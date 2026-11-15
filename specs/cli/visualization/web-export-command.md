@@ -220,7 +220,11 @@ element, with the atlas pages as data URIs, and the viewer in a
 `<script type="text/plain" id="wx-module">` element that `index.html` imports
 through a blob URL.
 
-What it draws, each matching SfM Explorer's rule:
+What it draws, each matching SfM Explorer's rule for a reconstruction in the
+Patches point style, with its Patches button off matching the Dots style
+([gui/scene-graph.md](../../gui/scene-graph.md#point-style)), except that a
+point at infinity is always a splat here, where SfM Explorer draws one that has
+a patch as its patch:
 
 - **Patches**: one instanced mesh per atlas page, corners `centre ± u ± v`,
   textured from the atlas, a patch seen from behind not drawn.

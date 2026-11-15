@@ -59,7 +59,12 @@ pub(super) struct ReconUniforms {
     /// `FILTER_DIM` or `FILTER_HIDE` (`shaders/common.wgsl`). Only read where a
     /// word carries the bit, which is only on the node the Track Table filters.
     pub(crate) filter_mode: u32,
-    pub(crate) _pad: f32,
+    /// 1 when the patch pass draws this node's surfels
+    /// (`NodeDisplay::points_as_patches`): the point shader then leaves out the
+    /// splat of every point whose mask word carries `MASK_HAS_SURFEL`, so each
+    /// point is drawn once, as its surfel or as its dot. 0 draws every point as
+    /// a splat.
+    pub(crate) points_as_patches: u32,
 }
 
 /// [`ReconUniforms::filter_mode`] for a node whose rejected points are dimmed:

@@ -1273,7 +1273,6 @@ pub(crate) enum Layer {
     Node,
     Points,
     CameraImages,
-    Patches,
     PointsAtInfinity,
 }
 
@@ -1284,9 +1283,13 @@ pub(crate) fn visibility_text(label: &str, layer: Layer, shown: bool) -> String 
         Layer::Node => format!("{label} {state}"),
         Layer::Points => format!("Points of {label} {state}"),
         Layer::CameraImages => format!("Camera images of {label} {state}"),
-        Layer::Patches => format!("Patches of {label} {state}"),
         Layer::PointsAtInfinity => format!("Points at infinity of {label} {state}"),
     }
+}
+
+/// `Point style of run_a: Patches`.
+pub(crate) fn point_style_text(label: &str, style: crate::scene::PointStyle) -> String {
+    format!("Point style of {label}: {}", style.label())
 }
 
 /// `run_a made non-interactive`.

@@ -92,8 +92,11 @@ impl SceneRenderer {
             &self.splat_corner_buffer,
         ) {
             pass.set_vertex_buffer(0, corners.slice(..));
+            // A node draws surfels under its points' group eye, when its
+            // style asks for them; the point pass leaves out the splats they
+            // replace (`ReconUniforms::points_as_patches`).
             for bundle in self
-                .drawn(|b| b.display.show_patches)
+                .drawn(ReconResources::draws_surfels)
                 .filter(|b| !dimmed_only || b.draws_dimmed())
             {
                 // The base's atlas, then the additions' own: two draws
@@ -240,7 +243,6 @@ impl SceneRenderer {
         encoder: &mut wgpu::CommandEncoder,
         show_points: bool,
         show_camera_images: bool,
-        show_patches: bool,
         in_camera_view: bool,
     ) {
         let Some(edl_output_view) = &self.edl_output_view else {
@@ -446,8 +448,9 @@ impl SceneRenderer {
             // Writes real hardware depth (occludes/occluded by points and
             // image quads) but 0.0 linear depth (EDL passthrough), and
             // PICK_TAG_POINT | point pick index so clicks select the patch's
-            // point.
-            if show_patches {
+            // point. The global Points toggle governs it as it governs the
+            // splats: surfels are a way of drawing points.
+            if show_points {
                 self.draw_patches(&mut pass, FIRST_DRAW, false);
             }
 
@@ -460,8 +463,6 @@ impl SceneRenderer {
             // so a dimmed point is still picked where it is in front.
             if show_points {
                 self.draw_points(&mut pass, DIMMED_DRAW, true);
-            }
-            if show_patches {
                 self.draw_patches(&mut pass, DIMMED_DRAW, true);
             }
         }

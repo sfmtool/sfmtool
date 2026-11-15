@@ -421,7 +421,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             description: "The 3D viewport's display controls, the checkboxes and sliders of its \
                           Display HUD, as one flat document named by the fields they are stored \
                           in: the layer toggles (show_points, show_camera_images, show_grid, \
-                          show_patches, show_points_at_infinity, show_target_indicator), the \
+                          show_points_at_infinity, show_target_indicator), the \
                           sizes (point_size_log2, infinity_point_px, length_scale), the patch \
                           sliders, maintain_z_up, the Advanced sliders, the Debug overlays \
                           (show_controls_help, show_fps, show_mcp_status_line) and tool, the \

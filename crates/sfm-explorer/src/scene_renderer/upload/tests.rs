@@ -164,7 +164,9 @@ fn radial_distorted() -> CameraModel {
 }
 
 /// Attach patch frames + bitmaps. `present[i]` false leaves point `i`'s `u`
-/// row all-zero, which is how the upload detects "no patch here".
+/// row all-zero, which is one way the upload detects "no patch here". Every
+/// bitmap row is filled, since an all-zero bitmap row is the other
+/// (`zero_bitmap_rows` makes some).
 ///
 /// `bitmap_rows` defaults to `present.len()`; passing fewer exercises the
 /// short-array bound in the row scan. `bitmap_cols` defaults to `resolution`;
@@ -189,8 +191,26 @@ fn with_patches(
     let cols = bitmap_cols.unwrap_or(resolution);
     recon.point_set.patch_u_halfvec_xyz = Some(u);
     recon.point_set.patch_v_halfvec_xyz = Some(v);
-    recon.point_set.patch_bitmaps_y_x_rgba =
-        Some(Arc::new(Array4::<u8>::zeros((rows, resolution, cols, 4))));
+    recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(Array4::<u8>::from_elem(
+        (rows, resolution, cols, 4),
+        200,
+    )));
+    recon
+}
+
+/// Zero the bitmap rows of `points`, which is how a point with no stored
+/// patch is written whatever its frame says.
+fn zero_bitmap_rows(mut recon: SfmrReconstruction, points: &[usize]) -> SfmrReconstruction {
+    let column = recon
+        .point_set
+        .patch_bitmaps_y_x_rgba
+        .as_ref()
+        .expect("a bitmap column");
+    let mut bitmaps = (**column).clone();
+    for &p in points {
+        bitmaps.index_axis_mut(ndarray::Axis(0), p).fill(0);
+    }
+    recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(bitmaps));
     recon
 }
 
@@ -1920,7 +1940,7 @@ fn the_additions_atlas_is_one_of_the_atlases_the_frame_writes_uniforms_for() {
     // Read through the draw loop's own filter, so the list asserted on is the
     // one the patch pass walks rather than a second reading of the bundle.
     let atlases: Vec<_> = renderer
-        .drawn(|b| b.display.show_patches)
+        .drawn(ReconResources::draws_surfels)
         .flat_map(|bundle| bundle.patch_atlases())
         .collect();
     assert_eq!(atlases.len(), 2, "the additions' atlas is not in the list");
@@ -2787,7 +2807,7 @@ fn the_filter_bit_marks_a_point_at_infinity() {
 /// with the bit where the kept set leaves them out.
 #[test]
 fn a_new_base_and_new_additions_take_the_filter_bit() {
-    use super::overlay::{MASK_ALIVE, MASK_REJECTED};
+    use super::overlay::{MASK_ALIVE, MASK_HAS_SURFEL, MASK_REJECTED};
     use crate::filter_3d::KeptPoints;
     let (device, queue) = device();
     let mut r = SceneRenderer::new();
@@ -2806,8 +2826,13 @@ fn a_new_base_and_new_additions_take_the_filter_bit() {
     let mut edited = loaded.clone();
     let record = moved_record(&edited, 3);
     assert_eq!(edited.replace_point(3, record).expect("a live point"), 10);
+    // The addition carries its patch, so its point word has the surfel bit
+    // beside the filter's.
     r.upload_additions(&device, &queue, RECON, &edited);
-    assert_eq!(r.masked_word(RECON, 10), Some(MASK_ALIVE | MASK_REJECTED));
+    assert_eq!(
+        r.masked_word(RECON, 10),
+        Some(MASK_ALIVE | MASK_REJECTED | MASK_HAS_SURFEL)
+    );
     let kept_with_addition = Arc::new(KeptPoints::from_points(&[0, 1, 2, 4, 10]));
     assert_eq!(
         r.update_point_mask(
@@ -2819,7 +2844,7 @@ fn a_new_base_and_new_additions_take_the_filter_bit() {
         11,
         "every base row and the addition's"
     );
-    assert_eq!(r.masked_word(RECON, 10), Some(MASK_ALIVE));
+    assert_eq!(r.masked_word(RECON, 10), Some(MASK_ALIVE | MASK_HAS_SURFEL));
 
     // A new base clears the record of what was written.
     let fresh = demo(10);
@@ -3465,4 +3490,172 @@ fn zero_lens_corrections_draw_exactly_the_shared_camera() {
         };
         assert_eq!(rays(&listed), rays(&recon));
     }
+}
+
+// ── Point style ─────────────────────────────────────────────────────────
+//
+// A node in the Patches style draws each point that has a surfel as that
+// surfel and every other point as a dot. The point shader leaves a dot out
+// where the word in the point buffer carries `MASK_HAS_SURFEL` and the node's
+// uniforms say `points_as_patches`; these tests hold the two halves the CPU
+// writes. See `specs/gui/scene-graph.md` § "Point style".
+
+/// Whether each base point's word, as last written, carries the surfel bit.
+fn surfel_bits(renderer: &SceneRenderer) -> Vec<bool> {
+    bundle(renderer)
+        .written_point_words
+        .iter()
+        .map(|word| word & super::MASK_HAS_SURFEL != 0)
+        .collect()
+}
+
+/// Exactly the points the atlas packed a surfel for carry the bit, whatever
+/// else their word says, and the node's uniforms and the patch pass follow
+/// `points_as_patches`.
+#[test]
+fn the_points_with_a_surfel_are_marked_for_the_point_pass_to_leave_out() {
+    use super::overlay::{MASK_ALIVE, MASK_DELETED, MASK_HIGHLIGHTED};
+    use super::MASK_HAS_SURFEL;
+
+    let (device, queue) = device();
+    let mut r = SceneRenderer::new();
+    let present = [true, false, true, true, false, true];
+    let base = Arc::new(with_patches(demo(present.len()), 8, &present, None, None));
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::clone(&base));
+    sync(&mut r, &device, &queue, RECON, &loaded);
+    assert_eq!(surfel_bits(&r), present, "a fresh upload");
+    for (index, &word) in bundle(&r).written_point_words.iter().enumerate() {
+        assert_eq!(word & !MASK_HAS_SURFEL, MASK_ALIVE, "point {index}");
+    }
+
+    // The patch pass draws the node, and its uniforms tell the point pass to
+    // leave the marked dots out, only while `points_as_patches` is on.
+    for (points_as_patches, show_points, drawn) in [
+        (true, true, true),
+        (false, true, false),
+        (true, false, false),
+    ] {
+        r.set_node_display(
+            RECON,
+            NodeDisplay {
+                points_as_patches,
+                show_points,
+                ..NodeDisplay::default()
+            },
+        );
+        assert_eq!(
+            recon_uniforms(bundle(&r), 1.0, true).points_as_patches,
+            u32::from(points_as_patches),
+        );
+        assert_eq!(
+            r.drawn(ReconResources::draws_surfels).count(),
+            usize::from(drawn),
+            "points_as_patches={points_as_patches}, show_points={show_points}"
+        );
+    }
+
+    // A mark written over a point keeps its bit, and a deleted point's word is
+    // the deleted word alone.
+    let mut edited = loaded.clone();
+    edited.delete_point(0).expect("a live point");
+    let highlighted: std::collections::HashSet<u32> = [2, 4].into();
+    let marks = super::PointMarks {
+        highlighted: &highlighted,
+        ..super::PointMarks::none()
+    };
+    r.update_point_mask(&queue, RECON, &edited.deleted_points, marks);
+    let words = &bundle(&r).written_point_words;
+    assert_eq!(words[0], MASK_DELETED);
+    assert_eq!(words[2], MASK_HIGHLIGHTED | MASK_HAS_SURFEL);
+    assert_eq!(words[4], MASK_HIGHLIGHTED);
+
+    // A bulk edit that keeps the atlas still marks the new point buffer.
+    let moved = with_points_moved((*base).clone());
+    r.upload_points(&device, RECON, &moved, &SILENT);
+    assert_eq!(
+        surfel_bits(&r),
+        [false; 6],
+        "the point upload knows no surfel"
+    );
+    assert_eq!(
+        r.upload_patches(&device, &queue, RECON, &moved, &SILENT),
+        Uploaded::Reused,
+    );
+    assert_eq!(surfel_bits(&r), present, "after a kept atlas");
+
+    // A point the overlay adds with a patch is marked in the additions' own
+    // buffer, by the additions' own atlas.
+    let mut edited = sfmtool_core::EditedReconstruction::new(Arc::new(moved));
+    let record = moved_record(&edited, 3);
+    edited.replace_point(3, record).expect("a live point");
+    r.upload_additions(&device, &queue, RECON, &edited);
+    let written = &additions(&r).expect("an addition").written_point_words;
+    assert_eq!(
+        written,
+        &[MASK_ALIVE | MASK_HAS_SURFEL],
+        "the addition's word"
+    );
+}
+
+/// A node with nothing for the patch pass to draw marks no point, so the
+/// Patches style draws every point as a dot: no patch data at all, frames with
+/// no bitmaps, and patch data an edit has since removed.
+#[test]
+fn a_node_with_no_patch_data_marks_no_point_for_a_surfel() {
+    let (device, queue) = device();
+    let mut r = SceneRenderer::new();
+    let mut frames_only = with_patches(demo(6), 8, &[true; 6], None, None);
+    frames_only.point_set.patch_bitmaps_y_x_rgba = None;
+    let with_data = with_patches(demo(6), 8, &[true; 6], None, None);
+    for (name, recon, expected) in [
+        ("no patch data", demo(6), [false; 6]),
+        ("patch data", with_data, [true; 6]),
+        ("frames without bitmaps", frames_only, [false; 6]),
+        ("patch data removed", demo(6), [false; 6]),
+    ] {
+        let loaded = sfmtool_core::EditedReconstruction::new(Arc::new(recon));
+        sync(&mut r, &device, &queue, RECON, &loaded);
+        assert_eq!(surfel_bits(&r), expected, "{name}");
+    }
+}
+
+/// The mirror's composition: a node in the Patches style draws its points as
+/// surfels only above zero patch opacity, and the Dots style never does.
+#[test]
+fn the_patches_style_draws_dots_at_zero_patch_opacity() {
+    use crate::scene::{PointStyle, SceneNode};
+
+    let mut node = SceneNode::demo(with_patches(demo(6), 8, &[true; 6], None, None));
+    assert_eq!(node.point_style, PointStyle::Patches);
+    for (style, opacity, expected) in [
+        (PointStyle::Patches, 1.0, true),
+        (PointStyle::Patches, 0.25, true),
+        (PointStyle::Patches, 0.0, false),
+        (PointStyle::Dots, 1.0, false),
+    ] {
+        node.point_style = style;
+        assert_eq!(
+            NodeDisplay::of(&node, None, opacity).points_as_patches,
+            expected,
+            "{style:?} at opacity {opacity}"
+        );
+    }
+}
+
+/// A point whose bitmap row is all zero stores no patch even with a frame, so
+/// the atlas packs no surfel for it, which would be a black square, and its
+/// dot stays.
+#[test]
+fn a_point_with_an_all_zero_bitmap_row_keeps_its_dot() {
+    let (device, queue) = device();
+    let mut r = SceneRenderer::new();
+    let recon = zero_bitmap_rows(with_patches(demo(6), 8, &[true; 6], None, None), &[1, 4]);
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::new(recon));
+    sync(&mut r, &device, &queue, RECON, &loaded);
+    assert_eq!(
+        patch_count(&r),
+        4,
+        "a surfel packed for a point with no patch"
+    );
+    assert_eq!(surfel_bits(&r), [true, false, true, true, false, true]);
 }

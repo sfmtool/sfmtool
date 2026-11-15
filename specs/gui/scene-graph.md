@@ -61,14 +61,13 @@ Scene (root, implicit)
 │   │   ├── IMG_0001.jpg          ← per-image rows (virtualized)
 │   │   └── …
 │   ├── Points (1,204,551 · 12 at ∞)  ← fixed group node
+│   │     Style [Dots|Patches]       ← the point style selector, only with patch data
 │   │   ├── ▸ selected: pt3d_a1b2c3_88231   ← selection/hover rows only
 │   │   └── ▸ hovered:  pt3d_a1b2c3_10442
 │   ├── Bench Points (2)           ← the bench's track-stage items, when it has any
 │   │   └── pt3d_a1b2c3_88231  5 in   ← one row per item, the focused one marked
 │   ├── Bench Clusters (1)         ← its cluster-stage items, likewise
 │   │   └── IMG_0004@120,90  3 in
-│   ├── Patches                   ← toggle-only row, present when the recon
-│   │                                carries patch data; not expandable
 │   └── Index Files  1 of 2 current  ← the files beside the .sfmr that a
 │       │                               bench search reads
 │       ├── SIFT Index  1.2M descriptors  ← each current, stale or absent
@@ -148,8 +147,8 @@ pub struct SceneNode {
     pub interactive: bool,
     pub show_points: bool,           // group eyes
     pub show_camera_images: bool,
-    pub show_patches: bool,
     pub show_points_at_infinity: bool,
+    pub point_style: PointStyle,     // Dots | Patches; see "Point style"
     pub tint: NodeTint,              // Original | Tint(&'static TintColor)
 }
 
@@ -163,9 +162,11 @@ impl SceneNode {
 ```
 
 The renderer does not read `SceneNode` directly: each frame `app.rs` mirrors the
-five display flags plus `interactive` and `tint` onto the node's GPU bundle as a
-`NodeDisplay`, and the display transform alongside them; the draw loop and
-per-recon uniform write consult only the bundle.
+node's display state onto its GPU bundle as a `NodeDisplay`
+(`NodeDisplay::of`): effective visibility, the three eyes under it, whether
+its points with a surfel are drawn as surfels (`points_as_patches`, see "Point
+style"), `interactive` and `tint`, and the display transform alongside them;
+the draw loop and per-recon uniform write consult only the bundle.
 
 `AppState` replaces its single slot with:
 
@@ -193,6 +194,58 @@ composed in exactly one place, `scene::is_visible(node, solo)`. `app.rs` folds
 it into the `NodeDisplay::visible` it mirrors onto the bundle each frame, so the
 draw loop and the bounds union read a single flag; the stats overlay calls the
 same function. Nothing else is allowed to spell the rule out again.
+
+### Point style
+
+Dots and patches are two ways of drawing the same 3D points, so a node has one
+**point style**, `PointStyle::Dots` or `PointStyle::Patches`, rather than a
+layer for each. The Points eye, and the HUD's Points checkbox over every node,
+decide whether the points are drawn; the style decides how. There is no third
+style that draws both: a point is drawn once.
+
+- **Dots** draws every point as a round splat
+  ([point-cloud-rendering.md](point-cloud-rendering.md)).
+- **Patches** draws each point that has a patch as its patch surfel
+  ([patch-rendering.md](patch-rendering.md)) and every point without one as a
+  dot. A point has a patch when the node's patch atlas packed a surfel for it:
+  a nonzero row of `patch_u_halfvec_xyz` and a bitmap row that is not all zero
+  (an all-zero bitmap row is how a point with no stored patch is written; see
+  [patch-rendering.md](patch-rendering.md)). A
+  node with no patch data, such as one an edit has removed it from, draws every
+  point as a dot under this style, and so does every node while the HUD's
+  patch opacity is 0, because a surfel at no opacity would show nothing yet
+  still write depth and pick ids.
+- **A node starts in the style its file draws best**: Patches when the file
+  carries patch frames and bitmaps (`SceneNode::has_patch_data`), Dots
+  otherwise (`PointStyle::for_reconstruction`, when the node is made). An edit
+  never changes the style: a conversion that adds patch data leaves the node in
+  Dots until the style is chosen.
+- **The Scene panel's Dots/Patches selector, under the Points row,** shows on a node
+  with patch data, the only kind on which the two styles draw differently, and
+  on no other; the wire's `set_reconstruction_display` takes `point_style`
+  (`"dots"` or `"patches"`) on any node. A change is logged as `Point style of
+  <label>: Patches`.
+- **The HUD's Patches section** (opacity, size, edge cutoff) is drawn while
+  some node draws patches, its style Patches and its patch data present
+  (`SceneNode::draws_patches`), since its sliders govern nothing otherwise.
+
+A point drawn as its surfel is still the point: a click on the surfel picks it,
+the Track Table filter's dimmed draw dims it, and the eraser brush's reds tint
+it. Selection, hover and the viewport's call-out (the points a camera being
+moved observes) have no colour in the surfel shader, so a point in any of those
+states keeps its dot, in the highlight colour, at the centre of its surfel.
+
+The two passes agree through two values. `NodeDisplay::points_as_patches` is
+the style composed with the opacity in one place (`NodeDisplay::of`): the patch
+pass draws a node only while it is on (`ReconResources::draws_surfels`, with the
+Points eye), and it reaches the point shader as the per-recon uniform of the
+same name. Which points have a surfel is a bit in the point buffer's mask word,
+`MASK_HAS_SURFEL`, set from the atlas's own slot map
+(`SceneRenderer::mark_points_with_surfels` after the patch upload, and the mask
+writer on every entry it writes after that), so a point whose patch the upload
+could not pack, past the GPU's atlas limit, keeps its dot. The point shader
+leaves out the splat of a point whose word carries the bit while the uniform is
+on.
 
 **Interactivity** is a separate per-node switch (`interactive`, default on),
 following the Blender-outliner eye/cursor pairing. With it off, the node's
@@ -449,7 +502,8 @@ fixed-height for virtualization.
   source and not `SceneNode::has_patch_data`: that answers the narrower question
   of whether the node also carries the reference bitmaps the surfel renderer
   textures a patch with. The conversion produces them when photographs are
-  available, so the `Patches` row appears after one in that case.
+  available, so the point style selector under the Points row appears after one in that
+  case, with the node still in the Dots style.
 - Expanded by default: with one file loaded the node's groups are the whole
   panel, and with a handful the tree is still what answers "what is in here".
   Its Camera Images and Points groups start *collapsed* — the image list is the
@@ -462,8 +516,10 @@ fixed-height for virtualization.
   solo button has said `S` for fifty years. Each is named in the
   accessibility tree, and so in `get_widgets`, by its glyph and then what it
   controls, the same whichever state it is in: `👁 Show reconstruction`,
-  `👁 Show camera images`, `👁 Show points`, `👁 Show patches`,
-  `∞ Show points at infinity`, `S Solo` and `🖱 Interactive`. The selection
+  `👁 Show camera images`, `👁 Show points`,
+  `∞ Show points at infinity`, `S Solo` and `🖱 Interactive`. The point style
+  selector's two buttons are words, and are named by them, `Dots` and
+  `Patches`. The selection
   accent bar and the tint swatch are *painted* rather than written: no bundled proportional glyph
   is a vertical bar, and a painted rect answers no pointer hit — which is what
   keeps it from competing with the row-wide click target.
@@ -564,9 +620,31 @@ it by hand, or take the image out. The menu's view of a node (which images are
 posed, how many, and why the cluster-patches file will not do) is
 `AppState::image_menu`, read once per node and frame before either place draws.
 
-**Points group row** — `[▸] [👁] Points (1,204,551 · 12 at ∞)`
-- Eye drives `show_points`; an inline `∞` mini-toggle drives
-  `show_points_at_infinity` when the recon has infinity points.
+**Points group row** — `[▸] [👁] Points (1,204,551 · 12 at ∞) [∞]`, then on a
+node with patch data the line `Style [Dots|Patches]`
+- Eye drives `show_points`, the node's points in whichever style they are
+  drawn; an inline `∞` mini-toggle drives `show_points_at_infinity` when the
+  recon has infinity points. A point at infinity follows the style like any
+  other, and the mini-toggle hides it in either, its surfel with its dot
+  ([patch-rendering.md](patch-rendering.md#points-at-infinity)).
+- On a node with patch data, the **point style selector** is a line of its own
+  under the row, indented as the row's children are: a weak `Style` and two
+  selectable buttons, `Dots` and `Patches`, the node's own style lit, a click on
+  the other choosing it (see "Point style"). It is drawn directly under the
+  row whether or not the group is expanded, so when it is, the selection and
+  hover rows come after it: the selector is a control of the row, not a row of
+  the selection list. The group is built from `CollapsingState`'s toggle button
+  and `show_body_indented` rather than `show_header(..).body(..)`, which leaves
+  no place between the header and the body. The selector has its own line
+  because the word `Points`, the `∞` toggle and the two buttons do not fit one
+  line of the panel's default width (227 px in a 1280 x 720 window) without
+  eliding the word. There is no separate Patches row.
+- The `∞` mini-toggle sits at the row's visible right edge (the clip rect, since
+  a wider row elsewhere in the tree widens the layout past the panel), and the
+  label takes the width left between it and the eye. The label drops counts
+  rather than letters, as the reconstruction row's counts do: the `· N at ∞`
+  part first, since the toggle already shows there are such points, then the
+  point count, and the word `Points` always stays whole.
 - Expands to **selection and hover rows only**, not a full listing:
   - `selected: pt3d_<hash>_<index>` — the same copyable ID Track View
     shows; click re-selects (useful after selecting elsewhere), and the
@@ -661,12 +739,8 @@ The rows have no eye, since there is no row to show or hide: the 3D viewport
 draws the focused item and no other bench item, whatever the tree shows. The
 groups are per node because an item names that node's images and poses. The panel that edits a track on it is [track-view.md](track-view.md).
 
-**Patches row** — `[👁] Patches` — eye only, shown when the node carries patch
-data (mirrors the HUD's greyed-when-absent convention).
-
 **Index Files group** — `▾ Index Files  1 of 2 current` — last among the
-group rows, after Points and after Patches where that row is present, open by
-default, with one child row per file:
+group rows, open by default, with one child row per file:
 
 ```
 ▾   Index Files     1 of 2 current
@@ -874,14 +948,19 @@ image_pick_base: u32
 pickable: u32             // 0 → emit PICK_TAG_NONE (node.interactive off)
 tint_color: vec4<f32>     // rgb = tint, a = strength; a = 0 → original colors
 show_infinity: f32        // global HUD ∞ toggle AND node.show_points_at_infinity
+preview_s: f32            // the camera model proposal's preview blend
+filter_mode: u32          // FILTER_DIM | FILTER_HIDE, for the Track Table filter
+points_as_patches: u32    // style Patches AND patch opacity above 0
 ```
 
 `show_infinity` is per-recon rather than global (where it started) because the
 ∞ mini-toggle is per node, and points at infinity are not a separate draw — they
 ride in the same instance buffer, culled in the vertex shader so instance
-indices, and therefore pick ids, stay unfiltered. The four whole-layer toggles
-*are* separate draws, so effective visibility for them is resolved on the CPU by
-skipping that node in that pass.
+indices, and therefore pick ids, stay unfiltered. `points_as_patches` is a
+uniform for the same reason: the dots a node's surfels replace are left out in
+the point shader ("Point style"). The whole-layer toggles *are* separate draws,
+so effective visibility for them is resolved on the CPU by skipping that node in
+that pass, and the patch pass skips a node whose `points_as_patches` is off.
 
 **Binding mechanism (implemented): one small uniform buffer per node, bound in
 a per-recon bind group** — not one buffer sliced by dynamic offsets. Three of
@@ -1456,6 +1535,23 @@ bundle from `retain_nodes` on the next frame.
   selection auto-scroll, eye and interaction-cursor toggles,
   selected-reconstruction marking, `Align to` menu gating (point mode
   disabled without feature indexes).
+- **The point style**: a node made from a file with patch frames and bitmaps
+  starts in Patches, and one with neither or with frames alone in Dots; the
+  Dots/Patches selector is drawn under the Points row on a node with patch data
+  and on no other; at the panel's default width (227 px) both of its buttons
+  and the `∞` toggle lie inside the panel and the word `Points` is drawn whole,
+  left of the toggle; with the group expanded and a point selected, the
+  selector's line lies between the Points row and the `selected:` row; a click
+  on the other style sets it and
+  logs `Point style of <label>: Dots`, and a click on the style in force logs
+  nothing (`scene_graph/tests.rs`). In the renderer, exactly the points the
+  atlas packed a surfel for carry `MASK_HAS_SURFEL` after a fresh upload, after
+  a kept atlas and under a mark the mask writer writes over them, a deleted
+  point's word is the deleted word alone, and an addition with a patch is
+  marked by the additions' atlas; a node with no patch data, frames without
+  bitmaps, or patch data an edit removed marks no point; the uniform and the
+  patch pass follow `points_as_patches`, which `NodeDisplay::of` turns off at
+  patch opacity 0 and in the Dots style (`scene_renderer/upload/tests.rs`).
 - **The image menu**, through the same whole frames: `Resect Image` sits on
   image rows and not on the reconstruction row, reports the image it was chosen
   on, and is greyed -- with the refusal as its hover text -- for an unposed

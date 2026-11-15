@@ -60,6 +60,17 @@ impl ObservationSource {
     }
 }
 
+/// Whether one point's row of `patch_bitmaps_y_x_rgba`, `(R, R, channels)`,
+/// stores a patch. A point with no stored patch is written as an all-zero row,
+/// so any nonzero byte means a patch is there.
+///
+/// The one definition of that rule: what the viewer draws as a surfel, what a
+/// Track Table *Patch* cell and Track View's header show, and which points a
+/// web export draws as patches all read it.
+pub fn patch_bitmap_is_stored(bitmap: ndarray::ArrayView3<'_, u8>) -> bool {
+    bitmap.iter().any(|&b| b != 0)
+}
+
 /// The 3D points, the tracks that observe them, and every column measured per
 /// point or per observation -- one half of a
 /// [`SfmrReconstruction`](super::SfmrReconstruction), the half an image never

@@ -105,13 +105,13 @@ fn the_recon_uniforms_struct_matches_its_wgsl_layout() {
             show_infinity: 1.0,
             preview_s: 0.0,
             filter_mode: 0,
-            _pad: 0.0,
+            points_as_patches: 0,
         }),
     );
     assert_eq!(std::mem::size_of::<ReconUniforms>() % 16, 0);
-    // mat4 (64) + four scalars (16) + vec4 (16) + a scalar rounded up to the
-    // struct's 16-byte alignment (16). The four scalars before the vec4 are
-    // sized to satisfy *its* alignment; the trailing pad satisfies the struct's.
+    // mat4 (64) + four scalars (16) + vec4 (16) + four scalars (16). The four
+    // scalars before the vec4 are sized to satisfy *its* alignment; the four
+    // after it fill the struct's 16-byte alignment exactly.
     assert_eq!(std::mem::size_of::<ReconUniforms>(), 112);
     device.poll(wgpu::PollType::Poll).expect("device poll");
 }
@@ -245,7 +245,8 @@ fn the_wgsl_mask_words_match_the_rust_ones() {
     // and patch shaders branch on them, so the two sides must agree. They are
     // written once on each side, in `common.wgsl` and `upload/overlay.rs`.
     use super::super::upload::{
-        MASK_ALIVE, MASK_DELETED, MASK_HIGHLIGHTED, MASK_PAINTED, MASK_UNDER_BRUSH,
+        MASK_ALIVE, MASK_DELETED, MASK_HAS_SURFEL, MASK_HIGHLIGHTED, MASK_PAINTED, MASK_REJECTED,
+        MASK_UNDER_BRUSH,
     };
     let common = include_str!("../../shaders/common.wgsl");
     for (name, rust_value) in [
@@ -254,6 +255,7 @@ fn the_wgsl_mask_words_match_the_rust_ones() {
         ("MASK_HIGHLIGHTED", MASK_HIGHLIGHTED),
         ("MASK_PAINTED", MASK_PAINTED),
         ("MASK_UNDER_BRUSH", MASK_UNDER_BRUSH),
+        ("MASK_HAS_SURFEL", MASK_HAS_SURFEL),
     ] {
         assert_eq!(
             wgsl_u32_const(common, name),
@@ -261,6 +263,14 @@ fn the_wgsl_mask_words_match_the_rust_ones() {
             "{name} differs between common.wgsl and upload/overlay.rs"
         );
     }
+    // The surfel bit sits above every word and apart from the filter's bit,
+    // so a point with a surfel keeps its word and its filter state.
+    assert_eq!(
+        wgsl_u32_const(common, "MASK_WORD") & MASK_HAS_SURFEL,
+        0,
+        "MASK_WORD keeps the surfel bit"
+    );
+    assert_eq!(MASK_REJECTED & MASK_HAS_SURFEL, 0, "the two bits overlap");
 }
 
 #[test]

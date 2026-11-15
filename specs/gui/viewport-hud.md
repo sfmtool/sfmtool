@@ -75,7 +75,6 @@ it from fighting the scene while open. The gear is the button named
 │                                      │   ☑ Points        │ │
 │                                      │   ☑ Camera Images │ │
 │                                      │   ☑ Grid          │ │
-│                                      │   ☑ Patches       │ │
 │                                      │   ☑ Points at ∞   │ │
 │                                      │   ☐ Target indic… │ │
 │                                      │ ▾ Size            │ │
@@ -225,9 +224,9 @@ Debug closed.
 
 | Section | Contents |
 |---------|----------|
-| **Layers** | Show Points, Show Camera Images, Show Grid, Show Patches, Show Points at Infinity, Target indicator ([viewport-navigation.md](viewport-navigation.md#the-target-indicator-checkbox)) |
+| **Layers** | Show Points, Show Camera Images, Show Grid, Show Points at Infinity, Target indicator ([viewport-navigation.md](viewport-navigation.md#the-target-indicator-checkbox)) |
 | **Size** | Point Size (log₂, −3…+3) + reset, Infinity Point Size (1–16 px), Length Scale (0.001–100, log) |
-| **Patches** | Patch Opacity, Patch Size, Patch Edge Cutoff |
+| **Patches** | Patch Opacity, Patch Size, Patch Edge Cutoff; drawn while some node draws patches |
 | **Camera** | Maintain Z-up ([viewport-navigation.md](viewport-navigation.md#maintain-z-up)), Field of View (10°–120°) + reset |
 | **Advanced** | EDL Line Thickness (0.5–8 px), Frustum Size (0.05–5, log), Target Size (0.05–5, log), Target Fog (0.5–100, log) |
 | **Debug** | Controls-help toggle, fps toggle, MCP status line toggle ([action-log.md](action-log.md#the-viewport-status-line)), touchpad diagnostic counters |
@@ -259,19 +258,24 @@ more than one is contributing. While the Track Table filters the 3D view,
 
 The Layers toggles are **master switches** across every loaded node: effective
 visibility of a layer is the AND of the toggle here, the node's master eye, and
-the node's group eye, both of the latter living in the Scene panel. Show Patches
-is greyed only when *no* loaded node carries patch data, and the Patches section
-appears when *any* of them does. The Grid stays global-only — it belongs to the
-world, not to a reconstruction.
+the node's group eye, both of the latter living in the Scene panel. There is no
+Patches toggle: dots and patches are two ways of drawing the same points, so
+Show Points governs both, and each node's **point style** in the Scene panel
+says which way its points are drawn
+([scene-graph.md](scene-graph.md#point-style)). The Patches section appears
+while *any* node draws patches, its style Patches and its patch data present
+(`hud::draws_patches`). Its opacity reaching 0 draws the points that have a
+patch as dots. The Grid stays global-only — it belongs to the world, not to a
+reconstruction.
 
 Three changes in behaviour from the menu:
 
-- **Patch controls are hidden, not greyed.** In the menu the four patch
-  controls were wrapped in `add_enabled_ui(has_patches, …)` and showed as dead
-  widgets for the common `sift_files` reconstruction. In the HUD the whole
-  Patches section is omitted when the reconstruction carries no patch frames +
-  bitmaps. Show Patches stays in Layers, greyed, so the capability remains
-  discoverable.
+- **Patch controls are hidden, not greyed.** In the menu the patch controls
+  were wrapped in `add_enabled_ui(has_patches, …)` and showed as dead widgets
+  for the common `sift_files` reconstruction. In the HUD the whole Patches
+  section is omitted while no node draws patches. Whether a node can is shown
+  where it is chosen, by the point style selector under its Points row, which a
+  node with patch data carries.
 - **The always-on overlays become togglable.** Controls help and the fps
   readout get toggles in Debug, satisfying the intent the UX spec previously
   claimed for the controls help. Both default to on, so the move changes

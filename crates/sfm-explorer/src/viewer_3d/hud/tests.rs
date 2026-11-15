@@ -23,7 +23,7 @@ use sfmtool_core::SfmrReconstruction;
 
 use super::section_id;
 use crate::platform::ScrollInput;
-use crate::scene::{ImageRef, ReconId, SceneNode};
+use crate::scene::{ImageRef, PointStyle, ReconId, SceneNode};
 use crate::state::AppState;
 use crate::viewer_3d::Viewer3D;
 
@@ -44,9 +44,9 @@ fn recon_id(state: &AppState) -> ReconId {
     state.selected_recon.expect("a selected reconstruction")
 }
 
-/// The same, plus the patch half-vectors and bitmaps the surfel pass needs, so
-/// the Patches section turns on. The values are arbitrary — nothing here
-/// renders them, only `has_patch_data` looks.
+/// The same, plus the patch half-vectors and bitmaps the surfel pass needs,
+/// and drawn in the Patches style, so the Patches section turns on. The values
+/// are arbitrary — nothing here renders them, only `draws_patches` looks.
 fn patch_state() -> AppState {
     let mut state = demo_state();
     let recon = state.scene[0].recon_mut();
@@ -55,6 +55,7 @@ fn patch_state() -> AppState {
     recon.point_set.patch_v_halfvec_xyz = Some(Array2::<f32>::from_elem((n, 3), 0.1));
     recon.point_set.patch_bitmaps_y_x_rgba =
         Some(Arc::new(Array4::<u8>::from_elem((n, 8, 8, 4), 200)));
+    state.scene[0].point_style = PointStyle::Patches;
     state
 }
 
@@ -449,6 +450,16 @@ fn a_collapsed_hud_never_draws_its_sections() {
 
 /// The names AccessKit gives the buttons of one quiet frame.
 fn button_names(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState) -> Vec<String> {
+    widget_names(viewer, ctx, state, egui::accesskit::Role::Button)
+}
+
+/// The names AccessKit gives the widgets of `role` in one quiet frame.
+fn widget_names(
+    viewer: &mut Viewer3D,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    role: egui::accesskit::Role,
+) -> Vec<String> {
     let mut output = ctx.run_ui(quiet_input(), |ui| draw(ui, viewer, state, false));
     output.textures_delta.clear();
     output
@@ -457,9 +468,41 @@ fn button_names(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState
         .expect("AccessKit is on")
         .nodes
         .iter()
-        .filter(|(_, node)| node.role() == egui::accesskit::Role::Button)
+        .filter(|(_, node)| node.role() == role)
         .filter_map(|(_, node)| node.label().map(str::to_string))
         .collect()
+}
+
+/// The Layers section's checkboxes are Points, Camera Images, Grid, Points at
+/// ∞ and Target indicator, and there is no Patches checkbox, even with a node
+/// that draws patches: how a node draws its points is its own point style,
+/// in the Scene panel, and Points is the one master switch over them.
+#[test]
+fn the_layers_section_has_no_patches_checkbox() {
+    let mut state = patch_state();
+    let mut viewer = Viewer3D::new();
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    viewer.hud_open = true;
+    for _ in 0..3 {
+        run_frame(&mut viewer, &ctx, &mut state, Frame::new());
+    }
+    let checkboxes = widget_names(
+        &mut viewer,
+        &ctx,
+        &mut state,
+        egui::accesskit::Role::CheckBox,
+    );
+    for layer in ["Points", "Camera Images", "Grid", "Points at ∞"] {
+        assert!(
+            checkboxes.iter().any(|name| name == layer),
+            "no {layer} checkbox in {checkboxes:?}"
+        );
+    }
+    assert!(
+        !checkboxes.iter().any(|name| name == "Patches"),
+        "a Patches checkbox is drawn: {checkboxes:?}"
+    );
 }
 
 /// The close button and the gear are named by their glyph and then the words
@@ -628,11 +671,24 @@ fn the_hud_anchors_to_the_top_right_of_whatever_viewport_it_is_given() {
 
 // ── Sections ────────────────────────────────────────────────────────────
 
+/// The Patches section is drawn while some node draws patches: one whose
+/// style is Patches and which carries patch bitmaps. A node with bitmaps drawn
+/// as dots, and a node in the Patches style with none, leave it out.
 #[test]
-fn the_patches_section_is_omitted_when_the_reconstruction_has_no_patch_bitmaps() {
+fn the_patches_section_is_drawn_only_while_a_node_draws_patches() {
+    let mut drawn_as_dots = patch_state();
+    drawn_as_dots.scene[0].point_style = PointStyle::Dots;
+    let mut patches_style_without_data = demo_state();
+    patches_style_without_data.scene[0].point_style = PointStyle::Patches;
     for (name, mut state, expected) in [
         ("plain", demo_state(), false),
         ("with patches", patch_state(), true),
+        ("with patches drawn as dots", drawn_as_dots, false),
+        (
+            "patches style without patch data",
+            patches_style_without_data,
+            false,
+        ),
     ] {
         let mut viewer = Viewer3D::new();
         let ctx = egui::Context::default();

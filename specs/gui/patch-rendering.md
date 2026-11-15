@@ -43,8 +43,11 @@ Key facts that shape the design:
   patch). The raster reverses `v` (steps rows along `−v`) to render un-mirrored,
   which is why the vertex shader flips the bitmap's `v` texture coordinate. There
   is no separate patch struct at rest — the frame is the two half-vectors.
-- **A point with no patch is an all-zero row** (present iff `u` is non-zero). The
-  uploader skips zero rows.
+- **A point with no patch is an all-zero row**, of the frame or of the
+  bitmaps. A point has a patch to draw when its `u` row is nonzero and its
+  bitmap row is not all zero (`patch_bitmap_is_stored` in `sfmtool_core`, the
+  rule the Track Table's *Patch* cell and the web export read too). The
+  uploader skips every other point, so no surfel is drawn as a black square.
 - **`u`/`v` are present-or-absent together.** Bitmaps require the frame but are
   independent of it: a reconstruction can carry frames with **no** bitmaps (e.g.
   a `to-embedded-patches` result before `refine_normals(render_bitmaps=True)`).
@@ -198,8 +201,8 @@ frame arrays **and** the bitmaps being `Some`):
 
 1. Return early unless both the `(u, v)` frame arrays and `patch_bitmaps_y_x_rgba`
    are present (a frame-only reconstruction renders nothing in v1 — flat-shaded
-   fallback deferred). Walk `patch_u_halfvec_xyz` rows and skip zero rows
-   (points without a patch).
+   fallback deferred). Walk the points and skip each whose `u` row is zero or
+   whose bitmap row is all zero (points without a patch).
 2. Fill the atlas a row of cells at a time: each present patch's `(R, R, 4)`
    tile is scattered into a band spanning the atlas, and each filled band goes
    up in one `write_texture`. Then push a `PatchInstance` per patch (center =
@@ -310,23 +313,28 @@ with a `log::warn` — only reachable at extreme counts.
 
 ## UI controls
 
+Whether a node's points are drawn as patches is its **point style**, the
+Dots/Patches selector under the Scene panel's Points row
+([scene-graph.md](scene-graph.md#point-style)): under Patches the patch pass
+draws each point that has a surfel, and the point pass leaves out that point's
+splat, so each point is drawn once, as its patch or as its dot. A node opened
+from a file that carries a patch frame **and** bitmaps starts in Patches. There
+is no patches toggle; the HUD's and the node's Points switches govern patches
+as they govern dots.
+
 A **Patches** section on the [viewport HUD](viewport-hud.md#sections)
-(`state.rs` + `viewer_3d/hud.rs`). The whole section is *hidden* unless the
-reconstruction carries a patch frame **and** bitmaps; the Show-patches toggle
-stays in the HUD's Layers section, greyed, so the capability is still
-discoverable.
+(`state.rs` + `viewer_3d/hud.rs`) holds the controls below. The whole section
+is *hidden* while no node draws patches.
 
 | Control | Default | Effect |
 |---------|---------|--------|
-| **Show patches** (toggle) | on when patches present | draw the patch pass |
-| **Patch opacity** (slider 0–1) | 1.0 | global multiply on patch color alpha |
+| **Patch opacity** (slider 0–1) | 1.0 | global multiply on patch color alpha; at 0 the patch pass is skipped and the points that have a patch are drawn as dots |
 | **Patch size** (`patch_size_log2`, −3…+3) | 0 | scale factor on `u/v` half-vecs, mirroring `point_size_log2`; lets you shrink surfels to see between them or grow them to close the surface |
 | **Edge cutoff** (slider 0–1) | 0.0 | `alpha_cutoff` for the coverage discard (0 = fully opaque, nothing discarded) |
-| **Points ↔ patches** | both | independent toggles; a natural default is to **auto-hide point splats where a patch exists** so the surface reads cleanly, keeping splats only for patch-less points — see [open questions](#open-questions) |
 
-Patches occlude points via shared hardware depth, so "show both" already looks
-right without hiding points; the auto-hide is a clarity refinement, not a
-correctness requirement.
+A shrunk surfel, or one the edge cutoff carves, leaves no dot behind it: the
+point is drawn as its patch, and what the patch does not cover shows what is
+behind it.
 
 ---
 
@@ -335,8 +343,9 @@ correctness requirement.
 Patches are drawn only when the reconstruction has **both** the per-point frame
 and `patch_bitmaps_y_x_rgba`. That is the textured case specified above, and it
 is the only one the renderer handles: `upload_patches` returns early when the
-bitmaps are absent, the Patches section of the HUD is hidden, and the
-Show-patches toggle is greyed in Layers.
+bitmaps are absent, so such a node marks no point as having a surfel and draws
+every point as a dot whatever its style, it opens in the Dots style, and its
+Points row has no point style selector under it.
 
 So a **frame-only** reconstruction — which is what `sfm xform
 --to-embedded-patches` produces before any bitmap render — shows no patches,
@@ -383,9 +392,6 @@ uniforms if desired, but is not required for v1.
   patch boundaries — could improve solidity/depth reading of a dense surfel
   field but may fight the texture. Prototype both; the choice may become a
   toggle.
-- **Point auto-hide.** Should splats be suppressed exactly where a patch exists
-  (cleanest surface), always drawn (patch as an overlay accent), or user-chosen?
-  Leaning toward auto-hide-with-override.
 - **Back-face dimming.** Back faces are **culled** in v1 (front-face only — see
   [Blending and face culling](#blending-and-face-culling)). An alternative is to
   dim/tint them rather than hide them; deferred.

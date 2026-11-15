@@ -134,9 +134,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "set_reconstruction_display",
             description: "Change how one reconstruction is drawn: its master eye, whether pointer \
-                          picks reach it, the per-group eyes, and its comparison tint. Every \
-                          field is optional and every omitted one is left alone. None of this \
-                          touches the reconstruction's data.",
+                          picks reach it, the per-group eyes, its point style and its comparison \
+                          tint. Every field is optional and every omitted one is left alone. \
+                          None of this touches the reconstruction's data.",
             kind: Write,
             schema: object(
                 &[
@@ -148,12 +148,27 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                              reconstruction. Off is display-only: it still renders and occludes.",
                         ),
                     ),
-                    ("show_points", flag("Group eye: the 3D points.")),
+                    (
+                        "show_points",
+                        flag("Group eye: the 3D points, in whichever point_style they are drawn."),
+                    ),
+                    (
+                        "point_style",
+                        json!({
+                            "type": "string",
+                            "enum": ["dots", "patches"],
+                            "description":
+                                "How the points are drawn: dots draws every point as a dot; \
+                                 patches draws each point that has a patch as its patch and the \
+                                 rest as dots. Settable on a reconstruction with no patch data, \
+                                 where patches draws every point as a dot. A file with patch \
+                                 data opens as patches, any other as dots.",
+                        }),
+                    ),
                     (
                         "show_camera_images",
                         flag("Group eye: the camera frustums and image quads."),
                     ),
-                    ("show_patches", flag("Group eye: the patch surfels.")),
                     (
                         "show_points_at_infinity",
                         flag("Sub-toggle of show_points: the w = 0 directions."),
@@ -453,7 +468,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             name: "set_viewer_3d_display",
             description: "Change the 3D viewport's display controls, the checkboxes and sliders \
                           of its Display HUD: which layers are drawn (points, camera images, grid, \
-                          patches, points at infinity, the orbit target's indicator), point and \
+                          points at infinity, the orbit target's indicator), point and \
                           patch sizes, the scene scale, Maintain Z-up, the Advanced sliders, \
                           the Debug overlays (the controls help, the frame rate and whether the \
                           status line shows an agent's actions, show_mcp_status_line), and the \

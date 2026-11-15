@@ -116,7 +116,9 @@ pub(super) fn recon_uniforms(
         } else {
             FILTER_DIM
         },
-        _pad: 0.0,
+        // The point style, already composed with the patch opacity, so the
+        // point pass leaves out exactly the splats the patch pass replaces.
+        points_as_patches: u32::from(bundle.display.points_as_patches),
     }
 }
 

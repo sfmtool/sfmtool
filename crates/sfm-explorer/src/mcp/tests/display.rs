@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::scene::PointStyle;
 use crate::viewer_3d::display::{Control, Field, FieldValue, Viewer3dDisplay};
 
 // ── Display, and solo ───────────────────────────────────────────────────
@@ -19,6 +20,64 @@ fn set_reconstruction_display_leaves_the_fields_it_was_not_given() {
     assert_eq!(entry["display"]["tint"], "Sky Blue");
     assert_eq!(entry["display"]["visible"], true);
     assert_eq!(entry["display"]["show_camera_images"], true);
+}
+
+/// `point_style` goes out on the scene read and comes back through
+/// `set_reconstruction_display`: a node with no patch data opens as dots, takes
+/// patches and dots again, logs each change in the Scene panel's words, and
+/// reports what it holds.
+#[test]
+fn point_style_round_trips_through_set_reconstruction_display() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let scene = ok(&mut state, &mut viewer, Command::GetScene);
+    assert_eq!(scene["scene"][1]["display"]["point_style"], "dots");
+    assert!(scene["scene"][1]["display"].get("show_patches").is_none());
+
+    let rows = state.action_log.entries().count();
+    for asked in ["patches", "dots"] {
+        // The reply is the scene entry `get_scene` reports, rendered from the
+        // node, so reading it back is reading what the node now holds.
+        let entry = call(
+            &mut state,
+            &mut viewer,
+            "set_reconstruction_display",
+            json!({ "reconstruction_label": "beta", "point_style": asked }),
+        );
+        assert_eq!(entry["display"]["point_style"], asked);
+        assert_eq!(state.scene[0].point_style, PointStyle::Dots, "alpha moved");
+    }
+    let logged: Vec<String> = state
+        .action_log
+        .entries()
+        .skip(rows)
+        .filter(|entry| entry.kind == crate::action_log::Kind::Scene)
+        .map(|entry| entry.text.clone())
+        .collect();
+    assert_eq!(
+        logged,
+        ["Point style of beta: Patches", "Point style of beta: Dots"]
+    );
+}
+
+/// A style other than the two, or a `show_patches`, is refused at the parse,
+/// so nothing else in the call is applied.
+#[test]
+fn set_reconstruction_display_refuses_an_unknown_point_style() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_reconstruction_display",
+        json!({ "reconstruction_label": "beta", "point_style": "both", "visible": false }),
+    );
+    assert!(error.0.contains("dots or patches"), "{error}");
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_reconstruction_display",
+        json!({ "reconstruction_label": "beta", "show_patches": false }),
+    );
+    assert!(error.0.contains("\"show_patches\""), "{error}");
 }
 
 #[test]
@@ -739,15 +798,20 @@ fn a_seeded_scene_scale_reads_back_as_a_value_the_set_accepts() {
     }
 }
 
-/// `show_patches` is a master switch, and it is set whether or not anything
-/// loaded carries patches; without them it draws nothing.
+/// There is no global patches switch: the HUD document has no `show_patches`
+/// and the setter refuses one, as it refuses any field it does not hold.
 #[test]
-fn show_patches_is_settable_without_patch_data() {
+fn the_viewer_3d_display_has_no_show_patches() {
     let (mut state, mut viewer) = two_reconstructions();
-    assert!(state.scene.iter().all(|node| !node.has_patch_data()));
-    let reply = set_viewer_3d(&mut state, &mut viewer, json!({ "show_patches": false }));
-    assert_eq!(reply["show_patches"], false);
-    assert!(!state.show_patches);
+    let document = viewer_3d_display(&mut state, &mut viewer);
+    assert!(document.get("show_patches").is_none(), "{document}");
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_viewer_3d_display",
+        json!({ "show_patches": false }),
+    );
+    assert!(error.0.contains("\"show_patches\""), "{error}");
 }
 
 /// Every refusal is at the parse, names the range, and leaves the call's good
@@ -939,7 +1003,6 @@ fn every_viewer_3d_display_field_records_the_hud_s_words() {
             "Points off",
             "Camera Images off",
             "Grid off",
-            "Patches off",
             "Points at ∞ off",
             "Target indicator off",
             "Point size 1.0",

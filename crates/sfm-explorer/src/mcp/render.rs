@@ -105,7 +105,7 @@ pub(super) fn reconstruction(node: &SceneNode, solo: Option<ReconId>, index_file
             "interactive": node.interactive,
             "show_points": node.show_points,
             "show_camera_images": node.show_camera_images,
-            "show_patches": node.show_patches,
+            "point_style": node.point_style.wire_name(),
             "show_points_at_infinity": node.show_points_at_infinity,
             "tint": tint_name(node),
         },

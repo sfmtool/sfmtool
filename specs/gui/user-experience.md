@@ -166,17 +166,16 @@ otherwise claims entirely.
 
 | Section | Control | Range / default | Purpose |
 |---------|---------|-----------------|---------|
-| Layers | Points | on | Toggle point cloud visibility |
+| Layers | Points | on | Toggle point cloud visibility, as dots or patches by each node's point style |
 | Layers | Camera Images | on | Toggle frustum and image quad visibility |
 | Layers | Grid | on | Toggle ground plane grid |
-| Layers | Patches | on | Toggle the patch surfel pass |
 | Layers | Points at ∞ | on | Toggle `w = 0` points |
 | Layers | Target indicator | off | Keep the orbit target's indicator drawn without holding Alt |
 | Size | Points | −3…+3, default 0 | Multiplier on the auto point size (log₂ scale) |
 | Size | Reset point size | — | Return Points to 0 |
 | Size | ∞ (px) | 1–16 px, default 3 | On-screen splat radius for `w = 0` points |
 | Size | Scene | 0.001–100, log scale | Scene length scale (affects target indicator, frustum size) |
-| Patches | Opacity | 0–1, default 1.0 | Global multiply on patch color alpha |
+| Patches | Opacity | 0–1, default 1.0 | Global multiply on patch color alpha; at 0 the points drawn as patches are drawn as dots |
 | Patches | Size | −3…+3, default 0 | Multiplier on stored patch half-extents (log₂) |
 | Patches | Edge cutoff | 0–1, default 0.0 | Coverage alpha below which patch texels are discarded |
 | Camera | Maintain Z-up | on | Turn the view back to +Z up whenever it is not looking through a camera; Q and E turn it off |
@@ -191,9 +190,11 @@ otherwise claims entirely.
 | Debug | MCP status line | on | Show an agent's actions in the status line; off, the line is empty after an agent's action until a person acts ([action-log.md](action-log.md#the-viewport-status-line)) |
 | Debug | Touchpad counters | — | DirectManipulation `H`/`C`/`U`/`G` counters and handler status |
 
-The whole **Patches** section is omitted when the loaded reconstruction carries
-no patch frames and bitmaps; the Layers "Patches" toggle stays, greyed, so the
-capability remains discoverable. See
+The whole **Patches** section is omitted while no node draws patches. Whether a
+node's points are drawn as dots or as patches is its point style, the
+Dots/Patches selector under its Points row in the Scene panel, which a node with
+patch frames and bitmaps carries and starts at Patches
+([scene-graph.md](scene-graph.md#point-style)). See
 [patch-rendering.md](patch-rendering.md#ui-controls).
 
 There is no **View** menu — with the display controls in the HUD, nothing

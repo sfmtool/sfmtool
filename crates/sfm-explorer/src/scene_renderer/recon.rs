@@ -4,7 +4,7 @@
 //! Per-reconstruction GPU resources.
 //!
 //! Everything that belongs to *one* loaded reconstruction lives in a
-//! [`ReconResources`] bundle keyed by [`ReconId`](crate::scene::ReconId) on the
+//! [`ReconResources`] bundle keyed by [`ReconId`] on the
 //! renderer; everything shared — pipelines, render targets, samplers, the unit
 //! quad, the EDL / target-indicator / track-ray / background-image resources —
 //! stays a singleton on [`SceneRenderer`](super::SceneRenderer).
@@ -24,7 +24,7 @@ use sfmtool_core::{Se3Transform, SfmrReconstruction};
 
 use super::gpu_types::FALLBACK_POINT_SIZE;
 use crate::filter_3d::KeptPoints;
-use crate::scene::NodeTint;
+use crate::scene::{NodeTint, PointStyle, ReconId, SceneNode};
 
 /// The patch (surfel) half of a bundle: present only when the reconstruction
 /// carries patch frames *and* bitmaps, so its fields need no individual
@@ -103,6 +103,10 @@ pub(super) struct AdditionResources {
     pub(crate) point_instance_buffer: wgpu::Buffer,
     /// Per-addition liveness, as for the base's.
     pub(crate) point_alive_buffer: wgpu::Buffer,
+    /// The words last written to `point_alive_buffer`, as for the base's
+    /// `ReconResources::written_point_words`.
+    #[cfg(test)]
+    pub(crate) written_point_words: Vec<u32>,
     pub(crate) point_count: u32,
     /// The additions' surfels and their own atlas, when any addition carries a
     /// patch bitmap.
@@ -142,7 +146,7 @@ pub(super) struct PreviewResources {
 /// One node's display state as the renderer needs it: which layers to draw,
 /// and whether the node captures picks.
 ///
-/// Mirrored from [`SceneNode`](crate::scene::SceneNode) once per frame rather
+/// Mirrored from [`SceneNode`] once per frame rather
 /// than looked up per draw, so the draw loop and the uniform write — which see
 /// only bundles — need no access to the scene.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,10 +159,20 @@ pub(crate) struct NodeDisplay {
     /// bounds union and the per-recon uniform write cannot disagree about what
     /// "visible" means.
     pub(crate) visible: bool,
+    /// Group eye: the node's points, in whichever style they are drawn.
     pub(crate) show_points: bool,
     /// Group eye: the node's camera frustums and image quads.
     pub(crate) show_camera_images: bool,
-    pub(crate) show_patches: bool,
+    /// Whether the node's points that have a surfel are drawn as their
+    /// surfels: its point style is Patches and the global patch opacity is
+    /// above 0. On, the patch pass draws the node and the point pass leaves out
+    /// the splat of each point with a surfel (the mask word's
+    /// `MASK_HAS_SURFEL`); off, every point is a splat and the patch pass skips
+    /// the node.
+    ///
+    /// Composed once, by `app.rs`'s per-frame mirror, so the two passes cannot
+    /// disagree about which of them draws a point.
+    pub(crate) points_as_patches: bool,
     /// Sub-toggle of `show_points`, applied in the point shader so instance
     /// indices (and therefore pick ids) stay unfiltered.
     pub(crate) show_points_at_infinity: bool,
@@ -169,6 +183,26 @@ pub(crate) struct NodeDisplay {
     pub(crate) tint: NodeTint,
 }
 
+impl NodeDisplay {
+    /// What `node` shows this frame, under the scene's `solo` and the HUD's
+    /// patch opacity: the one place the mirror composes it.
+    pub(crate) fn of(node: &SceneNode, solo: Option<ReconId>, patch_opacity: f32) -> Self {
+        Self {
+            visible: crate::scene::is_visible(node, solo),
+            show_points: node.show_points,
+            show_camera_images: node.show_camera_images,
+            // At zero opacity surfels are invisible, so a node whose style is
+            // Patches draws dots instead: a surfel drawn at no opacity would
+            // still write depth and pick ids where nothing shows, and its dot
+            // would be left out for it.
+            points_as_patches: node.point_style == PointStyle::Patches && patch_opacity > 0.0,
+            show_points_at_infinity: node.show_points_at_infinity,
+            interactive: node.interactive,
+            tint: node.tint,
+        }
+    }
+}
+
 impl Default for NodeDisplay {
     /// Everything on: what a freshly loaded node shows before the Scene panel
     /// has had a frame to say otherwise.
@@ -177,7 +211,7 @@ impl Default for NodeDisplay {
             visible: true,
             show_points: true,
             show_camera_images: true,
-            show_patches: true,
+            points_as_patches: true,
             show_points_at_infinity: true,
             interactive: true,
             tint: NodeTint::Original,
@@ -241,9 +275,15 @@ pub(super) struct ReconResources {
     pub(crate) point_instance_buffer: Option<wgpu::Buffer>,
     /// Per-point mask word (`0` deleted, `1` alive, `2` to `4` alive and
     /// marked; see `upload::overlay`), as a second instance buffer stepping
-    /// with `point_instance_buffer`. The overlay's deleted set and the
-    /// viewport's marks reach the point shader through this and nothing else.
+    /// with `point_instance_buffer`. The overlay's deleted set, the viewport's
+    /// marks and which points have a surfel reach the point shader through
+    /// this and nothing else.
     pub(crate) point_alive_buffer: Option<wgpu::Buffer>,
+    /// The words last written to `point_alive_buffer`, entry by entry: the
+    /// half a headless test cannot read back from a `VERTEX | COPY_DST`
+    /// buffer.
+    #[cfg(test)]
+    pub(crate) written_point_words: Vec<u32>,
     pub(crate) point_count: u32,
     /// Global point uniforms + this node's `ReconUniforms`.
     pub(crate) point_bind_group: wgpu::BindGroup,
@@ -380,6 +420,8 @@ impl ReconResources {
             atlas_rows: 0,
             images_per_page: 0,
             patch: None,
+            #[cfg(test)]
+            written_point_words: Vec::new(),
             additions: None,
             uploaded_additions: (0, 0),
             preview: None,
@@ -397,7 +439,6 @@ impl ReconResources {
     }
 
     /// The marks the mask last written for this bundle holds.
-    #[cfg(test)]
     pub(super) fn masked_marks(&self) -> super::upload::PointMarks<'_> {
         super::upload::PointMarks {
             highlighted: &self.masked_highlighted,
@@ -406,6 +447,13 @@ impl ReconResources {
             kept: self.masked_kept.as_ref(),
             filter_hides: self.filter_hides,
         }
+    }
+
+    /// Whether the patch pass draws this node's surfels, the per-node half of
+    /// its rule: the points' group eye is on and the style asks for surfels.
+    /// The global Points toggle and the node's visibility are the caller's.
+    pub(super) fn draws_surfels(&self) -> bool {
+        self.display.show_points && self.display.points_as_patches
     }
 
     /// Whether this node's points and surfels take the second, dimmed draw:

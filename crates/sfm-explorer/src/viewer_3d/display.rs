@@ -165,7 +165,6 @@ pub(crate) enum Field {
     ShowPoints,
     ShowCameraImages,
     ShowGrid,
-    ShowPatches,
     ShowPointsAtInfinity,
     ShowTargetIndicator,
     PointSizeLog2,
@@ -186,11 +185,10 @@ pub(crate) enum Field {
 
 impl Field {
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
-    pub(crate) const ALL: [Field; 20] = [
+    pub(crate) const ALL: [Field; 19] = [
         Field::ShowPoints,
         Field::ShowCameraImages,
         Field::ShowGrid,
-        Field::ShowPatches,
         Field::ShowPointsAtInfinity,
         Field::ShowTargetIndicator,
         Field::PointSizeLog2,
@@ -215,7 +213,6 @@ impl Field {
             Field::ShowPoints => "show_points",
             Field::ShowCameraImages => "show_camera_images",
             Field::ShowGrid => "show_grid",
-            Field::ShowPatches => "show_patches",
             Field::ShowPointsAtInfinity => "show_points_at_infinity",
             Field::ShowTargetIndicator => "show_target_indicator",
             Field::PointSizeLog2 => "point_size_log2",
@@ -243,7 +240,6 @@ impl Field {
             Field::ShowPoints => "Points",
             Field::ShowCameraImages => "Camera Images",
             Field::ShowGrid => "Grid",
-            Field::ShowPatches => "Patches",
             Field::ShowPointsAtInfinity => "Points at ∞",
             Field::ShowTargetIndicator => "Target indicator",
             Field::PointSizeLog2 => "Point size",
@@ -269,7 +265,6 @@ impl Field {
             Field::ShowPoints
             | Field::ShowCameraImages
             | Field::ShowGrid
-            | Field::ShowPatches
             | Field::ShowPointsAtInfinity
             | Field::ShowTargetIndicator
             | Field::MaintainZUp
@@ -349,7 +344,6 @@ impl Field {
             Field::ShowPoints => Flag(state.show_points),
             Field::ShowCameraImages => Flag(state.show_camera_images),
             Field::ShowGrid => Flag(state.show_grid),
-            Field::ShowPatches => Flag(state.show_patches),
             Field::ShowPointsAtInfinity => Flag(state.show_points_at_infinity),
             Field::ShowTargetIndicator => Flag(state.show_target_indicator),
             Field::PointSizeLog2 => Number(state.point_size_log2),
@@ -379,7 +373,6 @@ impl Field {
                     Field::ShowPoints => &mut state.show_points,
                     Field::ShowCameraImages => &mut state.show_camera_images,
                     Field::ShowGrid => &mut state.show_grid,
-                    Field::ShowPatches => &mut state.show_patches,
                     Field::ShowPointsAtInfinity => &mut state.show_points_at_infinity,
                     Field::ShowTargetIndicator => &mut state.show_target_indicator,
                     Field::MaintainZUp => &mut viewer.maintain_z_up,

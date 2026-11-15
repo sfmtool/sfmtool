@@ -27,6 +27,7 @@ use super::{
 use crate::action_log::Actor;
 use crate::dock::Tab;
 use crate::goto_point::{parse_point_query, PointQuery};
+use crate::scene::PointStyle;
 
 /// What a tool does to the viewer, which is all the MCP annotations need to
 /// know.
@@ -207,7 +208,14 @@ pub(crate) fn parse(
                 interactive: args.optional_bool("interactive")?,
                 show_points: args.optional_bool("show_points")?,
                 show_camera_images: args.optional_bool("show_camera_images")?,
-                show_patches: args.optional_bool("show_patches")?,
+                point_style: match args.optional_string("point_style")? {
+                    None => None,
+                    Some(name) => Some(PointStyle::from_wire_name(&name).ok_or_else(|| {
+                        args.error(format!(
+                            "does not know the point style {name:?} — expected dots or patches."
+                        ))
+                    })?),
+                },
                 show_points_at_infinity: args.optional_bool("show_points_at_infinity")?,
                 // Doubly optional: absent leaves the tint alone, an explicit
                 // null clears it.

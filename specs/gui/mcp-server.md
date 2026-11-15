@@ -159,7 +159,7 @@ Quit does (§ "`quit`").
 | `select_camera_intrinsics` | write | Select an intrinsics record |
 | `select_point` | write | Select a 3D point |
 | `clear_selection` | write | Drop the selection, wholly or one kind of it |
-| `set_reconstruction_display` | write | One reconstruction's eyes, tint, interactivity |
+| `set_reconstruction_display` | write | One reconstruction's eyes, point style, tint, interactivity |
 | `set_reconstruction_transform` | write | Set one reconstruction's display transform outright, the identity included |
 | `set_reconstruction_transform_from_patch` | write | Set it from the focused item's patch, in one of the four ways the viewport's patch menu offers |
 | `bake_reconstruction_transform` | write | Write the display transform into the reconstruction and return it to its own frame, as one version |
@@ -547,8 +547,8 @@ addressable. No arguments.
       "counts": { "points": 4210, "points_at_infinity": 0, "camera_images": 17,
                   "camera_intrinsics": 1, "observations": 19844 },
       "display": { "visible": true, "drawn": true, "interactive": true,
-                   "show_points": true, "show_camera_images": true,
-                   "show_patches": true, "show_points_at_infinity": true,
+                   "show_points": true, "point_style": "dots",
+                   "show_camera_images": true, "show_points_at_infinity": true,
                    "tint": null },
       "world_space_unit": "m",            // what the file declares; null for scene units
       "transformed": false,               // SceneNode::has_transform
@@ -1465,6 +1465,7 @@ rule — `"camera_image"` drops the camera image and keeps the intrinsics
 { "reconstruction_label": "global", "visible": false }
 { "reconstruction_label": "global", "tint": "Sky Blue" }  // TINT_PALETTE name, or null
 { "reconstruction_label": "global", "show_points": true, "show_camera_images": false }
+{ "reconstruction_label": "global", "point_style": "patches" }  // or "dots"
 ```
 
 Every field is one of `SceneNode`'s own, and every omitted one is left alone.
@@ -1476,6 +1477,16 @@ reconstruction's own colours; an unknown name is an error listing the seven,
 rather than a free colour, for the reason the palette is fixed in the first
 place. The tint is resolved **before** any field is written, so a refused call
 has not applied the rest of itself on the way out.
+
+`point_style` is the Scene panel's Dots/Patches selector
+([scene-graph.md](scene-graph.md#point-style)): `"dots"` draws every point as a
+dot, `"patches"` each point that has a patch as its patch and the rest as dots.
+Any other string is refused at the parse. It is settable on a reconstruction
+with no patch data, where `"patches"` draws every point as a dot, for the
+reason a layer's eye is settable with nothing to draw: refusing it would make an
+agent check for patch data before choosing how a reconstruction is drawn. A
+change is logged under `Scene` as the selector logs it, `Point style of
+<label>: Patches`.
 
 ### `set_reconstruction_transform` / `set_reconstruction_transform_from_patch` / `bake_reconstruction_transform`
 
@@ -1867,8 +1878,10 @@ are, whether the orbit target's indicator is up. These two tools read and write
 those controls as one document, the 3D counterpart of
 `get_image_detail_display` / `set_image_detail_display`. Like those, they are
 scene-level settings rather than properties of a reconstruction: the layer
-toggles are master switches over every node, and the per-node eyes stay with
-`set_reconstruction_display`.
+toggles are master switches over every node, and the per-node eyes and point
+style stay with `set_reconstruction_display`. There is no patches toggle:
+patches are a way of drawing points, so `show_points` governs them, and
+`patch_opacity` 0 draws the points that have a patch as dots.
 
 `get_viewer_3d_display` takes no arguments and returns the document:
 
@@ -1878,7 +1891,6 @@ toggles are master switches over every node, and the per-node eyes stay with
     "show_points": true,              // Layers
     "show_camera_images": true,
     "show_grid": true,
-    "show_patches": true,
     "show_points_at_infinity": true,
     "show_target_indicator": false,
     "point_size_log2": 0.0,           // Size: -3 to 3, 1 decimal
@@ -1951,11 +1963,6 @@ strip's click records it, `Eraser brush tool` or `Navigate tool`. With the
 brush on, a `drag` across the viewport paints and deletes; the version lands a
 frame or two after the `drag` replies.
 
-**`show_patches` is settable without patch data.** The HUD greys its checkbox
-when no loaded reconstruction carries patch bitmaps, but the value is a master
-switch with nothing to draw, and refusing it would make an agent check for
-patch data before setting a layer it may want for the next file it opens.
-
 **`show_mcp_status_line` keeps an agent's calls off the status line.** It is
 the HUD's Debug > **MCP status line** checkbox, on by default. Set false, the
 viewport status line is empty while the newest entry it would show is the
@@ -2007,7 +2014,7 @@ the HUD's widgets record through too, so the texts are one definition:
 
 | Field | Text |
 |-------|------|
-| `show_points` / `show_camera_images` / `show_grid` / `show_patches` | `Points {on|off}` / `Camera Images {on|off}` / `Grid {on|off}` / `Patches {on|off}` |
+| `show_points` / `show_camera_images` / `show_grid` | `Points {on|off}` / `Camera Images {on|off}` / `Grid {on|off}` |
 | `show_points_at_infinity` / `show_target_indicator` | `Points at ∞ {on|off}` / `Target indicator {on|off}` |
 | `point_size_log2` / `infinity_point_px` / `length_scale` | `Point size {v:.1}` / `∞ point size {v:.1} px` / `Scene scale {v:.3}` |
 | `patch_opacity` / `patch_size_log2` / `patch_alpha_cutoff` | `Patch opacity {v:.2}` / `Patch size {v:.1}` / `Patch edge cutoff {v:.2}` |
@@ -6560,7 +6567,14 @@ where a test hands no host over.
 - **Solo**: it moves rather than accumulating, leaves the selection alone, and
   keeps `visible` and `drawn` distinguishable.
 - **A refusal is atomic**: an unknown tint lists the palette and leaves the
-  call's other fields unapplied.
+  call's other fields unapplied, and a `point_style` other than `"dots"` and
+  `"patches"` is refused at the parse, before anything is applied.
+- **`point_style` round-trips**: a reconstruction with no patch data reads
+  `"dots"` in `get_scene`, takes `"patches"` and `"dots"` through
+  `set_reconstruction_display`, reads each back in the reply, which is its
+  `get_scene` entry, leaves the other reconstruction's style alone, and logs
+  `Point style of <label>: Patches` and `: Dots`; the scene entry has no
+  `show_patches`, and the setter refuses one.
 - **`get_image_detail_display` returns the defaults on a fresh state**, with
   `intrinsics.enabled` true, `feature_size_px` null and `overlay_mode`
   `"features"`; **`set_image_detail_display`** changes exactly the fields it
@@ -6586,10 +6600,11 @@ where a test hands no host over.
   that reads `2.4`); **`set_viewer_3d_display`** changes exactly the fields it
   names, writes `maintain_z_up` onto the viewer and turns it back on, and the
   reply equals the next `get`; a number inside its range is rounded to its
-  slider's decimals (`1.53` to `1.5`); `show_patches` is set with no patch data
-  loaded; a number outside its range is refused with the range in the message,
-  as are a value of the wrong type, `fov_short_axis_deg` (an unknown argument)
-  and an empty call, and none of those changes anything; a refused `1e300` is
+  slider's decimals (`1.53` to `1.5`); a number outside its range is refused
+  with the range in the message, as are a value of the wrong type,
+  `fov_short_axis_deg` and `show_patches` (unknown arguments) and an empty
+  call, and none of those changes anything, and the document has no
+  `show_patches`; a refused `1e300` is
   written in exponent form; every slider's range holds no value that is not
   finite. A scene scale seeded from the points at load reads back as a value
   the set accepts, and drawing the HUD leaves it unchanged; both ends of every

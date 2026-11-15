@@ -197,12 +197,12 @@ fn property(field: Field) -> Value {
 /// What each field does, for the schema.
 fn description(field: Field) -> &'static str {
     match field {
-        Field::ShowPoints => "Draw the 3D points (the HUD's Points).",
+        Field::ShowPoints => {
+            "Draw the 3D points (the HUD's Points), as dots or patches by each reconstruction's \
+             point_style."
+        }
         Field::ShowCameraImages => "Draw the camera frustums and their images (Camera Images).",
         Field::ShowGrid => "Draw the ground grid (Grid).",
-        Field::ShowPatches => {
-            "Draw patch surfels (Patches). Settable without patch data, where it draws nothing."
-        }
         Field::ShowPointsAtInfinity => "Draw points at infinity, w = 0 (Points at ∞).",
         Field::ShowTargetIndicator => {
             "Draw the orbit target's indicator all the time (Target indicator). Off by default, \
@@ -217,7 +217,9 @@ fn description(field: Field) -> &'static str {
             "The scene scale, in scene units, that the grid, frustums and target are sized by \
              (the HUD's Scene slider)."
         }
-        Field::PatchOpacity => "Opacity of the patch surfels.",
+        Field::PatchOpacity => {
+            "Opacity of the patch surfels. At 0 the points that have a patch are drawn as dots."
+        }
         Field::PatchSizeLog2 => "Patch size as log2 of a multiplier on the stored size.",
         Field::PatchAlphaCutoff => {
             "Patch texels with coverage below this are discarded (Edge cutoff)."

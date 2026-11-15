@@ -101,6 +101,15 @@ point under the brush keeps its red; the shaders read the word as
 `alive & MASK_WORD` (`0xFF`). A deleted point's word never carries it. See
 § "The Track Table's filter".
 
+A live point that has a surfel in its node's patch atlas carries
+`MASK_HAS_SURFEL` (`0x200`) as well, in the point buffer only. While the
+node's point style draws patches (`ReconUniforms::points_as_patches`), the
+vertex shader emits a clipped vertex for such a point, so it is drawn as its
+surfel and not also as a splat, unless it is selected, hovered or takes
+`MASK_HIGHLIGHTED`, whose colours only the splat shows. The bit, the uniform
+and the reason for each are [scene-graph.md](scene-graph.md#point-style)
+§ "Point style".
+
 `SceneRenderer::update_point_mask` writes the words; see
 [document-model.md](document-model.md) § "Change detection by identity".
 
@@ -534,6 +543,7 @@ The full rendering pipeline for the point cloud and its post-processing:
 Pass 1a: Point splats
   → writes: color, linear depth (positive), pick ID, hw depth
   → technique: billboard quads, circle-clipped, instanced
+  → leaves out the points a node in the Patches style draws in Pass 1d
 
 Pass 1b: Frustum wireframes  (see camera-views.md)
   → writes: color, linear depth (0.0), pick ID, hw depth

@@ -815,7 +815,7 @@ pub(crate) struct DisplayChange {
     pub(crate) interactive: Option<bool>,
     pub(crate) show_points: Option<bool>,
     pub(crate) show_camera_images: Option<bool>,
-    pub(crate) show_patches: Option<bool>,
+    pub(crate) point_style: Option<crate::scene::PointStyle>,
     pub(crate) show_points_at_infinity: Option<bool>,
     pub(crate) tint: Option<Option<String>>,
 }

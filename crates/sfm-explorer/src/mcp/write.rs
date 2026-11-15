@@ -17,7 +17,9 @@ use super::{
     render, resolve_camera_image, resolve_camera_intrinsics, resolve_point, resolve_reconstruction,
     CameraImageSel, CloseTarget, DisplayChange, JsonReply, SelectionScope, ToolError,
 };
-use crate::action_log::{interactive_text, tint_text, visibility_text, Kind, Layer};
+use crate::action_log::{
+    interactive_text, point_style_text, tint_text, visibility_text, Kind, Layer,
+};
 use crate::scene::{NodeTint, TINT_PALETTE};
 use crate::state::AppState;
 
@@ -185,17 +187,18 @@ pub(super) fn set_reconstruction_display(
         label,
     );
     toggle(
-        &mut node.show_patches,
-        change.show_patches,
-        Layer::Patches,
-        label,
-    );
-    toggle(
         &mut node.show_points_at_infinity,
         change.show_points_at_infinity,
         Layer::PointsAtInfinity,
         label,
     );
+    if let Some(style) = change
+        .point_style
+        .filter(|style| *style != node.point_style)
+    {
+        node.point_style = style;
+        log.record(Kind::Scene, point_style_text(label, style));
+    }
     if let Some(interactive) = change.interactive.filter(|v| *v != node.interactive) {
         node.interactive = interactive;
         log.record(Kind::Scene, interactive_text(label, interactive));

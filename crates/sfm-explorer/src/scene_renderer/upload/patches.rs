@@ -30,6 +30,10 @@ impl SceneRenderer {
     /// rewritten, which is the expensive half kept and what the frame's phase
     /// note says as `reused`; otherwise the tiles it packed.
     ///
+    /// Either way it ends by marking, in the base's point buffer, the points
+    /// the atlas holds a surfel for (`MASK_HAS_SURFEL`), which the point upload
+    /// before it could not know.
+    ///
     /// `progress` is the frame's `patch atlas` phase, and the stages under it
     /// are [`Progress::detail_phase`]s. This is the upload that costs the most
     /// on a node carrying embedded patches, and the one row cannot say whether
@@ -57,6 +61,7 @@ impl SceneRenderer {
         {
             let _phase = progress.detail_phase("repack");
             if self.repack_patches(device, id, &recon.point_set) {
+                self.mark_points_with_surfels(queue, id);
                 return Uploaded::Reused;
             }
         }
@@ -78,6 +83,7 @@ impl SceneRenderer {
         );
         let packed = patch.as_ref().map_or(0, |patch| patch.count as usize);
         self.recons.get_mut(&id).expect("just ensured").patch = patch;
+        self.mark_points_with_surfels(queue, id);
         Uploaded::Built(packed)
     }
 
@@ -474,7 +480,9 @@ pub(super) fn patch_liveness(
 }
 
 /// The points that carry a patch, ascending: a point with no patch is an
-/// all-zero `u` row.
+/// all-zero `u` row or an all-zero bitmap row
+/// (`sfmtool_core::reconstruction::patch_bitmap_is_stored`), and packing the
+/// latter would draw a black square where the point's dot belongs.
 ///
 /// The atlas and the instance buffer are both compacted over this list, so a
 /// patch's slot is its position here and not its point index. The scan is
@@ -497,7 +505,12 @@ fn packed_points(
         .min(u_halfvecs.nrows())
         .min(v_halfvecs.nrows());
     (0..n_rows)
-        .filter(|&i| (0..3).any(|k| u_halfvecs[[i, k]] != 0.0))
+        .filter(|&i| {
+            (0..3).any(|k| u_halfvecs[[i, k]] != 0.0)
+                && sfmtool_core::reconstruction::patch_bitmap_is_stored(
+                    bitmaps.index_axis(ndarray::Axis(0), i),
+                )
+        })
         .map(|i| i as u32)
         .collect()
 }

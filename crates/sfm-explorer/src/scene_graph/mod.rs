@@ -17,9 +17,9 @@
 //!         #0  OPENCV_FISHEYE  480×480  f 240.1  26 images
 //!   ▾ 👁 Camera Images (243)
 //!       IMG_0001.jpg              ← virtualized, `ScrollArea::show_rows`
-//!   ▾ 👁 Points (1,204,551 · 12 at ∞) ∞
+//!   ▾ 👁 Points (1,204,551)      ∞
+//!       Style  Dots  Patches       ← the point style selector, only with patch data
 //!       selected: pt3d_a1b2c3_88231   ← selection / hover rows only
-//!     👁 Patches                   ← only when the node carries patch data
 //!   ▾   Index Files  1 of 2 current
 //!         SIFT Index       1.2M descriptors   ← current / stale / none
 //!         Cluster Patches  none
@@ -58,10 +58,12 @@
 use eframe::egui;
 use sfmtool_core::bench::{BenchEntry, StageKind};
 
-use crate::action_log::{interactive_text, visibility_text, ActionLog, Kind, Layer};
+use crate::action_log::{
+    interactive_text, point_style_text, visibility_text, ActionLog, Kind, Layer,
+};
 use crate::align::AlignOptions;
 use crate::index_files::IndexFileState;
-use crate::scene::{point_id, CameraRef, ImageRef, PointRef, ReconId, SceneNode};
+use crate::scene::{point_id, CameraRef, ImageRef, PointRef, PointStyle, ReconId, SceneNode};
 use crate::state::AppState;
 
 mod cameras;
@@ -71,7 +73,7 @@ mod widgets;
 use cameras::{show_camera_images_group, show_camera_intrinsics_group};
 pub(crate) use menus::SWITCH_CAMERA_MODEL;
 use menus::{cluster_patches_menu, index_files_menu, node_context_menu, sift_index_menu};
-use widgets::{counts_text, eye_toggle, glyph_toggle, with_thousands};
+use widgets::{counts_text, eye_toggle, glyph_toggle, point_style_selector, with_thousands};
 
 /// Height of one tree row. Fixed so the image list can be virtualized, and so
 /// the eye/cursor toggles line up down the tree regardless of label height.
@@ -124,6 +126,17 @@ const SELECTED_BAR_WIDTH: f32 = 3.0;
 /// twice is two nodes with expansion state of their own.
 pub(crate) fn row_id(recon: ReconId, key: &str) -> egui::Id {
     egui::Id::new(("scene_graph_row", recon, key))
+}
+
+/// The [`row_id`] of one button of a node's point style selector.
+fn point_style_row_id(recon: ReconId, style: PointStyle) -> egui::Id {
+    row_id(
+        recon,
+        match style {
+            PointStyle::Dots => "point_style_dots",
+            PointStyle::Patches => "point_style_patches",
+        },
+    )
 }
 
 /// What the Scene panel reports back to `dock.rs`.
@@ -594,24 +607,6 @@ fn show_node(ui: &mut egui::Ui, node: &mut SceneNode, ctx: &NodeContext, out: &m
         show_camera_images_group(ui, node, ctx, out);
         show_points_group(ui, node, ctx, out);
         show_bench_groups(ui, node, out);
-        if node.has_patch_data() {
-            ui.horizontal(|ui| {
-                ui.set_height(ROW_HEIGHT);
-                let eye = eye_toggle(
-                    ui,
-                    row_id(node.id, "patches_eye"),
-                    &mut node.show_patches,
-                    None,
-                    "Show patches",
-                    "Show this node's patches",
-                );
-                let shown = node.show_patches;
-                out.logged(row_id(node.id, "patches_eye"), eye, || {
-                    visibility_text(&node.label, Layer::Patches, shown)
-                });
-                ui.label("Patches");
-            });
-        }
         show_index_files_group(ui, node, out);
     });
 }
@@ -1214,8 +1209,14 @@ fn show_bench_stage_group(
     });
 }
 
-/// `[▸] [👁] Points (1,204,551 · 12 at ∞) [∞]`, expanding to the selection and
-/// hover rows.
+/// `[▸] [👁] Points (1,204,551 · 12 at ∞) [∞]`, then the line
+/// `Style [Dots|Patches]` directly under it, then, expanded, the selection and
+/// hover rows. The point style selector is drawn only on a node that carries
+/// patch data, the one kind of node on which the two styles draw differently.
+///
+/// Built from `CollapsingState`'s parts rather than `show_header(..).body(..)`
+/// so the selector line sits between the header and the body: it is a control
+/// of the Points row, not one more row of the selection list.
 fn show_points_group(
     ui: &mut egui::Ui,
     node: &mut SceneNode,
@@ -1223,13 +1224,19 @@ fn show_points_group(
     out: &mut TreeOutput,
 ) {
     let at_infinity = node.infinity_point_count();
-    let state = egui::collapsing_header::CollapsingState::load_with_default_open(
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
         row_id(node.id, "points"),
         false,
     );
     let id = node.id;
-    let header = state.show_header(ui, |ui| {
+    let header = ui.horizontal(|ui| {
+        // As `CollapsingState::show_header` lays its toggle out: the button
+        // takes the full indent width.
+        let spacing = ui.spacing().item_spacing;
+        ui.spacing_mut().item_spacing.x = 0.0;
+        state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
+        ui.spacing_mut().item_spacing = spacing;
         ui.set_height(ROW_HEIGHT);
         let eye = eye_toggle(
             ui,
@@ -1243,30 +1250,57 @@ fn show_points_group(
         out.logged(row_id(id, "points_eye"), eye, || {
             visibility_text(&node.label, Layer::Points, shown)
         });
-        let count = with_thousands(node.point_count());
-        let label = if at_infinity > 0 {
-            format!("Points ({count} · {} at ∞)", with_thousands(at_infinity))
-        } else {
-            format!("Points ({count})")
-        };
-        ui.label(label);
-        if at_infinity > 0 {
-            let infinity = glyph_toggle(
-                ui,
-                row_id(id, "points_infinity"),
-                &mut node.show_points_at_infinity,
-                None,
-                INFINITY_GLYPH,
-                "Show points at infinity",
-                "Draw this node's w = 0 points — directions with no parallax",
-            );
-            let shown = node.show_points_at_infinity;
-            out.logged(row_id(id, "points_infinity"), infinity, || {
-                visibility_text(&node.label, Layer::PointsAtInfinity, shown)
+        // The ∞ toggle sits at the row's visible right edge and the label takes
+        // what is left, dropping its counts rather than the word: a wider row
+        // elsewhere in the tree widens the layout past the panel, and an edge
+        // taken from the layout alone would put the toggle out of sight.
+        let row = ui.available_rect_before_wrap();
+        let right = row.right().min(ui.clip_rect().right()).max(row.left());
+        let row = egui::Rect::from_min_max(row.min, egui::pos2(right, row.bottom()));
+        let layout = egui::Layout::right_to_left(egui::Align::Center);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(row).layout(layout), |ui| {
+            if at_infinity > 0 {
+                let infinity = glyph_toggle(
+                    ui,
+                    row_id(id, "points_infinity"),
+                    &mut node.show_points_at_infinity,
+                    None,
+                    INFINITY_GLYPH,
+                    "Show points at infinity",
+                    "Draw this node's w = 0 points — directions with no parallax",
+                );
+                let shown = node.show_points_at_infinity;
+                out.logged(row_id(id, "points_infinity"), infinity, || {
+                    visibility_text(&node.label, Layer::PointsAtInfinity, shown)
+                });
+            }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                let label = points_label_text(ui, node.point_count(), at_infinity);
+                let label = ui.add(egui::Label::new(label).selectable(false));
+                out.mark(row_id(id, "points_label"), label.rect);
             });
-        }
+        });
     });
-    header.body(|ui| {
+    // The point style selector, on its own line directly under the Points
+    // row: the row and two word buttons do not fit one line of the panel's
+    // default width without eliding the word "Points" away.
+    if node.has_patch_data() {
+        ui.indent(row_id(id, "point_style"), |ui| {
+            ui.horizontal(|ui| {
+                ui.set_height(ROW_HEIGHT);
+                ui.add(egui::Label::new(egui::RichText::new("Style").weak()).selectable(false));
+                let before = node.point_style;
+                for (style, response) in point_style_selector(ui, &mut node.point_style) {
+                    out.hit(point_style_row_id(id, style), response);
+                }
+                if node.point_style != before {
+                    out.log
+                        .record(Kind::Scene, point_style_text(&node.label, node.point_style));
+                }
+            });
+        });
+    }
+    state.show_body_indented(&header.response, ui, |ui| {
         let mut any = false;
         // Both rows are conditional, so both are salted: without that the hover
         // row's identity would depend on whether a selection row happened to be
@@ -1308,6 +1342,32 @@ fn show_points_group(
             ui.weak("No point selected");
         }
     });
+}
+
+/// `Points (1,204,551 · 12 at ∞)`, cut to the width left of the row: the
+/// points-at-infinity count goes first (the ∞ toggle beside it already says
+/// there are some), then the point count. The word itself always stays, so the
+/// row says what it is.
+fn points_label_text(ui: &egui::Ui, points: usize, at_infinity: usize) -> String {
+    let count = with_thousands(points);
+    let available = ui.available_width();
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let fits = |text: &str| {
+        let galley =
+            ui.painter()
+                .layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER);
+        galley.size().x <= available
+    };
+    let candidates = [
+        (at_infinity > 0)
+            .then(|| format!("Points ({count} · {} at ∞)", with_thousands(at_infinity))),
+        Some(format!("Points ({count})")),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|text| fits(text))
+        .unwrap_or_else(|| "Points".to_string())
 }
 
 #[cfg(test)]

@@ -41,6 +41,14 @@ pub(crate) const MASK_UNDER_BRUSH: u32 = 4;
 /// whether such a point is dimmed or hidden. A deleted point's word never
 /// carries it.
 pub(crate) const MASK_REJECTED: u32 = 0x100;
+/// The bit set on a live point's word in a *point* buffer, beside whichever of
+/// the words above it takes, when the point has a surfel in the node's patch
+/// atlas (the base's or the additions' own). The point shader leaves out such
+/// a point's splat while the node's `ReconUniforms::points_as_patches` is on,
+/// so the point is drawn once, as its surfel. Built from the atlases' own slot
+/// maps, so a point whose surfel the upload could not pack keeps its splat. A
+/// deleted point's word never carries it, and a patch buffer's words never do.
+pub(crate) const MASK_HAS_SURFEL: u32 = 0x200;
 
 /// The viewport's marks on one node's points, in the index space the mask is
 /// keyed on (edited indexes). Each set picks a mask word other than
@@ -104,6 +112,22 @@ pub(crate) fn mask_word(index: u32, deleted: &HashSet<u32>, marks: PointMarks<'_
     };
     if marks.kept.is_some_and(|kept| !kept.contains(index)) {
         word | MASK_REJECTED
+    } else {
+        word
+    }
+}
+
+/// The word one point index takes in a point buffer: its [`mask_word`], with
+/// [`MASK_HAS_SURFEL`] over it when the point is live and `has_surfel`.
+pub(crate) fn point_word(
+    index: u32,
+    deleted: &HashSet<u32>,
+    marks: PointMarks<'_>,
+    has_surfel: bool,
+) -> u32 {
+    let word = mask_word(index, deleted, marks);
+    if has_surfel && word != MASK_DELETED {
+        word | MASK_HAS_SURFEL
     } else {
         word
     }
@@ -207,6 +231,10 @@ impl SceneRenderer {
     /// compared by pointer; a new one, or the filter coming or going, writes
     /// every word of the node once.
     ///
+    /// A point-buffer entry it writes keeps [`MASK_HAS_SURFEL`] where the
+    /// point has a surfel ([`point_word`]), so a mark or an edit never gives a
+    /// point drawn as its surfel its dot back.
+    ///
     /// Returns how many indexes it wrote, which is what the frame's phase note
     /// says beside the time: this runs on every frame for every node, so zero
     /// is the usual answer and is the one that means nothing happened.
@@ -265,36 +293,41 @@ impl SceneRenderer {
         let mut addition_patches = Vec::new();
         for index in changed {
             let word = mask_word(index, deleted, marks);
-            if index < bundle.point_count {
-                points.push((index, word));
-            }
-            if let Some(&slot) = bundle
+            let slot = bundle
                 .patch
                 .as_ref()
-                .and_then(|patch| patch.slot_of_point.get(&index))
-            {
+                .and_then(|patch| patch.slot_of_point.get(&index));
+            if index < bundle.point_count {
+                points.push((index, point_word(index, deleted, marks, slot.is_some())));
+            }
+            if let Some(&slot) = slot {
                 patches.push((slot, word));
             }
             // An addition's own instance, whose row is its edited index less
             // the base's point count. Its surfel is keyed on the edited index,
             // like the base's, because the instances carry that.
             if let Some(additions) = &bundle.additions {
+                let slot = additions
+                    .patch
+                    .as_ref()
+                    .and_then(|patch| patch.slot_of_point.get(&index));
                 if let Some(row) = index.checked_sub(bundle.point_count) {
                     if row < additions.point_count {
+                        let word = point_word(index, deleted, marks, slot.is_some());
                         addition_points.push((row, word));
                     }
                 }
-                if let Some(&slot) = additions
-                    .patch
-                    .as_ref()
-                    .and_then(|patch| patch.slot_of_point.get(&index))
-                {
+                if let Some(&slot) = slot {
                     addition_patches.push((slot, word));
                 }
             }
         }
         if let Some(buffer) = &bundle.point_alive_buffer {
             write_runs(queue, buffer, &mut points);
+        }
+        #[cfg(test)]
+        for &(position, word) in &points {
+            bundle.written_point_words[position as usize] = word;
         }
         if let Some(patch) = &bundle.patch {
             write_runs(queue, &patch.alive_buffer, &mut patches);
@@ -305,6 +338,12 @@ impl SceneRenderer {
                 write_runs(queue, &patch.alive_buffer, &mut addition_patches);
             }
         }
+        #[cfg(test)]
+        if let Some(additions) = bundle.additions.as_mut() {
+            for &(row, word) in &addition_points {
+                additions.written_point_words[row as usize] = word;
+            }
+        }
         bundle.masked_deleted.clone_from(deleted);
         bundle.masked_highlighted.clone_from(marks.highlighted);
         bundle.masked_painted.clone_from(marks.painted);
@@ -313,15 +352,64 @@ impl SceneRenderer {
         written
     }
 
-    /// The word `id`'s mask holds for `index`, as the last
-    /// [`Self::update_point_mask`] left it. For the tests, which cannot read a
-    /// buffer back from the `noop` backend and so assert on the sets the
-    /// writes were diffed against.
+    /// Rewrite every word of `id`'s base point buffer, so each carries
+    /// [`MASK_HAS_SURFEL`] exactly where the base's atlas packed a surfel.
+    ///
+    /// The point upload builds that buffer before the patch upload has packed
+    /// anything, so the patch upload calls this once it has, whether it built a
+    /// new atlas, kept the old one or found none. Each word is otherwise what
+    /// the mask's sets say, so a call between two mask updates changes no
+    /// mark; [`Self::update_point_mask`] keeps the bit on the entries it writes
+    /// afterwards. One buffer write of the node's size, on a base change only.
+    pub(super) fn mark_points_with_surfels(&mut self, queue: &wgpu::Queue, id: ReconId) {
+        let Some(bundle) = self.recons.get(&id) else {
+            return;
+        };
+        let Some(buffer) = &bundle.point_alive_buffer else {
+            return;
+        };
+        if bundle.point_count == 0 {
+            return;
+        }
+        let marks = bundle.masked_marks();
+        let slots = bundle.patch.as_ref().map(|patch| &patch.slot_of_point);
+        let words: Vec<u32> = (0..bundle.point_count)
+            .map(|index| {
+                let has_surfel = slots.is_some_and(|slots| slots.contains_key(&index));
+                point_word(index, &bundle.masked_deleted, marks, has_surfel)
+            })
+            .collect();
+        queue.write_buffer(buffer, 0, bytemuck::cast_slice(&words));
+        #[cfg(test)]
+        if let Some(bundle) = self.recons.get_mut(&id) {
+            bundle.written_point_words = words;
+        }
+    }
+
+    /// The word `id`'s point buffer holds for `index`, as the last
+    /// [`Self::update_point_mask`] or [`Self::mark_points_with_surfels`] left
+    /// it. For the tests, which cannot read a buffer back from the `noop`
+    /// backend and so assert on the sets and the slot maps the writes were
+    /// built from.
     #[cfg(test)]
     pub(crate) fn masked_word(&self, id: ReconId, index: u32) -> Option<u32> {
-        self.recons
-            .get(&id)
-            .map(|bundle| mask_word(index, &bundle.masked_deleted, bundle.masked_marks()))
+        self.recons.get(&id).map(|bundle| {
+            let marks = bundle.masked_marks();
+            let deleted = &bundle.masked_deleted;
+            if index < bundle.point_count {
+                let has_surfel = bundle
+                    .patch
+                    .as_ref()
+                    .is_some_and(|patch| patch.slot_of_point.contains_key(&index));
+                return point_word(index, deleted, marks, has_surfel);
+            }
+            let has_surfel = bundle
+                .additions
+                .as_ref()
+                .and_then(|additions| additions.patch.as_ref())
+                .is_some_and(|patch| patch.slot_of_point.contains_key(&index));
+            point_word(index, deleted, marks, has_surfel)
+        })
     }
 
     /// How many base indexes `id`'s mask currently marks as deleted. For the

@@ -570,7 +570,8 @@ pub(crate) struct AppState {
     /// excluding one another.
     pub(crate) intrinsics_display: IntrinsicsDisplaySettings,
 
-    /// Whether to show 3D points.
+    /// Whether to show 3D points: the master switch over every node's points,
+    /// in whichever `PointStyle` each node draws them.
     pub(crate) show_points: bool,
 
     /// Whether to show camera frustums.
@@ -579,11 +580,9 @@ pub(crate) struct AppState {
     /// Whether to show the ground plane grid.
     pub(crate) show_grid: bool,
 
-    /// Whether to show patch surfels (textured oriented quads). Only has an
-    /// effect when the loaded reconstruction carries patch frames + bitmaps.
-    pub(crate) show_patches: bool,
-
-    /// Global opacity multiplier for patch surfel color.
+    /// Global opacity multiplier for patch surfel color. At 0 the patch pass
+    /// is skipped and every point a node would draw as a patch is drawn as a
+    /// dot instead.
     pub(crate) patch_opacity: f32,
 
     /// Log2 multiplier on the stored patch half-extents, mirroring
@@ -1015,7 +1014,6 @@ impl AppState {
             show_points: true,
             show_camera_images: true,
             show_grid: true,
-            show_patches: true,
             patch_opacity: 1.0,
             patch_size_log2: 0.0,
             patch_alpha_cutoff: 0.0,
