@@ -9,6 +9,8 @@
 //! motion, each image's keypoints made through its own planted correction and
 //! rates, read on rows or on columns, with a little noise.
 
+use std::sync::OnceLock;
+
 use super::*;
 
 /// A 60° `SFMTOOL_PINHOLE` of 640×480 (short side 480) with a mild barrel
@@ -65,24 +67,33 @@ fn correction_draws(count: usize, tau_e: f64, tau_w: f64, salt: u64) -> Vec<Intr
     out
 }
 
-const CORRECTION_IMAGES: usize = 30;
+/// The images of the tests' scenes. A solve's time grows faster than the image
+/// count, so a race on 12 images takes about a fifth of the time of one on 30,
+/// and on 12 a race under the default rule still chooses the planted
+/// scanlines and stops the other solve early, which the tests assert.
+const CORRECTION_IMAGES: usize = 12;
+/// The images of the scenes the scanlines race measurement raced
+/// (`specs/core/reconstruction/bundle-adjust-measurements.md`), which
+/// [`write_scanlines_race_scenes`] writes.
+const MEASURED_IMAGES: usize = 30;
 const CORRECTION_POINTS: usize = 400;
 const PER_IMAGE_POINTS: usize = 80;
 
-/// A scene of [`CORRECTION_IMAGES`] images, image `i` taken through camera
+/// A scene of one image per entry of `planted`, image `i` taken through camera
 /// `camera_of(i)` of `cameras` with the planted adjustment `planted[i]`, its
 /// rates read on `planted_scanlines[camera]`, looking from a cap of directions
 /// at [`CORRECTION_POINTS`] points, each image keeping the first
 /// [`PER_IMAGE_POINTS`] that land inside it, with 0.1 px of noise per axis.
 /// The value handed back carries no correction and no scanlines setting, and
-/// its poses are perturbed.
+/// its poses are perturbed. Each image is posed by its index alone, so a
+/// scene of fewer images is posed as the first images of a larger one.
 fn corrections_source(
     cameras: Vec<CameraIntrinsics>,
     camera_of: impl Fn(usize) -> u32,
     planted: &[IntrinsicAdjustment],
     planted_scanlines: &[RollingShutterScanlines],
 ) -> SfmrReconstruction {
-    let n_img = CORRECTION_IMAGES;
+    let n_img = planted.len();
     let mut recon = SfmrReconstruction::demo(1);
     let f = cameras[0].focal_lengths().0;
     let (half_w, half_h) = (
@@ -254,23 +265,70 @@ fn race_phases(collector: &Collector) -> Vec<&'static str> {
         .collect()
 }
 
+/// The index of `planted` in [`BOTH`], and the salt of the one-camera scene
+/// with rates planted on it that the race tests share: the measurement's
+/// scene with that setting, at the tests' size.
+fn race_scene(planted: RollingShutterScanlines) -> (usize, u64) {
+    match planted {
+        RollingShutterScanlines::Rows => (0, 70),
+        RollingShutterScanlines::Columns => (1, 80),
+    }
+}
+
+/// An adjustment of the one-camera scene with rates planted on one setting,
+/// with both corrections released and the scanlines falling back to
+/// `UNKNOWN`, with what it said on `progress`.
+struct RaceRun {
+    source: SfmrReconstruction,
+    out: SfmrReconstruction,
+    report: BundleAdjustReport,
+    collector: Collector,
+}
+
+/// The scene with rates planted on `planted` adjusted under `options`, with a
+/// recording `progress`.
+fn race_run(planted: RollingShutterScanlines, options: &BundleAdjustOptions) -> RaceRun {
+    let source = one_camera_source(planted, race_scene(planted).1);
+    let collector = Collector::recording();
+    let sink = |event: Event<'_>| collector.push(event);
+    let (out, report) = bundle_adjust(&source, options, &Progress::to(&sink)).expect("well posed");
+    RaceRun {
+        source,
+        out,
+        report,
+        collector,
+    }
+}
+
+/// The race under the defaults on the scene with rates planted on `planted`,
+/// run once and shared by the tests that only read it.
+fn default_race(planted: RollingShutterScanlines) -> &'static RaceRun {
+    static RUNS: [OnceLock<RaceRun>; 2] = [OnceLock::new(), OnceLock::new()];
+    RUNS[race_scene(planted).0]
+        .get_or_init(|| race_run(planted, &BundleAdjustOptions::uniform(1, CORRECTIONS)))
+}
+
+/// The race with the early stop off, two full solves, on the scene with rates
+/// planted on `planted`, run once and shared by the tests that only read it.
+fn full_race(planted: RollingShutterScanlines) -> &'static RaceRun {
+    static RUNS: [OnceLock<RaceRun>; 2] = [OnceLock::new(), OnceLock::new()];
+    RUNS[race_scene(planted).0].get_or_init(|| race_run(planted, &full_solves()))
+}
+
 #[test]
 fn unknown_scanlines_pick_the_planted_ones() {
     // A camera with no stored scanlines and no choice falls back to UNKNOWN:
     // two solves, and the one on the scanlines the rates were planted on ends
     // at the lower cost, is kept, and is written into the camera.
-    for (n, planted) in BOTH.into_iter().enumerate() {
-        let source = one_camera_source(planted, 70 + 10 * n as u64);
-        let collector = Collector::recording();
-        let sink = |event: Event<'_>| collector.push(event);
-        let (out, report) = bundle_adjust(
-            &source,
-            &BundleAdjustOptions::uniform(1, CORRECTIONS),
-            &Progress::to(&sink),
-        )
-        .expect("well posed");
+    for planted in BOTH {
+        let RaceRun {
+            out,
+            report,
+            collector,
+            ..
+        } = default_race(planted);
         assert_eq!(
-            race_phases(&collector),
+            race_phases(collector),
             ["solve with rows", "solve with columns"]
         );
         let camera = &report.cameras[0];
@@ -280,7 +338,9 @@ fn unknown_scanlines_pick_the_planted_ones() {
         let stop = race.stop.expect("the trailing solve was stopped");
         assert!(race.stopped_early);
         assert_ne!(stop.stopped, planted);
-        assert!(race.observations > 1000, "{race:?}");
+        // With 0.1 px of noise against a last trim of 4 px, both final rounds
+        // keep every observation, and the race compares them all.
+        assert_eq!(race.observations, report.observations, "{race:?}");
         assert!(race.sigma_px > 0.05 && race.sigma_px < 0.2, "{race:?}");
         assert!(
             ((race.rows_cost - race.columns_cost).abs() - stop.gap).abs() < 1e-9 * stop.gap,
@@ -336,7 +396,7 @@ fn unknown_scanlines_pick_the_planted_ones() {
             "{said:?}"
         );
         // The solved rates are near the planted ones.
-        let truth = correction_draws(CORRECTION_IMAGES, 3e-3, 4e-3, 70 + 10 * n as u64);
+        let truth = correction_draws(CORRECTION_IMAGES, 3e-3, 4e-3, race_scene(planted).1);
         let (mut err, mut size) = (0.0, 0.0);
         for (image, want) in out.image_set.images.iter().zip(&truth) {
             for (a, b) in image
@@ -504,12 +564,11 @@ fn several_unknown_cameras_are_raced_in_order_each_from_the_last_winner() {
         Some(RollingShutterScanlines::Columns)
     );
     assert!(report.cameras.iter().all(|c| c.scanlines_race.is_some()));
-    // Each race ran the early stop, and where it stopped a solve it stopped
-    // the one not chosen; the answer is the one two full solves per race give.
+    // Each race ran the early stop and stopped the solve not chosen; the
+    // answer is the one two full solves per race give.
     for camera in &report.cameras {
-        if let Some(stop) = camera.scanlines_race.unwrap().stop {
-            assert_ne!(Some(stop.stopped), camera.rolling_shutter_scanlines);
-        }
+        let stop = camera.scanlines_race.unwrap().stop.expect("a stopped race");
+        assert_ne!(Some(stop.stopped), camera.rolling_shutter_scanlines);
     }
     let full = BundleAdjustOptions {
         scanlines_early_stop: ScanlinesEarlyStopOptions {
@@ -862,31 +921,23 @@ fn report_text(report: &BundleAdjustReport) -> String {
 
 #[test]
 fn the_stop_falls_where_the_measurement_replayed_it() {
-    // The measurement's synthetic scenes at the default rate spread are
-    // these: the rule stops columns at round 2, iteration 4 with rows
-    // planted, and rows at round 2, iteration 2 with columns planted
-    // (bundle-adjust-measurements.md, "What the rule would do").
-    for (n, planted, stopped, iteration) in [
+    // The measurement's replay of the tests' synthetic scenes at the default
+    // rate spread: the rule stops columns at round 2, iteration 6 with rows
+    // planted, and rows at round 2, iteration 3 with columns planted
+    // (bundle-adjust-measurements.md, "Recommendation").
+    for (planted, stopped, iteration) in [
         (
-            0,
             RollingShutterScanlines::Rows,
             RollingShutterScanlines::Columns,
-            4,
+            6,
         ),
         (
-            1,
             RollingShutterScanlines::Columns,
             RollingShutterScanlines::Rows,
-            2,
+            3,
         ),
     ] {
-        let source = one_camera_source(planted, 70 + 10 * n as u64);
-        let (_, report) = bundle_adjust(
-            &source,
-            &BundleAdjustOptions::uniform(1, CORRECTIONS),
-            &Progress::none(),
-        )
-        .expect("well posed");
+        let report = &default_race(planted).report;
         let stop = report.cameras[0].scanlines_race.unwrap().stop.unwrap();
         assert_eq!(
             (stop.stopped, stop.round, stop.iteration),
@@ -902,54 +953,55 @@ fn the_winner_of_a_stopped_race_is_the_solve_it_would_be_alone() {
     // one two full solves give, and the one a solve given the winner's
     // setting gives: holding the winner in its progress sink changed nothing
     // it computed.
-    for (n, planted) in BOTH.into_iter().enumerate() {
-        let source = one_camera_source(planted, 70 + 10 * n as u64);
-        let (raced, raced_report) = bundle_adjust(
-            &source,
-            &BundleAdjustOptions::uniform(1, CORRECTIONS),
-            &Progress::none(),
-        )
-        .expect("well posed");
+    for planted in BOTH {
+        let raced = default_race(planted);
         assert!(
-            raced_report.cameras[0]
+            raced.report.cameras[0]
                 .scanlines_race
                 .unwrap()
                 .stopped_early
         );
-        let (full, full_report) =
-            bundle_adjust(&source, &full_solves(), &Progress::none()).expect("well posed");
+        let full = full_race(planted);
         let given = BundleAdjustOptions {
             rolling_shutter_scanlines: vec![Some(planted.into())],
             ..BundleAdjustOptions::uniform(1, CORRECTIONS)
         };
         let (alone, alone_report) =
-            bundle_adjust(&source, &given, &Progress::none()).expect("well posed");
+            bundle_adjust(&raced.source, &given, &Progress::none()).expect("well posed");
         same_bits(
-            &state_bits(&raced),
-            &state_bits(&full),
+            &state_bits(&raced.out),
+            &state_bits(&full.out),
             "against two full solves",
         );
         same_bits(
-            &state_bits(&raced),
+            &state_bits(&raced.out),
             &state_bits(&alone),
             "against one solve",
         );
         // The reports differ in the race alone.
-        let mut without_race = raced_report.clone();
+        let mut without_race = raced.report.clone();
         without_race.cameras[0].scanlines_race = None;
-        let mut full_without = full_report.clone();
+        let mut full_without = full.report.clone();
         full_without.cameras[0].scanlines_race = None;
         assert_eq!(report_text(&without_race), report_text(&full_without));
         assert_eq!(report_text(&without_race), report_text(&alone_report));
         // The two full solves chose the same setting, by its final costs.
-        let full_race = full_report.cameras[0].scanlines_race.unwrap();
+        let full_race = full.report.cameras[0].scanlines_race.unwrap();
         assert!(full_race.stop.is_none() && !full_race.stopped_early);
     }
 }
 
 #[test]
 fn a_race_the_rule_never_stops_is_two_full_solves_to_the_bit() {
-    let source = one_camera_source(RollingShutterScanlines::Rows, 70);
+    // The scene is one the rule stops under its defaults; an infinite
+    // threshold never fires.
+    let planted = RollingShutterScanlines::Rows;
+    assert!(
+        default_race(planted).report.cameras[0]
+            .scanlines_race
+            .unwrap()
+            .stopped_early
+    );
     let never = BundleAdjustOptions {
         scanlines_early_stop: ScanlinesEarlyStopOptions {
             gap_threshold: f64::INFINITY,
@@ -957,19 +1009,17 @@ fn a_race_the_rule_never_stops_is_two_full_solves_to_the_bit() {
         },
         ..BundleAdjustOptions::uniform(1, CORRECTIONS)
     };
-    let collector = Collector::recording();
-    let sink = |event: Event<'_>| collector.push(event);
-    let (raced, raced_report) =
-        bundle_adjust(&source, &never, &Progress::to(&sink)).expect("well posed");
-    let (full, full_report) =
-        bundle_adjust(&source, &full_solves(), &Progress::none()).expect("well posed");
-    same_bits(&state_bits(&raced), &state_bits(&full), "value");
-    assert_eq!(report_text(&raced_report), report_text(&full_report));
-    assert!(raced_report.cameras[0]
-        .scanlines_race
-        .unwrap()
-        .stop
-        .is_none());
+    let RaceRun {
+        out: raced,
+        report: raced_report,
+        collector,
+        ..
+    } = race_run(planted, &never);
+    let full = full_race(planted);
+    same_bits(&state_bits(&raced), &state_bits(&full.out), "value");
+    assert_eq!(report_text(&raced_report), report_text(&full.report));
+    let race = raced_report.cameras[0].scanlines_race.unwrap();
+    assert!(race.stop.is_none() && !race.stopped_early);
     // The columns solve's events are held until the rows solve has closed
     // its phase, so each solve's phase reads whole, rows first.
     let solves: Vec<String> = collector
@@ -994,22 +1044,26 @@ fn a_race_the_rule_never_stops_is_two_full_solves_to_the_bit() {
 
 #[test]
 fn a_stopped_race_stops_at_the_same_place_every_time() {
-    // The rule reads the solves' values, never the threads' timing.
-    let source = one_camera_source(RollingShutterScanlines::Columns, 80);
-    let runs: Vec<(Vec<u64>, String)> = (0..4)
-        .map(|_| {
-            let (out, report) = bundle_adjust(
-                &source,
-                &BundleAdjustOptions::uniform(1, CORRECTIONS),
-                &Progress::none(),
-            )
-            .expect("well posed");
-            (state_bits(&out), report_text(&report))
-        })
-        .collect();
-    for run in &runs[1..] {
-        same_bits(&run.0, &runs[0].0, "value");
-        assert_eq!(run.1, runs[0].1);
+    // The rule reads the solves' values, never the threads' timing: the
+    // shared race and three more runs of it stop at the same place and give
+    // the same answer.
+    let shared = default_race(RollingShutterScanlines::Columns);
+    assert!(
+        shared.report.cameras[0]
+            .scanlines_race
+            .unwrap()
+            .stopped_early
+    );
+    let first = (state_bits(&shared.out), report_text(&shared.report));
+    for _ in 0..3 {
+        let (out, report) = bundle_adjust(
+            &shared.source,
+            &BundleAdjustOptions::uniform(1, CORRECTIONS),
+            &Progress::none(),
+        )
+        .expect("well posed");
+        same_bits(&state_bits(&out), &first.0, "value");
+        assert_eq!(report_text(&report), first.1);
     }
 }
 
@@ -1033,9 +1087,11 @@ fn a_scanlines_choice_reads_and_writes_its_names() {
     );
 }
 
-/// Writes one-camera scenes with rates planted on rows and on columns at a few
-/// rate spreads, for the `scanlines_race` example to race. Run by hand, with
-/// `SCANLINES_RACE_SCENES` naming the directory to write them into:
+/// Writes one-camera scenes with rates planted on rows and on columns, for the
+/// `scanlines_race` example to race: the measurement's scenes of
+/// [`MEASURED_IMAGES`] images at a few rate spreads, and the tests' scenes of
+/// [`CORRECTION_IMAGES`] images at the spread the tests plant. Run by hand,
+/// with `SCANLINES_RACE_SCENES` naming the directory to write them into:
 /// `cargo test -p sfmtool-core --lib write_scanlines_race_scenes -- --ignored`.
 /// The directory needs a `.sfm-workspace.json` for the example to load them.
 #[test]
@@ -1044,10 +1100,14 @@ fn write_scanlines_race_scenes() {
     let dir = std::path::PathBuf::from(
         std::env::var("SCANLINES_RACE_SCENES").expect("SCANLINES_RACE_SCENES names a directory"),
     );
-    for tau_w in [4e-3, 1e-3, 3e-4, 1e-4] {
-        for (n, planted) in BOTH.into_iter().enumerate() {
-            let salt = 70 + 10 * n as u64;
-            let draws = correction_draws(CORRECTION_IMAGES, 3e-3, tau_w, salt);
+    let scenes = [4e-3, 1e-3, 3e-4, 1e-4]
+        .map(|tau_w| (MEASURED_IMAGES, tau_w))
+        .into_iter()
+        .chain([(CORRECTION_IMAGES, 4e-3)]);
+    for (images, tau_w) in scenes {
+        for planted in BOTH {
+            let salt = race_scene(planted).1;
+            let draws = correction_draws(images, 3e-3, tau_w, salt);
             let mut source = corrections_source(vec![spline_pinhole()], |_| 0, &draws, &[planted]);
             // The format needs each point's patch frame beside embedded
             // observations; the solve does not read it.
@@ -1057,6 +1117,14 @@ fn write_scanlines_race_scenes() {
             };
             source.point_set.patch_u_halfvec_xyz = Some(frame(0));
             source.point_set.patch_v_halfvec_xyz = Some(frame(1));
+            // And each image's readings, invented like the demo value's; the
+            // solve does not read them either.
+            for image in &mut source.image_set.images {
+                image.readings = Some(crate::features::sift::ImageReadings {
+                    sharpness: 0.01,
+                    gradient_structure_tensor_xx_yy_xy: [0.004, 0.003, 0.0],
+                });
+            }
             // And every keypoint inside its image, which the noise can push a
             // keypoint at the edge out of by a fraction of a pixel.
             if let ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
@@ -1067,7 +1135,10 @@ fn write_scanlines_race_scenes() {
                     row[1] = row[1].clamp(0.0, 479.99);
                 }
             }
-            let name = format!("planted_{}_rates_{tau_w:e}.sfmr", planted.as_str());
+            let name = format!(
+                "planted_{}_rates_{tau_w:e}_{images}_images.sfmr",
+                planted.as_str()
+            );
             source
                 .save(&dir.join(name), &Progress::none())
                 .expect("write a scene");
