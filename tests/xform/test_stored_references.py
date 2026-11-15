@@ -18,7 +18,6 @@ import pytest
 from click.testing import CliRunner
 
 from sfmtool._embed_patches import embed_patches
-from sfmtool.geometry import RotQuaternion
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.cli import main
 from sfmtool.xform import (
@@ -31,7 +30,7 @@ from sfmtool.xform import (
 )
 from sfmtool.xform._images import load_workspace_images
 
-from ..conftest import SEOUL_BULL_POINT_STEP, every_nth_point
+from ..conftest import SEOUL_BULL_GROUND_TRUTH, SEOUL_BULL_POINT_STEP, every_nth_point
 
 RESOLUTION = 16
 
@@ -59,8 +58,7 @@ def embedded(seoul_bull_workspace) -> SfmrReconstruction:
 @pytest.fixture
 def embedded_subset(embedded) -> SfmrReconstruction:
     """Every eighth point of :func:`embedded` (``SEOUL_BULL_POINT_STEP``), with
-    its references and bitmaps, for the tests that run ``embed_patches`` or
-    the normal refinement."""
+    its references and bitmaps, for the tests that run ``embed_patches``."""
     return every_nth_point(embedded, SEOUL_BULL_POINT_STEP)
 
 
@@ -203,45 +201,50 @@ def test_refine_keypoints_keeps_stored_references(embedded):
     np.testing.assert_array_equal(bare_refs[stored < 0], refs[stored < 0])
 
 
-def test_refine_normals_keeps_stored_references(embedded_subset):
-    """On :func:`embedded_subset`, with two of the points whose stored
-    reference the test moves made points at infinity. The run skips points
-    at infinity, so on every platform it leaves those two unrewritten with a
-    moved reference; which finite points it leaves depends on the fixture's
-    SIFT tracks."""
-    stored = _other_references(embedded_subset)
-    moved = (stored >= 0) & (
-        stored != np.asarray(embedded_subset.reference_observations)
+# The point of the seoul_bull ground truth that no view joins in the
+# grown-plane normal with 16x16 bitmaps, with its own reference observation
+# or the next one, so the run declines it and keeps its columns. It is the
+# only finite point the run declines once every reference has moved. The
+# ground truth is a checked-in file, so unlike the workspace's SIFT tracks
+# this does not differ between platforms.
+_DECLINED_GROUND_TRUTH_POINT = 40
+
+
+def test_refine_normals_keeps_stored_references():
+    """On every eighth point of the seoul_bull ground truth
+    (``SEOUL_BULL_POINT_STEP``), point 40 among them, with 16x16 bitmaps and
+    the references of :func:`_other_references`, point 40's moved too. So
+    the run both rewrites and declines a finite point whose reference
+    moved."""
+    ground_truth = SfmrReconstruction.load(str(SEOUL_BULL_GROUND_TRUTH))
+    sample = every_nth_point(ground_truth, SEOUL_BULL_POINT_STEP)
+    with_bitmaps = AddPatchBitmapsTransform(resolution=RESOLUTION).apply(sample)
+    picked = np.asarray(with_bitmaps.reference_observations)
+    counts = np.asarray(with_bitmaps.observation_counts).astype(np.int64)
+    stored = _other_references(with_bitmaps)
+    declined = _DECLINED_GROUND_TRUTH_POINT // SEOUL_BULL_POINT_STEP
+    np.testing.assert_array_equal(
+        np.asarray(sample.positions_xyzw)[declined],
+        np.asarray(ground_truth.positions_xyzw)[_DECLINED_GROUND_TRUTH_POINT],
     )
-    skipped = np.flatnonzero(moved)[:2]
-    assert len(skipped) == 2
-    centers = np.array(
-        [
-            -RotQuaternion.from_wxyz_array(q).to_rotation_matrix().T @ t
-            for q, t in zip(
-                embedded_subset.quaternions_wxyz, embedded_subset.translations
-            )
-        ]
-    )
-    positions = np.array(embedded_subset.positions_xyzw, dtype=np.float64)
-    directions = positions[skipped, :3] - centers.mean(axis=0)
-    positions[skipped, :3] = directions / np.linalg.norm(
-        directions, axis=1, keepdims=True
-    )
-    positions[skipped, 3] = 0.0
-    recon = embedded_subset.clone_with_changes(
-        positions=positions, reference_observations=stored
-    )
+    assert picked[declined] >= 0 and counts[declined] > 1
+    stored[declined] = (picked[declined] + 1) % counts[declined]
+    moved = (stored >= 0) & (stored != picked)
+    recon = with_bitmaps.clone_with_changes(reference_observations=stored)
+
     out = RefineNormalsTransform().apply(recon)
     refs = np.asarray(out.reference_observations)
     np.testing.assert_array_equal(refs[stored >= 0], stored[stored >= 0])
     # A point the run did not rewrite keeps its normal and every other column
     # bit for bit, its bitmap included, and that bitmap was rendered from the
-    # reference the fixture replaced; each rewritten point's bitmap is rendered
-    # from its own reference. Each kind holds a point whose reference moved.
+    # reference the test replaced; each rewritten point's bitmap is rendered
+    # from its own reference. Each kind holds a finite point whose reference
+    # moved: point 40 is the declined one.
     rewritten = (np.asarray(out.normals) != np.asarray(recon.normals)).any(axis=1)
+    finite = ~np.asarray(recon.point_is_at_infinity)
     assert (rewritten & moved).any()
-    assert not rewritten[skipped].any()
+    assert not rewritten[declined]
+    assert (~rewritten & moved & finite).any()
     np.testing.assert_array_equal(
         np.asarray(out.patch_bitmaps)[~rewritten],
         np.asarray(recon.patch_bitmaps)[~rewritten],
