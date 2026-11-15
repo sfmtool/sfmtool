@@ -333,8 +333,10 @@ The check is made in two places, both in
   `sfm merge`, `sfm to-colmap-db` from a `.sfmr`, `sfm undistort` and
   `sfm embed-patches`; `sfm heatmap`, `sfm inspect --strips`, `sfm xform` and
   `sfm align` for a `sift_files` input, `sfm xform` whatever its steps, since
-  several steps and the save read its `.sift` files, and `sfm align` with
-  either method, since it transforms and saves the reconstructions as
+  several steps and the save read its `.sift` files; `sfm xform` also for a
+  `sift_files` `--align-to` reference, whose `.sift` files it reads when it
+  matches points by keypoint position (when either side is `embedded_patches`);
+  `sfm align` with either method, since it transforms and saves the reconstructions as
   `sfm xform` does; and `sfm compare` for a `sift_files` input when it draws
   `--strips` or matches points by coordinate, which it does with
   `--by-coordinate` and by default when the inputs share no `.sift` file. It
