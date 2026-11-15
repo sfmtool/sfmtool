@@ -801,11 +801,12 @@ With a tool other than `sfmtool`, `frames_extracted` and
 runs the command with click's runner on scratch workspaces. Its video is a
 synthetic pan: crops sliding a few pixels per frame across one checked-in
 photograph. The tests that do not check the extraction start from a copy of
-one workspace of the pan whose `.sift` files are extracted once per module. It covers a report-only run
-that writes nothing but `.sift` files and prints the count of frames
-extracted and never read; an `opencv` workspace, whose every input frame gets a
-`.sift` file before the walk reads them; a written list that `-r NAME` and
-`sfm sift -r NAME` resolve to exactly the chosen frames; the JSON file and a
+one workspace of the pan whose `.sift` files are extracted once per module. It
+covers a report-only run that writes nothing but `.sift` files and prints the
+count of frames extracted and never read; an `opencv` workspace, whose every
+input frame gets a `.sift` file before the walk reads them; a written list
+that `-r NAME` and `sfm sift -r NAME` resolve to exactly the chosen frames; the
+JSON file and a
 second run that reuses every `.sift` file; the refusal of a defined name before
 any image is read, and `--force` replacing a list in place; a list with a
 slice as input, and the input list's own name as output only with `--force`;
@@ -830,9 +831,9 @@ seattle_backyard's photographs with no `.camrig`, in a workspace that keeps
 1600 features a frame, more than the 1500 the vote takes of each, whose pilot
 vote's pinhole camera the walk measures with, reported in the term's line, the
 pilot's line and the JSON, with nothing new in the workspace but `.sift` files
-and the report, and with `--max-density-gain 1` on three of them no pilot; the seoul_bull photographs,
-whose pilot vote's pool spread is above 0.35; two photographs, too few for a
-vote; a `.camrig` rig covering some of the input
+and the report, and with `--max-density-gain 1` on three of them no pilot;
+the seoul_bull photographs, whose pilot vote's pool spread is above 0.35; two
+photographs, too few for a vote; a `.camrig` rig covering some of the input
 files, walked as its rig sequence beside an ordinary sequence of the others,
 whose list `resolve_camrig_for_solve` takes as the rig at its chosen frames
 beside the other chosen images; two `.camrig` rigs, each its own sequence; a

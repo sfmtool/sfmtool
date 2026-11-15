@@ -483,7 +483,7 @@ def test_a_sequence_with_no_camrig_takes_the_pilot_vote_s_camera(
     # seattle_backyard's 26 photographs, every one of which is chosen and
     # voted on, and the vote agrees with itself: its pool spread is 0.24,
     # against the bound of 0.35. The workspace keeps 1600 features a frame,
-    # where the default keeps about 2800: still more than the 1500 the vote
+    # where the default keeps 2760 to 3950: still more than the 1500 the vote
     # takes of each frame, and those are the same 1500, the strongest, so the
     # vote is the one made at the default, at less cost to extract and match.
     source = TEST_DATA_DIR / "images" / "seattle_backyard"
