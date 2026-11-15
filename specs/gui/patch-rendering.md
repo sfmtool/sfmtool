@@ -190,8 +190,8 @@ wiring for free — no `PICK_TAG_PATCH`, no new pick decode branch.
   `dot(outward, camera_pos − center) ≤ 0`. A point at infinity is never culled
   (its normal faces every observer), and neither is the surfel of a selected,
   hovered or called-out point, so its outline and texture show from behind as
-  well (see [Picking, hover, selection](#picking-hover-selection)). The camera world position is supplied in
-  `PatchUniforms.camera_pos`. Dimming/tinting back faces instead of hiding them
+  well (see [Picking, hover, selection](#picking-hover-selection)). The camera
+  world position is supplied in `PatchUniforms.camera_pos`. Dimming/tinting back faces instead of hiding them
   is a possible later refinement.
 
 ---
@@ -241,9 +241,9 @@ is how an edit's deleted set reaches this pass. A deleted point's surfel is a
 clipped vertex, and the surfel of a point the eraser brush has painted, or has
 under its circle, is drawn in the brush's red or pale red in place of its texels,
 as the point's splat is. A surfel whose point takes the highlight (`2`) is
-outlined in the hover's cyan. Because the
-instances are compacted, a point's slot is not its point index, so the bundle
-keeps the point-index-to-slot map the mask write needs.
+outlined in the hover's cyan. Because the instances are compacted, a point's
+slot is not its point index, so the bundle keeps the point-index-to-slot map the
+mask write needs.
 
 ### The overlay's additions get a second atlas
 
