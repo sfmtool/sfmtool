@@ -279,9 +279,12 @@ def _check_rigs(reconstructions, rig_frame_data, labels, camera_mapping) -> None
     the reference, the first input (every input has rig frames), and each
     image keeps its frame's rig index and its sensor index. So each rig an
     input's images use must exist in the reference with the same sensor
-    count, sensor offset and reference sensor, and each image's camera must
-    merge into the same camera as the reference's camera for its sensor.
-    Raises ``ValueError`` naming the input and the rig or image otherwise.
+    count and sensor offset, and each image's camera must merge into the same
+    camera as the reference's camera for its sensor. Which sensor is a rig's
+    reference sensor is not compared: an image's sensor index counts over all
+    sensors whatever the reference sensor, which only sets how the sensor
+    poses are expressed, and the merge takes those from the reference input
+    while each image keeps its own pose. Raises ``ValueError`` naming the input and the rig or image otherwise.
     """
     reference = f"{labels[0]}, the first input with rigs, whose rigs the merge keeps"
     ref_rigs = rig_frame_data[0]["rigs_metadata"]["rigs"]
@@ -322,16 +325,10 @@ def _check_rigs(reconstructions, rig_frame_data, labels, camera_mapping) -> None
                 )
 
 
-def _rig_layout(rig: dict) -> tuple:
-    """What an image's sensor index means in a rig: its sensor count, its
-    sensor offset and the position of its reference sensor."""
-    names = rig["sensor_names"]
-    ref = rig["ref_sensor_name"]
-    return (
-        rig["sensor_count"],
-        rig["sensor_offset"],
-        names.index(ref) if ref in names else None,
-    )
+def _rig_layout(rig: dict) -> tuple[int, int]:
+    """Which sensor indexes a rig covers: its sensor count and its sensor
+    offset."""
+    return rig["sensor_count"], rig["sensor_offset"]
 
 
 def _count(n: int, noun: str) -> str:
@@ -341,11 +338,8 @@ def _count(n: int, noun: str) -> str:
 
 def _describe_rig(rig: dict) -> str:
     """A rig's layout (``_rig_layout``) in words."""
-    count, offset, ref = _rig_layout(rig)
-    return (
-        f"has {_count(count, 'sensor')} from sensor index {offset}, with "
-        f"reference sensor {ref}"
-    )
+    count, offset = _rig_layout(rig)
+    return f"has {_count(count, 'sensor')} from sensor index {offset}"
 
 
 def _join(labels: list[str]) -> str:

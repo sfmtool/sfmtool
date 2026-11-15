@@ -39,9 +39,13 @@ with an error naming the inputs, writing nothing, when:
   not fit the reference's rigs. The reference is the first input with rigs:
   the merged reconstruction keeps its rigs, sensors and sensor cameras, and
   each image keeps its frame's rig index and its sensor index. So every rig an
-  input's images use must exist in the reference with the same sensor count,
-  sensor offset and reference sensor, and each image's camera must merge (step
-  1) into the same camera as the reference's camera for its sensor. An input
+  input's images use must exist in the reference with the same sensor count
+  and sensor offset, and each image's camera must merge (step 1) into the
+  same camera as the reference's camera for its sensor. Which sensor is a
+  rig's reference sensor may differ: an image's sensor index counts over all
+  sensors whatever the reference sensor, which only sets how the sensor poses
+  are expressed, and the merge takes those from the reference while each
+  image keeps its own pose. An input
   may define fewer rigs than the reference, or rigs no image of it uses: a
   solve of rig frames and single images, which adds a single-sensor rig for
   the single images after the `.camrig` rig, merges with a solve of the rig

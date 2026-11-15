@@ -880,10 +880,38 @@ class TestMergeRefusesInputs:
         cameras = np.asarray(merged.camera_indexes)
         assert (np.asarray(rfd["sensor_camera_indexes"])[sensors] == cameras).all()
 
-    def test_refuses_an_input_with_a_rig_the_reference_lacks(
+    def test_merges_rigs_with_another_reference_sensor(
         self, seoul_bull_workspace, capsys
     ):
+        """An image's sensor index does not depend on which sensor is the
+        rig's reference sensor, so inputs that differ only in that merge."""
         recon = SfmrReconstruction.load(seoul_bull_workspace)
+        rigged = _with_rigs(recon, [2], _pairs(recon.image_count))
+        first = apply_transforms(rigged, [IncludeRangeFilter(RangeExpr("1-12"))])
+        later = apply_transforms(rigged, [IncludeRangeFilter(RangeExpr("6-17"))])
+        rfd = later.rig_frame_data
+        rfd["rigs_metadata"]["rigs"][0]["ref_sensor_name"] = "sensor1"
+        later = later.clone_with_changes(rig_frame_data=rfd)
+        assert (
+            later.rig_frame_data["rigs_metadata"]["rigs"][0]["ref_sensor_name"]
+            == "sensor1"
+        )
+
+        merged = merge_reconstructions([first, later])
+
+        assert merged.image_count == recon.image_count
+        merged_rfd = merged.rig_frame_data
+        sensors = np.asarray(merged_rfd["image_sensor_indexes"])
+        assert sorted(sensors.tolist()) == [0] * 9 + [1] * 8
+        cameras = np.asarray(merged.camera_indexes)
+        assert (
+            np.asarray(merged_rfd["sensor_camera_indexes"])[sensors] == cameras
+        ).all()
+
+    def test_refuses_an_input_with_a_rig_the_reference_lacks(
+        self, seoul_bull_sfmr_only, capsys
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         alone = _rig_frames_alone(recon)
         capsys.readouterr()
 
@@ -897,9 +925,9 @@ class TestMergeRefusesInputs:
         assert capsys.readouterr().out == ""
 
     def test_refuses_an_input_whose_rig_has_other_sensors(
-        self, seoul_bull_workspace, capsys
+        self, seoul_bull_sfmr_only, capsys
     ):
-        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         pairs = _with_rigs(recon, [2], _pairs(recon.image_count))
         # Image 1 alone in a one-sensor rig 0, the rest in pairs in rig 1.
         other = _with_rigs(
@@ -912,18 +940,18 @@ class TestMergeRefusesInputs:
             merge_reconstructions([pairs, other])
 
         assert str(excinfo.value).startswith(
-            "Rig 0 of input 2 has 1 sensor from sensor index 0, with reference "
-            "sensor 0, and rig 0 of input 1, the first input with rigs, whose "
-            "rigs the merge keeps, has 2 sensors from sensor index 0"
+            "Rig 0 of input 2 has 1 sensor from sensor index 0, and rig 0 of "
+            "input 1, the first input with rigs, whose rigs the merge keeps, "
+            "has 2 sensors from sensor index 0. "
         )
         assert capsys.readouterr().out == ""
 
     def test_refuses_a_sensor_on_a_camera_the_reference_sensor_is_not_on(
-        self, seoul_bull_workspace, capsys
+        self, seoul_bull_sfmr_only, capsys
     ):
         """Input 2 puts its single-image sensor on a second camera, which no
         image shares with input 1, so it stays a camera of its own."""
-        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         reference = _with_rigs(
             apply_transforms(recon, [IncludeRangeFilter(RangeExpr("1-14"))]),
             [2, 1],
@@ -954,9 +982,9 @@ class TestMergeRefusesInputs:
         assert capsys.readouterr().out == ""
 
     def test_refuses_cameras_that_vary_different_parameters_before_any_step(
-        self, seoul_bull_workspace, capsys
+        self, seoul_bull_sfmr_only, capsys
     ):
-        plain = SfmrReconstruction.load(seoul_bull_workspace)
+        plain = SfmrReconstruction.load(seoul_bull_sfmr_only)
         flagged = plain.clone_with_changes(per_image_adjustments=[["focal"]])
 
         with pytest.raises(ValueError) as excinfo:
