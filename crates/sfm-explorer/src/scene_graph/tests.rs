@@ -1977,7 +1977,9 @@ fn the_status_message_reports_the_fit() {
 
     let status = state.status_message().expect("a status message");
     assert!(
-        status.starts_with("Aligned run_b → run_a: ") && status.contains(" cameras, RMS "),
+        status.starts_with("Aligned run_b → run_a: ")
+            && status.contains(" cameras, RMS ")
+            && status.contains("; images paired: 0 by file hash, "),
         "unexpected status line: {status}"
     );
 }

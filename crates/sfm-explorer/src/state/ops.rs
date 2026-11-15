@@ -21,6 +21,7 @@
 use crate::action_log::Kind;
 use crate::align::{self, AlignOptions};
 use crate::scene::{ReconId, SceneNode};
+use sfmtool_core::progress::Progress;
 use sfmtool_core::SfmrReconstruction;
 
 use super::AppState;
@@ -64,8 +65,15 @@ impl AppState {
         };
         let (source_label, target_label) =
             (self.scene[si].label.clone(), self.scene[ti].label.clone());
-        let fit =
-            align::align_reconstructions(self.scene[si].recon(), self.scene[ti].recon(), options);
+        // Synchronous, so there is nothing to report progress to or cancel
+        // from; pairing the images reads a `sift_files` node's `.sift`
+        // metadata on this thread.
+        let fit = align::align_reconstructions(
+            self.scene[si].recon(),
+            self.scene[ti].recon(),
+            options,
+            &Progress::none(),
+        );
         match fit {
             Ok(fit) => {
                 // `compose` applies the receiver first: the fit takes the source

@@ -1126,13 +1126,18 @@ same answer. See
 [reconstruction-alignment.md](../core/analysis/reconstruction-alignment.md). What that
 fit does:
 
-- **Correspondences by cameras** (default): images matched by `name` across
-  the two nodes; corresponded camera centers feed the fit. Works whenever the
+- **Image pairs**: both modes start from the two nodes' images paired by
+  the hash of the image file, and by name only where a hash is not known, as
+  `sfm align` pairs them
+  ([reconstruction-alignment.md](../core/analysis/reconstruction-alignment.md#pairing-the-images)).
+  A `sift_files` node's hashes are read from its `.sift` files' metadata, one
+  file per image, on the UI thread with the rest of the fit.
+- **Correspondences by cameras** (default): the paired images' camera centers
+  feed the fit. Works whenever the
   reconstructions were solved from overlapping image sets — the typical
   comparison case (two solver runs over the same shoot) — and mirrors
   `sfm align`'s by-cameras mode. Only the shared subset matters; disjoint
-  extra images on either side are simply not correspondences. A repeated name
-  on either side pairs once, first occurrence winning, as `sfm align` does.
+  extra images on either side are simply not correspondences.
   Fewer than 3 shared images is refused rather than fitted: two points leave
   the rotation about the line joining them free.
   Note the deviation from `sfm align`'s by-cameras mode, which averages
@@ -1185,10 +1190,15 @@ file per shared image on that thread. If datasets outgrow that, the fit moves
 to a background thread without UI change.
 
 Outcome feedback is recorded in the Action Log and shown in the status line,
-with correspondence count, inliers, and post-fit RMS residual:
-`Aligned run_b → run_a: 214/243 cameras, RMS 0.031`. A point fit matched by
+with correspondence count, inliers, post-fit RMS residual and how the
+images were paired:
+`Aligned run_b → run_a: 214/243 cameras, RMS 0.031; images paired: 243 by
+file hash, 0 by name`. A point fit matched by
 keypoint position says so after the noun:
-`Aligned v02 → v01: 215/223 points by keypoint position, RMS 0.234`. On
+`Aligned v02 → v01: 215/223 points by keypoint position, RMS 0.234; images
+paired: 17 by file hash, 0 by name`. Names shared by different files, which
+are not paired, are counted at the end (`; 3 names shared by different
+files`), as `sfm align` prints them. On
 failure (no shared images, too few correspondences, keypoint positions that
 cannot be read, degenerate geometry) the
 transform is left untouched and the reason recorded as a **failed** entry:
