@@ -43,8 +43,8 @@ pub enum TrackTableColumn {
     TrackLength,
     /// The track's observations beyond one per image: the track length less
     /// the number of distinct images among its observations. Non-zero is a
-    /// defect, an image holding several observations of the point, which a
-    /// GLOMAP solve can produce.
+    /// defect, an image holding several observations of the point, which
+    /// COLMAP's global mapper can produce.
     RepeatObservations,
     /// The number of the track's observations that see the point's patch at
     /// a viewing angle of `90°` or more, edge on or from behind

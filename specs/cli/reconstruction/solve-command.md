@@ -55,7 +55,7 @@ Exactly one is required:
 | Flag | Description |
 |------|-------------|
 | `--incremental / -i` | COLMAP incremental SfM (sequential image registration) |
-| `--global / -g` | GLOMAP global SfM (simultaneous pose estimation) |
+| `--global / -g` | COLMAP global SfM (simultaneous pose estimation) |
 
 ## Options
 

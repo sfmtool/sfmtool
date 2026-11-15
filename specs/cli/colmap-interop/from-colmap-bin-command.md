@@ -73,8 +73,9 @@ solve, so a solve's output stores the RMS too.
 
 ## Repeat observations
 
-A GLOMAP model can hold a point whose track has several observations in one
-image. The import keeps, in each such image, the observation with the lowest
+A model from COLMAP's global mapper, or from the earlier standalone GLOMAP, can
+hold a point whose track has several observations in one image.
+The import keeps, in each such image, the observation with the lowest
 reprojection error against the point and drops the others, then scores the
 point's RMS again over what it keeps; this runs before `--detect-infinity`.
 When it drops anything it prints `Dropped N repeat observation(s) from M

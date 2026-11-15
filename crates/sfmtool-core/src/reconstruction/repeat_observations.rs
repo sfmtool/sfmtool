@@ -4,12 +4,13 @@
 //! Dropping a reconstruction's repeat observations: the observations of a
 //! point beyond one per image.
 //!
-//! A sound track sees its point at most once in each photograph. A GLOMAP
-//! solve can hand back a point whose track holds two or more observations in
-//! one image, each a different feature of that image. This keeps, in each such
-//! image, the observation that agrees best with the point, and drops the
-//! others. Nothing moves: the point keeps its position and every image it was
-//! seen in, and only its observation list is shorter.
+//! A sound track sees its point at most once in each photograph. COLMAP's
+//! global mapper, formerly the separate GLOMAP project, can hand back a point
+//! whose track holds two or more observations in one image, each a different
+//! feature of that image. This keeps, in each such image, the observation that
+//! agrees best with the point, and drops the others. Nothing moves: the point
+//! keeps its position and every image it was seen in, and only its observation
+//! list is shorter.
 //!
 //! See `specs/core/reconstruction/drop-repeat-observations.md` for the design.
 

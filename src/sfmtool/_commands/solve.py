@@ -59,7 +59,7 @@ _IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
     "-g",
     "global_mode",
     is_flag=True,
-    help="Run global structure from motion using GLOMAP.",
+    help="Run global structure from motion with COLMAP's global mapper.",
 )
 @click.option(
     "--sfmr-dir",
@@ -160,7 +160,7 @@ def solve(
         # From a pre-computed .matches file
         sfm solve -i tvg-matches/my.matches
 
-        # Use global SfM (GLOMAP)
+        # Use global SfM (COLMAP's global mapper)
         sfm solve -g path/to/images/
 
         # Sequential overlap mode

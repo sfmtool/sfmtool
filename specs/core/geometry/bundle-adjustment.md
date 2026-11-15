@@ -336,8 +336,8 @@ It is read every round, at that round's state, from the same measures the trim
 reads.
 
 **Why `1e-6`.** A legitimately near point sits at a percent-level fraction of
-the median: in a GLOMAP solve of `seoul_bull_sculpture`'s 17 images, whose
-median depth is 1.44 world units, the nearest observation is at 8% of it before
+the median: in a global solve (COLMAP's global mapper) of
+`seoul_bull_sculpture`'s 17 images, whose median depth is 1.44 world units, the nearest observation is at 8% of it before
 the adjustment and at 6% after, and a quarter of the observations end within a
 tenth of it. The fraction leaves four orders of magnitude between those and the
 floor, and a point at the floor has a projection derivative a million times its
@@ -2523,8 +2523,8 @@ validation, and outputs are unchanged.
   set the gauge and reports no uncertainty. A caller that wants a gauge states
   it through the point constraints (held points, or ranged points, which fix
   the scale; see "Point constraints") or aligns the result afterwards.
-- Replacing the production solvers (`sfm solve` wraps COLMAP/GLOMAP). The
-  kernel runs inside reconstruction growth and rotation initialization, and
+- Replacing the production solvers (`sfm solve` wraps COLMAP's incremental
+  and global mappers). The kernel runs inside reconstruction growth and rotation initialization, and
   through the reconstruction-level adjustment it backs the viewer's Bundle
   Adjust command, the `bundle_adjust` MCP tool and `sfm xform --bundle-adjust`
   on spline cameras.

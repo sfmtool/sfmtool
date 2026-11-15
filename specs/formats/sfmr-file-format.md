@@ -734,7 +734,7 @@ only if the `rigs/` section is present.
 
 A frame must contain at least one image but may have fewer images than the rig has sensors.
 This arises naturally in practice — for example, blurry images removed during preprocessing, or
-images that COLMAP/GLOMAP failed to register. The per-image mapping handles this without sentinel
+images that the SfM solver failed to register. The per-image mapping handles this without sentinel
 values: missing sensors simply have no image entry for that frame.
 
 #### Pose Semantics with Rigs

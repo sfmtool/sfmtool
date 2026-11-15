@@ -3,7 +3,7 @@
 # This script creates a workspace, copies test images, and sets up an sfm_solve.sh script
 #
 # Pipeline: sfmtool SIFT (capped at 2000 features) -> track-cluster matching ->
-# derived pairs -> global SfM (GLOMAP).
+# derived pairs -> global SfM (COLMAP's global mapper).
 
 set -e
 
@@ -27,7 +27,8 @@ echo "Copied ${NUM_IMAGES} images to ${WORKSPACE_DIR}/images/"
 cat > "${WORKSPACE_DIR}/sfm_solve.sh" << 'EOF'
 #!/bin/bash
 # SfM solve script for Seattle Backyard dataset
-# sfmtool SIFT -> track-cluster matching -> derived pairs -> global SfM (GLOMAP)
+# sfmtool SIFT -> track-cluster matching -> derived pairs -> global SfM
+# (COLMAP's global mapper)
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -48,7 +49,7 @@ sfm match --cluster images/ -o matches/seattle_backyard-clusters.matches
 sfm match --derive-pairs matches/seattle_backyard-clusters.matches \
   -o tvg-matches/seattle_backyard.matches
 
-echo "Running global SfM (GLOMAP) on Seattle Backyard dataset..."
+echo "Running global SfM (COLMAP's global mapper) on Seattle Backyard dataset..."
 sfm solve --global --seed 42 tvg-matches/seattle_backyard.matches
 
 echo "Reconstruction complete! Check sfmr/ for results."

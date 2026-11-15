@@ -487,10 +487,10 @@ def _detect_infinity_points(recon):
 def _drop_repeat_observations(recon):
     """Drop the repeat observations of a freshly imported reconstruction.
 
-    A GLOMAP solve can hand back a point whose track holds several observations
-    in one image. In each such image the observation with the lowest
-    reprojection error is kept and the others are dropped, so every point is
-    seen at most once per image. See
+    COLMAP's global mapper, formerly the separate GLOMAP project, can hand back
+    a point whose track holds several observations in one image. In each such
+    image the observation with the lowest reprojection error is kept and the
+    others are dropped, so every point is seen at most once per image. See
     ``specs/core/reconstruction/drop-repeat-observations.md``.
     """
     cleaned, summary = recon.drop_repeat_observations()

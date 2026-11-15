@@ -192,8 +192,8 @@ def _solve_with_retries(
 ):
     """Re-roll ``solve_fn`` until it yields an acceptable solve, keeping the best.
 
-    GLOMAP is not seed-deterministic, so a solve can come back degenerate — every
-    image registered but few or no points triangulated, a ``RuntimeError``
+    COLMAP's global mapper is not seed-deterministic, so a solve can come back
+    degenerate — every image registered but few or no points triangulated, a ``RuntimeError``
     ("No 3D points found"), or a COLMAP abort, which :func:`_solve_in_child`
     turns into a ``RuntimeError``. The session-scoped fixtures re-roll
     rather than flake the suite. Each attempt starts from a removed ``colmap_dir``
@@ -279,8 +279,8 @@ def _drop_camera_coincident_points(sfmr_path: Path) -> None:
     is a triangulation artifact with no surface element:
     ``PatchExtent::FeatureSize`` sizes a patch as ``σ·d/f`` and skips
     observations with ``d ≤ 1e-6``, so a point degenerate in all views cannot be
-    sized and ``PatchCloud.from_reconstruction`` errors. GLOMAP emits such a
-    point only occasionally, which flakes the fisheye patch-cloud tests; dropping
+    sized and ``PatchCloud.from_reconstruction`` errors. The global mapper
+    emits such a point only occasionally, which flakes the fisheye patch-cloud tests; dropping
     it here keeps every fixture reconstruction clean. A no-op (no resave) for the
     usual case where no point is camera-coincident.
     """
@@ -1223,8 +1223,8 @@ def kerry_park_solve_once(tmp_path_factory) -> Path:
     ``kerry_park.camrig``. Read it; do not modify it.
 
     Mirrors ``scripts/init_dataset_kerry_park.sh``: sfmtool SIFT + track-cluster
-    matching + global SfM (GLOMAP) with a fixed seed, on the 8-frame prefix
-    (``KERRY_PARK_PREFIX_FRAME_COUNT`` x 2 sensors = 16 images). Only the tests
+    matching + global SfM (COLMAP's global mapper) with a fixed seed, on the
+    8-frame prefix (``KERRY_PARK_PREFIX_FRAME_COUNT`` x 2 sensors = 16 images). Only the tests
     of the solve itself use this; everything else uses
     :func:`kerry_park_workspace`, which needs no solve. The fixture fails fast
     rather than handing a partial reconstruction to the tests.
@@ -1331,8 +1331,8 @@ def kerry_park_camrig_workspace_once(tmp_path_factory) -> Path:
         + KERRY_PARK_SOLO_FRAME_COUNT
     )
 
-    # GLOMAP is non-deterministic, and the back-to-back fisheye geometry
-    # occasionally yields a degenerate solve — all frames register but few/no
+    # COLMAP's global mapper is non-deterministic, and the back-to-back fisheye
+    # geometry occasionally yields a degenerate solve — all frames register but few/no
     # points triangulate (``run_global_sfm`` raises "No 3D points found" in the
     # extreme). Retry with a fresh randomization, keeping the densest complete
     # result and holding out for a substantive point cloud, rather than flaking
