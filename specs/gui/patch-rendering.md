@@ -194,7 +194,7 @@ wiring for free — no `PICK_TAG_PATCH`, no new pick decode branch.
   `dot(outward, camera_pos − center) ≤ 0`. A point at infinity is never culled
   and never back-facing (its normal faces every observer). The surfel of a
   selected, hovered or called-out point is not culled either: the test marks it
-  back-facing, a flat `back_facing` output rather than `(front_facing)`,
+  back-facing, a flat `back_facing` output rather than `@builtin(front_facing)`,
   which would depend on a winding the pipeline has no convention for, and the
   fragment stage draws its outline alone (see
   [Picking, hover, selection](#picking-hover-selection)). The camera world
@@ -465,7 +465,7 @@ frame where a drawn surfel is highlighted
   `Greater` under reversed-Z: a fragment passes only where something nearer
   was drawn. Where the band is the nearest thing it lands on the depth its own
   surfel wrote and fails, so the part the patch pass already drew opaque is not
-  drawn twice. The position output is ``, so both pipelines compute
+  drawn twice. The position output is `@invariant`, so both pipelines compute
   the same depth for a fragment. A highlighted surfel at infinity sits behind
   every finite thing, so its band is drawn wherever finite geometry covers it.
 - **Colour and opacity.** The band's colours and precedence (`outline_color`),
