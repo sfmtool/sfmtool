@@ -734,9 +734,10 @@ from the durations list that `pixi run test` prints. Whole-suite times can
 differ by up to a factor of two between runs on one machine, so compare
 per-test times, and repeat a comparison before reporting it.
 
-How to check: `pyproject.toml` sets `--durations=15`, so pytest prints the 15
-slowest setup, call and teardown phases at the end of every run
-(`pixi run test -- --durations=0` prints all of them). A test, or a fixture's
+How to check: `pyproject.toml` sets `--durations=0 --durations-min=10`, so
+pytest prints every setup, call and teardown phase that took 10 seconds or
+more at the end of every run (`pixi run test -- --durations-min=0` prints all
+of them, and `--durations-min=5` those over this section's 5-second limit). A test, or a fixture's
 setup, that takes more than 5 seconds in `pixi run test` on a developer
 machine gets a closer look, and so does a Rust test that `cargo test` reports
 as "has been running for over 60 seconds" in CI's `test-linux-rust` job. Look

@@ -711,12 +711,12 @@ worth more than a paragraph.
     also keep a wait on code that could hang, such as a join of worker
     threads, that has no timeout; that feeds STANDARDS.md § "Tests cost what
     their assertions need".
-21. **Test time** — run the Python suite with every duration listed, then
-    list and sum the setup and call phases over 5 seconds:
+21. **Test time** — run the Python suite with every phase of 5 seconds or
+    more listed, then list and sum the setup and call phases over 5 seconds:
 
     ```bash
     out=$(mktemp)
-    pixi run test -- --durations=0 > "$out" 2>&1
+    pixi run test -- --durations-min=5 > "$out" 2>&1
     awk '/slowest durations/ {f=1} f && ($2 == "setup" || $2 == "call") && $1 + 0 > 5 {n++; s += $1; print} END {printf "%d phases, %.1f s\n", n, s}' "$out"
     ```
 
