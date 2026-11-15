@@ -29,7 +29,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .._path_summary import summarize_paths_by_sequence
+from .._path_summary import PathFormat, summarize_paths_by_sequence
 
 # A lone sensor sits at the identity `sensor_from_rig` pose.
 _IDENTITY_QUATS = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float64)
@@ -52,15 +52,16 @@ def _infer_pattern(image_names: list[str], *, require_frame_field: bool) -> str 
 
     if not image_names:
         return None
-    summaries = summarize_paths_by_sequence(list(image_names))
+    # Image names and .camrig patterns use "/" on every platform.
+    summaries = summarize_paths_by_sequence(
+        list(image_names), path_format=PathFormat.POSIX
+    )
     if len(summaries) != 1:
         return None
     summary = summaries[0]
     if require_frame_field and not summary.index_set:
         return None
-    # summarize_paths_by_sequence may emit OS separators; .camrig patterns are
-    # always forward-slash relative paths.
-    pattern = summary.path.replace("\\", "/")
+    pattern = summary.path
     try:
         validate_camrig_pattern(pattern)
     except ValueError:

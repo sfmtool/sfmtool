@@ -20,7 +20,7 @@ from .constants import (
     STEP_RATIO_THRESHOLD,
     STEP_RATIO_WINDOW,
 )
-from .._path_summary import summarize_paths_by_sequence
+from .._path_summary import PathFormat, summarize_paths_by_sequence
 from .._pose_math import rotation_angle_deg
 from .._sfmtool.geometry import RotQuaternion
 
@@ -789,7 +789,10 @@ def analyze_reconstruction(
         name_to_idx[name] = i
 
     # Detect sequences
-    summaries = summarize_paths_by_sequence(list(name_to_idx.keys()))
+    # Image names use "/" on every platform, so the patterns do too.
+    summaries = summarize_paths_by_sequence(
+        list(name_to_idx.keys()), path_format=PathFormat.POSIX
+    )
     numbered_sequences = [s for s in summaries if s.index_set]
 
     if not numbered_sequences:
@@ -815,11 +818,7 @@ def analyze_reconstruction(
 
     for seq in numbered_sequences:
         sorted_indexes = sorted(seq.index_set)
-        # summarize_paths_by_sequence writes the pattern with the platform's
-        # separator, while image names always use forward slashes. Normalize
-        # it once, so the pattern and name printed and reported are the same
-        # on every platform.
-        seq_path = seq.path.replace("\\", "/")
+        seq_path = seq.path
 
         # Build ordered lists of poses for this sequence
         seq_image_names = []
