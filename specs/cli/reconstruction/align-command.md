@@ -58,6 +58,18 @@ passes repeat until no reconstruction can be added. A reconstruction that connec
 reference only through others is aligned through whichever aligned neighbours it has at that
 moment, not through a shortest path.
 
+A reconstruction is aligned to all of its aligned neighbours at once. Every aligned neighbour
+is already in the reference frame, so correspondences with any of them relate the
+reconstruction to that frame. Each neighbour's image pairs index that neighbour's own images, so the
+correspondences are found with each neighbour separately: with `--method points`, the 3D points
+seen in the images it shares with that neighbour, matched against that neighbour's points; with
+`--method cameras`, the camera poses of those images against that neighbour's poses. The
+correspondences from all the neighbours are then fitted together in one estimate (for points,
+one RANSAC and least-squares fit over the union). A neighbour that yields no point
+correspondence adds none, and the alignment fails when all the neighbours together yield too
+few. The output lists each neighbour's count of point correspondences, with the reason beside
+a count of zero.
+
 ## Output
 
 Under "Analyzing connectivity", after each input's line of neighbours and the

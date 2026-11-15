@@ -14,6 +14,15 @@ from ._sfmtool.fileio import read_sift_partial
 from .sift.file import get_sift_path_from_recon
 
 
+class NoPointCorrespondencesError(ValueError):
+    """The point finders found no finite point correspondence.
+
+    Raised only for that outcome, so a caller can tell it from a failure to
+    read the reconstructions' keypoints, such as a ``.sift`` file that no
+    longer matches its reconstruction.
+    """
+
+
 def _finite_pair_mask(
     source_recon: SfmrReconstruction,
     source_ids: np.ndarray,
@@ -91,7 +100,7 @@ def find_point_correspondences(
         - target_positions: (N, 3) array of target point positions
 
     Raises:
-        ValueError: If no point correspondences are found
+        NoPointCorrespondencesError: If no point correspondences are found
     """
     # Pairs involving a point at infinity are dropped: its position is a
     # direction, not a metric location, and would corrupt any positional or
@@ -101,12 +110,12 @@ def find_point_correspondences(
     )
 
     if found_count == 0:
-        raise ValueError(
+        raise NoPointCorrespondencesError(
             "No point correspondences found. "
             "This may indicate no shared features or incompatible reconstructions."
         )
     if len(source_ids) == 0:
-        raise ValueError(
+        raise NoPointCorrespondencesError(
             "No finite point correspondences found "
             "(every shared 3D point is at infinity)."
         )
@@ -273,7 +282,7 @@ def find_point_correspondences_by_coordinate(
         - target_positions: (N, 3) array of target point positions
 
     Raises:
-        ValueError: If no point correspondences are found
+        NoPointCorrespondencesError: If no point correspondences are found
     """
     source_by_image = _observation_xy_by_image(source_recon)
     target_by_image = _observation_xy_by_image(target_recon)
@@ -287,7 +296,7 @@ def find_point_correspondences_by_coordinate(
     )
 
     if not correspondences:
-        raise ValueError(
+        raise NoPointCorrespondencesError(
             "No point correspondences found by coordinate matching. "
             "Try a larger pixel_threshold or check that the reconstructions "
             "cover the same images."
@@ -301,7 +310,7 @@ def find_point_correspondences_by_coordinate(
     source_ids = source_ids[finite]
     target_ids = target_ids[finite]
     if len(source_ids) == 0:
-        raise ValueError(
+        raise NoPointCorrespondencesError(
             "No finite point correspondences found by coordinate matching "
             "(every matched 3D point is at infinity)."
         )

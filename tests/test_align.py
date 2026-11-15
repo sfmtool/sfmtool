@@ -8,6 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from sfmtool.reconstruction import RangeExpr
+from sfmtool.align import by_points
 from sfmtool.align.multi import (
     _build_connectivity_graph,
     align_reconstructions,
@@ -682,3 +683,121 @@ class TestAlignPairsImagesByFileHash:
         np.testing.assert_allclose(
             _camera_centers(aligned), _camera_centers(reference), atol=1e-6
         )
+
+
+# ---------------------------------------------------------------------------
+# An input that shares images with several aligned reconstructions
+# ---------------------------------------------------------------------------
+
+
+def _subset_moved(recon, images, axis, degrees, translation, scale):
+    """The images ``images`` of ``recon``, moved by a known similarity."""
+    rotation = RotQuaternion.from_axis_angle(axis, np.radians(degrees))
+    transform = Se3Transform(rotation=rotation, translation=translation, scale=scale)
+    return apply_transforms(
+        recon,
+        [IncludeRangeFilter(RangeExpr(images)), SimilarityTransform(transform)],
+    )
+
+
+class TestAlignInputWithSeveralAlignedNeighbours:
+    """The third input shares one image with the reference and four with the
+    second input, which is aligned before it. Its alignment uses both."""
+
+    @pytest.fixture(params=["embedded_patches", "sift_files"])
+    def truth(self, request):
+        if request.param == "embedded_patches":
+            return SfmrReconstruction.load(SEOUL_BULL_GROUND_TRUTH)
+        # Its points pair by feature index, which reads no .sift file.
+        return SfmrReconstruction.load(request.getfixturevalue("seoul_bull_sfmr_only"))
+
+    @pytest.mark.parametrize("method", ["points", "cameras"])
+    def test_third_input_recovers_its_transform(self, truth, method, monkeypatch):
+        reference = apply_transforms(truth, [IncludeRangeFilter(RangeExpr("1-8"))])
+        first = _subset_moved(truth, "6-13", [1, 2, 3], 40.0, [3, -2, 1], 1.7)
+        second = _subset_moved(truth, "8,11-17", [-2, 1, 0.5], 75.0, [-4, 5, 2], 0.6)
+        expected = apply_transforms(truth, [IncludeRangeFilter(RangeExpr("8,11-17"))])
+
+        # Every image pair handed to the point finders, by the names of its
+        # two images.
+        named_pairs = []
+        for name in [
+            "find_point_correspondences",
+            "find_point_correspondences_by_coordinate",
+        ]:
+            original = getattr(by_points, name)
+
+            def recording(source, target, shared, original=original):
+                named_pairs.append(
+                    sorted(
+                        (source.image_names[s], target.image_names[t])
+                        for s, t in shared
+                    )
+                )
+                return original(source, target, shared)
+
+            monkeypatch.setattr(by_points, name, recording)
+
+        result = align_reconstructions(
+            reference=reference, to_align=[first, second], method=method
+        )
+
+        assert result.failures == [None, None]
+        aligned = result.aligned[1]
+        np.testing.assert_allclose(
+            _camera_centers(aligned), _camera_centers(expected), atol=1e-6
+        )
+        finite = ~np.asarray(expected.point_is_at_infinity)
+        np.testing.assert_allclose(
+            aligned.positions[finite], expected.positions[finite], atol=1e-6
+        )
+        if method == "points":
+            # The second input's pairs with the reference, then with the first
+            # input, each pairing an image with the same image.
+            names = expected.image_names
+            assert named_pairs[-2:] == [
+                [(names[0], names[0])],
+                [(n, n) for n in names[:4]],
+            ]
+
+
+class TestPointAlignmentTargetWithNoCorrespondence:
+    """A target with no point correspondence adds none and says why; any other
+    error from the finders fails the alignment."""
+
+    def test_empty_target_adds_none_and_reports_why(self):
+        truth = SfmrReconstruction.load(SEOUL_BULL_GROUND_TRUTH)
+        pairs = [(i, i) for i in range(len(truth.image_names))]
+        result = by_points.estimate_alignment_from_points(
+            truth, [(truth, []), (truth, pairs)]
+        )
+        assert result.n_point_correspondences_per_target[0] == 0
+        assert result.n_point_correspondences_per_target[1] > 0
+        assert (
+            "No point correspondences"
+            in result.point_correspondence_errors_per_target[0]
+        )
+        assert result.point_correspondence_errors_per_target[1] is None
+        np.testing.assert_allclose(result.transform.scale, 1.0, atol=1e-9)
+
+    def test_other_finder_error_propagates(self, monkeypatch):
+        truth = SfmrReconstruction.load(SEOUL_BULL_GROUND_TRUTH)
+        pairs = [(i, i) for i in range(len(truth.image_names))]
+
+        drifted_target = SfmrReconstruction.load(SEOUL_BULL_GROUND_TRUTH)
+        original = by_points.find_point_correspondences_by_coordinate
+
+        # The first target yields correspondences; the second's keypoints
+        # cannot be read.
+        def finder(source, target, shared):
+            if target is drifted_target:
+                raise ValueError("its .sift files have drifted")
+            return original(source, target, shared)
+
+        monkeypatch.setattr(
+            by_points, "find_point_correspondences_by_coordinate", finder
+        )
+        with pytest.raises(ValueError, match="drifted"):
+            by_points.estimate_alignment_from_points(
+                truth, [(truth, pairs), (drifted_target, pairs)]
+            )

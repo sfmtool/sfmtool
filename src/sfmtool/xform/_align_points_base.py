@@ -53,8 +53,7 @@ class AlignToPointsTransform:
 
         alignment = estimate_alignment_from_points(
             source_recon=recon,
-            target_recon=target_recon,
-            shared_images=shared_images,
+            targets=[(target_recon, shared_images)],
             min_points=10,
             use_ransac=True,
             ransac_iterations=1000,
