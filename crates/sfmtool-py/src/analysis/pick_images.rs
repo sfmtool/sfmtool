@@ -10,8 +10,7 @@
 //! ``specs/core/analysis/pick-images.md``).
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::Ordering;
 
 use numpy::ndarray::Ix2;
 use numpy::PyUntypedArrayMethods;
@@ -40,6 +39,7 @@ use crate::format_errors::{fault_to_py, read_err, Direction, FormatError};
 use crate::geometry::PyCameraIntrinsics;
 use crate::helpers::{serde_to_py, value_err};
 use crate::sift::extract::{feature_options_error, feature_options_from_dict};
+use crate::signals::SignalWatch;
 use crate::spatial::kdforest::{extract_u8_2d, resolve_forest_params};
 use crate::ProgressCounter;
 
@@ -664,10 +664,9 @@ pub fn pick_images<'py>(
     // Every event, among them each pair matched and every 50 ms of a wait on
     // the workers, takes the GIL to run Python's signal handlers. One that
     // raises stops the walk, and its exception is raised in place of the
-    // cancellation.
+    // walk's result.
     let counter = progress.as_ref().map(ProgressCounter::handle);
-    let cancel = AtomicBool::new(false);
-    let signal: Mutex<Option<PyErr>> = Mutex::new(None);
+    let watch = SignalWatch::new();
     let sink = |event: Event<'_>| {
         if let (
             Event::Count {
@@ -680,25 +679,16 @@ pub fn pick_images<'py>(
         {
             counter.store(done as usize, Ordering::Relaxed);
         }
-        if cancel.load(Ordering::Relaxed) {
-            return;
-        }
-        if let Err(e) = Python::attach(|py| py.check_signals()) {
-            *signal.lock().unwrap_or_else(|p| p.into_inner()) = Some(e);
-            cancel.store(true, Ordering::Relaxed);
-        }
+        watch.check();
     };
     let result = py.detach(|| {
-        let progress = Progress::to(&sink).cancelled_by(&cancel);
+        let progress = Progress::to(&sink).cancelled_by(watch.cancel_flag());
         core_pick_images(&sequences, &mut *source, &options, &progress)
     });
-    match result {
+    match watch.finish(result)? {
         Ok(report) => serde_to_py(py, &report),
         Err(e) => Err(match e {
-            PickImagesError::Cancelled => signal
-                .into_inner()
-                .unwrap_or_else(|p| p.into_inner())
-                .unwrap_or_else(|| PyInterruptedError::new_err(e.to_string())),
+            PickImagesError::Cancelled => PyInterruptedError::new_err(e.to_string()),
             PickImagesError::ReadSift { ref source, .. } => {
                 fault_to_py(source.fault(), e.to_string(), Direction::Read)
             }

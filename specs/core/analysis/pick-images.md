@@ -1098,7 +1098,11 @@ The GIL is released while the walk runs. Each progress event, so each pair
 matched, each wait and every 50 ms of a wait on the workers, takes it to run
 Python's signal handlers; a handler that raises, such as the
 `KeyboardInterrupt` of Ctrl+C, cancels the walk and stops its workers, and its
-exception is raised. A cancellation from anywhere else is `InterruptedError`.
+exception is raised, whatever the walk returned: a handler can raise at an
+event after the walk's last check for cancellation, such as the end of the
+`walk` phase, and the walk then returns a report
+([python-bindings.md § Signal handlers during a run](../../python-bindings.md#signal-handlers-during-a-run)).
+A cancellation from anywhere else is `InterruptedError`.
 A `.sift` file that cannot be read is the `OSError` of
 [python-bindings.md § Format errors](../../python-bindings.md#format-errors),
 a folder that cannot be listed the `OSError` subclass for its kind, a missing
@@ -1240,7 +1244,8 @@ every one of which stops.
 checks the bindings on a synthetic capture whose files are written first and
 read, a missing file, the options and the source options and their errors,
 a sequence's camera and the term's fields in the report,
-a `KeyboardInterrupt` delivered while the walk runs, the exceptions of each
+a `KeyboardInterrupt` delivered while the walk runs, a handler that raises
+after the walk's last check for cancellation, the exceptions of each
 error, the capture classes, and the seoul_bull photographs extracted by the
 walk with the workspace's settings, every one of which is kept, whose files
 equal `build_sift_files`', and which a second run reads without extracting.

@@ -6,10 +6,14 @@
 ``specs/core/analysis/pick-images.md``)."""
 
 import _thread
+import ctypes
+import functools
 import json
 import shutil
+import signal
 import threading
 import time
+import weakref
 from pathlib import Path
 
 import numpy as np
@@ -295,6 +299,63 @@ def test_a_signal_while_the_walk_runs_stops_it(steady: _Capture):
         pick_images([capture.sequence], progress=counter)
     thread.join()
     assert 0 < counter.value < 150
+
+
+class _Interrupted(Exception):
+    """What the test's SIGINT handler raises in place of KeyboardInterrupt."""
+
+
+class _Token:
+    """An object that can be weakly referenced."""
+
+
+def test_a_handler_raising_after_the_walk_s_last_check_is_raised(tmp_path: Path):
+    """A signal handler that raises after the walk's last check of its cancel
+    flag still has its exception raised, though the walk then returns a
+    report. A one-frame capture's walk reads its frame, reports the count and
+    checks for cancellation no more. SIGINT is kept pending, so every
+    progress event runs its handler, until the handler sees that count and
+    raises."""
+    capture = _Capture(tmp_path / "frames", frames=1).write_all()
+    counter = ProgressCounter()
+    raised = 0
+    stopped = False
+
+    # A handler that sets SIGINT pending with a call, such as
+    # signal.raise_signal, runs again at once, since the interpreter runs
+    # pending handlers after each call. So it sets it from C on its way out:
+    # dropping a token runs its weakref callback, PyErr_SetInterruptEx, which
+    # ignores the weakref it is also called with.
+    set_interrupt = ctypes.pythonapi.PyErr_SetInterruptEx
+    set_interrupt.argtypes = [ctypes.c_int, ctypes.py_object]
+    set_interrupt.restype = ctypes.c_int
+    rearm = functools.partial(set_interrupt, signal.SIGINT)
+
+    def handler(signum, frame):
+        nonlocal raised
+        if stopped:
+            return
+        if counter.value == 1:
+            raised += 1
+            raise _Interrupted
+        token = _Token()
+        ref = weakref.ref(token, rearm)  # noqa: F841
+        del token
+
+    previous = signal.signal(signal.SIGINT, handler)
+    try:
+        signal.raise_signal(signal.SIGINT)
+        with pytest.raises(_Interrupted):
+            pick_images([capture.sequence], progress=counter)
+    finally:
+        # Run a SIGINT still pending, which now does nothing, before the
+        # previous handler comes back.
+        stopped = True
+        time.sleep(0)
+        signal.signal(signal.SIGINT, previous)
+    # Raised once, inside the walk, after the frame was read.
+    assert raised == 1
+    assert counter.value == 1
 
 
 def test_errors_map_to_python_exceptions(tmp_path: Path):

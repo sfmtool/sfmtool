@@ -6,8 +6,8 @@
 //! or the pairwise-flow normal, and *Commit* of each point, written back as
 //! one new value.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Mutex};
+use std::sync::atomic::Ordering;
+use std::sync::mpsc;
 use std::time::Duration;
 
 use pyo3::exceptions::{PyInterruptedError, PyValueError};
@@ -25,6 +25,7 @@ use super::normal::GrownPlaneKeywords;
 use super::pairwise_flow_normal::PairwiseFlowKeywords;
 use super::{refused, views_of};
 use crate::patches::views::{resolve_pyramids, PosedViews};
+use crate::signals::SignalWatch;
 use crate::{ProgressCounter, PySfmrReconstruction};
 
 /// The `method` that runs the grown-plane normal, the default.
@@ -373,15 +374,14 @@ fn refine_normals(
     // Python's signal handlers, so the run goes on a thread of its own while
     // the calling thread waits for it, taking the GIL every `PATIENCE` to run
     // them, as `pick_images` does from its own waits. One that raises stops
-    // the run, and its exception is raised in place of the cancellation.
+    // the run, and its exception is raised in place of the run's result.
     const PATIENCE: Duration = Duration::from_millis(50);
-    let cancel = AtomicBool::new(false);
-    let signal: Mutex<Option<PyErr>> = Mutex::new(None);
+    let watch = SignalWatch::new();
     let recon = recon.inner();
     let result = py.detach(|| {
         std::thread::scope(|scope| {
             let (sender, receiver) = mpsc::channel();
-            let (sink, cancel, views, options) = (&sink, &cancel, &views, &options);
+            let (sink, cancel, views, options) = (&sink, watch.cancel_flag(), &views, &options);
             let run = scope.spawn(move || {
                 let progress = Progress::to(sink).cancelled_by(cancel);
                 let result = core_refine_normals(recon, views, options, &progress);
@@ -391,15 +391,7 @@ fn refine_normals(
             loop {
                 match receiver.recv_timeout(PATIENCE) {
                     Ok(result) => return result,
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        if cancel.load(Ordering::Relaxed) {
-                            continue;
-                        }
-                        if let Err(e) = Python::attach(|py| py.check_signals()) {
-                            *signal.lock().unwrap_or_else(|p| p.into_inner()) = Some(e);
-                            cancel.store(true, Ordering::Relaxed);
-                        }
-                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => watch.check(),
                     // The run's thread ended without sending: it panicked.
                     Err(mpsc::RecvTimeoutError::Disconnected) => match run.join() {
                         Err(panic) => std::panic::resume_unwind(panic),
@@ -409,13 +401,7 @@ fn refine_normals(
             }
         })
     });
-    // A handler can raise after the run's last check of its cancel flag, so
-    // the run ends without being cancelled; its exception is raised all the
-    // same, or the signal would be lost.
-    if let Some(e) = signal.into_inner().unwrap_or_else(|p| p.into_inner()) {
-        return Err(e);
-    }
-    let (next, report) = result.map_err(|e| match e {
+    let (next, report) = watch.finish(result)?.map_err(|e| match e {
         RefineNormalsError::Cancelled => PyInterruptedError::new_err(e.to_string()),
         other => refused(other),
     })?;

@@ -468,8 +468,11 @@ taking the GIL every 50 ms to run Python's signal handlers, as
 `sfmtool.analysis.pick_images` does from its waits: the points are refined on
 the rayon pool, whose workers cannot run them. A handler that raises
 (`KeyboardInterrupt` for Ctrl-C) sets the run's cancel flag, and the binding
-raises that exception once the run has stopped (§ "Cancellation"); a run
-cancelled otherwise raises `InterruptedError`. So Ctrl-C stops
+raises that exception once the run has stopped (§ "Cancellation"), even when
+the handler raised after the run's last check of the flag and the run
+finished
+([python-bindings.md § Signal handlers during a run](../../python-bindings.md#signal-handlers-during-a-run));
+a run cancelled otherwise raises `InterruptedError`. So Ctrl-C stops
 `sfm xform --refine-normals`, the rounds of `sfm embed-patches` and the
 refinement of `inspect --strips` and `compare --strips`.
 `progress`, an `sfmtool.ProgressCounter`, is set from the `refine normals`
