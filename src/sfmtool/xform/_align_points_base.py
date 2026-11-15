@@ -10,6 +10,7 @@ subclasses supply the target and the name to announce it under.
 """
 
 from ..align.by_points import estimate_alignment_from_points
+from .._sfmtool.analysis import pair_images
 from .._sfmtool.reconstruction import SfmrReconstruction
 
 
@@ -33,26 +34,22 @@ class AlignToPointsTransform:
 
         print(f"  Aligning to {self._target_label()} using 3D points...")
 
-        source_name_to_idx = {name: idx for idx, name in enumerate(recon.image_names)}
-        target_name_to_idx = {
-            name: idx for idx, name in enumerate(target_recon.image_names)
-        }
+        # Images are paired by file hash, and by name where a hash is not known.
+        pairing = pair_images(
+            recon.image_names,
+            recon.find_image_file_hashes(),
+            target_recon.image_names,
+            target_recon.find_image_file_hashes(),
+        )
+        shared_images = [(int(s), int(t)) for s, t in pairing["pairs"]]
 
-        common_names = set(source_name_to_idx.keys()) & set(target_name_to_idx.keys())
-
-        if len(common_names) < 2:
+        if len(shared_images) < 2:
             raise ValueError(
-                f"Insufficient overlap: only {len(common_names)} common images "
-                f"(need at least 2 for point-based alignment)"
+                f"Insufficient overlap: only {len(shared_images)} common images "
+                f"(need at least 2 for point-based alignment; {pairing['summary']})"
             )
 
-        print(f"    Found {len(common_names)} common images")
-
-        shared_images = []
-        for name in common_names:
-            source_idx = source_name_to_idx[name]
-            target_idx = target_name_to_idx[name]
-            shared_images.append((source_idx, target_idx))
+        print(f"    Found {len(shared_images)} common images ({pairing['summary']})")
 
         alignment = estimate_alignment_from_points(
             source_recon=recon,

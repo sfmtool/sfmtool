@@ -14,6 +14,7 @@ from .._point_correspondence import (
     find_point_correspondences,
     find_point_correspondences_by_coordinate,
 )
+from .._sfmtool.analysis import pair_images
 from .._sfmtool.reconstruction import SfmrReconstruction
 from .._sfmtool.geometry import RotQuaternion
 from .._workspace import require_version_2_workspace
@@ -103,7 +104,8 @@ def compare_reconstructions(
     # Resolve the point-correspondence method up front: when every shared
     # image uses a different SIFT file, feature-index correspondence is
     # meaningless, so default to matching by 2D keypoint coordinate.
-    matches = _find_matching_images(recon1, recon2)
+    pairing = _find_matching_images(recon1, recon2)
+    matches = [(int(i1), int(i2)) for i1, i2 in pairing["pairs"]]
     if by_coordinate is None:
         hashes1 = recon1.sift_content_hashes
         hashes2 = recon2.sift_content_hashes
@@ -149,6 +151,7 @@ def compare_reconstructions(
     # Find matching images
     print("\n[3/7] Finding matching images...")
     print(f"  Matching images: {len(matches)}")
+    print(f"  {pairing['summary'].capitalize()}")
     print(f"  Only in reference: {recon1.image_count - len(matches)}")
     print(f"  Only in target: {recon2.image_count - len(matches)}")
 
@@ -494,19 +497,16 @@ def _compare_cameras(recon1: SfmrReconstruction, recon2: SfmrReconstruction) -> 
 
 def _find_matching_images(
     recon1: SfmrReconstruction, recon2: SfmrReconstruction
-) -> list[tuple[int, int]]:
-    """Find matching images between two reconstructions by workspace-relative path."""
-    name_to_idx2 = {
-        name.replace("\\", "/"): idx for idx, name in enumerate(recon2.image_names)
-    }
-
-    matches = []
-    for idx1, name in enumerate(recon1.image_names):
-        norm = name.replace("\\", "/")
-        if norm in name_to_idx2:
-            matches.append((idx1, name_to_idx2[norm]))
-
-    return matches
+) -> dict:
+    """Pair the images of two reconstructions by the hash of the image file, and
+    by name where a hash is not known: ``pair_images`` over each one's
+    ``find_image_file_hashes()``."""
+    return pair_images(
+        recon1.image_names,
+        recon1.find_image_file_hashes(),
+        recon2.image_names,
+        recon2.find_image_file_hashes(),
+    )
 
 
 def _print_alignment_results(alignment_result) -> None:
