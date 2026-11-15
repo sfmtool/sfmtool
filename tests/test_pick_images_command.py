@@ -512,31 +512,6 @@ def test_a_pilot_of_two_frames_runs_no_vote(tmp_path: Path, monkeypatch):
     )
 
 
-def test_a_version_1_workspace_is_refused(tmp_path: Path, monkeypatch):
-    workspace = tmp_path / "ws"
-    images = workspace / "images"
-    images.mkdir(parents=True)
-    for i in range(1, 4):
-        name = f"seoul_bull_sculpture_{i:02d}.jpg"
-        shutil.copy(SEOUL_BULL_DIR / name, images / name)
-    shutil.copy(
-        SEOUL_BULL_DIR / ".sfm-workspace.json", workspace / ".sfm-workspace.json"
-    )
-    monkeypatch.chdir(workspace)
-
-    result = CliRunner().invoke(main, ["pick-images", "images"])
-    assert result.exit_code == 1, result.output
-    assert (
-        f"The workspace file {workspace / '.sfm-workspace.json'} holds version 1 settings"
-        in result.output
-    )
-    assert "Run 'sfm ws upgrade'" in result.output
-    # Refused up front, before the sequences are collected, not by the first
-    # extraction of the walk.
-    assert "image file(s) in" not in result.output
-    assert not (images / "features").exists()
-
-
 def test_no_workspace_is_an_error(tmp_path: Path, pan_source):
     _copy_frames(pan_source["top"], tmp_path / "frames", count=5)
     result = CliRunner().invoke(main, ["pick-images", str(tmp_path / "frames")])

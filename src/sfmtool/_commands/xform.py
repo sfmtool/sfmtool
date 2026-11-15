@@ -489,6 +489,7 @@ def xform(ctx, input_path, output_path, **kwargs):
         sfm xform in.sfmr out.sfmr --drop-patch-bitmaps --add-patch-bitmaps resolution=32
     """
     from .._sfmtool.reconstruction import SfmrReconstruction
+    from .._workspace import require_version_2_workspace
 
     raw_input_path, raw_output_path = input_path, output_path
     input_path = check_sfmr_path(input_path, "Input path")
@@ -547,6 +548,10 @@ def xform(ctx, input_path, output_path, **kwargs):
         click.echo(f"  Images: {recon.image_count}")
         click.echo(f"  Points: {recon.point_count}")
         click.echo(f"  Cameras: {recon.camera_count}")
+        # A sift_files reconstruction's steps and its save read the .sift files
+        # of its workspace, which must be version 2; checked before any step.
+        if recon.feature_source == "sift_files":
+            require_version_2_workspace(recon.workspace_dir)
 
         recon = apply_transforms(
             recon=recon,

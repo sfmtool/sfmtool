@@ -271,10 +271,15 @@ def undistort_reconstruction_images(
     from .fileio import SiftFile, write_sift
     from .sift import image_readings_from_rgb
     from .workspace import recorded_image_to_gray
+    from ._workspace import require_version_2_workspace
+
+    # The source .sift files are read from a version 2 workspace; checked
+    # before any work.
+    workspace_dir = Path(recon.workspace_dir)
+    require_version_2_workspace(workspace_dir)
 
     recon = materialize_infinity_for_export(recon, "Undistortion")
 
-    workspace_dir = Path(recon.workspace_dir)
     image_names = recon.image_names
     cameras_meta = recon.cameras
     camera_indexes = recon.camera_indexes

@@ -357,10 +357,10 @@ def test_get_sift_path_for_image_with_workspace(tmp_path):
     image_path.touch()
 
     config = {
-        "version": 1,
+        "version": 2,
         "feature_tool": "colmap",
         "feature_type": "sift-colmap",
-        "feature_options": {},
+        "feature_options": {"image_to_gray": {"formula": "G"}},
         "feature_prefix_dir": "features/sift-colmap-abc123",
     }
     (tmp_path / ".sfm-workspace.json").write_text(json.dumps(config))

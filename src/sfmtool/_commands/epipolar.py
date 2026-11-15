@@ -13,6 +13,7 @@ from ..visualization._epipolar_display import draw_epipolar_visualization
 from .._filenames import number_from_filename
 from .._sfmr_naming import get_image_hint_message
 from .._sfmtool.reconstruction import SfmrReconstruction
+from .._workspace import Version1WorkspaceError, require_version_2_workspace
 
 
 def resolve_image_name(image_input: str, recon) -> str:
@@ -221,6 +222,12 @@ def epipolar(
         sweep_window_size = 30
 
     recon = SfmrReconstruction.load(reconstruction_path)
+    # The features are drawn from the .sift files of a version 2 workspace;
+    # checked before either mode does any work.
+    try:
+        require_version_2_workspace(recon.workspace_dir)
+    except Version1WorkspaceError as e:
+        raise click.ClickException(str(e)) from None
 
     if not pairs_mode:
         if image1 is None:

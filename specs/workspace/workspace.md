@@ -155,8 +155,10 @@ switch back.
 
 ### Versions
 
-`.sfm-workspace.json` has two versions. A reader reads both, and a writer writes
-version 2.
+`.sfm-workspace.json` has two versions. A writer writes version 2, and every
+command that uses a workspace requires it
+([A command that uses a workspace requires version 2](#a-command-that-uses-a-workspace-requires-version-2));
+only `sfm ws upgrade` reads a version 1 file.
 
 | Aspect | version 1 | version 2 |
 |--------|-----------|-----------|
@@ -191,15 +193,15 @@ choosing it, and extraction refuses one that differs.
 
 #### Loading checks
 
-`load_workspace_config`, the one reader of the file, refuses at load, naming the
-file and what is wrong:
+`load_workspace_config`, the one reader of the file for the commands, refuses
+at load, naming the file and what is wrong:
 
 - a file with no `version` key;
 - a `version` other than `1` or `2`;
+- a version 1 file, with the refusal of a version 1 workspace
+  ([below](#a-command-that-uses-a-workspace-requires-version-2));
 - a version 2 file whose `feature_options` carry `gray_formula` at the top
-  level, carry no top-level `image_to_gray`, or carry one that does not parse;
-- a version 1 file whose `feature_options` carry `image_to_gray`, since the
-  object belongs to version 2.
+  level, carry no top-level `image_to_gray`, or carry one that does not parse.
 
 The version 2 rules apply to the top level of `feature_options` only;
 `sfmtool-undistort`'s nested `source_feature_options` is a copy of its source's
@@ -228,17 +230,18 @@ afterwards. To change the options, run `sfm ws init --force` or
 
 **No `.sift` file is written from version 1 settings, and no version 2 `.sift`
 file goes into a folder that holds version 1 files.** Version 1 settings are a
-version 1 workspace file or a record whose `feature_options` carry no
-`image_to_gray`, such as a `.sfmr` made from a version 1 workspace. A version 1
-workspace moves to version 2 only through `sfm ws upgrade` or `sfm ws init`,
-both of which create a new folder.
+record whose `feature_options` carry no `image_to_gray`, such as a `.sfmr` made
+from a version 1 workspace; a version 1 workspace file is refused before its
+settings are used
+([A command that uses a workspace requires version 2](#a-command-that-uses-a-workspace-requires-version-2)).
+A version 1 workspace moves to version 2 only through `sfm ws upgrade` or
+`sfm ws init --force`, both of which create a new folder.
 
-**Reading version 1 files stays allowed everywhere.** A command that reads
-`.sift` or `.sfmr` files in a version 1 workspace reads them in its recorded
-folder, a `gray_formula` reading as `{"formula": <gray_formula>}` and a `colmap`
-or `opencv` file with no stated conversion as its tool's row. A command that
-only needed features already there, and finds every `.sift` present and
-current, writes nothing and so does not refuse.
+**Reading version 1 files stays allowed.** A `.sfmr`, `.matches` or `.sift`
+file made in a version 1 workspace keeps naming the folder it was made from,
+and is read there after the upgrade, a `gray_formula` reading as
+`{"formula": <gray_formula>}` and a `colmap` or `opencv` file with no stated
+conversion as its tool's row.
 
 Every `.sift` file is written by one of these, and the rule is checked in each:
 
@@ -259,7 +262,8 @@ with a version below 2. A file whose metadata cannot be read says nothing about
 the folder and is passed over, and a folder that is not there holds nothing.
 
 **`sfm to-colmap-db`** reads its settings from the `.sfmr`, not the workspace
-file, so `sfm ws upgrade` cannot change them. When its record holds version 1
+file, so `sfm ws upgrade` cannot change them, and a `.sfmr` made before the
+upgrade still records version 1 settings. When its record holds version 1
 settings and some `.sift` file is missing or older than its image, it converts
 the record in memory as the viewer does (`upgrade_feature_options`), extracts
 into the folder named from the converted options, and reads every `.sift` file
@@ -288,16 +292,82 @@ those images. Its folder, `features/sift-sfmtool-undistort-{hash}`, is named ove
 its whole `feature_options` when it creates it, so undistorting again under
 version 2 writes a new folder beside any older output.
 
+#### A command that uses a workspace requires version 2
+
+**A command that does work with a workspace's settings or with the features in
+its feature folders requires a version 2 workspace, and refuses a version 1
+one before it does any work**, whether or not the `.sift` files it needs are
+there. That work is extracting, matching, solving, transforming or refining a
+reconstruction, and drawing or measuring from its `.sift` features. Opening a
+file the user gives is not such work: it reads what the file records, at any
+version and in any workspace. `SfmrReconstruction.load` fills in an older
+`.sfmr`'s keypoints from the `.sift` files it records, and a reconstruction
+with no thumbnails takes them from those files, as the viewer and
+`sfm web-export` do, so a `.sfmr` made before `sfm ws upgrade` still opens
+afterwards from the old folder it names.
+
+The refusal is one message: it names the workspace file, says it is version 1
+and that sfmtool works only in a version 2 workspace, and says to run
+`sfm ws upgrade`, which moves the workspace to version 2 and a new features
+folder. Version 1 settings cannot write a `.sift` file
+([Versions never mix](#versions-never-mix)), so a command could do such work
+in a version 1 workspace only as long as every file it needed was already
+there; requiring version 2 takes away that case and the code that kept it
+working, and gives one answer for every command.
+
+The check is made in two places, both in
+[`_workspace.py`](../../src/sfmtool/_workspace.py), with the same message:
+
+- **`load_workspace_config`**, the one reader of the workspace file's settings,
+  raises `Version1WorkspaceError` for a version 1 file. Every command that
+  reads the settings reads them through it before any work, so a command that
+  loads them gets the refusal with no code of its own: `sfm sift`, every mode
+  of `sfm match`, `sfm solve` from images and from a `.matches` file,
+  `sfm to-colmap-db` and `sfm match --derive-pairs` from a `.matches` file,
+  `sfm pick-images`, `sfm from-colmap-bin`, and `sfm flow` and `sfm sift --draw`,
+  which find `.sift` files through the settings.
+- **`require_version_2_workspace`** refuses a version 1 workspace for a command
+  that does such work from a `.sfmr`'s `.sift` files, which it finds through
+  the `.sfmr`'s own record rather than the workspace's settings. Each calls it
+  before any work: `sfm epipolar`, in both its modes, `sfm densify`,
+  `sfm merge`, `sfm to-colmap-db` from a `.sfmr`, `sfm undistort` and
+  `sfm embed-patches`; `sfm heatmap`, `sfm inspect --strips`, `sfm xform` and
+  `sfm align` for a `sift_files` input, `sfm xform` whatever its steps, since
+  several steps and the save read its `.sift` files, and `sfm align` with
+  either method, since it transforms and saves the reconstructions as
+  `sfm xform` does; and `sfm compare` for a `sift_files` input when it draws
+  `--strips` or matches points by coordinate, which it does with
+  `--by-coordinate` and by default when the inputs share no `.sift` file. It
+  makes that choice before any work; matching by feature index, its default
+  when the inputs share their `.sift` files, reads none of them.
+
+The commands that open the files they are given and write them out or report
+on them work in a version 1 workspace: `sfm inspect` of a `.sfmr`, `.matches`
+or `.sift` file, `sfm analyze`, `sfm explorer`, `sfm web-export`,
+`sfm to-colmap-bin` and `sfm to-nerfstudio` (which write a `sift_files`
+reconstruction's keypoints from the `.sift` files it records, `sfm to-nerfstudio`
+only with `--include-colmap`),
+`sfm estimate-intrinsics` (which reads a `.matches` file's image sizes) and
+`sfm cluster-patches` (which reads a `.matches` file and the photographs).
+`sfm panorama`, `sfm render-patches` and `sfm motion` use neither the
+workspace's settings nor its `.sift` files: they read the photographs and
+a `.sfmr`, an `embedded_patches` one for `sfm render-patches` and only when
+given one for `sfm motion`, so they work too. `sfm inspect` of an image reports
+its readings as unavailable, with the refusal, since they are taken through the
+workspace's conversion. `sfm ws upgrade` and `sfm ws init --force` are what
+move a version 1 workspace to version 2.
+
 #### Refusals
 
 | Refusal | Raised by | Its message |
 |---------|-----------|-------------|
-| Version 1 settings | `image_files_to_sift_files`, `build_sift_files` | names the workspace file or the record, says it holds version 1 settings, and, for a workspace file, says to run `sfm ws upgrade`, which moves the workspace to version 2 and a new folder. For a `.sfmr`'s record it says the record is the `.sfmr`'s own, and never suggests `sfm ws upgrade` |
-| Version 1 files in the folder | `image_files_to_sift_files`, `build_sift_files` | names the folder and the version 1 `.sift` files in it (the first five, and a count of the rest), and says to remove those files from the folder and run again, which extracts version 2 files in their place. The folder is checked only for version 2 settings, since version 1 settings are refused first, and `sfm ws upgrade` prints "nothing to do: already version 2" for a version 2 workspace file and never changes a `.sfmr`'s record, so the message is the same for every caller. It is the `Display` of `Version1SiftFiles`, which `sfmtool_core::features::sift::version_1_sift_files` returns and `sfmtool.sift.version_1_sift_files` binds |
+| Version 1 workspace | `load_workspace_config`, `require_version_2_workspace` | names the workspace file, says it is version 1 and that sfmtool works only in a version 2 workspace, and says to run `sfm ws upgrade`, which moves the workspace to version 2 and a new features folder |
+| Version 1 settings | `image_files_to_sift_files`, `build_sift_files`, for options their caller passes, since no command passes a version 1 workspace's | says the feature options carry no `image_to_gray`, so they are version 1 settings, from which no `.sift` file is written |
+| Version 1 files in the folder | `image_files_to_sift_files`, `build_sift_files` | names the folder and the version 1 `.sift` files in it (the first five, and a count of the rest), and says to remove those files from the folder and run again, which extracts version 2 files in their place. The folder is checked only for version 2 settings, since version 1 settings are refused first, and `sfm ws upgrade` prints "nothing to do: already version 2" for a version 2 workspace file, so the message is the same for every caller. It is the `Display` of `Version1SiftFiles`, which `sfmtool_core::features::sift::version_1_sift_files` returns and `sfmtool.sift.version_1_sift_files` binds |
 | An `sfmtool-undistort` tool | `image_files_to_sift_files` | says the files of an undistorted workspace are made by `sfm undistort` and cannot be extracted, and to run `sfm undistort` again |
 | `colmap` or `opencv` conversion differs | `image_files_to_sift_files` | names the tool and the one conversion it makes |
 | Version 1 record on a `sift_files` node | the viewer | says the feature indexes name features of the old files, which a new folder would not hold, and suggests converting to embedded patches |
-| Invalid workspace file at load | `load_workspace_config` | names the file and what is wrong: no `version`, the version found, or the key that breaks the version's rules |
+| Invalid workspace file at load | `load_workspace_config` | names the file and what is wrong: no `version`, a version other than 1 or 2, or the key that breaks version 2's rules |
 | `sfm ws upgrade` cannot upgrade | `sfm ws upgrade`, changing nothing | names the file and says which: no workspace file, no `version`, a version other than 1 or 2, a `feature_tool` other than `sfmtool`, `colmap` or `opencv` (an `sfmtool-undistort` workspace is told to run `sfm undistort` again, since its `.sift` files cannot be extracted again), or a `gray_formula` that does not parse |
 
 #### Migration
@@ -317,7 +387,7 @@ No command rewrites the workspace file unless the user runs one of these:
 - **`sfm ws init` and `sfm ws init --force`** write version 2 with fresh
   options from the tool's defaults and the flags, the tool's `image_to_gray`
   row, and a new folder named from them. `--force` drops any hand-edited option,
-  which is why the refusals point at `sfm ws upgrade`. The old folder stays on
+  which is why the refusal of a version 1 workspace points at `sfm ws upgrade`. The old folder stays on
   disk, and the named image lists file is not touched.
 - **`sfm ws init --image-to-gray FORMULA --quantize-bits B`** sets the
   `sfmtool` tool's conversion before the folder is named. The formula is checked

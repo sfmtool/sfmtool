@@ -240,6 +240,7 @@ def embed_patches_command(
     from .._sfmtool.patches import DEFAULT_ANISOTROPIC_THRESHOLD
     from .._sfmtool.reconstruction import SfmrReconstruction
     from .._workspace_image import read_workspace_image
+    from .._workspace import require_version_2_workspace
     from ..xform._arg_parser import auto_output_path
 
     input_path = check_sfmr_path(input_path, "Input path")
@@ -271,6 +272,8 @@ def embed_patches_command(
                 f"Input is already {recon.feature_source}; nothing to convert "
                 "(embed-patches converts sift_files → embedded_patches)."
             )
+        # The conversion reads the .sift files of a version 2 workspace.
+        require_version_2_workspace(recon.workspace_dir)
         click.echo(f"  Images: {recon.image_count}")
         click.echo(f"  Points: {recon.point_count}")
         click.echo(f"  Observations: {recon.observation_count}")

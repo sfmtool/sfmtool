@@ -25,6 +25,7 @@ from ._image_pair_graph import (
     build_frustum_intersection_pairs,
 )
 from .sift.file import get_sift_path_from_recon
+from ._workspace import require_version_2_workspace
 from .fileio import SiftFile
 from ._sfmtool.reconstruction import SfmrReconstruction
 from ._sfmtool.geometry import RotQuaternion
@@ -596,6 +597,8 @@ def densify_reconstruction(
     """
     from .camera.cameras import _camera_adjustments
 
+    # The matching reads the .sift files of a version 2 workspace.
+    require_version_2_workspace(recon.workspace_dir)
     adjusted = _camera_adjustments(recon)
     if adjusted:
         camera, names = next(iter(adjusted.items()))

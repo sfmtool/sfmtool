@@ -10,6 +10,7 @@ import click
 
 from .core import estimate_pairwise_alignment
 from .._sfmtool.reconstruction import SfmrReconstruction
+from .._workspace import require_version_2_workspace
 
 
 def _get_reconstruction_images(recon: SfmrReconstruction) -> dict[int, str]:
@@ -347,8 +348,6 @@ def align_command(
             )
         seen_names[input_path.name] = input_path
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     click.echo(f"Reference reconstruction: {reference_path.name}")
     click.echo(f"Aligning {len(align_paths)} reconstruction(s) to reference...")
 
@@ -360,6 +359,15 @@ def align_command(
     for path in align_paths:
         click.echo(f"  Loading {path.name}...")
         to_align.append(SfmrReconstruction.load(path))
+
+    # Aligning transforms and saves the reconstructions, as `sfm xform` does,
+    # so a sift_files input must be in a version 2 workspace; checked before
+    # any work.
+    for recon in [reference, *to_align]:
+        if recon.feature_source == "sift_files":
+            require_version_2_workspace(recon.workspace_dir)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     click.echo("\nAnalyzing connectivity...")
     graph = _build_connectivity_graph([reference] + to_align)

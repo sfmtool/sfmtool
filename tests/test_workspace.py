@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from sfmtool._workspace import load_workspace_config
+from sfmtool._workspace import (
+    Version1WorkspaceError,
+    load_workspace_config,
+    require_version_2_workspace,
+)
 from sfmtool.workspace import find_workspace_for_path
 
 
@@ -177,10 +181,13 @@ class TestLoadWorkspaceConfig:
 
     def test_loads_valid_config(self, tmp_path: Path):
         config = {
-            "version": 1,
+            "version": 2,
             "feature_tool": "colmap",
             "feature_type": "sift",
-            "feature_options": {"domain_size_pooling": False},
+            "feature_options": {
+                "domain_size_pooling": False,
+                "image_to_gray": {"formula": "G"},
+            },
             "feature_prefix_dir": "features/sift-colmap-abc123",
         }
         _write_workspace_config(tmp_path, config)
@@ -233,10 +240,23 @@ class TestLoadWorkspaceVersions:
         # The recorded folder name comes back as it is.
         assert load_workspace_config(tmp_path) == config
 
-    def test_version_1_with_gray_formula_loads(self, tmp_path: Path):
-        config = _v2({"gray_formula": "G"}, version=1)
-        _write_workspace_config(tmp_path, config)
-        assert load_workspace_config(tmp_path) == config
+    def test_version_1_is_refused_naming_ws_upgrade(self, tmp_path: Path):
+        path = _write_workspace_config(tmp_path, _v2({"gray_formula": "G"}, version=1))
+        with pytest.raises(Version1WorkspaceError) as info:
+            load_workspace_config(tmp_path)
+        assert str(info.value) == (
+            f"The workspace file {path} is version 1, and sfmtool works only in "
+            "a version 2 workspace. Run 'sfm ws upgrade', which moves the "
+            "workspace to version 2 and a new features folder."
+        )
+        # The check that needs no settings refuses it the same way.
+        with pytest.raises(Version1WorkspaceError) as again:
+            require_version_2_workspace(tmp_path)
+        assert str(again.value) == str(info.value)
+        # A version 2 file, and a directory with no workspace file, pass it.
+        _write_workspace_config(tmp_path, _v2({"image_to_gray": {"formula": "G"}}))
+        require_version_2_workspace(tmp_path)
+        require_version_2_workspace(tmp_path / "elsewhere")
 
     @pytest.mark.parametrize(
         "config, message",
@@ -264,10 +284,6 @@ class TestLoadWorkspaceVersions:
                 "'image_to_gray' is not valid",
             ),
             (_v2({"image_to_gray": "G"}), "'image_to_gray' is not valid"),
-            (
-                _v2({"image_to_gray": {"formula": "G"}}, version=1),
-                "carry 'image_to_gray', which belongs to version 2",
-            ),
             (_v2([]), "'feature_options' is not a JSON object"),
         ],
     )

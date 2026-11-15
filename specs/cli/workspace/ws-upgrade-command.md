@@ -10,8 +10,11 @@ file stay as they are, and a `.matches` or `.sfmr` file that names the old
 folder still finds its `.sift` files there through its own record. Their
 feature indexes refer to the old folder's files, so a solve from an existing
 `.matches` file reads the old folder, and refuses when those files are gone or
-have changed; matching on the new features takes `sfm match` again. The two versions of the file, and why extraction refuses
-version 1 settings, are in
+have changed; matching on the new features takes `sfm match` again. Every
+other command that uses a workspace refuses a version 1 one and says to run
+this command first
+([workspace.md § A command that uses a workspace requires version 2](../../workspace/workspace.md#a-command-that-uses-a-workspace-requires-version-2)).
+The two versions of the file are in
 [workspace.md § Versions](../../workspace/workspace.md#versions).
 
 ## Command Syntax

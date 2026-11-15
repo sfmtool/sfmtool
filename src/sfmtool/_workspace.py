@@ -8,8 +8,42 @@ from pathlib import Path
 # configuration.
 WORKSPACE_CONFIG_FILE = ".sfm-workspace.json"
 
-# The `.sfm-workspace.json` versions this build reads.
-_READABLE_VERSIONS = (1, 2)
+
+class Version1WorkspaceError(RuntimeError):
+    """A command that uses a workspace was given a version 1 workspace, which
+    only ``sfm ws upgrade`` and ``sfm ws init --force`` act on."""
+
+
+def _version_1_workspace_error(config_file: Path) -> Version1WorkspaceError:
+    """The one refusal of a version 1 workspace, naming its file."""
+    return Version1WorkspaceError(
+        f"The workspace file {config_file} is version 1, and sfmtool works only "
+        "in a version 2 workspace. Run 'sfm ws upgrade', which moves the "
+        "workspace to version 2 and a new features folder."
+    )
+
+
+def require_version_2_workspace(workspace_dir: str | Path) -> None:
+    """Refuse a version 1 workspace, for a command that uses the workspace's
+    files without its settings, such as one that reads the ``.sift`` files a
+    ``.sfmr`` names.
+
+    Raises ``Version1WorkspaceError`` when ``workspace_dir`` holds a
+    ``.sfm-workspace.json`` whose ``version`` is 1, with the message
+    ``load_workspace_config`` gives. A directory with no workspace file, or one
+    that cannot be read, passes: the check is about the version only, and the
+    reader that needs the file reports what is wrong with it.
+    """
+    config_file = Path(workspace_dir) / WORKSPACE_CONFIG_FILE
+    try:
+        with open(config_file) as f:
+            config = json.load(f)
+    except OSError, ValueError:
+        return
+    if isinstance(config, dict):
+        version = config.get("version")
+        if version == 1 and not isinstance(version, bool):
+            raise _version_1_workspace_error(config_file)
 
 
 def init_workspace(
@@ -236,11 +270,12 @@ def load_workspace_config(workspace_dir: Path) -> dict:
     """
     Load workspace configuration from .sfm-workspace.json.
 
-    The file's ``version`` is checked here, so a file this build cannot use
-    fails before any work: it must be 1 or 2. A version 2 file's
+    This is the one reader of the file for every command that uses a
+    workspace, and it requires version 2, so such a command stops before any
+    work: a version 1 file raises ``Version1WorkspaceError``, whose message
+    names the file and says to run ``sfm ws upgrade``. A version 2 file's
     ``feature_options`` must carry a valid ``image_to_gray`` object at their
-    top level and no ``gray_formula``; a version 1 file's must carry no
-    ``image_to_gray``. These rules apply to the top level of
+    top level and no ``gray_formula``; these rules apply to the top level of
     ``feature_options`` only. The recorded ``feature_prefix_dir`` is returned
     as it is, never computed again.
 
@@ -251,6 +286,7 @@ def load_workspace_config(workspace_dir: Path) -> dict:
         Dictionary with workspace configuration fields
 
     Raises:
+        Version1WorkspaceError: If the file is version 1.
         RuntimeError: If config file is missing or invalid, naming the file
             and what is wrong
     """
@@ -281,33 +317,26 @@ def load_workspace_config(workspace_dir: Path) -> dict:
     if "version" not in config:
         raise invalid("it has no 'version'")
     version = config["version"]
-    if isinstance(version, bool) or version not in _READABLE_VERSIONS:
-        raise invalid(
-            f"it is version {version!r}, and this build reads versions 1 and 2"
-        )
+    if isinstance(version, bool) or version not in (1, 2):
+        raise invalid(f"it is version {version!r}, and this build reads version 2")
+    if version == 1:
+        raise _version_1_workspace_error(config_file)
     feature_options = config["feature_options"]
     if not isinstance(feature_options, dict):
         raise invalid("its 'feature_options' is not a JSON object")
-    if version == 2:
-        if "gray_formula" in feature_options:
-            raise invalid(
-                "a version 2 file's feature_options carry 'gray_formula', which "
-                "belongs to version 1; version 2 records the conversion as "
-                "'image_to_gray'"
-            )
-        if "image_to_gray" not in feature_options:
-            raise invalid("a version 2 file's feature_options carry no 'image_to_gray'")
-        from sfmtool.sift import ImageToGray
-
-        try:
-            ImageToGray.from_json(feature_options["image_to_gray"])
-        except ValueError as e:
-            raise invalid(f"its feature_options 'image_to_gray' is not valid: {e}")
-    elif "image_to_gray" in feature_options:
+    if "gray_formula" in feature_options:
         raise invalid(
-            "a version 1 file's feature_options carry 'image_to_gray', which belongs "
-            "to version 2; run 'sfm ws upgrade' on a version 1 file instead of "
-            "editing it"
+            "a version 2 file's feature_options carry 'gray_formula', which "
+            "belongs to version 1; version 2 records the conversion as "
+            "'image_to_gray'"
         )
+    if "image_to_gray" not in feature_options:
+        raise invalid("a version 2 file's feature_options carry no 'image_to_gray'")
+    from sfmtool.sift import ImageToGray
+
+    try:
+        ImageToGray.from_json(feature_options["image_to_gray"])
+    except ValueError as e:
+        raise invalid(f"its feature_options 'image_to_gray' is not valid: {e}")
 
     return config

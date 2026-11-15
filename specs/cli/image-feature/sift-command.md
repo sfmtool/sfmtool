@@ -105,34 +105,32 @@ skipped and how many were extracted.
 
 ## Version refusals
 
+In a workspace, a version 1 workspace file is refused before anything else,
+with or without `--extract`, naming the file and saying to run
+[`sfm ws upgrade`](../workspace/ws-upgrade-command.md)
+([workspace.md § A command that uses a workspace requires version 2](../../workspace/workspace.md#a-command-that-uses-a-workspace-requires-version-2)).
+
 Version 1 and version 2 files never mix
 ([workspace.md § Versions never mix](../../workspace/workspace.md#versions-never-mix)).
 When `--extract` has at least one file to write, it refuses, before writing
 anything:
 
-- **version 1 settings**: a version 1 workspace file, whose `feature_options`
-  carry no `image_to_gray`. The error names the workspace file and says to run
-  [`sfm ws upgrade`](../workspace/ws-upgrade-command.md), which moves the
-  workspace to version 2 and a new folder;
-- **a folder holding version 1 files** in a version 2 workspace, where
-  `sfm ws upgrade` has nothing to do: the error names the folder and the
-  version 1 files in it, and says to remove those files from the folder and
-  run again, which extracts version 2 files in their place;
+- **a folder holding version 1 files**, where `sfm ws upgrade` has nothing to
+  do: the error names the folder and the version 1 files in it, and says to
+  remove those files from the folder and run again, which extracts version 2
+  files in their place;
 - **a `colmap` or `opencv` conversion other than the tool's**: the error names
   the tool and the one conversion it makes;
 - **the `sfmtool-undistort` tool**: the files of an undistorted workspace are
   made by `sfm undistort`, and the error says to run it again.
 
-When every `.sift` file is present and current, nothing is written and nothing
-is refused, so a version 1 workspace's existing features keep working. The same
-refusals apply where [`sfm solve`](../reconstruction/solve-command.md),
+The same refusals apply where [`sfm solve`](../reconstruction/solve-command.md),
 [`sfm match`](match-command.md) and
 [`sfm to-colmap-db`](../colmap-interop/to-colmap-db-command.md) extract missing
 features; `sfm to-colmap-db`, whose settings are its `.sfmr`'s record,
-converts a version 1 record in memory instead of pointing at `sfm ws upgrade`.
-In tool mode outside a workspace, the tool's version 2 defaults name a
-new folder, so version 1 files from an earlier run in the old folder are not
-touched.
+converts a version 1 record in memory. In tool mode outside a workspace, the
+tool's version 2 defaults name a new folder, so version 1 files from an earlier
+run in the old folder are not touched.
 
 `--draw <DIR>` writes `<DIR>/<name>` for each image. An image whose `.sift` file
 is missing is reported as an error and the command continues with the next

@@ -388,26 +388,14 @@ def _run(
     from .._sfmtool.analysis import pick_images as walk
     from .._sfmtool.workspace import NamedImageLists
     from .._workspace import load_workspace_config
-    from ..sift.extract import SiftExtractionError, _check_versions_never_mix
+    from ..sift.extract import SiftExtractionError
 
     try:
         config = load_workspace_config(workspace_dir)
     except RuntimeError as e:
         raise click.ClickException(str(e))
-    workspace_file = workspace_dir / ".sfm-workspace.json"
-    settings_source = f"The workspace file {workspace_file}"
     click.echo(f"Using workspace: {workspace_dir}")
     click.echo(f"  Feature tool: {config['feature_tool']}")
-
-    # Version 1 settings, which write no .sift file, are refused before any
-    # frame is read, with the message `sfm sift --extract` gives for them; the
-    # walk checks the folders themselves.
-    try:
-        _check_versions_never_mix(
-            config["feature_tool"], config["feature_options"], (), settings_source
-        )
-    except SiftExtractionError as e:
-        raise click.ClickException(str(e))
 
     if write_list is not None and not force:
         try:
@@ -462,7 +450,7 @@ def _run(
         )
         extracting = time.monotonic()
         try:
-            written_first = extract_every_frame(capture, config, settings_source)
+            written_first = extract_every_frame(capture, config)
         except (SiftExtractionError, ValueError, OSError) as e:
             raise click.ClickException(str(e))
         command_times["extracting_first_seconds"] = time.monotonic() - extracting
