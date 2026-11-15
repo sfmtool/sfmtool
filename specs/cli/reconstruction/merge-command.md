@@ -30,15 +30,23 @@ with an error naming the inputs, writing nothing, when:
   workspace metadata), such as one solved before `sfm ws upgrade` and one
   after; the error names each input's folder. The merged reconstruction
   records the first input's folder;
-- some inputs have rig frames and others do not, or two inputs define
-  different rigs (a different `rigs/metadata.json.zst`). The merged reconstruction
-  keeps the first input's rigs, and each image keeps its sensor index into
-  them;
 - two cameras that took the same image vary different parameters per image
   (their `per_image_adjustments`, see
   [sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13))
   or have different `rolling_shutter_scanlines` settings, since step 1 below
   makes them one camera; the error names the image and both cameras;
+- some inputs have rig frames and others do not, or an input's rig frames do
+  not fit the reference's rigs. The reference is the first input with rigs:
+  the merged reconstruction keeps its rigs, sensors and sensor cameras, and
+  each image keeps its frame's rig index and its sensor index. So every rig an
+  input's images use must exist in the reference with the same sensor count,
+  sensor offset and reference sensor, and each image's camera must merge (step
+  1) into the same camera as the reference's camera for its sensor. An input
+  may define fewer rigs than the reference, or rigs no image of it uses: a
+  solve of rig frames and single images, which adds a single-sensor rig for
+  the single images after the `.camrig` rig, merges with a solve of the rig
+  frames alone. The cameras of step 1 are merged with the checks, before any
+  step prints;
 - the first input's workspace is version 1 (the `sfm ws upgrade` error),
   since the poses are refined from the `.sift` files there.
 

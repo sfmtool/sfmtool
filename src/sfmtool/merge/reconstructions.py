@@ -36,7 +36,7 @@ def merge_reconstructions(
     Returns:
         Merged SfmrReconstruction object
     """
-    feature_prefix_dir = _check_inputs(reconstructions, input_names)
+    feature_prefix_dir, camera_merge = _check_inputs(reconstructions, input_names)
 
     click.echo(f"\nMerging {len(reconstructions)} reconstructions...")
     click.echo("=" * 70)
@@ -61,9 +61,8 @@ def merge_reconstructions(
     # [2/7] Merge cameras
     click.echo("\n[2/7] Merging cameras...")
     step_start = time.perf_counter()
-    merged_cameras, merged_flags, merged_scanlines, camera_mapping = _merge_cameras(
-        reconstructions, image_name_to_camera
-    )
+    # `_check_inputs` merged the cameras, to check the rigs' sensors on them.
+    merged_cameras, merged_flags, merged_scanlines, camera_mapping = camera_merge
     click.echo(f"  Merged cameras: {len(merged_cameras)}")
     click.echo(f"  Completed in {time.perf_counter() - step_start:.2f}s")
 
@@ -152,18 +151,19 @@ def merge_reconstructions(
 def _check_inputs(
     reconstructions: list[SfmrReconstruction],
     input_names: list[str] | None,
-) -> str:
+) -> tuple[str, tuple]:
     """Refuse inputs the merge cannot take, before any step runs.
 
     Raises ``ValueError`` naming the inputs when there are fewer than two,
-    or when ``input_names`` does not name each of them;
-    when an input is not a ``sift_files`` reconstruction; when the inputs
-    record different feature folders; when some inputs have rig frames and
-    others do not, or two define different rigs; or when two cameras that
-    took the same image vary different parameters per image or have different
-    ``rolling_shutter_scanlines`` settings. Raises ``Version1WorkspaceError``
-    when the first input's workspace is version 1. Returns the feature folder
-    the inputs record.
+    or when ``input_names`` does not name each of them; when an input is not
+    a ``sift_files`` reconstruction; when the inputs record different feature
+    folders; when two cameras that took the same image vary different
+    parameters per image or have different ``rolling_shutter_scanlines``
+    settings; or when some inputs have rig frames and others do not, or an
+    input's rig frames do not fit the reference's rigs (``_check_rigs``).
+    Raises ``Version1WorkspaceError`` when the first input's workspace is
+    version 1. Returns the feature folder the inputs record and the merged
+    cameras (``_merge_cameras``), which the rig check reads.
     """
     if len(reconstructions) < 2:
         raise ValueError("Need at least 2 reconstructions to merge")
@@ -221,7 +221,8 @@ def _check_inputs(
         )
 
     # The merged reconstruction keeps the rig definitions of the first input
-    # that has them, and each image keeps its sensor index into them.
+    # that has them, and each image keeps its rig and sensor indexes into
+    # them; `_check_rigs` checks those once the cameras are merged.
     rig_frame_data = [r.rig_frame_data for r in reconstructions]
     with_rigs = [i for i, rfd in enumerate(rig_frame_data) if rfd is not None]
     if with_rigs and len(with_rigs) < len(reconstructions):
@@ -233,16 +234,6 @@ def _check_inputs(
             f"{'has' if len(without) == 1 else 'have'} none. sfm merge needs "
             "rig frames in every input or in none."
         )
-    for i in with_rigs[1:]:
-        first = with_rigs[0]
-        if rig_frame_data[i]["rigs_metadata"] != rig_frame_data[first]["rigs_metadata"]:
-            raise ValueError(
-                f"{labels[first]} and {labels[i]} define different rigs. The "
-                "merged reconstruction keeps the first input's rigs and each "
-                "image's sensor index into them, so every input must define "
-                "the same rigs."
-            )
-
     # Two cameras that took the same image become one, so they must vary the
     # same parameters per image and have the same scanlines setting.
     flags = [r.per_image_adjustments for r in reconstructions]
@@ -271,10 +262,90 @@ def _check_inputs(
                     )
                 )
 
+    camera_merge = _merge_cameras(reconstructions)
+    if with_rigs:
+        _check_rigs(reconstructions, rig_frame_data, labels, camera_merge[3])
+
     # The poses are refined from the .sift files in the first input's
     # workspace, which must be version 2.
     require_version_2_workspace(reconstructions[0].workspace_dir)
-    return feature_folders[0]
+    return feature_folders[0], camera_merge
+
+
+def _check_rigs(reconstructions, rig_frame_data, labels, camera_mapping) -> None:
+    """Refuse rig frames the merged reconstruction cannot keep.
+
+    The merged reconstruction keeps the rigs, sensors and sensor cameras of
+    the reference, the first input (every input has rig frames), and each
+    image keeps its frame's rig index and its sensor index. So each rig an
+    input's images use must exist in the reference with the same sensor
+    count, sensor offset and reference sensor, and each image's camera must
+    merge into the same camera as the reference's camera for its sensor.
+    Raises ``ValueError`` naming the input and the rig or image otherwise.
+    """
+    reference = f"{labels[0]}, the first input with rigs, whose rigs the merge keeps"
+    ref_rigs = rig_frame_data[0]["rigs_metadata"]["rigs"]
+    ref_sensor_cameras = rig_frame_data[0]["sensor_camera_indexes"]
+    for i, (recon, rfd) in enumerate(zip(reconstructions, rig_frame_data)):
+        rigs = rfd["rigs_metadata"]["rigs"]
+        frame_rigs = np.asarray(rfd["rig_indexes"], dtype=np.int64)
+        image_frames = np.asarray(rfd["image_frame_indexes"], dtype=np.int64)
+        for r in np.unique(frame_rigs[image_frames]).tolist():
+            if r >= len(ref_rigs):
+                raise ValueError(
+                    f"{_capitalized(labels[i])} has images in rig {r}, and "
+                    f"{reference}, defines {_count(len(ref_rigs), 'rig')}. "
+                    "Each image keeps its rig index, so every rig an input uses "
+                    "must be one of the reference's."
+                )
+            if _rig_layout(rigs[r]) != _rig_layout(ref_rigs[r]):
+                raise ValueError(
+                    f"Rig {r} of {labels[i]} {_describe_rig(rigs[r])}, and rig "
+                    f"{r} of {reference}, {_describe_rig(ref_rigs[r])}. Each "
+                    "image keeps its rig and sensor indexes, so every rig an "
+                    "input uses must have the same sensors as the reference's."
+                )
+        names = recon.image_names
+        camera_indexes = recon.camera_indexes
+        image_sensors = np.asarray(rfd["image_sensor_indexes"]).tolist()
+        for j, sensor in enumerate(image_sensors):
+            merged = camera_mapping[i][int(camera_indexes[j])]
+            expected = camera_mapping[0][int(ref_sensor_cameras[sensor])]
+            if merged != expected:
+                raise ValueError(
+                    f"Image {names[j]} of {labels[i]} was taken by sensor "
+                    f"{sensor} through a camera that merges into camera "
+                    f"{merged}, and sensor {sensor} of {reference}, is on a "
+                    f"camera that merges into camera {expected}. The merged "
+                    "reconstruction keeps the reference's camera for each "
+                    "sensor, so an image's camera must merge into it."
+                )
+
+
+def _rig_layout(rig: dict) -> tuple:
+    """What an image's sensor index means in a rig: its sensor count, its
+    sensor offset and the position of its reference sensor."""
+    names = rig["sensor_names"]
+    ref = rig["ref_sensor_name"]
+    return (
+        rig["sensor_count"],
+        rig["sensor_offset"],
+        names.index(ref) if ref in names else None,
+    )
+
+
+def _count(n: int, noun: str) -> str:
+    """``1 rig``, ``2 rigs``."""
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
+def _describe_rig(rig: dict) -> str:
+    """A rig's layout (``_rig_layout``) in words."""
+    count, offset, ref = _rig_layout(rig)
+    return (
+        f"has {_count(count, 'sensor')} from sensor index {offset}, with "
+        f"reference sensor {ref}"
+    )
 
 
 def _join(labels: list[str]) -> str:
@@ -307,7 +378,6 @@ def _image_to_cameras(
 
 def _merge_cameras(
     reconstructions: list[SfmrReconstruction],
-    image_name_to_camera: dict,
 ) -> tuple[list, list[list[str]], list[str | None], list[dict[int, int]]]:
     """Merge cameras from all reconstructions using union-find.
 

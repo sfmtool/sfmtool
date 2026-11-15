@@ -486,38 +486,7 @@ class TestMergeCLI:
         original_path = seoul_bull_workspace
         recon = SfmrReconstruction.load(original_path)
 
-        # Add synthetic rig_frame_data to the reconstruction
-        n_images = recon.image_count
-        n_frames = (n_images + 1) // 2
-        rig_frame_data = {
-            "rigs_metadata": {
-                "rig_count": 1,
-                "sensor_count": 2,
-                "rigs": [
-                    {
-                        "name": "rig0",
-                        "sensor_count": 2,
-                        "sensor_offset": 0,
-                        "ref_sensor_name": "sensor0",
-                        "sensor_names": ["sensor0", "sensor1"],
-                    }
-                ],
-            },
-            "sensor_camera_indexes": np.array([0, 0], dtype=np.uint32),
-            "sensor_quaternions_wxyz": np.array(
-                [[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]
-            ),
-            "sensor_translations_xyz": np.array([[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]]),
-            "frames_metadata": {"frame_count": n_frames},
-            "rig_indexes": np.zeros(n_frames, dtype=np.uint32),
-            "image_sensor_indexes": np.array(
-                [i % 2 for i in range(n_images)], dtype=np.uint32
-            ),
-            "image_frame_indexes": np.array(
-                [i // 2 for i in range(n_images)], dtype=np.uint32
-            ),
-        }
-        recon_with_rig = recon.clone_with_changes(rig_frame_data=rig_frame_data)
+        recon_with_rig = _with_rigs(recon, [2], _pairs(recon.image_count))
         rig_path = original_path.parent / "with_rig.sfmr"
         recon_with_rig.save(rig_path, operation="add_rig")
 
@@ -724,40 +693,69 @@ def _embedded_copy(sift_path):
     return path
 
 
-def _with_rig(recon, sensor_names=("sensor0", "sensor1")):
-    """``recon`` with a two-sensor rig, its images alternating sensors."""
-    n_images = recon.image_count
-    n_frames = (n_images + 1) // 2
+def _pairs(first, stop=None):
+    """Frames of rig 0 holding images ``first, first + 1``, ``first + 2,
+    first + 3`` and so on below ``stop``, the last one alone when the count
+    is odd; ``_pairs(n)`` covers images ``0..n``."""
+    if stop is None:
+        first, stop = 0, first
+    return [(0, list(range(i, min(i + 2, stop)))) for i in range(first, stop, 2)]
+
+
+def _with_rigs(recon, sensor_counts, frames, sensor_cameras=None):
+    """``recon`` with rigs of ``sensor_counts`` sensors and the ``frames``,
+    each ``(rig, images)`` with the images in sensor order. The sensors sit on
+    camera 0 unless ``sensor_cameras`` names theirs."""
+    offsets = np.concatenate([[0], np.cumsum(sensor_counts)[:-1]]).astype(int).tolist()
+    sensor_total = int(sum(sensor_counts))
+    image_sensors = np.zeros(recon.image_count, dtype=np.uint32)
+    image_frames = np.zeros(recon.image_count, dtype=np.uint32)
+    for frame, (rig, images) in enumerate(frames):
+        for position, image in enumerate(images):
+            image_sensors[image] = offsets[rig] + position
+            image_frames[image] = frame
+    translations = np.zeros((sensor_total, 3))
+    for rig, count in enumerate(sensor_counts):
+        translations[offsets[rig] : offsets[rig] + count, 0] = 0.1 * np.arange(count)
     return recon.clone_with_changes(
         rig_frame_data={
             "rigs_metadata": {
-                "rig_count": 1,
-                "sensor_count": 2,
+                "rig_count": len(sensor_counts),
+                "sensor_count": sensor_total,
                 "rigs": [
                     {
-                        "name": "rig0",
-                        "sensor_count": 2,
-                        "sensor_offset": 0,
-                        "ref_sensor_name": sensor_names[0],
-                        "sensor_names": list(sensor_names),
+                        "name": f"rig{rig}",
+                        "sensor_count": count,
+                        "sensor_offset": offsets[rig],
+                        "ref_sensor_name": "sensor0",
+                        "sensor_names": [f"sensor{k}" for k in range(count)],
                     }
+                    for rig, count in enumerate(sensor_counts)
                 ],
             },
-            "sensor_camera_indexes": np.array([0, 0], dtype=np.uint32),
-            "sensor_quaternions_wxyz": np.array(
-                [[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]
+            "sensor_camera_indexes": np.array(
+                sensor_cameras or [0] * sensor_total, dtype=np.uint32
             ),
-            "sensor_translations_xyz": np.array([[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]]),
-            "frames_metadata": {"frame_count": n_frames},
-            "rig_indexes": np.zeros(n_frames, dtype=np.uint32),
-            "image_sensor_indexes": np.array(
-                [i % 2 for i in range(n_images)], dtype=np.uint32
-            ),
-            "image_frame_indexes": np.array(
-                [i // 2 for i in range(n_images)], dtype=np.uint32
-            ),
+            "sensor_quaternions_wxyz": np.tile([1.0, 0.0, 0.0, 0.0], (sensor_total, 1)),
+            "sensor_translations_xyz": translations,
+            "frames_metadata": {"frame_count": len(frames)},
+            "rig_indexes": np.array([rig for rig, _ in frames], dtype=np.uint32),
+            "image_sensor_indexes": image_sensors,
+            "image_frame_indexes": image_frames,
         }
     )
+
+
+def _rig_and_single_images(recon):
+    """A solve of rig frames and single images: rig 0 pairs images 1-14,
+    and images 15-17 are each a frame of the single-sensor rig 1."""
+    return _with_rigs(recon, [2, 1], _pairs(14) + [(1, [i]) for i in (14, 15, 16)])
+
+
+def _rig_frames_alone(recon):
+    """A solve of the rig frames alone: images 1-14 in rig 0."""
+    first_14 = apply_transforms(recon, [IncludeRangeFilter(RangeExpr("1-14"))])
+    return _with_rigs(first_14, [2], _pairs(14))
 
 
 def _assert_refused_before_any_step(result, output_path):
@@ -824,7 +822,9 @@ class TestMergeRefusesInputs:
     ):
         recon = SfmrReconstruction.load(seoul_bull_workspace)
         rig_path = seoul_bull_workspace.parent / "with_rig.sfmr"
-        _with_rig(recon).save(rig_path, operation="add_rig")
+        _with_rigs(recon, [2], _pairs(recon.image_count)).save(
+            rig_path, operation="add_rig"
+        )
         subset_path = seoul_bull_workspace.parent / "rig_subset.sfmr"
         _apply_transforms_to_file(
             rig_path, subset_path, [IncludeRangeFilter(RangeExpr("1-10"))]
@@ -848,14 +848,109 @@ class TestMergeRefusesInputs:
             f"({seoul_bull_workspace.name}) has none" in result.output
         )
 
-    def test_refuses_inputs_that_define_different_rigs(
+    def test_merges_rig_frames_beside_single_images_with_rig_frames_alone(
+        self, seoul_bull_workspace, tmp_path
+    ):
+        """The reference defines rig 0 and a single-sensor rig 1 for its single
+        images; the other input defines rig 0 alone, the same rig."""
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        workspace = seoul_bull_workspace.parent
+        both_path = workspace / "both.sfmr"
+        _rig_and_single_images(recon).save(both_path, operation="add_rig")
+        later_path = workspace / "later.sfmr"
+        _apply_transforms_to_file(
+            both_path, later_path, [IncludeRangeFilter(RangeExpr("6-17"))]
+        )
+        alone_path = workspace / "alone.sfmr"
+        _rig_frames_alone(recon).save(alone_path, operation="add_rig")
+        output_path = tmp_path / "merged.sfmr"
+
+        result = CliRunner().invoke(
+            main,
+            ["merge", str(later_path), str(alone_path), "-o", str(output_path)],
+        )
+
+        assert result.exit_code == 0, result.output
+        merged = SfmrReconstruction.load(output_path)
+        assert merged.image_count == recon.image_count
+        rfd = merged.rig_frame_data
+        assert rfd["rigs_metadata"]["rig_count"] == 2
+        sensors = np.asarray(rfd["image_sensor_indexes"])
+        assert sorted(sensors.tolist()) == [0] * 7 + [1] * 7 + [2] * 3
+        cameras = np.asarray(merged.camera_indexes)
+        assert (np.asarray(rfd["sensor_camera_indexes"])[sensors] == cameras).all()
+
+    def test_refuses_an_input_with_a_rig_the_reference_lacks(
         self, seoul_bull_workspace, capsys
     ):
         recon = SfmrReconstruction.load(seoul_bull_workspace)
-        left_right = _with_rig(recon, ("left", "right"))
+        alone = _rig_frames_alone(recon)
+        capsys.readouterr()
 
-        with pytest.raises(ValueError, match="input 1 and input 2 define different"):
-            merge_reconstructions([_with_rig(recon), left_right])
+        with pytest.raises(ValueError) as excinfo:
+            merge_reconstructions([alone, _rig_and_single_images(recon)])
+
+        assert str(excinfo.value).startswith(
+            "Input 2 has images in rig 1, and input 1, the first input with "
+            "rigs, whose rigs the merge keeps, defines 1 rig."
+        )
+        assert capsys.readouterr().out == ""
+
+    def test_refuses_an_input_whose_rig_has_other_sensors(
+        self, seoul_bull_workspace, capsys
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        pairs = _with_rigs(recon, [2], _pairs(recon.image_count))
+        # Image 1 alone in a one-sensor rig 0, the rest in pairs in rig 1.
+        other = _with_rigs(
+            recon,
+            [1, 2],
+            [(0, [0])] + [(1, images) for _, images in _pairs(1, recon.image_count)],
+        )
+
+        with pytest.raises(ValueError) as excinfo:
+            merge_reconstructions([pairs, other])
+
+        assert str(excinfo.value).startswith(
+            "Rig 0 of input 2 has 1 sensor from sensor index 0, with reference "
+            "sensor 0, and rig 0 of input 1, the first input with rigs, whose "
+            "rigs the merge keeps, has 2 sensors from sensor index 0"
+        )
+        assert capsys.readouterr().out == ""
+
+    def test_refuses_a_sensor_on_a_camera_the_reference_sensor_is_not_on(
+        self, seoul_bull_workspace, capsys
+    ):
+        """Input 2 puts its single-image sensor on a second camera, which no
+        image shares with input 1, so it stays a camera of its own."""
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        reference = _with_rigs(
+            apply_transforms(recon, [IncludeRangeFilter(RangeExpr("1-14"))]),
+            [2, 1],
+            _pairs(14),
+        )
+        two_cameras = recon.clone_with_changes(
+            cameras=recon.cameras * 2,
+            camera_indexes=np.array([0] * 14 + [1] * 3, dtype=np.uint32),
+            per_image_adjustments=recon.per_image_adjustments * 2,
+            rolling_shutter_scanlines=recon.rolling_shutter_scanlines * 2,
+        )
+        other = _with_rigs(
+            two_cameras,
+            [2, 1],
+            _pairs(14) + [(1, [i]) for i in (14, 15, 16)],
+            sensor_cameras=[0, 0, 1],
+        )
+        name = recon.image_names[14]
+        capsys.readouterr()
+
+        with pytest.raises(ValueError) as excinfo:
+            merge_reconstructions([reference, other])
+
+        assert str(excinfo.value).startswith(
+            f"Image {name} of input 2 was taken by sensor 2 through a camera "
+            "that merges into camera 1, and sensor 2 of input 1"
+        )
         assert capsys.readouterr().out == ""
 
     def test_refuses_cameras_that_vary_different_parameters_before_any_step(
