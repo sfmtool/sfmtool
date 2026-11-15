@@ -570,11 +570,11 @@ checks the binding on the seoul_bull ground truth. On every eighth point and
 the two whose grown-plane normal is a large turn on weak evidence, a sample
 that meets every outcome a run over all 280 points meets: no position,
 keypoint or index moves, only the rewritten points' normals change, and the
-input is unchanged; the report's statuses and counts; each turned point's agreement is
-finite and `mean_agreement` is their mean; a list of points gets the statuses a
-run over every point gives them, and the other points keep their normals and
-are `"not_asked"`. On all of its points: the refusals; a refused point's `error` and `reason`; the
-progress counter; that a SIGINT raised from another thread 0.3 s into a
+input is unchanged; the report's statuses and counts; each turned point's
+agreement is finite and `mean_agreement` is their mean; a list of points gets
+the statuses a run over every point gives them, and the other points keep
+their normals and are `"not_asked"`. On all of its points: the refusals; a
+refused point's `error` and `reason`; the progress counter; that a SIGINT raised from another thread 0.3 s into a
 pairwise-flow run over every point stops it within seconds, before every
 point is counted, and raises what the test's own handler raised; and `method="pairwise_flow"` on seoul_bull v02, where
 point 2 is turned with the step's numbers and, with the bar on the mean

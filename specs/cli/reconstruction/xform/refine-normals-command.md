@@ -208,14 +208,15 @@ step, written separated or joined on the command line, and any other key, an
 unknown or hyphenated method and a malformed `method` are usage errors, refused
 on the command line before the reconstruction is loaded; the summary lines of
 both steps; on two points of the seoul_bull ground truth, one of them at
-infinity, that the pairwise-flow normal turns the finite normal to a normal other
-than the grown plane's, moves no point, skips the point at infinity and prints
-its own summary; that the transform's progress counter reaches every point;
-that a SIGINT raised once a pairwise-flow run over the ground truth has
+infinity, that the pairwise-flow normal turns the finite normal to a normal
+other than the grown plane's, moves no point, skips the point at infinity and
+prints its own summary; that the transform's progress counter reaches every
+point; that a SIGINT raised once a pairwise-flow run over the ground truth has
 counted a point aborts the command with nothing written; on every eighth point
 of the seoul_bull ground truth, that the finite points' normals turn while no
 position, keypoint or track moves, that the points at infinity keep their
-normals and colours, and that the run prints its summary; on an embedded-patches conversion of the seoul_bull workspace, that a reconstruction
+normals and colours, and that the run prints its summary; on an
+embedded-patches conversion of the seoul_bull workspace, that a reconstruction
 without bitmaps gets none and one with bitmaps has the rewritten points'
 bitmaps rendered again and the others kept; a missing image; the
 `--to-embedded-patches --refine-normals` chain; a bare option before another;
