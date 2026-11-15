@@ -93,9 +93,9 @@ Could not align part_b.sfmr: it shares no images with the reference or another i
 
 The reference and every input that was aligned are still written to `--output-dir`; an input
 that failed has no file there. The command then exits with status 1 and the error
-`N of M reconstruction(s) could not be aligned.`, so a script that runs `sfm align` sees that
-the output directory does not hold every input it asked for. It exits with status 0 only when
-every input was aligned.
+`N of M reconstructions could not be aligned.` ("reconstruction" when M is 1), so a script
+that runs `sfm align` sees that the output directory does not hold every input it asked for.
+It exits with status 0 only when every input was aligned.
 
 Only those failures, which come from the inputs, are reported this way. Any other exception
 raised during an alignment is a fault in the code: it is not caught, and the command stops with

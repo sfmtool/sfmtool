@@ -479,9 +479,9 @@ def align_command(
         click.echo("")
         for name, reason in failed:
             click.echo(f"Could not align {name}: {reason}", err=True)
+        noun = "reconstruction" if len(align_paths) == 1 else "reconstructions"
         raise click.ClickException(
-            f"{len(failed)} of {len(align_paths)} reconstruction(s) could not "
-            "be aligned."
+            f"{len(failed)} of {len(align_paths)} {noun} could not be aligned."
         )
 
 

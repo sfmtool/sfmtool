@@ -459,7 +459,7 @@ class TestAlignCLI:
             "Could not align last.sfmr: it shares no images with the reference "
             "or another input"
         ) in result.output
-        assert "1 of 1 reconstruction(s) could not be aligned." in result.output
+        assert "1 of 1 reconstruction could not be aligned." in result.output
         assert sorted(p.name for p in output_dir.iterdir()) == ["first.sfmr"]
 
     def test_unreadable_sift_fails_one_input_and_keeps_the_others(
@@ -502,7 +502,7 @@ class TestAlignCLI:
         assert result.exit_code == 1, result.output
         assert "Successfully aligned: 1/2" in result.output
         assert "Could not align embedded.sfmr: Missing SIFT file" in result.output
-        assert "1 of 2 reconstruction(s) could not be aligned." in result.output
+        assert "1 of 2 reconstructions could not be aligned." in result.output
         assert sorted(p.name for p in output_dir.iterdir()) == sorted(
             [seoul_bull_sfmr_only.name, "moved.sfmr"]
         )
