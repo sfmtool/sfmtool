@@ -729,7 +729,11 @@ fn a_seeded_scene_scale_reads_back_as_a_value_the_set_accepts() {
                 });
             });
         }
-        assert!(viewer.hud_open, "the HUD was not drawn open");
+        let drawn = viewer.hud_rect.expect("the HUD claims a rect");
+        assert!(
+            drawn.width() > 200.0,
+            "the HUD was drawn as a gear rather than open: {drawn:?}"
+        );
         assert_eq!(state.length_scale, expected, "the HUD moved {seed}'s seed");
         assert_eq!(displayed(&state), 0, "the HUD recorded {seed}'s seed");
     }
