@@ -246,9 +246,12 @@ fn click_at(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, po
     run_frame(viewer, ctx, state, Frame::new().button(pos, false));
 }
 
-/// A viewer + context + state that have already settled.
+/// A viewer + context + state that have already settled, with the HUD
+/// expanded: it starts collapsed to its gear, and most tests here are about
+/// the panel's controls.
 fn settled(state: &mut AppState) -> (Viewer3D, egui::Context) {
     let mut viewer = Viewer3D::new();
+    viewer.hud_open = true;
     let ctx = egui::Context::default();
     warm_up(&mut viewer, &ctx, state);
     (viewer, ctx)
@@ -390,12 +393,30 @@ fn an_area_on_a_higher_layer_swallows_drag_and_click_from_the_painter_beneath() 
 
 // ── Collapsed / expanded ────────────────────────────────────────────────
 
+/// A new viewer starts with the HUD collapsed to its gear, in a viewport big
+/// enough for the panel to open itself, so the gear is the default's doing and
+/// not the size rule's.
 #[test]
-fn the_hud_starts_open_with_its_sections_drawn() {
+fn the_hud_starts_collapsed_to_its_gear() {
+    let mut state = demo_state();
+    let mut viewer = Viewer3D::new();
+    let ctx = egui::Context::default();
+    warm_up(&mut viewer, &ctx, &mut state);
+
+    assert!(!viewer.hud_open, "the HUD should start collapsed");
+    let rect = viewer.hud_rect.expect("the gear claims a rect");
+    assert!(
+        rect.width() < 60.0 && rect.height() < 60.0,
+        "the HUD started at {rect:?}, which is more than a gear"
+    );
+}
+
+/// Expanded, the panel draws its sections. The counterpart of the next test.
+#[test]
+fn an_expanded_hud_draws_its_sections() {
     let mut state = demo_state();
     let (viewer, ctx) = settled(&mut state);
 
-    assert!(viewer.hud_open, "the HUD should open expanded");
     let rect = viewer.hud_rect.expect("the panel claims a rect");
     assert!(
         rect.width() > 200.0,
@@ -530,6 +551,8 @@ fn a_click_on_the_gear_opens_the_hud_in_a_viewport_too_small_for_it() {
     let mut state = demo_state();
     let mut viewer = Viewer3D::new();
     let ctx = egui::Context::default();
+    // Asked to open, so the gear below is the size rule's doing.
+    viewer.hud_open = true;
 
     // Between the panel's own width and the size it opens itself at.
     let narrow = egui::vec2(452.0, 800.0);

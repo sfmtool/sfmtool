@@ -714,6 +714,7 @@ fn a_seeded_scene_scale_reads_back_as_a_value_the_set_accepts() {
         // The HUD's slider clamps and rounds what it is handed on every frame
         // it draws; the seeded value is already what it would hold.
         let ctx = eframe::egui::Context::default();
+        viewer.hud_open = true;
         for _ in 0..3 {
             let input = eframe::egui::RawInput {
                 screen_rect: Some(eframe::egui::Rect::from_min_size(

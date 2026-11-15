@@ -53,11 +53,10 @@ follow the panel-owns-its-controls rule and are not touched.
 The HUD lives in [hud.rs](../../crates/sfm-explorer/src/viewer_3d/hud.rs), with
 tests in [hud/tests.rs](../../crates/sfm-explorer/src/viewer_3d/hud/tests.rs).
 
-The HUD is **open by default**. The controls are the point of the panel, and a
-viewport that starts by hiding them just trades a menu round-trip for a click.
-It collapses to a single gear glyph for when the full-bleed viewport matters
-more (design principle #4, *Dark, Cinematic Aesthetic*) — the translucent fill
-keeps it from fighting the scene while open. The gear is the button named
+The HUD is **collapsed by default**, to a single gear glyph, so the scene
+starts with the whole viewport (design principle #4, *Dark, Cinematic
+Aesthetic*). One click on the gear expands it, and the translucent fill keeps
+it from fighting the scene while open. The gear is the button named
 `⚙ Display controls` in `get_widgets`, and the close button of the open panel
 `🗙 Collapse display controls`: each glyph, then the words of its hover text.
 
@@ -126,7 +125,7 @@ stays under a third. An open the size refused is remembered, not discarded —
 widen the panel and the HUD expands without a click.
 
 **A click on the gear opens the HUD at any size.** The size rule decides only
-what the HUD does on its own, at launch and as the panel is resized; a click
+what the HUD does on its own as the panel is resized; a click
 is a request to see the controls, so it is carried out even when the panel then
 covers most of a narrow viewport. The panel stays open, whatever the viewport's
 size, until its close button is clicked, which hands the decision back to the
@@ -321,8 +320,8 @@ adjustments to existing ones.
 | `maintain_z_up` | `Viewer3D` | Navigation state, beside the camera it turns, as the field of view the same section edits is. Q and E in the viewport's own input turn it off |
 | Per-section collapsed flags | egui's own `CollapsingState` memory, under the stable ids from `hud::section_id` | Already exactly session-scoped, with per-section defaults via `load_with_default_open`; duplicating it into `Viewer3D` fields would only add a sync step. The explicit ids keep it addressable from outside the HUD |
 
-Nothing is persisted across runs; the HUD opens expanded each launch
-(`Viewer3D::hud_open` starts `true`).
+Nothing is persisted across runs; the HUD starts collapsed to its gear each
+launch (`Viewer3D::hud_open` starts `false`).
 
 ---
 
