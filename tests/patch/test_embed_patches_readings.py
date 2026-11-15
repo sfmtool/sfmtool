@@ -10,11 +10,40 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.xform import RefineKeypointsTransform
 
+from ..conftest import SEOUL_BULL_POINT_STEP, every_nth_point
 from .conftest import load_images
+
+
+@pytest.fixture(scope="module")
+def scene(seoul_bull_workspace_once: Path):
+    """Every eighth point of the seoul_bull reconstruction
+    (``SEOUL_BULL_POINT_STEP``) and its images. Each observation's readings are
+    taken on its own render, so the subset runs the same code as every point.
+    Read them; do not modify them or their workspace."""
+    recon = every_nth_point(
+        SfmrReconstruction.load(seoul_bull_workspace_once), SEOUL_BULL_POINT_STEP
+    )
+    return recon, load_images(recon)
+
+
+@pytest.fixture(scope="module")
+def embedded(scene):
+    """The subset as an ``embedded_patches`` reconstruction with no bitmaps."""
+    recon, _ = scene
+    return recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
+
+
+@pytest.fixture(scope="module")
+def refined(embedded):
+    """``RefineKeypointsTransform`` with bitmaps on :func:`embedded`, for the
+    tests that read it. Each read of ``observation_readings`` builds a new
+    dict, so a test may edit the dict it read."""
+    return RefineKeypointsTransform(resolution=12, max_gn_steps=3).apply(embedded)
 
 
 def _check_ranges(readings: dict, recon: SfmrReconstruction) -> None:
@@ -42,11 +71,10 @@ def _check_ranges(readings: dict, recon: SfmrReconstruction) -> None:
         assert readings[key].dtype == np.float32
 
 
-def test_embed_patches_stores_each_observations_readings(seoul_bull_workspace: Path):
+def test_embed_patches_stores_each_observations_readings(scene):
     from sfmtool._embed_patches import embed_patches
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = load_images(recon)
+    recon, images = scene
     out = embed_patches(recon, images, patch_size=10.0, resolution=12, rounds=1)
     readings = out.observation_readings
     assert readings is not None
@@ -62,6 +90,7 @@ def test_embed_patches_stores_each_observations_readings(seoul_bull_workspace: P
     assert referenced.size > 0
     rows = offsets[referenced] + refs[referenced]
     measured = ~np.isnan(readings["zncc_self_similarity_ellipse_axes"][rows, 0])
+    assert measured.any()
     np.testing.assert_array_equal(readings["plain_bitmap_zncc"][rows][measured], 1.0)
     np.testing.assert_array_equal(
         readings["blur_matched_bitmap_zncc"][rows][measured], 1.0
@@ -83,11 +112,8 @@ def test_embed_patches_stores_each_observations_readings(seoul_bull_workspace: P
             )
 
 
-def test_refine_keypoints_reads_every_observation_again(seoul_bull_workspace: Path):
-    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
-        normal="mean_viewing", extent_value=5.0
-    )
-    with_bitmaps = RefineKeypointsTransform(resolution=12, max_gn_steps=3).apply(recon)
+def test_refine_keypoints_reads_every_observation_again(embedded, refined):
+    recon, with_bitmaps = embedded, refined
     _check_ranges(with_bitmaps.observation_readings, with_bitmaps)
     assert np.isfinite(with_bitmaps.observation_readings["plain_bitmap_zncc"]).any()
 
@@ -100,27 +126,19 @@ def test_refine_keypoints_reads_every_observation_again(seoul_bull_workspace: Pa
     assert np.isnan(readings["plain_bitmap_zncc"]).all()
 
 
-def test_read_observations_advances_its_progress_counter(seoul_bull_workspace: Path):
+def test_read_observations_advances_its_progress_counter(scene, embedded):
     from sfmtool import ProgressCounter
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
-        normal="mean_viewing", extent_value=5.0
-    )
-    cloud = recon.patches
+    _, images = scene
+    cloud = embedded.patches
     counter = ProgressCounter()
-    cloud.read_observations(recon, load_images(recon), resolution=12, progress=counter)
+    cloud.read_observations(embedded, images, resolution=12, progress=counter)
     assert counter.value == len(cloud)
 
 
 def test_passed_readings_at_another_resolution_than_the_bitmaps_are_refused(
-    seoul_bull_workspace: Path,
+    refined,
 ):
-    import pytest
-
-    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
-        normal="mean_viewing", extent_value=5.0
-    )
-    refined = RefineKeypointsTransform(resolution=12, max_gn_steps=3).apply(recon)
     readings = refined.observation_readings
     readings["options"]["resolution"] = 24
     with pytest.raises(ValueError, match="resolution 24"):

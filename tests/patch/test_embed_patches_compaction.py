@@ -30,7 +30,11 @@ from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.patches import PatchCloud
 from sfmtool.fileio import verify_sfmr
 
-from ..conftest import per_point_reprojection_error_stats
+from ..conftest import (
+    SEOUL_BULL_POINT_STEP,
+    every_nth_point,
+    per_point_reprojection_error_stats,
+)
 from .conftest import load_images, rotation_matrices
 
 
@@ -57,10 +61,14 @@ def _run_pipeline(recon, images, resolution=12):
 
 @pytest.fixture(scope="module")
 def pipeline(seoul_bull_workspace_once: Path):
-    """``(recon, cloud, bitmaps, locs)``: :func:`_run_pipeline` on the shared
-    workspace, run once for the module. The bitmaps are read-only, and a test
-    that edits the localizations edits a ``copy.deepcopy`` of them."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace_once)
+    """``(recon, cloud, bitmaps, locs)``: :func:`_run_pipeline` on every
+    eighth point of the shared workspace (``SEOUL_BULL_POINT_STEP``), run once
+    for the module. The kernels treat each point on its own, so the subset runs
+    the same code as every point. The bitmaps are read-only, and a test that
+    edits the localizations edits a ``copy.deepcopy`` of them."""
+    recon = every_nth_point(
+        SfmrReconstruction.load(seoul_bull_workspace_once), SEOUL_BULL_POINT_STEP
+    )
     cloud, bitmaps, locs = _run_pipeline(recon, load_images(recon))
     bitmaps.flags.writeable = False
     return recon, cloud, bitmaps, locs

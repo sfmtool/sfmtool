@@ -52,6 +52,25 @@ def _run(recon, images, rounds: int, **kwargs):
     return out, lines
 
 
+# A self-similarity bar low enough that round 1 culls some of the subset's
+# points: at the default bar it culls none of them.
+_LOW_SELF_SIMILARITY_BAR = 0.8
+
+
+@pytest.fixture(scope="module")
+def one_round(scene):
+    """``(out, lines)``: :func:`_run` with one round at the low self-similarity
+    bar, run once for the sub-pixel and multiple-rounds tests, which only read
+    it."""
+    recon, images = scene
+    return _run(
+        recon,
+        images,
+        rounds=1,
+        max_zncc_self_similarity_radius=_LOW_SELF_SIMILARITY_BAR,
+    )
+
+
 def test_embed_patches_default_is_two_rounds_with_subpixel(default_embed_patches_run):
     """The default ``embed_patches`` call (no ``subpixel=`` / ``rounds=`` kwargs) is
     bit-for-bit equivalent to passing ``subpixel=True, rounds=2``. Pins the default so
@@ -81,7 +100,7 @@ def test_embed_patches_default_is_two_rounds_with_subpixel(default_embed_patches
     )
 
 
-def test_embed_patches_subpixel_lk_round_trips(scene, tmp_path: Path):
+def test_embed_patches_subpixel_lk_round_trips(scene, one_round, tmp_path: Path):
     """``embed_patches(subpixel=True)`` produces a valid ``embedded_patches``
     reconstruction that round-trips through ``.sfmr``, and its per-view
     keypoints differ from the no-refinement baseline (``subpixel=False``) — the
@@ -98,10 +117,18 @@ def test_embed_patches_subpixel_lk_round_trips(scene, tmp_path: Path):
     # test_embed_patches_multiple_rounds_round_trips.)
     # resolution=12 (vs default 24) is a cheaper sampling grid; the assertion is
     # a relative baseline-vs-refined comparison at a fixed grid, so it holds.
+    # Both sides take the low self-similarity bar, so the refined side is the
+    # one-round run the multiple-rounds test also reads.
     baseline = embed_patches(
-        recon, images, patch_size=10.0, subpixel=False, rounds=1, resolution=12
+        recon,
+        images,
+        patch_size=10.0,
+        subpixel=False,
+        rounds=1,
+        resolution=12,
+        max_zncc_self_similarity_radius=_LOW_SELF_SIMILARITY_BAR,
     )
-    refined, _ = _run(recon, images, rounds=1)
+    refined, _ = one_round
 
     assert baseline.feature_source == refined.feature_source == "embedded_patches"
 
@@ -142,8 +169,9 @@ def test_embed_patches_subpixel_lk_round_trips(scene, tmp_path: Path):
     base_seen = set(_buckets(baseline))
     ref_buckets = _buckets(refined)
     moved = sum(1 for b in ref_buckets if b not in base_seen)
-    # Measured 94-95% of observations move; 50% leaves ample headroom while
-    # still failing a no-op (0%) or a near-no-op.
+    # About 71% of the subset's observations move (363 of 511, and 394 of
+    # 550 at the default self-similarity bar); 50% leaves headroom while still
+    # failing a no-op (0%) or a near-no-op.
     assert moved > 0.5 * len(ref_buckets), (
         f"subpixel=True moved only {moved}/{len(ref_buckets)} keypoints "
         "(wiring is a no-op?)"
@@ -197,7 +225,7 @@ def _self_similarity_culled(lines: list[str]) -> int:
     return counts[0] if counts else 0
 
 
-def test_embed_patches_multiple_rounds_round_trips(scene, tmp_path: Path):
+def test_embed_patches_multiple_rounds_round_trips(scene, one_round, tmp_path: Path):
     """``rounds > 1`` alternates normal- and keypoint-refinement, feeding each
     round into the next and re-pruning grazing observations. The output is a valid
     ``embedded_patches`` recon. Every point a one-round or a three-round run keeps
@@ -215,11 +243,15 @@ def test_embed_patches_multiple_rounds_round_trips(scene, tmp_path: Path):
     recon, images = scene
 
     # resolution=12 (vs default 24) is a cheaper sampling grid; both runs use
-    # it, so the comparison between them is unaffected. Both runs take a
-    # self-similarity bar low enough that round 1 culls some of the subset's
-    # points: at the default bar it culls none of them.
-    one, one_lines = _run(recon, images, rounds=1, max_zncc_self_similarity_radius=0.8)
-    three, lines = _run(recon, images, rounds=3, max_zncc_self_similarity_radius=0.8)
+    # it, so the comparison between them is unaffected. Both runs take the low
+    # self-similarity bar, so that round 1 culls some of the subset's points.
+    one, one_lines = one_round
+    three, lines = _run(
+        recon,
+        images,
+        rounds=3,
+        max_zncc_self_similarity_radius=_LOW_SELF_SIMILARITY_BAR,
+    )
 
     assert three.feature_source == "embedded_patches"
     assert three.point_count > 0
