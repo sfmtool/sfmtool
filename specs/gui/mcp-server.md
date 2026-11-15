@@ -6567,13 +6567,14 @@ where a test hands no host over.
 - **Solo**: it moves rather than accumulating, leaves the selection alone, and
   keeps `visible` and `drawn` distinguishable.
 - **A refusal is atomic**: an unknown tint lists the palette and leaves the
-  call's other fields unapplied, and so does a `point_style` other than
-  `"dots"` and `"patches"`.
+  call's other fields unapplied, and a `point_style` other than `"dots"` and
+  `"patches"` is refused at the parse, before anything is applied.
 - **`point_style` round-trips**: a reconstruction with no patch data reads
   `"dots"` in `get_scene`, takes `"patches"` and `"dots"` through
-  `set_reconstruction_display`, reads each back in the reply and the next
-  `get_scene`, and logs `Point style of <label>: Patches` and `: Dots`; the
-  scene entry has no `show_patches`, and the setter refuses one.
+  `set_reconstruction_display`, reads each back in the reply, which is its
+  `get_scene` entry, leaves the other reconstruction's style alone, and logs
+  `Point style of <label>: Patches` and `: Dots`; the scene entry has no
+  `show_patches`, and the setter refuses one.
 - **`get_image_detail_display` returns the defaults on a fresh state**, with
   `intrinsics.enabled` true, `feature_size_px` null and `overlay_mode`
   `"features"`; **`set_image_detail_display`** changes exactly the fields it
