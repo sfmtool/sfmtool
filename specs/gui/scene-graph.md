@@ -1184,9 +1184,11 @@ radio pairs do not earn a third level of nesting. Both modes and every target
 are always enabled: the point mode matches by feature index or by keypoint
 position, and a pair it cannot match fails with the reason in the status line.
 The fit runs synchronously — by-cameras is trivially small, and by-points
-RANSAC over ~10⁵ correspondences is tens of milliseconds. A keypoint-position
-match of a `sift_files` node without inline keypoints also reads one `.sift`
-file per shared image on that thread. If datasets outgrow that, the fit moves
+RANSAC over ~10⁵ correspondences is tens of milliseconds. Pairing the images
+reads the metadata of one `.sift` file per image of each `sift_files` node on
+that thread, about a millisecond per file (some 0.4 s for a 370-image
+reconstruction), and a keypoint-position match of a `sift_files` node without
+inline keypoints also reads one `.sift` file per shared image there. If datasets outgrow that, the fit moves
 to a background thread without UI change.
 
 Outcome feedback is recorded in the Action Log and shown in the status line,
