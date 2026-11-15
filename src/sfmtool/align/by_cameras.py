@@ -33,35 +33,25 @@ def get_reconstruction_poses(
 
 
 def build_image_matches(
-    shared_images: set[str],
-    source_images: dict[int, str],
+    shared_pairs,
+    source_names: list[str],
     source_quaternions: dict[int, RotQuaternion],
     source_camera_centers: dict[int, np.ndarray],
-    target_images: dict[int, str],
     target_quaternions: dict[int, RotQuaternion],
     target_camera_centers: dict[int, np.ndarray],
 ) -> list[ImageMatch]:
-    """Build ImageMatch objects for shared images between two reconstructions."""
+    """Build ImageMatch objects for the paired images of two reconstructions.
+
+    ``shared_pairs`` holds ``(source index, target index)`` rows, as
+    ``sfmtool.analysis.pair_images`` returns them; each match is named after
+    its source image.
+    """
     matches = []
 
-    for img_name in shared_images:
-        source_idx = None
-        for idx, name in source_images.items():
-            if name == img_name:
-                source_idx = idx
-                break
-
-        target_idx = None
-        for idx, name in target_images.items():
-            if name == img_name:
-                target_idx = idx
-                break
-
-        if source_idx is None or target_idx is None:
-            continue
-
+    for source_idx, target_idx in shared_pairs:
+        source_idx, target_idx = int(source_idx), int(target_idx)
         match = ImageMatch(
-            image_name=img_name,
+            image_name=source_names[source_idx],
             source_index=source_idx,
             target_index=target_idx,
             source_quat=source_quaternions[source_idx],

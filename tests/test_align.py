@@ -4,13 +4,12 @@
 """Tests for the sfm align CLI command and multi-alignment logic."""
 
 import numpy as np
+import pytest
 from click.testing import CliRunner
 
 from sfmtool.reconstruction import RangeExpr
 from sfmtool.align.multi import (
     _build_connectivity_graph,
-    _find_shared_images,
-    _get_reconstruction_images,
     align_reconstructions,
 )
 from sfmtool.reconstruction import SfmrReconstruction
@@ -101,30 +100,15 @@ class TestEstimateAlignment:
 
 
 class TestHelperFunctions:
-    def test_get_reconstruction_images(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
-        images = _get_reconstruction_images(recon)
-        assert len(images) == 17
-        assert all(isinstance(v, str) for v in images.values())
-
-    def test_find_shared_images(self):
-        a = {0: "img1.jpg", 1: "img2.jpg", 2: "img3.jpg"}
-        b = {0: "img2.jpg", 1: "img4.jpg"}
-        shared = _find_shared_images(a, b)
-        assert shared == {"img2.jpg"}
-
-    def test_find_shared_images_none(self):
-        a = {0: "img1.jpg"}
-        b = {0: "img2.jpg"}
-        shared = _find_shared_images(a, b)
-        assert shared == set()
-
     def test_build_connectivity_graph(self, seoul_bull_sfmr_only):
+        # Copied without its .sift files, so no image's file hash is known and
+        # every image pairs by name.
         recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         graph = _build_connectivity_graph([recon, recon])
         assert 1 in graph[0]
         assert 0 in graph[1]
-        assert len(graph[0][1]) == 17
+        assert len(graph[0][1]["pairs"]) == 17
+        assert graph[0][1]["by_name"] == 17
 
 
 # ---------------------------------------------------------------------------
@@ -476,3 +460,107 @@ class TestAlignCLI:
 
         distances = np.linalg.norm(aligned_positions - ref_positions, axis=1)
         assert np.mean(distances) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# Image pairing by file hash
+# ---------------------------------------------------------------------------
+
+
+def _embedded_copy(reference_path, tmp_path, name, **changes):
+    """An ``embedded_patches`` copy of the ``sift_files`` reconstruction at
+    ``reference_path``, with ``changes`` applied and moved by a known
+    similarity, saved as ``tmp_path / name``. It stores each image's file hash,
+    which it reads from the reference's ``.sift`` files."""
+    reference = SfmrReconstruction.load(reference_path)
+    embedded = reference.to_embedded_patches()
+    if changes:
+        embedded = embedded.clone_with_changes(**changes)
+    path = tmp_path / name
+    _moved(embedded).save(path, operation="align_test")
+    return reference, path
+
+
+def _rotated(names):
+    """Every name moved to the next image: the same names, each on another file."""
+    return names[1:] + names[:1]
+
+
+class TestAlignPairsImagesByFileHash:
+    """`sfm align` pairs images by the hash of the image file, and by name only
+    where a hash is not known."""
+
+    @pytest.mark.parametrize("method", ["points", "cameras"])
+    def test_names_moved_to_other_files_still_pair_by_file(
+        self, seoul_bull_workspace_once, tmp_path, method
+    ):
+        # The sift_files reference's hashes come from its .sift files; the
+        # embedded copy stores them. Every name of the copy is on another
+        # image, so pairing by name would pair every image with the wrong one.
+        reference = SfmrReconstruction.load(seoul_bull_workspace_once)
+        _, target_path = _embedded_copy(
+            seoul_bull_workspace_once,
+            tmp_path,
+            "shuffled.sfmr",
+            image_names=_rotated(reference.image_names),
+        )
+        output_dir = tmp_path / "aligned"
+
+        result = CliRunner().invoke(
+            main,
+            [
+                "align",
+                str(seoul_bull_workspace_once),
+                str(target_path),
+                "-o",
+                str(output_dir),
+                "--method",
+                method,
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert (
+            "images paired: 17 by file hash, 0 by name; "
+            "17 names shared by different files"
+        ) in result.output
+        assert "Successfully aligned: 1/1" in result.output
+        aligned = SfmrReconstruction.load(output_dir / target_path.name)
+        # Image i of the copy is image i of the reference under another name.
+        np.testing.assert_allclose(
+            _camera_centers(aligned), _camera_centers(reference), atol=1e-6
+        )
+
+    def test_same_names_on_other_files_are_not_paired(
+        self, seoul_bull_workspace_once, tmp_path
+    ):
+        # The copy keeps every name, but records files the reference does not
+        # have, so no image pairs, and the CLI names what pairing by name would
+        # have paired.
+        reference = SfmrReconstruction.load(seoul_bull_workspace_once)
+        other_files = [bytes([i + 1]) * 16 for i in range(reference.image_count)]
+        _, target_path = _embedded_copy(
+            seoul_bull_workspace_once,
+            tmp_path,
+            "other_files.sfmr",
+            image_file_hashes=other_files,
+        )
+
+        result = CliRunner().invoke(
+            main,
+            [
+                "align",
+                str(seoul_bull_workspace_once),
+                str(target_path),
+                "-o",
+                str(tmp_path / "aligned"),
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert (
+            "images paired: 0 by file hash, 0 by name; "
+            "17 names shared by different files"
+        ) in result.output
+        assert "Not paired, same name but different file: " in result.output
+        assert "Successfully aligned: 0/1" in result.output

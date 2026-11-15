@@ -9,7 +9,7 @@ use numpy::{Element, IntoPyArray, PyArray, PyArray1, PyArray2, PyArray4, PyReado
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList};
 use std::path::PathBuf;
 
 use sfmtool_core::geometry::viewing_angle::viewing_rays;
@@ -730,6 +730,47 @@ impl PySfmrReconstruction {
             .sift_content_hashes()
             .map(|h| u128_bytes_to_py(py, h))
             .transpose()
+    }
+
+    /// Each image's source-file hash (XXH128 of the photograph's bytes) as
+    /// ``bytes`` (16 bytes), or ``None`` for an image whose hash is not known.
+    ///
+    /// An ``"embedded_patches"`` reconstruction stores the hashes, so every
+    /// image has one. A ``"sift_files"`` one does not: each comes from the
+    /// ``image_file_xxh128`` its ``.sift`` file records, in the feature folder
+    /// the reconstruction records, reading only the file's metadata. An image
+    /// whose ``.sift`` file is missing or unreadable, or is not the extraction
+    /// :attr:`sift_content_hashes` records, gets ``None``; that is not an
+    /// error. No photograph is read. ``progress``, an optional
+    /// :class:`ProgressCounter`, counts the ``.sift`` files read so far, with
+    /// the GIL released.
+    ///
+    /// :func:`sfmtool.analysis.pair_images` pairs two reconstructions' images
+    /// by these hashes.
+    #[pyo3(signature = (progress=None))]
+    fn find_image_file_hashes<'py>(
+        &self,
+        py: Python<'py>,
+        progress: Option<crate::py_progress::ProgressCounter>,
+    ) -> PyResult<Bound<'py, PyList>> {
+        let counter = progress.as_ref().map(|p| p.handle());
+        let sink = |event: sfmtool_core::progress::Event<'_>| {
+            if let (sfmtool_core::progress::Event::Count { done, .. }, Some(counter)) =
+                (event, &counter)
+            {
+                counter.fetch_max(done as usize, std::sync::atomic::Ordering::Relaxed);
+            }
+        };
+        let inner = &self.inner;
+        let hashes = py
+            .detach(|| inner.find_image_file_hashes(&Progress::to(&sink)))
+            .map_err(|e| pyo3::exceptions::PyInterruptedError::new_err(e.to_string()))?;
+        PyList::new(
+            py,
+            hashes
+                .iter()
+                .map(|h| h.as_ref().map(|h| PyBytes::new(py, h))),
+        )
     }
 
     /// Observation source: ``"sift_files"`` (observations reference ``.sift``
