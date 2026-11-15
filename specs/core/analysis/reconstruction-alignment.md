@@ -295,10 +295,12 @@ Binding defaults (`analysis/core.rs`): `max_iterations=1000`,
   since each target's pairs index its own images, then concatenated, and
   the threshold, RANSAC and final fit below run over the union. `sfm align`
   passes every aligned neighbour of the input being aligned; `--align-to`
-  passes its one target. A target whose finder raises `ValueError` (no
-  correspondence found, or a `.sift` file that does not match its
-  reconstruction) adds none; when every target's finder raises, their
-  messages are raised together as one `ValueError`.
+  passes its one target. A target whose finder raises
+  `NoPointCorrespondencesError` (a `ValueError` raised only when no finite
+  correspondence is found) adds none; when every target's finder raises it,
+  their messages are raised together as one `ValueError`. Any other error,
+  such as a `.sift` file that does not match its reconstruction, fails the
+  alignment.
 - **Threshold is data-derived, not fixed:** a preliminary least-squares fit
   over *all* correspondences is computed, and the threshold is the
   `--ransac-percentile` (default 95.0) percentile of its residual

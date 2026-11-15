@@ -67,7 +67,8 @@ seen in the images it shares with that neighbour, matched against that neighbour
 correspondences from all the neighbours are then fitted together in one estimate (for points,
 one RANSAC and least-squares fit over the union). A neighbour that yields no point
 correspondence adds none, and the alignment fails when all the neighbours together yield too
-few.
+few. The output lists each neighbour's count of point correspondences, with the reason beside
+a count of zero.
 
 ## Output
 

@@ -7,6 +7,7 @@ import numpy as np
 
 from .core import AlignmentResult, estimate_alignment
 from .._point_correspondence import (
+    NoPointCorrespondencesError,
     find_point_correspondences,
     find_point_correspondences_by_coordinate,
 )
@@ -51,9 +52,11 @@ def estimate_alignment_from_points(
     fitted together, by a least-squares similarity fit with optional RANSAC
     outlier rejection over all of them.
 
-    A target that yields no correspondence (its finder raises ``ValueError``)
-    adds none; when no target yields one, the targets' errors are raised
-    together as one ``ValueError``.
+    A target that yields no correspondence (its finder raises
+    ``NoPointCorrespondencesError``) adds none; when no target yields one, the
+    targets' errors are raised together as one ``ValueError``. Any other
+    error, such as a ``.sift`` file that no longer matches its reconstruction,
+    propagates.
 
     Args:
         source_recon: Source SfmrReconstruction object
@@ -66,12 +69,14 @@ def estimate_alignment_from_points(
 
     Returns:
         AlignmentResult with transform from source to the targets' frame. Its
-        ``n_point_correspondences_per_target`` holds each target's count.
+        ``n_point_correspondences_per_target`` holds each target's count, and
+        ``point_correspondence_errors_per_target`` why a target with none has
+        none (``None`` for a target with correspondences).
     """
     source_parts = []
     target_parts = []
     per_target = []
-    errors = []
+    errors: list[str | None] = []
     for target_recon, shared_images in targets:
         if _matches_by_feature_index(source_recon, target_recon):
             find = find_point_correspondences
@@ -81,15 +86,16 @@ def estimate_alignment_from_points(
             _, source_found, target_found = find(
                 source_recon, target_recon, shared_images
             )
-        except ValueError as e:
+        except NoPointCorrespondencesError as e:
             errors.append(str(e))
             per_target.append(0)
             continue
         source_parts.append(source_found)
         target_parts.append(target_found)
         per_target.append(len(source_found))
+        errors.append(None)
     if not source_parts:
-        raise ValueError("; ".join(errors))
+        raise ValueError("; ".join(e for e in errors if e is not None))
     source_positions = np.concatenate(source_parts)
     target_positions = np.concatenate(target_parts)
 
@@ -154,6 +160,7 @@ def estimate_alignment_from_points(
     result.confidence = max(0.0, 1.0 - rms_error / 0.1)
     result.n_point_correspondences = n_points
     result.n_point_correspondences_per_target = per_target
+    result.point_correspondence_errors_per_target = errors
     result.n_inliers = n_inliers
     result.point_rms_error = float(rms_error)
     result.computed_threshold = computed_threshold
@@ -194,15 +201,19 @@ def estimate_alignment_from_points_with_logging(
     )
 
     if verbose:
-        for (target_recon, _), label, count in zip(
-            targets, target_labels, result.n_point_correspondences_per_target
+        for (target_recon, _), label, count, error in zip(
+            targets,
+            target_labels,
+            result.n_point_correspondences_per_target,
+            result.point_correspondence_errors_per_target,
         ):
             how = (
                 "feature index"
                 if _matches_by_feature_index(source_recon, target_recon)
                 else "keypoint position"
             )
-            click.echo(f"    With {label} (by {how}): {count}")
+            reason = f" ({error})" if error is not None else ""
+            click.echo(f"    With {label} (by {how}): {count}{reason}")
         click.echo(f"    Found {result.n_point_correspondences} point correspondences")
 
         if use_ransac and result.distances_for_stats is not None:

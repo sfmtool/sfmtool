@@ -759,3 +759,45 @@ class TestAlignInputWithSeveralAlignedNeighbours:
                 [(names[0], names[0])],
                 [(n, n) for n in names[:4]],
             ]
+
+
+class TestPointAlignmentTargetWithNoCorrespondence:
+    """A target with no point correspondence adds none and says why; any other
+    error from the finders fails the alignment."""
+
+    def test_empty_target_adds_none_and_reports_why(self):
+        truth = SfmrReconstruction.load(SEOUL_BULL_GROUND_TRUTH)
+        pairs = [(i, i) for i in range(len(truth.image_names))]
+        result = by_points.estimate_alignment_from_points(
+            truth, [(truth, []), (truth, pairs)]
+        )
+        assert result.n_point_correspondences_per_target[0] == 0
+        assert result.n_point_correspondences_per_target[1] > 0
+        assert (
+            "No point correspondences"
+            in result.point_correspondence_errors_per_target[0]
+        )
+        assert result.point_correspondence_errors_per_target[1] is None
+        np.testing.assert_allclose(result.transform.scale, 1.0, atol=1e-9)
+
+    def test_other_finder_error_propagates(self, monkeypatch):
+        truth = SfmrReconstruction.load(SEOUL_BULL_GROUND_TRUTH)
+        pairs = [(i, i) for i in range(len(truth.image_names))]
+
+        drifted_target = SfmrReconstruction.load(SEOUL_BULL_GROUND_TRUTH)
+        original = by_points.find_point_correspondences_by_coordinate
+
+        # The first target yields correspondences; the second's keypoints
+        # cannot be read.
+        def finder(source, target, shared):
+            if target is drifted_target:
+                raise ValueError("its .sift files have drifted")
+            return original(source, target, shared)
+
+        monkeypatch.setattr(
+            by_points, "find_point_correspondences_by_coordinate", finder
+        )
+        with pytest.raises(ValueError, match="drifted"):
+            by_points.estimate_alignment_from_points(
+                truth, [(truth, pairs), (drifted_target, pairs)]
+            )
