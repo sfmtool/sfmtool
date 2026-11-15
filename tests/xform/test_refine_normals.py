@@ -293,13 +293,18 @@ def test_refine_normals_prints_its_summary(ground_truth_refined):
     assert "3 at infinity skipped" in out
 
 
-# Point 140 of the ground truth, which the pairwise-flow normal turns in
-# about a second of one thread, and point 86, which is at infinity.
-_PAIRWISE_FLOW_POINTS = [140, 86]
+# Point 24 of the ground truth, which the pairwise-flow normal turns in about
+# a second of one thread, and point 86, which is at infinity. Point 24 is far
+# from the step's bars: its sigma is 1.0 degree against a bar of 10, and it
+# stays turned when any one bar is tightened: sigma to 3 degrees, mean
+# chi-squared to 0.7 (from 2), agreement to 1 sigma and 1.5 degrees (from 3
+# and 5), or the angle from the mean viewing direction to 55 degrees (from
+# 80).
+_PAIRWISE_FLOW_POINTS = [24, 86]
 
 
 def test_pairwise_flow_turns_finite_normals_and_skips_infinity(capsys):
-    """``method="pairwise_flow"`` reaches the binding: on point 140 of the
+    """``method="pairwise_flow"`` reaches the binding: on point 24 of the
     ground truth, and point 86, which is at infinity, the run writes a normal
     other than the grown plane's, moves no point, leaves the point at
     infinity alone and prints the pairwise-flow summary. The pairwise-flow

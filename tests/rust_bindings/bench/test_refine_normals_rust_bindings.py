@@ -48,18 +48,16 @@ def _load():
     return SfmrReconstruction.load(str(SEOUL_BULL_GROUND_TRUTH))
 
 
-# The ground truth's points whose grown-plane normal is a large turn on weak
-# evidence. Point 40, which no view joins, is a multiple of the sample's step.
-_WEAK_TURN_POINTS = [180, 237]
-
-
 def _sample():
-    """Every eighth point of the ground truth (``SEOUL_BULL_POINT_STEP``) and
-    the two weak turns: 37 points, 88, 96 and 192 of them at infinity. A run over
-    every one of them costs about an eighth of one over all 280 and meets
-    every outcome that run meets: turned, low-confidence, no view joined
-    (point 40), weak turn and at infinity."""
-    return every_nth_point(_load(), SEOUL_BULL_POINT_STEP, keep=_WEAK_TURN_POINTS)
+    """Every eighth point of the ground truth (``SEOUL_BULL_POINT_STEP``): 35
+    points, 88, 96 and 192 of them at infinity. A run over every one of them
+    costs about an eighth of one over all 280, and meets the outcomes turned,
+    low-confidence, no view joined (point 40, whose views' whole-grid scores
+    are at most 0.27 against the floor of 0.5) and at infinity. A weak turn
+    is decided too close to its bars to read off the default run on every
+    platform, so :func:`test_a_large_turn_on_weak_evidence_keeps_its_normal`
+    makes one."""
+    return every_nth_point(_load(), SEOUL_BULL_POINT_STEP)
 
 
 @pytest.fixture(scope="module")
@@ -123,9 +121,9 @@ def test_the_report_holds_one_status_per_point_and_counts_them(sample, refined):
     assert set(outcomes) <= OUTCOMES
     for word in ("turned", "none_joined", "weak_turn", "at_infinity", "not_asked"):
         assert report[word] == outcomes.count(word), word
-    # The sample meets each outcome of a run over every point, so the checks
-    # below each read at least one status.
-    for word in ("none_joined", "weak_turn", "at_infinity", "low_confidence"):
+    # The sample meets each of these outcomes, so the checks below read a
+    # status of each.
+    for word in ("none_joined", "at_infinity", "low_confidence"):
         assert report[word] >= 1, word
     assert report["kept"] == outcomes.count("not_refined") + outcomes.count("no_bitmap")
     assert report["not_asked"] == 0
@@ -156,6 +154,29 @@ def test_a_turned_points_agreement_is_a_finite_score(refined):
     assert agreements
     assert all(np.isfinite(a) and -1.0 <= a <= 1.0 for a in agreements)
     assert report["mean_agreement"] == pytest.approx(np.mean(agreements))
+
+
+# Row 8 of the sample, point 64 of the ground truth, whose grown-plane normal
+# turns about 56 degrees. With a weak-turn bar of 10 degrees and a ratio to
+# sigma that no sigma reaches, the weak-turn rule judges that turn alone, 46
+# degrees over the bar, so the outcome does not hang on the last bits of the
+# turn or the sigma.
+_WEAK_TURN_ROW = 8
+_WEAK_TURN_OPTIONS = {"weak_turn_deg": 10.0, "min_turn_sigma_ratio": 1e9}
+
+
+def test_a_large_turn_on_weak_evidence_keeps_its_normal(sample, images):
+    out, report = refine_normals(
+        sample, images, point_indexes=[_WEAK_TURN_ROW], **_WEAK_TURN_OPTIONS
+    )
+    status = report["points"][_WEAK_TURN_ROW]
+    assert set(status) == {"index", "outcome", "turn_deg", "agreement"}
+    assert status["outcome"] == "weak_turn"
+    assert status["turn_deg"] >= _WEAK_TURN_OPTIONS["weak_turn_deg"]
+    assert report["read"] == report["weak_turn"] == 1
+    assert report["turned"] == report["none_joined"] == report["kept"] == 0
+    # The point is left as it was, and so is every point not asked for.
+    np.testing.assert_array_equal(np.asarray(out.normals), np.asarray(sample.normals))
 
 
 def test_a_list_of_points_refines_those_and_leaves_the_rest(sample, images, refined):

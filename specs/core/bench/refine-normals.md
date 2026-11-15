@@ -566,12 +566,13 @@ on the grown plane normal's synthetic textured plane seen from six views out to
   and that it is the joined views' alone under `WeakTurn`.
 
 [`tests/rust_bindings/bench/test_refine_normals_rust_bindings.py`](../../../tests/rust_bindings/bench/test_refine_normals_rust_bindings.py)
-checks the binding on the seoul_bull ground truth. On every eighth point and
-the two whose grown-plane normal is a large turn on weak evidence, a sample
-that meets every outcome a run over all 280 points meets: no position,
-keypoint or index moves, only the rewritten points' normals change, and the
-input is unchanged; the report's statuses and counts; each turned point's
-agreement is finite and `mean_agreement` is their mean; a list of points gets
+checks the binding on the seoul_bull ground truth. On every eighth point, a
+sample with turned, low-confidence, no-view-joined and at-infinity points: no
+position, keypoint or index moves, only the rewritten points' normals change,
+and the input is unchanged; the report's statuses and counts; each turned
+point's agreement is finite and `mean_agreement` is their mean; with
+`weak_turn_deg` 10 and a `min_turn_sigma_ratio` no σ reaches, a point that
+turns about 56° is a weak turn and keeps its normal; a list of points gets
 the statuses a run over every point gives them, and the other points keep
 their normals and are `"not_asked"`. On all of its points: the refusals; a
 refused point's `error` and `reason`; the progress counter; that a SIGINT raised from another thread 0.3 s into a
