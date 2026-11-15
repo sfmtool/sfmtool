@@ -237,10 +237,11 @@ outlives the node it was editing, or that is caught by a background task, is
 dropped.
 
 With Track View's **Surface Tiling Mode** on, a released drag that changed the
-patch is followed by Fit, Find matches by geometry, Fit, Grown Plane Normal, Fit
-and Commit, each its own version, once per drag rather than per frame; the dock
-applies the drag through `AppState::edit_bench_patch_by_gesture`, the call
-Image Detail's handle drags go through too, which starts
+patch is followed by Fit, Pairwise Flow Normal, Fit, Find matches by geometry,
+Pairwise Flow Normal, Fit and Commit, each its own version, once per drag
+rather than per frame; the dock applies the drag through
+`AppState::edit_bench_patch_by_gesture`, the call Image Detail's handle drags
+go through too, which starts
 that sequence ([`track-view.md`](track-view.md) § "Surface Tiling Mode").
 
 **Reach** is nine panel pixels for the dot, a corner, the arrowhead or a circle,

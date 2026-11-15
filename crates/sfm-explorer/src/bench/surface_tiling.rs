@@ -18,13 +18,14 @@
 //!   it reads are final only once the copy's live evaluation has settled.
 //! - **A move of the patch in the mode**, by a handle in the 3D viewer or in
 //!   Image Detail ([`AppState::edit_bench_patch_by_gesture`]), starts a
-//!   [`TilingSequence`] ([`AppState::start_surface_tiling`]): Fit, Find
-//!   matches by geometry, Fit, Grown Plane Normal, Fit and Commit, each through
-//!   the starter its button calls, so each pushes its own version and writes
-//!   its own row. [`AppState::drive_surface_tiling`] runs once per frame and
-//!   starts the next step once the one before it has finished and the track's
-//!   live evaluation has caught up with it, which is when a person pressing
-//!   the buttons in turn would see *Evaluated* and press the next.
+//!   [`TilingSequence`] ([`AppState::start_surface_tiling`]): Fit, Pairwise
+//!   Flow Normal, Fit, Find matches by geometry, Pairwise Flow Normal, Fit and
+//!   Commit, each through the starter its button calls, so each pushes its
+//!   own version and writes its own row. [`AppState::drive_surface_tiling`]
+//!   runs once per frame and starts the next step once the one before it has
+//!   finished and the track's live evaluation has caught up with it, which is
+//!   when a person pressing the buttons in turn would see *Evaluated* and
+//!   press the next.
 //!
 //! **A sequence stops rather than guessing.** A step refused or failed, the
 //! item no longer focused, or a version on the node that the sequence did not
@@ -59,9 +60,9 @@ enum TilingStep {
     /// The observation table's *Find matches by geometry*
     /// ([`AppState::start_bench_geometry_search`]), from [`search_row`].
     SearchGeometry,
-    /// Track View's *Grown Plane Normal* ([`AppState::start_bench_normal`]
-    /// with [`NormalStep::GrownPlane`]), which takes no settings.
-    GrownPlaneNormal,
+    /// Track View's *Pairwise Flow Normal* ([`AppState::start_bench_normal`]
+    /// with [`NormalStep::PairwiseFlow`]), at its default options.
+    PairwiseFlowNormal,
     /// Track View's *Commit* ([`AppState::commit_bench_track`]).
     Commit,
     /// The `out` observations dropped
@@ -76,7 +77,7 @@ impl TilingStep {
         match self {
             TilingStep::Fit => "Fit",
             TilingStep::SearchGeometry => "Find matches by geometry",
-            TilingStep::GrownPlaneNormal => "Grown Plane Normal",
+            TilingStep::PairwiseFlowNormal => "Pairwise Flow Normal",
             TilingStep::Commit => "Commit",
             TilingStep::DropOut => "Drop the out observations",
         }
@@ -86,17 +87,30 @@ impl TilingStep {
 /// The steps a move of the patch runs in Surface Tiling Mode, in order.
 ///
 /// The first Fit lets the sightings follow the moved patch and triangulates
-/// it where they agree; the geometry search then has a placed patch to project
-/// into every camera; the second Fit takes the cameras it added and fits
-/// their keypoints; Grown Plane Normal, which trusts the keypoints it is
-/// given, turns the patch about its centre to the plane the views agree on,
-/// keeping every keypoint; the third Fit relocalizes the sightings on the
-/// turned patch; and the commit writes the point.
-const TILING_STEPS: [TilingStep; 6] = [
+/// it where they agree. Pairwise Flow Normal reads no keypoint: it renders the
+/// `in` sightings on a plane centred on that point and turns the patch about
+/// its centre to the plane the pairs of views agree on, keeping every
+/// keypoint, or leaves it as it was when they do not determine one. The
+/// second Fit relocalizes the sightings on the turned patch, so the geometry
+/// search projects into every camera a patch that is placed and faces the way
+/// the views agree on. The search's candidates join `out`, and the evaluation
+/// the sequence waits for after it is what lets the bars take them in. Pairwise
+/// Flow Normal then runs again with the cameras the search added among its
+/// pairs; the third Fit relocalizes every sighting, the added ones with them,
+/// on the patch as it was turned the second time; and the commit writes the
+/// point.
+///
+/// The order is for reliability: each step starts from a better patch, so a
+/// move leaves less to correct by hand afterwards, at the cost of two
+/// pairwise-flow runs per move. A run that leaves the normal unchanged
+/// (undetermined or unstable) still finishes, and the sequence goes on from
+/// the normal the patch had.
+const TILING_STEPS: [TilingStep; 7] = [
+    TilingStep::Fit,
+    TilingStep::PairwiseFlowNormal,
     TilingStep::Fit,
     TilingStep::SearchGeometry,
-    TilingStep::Fit,
-    TilingStep::GrownPlaneNormal,
+    TilingStep::PairwiseFlowNormal,
     TilingStep::Fit,
     TilingStep::Commit,
 ];
@@ -471,7 +485,8 @@ impl AppState {
         // Wait for the evaluation of the track as it now stands, as a person
         // waits for *Evaluated* before pressing the next button: a geometry
         // search's candidates join `out` and unmeasured, and the evaluation is
-        // what lets the bars take them in before the Fit after it.
+        // what lets the bars take them in before the normal step after it,
+        // which renders only the `in` sightings.
         if self.bench_evaluation(sequence.node, &label) == Some(Evaluation::Evaluating) {
             return driven;
         }
@@ -489,8 +504,8 @@ impl AppState {
                     )),
                 }
             }
-            TilingStep::GrownPlaneNormal => {
-                self.start_bench_normal(id, &label, NormalStep::GrownPlane)
+            TilingStep::PairwiseFlowNormal => {
+                self.start_bench_normal(id, &label, NormalStep::PairwiseFlow)
             }
             TilingStep::Commit => {
                 match self.commit_bench_track(id, &label) {

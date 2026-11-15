@@ -22,9 +22,11 @@ expensive, one dense flow per pair of photographs per round, and stands beside
 the cheap per-point step, the grown-plane normal
 ([grown-plane-normal.md](grown-plane-normal.md)), which it does not replace.
 Python runs it through `sfmtool.bench.pairwise_flow_normal`; Track View's
-*Pairwise Flow Normal* and the wire's `fit_bench_track_normal` with `method`
+*Pairwise Flow Normal*, Surface Tiling Mode's sequence (twice after each move
+of the patch) and the wire's `fit_bench_track_normal` with `method`
 `pairwise_flow` run it at its default options
-([../../gui/track-view.md](../../gui/track-view.md) § "The toolbar",
+([../../gui/track-view.md](../../gui/track-view.md) § "The toolbar" and §
+"Surface Tiling Mode",
 [../../gui/mcp-server.md](../../gui/mcp-server.md)); and
 `bench::refine_normals` runs it on every finite point of a reconstruction when
 its options choose it as the step ([refine-normals.md](refine-normals.md)
@@ -966,7 +968,9 @@ step does not take, a flow setting among them, are refused, as is a cluster.
 - **Moving the centre or the keypoints.** Like the grown-plane step, it turns
   the patch about its centre and moves neither the centre nor any keypoint.
 - **Replacing the grown-plane step.** That step stays the default per-point
-  step of `refine_normals` and the per-point step of Surface Tiling Mode; this
-  one is the expensive check and refinement beside it.
+  step of `refine_normals`; this one is the expensive check and refinement
+  beside it, and the normal step of Surface Tiling Mode's sequence
+  ([../../gui/track-view.md](../../gui/track-view.md) § "Surface Tiling
+  Mode").
 - **A curved surface model.** The step fits a plane and chooses the support on
   which a plane fits; it does not fit curvature.

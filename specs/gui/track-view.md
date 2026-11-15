@@ -917,8 +917,9 @@ run of steps by hand, starting from the track just committed: *Discard* and
 *Edit* to take the `out` rows off it (*Discard* abandons the bench item, and
 *Edit* puts the committed point back on the bench, and the point holds only the
 `in` observations the commit wrote), the *Keep* heading's pin to hand every
-verdict back to the thresholds, *Duplicate*, the move, *Fit*, the row menu's
-*Find matches by geometry*, *Fit*, *Grown Plane Normal*, *Fit* and *Commit*. The
+verdict back to the thresholds, *Duplicate*, the move, *Fit*, *Pairwise Flow
+Normal*, *Fit*, the row menu's *Find matches by geometry*, *Pairwise Flow
+Normal*, *Fit* and *Commit*. The
 mode takes all of them but the duplicate and the move, and it drops the copy's
 `out` rows after handing its verdicts back rather than before. It is the
 *Surface Tiling Mode* box on the toolbar's second row, after *Lock*, and the
@@ -946,7 +947,7 @@ impl AppState {
     pub(crate) fn drive_surface_tiling(&mut self) -> TilingDriven;
     /// End the sequence under way with a failed row saying `why`.
     pub(crate) fn stop_surface_tiling(&mut self, why: &str);
-    /// "Step 2 of 6: Find matches by geometry", for the item the sequence is on.
+    /// "Step 4 of 7: Find matches by geometry", for the item the sequence is on.
     pub(crate) fn surface_tiling_status(&self, id: ReconId, label: &str) -> Option<String>;
 }
 ```
@@ -1000,15 +1001,16 @@ of a handle over the 3D viewer's bench figure or over Image Detail's bench
 layer that changes the patch (a slide, a move along the normal, a resize, a
 spin or a tilt) is applied as it always is, one version through
 `edit_bench_patch`, and then starts a **tiling sequence** on the focused item:
-*Fit*, *Find matches by geometry*, *Fit*, *Grown Plane Normal*, *Fit*,
-*Commit*. Both panels' handles reach the dock's one call,
+*Fit*, *Pairwise Flow Normal*, *Fit*, *Find matches by geometry*, *Pairwise
+Flow Normal*, *Fit*, *Commit*. Both panels' handles reach the dock's one call,
 `edit_bench_patch_by_gesture`, so a drag over a photograph and a drag out in
 the world start the same sequence, once per released gesture. A row `Surface
-tiling bull-nose after the move: Fit, Find matches by geometry, Fit, Grown
-Plane Normal, Fit, Commit` says it started. A release that changed nothing
-starts none, and neither does an edit that leaves the patch where it is: a
-sighting placed on its own or a cluster sighting's shape set or turned
-(`PatchEdit::moves_patch`). The wire's patch tools do not start one. The mode
+tiling bull-nose after the move: Fit, Pairwise Flow Normal, Fit, Find matches
+by geometry, Pairwise Flow Normal, Fit, Commit` says it started. A release
+that changed nothing starts none, and neither does an edit that leaves the patch
+where it is: a sighting placed on its own or a cluster sighting's shape set or
+turned (`PatchEdit::moves_patch`). The wire's patch tools do not start one.
+The mode
 is a tool setting that says what a person's gesture means, as *Lock* is, and
 the wire reads neither: each patch tool is one named step, one version and one
 reply ([`bench.md`](bench.md) § "The wire"), so an agent that wants Fit, the
@@ -1017,7 +1019,7 @@ never writes the reconstruction it did not name.
 
 Each step is the call its button makes (`start_bench_fit`,
 `start_bench_geometry_search`, `start_bench_normal` with
-`NormalStep::GrownPlane`, `commit_bench_track`), so each is refused, runs on a
+`NormalStep::PairwiseFlow`, `commit_bench_track`), so each is refused, runs on a
 worker, pushes its version and writes its row exactly as a press would.
 `AppState::drive_surface_tiling` runs once per frame, after the background task
 is polled and the live evaluation driven. It starts
@@ -1025,7 +1027,8 @@ the next step once the step before it has finished **and** the focused item's
 evaluation is no longer *Evaluating*, which is the moment a person pressing the
 buttons in turn would see *Evaluated* and press the next. The wait matters most
 after the search: its candidates join `out` and unmeasured, and the evaluation
-is what lets the bars take them in before the Fit after it.
+is what lets the bars take them in before the *Pairwise Flow Normal* after
+it, which renders only the `in` sightings.
 
 **The geometry search starts from the reference row**: the row the track's
 stored bitmap is the render of (the *Reference* column's mark), else the row
@@ -1036,18 +1039,30 @@ whose appearance leads. The reference is the sighting the Fit just before
 rendered the patch from, which the rule chose as the best view of the patch, so
 it is the row a person would right-click.
 
-**The normal step is *Grown Plane Normal*, at its default options.** It takes
-no settings, so the *per axis* and *overlap* boxes, which cut the patch for
-*Finite Diff Normal* and *Grid Plane Normal*, do not reach the sequence. It
-trusts the keypoints it is given, and it comes after the second *Fit*, which
-has just fitted the keypoints of the cameras the search added. It turns the
-patch about its centre and moves no keypoint (*Grown Plane Normal* under §
-"The toolbar"). The third *Fit* localizes each sighting from where it is, so
-it relocalizes every sighting on the turned patch before the commit. The
-sequence takes the step as one version and one row, as it does every other.
+**The normal step is *Pairwise Flow Normal*, at its default options, and it
+runs twice.** It takes no settings, so the *per axis* and *overlap* boxes,
+which cut the patch for *Finite Diff Normal* and *Grid Plane Normal*, do not
+reach the sequence. It reads no keypoint: it renders the `in` sightings on a
+plane through the point, so it comes after the first *Fit*, which has
+triangulated the point where the sightings agree. It turns the patch about its
+centre and moves no sighting (*Pairwise Flow Normal* under § "The toolbar"),
+and the *Fit* after it localizes each sighting from where it is, so it
+relocalizes every sighting on the turned patch. The first run comes before the
+search, so the search projects a patch that already faces the way the views
+agree on. The second comes after it, with the cameras the search added that
+the evaluation took in among its pairs. The order is for reliability: each step
+starts from a better patch, so a move leaves less to correct by hand
+afterwards, at the cost of two pairwise-flow runs per move, each a dense
+optical flow per pair per round, which the sequence waits on as it waits on any
+step. Where the photographs do not determine the normal, or the pairs do not
+agree, the step leaves the normal as it was and its row says *normal left
+unchanged*; that is a finished step, not a failed one, so the sequence goes on
+from the normal the patch had, as a person pressing the buttons would. The
+sequence takes each run as one version and one row, as it does every other
+step.
 
 **A sequence stops rather than guesses.** It ends with a failed Bench row,
-`Surface tiling of bull-nose stopped at Find matches by geometry (step 2 of 6):
+`Surface tiling of bull-nose stopped at Find matches by geometry (step 4 of 7):
 <why>`, when a step is refused or its task fails or is cancelled (the step's own
 row says why first), when the item is no longer the focused item or no longer on
 the bench, when a version the sequence did not push lands on the node between
@@ -1055,7 +1070,7 @@ its steps (an undo, a verdict, a threshold), and when the box is cleared. A
 second move while a sequence waits between steps starts it again from the first
 Fit, the row saying `again, from the start`. A move while one of its tasks runs
 is refused as busy, as any edit then is, and the sequence goes on. While a
-sequence is on the focused item, a spinner and `Step 2 of 6: Find matches by
+sequence is on the focused item, a spinner and `Step 4 of 7: Find matches by
 geometry` stand after the box.
 
 **The commit is the Commit button's.** A duplicate has no origin, so its first
@@ -2502,10 +2517,11 @@ texels, so their geometry is checked without reading pixels off the screen.
   move's sequence; dropping no row is a no-effect row and dropping every row
   is refused; a 3D viewer move
   starts a sequence only with the mode on and only when it changed the patch;
-  a sequence runs Fit, the geometry search, Fit, Grown Plane Normal, Fit and
-  Commit in that order with each step's own row and no failed row, the item
-  still focused and seated on the point written; a second sequence on a
-  duplicate replaces the point its first created; the search starts from the
+  a sequence runs Fit, Pairwise Flow Normal, Fit, the geometry search,
+  Pairwise Flow Normal, Fit and Commit in that order with each step's own
+  row and no failed row, the item still focused and seated on the point
+  written; a second sequence on a duplicate replaces the point its first
+  created; the search starts from the
   row the Fit rendered the bitmap from; a step waits while the evaluation is
   unsettled and starts once it lands; and a failed task, a refused starter, a
   refused commit, an unfocus, a version the sequence did not push and a second

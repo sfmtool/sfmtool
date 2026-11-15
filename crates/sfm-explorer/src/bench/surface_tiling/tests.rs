@@ -334,7 +334,7 @@ fn dropping_every_row_is_refused_and_dropping_none_is_no_effect() {
 }
 
 #[test]
-fn a_move_runs_fit_search_fit_normal_fit_and_commit_in_order() {
+fn a_move_runs_fit_normal_fit_search_normal_fit_and_commit_in_order() {
     let (mut state, id) = state();
     let label = put_on_bench(&mut state, id);
     state.settle_bench_evaluation();
@@ -343,13 +343,13 @@ fn a_move_runs_fit_search_fit_normal_fit_and_commit_in_order() {
     state.start_surface_tiling(id, &label);
     assert_eq!(
         state.surface_tiling_status(id, &label).as_deref(),
-        Some("Step 1 of 6: Fit")
+        Some("Step 1 of 7: Fit")
     );
     assert_eq!(
         rows(&state)[0].2,
         format!(
-            "Surface tiling {label} after the move: Fit, Find matches by geometry, Fit, \
-             Grown Plane Normal, Fit, Commit"
+            "Surface tiling {label} after the move: Fit, Pairwise Flow Normal, Fit, \
+             Find matches by geometry, Pairwise Flow Normal, Fit, Commit"
         )
     );
     let started = run_sequence(&mut state);
@@ -363,7 +363,7 @@ fn a_move_runs_fit_search_fit_normal_fit_and_commit_in_order() {
     );
     // Each step wrote the row it writes when its button is pressed, in the
     // sequence's order, and the last is the commit's edit row. The normal
-    // step is Grown Plane Normal, whose row carries no piece count.
+    // steps are Pairwise Flow Normal, whose row carries no piece count.
     let find = |from: usize, kind: Kind, prefix: &str| {
         logged[from..]
             .iter()
@@ -373,12 +373,13 @@ fn a_move_runs_fit_search_fit_normal_fit_and_commit_in_order() {
     };
     let fit = format!("Fitted {label}");
     let search = format!("{label}: Geometry search from observation");
-    let normal = format!("Grown-plane normal of {label}");
+    let normal = format!("Pairwise-flow normal of {label}");
     let first = find(0, Kind::Bench, &fit);
-    let searched = find(first + 1, Kind::Bench, &search);
-    let second = find(searched + 1, Kind::Bench, &fit);
-    let turned = find(second + 1, Kind::Bench, &normal);
-    let third = find(turned + 1, Kind::Bench, &fit);
+    let turned = find(first + 1, Kind::Bench, &normal);
+    let second = find(turned + 1, Kind::Bench, &fit);
+    let searched = find(second + 1, Kind::Bench, &search);
+    let turned_again = find(searched + 1, Kind::Bench, &normal);
+    let third = find(turned_again + 1, Kind::Bench, &fit);
     let committed = find(third + 1, Kind::Edit, "Committed ");
     assert!(
         logged[committed + 1..]
@@ -416,7 +417,7 @@ fn unfocusing_the_item_stops_the_sequence_with_a_row() {
     assert!(last.1, "the stop is a failed row: {last:?}");
     assert_eq!(
         last.2,
-        format!("Surface tiling of {label} stopped at Fit (step 1 of 6): {label} is no longer the focused item")
+        format!("Surface tiling of {label} stopped at Fit (step 1 of 7): {label} is no longer the focused item")
     );
     // The fit it started still lands, as a pressed Fit does.
     state.finish_background_tasks();
@@ -462,7 +463,7 @@ fn a_second_move_starts_the_sequence_again_from_the_first_fit() {
     state.finish_background_tasks();
     assert_eq!(
         state.surface_tiling.as_ref().map(|s| s.step()),
-        Some(TilingStep::SearchGeometry)
+        Some(TilingStep::PairwiseFlowNormal)
     );
 
     state.start_surface_tiling(id, &label);
@@ -500,8 +501,13 @@ fn the_search_starts_from_the_row_the_fit_rendered_the_patch_from() {
 fn a_second_move_of_a_duplicate_replaces_the_point_its_first_wrote() {
     let (mut state, id) = state();
     let label = put_on_bench(&mut state, id);
-    // A plain duplicate, its rows still pinned `in`, so the fixture's bars
-    // cannot leave the copy with too few rows to fit.
+    // Two rows `in`, the fewest a commit takes, so each Pairwise Flow Normal
+    // reads one pair in one round rather than three pairs in three.
+    state
+        .set_bench_verdict(id, &label, 2, Verdict::Out)
+        .expect("a verdict step");
+    // A plain duplicate, its rows still pinned, so the fixture's bars cannot
+    // leave the copy with too few rows to fit.
     let copy = state
         .duplicate_bench_item(id, &label)
         .expect("the copy is made");
@@ -589,7 +595,7 @@ fn a_step_whose_task_fails_stops_the_sequence() {
     let text = stop_row(&state);
     assert!(
         text.starts_with(&format!(
-            "Surface tiling of {label} stopped at Fit (step 1 of 6): it did not finish: "
+            "Surface tiling of {label} stopped at Fit (step 1 of 7): it did not finish: "
         )),
         "{text}"
     );
@@ -617,7 +623,7 @@ fn a_step_its_starter_refuses_stops_the_sequence() {
     let text = stop_row(&state);
     assert!(
         text.starts_with(&format!(
-            "Surface tiling of {label} stopped at Fit (step 1 of 6): Cannot fit {label}: "
+            "Surface tiling of {label} stopped at Fit (step 1 of 7): Cannot fit {label}: "
         )),
         "{text}"
     );
@@ -637,7 +643,7 @@ fn a_refused_commit_stops_the_sequence_at_its_last_step() {
     }
     state.settle_bench_evaluation();
     state.start_surface_tiling(id, &label);
-    // As if the five steps before it had run.
+    // As if the six steps before it had run.
     state.surface_tiling.as_mut().expect("started").next = TILING_STEPS.len() - 1;
     let before = versions(&state, id);
 
@@ -658,7 +664,7 @@ fn a_refused_commit_stops_the_sequence_at_its_last_step() {
     );
     assert_eq!(
         stop_row(&state),
-        format!("Surface tiling of {label} stopped at Commit (step 6 of 6): {refusal}")
+        format!("Surface tiling of {label} stopped at Commit (step 7 of 7): {refusal}")
     );
 }
 

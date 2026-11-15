@@ -230,7 +230,7 @@ fn clearing_surface_tiling_mode_stops_the_sequence() {
     assert_eq!(
         last.text,
         format!(
-            "Surface tiling of {label} stopped at Fit (step 1 of 6): Surface Tiling Mode \
+            "Surface tiling of {label} stopped at Fit (step 1 of 7): Surface Tiling Mode \
              was turned off"
         )
     );
@@ -291,7 +291,7 @@ fn an_image_detail_patch_edit_starts_the_sequence_only_in_surface_tiling_mode() 
     );
     assert_eq!(
         state.surface_tiling_status(id, &label).as_deref(),
-        Some("Step 1 of 6: Fit")
+        Some("Step 1 of 7: Fit")
     );
 }
 
