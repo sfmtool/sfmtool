@@ -60,8 +60,8 @@ Scene (root, implicit)
 │   ├── Camera Images (243)       ← fixed group node
 │   │   ├── IMG_0001.jpg          ← per-image rows (virtualized)
 │   │   └── …
-│   ├── Points (1,204,551 · 12 at ∞) [Dots|Patches]  ← fixed group node; the
-│   │                                  point style selector only with patch data
+│   ├── Points (1,204,551 · 12 at ∞)  ← fixed group node
+│   │     Style [Dots|Patches]       ← the point style selector, only with patch data
 │   │   ├── ▸ selected: pt3d_a1b2c3_88231   ← selection/hover rows only
 │   │   └── ▸ hovered:  pt3d_a1b2c3_10442
 │   ├── Bench Points (2)           ← the bench's track-stage items, when it has any
@@ -220,7 +220,7 @@ style that draws both: a point is drawn once.
   otherwise (`PointStyle::for_reconstruction`, when the node is made). An edit
   never changes the style: a conversion that adds patch data leaves the node in
   Dots until the style is chosen.
-- **The Scene panel's Points row carries the Dots/Patches selector** on a node
+- **The Scene panel's Dots/Patches selector, under the Points row,** shows on a node
   with patch data, the only kind on which the two styles draw differently, and
   on no other; the wire's `set_reconstruction_display` takes `point_style`
   (`"dots"` or `"patches"`) on any node. A change is logged as `Point style of
@@ -502,7 +502,7 @@ fixed-height for virtualization.
   source and not `SceneNode::has_patch_data`: that answers the narrower question
   of whether the node also carries the reference bitmaps the surfel renderer
   textures a patch with. The conversion produces them when photographs are
-  available, so the Points row's point style selector appears after one in that
+  available, so the point style selector under the Points row appears after one in that
   case, with the node still in the Dots style.
 - Expanded by default: with one file loaded the node's groups are the whole
   panel, and with a handful the tree is still what answers "what is in here".
@@ -620,19 +620,27 @@ it by hand, or take the image out. The menu's view of a node (which images are
 posed, how many, and why the cluster-patches file will not do) is
 `AppState::image_menu`, read once per node and frame before either place draws.
 
-**Points group row** — `[▸] [👁] Points (1,204,551 · 12 at ∞) [∞] [Dots|Patches]`
+**Points group row** — `[▸] [👁] Points (1,204,551 · 12 at ∞) [∞]`, then on a
+node with patch data the line `Style [Dots|Patches]`
 - Eye drives `show_points`, the node's points in whichever style they are
   drawn; an inline `∞` mini-toggle drives `show_points_at_infinity` when the
   recon has infinity points. A point at infinity follows the style like any
   other, and the mini-toggle hides it in either, its surfel with its dot
   ([patch-rendering.md](patch-rendering.md#points-at-infinity)).
-- On a node with patch data, the **point style selector** follows: two
+- On a node with patch data, the **point style selector** is a line of its own
+  under the row, indented as the row's children are: a weak `Style` and two
   selectable buttons, `Dots` and `Patches`, the node's own style lit, a click on
-  the other choosing it (see "Point style"). There is no separate Patches row.
-- The `∞` mini-toggle and the selector sit at the row's right edge, laid out
-  right to left, and the label takes the width left between them and the eye,
-  elided when it does not fit, as the reconstruction row's counts are. So a long
-  count never pushes the selector out of a narrow panel.
+  the other choosing it (see "Point style"). It is drawn whether or not the
+  group is expanded, after the selection and hover rows when it is. There is no
+  separate Patches row. Its own line because the word `Points`, the `∞` toggle
+  and the two buttons do not fit one line of the panel's default width (227 px
+  in a 1280 x 720 window) without eliding the word.
+- The `∞` mini-toggle sits at the row's visible right edge (the clip rect, since
+  a wider row elsewhere in the tree widens the layout past the panel), and the
+  label takes the width left between it and the eye. The label drops counts
+  rather than letters, as the reconstruction row's counts do: the `· N at ∞`
+  part first, since the toggle already shows there are such points, then the
+  point count, and the word `Points` always stays whole.
 - Expands to **selection and hover rows only**, not a full listing:
   - `selected: pt3d_<hash>_<index>` — the same copyable ID Track View
     shows; click re-selects (useful after selecting elsewhere), and the
@@ -1525,8 +1533,10 @@ bundle from `retain_nodes` on the next frame.
   disabled without feature indexes).
 - **The point style**: a node made from a file with patch frames and bitmaps
   starts in Patches, and one with neither or with frames alone in Dots; the
-  Points row carries the Dots/Patches selector on a node with patch data and on
-  no other; a click on the other style sets it and
+  Dots/Patches selector is drawn under the Points row on a node with patch data
+  and on no other; at the panel's default width (227 px) both of its buttons
+  and the `∞` toggle lie inside the panel and the word `Points` is drawn whole,
+  left of the toggle; a click on the other style sets it and
   logs `Point style of <label>: Dots`, and a click on the style in force logs
   nothing (`scene_graph/tests.rs`). In the renderer, exactly the points the
   atlas packed a surfel for carry `MASK_HAS_SURFEL` after a fresh upload, after

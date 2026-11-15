@@ -192,7 +192,7 @@ otherwise claims entirely.
 
 The whole **Patches** section is omitted while no node draws patches. Whether a
 node's points are drawn as dots or as patches is its point style, the
-Dots/Patches selector on its Points row in the Scene panel, which a node with
+Dots/Patches selector under its Points row in the Scene panel, which a node with
 patch frames and bitmaps carries and starts at Patches
 ([scene-graph.md](scene-graph.md#point-style)). See
 [patch-rendering.md](patch-rendering.md#ui-controls).

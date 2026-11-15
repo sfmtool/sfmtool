@@ -17,7 +17,8 @@
 //!         #0  OPENCV_FISHEYE  480×480  f 240.1  26 images
 //!   ▾ 👁 Camera Images (243)
 //!       IMG_0001.jpg              ← virtualized, `ScrollArea::show_rows`
-//!   ▾ 👁 Points (1,204,5…  ∞ Dots Patches  ← the selector only with patch data
+//!   ▾ 👁 Points (1,204,551)      ∞
+//!       Style  Dots  Patches       ← the point style selector, only with patch data
 //!       selected: pt3d_a1b2c3_88231   ← selection / hover rows only
 //!   ▾   Index Files  1 of 2 current
 //!         SIFT Index       1.2M descriptors   ← current / stale / none
@@ -1239,33 +1240,15 @@ fn show_points_group(
         out.logged(row_id(id, "points_eye"), eye, || {
             visibility_text(&node.label, Layer::Points, shown)
         });
-        let count = with_thousands(node.point_count());
-        let label = if at_infinity > 0 {
-            format!("Points ({count} · {} at ∞)", with_thousands(at_infinity))
-        } else {
-            format!("Points ({count})")
-        };
-        // The controls after the label sit at the row's right edge, laid out
-        // right to left, and the label takes what is left and elides: a long
-        // count must not push the selector out of a narrow panel, where it
-        // could not be reached. The edge is the visible one: a wider row
+        // The ∞ toggle sits at the row's visible right edge and the label takes
+        // what is left, dropping its counts rather than the word: a wider row
         // elsewhere in the tree widens the layout past the panel, and an edge
-        // taken from the layout alone would put the selector out of sight.
+        // taken from the layout alone would put the toggle out of sight.
         let row = ui.available_rect_before_wrap();
         let right = row.right().min(ui.clip_rect().right()).max(row.left());
         let row = egui::Rect::from_min_max(row.min, egui::pos2(right, row.bottom()));
         let layout = egui::Layout::right_to_left(egui::Align::Center);
         ui.scope_builder(egui::UiBuilder::new().max_rect(row).layout(layout), |ui| {
-            if node.has_patch_data() {
-                let before = node.point_style;
-                for (style, response) in point_style_selector(ui, &mut node.point_style) {
-                    out.hit(point_style_row_id(id, style), response);
-                }
-                if node.point_style != before {
-                    out.log
-                        .record(Kind::Scene, point_style_text(&node.label, node.point_style));
-                }
-            }
             if at_infinity > 0 {
                 let infinity = glyph_toggle(
                     ui,
@@ -1282,7 +1265,8 @@ fn show_points_group(
                 });
             }
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                let label = ui.add(egui::Label::new(label).truncate());
+                let label = points_label_text(ui, node.point_count(), at_infinity);
+                let label = ui.add(egui::Label::new(label).selectable(false));
                 out.mark(row_id(id, "points_label"), label.rect);
             });
         });
@@ -1329,6 +1313,51 @@ fn show_points_group(
             ui.weak("No point selected");
         }
     });
+    // The point style selector, on its own line under the Points row: the
+    // Points row and two word buttons do not fit one line of the panel's
+    // default width without eliding the word "Points" away.
+    if node.has_patch_data() {
+        ui.indent(row_id(id, "point_style"), |ui| {
+            ui.horizontal(|ui| {
+                ui.set_height(ROW_HEIGHT);
+                ui.add(egui::Label::new(egui::RichText::new("Style").weak()).selectable(false));
+                let before = node.point_style;
+                for (style, response) in point_style_selector(ui, &mut node.point_style) {
+                    out.hit(point_style_row_id(id, style), response);
+                }
+                if node.point_style != before {
+                    out.log
+                        .record(Kind::Scene, point_style_text(&node.label, node.point_style));
+                }
+            });
+        });
+    }
+}
+
+/// `Points (1,204,551 · 12 at ∞)`, cut to the width left of the row: the
+/// points-at-infinity count goes first (the ∞ toggle beside it already says
+/// there are some), then the point count. The word itself always stays, so the
+/// row says what it is.
+fn points_label_text(ui: &egui::Ui, points: usize, at_infinity: usize) -> String {
+    let count = with_thousands(points);
+    let available = ui.available_width();
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let fits = |text: &str| {
+        let galley =
+            ui.painter()
+                .layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER);
+        galley.size().x <= available
+    };
+    let candidates = [
+        (at_infinity > 0)
+            .then(|| format!("Points ({count} · {} at ∞)", with_thousands(at_infinity))),
+        Some(format!("Points ({count})")),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|text| fits(text))
+        .unwrap_or_else(|| "Points".to_string())
 }
 
 #[cfg(test)]

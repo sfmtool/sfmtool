@@ -274,7 +274,7 @@ Three changes in behaviour from the menu:
   were wrapped in `add_enabled_ui(has_patches, …)` and showed as dead widgets
   for the common `sift_files` reconstruction. In the HUD the whole Patches
   section is omitted while no node draws patches. Whether a node can is shown
-  where it is chosen, by the point style selector on its Points row, which a
+  where it is chosen, by the point style selector under its Points row, which a
   node with patch data carries.
 - **The always-on overlays become togglable.** Controls help and the fps
   readout get toggles in Debug, satisfying the intent the UX spec previously

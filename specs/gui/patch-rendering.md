@@ -314,7 +314,7 @@ with a `log::warn` — only reachable at extreme counts.
 ## UI controls
 
 Whether a node's points are drawn as patches is its **point style**, the
-Dots/Patches selector on the Scene panel's Points row
+Dots/Patches selector under the Scene panel's Points row
 ([scene-graph.md](scene-graph.md#point-style)): under Patches the patch pass
 draws each point that has a surfel, and the point pass leaves out that point's
 splat, so each point is drawn once, as its patch or as its dot. A node opened
@@ -345,7 +345,7 @@ and `patch_bitmaps_y_x_rgba`. That is the textured case specified above, and it
 is the only one the renderer handles: `upload_patches` returns early when the
 bitmaps are absent, so such a node marks no point as having a surfel and draws
 every point as a dot whatever its style, it opens in the Dots style, and its
-Points row has no point style selector.
+Points row has no point style selector under it.
 
 So a **frame-only** reconstruction — which is what `sfm xform
 --to-embedded-patches` produces before any bitmap render — shows no patches,

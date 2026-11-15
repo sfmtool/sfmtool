@@ -75,19 +75,17 @@ pub(super) fn glyph_toggle(
     response
 }
 
-/// The Points row's point style selector: one selectable button per
+/// The point style selector under the Points row: one selectable button per
 /// [`PointStyle`], the node's own style lit, a click on the other setting it.
 ///
-/// Drawn into a right-to-left layout at the row's right edge, so `Patches` is
-/// added first and the pair reads `Dots Patches`. Each button's response is
-/// handed back for the caller to record where it landed. Each sits under an
-/// explicit id for the reason [`glyph_toggle`] gives, and is named by its
-/// label.
+/// Each button's response is handed back, in `Dots`, `Patches` order, for the
+/// caller to record where it landed. Each sits under an explicit id for the
+/// reason [`glyph_toggle`] gives, and is named by its label.
 pub(super) fn point_style_selector(
     ui: &mut egui::Ui,
     style: &mut PointStyle,
 ) -> [(PointStyle, egui::Response); 2] {
-    [PointStyle::Patches, PointStyle::Dots].map(|option| {
+    [PointStyle::Dots, PointStyle::Patches].map(|option| {
         let tooltip = match option {
             PointStyle::Dots => "Draw every point of this node as a dot",
             PointStyle::Patches => {

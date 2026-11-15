@@ -500,7 +500,7 @@ fn a_node_starts_in_the_patches_style_only_when_its_file_carries_patch_data() {
     );
 }
 
-/// The Points row carries the Dots/Patches selector on a node with patch data
+/// The Dots/Patches selector is drawn under the Points row on a node with patch data
 /// and on no other.
 #[test]
 fn the_point_style_selector_appears_only_for_a_node_that_carries_patch_data() {
@@ -524,12 +524,12 @@ fn the_point_style_selector_appears_only_for_a_node_that_carries_patch_data() {
     }
 }
 
-/// The selector stays inside a narrow panel however long the Points label is:
-/// it sits at the panel's visible right edge and the label elides into what
-/// is left. 220 px is about the default Scene panel of a 1280 x 720 window;
-/// with points at infinity the label and the ∞ toggle are both drawn, and the
-/// intrinsics row above is wider than the panel, which widens the tree's
-/// layout past what is visible.
+/// At the Scene panel's default width, 227 px in a 1280 x 720 window, the
+/// selector's two buttons sit whole inside the panel on their own line, and
+/// the Points row keeps the word "Points" whole, left of the ∞ toggle, which
+/// stays inside the panel. With points at infinity the label and the toggle
+/// are both drawn, and the intrinsics row above is wider than the panel, which
+/// widens the tree's layout past what is visible.
 #[test]
 fn the_point_style_selector_stays_inside_a_narrow_panel() {
     let mut recon = recon_named(32, 8, "IMG");
@@ -543,9 +543,9 @@ fn the_point_style_selector_stays_inside_a_narrow_panel() {
     let id = state.scene[0].id;
     let mut panel = SceneGraphPanel::new();
     let ctx = egui::Context::default();
-    let width = 220.0;
+    let width = 227.0;
     painted_at_width(&mut panel, &ctx, &mut state, width);
-    painted_at_width(&mut panel, &ctx, &mut state, width);
+    let painted = painted_at_width(&mut panel, &ctx, &mut state, width);
     for style in [PointStyle::Dots, PointStyle::Patches] {
         let rect = panel
             .hit_rect(point_style_row_id(id, style))
@@ -562,8 +562,26 @@ fn the_point_style_selector_stays_inside_a_narrow_panel() {
         .hit_rect(row_id(id, "points_infinity"))
         .expect("the ∞ toggle");
     assert!(
-        label.right() <= infinity.left(),
+        label.right() <= infinity.left() && infinity.right() <= width,
         "the Points label at {label:?} runs under the ∞ toggle at {infinity:?}"
+    );
+    // The word is drawn whole: the painted text starts with it, and the label
+    // is at least as wide as the word laid out in the row's font.
+    let text = painted
+        .iter()
+        .find(|text| text.starts_with("Points"))
+        .unwrap_or_else(|| panic!("no Points label in {painted:?}"));
+    let font = egui::TextStyle::Body.resolve(&ctx.global_style());
+    let word = ctx.fonts_mut(|fonts| {
+        fonts
+            .layout_no_wrap("Points".to_owned(), font, egui::Color32::PLACEHOLDER)
+            .size()
+            .x
+    });
+    assert!(
+        label.width() >= word,
+        "the Points label {text:?} is {} px wide, narrower than the word ({word} px)",
+        label.width()
     );
 }
 
