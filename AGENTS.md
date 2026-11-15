@@ -297,14 +297,11 @@ empty-handed". Name the thing and say what it does.
   cached, saved and pruned by `main` only — the "Rust caches" comment above
   `prune-caches` says why. Two things there are easy to get wrong: a **target**
   cache is keyed on `hashFiles('Cargo.lock', 'Cargo.toml',
-  'crates/*/Cargo.toml', '.github/ci-cargo-config.toml')`, not the lockfile
-  alone, because feature resolution and which targets exist are declared in
-  the *manifests* — key it on the lockfile and a feature change silently
-  restores artifacts built under a different resolution, which is a full
-  rebuild that the `cache-hit != 'true'` save guard then never replaces (the
-  last file is the cargo config every CI job installs, which builds
-  `sfm-explorer` at `opt-level = 0`; the "CI cargo config" comment at the top
-  of `ci.yml` says why); and `test-os-rust` and `test-os-python` must
+  'crates/*/Cargo.toml')`, not the lockfile alone, because feature resolution
+  and which targets exist are declared in the *manifests* — key it on the
+  lockfile and a feature change silently restores artifacts built under a
+  different resolution, which is a full rebuild that the `cache-hit != 'true'`
+  save guard then never replaces; and `test-os-rust` and `test-os-python` must
   keep *separate* target-cache prefixes because they build disjoint trees
   (`target/debug` vs `target/release`). A **cargo home** stays keyed on
   `Cargo.lock` alone, so the two kinds are on different generations and
