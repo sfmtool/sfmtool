@@ -284,7 +284,8 @@ def _check_rigs(reconstructions, rig_frame_data, labels, camera_mapping) -> None
     reference sensor is not compared: an image's sensor index counts over all
     sensors whatever the reference sensor, which only sets how the sensor
     poses are expressed, and the merge takes those from the reference input
-    while each image keeps its own pose. Raises ``ValueError`` naming the input and the rig or image otherwise.
+    while each image keeps its own pose. Raises ``ValueError`` naming the
+    input and the rig or image otherwise.
     """
     reference = f"{labels[0]}, the first input with rigs, whose rigs the merge keeps"
     ref_rigs = rig_frame_data[0]["rigs_metadata"]["rigs"]
