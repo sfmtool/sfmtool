@@ -1097,6 +1097,17 @@ impl McpViewer {
             .unwrap_or_else(|| panic!("clicking {name} opened no {name} menu: {reply}"))
     }
 
+    /// Expand the 3D viewport's HUD, which starts collapsed to its gear, by
+    /// clicking the gear once it is drawn.
+    fn open_hud(&self) {
+        let gear = self.wait_for(
+            json!({ "panel_name": "viewer_3d" }),
+            "the HUD's gear never appeared",
+            |listing| find_widget(listing, "button", "\u{2699} Display controls").cloned(),
+        );
+        self.click(json!({ "widget": gear["widget"] }));
+    }
+
     /// Call `screenshot` and return its content blocks.
     fn screenshot_blocks(&self, arguments: Value) -> Vec<Value> {
         let result = self.call("screenshot", arguments.clone());
@@ -1446,13 +1457,14 @@ fn quit_menu_item_exits_the_process() {
 
 // --- Panels ---
 
-/// With a reconstruction loaded the viewport HUD is open, so its layer toggles
-/// are there without opening anything — the point of moving them out of a
-/// menu. Also the end-to-end check that the HUD reaches a real window;
-/// everything else about it is exercised headlessly in `viewer_3d/hud/tests.rs`.
+/// With a reconstruction loaded, one click on the viewport HUD's gear shows
+/// its layer toggles, all checked. Also the end-to-end check that the HUD
+/// reaches a real window; everything else about it is exercised headlessly in
+/// `viewer_3d/hud/tests.rs`.
 #[test]
 fn hud_layer_toggles_are_present_and_checked_once_a_scene_is_loaded() {
     let viewer = McpViewer::launch_demo();
+    viewer.open_hud();
     let layers = ["Points", "Camera Images", "Grid"];
     let hud = viewer.wait_for(
         json!({ "panel_name": "viewer_3d" }),
@@ -1477,6 +1489,7 @@ fn hud_layer_toggles_are_present_and_checked_once_a_scene_is_loaded() {
 #[test]
 fn toggle_hud_layer_checkbox() {
     let viewer = McpViewer::launch_demo();
+    viewer.open_hud();
     let panel = json!({ "panel_name": "viewer_3d" });
     let grid = viewer.wait_for(
         panel.clone(),
