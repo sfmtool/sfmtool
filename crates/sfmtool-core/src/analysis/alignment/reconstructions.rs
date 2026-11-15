@@ -11,10 +11,14 @@
 //! it is the shared implementation any other caller aligning two loaded
 //! `SfmrReconstruction`s should reach for.
 //!
+//! Both modes start from the same image pairs: [`pair_reconstruction_images`]
+//! pairs the two reconstructions' images by the hash of the image file, and by
+//! name only where a hash is not known (see [`super::image_pairing`]).
+//! [`AlignFit::images`] carries that pairing.
+//!
 //! ## The two modes
 //!
-//! - **Cameras** (default): images matched by `name` across the two
-//!   reconstructions; the corresponded camera *centres* feed the fit. Works
+//! - **Cameras** (default): the paired images' camera *centres* feed the fit. Works
 //!   whenever the two were solved from overlapping image sets, which is the
 //!   typical comparison case. Correspondence counts are in the tens or
 //!   hundreds, far too few for RANSAC to have anything to consense over, so
@@ -42,10 +46,10 @@
 //! somewhere other than its own frame composes that in itself — for the
 //! explorer, `AppState::align_node`.
 
-use std::collections::HashMap;
-
+use crate::analysis::alignment::image_pairing::{pair_reconstruction_images, ImagePairing};
 use crate::analysis::alignment::{estimate_alignment, ransac_alignment, AlignmentParams};
 use crate::numeric::quantile_in_place;
+use crate::progress::Progress;
 use crate::reconstruction::point_correspondence::{
     find_point_correspondences, find_point_correspondences_by_coordinate,
     CoordinateCorrespondenceOptions, PointCorrespondenceResult,
@@ -97,7 +101,7 @@ const ROUNDING_FLOOR: f64 = 1e-9;
 /// Where the correspondences behind a fit come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AlignSource {
-    /// Camera centres of same-named images.
+    /// Camera centres of paired images.
     #[default]
     Cameras,
     /// 3D points matched through their observations in shared images.
@@ -172,6 +176,8 @@ pub struct AlignFit {
     pub source: AlignSource,
     /// How the point mode matched observations; `None` for the camera mode.
     pub point_matching: Option<PointMatching>,
+    /// How the two reconstructions' images were paired.
+    pub images: ImagePairing,
 }
 
 /// Fit the similarity taking `source` onto `target`.
@@ -179,15 +185,31 @@ pub struct AlignFit {
 /// Returns the reason as an `Err` string on every failure the spec names — no
 /// shared images, too few correspondences, a degenerate configuration — so
 /// the caller can leave the source where it was and report it.
+///
+/// Pairing the images reads a `sift_files` reconstruction's `.sift` metadata,
+/// one file per image, through `progress`, which can cancel it; a cancelled
+/// call returns an `Err` saying so.
 pub fn align_reconstructions(
     source: &SfmrReconstruction,
     target: &SfmrReconstruction,
     options: AlignOptions,
+    progress: &Progress,
 ) -> Result<AlignFit, String> {
+    let images = pair_reconstruction_images(source, target, progress).map_err(|e| e.to_string())?;
     match options.source {
-        AlignSource::Cameras => fit_by_cameras(source, target, options.estimate_scale),
-        AlignSource::Points => fit_by_points(source, target, options.estimate_scale),
+        AlignSource::Cameras => fit_by_cameras(source, target, images, options.estimate_scale),
+        AlignSource::Points => fit_by_points(source, target, images, options.estimate_scale),
     }
+}
+
+/// The reason given when no image pairs: what the pairing found, including the
+/// names shared by different files, which a reader expecting a pairing by name
+/// needs to see.
+fn no_shared_images(images: &ImagePairing) -> String {
+    format!(
+        "the two reconstructions share no images ({})",
+        images.summary()
+    )
 }
 
 // ── Correspondence gathering ────────────────────────────────────────────
@@ -229,45 +251,17 @@ impl Correspondences {
     }
 }
 
-/// `image name → index`, first occurrence winning — the same rule
-/// `sfm align`'s by-cameras mode uses when a name repeats.
-fn images_by_name(recon: &SfmrReconstruction) -> HashMap<&str, usize> {
-    let mut map = HashMap::with_capacity(recon.image_set.images.len());
-    for (i, image) in recon.image_set.images.iter().enumerate() {
-        map.entry(image.name.as_str()).or_insert(i);
-    }
-    map
-}
-
-/// Image index pairs for the images the two reconstructions share by name.
-///
-/// A repeated name on either side pairs once, first occurrence winning.
-pub fn shared_images(source: &SfmrReconstruction, target: &SfmrReconstruction) -> Vec<(u32, u32)> {
-    let target_by_name = images_by_name(target);
-    let mut seen: HashMap<&str, ()> = HashMap::new();
-    let mut pairs = Vec::new();
-    for (i, image) in source.image_set.images.iter().enumerate() {
-        let name = image.name.as_str();
-        if seen.insert(name, ()).is_some() {
-            continue; // a repeated source name pairs once, like the target side
-        }
-        if let Some(&j) = target_by_name.get(name) {
-            pairs.push((i as u32, j as u32));
-        }
-    }
-    pairs
-}
-
-/// Camera centres of the same-named images, source against target.
+/// Camera centres of the paired images, source against target.
 fn camera_correspondences(
     source: &SfmrReconstruction,
     target: &SfmrReconstruction,
+    shared: &[(u32, u32)],
 ) -> Correspondences {
     let mut out = Correspondences {
         source: Vec::new(),
         target: Vec::new(),
     };
-    for (i, j) in shared_images(source, target) {
+    for &(i, j) in shared {
         out.push(
             &source.image_set.images[i as usize].camera_center(),
             &target.image_set.images[j as usize].camera_center(),
@@ -324,10 +318,11 @@ fn keypoint_positions(
 fn point_correspondences(
     source: &SfmrReconstruction,
     target: &SfmrReconstruction,
+    images: &ImagePairing,
 ) -> Result<(Correspondences, PointMatching), String> {
-    let shared = shared_images(source, target);
+    let shared = &images.pairs;
     if shared.is_empty() {
-        return Err("the two reconstructions share no image names".to_string());
+        return Err(no_shared_images(images));
     }
     let (source_images, source_points) = track_columns(source);
     let (target_images, target_points) = track_columns(target);
@@ -470,16 +465,18 @@ fn kept_count(n: usize) -> usize {
 fn fit_by_cameras(
     source: &SfmrReconstruction,
     target: &SfmrReconstruction,
+    images: ImagePairing,
     estimate_scale: bool,
 ) -> Result<AlignFit, String> {
-    let c = camera_correspondences(source, target);
+    let c = camera_correspondences(source, target, &images.pairs);
     let n = c.len();
     if n < MIN_CAMERA_CORRESPONDENCES {
         return Err(match n {
-            0 => "the two reconstructions share no image names".to_string(),
+            0 => no_shared_images(&images),
             _ => format!(
                 "only {n} shared image(s); a similarity needs at least \
-                 {MIN_CAMERA_CORRESPONDENCES} camera correspondences"
+                 {MIN_CAMERA_CORRESPONDENCES} camera correspondences ({})",
+                images.summary()
             ),
         });
     }
@@ -496,15 +493,17 @@ fn fit_by_cameras(
         transform,
         source: AlignSource::Cameras,
         point_matching: None,
+        images,
     })
 }
 
 fn fit_by_points(
     source: &SfmrReconstruction,
     target: &SfmrReconstruction,
+    images: ImagePairing,
     estimate_scale: bool,
 ) -> Result<AlignFit, String> {
-    let (c, matching) = point_correspondences(source, target)?;
+    let (c, matching) = point_correspondences(source, target, &images)?;
     let n = c.len();
     if n < MIN_POINT_CORRESPONDENCES {
         return Err(format!(
@@ -562,6 +561,7 @@ fn fit_by_points(
         transform,
         source: AlignSource::Points,
         point_matching: Some(matching),
+        images,
     })
 }
 

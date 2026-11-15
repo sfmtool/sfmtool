@@ -21,20 +21,24 @@ pub(crate) use sfmtool_core::analysis::alignment::{
     align_reconstructions, AlignFit, AlignOptions, AlignSource, PointMatching,
 };
 
-/// `Aligned run_b → run_a: 214/243 cameras, RMS 0.031`, with
-/// ` by keypoint position` after the noun when the point mode matched by
-/// keypoint position rather than by feature index.
+/// `Aligned run_b → run_a: 214/243 cameras, RMS 0.031; images paired: 243 by
+/// file hash, 0 by name`, with ` by keypoint position` after the noun when
+/// the point mode matched by keypoint position rather than by feature index.
+/// The text after the semicolon is the pairing's own summary
+/// ([`sfmtool_core::analysis::alignment::ImagePairing::summary`]), the same
+/// text `sfm align` prints.
 pub(crate) fn success_message(source_label: &str, target_label: &str, fit: &AlignFit) -> String {
     let matching = match fit.point_matching {
         Some(PointMatching::KeypointPosition) => " by keypoint position",
         Some(PointMatching::FeatureIndex) | None => "",
     };
     format!(
-        "Aligned {source_label} → {target_label}: {}/{} {}{matching}, RMS {:.3}",
+        "Aligned {source_label} → {target_label}: {}/{} {}{matching}, RMS {:.3}; {}",
         fit.inliers,
         fit.correspondences,
         fit.source.noun(),
         fit.rms,
+        fit.images.summary(),
     )
 }
 

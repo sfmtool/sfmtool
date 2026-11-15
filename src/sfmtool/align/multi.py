@@ -9,35 +9,40 @@ from pathlib import Path
 import click
 
 from .core import estimate_pairwise_alignment
+from .._sfmtool.analysis import pair_images
 from .._sfmtool.reconstruction import SfmrReconstruction
 from .._workspace import require_version_2_workspace
 
 
-def _get_reconstruction_images(recon: SfmrReconstruction) -> dict[int, str]:
-    """Get image names from a SfmrReconstruction."""
-    return {i: name for i, name in enumerate(recon.image_names)}
-
-
-def _find_shared_images(images_a: dict[int, str], images_b: dict[int, str]) -> set[str]:
-    """Find image names that are shared between two reconstructions."""
-    return set(images_a.values()) & set(images_b.values())
-
-
 def _build_connectivity_graph(
     reconstructions: list[SfmrReconstruction],
-) -> dict[int, dict[int, set[str]]]:
-    """Build a connectivity graph based on shared images between reconstructions."""
-    n = len(reconstructions)
-    all_images = [_get_reconstruction_images(r) for r in reconstructions]
+    file_hashes: list[list[bytes | None]] | None = None,
+) -> dict[int, dict[int, dict]]:
+    """Build a connectivity graph of the images reconstructions share.
 
-    graph: dict[int, dict[int, set[str]]] = {i: {} for i in range(n)}
+    ``graph[i][j]`` is the ``pair_images`` result of reconstruction ``i``'s
+    images (source) against ``j``'s (target), present only when it pairs at
+    least one image. ``file_hashes`` holds each reconstruction's
+    ``find_image_file_hashes()``, read here when not given.
+    """
+    n = len(reconstructions)
+    if file_hashes is None:
+        file_hashes = [r.find_image_file_hashes() for r in reconstructions]
+
+    graph: dict[int, dict[int, dict]] = {i: {} for i in range(n)}
 
     for i in range(n):
-        for j in range(i + 1, n):
-            shared = _find_shared_images(all_images[i], all_images[j])
-            if shared:
-                graph[i][j] = shared
-                graph[j][i] = shared
+        for j in range(n):
+            if i == j:
+                continue
+            pairing = pair_images(
+                reconstructions[i].image_names,
+                file_hashes[i],
+                reconstructions[j].image_names,
+                file_hashes[j],
+            )
+            if len(pairing["pairs"]):
+                graph[i][j] = pairing
 
     return graph
 
@@ -62,17 +67,25 @@ def align_reconstructions(
     ransac_percentile: float = 95.0,
     ransac_iterations: int = 1000,
     verbose: bool = False,
+    file_hashes: list[list[bytes | None]] | None = None,
 ) -> AlignmentResult:
     """Align reconstructions to a reference coordinate frame.
 
     Supports transitive alignment through a connectivity graph, so
     reconstructions that don't directly share images with the reference
     can still be aligned if they connect through other reconstructions.
+
+    Images are paired by file hash, and by name where a hash is not known
+    (``sfmtool.analysis.pair_images``). ``file_hashes`` holds the
+    ``find_image_file_hashes()`` of ``reference`` and then of each of
+    ``to_align``, read here when not given.
     """
+    graph = _build_connectivity_graph([reference, *to_align], file_hashes)
     if method == "points":
         return _align_with_points(
             reference=reference,
             to_align=to_align,
+            graph=graph,
             use_ransac=use_ransac,
             ransac_percentile=ransac_percentile,
             ransac_iterations=ransac_iterations,
@@ -82,6 +95,7 @@ def align_reconstructions(
         return _align_with_cameras(
             reference=reference,
             to_align=to_align,
+            graph=graph,
             confidence=confidence,
             verbose=verbose,
         )
@@ -90,6 +104,7 @@ def align_reconstructions(
 def _align_with_cameras(
     reference: SfmrReconstruction,
     to_align: list[SfmrReconstruction],
+    graph: dict[int, dict[int, dict]],
     confidence: float = 0.7,
     verbose: bool = False,
 ) -> AlignmentResult:
@@ -100,8 +115,6 @@ def _align_with_cameras(
     all_recons = [reference] + list(to_align)
     n = len(all_recons)
 
-    graph = _build_connectivity_graph(all_recons)
-
     aligned_set = {0}
     current_recons = list(all_recons)
     results: list[SfmrReconstruction | None] = [None] * len(to_align)
@@ -110,7 +123,6 @@ def _align_with_cameras(
     aligned_data: dict[int, dict] = {}
     ref_quats, ref_centers = get_reconstruction_poses(current_recons[0])
     aligned_data[0] = {
-        "images": _get_reconstruction_images(current_recons[0]),
         "quaternions": ref_quats,
         "camera_centers": ref_centers,
     }
@@ -133,22 +145,21 @@ def _align_with_cameras(
                     f"  Connected to {len(aligned_neighbors)} aligned reconstruction(s)"
                 )
 
-            align_images = _get_reconstruction_images(current_recons[idx])
+            align_names = current_recons[idx].image_names
             align_quats, align_centers = get_reconstruction_poses(current_recons[idx])
 
             all_matches = []
             shared_count = 0
 
             for nb_idx in aligned_neighbors:
-                shared_images = graph[idx][nb_idx]
-                shared_count += len(shared_images)
+                shared_pairs = graph[idx][nb_idx]["pairs"]
+                shared_count += len(shared_pairs)
 
                 matches = build_image_matches(
-                    shared_images=shared_images,
-                    source_images=align_images,
+                    shared_pairs=shared_pairs,
+                    source_names=align_names,
                     source_quaternions=align_quats,
                     source_camera_centers=align_centers,
-                    target_images=aligned_data[nb_idx]["images"],
                     target_quaternions=aligned_data[nb_idx]["quaternions"],
                     target_camera_centers=aligned_data[nb_idx]["camera_centers"],
                 )
@@ -186,7 +197,6 @@ def _align_with_cameras(
 
                 new_quats, new_centers = get_reconstruction_poses(aligned_recon)
                 aligned_data[idx] = {
-                    "images": _get_reconstruction_images(aligned_recon),
                     "quaternions": new_quats,
                     "camera_centers": new_centers,
                 }
@@ -204,6 +214,7 @@ def _align_with_cameras(
 def _align_with_points(
     reference: SfmrReconstruction,
     to_align: list[SfmrReconstruction],
+    graph: dict[int, dict[int, dict]],
     use_ransac: bool = True,
     ransac_percentile: float = 95.0,
     ransac_iterations: int = 1000,
@@ -215,8 +226,6 @@ def _align_with_points(
 
     all_recons = [reference] + list(to_align)
     n = len(all_recons)
-
-    graph = _build_connectivity_graph(all_recons)
 
     aligned_set = {0}
     current_recons = list(all_recons)
@@ -241,25 +250,13 @@ def _align_with_points(
                     f"  Connected to {len(aligned_neighbors)} aligned reconstruction(s)"
                 )
 
-            align_images = _get_reconstruction_images(current_recons[idx])
-
             all_shared_pairs: list[tuple[int, int]] = []
             shared_count = 0
 
             for nb_idx in aligned_neighbors:
-                shared_names = graph[idx][nb_idx]
-                shared_count += len(shared_names)
-                neighbor_images = _get_reconstruction_images(current_recons[nb_idx])
-
-                for img_name in shared_names:
-                    src_idx = next(
-                        (i for i, n in align_images.items() if n == img_name), None
-                    )
-                    tgt_idx = next(
-                        (i for i, n in neighbor_images.items() if n == img_name), None
-                    )
-                    if src_idx is not None and tgt_idx is not None:
-                        all_shared_pairs.append((src_idx, tgt_idx))
+                shared_pairs = graph[idx][nb_idx]["pairs"]
+                shared_count += len(shared_pairs)
+                all_shared_pairs.extend((int(s), int(t)) for s, t in shared_pairs)
 
             if not all_shared_pairs:
                 if verbose:
@@ -370,17 +367,23 @@ def align_command(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     click.echo("\nAnalyzing connectivity...")
-    graph = _build_connectivity_graph([reference] + to_align)
-    for i, path in enumerate([reference_path] + list(align_paths)):
+    all_recons = [reference, *to_align]
+    all_paths = [reference_path, *align_paths]
+    file_hashes = [r.find_image_file_hashes() for r in all_recons]
+    graph = _build_connectivity_graph(all_recons, file_hashes)
+    for i, path in enumerate(all_paths):
         neighbors = graph[i]
         if neighbors:
             neighbor_names = []
-            for nb_idx, shared in neighbors.items():
-                nb_path = ([reference_path] + list(align_paths))[nb_idx]
-                neighbor_names.append(f"{nb_path.name} ({len(shared)} shared)")
+            for nb_idx, pairing in neighbors.items():
+                nb_path = all_paths[nb_idx]
+                neighbor_names.append(
+                    f"{nb_path.name} ({len(pairing['pairs'])} shared)"
+                )
             click.echo(f"  {path.name}: {', '.join(neighbor_names)}")
         else:
             click.echo(f"  {path.name}: (isolated)")
+    _echo_image_pairing(all_recons, all_paths, file_hashes)
 
     for i, path in enumerate(align_paths, start=1):
         if not graph[i]:
@@ -410,6 +413,7 @@ def align_command(
         ransac_percentile=ransac_percentile,
         ransac_iterations=ransac_iterations,
         verbose=True,
+        file_hashes=file_hashes,
     )
 
     success_count = 0
@@ -433,3 +437,31 @@ def align_command(
         click.echo(f"\nFailed to align: {', '.join(failed)}")
 
     click.echo(f"\nResults saved to: {output_dir}")
+
+
+def _echo_image_pairing(
+    recons: list[SfmrReconstruction],
+    paths: list[Path],
+    file_hashes: list[list[bytes | None]],
+) -> None:
+    """Print how each two inputs' images were paired: by file hash, by name,
+    and the names that different files share, which are not paired."""
+    for i in range(len(recons)):
+        for j in range(i + 1, len(recons)):
+            pairing = pair_images(
+                recons[i].image_names,
+                file_hashes[i],
+                recons[j].image_names,
+                file_hashes[j],
+            )
+            mismatched = pairing["same_name_different_file"]
+            if not len(pairing["pairs"]) and not len(mismatched):
+                continue
+            click.echo(f"  {paths[i].name} and {paths[j].name}: {pairing['summary']}")
+            if len(mismatched):
+                names = recons[i].image_names
+                listed = ", ".join(names[int(s)] for s, _ in mismatched[:3])
+                more = f" and {len(mismatched) - 3} more" if len(mismatched) > 3 else ""
+                click.echo(
+                    f"    Not paired, same name but different file: {listed}{more}"
+                )

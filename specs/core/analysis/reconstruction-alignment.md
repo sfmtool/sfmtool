@@ -8,7 +8,8 @@ transform** (rotation `R`, translation `t`, uniform scale `s`, together an
 counterparts. The point-based alignment pipeline is:
 
 1. Find corresponding 3D point pairs between the two reconstructions via
-   their observations in shared images, by feature index or by keypoint
+   their observations in shared images (paired as
+   [Pairing the images](#pairing-the-images) says), by feature index or by keypoint
    position — see
    [point-correspondence.md](../reconstruction/point-correspondence.md). Pairs involving a
    point at infinity are dropped up front (a `w = 0` point stores a bearing
@@ -26,6 +27,102 @@ of reconstruction-level alignment, parallel to `reconstructions.rs` below and
 answering the same question differently; retargeting `sfm align` at the
 shared Rust one is open work.
 
+## Pairing the images (`image_pairing.rs`)
+
+Every alignment of two reconstructions starts by deciding which image of one
+is which image of the other. A name, the image's path relative to its
+workspace, does not decide it: a folder copied into another workspace layout,
+or frames renamed after extraction, give a photograph another name, and the
+frames of two videos in two workspaces give different photographs the same
+name (`frame_000001.jpg`). The hash of the image file decides it, so images are
+paired by that hash, and by name only where a hash is not known. `sfm align`,
+`sfm compare`, `sfm xform --align-to` and the SfM Explorer's `Align to` all
+pair images this way.
+
+The pairing is in
+[image_pairing.rs](../../../crates/sfmtool-core/src/analysis/alignment/image_pairing.rs):
+
+```rust
+pub struct ImageIdentity<'a> { pub name: &'a str, pub file_hash: Option<[u8; 16]> }
+
+pub struct ImagePairing {
+    pub pairs: Vec<(u32, u32)>,                    // (source, target), by source index
+    pub by_file_hash: usize,
+    pub by_name: usize,
+    pub same_name_different_file: Vec<(u32, u32)>,
+}
+
+pub fn pair_images(source: &[ImageIdentity], target: &[ImageIdentity]) -> ImagePairing;
+pub fn pair_reconstruction_images(
+    source: &SfmrReconstruction,
+    target: &SfmrReconstruction,
+    progress: &Progress,
+) -> Result<ImagePairing, Cancelled>;
+```
+
+`pair_images` takes names and hashes rather than reconstructions so that a
+caller pairing many reconstructions reads each one's hashes once (`sfm align`
+pairs every two of its inputs). `pair_reconstruction_images` reads both
+reconstructions' hashes and pairs them; `align_reconstructions` calls it. Python
+reaches the pairing as `sfmtool.analysis.pair_images(source_names,
+source_file_hashes, target_names, target_file_hashes)`, which returns a dict of
+the same fields as `uint32` `(k, 2)` arrays and counts, plus the `summary`
+line.
+
+```rust
+let pairing = pair_reconstruction_images(&source, &target, &Progress::none())?;
+println!("{}", pairing.summary()); // images paired: 15 by file hash, 2 by name
+```
+
+**The rule**, in order:
+
+1. **By file hash.** Two images whose file hashes are both known pair only when
+   the hashes are equal, whatever their names, and never by name. A hash held
+   by exactly one image on each side pairs those two. A hash held by more than
+   one image on a side is the same file under several names; among the images
+   holding it, only images of the same name pair, and an image of that group
+   with no same-named partner in the other side's group is not paired by hash.
+   These pairs are counted in `by_file_hash`.
+2. **By name.** Each image still unpaired pairs with the still-unpaired image
+   of the same name on the other side, as long as at least one of the two has
+   no known hash. These pairs are counted in `by_name`. An image whose hash is
+   known therefore still pairs with a same-named image whose hash is not, which
+   keeps a reconstruction whose `.sift` files are gone pairing as it did before.
+3. **A repeated name** pairs once: in step 2, and among the images of one hash
+   in step 1, the first image of a name on each side is the one that pairs.
+
+Beside the pairs, `same_name_different_file` lists each name whose first image
+on each side has a known hash and the two hashes differ: two photographs that a
+pairing by name alone would have paired. They are not paired with each other,
+though either may be paired with another image by its hash. The report says
+how many there are, since a reader who expected a pairing by name needs to see
+why it did not happen: `ImagePairing::summary` reads `images paired: 15 by file
+hash, 2 by name`, followed by `; 3 names shared by different files` when there
+are any. The CLI and the viewer print this line as it is.
+
+**Where the hashes come from.**
+`SfmrReconstruction::find_image_file_hashes(progress)` returns one
+`Option<[u8; 16]>` per image, the XXH128 of the image file's bytes:
+
+- `embedded_patches`: the stored `image_file_hashes` column, so every hash is
+  known.
+- `sift_files`: the `image_file_xxh128` that image's `.sift` file records in
+  its metadata, read from the feature folder the `.sfmr` records
+  (`sift_path_for_image`). Only the file's metadata is read; no photograph is
+  read or hashed. An image's hash is `None` when its `.sift` file is missing or
+  cannot be read, when the file's content hash is not the image's
+  `sift_content_hashes` entry (another extraction, perhaps of another
+  photograph), or when its `image_file_xxh128` is not a hash; every hash is
+  `None` for a reconstruction with no workspace directory. None of these is an
+  error: the image pairs by name.
+
+Reading a `sift_files` reconstruction's hashes opens one `.sift` file per
+image, which is why it takes a `Progress`. It reads only what the given `.sfmr`
+records, which opening that file may always do, so it needs no version 2
+workspace ([workspace.md](../../workspace/workspace.md#a-command-that-uses-a-workspace-requires-version-2)).
+Python reaches it as `SfmrReconstruction.find_image_file_hashes(progress=None)`,
+a list of 16-byte `bytes` or `None`.
+
 ## Aligning two reconstructions (`reconstructions.rs`)
 
 The alignment core lives in
@@ -41,7 +138,7 @@ operations `--align-to` / `--align-to-input`
 [_align_to_input.py](../../../src/sfmtool/xform/_align_to_input.py)).
 
 The two estimators above fit *point sets*. `align_reconstructions(source,
-target, options) -> Result<AlignFit, String>` fits *reconstructions*: it
+target, options, progress) -> Result<AlignFit, String>` fits *reconstructions*: it
 decides which of the source's geometry corresponds to which of the target's,
 drives the estimators over the result, and reports how well it went. This is
 the shared implementation behind the SfM Explorer's `Align to ▸` (see
@@ -59,10 +156,12 @@ all-correspondence fit's residuals (floored at `1e-9 ×` the target cloud's
 extent, so an exactly-corresponding pair is not rejected as all-outlier by
 `f64` rounding noise).
 
-**Correspondences by cameras** — images matched by `name`, corresponded camera
-*centres* feeding the fit. A repeated name on either side pairs once, first
-occurrence winning (`shared_images`, also public: the same pairing other
-per-image comparisons want). Fewer than 3 shared images is refused rather than
+Both modes start from `pair_reconstruction_images` ([Pairing the
+images](#pairing-the-images)); `progress` is passed to it, the one part of the
+fit that reads files for every image, and a cancelled pairing fails the fit.
+
+**Correspondences by cameras** — the paired images' camera *centres* feed the
+fit. Fewer than 3 shared images is refused rather than
 fitted — two points leave the rotation about the line joining them free. No
 RANSAC: a few hundred centres are too few for a consensus sample to beat
 fitting them all and trimming the worst away.
@@ -87,10 +186,14 @@ target's native coordinates; composing it into a frame either reconstruction
 is *displayed* in is the caller's job), the correspondence count, the inlier
 count, the RMS residual over the inliers, which mode produced them, and, for
 the point mode, `point_matching`: `PointMatching::FeatureIndex` or
-`PointMatching::KeypointPosition` (`None` for the camera mode). Every
+`PointMatching::KeypointPosition` (`None` for the camera mode), and `images`,
+the `ImagePairing` the fit started from. Every
 failure the modes name — no shared images, too few correspondences, a
 degenerate configuration — comes back as an `Err` string a caller can show
-verbatim, leaving the source where it was.
+verbatim, leaving the source where it was. The two that are about the images
+end with the pairing's summary in parentheses: `the two reconstructions share
+no images (images paired: 0 by file hash, 0 by name; 17 names shared by
+different files)`.
 
 ## Least-squares fit (`least_squares.rs`)
 
@@ -209,6 +312,16 @@ rank-deficient inputs (identical points, collinear points), reflection
 avoidance, scale recovery, and RANSAC inlier/outlier separation with
 deterministic seeds.
 
+`analysis/alignment/image_pairing/tests.rs` covers each step of the pairing
+rule: images of one file paired across different names, the same name on two
+files left unpaired and reported, a name pairing where a hash is missing, an
+image paired by hash not paired again by name, a hash held by several images
+on one or both sides, a repeated name, and the summary.
+`reconstruction/image_file_hashes/tests.rs` covers where the hashes come from:
+the stored column, a `.sift` file whose content hash matches, one that is
+another extraction, one with no hash, a missing file, no workspace, and a
+cancelled read.
+
 `analysis/alignment/reconstructions/tests.rs` works one level up, on a fixture
 pair built the way the GUI spec asks for: reconstruction B is reconstruction A
 put through a *known* similarity, so the assertions are about where B's points
@@ -217,4 +330,6 @@ the quaternion sign ambiguity). It covers both modes' round trips, the point
 mode by feature index and by keypoint position (an `embedded_patches` pair, a
 mixed pair, and the checked-in Seoul bull ground truth against a moved copy of
 itself), that the landed cameras face the way the target's do, rigid vs
-similarity, the exclusion of points at infinity, and each refusal path.
+similarity, the exclusion of points at infinity, renamed images of the same
+files aligning by their hashes in both modes, same-named images of different
+files not being paired, and each refusal path.

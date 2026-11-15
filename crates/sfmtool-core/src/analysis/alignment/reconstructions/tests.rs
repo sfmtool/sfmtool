@@ -90,6 +90,32 @@ fn with_inline_keypoints(recon: &SfmrReconstruction) -> SfmrReconstruction {
     out
 }
 
+/// `recon` with its embedded image file hashes set to `first`, `first + 1`, …
+/// in image order: one distinct photograph per image.
+fn with_file_hashes(recon: &SfmrReconstruction, first: u8) -> SfmrReconstruction {
+    let mut out = recon.clone();
+    if let ObservationSource::EmbeddedPatches {
+        image_file_hashes, ..
+    } = &mut out.point_set.observations
+    {
+        for (i, hash) in image_file_hashes.iter_mut().enumerate() {
+            *hash = [first.wrapping_add(i as u8); 16];
+        }
+    } else {
+        panic!("give the file hashes to an embedded_patches reconstruction");
+    }
+    out
+}
+
+/// [`align_reconstructions`] with no progress reporting.
+fn align(
+    source: &SfmrReconstruction,
+    target: &SfmrReconstruction,
+    options: AlignOptions,
+) -> Result<AlignFit, String> {
+    align_reconstructions(source, target, options, &crate::progress::Progress::none())
+}
+
 fn options(source: AlignSource, estimate_scale: bool) -> AlignOptions {
     AlignOptions {
         source,
@@ -121,7 +147,7 @@ fn aligning_by_cameras_recovers_a_known_similarity() {
     let t = known_similarity();
     let b = transformed(&a, &t);
 
-    let fit = align_reconstructions(&b, &a, options(AlignSource::Cameras, true)).expect("a fit");
+    let fit = align(&b, &a, options(AlignSource::Cameras, true)).expect("a fit");
 
     // The fit maps B back onto A, so it is `t` inverted — asserted where it
     // matters, on where B's points land.
@@ -147,7 +173,7 @@ fn aligning_by_cameras_lands_the_cameras_facing_the_same_way() {
     let a = SfmrReconstruction::demo(64);
     let b = transformed(&a, &known_similarity());
 
-    let fit = align_reconstructions(&b, &a, options(AlignSource::Cameras, true)).expect("a fit");
+    let fit = align(&b, &a, options(AlignSource::Cameras, true)).expect("a fit");
 
     let rotation = fit.transform.rotation.to_rotation_matrix();
     for (source, target) in b.image_set.images.iter().zip(a.image_set.images.iter()) {
@@ -176,7 +202,7 @@ fn aligning_by_points_recovers_a_known_similarity() {
     let t = known_similarity();
     let b = transformed(&a, &t);
 
-    let fit = align_reconstructions(&b, &a, options(AlignSource::Points, true)).expect("a fit");
+    let fit = align(&b, &a, options(AlignSource::Points, true)).expect("a fit");
 
     assert!(
         worst_point_error(&b, &a, &fit.transform) < 1e-9,
@@ -196,7 +222,7 @@ fn an_embedded_patches_pair_aligns_by_keypoint_position() {
     let a = embedded(&SfmrReconstruction::demo(64));
     let b = transformed(&a, &known_similarity());
 
-    let fit = align_reconstructions(&b, &a, options(AlignSource::Points, true)).expect("a fit");
+    let fit = align(&b, &a, options(AlignSource::Points, true)).expect("a fit");
 
     assert_eq!(fit.point_matching, Some(PointMatching::KeypointPosition));
     // Each point is seen at the same pixel in two shared images: two votes,
@@ -216,8 +242,7 @@ fn a_mixed_pair_aligns_by_keypoint_position_when_the_sift_files_side_has_inline_
     let b = embedded(&transformed(&a, &known_similarity()));
 
     for (source, target) in [(&b, &a), (&a, &b)] {
-        let fit = align_reconstructions(source, target, options(AlignSource::Points, true))
-            .expect("a fit");
+        let fit = align(source, target, options(AlignSource::Points, true)).expect("a fit");
         assert_eq!(fit.point_matching, Some(PointMatching::KeypointPosition));
         assert_eq!(fit.correspondences, 64);
         assert!(worst_point_error(source, target, &fit.transform) < 1e-9);
@@ -232,15 +257,14 @@ fn a_mixed_pair_whose_sift_files_side_has_no_keypoint_positions_says_what_is_mis
     let a = SfmrReconstruction::demo(64);
     let b = embedded(&transformed(&a, &known_similarity()));
 
-    let err =
-        align_reconstructions(&b, &a, options(AlignSource::Points, true)).expect_err("no .sift");
+    let err = align(&b, &a, options(AlignSource::Points, true)).expect_err("no .sift");
     assert!(
         err.contains("target reconstruction has no inline keypoints") && err.contains(".sift"),
         "{err}"
     );
 
     // The camera mode is unaffected: it never looks at observations.
-    assert!(align_reconstructions(&b, &a, options(AlignSource::Cameras, true)).is_ok());
+    assert!(align(&b, &a, options(AlignSource::Cameras, true)).is_ok());
 }
 
 #[test]
@@ -250,7 +274,7 @@ fn the_infinity_points_are_left_out_of_a_fit_by_keypoint_position() {
     a.point_set.points[0].position = Point3::new(0.0, 0.0, 1.0);
     let b = transformed(&a, &known_similarity());
 
-    let fit = align_reconstructions(&b, &a, options(AlignSource::Points, true)).expect("a fit");
+    let fit = align(&b, &a, options(AlignSource::Points, true)).expect("a fit");
 
     assert_eq!(fit.point_matching, Some(PointMatching::KeypointPosition));
     assert_eq!(
@@ -267,8 +291,7 @@ fn keypoints_that_match_nothing_are_reported_by_keypoint_position() {
         keypoints_xy.mapv_inplace(|v| v + 1000.0);
     }
 
-    let err =
-        align_reconstructions(&b, &a, options(AlignSource::Points, true)).expect_err("no matches");
+    let err = align(&b, &a, options(AlignSource::Points, true)).expect_err("no matches");
     assert!(err.contains("by keypoint position"), "{err}");
 }
 
@@ -287,7 +310,7 @@ fn the_seoul_bull_ground_truth_aligns_by_points_to_a_moved_copy_of_itself() {
     assert!(a.feature_indexes().is_none());
     let b = transformed(&a, &known_similarity());
 
-    let fit = align_reconstructions(&b, &a, options(AlignSource::Points, true)).expect("a fit");
+    let fit = align(&b, &a, options(AlignSource::Points, true)).expect("a fit");
 
     assert_eq!(fit.point_matching, Some(PointMatching::KeypointPosition));
     let finite = a
@@ -320,7 +343,7 @@ fn a_rigid_fit_leaves_the_scale_at_one() {
     );
     let b = transformed(&a, &t);
 
-    let fit = align_reconstructions(&b, &a, options(AlignSource::Cameras, false)).expect("a fit");
+    let fit = align(&b, &a, options(AlignSource::Cameras, false)).expect("a fit");
 
     assert_eq!(fit.transform.scale, 1.0);
     assert!(worst_point_error(&b, &a, &fit.transform) < 1e-9);
@@ -331,7 +354,7 @@ fn a_rigid_fit_of_a_scaled_pair_does_not_absorb_the_scale() {
     let a = SfmrReconstruction::demo(64);
     let b = transformed(&a, &known_similarity());
 
-    let fit = align_reconstructions(&b, &a, options(AlignSource::Cameras, false)).expect("a fit");
+    let fit = align(&b, &a, options(AlignSource::Cameras, false)).expect("a fit");
 
     // Refusing to fit scale is the whole point of the Rigid option: the result
     // is deliberately a poor fit of a scaled pair rather than a silent
@@ -352,7 +375,7 @@ fn the_infinity_points_are_left_out_of_a_point_fit() {
     a.point_set.points[0].position = Point3::new(0.0, 0.0, 1.0);
     let b = transformed(&a, &known_similarity());
 
-    let fit = align_reconstructions(&b, &a, options(AlignSource::Points, true)).expect("a fit");
+    let fit = align(&b, &a, options(AlignSource::Points, true)).expect("a fit");
 
     assert_eq!(
         fit.correspondences, 63,
@@ -368,10 +391,9 @@ fn two_reconstructions_with_no_shared_images_cannot_be_aligned() {
     let b = renamed(&transformed(&a, &known_similarity()), "other");
 
     for source in [AlignSource::Cameras, AlignSource::Points] {
-        let err =
-            align_reconstructions(&b, &a, options(source, true)).expect_err("no correspondences");
+        let err = align(&b, &a, options(source, true)).expect_err("no correspondences");
         assert!(
-            err.contains("share no image names"),
+            err.contains("share no images"),
             "unhelpful reason for {source:?}: {err}"
         );
     }
@@ -386,8 +408,7 @@ fn too_few_shared_cameras_is_reported_rather_than_fitted() {
         image.name = format!("only_in_a_{i:03}.jpg");
     }
 
-    let err =
-        align_reconstructions(&b, &a, options(AlignSource::Cameras, true)).expect_err("too few");
+    let err = align(&b, &a, options(AlignSource::Cameras, true)).expect_err("too few");
     assert!(err.contains("only 2 shared image(s)"), "{err}");
 }
 
@@ -406,8 +427,7 @@ fn a_pair_sharing_images_but_no_3d_points_is_reported() {
         }
     }
 
-    let err =
-        align_reconstructions(&b, &a, options(AlignSource::Points, true)).expect_err("no matches");
+    let err = align(&b, &a, options(AlignSource::Points, true)).expect_err("no matches");
     assert!(err.contains("point correspondences"), "{err}");
 }
 
@@ -421,8 +441,46 @@ fn a_repeated_image_name_pairs_once_on_either_side() {
 
     // First occurrence wins on both sides, so the duplicate contributes one
     // pair, not two — and never a pair with the *second* index.
-    let pairs = shared_images(&b, &a);
+    let pairs = align(&b, &a, options(AlignSource::Cameras, true))
+        .expect("a fit")
+        .images
+        .pairs;
     assert_eq!(pairs.iter().filter(|&&(s, _)| s == 0).count(), 1);
     assert!(!pairs.iter().any(|&(s, _)| s == 1));
     assert_eq!(pairs.len(), a.image_set.images.len() - 1);
+}
+
+#[test]
+fn renamed_images_of_the_same_files_are_paired_by_their_hashes() {
+    let a = with_file_hashes(&embedded(&SfmrReconstruction::demo(64)), 1);
+    let b = renamed(&transformed(&a, &known_similarity()), "moved");
+    let n = a.image_set.images.len();
+
+    for source in [AlignSource::Cameras, AlignSource::Points] {
+        let fit = align(&b, &a, options(source, true)).expect("a fit");
+        assert_eq!(fit.images.by_file_hash, n, "{source:?}");
+        assert_eq!(fit.images.by_name, 0, "{source:?}");
+        let pairs: Vec<(u32, u32)> = (0..n as u32).map(|i| (i, i)).collect();
+        assert_eq!(fit.images.pairs, pairs, "{source:?}");
+        assert!(
+            worst_point_error(&b, &a, &fit.transform) < 1e-6,
+            "{source:?} did not recover the similarity"
+        );
+    }
+}
+
+#[test]
+fn same_named_images_of_different_files_are_not_paired() {
+    let a = with_file_hashes(&embedded(&SfmrReconstruction::demo(64)), 1);
+    let b = with_file_hashes(&transformed(&a, &known_similarity()), 101);
+    let n = a.image_set.images.len();
+
+    for source in [AlignSource::Cameras, AlignSource::Points] {
+        let err = align(&b, &a, options(source, true)).expect_err("nothing pairs");
+        assert!(err.contains("share no images"), "{source:?}: {err}");
+        assert!(
+            err.contains(&format!("{n} names shared by different files")),
+            "{source:?}: {err}"
+        );
+    }
 }

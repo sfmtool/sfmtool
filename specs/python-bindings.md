@@ -400,6 +400,7 @@ Paths in the *Source* column are relative to
 | [analysis/triangulation.rs](../crates/sfmtool-py/src/analysis/triangulation.rs), [point_or_bearing.rs](../crates/sfmtool-py/src/analysis/point_or_bearing.rs) | `triangulate_batch`, `fit_point_and_bearing_batch`, `bearing_score_batch`, `observed_rays` and the triangulation default constants | [batch-triangulation-api.md](core/reconstruction/batch-triangulation-api.md) |
 | [analysis/epipolar.rs](../crates/sfmtool-py/src/analysis/epipolar.rs) | `epipolar_curves` | [epipolar-curves.md](core/camera/epipolar-curves.md) |
 | [analysis/image_pair_graph.rs](../crates/sfmtool-py/src/analysis/image_pair_graph.rs) | `build_covisibility_pairs`, `build_frustum_intersection_pairs` | [image-pair-graph.md](core/analysis/image-pair-graph.md) |
+| [analysis/image_pairing.rs](../crates/sfmtool-py/src/analysis/image_pairing.rs) | `pair_images` | [reconstruction-alignment.md](core/analysis/reconstruction-alignment.md#pairing-the-images) |
 | [analysis/keypoint_reach.rs](../crates/sfmtool-py/src/analysis/keypoint_reach.rs) | `keypoint_pairs_within_reach` | [keypoint-reach.md](core/analysis/keypoint-reach.md) |
 | [analysis/covered_by_finer.rs](../crates/sfmtool-py/src/analysis/covered_by_finer.rs) | `covered_by_finer` | [covered-by-finer.md](core/analysis/covered-by-finer.md) |
 | [analysis/observation_adjacency.rs](../crates/sfmtool-py/src/analysis/observation_adjacency.rs) | `build_observation_adjacency` | [observation-adjacency-graph.md](core/analysis/observation-adjacency-graph.md) |
