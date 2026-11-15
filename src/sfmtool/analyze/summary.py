@@ -671,12 +671,12 @@ def print_reconstruction_summary(
 
     # Image path summarization (optional dependency)
     try:
-        from .._path_summary import summarize_path_list
+        from .._path_summary import PathFormat, summarize_path_list
 
+        # Image names use "/" on every platform, so the patterns do too.
+        summary = summarize_path_list(recon.image_names, path_format=PathFormat.POSIX)
         click.echo("  Image paths:")
-        click.echo(
-            textwrap.indent(summarize_path_list(recon.image_names).rstrip(), "    ")
-        )
+        click.echo(textwrap.indent(summary.rstrip(), "    "))
     except ImportError:
         pass
 

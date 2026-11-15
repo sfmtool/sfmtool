@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from click.testing import CliRunner
+from deadline.job_attachments.models import PathFormat
 
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.analyze.summary import _print_tool_options
@@ -78,6 +79,25 @@ def test_inspect_sfmr_verbose(seoul_bull_workspace):
     # the .sfmr metadata; inspect used to read workspace.feature_tool and
     # always printed "unknown".
     assert "Feature tool: sfmtool" in out
+
+
+def test_inspect_sfmr_verbose_image_paths_use_forward_slashes(
+    seoul_bull_sfmr_only, monkeypatch
+):
+    """The `Image paths` patterns use "/" as the image names do, even on a
+    host whose separator is "\\". The host is made to look like Windows, so
+    the test checks that on every platform."""
+    monkeypatch.setattr(
+        PathFormat, "get_host_path_format", classmethod(lambda cls: cls.WINDOWS)
+    )
+    result = CliRunner().invoke(main, ["inspect", "-v", str(seoul_bull_sfmr_only)])
+    assert result.exit_code == 0, result.output
+
+    lines = result.output.splitlines()
+    pattern_line = lines[lines.index("  Image paths:") + 1]
+    assert pattern_line == (
+        "    test_17_image/seoul_bull_sculpture_%02d.jpg (17 files, sequence 1-17)"
+    )
 
 
 def test_inspect_sfmr_verbose_with_points_at_infinity(

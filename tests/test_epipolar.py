@@ -6,6 +6,7 @@
 import numpy as np
 import pytest
 from click.testing import CliRunner
+from deadline.job_attachments.models import PathFormat
 
 from sfmtool.visualization._common import get_color_palette
 from sfmtool.feature_match._geometry import get_fundamental_matrix
@@ -489,6 +490,30 @@ class TestEpipolarCLI:
         assert result.exit_code == 0
         assert "_other" in result.output
         assert "_A and _B" not in result.output
+
+    def test_image_hint_uses_forward_slashes(
+        self, seoul_bull_sfmr_only, monkeypatch, tmp_path
+    ):
+        """The hint listing a reconstruction's images writes its patterns with
+        "/" as the image names do, even on a host whose separator is a
+        backslash. The host is made to look like Windows, so the test checks
+        that on every platform."""
+        from sfmtool.cli import main
+
+        monkeypatch.setattr(
+            PathFormat, "get_host_path_format", classmethod(lambda cls: cls.WINDOWS)
+        )
+        result = CliRunner().invoke(
+            main,
+            ["epipolar", str(seoul_bull_sfmr_only), "--draw", str(tmp_path / "e.png")],
+        )
+        assert "Missing argument 'IMAGE1'" in result.output
+
+        lines = result.output.splitlines()
+        pattern_line = lines[lines.index("Image in reconstruction:") + 1]
+        assert pattern_line == (
+            "  test_17_image/seoul_bull_sculpture_%02d.jpg (17 files, sequence 1-17)"
+        )
 
     def test_non_sfmr_rejected(self, tmp_path):
         from sfmtool.cli import main

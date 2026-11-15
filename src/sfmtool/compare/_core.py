@@ -398,12 +398,12 @@ def _print_reconstruction_summary(recon: SfmrReconstruction, label: str) -> None
     print(f"    Images: {recon.image_count}")
 
     try:
-        from .._path_summary import summarize_path_list
+        from .._path_summary import PathFormat, summarize_path_list
 
+        # Image names use "/" on every platform, so the patterns do too.
+        summary = summarize_path_list(recon.image_names, path_format=PathFormat.POSIX)
         print("    Image paths:")
-        print(
-            textwrap.indent(summarize_path_list(recon.image_names).rstrip(), "      ")
-        )
+        print(textwrap.indent(summary.rstrip(), "      "))
     except ImportError:
         pass
 
