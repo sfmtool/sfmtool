@@ -830,6 +830,96 @@ fn read_refuses_a_jpeg_too_large_to_decode_before_decoding_it() {
     }
 }
 
+/// The decoded-size limit that refuses a JPEG from its frame header accepts a
+/// 200-megapixel photograph (16320 x 12240, 571 MiB as RGB), above the
+/// `image` crate's default limit of 512 MiB, and refuses one byte more than
+/// [`MAX_DECODED_BYTES`].
+#[test]
+fn the_decoded_size_limit_accepts_a_200_megapixel_photograph() {
+    let photograph = 16320 * 12240 * 3;
+    assert!(photograph > ::image::Limits::default().max_alloc.unwrap());
+    assert!(check_decoded_bytes(photograph).is_ok());
+    assert!(check_decoded_bytes(MAX_DECODED_BYTES).is_ok());
+    assert!(matches!(
+        check_decoded_bytes(MAX_DECODED_BYTES + 1),
+        Err(::image::ImageError::Limits(_))
+    ));
+}
+
+/// A JPEG that ends before its end-of-image marker, which zune-jpeg decodes,
+/// is decoded under the same limit: one whose frame header names a
+/// 200-megapixel photograph (16320 x 12240, 571 MiB as RGB) reads at that
+/// size, though the `image` crate's default limit of 512 MiB would refuse it.
+#[test]
+fn read_decodes_a_200_megapixel_jpeg_without_its_end_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut bytes = Vec::new();
+    jpeg_encoder::Encoder::new(&mut bytes, DEFAULT_JPEG_QUALITY)
+        .encode(&smooth_rgb(64, 64), 64, 64, jpeg_encoder::ColorType::Rgb)
+        .unwrap();
+    let at = bytes
+        .windows(2)
+        .position(|m| m == [0xFF, 0xC0])
+        .expect("a baseline frame header");
+    // Height and width follow the marker, length and precision.
+    bytes[at + 5..at + 7].copy_from_slice(&12240u16.to_be_bytes());
+    bytes[at + 7..at + 9].copy_from_slice(&16320u16.to_be_bytes());
+    assert_eq!(bytes[bytes.len() - 2..], [0xFF, 0xD9]);
+    bytes.truncate(bytes.len() - 2);
+    let path = dir.path().join("cut.jpg");
+    std::fs::write(&path, &bytes).unwrap();
+
+    let image = ImageU8::read_rgb(&path).unwrap();
+    assert_eq!((image.width(), image.height()), (16320, 12240));
+}
+
+/// The CRC-32 of a PNG chunk's type and data.
+fn png_crc(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &byte in bytes {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+/// A PNG is decoded under the same limit as a JPEG: one whose header names a
+/// 200-megapixel RGB image gets past the limit and fails only on its pixel
+/// data, which is that of a 64 x 64 image, while one that names 65500 x 65500
+/// pixels (12 GiB) is refused by the limit before its buffer is allocated.
+#[test]
+fn read_applies_the_decoded_size_limit_to_a_png() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("small.png");
+    ImageU8::new(64, 64, 3, smooth_rgb(64, 64))
+        .write(&path, DEFAULT_JPEG_QUALITY)
+        .unwrap();
+    let small = std::fs::read(&path).unwrap();
+    // The IHDR chunk follows the 8-byte signature: length, type, then width
+    // and height, and its CRC after 13 bytes of data.
+    assert_eq!(&small[12..16], b"IHDR");
+    for ((w, h), refused) in [((16320u32, 12240u32), false), ((65500, 65500), true)] {
+        let mut bytes = small.clone();
+        bytes[16..20].copy_from_slice(&w.to_be_bytes());
+        bytes[20..24].copy_from_slice(&h.to_be_bytes());
+        let crc = png_crc(&bytes[12..29]);
+        bytes[29..33].copy_from_slice(&crc.to_be_bytes());
+        std::fs::write(&path, &bytes).unwrap();
+
+        assert_eq!(image_dimensions(&path).unwrap(), (w, h));
+        let result = ImageU8::read_rgb(&path);
+        let by_limit = matches!(result, Err(::image::ImageError::Limits(_)));
+        assert!(result.is_err());
+        assert_eq!(by_limit, refused, "{w} x {h}: {:?}", result.err());
+    }
+}
+
 /// Decode `bytes` with `jpeg-decoder` as the reader first does, returning the
 /// result and whether the decoder read to the end of the bytes. A refusal
 /// with the end not reached was made from the markers before the scan data:

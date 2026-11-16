@@ -132,7 +132,7 @@ since OpenCV draws a tuple in whatever channel order the array has.
   not use rayon, but for an image wider than 128 px it starts one OS thread
   per colour component. A CMYK or YCCK JPEG becomes RGB within one grey level
   of OpenCV's conversion. The reader reads a JPEG into memory once (a file
-  over 1 GiB is refused, twice the largest decode the limit below allows)
+  over 8 GiB is refused, twice the largest decode the limit below allows)
   and decodes it with `jpeg-decoder`, which reads past the end of the bytes
   only when the file ends before its end-of-image marker: it lacks only the
   marker, was cut part way through, or has segment lengths that run past its
@@ -160,12 +160,20 @@ since OpenCV draws a tuple in whatever channel order the array has.
   maintenance mode (image-rs is
   moving to zune-jpeg; its last release is 0.3.2, 2025-06), so the reader
   goes back to the `image` crate's decoder once a stable zune-jpeg release
-  passes `read_decodes_a_jpeg_with_one_scan_per_component`. The decoders have
-  limits of their own, each raised as `OSError`: the `image` crate refuses a
-  WebP 16384 pixels wide, the largest WebP allows and one OpenCV reads. The
-  JPEG reader refuses, from the frame header and before decoding any scan, a
-  JPEG that would decode to more than 512 MiB and a lossless JPEG of a
-  precision other than 8 bits. Of the JPEG precisions it reads
+  passes `read_decodes_a_jpeg_with_one_scan_per_component`. Every decoder,
+  for JPEG and every other format, refuses an image whose decoded buffer
+  would exceed 4 GiB (`MAX_DECODED_BYTES`), raised as `OSError` before the
+  buffer is allocated. The `image` crate's own default is 512 MiB, which a
+  200-megapixel phone photograph (16320 x 12240, 571 MiB as RGB) exceeds;
+  4 GiB holds that photograph even as 16-bit RGBA (1.5 GiB) and an 8-bit
+  RGB image of up to 1.4 gigapixels, while a header that names a larger
+  image, such as the largest frame a JPEG can name (65535 x 65535, 12 GiB
+  as RGB), is refused rather than allocated. The decoders have limits of
+  their own, each raised as `OSError`: the `image` crate refuses a WebP
+  16384 pixels wide, the largest WebP allows and one OpenCV reads. The JPEG
+  reader applies the 4 GiB limit from the frame header, before decoding any
+  scan, and there also refuses a lossless JPEG of a precision other than 8
+  bits. Of the JPEG precisions it reads
   only 8 bits: it refuses every DCT frame (baseline, extended or
   progressive) of any other precision, among them 12-bit colour and grey,
   and every lossless frame of a precision other than 8. Only an 8-bit
