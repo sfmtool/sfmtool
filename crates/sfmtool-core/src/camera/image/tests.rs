@@ -846,6 +846,33 @@ fn the_decoded_size_limit_accepts_a_200_megapixel_photograph() {
     ));
 }
 
+/// A JPEG that ends before its end-of-image marker, which zune-jpeg decodes,
+/// is decoded under the same limit: one whose frame header names a
+/// 200-megapixel photograph (16320 x 12240, 571 MiB as RGB) reads at that
+/// size, though the `image` crate's default limit of 512 MiB would refuse it.
+#[test]
+fn read_decodes_a_200_megapixel_jpeg_without_its_end_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut bytes = Vec::new();
+    jpeg_encoder::Encoder::new(&mut bytes, DEFAULT_JPEG_QUALITY)
+        .encode(&smooth_rgb(64, 64), 64, 64, jpeg_encoder::ColorType::Rgb)
+        .unwrap();
+    let at = bytes
+        .windows(2)
+        .position(|m| m == [0xFF, 0xC0])
+        .expect("a baseline frame header");
+    // Height and width follow the marker, length and precision.
+    bytes[at + 5..at + 7].copy_from_slice(&12240u16.to_be_bytes());
+    bytes[at + 7..at + 9].copy_from_slice(&16320u16.to_be_bytes());
+    assert_eq!(bytes[bytes.len() - 2..], [0xFF, 0xD9]);
+    bytes.truncate(bytes.len() - 2);
+    let path = dir.path().join("cut.jpg");
+    std::fs::write(&path, &bytes).unwrap();
+
+    let image = ImageU8::read_rgb(&path).unwrap();
+    assert_eq!((image.width(), image.height()), (16320, 12240));
+}
+
 /// The CRC-32 of a PNG chunk's type and data.
 fn png_crc(bytes: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
