@@ -17,6 +17,12 @@ this command first
 The two versions of the file are in
 [workspace.md § Versions](../../workspace/workspace.md#versions).
 
+The command converts no `.sift`, `.sfmr`, `.matches` or `.camrig` file and
+deletes no features folder. Bringing every file in the workspace to the current
+format version, pointing at version 2 `.sift` files converted from the version
+1 ones, is proposed in
+[../../drafts/ws-upgrade-files-amendment.md](../../drafts/ws-upgrade-files-amendment.md).
+
 ## Command Syntax
 
 ```bash
