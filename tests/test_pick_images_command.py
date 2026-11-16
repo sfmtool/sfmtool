@@ -69,8 +69,8 @@ def pan_source(tmp_path_factory) -> dict[str, list[Path]]:
     return pans
 
 
-def _init_workspace(workspace: Path) -> None:
-    result = _invoke(["ws", "init", str(workspace)])
+def _init_workspace(workspace: Path, *args: str) -> None:
+    result = _invoke(["ws", "init", *args, str(workspace)])
     assert result.exit_code == 0, result.output
 
 
@@ -87,6 +87,47 @@ def pan_workspace(tmp_path: Path, pan_source, monkeypatch) -> Path:
     workspace = tmp_path / "ws"
     _copy_frames(pan_source["top"], workspace / "frames")
     _init_workspace(workspace)
+    monkeypatch.chdir(workspace)
+    return workspace
+
+
+@pytest.fixture(scope="module")
+def pan_extracted(tmp_path_factory, pan_source) -> Path:
+    """A version 2 workspace holding the top pan under `frames/` with every
+    frame's `.sift` file, extracted once for the module's tests that do not
+    check the extraction."""
+    workspace = tmp_path_factory.mktemp("pan_extracted") / "ws"
+    _copy_frames(pan_source["top"], workspace / "frames")
+    _init_workspace(workspace)
+    result = _invoke(["sift", "--extract", str(workspace / "frames")])
+    assert result.exit_code == 0, result.output
+    return workspace
+
+
+@pytest.fixture
+def pan_workspace_with_sift(tmp_path: Path, pan_extracted, monkeypatch) -> Path:
+    """A copy of `pan_extracted`, with the current directory set to it. The
+    copy keeps the files' times, so every `.sift` file stays at least as new
+    as its frame and the walk reads it without extracting.
+
+    The `.sift` files are hard links where the file system allows them: a
+    new copy of a file is new to a virus scanner, which on Windows can read
+    it in full when it is first opened, at a cost near that of extracting it. A
+    `.sift` file is written to a temporary file renamed over its path, so a
+    test that rewrote one would replace its own link and leave the module's
+    file as it is."""
+
+    def link_or_copy(source: str, destination: str) -> None:
+        if source.endswith(".sift"):
+            try:
+                os.link(source, destination)
+                return
+            except OSError:
+                pass
+        shutil.copy2(source, destination)
+
+    workspace = tmp_path / "ws"
+    shutil.copytree(pan_extracted, workspace, copy_function=link_or_copy)
     monkeypatch.chdir(workspace)
     return workspace
 
@@ -168,22 +209,23 @@ def test_report_only_writes_nothing_but_sift_files(pan_workspace: Path):
     assert not (pan_workspace / NAMED_IMAGE_LISTS_FILE_NAME).exists()
 
 
-def test_write_list_writes_the_chosen_frames(pan_workspace: Path):
+def test_write_list_writes_the_chosen_frames(pan_workspace_with_sift: Path):
+    workspace = pan_workspace_with_sift
     result = _invoke(
         ["pick-images", "frames", *FAST, "--write-list", "pan", "--json", "r.json"]
     )
     assert result.exit_code == 0, result.output
-    data = json.loads((pan_workspace / "r.json").read_text())
+    data = json.loads((workspace / "r.json").read_text())
     (chosen,) = data["chosen_numbers"]
     assert len(chosen) > 5
     positions = data["sequences"][0]["chosen"]
     assert chosen == [data["capture"][0]["numbers"][p] for p in positions]
 
-    lists = json.loads((pan_workspace / NAMED_IMAGE_LISTS_FILE_NAME).read_text())
+    lists = json.loads((workspace / NAMED_IMAGE_LISTS_FILE_NAME).read_text())
     (entry,) = lists["named_image_lists"]["pan"]
     assert entry["pattern"] == "frames/pan_%03d.jpg"
     assert set(RangeExpr(entry["range"])) == set(chosen)
-    assert _resolve(pan_workspace, "pan") == [f"frames/pan_{n:03d}.jpg" for n in chosen]
+    assert _resolve(workspace, "pan") == [f"frames/pan_{n:03d}.jpg" for n in chosen]
     assert f"Wrote the named image list pan ({len(chosen)} images)" in result.output
     assert data["named_image_list"]["entries"] == [entry]
 
@@ -264,8 +306,9 @@ def test_an_existing_name_is_refused_before_any_image_is_read(pan_workspace: Pat
     assert "x.jpg" in lists_path.read_text()
 
 
-def test_force_replaces_a_list_in_place(pan_workspace: Path):
-    lists_path = pan_workspace / NAMED_IMAGE_LISTS_FILE_NAME
+def test_force_replaces_a_list_in_place(pan_workspace_with_sift: Path):
+    workspace = pan_workspace_with_sift
+    lists_path = workspace / NAMED_IMAGE_LISTS_FILE_NAME
     lists_path.write_text(
         json.dumps(
             {
@@ -290,16 +333,17 @@ def test_force_replaces_a_list_in_place(pan_workspace: Path):
         ]
     )
     assert result.exit_code == 0, result.output
-    data = json.loads((pan_workspace / "r.json").read_text())
+    data = json.loads((workspace / "r.json").read_text())
     (chosen,) = data["chosen_numbers"]
     lists = json.loads(lists_path.read_text())["named_image_lists"]
     assert list(lists) == ["pan", "other"]
     assert lists["pan"][0]["pattern"] == "frames/pan_%03d.jpg"
-    assert _resolve(pan_workspace, "pan") == [f"frames/pan_{n:03d}.jpg" for n in chosen]
+    assert _resolve(workspace, "pan") == [f"frames/pan_{n:03d}.jpg" for n in chosen]
 
 
-def test_a_list_with_a_slice_as_input(pan_workspace: Path):
-    lists_path = pan_workspace / NAMED_IMAGE_LISTS_FILE_NAME
+def test_a_list_with_a_slice_as_input(pan_workspace_with_sift: Path):
+    workspace = pan_workspace_with_sift
+    lists_path = workspace / NAMED_IMAGE_LISTS_FILE_NAME
     lists_path.write_text(
         json.dumps(
             {
@@ -311,7 +355,7 @@ def test_a_list_with_a_slice_as_input(pan_workspace: Path):
     result = _invoke(["pick-images", "-r", "pan_all[5:95]", *FAST, "--json", "r.json"])
     assert result.exit_code == 0, result.output
     assert "Given named image list 'pan_all' sliced by [5:95]" in result.output
-    data = json.loads((pan_workspace / "r.json").read_text())
+    data = json.loads((workspace / "r.json").read_text())
     assert data["capture"][0]["numbers"] == list(range(6, 96))
     (chosen,) = data["chosen_numbers"]
     assert chosen and all(6 <= n <= 95 for n in chosen)
@@ -338,14 +382,15 @@ def test_a_list_with_a_slice_as_input(pan_workspace: Path):
     assert replaced.exit_code == 0, replaced.output
     entries = json.loads(lists_path.read_text())["named_image_lists"]["pan_all"]
     assert len(entries) == 1 and "range" in entries[0]
-    assert len(_resolve(pan_workspace, "pan_all")) < PAN_FRAMES
+    assert len(_resolve(workspace, "pan_all")) < PAN_FRAMES
 
 
-def test_a_range_narrows_the_folder(pan_workspace: Path):
+def test_a_range_narrows_the_folder(pan_workspace_with_sift: Path):
+    workspace = pan_workspace_with_sift
     result = _invoke(["pick-images", "frames", "-r", "1-70", *FAST, "--json", "r.json"])
     assert result.exit_code == 0, result.output
     assert "frames/pan_%03d.jpg, 70 frames (1-70)" in result.output
-    data = json.loads((pan_workspace / "r.json").read_text())
+    data = json.loads((workspace / "r.json").read_text())
     assert data["capture"][0]["numbers"] == list(range(1, 71))
 
 
@@ -435,15 +480,19 @@ def test_photographs_below_the_match_floor_keep_every_frame(
 def test_a_sequence_with_no_camrig_takes_the_pilot_vote_s_camera(
     tmp_path: Path, monkeypatch
 ):
-    # seattle_backyard's 26 photographs match below the floor, so every one
-    # is chosen and voted on, and the vote agrees with itself.
+    # seattle_backyard's 26 photographs, every one of which is chosen and
+    # voted on, and the vote agrees with itself: its pool spread is 0.24,
+    # against the bound of 0.35. The workspace keeps 1600 features a frame,
+    # where the default keeps 2760 to 3950: still more than the 1500 the vote
+    # takes of each frame, and those are the same 1500, the strongest, so the
+    # vote is the one made at the default, at less cost to extract and match.
     source = TEST_DATA_DIR / "images" / "seattle_backyard"
     workspace = tmp_path / "ws"
     images = workspace / "photos"
     images.mkdir(parents=True)
     for path in sorted(source.glob("seattle_backyard_*.jpg")):
         shutil.copy(path, images / path.name)
-    _init_workspace(workspace)
+    _init_workspace(workspace, "--max-features", "1600")
     monkeypatch.chdir(workspace)
     before = _files(workspace)
 
@@ -458,7 +507,8 @@ def test_a_sequence_with_no_camrig_takes_the_pilot_vote_s_camera(
     assert vote["camera_model"] == "Pinhole" and vote["confirmed"] is None
     assert vote["pool_spread"] <= 0.35
     assert vote["n_pool"] == vote["n_epipolar"] + vote["n_rotation"] >= 2
-    assert vote["features"] <= 26 * 1500 and vote["clusters"] > 0
+    # Every frame has more than the 1500 features the vote takes.
+    assert vote["features"] == 26 * 1500 and vote["clusters"] > 0
     # The walk measured with the vote's camera.
     assert walk["density_term"] == {"status": "on", "focal_px": vote["focal_px"]}
     source_text = (
@@ -479,8 +529,9 @@ def test_a_sequence_with_no_camrig_takes_the_pilot_vote_s_camera(
     added = _files(workspace) - before
     assert {p for p in added if not p.endswith(".jpg.sift")} == {"r.json"}
 
-    # A maximum gain of 1 runs no pilot vote.
-    off = _invoke(["pick-images", "photos", "--max-density-gain", "1"])
+    # A maximum gain of 1 runs no pilot vote, on three frames, which with
+    # the default gain would have one.
+    off = _invoke(["pick-images", "photos", "-r", "1-3", "--max-density-gain", "1"])
     assert off.exit_code == 0, off.output
     assert "Local density term: off, --max-density-gain is 1" in off.output
     assert "Pilot vote" not in off.output
