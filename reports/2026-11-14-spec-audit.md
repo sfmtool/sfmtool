@@ -224,6 +224,18 @@ Land each replacement opening in its own PR (see failure 1).
   the v4→5 migration nor the optional-column list mentions it. ~2483 "required
   in a version 12 file" → "version 12 or later" (the reader gates on
   `version < 12`, `read.rs:990–1003`).
+
+  > _Status (2026-11-15): **Done** — the reprojection-error and
+  > `observation_confidence` sections now say what each version holds: version
+  > 11 or earlier (every release) the mean from most writers and the
+  > leave-one-out ZNCC, version 12 (development builds only) either, version 13
+  > or later the RMS and the blur-matched ZNCC; the Version 12 → 13 section
+  > names both changes. Both sections also say that a file saved from an older
+  > one keeps the older values on points and rows no writer has measured
+  > again, which only a reader-side recompute could close. `normal_confidence`
+  > is in the v4→5 migration, the optional-column list and the version
+  > history, and the reference-observations presence rule reads "version 12 or
+  > later". Branch `sfmr-meaning-version-ranges`._
 - **sfmr field spot-checks (3, all match the code):** per-image adjustments
   (names, order, finiteness, focal > −1, shapes; `types.rs:623–760`);
   `point_constraints` legend — matches, except the spec says a reader accepts a
@@ -450,6 +462,11 @@ command lists, "the sampler rule"; mannered prose at sfmr :98, :1263, :1927,
    `normal_confidence` is missing from the v4→5 migration. Fix the versioning
    gaps first, since they decide whether old files can be read correctly. Then
    move the writer and command lists into Implementations.
+
+   > _Status (2026-11-15): **Partially done** — the versioning gaps are closed
+   > (see "sfmr — versioning gaps (e)" above), branch
+   > `sfmr-meaning-version-ranges`. The sampler rule, the reference-view rule
+   > and moving the writer and command lists into Implementations remain._
 3. **`image-warping.md` describes tests and Python API that do not exist.** The
    checkerboard-aniso and anisotropy-cap tests, the `cv2.remap` and
    `pycolmap.undistort_image` comparisons, `camera.to_pinhole()` and the Python
