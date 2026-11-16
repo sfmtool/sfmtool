@@ -62,10 +62,12 @@ either way, by the rule SfM Explorer's surfels follow
 patch it is drawn as its patch, and without one as a splat.
 
 A reconstruction whose per-point columns are not parallel to its points (a
-patch frame, bitmap or observation-count column with another row count, or `u`
-without `v`) is refused before anything is written, with a message naming the
-column, its shape and the point count. A file `read_sfmr` reads cannot be like that; a
-Rust caller that builds the value itself can.
+patch frame, bitmap or observation-count column with another row count, one of
+`u` and `v` without the other, or bitmaps without the patch frame) is refused
+before anything is written, with a message naming the column. For a wrong row
+count the message also gives the column's shape (its length, for the
+observation counts) and the point count. A file `read_sfmr` reads cannot be
+like that; a Rust caller that builds the value itself can.
 
 The command prints the points written, the patches and where their bitmaps came
 from, where the thumbnails came from, the GPU memory the atlases take once
