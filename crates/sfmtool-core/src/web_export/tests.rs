@@ -519,7 +519,7 @@ fn a_point_has_a_patch_frame_when_its_u_is_nonzero() {
 #[test]
 fn a_column_not_parallel_to_the_points_is_refused_naming_it() {
     type Spoil = fn(&mut SfmrReconstruction);
-    let cases: [(&str, Spoil, &str); 6] = [
+    let cases: [(&str, Spoil, &str); 7] = [
         (
             "short u",
             |r| r.point_set.patch_u_halfvec_xyz = Some(Array2::zeros((3, 3))),
@@ -557,6 +557,11 @@ fn a_column_not_parallel_to_the_points_is_refused_naming_it() {
                 r.point_set.observation_counts.pop();
             },
             "observation_counts length (4) must match point count (5)",
+        ),
+        (
+            "long observation counts",
+            |r| r.point_set.observation_counts.push(1),
+            "observation_counts length (6) must match point count (5)",
         ),
     ];
     for (what, spoil, message) in cases {

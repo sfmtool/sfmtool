@@ -185,9 +185,10 @@ pub enum WebExportError {
     UnknownStartImage(String),
     /// An option is out of range.
     InvalidOption(String),
-    /// A per-point column of the reconstruction is not parallel to its points,
-    /// as [`SfmrReconstruction::validate_point_columns`] checks; the message
-    /// names the column, its length or shape, and the point count.
+    /// A per-point column of the reconstruction is not parallel to its points:
+    /// one [`SfmrReconstruction::validate_point_columns`] checks, or
+    /// `observation_counts`. The message names the column, its length or
+    /// shape, and the point count.
     InvalidReconstruction(String),
     /// An atlas page could not be encoded.
     Encode(image::ImageError),
@@ -264,6 +265,16 @@ pub fn build_web_export(
     recon
         .validate_point_columns()
         .map_err(WebExportError::InvalidReconstruction)?;
+    // The points written are chosen by their observation counts and then
+    // read from `points`, so the two must be parallel too.
+    let set = &recon.point_set;
+    if set.observation_counts.len() != set.points.len() {
+        return Err(WebExportError::InvalidReconstruction(format!(
+            "observation_counts length ({}) must match point count ({})",
+            set.observation_counts.len(),
+            set.points.len()
+        )));
+    }
     let images = &recon.image_set.images;
     let start_index = match &options.start_image {
         Some(name) => Some(

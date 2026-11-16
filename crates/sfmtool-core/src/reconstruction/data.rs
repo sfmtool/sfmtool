@@ -425,8 +425,7 @@ impl SfmrReconstruction {
             .validate_observation_columns(self.image_set.image_count())
     }
 
-    /// Check that `observation_counts` has one entry per point, that the patch
-    /// frame and bitmap columns are parallel to `points`
+    /// Check that the patch frame and bitmap columns are parallel to `points`
     /// ([`PointSet::validate_patch_columns`]), that the optional per-point
     /// constraint columns are parallel to
     /// `points`, carry a constraint this format defines, and reference only images
@@ -442,13 +441,6 @@ impl SfmrReconstruction {
     /// and a stale image reference is the failure a file-level check would only
     /// catch at write time.
     pub fn validate_point_columns(&self) -> Result<(), String> {
-        let counts = self.point_set.observation_counts.len();
-        if counts != self.point_set.points.len() {
-            return Err(format!(
-                "observation_counts length ({counts}) must match point count ({})",
-                self.point_set.points.len()
-            ));
-        }
         self.point_set.validate_patch_columns()?;
         if let Some(marks) = &self.point_set.display_only_references {
             if self.point_set.reference_observations.is_none() {
