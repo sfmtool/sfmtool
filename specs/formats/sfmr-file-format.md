@@ -213,7 +213,7 @@ reconstruction.sfmr (ZIP archive)
     ├── image_indexes.{M}.uint32.zst           # Image index per observation
     ├── feature_indexes.{M}.uint32.zst         # (sift_files only) feature index per observation
     ├── keypoints_xy.{M}.2.float32.zst         # inline 2D keypoint (embedded_patches; optional in sift_files) (version 4+)
-    ├── observation_confidence.{M}.uint8.zst   # (Optional) per-observation blur-matched ZNCC against the patch bitmap (version 6+)
+    ├── observation_confidence.{M}.uint8.zst   # (Optional) per-observation blur-matched ZNCC against the patch bitmap (version 6+; other scores before 13)
     ├── plain_bitmap_zncc_deficit.{M}.float16.zst      # (Optional, readings) 1 − the plain ZNCC against the stored bitmap (version 16+; plain_bitmap_zncc.{M}.float32.zst, the score, in 12 to 15)
     ├── point_indexes.{M}.uint32.zst           # Point index per observation
     ├── observation_counts.{N}.uint32.zst      # Observations per point
@@ -1811,8 +1811,8 @@ What the writers stored follows the file's version:
   `--refine-keypoints` copied the input's errors after moving the keypoints,
   `sfm merge` stored the average of the merged points' errors, and Resect
   Image, Retriangulate, Add Image to Tracks, Prune Covered Observations, an
-  image subset and `materialize_points_at_infinity` kept the errors the points
-  had.
+  image subset, `materialize_points_at_infinity` and Move Camera, for the
+  tracks it kept in place, kept the errors the points had.
 - **Version 12**: only development builds wrote it, and its writers changed
   while it was current, first to store the RMS where the version 11 writers
   stored the mean, then to score the points they touch as the lists above
@@ -2401,15 +2401,17 @@ confidence bundle adjustment weighs observations by.
 
 What the writers stored follows the file's version:
 
-- **Versions 6 to 11**, which covers every released sfmtool: the bench's
-  commit stored each observation's leave-one-out ZNCC, its score against the
+- **Versions 6 to 11**, which covers every released sfmtool that writes the
+  column: the bench's commit stored each observation's leave-one-out ZNCC, its score against the
   mean of the track's other views, and stored a measured score that rounds to
   `0` as `0`. Add Image to Tracks stored each observation it added as its ZNCC
   against the template it searched with, a robust consensus of the track's
   views or the point's stored bitmap (then a fused mean of the views), with a
   score that rounds to `0` raised to `1`. In versions 9 and 10, SfM
-  Explorer's Create Point stored `255` for the one observation of a point it
-  created. Every other writer stored `0` for an observation it added.
+  Explorer's Add Observation stored the leave-one-out ZNCC of the observation
+  it added, as the bench's commit did, and Create Point stored `255` for the
+  one observation of a point it created. Every other writer stored `0` for an
+  observation it added.
 - **Version 12**: only development builds wrote it, and the bench's commit and
   Add Image to Tracks changed while it was current, first to the plain ZNCC
   against the stored bitmap or the reference observation's render, before
