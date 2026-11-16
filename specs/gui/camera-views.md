@@ -286,9 +286,13 @@ The EDL post-process shader (`edl.wgsl`) uses a three-way check:
 
 ```
 alpha == 0    → background (no points or frustums rendered here)
-depth == 0    → frustum/image quad pixel (composite over background without EDL)
-depth > 0     → point cloud pixel (apply full EDL shading)
+depth <= 0    → frustum, image quad or surfel pixel (composite over background without EDL)
+depth > 0     → point splat pixel (apply full EDL shading)
 ```
+
+A surfel writes its depth negated rather than `0`, so the depth readback,
+which takes the magnitude, finds it
+([patch-rendering.md](patch-rendering.md#render-targets--reuse-the-image-quad-convention)).
 
 ### Render order
 

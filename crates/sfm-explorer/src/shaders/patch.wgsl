@@ -3,9 +3,11 @@
 // Renders each patch-bearing 3D point as a quad expanded in the vertex shader
 // from the point position and the patch's u/v half-extent vectors. Bitmaps are
 // packed into a 2D texture array atlas (grid of cells per layer), like the
-// camera thumbnail atlas. Like image quads, patches write real hardware depth
-// (correct occlusion) but 0.0 linear depth (EDL passthrough), and write
-// PICK_TAG_POINT | point_index so clicking a patch selects its point. A
+// camera thumbnail atlas. Patches write real hardware depth (correct
+// occlusion), the negated view-space depth to the linear depth target (any
+// value <= 0 is passed through by the EDL pass, and the depth readback reads
+// the magnitude, so Alt+click finds a surfel's depth), and PICK_TAG_POINT |
+// point_index so clicking a patch selects its point. A
 // selected, hovered or called-out point's surfel draws an outline along its
 // quad's edge in the highlight colour, in place of the splat a dot would show,
 // and from behind draws that outline alone.
@@ -81,6 +83,10 @@ struct VertexOutput {
     // 1 for a surfel seen from behind, which only a highlighted one is drawn
     // as: it draws its outline and none of its texels.
     @location(6) @interpolate(flat) back_facing: u32,
+    // The view-space depth of the fragment, positive in front of the camera:
+    // the clip-space w of a finite surfel, 0 for one at infinity, which has no
+    // finite depth.
+    @location(7) view_depth: f32,
 }
 
 // Whether the instance's point is selected or hovered, which the Track Table's
@@ -111,6 +117,7 @@ fn place(in: VertexInput) -> VertexOutput {
     out.failure = 0.0;
     out.alpha = 1.0;
     out.back_facing = 0u;
+    out.view_depth = 0.0;
     // A deleted point's surfel collapses to a clipped vertex, the same way a
     // back-facing one does below. So does one that is not this draw's, by the
     // splats' rule (points.wgsl): a surfel the Track Table's filter rejects is
@@ -182,8 +189,10 @@ fn place(in: VertexInput) -> VertexOutput {
         return out;
     }
 
-    // Finite point: plain projective transform of the world-space corner.
+    // Finite point: plain projective transform of the world-space corner. The
+    // projection's w row is (0, 0, -1, 0), so clip w is the view-space depth.
     out.clip_pos = uniforms.view_proj * vec4<f32>(corner, 1.0);
+    out.view_depth = out.clip_pos.w;
     return out;
 }
 
@@ -342,7 +351,10 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     // patch opacity.
     let opacity = select(uniforms.patch_opacity * in.alpha, 1.0, outline);
     out.color = vec4<f32>(rgb * opacity, opacity);
-    out.linear_depth = 0.0; // EDL passthrough — textured surface, no edge darkening
+    // Negated, so the EDL pass passes the textured surface through without edge
+    // darkening (it shades only depth > 0), while the depth readback, which
+    // reads the magnitude, still finds the surfel's depth for Alt+click.
+    out.linear_depth = -in.view_depth;
     // A non-interactive node reads as background rather than passing the pick
     // through to whatever it occludes.
     out.pick_id = select(PICK_TAG_POINT | in.point_index, PICK_TAG_NONE, recon.pickable == 0u);

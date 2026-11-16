@@ -447,7 +447,8 @@ impl SceneRenderer {
 
             // ── Pass 1d: Patch surfels (textured oriented quads) ──
             // Writes real hardware depth (occludes/occluded by points and
-            // image quads) but 0.0 linear depth (EDL passthrough), and
+            // image quads) and negated linear depth (EDL passthrough, while
+            // the depth readback reads the magnitude), and
             // PICK_TAG_POINT | point pick index so clicks select the patch's
             // point. The global Points toggle governs it as it governs the
             // splats: surfels are a way of drawing points.

@@ -186,8 +186,9 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PatchPipelineR
             cache: None,
         })
     };
-    // Patches write 0.0 to @location(1): a textured surface should not take
-    // EDL edge-darkening.
+    // Patches write their negated view-space depth to @location(1): a
+    // textured surface should not take EDL edge-darkening, which shades only
+    // depth > 0, and the depth readback reads the magnitude.
     let gbuffer = gbuffer_targets(Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING));
     let pipeline = make(
         "patch pipeline",

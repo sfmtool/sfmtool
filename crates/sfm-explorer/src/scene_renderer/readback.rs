@@ -15,9 +15,16 @@ pub(crate) struct ReadbackResult {
     pub(crate) pick: Option<PickTarget>,
 }
 
-/// Read a 5x5 grid of f32 values from a 256-byte-aligned staging buffer.
-/// Returns the first valid value using center → 3x3 → 5x5 search order.
-fn search_5x5_f32(data: &[u8], valid: impl Fn(f32) -> bool) -> Option<f32> {
+/// Read a 5x5 grid of linear depths from a 256-byte-aligned staging buffer.
+/// Returns the first depth found using center → 3x3 → 5x5 search order, the
+/// nearest one within a ring.
+///
+/// A stored depth is the view-space depth of what was drawn there, positive
+/// for a point's splat and negated for a surfel, whose sign keeps the EDL pass
+/// from shading it. Zero is no depth: the background, a frustum, an image quad
+/// or a point at infinity. So the depth is the stored value's magnitude, and a
+/// pixel holds one wherever that is positive.
+fn search_5x5_depth(data: &[u8]) -> Option<f32> {
     let read = |row: usize, col: usize| -> f32 {
         let offset = row * 256 + col * 4;
         if offset + 4 <= data.len() {
@@ -27,10 +34,12 @@ fn search_5x5_f32(data: &[u8], valid: impl Fn(f32) -> bool) -> Option<f32> {
                 data[offset + 2],
                 data[offset + 3],
             ])
+            .abs()
         } else {
             0.0
         }
     };
+    let valid = |d: f32| d > 0.0;
 
     // Center first
     let center = read(2, 2);
@@ -236,7 +245,7 @@ impl SceneRenderer {
             return None;
         }
         let data = slice.get_mapped_range().ok()?;
-        let result = search_5x5_f32(&data, |d| d > 0.0);
+        let result = search_5x5_depth(&data);
         drop(data);
         staging.unmap();
         result
@@ -264,3 +273,6 @@ impl SceneRenderer {
         result
     }
 }
+
+#[cfg(test)]
+mod tests;

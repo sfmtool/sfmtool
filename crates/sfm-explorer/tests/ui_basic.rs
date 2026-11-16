@@ -2213,6 +2213,114 @@ fn a_brush_stroke_deletes_the_points_it_passes_over() {
     );
 }
 
+/// Alt+click on a point drawn as its patch surfel moves the orbit target onto
+/// the surfel. The depth Alt+click unprojects comes from the GPU's linear depth
+/// target, which only a real window draws: a surfel that wrote no depth there
+/// selected its point and left the target where it was.
+///
+/// The view is put through point 275 of the seoul bull ground truth, which
+/// opens in the Patches style, with the point in the middle of the viewport at
+/// depth `d` and the orbit target twice as far. An Alt+click in the middle
+/// selects the point and brings the target distance down to `d`.
+#[test]
+fn an_alt_click_on_a_surfel_moves_the_orbit_target_onto_it() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr"
+    );
+    let viewer = McpViewer::launched(ui_test_lock(), None, &["--no-default-layout", path]);
+    let deadline = Instant::now() + CONTENT_TIMEOUT;
+    let scene = loop {
+        let scene = viewer.call("get_scene", json!({}));
+        if scene["structuredContent"]["scene"][0]["label"].is_string() {
+            break scene["structuredContent"].clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the reconstruction never appeared: {scene}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(
+        scene["scene"][0]["display"]["point_style"], "patches",
+        "the file should open drawing its points as surfels: {scene}"
+    );
+    viewer.ok(
+        "set_window_layout",
+        json!({
+            "layout": { "main": { "tabs": ["viewer_3d"], "active": "viewer_3d" }, "windows": [] },
+        }),
+    );
+
+    // Through a photograph that sees the point, so its surfel faces the
+    // camera, then panned until the point is in the middle.
+    const POINT: u64 = 275;
+    let point = viewer.ok("get_point", json!({ "point": POINT }));
+    let seen_in = point["track"][0]["camera_image_index"].clone();
+    viewer.ok(
+        "set_view",
+        json!({ "look_through": { "camera_image": seen_in } }),
+    );
+    let on_point = viewer.ok("set_view", json!({ "point": POINT }))["view"].clone();
+    let depth = on_point["target_distance"].as_f64().expect("a distance");
+    let view = viewer.ok(
+        "set_view",
+        json!({
+            "position": on_point["position"],
+            "quaternion_wxyz": on_point["quaternion_wxyz"],
+            "target_distance": 2.0 * depth,
+        }),
+    )["view"]
+        .clone();
+
+    // The viewport widget, which is the panel body less its margin.
+    let size = view["derived"]["viewport_px"].clone();
+    let listing = viewer.get_widgets(json!({ "panel_name": "viewer_3d" }));
+    let viewport = entries(&listing)
+        .iter()
+        .find(|widget| {
+            widget["sense"] == "click_and_drag"
+                && widget["rect_px"][2] == size[0]
+                && widget["rect_px"][3] == size[1]
+        })
+        .unwrap_or_else(|| panic!("no viewport widget of size {size} in {listing}"))
+        .clone();
+    let rect = &viewport["rect_px"];
+    let n = |value: &Value| value.as_f64().expect("a number of pixels");
+    let middle = [
+        (n(&rect[0]) + n(&rect[2]) / 2.0).floor(),
+        (n(&rect[1]) + n(&rect[3]) / 2.0).floor(),
+    ];
+    viewer.click(json!({
+        "panel_name": "viewer_3d",
+        "at_px": middle,
+        "modifiers": ["alt"],
+    }));
+
+    let scene = viewer.ok("get_scene", json!({}));
+    assert_eq!(
+        scene["selection"]["point"]["index"], POINT,
+        "the Alt+click did not land on the point's surfel: {scene}"
+    );
+    // The target eases there over about 200 ms. The surfel is the point's
+    // patch, centred on the point and crossing the middle of the view there,
+    // so the depth found is the point's to well within its half extent.
+    let half_extent = n(&point["patch_frame"]["half_extent"][0]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let view = viewer.ok("get_scene", json!({}))["view"].clone();
+        let distance = n(&view["target_distance"]);
+        if (distance - depth).abs() < half_extent / 4.0 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the orbit target stayed at distance {distance}, not the surfel's {depth}: {view}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// The camera model proposal's Drop per image row in a real window: on the
 /// seoul bull ground truth whose `SFMTOOL_PINHOLE` camera varies all four
 /// per-image parameters, a proposal of `SFMTOOL_FISHEYE` lists one check box

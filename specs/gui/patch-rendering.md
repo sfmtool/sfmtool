@@ -162,20 +162,26 @@ instead.
 
 The three-MRT + hardware-depth layout is identical to points/image-quads
 (`point-cloud-rendering.md §Three Render Targets`). Patches follow the
-**image-quad** convention, not the point convention:
+**image-quad** convention, not the point convention, except that their linear
+depth still carries their depth:
 
 | Target | Patch writes | Rationale |
 |--------|-------------|-----------|
 | Color `Rgba8UnormSrgb` | premultiplied patch color × opacity | visible surfel |
-| Linear depth `R32Float` | **`0.0`** (EDL passthrough sentinel) | a textured surface shouldn't get EDL edge-darkening; matches image quads |
+| Linear depth `R32Float` | **minus** the view-space depth (`0.0` for a patch at infinity) | the EDL pass shades only depth `> 0`, so a textured surface gets no edge-darkening; the depth readback reads the magnitude, so Alt+click sets the target on a patch |
 | Pick `R32Uint` | `PICK_TAG_POINT \| point_index` | clicking a patch selects its point |
 | HW depth `Depth32Float` | **real** reversed-Z depth, `depth_write = true`, `depth_compare = Greater` | correct occlusion against points, frustums, and other patches |
 
-Writing real hardware depth but `0.0` linear depth means patches **occlude
-correctly** yet are treated by the EDL pass as "surface" pixels (the existing
-`depth == 0` branch), which is the behavior we want. The target indicator,
-which reads the hardware depth, sees a patch at its real depth. See
-[Open questions](#open-questions) for the EDL-on-patches alternative.
+Writing real hardware depth and negated linear depth means patches **occlude
+correctly** yet are treated by the EDL pass as "surface" pixels (its
+`depth <= 0` branch, which frustums and image quads take with `0.0`), which is
+the behavior we want. The sign is all that keeps a patch out of EDL: the
+5×5 depth readback (`scene_renderer/readback.rs`) takes each pixel's magnitude,
+so Alt+click and the hover text's depth find a patch's depth as they find a
+splat's, where with `0.0` they would find none and Alt+click on a patch would
+leave the target where it was. The target indicator, which reads the hardware
+depth, sees a patch at its real depth. See [Open questions](#open-questions)
+for the EDL-on-patches alternative.
 
 `PICK_TAG_POINT | point_index` is deliberate: a patch and its point are the same
 entity, so a patch click reuses all existing point selection/hover/track-detail
@@ -488,8 +494,8 @@ frame where a drawn surfel is highlighted
 
 ## Open questions
 
-- **EDL on patches.** v1 writes `0.0` linear depth (no EDL) for a clean textured
-  look. The alternative — write real positive linear depth so EDL edge-darkens
+- **EDL on patches.** v1 writes negated linear depth (no EDL) for a clean
+  textured look. The alternative — write real positive linear depth so EDL edge-darkens
   patch boundaries — could improve solidity/depth reading of a dense surfel
   field but may fight the texture. Prototype both; the choice may become a
   toggle.
