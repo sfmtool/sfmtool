@@ -76,8 +76,9 @@ pub enum UpgradeOutcome {
     Converted,
     /// Already the current version and naming no old folder, so not written.
     AlreadyCurrent,
-    /// Left as it is for the reason given. It does not stop the old folders
-    /// from being deleted, since no current reader reads it through them.
+    /// Left as it is for the reason given. It does not stop the other old
+    /// folders from being deleted; an old folder that a file the current
+    /// reader refuses names is kept.
     NotConverted(String),
     /// Could not be read or rewritten, for the reason given. Any such file
     /// stops the old folders from being deleted.
@@ -386,8 +387,8 @@ struct NewHashes {
 ///    [`feature_prefix_dir`](super::feature_prefix_dir). A version 1 folder
 ///    is named by a record when it is `<image dir>/<feature_prefix_dir>`;
 ///    one no record names is an orphan.
-/// 3. Convert every version 1 `.sift` file of a folder that is not an orphan
-///    into its new folder ([`Version2SiftFolder`]), in parallel, the image
+/// 3. Convert every version 1 `.sift` file of a folder that the version 1
+///    workspace file or a file this run rewrites names into its new folder ([`Version2SiftFolder`]), in parallel, the image
 ///    being `<image dir>/<name>` for `<image dir>/<feature_prefix_dir>/<name>.sift`.
 ///    Any failure stops the run here, listing every file that failed.
 /// 4. Rewrite each `.sfmr` and `.matches` file that names an old folder or
@@ -396,7 +397,8 @@ struct NewHashes {
 /// 5. Write the workspace file as version 2.
 /// 6. When no file failed, delete the version 1 `.sift` files of every
 ///    version 1 folder, orphans included, and the directories that leaves
-///    empty.
+///    empty, except a folder that a file the current reader refuses names,
+///    one inside a nested workspace and one outside the workspace.
 ///
 /// A file whose record resolves to another workspace, a cluster `.matches`
 /// file below version 6 and a `.sfmr` or `.matches` file whose recorded

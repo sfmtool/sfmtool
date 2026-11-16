@@ -746,8 +746,8 @@ pub(super) fn plan(
             .get(&record_key(contents))
             .and_then(|r| r.new.clone())
     };
-    // What each folder becomes: converted when a file the run can convert, a
-    // file it leaves but can read, or the workspace file names it; kept when
+    // What each folder becomes: converted when the workspace file or a file
+    // the run rewrites names it; kept when
     // a file the reader refuses names it or it lies in a nested workspace;
     // and deleted otherwise, an orphan included.
     let mut folders = Vec::new();
@@ -767,7 +767,7 @@ pub(super) fn plan(
             .collect();
         let refused_by: usize = naming.iter().map(|(r, _)| r.refused_by).sum();
         // Converted only for a file this run rewrites: a file it leaves
-        // cannot read the new folder, and a nested workspace.s own run sees
+        // cannot read the new folder, and a nested workspace's own run sees
         // to its folders for its own files.
         let converter = naming
             .iter()
