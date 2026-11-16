@@ -25,7 +25,7 @@ platforms = [
     { name = "win-64-cuda", platform = "win-64", cuda = "12.9" },
     { name = "linux-64-cuda", platform = "linux-64", cuda = "12.9" },
 ]
-version = "0.2"
+version = "0.4"
 
 # Universal build dependency: the Rust toolchain is needed to build any crate in
 # the workspace (clippy, the sfm-explorer GUI tests, the PyO3 extension).
