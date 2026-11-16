@@ -385,7 +385,9 @@ No command rewrites the workspace file unless the user runs one of these:
   workspace its tool's row; names a new `feature_prefix_dir` from the new
   options; prints the old and new folders; and leaves the old folder, its
   `.sift` files and the named image lists file on disk. On a version 2 file it
-  says "nothing to do: already version 2" and changes nothing.
+  says "nothing to do: already version 2" and changes nothing. It converts no
+  `.sift`, `.sfmr`, `.matches` or `.camrig` file; converting them is proposed
+  in [../drafts/ws-upgrade-files-amendment.md](../drafts/ws-upgrade-files-amendment.md).
 - **`sfm ws init` and `sfm ws init --force`** write version 2 with fresh
   options from the tool's defaults and the flags, the tool's `image_to_gray`
   row, and a new folder named from them. `--force` drops any hand-edited option,
