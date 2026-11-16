@@ -166,7 +166,9 @@ fn a_missing_view_leaves_each_reference_naming_its_own_observation() {
         }
     }
 
-    let cloud = PatchCloud::from_stored_patch_frames(&recon).expect("the file has patch frames");
+    let cloud = PatchCloud::from_stored_patch_frames(&recon)
+        .unwrap()
+        .expect("the file has patch frames");
     let params = KeypointSubpixelParams::default();
     let column = render_patch_cloud_bitmaps(
         &cloud,
@@ -410,7 +412,9 @@ fn stored_references_survive_missing_views_skipped_points_and_zero_frames() {
             .row_mut(0)
             .fill(0.0);
     }
-    let cloud = PatchCloud::from_stored_patch_frames(&recon).expect("the file has patch frames");
+    let cloud = PatchCloud::from_stored_patch_frames(&recon)
+        .unwrap()
+        .expect("the file has patch frames");
     assert!(
         !cloud.point_indexes.contains(&0),
         "a zero frame is no patch"

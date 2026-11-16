@@ -563,7 +563,34 @@ impl PointSet {
     ///
     /// The in-memory form of the shapes the `.sfmr` writer and reader check,
     /// run by [`SfmrReconstruction::validate_point_columns`](super::SfmrReconstruction::validate_point_columns).
+    /// The frame half is [`Self::validate_patch_frame_columns`].
     pub fn validate_patch_columns(&self) -> Result<(), String> {
+        self.validate_patch_frame_columns()?;
+        let n = self.points.len();
+        if let Some(bitmaps) = &self.patch_bitmaps_y_x_rgba {
+            if self.patch_u_halfvec_xyz.is_none() {
+                return Err("patch_bitmaps_y_x_rgba requires the patch frame".to_string());
+            }
+            let s = bitmaps.shape();
+            if s[0] != n || s[1] != s[2] || s[3] != 4 {
+                return Err(format!(
+                    "patch_bitmaps_y_x_rgba has shape {s:?}, not [{n}, R, R, 4]: one square \
+                     RGBA bitmap per point, for {n} points"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Check that the patch frame columns are parallel to `points`:
+    /// `patch_u_halfvec_xyz` and `patch_v_halfvec_xyz` present together and
+    /// shaped `(N, 3)`, for `N` points. Returns a message naming the first
+    /// column that is not, with its shape and the point count.
+    ///
+    /// What [`PatchCloud::from_stored_patch_frames`](crate::patch::PatchCloud::from_stored_patch_frames)
+    /// checks before it reads a row per point; [`Self::validate_patch_columns`]
+    /// runs it first.
+    pub fn validate_patch_frame_columns(&self) -> Result<(), String> {
         let n = self.points.len();
         let (u, v) = (&self.patch_u_halfvec_xyz, &self.patch_v_halfvec_xyz);
         if u.is_some() != v.is_some() {
@@ -581,17 +608,45 @@ impl PointSet {
                 }
             }
         }
-        if let Some(bitmaps) = &self.patch_bitmaps_y_x_rgba {
-            if u.is_none() {
-                return Err("patch_bitmaps_y_x_rgba requires the patch frame".to_string());
-            }
-            let s = bitmaps.shape();
-            if s[0] != n || s[1] != s[2] || s[3] != 4 {
-                return Err(format!(
-                    "patch_bitmaps_y_x_rgba has shape {s:?}, not [{n}, R, R, 4]: one square \
-                     RGBA bitmap per point, for {n} points"
-                ));
-            }
+        Ok(())
+    }
+
+    /// Check that `observation_offsets` is the prefix sum of
+    /// `observation_counts` and that the counts add up to the track rows, so
+    /// that [`Self::observations_for_point`] and every reader of
+    /// `observation_offsets[p]..observation_offsets[p + 1]` stay within
+    /// `tracks` and the per-observation columns parallel to it. Returns a
+    /// message naming the column, its length or entry, and what it must be.
+    ///
+    /// It does not compare the counts with `points`: a value
+    /// `clone_with_changes` gives a shorter point list keeps its longer
+    /// counts, and a caller that reads points by their counts checks that
+    /// itself.
+    pub fn validate_observation_offsets(&self) -> Result<(), String> {
+        let counts = &self.observation_counts;
+        let offsets = &self.observation_offsets;
+        if offsets.len() != counts.len() + 1 {
+            return Err(format!(
+                "observation_offsets length ({}) must be one more than the observation_counts \
+                 length ({})",
+                offsets.len(),
+                counts.len()
+            ));
+        }
+        let expected = compute_observation_offsets(counts);
+        if let Some(p) = (0..offsets.len()).find(|&p| offsets[p] != expected[p]) {
+            return Err(format!(
+                "observation_offsets entry {p} is {}, not {}, the sum of the observation_counts \
+                 before it",
+                offsets[p], expected[p]
+            ));
+        }
+        let total = expected[counts.len()];
+        if total != self.tracks.len() {
+            return Err(format!(
+                "observation_counts add up to {total}, not the {} track rows",
+                self.tracks.len()
+            ));
         }
         Ok(())
     }
@@ -620,7 +675,8 @@ impl PointSet {
     /// Check that every track row names an image of the image set and that the
     /// observation-source columns are parallel to the structures they
     /// annotate: per-observation columns (`feature_indexes` / `keypoints_xy`)
-    /// must match the track count, and per-image columns (the hashes) must match
+    /// must match the track count, `keypoints_xy` with two columns, and
+    /// per-image columns (the hashes) must match
     /// `image_count`. Returns an error message describing the first mismatch.
     ///
     /// `from_sfmr_data` builds these in lockstep, but the in-memory editors
@@ -649,6 +705,22 @@ impl PointSet {
                 ));
             }
         }
+        // One `(x, y)` row per observation, in either observation source.
+        let check_keypoints = |keypoints_xy: &Array2<f32>| {
+            if keypoints_xy.nrows() != n_obs {
+                return Err(format!(
+                    "keypoints_xy row count ({}) must match observation count ({n_obs})",
+                    keypoints_xy.nrows()
+                ));
+            }
+            if keypoints_xy.ncols() != 2 {
+                return Err(format!(
+                    "keypoints_xy has {} columns, not 2: one (x, y) row per observation",
+                    keypoints_xy.ncols()
+                ));
+            }
+            Ok(())
+        };
         match &self.observations {
             ObservationSource::SiftFiles {
                 feature_indexes,
@@ -663,12 +735,7 @@ impl PointSet {
                     ));
                 }
                 if let Some(keypoints_xy) = keypoints_xy {
-                    if keypoints_xy.nrows() != n_obs {
-                        return Err(format!(
-                            "keypoints_xy row count ({}) must match observation count ({n_obs})",
-                            keypoints_xy.nrows()
-                        ));
-                    }
+                    check_keypoints(keypoints_xy)?;
                 }
                 if feature_tool_hashes.len() != n_img {
                     return Err(format!(
@@ -687,12 +754,7 @@ impl PointSet {
                 keypoints_xy,
                 image_file_hashes,
             } => {
-                if keypoints_xy.nrows() != n_obs {
-                    return Err(format!(
-                        "keypoints_xy row count ({}) must match observation count ({n_obs})",
-                        keypoints_xy.nrows()
-                    ));
-                }
+                check_keypoints(keypoints_xy)?;
                 if image_file_hashes.len() != n_img {
                     return Err(format!(
                         "image_file_hashes length ({}) must match image count ({n_img})",

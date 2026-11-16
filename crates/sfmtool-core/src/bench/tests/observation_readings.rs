@@ -70,7 +70,9 @@ fn the_readings_are_float32_and_match_a_reading_of_the_committed_reconstruction(
     let (next, point, _) = evaluated_and_committed(&scene);
     let (recon, map) = next.materialize();
     let p = map.forward(point).expect("kept") as usize;
-    let cloud = PatchCloud::from_stored_patch_frames(&recon).expect("a patch frame");
+    let cloud = PatchCloud::from_stored_patch_frames(&recon)
+        .unwrap()
+        .expect("a patch frame");
     let views: Vec<_> = scene.views().into_iter().map(Some).collect();
     let rows = read_cloud_observations(
         &cloud,
@@ -199,7 +201,9 @@ fn a_reading_carries_the_rows_of_a_point_it_does_not_read() {
             .as_ref()
             .map(|r| r.options)
     );
-    let mut cloud = PatchCloud::from_stored_patch_frames(&recon).expect("a patch frame");
+    let mut cloud = PatchCloud::from_stored_patch_frames(&recon)
+        .unwrap()
+        .expect("a patch frame");
     let at = cloud
         .point_indexes
         .iter()

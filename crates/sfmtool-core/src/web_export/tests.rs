@@ -575,3 +575,168 @@ fn a_column_not_parallel_to_the_points_is_refused_naming_it() {
         }
     }
 }
+
+/// A per-image or per-camera column that does not fit the images and cameras
+/// is refused with an error naming it, rather than read through: a camera
+/// index past the cameras or an adjustment the camera cannot take would panic
+/// in the camera's intrinsics, a thumbnail row of the wrong size would panic
+/// in the atlas, a short thumbnail column would give cameras cells past the
+/// atlas, and a track row past the images would panic in a bitmap render.
+#[test]
+fn an_image_column_that_does_not_fit_the_images_is_refused_naming_it() {
+    type Spoil = fn(&mut SfmrReconstruction);
+    let cases: [(&str, Spoil, &str); 6] = [
+        (
+            "camera index past the cameras",
+            |r| r.image_set.images[3].camera_index = 1,
+            "camera index 1 is past the 1 cameras",
+        ),
+        (
+            "adjustment the camera cannot take",
+            |r| r.image_set.images[2].intrinsic_adjustment.radial_bspline = [0.01, 0.0],
+            "a radial correction applies only to an SFMTOOL_PINHOLE camera, not PINHOLE",
+        ),
+        (
+            "short thumbnails",
+            |r| {
+                r.image_set.thumbnails_y_x_rgb = Some(Arc::new(Array4::from_elem(
+                    (4, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3),
+                    90,
+                )))
+            },
+            "thumbnails_y_x_rgb has shape [4, 128, 128, 3], not [8, 128, 128, 3]",
+        ),
+        (
+            "small thumbnails",
+            |r| {
+                r.image_set.thumbnails_y_x_rgb =
+                    Some(Arc::new(Array4::from_elem((8, 64, 64, 3), 90)))
+            },
+            "thumbnails_y_x_rgb has shape [8, 64, 64, 3], not [8, 128, 128, 3]",
+        ),
+        (
+            "track row past the images",
+            |r| r.point_set.tracks[1].image_index = 8,
+            "track row 1: image index 8 out of range for 8 images",
+        ),
+        (
+            "short per-image hashes",
+            |r| {
+                if let crate::reconstruction::ObservationSource::SiftFiles {
+                    sift_content_hashes,
+                    ..
+                } = &mut r.point_set.observations
+                {
+                    sift_content_hashes.pop();
+                }
+            },
+            "sift_content_hashes length (7) must match image count (8)",
+        ),
+    ];
+    for (what, spoil, message) in cases {
+        let mut recon = far_demo(5);
+        spoil(&mut recon);
+        match build_web_export(&recon, &WebExportOptions::default(), &Progress::none()) {
+            Err(WebExportError::InvalidReconstruction(m)) => {
+                assert!(m.contains(message), "{what}: {m}");
+            }
+            other => panic!("{what}: {:?}", other.map(|e| e.report)),
+        }
+    }
+}
+
+/// Observation offsets that are not the prefix sum of the observation counts,
+/// or counts that do not add up to the track rows, are refused with an error
+/// naming the column, on a reconstruction whose patch bitmaps would be
+/// rendered from its photographs: the render reads each point's track rows
+/// and keypoints through the offsets, and would index past them. Keypoints
+/// without two columns, whose second the render reads, are refused too.
+#[test]
+fn observation_offsets_that_do_not_fit_the_tracks_are_refused_naming_them() {
+    // The Seoul bull ground truth: patch frames and inline keypoints, no
+    // bitmap column, and its photographs beside it.
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+        "../../test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr",
+    );
+    let base = SfmrReconstruction::load(&path, &Progress::none()).expect("the ground truth loads");
+    let points = base.point_set.points.len();
+    let rows = base.point_set.tracks.len();
+    type Spoil = fn(&mut SfmrReconstruction);
+    let cases: [(&str, Spoil, String); 5] = [
+        (
+            "last offset past the tracks",
+            |r| *r.point_set.observation_offsets.last_mut().unwrap() += 5,
+            format!(
+                "observation_offsets entry {points} is {}, not {rows}",
+                rows + 5
+            ),
+        ),
+        (
+            "an offset out of step",
+            |r| r.point_set.observation_offsets[1] += 1,
+            "observation_offsets entry 1 is ".to_string(),
+        ),
+        (
+            "offsets one entry short",
+            |r| {
+                r.point_set.observation_offsets.pop();
+            },
+            format!(
+                "observation_offsets length ({points}) must be one more than the \
+                 observation_counts length ({points})"
+            ),
+        ),
+        (
+            "tracks and keypoints cut short",
+            |r| {
+                let set = &mut r.point_set;
+                let keep = set.tracks.len() - 3;
+                set.tracks.truncate(keep);
+                if let crate::reconstruction::ObservationSource::EmbeddedPatches {
+                    keypoints_xy,
+                    ..
+                } = &mut set.observations
+                {
+                    *keypoints_xy = keypoints_xy.slice(ndarray::s![..keep, ..]).to_owned();
+                }
+                if let Some(confidence) = &mut set.observation_confidence {
+                    confidence.truncate(keep);
+                }
+                if let Some(readings) = &mut set.observation_readings {
+                    readings.rows.truncate(keep);
+                }
+            },
+            format!(
+                "observation_counts add up to {rows}, not the {} track rows",
+                rows - 3
+            ),
+        ),
+        (
+            "keypoints with one column",
+            |r| {
+                if let crate::reconstruction::ObservationSource::EmbeddedPatches {
+                    keypoints_xy,
+                    ..
+                } = &mut r.point_set.observations
+                {
+                    *keypoints_xy = keypoints_xy.slice(ndarray::s![.., ..1]).to_owned();
+                }
+            },
+            "keypoints_xy has 1 columns, not 2".to_string(),
+        ),
+    ];
+    let options = WebExportOptions {
+        thumbnails: false,
+        ..WebExportOptions::default()
+    };
+    for (what, spoil, message) in cases {
+        let mut recon = base.clone();
+        spoil(&mut recon);
+        match build_web_export(&recon, &options, &Progress::none()) {
+            Err(WebExportError::InvalidReconstruction(m)) => {
+                assert!(m.starts_with(&message), "{what}: {m}");
+            }
+            other => panic!("{what}: {:?}", other.map(|e| e.report)),
+        }
+    }
+}

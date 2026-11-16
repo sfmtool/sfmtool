@@ -240,6 +240,29 @@ impl ImageSet {
         Ok(())
     }
 
+    /// Check that the thumbnail column, when there is one, is shaped
+    /// `(N, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3)` for `N` images: one square RGB
+    /// row per image ([`crate::THUMBNAIL_SIZE`]). Returns a message naming the
+    /// column, its shape and the image count when it is not.
+    ///
+    /// The in-memory form of the shape the `.sfmr` writer and reader check; a
+    /// value read from a file always passes.
+    pub fn validate_thumbnail_column(&self) -> Result<(), String> {
+        let Some(thumbnails) = &self.thumbnails_y_x_rgb else {
+            return Ok(());
+        };
+        let n = self.images.len();
+        let s = crate::THUMBNAIL_SIZE;
+        if thumbnails.shape() != [n, s, s, 3] {
+            return Err(format!(
+                "thumbnails_y_x_rgb has shape {:?}, not [{n}, {s}, {s}, 3]: one {s} x {s} RGB \
+                 thumbnail per image, for {n} images",
+                thumbnails.shape()
+            ));
+        }
+        Ok(())
+    }
+
     /// Every camera's rolling-shutter scanlines setting, one per camera: the
     /// list [`ImageIntrinsicsList::new`] and the bundle adjustment read the
     /// images' rates on.

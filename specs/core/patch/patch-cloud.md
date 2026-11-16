@@ -638,9 +638,16 @@ NaN or infinite `centers_xyzw` value, and for a `w = 0` row with a zero
 direction.
 `PatchCloud::from_stored_patch_frames(recon)` is the cloud a reconstruction stores:
 the same rows built over its frame columns and its points, so the patches of
-points at infinity have `w = 0`, and `None` when the reconstruction carries no
-frame. The `recon.patches` getter returns it, and the
-viewer's open renders the display patch bitmaps over it.
+points at infinity have `w = 0`, and `Ok(None)` when the reconstruction carries
+no frame. It returns `HalfvecArraysError::StoredFrameColumns`, naming the
+column, its shape and the point count, when one of `patch_u_halfvec_xyz` and
+`patch_v_halfvec_xyz` is present without the other or is not shaped `(N, 3)`
+for `N` points (`PointSet::validate_patch_frame_columns`, the frame half of the
+check `validate_point_columns` runs). A reconstruction read from a file or made
+by `clone_with_changes` always passes; one whose columns a Rust caller set by
+hand may not. The `recon.patches` getter returns it, raising `ValueError` on
+that error, and the viewer's open renders the display patch bitmaps over it;
+`render_patch_bitmap_column` treats a cloud it cannot build as no frame.
 
 The two arrays (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`) and the optional
 `patch_bitmaps_y_x_rgba` are stored on `SfmrData`/`SfmrReconstruction` as plain

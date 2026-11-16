@@ -95,7 +95,9 @@ fn bytes_off_a_render_through(
     patch_frame: impl FnMut(&OrientedPatch) -> OrientedPatch,
 ) -> (usize, usize) {
     let views: Vec<Option<ProjectedImage<'_>>> = scene.views().into_iter().map(Some).collect();
-    let mut cloud = PatchCloud::from_stored_patch_frames(recon).expect("a framed value");
+    let mut cloud = PatchCloud::from_stored_patch_frames(recon)
+        .unwrap()
+        .expect("a framed value");
     cloud.patches = cloud.patches.iter().map(patch_frame).collect();
     let params = KeypointSubpixelParams {
         resolution: BITMAP_R as u32,
