@@ -271,10 +271,12 @@ Every `.sift` file is written by one of these, and the rule is checked in each:
 | `build_sift_files` in `sfmtool-core` | its Python binding and the viewer | the options and folder it is handed; it never reads the workspace file | the folder it is handed | the options carry no `image_to_gray`; a `.sift` already in the folder is version 1 |
 | the viewer's *Build SIFT Files*, through `build_sift_files` | the scene tree and the wire | the node's `.sfmr` record, not the workspace file, so the files go where the node looks for them | a version 2 `sfmtool` record: its recorded folder. A version 1 `sfmtool` record of an embedded-patches node: a new folder named from the record converted in memory as `sfm ws upgrade` converts one. A record naming another tool: the `sfmtool` defaults' folder | a version 1 record on a `sift_files` node ([index-files.md](../gui/index-files.md#building-the-sift-files)) |
 | `sfm undistort` | `sfm undistort` | the input `.sfmr`'s record and the undistorted images | a new folder in its output | never, for version reasons |
+| `Version2SiftFolder` in `sfmtool-core`, which converts a version 1 `.sift` file to version 2 ([sift.md](../core/features/sift.md#converting-a-version-1-sift-file)) | its Python binding | the version 1 file it converts, its options upgraded by `upgrade_feature_options` | the folder it is made for | the file is not version 1; its tool is `sfmtool-undistort` or one with no conversion; and, when the folder value is made, a `.sift` already in the folder is version 1 |
 
-Each writer checks only when it has something to write. The two that check a
-folder for version 1 files, `image_files_to_sift_files` and `build_sift_files`,
-both call `version_1_sift_files`
+Each writer checks before it writes, and only when it has something to write:
+`Version2SiftFolder` checks its folder when the folder value is made, before
+any file is converted into it. The three that check a folder for version 1 files, `image_files_to_sift_files`,
+`build_sift_files` and `Version2SiftFolder`, all call `version_1_sift_files`
 ([`features/sift/files.rs`](../../crates/sfmtool-core/src/features/sift/files.rs),
 bound in `sfmtool.sift`), so they agree on what counts: a file in the folder
 itself, not a subfolder, whose name ends in `.sift` and whose metadata reads

@@ -16,6 +16,7 @@ _EXPECTED_FUNCTIONS = (
     "ImageToGray",
     "version_1_sift_files",
     "Version1SiftFiles",
+    "Version2SiftFolder",
 )
 
 

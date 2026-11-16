@@ -29,11 +29,13 @@
 //! [`SiftParams::from_feature_options`] reads the `feature_options` object a
 //! workspace records for the `sfmtool` feature tool, and [`build_sift_files`]
 //! writes the `.sift` files of a set of images with it, as
-//! `sfm sift --extract` does.
+//! `sfm sift --extract` does. [`Version2SiftFolder`] converts a version 1
+//! `.sift` file to version 2 without extracting it again.
 //!
 //! [`image_readings_from_rgb`] takes an image's sharpness and gradient
 //! structure tensor through an [`ImageToGray`] conversion.
 
+mod convert;
 mod descriptor;
 mod detect;
 mod feature_options;
@@ -44,6 +46,7 @@ mod orientation;
 mod scale_space;
 mod simd;
 
+pub use convert::{ConvertSiftFileError, ConvertedSiftFile, Version2SiftFolder};
 pub use feature_options::FeatureOptionsError;
 pub(crate) use files::{
     build_sift_file, default_concurrent_images, sift_file_up_to_date, xxh128_of_file,
