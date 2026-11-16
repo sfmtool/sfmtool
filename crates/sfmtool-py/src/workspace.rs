@@ -462,22 +462,97 @@ fn upgrade_feature_options_py(
 /// ``json.dumps(..., sort_keys=True, separators=(",", ":"))`` writes it, so
 /// it is the name every earlier version of sfmtool gave the same options.
 ///
+/// Some options name no folder, because a JSON record cannot hold them as
+/// they are and so could not tell them apart from other options: a NaN or an
+/// infinite float, an integer outside the 64-bit range (below ``-2**63`` or
+/// above ``2**64 - 1``), and a dict key that is not a ``str``.
+///
 /// Raises:
-///     ValueError: for options that ``json.dumps`` writes but JSON cannot
-///         hold, such as a NaN.
+///     ValueError: for options that name no folder, naming where the value
+///         is, as in ``feature_options['image_to_gray']['quantize_bits']``,
+///         and for a value that is not ``None``, a ``bool``, an ``int``, a
+///         ``float``, a ``str``, a ``list``, a ``tuple`` or a ``dict``.
 #[pyfunction(name = "feature_prefix_dir")]
 fn feature_prefix_dir_py(
-    py: Python<'_>,
     feature_tool: &str,
     feature_type: &str,
     feature_options: &Bound<'_, PyAny>,
 ) -> PyResult<String> {
-    let options = py_to_serde(py, feature_options)?;
+    let options = record_json(feature_options, "feature_options")?;
     Ok(sfmtool_core::workspace::feature_prefix_dir(
         feature_tool,
         feature_type,
         &options,
     ))
+}
+
+/// The JSON value a workspace record holds for `value`, the one at `path`,
+/// refusing what JSON cannot hold as it is rather than changing it: a
+/// `serde_json` number is an `i64`, a `u64` or a finite `f64`, so a larger
+/// integer would become a float and a NaN would have no value, and an object's
+/// keys are strings, so an `int` key would become one.
+fn record_json(value: &Bound<'_, PyAny>, path: &str) -> PyResult<serde_json::Value> {
+    use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
+    if value.is_none() {
+        Ok(serde_json::Value::Null)
+    } else if let Ok(b) = value.cast::<PyBool>() {
+        Ok(serde_json::Value::Bool(b.is_true()))
+    } else if value.is_instance_of::<PyInt>() {
+        if let Ok(v) = value.extract::<u64>() {
+            Ok(v.into())
+        } else if let Ok(v) = value.extract::<i64>() {
+            Ok(v.into())
+        } else {
+            Err(PyValueError::new_err(format!(
+                "{path} is an integer outside the 64-bit range, which names no features folder"
+            )))
+        }
+    } else if value.is_instance_of::<PyFloat>() {
+        let v: f64 = value.extract()?;
+        serde_json::Number::from_f64(v)
+            .map(serde_json::Value::Number)
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "{path} is {v}, and a NaN or infinite value names no features folder"
+                ))
+            })
+    } else if let Ok(s) = value.cast::<PyString>() {
+        Ok(serde_json::Value::String(s.to_str()?.to_owned()))
+    } else if let Ok(dict) = value.cast::<PyDict>() {
+        let mut map = serde_json::Map::new();
+        for (key, item) in dict.iter() {
+            let key: String = key
+                .cast::<PyString>()
+                .map_err(|_| {
+                    PyValueError::new_err(format!(
+                        "{path} has the key {}, which is not a str; a dict with a key \
+                         that is not a str names no features folder",
+                        key.repr()
+                            .map_or_else(|_| "?".to_owned(), |r| r.to_string())
+                    ))
+                })?
+                .to_str()?
+                .to_owned();
+            let at = format!("{path}['{key}']");
+            map.insert(key, record_json(&item, &at)?);
+        }
+        Ok(serde_json::Value::Object(map))
+    } else if value.is_instance_of::<PyList>() || value.is_instance_of::<PyTuple>() {
+        let items = value
+            .try_iter()?
+            .enumerate()
+            .map(|(i, item)| record_json(&item?, &format!("{path}[{i}]")))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(serde_json::Value::Array(items))
+    } else {
+        Err(PyValueError::new_err(format!(
+            "{path} is a {}, which a workspace record cannot hold",
+            value
+                .get_type()
+                .name()
+                .map_or_else(|_| "?".to_owned(), |n| n.to_string())
+        )))
+    }
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

@@ -235,7 +235,9 @@ pub fn upgrade_feature_options(
 /// give the name an earlier `sfm ws init` or `sfm sift --extract` gave: a
 /// float in Python's `repr` form (`3.0`, `1e-05`, `1e+16`), and every
 /// character outside printable ASCII as a `\uXXXX` escape. Options that differ
-/// always name different folders.
+/// always name different folders. A NaN or infinite float, an integer outside
+/// the 64-bit range and a non-string key are not `serde_json::Value`s, so they
+/// name no folder; the Python binding refuses them.
 ///
 /// ```
 /// use sfmtool_core::workspace::feature_prefix_dir;

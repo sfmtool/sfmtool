@@ -149,9 +149,13 @@ This is structured as `features/{feature_type}-{feature_cache_hash}`, where:
   [`sfmtool_core::workspace`](../../crates/sfmtool-core/src/workspace/feature_options.rs),
   bound as `sfmtool.workspace.feature_prefix_dir`, so every writer, in Rust or
   Python, names the same folder for the same settings, and reinitializing a
-  workspace with the same settings reuses its cached features. Options that
-  JSON cannot hold, a NaN or an infinity, name no folder: the binding raises
-  `ValueError` for them. It is a
+  workspace with the same settings reuses its cached features. Options that a
+  JSON record cannot hold as they are name no folder, since they could not be
+  told apart from other options: a NaN or an infinite float, an integer outside
+  the 64-bit range (below `-2**63` or above `2**64 - 1`), and a dict key that is
+  not a string. The Rust function's `serde_json::Value` cannot hold any of
+  them, and the binding raises `ValueError` for them, naming where the value
+  is. It is a
   different value from the `feature_tool_xxh128` field stored inside each `.sift` file, which is
   the hash of that file's `feature_tool_metadata.json` bytes (see
   [Feature tool hash computation](../formats/sift-file-format.md#feature-tool-hash-computation)).
