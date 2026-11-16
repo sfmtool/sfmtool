@@ -54,10 +54,11 @@ sfm ws upgrade [PATH] [--dry-run]
 ```
 
 The workspace is found as today. On a version 1 workspace the command runs the
-phases below in order. On a version 2 workspace it still runs phases 1 to 4,
-so a run that stopped part way can be run again to finish, and a version 2
-workspace that holds older files is brought up to date; when nothing needs
-converting it prints "nothing to do" and changes nothing.
+phases below in order. On a version 2 workspace it runs every phase that still
+has work, phase 6 included, so a run that stopped part way can be run again to
+finish, and a version 2 workspace that holds older files is brought up to
+date. When no file needs converting and no version 1 features folder remains,
+it prints "nothing to do" and changes nothing.
 
 `--dry-run` runs phases 1 and 2 and prints the plan (each old folder and its
 new one, how many files of each kind would be converted, and every file that
@@ -71,15 +72,23 @@ cannot be, with the reason) and writes nothing.
    holds images
    ([workspace.md § Feature Storage Convention](../workspace/workspace.md#feature-storage-convention)).
    A workspace can hold several records' folders, left by earlier
-   `sfm ws init --force` runs.
+   `sfm ws init --force` runs. The walk also finds every version 1 features
+   folder whether or not a record names it: each directory in the workspace
+   that holds `.sift` files is checked with
+   `sfmtool_core::features::sift::version_1_sift_files`, which lists the
+   version 1 `.sift` files directly in one folder, the same check every
+   writer of version 2 files makes before it writes into a folder. A version
+   1 folder that no `.sfmr` or `.matches` file names and that is not
+   the workspace file's own folder is an **orphan**: it is not converted, it
+   is deleted in phase 6 with the others, and the report lists it.
 2. **Map each old folder to a new one.** Each distinct version 1 record
    (`feature_tool`, `feature_type`, `feature_options`, `feature_prefix_dir`)
    is converted with `upgrade_feature_options`, and its new folder is named
    from the converted options by the one folder-hash implementation (see
    "Steps" for why there must be one). The workspace file's own record maps
    to the folder phase 5 writes into it.
-3. **Convert the `.sift` files** of every old folder into its new folder, as
-   above, in parallel. This builds a table from each old file's
+3. **Convert the `.sift` files** of every old folder that is not an orphan
+   into its new folder, as above, in parallel. This builds a table from each old file's
    `content_xxh128` to the new file's `content_xxh128` and
    `feature_tool_xxh128`. An image whose file is missing, cannot be decoded or
    no longer matches `image_file_xxh128` cannot be converted; its `.sift` is
@@ -133,6 +142,15 @@ version 1 workspace and says to run `sfm ws upgrade`
 and a command that opens a file it is given reads the `.sift` files that file
 records, which are on disk either way, since phase 3 has finished and phase 6
 has not run.
+
+A run stopped after phase 5, or part way through phase 6, leaves the workspace
+file at version 2, no file naming an old folder, and some or all of the old
+folders on disk. Running the command again finds them by the walk in phase 1,
+as orphans, since no file names them any more and they are not the workspace
+file's own folder. Their files were converted by the first run, so the second
+run converts nothing and runs phase 6, which deletes them. Until then they
+are folders no file reads: commands use the new folders through the version 2
+workspace file and the rewritten files' records.
 
 ### What is not converted
 
