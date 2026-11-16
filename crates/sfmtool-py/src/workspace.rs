@@ -454,6 +454,29 @@ fn upgrade_feature_options_py(
     serde_to_py(py, &upgraded)
 }
 
+/// The ``feature_type`` a workspace records for ``feature_tool`` with
+/// ``feature_options``: ``sift-opencv``, ``sift-sfmtool``, and for
+/// ``colmap`` ``sift-colmap`` followed by ``-dsp`` when
+/// ``domain_size_pooling`` is set and ``-max<N>`` when ``max_num_features``
+/// is given and not 8192; any other tool gives ``sift-<tool>``. The tool name
+/// is matched in lower case. It is the name ``sfm ws init`` records, and the
+/// one the workspace upgrade names a converted folder with.
+///
+/// Raises:
+///     ValueError: for options that a JSON record cannot hold.
+#[pyfunction(name = "feature_type_for_tool")]
+fn feature_type_for_tool_py(
+    py: Python<'_>,
+    feature_tool: &str,
+    feature_options: &Bound<'_, PyAny>,
+) -> PyResult<String> {
+    let options = py_to_serde(py, feature_options)?;
+    Ok(sfmtool_core::workspace::feature_type_for_tool(
+        feature_tool,
+        &options,
+    ))
+}
+
 /// The folder, relative to an image's directory, that a new record's
 /// ``.sift`` files go in: ``features/{feature_type}-{hash}``.
 ///
@@ -504,9 +527,13 @@ fn feature_prefix_dir_py(
 /// folder is deleted; each version 1 workspace file is written as version 2,
 /// keeping every other key; and when no file failed, the old folders are
 /// deleted, except those a file the current reader refuses or a file of a
-/// workspace outside the tree names, and any outside the tree. The walk does
-/// not enter a symbolic link or junction to a directory. A stopped run can be
-/// run again to finish. See ``specs/drafts/ws-upgrade-files-amendment.md``.
+/// workspace outside the tree names, and any outside the tree. Each old
+/// folder maps to one new folder, named from the converted record of the
+/// workspace file that names it or else from its own ``.sift`` files, and
+/// every file that names it is pointed there with that record. The walk does
+/// not enter a symbolic link or junction to a directory, and a tree that
+/// holds one has no old folder deleted. A stopped run can be run again to
+/// finish. See ``specs/drafts/ws-upgrade-files-amendment.md``.
 ///
 /// Args:
 ///     path: a directory or file in the outermost workspace of the tree.
@@ -537,8 +564,10 @@ fn feature_prefix_dir_py(
 ///         cannot be read (locked, or a placeholder that cannot be fetched;
 ///         each is named), a version 1 record cannot be converted (an
 ///         ``sfmtool-undistort`` one is told to run ``sfm undistort`` again)
-///         or its ``feature_prefix_dir`` would leave the image directory, two
-///         old folders hold different files for one new file, or version 1
+///         or its ``feature_prefix_dir`` would leave the image directory, a
+///         folder's ``.sift`` files record different options, a file names
+///         folders that map to different new folders, two old folders hold
+///         different files for one new file, or version 1
 ///         ``.sift`` files cannot be converted (every one is named); nothing
 ///         but new ``.sift`` files is written in each case.
 ///     FileNotFoundError: when no workspace is found at or above ``path``.
@@ -671,6 +700,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyNamedImageListMember>()?;
     m.add_class::<PyNamedImageListSlice>()?;
     m.add_function(wrap_pyfunction!(feature_prefix_dir_py, m)?)?;
+    m.add_function(wrap_pyfunction!(feature_type_for_tool_py, m)?)?;
     m.add_function(wrap_pyfunction!(find_workspace_for_path_py, m)?)?;
     m.add_function(wrap_pyfunction!(is_named_image_list_name_py, m)?)?;
     m.add_function(wrap_pyfunction!(split_named_image_list_value_py, m)?)?;

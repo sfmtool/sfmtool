@@ -326,3 +326,46 @@ fn strings_and_keys_are_escaped_and_sorted_as_python_writes_them() {
         "features/sift-sfmtool-06f6970d3ddc032fb0a1348752c32818"
     );
 }
+
+#[test]
+fn feature_types_are_the_names_python_gave() {
+    use serde_json::json;
+    // The values `get_feature_type_for_tool` gave in Python before it called
+    // this function.
+    for (tool, options, expected) in [
+        ("opencv", json!({}), "sift-opencv"),
+        ("SfMTool", json!({"max_num_features": 100}), "sift-sfmtool"),
+        ("colmap", json!({}), "sift-colmap"),
+        ("colmap", json!({"max_num_features": 8192}), "sift-colmap"),
+        ("colmap", json!({"max_num_features": 8192.0}), "sift-colmap"),
+        ("colmap", json!({"max_num_features": null}), "sift-colmap"),
+        (
+            "colmap",
+            json!({"max_num_features": 4000}),
+            "sift-colmap-max4000",
+        ),
+        (
+            "colmap",
+            json!({"max_num_features": 1000.5}),
+            "sift-colmap-max1000.5",
+        ),
+        (
+            "colmap",
+            json!({"domain_size_pooling": true}),
+            "sift-colmap-dsp",
+        ),
+        ("colmap", json!({"domain_size_pooling": 0}), "sift-colmap"),
+        (
+            "colmap",
+            json!({"domain_size_pooling": "yes", "max_num_features": 2000}),
+            "sift-colmap-dsp-max2000",
+        ),
+        ("Undistorted", json!({}), "sift-undistorted"),
+    ] {
+        assert_eq!(
+            feature_type_for_tool(tool, &options),
+            expected,
+            "{tool} {options}"
+        );
+    }
+}

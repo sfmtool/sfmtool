@@ -609,16 +609,26 @@ pub fn version_1_sift_files(folder: &Path) -> std::io::Result<Option<Version1Sif
     }
     Ok(Some(Version1SiftFiles {
         folder: folder.to_path_buf(),
-        files: scan.version_1.into_iter().map(|(path, _)| path).collect(),
+        files: scan.version_1.into_iter().map(|file| file.path).collect(),
     }))
+}
+
+/// One version 1 `.sift` file [`scan_sift_folder`] found.
+#[derive(Debug, Clone)]
+pub struct ScannedSiftFile {
+    /// The file.
+    pub path: PathBuf,
+    /// The feature tool, type and options it records.
+    pub feature_tool: sfmtool_sift_format::FeatureToolMetadata,
+    /// The content hashes it stores.
+    pub content_hash: sfmtool_sift_format::SiftContentHash,
 }
 
 /// What [`scan_sift_folder`] found in one folder.
 #[derive(Debug)]
 pub struct SiftFolderScan {
-    /// The version 1 `.sift` files, sorted, each with the content hashes it
-    /// stores.
-    pub version_1: Vec<(PathBuf, sfmtool_sift_format::SiftContentHash)>,
+    /// The version 1 `.sift` files, sorted by path.
+    pub version_1: Vec<ScannedSiftFile>,
     /// The `.sift` files whose metadata could not be read, sorted, each with
     /// the error.
     pub unreadable: Vec<(PathBuf, sfmtool_sift_format::SiftError)>,
@@ -654,14 +664,20 @@ pub fn scan_sift_folder(folder: &Path) -> std::io::Result<SiftFolderScan> {
             continue;
         }
         match sfmtool_sift_format::read_sift_metadata(&path) {
-            Ok((_, metadata, hash)) if metadata.version < SIFT_READINGS_VERSION => {
-                scan.version_1.push((path, hash));
+            Ok((feature_tool, metadata, content_hash))
+                if metadata.version < SIFT_READINGS_VERSION =>
+            {
+                scan.version_1.push(ScannedSiftFile {
+                    path,
+                    feature_tool,
+                    content_hash,
+                });
             }
             Ok(_) => {}
             Err(e) => scan.unreadable.push((path, e)),
         }
     }
-    scan.version_1.sort_by(|a, b| a.0.cmp(&b.0));
+    scan.version_1.sort_by(|a, b| a.path.cmp(&b.path));
     scan.unreadable.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(scan)
 }

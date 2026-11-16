@@ -15,6 +15,10 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xxhash
 
+# The feature type a workspace records for a tool, named by the one Rust
+# implementation, which the workspace upgrade also names folders with.
+from ..workspace import feature_type_for_tool as get_feature_type_for_tool
+
 if TYPE_CHECKING:
     from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
@@ -107,42 +111,6 @@ def feature_size(affine_shape):
     col0_norms = np.linalg.norm(affine_shape[:, :, 0], axis=1)
     col1_norms = np.linalg.norm(affine_shape[:, :, 1], axis=1)
     return 0.5 * (col0_norms + col1_norms)
-
-
-# ---------------------------------------------------------------------------
-# Feature type naming
-# ---------------------------------------------------------------------------
-
-
-def get_feature_type_for_tool(feature_tool: str, feature_options: dict) -> str:
-    """Get the feature type string for directory naming based on tool and options.
-
-    Args:
-        feature_tool: Feature extraction tool name ("colmap" or "opencv")
-        feature_options: Dict with tool-specific options
-
-    Returns:
-        Feature type string (e.g. "sift-colmap", "sift-colmap-dsp", "sift-opencv")
-    """
-    feature_tool = feature_tool.lower()
-
-    if feature_tool == "opencv":
-        return "sift-opencv"
-    elif feature_tool == "sfmtool":
-        return "sift-sfmtool"
-    elif feature_tool == "colmap":
-        parts = ["sift-colmap"]
-
-        if feature_options.get("domain_size_pooling"):
-            parts.append("dsp")
-
-        max_features = feature_options.get("max_num_features")
-        if max_features is not None and max_features != 8192:
-            parts.append(f"max{max_features}")
-
-        return "-".join(parts)
-    else:
-        return f"sift-{feature_tool}"
 
 
 # ---------------------------------------------------------------------------

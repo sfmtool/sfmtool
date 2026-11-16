@@ -54,9 +54,8 @@ pub(crate) use files::{
 pub use files::{
     build_sift_files, default_concurrent_images_for_dimensions, scan_sift_folder,
     version_1_sift_files, BuildSiftFilesError, BuildSiftFilesOptions, BuildSiftFilesReport,
-    SiftFolderScan, Version1SiftFiles,
-    CONCURRENT_IMAGES_ENV_VAR, SFMTOOL_FEATURE_TOOL, SFMTOOL_FEATURE_TYPE, SIFT_ZSTD_LEVEL,
-    WORKSPACE_CONFIG_FILE,
+    ScannedSiftFile, SiftFolderScan, Version1SiftFiles, CONCURRENT_IMAGES_ENV_VAR,
+    SFMTOOL_FEATURE_TOOL, SFMTOOL_FEATURE_TYPE, SIFT_ZSTD_LEVEL, WORKSPACE_CONFIG_FILE,
 };
 pub use gray::{
     gray_from_rgb, parse_gray_formula, GrayFormula, ImageToGray, ImageToGrayError,

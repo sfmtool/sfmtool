@@ -850,8 +850,14 @@ returns each `.sift` file whose metadata could not be read, with its error:
 pub fn scan_sift_folder(folder: &Path) -> std::io::Result<SiftFolderScan>;
 
 pub struct SiftFolderScan {
-    pub version_1: Vec<(PathBuf, SiftContentHash)>, // sorted
-    pub unreadable: Vec<(PathBuf, SiftError)>,       // sorted
+    pub version_1: Vec<ScannedSiftFile>,       // sorted by path
+    pub unreadable: Vec<(PathBuf, SiftError)>, // sorted
+}
+
+pub struct ScannedSiftFile {
+    pub path: PathBuf,
+    pub feature_tool: FeatureToolMetadata, // the tool, type and options it records
+    pub content_hash: SiftContentHash,
 }
 ```
 

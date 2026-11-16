@@ -114,7 +114,8 @@ pub struct UpgradedFolder {
     pub sift_file_count: usize,
     /// Why the folder is kept rather than deleted, or `None` when the run
     /// deletes it: files the current reader refuses name it, a file of a
-    /// workspace outside the tree names it, or it lies outside the tree.
+    /// workspace outside the tree names it, it lies outside the tree, or the
+    /// tree holds a link.
     pub kept_because: Option<String>,
     /// Whether its version 1 `.sift` files were deleted (in a dry run,
     /// whether they would be).
@@ -257,6 +258,25 @@ pub enum UpgradeWorkspaceError {
     /// fetched), each with its error. They could hold features a file
     /// needs, so nothing was written.
     UnreadableSiftFiles(Vec<SiftFileFailure>),
+    /// A version 1 folder that no workspace file names holds `.sift` files
+    /// that record different feature tools or options, so no one new folder
+    /// can be named from them.
+    FolderFeatureOptions {
+        /// The folder.
+        folder: PathBuf,
+        /// One `.sift` file.
+        first: PathBuf,
+        /// A `.sift` file that records other options.
+        second: PathBuf,
+    },
+    /// A file names old folders that convert to different new folders, so
+    /// its one `feature_prefix_dir` cannot name them all.
+    FolderTargets {
+        /// The file.
+        file: PathBuf,
+        /// The old folders it names.
+        folders: Vec<PathBuf>,
+    },
     /// Two old folders map to one new folder and hold different files for
     /// one image.
     Conflicts(Vec<SiftConflict>),
@@ -337,6 +357,28 @@ impl fmt::Display for UpgradeWorkspaceError {
                     write!(f, "{}: {}", x.sift_path.display(), x.problem)
                 })
             }
+            Self::FolderFeatureOptions {
+                folder,
+                first,
+                second,
+            } => write!(
+                f,
+                "the features folder {} holds .sift files that record different feature tools \
+                 or options ({} and {}), so it cannot be converted into one new folder; move \
+                 the files that do not belong elsewhere and run again",
+                folder.display(),
+                first.display(),
+                second.display()
+            ),
+            Self::FolderTargets { file, folders } => {
+                write!(
+                    f,
+                    "{} names old features folders that convert to different new folders, so \
+                     its one feature_prefix_dir cannot name them all:",
+                    file.display()
+                )?;
+                write_list(f, folders, |f, p| write!(f, "{}", p.display()))
+            }
             Self::Conflicts(conflicts) => {
                 write!(
                     f,
@@ -404,12 +446,14 @@ struct NewHashes {
 ///    ([`scan_sift_folder`](crate::features::sift::scan_sift_folder)), and
 ///    attribute each file to the workspace its record resolves to. A `.sift`
 ///    file the file system will not give up stops the run.
-/// 2. Map each distinct version 1 record, each version 1 workspace file's
-///    and each one a `.sfmr` or `.matches` file of the tree holds, to its new
-///    folder: [`upgrade_feature_options`](super::upgrade_feature_options) and
-///    [`feature_prefix_dir`](super::feature_prefix_dir). A version 1 folder
-///    is named by a record when it is `<image dir>/<feature_prefix_dir>`
-///    below the record's workspace; one no record names is an orphan.
+/// 2. Map each physical version 1 folder to one new folder and one converted
+///    record. A version 1 folder is named by a record when it is
+///    `<image dir>/<feature_prefix_dir>` below the record's workspace; one
+///    no record names is an orphan. When a version 1 workspace file's record
+///    names the folder, that workspace file's converted record decides;
+///    otherwise the folder's own `.sift` files do, under the tool's workspace
+///    `feature_type` ([`feature_type_for_tool`](super::feature_type_for_tool)),
+///    and must agree. Every file that names the folder takes that record.
 /// 3. Convert every version 1 `.sift` file of a folder that a version 1
 ///    workspace file or a file this run rewrites names into its new folder
 ///    ([`Version2SiftFolder`]), in parallel, the image being
@@ -423,7 +467,8 @@ struct NewHashes {
 ///    version 1 folder, orphans included, and the directories that leaves
 ///    empty, except a folder that a file the current reader refuses or a
 ///    file of a workspace outside the tree names; and nothing at all when a
-///    folder it would delete lies outside the tree.
+///    folder it would delete lies outside the tree or the tree holds a
+///    symbolic link or junction, behind which files are not examined.
 ///
 /// A file whose record resolves to a workspace outside the tree, a cluster
 /// `.matches` file below version 6 and a `.sfmr` or `.matches` file whose

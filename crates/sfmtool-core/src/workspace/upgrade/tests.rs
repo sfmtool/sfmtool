@@ -69,12 +69,21 @@ fn v2_record() -> WorkspaceContents {
 /// that vary with `seed` and a thumbnail; the image's hash, size and decoded
 /// dimensions are its own, so the conversion accepts it.
 fn write_version_1(image: &Path, folder: &Path, seed: usize) -> PathBuf {
+    write_version_1_of(image, folder, seed, v1_record())
+}
+
+/// [`write_version_1`] recording `record`'s tool, type and options.
+fn write_version_1_of(
+    image: &Path,
+    folder: &Path,
+    seed: usize,
+    record: WorkspaceContents,
+) -> PathBuf {
     let decoded = ImageU8::read_rgb(image).unwrap();
     let (image_file_xxh128, image_file_size) = xxh128_of_file(image).unwrap();
     let name = image.file_name().unwrap().to_string_lossy().into_owned();
     std::fs::create_dir_all(folder).unwrap();
     let path = folder.join(format!("{name}.sift"));
-    let record = v1_record();
     let data = SiftData {
         feature_tool_metadata: FeatureToolMetadata {
             feature_tool: record.feature_tool,
@@ -1511,4 +1520,248 @@ fn a_reconstruction_locked_during_the_rewrite_fails_and_stops_the_deletion() {
         IMAGES
     );
     SfmrReconstruction::load(&target, &Progress::none()).unwrap();
+}
+
+/// How many of the `.sift` files the `sift_files` reconstruction at `path`
+/// records are not on disk, and how many are there with another content
+/// hash than it records.
+fn missing_sift(path: &Path) -> (usize, usize) {
+    let recon = SfmrReconstruction::load(path, &Progress::none()).unwrap();
+    let ObservationSource::SiftFiles {
+        sift_content_hashes,
+        ..
+    } = &recon.point_set.observations
+    else {
+        panic!("not sift_files")
+    };
+    let mut missing = 0;
+    let mut wrong = 0;
+    for (i, hash) in sift_content_hashes.iter().enumerate() {
+        match sfmtool_sift_format::read_sift_metadata(&recon.sift_path_for_image(i)) {
+            Ok((_, _, recorded)) if &hash_bytes(&recorded.content_xxh128) != hash => wrong += 1,
+            Ok(_) => {}
+            Err(_) => missing += 1,
+        }
+    }
+    (missing, wrong)
+}
+
+/// The record the `.sfmr` at `path` holds.
+fn record_of(path: &Path) -> WorkspaceContents {
+    sfmtool_sfmr_format::read_sfmr_metadata(path)
+        .unwrap()
+        .workspace
+        .contents
+}
+
+/// A file behind a junction or symbolic link is not examined, so a tree
+/// with a link deletes no old folder.
+#[cfg(windows)]
+#[test]
+fn a_file_behind_a_link_keeps_its_folder() {
+    let fixture = fixture();
+    let results = fixture._dir.path().join("results");
+    std::fs::create_dir_all(&results).unwrap();
+    let mut recon = reconstruction(&fixture.root, &fixture.old_folder(), v1_record(), false);
+    recon.metadata.workspace.relative_path = "../ws".into();
+    recon
+        .save(&results.join("behind.sfmr"), &Progress::none())
+        .unwrap();
+    let link = fixture.path("results");
+    link_directory(&results, &link);
+    let via_link = link.join("behind.sfmr");
+    assert_eq!(missing_sift(&via_link), (0, 0));
+    let report = run(&fixture, false);
+    let after = missing_sift(&via_link);
+    std::fs::remove_dir(&link).unwrap();
+    assert_eq!(after, (0, 0), "a file behind a link lost its features");
+    assert_eq!(report.linked_directories, vec![link]);
+    assert!(!report.old_folders_deleted);
+    assert!(report
+        .notes
+        .iter()
+        .any(|n| n.contains("linked directories")));
+    assert_eq!(
+        outcome_of(&report, &fixture.path("sfmr/sift.sfmr")),
+        &UpgradeOutcome::Converted
+    );
+}
+
+/// The SeoulBull mix: the workspace file records `sift-sfmtool`, a `.sfmr`
+/// records `sift`, and both name the same folder. The folder converts into
+/// the one new folder the workspace file names, and the `.sfmr` is pointed
+/// there with the workspace file's converted record.
+#[test]
+fn files_whose_records_differ_in_feature_type_follow_the_workspace_file() {
+    let fixture = fixture();
+    let mut record = v1_record();
+    record.feature_type = "sift".into();
+    let path = fixture.path("sfmr/typed-sift.sfmr");
+    reconstruction(&fixture.root, &fixture.old_folder(), record, false)
+        .save(&path, &Progress::none())
+        .unwrap();
+    let report = run(&fixture, false);
+    assert_eq!(outcome_of(&report, &path), &UpgradeOutcome::Converted);
+    let new = v2_record();
+    let written = record_of(&path);
+    assert_eq!(written.feature_type, new.feature_type);
+    assert_eq!(written.feature_prefix_dir, new.feature_prefix_dir);
+    assert_eq!(written.feature_options, new.feature_options);
+    assert_eq!(missing_sift(&path), (0, 0));
+    assert!(!fixture.old_folder().exists());
+    // Only the one new folder was made beside the images.
+    let made: Vec<_> = std::fs::read_dir(fixture.images().join("features"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(made, vec![fixture.new_folder()]);
+}
+
+/// Two records that differ in their options name one hand-named folder that
+/// no workspace file names: the folder's own `.sift` files decide its one
+/// new folder, and both files are pointed there with the same record.
+#[test]
+fn records_that_differ_in_options_follow_the_folders_sift_files() {
+    let fixture = fixture();
+    // The folder's `.sift` files record 15 features; one record says 16.
+    let hand = fixture.images().join("features/sift-hand");
+    let mut sift_record = v1_record();
+    sift_record.feature_options["max_num_features"] = serde_json::json!(15);
+    for i in 0..IMAGES {
+        write_version_1_of(
+            &fixture.images().join(image_name(i)),
+            &hand,
+            5,
+            sift_record.clone(),
+        );
+    }
+    let mut a_record = v1_record();
+    a_record.feature_prefix_dir = "features/sift-hand".into();
+    let mut b_record = sift_record.clone();
+    b_record.feature_prefix_dir = "features/sift-hand".into();
+    let a = fixture.path("sfmr/hand-a.sfmr");
+    let b = fixture.path("sfmr/hand-b.sfmr");
+    reconstruction(&fixture.root, &hand, a_record, false)
+        .save(&a, &Progress::none())
+        .unwrap();
+    reconstruction(&fixture.root, &hand, b_record, false)
+        .save(&b, &Progress::none())
+        .unwrap();
+    let report = run(&fixture, false);
+    for path in [&a, &b] {
+        assert_eq!(outcome_of(&report, path), &UpgradeOutcome::Converted);
+        assert_eq!(missing_sift(path), (0, 0), "{}", path.display());
+    }
+    // The folder's one new folder is named from the `.sift` files' options,
+    // converted, under the tool's workspace feature type; both records take
+    // them, `a`'s 16 features replaced.
+    let options = upgrade_feature_options("sfmtool", &sift_record.feature_options).unwrap();
+    let expected = feature_prefix_dir("sfmtool", "sift-sfmtool", &options);
+    for path in [&a, &b] {
+        let written = record_of(path);
+        assert_eq!(written.feature_prefix_dir, expected);
+        assert_eq!(written.feature_options, options);
+        assert_eq!(written.feature_type, "sift-sfmtool");
+    }
+    assert!(!hand.exists());
+}
+
+#[test]
+fn a_folder_whose_sift_files_record_different_options_is_refused() {
+    let fixture = fixture();
+    let hand = fixture.images().join("features/sift-hand");
+    let mut other = v1_record();
+    other.feature_options["max_num_features"] = serde_json::json!(15);
+    for i in 0..IMAGES {
+        let record = if i == 2 { other.clone() } else { v1_record() };
+        write_version_1_of(&fixture.images().join(image_name(i)), &hand, 5, record);
+    }
+    let mut record = v1_record();
+    record.feature_prefix_dir = "features/sift-hand".into();
+    reconstruction(&fixture.root, &hand, record, true)
+        .save(&fixture.path("sfmr/hand.sfmr"), &Progress::none())
+        .unwrap();
+    let before = snapshot(&fixture.root);
+    let error = run_error(&fixture, true);
+    let UpgradeWorkspaceError::FolderFeatureOptions {
+        folder,
+        first,
+        second,
+    } = &error
+    else {
+        panic!("{error}")
+    };
+    assert_eq!(folder, &hand);
+    let pair = BTreeSet::from([first.clone(), second.clone()]);
+    assert!(
+        pair.contains(&hand.join(format!("{}.sift", image_name(2)))),
+        "{error}"
+    );
+    assert_eq!(snapshot(&fixture.root), before);
+}
+
+/// A file of a workspace outside the tree that the reader refuses still
+/// keeps the folder it names in the tree.
+#[test]
+fn a_refused_file_outside_the_tree_keeps_its_folder() {
+    let fixture = fixture();
+    let outside = fixture._dir.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    write_v2_workspace_file(&outside);
+    let mut recon = reconstruction(&outside, &fixture.old_folder(), v1_record(), false);
+    for (i, image) in recon.image_set.images.iter_mut().enumerate() {
+        image.name = format!("../ws/images/{}", image_name(i));
+    }
+    recon.metadata.workspace.relative_path = "../../outside".into();
+    let path = fixture.path("sfmr/from-outside.sfmr");
+    recon.save(&path, &Progress::none()).unwrap();
+    rewrite_archive(
+        &path,
+        "cameras/metadata.json.zst",
+        |cameras| {
+            let camera = &mut cameras.as_array_mut().unwrap()[0];
+            camera["parameters"]
+                .as_object_mut()
+                .unwrap()
+                .remove("focal_length_y");
+        },
+        |_| false,
+    );
+    let report = run(&fixture, false);
+    assert!(not_converted(outcome_of(&report, &path)), "{report:?}");
+    let folder = report
+        .folders
+        .iter()
+        .find(|f| f.old_folder == fixture.old_folder())
+        .unwrap();
+    assert!(
+        folder
+            .kept_because
+            .as_deref()
+            .is_some_and(|k| k.contains("outside this tree")),
+        "{folder:?}"
+    );
+    assert_eq!(
+        std::fs::read_dir(fixture.old_folder()).unwrap().count(),
+        IMAGES
+    );
+}
+
+/// A `.sift` file whose content the reader rejects is reported as not
+/// readable as the file a reconstruction records, not as changed.
+#[test]
+fn a_sift_file_the_reader_rejects_is_reported_as_unreadable_not_changed() {
+    let fixture = fixture();
+    let broken = fixture.old_folder().join(format!("{}.sift", image_name(4)));
+    std::fs::write(&broken, b"not a zip archive").unwrap();
+    let report = run(&fixture, true);
+    let UpgradeOutcome::NotConverted(reason) = outcome_of(&report, &fixture.path("sfmr/sift.sfmr"))
+    else {
+        panic!("{report:?}")
+    };
+    assert!(
+        reason.contains("cannot be read as the version 1 file"),
+        "{reason}"
+    );
+    assert!(!reason.contains("changed"), "{reason}");
 }

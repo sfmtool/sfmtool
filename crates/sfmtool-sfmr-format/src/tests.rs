@@ -698,6 +698,10 @@ fn test_read_metadata_only() {
     assert_eq!(metadata.operation, "sfm_solve");
     assert_eq!(metadata.image_count, 3);
 
+    let (metadata, names) = read_sfmr_image_names(&path).unwrap();
+    assert_eq!(metadata.operation, "sfm_solve");
+    assert_eq!(names, data.image_names);
+
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

@@ -111,21 +111,48 @@ with the reason) and writes nothing.
 
    The folders a file's record names are found by their paths on disk,
    `<its workspace>/<image's directory>/<feature_prefix_dir>` for each image
-   the file records. Each `.sfmr` and `.matches` file the run would rewrite
+   the file records, from the file's record and image names alone, read by
+   the cheap readers (`read_sfmr_image_names`, `read_matches_image_names`)
+   rather than a whole load, so a file the current reader refuses still
+   names its folders, wherever its record resolves. A file whose metadata or
+   image names the file system will not give up fails, wherever its record
+   would resolve, and stops the deletion. Each `.sfmr` and `.matches` file the run would rewrite
    is read whole here, in a dry run too: a file the current reader refuses is
    told apart from one the file system will not give up (it is locked, or
    cannot be opened or read), which is a failure, by the error's type, and a
    `.sift` file a file records that is not on disk, or not the version 1 file
    it records, is found before anything is written.
-2. **Map each old folder to a new one.** Each distinct version 1 record
-   (`feature_tool`, `feature_type`, `feature_options`, `feature_prefix_dir`)
-   is converted with `upgrade_feature_options`, and its new folder is named
-   from the converted options by the one folder-hash implementation (see
-   "Steps" for why there must be one). Each version 1 workspace file's own
-   record maps to the folder phase 5 writes into it. A version 1 folder is
-   named by a record of a workspace when it is `<image dir>/<feature_prefix_dir>`
-   below that workspace, and its files go to
-   `<image dir>/<new feature_prefix_dir>`. A record that cannot be converted
+2. **Map each old folder to a new one.** A version 1 folder is named by a
+   record (`feature_tool`, `feature_type`, `feature_options`,
+   `feature_prefix_dir`) of a workspace when it is
+   `<image dir>/<feature_prefix_dir>` below that workspace. Several records
+   can name one folder: a workspace file of sfmtool 0.3 records
+   `feature_type: "sift-sfmtool"` and its `.sfmr` files `"sift"`, or two
+   files record options that differ. Each physical old folder therefore maps
+   to exactly one new folder, `<image dir>/<new feature_prefix_dir>`, and one
+   converted record, named by the one folder-hash implementation (see
+   "Steps" for why there must be one):
+   - when a version 1 workspace file's own record names the folder (the
+     deepest such workspace, for a folder of a nested one), the record that
+     workspace file is converted to, with `upgrade_feature_options`, which
+     is what phase 5 writes into it, as `sfm ws upgrade` names it today;
+   - otherwise the folder's own `.sift` files decide: the record of their
+     feature tool, the tool's workspace `feature_type`
+     (`sfmtool_core::workspace::feature_type_for_tool`, the `sift-<tool>`
+     form `sfm ws init` records, bound as
+     `sfmtool.workspace.feature_type_for_tool` and the one implementation
+     behind Python's `get_feature_type_for_tool`), and their
+     `feature_options` converted. When the folder's `.sift` files record
+     different tools or options, the run stops here, naming the folder and
+     two files that differ.
+
+   Every file that names the folder, whatever its record, is pointed at
+   that one new folder and takes that one converted record, so the records
+   come out the same. A file that names folders that map to different new
+   folders stops the run here, naming the file and the folders. A file that
+   names no folder on disk takes its workspace file's converted record when
+   that names the same `feature_prefix_dir`, and otherwise its own record
+   converted under the tool's workspace `feature_type`. A record that cannot be converted
    (an `sfmtool-undistort` record, a tool this build does not know, a
    `gray_formula` that does not parse) stops the run here, naming the files
    that hold it, since its folder could be neither converted nor deleted. So
@@ -160,6 +187,7 @@ with the reason) and writes nothing.
    `.matches` file below the current version that names no old folder is
    rewritten the same way, with its record and hashes unchanged:
    - a `sift_files` `.sfmr`: `workspace.contents` becomes the converted record
+     of the folders it names (phase 2)
      and `feature_tool_hashes` and `sift_content_hashes` are looked up in the
      table, then it is saved as the current version, which fills the readings
      of a file below version 15 from the new `.sift` files;
@@ -210,7 +238,11 @@ with the reason) and writes nothing.
    workspace's other files; and a folder whose real path is not in the tree.
    Phase 6 deletes nothing from a directory whose real path is outside the
    tree's root, and when a folder it would delete lies outside the tree
-   (reached through a link), it deletes nothing at all and says so.
+   (reached through a link), it deletes nothing at all and says so. When the
+   tree holds any symbolic link or junction to a directory, phase 6 deletes
+   nothing either: the walk does not examine the files behind a link, and one
+   of them may name an old folder. The report lists each link and says the
+   old folders were kept for that reason; conversion and rewriting go ahead.
    Otherwise nothing is deleted, and the report says what to fix before
    running the command again: a file that could not be read or rewritten
    stops the deletion, while a file that is not converted for a reason under
@@ -259,8 +291,9 @@ those folders by the current reader anyway:
   cannot be opened or read) is not one of these: it fails, and stops the
   deletion; so does a file whose metadata cannot be read at all, since its
   record is unknown and its folder could be taken for an orphan;
-- a `.sfmr` or `.matches` file a `.sift` file of which is not on disk, or is
-  on disk but is not the version 1 file it records; the reason says which;
+- a `.sfmr` or `.matches` file a `.sift` file of which is not on disk, cannot
+  be read as the version 1 file it records (its content is not one the
+  reader accepts), or is on disk but has changed; the reason says which;
 - a `.sfmr` or `.matches` file whose `workspace` record resolves to a
   workspace outside the tree, which that workspace's upgrade converts; a
   folder inside the tree that it names is kept;
@@ -328,6 +361,9 @@ files is written: no workspace, a path in a workspace nested in another
 workspace file that cannot be read or is not version 1 or 2, a directory that
 cannot be listed, a `.sift` file in a folder the run examines that the file
 system will not give up (`UnreadableSiftFiles`, each with its error), a
+folder whose `.sift` files record different tools or options
+(`FolderFeatureOptions`), a file whose folders map to different new folders
+(`FolderTargets`), a
 record that
 cannot be converted (`FeatureOptions`, naming the files that hold it), a
 `feature_prefix_dir` that would leave the image directory

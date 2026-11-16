@@ -22,9 +22,9 @@ pub mod upgrade;
 pub use sfmtool_archive_io::find_workspace_for_path;
 
 pub use feature_options::{
-    feature_prefix_dir, has_image_to_gray, recorded_image_to_gray, tool_image_to_gray,
-    upgrade_feature_options, FeatureOptionsError, COLMAP_TOOL, OPENCV_TOOL, SFMTOOL_TOOL,
-    UNDISTORT_TOOL, WORKSPACE_VERSION,
+    feature_prefix_dir, feature_type_for_tool, has_image_to_gray, recorded_image_to_gray,
+    tool_image_to_gray, upgrade_feature_options, FeatureOptionsError, COLMAP_TOOL, OPENCV_TOOL,
+    SFMTOOL_TOOL, UNDISTORT_TOOL, WORKSPACE_VERSION,
 };
 pub use named_image_lists::{
     is_named_image_list_name, split_named_image_list_value, DuplicateMatch, NamedImageList,
