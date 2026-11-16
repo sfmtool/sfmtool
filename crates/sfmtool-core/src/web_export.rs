@@ -255,10 +255,11 @@ impl From<Cancelled> for WebExportError {
 /// fit what it describes: a per-point column, such as the patch frame or
 /// bitmaps, without one row per point, observation offsets that are not the
 /// prefix sum of the observation counts or counts that do not add up to the
-/// track rows, a track row naming an image past the
-/// images, an image whose camera index is past the cameras or whose
-/// adjustment its camera cannot take, or a thumbnail column without one row
-/// per image;
+/// track rows, a track row naming an image past the images, an observation
+/// or per-image column without one row per observation or image, keypoints
+/// without two columns, an image whose camera index is past the cameras or
+/// whose adjustment its camera cannot take, or a thumbnail column without one
+/// row per image;
 /// [`WebExportError::Encode`] when a page cannot be encoded;
 /// [`WebExportError::Cancelled`] when `progress` is cancelled.
 pub fn build_web_export(
