@@ -52,8 +52,9 @@ impl SiftParams {
     /// Apply a `feature_options` JSON object onto [`SiftParams::default`].
     ///
     /// The keys are `octave_layers`, `sigma`, `blur_radius_factor`,
-    /// `input_sigma`, `double_image`, `contrast_threshold`, `edge_threshold`,
-    /// `max_num_features` (an integer, or `null` for no cap),
+    /// `input_sigma`, `double_image`, `double_image_below_long_side` (a
+    /// positive integer, or `null` for no limit), `contrast_threshold`,
+    /// `edge_threshold`, `max_num_features` (an integer, or `null` for no cap),
     /// `orientation_bins`, `peak_ratio`, `descriptor_width`, `descriptor_bins`,
     /// `descriptor_magnification`, `descriptor_clamp` and `image_to_gray` (the
     /// object [`ImageToGray::from_json`] reads). `gray_formula`, a formula
@@ -65,9 +66,11 @@ impl SiftParams {
     ///
     /// [`FeatureOptionsError`] for a value that is not an object, an unknown
     /// key, a value of the wrong type, a value that would break the pipeline
-    /// (`octave_layers` or `orientation_bins` below 1, a `sigma`,
-    /// `blur_radius_factor`, `descriptor_magnification` or `descriptor_clamp`
-    /// that is not positive and finite, an `input_sigma` that is negative or not
+    /// (`octave_layers` or `orientation_bins` below 1, a
+    /// `double_image_below_long_side` that is not an integer from 1 to
+    /// `u32::MAX`, a `sigma`, `blur_radius_factor`, `descriptor_magnification`
+    /// or `descriptor_clamp` that is not positive and finite, an `input_sigma`
+    /// that is negative or not
     /// finite), an `image_to_gray` or `gray_formula` that does not parse, both
     /// of them at once, and a descriptor grid other than 4 x 8, since the
     /// descriptor is always 128 values.
@@ -105,6 +108,25 @@ impl SiftParams {
                 "input_sigma" => out.input_sigma = as_f64(key, value)?,
                 "double_image" => {
                     out.double_image = value.as_bool().ok_or_else(|| wrong_type(key))?
+                }
+                "double_image_below_long_side" => {
+                    // `null` means no limit, as a missing key does.
+                    out.double_image_below_long_side = if value.is_null() {
+                        None
+                    } else {
+                        Some(
+                            value
+                                .as_u64()
+                                .and_then(|v| u32::try_from(v).ok())
+                                .filter(|&v| v >= 1)
+                                .ok_or_else(|| {
+                                    FeatureOptionsError::key(
+                                        key,
+                                        "must be an integer from 1 to 4294967295, or None",
+                                    )
+                                })?,
+                        )
+                    };
                 }
                 "contrast_threshold" => out.contrast_threshold = as_f64(key, value)?,
                 "edge_threshold" => out.edge_threshold = as_f64(key, value)?,

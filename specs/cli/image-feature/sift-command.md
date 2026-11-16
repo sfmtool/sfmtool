@@ -69,8 +69,13 @@ configuration; change it by reinitializing the workspace with
 
 The `sfmtool` tool is the toolkit's own SIFT (the Rust `sfmtool-core`
 implementation), calibrated to match COLMAP's keypoint density and descriptor
-convention. It needs no external library and parallelizes internally, so it
-ignores `--num-threads`. It chooses how many images to decode and extract at
+convention. With `double_image` on, its default, it doubles an image before
+detection unless the image's width or height reaches the options'
+`double_image_below_long_side`, which a new workspace and `--tool sfmtool` set
+to 4096 and an older workspace does not have
+([SIFT § 1. Scale-space pyramid](../../core/features/sift.md#1-scale-space-pyramid)).
+It needs no external library and parallelizes internally, so it ignores
+`--num-threads`. It chooses how many images to decode and extract at
 once from the core count and available memory, and the
 `SFMTOOL_SIFT_EXTRACT_WORKERS` environment variable overrides that number (see
 [Extraction-orchestration pipelining](#extraction-orchestration-pipelining)).

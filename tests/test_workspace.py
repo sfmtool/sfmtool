@@ -314,7 +314,12 @@ class TestLoadWorkspaceVersions:
 # Rust `BuildSiftFilesOptions::sfmtool_defaults()` test
 # (crates/sfmtool-core/src/features/sift/files/tests.rs) holds the Rust side to
 # the same string, so the two default folder names stay equal.
-WS_INIT_SFMTOOL_PREFIX = "features/sift-sfmtool-9017ec0d2c5dfc401da610578062b53d"
+WS_INIT_SFMTOOL_PREFIX = "features/sift-sfmtool-fc19c88d9c98d94ebff1b97f2a345bb6"
+
+# The `feature_prefix_dir` of those defaults without
+# `double_image_below_long_side`, which `sfm ws init` wrote before the key
+# existed. The Rust files tests hold `feature_prefix_dir` to it too.
+NO_DOUBLING_LIMIT_PREFIX = "features/sift-sfmtool-9017ec0d2c5dfc401da610578062b53d"
 
 
 class TestInitWorkspace:
@@ -340,6 +345,21 @@ class TestInitWorkspace:
             "formula": "0.299*R + 0.587*G + 0.114*B",
             "quantize_bits": 8,
         }
+
+    def test_records_the_doubling_limit_which_without_it_names_the_old_folder(
+        self, tmp_path: Path
+    ):
+        from sfmtool import init_workspace
+        from sfmtool.sift.file import get_feature_tool_xxh128
+
+        config = init_workspace(tmp_path / "s")
+        options = dict(config["feature_options"])
+        assert options.pop("double_image_below_long_side") == 4096
+        assert (
+            f"features/sift-sfmtool-"
+            f"{get_feature_tool_xxh128('sfmtool', 'sift-sfmtool', options)}"
+            == NO_DOUBLING_LIMIT_PREFIX
+        )
 
     def test_sets_the_sfmtool_conversion_before_naming_the_folder(self, tmp_path: Path):
         from sfmtool import init_workspace

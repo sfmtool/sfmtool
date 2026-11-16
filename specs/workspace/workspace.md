@@ -102,9 +102,14 @@ The example shows the `colmap` option shape. Each tool defines its own
 `feature_options` keys: `opencv` uses the OpenCV SIFT parameter names
 (`nfeatures`, `nOctaveLayers`, `contrastThreshold`, `edgeThreshold`, `sigma`),
 and `sfmtool` uses the Rust SIFT's parameters (`octave_layers`,
-`contrast_threshold`, `edge_threshold`, `max_num_features`, descriptor and
-orientation settings, etc.). `use_gpu` (COLMAP only) is excluded from the
-feature-cache hash since it does not affect feature output. In version 2 every
+`contrast_threshold`, `edge_threshold`, `max_num_features`, `double_image`,
+`double_image_below_long_side`, descriptor and orientation settings, etc.).
+`sfm ws init` writes `double_image_below_long_side: 4096` for `sfmtool`, so a
+new workspace does not double an image whose width or height is 4096 or more; a
+workspace without the key has no such limit, and keeps its folder and its
+`.sift` files
+([SIFT § 1. Scale-space pyramid](../core/features/sift.md#1-scale-space-pyramid)).
+`use_gpu` (COLMAP only) is excluded from the feature-cache hash since it does not affect feature output. In version 2 every
 tool's `feature_options` also carry the `image_to_gray` object
 ([Version 2: `image_to_gray`](#version-2-image_to_gray)).
 

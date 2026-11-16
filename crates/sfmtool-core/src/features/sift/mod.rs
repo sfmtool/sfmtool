@@ -113,7 +113,19 @@ pub struct SiftParams {
     pub input_sigma: f64,
     /// Whether to upsample the input 2x (bilinear) before octave 0, which
     /// increases the count of stable keypoints ~4x. Default true.
+    /// [`double_image_below_long_side`](Self::double_image_below_long_side)
+    /// can turn it off for large images; [`SiftParams::doubles_image`] says
+    /// whether an image of a given size is doubled.
     pub double_image: bool,
+    /// The long side, in pixels, from which an image is not doubled: with
+    /// `double_image` on, an image is doubled only when its width and its
+    /// height are both below this, so an image whose width or height is equal
+    /// to it or larger is not. `None` puts no limit on doubling. Default
+    /// `None`, which is what a `feature_options` object without the key means,
+    /// so every record written before the key existed reads as it did; a new
+    /// workspace records 4096 (see `specs/core/features/sift.md` § "1.
+    /// Scale-space pyramid").
+    pub double_image_below_long_side: Option<u32>,
     /// Contrast threshold `C`: discard extrema with `|D(x̂)| < C`. Lowe's paper
     /// uses 0.03, but that is ~2–4x stricter than the effective per-layer
     /// threshold the common implementations ship. This value is on the same
@@ -162,6 +174,7 @@ impl Default for SiftParams {
             blur_radius_factor: 2.25,
             input_sigma: 0.5,
             double_image: true,
+            double_image_below_long_side: None,
             contrast_threshold: 0.0067,
             edge_threshold: 10.0,
             max_num_features: Some(8192),
@@ -173,6 +186,32 @@ impl Default for SiftParams {
             descriptor_clamp: 0.2,
             image_to_gray: ImageToGray::default(),
         }
+    }
+}
+
+impl SiftParams {
+    /// Whether an image of `width` x `height` pixels is upsampled 2x before
+    /// octave 0: [`double_image`](Self::double_image) is on, and when
+    /// [`double_image_below_long_side`](Self::double_image_below_long_side) is
+    /// set, the image's long side is below it.
+    ///
+    /// ```
+    /// use sfmtool_core::features::sift::SiftParams;
+    ///
+    /// let params = SiftParams {
+    ///     double_image_below_long_side: Some(4096),
+    ///     ..SiftParams::default()
+    /// };
+    /// assert!(params.doubles_image(4095, 3000));
+    /// assert!(!params.doubles_image(4096, 3000));
+    /// assert!(!params.doubles_image(3000, 4096));
+    /// assert!(SiftParams::default().doubles_image(16320, 12240));
+    /// ```
+    pub fn doubles_image(&self, width: u32, height: u32) -> bool {
+        self.double_image
+            && self
+                .double_image_below_long_side
+                .is_none_or(|limit| width.max(height) < limit)
     }
 }
 

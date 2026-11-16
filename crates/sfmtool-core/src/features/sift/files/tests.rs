@@ -17,7 +17,12 @@ const SEOUL_BULL: &str = concat!(
 /// The `feature_prefix_dir` `sfm ws init --feature-tool sfmtool` writes for
 /// the default options. `tests/test_workspace.py` holds the Python side to the
 /// same string, so the two default folder names stay equal.
-const WS_INIT_SFMTOOL_PREFIX: &str = "features/sift-sfmtool-9017ec0d2c5dfc401da610578062b53d";
+const WS_INIT_SFMTOOL_PREFIX: &str = "features/sift-sfmtool-fc19c88d9c98d94ebff1b97f2a345bb6";
+
+/// The `feature_prefix_dir` of the default options without
+/// `double_image_below_long_side`, which `sfm ws init` wrote before the key
+/// existed. `tests/test_workspace.py` holds the Python side to it too.
+const NO_DOUBLING_LIMIT_PREFIX: &str = "features/sift-sfmtool-9017ec0d2c5dfc401da610578062b53d";
 
 /// Copies of the first `count` seoul_bull images under `images/` of a
 /// temporary directory.
@@ -52,6 +57,10 @@ fn the_sfmtool_defaults_are_those_ws_init_writes() {
     );
     assert!(defaults.feature_options.get("gray_formula").is_none());
     assert_eq!(defaults.feature_options["max_num_features"], 8192);
+    assert_eq!(
+        defaults.feature_options["double_image_below_long_side"],
+        4096
+    );
     assert_eq!(defaults.concurrent_images, None);
     assert_eq!(
         defaults.sift_path_for_image(Path::new("a/b/x.jpg")),
@@ -61,6 +70,24 @@ fn the_sfmtool_defaults_are_those_ws_init_writes() {
     );
     // The options are a valid extraction.
     SiftParams::from_feature_options(&defaults.feature_options).unwrap();
+}
+
+/// Options without `double_image_below_long_side` name the folder they named
+/// before the key existed: the defaults without it are what `sfm ws init`
+/// wrote then, and `sfm ws upgrade` writes now from the test-data workspaces'
+/// version 1 options.
+#[test]
+fn options_without_the_doubling_limit_keep_their_folder() {
+    let mut options = BuildSiftFilesOptions::sfmtool_defaults().feature_options;
+    options
+        .as_object_mut()
+        .unwrap()
+        .remove("double_image_below_long_side")
+        .unwrap();
+    assert_eq!(
+        crate::workspace::feature_prefix_dir(SFMTOOL_FEATURE_TOOL, SFMTOOL_FEATURE_TYPE, &options),
+        NO_DOUBLING_LIMIT_PREFIX
+    );
 }
 
 #[test]
@@ -275,6 +302,23 @@ fn feature_options_override_the_defaults() {
     assert!(!params.double_image);
     assert_eq!(params.max_num_features, None);
 
+    // No `double_image_below_long_side`, or `null`, is no limit on doubling.
+    assert_eq!(defaults.double_image_below_long_side, None);
+    let no_limit = serde_json::json!({"double_image_below_long_side": null});
+    assert_eq!(
+        SiftParams::from_feature_options(&no_limit)
+            .unwrap()
+            .double_image_below_long_side,
+        None
+    );
+    let limit = serde_json::json!({"double_image_below_long_side": 1});
+    assert_eq!(
+        SiftParams::from_feature_options(&limit)
+            .unwrap()
+            .double_image_below_long_side,
+        Some(1)
+    );
+
     let refused = |options: serde_json::Value| {
         SiftParams::from_feature_options(&options)
             .unwrap_err()
@@ -292,6 +336,21 @@ fn feature_options_override_the_defaults() {
         refused(serde_json::json!({"orientation_bins": 0})),
         "feature option 'orientation_bins' must be >= 1"
     );
+    for bad in [
+        serde_json::json!(0),
+        serde_json::json!(-1),
+        serde_json::json!(4096.5),
+        serde_json::json!(true),
+        serde_json::json!("4096"),
+        serde_json::json!(1u64 << 32),
+    ] {
+        assert_eq!(
+            refused(serde_json::json!({"double_image_below_long_side": bad})),
+            "feature option 'double_image_below_long_side' must be an integer from 1 to \
+             4294967295, or None",
+            "{bad}"
+        );
+    }
     assert!(refused(serde_json::json!({"descriptor_width": 3})).contains("fixed at 4 and 8"));
     assert!(refused(serde_json::json!({"gray_formula": "R +"})).contains("gray formula"));
     assert!(

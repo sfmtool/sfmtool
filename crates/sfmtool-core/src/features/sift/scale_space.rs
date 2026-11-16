@@ -9,7 +9,8 @@
 //!
 //! - The **Gaussian pyramid**: `octave_layers + 3` Gaussian-blurred images per
 //!   octave, with absolute blur `σ · k^i` at level `i` (`k = 2^(1/s)`). The input
-//!   is optionally doubled (bilinear) before octave 0; the next octave is seeded
+//!   is optionally doubled (bilinear) before octave 0
+//!   ([`SiftParams::doubles_image`]); the next octave is seeded
 //!   by decimating the Gaussian image `octave_layers` levels up.
 //! - The **DoG** (`octave_layers + 2` adjacent-Gaussian differences per octave)
 //!   is **not stored**. It is needed only for detection, which fuses it per row
@@ -88,7 +89,8 @@ pub struct ScaleSpace {
     s: u32,
     /// Base blur `σ`.
     sigma: f64,
-    /// Whether the input was doubled before octave 0.
+    /// Whether the input was doubled before octave 0
+    /// ([`SiftParams::doubles_image`] at the input's size).
     double_image: bool,
     /// Incremental blur sigmas for levels `1..s+3` (level `i` is level `i−1`
     /// blurred by `inc_sigmas[i−1]`), retained for [`Self::extend_octave`].
@@ -115,7 +117,10 @@ impl ScaleSpace {
     pub fn build_chain(image: &GrayImage, params: &SiftParams) -> Self {
         let s = params.octave_layers;
         let sigma = params.sigma;
-        let double_image = params.double_image;
+        // Doubling is resolved once, at the input's size; every coordinate and
+        // sigma mapping below reads this field, so a keypoint of an image too
+        // large to double is still in source pixels.
+        let double_image = params.doubles_image(image.width(), image.height());
         // Multiplicative scale step between adjacent levels.
         let k = 2.0f64.powf(1.0 / s as f64);
         let gaussians_per_octave = (s + 3) as usize;

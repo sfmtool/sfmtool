@@ -177,7 +177,7 @@ def test_a_command_that_uses_the_workspace_refuses_version_1_before_any_work(
         ["inspect", "images/seoul_bull_sculpture_01.jpg"],
         [
             "inspect",
-            "images/features/sift-sfmtool-9017ec0d2c5dfc401da610578062b53d/"
+            "images/features/sift-sfmtool-fc19c88d9c98d94ebff1b97f2a345bb6/"
             "seoul_bull_sculpture_01.jpg.sift",
         ],
         ["estimate-intrinsics", "-i", "clusters.matches"],
