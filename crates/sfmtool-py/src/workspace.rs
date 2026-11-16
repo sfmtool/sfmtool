@@ -489,8 +489,9 @@ fn feature_prefix_dir_py(
 }
 
 /// How many lists and dicts deep [`record_json`] converts a value: the
-/// recursion limit `serde_json` reads a record with, so a deeper value could
-/// not be read back, and far below what would overflow the stack.
+/// recursion limit `serde_json` reads JSON with, which stops at the 128th
+/// nested list or object, so no sfmtool record holding a deeper value could be
+/// read back; it is far below what would overflow the stack.
 const RECORD_JSON_MAX_DEPTH: usize = 128;
 
 /// The JSON value a workspace record holds for `value`, the one at `path`,
@@ -504,7 +505,8 @@ fn record_json(value: &Bound<'_, PyAny>, path: &str, depth: usize) -> PyResult<s
     use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
     if depth > RECORD_JSON_MAX_DEPTH {
         return Err(PyValueError::new_err(format!(
-            "{path} is nested more than {RECORD_JSON_MAX_DEPTH} lists or dicts deep,              which names no features folder"
+            "{path} is nested more than {RECORD_JSON_MAX_DEPTH} lists or dicts deep, \
+             which names no features folder"
         )));
     }
     if value.is_none() {

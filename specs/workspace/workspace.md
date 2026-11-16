@@ -156,8 +156,9 @@ This is structured as `features/{feature_type}-{feature_cache_hash}`, where:
   not a string. The Rust function's `serde_json::Value` cannot hold any of
   them, and the binding raises `ValueError` for them, naming where the value
   is. It also raises `ValueError` for a list or dict nested more than 128
-  levels deep, `serde_json`'s limit for reading a record back, which includes
-  one that holds itself. It is a
+  levels deep, which includes one that holds itself: `serde_json` stops
+  reading JSON at the 128th nested list or object, so no record holding it
+  could be read back. It is a
   different value from the `feature_tool_xxh128` field stored inside each `.sift` file, which is
   the hash of that file's `feature_tool_metadata.json` bytes (see
   [Feature tool hash computation](../formats/sift-file-format.md#feature-tool-hash-computation)).

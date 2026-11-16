@@ -54,7 +54,9 @@ def _nested(depth):
 
 def test_options_nested_past_the_limit_name_no_folder():
     assert feature_prefix_dir("t", "sift-t", _nested(127)).startswith("features/")
-    with pytest.raises(ValueError, match="nested more than 128"):
+    with pytest.raises(
+        ValueError, match="nested more than 128 lists or dicts deep, which names"
+    ):
         feature_prefix_dir("t", "sift-t", _nested(128))
     looped = []
     looped.append(looped)
