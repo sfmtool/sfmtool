@@ -61,8 +61,9 @@ date. When no file needs converting and no version 1 features folder remains,
 it prints "nothing to do" and changes nothing.
 
 `--dry-run` runs phases 1 and 2 and prints the plan (each old folder and its
-new one, how many files of each kind would be converted, and every file that
-cannot be, with the reason) and writes nothing.
+new one, each orphan folder, which would be deleted without converting, how
+many files of each kind would be converted, and every file that cannot be,
+with the reason) and writes nothing.
 
 1. **Find the files.** Walk the workspace for `.sfmr`, `.matches`, `.camrig`
    and `.kdf` files and for the `.sift` folders named by a `feature_prefix_dir`
@@ -144,12 +145,15 @@ records, which are on disk either way, since phase 3 has finished and phase 6
 has not run.
 
 A run stopped after phase 5, or part way through phase 6, leaves the workspace
-file at version 2, no file naming an old folder, and some or all of the old
-folders on disk. Running the command again finds them by the walk in phase 1,
-as orphans, since no file names them any more and they are not the workspace
-file's own folder. Their files were converted by the first run, so the second
-run converts nothing and runs phase 6, which deletes them. Until then they
-are folders no file reads: commands use the new folders through the version 2
+file at version 2, no file naming an old folder but those listed under "What
+is not converted", and some or all of the old folders on disk. Running the
+command again finds them by the walk in phase 1. A folder that no file names
+any more is an orphan, since it is not the workspace file's own folder either;
+its files were converted by the first run, so the second run does not convert
+them. A folder still named by a file listed as not converted is not an orphan,
+so phase 3 converts its remaining files again, into the same new files the
+first run wrote. Phase 6 then deletes them all. Until then they are folders no
+converted file reads: commands use the new folders through the version 2
 workspace file and the rewritten files' records.
 
 ### What is not converted
