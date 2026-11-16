@@ -104,17 +104,17 @@ pub struct UpgradedFile {
 pub struct UpgradedFolder {
     /// The version 1 folder.
     pub old_folder: PathBuf,
-    /// The folder its `.sift` files were converted into, or `None` when no
-    /// file that can be converted names it: an orphan, which neither the
-    /// workspace file nor any `.sfmr` or `.matches` file of the workspace
-    /// names and whose files are deleted without being converted, or a
-    /// folder named only by files the current reader refuses, which is kept.
+    /// The folder its `.sift` files were converted into, or `None` when
+    /// neither a version 1 workspace file nor a file the run rewrites names
+    /// it: an orphan, which no file of the tree names and whose files are
+    /// deleted without being converted, or a folder named only by files the
+    /// run leaves.
     pub new_folder: Option<PathBuf>,
     /// How many version 1 `.sift` files it held.
     pub sift_file_count: usize,
     /// Why the folder is kept rather than deleted, or `None` when the run
-    /// deletes it: files the current reader refuses name it, it lies in a
-    /// nested workspace, or it lies outside the workspace.
+    /// deletes it: files the current reader refuses name it, a file of a
+    /// workspace outside the tree names it, or it lies outside the tree.
     pub kept_because: Option<String>,
     /// Whether its version 1 `.sift` files were deleted (in a dry run,
     /// whether they would be).
@@ -135,29 +135,29 @@ impl UpgradedFolder {
 /// What [`upgrade_workspace`] did, or in a dry run what it would do.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UpgradeWorkspaceReport {
-    /// The workspace directory.
+    /// The root of the tree: the outermost workspace, which the run was
+    /// given.
     pub workspace_dir: PathBuf,
+    /// The workspaces of the tree, the root first, then each nested one
+    /// sorted by path. Each one's workspace file is in `files`.
+    pub workspaces: Vec<PathBuf>,
     /// Whether this was a dry run, which wrote nothing.
     pub dry_run: bool,
-    /// The workspace file first, then every `.sfmr`, `.matches`, `.camrig`
-    /// and `.kdf` file the walk found, each kind sorted by path.
+    /// The workspace files of the tree first, in the order of `workspaces`,
+    /// then every `.sfmr`, `.matches`, `.camrig` and `.kdf` file the walk
+    /// found, each kind sorted by path.
     pub files: Vec<UpgradedFile>,
     /// Every version 1 features folder the run found, by the walk or as a
     /// folder a file's record names, sorted by path.
     pub folders: Vec<UpgradedFolder>,
     /// How many version 1 `.sift` files were converted (or would be).
     pub converted_sift_file_count: usize,
-    /// The directories below the workspace that hold a `.sfm-workspace.json`
-    /// of their own. They are other workspaces, so the walk did not enter
-    /// them, and nothing in them was deleted.
-    pub nested_workspaces: Vec<PathBuf>,
     /// The symbolic links and junctions to directories the walk found. It
-    /// does not enter them, since their targets may be outside the
-    /// workspace.
+    /// does not enter them, since their targets may be outside the tree.
     pub linked_directories: Vec<PathBuf>,
     /// Whether phase 6 ran (or would run) and deleted every folder not kept:
     /// only when no file [`Failed`](UpgradeOutcome::Failed) and no folder it
-    /// would delete lies outside the workspace.
+    /// would delete lies outside the tree.
     pub old_folders_deleted: bool,
     /// Notes for the user, such as that point IDs taken from a rewritten
     /// `.sfmr` before the upgrade no longer resolve.
@@ -165,7 +165,7 @@ pub struct UpgradeWorkspaceReport {
 }
 
 impl UpgradeWorkspaceReport {
-    /// Whether there was nothing to do: the workspace file is version 2, no
+    /// Whether there was nothing to do: every workspace file is version 2, no
     /// file was converted or deleted, and every version 1 folder found is
     /// settled ([`UpgradedFolder::is_settled`]).
     pub fn nothing_to_do(&self) -> bool {
@@ -245,13 +245,18 @@ pub enum UpgradeWorkspaceError {
         /// The `feature_prefix_dir`.
         feature_prefix_dir: String,
     },
-    /// The workspace lies inside an enclosing workspace whose workspace file
-    /// is still version 1. That workspace's upgrade converts the folders its
-    /// files name in this one, so it goes first.
-    EnclosingWorkspace {
-        /// The enclosing workspace's `.sfm-workspace.json`.
-        workspace_file: PathBuf,
+    /// The path given is in a workspace nested in another. One run upgrades
+    /// the whole tree of nested workspaces from its outermost one, since a
+    /// file of one workspace can name the features of another.
+    NotTreeRoot {
+        /// The outermost workspace, where the run is to be made.
+        root: PathBuf,
     },
+    /// `.sift` files in a folder the run examines whose metadata the file
+    /// system would not give up (locked, or a placeholder that cannot be
+    /// fetched), each with its error. They could hold features a file
+    /// needs, so nothing was written.
+    UnreadableSiftFiles(Vec<SiftFileFailure>),
     /// Two old folders map to one new folder and hold different files for
     /// one image.
     Conflicts(Vec<SiftConflict>),
@@ -314,13 +319,24 @@ impl fmt::Display for UpgradeWorkspaceError {
                 )?;
                 write_list(f, files, |f, p| write!(f, "{}", p.display()))
             }
-            Self::EnclosingWorkspace { workspace_file } => write!(
+            Self::NotTreeRoot { root } => write!(
                 f,
-                "this workspace lies inside the workspace of {}, which is still version 1; \
-                 upgrade that workspace first, since its upgrade converts the features folders \
-                 its files name in this one",
-                workspace_file.display()
+                "this workspace is nested in the workspace {}; run the upgrade there, which \
+                 upgrades every workspace nested in it in one run",
+                root.display()
             ),
+            Self::UnreadableSiftFiles(failures) => {
+                write!(
+                    f,
+                    "{} .sift file(s) could not be read, so nothing was written; make them \
+                     readable (close the program that holds them, or make a cloud copy \
+                     available offline) and run again:",
+                    failures.len()
+                )?;
+                write_list(f, failures, |f, x| {
+                    write!(f, "{}: {}", x.sift_path.display(), x.problem)
+                })
+            }
             Self::Conflicts(conflicts) => {
                 write!(
                     f,
@@ -372,41 +388,50 @@ struct NewHashes {
     feature_tool: [u8; 16],
 }
 
-/// Bring the workspace found at or above `path` to the current file
-/// versions, and report every file and folder and what became of it.
+/// Bring the tree of workspaces whose root is the workspace at or above
+/// `path` to the current file versions, and report every file and folder and
+/// what became of it.
 ///
-/// It runs the phases of `specs/drafts/ws-upgrade-files-amendment.md`:
+/// The tree is the outermost workspace at or above `path` and every workspace
+/// nested in it. One run upgrades the whole tree, since a file of one
+/// workspace can name the features of another; `path` must be in the
+/// outermost one. It runs the phases of
+/// `specs/drafts/ws-upgrade-files-amendment.md`:
 ///
-/// 1. Walk the workspace for `.sfmr`, `.matches`, `.camrig` and `.kdf`
-///    files and for folders of version 1 `.sift` files
-///    ([`version_1_sift_files`](crate::features::sift::version_1_sift_files)),
-///    without entering a nested workspace (listed in the report).
-/// 2. Map each distinct version 1 record, the workspace file's and each one a
-///    `.sfmr` or `.matches` file of this workspace holds, to its new folder:
-///    [`upgrade_feature_options`](super::upgrade_feature_options) and
+/// 1. Walk the tree, nested workspaces included but no symbolic link or
+///    junction, for `.sfmr`, `.matches`, `.camrig` and `.kdf` files and for
+///    folders of version 1 `.sift` files
+///    ([`scan_sift_folder`](crate::features::sift::scan_sift_folder)), and
+///    attribute each file to the workspace its record resolves to. A `.sift`
+///    file the file system will not give up stops the run.
+/// 2. Map each distinct version 1 record, each version 1 workspace file's
+///    and each one a `.sfmr` or `.matches` file of the tree holds, to its new
+///    folder: [`upgrade_feature_options`](super::upgrade_feature_options) and
 ///    [`feature_prefix_dir`](super::feature_prefix_dir). A version 1 folder
-///    is named by a record when it is `<image dir>/<feature_prefix_dir>`;
-///    one no record names is an orphan.
-/// 3. Convert every version 1 `.sift` file of a folder that the version 1
-///    workspace file or a file this run rewrites names into its new folder ([`Version2SiftFolder`]), in parallel, the image
-///    being `<image dir>/<name>` for `<image dir>/<feature_prefix_dir>/<name>.sift`.
+///    is named by a record when it is `<image dir>/<feature_prefix_dir>`
+///    below the record's workspace; one no record names is an orphan.
+/// 3. Convert every version 1 `.sift` file of a folder that a version 1
+///    workspace file or a file this run rewrites names into its new folder
+///    ([`Version2SiftFolder`]), in parallel, the image being
+///    `<image dir>/<name>` for `<image dir>/<feature_prefix_dir>/<name>.sift`.
 ///    Any failure stops the run here, listing every file that failed.
 /// 4. Rewrite each `.sfmr` and `.matches` file that names an old folder or
 ///    is below the current version, each `.camrig` below version 2, at its
 ///    own path, and delete each `.kdf` built from an old folder.
-/// 5. Write the workspace file as version 2.
+/// 5. Write each version 1 workspace file of the tree as version 2.
 /// 6. When no file failed, delete the version 1 `.sift` files of every
 ///    version 1 folder, orphans included, and the directories that leaves
-///    empty, except a folder that a file the current reader refuses names,
-///    one inside a nested workspace and one outside the workspace.
+///    empty, except a folder that a file the current reader refuses or a
+///    file of a workspace outside the tree names; and nothing at all when a
+///    folder it would delete lies outside the tree.
 ///
-/// A file whose record resolves to another workspace, a cluster `.matches`
-/// file below version 6 and a `.sfmr` or `.matches` file whose recorded
-/// `.sift` files are not the version 1 files in an old folder are left as
-/// they are, listed as not converted. A run that stops part way, by
+/// A file whose record resolves to a workspace outside the tree, a cluster
+/// `.matches` file below version 6 and a `.sfmr` or `.matches` file whose
+/// recorded `.sift` files are not the version 1 files in an old folder are
+/// left as they are, listed as not converted. A run that stops part way, by
 /// cancellation or a failure, can be run again to finish.
 ///
-/// It reads and writes every file of a workspace, minutes of work on a large
+/// It reads and writes every file of a tree, minutes of work on a large
 /// one, so it takes a `Progress`: it opens the phases `find files`, `plan`,
 /// `convert .sift files`, `rewrite files`, `workspace file` and `delete old
 /// folders`, counts folders, `.sift` files and files in them, and checks for
@@ -434,39 +459,47 @@ pub fn upgrade_workspace(
     options: &UpgradeWorkspaceOptions,
     progress: &Progress<'_>,
 ) -> Result<UpgradeWorkspaceReport, UpgradeWorkspaceError> {
-    let root = find_workspace_for_path(path).ok_or_else(|| UpgradeWorkspaceError::NoWorkspace {
-        path: path.to_path_buf(),
-    })?;
+    let nearest =
+        find_workspace_for_path(path).ok_or_else(|| UpgradeWorkspaceError::NoWorkspace {
+            path: path.to_path_buf(),
+        })?;
+    // The tree's root is the outermost workspace above `path`.
+    let mut root = nearest.clone();
+    while let Some(enclosing) = root.parent().and_then(find_workspace_for_path) {
+        root = enclosing;
+    }
+    if root != nearest {
+        return Err(UpgradeWorkspaceError::NotTreeRoot { root });
+    }
     let root_canonical =
         std::fs::canonicalize(&root).map_err(|e| UpgradeWorkspaceError::ListFolder {
             folder: root.clone(),
             problem: e.to_string(),
         })?;
-    if let Some(workspace_file) = plan::enclosing_version_1_workspace(&root) {
-        return Err(UpgradeWorkspaceError::EnclosingWorkspace { workspace_file });
-    }
     let plan = plan::plan(&root, &root_canonical, progress)?;
 
     let mut report = UpgradeWorkspaceReport {
         workspace_dir: root.clone(),
+        workspaces: plan.workspaces.iter().map(|w| w.dir.clone()).collect(),
         dry_run: options.dry_run,
-        files: Vec::with_capacity(plan.files.len() + 1),
+        files: Vec::with_capacity(plan.files.len() + plan.workspaces.len()),
         folders: Vec::new(),
         converted_sift_file_count: plan.jobs.len(),
-        nested_workspaces: plan.nested_workspaces.clone(),
         linked_directories: plan.linked_directories.clone(),
         old_folders_deleted: false,
         notes: Vec::new(),
     };
-    report.files.push(UpgradedFile {
-        path: plan.workspace_file.clone(),
-        kind: UpgradeFileKind::WorkspaceFile,
-        outcome: if plan.new_workspace_file.is_some() {
-            UpgradeOutcome::Converted
-        } else {
-            UpgradeOutcome::AlreadyCurrent
-        },
-    });
+    for workspace in &plan.workspaces {
+        report.files.push(UpgradedFile {
+            path: workspace.file.clone(),
+            kind: UpgradeFileKind::WorkspaceFile,
+            outcome: if workspace.new_file.is_some() {
+                UpgradeOutcome::Converted
+            } else {
+                UpgradeOutcome::AlreadyCurrent
+            },
+        });
+    }
 
     if options.dry_run {
         for file in &plan.files {
@@ -502,11 +535,12 @@ pub fn upgrade_workspace(
                     Err(e) => UpgradeOutcome::Failed(format!("it could not be deleted: {e}")),
                 },
                 Action::Rewrite {
+                    workspace,
                     new_contents,
                     names_sift_files,
                 } => {
                     let rewrite = Rewrite {
-                        root: &plan.root,
+                        root: workspace,
                         table: &table,
                         new_contents: new_contents.as_ref(),
                         names_sift_files: *names_sift_files,
@@ -528,19 +562,25 @@ pub fn upgrade_workspace(
     }
 
     // Phase 5.
-    if let Some(config) = &plan.new_workspace_file {
+    if plan.workspaces.iter().any(|w| w.new_file.is_some()) {
         let phase = progress.phase("workspace file");
         phase.check_cancel()?;
-        let text = serde_json::to_string_pretty(config).expect("a JSON value serializes");
-        if let Err(e) = sfmtool_archive_io::write_atomically(
-            &plan.workspace_file,
-            |file| -> std::io::Result<()> {
-                use std::io::Write;
-                file.write_all(text.as_bytes())
-            },
-        ) {
-            report.files[0].outcome =
-                UpgradeOutcome::Failed(format!("it could not be written: {e}"));
+        for (i, workspace) in plan.workspaces.iter().enumerate() {
+            let Some(config) = &workspace.new_file else {
+                continue;
+            };
+            let text = serde_json::to_string_pretty(config).expect("a JSON value serializes");
+            if let Err(e) = sfmtool_archive_io::write_atomically(
+                &workspace.file,
+                |file| -> std::io::Result<()> {
+                    use std::io::Write;
+                    file.write_all(text.as_bytes())
+                },
+            ) {
+                // The workspace files are the report's first rows, in order.
+                report.files[i].outcome =
+                    UpgradeOutcome::Failed(format!("it could not be written: {e}"));
+            }
         }
     }
 
@@ -885,16 +925,10 @@ fn rewrite_camrig(path: &Path) -> UpgradeOutcome {
     }
 }
 
-/// Whether `path` lies in the workspace on disk: its real path is below the
-/// workspace's real path, and no nested workspace holds it.
+/// Whether `path` lies in the tree on disk: its real path is below the real
+/// path of the tree's root.
 fn lies_in_workspace(plan: &Plan, path: &Path) -> bool {
-    let Ok(real) = std::fs::canonicalize(path) else {
-        return false;
-    };
-    real.starts_with(&plan.root_canonical)
-        && find_workspace_for_path(path)
-            .and_then(|ws| std::fs::canonicalize(ws).ok())
-            .is_some_and(|ws| ws == plan.root_canonical)
+    std::fs::canonicalize(path).is_ok_and(|real| real.starts_with(&plan.root_canonical))
 }
 
 /// Phase 6 for one folder: delete its version 1 `.sift` files, then the
@@ -906,7 +940,7 @@ fn lies_in_workspace(plan: &Plan, path: &Path) -> bool {
 fn delete_old_folder(plan: &Plan, folder: &plan::OldFolder, report: &mut UpgradedFolder) {
     if !lies_in_workspace(plan, &folder.path) {
         report.kept_because =
-            Some("its real path is not in this workspace, so it was not deleted".to_string());
+            Some("its real path is not in this tree, so it was not deleted".to_string());
         return;
     }
     for file in &folder.sift_files {

@@ -603,29 +603,67 @@ impl fmt::Display for Version1SiftFiles {
 /// The error of listing the folder when it is there but cannot be listed, such
 /// as a file in its place.
 pub fn version_1_sift_files(folder: &Path) -> std::io::Result<Option<Version1SiftFiles>> {
-    let entries = match std::fs::read_dir(folder) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e),
-    };
-    let mut files = Vec::new();
-    for entry in entries {
-        let path = entry?.path();
-        if path.extension().is_some_and(|e| e == "sift")
-            && sfmtool_sift_format::read_sift_metadata(&path)
-                .is_ok_and(|(_, metadata, _)| metadata.version < SIFT_READINGS_VERSION)
-        {
-            files.push(path);
-        }
-    }
-    if files.is_empty() {
+    let scan = scan_sift_folder(folder)?;
+    if scan.version_1.is_empty() {
         return Ok(None);
     }
-    files.sort();
     Ok(Some(Version1SiftFiles {
         folder: folder.to_path_buf(),
-        files,
+        files: scan.version_1.into_iter().map(|(path, _)| path).collect(),
     }))
+}
+
+/// What [`scan_sift_folder`] found in one folder.
+#[derive(Debug)]
+pub struct SiftFolderScan {
+    /// The version 1 `.sift` files, sorted, each with the content hashes it
+    /// stores.
+    pub version_1: Vec<(PathBuf, sfmtool_sift_format::SiftContentHash)>,
+    /// The `.sift` files whose metadata could not be read, sorted, each with
+    /// the error.
+    pub unreadable: Vec<(PathBuf, sfmtool_sift_format::SiftError)>,
+}
+
+/// The `.sift` files directly in `folder` whose metadata reads with a version
+/// below 2, by the rule of [`version_1_sift_files`], and the `.sift` files
+/// whose metadata could not be read.
+///
+/// [`version_1_sift_files`] passes over a file it cannot read, which is right
+/// for a writer deciding whether the folder is version 1. A caller that must
+/// not lose a file to a passing lock or a sync placeholder, as the workspace
+/// upgrade must not, reads `unreadable` and tells a file system error from
+/// content the reader rejects by the error itself. A folder that is not there
+/// holds nothing.
+///
+/// # Errors
+///
+/// The error of listing the folder when it is there but cannot be listed.
+pub fn scan_sift_folder(folder: &Path) -> std::io::Result<SiftFolderScan> {
+    let mut scan = SiftFolderScan {
+        version_1: Vec::new(),
+        unreadable: Vec::new(),
+    };
+    let entries = match std::fs::read_dir(folder) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(scan),
+        Err(e) => return Err(e),
+    };
+    for entry in entries {
+        let path = entry?.path();
+        if !path.extension().is_some_and(|e| e == "sift") {
+            continue;
+        }
+        match sfmtool_sift_format::read_sift_metadata(&path) {
+            Ok((_, metadata, hash)) if metadata.version < SIFT_READINGS_VERSION => {
+                scan.version_1.push((path, hash));
+            }
+            Ok(_) => {}
+            Err(e) => scan.unreadable.push((path, e)),
+        }
+    }
+    scan.version_1.sort_by(|a, b| a.0.cmp(&b.0));
+    scan.unreadable.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(scan)
 }
 
 /// The XXH128 of a file's bytes as 32 lowercase hex digits, and its size.

@@ -454,7 +454,8 @@ fn write_workspace_file(dir: &Path) {
 /// `.sift` hash is not its file's (`stale`); a `.sfmr` of the nested
 /// workspace (`other`); a version 1 pairwise, a version 10 cluster and a
 /// version 5 cluster `.matches`; a version 1 `.camrig`; a `.kdf` of the old
-/// folder; and a nested workspace with a version 1 folder of its own.
+/// folder; and a nested workspace with the images and a version 1 folder of
+/// its own.
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("ws");
@@ -497,14 +498,24 @@ fn fixture() -> Fixture {
         .save(&fixture.path("sfmr/stale.sfmr"), &Progress::none())
         .unwrap();
 
+    // The nested workspace holds copies of the images and their version 1
+    // `.sift` files, which `other` names.
     write_workspace_file(&fixture.nested());
     let nested_sift = fixture
         .nested()
         .join("images")
         .join(v1_record().feature_prefix_dir);
     std::fs::create_dir_all(&nested_sift).unwrap();
-    let name = format!("{}.sift", image_name(0));
-    std::fs::copy(old.join(&name), nested_sift.join(&name)).unwrap();
+    for i in 0..IMAGES {
+        let name = image_name(i);
+        std::fs::copy(
+            fixture.images().join(&name),
+            fixture.nested().join("images").join(&name),
+        )
+        .unwrap();
+        let sift = format!("{name}.sift");
+        std::fs::copy(old.join(&sift), nested_sift.join(&sift)).unwrap();
+    }
     let mut other = reconstruction(&root, &old, v1_record(), false);
     other.metadata.workspace.relative_path = "../nested".into();
     other
@@ -744,20 +755,31 @@ fn assert_upgraded(fixture: &Fixture, before: &BTreeMap<PathBuf, Bytes>) {
     );
     assert!(!fixture.path("sfmr/sift-sift-index.kdf").exists());
 
-    // The files not converted, and the nested workspace, are as they were.
+    // The nested workspace is upgraded with the rest: its workspace file is
+    // version 2, its old folder gone, and the file of its own that `other`
+    // is resolves in its new folder.
+    let nested_config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(fixture.nested().join(WORKSPACE_FILE_NAME)).unwrap())
+            .unwrap();
+    assert_eq!(nested_config["version"], 2);
+    assert!(!fixture
+        .nested()
+        .join("images")
+        .join(v1_record().feature_prefix_dir)
+        .exists());
+    assert_sift_files_resolve(&fixture.path("sfmr/other.sfmr"));
+    assert!(
+        SfmrReconstruction::load(&fixture.path("sfmr/other.sfmr"), &Progress::none())
+            .unwrap()
+            .sift_path_for_image(0)
+            .starts_with(fixture.nested())
+    );
+
+    // The files not converted are as they were.
     let after = snapshot(&fixture.root);
-    for unchanged in [
-        "sfmr/stale.sfmr",
-        "sfmr/other.sfmr",
-        "matches/old-clusters.matches",
-    ] {
+    for unchanged in ["sfmr/stale.sfmr", "matches/old-clusters.matches"] {
         let path = fixture.path(unchanged);
         assert_eq!(after[&path], before[&path], "{unchanged} changed");
-    }
-    for (path, bytes) in before {
-        if path.starts_with(fixture.nested()) {
-            assert_eq!(&after[path], bytes, "{} changed", path.display());
-        }
     }
 }
 
@@ -807,11 +829,18 @@ fn a_version_1_workspace_is_upgraded_and_reported() {
     assert_eq!(report.workspace_dir, fixture.root);
     assert!(!report.dry_run);
     assert_eq!(
-        outcome_of(&report, &fixture.root.join(WORKSPACE_FILE_NAME)),
-        &UpgradeOutcome::Converted
+        report.workspaces,
+        vec![fixture.root.clone(), fixture.nested()]
     );
+    for workspace in &report.workspaces {
+        assert_eq!(
+            outcome_of(&report, &workspace.join(WORKSPACE_FILE_NAME)),
+            &UpgradeOutcome::Converted
+        );
+    }
     for converted in [
         "sfmr/sift.sfmr",
+        "sfmr/other.sfmr",
         "sfmr/embedded.sfmr",
         "matches/pairs.matches",
         "matches/clusters.matches",
@@ -827,15 +856,10 @@ fn a_version_1_workspace_is_upgraded_and_reported() {
         outcome_of(&report, &path("sfmr/sift-sift-index.kdf")),
         &UpgradeOutcome::Deleted
     );
-    for left in [
-        "sfmr/stale.sfmr",
-        "sfmr/other.sfmr",
-        "matches/old-clusters.matches",
-    ] {
+    for left in ["sfmr/stale.sfmr", "matches/old-clusters.matches"] {
         assert!(not_converted(outcome_of(&report, &path(left))), "{left}");
     }
-    assert_eq!(report.nested_workspaces, vec![fixture.nested()]);
-    assert_eq!(report.converted_sift_file_count, IMAGES);
+    assert_eq!(report.converted_sift_file_count, 2 * IMAGES);
     assert!(report.old_folders_deleted);
     let folders: BTreeSet<_> = report
         .folders
@@ -859,6 +883,20 @@ fn a_version_1_workspace_is_upgraded_and_reported() {
                 true
             ),
             (fixture.orphan_folder(), None, 2, true),
+            (
+                fixture
+                    .nested()
+                    .join("images")
+                    .join(v1_record().feature_prefix_dir),
+                Some(
+                    fixture
+                        .nested()
+                        .join("images")
+                        .join(v2_record().feature_prefix_dir)
+                ),
+                IMAGES,
+                true
+            ),
         ])
     );
     assert!(report.notes.iter().any(|n| n.contains("pt3d_")));
@@ -891,9 +929,9 @@ fn a_dry_run_reports_the_plan_and_writes_nothing() {
         &report,
         &fixture.path("sfmr/stale.sfmr")
     )));
-    assert_eq!(report.converted_sift_file_count, IMAGES);
+    assert_eq!(report.converted_sift_file_count, 2 * IMAGES);
     assert!(report.old_folders_deleted);
-    assert_eq!(report.folders.len(), 2);
+    assert_eq!(report.folders.len(), 3);
 }
 
 #[test]
@@ -922,10 +960,14 @@ fn a_missing_image_fails_the_run_before_any_file_is_rewritten() {
     for (path, bytes) in &before {
         assert_eq!(after.get(path), Some(bytes), "{} changed", path.display());
     }
-    assert!(after
-        .keys()
-        .filter(|p| !before.contains_key(*p))
-        .all(|p| p.starts_with(fixture.new_folder())));
+    assert!(after.keys().filter(|p| !before.contains_key(*p)).all(|p| p
+        .starts_with(fixture.new_folder())
+        || p.starts_with(
+            fixture
+                .nested()
+                .join("images")
+                .join(v2_record().feature_prefix_dir)
+        )));
 }
 
 #[test]
@@ -1231,53 +1273,166 @@ fn assert_sift_files_resolve(path: &Path) {
 }
 
 #[test]
-fn an_outer_file_naming_a_nested_workspace_survives_both_upgrades() {
+fn one_run_upgrades_an_outer_file_naming_a_nested_workspace_and_that_workspace() {
     let (fixture, inner, outer_sfmr) = fixture_with_inner_workspace();
     let inner_old = inner.join("images").join(v1_record().feature_prefix_dir);
     let inner_new = inner.join("images").join(v2_record().feature_prefix_dir);
 
-    let outer = run(&fixture, false);
-    assert_eq!(outcome_of(&outer, &outer_sfmr), &UpgradeOutcome::Converted);
-    let folder = outer
+    let report = run(&fixture, false);
+    assert!(report.workspaces.contains(&inner), "{report:?}");
+    assert_eq!(outcome_of(&report, &outer_sfmr), &UpgradeOutcome::Converted);
+    assert_eq!(
+        outcome_of(&report, &inner.join(WORKSPACE_FILE_NAME)),
+        &UpgradeOutcome::Converted
+    );
+    let folder = report
         .folders
         .iter()
         .find(|f| f.old_folder == inner_old)
-        .unwrap_or_else(|| panic!("{outer:?}"));
-    assert_eq!(folder.new_folder, Some(inner_new.clone()));
-    assert!(folder.kept_because.as_deref().unwrap().contains("nested"));
-    assert!(!folder.deleted);
-    assert!(inner_old.is_dir());
-    assert_sift_files_resolve(&outer_sfmr);
-
-    // The inner workspace's own run takes the conversions already there and
-    // deletes its old folder; the outer file still resolves.
-    let inner_report = upgrade_workspace(
-        &inner,
-        &UpgradeWorkspaceOptions::default(),
-        &Progress::none(),
-    )
-    .unwrap();
-    assert!(inner_report.old_folders_deleted, "{inner_report:?}");
+        .unwrap_or_else(|| panic!("{report:?}"));
+    assert_eq!(folder.new_folder, Some(inner_new));
+    assert!(folder.deleted);
     assert!(!inner_old.exists());
     assert_sift_files_resolve(&outer_sfmr);
 }
 
 #[test]
-fn a_nested_workspace_is_refused_while_its_enclosing_one_is_version_1() {
+fn a_run_on_a_nested_workspace_is_refused_naming_the_root() {
     let (fixture, inner, _) = fixture_with_inner_workspace();
     let before = snapshot(&fixture.root);
     for dry_run in [true, false] {
         let error = upgrade_workspace(
-            &inner,
+            &inner.join("images"),
             &UpgradeWorkspaceOptions { dry_run },
             &Progress::none(),
         )
         .unwrap_err();
-        let UpgradeWorkspaceError::EnclosingWorkspace { workspace_file } = &error else {
+        let UpgradeWorkspaceError::NotTreeRoot { root } = &error else {
             panic!("{error}")
         };
-        assert_eq!(workspace_file, &fixture.root.join(WORKSPACE_FILE_NAME));
+        assert_eq!(root, &fixture.root);
     }
+    assert_eq!(snapshot(&fixture.root), before);
+}
+
+/// Write a version 2 workspace file naming the converted record into `dir`,
+/// as `sfm ws upgrade` before this run left one.
+fn write_v2_workspace_file(dir: &Path) {
+    let record = v2_record();
+    let config = serde_json::json!({
+        "version": 2,
+        "feature_tool": record.feature_tool,
+        "feature_type": record.feature_type,
+        "feature_options": record.feature_options,
+        "feature_prefix_dir": record.feature_prefix_dir,
+    });
+    std::fs::write(
+        dir.join(WORKSPACE_FILE_NAME),
+        serde_json::to_string_pretty(&config).unwrap(),
+    )
+    .unwrap();
+}
+
+/// A1: the enclosing workspace file is already version 2, as the shipped
+/// `sfm ws upgrade` leaves it, but a version 1 file of the enclosing
+/// workspace still names the inner workspace's `.sift` files. A run on the
+/// inner workspace is refused, and the run on the root keeps them readable.
+#[test]
+fn a_version_2_enclosing_workspace_with_version_1_files_loses_nothing() {
+    let (fixture, inner, outer_sfmr) = fixture_with_inner_workspace();
+    write_v2_workspace_file(&fixture.root);
+    let error = upgrade_workspace(
+        &inner,
+        &UpgradeWorkspaceOptions::default(),
+        &Progress::none(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, UpgradeWorkspaceError::NotTreeRoot { .. }),
+        "{error}"
+    );
+    let report = run(&fixture, false);
+    assert_eq!(outcome_of(&report, &outer_sfmr), &UpgradeOutcome::Converted);
+    assert_sift_files_resolve(&outer_sfmr);
+}
+
+/// A2: a file inside a nested workspace records the enclosing workspace; the
+/// run finds it and converts it before deleting the folder it names.
+#[test]
+fn a_nested_file_recording_the_enclosing_workspace_loses_nothing() {
+    let fixture = fixture();
+    let mut recon = reconstruction(&fixture.root, &fixture.old_folder(), v1_record(), false);
+    recon.metadata.workspace.relative_path = "..".into();
+    let path = fixture.nested().join("inner-on-outer.sfmr");
+    recon.save(&path, &Progress::none()).unwrap();
+    let report = run(&fixture, false);
+    assert_eq!(outcome_of(&report, &path), &UpgradeOutcome::Converted);
+    assert!(!fixture.old_folder().exists());
+    assert_sift_files_resolve(&path);
+}
+
+/// A folder of the tree that a file of a workspace outside the tree names is
+/// kept: the run cannot see that workspace's other files.
+#[test]
+fn a_folder_a_workspace_outside_the_tree_names_is_kept() {
+    let fixture = fixture();
+    let outside = fixture._dir.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    write_v2_workspace_file(&outside);
+    let mut recon = reconstruction(&outside, &fixture.old_folder(), v1_record(), false);
+    for (i, image) in recon.image_set.images.iter_mut().enumerate() {
+        image.name = format!("../ws/images/{}", image_name(i));
+    }
+    recon.metadata.workspace.relative_path = "../../outside".into();
+    let path = fixture.path("sfmr/from-outside.sfmr");
+    recon.save(&path, &Progress::none()).unwrap();
+    let report = run(&fixture, false);
+    assert!(not_converted(outcome_of(&report, &path)), "{report:?}");
+    let folder = report
+        .folders
+        .iter()
+        .find(|f| f.old_folder == fixture.old_folder())
+        .unwrap();
+    assert!(
+        folder
+            .kept_because
+            .as_deref()
+            .unwrap()
+            .contains("outside this tree"),
+        "{folder:?}"
+    );
+    assert_eq!(
+        std::fs::read_dir(fixture.old_folder()).unwrap().count(),
+        IMAGES
+    );
+}
+
+/// A7: a version 1 `.sift` file locked with no sharing for the whole run
+/// stops the run before anything is written.
+#[cfg(windows)]
+#[test]
+fn a_locked_sift_file_stops_the_run_before_anything_is_written() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let fixture = fixture();
+    let before = snapshot(&fixture.root);
+    let locked = fixture.old_folder().join(format!("{}.sift", image_name(3)));
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&locked)
+        .unwrap();
+    let error = upgrade_workspace(
+        &fixture.root,
+        &UpgradeWorkspaceOptions::default(),
+        &Progress::none(),
+    )
+    .unwrap_err();
+    drop(lock);
+    let UpgradeWorkspaceError::UnreadableSiftFiles(failures) = &error else {
+        panic!("{error}")
+    };
+    assert_eq!(failures.len(), 1, "{error}");
+    assert_eq!(failures[0].sift_path, locked);
     assert_eq!(snapshot(&fixture.root), before);
 }
 

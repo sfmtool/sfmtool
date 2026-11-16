@@ -55,69 +55,76 @@ that records them has to be rewritten too.
 sfm ws upgrade [PATH] [--dry-run]
 ```
 
-The workspace is found as today. On a version 1 workspace the command runs the
-phases below in order. On a version 2 workspace it runs every phase that still
-has work, phase 6 included, so a run that stopped part way can be run again to
-finish, and a version 2 workspace that holds older files is brought up to
-date. When no file needs converting and no version 1 features folder remains,
-it prints "nothing to do" and changes nothing.
+The workspace is found as today, and the run upgrades the whole **tree** of
+workspaces it belongs to: the outermost workspace at or above it, the tree's
+root, and every workspace nested in that one. One run does the whole tree
+because a file of one workspace can name the `.sift` files of another, in
+either direction, and two runs that each decide what to delete without seeing
+the other's files can each delete what the other still needs. When the path
+given is in a workspace nested in another, the run refuses before reading
+anything else, names the outermost workspace and says to run the command
+there. The command then runs the phases below in order. On a tree whose
+workspace files are all version 2 it runs every phase that still has work,
+phase 6 included, so a run that stopped part way can be run again to finish,
+and a version 2 workspace that holds older files is brought up to date. When
+no file needs converting and no version 1 features folder remains, it prints
+"nothing to do" and changes nothing.
 
 `--dry-run` runs phases 1 and 2 and prints the plan (each old folder and its
 new one, each orphan folder, which would be deleted without converting, how
 many files of each kind would be converted, and every file that cannot be,
 with the reason) and writes nothing.
 
-1. **Find the files.** Walk the workspace for `.sfmr`, `.matches`, `.camrig`
+1. **Find the files.** Walk the tree for `.sfmr`, `.matches`, `.camrig`
    and `.kdf` files and for the `.sift` folders named by a `feature_prefix_dir`
-   — the workspace file's own and each one recorded in a `.sfmr` or `.matches`
+   — each workspace file's own and each one recorded in a `.sfmr` or `.matches`
    file's `workspace.contents`. A `feature_prefix_dir` is relative to each
    image's directory, so one record names one folder in every directory that
    holds images
    ([workspace.md § Feature Storage Convention](../workspace/workspace.md#feature-storage-convention)).
    A workspace can hold several records' folders, left by earlier
    `sfm ws init --force` runs. The walk also finds every version 1 features
-   folder whether or not a record names it: each directory in the workspace
-   that holds `.sift` files is checked with
-   `sfmtool_core::features::sift::version_1_sift_files`, which lists the
-   version 1 `.sift` files directly in one folder, the same check every
-   writer of version 2 files makes before it writes into a folder. A version
-   1 folder that no `.sfmr` or `.matches` file names and that is not
-   the workspace file's own folder is an **orphan**: it is not converted, it
-   is deleted in phase 6 with the others, and the report lists it.
+   folder whether or not a record names it: each directory in the tree
+   that holds `.sift` files is checked by the rule
+   `sfmtool_core::features::sift::version_1_sift_files` applies, which
+   lists the version 1 `.sift` files directly in one folder, the same check
+   every writer of version 2 files makes before it writes into a folder. The
+   upgrade reads them with `scan_sift_folder`, which also reports each
+   `.sift` file whose metadata could not be read: one the file system will
+   not give up (locked, or a sync client's placeholder that cannot be
+   fetched) stops the run before anything is written, listing each such
+   file and its error, since it could hold features a file needs; one whose
+   content the reader rejects is passed over, as the writers pass it over.
+   A version 1 folder that no file and no workspace file of the tree names is
+   an **orphan**: it is not converted, it is deleted in phase 6 with the
+   others, and the report lists it.
 
-   A directory below the workspace root that holds its own
-   `.sfm-workspace.json` is another workspace: the walk does not enter it
-   to find files or orphan folders, and the report lists it. Nor does the
-   walk enter a symbolic link or junction to a directory, whose target may
-   lie outside the workspace; the report lists each. A `.sfmr` or `.matches`
-   file whose `workspace` record resolves to another workspace (by the rule
-   every reader resolves it with) is left as it is and listed as not
-   converted; its record names no folder of this workspace, so it makes no
-   folder here a non-orphan.
+   The walk enters nested workspaces and lists them, but not a symbolic link
+   or junction to a directory, whose target may lie outside the tree; the
+   report lists each. Every file is attributed to the workspace its
+   `workspace` record resolves to (by the rule every reader resolves it
+   with), and its image names and folders are relative to that workspace. A
+   `.sfmr` or `.matches` file whose record resolves to a workspace outside the
+   tree is left as it is and listed as not converted, and a folder inside the
+   tree that such a file names is kept in phase 6, since the run cannot see
+   that workspace's other files.
 
-   The walk limits only what is discovered. The folders a file's record
-   names are found by their paths on disk, `<root>/<image's directory>/<feature_prefix_dir>`
-   for each image the file records, even when they lie inside a nested
-   workspace, so a file of this workspace whose images are in a nested one
-   is converted with the rest. Each `.sfmr` and `.matches` file the run would
-   rewrite is read whole here, in a dry run too: a file the current reader
-   refuses is told apart from one the file system will not give up (it is
-   locked, or cannot be opened or read), which is a failure, by the error's
-   type, and a `.sift` file a file records that is not on disk, or not the
-   version 1 file it records, is found before anything is written.
-
-   A run refuses at once, before anything is written, when the workspace
-   lies inside an enclosing workspace whose workspace file is still version
-   1: that workspace's upgrade converts the folders its files name in this
-   one, and this one's deletion would take them away first. The enclosing
-   workspace is upgraded first, then this one.
+   The folders a file's record names are found by their paths on disk,
+   `<its workspace>/<image's directory>/<feature_prefix_dir>` for each image
+   the file records. Each `.sfmr` and `.matches` file the run would rewrite
+   is read whole here, in a dry run too: a file the current reader refuses is
+   told apart from one the file system will not give up (it is locked, or
+   cannot be opened or read), which is a failure, by the error's type, and a
+   `.sift` file a file records that is not on disk, or not the version 1 file
+   it records, is found before anything is written.
 2. **Map each old folder to a new one.** Each distinct version 1 record
    (`feature_tool`, `feature_type`, `feature_options`, `feature_prefix_dir`)
    is converted with `upgrade_feature_options`, and its new folder is named
    from the converted options by the one folder-hash implementation (see
-   "Steps" for why there must be one). The workspace file's own record maps
-   to the folder phase 5 writes into it. A version 1 folder is named by a
-   record when it is `<image dir>/<feature_prefix_dir>`, and its files go to
+   "Steps" for why there must be one). Each version 1 workspace file's own
+   record maps to the folder phase 5 writes into it. A version 1 folder is
+   named by a record of a workspace when it is `<image dir>/<feature_prefix_dir>`
+   below that workspace, and its files go to
    `<image dir>/<new feature_prefix_dir>`. A record that cannot be converted
    (an `sfmtool-undistort` record, a tool this build does not know, a
    `gray_formula` that does not parse) stops the run here, naming the files
@@ -125,18 +132,16 @@ with the reason) and writes nothing.
    does a record whose `feature_prefix_dir` is empty, absolute or holds `..`,
    whose folder would not lie below each image's directory, and a version 1
    workspace file whose options already carry `image_to_gray`, which
-   `upgrade_feature_options` refuses. Two old folders whose records convert to the same new folder, such as a
+   `upgrade_feature_options` refuses. Two old folders whose records convert
+   to the same new folder, such as a
    hand-named `features/sift-colmap-3000` beside a hashed one with the same
    options, are converted into it together: a file the two hold with the
    same content hash is converted once, and two different files for one
    image stop the run here, naming both, rather than the run picking one.
-3. **Convert the `.sift` files** of every old folder that the version 1
+3. **Convert the `.sift` files** of every old folder that a version 1
    workspace file or a file this run rewrites names, into its new folder, as
    above, in parallel; a folder named only by files the run leaves is not
-   converted, since none of them would read the new files. A folder inside a
-   nested workspace is converted into the new folder beside it, in that
-   workspace, where the nested workspace's own run later finds the
-   conversions and keeps them. The image of
+   converted, since none of them would read the new files. The image of
    `<image dir>/<feature_prefix_dir>/<name>.sift` is `<image dir>/<name>`,
    never the file's `image_name`, which version 1 extractors sometimes wrote
    relative to another directory. This builds a table from each old file's
@@ -186,8 +191,9 @@ with the reason) and writes nothing.
    A file already at the current version and naming no old folder (a `.sfmr`
    at version 16, a `.matches` at version 10, a `.camrig` at version 2) is
    left as it is, so its hashes do not change.
-5. **Write the workspace file** as version 2, as `sfm ws upgrade` does today,
-   with the new folder from phase 2, keeping every other key.
+5. **Write the workspace files**: each version 1 workspace file of the tree
+   as version 2, as `sfm ws upgrade` does today for one, with the new folder
+   from phase 2, keeping every other key.
 6. **Delete the old folders.** Only when phases 3 to 5 converted every file
    they had to, every version 1 features folder found in phase 1 is deleted:
    its version 1 `.sift` files, then each directory that leaves empty, up to
@@ -195,14 +201,16 @@ with the reason) and writes nothing.
    known, so the orphan folder and, when it is inside a `features` folder,
    that folder are removed when empty. A file in the folder that is not a version
    1 `.sift` file is kept, keeps the folder, and is listed in the report.
-   Three kinds of folder are kept, and listed with the reason: a folder that
-   a file the current reader refuses names ("kept: named by N files the
-   current reader refuses"), since that file's features are there; a folder
-   inside a nested workspace, which that workspace's own run deletes; and a
-   folder whose real path is not in this workspace. Phase 6 deletes nothing
-   from a directory whose real path is outside the workspace root or inside a
-   nested workspace, and when a folder it would delete lies outside the
-   workspace (reached through a link), it deletes nothing at all and says so.
+   Phase 6 decides over every file of the whole tree, so a folder is deleted
+   only when no file anywhere in the tree still needs it. Three kinds of
+   folder are kept, and listed with the reason: a folder that a file the
+   current reader refuses names ("kept: named by N files the current reader
+   refuses"), since that file's features are there; a folder that a file of
+   a workspace outside the tree names, since the run cannot see that
+   workspace's other files; and a folder whose real path is not in the tree.
+   Phase 6 deletes nothing from a directory whose real path is outside the
+   tree's root, and when a folder it would delete lies outside the tree
+   (reached through a link), it deletes nothing at all and says so.
    Otherwise nothing is deleted, and the report says what to fix before
    running the command again: a file that could not be read or rewritten
    stops the deletion, while a file that is not converted for a reason under
@@ -211,7 +219,7 @@ with the reason) and writes nothing.
 ### A run that stops part way
 
 A run stopped in phase 4 leaves some files naming the new folders, the rest
-naming the old ones, and the workspace file at version 1. Running the command
+naming the old ones, and the workspace files at version 1. Running the command
 again resumes it. No other command needs to handle that state: every command
 that works with the workspace's settings or its `.sift` features refuses a
 version 1 workspace and says to run `sfm ws upgrade`
@@ -221,16 +229,16 @@ records, which are on disk either way, since phase 3 has finished and phase 6
 has not run.
 
 A run stopped after phase 5, or part way through phase 6, leaves the workspace
-file at version 2, no file naming an old folder but those listed under "What
+files at version 2, no file naming an old folder but those listed under "What
 is not converted", and some or all of the old folders on disk. Running the
 command again finds them by the walk in phase 1. A folder that no file names
-any more is an orphan, since it is not the workspace file's own folder either;
+any more is an orphan, since it is no workspace file's own folder either;
 its files were converted by the first run, so the second run does not convert
 them. A folder still named by a file listed as not converted is not an orphan,
 but no file the run rewrites names it, so it is not converted again either.
 Phase 6 then deletes them all, except the folders it keeps. Until then they
 are folders no converted file reads: commands use the new folders through the
-version 2 workspace file and the rewritten files' records. A folder kept
+version 2 workspace files and the rewritten files' records. A folder kept
 because a file the reader refuses names it is settled: a rerun neither
 converts it nor counts it as work, so a workspace that holds such files still
 reaches "nothing to do".
@@ -253,8 +261,9 @@ those folders by the current reader anyway:
   record is unknown and its folder could be taken for an orphan;
 - a `.sfmr` or `.matches` file a `.sift` file of which is not on disk, or is
   on disk but is not the version 1 file it records; the reason says which;
-- a `.sfmr` or `.matches` file whose `workspace` record resolves to another
-  workspace, which that workspace's upgrade converts;
+- a `.sfmr` or `.matches` file whose `workspace` record resolves to a
+  workspace outside the tree, which that workspace's upgrade converts; a
+  folder inside the tree that it names is kept;
 - a `.kdf` file that cannot be read.
 
 ### Backing up
@@ -292,8 +301,10 @@ if report.nothing_to_do() {
 }
 ```
 
-`UpgradeWorkspaceReport` holds the workspace directory; the dry-run flag; one
-`UpgradedFile` per file (the workspace file first, then each `.sfmr`,
+`UpgradeWorkspaceReport` holds the tree's root (`workspace_dir`); the
+workspaces of the tree (`workspaces`, the root first); the dry-run flag; one
+`UpgradedFile` per file (each workspace file of the tree first, in the order
+of `workspaces`, then each `.sfmr`,
 `.matches`, `.camrig` and `.kdf` file the walk found) with its
 `UpgradeFileKind` and `UpgradeOutcome`: `Converted`, `AlreadyCurrent`,
 `NotConverted(reason)` (one of "What is not converted", which does not stop the
@@ -303,22 +314,26 @@ deletion), `Failed(reason)` (could not be read or written, which does) or
 leaves name), its `.sift` file count, why it is kept (`kept_because`, `None`
 when phase 6 deletes it), whether it was deleted and the files the deletion
 kept; a folder not converted and kept is settled (`is_settled`); the number of
-`.sift` files converted; the nested workspaces; the linked directories the
+`.sift` files converted; the linked directories the
 walk did not enter; whether phase 6 deleted every folder it does not keep;
 and notes for the user, the point-ID note among them. `nothing_to_do` holds
-when the workspace file is current, no file is converted or deleted, and
+when every workspace file is current, no file is converted or deleted, and
 every folder is settled. A dry run fills the same report with the outcomes the
 run would have. The report serializes with `serde`, so a caller can print or
 store it as JSON.
 
 `UpgradeWorkspaceError` is what stops a run before anything but new `.sift`
-files is written: no workspace, a workspace file that cannot be read or is
-not version 1 or 2, an enclosing workspace still at version 1
-(`EnclosingWorkspace`), a directory that cannot be listed, a record that
+files is written: no workspace, a path in a workspace nested in another
+(`NotTreeRoot`, naming the outermost workspace, where to run it), a
+workspace file that cannot be read or is not version 1 or 2, a directory that
+cannot be listed, a `.sift` file in a folder the run examines that the file
+system will not give up (`UnreadableSiftFiles`, each with its error), a
+record that
 cannot be converted (`FeatureOptions`, naming the files that hold it), a
 `feature_prefix_dir` that would leave the image directory
 (`FeaturePrefixDir`), two old files for one new one (`Conflicts`), every
-`.sift` file that could not be converted (`SiftFiles`), and `Cancelled`. The progress phases are `find files`, `plan`,
+`.sift` file that could not be converted (`SiftFiles`), and `Cancelled`. The
+progress phases are `find files`, `plan`,
 `convert .sift files`, `rewrite files`, `workspace file` and
 `delete old folders`, each counting what it works through; cancellation is
 checked between files, and a cancelled run is one of the stopped runs above.

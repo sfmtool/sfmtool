@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Phases 1 and 2 of the workspace upgrade: find the files and the version 1
-//! features folders, and map each version 1 record to its new folder.
+//! features folders of a tree of workspaces, and map each version 1 record to
+//! its new folder.
 //!
 //! Nothing here writes. A dry run is these two phases and the report they
 //! give; a run goes on from the [`Plan`] to the phases in the parent module.
@@ -15,13 +16,13 @@ use rayon::prelude::*;
 use sfmtool_archive_io::{parse_hash_bytes, WorkspaceContents};
 
 use super::{
-    SiftConflict, UpgradeFileKind, UpgradeOutcome, UpgradeWorkspaceError, WORKSPACE_FILE_NAME,
+    SiftConflict, SiftFileFailure, UpgradeFileKind, UpgradeOutcome, UpgradeWorkspaceError,
+    WORKSPACE_FILE_NAME,
 };
-use crate::features::sift::version_1_sift_files;
+use crate::features::sift::scan_sift_folder;
 use crate::progress::Progress;
 use crate::workspace::{
-    feature_prefix_dir, find_workspace_for_path, has_image_to_gray, upgrade_feature_options,
-    FeatureOptionsError,
+    feature_prefix_dir, has_image_to_gray, upgrade_feature_options, FeatureOptionsError,
 };
 
 /// What a run does to one `.sfmr`, `.matches`, `.camrig` or `.kdf` file.
@@ -29,6 +30,9 @@ use crate::workspace::{
 pub(super) enum Action {
     /// Read it and write it back as the current version, at its own path.
     Rewrite {
+        /// The directory of the workspace its record resolves to, which its
+        /// image names are relative to.
+        workspace: PathBuf,
         /// The converted record its `workspace.contents` becomes, when it
         /// records a version 1 one.
         new_contents: Option<WorkspaceContents>,
@@ -54,8 +58,8 @@ pub(super) struct FilePlan {
 #[derive(Debug, Clone)]
 pub(super) struct OldFolder {
     pub(super) path: PathBuf,
-    /// The folder its files are converted into, or `None` when no file of
-    /// the workspace that can be converted names it.
+    /// The folder its files are converted into, or `None` when neither a
+    /// version 1 workspace file nor a file the run rewrites names it.
     pub(super) new_folder: Option<PathBuf>,
     /// The directory the record's `feature_prefix_dir` is relative to, where
     /// the images are, when a record names the folder.
@@ -75,26 +79,35 @@ pub(super) struct SiftJob {
     pub(super) folder: usize,
 }
 
+/// One workspace of the tree, and its workspace file.
+#[derive(Debug, Clone)]
+pub(super) struct WorkspacePlan {
+    /// The workspace directory.
+    pub(super) dir: PathBuf,
+    /// Its `.sfm-workspace.json`.
+    pub(super) file: PathBuf,
+    /// The version 2 workspace file to write, or `None` when it is version 2
+    /// already.
+    pub(super) new_file: Option<serde_json::Value>,
+}
+
 /// What phases 1 and 2 found.
 #[derive(Debug)]
 pub(super) struct Plan {
-    /// The workspace root, as the upward search found it.
+    /// The root of the tree, the outermost workspace.
     pub(super) root: PathBuf,
     /// Its real path.
     pub(super) root_canonical: PathBuf,
-    /// `.sfm-workspace.json`.
-    pub(super) workspace_file: PathBuf,
-    /// The version 2 workspace file to write, or `None` when it is version 2
-    /// already.
-    pub(super) new_workspace_file: Option<serde_json::Value>,
+    /// The workspaces of the tree, the root first, then the nested ones
+    /// sorted by path.
+    pub(super) workspaces: Vec<WorkspacePlan>,
     pub(super) folders: Vec<OldFolder>,
     pub(super) new_folders: Vec<PathBuf>,
     pub(super) jobs: Vec<SiftJob>,
     pub(super) files: Vec<FilePlan>,
-    pub(super) nested_workspaces: Vec<PathBuf>,
     pub(super) linked_directories: Vec<PathBuf>,
     /// Why phase 6 deletes nothing at all, when a folder it would delete lies
-    /// outside the workspace.
+    /// outside the tree.
     pub(super) deletion_refused: Option<String>,
 }
 
@@ -102,6 +115,22 @@ pub(super) struct Plan {
 /// (`a/b` and `a\b` on Windows, a trailing separator) compare and hash equal.
 pub(super) fn normalized(path: &Path) -> PathBuf {
     path.components().collect()
+}
+
+/// `path` with each `..` taking off the name before it, without touching
+/// the file system.
+fn lexically_resolved(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// Whether `path` is relative and holds only plain names: no root, drive or
@@ -112,25 +141,25 @@ fn is_plain_relative(path: &Path) -> bool {
 }
 
 /// The `.sift` path image `name` (workspace-relative, `/`-separated) has
-/// under `prefix` in the workspace at `root`:
-/// `<root>/<name's directory>/<prefix>/<name's file name>.sift`.
-pub(super) fn sift_path(root: &Path, name: &str, prefix: &str) -> PathBuf {
+/// under `prefix` in the workspace at `workspace`:
+/// `<workspace>/<name's directory>/<prefix>/<name's file name>.sift`.
+pub(super) fn sift_path(workspace: &Path, name: &str, prefix: &str) -> PathBuf {
     let image = Path::new(name);
     let parent = image.parent().unwrap_or(Path::new(""));
     let file_name = image.file_name().unwrap_or_default().to_string_lossy();
     normalized(
-        &root
+        &workspace
             .join(parent)
             .join(prefix)
             .join(format!("{file_name}.sift")),
     )
 }
 
-/// Whether an error from reading a `.sfmr` or `.matches` file is the file
-/// system's (the file could not be opened, read or was locked) rather than
-/// the reader refusing what the file holds. An I/O error of kind
-/// `InvalidData` or `UnexpectedEof` is the content's: the decompressor and a
-/// truncated archive report through `std::io::Error` too.
+/// Whether an error from reading a file is the file system's (the file could
+/// not be opened, read or was locked) rather than the reader refusing what
+/// the file holds. An I/O error of kind `InvalidData` or `UnexpectedEof` is
+/// the content's: the decompressor and a truncated archive report through
+/// `std::io::Error` too.
 pub(super) fn is_file_system_error(error: &(dyn std::error::Error + 'static)) -> bool {
     let mut current = Some(error);
     while let Some(e) = current {
@@ -150,9 +179,6 @@ fn refused(error: &str) -> String {
     format!("the current reader refuses it, so it is left as it is: {error}")
 }
 
-/// A folder of version 1 `.sift` files, and each file with its content hash.
-type HashedFolder = (PathBuf, Vec<(PathBuf, [u8; 16])>);
-
 /// The files and folders the walk found, before any is read.
 #[derive(Default)]
 struct Walk {
@@ -165,10 +191,10 @@ struct Walk {
     linked_directories: Vec<PathBuf>,
 }
 
-/// Walk the workspace at `root` for the files the upgrade reads. It does not
-/// descend into a nested workspace, a directory below `root` that holds its
-/// own `.sfm-workspace.json`, nor into a symbolic link or junction to a
-/// directory, whose target may be outside the workspace; it lists both.
+/// Walk the tree at `root` for the files the upgrade reads, nested
+/// workspaces included, which it lists. It does not enter a symbolic link or
+/// junction to a directory, whose target may be outside the tree; it lists
+/// each.
 fn walk(root: &Path, progress: &Progress<'_>) -> Result<Walk, UpgradeWorkspaceError> {
     let mut found = Walk::default();
     let mut stack = vec![root.to_path_buf()];
@@ -198,10 +224,9 @@ fn walk(root: &Path, progress: &Progress<'_>) -> Result<Walk, UpgradeWorkspaceEr
             }
             if file_type.is_dir() {
                 if path.join(WORKSPACE_FILE_NAME).is_file() {
-                    found.nested_workspaces.push(path);
-                } else {
-                    stack.push(path);
+                    found.nested_workspaces.push(path.clone());
                 }
+                stack.push(path);
                 continue;
             }
             match path.extension().and_then(|e| e.to_str()) {
@@ -233,11 +258,11 @@ fn walk(root: &Path, progress: &Progress<'_>) -> Result<Walk, UpgradeWorkspaceEr
     Ok(found)
 }
 
-/// The record a file or the workspace file names, as the key two equal
-/// records share.
-fn record_key(contents: &WorkspaceContents) -> String {
+/// The record a file or a workspace file names, in workspace `workspace`, as
+/// the key two equal records share.
+fn record_key(workspace: usize, contents: &WorkspaceContents) -> String {
     format!(
-        "{}\u{0}{}\u{0}{}\u{0}{}",
+        "{workspace}\u{0}{}\u{0}{}\u{0}{}\u{0}{}",
         contents.feature_tool,
         contents.feature_type,
         contents.feature_prefix_dir,
@@ -245,12 +270,14 @@ fn record_key(contents: &WorkspaceContents) -> String {
     )
 }
 
-/// A version 1 record, the files that name it, and the record it becomes.
+/// A version 1 record of one workspace, the files that name it, and the
+/// record it becomes.
 struct Record {
+    /// The directory of the workspace the record belongs to.
+    workspace: PathBuf,
     old: WorkspaceContents,
     new: Option<WorkspaceContents>,
-    /// The workspace file and the files of the workspace that can be read
-    /// and name it.
+    /// The workspace file and the files that can be read and name it.
     named_by: Vec<PathBuf>,
     /// Of those, how many will be rewritten, the workspace file among them
     /// when it is version 1.
@@ -259,37 +286,47 @@ struct Record {
     refused_by: usize,
 }
 
-/// What phase 1 read of a `.sfmr` or `.matches` file: whether it is in this
-/// workspace, and if so the record it holds.
+/// What phase 1 read of a `.sfmr` or `.matches` file: which workspace of the
+/// tree it is in, if any, and the record it holds.
 enum Recorded {
-    /// It records this workspace: its version, its record, whether its
-    /// observations name `.sift` files, and for a cluster `.matches` file
-    /// below version 6, which the reader refuses, `true`.
+    /// Its record resolves to the tree's workspace `workspace`: its version,
+    /// its record, whether its observations name `.sift` files, and for a
+    /// cluster `.matches` file below version 6, which the reader refuses,
+    /// `true`.
     Here {
+        workspace: usize,
         version: u32,
         contents: WorkspaceContents,
         names_sift_files: bool,
         unreadable_clusters: bool,
     },
+    /// Its record resolves to the workspace at `dir`, outside the tree.
+    Elsewhere {
+        dir: PathBuf,
+        contents: WorkspaceContents,
+    },
     Leave(UpgradeOutcome),
 }
 
-/// Whether `dir`, a workspace directory a file records, is the one at `root`.
-fn same_dir(dir: &Path, root_canonical: &Path) -> bool {
-    std::fs::canonicalize(dir).is_ok_and(|d| d == root_canonical)
+/// The index of the workspace of the tree at `dir`, by real path.
+fn workspace_index(dir: &Path, canonical: &[PathBuf]) -> Option<usize> {
+    let real = std::fs::canonicalize(dir).ok()?;
+    canonical.iter().position(|c| *c == real)
 }
 
-fn elsewhere(dir: Option<&Path>) -> UpgradeOutcome {
-    UpgradeOutcome::NotConverted(match dir {
-        Some(dir) => format!(
-            "it records the workspace {}, not this one, so that workspace's upgrade converts it",
-            dir.display()
-        ),
-        None => "it records no workspace that can be found".to_string(),
-    })
+fn elsewhere(dir: &Path) -> UpgradeOutcome {
+    UpgradeOutcome::NotConverted(format!(
+        "it records the workspace {}, which is outside this tree, so that workspace's upgrade \
+         converts it",
+        dir.display()
+    ))
 }
 
-fn read_sfmr_record(path: &Path, root_canonical: &Path) -> Recorded {
+fn no_workspace() -> UpgradeOutcome {
+    UpgradeOutcome::NotConverted("it records no workspace that can be found".to_string())
+}
+
+fn read_sfmr_record(path: &Path, canonical: &[PathBuf]) -> Recorded {
     let metadata = match sfmtool_sfmr_format::read_sfmr_metadata(path) {
         Ok(m) => m,
         Err(e) => {
@@ -297,19 +334,25 @@ fn read_sfmr_record(path: &Path, root_canonical: &Path) -> Recorded {
         }
     };
     match sfmtool_sfmr_format::resolve_workspace_dir(path, &metadata) {
-        Ok(dir) if same_dir(&dir, root_canonical) => Recorded::Here {
-            version: metadata.version,
-            names_sift_files: metadata.feature_source
-                == sfmtool_sfmr_format::FEATURE_SOURCE_SIFT_FILES,
-            contents: metadata.workspace.contents,
-            unreadable_clusters: false,
+        Ok(dir) => match workspace_index(&dir, canonical) {
+            Some(workspace) => Recorded::Here {
+                workspace,
+                version: metadata.version,
+                names_sift_files: metadata.feature_source
+                    == sfmtool_sfmr_format::FEATURE_SOURCE_SIFT_FILES,
+                contents: metadata.workspace.contents,
+                unreadable_clusters: false,
+            },
+            None => Recorded::Elsewhere {
+                dir,
+                contents: metadata.workspace.contents,
+            },
         },
-        Ok(dir) => Recorded::Leave(elsewhere(Some(&dir))),
-        Err(_) => Recorded::Leave(elsewhere(None)),
+        Err(_) => Recorded::Leave(no_workspace()),
     }
 }
 
-fn read_matches_record(path: &Path, root_canonical: &Path) -> Recorded {
+fn read_matches_record(path: &Path, canonical: &[PathBuf]) -> Recorded {
     let metadata = match sfmtool_matches_format::read_matches_metadata(path) {
         Ok(m) => m,
         Err(e) => {
@@ -317,18 +360,24 @@ fn read_matches_record(path: &Path, root_canonical: &Path) -> Recorded {
         }
     };
     match sfmtool_matches_format::resolve_workspace_dir(path, &metadata) {
-        Some(dir) if same_dir(&dir, root_canonical) => Recorded::Here {
-            version: metadata.version,
-            unreadable_clusters: metadata.has_clusters && metadata.version < 6,
-            contents: metadata.workspace.contents,
-            names_sift_files: true,
+        Some(dir) => match workspace_index(&dir, canonical) {
+            Some(workspace) => Recorded::Here {
+                workspace,
+                version: metadata.version,
+                unreadable_clusters: metadata.has_clusters && metadata.version < 6,
+                contents: metadata.workspace.contents,
+                names_sift_files: true,
+            },
+            None => Recorded::Elsewhere {
+                dir,
+                contents: metadata.workspace.contents,
+            },
         },
-        Some(dir) => Recorded::Leave(elsewhere(Some(&dir))),
-        None => Recorded::Leave(elsewhere(None)),
+        None => Recorded::Leave(no_workspace()),
     }
 }
 
-/// What reading a whole `.sfmr` or `.matches` file of this workspace gave.
+/// What reading a whole `.sfmr` or `.matches` file gave.
 enum Contents {
     /// The image names it records and, when it names `.sift` files, their
     /// content hashes.
@@ -376,7 +425,7 @@ fn read_contents(path: &Path, kind: UpgradeFileKind) -> Contents {
     }
 }
 
-/// Read the workspace file: the version 2 file to write in its place, or
+/// Read a workspace file: the version 2 file to write in its place, or
 /// `None` when it is version 2 already, and the version 1 record it holds.
 fn read_workspace_file(
     path: &Path,
@@ -428,30 +477,10 @@ fn read_workspace_file(
     Ok((Some(config), Some(contents)))
 }
 
-/// The version 1 workspace file of a workspace that encloses the one at
-/// `root`, if any. Its upgrade converts the folders its files name inside
-/// this workspace, so it goes first.
-pub(super) fn enclosing_version_1_workspace(root: &Path) -> Option<PathBuf> {
-    let mut start = root.parent().map(Path::to_path_buf);
-    while let Some(dir) = start {
-        let enclosing = find_workspace_for_path(&dir)?;
-        let file = enclosing.join(WORKSPACE_FILE_NAME);
-        let version = std::fs::read_to_string(&file)
-            .ok()
-            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-            .and_then(|config| config.get("version").and_then(serde_json::Value::as_u64));
-        if version == Some(1) {
-            return Some(file);
-        }
-        start = enclosing.parent().map(Path::to_path_buf);
-    }
-    None
-}
-
-/// The directory `folder` is in when it is `<image_dir>/<prefix>`, or `None`
-/// when it does not end with `prefix`'s components.
-fn image_dir_of(folder: &Path, root: &Path, prefix: &str) -> Option<PathBuf> {
-    let relative = folder.strip_prefix(root).ok()?;
+/// The directory `folder` is in when it is `<image_dir>/<prefix>` below
+/// `workspace`, or `None` when it is not.
+fn image_dir_of(folder: &Path, workspace: &Path, prefix: &str) -> Option<PathBuf> {
+    let relative = folder.strip_prefix(workspace).ok()?;
     let folder_parts: Vec<OsString> = relative
         .components()
         .map(|c| c.as_os_str().to_owned())
@@ -471,53 +500,57 @@ fn image_dir_of(folder: &Path, root: &Path, prefix: &str) -> Option<PathBuf> {
     Some(normalized(
         &folder_parts[..split]
             .iter()
-            .fold(root.to_path_buf(), |dir, part| dir.join(part)),
+            .fold(workspace.to_path_buf(), |dir, part| dir.join(part)),
     ))
 }
 
-/// Where a folder lies relative to the workspace.
-enum Location {
-    /// In this workspace.
-    Here,
-    /// In the nested workspace at this directory.
-    Nested(PathBuf),
-    /// Outside the workspace, through a link.
-    Outside(PathBuf),
-}
-
-fn location(folder: &Path, root_canonical: &Path) -> Location {
+/// The real path of `folder` when it lies outside the tree at
+/// `root_canonical`, reached through a link.
+fn outside_tree(folder: &Path, root_canonical: &Path) -> Option<PathBuf> {
     let real = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
-    if !real.starts_with(root_canonical) {
-        return Location::Outside(real);
-    }
-    match find_workspace_for_path(folder) {
-        Some(ws) if !same_dir(&ws, root_canonical) => Location::Nested(ws),
-        _ => Location::Here,
-    }
+    (!real.starts_with(root_canonical)).then_some(real)
 }
 
-/// Run phases 1 and 2 on the workspace at `root`, whose canonical path is
-/// `root_canonical`. Every `.sfmr` and `.matches` file that the run would
-/// rewrite is read here, so that a file the reader refuses, a file that
-/// cannot be read and a file whose `.sift` files are not on disk are known
-/// before anything is written.
+/// Run phases 1 and 2 on the tree of workspaces at `root`, whose canonical
+/// path is `root_canonical`. Every `.sfmr` and `.matches` file that the run
+/// would rewrite is read here, and the metadata of every `.sift` file in a
+/// folder it examines, so that a file the reader refuses, a file that cannot
+/// be read and a file whose `.sift` files are not on disk are known before
+/// anything is written.
 pub(super) fn plan(
     root: &Path,
     root_canonical: &Path,
     progress: &Progress<'_>,
 ) -> Result<Plan, UpgradeWorkspaceError> {
-    let workspace_file = root.join(WORKSPACE_FILE_NAME);
-    let (new_workspace_file, workspace_record) = read_workspace_file(&workspace_file)?;
-
     let found = {
         let phase = progress.phase("find files");
         walk(root, &phase)?
     };
-
     let phase = progress.phase("plan");
 
-    // Each `.sfmr` and `.matches` file: whether it is in this workspace, and
-    // for those the run would rewrite, what reading it whole gives.
+    // The workspaces of the tree and their workspace files.
+    let mut workspace_dirs = vec![root.to_path_buf()];
+    workspace_dirs.extend(found.nested_workspaces.iter().cloned());
+    let mut workspaces = Vec::with_capacity(workspace_dirs.len());
+    let mut workspace_records = Vec::with_capacity(workspace_dirs.len());
+    for dir in &workspace_dirs {
+        let file = dir.join(WORKSPACE_FILE_NAME);
+        let (new_file, record) = read_workspace_file(&file)?;
+        workspaces.push(WorkspacePlan {
+            dir: dir.clone(),
+            file,
+            new_file,
+        });
+        workspace_records.push(record);
+    }
+    let canonical: Vec<PathBuf> = workspace_dirs
+        .iter()
+        .map(|d| std::fs::canonicalize(d).unwrap_or_else(|_| d.clone()))
+        .collect();
+
+    // Each `.sfmr` and `.matches` file: which workspace of the tree it is
+    // in, and what reading it whole gives for those the run would rewrite and
+    // those of a workspace outside the tree that name a version 1 record.
     let current_version = |kind| match kind {
         UpgradeFileKind::Sfmr => sfmtool_sfmr_format::SFMR_FORMAT_VERSION,
         _ => sfmtool_matches_format::MATCHES_FORMAT_VERSION,
@@ -532,8 +565,8 @@ pub(super) fn plan(
         .par_iter()
         .map(|(kind, path)| {
             let recorded = match kind {
-                UpgradeFileKind::Sfmr => read_sfmr_record(path, root_canonical),
-                _ => read_matches_record(path, root_canonical),
+                UpgradeFileKind::Sfmr => read_sfmr_record(path, &canonical),
+                _ => read_matches_record(path, &canonical),
             };
             let contents = match &recorded {
                 Recorded::Here {
@@ -546,6 +579,11 @@ pub(super) fn plan(
                 {
                     Some(read_contents(path, *kind))
                 }
+                Recorded::Elsewhere { contents, .. }
+                    if !has_image_to_gray(&contents.feature_options) =>
+                {
+                    Some(read_contents(path, *kind))
+                }
                 _ => None,
             };
             (recorded, contents)
@@ -555,112 +593,130 @@ pub(super) fn plan(
 
     // The folders to check for version 1 files: each the walk found, and each
     // a readable file's record names for its images, found by its path on
-    // disk even inside a nested workspace.
+    // disk. A folder a file of a workspace outside the tree names, inside the
+    // tree, is kept whatever else names it.
     let mut sift_dirs: BTreeSet<PathBuf> = found.sift_dirs.iter().cloned().collect();
-    for ((_, _), (recorded, contents)) in candidates.iter().zip(&read) {
-        if let (
+    let mut named_from_outside: HashMap<PathBuf, PathBuf> = HashMap::new();
+    for (recorded, contents) in &read {
+        let (workspace, record, from_outside) = match recorded {
             Recorded::Here {
-                contents: record, ..
-            },
-            Some(Contents::Read { names, .. }),
-        ) = (recorded, contents)
+                workspace,
+                contents: record,
+                ..
+            } => (workspace_dirs[*workspace].clone(), record, false),
+            Recorded::Elsewhere { dir, contents } => (dir.clone(), contents, true),
+            Recorded::Leave(_) => continue,
+        };
+        let Some(Contents::Read { names, .. }) = contents else {
+            continue;
+        };
+        if has_image_to_gray(&record.feature_options)
+            || !is_plain_relative(Path::new(&record.feature_prefix_dir))
         {
-            if has_image_to_gray(&record.feature_options)
-                || !is_plain_relative(Path::new(&record.feature_prefix_dir))
-            {
+            continue;
+        }
+        for name in names {
+            let parent = Path::new(name).parent().unwrap_or(Path::new(""));
+            if !from_outside && !is_plain_relative(parent) {
                 continue;
             }
-            for name in names {
-                let parent = Path::new(name).parent().unwrap_or(Path::new(""));
-                if is_plain_relative(parent) {
-                    let dir = normalized(&root.join(parent).join(&record.feature_prefix_dir));
-                    if dir.is_dir() {
-                        sift_dirs.insert(dir);
-                    }
-                }
+            let dir = normalized(&lexically_resolved(
+                &workspace.join(parent).join(&record.feature_prefix_dir),
+            ));
+            if !dir.is_dir() {
+                continue;
             }
+            if from_outside {
+                if outside_tree(&dir, root_canonical).is_some() {
+                    continue;
+                }
+                named_from_outside.insert(dir.clone(), workspace.clone());
+            }
+            sift_dirs.insert(dir);
         }
     }
 
-    // The version 1 `.sift` files of each of those folders, by the check
-    // every writer of version 2 files makes.
-    let listed: Vec<Result<Option<HashedFolder>, UpgradeWorkspaceError>> = sift_dirs
+    // The version 1 `.sift` files of each of those folders, by the rule every
+    // writer of version 2 files follows. A `.sift` file the file system will
+    // not give up (locked, or a placeholder that cannot be fetched) could
+    // hold features a file needs, so it stops the run here.
+    let scans: Vec<_> = sift_dirs
         .par_iter()
-        .map(|dir| {
-            let files = version_1_sift_files(dir)
-                .map_err(|e| UpgradeWorkspaceError::ListFolder {
-                    folder: dir.clone(),
-                    problem: e.to_string(),
-                })?
-                .map(|found| found.files)
-                .unwrap_or_default();
-            if files.is_empty() {
-                return Ok(None);
-            }
-            // A file `version_1_sift_files` counted read as version 1, so its
-            // hashes read too unless it changed since; one that no longer
-            // reads keeps no hash and so matches no record.
-            let hashed = files
-                .into_iter()
-                .map(|path| {
-                    let hash = sfmtool_sift_format::read_sift_metadata(&path)
-                        .ok()
-                        .and_then(|(_, _, h)| parse_hash_bytes(&h.content_xxh128).ok())
-                        .unwrap_or([0; 16]);
-                    (path, hash)
-                })
-                .collect();
-            Ok(Some((dir.clone(), hashed)))
-        })
+        .map(|dir| (dir, scan_sift_folder(dir)))
         .collect();
     let mut version_1_folders = Vec::new();
-    let mut version_1_hashes = HashMap::new();
-    for item in listed {
-        if let Some((dir, files)) = item? {
-            let mut paths = Vec::with_capacity(files.len());
-            for (path, hash) in files {
+    let mut version_1_hashes: HashMap<PathBuf, [u8; 16]> = HashMap::new();
+    let mut unreadable = Vec::new();
+    for (dir, scan) in scans {
+        let scan = scan.map_err(|e| UpgradeWorkspaceError::ListFolder {
+            folder: dir.clone(),
+            problem: e.to_string(),
+        })?;
+        for (path, error) in scan.unreadable {
+            if is_file_system_error(&error) {
+                unreadable.push(SiftFileFailure {
+                    sift_path: path,
+                    problem: error.to_string(),
+                });
+            }
+        }
+        let mut paths = Vec::with_capacity(scan.version_1.len());
+        for (path, hash) in scan.version_1 {
+            // A content hash that is not 32 hex digits is the content's
+            // fault, like any other the reader rejects: the file names no
+            // record's hash and is passed over.
+            if let Ok(hash) = parse_hash_bytes(&hash.content_xxh128) {
                 version_1_hashes.insert(normalized(&path), hash);
                 paths.push(path);
             }
-            version_1_folders.push((dir, paths));
         }
+        if !paths.is_empty() {
+            version_1_folders.push((dir.clone(), paths));
+        }
+    }
+    if !unreadable.is_empty() {
+        return Err(UpgradeWorkspaceError::UnreadableSiftFiles(unreadable));
     }
     phase.check_cancel()?;
 
     // Why a readable file that names a version 1 folder cannot be
-    // converted: a `.sift` file it records is not on disk, or has changed.
-    let missing = |names: &[String], hashes: &[[u8; 16]], prefix: &str| -> Option<String> {
-        for (name, hash) in names.iter().zip(hashes) {
-            let path = sift_path(root, name, prefix);
-            if version_1_hashes.get(&path) == Some(hash) {
-                continue;
-            }
-            return Some(if path.is_file() {
-                format!(
-                    "the .sift file {} it records for {name} is not the version 1 file it \
+    // converted: a `.sift` file it records is not on disk, or is on disk but
+    // is not the version 1 file it records.
+    let missing =
+        |workspace: &Path, names: &[String], hashes: &[[u8; 16]], prefix: &str| -> Option<String> {
+            for (name, hash) in names.iter().zip(hashes) {
+                let path = sift_path(workspace, name, prefix);
+                if version_1_hashes.get(&path) == Some(hash) {
+                    continue;
+                }
+                return Some(if path.is_file() {
+                    format!(
+                        "the .sift file {} it records for {name} is not the version 1 file it \
                      records: it has changed",
-                    path.display()
-                )
-            } else {
-                format!(
-                    "the .sift file {} it records for {name} is not on disk",
-                    path.display()
-                )
-            });
-        }
-        None
-    };
+                        path.display()
+                    )
+                } else {
+                    format!(
+                        "the .sift file {} it records for {name} is not on disk",
+                        path.display()
+                    )
+                });
+            }
+            None
+        };
     let reasons: Vec<Option<String>> = read
         .iter()
         .map(|(recorded, contents)| match (recorded, contents) {
             (
                 Recorded::Here {
+                    workspace,
                     contents: record,
                     names_sift_files: true,
                     ..
                 },
                 Some(Contents::Read { names, hashes }),
             ) if !has_image_to_gray(&record.feature_options) => missing(
+                &workspace_dirs[*workspace],
                 names,
                 hashes.as_deref().unwrap_or_default(),
                 &record.feature_prefix_dir,
@@ -669,45 +725,57 @@ pub(super) fn plan(
         })
         .collect();
 
-    // The records: the workspace file's when it is version 1, and each one a
-    // file of this workspace holds.
+    // The records: each version 1 workspace file's, and each one a file of
+    // the tree holds, by the workspace it belongs to.
     let mut records: BTreeMap<String, Record> = BTreeMap::new();
-    let mut note_record =
-        |contents: &WorkspaceContents, path: &Path, rewritten: bool, is_refused: bool| {
-            if has_image_to_gray(&contents.feature_options) {
-                return;
-            }
-            let record = records
-                .entry(record_key(contents))
-                .or_insert_with(|| Record {
-                    old: contents.clone(),
-                    new: None,
-                    named_by: Vec::new(),
-                    rewritten_by: 0,
-                    refused_by: 0,
-                });
-            if is_refused {
-                record.refused_by += 1;
-            } else {
-                record.named_by.push(path.to_path_buf());
-                record.rewritten_by += usize::from(rewritten);
-            }
-        };
-    if let Some(contents) = &workspace_record {
-        note_record(contents, &workspace_file, true, false);
+    let mut note_record = |workspace: usize,
+                           contents: &WorkspaceContents,
+                           path: &Path,
+                           rewritten: bool,
+                           is_refused: bool| {
+        if has_image_to_gray(&contents.feature_options) {
+            return;
+        }
+        let record = records
+            .entry(record_key(workspace, contents))
+            .or_insert_with(|| Record {
+                workspace: workspace_dirs[workspace].clone(),
+                old: contents.clone(),
+                new: None,
+                named_by: Vec::new(),
+                rewritten_by: 0,
+                refused_by: 0,
+            });
+        if is_refused {
+            record.refused_by += 1;
+        } else {
+            record.named_by.push(path.to_path_buf());
+            record.rewritten_by += usize::from(rewritten);
+        }
+    };
+    for (i, (record, workspace)) in workspace_records.iter().zip(&workspaces).enumerate() {
+        if let Some(contents) = record {
+            note_record(i, contents, &workspace.file, true, false);
+        }
     }
     for (((_, path), (recorded, contents)), reason) in candidates.iter().zip(&read).zip(&reasons) {
         if let Recorded::Here {
-            contents: record, ..
+            workspace,
+            contents: record,
+            ..
         } = recorded
         {
             match contents {
-                Some(Contents::Refused(_)) => note_record(record, path, false, true),
-                Some(Contents::Read { .. }) => note_record(record, path, reason.is_none(), false),
+                Some(Contents::Refused(_)) => note_record(*workspace, record, path, false, true),
+                Some(Contents::Read { .. }) => {
+                    note_record(*workspace, record, path, reason.is_none(), false)
+                }
                 // A cluster file the reader refuses names the folder like any
                 // file the run does not rewrite, and so does one that cannot
                 // be read now: neither may lose its folder.
-                Some(Contents::Unreadable(_)) | None => note_record(record, path, false, false),
+                Some(Contents::Unreadable(_)) | None => {
+                    note_record(*workspace, record, path, false, false)
+                }
             }
         }
     }
@@ -741,15 +809,16 @@ pub(super) fn plan(
             feature_options: options,
         });
     }
-    let new_record = |contents: &WorkspaceContents| {
+    let new_record = |workspace: usize, contents: &WorkspaceContents| {
         records
-            .get(&record_key(contents))
+            .get(&record_key(workspace, contents))
             .and_then(|r| r.new.clone())
     };
-    // What each folder becomes: converted when the workspace file or a file
-    // the run rewrites names it; kept when
-    // a file the reader refuses names it or it lies in a nested workspace;
-    // and deleted otherwise, an orphan included.
+
+    // What each folder becomes: converted when a version 1 workspace file or
+    // a file the run rewrites names it; kept when a file the reader refuses
+    // or a file of a workspace outside the tree names it; and deleted
+    // otherwise, an orphan included, unless it lies outside the tree.
     let mut folders = Vec::new();
     let mut new_folders: Vec<PathBuf> = Vec::new();
     let mut new_folder_index: HashMap<PathBuf, usize> = HashMap::new();
@@ -758,44 +827,42 @@ pub(super) fn plan(
     let mut jobs = Vec::new();
     let mut deletion_refused = None;
     for (dir, sift_files) in version_1_folders {
-        let place = location(&dir, root_canonical);
         let naming: Vec<(&Record, PathBuf)> = records
             .values()
             .filter_map(|record| {
-                image_dir_of(&dir, root, &record.old.feature_prefix_dir).map(|d| (record, d))
+                image_dir_of(&dir, &record.workspace, &record.old.feature_prefix_dir)
+                    .map(|d| (record, d))
             })
             .collect();
         let refused_by: usize = naming.iter().map(|(r, _)| r.refused_by).sum();
         // Converted only for a file this run rewrites: a file it leaves
-        // cannot read the new folder, and a nested workspace's own run sees
-        // to its folders for its own files.
+        // cannot read the new folder.
         let converter = naming
             .iter()
             .find(|(record, _)| record.new.is_some() && record.rewritten_by > 0);
         let image_dir = naming.first().map(|(_, d)| d.clone());
-        let kept_because = match &place {
-            Location::Nested(ws) => Some(format!(
-                "it is inside the nested workspace {}, whose own upgrade deletes it",
-                ws.display()
-            )),
-            _ if refused_by > 0 => Some(format!(
+        let kept_because = if refused_by > 0 {
+            Some(format!(
                 "kept: named by {refused_by} file(s) the current reader refuses"
-            )),
-            Location::Outside(real) => {
-                deletion_refused.get_or_insert_with(|| {
-                    format!(
-                        "the old folder {} lies outside the workspace, at {}, so nothing was \
-                         deleted; delete the old folders by hand once you have checked them",
-                        dir.display(),
-                        real.display()
-                    )
-                });
-                Some(format!(
-                    "it lies outside the workspace, at {}",
+            ))
+        } else if let Some(outside) = named_from_outside.get(&dir) {
+            Some(format!(
+                "kept: named by a file of the workspace {}, outside this tree, whose other \
+                 files this run cannot see",
+                outside.display()
+            ))
+        } else if let Some(real) = outside_tree(&dir, root_canonical) {
+            deletion_refused.get_or_insert_with(|| {
+                format!(
+                    "the old folder {} lies outside the tree, at {}, so nothing was deleted; \
+                     delete the old folders by hand once you have checked them",
+                    dir.display(),
                     real.display()
-                ))
-            }
-            Location::Here => None,
+                )
+            });
+            Some(format!("it lies outside the tree, at {}", real.display()))
+        } else {
+            None
         };
         let Some((record, image_dir)) = converter else {
             folders.push(OldFolder {
@@ -807,13 +874,9 @@ pub(super) fn plan(
             });
             continue;
         };
-        let new = record
-            .new
-            .as_ref()
-            .ok_or_else(|| UpgradeWorkspaceError::WorkspaceFile {
-                path: workspace_file.clone(),
-                problem: "a record was not mapped to a new folder".into(),
-            })?;
+        let Some(new) = record.new.as_ref() else {
+            continue;
+        };
         let new_folder = normalized(&image_dir.join(&new.feature_prefix_dir));
         let index = *new_folder_index
             .entry(new_folder.clone())
@@ -822,12 +885,11 @@ pub(super) fn plan(
                 new_folders.len() - 1
             });
         for source in &sift_files {
+            let Some(&hash) = version_1_hashes.get(&normalized(source)) else {
+                continue;
+            };
             let file_name = source.file_name().unwrap_or_default();
             let destination = new_folder.join(file_name);
-            let hash = version_1_hashes
-                .get(&normalized(source))
-                .copied()
-                .unwrap_or_default();
             match destinations.get(&destination) {
                 Some((first, first_hash)) if *first_hash != hash => {
                     conflicts.push(SiftConflict {
@@ -862,30 +924,31 @@ pub(super) fn plan(
         return Err(UpgradeWorkspaceError::Conflicts(conflicts));
     }
 
-    let new_workspace_file = match (new_workspace_file, &workspace_record) {
-        (Some(mut config), Some(contents)) => {
-            let new = new_record(contents).ok_or_else(|| UpgradeWorkspaceError::WorkspaceFile {
-                path: workspace_file.clone(),
-                problem: "its record was not mapped to a new folder".into(),
-            })?;
-            if let Some(map) = config.as_object_mut() {
-                map.insert("version".into(), crate::workspace::WORKSPACE_VERSION.into());
-                map.insert("feature_options".into(), new.feature_options);
-                map.insert(
-                    "feature_prefix_dir".into(),
-                    new.feature_prefix_dir.clone().into(),
-                );
-            }
-            Some(config)
+    // Each version 1 workspace file's version 2 form.
+    for (i, (workspace, record)) in workspaces.iter_mut().zip(&workspace_records).enumerate() {
+        let (Some(config), Some(contents)) = (workspace.new_file.as_mut(), record) else {
+            continue;
+        };
+        let new = new_record(i, contents).ok_or_else(|| UpgradeWorkspaceError::WorkspaceFile {
+            path: workspace.file.clone(),
+            problem: "its record was not mapped to a new folder".into(),
+        })?;
+        if let Some(map) = config.as_object_mut() {
+            map.insert("version".into(), crate::workspace::WORKSPACE_VERSION.into());
+            map.insert("feature_options".into(), new.feature_options);
+            map.insert(
+                "feature_prefix_dir".into(),
+                new.feature_prefix_dir.clone().into(),
+            );
         }
-        _ => None,
-    };
+    }
 
     // What the run does to each file.
     let mut files = Vec::new();
     for (((kind, path), (recorded, contents)), reason) in candidates.iter().zip(read).zip(reasons) {
         let action = match (recorded, contents) {
             (Recorded::Leave(outcome), _) => Action::Leave(outcome),
+            (Recorded::Elsewhere { dir, .. }, _) => Action::Leave(elsewhere(&dir)),
             (
                 Recorded::Here {
                     unreadable_clusters: true,
@@ -906,17 +969,19 @@ pub(super) fn plan(
             }
             (
                 Recorded::Here {
+                    workspace,
                     contents: record,
                     names_sift_files,
                     ..
                 },
                 Some(Contents::Read { .. }),
             ) => {
-                let new_contents = new_record(&record);
+                let new_contents = new_record(workspace, &record);
                 let names_sift_files = names_sift_files && new_contents.is_some();
                 match reason {
                     Some(reason) => Action::Leave(UpgradeOutcome::NotConverted(reason)),
                     None => Action::Rewrite {
+                        workspace: workspace_dirs[workspace].clone(),
                         new_contents,
                         names_sift_files,
                     },
@@ -938,6 +1003,7 @@ pub(super) fn plan(
                 Action::Leave(UpgradeOutcome::AlreadyCurrent)
             }
             Ok(_) => Action::Rewrite {
+                workspace: root.to_path_buf(),
                 new_contents: None,
                 names_sift_files: false,
             },
@@ -960,7 +1026,7 @@ pub(super) fn plan(
                         &workspace.relative_path,
                         &workspace.absolute_path,
                     )
-                    .is_some_and(|dir| same_dir(&dir, root_canonical)) =>
+                    .is_some_and(|dir| workspace_index(&dir, &canonical).is_some()) =>
             {
                 Action::Delete
             }
@@ -976,13 +1042,11 @@ pub(super) fn plan(
     Ok(Plan {
         root: root.to_path_buf(),
         root_canonical: root_canonical.to_path_buf(),
-        workspace_file,
-        new_workspace_file,
+        workspaces,
         folders,
         new_folders,
         jobs,
         files,
-        nested_workspaces: found.nested_workspaces,
         linked_directories: found.linked_directories,
         deletion_refused,
     })
