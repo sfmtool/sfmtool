@@ -644,3 +644,85 @@ fn an_image_column_that_does_not_fit_the_images_is_refused_naming_it() {
         }
     }
 }
+
+/// Observation offsets that are not the prefix sum of the observation counts,
+/// or counts that do not add up to the track rows, are refused with an error
+/// naming the column, on a reconstruction whose patch bitmaps would be
+/// rendered from its photographs: the render reads each point's track rows
+/// and keypoints through the offsets, and would index past them.
+#[test]
+fn observation_offsets_that_do_not_fit_the_tracks_are_refused_naming_them() {
+    // The Seoul bull ground truth: patch frames and inline keypoints, no
+    // bitmap column, and its photographs beside it.
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+        "../../test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr",
+    );
+    let base = SfmrReconstruction::load(&path, &Progress::none()).expect("the ground truth loads");
+    let points = base.point_set.points.len();
+    let rows = base.point_set.tracks.len();
+    type Spoil = fn(&mut SfmrReconstruction);
+    let cases: [(&str, Spoil, String); 4] = [
+        (
+            "last offset past the tracks",
+            |r| *r.point_set.observation_offsets.last_mut().unwrap() += 5,
+            format!(
+                "observation_offsets entry {points} is {}, not {rows}",
+                rows + 5
+            ),
+        ),
+        (
+            "an offset out of step",
+            |r| r.point_set.observation_offsets[1] += 1,
+            "observation_offsets entry 1 is ".to_string(),
+        ),
+        (
+            "offsets one entry short",
+            |r| {
+                r.point_set.observation_offsets.pop();
+            },
+            format!(
+                "observation_offsets length ({points}) must be one more than the \
+                 observation_counts length ({points})"
+            ),
+        ),
+        (
+            "tracks and keypoints cut short",
+            |r| {
+                let set = &mut r.point_set;
+                let keep = set.tracks.len() - 3;
+                set.tracks.truncate(keep);
+                if let crate::reconstruction::ObservationSource::EmbeddedPatches {
+                    keypoints_xy,
+                    ..
+                } = &mut set.observations
+                {
+                    *keypoints_xy = keypoints_xy.slice(ndarray::s![..keep, ..]).to_owned();
+                }
+                if let Some(confidence) = &mut set.observation_confidence {
+                    confidence.truncate(keep);
+                }
+                if let Some(readings) = &mut set.observation_readings {
+                    readings.rows.truncate(keep);
+                }
+            },
+            format!(
+                "observation_counts add up to {rows}, not the {} track rows",
+                rows - 3
+            ),
+        ),
+    ];
+    let options = WebExportOptions {
+        thumbnails: false,
+        ..WebExportOptions::default()
+    };
+    for (what, spoil, message) in cases {
+        let mut recon = base.clone();
+        spoil(&mut recon);
+        match build_web_export(&recon, &options, &Progress::none()) {
+            Err(WebExportError::InvalidReconstruction(m)) => {
+                assert!(m.starts_with(&message), "{what}: {m}");
+            }
+            other => panic!("{what}: {:?}", other.map(|e| e.report)),
+        }
+    }
+}

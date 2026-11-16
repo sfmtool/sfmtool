@@ -66,9 +66,16 @@ patch frame, bitmap or observation-count column with another row count, one of
 `u` and `v` without the other, or bitmaps without the patch frame) is refused
 before anything is written, with a message naming the column. For a wrong row
 count the message also gives the column's shape (its length, for the
-observation counts) and the point count. The images and cameras are checked
-the same way before anything is written:
+observation counts) and the point count. The observations, images and cameras
+are checked the same way before anything is written:
 
+- `observation_offsets` that are not the prefix sum of `observation_counts`
+  (one entry more than the counts, starting at 0), or counts that do not add
+  up to the track rows (`PointSet::validate_observation_offsets`), since a
+  patch bitmap render reads each point's track rows and keypoints through the
+  offsets; the message gives the offsets' length and the counts' length, the
+  first wrong entry and what it should be, or the counts' sum and the track
+  row count;
 - a track row naming an image past the images, or an observation or per-image
   column (`keypoints_xy`, `feature_indexes`, the per-image hashes) whose length
   is not the observation or image count

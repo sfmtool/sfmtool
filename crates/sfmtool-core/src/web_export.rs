@@ -188,7 +188,10 @@ pub enum WebExportError {
     /// A column of the reconstruction does not fit the points, observations,
     /// images or cameras it describes: a per-point one
     /// [`SfmrReconstruction::validate_point_columns`] checks, or
-    /// `observation_counts`; an observation one
+    /// `observation_counts`; `observation_offsets` that are not the prefix
+    /// sum of the counts, or counts that do not add up to the track rows
+    /// ([`PointSet::validate_observation_offsets`](crate::PointSet::validate_observation_offsets));
+    /// an observation one
     /// [`SfmrReconstruction::validate_observation_columns`] checks; an image
     /// whose camera index or adjustment
     /// [`ImageSet::check_image_intrinsics`](crate::ImageSet::check_image_intrinsics)
@@ -250,7 +253,9 @@ impl From<Cancelled> for WebExportError {
 /// [`WebExportError::InvalidOption`] for options that do not fit `recon`;
 /// [`WebExportError::InvalidReconstruction`] when a column of `recon` does not
 /// fit what it describes: a per-point column, such as the patch frame or
-/// bitmaps, without one row per point, a track row naming an image past the
+/// bitmaps, without one row per point, observation offsets that are not the
+/// prefix sum of the observation counts or counts that do not add up to the
+/// track rows, a track row naming an image past the
 /// images, an image whose camera index is past the cameras or whose
 /// adjustment its camera cannot take, or a thumbnail column without one row
 /// per image;
@@ -287,8 +292,11 @@ pub fn build_web_export(
     }
     // Each camera is drawn through its image's intrinsics, which index the
     // cameras by the image's camera index; camera `i` is given row `i` of the
-    // thumbnail column; and a patch bitmap render reads each observation's
-    // image and keypoint.
+    // thumbnail column; and a patch bitmap render reads each point's
+    // observations through the offsets, and each observation's image and
+    // keypoint.
+    set.validate_observation_offsets()
+        .map_err(WebExportError::InvalidReconstruction)?;
     recon
         .validate_observation_columns()
         .map_err(WebExportError::InvalidReconstruction)?;

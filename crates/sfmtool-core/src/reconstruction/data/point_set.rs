@@ -611,6 +611,46 @@ impl PointSet {
         Ok(())
     }
 
+    /// Check that `observation_offsets` is the prefix sum of
+    /// `observation_counts` and that the counts add up to the track rows, so
+    /// that [`Self::observations_for_point`] and every reader of
+    /// `observation_offsets[p]..observation_offsets[p + 1]` stay within
+    /// `tracks` and the per-observation columns parallel to it. Returns a
+    /// message naming the column, its length or entry, and what it must be.
+    ///
+    /// It does not compare the counts with `points`: a value
+    /// `clone_with_changes` gives a shorter point list keeps its longer
+    /// counts, and a caller that reads points by their counts checks that
+    /// itself.
+    pub fn validate_observation_offsets(&self) -> Result<(), String> {
+        let counts = &self.observation_counts;
+        let offsets = &self.observation_offsets;
+        if offsets.len() != counts.len() + 1 {
+            return Err(format!(
+                "observation_offsets length ({}) must be one more than the observation_counts \
+                 length ({})",
+                offsets.len(),
+                counts.len()
+            ));
+        }
+        let expected = compute_observation_offsets(counts);
+        if let Some(p) = (0..offsets.len()).find(|&p| offsets[p] != expected[p]) {
+            return Err(format!(
+                "observation_offsets entry {p} is {}, not {}, the sum of the observation_counts \
+                 before it",
+                offsets[p], expected[p]
+            ));
+        }
+        let total = expected[counts.len()];
+        if total != self.tracks.len() {
+            return Err(format!(
+                "observation_counts add up to {total}, not the {} track rows",
+                self.tracks.len()
+            ));
+        }
+        Ok(())
+    }
+
     /// Check that every track row names one of `image_count` images. Returns a
     /// message naming the first row that does not.
     ///
