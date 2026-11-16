@@ -4,7 +4,11 @@ name: Publish to PyPI
 # files and keeps them as run artifacts, to check the builds before tagging a
 # release; with `upload-to-testpypi` ticked it also uploads them to TestPyPI,
 # to check the upload step too. TestPyPI refuses a file that is already there,
-# so an upload only succeeds for a version TestPyPI does not have.
+# so a manual run builds version `<version>.dev<run number>` (for example
+# `0.3.dev12`, by scripts/ci_set_dev_version.sh), which no other run has
+# uploaded. A re-run keeps its run number, so after a run that uploaded, start
+# a new run rather than re-running it. PEP 440 sorts `<version>.dev<N>` before
+# `<version>`. A release builds the version in pyproject.toml unchanged.
 on:
   release:
     types: [published]
@@ -24,6 +28,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Give a manual run a dev version
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: bash scripts/ci_set_dev_version.sh "${{ github.run_number }}"
+
       - uses: PyO3/maturin-action@v1
         with:
           manylinux: auto
@@ -41,6 +50,11 @@ jobs:
         python-version: ["3.14"]
     steps:
       - uses: actions/checkout@v7
+
+      - name: Give a manual run a dev version
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: bash scripts/ci_set_dev_version.sh "${{ github.run_number }}"
 
       - uses: actions/setup-python@v7
         with:
@@ -66,6 +80,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Give a manual run a dev version
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: bash scripts/ci_set_dev_version.sh "${{ github.run_number }}"
+
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
@@ -84,6 +103,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+
+      - name: Give a manual run a dev version
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: bash scripts/ci_set_dev_version.sh "${{ github.run_number }}"
 
       - uses: PyO3/maturin-action@v1
         with:
