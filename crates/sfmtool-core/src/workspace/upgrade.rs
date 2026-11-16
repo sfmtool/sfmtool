@@ -32,7 +32,7 @@ use crate::SfmrReconstruction;
 
 mod plan;
 
-use plan::{missing_sift_file, sift_path, Action, Plan};
+use plan::{sift_path, Action, Plan};
 
 /// The zstd level the upgrade writes `.matches` and `.camrig` files at, the
 /// level their bindings write by default.
@@ -103,19 +103,32 @@ pub struct UpgradedFile {
 pub struct UpgradedFolder {
     /// The version 1 folder.
     pub old_folder: PathBuf,
-    /// The folder its `.sift` files were converted into, or `None` for an
-    /// orphan, a folder that neither the workspace file nor any `.sfmr` or
-    /// `.matches` file of the workspace names, whose files are deleted
-    /// without being converted.
+    /// The folder its `.sift` files were converted into, or `None` when no
+    /// file that can be converted names it: an orphan, which neither the
+    /// workspace file nor any `.sfmr` or `.matches` file of the workspace
+    /// names and whose files are deleted without being converted, or a
+    /// folder named only by files the current reader refuses, which is kept.
     pub new_folder: Option<PathBuf>,
     /// How many version 1 `.sift` files it held.
     pub sift_file_count: usize,
+    /// Why the folder is kept rather than deleted, or `None` when the run
+    /// deletes it: files the current reader refuses name it, it lies in a
+    /// nested workspace, or it lies outside the workspace.
+    pub kept_because: Option<String>,
     /// Whether its version 1 `.sift` files were deleted (in a dry run,
     /// whether they would be).
     pub deleted: bool,
     /// The files the deletion left in the folder because they are not
     /// version 1 `.sift` files, which keep the folder from being removed.
     pub kept_files: Vec<PathBuf>,
+}
+
+impl UpgradedFolder {
+    /// Whether the folder needs nothing from a run: it is not converted and
+    /// is kept for a reason that a rerun would find again.
+    pub fn is_settled(&self) -> bool {
+        self.new_folder.is_none() && self.kept_because.is_some()
+    }
 }
 
 /// What [`upgrade_workspace`] did, or in a dry run what it would do.
@@ -128,16 +141,22 @@ pub struct UpgradeWorkspaceReport {
     /// The workspace file first, then every `.sfmr`, `.matches`, `.camrig`
     /// and `.kdf` file the walk found, each kind sorted by path.
     pub files: Vec<UpgradedFile>,
-    /// Every version 1 features folder the walk found, sorted by path.
+    /// Every version 1 features folder the run found, by the walk or as a
+    /// folder a file's record names, sorted by path.
     pub folders: Vec<UpgradedFolder>,
     /// How many version 1 `.sift` files were converted (or would be).
     pub converted_sift_file_count: usize,
     /// The directories below the workspace that hold a `.sfm-workspace.json`
     /// of their own. They are other workspaces, so the walk did not enter
-    /// them and nothing in them was changed.
+    /// them, and nothing in them was deleted.
     pub nested_workspaces: Vec<PathBuf>,
-    /// Whether the version 1 folders were deleted (or would be): only when
-    /// no file [`Failed`](UpgradeOutcome::Failed).
+    /// The symbolic links and junctions to directories the walk found. It
+    /// does not enter them, since their targets may be outside the
+    /// workspace.
+    pub linked_directories: Vec<PathBuf>,
+    /// Whether phase 6 ran (or would run) and deleted every folder not kept:
+    /// only when no file [`Failed`](UpgradeOutcome::Failed) and no folder it
+    /// would delete lies outside the workspace.
     pub old_folders_deleted: bool,
     /// Notes for the user, such as that point IDs taken from a rewritten
     /// `.sfmr` before the upgrade no longer resolve.
@@ -146,9 +165,10 @@ pub struct UpgradeWorkspaceReport {
 
 impl UpgradeWorkspaceReport {
     /// Whether there was nothing to do: the workspace file is version 2, no
-    /// file was converted or deleted, and no version 1 folder was found.
+    /// file was converted or deleted, and every version 1 folder found is
+    /// settled ([`UpgradedFolder::is_settled`]).
     pub fn nothing_to_do(&self) -> bool {
-        self.folders.is_empty()
+        self.folders.iter().all(UpgradedFolder::is_settled)
             && self.files.iter().all(|f| {
                 matches!(
                     f.outcome,
@@ -216,6 +236,21 @@ pub enum UpgradeWorkspaceError {
         /// Why it cannot be converted.
         error: FeatureOptionsError,
     },
+    /// A version 1 record's `feature_prefix_dir` is empty, absolute or holds
+    /// `..`, so its folder would not lie below each image's directory.
+    FeaturePrefixDir {
+        /// The files that hold the record.
+        files: Vec<PathBuf>,
+        /// The `feature_prefix_dir`.
+        feature_prefix_dir: String,
+    },
+    /// The workspace lies inside an enclosing workspace whose workspace file
+    /// is still version 1. That workspace's upgrade converts the folders its
+    /// files name in this one, so it goes first.
+    EnclosingWorkspace {
+        /// The enclosing workspace's `.sfm-workspace.json`.
+        workspace_file: PathBuf,
+    },
     /// Two old folders map to one new folder and hold different files for
     /// one image.
     Conflicts(Vec<SiftConflict>),
@@ -266,6 +301,25 @@ impl fmt::Display for UpgradeWorkspaceError {
                 )?;
                 write_list(f, files, |f, p| write!(f, "{}", p.display()))
             }
+            Self::FeaturePrefixDir {
+                files,
+                feature_prefix_dir,
+            } => {
+                write!(
+                    f,
+                    "the feature_prefix_dir '{feature_prefix_dir}' is empty, absolute or holds \
+                     '..', so its folder would not lie below each image's directory; it is \
+                     recorded by:"
+                )?;
+                write_list(f, files, |f, p| write!(f, "{}", p.display()))
+            }
+            Self::EnclosingWorkspace { workspace_file } => write!(
+                f,
+                "this workspace lies inside the workspace of {}, which is still version 1; \
+                 upgrade that workspace first, since its upgrade converts the features folders \
+                 its files name in this one",
+                workspace_file.display()
+            ),
             Self::Conflicts(conflicts) => {
                 write!(
                     f,
@@ -386,7 +440,10 @@ pub fn upgrade_workspace(
             folder: root.clone(),
             problem: e.to_string(),
         })?;
-    let plan = plan::plan(&root, &root_canonical, options.dry_run, progress)?;
+    if let Some(workspace_file) = plan::enclosing_version_1_workspace(&root) {
+        return Err(UpgradeWorkspaceError::EnclosingWorkspace { workspace_file });
+    }
+    let plan = plan::plan(&root, &root_canonical, progress)?;
 
     let mut report = UpgradeWorkspaceReport {
         workspace_dir: root.clone(),
@@ -395,6 +452,7 @@ pub fn upgrade_workspace(
         folders: Vec::new(),
         converted_sift_file_count: plan.jobs.len(),
         nested_workspaces: plan.nested_workspaces.clone(),
+        linked_directories: plan.linked_directories.clone(),
         old_folders_deleted: false,
         notes: Vec::new(),
     };
@@ -420,9 +478,9 @@ pub fn upgrade_workspace(
                 },
             });
         }
-        report.old_folders_deleted = !any_failed(&report.files);
+        report.old_folders_deleted = !any_failed(&report.files) && plan.deletion_refused.is_none();
         report.folders = folder_reports(&plan, report.old_folders_deleted);
-        finish_notes(&mut report);
+        finish_notes(&mut report, &plan);
         return Ok(report);
     }
 
@@ -443,14 +501,12 @@ pub fn upgrade_workspace(
                 },
                 Action::Rewrite {
                     new_contents,
-                    old_prefix,
                     names_sift_files,
                 } => {
                     let rewrite = Rewrite {
-                        plan: &plan,
+                        root: &plan.root,
                         table: &table,
                         new_contents: new_contents.as_ref(),
-                        old_prefix,
                         names_sift_files: *names_sift_files,
                     };
                     match file.kind {
@@ -487,7 +543,7 @@ pub fn upgrade_workspace(
     }
 
     // Phase 6.
-    report.old_folders_deleted = !any_failed(&report.files);
+    report.old_folders_deleted = !any_failed(&report.files) && plan.deletion_refused.is_none();
     report.folders = folder_reports(&plan, false);
     if report.old_folders_deleted {
         let phase = progress.phase("delete old folders");
@@ -496,12 +552,18 @@ pub fn upgrade_workspace(
             plan.folders.iter().zip(&mut report.folders).enumerate()
         {
             phase.check_cancel()?;
-            delete_old_folder(&plan.root, folder, folder_report);
+            if folder.kept_because.is_none() {
+                delete_old_folder(&plan, folder, folder_report);
+            }
             phase.count(done as u64 + 1, Some(total), "folder");
         }
-        report.old_folders_deleted = report.folders.iter().all(|f| f.deleted);
+        report.old_folders_deleted = plan
+            .folders
+            .iter()
+            .zip(&report.folders)
+            .all(|(planned, f)| f.deleted || planned.kept_because.is_some());
     }
-    finish_notes(&mut report);
+    finish_notes(&mut report, &plan);
     Ok(report)
 }
 
@@ -511,6 +573,8 @@ fn any_failed(files: &[UpgradedFile]) -> bool {
         .any(|f| matches!(f.outcome, UpgradeOutcome::Failed(_)))
 }
 
+/// The folders' report rows before phase 6, `deleted` set for each folder
+/// it deletes when `deleted` is given.
 fn folder_reports(plan: &Plan, deleted: bool) -> Vec<UpgradedFolder> {
     plan.folders
         .iter()
@@ -518,13 +582,14 @@ fn folder_reports(plan: &Plan, deleted: bool) -> Vec<UpgradedFolder> {
             old_folder: folder.path.clone(),
             new_folder: folder.new_folder.clone(),
             sift_file_count: folder.sift_files.len(),
-            deleted,
+            kept_because: folder.kept_because.clone(),
+            deleted: deleted && folder.kept_because.is_none(),
             kept_files: Vec::new(),
         })
         .collect()
 }
 
-fn finish_notes(report: &mut UpgradeWorkspaceReport) {
+fn finish_notes(report: &mut UpgradeWorkspaceReport, plan: &Plan) {
     if report
         .files
         .iter()
@@ -537,7 +602,11 @@ fn finish_notes(report: &mut UpgradeWorkspaceReport) {
                 .into(),
         );
     }
-    if !report.old_folders_deleted && !report.folders.is_empty() {
+    if let Some(refusal) = &plan.deletion_refused {
+        report.notes.push(format!(
+            "No version 1 features folder was deleted: {refusal}."
+        ));
+    } else if any_failed(&report.files) && !report.folders.is_empty() {
         report.notes.push(
             "The version 1 features folders were not deleted, because a file failed; fix the \
              files listed as failed and run the upgrade again."
@@ -680,46 +749,38 @@ fn is_conversion_of(new: &SiftData, old: &SiftData) -> bool {
 
 /// The phase 4 rewrite of one `.sfmr` or `.matches` file.
 struct Rewrite<'a> {
-    plan: &'a Plan,
+    root: &'a Path,
     table: &'a HashMap<[u8; 16], NewHashes>,
     new_contents: Option<&'a WorkspaceContents>,
-    old_prefix: &'a str,
     names_sift_files: bool,
 }
 
 impl Rewrite<'_> {
-    /// The new hashes of the `.sift` files `names` and `hashes` record, or
-    /// why the file is not converted.
-    fn new_hashes(
-        &self,
-        names: &[String],
-        hashes: &[[u8; 16]],
-    ) -> Result<Vec<NewHashes>, UpgradeOutcome> {
-        if let Some(reason) = missing_sift_file(self.plan, names, hashes, self.old_prefix) {
-            return Err(UpgradeOutcome::NotConverted(reason));
-        }
+    /// The new hashes of the `.sift` files `hashes` records. Phase 2 checked
+    /// that each is a version 1 file of a folder phase 3 converted, so a
+    /// hash the table lacks means the file changed since; it fails the file.
+    fn new_hashes(&self, hashes: &[[u8; 16]]) -> Result<Vec<NewHashes>, UpgradeOutcome> {
         hashes
             .iter()
             .map(|h| {
                 self.table.get(h).copied().ok_or_else(|| {
-                    UpgradeOutcome::Failed("a .sift file it records was not converted".to_string())
+                    UpgradeOutcome::Failed(
+                        "a .sift file it records was not converted; it changed during the run"
+                            .to_string(),
+                    )
                 })
             })
             .collect()
     }
 
+    /// Phase 2 read the file and the current reader accepted it, so an error
+    /// here, a lock, a permission or a change since, fails the file.
     fn sfmr(&self, path: &Path, progress: &Progress<'_>) -> Result<UpgradeOutcome, Cancelled> {
         let mut recon = match SfmrReconstruction::load(path, progress) {
             Ok(r) => r,
-            Err(e) => return Ok(UpgradeOutcome::NotConverted(plan::refused(&e.to_string()))),
+            Err(e) => return Ok(UpgradeOutcome::Failed(format!("it cannot be read: {e}"))),
         };
         if let Some(new_contents) = self.new_contents {
-            let names: Vec<String> = recon
-                .image_set
-                .images
-                .iter()
-                .map(|i| i.name.clone())
-                .collect();
             if let ObservationSource::SiftFiles {
                 feature_tool_hashes,
                 sift_content_hashes,
@@ -727,13 +788,17 @@ impl Rewrite<'_> {
             } = &mut recon.point_set.observations
             {
                 if self.names_sift_files {
-                    let new = match self.new_hashes(&names, sift_content_hashes) {
+                    let new = match self.new_hashes(sift_content_hashes) {
                         Ok(new) => new,
                         Err(outcome) => return Ok(outcome),
                     };
-                    for (i, hashes) in new.into_iter().enumerate() {
-                        sift_content_hashes[i] = hashes.content;
-                        feature_tool_hashes[i] = hashes.feature_tool;
+                    for ((content, tool), hashes) in sift_content_hashes
+                        .iter_mut()
+                        .zip(feature_tool_hashes.iter_mut())
+                        .zip(new)
+                    {
+                        *content = hashes.content;
+                        *tool = hashes.feature_tool;
                     }
                 }
             }
@@ -757,16 +822,23 @@ impl Rewrite<'_> {
     fn matches(&self, path: &Path) -> UpgradeOutcome {
         let mut data = match sfmtool_matches_format::read_matches(path) {
             Ok(d) => d,
-            Err(e) => return UpgradeOutcome::NotConverted(plan::refused(&e.to_string())),
+            Err(e) => return UpgradeOutcome::Failed(format!("it cannot be read: {e}")),
         };
         if let Some(new_contents) = self.new_contents {
-            let new = match self.new_hashes(&data.image_names, &data.sift_content_hashes) {
-                Ok(new) => new,
-                Err(outcome) => return outcome,
-            };
-            for (i, hashes) in new.into_iter().enumerate() {
-                data.sift_content_hashes[i] = hashes.content;
-                data.feature_tool_hashes[i] = hashes.feature_tool;
+            if self.names_sift_files {
+                let new = match self.new_hashes(&data.sift_content_hashes) {
+                    Ok(new) => new,
+                    Err(outcome) => return outcome,
+                };
+                for ((content, tool), hashes) in data
+                    .sift_content_hashes
+                    .iter_mut()
+                    .zip(data.feature_tool_hashes.iter_mut())
+                    .zip(new)
+                {
+                    *content = hashes.content;
+                    *tool = hashes.feature_tool;
+                }
             }
             data.metadata.workspace.contents = new_contents.clone();
         }
@@ -776,7 +848,7 @@ impl Rewrite<'_> {
             let prefix = &data.metadata.workspace.contents.feature_prefix_dir;
             let mut dims = Vec::with_capacity(2 * data.image_names.len());
             for name in &data.image_names {
-                let sift = sift_path(&self.plan.root, name, prefix);
+                let sift = sift_path(self.root, name, prefix);
                 match sfmtool_sift_format::read_sift_metadata(&sift) {
                     Ok((_, metadata, _)) => {
                         dims.extend([metadata.image_width, metadata.image_height]);
@@ -811,11 +883,30 @@ fn rewrite_camrig(path: &Path) -> UpgradeOutcome {
     }
 }
 
+/// Whether `path` lies in the workspace on disk: its real path is below the
+/// workspace's real path, and no nested workspace holds it.
+fn lies_in_workspace(plan: &Plan, path: &Path) -> bool {
+    let Ok(real) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    real.starts_with(&plan.root_canonical)
+        && find_workspace_for_path(path)
+            .and_then(|ws| std::fs::canonicalize(ws).ok())
+            .is_some_and(|ws| ws == plan.root_canonical)
+}
+
 /// Phase 6 for one folder: delete its version 1 `.sift` files, then the
 /// directories that leaves empty, up to but not including the image
 /// directory. An orphan's image directory is not known, so the folder and,
 /// when it is inside a `features` folder, that folder are removed when empty.
-fn delete_old_folder(root: &Path, folder: &plan::OldFolder, report: &mut UpgradedFolder) {
+/// Nothing is deleted from a folder or directory whose real path is not in
+/// this workspace, outside it or in a nested workspace.
+fn delete_old_folder(plan: &Plan, folder: &plan::OldFolder, report: &mut UpgradedFolder) {
+    if !lies_in_workspace(plan, &folder.path) {
+        report.kept_because =
+            Some("its real path is not in this workspace, so it was not deleted".to_string());
+        return;
+    }
     for file in &folder.sift_files {
         if let Err(e) = std::fs::remove_file(file) {
             if e.kind() != std::io::ErrorKind::NotFound {
@@ -843,16 +934,16 @@ fn delete_old_folder(root: &Path, folder: &plan::OldFolder, report: &mut Upgrade
         Some(dir) => dir.clone(),
         None => match folder.path.parent() {
             Some(parent) if parent.file_name().is_some_and(|n| n == "features") => {
-                parent.parent().unwrap_or(root).to_path_buf()
+                parent.parent().unwrap_or(&plan.root).to_path_buf()
             }
             Some(parent) => parent.to_path_buf(),
-            None => root.to_path_buf(),
+            None => plan.root.clone(),
         },
     };
     let stop = plan::normalized(&stop);
-    let root = plan::normalized(root);
+    let root = plan::normalized(&plan.root);
     let mut dir = plan::normalized(&folder.path);
-    while dir != stop && dir != root && dir.starts_with(&root) {
+    while dir != stop && dir != root && dir.starts_with(&root) && lies_in_workspace(plan, &dir) {
         if std::fs::remove_dir(&dir).is_err() {
             break;
         }

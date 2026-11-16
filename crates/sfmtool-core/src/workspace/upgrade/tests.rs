@@ -1063,18 +1063,15 @@ impl std::fmt::Debug for Bytes {
     }
 }
 
-#[test]
-fn a_reconstruction_the_reader_refuses_is_left_and_does_not_stop_the_deletion() {
-    let fixture = fixture();
-    // A camera with a parameter missing, as a file from before a camera
-    // model gained one: the format reader reads it, the reconstruction does
-    // not.
-    let path = fixture.path("sfmr/refused.sfmr");
+/// Write a `.sfmr` naming the fixture's old folder whose camera lacks a
+/// parameter, as a file from before a camera model gained one: the format
+/// reader reads it, the reconstruction does not.
+fn write_refused_sfmr(fixture: &Fixture, path: &Path) {
     reconstruction(&fixture.root, &fixture.old_folder(), v1_record(), false)
-        .save(&path, &Progress::none())
+        .save(path, &Progress::none())
         .unwrap();
     rewrite_archive(
-        &path,
+        path,
         "cameras/metadata.json.zst",
         |cameras| {
             let camera = &mut cameras.as_array_mut().unwrap()[0];
@@ -1085,13 +1082,278 @@ fn a_reconstruction_the_reader_refuses_is_left_and_does_not_stop_the_deletion() 
         },
         |_| false,
     );
+}
+
+#[test]
+fn a_folder_a_refused_reconstruction_names_is_kept_and_then_settled() {
+    let fixture = fixture();
+    let path = fixture.path("sfmr/refused.sfmr");
+    write_refused_sfmr(&fixture, &path);
     let refused = std::fs::read(&path).unwrap();
     let is_refusal = |outcome: &UpgradeOutcome| matches!(outcome, UpgradeOutcome::NotConverted(r) if r.contains("reader refuses"));
+    let kept = |report: &UpgradeWorkspaceReport| {
+        report
+            .folders
+            .iter()
+            .find(|f| f.old_folder == fixture.old_folder())
+            .cloned()
+            .unwrap()
+    };
     let plan = run(&fixture, true);
     assert!(is_refusal(outcome_of(&plan, &path)), "{plan:?}");
+    assert!(!kept(&plan).deleted);
+
     let report = run(&fixture, false);
     assert!(is_refusal(outcome_of(&report, &path)), "{report:?}");
+    // The old folder is converted for the files that can be, and kept for
+    // the one that cannot; the orphan is still deleted.
+    let folder = kept(&report);
+    assert_eq!(folder.new_folder, Some(fixture.new_folder()));
+    assert_eq!(
+        folder.kept_because.as_deref(),
+        Some("kept: named by 1 file(s) the current reader refuses")
+    );
+    assert!(!folder.deleted);
     assert!(report.old_folders_deleted);
-    assert!(!fixture.old_folder().exists());
+    assert_eq!(
+        std::fs::read_dir(fixture.old_folder()).unwrap().count(),
+        IMAGES
+    );
+    assert!(!fixture.orphan_folder().exists());
     assert_eq!(std::fs::read(&path).unwrap(), refused);
+    assert_eq!(
+        outcome_of(&report, &fixture.path("sfmr/sift.sfmr")),
+        &UpgradeOutcome::Converted
+    );
+
+    // A rerun finds the kept folder settled: nothing to convert or delete.
+    let settled = snapshot(&fixture.root);
+    let again = run(&fixture, false);
+    assert!(again.nothing_to_do(), "{again:?}");
+    assert_eq!(again.converted_sift_file_count, 0);
+    assert!(kept(&again).is_settled());
+    assert_eq!(snapshot(&fixture.root), settled);
+}
+
+#[test]
+fn a_version_1_workspace_file_with_version_2_options_is_refused() {
+    let fixture = fixture();
+    let mut record = v2_record();
+    record.feature_prefix_dir = v1_record().feature_prefix_dir;
+    let config = serde_json::json!({
+        "version": 1,
+        "feature_tool": record.feature_tool,
+        "feature_type": record.feature_type,
+        "feature_options": record.feature_options,
+        "feature_prefix_dir": record.feature_prefix_dir,
+    });
+    let workspace_file = fixture.root.join(WORKSPACE_FILE_NAME);
+    std::fs::write(
+        &workspace_file,
+        serde_json::to_string_pretty(&config).unwrap(),
+    )
+    .unwrap();
+    let before = snapshot(&fixture.root);
+    for dry_run in [true, false] {
+        let error = run_error(&fixture, dry_run);
+        let UpgradeWorkspaceError::FeatureOptions { files, error } = &error else {
+            panic!("{error}")
+        };
+        assert_eq!(files, &vec![workspace_file.clone()]);
+        assert_eq!(error, &FeatureOptionsError::AlreadyVersion2);
+    }
+    assert_eq!(snapshot(&fixture.root), before);
+}
+
+#[test]
+fn a_feature_prefix_dir_that_leaves_the_image_directory_is_refused() {
+    let fixture = fixture();
+    let mut record = v1_record();
+    record.feature_prefix_dir = "../features/elsewhere".into();
+    reconstruction(&fixture.root, &fixture.old_folder(), record, true)
+        .save(&fixture.path("sfmr/escape.sfmr"), &Progress::none())
+        .unwrap();
+    let before = snapshot(&fixture.root);
+    let error = run_error(&fixture, false);
+    let UpgradeWorkspaceError::FeaturePrefixDir {
+        files,
+        feature_prefix_dir,
+    } = &error
+    else {
+        panic!("{error}")
+    };
+    assert_eq!(files, &vec![fixture.path("sfmr/escape.sfmr")]);
+    assert_eq!(feature_prefix_dir, "../features/elsewhere");
+    assert_eq!(snapshot(&fixture.root), before);
+}
+
+/// The fixture with an inner workspace at `inner/` holding images and their
+/// version 1 `.sift` files, and an outer reconstruction naming them.
+fn fixture_with_inner_workspace() -> (Fixture, PathBuf, PathBuf) {
+    let fixture = fixture();
+    let inner = fixture.root.join("inner");
+    write_workspace_file(&inner);
+    let inner_images = inner.join("images");
+    std::fs::create_dir_all(&inner_images).unwrap();
+    let old = inner_images.join(v1_record().feature_prefix_dir);
+    for i in 0..IMAGES {
+        let image = inner_images.join(image_name(i));
+        std::fs::copy(fixture.images().join(image_name(i)), &image).unwrap();
+        write_version_1(&image, &old, 0);
+    }
+    let mut recon = reconstruction(&fixture.root, &old, v1_record(), false);
+    for (i, image) in recon.image_set.images.iter_mut().enumerate() {
+        image.name = format!("inner/images/{}", image_name(i));
+    }
+    let outer_sfmr = fixture.path("sfmr/outer-on-inner.sfmr");
+    recon.save(&outer_sfmr, &Progress::none()).unwrap();
+    (fixture, inner, outer_sfmr)
+}
+
+/// Check that every `.sift` file the `sift_files` reconstruction at `path`
+/// records is on disk, version 2, with the content hash it records.
+fn assert_sift_files_resolve(path: &Path) {
+    let recon = SfmrReconstruction::load(path, &Progress::none()).unwrap();
+    let ObservationSource::SiftFiles {
+        sift_content_hashes,
+        ..
+    } = &recon.point_set.observations
+    else {
+        panic!("not sift_files")
+    };
+    for (i, hash) in sift_content_hashes.iter().enumerate() {
+        let sift = recon.sift_path_for_image(i);
+        let (_, metadata, recorded) = sfmtool_sift_format::read_sift_metadata(&sift)
+            .unwrap_or_else(|e| panic!("{}: {e}", sift.display()));
+        assert_eq!(metadata.version, 2, "{}", sift.display());
+        assert_eq!(&hash_bytes(&recorded.content_xxh128), hash);
+    }
+}
+
+#[test]
+fn an_outer_file_naming_a_nested_workspace_survives_both_upgrades() {
+    let (fixture, inner, outer_sfmr) = fixture_with_inner_workspace();
+    let inner_old = inner.join("images").join(v1_record().feature_prefix_dir);
+    let inner_new = inner.join("images").join(v2_record().feature_prefix_dir);
+
+    let outer = run(&fixture, false);
+    assert_eq!(outcome_of(&outer, &outer_sfmr), &UpgradeOutcome::Converted);
+    let folder = outer
+        .folders
+        .iter()
+        .find(|f| f.old_folder == inner_old)
+        .unwrap_or_else(|| panic!("{outer:?}"));
+    assert_eq!(folder.new_folder, Some(inner_new.clone()));
+    assert!(folder.kept_because.as_deref().unwrap().contains("nested"));
+    assert!(!folder.deleted);
+    assert!(inner_old.is_dir());
+    assert_sift_files_resolve(&outer_sfmr);
+
+    // The inner workspace's own run takes the conversions already there and
+    // deletes its old folder; the outer file still resolves.
+    let inner_report = upgrade_workspace(
+        &inner,
+        &UpgradeWorkspaceOptions::default(),
+        &Progress::none(),
+    )
+    .unwrap();
+    assert!(inner_report.old_folders_deleted, "{inner_report:?}");
+    assert!(!inner_old.exists());
+    assert_sift_files_resolve(&outer_sfmr);
+}
+
+#[test]
+fn a_nested_workspace_is_refused_while_its_enclosing_one_is_version_1() {
+    let (fixture, inner, _) = fixture_with_inner_workspace();
+    let before = snapshot(&fixture.root);
+    for dry_run in [true, false] {
+        let error = upgrade_workspace(
+            &inner,
+            &UpgradeWorkspaceOptions { dry_run },
+            &Progress::none(),
+        )
+        .unwrap_err();
+        let UpgradeWorkspaceError::EnclosingWorkspace { workspace_file } = &error else {
+            panic!("{error}")
+        };
+        assert_eq!(workspace_file, &fixture.root.join(WORKSPACE_FILE_NAME));
+    }
+    assert_eq!(snapshot(&fixture.root), before);
+}
+
+/// Make `link` a link to the directory `target`: a junction on Windows, which
+/// needs no privilege, and a symbolic link elsewhere.
+fn link_directory(target: &Path, link: &Path) {
+    #[cfg(windows)]
+    {
+        let output = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+    #[cfg(not(windows))]
+    std::os::unix::fs::symlink(target, link).unwrap();
+}
+
+#[test]
+fn a_linked_directory_is_listed_and_not_entered() {
+    let fixture = fixture();
+    let outside = fixture._dir.path().join("outside");
+    let elsewhere = outside.join("features").join("sift-elsewhere");
+    for i in 0..2 {
+        write_version_1(&fixture.images().join(image_name(i)), &elsewhere, 3);
+    }
+    let link = fixture.root.join("linked");
+    link_directory(&outside, &link);
+    let before = snapshot(&outside);
+    let report = run(&fixture, false);
+    assert_eq!(report.linked_directories, vec![link.clone()]);
+    assert!(report
+        .folders
+        .iter()
+        .all(|f| !f.old_folder.starts_with(&link)));
+    assert_eq!(snapshot(&outside), before);
+    // A junction is removed as a directory, which leaves its target.
+    #[cfg(windows)]
+    std::fs::remove_dir(&link).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn a_reconstruction_locked_during_the_rewrite_fails_and_stops_the_deletion() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let fixture = fixture();
+    let target = fixture.path("sfmr/sift.sfmr");
+    let lock = std::sync::Mutex::new(None);
+    let sink = |event: Event<'_>| {
+        if matches!(event, Event::Enter { phase, .. } if phase == "rewrite files") {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(&target)
+                .unwrap();
+            *lock.lock().unwrap() = Some(file);
+        }
+    };
+    let report = upgrade_workspace(
+        &fixture.root,
+        &UpgradeWorkspaceOptions::default(),
+        &Progress::to(&sink),
+    )
+    .unwrap();
+    drop(lock.lock().unwrap().take());
+    assert!(
+        matches!(outcome_of(&report, &target), UpgradeOutcome::Failed(_)),
+        "{report:?}"
+    );
+    assert!(!report.old_folders_deleted);
+    // The file still finds its features in the old folder.
+    assert_eq!(
+        std::fs::read_dir(fixture.old_folder()).unwrap().count(),
+        IMAGES
+    );
+    SfmrReconstruction::load(&target, &Progress::none()).unwrap();
 }

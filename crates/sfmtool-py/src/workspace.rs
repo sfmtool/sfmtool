@@ -499,9 +499,13 @@ fn feature_prefix_dir_py(
 /// the current version; a version 1 ``.camrig`` is rewritten as version 2; a
 /// ``.kdf`` index built from an old folder is deleted; the workspace file is
 /// written as version 2, keeping every other key; and when no file failed,
-/// the old folders are deleted. A directory below the workspace that holds
-/// its own ``.sfm-workspace.json`` is another workspace and is not entered. A
-/// stopped run can be run again to finish. See
+/// the old folders are deleted, except those a file the current reader
+/// refuses names, those inside a nested workspace and any outside the
+/// workspace. A directory below the workspace that holds its own
+/// ``.sfm-workspace.json`` is another workspace, and a symbolic link or
+/// junction to a directory may lead outside it; the walk enters neither. A
+/// workspace inside an enclosing one still at version 1 is refused until that
+/// one is upgraded. A stopped run can be run again to finish. See
 /// ``specs/drafts/ws-upgrade-files-amendment.md``.
 ///
 /// Args:
@@ -518,19 +522,23 @@ fn feature_prefix_dir_py(
 ///     ``camrig`` or ``kdf``), ``outcome`` (``converted``,
 ///     ``already_current``, ``not_converted``, ``failed`` or ``deleted``)
 ///     and, for ``not_converted`` and ``failed``, ``reason``; ``folders``, a
-///     list of dicts with ``old_folder``, ``new_folder`` (None for an orphan
-///     folder that no file names, deleted without converting),
-///     ``sift_file_count``, ``deleted`` and ``kept_files``;
-///     ``converted_sift_file_count``; ``nested_workspaces``;
+///     list of dicts with ``old_folder``, ``new_folder`` (None when it is not
+///     converted: an orphan folder that no file names, deleted without
+///     converting, or one named only by files the run leaves),
+///     ``sift_file_count``, ``kept_because`` (None when it is deleted),
+///     ``deleted`` and ``kept_files``; ``converted_sift_file_count``;
+///     ``nested_workspaces``; ``linked_directories``;
 ///     ``old_folders_deleted``; and ``notes``, lines for the user.
 ///
 /// Raises:
-///     ValueError: when the workspace file cannot be upgraded, a version 1
-///         record cannot be converted (an ``sfmtool-undistort`` one is told to
-///         run ``sfm undistort`` again), two old folders hold different files
-///         for one new file, or version 1 ``.sift`` files cannot be
-///         converted (every one is named); nothing but new ``.sift`` files is
-///         written in each case.
+///     ValueError: when the workspace file cannot be upgraded, the workspace
+///         lies inside one still at version 1, a version 1 record cannot be
+///         converted (an ``sfmtool-undistort`` one is told to run
+///         ``sfm undistort`` again) or its ``feature_prefix_dir`` would leave
+///         the image directory, two old folders hold different files for one
+///         new file, or version 1 ``.sift`` files cannot be converted (every
+///         one is named); nothing but new ``.sift`` files is written in each
+///         case.
 ///     FileNotFoundError: when no workspace is found at or above ``path``.
 ///     OSError: when a directory of the workspace cannot be listed.
 ///     InterruptedError: when a signal handler stopped the run.
