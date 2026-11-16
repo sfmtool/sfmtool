@@ -721,6 +721,7 @@ Each of those modules carries a `tests.rs` beside it, in a directory of its own 
 - `describe_keypoints(image, positions (N,2) f32, affine_shapes (N,2,2) f32, params=None) -> descriptors (N,128) u8` -- the binding for `describe_keypoints`, taking exactly the arrays `extract_sift` returns and raising `ValueError` on a refused keypoint or a shape mismatch
 - `affine_shapes_from_similarity(scales (N,) f32, orientations (N,) f32) -> affine_shapes (N,2,2) f32` -- the similarity-to-shape conversion, so a caller holding a size and an angle does not restate it
 - `build_sift_files(image_paths, feature_options, feature_prefix_dir, *, concurrent_images=None) -> (sift_paths, extracted, skipped)` -- the binding for `build_sift_files` ([files.rs](../../../crates/sfmtool-py/src/sift/files.rs)), raising `ValueError` for invalid options and `OSError` naming the image or file that failed
+- `default_concurrent_images(width, height) -> int` -- the binding for `default_concurrent_images_for_pixels` at `width * height` pixels ([files.rs](../../../crates/sfmtool-py/src/sift/files.rs)), which issues a `UserWarning` for each warning it gives, so a value of `SFMTOOL_SIFT_EXTRACT_WORKERS` that is not a whole number warns; the Python `sfmtool` backend sizes its pool with it
 - `ImageToGray(formula, quantize_bits=None)`, with `ImageToGray.from_json(dict or str)`, `ImageToGray.from_gray_formula(str)`, `to_dict()`, `gray(r, g, b)` (in single precision) and the `formula` and `quantize_bits` properties, `gray_from_rgb(image (H,W,3) u8, image_to_gray) -> (H,W) float32`, the detector's grey image, and `image_readings_from_rgb(image (H,W,3) u8, image_to_gray) -> ImageReadings` with `sharpness`, `gradient_structure_tensor_xx_yy_xy`, `axis_ratio` (`None` for a flat image) and `coherence`, and `ImageReadings(sharpness, gradient_structure_tensor_xx_yy_xy)` from stored readings -- the bindings for `ImageToGray`, `gray_from_rgb`, `image_readings_from_rgb` and `ImageReadings::new` ([image_readings.rs](../../../crates/sfmtool-py/src/sift/image_readings.rs)), raising `ValueError` for a refused conversion, a last axis other than 3, a reading that is not finite or stored readings `ImageReadings::new` refuses
 
 The `params` dict the first three take is read as the `feature_options` JSON
@@ -759,6 +760,9 @@ pub fn build_sift_files(
     options: &BuildSiftFilesOptions,
     progress: &Progress,
 ) -> Result<BuildSiftFilesReport, BuildSiftFilesError>;
+/// How many images of `pixels` source pixels to run at once when the caller
+/// does not say; see below.
+pub fn default_concurrent_images_for_pixels(pixels: Option<u64>, progress: &Progress) -> usize;
 
 impl SiftParams {
     pub fn from_feature_options(options: &serde_json::Value) -> Result<SiftParams, FeatureOptionsError>;
@@ -868,11 +872,20 @@ write inside
 waits. The pool therefore keeps one thread per core, and the threads outside it
 run only the decode, the hash and the thumbnail, as the Python worker threads
 do. `K` is
-`concurrent_images` when given, then the `SFMTOOL_SIFT_EXTRACT_WORKERS`
-environment variable the Python backend also reads, and otherwise the core
-count capped so that `K` images at 192 bytes per source pixel of the first
-image fit in half of physical memory (or at most 4 when the first image's size
-cannot be read).
+`concurrent_images` when given, and otherwise
+`default_concurrent_images_for_pixels` at the size of the first image to
+extract, read from its header: the `SFMTOOL_SIFT_EXTRACT_WORKERS` environment
+variable when it is a whole number (raised to 1 if lower; any other value is
+ignored with a warning), and otherwise the core count capped so that `K`
+images at 192 bytes per source pixel fit in half of physical memory, read with
+`machine::physical_memory_bytes` (4 GiB when it cannot be read), or at most 4
+when the size is unknown. The Python backend takes its count from the same
+function, through the `default_concurrent_images` binding. The 192 bytes round
+up an estimate of about 130: with the image doubled, the octave-0 base has 4
+times the source pixels, the pyramid keeps `s + 3` Gaussian levels per octave
+in `f32`, and the octaves after the first add a third more, about 128 bytes per
+source pixel, to which the decoded RGB frame adds 3. Guessing high only gives
+up a few concurrent images, while guessing low risks running out of memory.
 
 It reports a `build_sift_files` phase, a message saying how many images were
 up to date, a status naming each image as it starts, and a count of images
@@ -884,7 +897,7 @@ image in input order. Invalid options are refused before any directory is made.
 
 The Python `sfmtool` backend does not call `build_sift_files`. It shares the
 pipeline in `image_files_to_sift_files` with the COLMAP and OpenCV backends,
-and its own concurrency code is tested and benchmarked separately; the
+and its own pipelining code is tested and benchmarked separately; the
 byte-for-byte test above is what keeps the two writers in agreement.
 
 ## Testing & validation

@@ -253,6 +253,8 @@ fn concurrency_is_the_core_count_capped_by_memory() {
     assert_eq!(concurrent_images_for(64, Some(pixels), 2 << 30), expected);
     // Never fewer than one, and at most four when the size is unknown.
     assert_eq!(concurrent_images_for(8, Some(u64::MAX / 1024), 1), 1);
+    // A size whose footprint does not fit in 64 bits still gives one.
+    assert_eq!(concurrent_images_for(8, Some(u64::MAX), u64::MAX), 1);
     assert_eq!(concurrent_images_for(16, None, 1 << 30), 4);
     assert_eq!(concurrent_images_for(2, None, 1 << 30), 2);
 }

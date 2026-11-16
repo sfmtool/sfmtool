@@ -165,7 +165,7 @@ rather than a full three-stage pipeline, the backend implements several targeted
 low-risk overlaps:
 
 - **Decode and extract several images concurrently**, yielding results in input
-  order. A `ThreadPoolExecutor(max_workers=_extract_workers())` runs up to *K*
+  order. A `ThreadPoolExecutor` of *K* workers runs up to *K*
   decode+extract pipelines at once (FIFO over the in-flight futures preserves
   order and re-raises decode/extract errors in order); the bounded look-ahead
   caps memory to ~*K* decoded frames + pyramids. This hides disk-read latency
@@ -179,15 +179,16 @@ low-risk overlaps:
   the decode. So while images are being decoded the runnable threads can exceed
   the core count. A decode is short beside an extract (about 13 ms against
   several hundred on dino, below), so that overlap is brief. *K* must scale *with*
-  the core count to fill a many-core host, so it defaults to `os.cpu_count()`,
-  bounded only by memory: each in-flight image holds a decoded frame plus its
-  f32 gaussian pyramid (`_EXTRACT_BYTES_PER_SOURCE_PIXEL` ≈ 192 B per source
-  pixel), so *K* is capped to keep the in-flight set within
-  `_extract_mem_budget_bytes()` (~half of physical RAM). The per-image footprint
-  is estimated from the first image's dimensions — decoded once on the calling
-  thread to size the pool, then reused as image 0's input — assuming a batch of
-  like-sized images (one workspace). When the size is unknown (e.g. a test fake)
-  *K* falls back to the historical conservative `min(os.cpu_count(), 4)`.
+  the core count to fill a many-core host. The backend takes it from the
+  `default_concurrent_images(width, height)` binding, the Rust count that
+  `build_sift_files` also uses
+  ([SIFT § Building `.sift` files](../../core/features/sift.md#building-sift-files)):
+  the core count, capped by memory, since each in-flight image holds a decoded
+  frame plus its f32 gaussian pyramid, about 192 B per source pixel, so *K* is
+  capped to keep the in-flight set within half of physical memory. The
+  per-image footprint is estimated from the first image's dimensions — decoded
+  once on the calling thread to size the pool, then reused as image 0's input —
+  assuming a batch of like-sized images (one workspace).
   `SFMTOOL_SIFT_EXTRACT_WORKERS` overrides everything (`1` restores
   one-at-a-time; a value below 1 counts as 1, and a non-integer value is
   ignored with a warning). Measured win (point-in-time, 4-core box, release
@@ -197,8 +198,7 @@ low-risk overlaps:
   there is modest — the memory-bounded core-scaled default matters on many-core
   hosts, where the old constant `4` left most cores idle. (Illustrative
   snapshots, not invariants — rerun `bench-sift` to refresh.) See
-  `_stream_sift_with_sfmtool`, `_extract_workers` and `_extract_mem_budget_bytes`
-  in `sift/extract_sfmtool.py`.
+  `_stream_sift_with_sfmtool` in `sift/extract_sfmtool.py`.
 - **Stream `.sift` writes per image** instead of buffering a whole chunk
   (`chunk_size = 500` images) in memory — `extract_sift_with_sfmtool` is a
   generator that yields one result at a time, and `image_files_to_sift_files`
