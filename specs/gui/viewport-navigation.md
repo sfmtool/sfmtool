@@ -769,7 +769,8 @@ in Houdini (Space+Z), CloudCompare (Pick Rotation Center), and Potree/RealityCap
 
 **Alt + Click** (single click, no drag):
 1. Read the **linear depth buffer** at the cursor position
-2. If a point is found at the cursor pixel (depth ≠ background):
+2. If a point is found at the cursor pixel (depth ≠ background), drawn as a
+   splat or as a patch surfel:
    - Unproject the cursor position at that depth to get a 3D world-space point
    - Animate the target to the new point over ~200ms with ease-in/ease-out.
      Use spherical linear interpolation (slerp) for the camera orientation and

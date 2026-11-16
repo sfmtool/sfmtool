@@ -290,7 +290,7 @@ Pass 1c: Image quads (pinhole instanced + distorted indexed)
 
 Pass 1d: Patch surfels
   Input:  Patch instance buffer + patch texture array atlas
-  Output: Color + linear depth (0.0) + pick ID (the patch's point) + hw depth
+  Output: Color + linear depth (negated) + pick ID (the patch's point) + hw depth
 
 Pass 1e: The Track Table filter's dimmed points and surfels
   Input:  The instance buffers of Passes 1a and 1d, drawn again at DIM_ALPHA

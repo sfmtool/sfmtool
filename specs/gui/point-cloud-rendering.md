@@ -309,10 +309,14 @@ The point splat pass writes to three color attachments plus hardware depth:
 | Pick ID | R32Uint | `PICK_TAG_POINT \| index` | Entity picking |
 | HW depth | Depth32Float | Standard depth | Z-test during rendering |
 
-The linear depth texture stores *positive* values for points. This is critical
-for the EDL shader and depth readback — background pixels have alpha = 0 and
-depth = 0, while frustum/image pixels write depth = 0 explicitly (see
-[camera-views.md](camera-views.md#edl-shader-compatibility)).
+The linear depth texture stores *positive* values for point splats. This is
+critical for the EDL shader and depth readback — background pixels have
+alpha = 0 and depth = 0, while frustum/image pixels write depth = 0 explicitly
+(see [camera-views.md](camera-views.md#edl-shader-compatibility)). Patch
+surfels write their view-space depth negated, which the EDL shader passes
+through as it does `0`, while the depth readback takes the magnitude, so
+Alt+click sets the target on a surfel as it does on a splat (see
+[patch-rendering.md](patch-rendering.md#render-targets--reuse-the-image-quad-convention)).
 
 ---
 
@@ -364,13 +368,14 @@ The EDL shader uses a three-way check to handle different pixel types:
 
 ```
 alpha == 0    → background (no geometry rendered here)
-depth == 0    → frustum/image quad pixel (composite without EDL)
-depth > 0     → point cloud pixel (apply full EDL shading)
+depth <= 0    → frustum, image quad or surfel pixel (composite without EDL)
+depth > 0     → point splat pixel (apply full EDL shading)
 ```
 
-Background pixels receive the dark background color. Frustum and image quad
-pixels pass through without EDL darkening (they write 0.0 to the linear depth
-texture to signal this). Only point cloud pixels receive the full EDL treatment.
+Background pixels receive the dark background color. Frustum, image quad and
+surfel pixels pass through without EDL darkening (frustums and image quads
+write 0.0 to the linear depth texture to signal this, surfels their negated
+depth). Only point splat pixels receive the full EDL treatment.
 
 ---
 
@@ -556,7 +561,7 @@ Pass 1c: Image quads  (see camera-views.md)
   → writes: color, linear depth (0.0), pick ID, hw depth
 
 Pass 1d: Patch surfels
-  → writes: color, linear depth (0.0), pick ID, hw depth
+  → writes: color, linear depth (negated), pick ID, hw depth
 
 Pass 1e: The Track Table filter's dimmed splats and surfels
   → only while the filter dims; vertices 4..8 of the same pipelines
