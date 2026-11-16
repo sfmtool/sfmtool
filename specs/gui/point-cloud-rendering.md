@@ -565,7 +565,7 @@ Pass 1e: The Track Table filter's dimmed splats and surfels
 Pass 2:  EDL post-process
   → reads: color + linear depth
   → applies: edge darkening + supernova glow
-  → writes: final display color
+  → writes: EDL output texture
 
 Pass 2b: The hidden part of each highlighted surfel's outline
   → only while a drawn surfel is highlighted; the surfels of Pass 1d and 1e

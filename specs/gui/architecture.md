@@ -305,7 +305,8 @@ Pass 2b: Hidden outlines (while a drawn surfel is highlighted)
   Input:  Patch instances + hw depth (read-only, compared Less)
   Output: EDL output color where the scene hides a highlighted surfel's outline
 
-Pass 3:  Target indicator (while the HUD's Target indicator checkbox is on)
+Pass 3:  Target indicator (while Alt is held, while the HUD's Target indicator
+         is on, and for the flash after the target moves)
   Input:  Compass edge instances + star mesh + hw depth (sampled)
   Output: EDL output color (additive blending, reads depth for occlusion)
 
