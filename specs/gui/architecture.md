@@ -259,16 +259,22 @@ These four formats are declared once, in `scene_renderer/gpu_types.rs`, as
 `gbuffer_targets(color_blend)` helper that builds the three-target array. Both
 sides of the contract read them: `scene_renderer/sizing.rs` allocates the
 textures and every pass-1 pipeline in `scene_renderer/pipelines/` declares its
-targets. `pipelines/tests.rs` binds all five pass-1 pipelines inside a pass
+targets. `pipelines/tests.rs` binds every pass-1 pipeline inside a pass
 built from the same constants, so a producer that drifts from the consumer
 fails headlessly rather than at the first frame on a real GPU.
 
 ### Pass Order
 
+`SceneRenderer::render` (`scene_renderer/render.rs`) records Passes 0 to 2b;
+`App::render_scene` (`app.rs`) then records Passes 3 to 5 after it, each from
+its own `SceneRenderer` method. Passes 1a to 1e are draws in one render pass,
+the one that attaches the G-buffer and the hardware depth; every other pass is
+a render pass of its own.
+
 ```
 Pass 0:  Background image (camera view mode only)
   Input:  Full-resolution camera photograph
-  Output: EDL output texture (cleared to BG_COLOR, image quad drawn)
+  Output: EDL output texture (cleared to BG_COLOR, image drawn)
 
 Pass 1a: Point splats
   Input:  Point instance buffer (position + color)
@@ -282,28 +288,46 @@ Pass 1c: Image quads (pinhole instanced + distorted indexed)
   Input:  Image quad instances + thumbnail texture array atlas
   Output: Color + linear depth (0.0) + pick ID + hw depth
 
+Pass 1d: Patch surfels
+  Input:  Patch instance buffer + patch texture array atlas
+  Output: Color + linear depth (0.0) + pick ID (the patch's point) + hw depth
+
+Pass 1e: The Track Table filter's dimmed points and surfels
+  Input:  The instance buffers of Passes 1a and 1d, drawn again at DIM_ALPHA
+  Output: Color + linear depth + pick ID + hw depth
+
 Pass 2:  EDL post-process
   Input:  Color + linear depth textures
-  Output: Final display color (edge darkening + supernova glow)
+  Output: EDL output texture (edge darkening + supernova glow; loaded after
+          Pass 0, cleared to BG_COLOR otherwise)
 
 Pass 2b: Hidden outlines (while a drawn surfel is highlighted)
   Input:  Patch instances + hw depth (read-only, compared Less)
   Output: EDL output color where the scene hides a highlighted surfel's outline
 
-Pass 3:  Target indicator
-  Input:  Compass edge instances + star mesh + scene depth texture
+Pass 3:  Target indicator (while the HUD's Target indicator checkbox is on)
+  Input:  Compass edge instances + star mesh + hw depth (sampled)
   Output: EDL output color (additive blending, reads depth for occlusion)
 
 Pass 4:  Track rays (when a 3D point is selected)
   Input:  Edge instance buffer (camera center → nearest ray point) + hw depth
   Output: EDL output color (premultiplied alpha blending, reads depth for occlusion)
+
+Pass 5:  Bench figure (while the 3D viewer draws the focused item)
+  Input:  Figure edge instances + centre disc mesh + hw depth (sampled)
+  Output: EDL output color (alpha blending, reads depth for occlusion)
 ```
 
 For detailed specifications of each pass, see:
-- [point-cloud-rendering.md](point-cloud-rendering.md) — Points, EDL,
-  target indicator, supernova
-- [camera-views.md](camera-views.md) — Frustum wireframes, image quads,
-  pick buffer
+- [point-cloud-rendering.md](point-cloud-rendering.md) — Points, the dimmed
+  draw, EDL, target indicator, supernova
+- [camera-views.md](camera-views.md) — Background image, frustum wireframes,
+  image quads, pick buffer
+- [patch-rendering.md](patch-rendering.md) — Patch surfels and the hidden
+  outline
+- [scene-graph.md](scene-graph.md) § "Track rays and background image" —
+  Track rays
+- [viewer-3d-bench-layer.md](viewer-3d-bench-layer.md) — The bench figure
 
 ### GPU Readback
 

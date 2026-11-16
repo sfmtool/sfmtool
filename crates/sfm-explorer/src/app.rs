@@ -911,7 +911,8 @@ impl App {
     }
 
     /// Phase 2: encode the 3D scene render passes (scene, target indicator,
-    /// track rays) and the depth/pick readback copies into `encoder`.
+    /// track rays, bench figure) and the depth/pick readback copies into
+    /// `encoder`.
     fn render_scene(
         &mut self,
         device: &wgpu::Device,

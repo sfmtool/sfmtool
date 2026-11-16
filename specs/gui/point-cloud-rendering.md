@@ -538,7 +538,10 @@ The EDL shader receives these additional uniforms for the supernova:
 
 ## Render Pipeline Summary
 
-The full rendering pipeline for the point cloud and its post-processing:
+The passes that draw the point cloud and its post-processing, in the order the
+renderer records them. The background image before them and the track rays and
+bench figure after them are in [architecture.md](architecture.md#pass-order)
+§ "Pass Order", which lists every pass.
 
 ```
 Pass 1a: Point splats
@@ -571,14 +574,16 @@ Pass 2b: The hidden part of each highlighted surfel's outline
   → no linear depth, pick ID or depth (see patch-rendering.md)
 
 Pass 3:  Target indicator
-  → reads: linear depth (for occlusion testing)
+  → reads: hw depth, sampled in the fragment shader (for occlusion testing)
   → writes: EDL output color (additive blending, no depth write)
   → no pick ID (not a selectable entity)
 ```
 
-All passes share the same hardware depth buffer for correct occlusion between
-points, frustums, and image quads. The target indicator reads scene depth but
-does not write to it, allowing it to render with depth-aware transparency.
+Passes 1a to 1e share one hardware depth buffer, so points, frustums, image
+quads and surfels occlude each other. The passes after the EDL read that buffer
+and none writes it: Pass 2b attaches it read-only and tests against it, and the
+target indicator samples it, which lets it render with depth-aware
+transparency.
 
 ---
 

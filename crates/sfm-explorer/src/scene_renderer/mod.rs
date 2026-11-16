@@ -4,10 +4,12 @@
 //! GPU scene renderer.
 //!
 //! Manages offscreen rendering of the 3D scene to a texture that is
-//! displayed inside the egui UI. Uses a two-pass pipeline:
-//!
-//! 1. Point splat pass — renders instanced billboard quads to color + linear depth
-//! 2. EDL post-process pass — applies Eye-Dome Lighting for depth-aware shading
+//! displayed inside the egui UI. The scene geometry (points, frustums, image
+//! quads, patch surfels) is drawn into color, linear depth, pick ID and
+//! hardware depth targets; an Eye-Dome Lighting pass shades that onto the
+//! output texture; and the target indicator, the track rays and the bench
+//! figure are drawn over it. `specs/gui/architecture.md` § "Pass Order" lists
+//! every pass in the order it is recorded, with what each reads and writes.
 //!
 //! ## Per-reconstruction resources
 //!
