@@ -273,10 +273,12 @@ Every `.sift` file is written by one of these, and the rule is checked in each:
 | `sfm undistort` | `sfm undistort` | the input `.sfmr`'s record and the undistorted images | a new folder in its output | never, for version reasons |
 | `Version2SiftFolder` in `sfmtool-core`, which converts a version 1 `.sift` file to version 2 ([sift.md](../core/features/sift.md#converting-a-version-1-sift-file)) | its Python binding | the version 1 file it converts, its options upgraded by `upgrade_feature_options` | the folder it is made for | the file is not version 1; its tool is `sfmtool-undistort` or one with no conversion; and, when the folder value is made, a `.sift` already in the folder is version 1 |
 
-Each writer checks before it writes, and only when it has something to write:
+Each writer checks before it writes. `image_files_to_sift_files` and
+`build_sift_files` check only when they have something to write, and
 `Version2SiftFolder` checks its folder when the folder value is made, before
-any file is converted into it. The three that check a folder for version 1 files, `image_files_to_sift_files`,
-`build_sift_files` and `Version2SiftFolder`, all call `version_1_sift_files`
+any file is converted into it. The three that check a folder for version 1
+files, `image_files_to_sift_files`, `build_sift_files` and
+`Version2SiftFolder`, all call `version_1_sift_files`
 ([`features/sift/files.rs`](../../crates/sfmtool-core/src/features/sift/files.rs),
 bound in `sfmtool.sift`), so they agree on what counts: a file in the folder
 itself, not a subfolder, whose name ends in `.sift` and whose metadata reads

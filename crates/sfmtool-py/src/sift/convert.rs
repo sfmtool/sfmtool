@@ -107,8 +107,9 @@ impl PyVersion2SiftFolder {
     /// Raises:
     ///     ValueError: if the file is not version 1, or its feature options
     ///         cannot be upgraded: an `sfmtool-undistort` file, whose message
-    ///         says to run `sfm undistort` again, or a feature tool other than
-    ///         `sfmtool`, `colmap` and `opencv`.
+    ///         says to run `sfm undistort` again, a feature tool other than
+    ///         `sfmtool`, `colmap` and `opencv`, or a `gray_formula` that does
+    ///         not parse.
     ///     FileNotFoundError: if the `.sift` file or the image is not there.
     ///     OSError: if the `.sift` file cannot be read or written, or the
     ///         image cannot be read or decoded, does not hash to the recorded
