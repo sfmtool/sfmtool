@@ -3,8 +3,9 @@
 
 //! Bindings for the files in a workspace root that configure the workspace as
 //! a whole (`sfmtool_core::workspace`): its named image lists and their slices,
-//! the rules of the feature options its `.sfm-workspace.json` records, and the
-//! upward search that finds the workspace a path is in.
+//! the rules of the feature options its `.sfm-workspace.json` records, the
+//! upward search that finds the workspace a path is in, and the upgrade that
+//! brings a workspace's files to the current versions.
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -488,6 +489,90 @@ fn feature_prefix_dir_py(
     ))
 }
 
+/// Bring the workspace found at or above `path` to the current file versions,
+/// and return a report of every file and folder and what became of it.
+///
+/// The workspace's version 1 ``.sift`` files are converted to version 2 in
+/// new features folders without extracting them again; every ``.sfmr`` and
+/// ``.matches`` file that names an old folder is rewritten at its own path to
+/// name the new one and the new files' content hashes, as is any older than
+/// the current version; a version 1 ``.camrig`` is rewritten as version 2; a
+/// ``.kdf`` index built from an old folder is deleted; the workspace file is
+/// written as version 2, keeping every other key; and when no file failed,
+/// the old folders are deleted. A directory below the workspace that holds
+/// its own ``.sfm-workspace.json`` is another workspace and is not entered. A
+/// stopped run can be run again to finish. See
+/// ``specs/drafts/ws-upgrade-files-amendment.md``.
+///
+/// Args:
+///     path: a directory or file in the workspace.
+///     dry_run: find the files and plan the conversion, and write nothing;
+///         the report then gives what the run would do.
+///     progress: a ``ProgressCounter`` set to the count of the phase that is
+///         running: the folders walked, the ``.sift`` files converted, the
+///         files rewritten, then the folders deleted.
+///
+/// Returns:
+///     A dict: ``workspace_dir``; ``dry_run``; ``files``, a list of dicts with
+///     ``path``, ``kind`` (``workspace_file``, ``sfmr``, ``matches``,
+///     ``camrig`` or ``kdf``), ``outcome`` (``converted``,
+///     ``already_current``, ``not_converted``, ``failed`` or ``deleted``)
+///     and, for ``not_converted`` and ``failed``, ``reason``; ``folders``, a
+///     list of dicts with ``old_folder``, ``new_folder`` (None for an orphan
+///     folder that no file names, deleted without converting),
+///     ``sift_file_count``, ``deleted`` and ``kept_files``;
+///     ``converted_sift_file_count``; ``nested_workspaces``;
+///     ``old_folders_deleted``; and ``notes``, lines for the user.
+///
+/// Raises:
+///     ValueError: when the workspace file cannot be upgraded, a version 1
+///         record cannot be converted (an ``sfmtool-undistort`` one is told to
+///         run ``sfm undistort`` again), two old folders hold different files
+///         for one new file, or version 1 ``.sift`` files cannot be
+///         converted (every one is named); nothing but new ``.sift`` files is
+///         written in each case.
+///     FileNotFoundError: when no workspace is found at or above ``path``.
+///     OSError: when a directory of the workspace cannot be listed.
+///     InterruptedError: when a signal handler stopped the run.
+#[pyfunction(name = "upgrade_workspace")]
+#[pyo3(signature = (path, *, dry_run=false, progress=None))]
+fn upgrade_workspace_py(
+    py: Python<'_>,
+    path: PathBuf,
+    dry_run: bool,
+    progress: Option<ProgressCounter>,
+) -> PyResult<Py<PyAny>> {
+    use sfmtool_core::workspace::{
+        upgrade_workspace, UpgradeWorkspaceError, UpgradeWorkspaceOptions,
+    };
+    let options = UpgradeWorkspaceOptions { dry_run };
+    let counter = progress.as_ref().map(ProgressCounter::handle);
+    let watch = crate::signals::SignalWatch::new();
+    let sink = |event: Event<'_>| {
+        if let (Event::Count { done, .. }, Some(counter)) = (event, &counter) {
+            counter.store(done as usize, Ordering::Relaxed);
+        }
+        watch.check();
+    };
+    let result = py.detach(|| {
+        let progress = Progress::to(&sink).cancelled_by(watch.cancel_flag());
+        upgrade_workspace(&path, &options, &progress)
+    });
+    match watch.finish(result)? {
+        Ok(report) => crate::helpers::serde_to_py(py, &report),
+        Err(e) => Err(match e {
+            UpgradeWorkspaceError::NoWorkspace { .. } => {
+                pyo3::exceptions::PyFileNotFoundError::new_err(e.to_string())
+            }
+            UpgradeWorkspaceError::ListFolder { .. } => {
+                pyo3::exceptions::PyOSError::new_err(e.to_string())
+            }
+            UpgradeWorkspaceError::Cancelled => PyInterruptedError::new_err(e.to_string()),
+            _ => PyValueError::new_err(e.to_string()),
+        }),
+    }
+}
+
 /// How many lists and dicts deep [`record_json`] converts a value: the
 /// recursion limit `serde_json` reads JSON with, which stops at the 128th
 /// nested list or object, so no sfmtool record holding a deeper value could be
@@ -582,6 +667,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tool_image_to_gray_py, m)?)?;
     m.add_function(wrap_pyfunction!(recorded_image_to_gray_py, m)?)?;
     m.add_function(wrap_pyfunction!(upgrade_feature_options_py, m)?)?;
+    m.add_function(wrap_pyfunction!(upgrade_workspace_py, m)?)?;
     m.add("NAMED_IMAGE_LISTS_FILE_NAME", NAMED_IMAGE_LISTS_FILE_NAME)?;
     m.add("WORKSPACE_VERSION", WORKSPACE_VERSION)?;
     Ok(())

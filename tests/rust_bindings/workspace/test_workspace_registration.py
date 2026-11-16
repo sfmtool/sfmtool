@@ -13,6 +13,7 @@ _EXPECTED_FUNCTIONS = (
     "split_named_image_list_value",
     "tool_image_to_gray",
     "upgrade_feature_options",
+    "upgrade_workspace",
 )
 
 _EXPECTED_CLASSES = (

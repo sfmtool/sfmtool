@@ -448,7 +448,7 @@ Paths in the *Source* column are relative to
 
 | Source | Exposes | Spec |
 |--------|---------|------|
-| [workspace.rs](../crates/sfmtool-py/src/workspace.rs) | `NamedImageLists`, `NamedImageListMember`, `NamedImageListSlice`, `is_named_image_list_name`, `split_named_image_list_value`, `NAMED_IMAGE_LISTS_FILE_NAME`; `tool_image_to_gray`, `recorded_image_to_gray`, `upgrade_feature_options`, `WORKSPACE_VERSION`: each feature tool's grey conversion and the version 1 to version 2 conversion of `sfm ws upgrade`; `feature_prefix_dir`: the features folder named from a record's options, the one implementation every Python writer calls; `find_workspace_for_path`: the upward search for a path's workspace | [named-image-lists.md](workspace/named-image-lists.md), [workspace.md](workspace/workspace.md) |
+| [workspace.rs](../crates/sfmtool-py/src/workspace.rs) | `NamedImageLists`, `NamedImageListMember`, `NamedImageListSlice`, `is_named_image_list_name`, `split_named_image_list_value`, `NAMED_IMAGE_LISTS_FILE_NAME`; `tool_image_to_gray`, `recorded_image_to_gray`, `upgrade_feature_options`, `WORKSPACE_VERSION`: each feature tool's grey conversion and the version 1 to version 2 conversion of `sfm ws upgrade`; `feature_prefix_dir`: the features folder named from a record's options, the one implementation every Python writer calls; `find_workspace_for_path`: the upward search for a path's workspace; `upgrade_workspace`: the upgrade of a workspace's files to the current versions | [named-image-lists.md](workspace/named-image-lists.md), [workspace.md](workspace/workspace.md), [ws-upgrade-files-amendment.md](drafts/ws-upgrade-files-amendment.md#interface) |
 
 ## Keeping the index current
 

@@ -5,8 +5,10 @@ new command); `.sift` files are converted, never extracted again; `.sfmr`,
 `.matches` and `.camrig` files are rewritten at their own paths; the old
 version 1 features folders are deleted at the end of a run that converted
 everything, with no option to keep them, and the command and its spec tell the
-user to back up the workspace first. Targets sfmtool 0.4.1. Open questions are
-at the end.
+user to back up the workspace first. Targets sfmtool 0.4.1. The upgrade itself
+is built ([Interface](#interface)); `sfm ws upgrade` does not call it yet, which
+is the second half of step 3 ([Steps](#steps)). The questions this draft left
+open are settled at the end.
 
 Amends [`../cli/workspace/ws-upgrade-command.md`](../cli/workspace/ws-upgrade-command.md)
 and [`../workspace/workspace.md` § Migration](../workspace/workspace.md#migration),
@@ -82,21 +84,49 @@ with the reason) and writes nothing.
    1 folder that no `.sfmr` or `.matches` file names and that is not
    the workspace file's own folder is an **orphan**: it is not converted, it
    is deleted in phase 6 with the others, and the report lists it.
+
+   A directory below the workspace root that holds its own
+   `.sfm-workspace.json` is another workspace: the walk does not enter it,
+   and the report lists it, so nothing in it is changed. A `.sfmr` or
+   `.matches` file whose `workspace` record resolves to another workspace
+   (by the rule every reader resolves it with) is left as it is and listed as
+   not converted; its record names no folder of this workspace, so it makes
+   no folder here a non-orphan.
 2. **Map each old folder to a new one.** Each distinct version 1 record
    (`feature_tool`, `feature_type`, `feature_options`, `feature_prefix_dir`)
    is converted with `upgrade_feature_options`, and its new folder is named
    from the converted options by the one folder-hash implementation (see
    "Steps" for why there must be one). The workspace file's own record maps
-   to the folder phase 5 writes into it.
+   to the folder phase 5 writes into it. A version 1 folder is named by a
+   record when it is `<image dir>/<feature_prefix_dir>`, and its files go to
+   `<image dir>/<new feature_prefix_dir>`. A record that cannot be converted
+   (an `sfmtool-undistort` record, a tool this build does not know, a
+   `gray_formula` that does not parse) stops the run here, naming the files
+   that hold it, since its folder could be neither converted nor deleted.
+   Two old folders whose records convert to the same new folder, such as a
+   hand-named `features/sift-colmap-3000` beside a hashed one with the same
+   options, are converted into it together: a file the two hold with the
+   same content hash is converted once, and two different files for one
+   image stop the run here, naming both, rather than the run picking one.
 3. **Convert the `.sift` files** of every old folder that is not an orphan
-   into its new folder, as above, in parallel. This builds a table from each old file's
+   into its new folder, as above, in parallel. The image of
+   `<image dir>/<feature_prefix_dir>/<name>.sift` is `<image dir>/<name>`,
+   never the file's `image_name`, which version 1 extractors sometimes wrote
+   relative to another directory. This builds a table from each old file's
    `content_xxh128` to the new file's `content_xxh128` and
    `feature_tool_xxh128`. An image whose file is missing, cannot be decoded or
    no longer matches `image_file_xxh128` cannot be converted; its `.sift` is
    listed and the run fails at the end of this phase, before any other file is
-   rewritten.
+   rewritten. A new file already in the new folder is kept when it is this
+   file's conversion (the same tool, type, image and features, with the
+   options upgraded), as a rerun finds it, and is otherwise refused the same
+   way rather than replaced, since it may be an extraction other files
+   record.
 4. **Rewrite the files that record the old folders, and the `.camrig`
-   files,** each atomically at its own path:
+   files,** each atomically at its own path (every writer below writes a
+   temporary file beside the target and renames it over it). A `.sfmr` or
+   `.matches` file below the current version that names no old folder is
+   rewritten the same way, with its record and hashes unchanged:
    - a `sift_files` `.sfmr`: `workspace.contents` becomes the converted record
      and `feature_tool_hashes` and `sift_content_hashes` are looked up in the
      table, then it is saved as the current version, which fills the readings
@@ -105,11 +135,14 @@ with the reason) and writes nothing.
      record, then it is saved as the current version;
    - a `.matches` file: the same three fields as a `sift_files` `.sfmr`, then
      it is written as the current version; a file of version 3 or older takes
-     each image's width and height from its new `.sift` file;
+     each image's width and height from its new `.sift` file. A pairwise file
+     of version 1 is written back as version 10 like any other: the reader
+     turns its two-view poses to the canonical convention on load;
    - a `.camrig` file: read and written as the current version. It records no
      features folder; it is rewritten only so that no version 1 `.camrig` is
      left for a reader that drops version 1;
-   - a `.kdf` index: deleted, since it records the old folder and its hashes.
+   - a `.kdf` index whose sources record a version 1 record of this
+     workspace: deleted, since it records the old folder and its hashes.
      No reader rebuilds a missing `.kdf` on its own. The viewer is the one
      reader that finds an index by itself, `<stem>-sift-index.kdf` beside a
      `.sfmr`: it reads a missing one as `none` and one whose recorded `.sift`
@@ -123,14 +156,22 @@ with the reason) and writes nothing.
      it is rewritten like any other `.matches` file, and reads as stale in the
      viewer until the index is built again, since its index is gone
      ([index-files.md § When the cluster patches are stale](../gui/index-files.md#when-the-cluster-patches-are-stale)).
-   A file already at the current version and naming no old folder is left as
-   it is.
+   A file already at the current version and naming no old folder (a `.sfmr`
+   at version 16, a `.matches` at version 10, a `.camrig` at version 2) is
+   left as it is, so its hashes do not change.
 5. **Write the workspace file** as version 2, as `sfm ws upgrade` does today,
-   with the new folder from phase 2.
+   with the new folder from phase 2, keeping every other key.
 6. **Delete the old folders.** Only when phases 3 to 5 converted every file
-   they had to, every version 1 features folder found in phase 1 is deleted.
+   they had to, every version 1 features folder found in phase 1 is deleted:
+   its version 1 `.sift` files, then each directory that leaves empty, up to
+   but not including the image directory. An orphan's image directory is not
+   known, so the orphan folder and, when it is inside a `features` folder,
+   that folder are removed when empty. A file in the folder that is not a version
+   1 `.sift` file is kept, keeps the folder, and is listed in the report.
    Otherwise nothing is deleted, and the report says what to fix before
-   running the command again.
+   running the command again: a file that could not be read or rewritten
+   stops the deletion, while a file that is not converted for a reason under
+   "What is not converted" does not.
 
 ### A run that stops part way
 
@@ -163,8 +204,17 @@ the old folders from being deleted, because none of them can be read through
 those folders by the current reader anyway:
 
 - a cluster `.matches` file below version 6, which the reader refuses;
+- any other `.sfmr` or `.matches` file the current reader refuses, such as a
+  `.sfmr` whose camera lacks a parameter its model gained later (KerryPark480
+  holds five whose `SFMTOOL_FISHEYE` camera has no `bspline_coeff_count`);
+  a file whose metadata cannot be read at all is different, since its record
+  is unknown and its folder could be taken for an orphan, so it stops the
+  deletion;
 - a `.sfmr` or `.matches` file whose recorded `.sift` files are already
-  missing or changed, so it no longer matches any file in an old folder.
+  missing or changed, so it no longer matches any file in an old folder;
+- a `.sfmr` or `.matches` file whose `workspace` record resolves to another
+  workspace, which that workspace's upgrade converts;
+- a `.kdf` file that cannot be read.
 
 ### Backing up
 
@@ -177,13 +227,68 @@ the report says so.
 
 ## Interface
 
-The work is one function in `sfmtool-core`'s `workspace` module, which takes a
-`&Progress` (it runs for minutes on a large workspace) and returns a report
-listing every file and its outcome; it plans and writes in one call, with a
-dry-run flag. It is bound in `sfmtool.workspace`, and the `upgrade` command in
-[`_commands/ws.py`](../../src/sfmtool/_commands/ws.py) calls it and prints the
-report. `upgrade_workspace` in `_workspace.py` becomes the workspace file step
-of that function, so the Python wrapper does not repeat the binding's work.
+The work is one function,
+[`sfmtool_core::workspace::upgrade_workspace`](../../crates/sfmtool-core/src/workspace/upgrade.rs),
+which plans and writes in one call. It takes a `&Progress`, since it runs for
+minutes on a large workspace, and a settings struct whose one field is the
+dry-run flag; it returns a report listing every file and folder and its
+outcome:
+
+```rust
+pub fn upgrade_workspace(
+    path: &Path,                       // a directory or file in the workspace
+    options: &UpgradeWorkspaceOptions, // { dry_run: bool }
+    progress: &Progress<'_>,
+) -> Result<UpgradeWorkspaceReport, UpgradeWorkspaceError>
+```
+
+```rust
+use sfmtool_core::workspace::{upgrade_workspace, UpgradeWorkspaceOptions};
+
+let report = upgrade_workspace(path, &UpgradeWorkspaceOptions { dry_run: true }, &progress)?;
+if report.nothing_to_do() {
+    println!("nothing to do");
+}
+```
+
+`UpgradeWorkspaceReport` holds the workspace directory; the dry-run flag; one
+`UpgradedFile` per file (the workspace file first, then each `.sfmr`,
+`.matches`, `.camrig` and `.kdf` file the walk found) with its
+`UpgradeFileKind` and `UpgradeOutcome`: `Converted`, `AlreadyCurrent`,
+`NotConverted(reason)` (one of "What is not converted", which does not stop the
+deletion), `Failed(reason)` (could not be read or written, which does) or
+`Deleted`; one `UpgradedFolder` per version 1 folder, with its new folder
+(`None` for an orphan), its `.sift` file count, whether it was deleted and the
+files the deletion kept; the number of `.sift` files converted; the nested
+workspaces; whether the old folders were deleted; and notes for the user, the
+point-ID note among them. A dry run fills the same report with the outcomes
+the run would have, and reads each `.sfmr` and `.matches` file that names an
+old folder to find those whose `.sift` files are missing or changed. The
+report serializes with `serde`, so a caller can print or store it as JSON.
+
+`UpgradeWorkspaceError` is what stops a run before anything but new `.sift`
+files is written: no workspace, a workspace file that cannot be read or is
+not version 1 or 2, a directory that cannot be listed, a record that cannot be
+converted (`FeatureOptions`, naming the files that hold it), two old files
+for one new one (`Conflicts`), every `.sift` file that could not be converted
+(`SiftFiles`), and `Cancelled`. The progress phases are `find files`, `plan`,
+`convert .sift files`, `rewrite files`, `workspace file` and
+`delete old folders`, each counting what it works through; cancellation is
+checked between files, and a cancelled run is one of the stopped runs above.
+
+It is bound as `sfmtool.workspace.upgrade_workspace(path, *, dry_run=False,
+progress=None)`, which returns the report as a dict and raises
+`FileNotFoundError` for no workspace, `OSError` for a directory that cannot be
+listed, `InterruptedError` for a signal and `ValueError` for the rest. The
+`upgrade` command in [`_commands/ws.py`](../../src/sfmtool/_commands/ws.py)
+is to call it and print the report, and `upgrade_workspace` in
+`_workspace.py`, whose workspace file step the Rust function now holds, is to
+be removed, so the Python wrapper does not repeat the binding's work.
+
+The `.kdf` files are read by `sfmtool_kdf_format::read_kdf_workspace`, which
+reads a file's recorded workspace from its metadata alone, with no scalar type
+and no tree or row map, since phase 1 needs only the folder each index was
+built from.
 
 The `.sfmr` rewrite is in Rust. Python's `SfmrReconstruction` has no way to
 change a loaded reconstruction's `workspace.contents`
@@ -216,21 +321,25 @@ Each step is its own pull request.
 2. **`.sift` version 1 to version 2 conversion** in core, with a binding, and
    tests that a converted file's features are byte-identical and its readings
    equal a fresh computation from the image.
-3. **The workspace upgrade above,** with this draft converted into
-   [ws-upgrade-command.md](../cli/workspace/ws-upgrade-command.md) and
-   [workspace.md § Migration](../workspace/workspace.md#migration), and tests on
-   copies of `test-data` workspaces, which are version 1. The datasets carry
-   no `.sift` or `.matches` files, so the tests write version 1 `.sift` files
-   into the copies first.
+3. **The workspace upgrade above,** in two pull requests:
+   - **3a.** `upgrade_workspace` in core and its binding, with tests on
+     synthetic workspaces built from `test-data` images, which write version 1
+     `.sift`, `.sfmr`, `.matches`, `.camrig` and `.kdf` files first, since the
+     datasets carry none.
+   - **3b.** `sfm ws upgrade` calls the binding and prints the report;
+     `upgrade_workspace` in `_workspace.py` is removed; and this draft is
+     converted into
+     [ws-upgrade-command.md](../cli/workspace/ws-upgrade-command.md) and
+     [workspace.md § Migration](../workspace/workspace.md#migration) and
+     retired.
 
-## Open questions
+## Settled questions
 
-- **`sfmtool-undistort` records.** `upgrade_feature_options` refuses them.
-  Whether to convert an undistorted workspace's `.sift` files with their
-  recorded conversion, or to keep refusing and say to run `sfm undistort`
-  again.
-- **Version 1 `.matches` files.** Whether a pairwise file of version 1 is
-  written back as version 10 or listed as not converted. The reader already
-  turns its two-view poses to the canonical convention on load and reports the
-  value as version 10, so writing it back is the same write as for any other
-  file of version 3 or older.
+- **`sfmtool-undistort` records** are refused, as step 2 decided: their
+  `.sift` files are made from their source's, and the message says to run
+  `sfm undistort` again. A workspace whose files record one stops in phase 2,
+  before anything is written.
+- **A version 1 pairwise `.matches` file** is written back as version 10. The
+  reader already turns its two-view poses to the canonical convention on load,
+  so writing it back is the same write as for any other file of version 3 or
+  older.

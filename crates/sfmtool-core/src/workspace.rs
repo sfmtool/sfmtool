@@ -12,9 +12,12 @@
 //! a new record's `.sift` files go in. [`find_workspace_for_path`], the
 //! upward search for `.sfm-workspace.json`, is `sfmtool-archive-io`'s, re-exported
 //! here; reading that file is the caller's (see `specs/workspace/workspace.md`).
+//! [`upgrade`] brings a workspace made by an earlier sfmtool to the current file
+//! versions: [`upgrade_workspace`].
 
 pub mod feature_options;
 pub mod named_image_lists;
+pub mod upgrade;
 
 pub use sfmtool_archive_io::find_workspace_for_path;
 
@@ -28,4 +31,9 @@ pub use named_image_lists::{
     NamedImageListEntry, NamedImageListMember, NamedImageListSlice, NamedImageListSliceError,
     NamedImageLists, NamedImageListsError, NAMED_IMAGE_LISTS_FILE_NAME, NAMED_IMAGE_LISTS_VERSION,
     WORKSPACE_FILE_NAME,
+};
+pub use upgrade::{
+    upgrade_workspace, SiftConflict, SiftFileFailure, UpgradeFileKind, UpgradeOutcome,
+    UpgradeWorkspaceError, UpgradeWorkspaceOptions, UpgradeWorkspaceReport, UpgradedFile,
+    UpgradedFolder,
 };
