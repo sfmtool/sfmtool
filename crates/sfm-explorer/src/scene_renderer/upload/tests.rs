@@ -3756,3 +3756,27 @@ fn a_point_with_an_all_zero_bitmap_row_keeps_its_dot() {
     );
     assert_eq!(surfel_bits(&r), [true, false, true, true, false, true]);
 }
+
+/// A point has a patch frame when its `u` is nonzero, whatever its `v`
+/// (`sfmtool_core::reconstruction::patch_frame_is_stored`, the rule `sfm
+/// web-export` follows too): a zero `u` with a nonzero `v` packs no surfel, and
+/// a nonzero `u` with a zero `v` packs one.
+#[test]
+fn a_point_has_a_patch_frame_when_its_u_is_nonzero() {
+    let (device, queue) = device();
+    let mut r = SceneRenderer::new();
+    let mut recon = with_patches(demo(6), 8, &[true; 6], None, None);
+    let u = recon.point_set.patch_u_halfvec_xyz.as_mut().unwrap();
+    u.row_mut(1).fill(0.0);
+    let v = recon.point_set.patch_v_halfvec_xyz.as_mut().unwrap();
+    v.row_mut(4).fill(0.0);
+    let u = recon.point_set.patch_u_halfvec_xyz.as_ref().unwrap();
+    let rule: Vec<bool> = u
+        .outer_iter()
+        .map(|row| sfmtool_core::reconstruction::patch_frame_is_stored([row[0], row[1], row[2]]))
+        .collect();
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::new(recon));
+    sync(&mut r, &device, &queue, RECON, &loaded);
+    assert_eq!(surfel_bits(&r), [true, false, true, true, true, true]);
+    assert_eq!(surfel_bits(&r), rule, "the packing follows the shared rule");
+}

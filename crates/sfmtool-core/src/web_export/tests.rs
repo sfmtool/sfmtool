@@ -467,3 +467,111 @@ fn many_patches_spill_onto_several_pages_and_the_report_counts_their_memory() {
     assert_eq!(export.report.decoded_atlas_bytes, decoded);
     assert!(export.report.warnings.is_empty());
 }
+
+/// The `patch_cell` array of an export, one entry per point written.
+fn patch_cells(export: &WebExport) -> Vec<u32> {
+    let scene = scene_of(export);
+    let block = decode(&scene, "points_b64");
+    let (bytes, _) = array_bytes(&scene, &block, "points.arrays", "patch_cell");
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| u32::from_le_bytes(*b))
+        .collect()
+}
+
+/// A point has a patch frame when its `u` is nonzero, whatever its `v`, the
+/// rule SfM Explorer's surfels follow ([`patch_frame_is_stored`]): a zero `u`
+/// with a nonzero `v` is a splat, and a nonzero `u` with a zero `v` a patch.
+#[test]
+fn a_point_has_a_patch_frame_when_its_u_is_nonzero() {
+    // far_demo gives the last point, 6, no frame or bitmap.
+    let mut recon = far_demo(7);
+    let u = recon.point_set.patch_u_halfvec_xyz.as_mut().unwrap();
+    u.row_mut(1).fill(0.0);
+    let v = recon.point_set.patch_v_halfvec_xyz.as_mut().unwrap();
+    v.row_mut(4).fill(0.0);
+    let u = recon.point_set.patch_u_halfvec_xyz.as_ref().unwrap();
+    let bitmaps = recon.point_set.patch_bitmaps_y_x_rgba.as_ref().unwrap();
+    let rule: Vec<bool> = (0..7)
+        .map(|p| {
+            patch_frame_is_stored([u[[p, 0]], u[[p, 1]], u[[p, 2]]])
+                && patch_bitmap_is_stored(bitmaps.index_axis(ndarray::Axis(0), p))
+        })
+        .collect();
+    let options = WebExportOptions {
+        thumbnails: false,
+        ..WebExportOptions::default()
+    };
+    let export = build_web_export(&recon, &options, &Progress::none()).unwrap();
+    let drawn: Vec<bool> = patch_cells(&export)
+        .iter()
+        .map(|&c| c != u32::MAX)
+        .collect();
+    assert_eq!(drawn, [true, false, true, true, true, true, false]);
+    assert_eq!(drawn, rule, "the export follows the shared rule");
+    assert_eq!(export.report.patches, 5);
+}
+
+/// A per-point column that is not parallel to the points is refused with an
+/// error naming it, rather than indexed past its end.
+#[test]
+fn a_column_not_parallel_to_the_points_is_refused_naming_it() {
+    type Spoil = fn(&mut SfmrReconstruction);
+    let cases: [(&str, Spoil, &str); 7] = [
+        (
+            "short u",
+            |r| r.point_set.patch_u_halfvec_xyz = Some(Array2::zeros((3, 3))),
+            "patch_u_halfvec_xyz has shape [3, 3], not [5, 3]",
+        ),
+        (
+            "short v",
+            |r| r.point_set.patch_v_halfvec_xyz = Some(Array2::zeros((4, 3))),
+            "patch_v_halfvec_xyz has shape [4, 3], not [5, 3]",
+        ),
+        (
+            "u without v",
+            |r| r.point_set.patch_v_halfvec_xyz = None,
+            "patch_u_halfvec_xyz and patch_v_halfvec_xyz must be present together",
+        ),
+        (
+            "short bitmaps",
+            |r| {
+                r.point_set.patch_bitmaps_y_x_rgba =
+                    Some(Arc::new(Array4::from_elem((2, 8, 8, 4), 9)))
+            },
+            "patch_bitmaps_y_x_rgba has shape [2, 8, 8, 4], not [5, R, R, 4]",
+        ),
+        (
+            "three-channel bitmaps",
+            |r| {
+                r.point_set.patch_bitmaps_y_x_rgba =
+                    Some(Arc::new(Array4::from_elem((5, 8, 8, 3), 9)))
+            },
+            "patch_bitmaps_y_x_rgba has shape [5, 8, 8, 3], not [5, R, R, 4]",
+        ),
+        (
+            "short observation counts",
+            |r| {
+                r.point_set.observation_counts.pop();
+            },
+            "observation_counts length (4) must match point count (5)",
+        ),
+        (
+            "long observation counts",
+            |r| r.point_set.observation_counts.push(1),
+            "observation_counts length (6) must match point count (5)",
+        ),
+    ];
+    for (what, spoil, message) in cases {
+        let mut recon = far_demo(5);
+        spoil(&mut recon);
+        match build_web_export(&recon, &WebExportOptions::default(), &Progress::none()) {
+            Err(WebExportError::InvalidReconstruction(m)) => {
+                assert!(m.starts_with(message), "{what}: {m}");
+            }
+            other => panic!("{what}: {:?}", other.map(|e| e.report)),
+        }
+    }
+}

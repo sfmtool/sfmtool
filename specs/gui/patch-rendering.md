@@ -44,10 +44,15 @@ Key facts that shape the design:
   which is why the vertex shader flips the bitmap's `v` texture coordinate. There
   is no separate patch struct at rest — the frame is the two half-vectors.
 - **A point with no patch is an all-zero row**, of the frame or of the
-  bitmaps. A point has a patch to draw when its `u` row is nonzero and its
-  bitmap row is not all zero (`patch_bitmap_is_stored` in `sfmtool_core`, the
-  rule the Track Table's *Patch* cell and the web export read too). The
-  uploader skips every other point, so no surfel is drawn as a black square.
+  bitmaps. A point has a patch to draw when its `u` row is nonzero
+  (`patch_frame_is_stored`, the format's own test for a present row) and its
+  bitmap row is not all zero (`patch_bitmap_is_stored`), both in
+  `sfmtool_core::reconstruction` and the rule the web export reads too; the
+  Track Table's *Patch* cell reads the bitmap half. A zero `v` beside a nonzero
+  `u` is a degenerate frame, not a missing one, as the format's derived
+  normals count it: the point is packed as a surfel whose quad has no area.
+  The uploader skips every other point, so no surfel is drawn as a black
+  square.
 - **`u`/`v` are present-or-absent together.** Bitmaps require the frame but are
   independent of it: a reconstruction can carry frames with **no** bitmaps (e.g.
   a `to-embedded-patches` result before `refine_normals(render_bitmaps=True)`).

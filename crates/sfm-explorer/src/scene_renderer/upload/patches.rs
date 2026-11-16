@@ -480,7 +480,8 @@ pub(super) fn patch_liveness(
 }
 
 /// The points that carry a patch, ascending: a point with no patch is an
-/// all-zero `u` row or an all-zero bitmap row
+/// all-zero `u` row (`sfmtool_core::reconstruction::patch_frame_is_stored`) or
+/// an all-zero bitmap row
 /// (`sfmtool_core::reconstruction::patch_bitmap_is_stored`), and packing the
 /// latter would draw a black square where the point's dot belongs.
 ///
@@ -506,10 +507,13 @@ fn packed_points(
         .min(v_halfvecs.nrows());
     (0..n_rows)
         .filter(|&i| {
-            (0..3).any(|k| u_halfvecs[[i, k]] != 0.0)
-                && sfmtool_core::reconstruction::patch_bitmap_is_stored(
-                    bitmaps.index_axis(ndarray::Axis(0), i),
-                )
+            sfmtool_core::reconstruction::patch_frame_is_stored([
+                u_halfvecs[[i, 0]],
+                u_halfvecs[[i, 1]],
+                u_halfvecs[[i, 2]],
+            ]) && sfmtool_core::reconstruction::patch_bitmap_is_stored(
+                bitmaps.index_axis(ndarray::Axis(0), i),
+            )
         })
         .map(|i| i as u32)
         .collect()

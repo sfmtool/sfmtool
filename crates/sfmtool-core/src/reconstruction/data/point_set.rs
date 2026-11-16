@@ -66,7 +66,8 @@ impl ObservationSource {
 ///
 /// The one definition of that rule: what the viewer draws as a surfel, what a
 /// Track Table *Patch* cell and Track View's header show, and which points a
-/// web export draws as patches all read it.
+/// web export draws as patches all read it. The frame half of the rule is
+/// [`patch_frame_is_stored`](super::patch_frame_is_stored).
 pub fn patch_bitmap_is_stored(bitmap: ndarray::ArrayView3<'_, u8>) -> bool {
     bitmap.iter().any(|&b| b != 0)
 }
@@ -552,6 +553,47 @@ impl PointSet {
     pub fn reference_observation_row(&self, point: usize) -> Option<usize> {
         let r = *self.reference_observations.as_ref()?.get(point)?;
         (r >= 0).then(|| self.observation_offsets[point] + r as usize)
+    }
+
+    /// Check that the patch frame and patch bitmap columns are parallel to
+    /// `points`: `patch_u_halfvec_xyz` and `patch_v_halfvec_xyz` present
+    /// together and shaped `(N, 3)`, and the bitmaps shaped `(N, R, R, 4)` and
+    /// present only with the frame, for `N` points. Returns a message naming
+    /// the first column that is not, with its shape and the point count.
+    ///
+    /// The in-memory form of the shapes the `.sfmr` writer and reader check,
+    /// run by [`SfmrReconstruction::validate_point_columns`](super::SfmrReconstruction::validate_point_columns).
+    pub fn validate_patch_columns(&self) -> Result<(), String> {
+        let n = self.points.len();
+        let (u, v) = (&self.patch_u_halfvec_xyz, &self.patch_v_halfvec_xyz);
+        if u.is_some() != v.is_some() {
+            return Err(
+                "patch_u_halfvec_xyz and patch_v_halfvec_xyz must be present together".to_string(),
+            );
+        }
+        for (name, column) in [("patch_u_halfvec_xyz", u), ("patch_v_halfvec_xyz", v)] {
+            if let Some(column) = column {
+                if column.shape() != [n, 3] {
+                    return Err(format!(
+                        "{name} has shape {:?}, not [{n}, 3]: one row per point, for {n} points",
+                        column.shape()
+                    ));
+                }
+            }
+        }
+        if let Some(bitmaps) = &self.patch_bitmaps_y_x_rgba {
+            if u.is_none() {
+                return Err("patch_bitmaps_y_x_rgba requires the patch frame".to_string());
+            }
+            let s = bitmaps.shape();
+            if s[0] != n || s[1] != s[2] || s[3] != 4 {
+                return Err(format!(
+                    "patch_bitmaps_y_x_rgba has shape {s:?}, not [{n}, R, R, 4]: one square \
+                     RGBA bitmap per point, for {n} points"
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Check that every track row names one of `image_count` images. Returns a

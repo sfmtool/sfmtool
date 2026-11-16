@@ -54,9 +54,20 @@ it, or for a point at `-1` the reference view's tile, as
 [reference-view.md](../../core/patch/reference-view.md) § "The stored
 bitmap" describes);
 when no photograph can be read, the points are drawn as splats. A point with no
-frame or an all-zero bitmap row is drawn as a splat either way. A point at
-infinity follows the same rule: with a patch it is drawn as its patch, and
-without one as a splat.
+frame (an all-zero `u` row) or an all-zero bitmap row is drawn as a splat
+either way, by the rule SfM Explorer's surfels follow
+([patch-rendering.md](../../gui/patch-rendering.md#data-source-already-present), the
+`sfmtool_core::reconstruction` functions `patch_frame_is_stored` and
+`patch_bitmap_is_stored`). A point at infinity follows the same rule: with a
+patch it is drawn as its patch, and without one as a splat.
+
+A reconstruction whose per-point columns are not parallel to its points (a
+patch frame, bitmap or observation-count column with another row count, one of
+`u` and `v` without the other, or bitmaps without the patch frame) is refused
+before anything is written, with a message naming the column. For a wrong row
+count the message also gives the column's shape (its length, for the
+observation counts) and the point count. A file `read_sfmr` reads cannot be
+like that; a Rust caller that builds the value itself can.
 
 The command prints the points written, the patches and where their bitmaps came
 from, where the thumbnails came from, the GPU memory the atlases take once

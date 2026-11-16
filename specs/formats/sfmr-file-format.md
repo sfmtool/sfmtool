@@ -2198,7 +2198,9 @@ rules are checked on the flags alone.
 - **Format**: The in-plane half-extent vectors `u` and `v`. The patch covers
   world points `center + s·u + t·v` for `(s, t) ∈ [-1, 1]²`, where `center` is
   the point's position. Rows for points with no patch are `(0, 0, 0)`; a
-  non-zero `u` is what marks a row as present.
+  non-zero `u` is what marks a row as present, whatever `v` holds
+  (`sfmtool_sfmr_format::patch_frame_is_stored`); a zero `v` beside it makes
+  the frame degenerate, not absent.
 
 ##### `points3d/patch_bitmaps_y_x_rgba.{N}.{R}.{R}.4.uint8.zst` (Optional)
 

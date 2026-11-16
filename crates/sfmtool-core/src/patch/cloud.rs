@@ -1344,11 +1344,11 @@ impl PatchCloud {
         let mut point_indexes = Vec::new();
         for i in 0..half_u_xyz.shape()[0] {
             let row = |a: &ArrayView2<'_, f32>| [a[[i, 0]], a[[i, 1]], a[[i, 2]]];
-            // A zero `u` marks a point with no patch.
-            let (u_axis, hu) = split_halfvec(row(&half_u_xyz));
-            if hu <= 1e-12 {
+            let u = row(&half_u_xyz);
+            if !crate::reconstruction::patch_frame_is_stored(u) {
                 continue;
             }
+            let (u_axis, hu) = split_halfvec(u);
             let v = row(&half_v_xyz);
             let (v_unit, hv) = split_halfvec(v);
             let v_axis = if hv > 1e-12 {

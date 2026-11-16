@@ -508,7 +508,7 @@ impl SfmrReconstruction {
                 let from_frame = frames.and_then(|(u, v)| {
                     let row = |a: &Array2<f32>| [a[[i, 0]], a[[i, 1]], a[[i, 2]]];
                     let u = row(u);
-                    (pt.w != 0.0 && u != [0.0; 3])
+                    (pt.w != 0.0 && sfmtool_sfmr_format::patch_frame_is_stored(u))
                         .then(|| sfmtool_sfmr_format::patch_normal(u, row(v)))
                         .flatten()
                 });
