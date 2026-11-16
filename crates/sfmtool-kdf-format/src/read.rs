@@ -180,6 +180,44 @@ fn locate_corpus(
     })
 }
 
+/// The workspace a `.kdf` file records for its source `.sift` files, or
+/// `None` for a corpus with no sources.
+///
+/// It reads the ZIP directory and `metadata.json.zst` alone, within
+/// [`KdfOpenOptions::default`]'s `max_metadata_bytes`, and checks the format
+/// and version as [`KdfFile::open`] does, so it needs no scalar type and
+/// decodes no tree, descriptor or row map. It is for a caller that only needs
+/// to know which features folder an index was built from, as the workspace
+/// upgrade does to find the indexes it deletes.
+///
+/// ```no_run
+/// let workspace = sfmtool_kdf_format::read_kdf_workspace("kerry-sift-index.kdf".as_ref())?;
+/// if let Some(workspace) = workspace {
+///     println!("{}", workspace.contents.feature_prefix_dir);
+/// }
+/// # Ok::<(), sfmtool_kdf_format::KdfError>(())
+/// ```
+///
+/// # Errors
+///
+/// [`KdfError`] when the file cannot be opened, is not a ZIP archive, has no
+/// `metadata.json.zst` or one larger than the limit, or is not a `.kdf` of
+/// the version this build reads.
+pub fn read_kdf_workspace(path: &Path) -> Result<Option<KdfWorkspaceMetadata>, KdfError> {
+    let file = std::fs::File::open(path)?;
+    let mut archive = ZipArchive::new(file)?;
+    let mut entries = HashMap::new();
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i)?;
+        entries.insert(entry.name()?.into_owned(), entry.compressed_size());
+    }
+    let limit = KdfOpenOptions::default().max_metadata_bytes;
+    let raw = read_bounded_json_raw(&mut archive, &entries, "metadata.json.zst", limit)?;
+    let metadata: Metadata = serde_json::from_slice(&raw)?;
+    check_format_and_version(&metadata)?;
+    Ok(metadata.workspace)
+}
+
 /// An open immutable `.kdf` snapshot with lazy, integrity-checked payload access.
 pub struct KdfFile<S: KdfScalar> {
     archive: Mutex<ZipArchive<std::fs::File>>,

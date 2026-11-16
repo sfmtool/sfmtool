@@ -73,6 +73,7 @@ fn round_trip_descriptor_corpus() {
         assert_eq!(file.vector(2).unwrap(), [9, 9]);
         let verified = verify_kdf::<u8>(&path, roomy()).unwrap();
         assert_eq!(verified.features, 3);
+        assert_eq!(read_kdf_workspace(&path).unwrap(), None);
     }
 }
 
@@ -130,6 +131,10 @@ fn source_origins_are_lazy_and_keep_requested_order() {
     let descriptor_order = [2, 0, 1];
     data.descriptor_order = Some(&descriptor_order);
     write_kdf(&path, &data, Some(&sources), &options, &Progress::none()).unwrap();
+    assert_eq!(
+        read_kdf_workspace(&path).unwrap().as_ref(),
+        Some(&sources.workspace)
+    );
     let file = KdfFile::<u8>::open(&path, roomy()).unwrap();
     assert_eq!(file.io_stats().read_calls, 0);
     assert_eq!(file.descriptor_block_shape(), (2, 2));
