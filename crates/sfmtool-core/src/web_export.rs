@@ -48,6 +48,7 @@ use crate::numeric::quantile_in_place;
 use crate::patch::display_bitmaps::{render_display_patch_bitmaps, DISPLAY_PYRAMID_LEVELS};
 use crate::progress::{Cancelled, Progress};
 use crate::reconstruction::thumbnail::{display_thumbnail_row, resize_area, ThumbnailSource};
+use crate::reconstruction::{patch_bitmap_is_stored, patch_frame_is_stored};
 use crate::{progress_note, CameraIntrinsics, SfmrReconstruction, THUMBNAIL_SIZE};
 
 use atlas::{AtlasLayout, RgbPage};
@@ -184,6 +185,10 @@ pub enum WebExportError {
     UnknownStartImage(String),
     /// An option is out of range.
     InvalidOption(String),
+    /// A per-point column of the reconstruction is not parallel to its points,
+    /// as [`SfmrReconstruction::validate_point_columns`] checks; the message
+    /// names the column, its length or shape, and the point count.
+    InvalidReconstruction(String),
     /// An atlas page could not be encoded.
     Encode(image::ImageError),
     /// A file could not be written.
@@ -202,6 +207,9 @@ impl std::fmt::Display for WebExportError {
                 )
             }
             Self::InvalidOption(message) => f.write_str(message),
+            Self::InvalidReconstruction(message) => {
+                write!(f, "the reconstruction cannot be exported: {message}")
+            }
             Self::Encode(e) => write!(f, "could not encode an atlas page: {e}"),
             Self::Io(e) => write!(f, "could not write the export: {e}"),
             Self::Cancelled => f.write_str("cancelled"),
@@ -232,6 +240,9 @@ impl From<Cancelled> for WebExportError {
 ///
 /// [`WebExportError::UnknownStartImage`] and
 /// [`WebExportError::InvalidOption`] for options that do not fit `recon`;
+/// [`WebExportError::InvalidReconstruction`] when a per-point column of
+/// `recon`, such as the patch frame or bitmaps, does not have one row per
+/// point;
 /// [`WebExportError::Encode`] when a page cannot be encoded;
 /// [`WebExportError::Cancelled`] when `progress` is cancelled.
 pub fn build_web_export(
@@ -250,6 +261,9 @@ pub fn build_web_export(
             "the patch size must be at least 1".into(),
         ));
     }
+    recon
+        .validate_point_columns()
+        .map_err(WebExportError::InvalidReconstruction)?;
     let images = &recon.image_set.images;
     let start_index = match &options.start_image {
         Some(name) => Some(
@@ -579,19 +593,16 @@ fn kept_points(observation_counts: &[u32], max_points: Option<usize>) -> Vec<usi
 }
 
 /// Whether point `p` is drawn as a textured patch: a point, finite or at
-/// infinity, with a nonzero frame and a bitmap row that is not all zero.
+/// infinity, whose frame and bitmap rows both store a patch, by the rule SfM
+/// Explorer's surfels follow ([`patch_frame_is_stored`],
+/// [`patch_bitmap_is_stored`]). `recon`'s point columns and `bitmaps` have one
+/// row per point, which [`build_web_export`] checks first.
 fn has_patch(recon: &SfmrReconstruction, bitmaps: &ndarray::Array4<u8>, p: usize) -> bool {
-    let set = &recon.point_set;
-    let (Some(u), Some(v)) = (&set.patch_u_halfvec_xyz, &set.patch_v_halfvec_xyz) else {
+    let Some(u) = &recon.point_set.patch_u_halfvec_xyz else {
         return false;
     };
-    if p >= bitmaps.shape()[0] {
-        return false;
-    }
-    let nonzero = |column: &ndarray::Array2<f32>| column.row(p).iter().any(|&x| x != 0.0);
-    nonzero(u)
-        && nonzero(v)
-        && crate::reconstruction::patch_bitmap_is_stored(bitmaps.index_axis(ndarray::Axis(0), p))
+    patch_frame_is_stored([u[[p, 0]], u[[p, 1]], u[[p, 2]]])
+        && patch_bitmap_is_stored(bitmaps.index_axis(ndarray::Axis(0), p))
 }
 
 /// A point's position as the viewer stores it: a place relative to `centre`,

@@ -59,6 +59,9 @@ pub use readings::{
     observation_reading_options, ObservationReading, ObservationReadingOptions,
     ObservationReadings, ReadingSampler, ReadingWindow,
 };
+/// The frame half of the rule [`patch_bitmap_is_stored`] is the bitmap half
+/// of, defined by the format crate beside the derived normals that read it.
+pub use sfmtool_sfmr_format::patch_frame_is_stored;
 pub use sift_keypoints::SiftKeypointFill;
 
 // Re-exported at the old path: `analysis::infinity::discover` imports it as
@@ -422,7 +425,10 @@ impl SfmrReconstruction {
             .validate_observation_columns(self.image_set.image_count())
     }
 
-    /// Check that the optional per-point constraint columns are parallel to
+    /// Check that `observation_counts` has one entry per point, that the patch
+    /// frame and bitmap columns are parallel to `points`
+    /// ([`PointSet::validate_patch_columns`]), that the optional per-point
+    /// constraint columns are parallel to
     /// `points`, carry a constraint this format defines, and reference only images
     /// this reconstruction holds, and that each reference observation is `-1` or
     /// within its point's track and present only with the patch frame, with or
@@ -436,6 +442,14 @@ impl SfmrReconstruction {
     /// and a stale image reference is the failure a file-level check would only
     /// catch at write time.
     pub fn validate_point_columns(&self) -> Result<(), String> {
+        let counts = self.point_set.observation_counts.len();
+        if counts != self.point_set.points.len() {
+            return Err(format!(
+                "observation_counts length ({counts}) must match point count ({})",
+                self.point_set.points.len()
+            ));
+        }
+        self.point_set.validate_patch_columns()?;
         if let Some(marks) = &self.point_set.display_only_references {
             if self.point_set.reference_observations.is_none() {
                 return Err("display_only_references requires reference_observations".to_string());

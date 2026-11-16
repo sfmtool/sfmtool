@@ -86,6 +86,19 @@ pub(crate) fn normals_entries_error<'a>(
     }
 }
 
+/// Whether one point's patch frame row stores a patch, given its `u`
+/// half-vector. A point with no patch is written as all-zero `u` and `v` rows,
+/// and the format marks a row present by a nonzero `u` alone, so a point whose
+/// `v` is zero and `u` is not has a patch with a degenerate frame.
+///
+/// The one definition of that rule: the normals a version 16 file derives,
+/// the patch cloud a reconstruction stores, the surfels SfM Explorer draws and
+/// the patches `sfm web-export` writes all read it. See
+/// `specs/formats/sfmr-file-format.md` § "Per-point patch frame".
+pub fn patch_frame_is_stored(u: [f32; 3]) -> bool {
+    u != [0.0; 3]
+}
+
 /// `normalize(u × v)` in `f32`, or `None` where the cross product is zero or
 /// not finite.
 ///
@@ -122,13 +135,13 @@ impl PatchFrameRows<'_> {
     }
 
     /// Point `i`'s derived normal, `Some` where it is finite (`w ≠ 0`), its
-    /// `u` is non-zero (the format's test for a point that has a patch) and
-    /// its `u × v` gives a normal ([`patch_normal`]). `None` for a point at
-    /// infinity, a point without a patch, and a degenerate frame, whose
-    /// normal is stored.
+    /// `u` is non-zero (the format's test for a point that has a patch,
+    /// [`patch_frame_is_stored`]) and its `u × v` gives a normal
+    /// ([`patch_normal`]). `None` for a point at infinity, a point without a
+    /// patch, and a degenerate frame, whose normal is stored.
     pub(crate) fn derived(&self, i: usize) -> Option<[f32; 3]> {
         let u = Self::row(self.u, i);
-        (self.w[i] != 0.0 && u != [0.0; 3])
+        (self.w[i] != 0.0 && patch_frame_is_stored(u))
             .then(|| patch_normal(u, Self::row(self.v, i)))
             .flatten()
     }
