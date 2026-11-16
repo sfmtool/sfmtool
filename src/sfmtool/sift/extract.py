@@ -155,7 +155,8 @@ def image_files_to_sift_files(
         SiftExtractionError: If feature extraction fails for any image
     """
     from sfmtool._sfmtool.fileio import SiftWriteQueue
-    from sfmtool.sift.file import get_feature_tool_xxh128, get_feature_type_for_tool
+    from sfmtool.sift.file import get_feature_type_for_tool
+    from sfmtool.workspace import feature_prefix_dir as named_feature_prefix_dir
     from sfmtool.sift.extract_colmap import (
         extract_sift_with_colmap,
         get_colmap_feature_options,
@@ -201,16 +202,9 @@ def image_files_to_sift_files(
             for p in image_filename_list
         ]
     else:
-        feature_tool_xxh128 = get_feature_tool_xxh128(
-            feature_tool, feature_type, feature_options
-        )
-
+        prefix = named_feature_prefix_dir(feature_tool, feature_type, feature_options)
         sift_filename_list = [
-            p.parent
-            / "features"
-            / f"{feature_type}-{feature_tool_xxh128}"
-            / (p.name + ".sift")
-            for p in image_filename_list
+            p.parent / prefix / (p.name + ".sift") for p in image_filename_list
         ]
 
     # Check modification times to skip up-to-date files

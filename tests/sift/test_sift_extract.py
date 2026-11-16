@@ -9,22 +9,25 @@ import pytest
 from click.testing import CliRunner
 
 from sfmtool.cli import main
-from sfmtool.sift.file import get_feature_tool_xxh128, get_feature_type_for_tool
+from sfmtool.sift.file import get_feature_type_for_tool
 from sfmtool.fileio import SiftFile
 from sfmtool.sift.extract_colmap import get_colmap_feature_options
+from sfmtool.workspace import feature_prefix_dir
 
-# Compute the hash of the default feature tool metadata (COLMAP without DSP)
+# The features folder of the default feature tool options (COLMAP without DSP)
 _default_options = get_colmap_feature_options()
 _default_feature_type = get_feature_type_for_tool("colmap", _default_options)
-EXPECTED_FEATURE_TOOL_HASH = get_feature_tool_xxh128(
+EXPECTED_FEATURE_PREFIX_DIR = feature_prefix_dir(
     "colmap", _default_feature_type, _default_options
 )
 
 
 def test_default_feature_tool():
-    """Sanity check that we're getting a consistent hash for the feature tool."""
-    assert len(EXPECTED_FEATURE_TOOL_HASH) == 32
-    assert all(c in "0123456789abcdef" for c in EXPECTED_FEATURE_TOOL_HASH)
+    """The COLMAP defaults name the folder every earlier version named for
+    them."""
+    assert EXPECTED_FEATURE_PREFIX_DIR == (
+        "features/sift-colmap-c2405a72d0875a97223cbeccadab3291"
+    )
 
 
 def test_sift_cli_no_paths_defaults_to_cwd(
@@ -33,8 +36,7 @@ def test_sift_cli_no_paths_defaults_to_cwd(
     """'sift --extract' with no paths processes the current directory."""
     expected_sift_path = (
         isolated_seoul_bull_image.parent
-        / "features"
-        / f"sift-colmap-{EXPECTED_FEATURE_TOOL_HASH}"
+        / EXPECTED_FEATURE_PREFIX_DIR
         / (isolated_seoul_bull_image.name + ".sift")
     )
 
@@ -50,8 +52,7 @@ def test_sift_cli_with_file(isolated_seoul_bull_image: Path, provide_dir: bool):
     """Tests 'sift --extract' with a single image file."""
     expected_sift_path = (
         isolated_seoul_bull_image.parent
-        / "features"
-        / f"sift-colmap-{EXPECTED_FEATURE_TOOL_HASH}"
+        / EXPECTED_FEATURE_PREFIX_DIR
         / (isolated_seoul_bull_image.name + ".sift")
     )
 
@@ -110,12 +111,11 @@ def test_sift_cli_sfmtool_backend(isolated_seoul_bull_image: Path):
     options = get_default_sfmtool_feature_options()
     feature_type = get_feature_type_for_tool("sfmtool", options)
     assert feature_type == "sift-sfmtool"
-    tool_hash = get_feature_tool_xxh128("sfmtool", feature_type, options)
+    prefix = feature_prefix_dir("sfmtool", feature_type, options)
 
     expected_sift_path = (
         isolated_seoul_bull_image.parent
-        / "features"
-        / f"{feature_type}-{tool_hash}"
+        / prefix
         / (isolated_seoul_bull_image.name + ".sift")
     )
 
@@ -426,7 +426,6 @@ def test_sift_cli_with_range(isolated_seoul_bull_17_images: list[Path]):
     for i in [5, 6, 7, 10]:
         assert (
             image_dir
-            / "features"
-            / f"sift-colmap-{EXPECTED_FEATURE_TOOL_HASH}"
+            / EXPECTED_FEATURE_PREFIX_DIR
             / f"seoul_bull_sculpture_{i:02d}.jpg.sift"
         ).exists()

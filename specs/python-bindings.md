@@ -85,8 +85,9 @@ that find an image's `.sift` path, imported by module path
 the analysis bindings and is a different module from `sfmtool.analyze`, the
 Python reconstruction analysis that calls some of them; each keeps its name,
 the one from the extension and the one from the code it holds. In the same
-way `sfmtool.workspace` holds the bindings for a workspace's named image lists
-and `find_workspace_for_path`, the upward search for a path's workspace, and
+way `sfmtool.workspace` holds the bindings for a workspace's named image lists,
+the rules of its feature options, and `find_workspace_for_path`, the upward
+search for a path's workspace, and
 `sfmtool._workspace` is the internal Python that writes and reads
 `.sfm-workspace.json`.
 `sfmtool.fileio` is named `fileio` rather than `io` because
@@ -446,7 +447,7 @@ Paths in the *Source* column are relative to
 
 | Source | Exposes | Spec |
 |--------|---------|------|
-| [workspace.rs](../crates/sfmtool-py/src/workspace.rs) | `NamedImageLists`, `NamedImageListMember`, `NamedImageListSlice`, `is_named_image_list_name`, `split_named_image_list_value`, `NAMED_IMAGE_LISTS_FILE_NAME`; `tool_image_to_gray`, `recorded_image_to_gray`, `upgrade_feature_options`, `WORKSPACE_VERSION`: each feature tool's grey conversion and the version 1 to version 2 conversion of `sfm ws upgrade`; `find_workspace_for_path`: the upward search for a path's workspace | [named-image-lists.md](workspace/named-image-lists.md), [workspace.md](workspace/workspace.md) |
+| [workspace.rs](../crates/sfmtool-py/src/workspace.rs) | `NamedImageLists`, `NamedImageListMember`, `NamedImageListSlice`, `is_named_image_list_name`, `split_named_image_list_value`, `NAMED_IMAGE_LISTS_FILE_NAME`; `tool_image_to_gray`, `recorded_image_to_gray`, `upgrade_feature_options`, `WORKSPACE_VERSION`: each feature tool's grey conversion and the version 1 to version 2 conversion of `sfm ws upgrade`; `feature_prefix_dir`: the features folder named from a record's options, the one implementation every Python writer calls; `find_workspace_for_path`: the upward search for a path's workspace | [named-image-lists.md](workspace/named-image-lists.md), [workspace.md](workspace/workspace.md) |
 
 ## Keeping the index current
 

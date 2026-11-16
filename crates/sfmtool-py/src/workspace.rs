@@ -453,10 +453,38 @@ fn upgrade_feature_options_py(
     serde_to_py(py, &upgraded)
 }
 
+/// The folder, relative to an image's directory, that a new record's
+/// ``.sift`` files go in: ``features/{feature_type}-{hash}``.
+///
+/// The hash is the XXH3-128 of the compact JSON of ``feature_tool``,
+/// ``feature_type`` and ``feature_options``, with every object's keys sorted
+/// and without the top-level ``use_gpu``, written as
+/// ``json.dumps(..., sort_keys=True, separators=(",", ":"))`` writes it, so
+/// it is the name every earlier version of sfmtool gave the same options.
+///
+/// Raises:
+///     ValueError: for options that ``json.dumps`` writes but JSON cannot
+///         hold, such as a NaN.
+#[pyfunction(name = "feature_prefix_dir")]
+fn feature_prefix_dir_py(
+    py: Python<'_>,
+    feature_tool: &str,
+    feature_type: &str,
+    feature_options: &Bound<'_, PyAny>,
+) -> PyResult<String> {
+    let options = py_to_serde(py, feature_options)?;
+    Ok(sfmtool_core::workspace::feature_prefix_dir(
+        feature_tool,
+        feature_type,
+        &options,
+    ))
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyNamedImageLists>()?;
     m.add_class::<PyNamedImageListMember>()?;
     m.add_class::<PyNamedImageListSlice>()?;
+    m.add_function(wrap_pyfunction!(feature_prefix_dir_py, m)?)?;
     m.add_function(wrap_pyfunction!(find_workspace_for_path_py, m)?)?;
     m.add_function(wrap_pyfunction!(is_named_image_list_name_py, m)?)?;
     m.add_function(wrap_pyfunction!(split_named_image_list_value_py, m)?)?;

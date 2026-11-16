@@ -1,14 +1,14 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Helpers for `.sift` files: where an image's file lives, the feature-cache
-hash that names its directory, and arithmetic on the affine shapes it stores.
+"""Helpers for `.sift` files: where an image's file lives, and arithmetic on
+the affine shapes it stores. The features folder an image's file goes in is
+named by `sfmtool.workspace.feature_prefix_dir`.
 
 Reading and writing a `.sift` file is `sfmtool.fileio`'s: `SiftFile` opens
 one, and `write_sift` and `SiftWriteQueue` write them.
 """
 
-import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -24,7 +24,6 @@ __all__ = [
     "get_sift_path_from_recon",
     "get_used_features_from_reconstruction",
     "xxh128_of_file",
-    "get_feature_tool_xxh128",
     "compute_orientation",
     "feature_size",
     "feature_size_x",
@@ -51,42 +50,6 @@ def xxh128_of_file(filename: str | Path) -> str:
         for b in iter(lambda: fh.read(2**16), b""):
             xxh128.update(b)
     return xxh128.hexdigest()
-
-
-# Feature options that describe hardware/performance choices rather than the
-# feature output, and so are excluded from the feature-cache hash.
-_NON_DEFINING_OPTION_KEYS = frozenset({"use_gpu"})
-
-
-def get_feature_tool_xxh128(
-    feature_tool: str, feature_type: str, feature_options: dict
-) -> str:
-    """Calculate the XXH128 hash for a feature extraction configuration.
-
-    Args:
-        feature_tool: Name of the feature tool (e.g. "colmap", "opencv")
-        feature_type: Feature type string (e.g. "sift-colmap", "sift-opencv")
-        feature_options: Dict of feature extraction options
-
-    Returns:
-        Hexadecimal string representation of the XXH128 hash
-    """
-    # Drop non-defining keys (e.g. use_gpu) so the cache directory is stable
-    # across GPU/CPU extraction and identical to configs written before the
-    # key existed (where stripping is a no-op).
-    hashed_options = {
-        k: v for k, v in feature_options.items() if k not in _NON_DEFINING_OPTION_KEYS
-    }
-    canonical = json.dumps(
-        {
-            "feature_tool": feature_tool,
-            "feature_type": feature_type,
-            "feature_options": hashed_options,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return xxhash.xxh3_128(canonical.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +175,7 @@ def get_sift_path_for_image(
     image_filename = Path(image_filename).resolve()
 
     from sfmtool._workspace import load_workspace_config
-    from sfmtool.workspace import find_workspace_for_path
+    from sfmtool.workspace import feature_prefix_dir, find_workspace_for_path
 
     workspace_dir = (
         None if ignore_workspace else find_workspace_for_path(image_filename)
@@ -240,16 +203,8 @@ def get_sift_path_for_image(
             feature_options = get_colmap_feature_options()
 
     feature_type = get_feature_type_for_tool(feature_tool, feature_options)
-    feature_tool_hash = get_feature_tool_xxh128(
-        feature_tool, feature_type, feature_options
-    )
-
-    return (
-        image_filename.parent
-        / "features"
-        / f"{feature_type}-{feature_tool_hash}"
-        / (image_filename.name + ".sift")
-    )
+    prefix = feature_prefix_dir(feature_tool, feature_type, feature_options)
+    return image_filename.parent / prefix / (image_filename.name + ".sift")
 
 
 def get_sift_path_from_recon(

@@ -41,7 +41,7 @@ def get_colmap_feature_options(
                               Incompatible with GPU SIFT.
         use_gpu: Use GPU SIFT extraction (default: True). A hardware/performance
                  choice, not a feature-defining option, so it is excluded from
-                 the feature-cache hash (see get_feature_tool_xxh128).
+                 the feature-cache hash (see sfmtool.workspace.feature_prefix_dir).
 
     Returns:
         Dict of feature options that affect feature output, with the

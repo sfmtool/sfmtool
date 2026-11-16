@@ -263,14 +263,13 @@ def undistort_reconstruction_images(
         finite_positions_xyzw,
         materialize_infinity_for_export,
     )
-    from .sift.file import (
-        get_feature_tool_xxh128,
-        get_sift_path_from_recon,
-        xxh128_of_file,
-    )
+    from .sift.file import get_sift_path_from_recon, xxh128_of_file
     from .fileio import SiftFile, write_sift
     from .sift import image_readings_from_rgb
-    from .workspace import recorded_image_to_gray
+    from .workspace import (
+        feature_prefix_dir as named_feature_prefix_dir,
+        recorded_image_to_gray,
+    )
     from ._workspace import require_version_2_workspace
 
     # The source .sift files are read from a version 2 workspace; checked
@@ -310,11 +309,8 @@ def undistort_reconstruction_images(
         "image_to_gray": image_to_gray.to_dict(),
     }
     undistort_feature_type = f"sift-{undistort_feature_tool}"
-    undistort_feature_tool_hash = get_feature_tool_xxh128(
+    feature_prefix_dir = named_feature_prefix_dir(
         undistort_feature_tool, undistort_feature_type, undistort_feature_options
-    )
-    feature_prefix_dir = (
-        f"features/{undistort_feature_type}-{undistort_feature_tool_hash}"
     )
 
     feature_tool_metadata = {

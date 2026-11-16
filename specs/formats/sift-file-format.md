@@ -509,7 +509,8 @@ formatting, whitespace) produce different values.
 
 The hash in the workspace's `feature_prefix_dir` directory name is a separate value. It is
 computed from `feature_tool`, the configured `feature_type` (for example `sift-colmap`) and
-`feature_options` minus options that do not affect the output. A workspace computes it once, when
+`feature_options` minus options that do not affect the output, by the one function
+`sfmtool_core::workspace::feature_prefix_dir`. A workspace computes it once, when
 the folder is created, and stores it in `feature_prefix_dir`, which is read back as it is
 from then on; for an image outside a workspace it is
 computed from the extraction options at extraction time. It is never computed from a `.sift`

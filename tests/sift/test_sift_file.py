@@ -13,7 +13,6 @@ from sfmtool.sift.file import (
     feature_size,
     feature_size_x,
     feature_size_y,
-    get_feature_tool_xxh128,
     get_feature_type_for_tool,
     get_sift_path_for_image,
     xxh128_of_file,
@@ -30,6 +29,7 @@ from sfmtool.sift.extract_opencv import (
     get_default_opencv_feature_options,
     opencv_keypoint_to_affine_shape,
 )
+from sfmtool.workspace import feature_prefix_dir
 
 
 # ---------------------------------------------------------------------------
@@ -346,8 +346,8 @@ def test_get_sift_path_for_image_with_tool(tmp_path):
     path = get_sift_path_for_image(
         image_path, feature_tool="colmap", feature_options=opts
     )
-    expected_hash = get_feature_tool_xxh128("colmap", "sift-colmap-dsp", opts)
-    assert f"sift-colmap-dsp-{expected_hash}" in str(path)
+    expected = feature_prefix_dir("colmap", "sift-colmap-dsp", opts)
+    assert path.parent == image_path.parent.resolve() / expected
     assert path.name == "image.jpg.sift"
 
 
@@ -395,17 +395,6 @@ def test_xxh128_of_file(tmp_path):
     assert len(result) == 32
     # Same content → same hash
     assert xxh128_of_file(f) == result
-
-
-def test_get_feature_tool_xxh128_deterministic():
-    """get_feature_tool_xxh128 is deterministic and changes with inputs."""
-    h1 = get_feature_tool_xxh128("colmap", "sift-colmap", {})
-    h2 = get_feature_tool_xxh128("colmap", "sift-colmap", {})
-    assert h1 == h2
-    assert len(h1) == 32
-
-    h3 = get_feature_tool_xxh128("opencv", "sift-opencv", {})
-    assert h3 != h1
 
 
 # ---------------------------------------------------------------------------

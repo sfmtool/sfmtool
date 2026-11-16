@@ -47,8 +47,8 @@ def _extraction_settings(recon, image_paths: list[Path], sfmr_path) -> tuple:
     one folder and needs no correspondence with the reconstruction's feature
     indexes.
     """
-    from ..sift.file import get_feature_tool_xxh128, get_feature_type_for_tool
-    from ..workspace import upgrade_feature_options
+    from ..sift.file import get_feature_type_for_tool
+    from ..workspace import feature_prefix_dir, upgrade_feature_options
 
     contents = recon.source_metadata.get("workspace", {}).get("contents", {})
     tool = contents.get("feature_tool")
@@ -70,8 +70,7 @@ def _extraction_settings(recon, image_paths: list[Path], sfmr_path) -> tuple:
     # feature type, so it is the one `sfm ws upgrade` and the viewer name for
     # the same options; older records hold a bare "sift" feature type.
     feature_type = get_feature_type_for_tool(tool, new_options)
-    xxh128 = get_feature_tool_xxh128(tool, feature_type, new_options)
-    new_prefix = f"features/{feature_type}-{xxh128}"
+    new_prefix = feature_prefix_dir(tool, feature_type, new_options)
     print(
         f"Converted the version 1 SIFT extraction record of {named} to version 2 in "
         f"memory, so its .sift files are read from {new_prefix}, moved from {prefix}; "
