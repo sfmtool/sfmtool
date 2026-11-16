@@ -808,7 +808,9 @@ fn each_turned_bitmap_is_the_render_of_the_frame_the_value_stores() {
     let views = scene.views();
     let (out, report) = refine_over(&scene, &recon);
     assert_eq!(report.turned(), 3, "{report:?}");
-    let cloud = PatchCloud::from_stored_patch_frames(&out).expect("framed");
+    let cloud = PatchCloud::from_stored_patch_frames(&out)
+        .unwrap()
+        .expect("framed");
     let wrapped: Vec<Option<ProjectedImage<'_>>> = views.iter().copied().map(Some).collect();
     let params = crate::patch::keypoint_subpixel::KeypointSubpixelParams {
         resolution: BITMAP_R as u32,

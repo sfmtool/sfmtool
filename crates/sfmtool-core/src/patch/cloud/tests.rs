@@ -1900,3 +1900,81 @@ fn a_cancel_between_the_images_stops_the_scale_read() {
     );
     assert_eq!(*read.lock().unwrap(), 1);
 }
+
+/// A reconstruction whose patch frame columns are not one row per point, or
+/// are not both present, is refused with an error naming the column rather
+/// than indexed past a column's end; one with no frame is `Ok(None)`, and one
+/// whose columns fit builds a patch per row with a nonzero `u`.
+#[test]
+fn from_stored_patch_frames_refuses_columns_that_do_not_fit_the_points() {
+    use ndarray::Array2;
+    let framed = || {
+        let mut recon = SfmrReconstruction::demo(4);
+        let mut u = Array2::<f32>::zeros((4, 3));
+        let mut v = Array2::<f32>::zeros((4, 3));
+        for p in 0..3 {
+            u[[p, 0]] = 0.01;
+            v[[p, 1]] = 0.01;
+        }
+        recon.point_set.patch_u_halfvec_xyz = Some(u);
+        recon.point_set.patch_v_halfvec_xyz = Some(v);
+        recon
+    };
+    let cloud = PatchCloud::from_stored_patch_frames(&framed())
+        .unwrap()
+        .expect("a frame");
+    assert_eq!(cloud.point_indexes, [0, 1, 2]);
+    let mut bare = framed();
+    bare.point_set.patch_u_halfvec_xyz = None;
+    bare.point_set.patch_v_halfvec_xyz = None;
+    assert!(PatchCloud::from_stored_patch_frames(&bare)
+        .unwrap()
+        .is_none());
+
+    type Spoil = fn(&mut SfmrReconstruction);
+    let cases: [(&str, Spoil, &str); 6] = [
+        (
+            "short u",
+            |r| r.point_set.patch_u_halfvec_xyz = Some(Array2::from_elem((2, 3), 0.01)),
+            "patch_u_halfvec_xyz has shape [2, 3], not [4, 3]",
+        ),
+        (
+            "short v",
+            |r| r.point_set.patch_v_halfvec_xyz = Some(Array2::from_elem((3, 3), 0.01)),
+            "patch_v_halfvec_xyz has shape [3, 3], not [4, 3]",
+        ),
+        (
+            "long u and v",
+            |r| {
+                r.point_set.patch_u_halfvec_xyz = Some(Array2::from_elem((6, 3), 0.01));
+                r.point_set.patch_v_halfvec_xyz = Some(Array2::from_elem((6, 3), 0.01));
+            },
+            "patch_u_halfvec_xyz has shape [6, 3], not [4, 3]",
+        ),
+        (
+            "narrow u",
+            |r| r.point_set.patch_u_halfvec_xyz = Some(Array2::from_elem((4, 2), 0.01)),
+            "patch_u_halfvec_xyz has shape [4, 2], not [4, 3]",
+        ),
+        (
+            "u without v",
+            |r| r.point_set.patch_v_halfvec_xyz = None,
+            "patch_u_halfvec_xyz and patch_v_halfvec_xyz must be present together",
+        ),
+        (
+            "v without u",
+            |r| r.point_set.patch_u_halfvec_xyz = None,
+            "patch_u_halfvec_xyz and patch_v_halfvec_xyz must be present together",
+        ),
+    ];
+    for (what, spoil, message) in cases {
+        let mut recon = framed();
+        spoil(&mut recon);
+        match PatchCloud::from_stored_patch_frames(&recon) {
+            Err(HalfvecArraysError::StoredFrameColumns(m)) => {
+                assert!(m.starts_with(message), "{what}: {m}");
+            }
+            other => panic!("{what}: {:?}", other.map(|c| c.map(|c| c.point_indexes))),
+        }
+    }
+}

@@ -66,8 +66,25 @@ patch frame, bitmap or observation-count column with another row count, one of
 `u` and `v` without the other, or bitmaps without the patch frame) is refused
 before anything is written, with a message naming the column. For a wrong row
 count the message also gives the column's shape (its length, for the
-observation counts) and the point count. A file `read_sfmr` reads cannot be
-like that; a Rust caller that builds the value itself can.
+observation counts) and the point count. The images and cameras are checked
+the same way before anything is written:
+
+- a track row naming an image past the images, or an observation or per-image
+  column (`keypoints_xy`, `feature_indexes`, the per-image hashes) whose length
+  is not the observation or image count
+  (`SfmrReconstruction::validate_observation_columns`); the message names the
+  row and its image index, or the column and its length, with the count it must
+  match;
+- an image whose camera index is past the cameras, or whose per-image
+  adjustment its camera cannot take (`ImageSet::check_image_intrinsics`); the
+  message names the image by index and name, and the camera index and camera
+  count or what the camera cannot take;
+- a thumbnail column not shaped `(N, 128, 128, 3)` for `N` images
+  (`ImageSet::validate_thumbnail_column`); the message gives its shape and the
+  image count.
+
+A file `read_sfmr` reads cannot be like that; a Rust caller that builds the
+value itself can.
 
 The command prints the points written, the patches and where their bitmaps came
 from, where the thumbnails came from, the GPU memory the atlases take once

@@ -609,7 +609,9 @@ const PARTIAL_POINT: usize = 53;
 
 /// Point `p`'s patch, its images and its stored keypoints.
 fn point_inputs(recon: &SfmrReconstruction, p: usize) -> (OrientedPatch, Vec<u32>, Vec<[f64; 2]>) {
-    let cloud = PatchCloud::from_stored_patch_frames(recon).expect("patch frames");
+    let cloud = PatchCloud::from_stored_patch_frames(recon)
+        .unwrap()
+        .expect("patch frames");
     let kxy = recon.keypoints_xy().expect("inline keypoints");
     let offsets = &recon.point_set.observation_offsets;
     let rows = offsets[p]..offsets[p + 1];

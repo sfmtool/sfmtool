@@ -575,3 +575,72 @@ fn a_column_not_parallel_to_the_points_is_refused_naming_it() {
         }
     }
 }
+
+/// A per-image or per-camera column that does not fit the images and cameras
+/// is refused with an error naming it, rather than read through: a camera
+/// index past the cameras or an adjustment the camera cannot take would panic
+/// in the camera's intrinsics, a thumbnail row of the wrong size would panic
+/// in the atlas, a short thumbnail column would give cameras cells past the
+/// atlas, and a track row past the images would panic in a bitmap render.
+#[test]
+fn an_image_column_that_does_not_fit_the_images_is_refused_naming_it() {
+    type Spoil = fn(&mut SfmrReconstruction);
+    let cases: [(&str, Spoil, &str); 6] = [
+        (
+            "camera index past the cameras",
+            |r| r.image_set.images[3].camera_index = 1,
+            "camera index 1 is past the 1 cameras",
+        ),
+        (
+            "adjustment the camera cannot take",
+            |r| r.image_set.images[2].intrinsic_adjustment.radial_bspline = [0.01, 0.0],
+            "a radial correction applies only to an SFMTOOL_PINHOLE camera, not PINHOLE",
+        ),
+        (
+            "short thumbnails",
+            |r| {
+                r.image_set.thumbnails_y_x_rgb = Some(Arc::new(Array4::from_elem(
+                    (4, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3),
+                    90,
+                )))
+            },
+            "thumbnails_y_x_rgb has shape [4, 128, 128, 3], not [8, 128, 128, 3]",
+        ),
+        (
+            "small thumbnails",
+            |r| {
+                r.image_set.thumbnails_y_x_rgb =
+                    Some(Arc::new(Array4::from_elem((8, 64, 64, 3), 90)))
+            },
+            "thumbnails_y_x_rgb has shape [8, 64, 64, 3], not [8, 128, 128, 3]",
+        ),
+        (
+            "track row past the images",
+            |r| r.point_set.tracks[1].image_index = 8,
+            "track row 1: image index 8 out of range for 8 images",
+        ),
+        (
+            "short per-image hashes",
+            |r| {
+                if let crate::reconstruction::ObservationSource::SiftFiles {
+                    sift_content_hashes,
+                    ..
+                } = &mut r.point_set.observations
+                {
+                    sift_content_hashes.pop();
+                }
+            },
+            "sift_content_hashes length (7) must match image count (8)",
+        ),
+    ];
+    for (what, spoil, message) in cases {
+        let mut recon = far_demo(5);
+        spoil(&mut recon);
+        match build_web_export(&recon, &WebExportOptions::default(), &Progress::none()) {
+            Err(WebExportError::InvalidReconstruction(m)) => {
+                assert!(m.contains(message), "{what}: {m}");
+            }
+            other => panic!("{what}: {:?}", other.map(|e| e.report)),
+        }
+    }
+}

@@ -49,7 +49,9 @@ pub const DISPLAY_PYRAMID_LEVELS: usize = 6;
 /// as `sfm web-export`, passes `PhotographCache::new(0, DISPLAY_PYRAMID_LEVELS)`,
 /// which keeps nothing.
 ///
-/// `Ok(None)` when `recon` has no patch frames or no inline keypoints, or when
+/// `Ok(None)` when `recon` has no patch frames it can read (none, or columns
+/// that are not one row per point, which
+/// [`PatchCloud::from_stored_patch_frames`] refuses) or no inline keypoints, or when
 /// not one photograph could be read, since a column of zero rows would draw
 /// nothing.
 ///
@@ -84,7 +86,7 @@ pub fn render_patch_bitmap_column(
     if recon.keypoints_xy().is_none() {
         return Ok(None);
     }
-    let Some(cloud) = PatchCloud::from_stored_patch_frames(recon) else {
+    let Ok(Some(cloud)) = PatchCloud::from_stored_patch_frames(recon) else {
         return Ok(None);
     };
     let [decode, render] = progress.split([1.0, 3.0]);

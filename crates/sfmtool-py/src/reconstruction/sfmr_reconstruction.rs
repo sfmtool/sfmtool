@@ -1133,11 +1133,13 @@ impl PySfmrReconstruction {
 
     /// The attached oriented-patch cloud, or ``None`` when this reconstruction
     /// carries no patch data. The returned cloud is a copy (geometry only;
-    /// bitmaps, if stored, are not loaded into the cloud).
+    /// bitmaps, if stored, are not loaded into the cloud). Raises ``ValueError``
+    /// when the patch frame columns are not one row per point.
     #[getter]
-    fn patches(&self) -> Option<crate::PyPatchCloud> {
-        let cloud = sfmtool_core::patch::PatchCloud::from_stored_patch_frames(&self.inner)?;
-        Some(crate::PyPatchCloud { inner: cloud })
+    fn patches(&self) -> PyResult<Option<crate::PyPatchCloud>> {
+        let cloud = sfmtool_core::patch::PatchCloud::from_stored_patch_frames(&self.inner)
+            .map_err(|e| PyValueError::new_err(format!("patches: {e}")))?;
+        Ok(cloud.map(|inner| crate::PyPatchCloud { inner }))
     }
 
     /// The per-3D-point RGBA patch bitmaps as a ``(N, R, R, 4)`` uint8 array, or

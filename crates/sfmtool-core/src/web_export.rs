@@ -185,10 +185,17 @@ pub enum WebExportError {
     UnknownStartImage(String),
     /// An option is out of range.
     InvalidOption(String),
-    /// A per-point column of the reconstruction is not parallel to its points:
-    /// one [`SfmrReconstruction::validate_point_columns`] checks, or
-    /// `observation_counts`. The message names the column, its length or
-    /// shape, and the point count.
+    /// A column of the reconstruction does not fit the points, observations,
+    /// images or cameras it describes: a per-point one
+    /// [`SfmrReconstruction::validate_point_columns`] checks, or
+    /// `observation_counts`; an observation one
+    /// [`SfmrReconstruction::validate_observation_columns`] checks; an image
+    /// whose camera index or adjustment
+    /// [`ImageSet::check_image_intrinsics`](crate::ImageSet::check_image_intrinsics)
+    /// refuses; or the thumbnail column
+    /// ([`ImageSet::validate_thumbnail_column`](crate::ImageSet::validate_thumbnail_column)).
+    /// The message names the column or image, its length, shape or index, and
+    /// the count it must fit.
     InvalidReconstruction(String),
     /// An atlas page could not be encoded.
     Encode(image::ImageError),
@@ -241,9 +248,12 @@ impl From<Cancelled> for WebExportError {
 ///
 /// [`WebExportError::UnknownStartImage`] and
 /// [`WebExportError::InvalidOption`] for options that do not fit `recon`;
-/// [`WebExportError::InvalidReconstruction`] when a per-point column of
-/// `recon`, such as the patch frame or bitmaps, does not have one row per
-/// point;
+/// [`WebExportError::InvalidReconstruction`] when a column of `recon` does not
+/// fit what it describes: a per-point column, such as the patch frame or
+/// bitmaps, without one row per point, a track row naming an image past the
+/// images, an image whose camera index is past the cameras or whose
+/// adjustment its camera cannot take, or a thumbnail column without one row
+/// per image;
 /// [`WebExportError::Encode`] when a page cannot be encoded;
 /// [`WebExportError::Cancelled`] when `progress` is cancelled.
 pub fn build_web_export(
@@ -275,6 +285,21 @@ pub fn build_web_export(
             set.points.len()
         )));
     }
+    // Each camera is drawn through its image's intrinsics, which index the
+    // cameras by the image's camera index; camera `i` is given row `i` of the
+    // thumbnail column; and a patch bitmap render reads each observation's
+    // image and keypoint.
+    recon
+        .validate_observation_columns()
+        .map_err(WebExportError::InvalidReconstruction)?;
+    recon
+        .image_set
+        .check_image_intrinsics()
+        .map_err(WebExportError::InvalidReconstruction)?;
+    recon
+        .image_set
+        .validate_thumbnail_column()
+        .map_err(WebExportError::InvalidReconstruction)?;
     let images = &recon.image_set.images;
     let start_index = match &options.start_image {
         Some(name) => Some(

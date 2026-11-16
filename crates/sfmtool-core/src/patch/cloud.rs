@@ -197,9 +197,14 @@ impl From<Cancelled> for PatchCloudError {
     }
 }
 
-/// Errors from [`PatchCloud::from_halfvec_arrays`].
+/// Errors from [`PatchCloud::from_halfvec_arrays`] and
+/// [`PatchCloud::from_stored_patch_frames`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum HalfvecArraysError {
+    /// A reconstruction's patch frame columns are not parallel to its points,
+    /// as [`PointSet::validate_patch_frame_columns`](crate::reconstruction::PointSet::validate_patch_frame_columns)
+    /// checks: the message names the column, its shape and the point count.
+    StoredFrameColumns(String),
     /// `half_u_xyz` and `half_v_xyz` must be `(N, 3)` and `centers_xyzw`
     /// `(N, 4)`, all with the same `N`; these are the shapes passed.
     Shape {
@@ -217,6 +222,10 @@ pub enum HalfvecArraysError {
 impl std::fmt::Display for HalfvecArraysError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            HalfvecArraysError::StoredFrameColumns(message) => write!(
+                f,
+                "the reconstruction's patch frame does not fit its points: {message}"
+            ),
             HalfvecArraysError::Shape {
                 half_u_xyz,
                 half_v_xyz,
@@ -1371,23 +1380,40 @@ impl PatchCloud {
     /// stored frame is present, built as [`Self::from_halfvec_arrays`] builds
     /// it from the `patch_u_halfvec_xyz` / `patch_v_halfvec_xyz` columns and
     /// the point positions, so the patches of points at infinity have `w = 0`.
-    /// `None` when the reconstruction carries no patch frame. Geometry only:
-    /// bitmaps are not loaded into the cloud.
-    pub fn from_stored_patch_frames(recon: &crate::SfmrReconstruction) -> Option<Self> {
-        let u = recon.point_set.patch_u_halfvec_xyz.as_ref()?;
-        let v = recon.point_set.patch_v_halfvec_xyz.as_ref()?;
+    /// `Ok(None)` when the reconstruction carries no patch frame. Geometry
+    /// only: bitmaps are not loaded into the cloud.
+    ///
+    /// Errors with [`HalfvecArraysError::StoredFrameColumns`] when one of the
+    /// two columns is present without the other or does not have one `(3,)`
+    /// row per point
+    /// ([`PointSet::validate_patch_frame_columns`](crate::reconstruction::PointSet::validate_patch_frame_columns)).
+    /// A value read from a file or made by the reconstruction's own edits
+    /// always passes; the check is for a value whose columns were set by hand.
+    pub fn from_stored_patch_frames(
+        recon: &crate::SfmrReconstruction,
+    ) -> Result<Option<Self>, HalfvecArraysError> {
+        recon
+            .point_set
+            .validate_patch_frame_columns()
+            .map_err(HalfvecArraysError::StoredFrameColumns)?;
+        let (Some(u), Some(v)) = (
+            &recon.point_set.patch_u_halfvec_xyz,
+            &recon.point_set.patch_v_halfvec_xyz,
+        ) else {
+            return Ok(None);
+        };
         let points = &recon.point_set.points;
         let centers: Vec<Point3<f64>> = points.iter().map(|p| p.position).collect();
         let weights: Vec<f64> = points
             .iter()
             .map(|p| if p.is_at_infinity() { 0.0 } else { 1.0 })
             .collect();
-        Some(Self::from_halfvec_rows(
+        Ok(Some(Self::from_halfvec_rows(
             u.view(),
             v.view(),
             &centers,
             &weights,
-        ))
+        )))
     }
 }
 

@@ -338,7 +338,9 @@ fn main() {
     // Each image's intrinsics: its camera's with its adjustment applied.
     let intrinsics = recon.image_set.all_image_intrinsics();
     let cams: Vec<&CameraIntrinsics> = intrinsics.iter().map(|c| c.as_ref()).collect();
-    let cloud = PatchCloud::from_stored_patch_frames(&recon).expect("patch frames");
+    let cloud = PatchCloud::from_stored_patch_frames(&recon)
+        .unwrap()
+        .expect("patch frames");
     let r = recon
         .point_set
         .patch_bitmaps_y_x_rgba

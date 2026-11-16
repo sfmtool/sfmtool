@@ -563,7 +563,34 @@ impl PointSet {
     ///
     /// The in-memory form of the shapes the `.sfmr` writer and reader check,
     /// run by [`SfmrReconstruction::validate_point_columns`](super::SfmrReconstruction::validate_point_columns).
+    /// The frame half is [`Self::validate_patch_frame_columns`].
     pub fn validate_patch_columns(&self) -> Result<(), String> {
+        self.validate_patch_frame_columns()?;
+        let n = self.points.len();
+        if let Some(bitmaps) = &self.patch_bitmaps_y_x_rgba {
+            if self.patch_u_halfvec_xyz.is_none() {
+                return Err("patch_bitmaps_y_x_rgba requires the patch frame".to_string());
+            }
+            let s = bitmaps.shape();
+            if s[0] != n || s[1] != s[2] || s[3] != 4 {
+                return Err(format!(
+                    "patch_bitmaps_y_x_rgba has shape {s:?}, not [{n}, R, R, 4]: one square \
+                     RGBA bitmap per point, for {n} points"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Check that the patch frame columns are parallel to `points`:
+    /// `patch_u_halfvec_xyz` and `patch_v_halfvec_xyz` present together and
+    /// shaped `(N, 3)`, for `N` points. Returns a message naming the first
+    /// column that is not, with its shape and the point count.
+    ///
+    /// What [`PatchCloud::from_stored_patch_frames`](crate::patch::PatchCloud::from_stored_patch_frames)
+    /// checks before it reads a row per point; [`Self::validate_patch_columns`]
+    /// runs it first.
+    pub fn validate_patch_frame_columns(&self) -> Result<(), String> {
         let n = self.points.len();
         let (u, v) = (&self.patch_u_halfvec_xyz, &self.patch_v_halfvec_xyz);
         if u.is_some() != v.is_some() {
@@ -579,18 +606,6 @@ impl PointSet {
                         column.shape()
                     ));
                 }
-            }
-        }
-        if let Some(bitmaps) = &self.patch_bitmaps_y_x_rgba {
-            if u.is_none() {
-                return Err("patch_bitmaps_y_x_rgba requires the patch frame".to_string());
-            }
-            let s = bitmaps.shape();
-            if s[0] != n || s[1] != s[2] || s[3] != 4 {
-                return Err(format!(
-                    "patch_bitmaps_y_x_rgba has shape {s:?}, not [{n}, R, R, 4]: one square \
-                     RGBA bitmap per point, for {n} points"
-                ));
             }
         }
         Ok(())
