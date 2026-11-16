@@ -213,7 +213,7 @@ reconstruction.sfmr (ZIP archive)
     ├── image_indexes.{M}.uint32.zst           # Image index per observation
     ├── feature_indexes.{M}.uint32.zst         # (sift_files only) feature index per observation
     ├── keypoints_xy.{M}.2.float32.zst         # inline 2D keypoint (embedded_patches; optional in sift_files) (version 4+)
-    ├── observation_confidence.{M}.uint8.zst   # (Optional) per-observation blur-matched ZNCC against the patch bitmap (version 6+)
+    ├── observation_confidence.{M}.uint8.zst   # (Optional) per-observation blur-matched ZNCC against the patch bitmap (version 6+; other scores before 13)
     ├── plain_bitmap_zncc_deficit.{M}.float16.zst      # (Optional, readings) 1 − the plain ZNCC against the stored bitmap (version 16+; plain_bitmap_zncc.{M}.float32.zst, the score, in 12 to 15)
     ├── point_indexes.{M}.uint32.zst           # Point index per observation
     ├── observation_counts.{N}.uint32.zst      # Observations per point
@@ -1796,16 +1796,36 @@ does which:
 An observation the camera cannot image, such as a point behind it, is left
 out of its point's RMS, and a point with no observation left stores `0.0`.
 
-Before sfmtool's writers stored the RMS, they stored the mean of the
-per-observation errors, so a file written by an earlier sfmtool holds the mean
-in this column until its errors are recomputed. A solve or COLMAP import of
-that time stored the mean of sfmtool's own per-observation errors, not
-COLMAP's value. A file written after that change and before the writers above
-scored the points they touch can hold an error measured on other keypoints
-or tracks: `sfm embed-patches`, `--localize-keypoints` and `--refine-keypoints`
-copied the input's errors after moving the keypoints, `sfm merge` stored the
-average, and the edits in the second list kept the errors they had. A reader
-does not recompute them on open.
+What the writers stored follows the file's version:
+
+- **Version 11 or earlier**, which covers every released sfmtool: most writers
+  stored the mean of the per-observation errors, not the RMS. A solve or a
+  COLMAP import stored the mean of sfmtool's own per-observation errors, not
+  COLMAP's value, and so did `classify_points_at_infinity`,
+  `find_points_at_infinity`, the bench's commit and Switch Camera Model for
+  the points they scored. `sfm xform --bundle-adjust` through pycolmap stored
+  COLMAP's per-point error, which is also the mean. sfmtool's own bundle
+  adjustment, for the points it solved, and Move Camera, for the tracks it
+  moved, stored the RMS. Other writers stored a value measured on other
+  keypoints or tracks: `sfm embed-patches`, `--localize-keypoints` and
+  `--refine-keypoints` copied the input's errors after moving the keypoints,
+  `sfm merge` stored the average of the merged points' errors, and Resect
+  Image, Retriangulate, Add Image to Tracks, Prune Covered Observations, an
+  image subset, `materialize_points_at_infinity` and Move Camera, for the
+  tracks it kept in place, kept the errors the points had.
+- **Version 12**: only development builds wrote it, and its writers changed
+  while it was current, first to store the RMS where the version 11 writers
+  stored the mean, then to score the points they touch as the lists above
+  say. A version 12 file can hold any of the values the version 11 entry
+  describes, or the RMS.
+- **Version 13 or later**: every writer that scores a point stores the RMS,
+  and the writers score the points the lists above say.
+
+The version is that of the writer that last saved the file, and a writer
+keeps the stored value of every point it does not score. A file of version 13
+or later saved from an older file therefore still holds the older file's value
+for each point no writer has scored since, so a reader cannot rule out a mean
+on such a point. A reader does not recompute the errors on open.
 
 The names this column goes by outside the file. The entry's name, and the
 keys that copy it field for field, stay `reprojection_errors`, because the
@@ -2379,14 +2399,33 @@ the observation by. The reference observation itself scores `1.0`. It holds
 this score until the per-observation keypoint covariance replaces it as the
 confidence bundle adjustment weighs observations by.
 
-The column's meaning changed without a version bump, twice. Earlier bench
-commits stored each observation's leave-one-out ZNCC here (its score against
-the mean of the track's other views), and stored a measured score that rounds
-to `0` as `0`; later ones stored the plain ZNCC against the stored bitmap,
-before blur matching. Such a file's bytes read back as the blur-matched ZNCC
-described here, and nothing in the file tells them apart. Where the bitmap is
-not blurred for an observation, about nine in ten, the plain and blur-matched
-scores are the same.
+What the writers stored follows the file's version:
+
+- **Versions 6 to 11**, which covers every released sfmtool that writes the
+  column: the bench's commit stored each observation's leave-one-out ZNCC, its score against the
+  mean of the track's other views, and stored a measured score that rounds to
+  `0` as `0`. Add Image to Tracks stored each observation it added as its ZNCC
+  against the template it searched with, a robust consensus of the track's
+  views or the point's stored bitmap (then a fused mean of the views), with a
+  score that rounds to `0` raised to `1`. In versions 9 and 10, SfM
+  Explorer's Add Observation stored the leave-one-out ZNCC of the observation
+  it added, as the bench's commit did, and Create Point stored `255` for the
+  one observation of a point it created. Every other writer stored `0` for an
+  observation it added.
+- **Version 12**: only development builds wrote it, and the bench's commit and
+  Add Image to Tracks changed while it was current, first to the plain ZNCC
+  against the stored bitmap or the reference observation's render, before
+  blur matching, then to the blur-matched ZNCC described here. A version 12
+  file can hold these scores and the ones the version 11 entry describes, and
+  nothing in it tells them apart. Where the bitmap is not blurred for an
+  observation, about nine in ten, the plain and blur-matched scores are the
+  same.
+- **Version 13 or later**: the blur-matched ZNCC described here.
+
+The version is that of the writer that last saved the file, and the column
+passes through every writer but the two that measure it. A file of version 13
+or later saved from an older file therefore still holds the older file's
+values in every row neither of those writers has written since.
 
 - **Shape**: `(M,)` where M = observation_count
 - **Data type**: `uint8` (little-endian)
@@ -2482,11 +2521,12 @@ Which observation each point's patch bitmap is, or is to be, rendered from:
   render of an observation that has since been removed from the point -- and
   a later render runs the reference-view rule for the point and records its
   pick.
-- **Presence**: required in a version 12 file whose `points3d/metadata.json`
-  has `has_uv_frames: true`, and absent otherwise, so it needs no flag of its
-  own. It is present with the patch frame, not with the bitmaps: a file
-  without bitmaps keeps the column and its references. A reader and a
-  verifier refuse a value that is neither `-1` nor within its point's run; a
+- **Presence**: required in a file of version 12 or later whose
+  `points3d/metadata.json` has `has_uv_frames: true`, and absent otherwise
+  (an older file with the patch frame reads with every row `-1`), so it needs
+  no flag of its own. It is present with the patch frame, not with the
+  bitmaps: a file without bitmaps keeps the column and its references. A
+  reader and a verifier refuse a value that is neither `-1` nor within its point's run; a
   writer refuses the column missing beside a patch frame, present without one,
   or out of range. All three accept a reference other than `-1` in a file
   without bitmaps.
@@ -3377,7 +3417,7 @@ described; [Version History](#version-history) is an index into it.
 
 A conforming writer always writes the current version. It does not choose its
 version by which optional columns a file carries: every optional column (normals
-in 3, observation confidence in 6, constraints in 7, thumbnails in 11, observation readings in 12, per-image intrinsic adjustments in 13, the
+in 3, normal confidence in 5, observation confidence in 6, constraints in 7, thumbnails in 11, observation readings in 12, per-image intrinsic adjustments in 13, the
 radial B-spline correction, the rolling-shutter rates and the scanlines setting
 in 14) was introduced this way, and a writer that picked its version by
 content would make "which version is this file" a question about its columns.
@@ -3464,6 +3504,14 @@ in `metadata.json` differs. A version 13 file with no column maps back to
 version 12 unchanged apart from the version number; one with columns maps back
 by dropping them and the keys, which reads every image through its camera
 exactly.
+
+Two columns changed what their writers store while version 12 was current,
+with no change to their layout:
+[`points3d/reprojection_errors`](#points3dreprojection_errorsnfloat32zst)
+went from the mean of the observation errors to their RMS, and
+[`tracks/observation_confidence`](#tracksobservation_confidencemuint8zst-optional-version-6)
+from a leave-one-out ZNCC to the blur-matched ZNCC. Each section says what a
+file of each version holds.
 
 ### Version 11 → Version 12
 
@@ -3599,12 +3647,18 @@ and no existing array changes meaning.
 ### Version 4 → Version 5
 
 Version 5 makes the
-[Coordinate System Conventions](#coordinate-system-conventions) normative. No
-array is added, removed, or renamed; the change is purely semantic:
+[Coordinate System Conventions](#coordinate-system-conventions) normative, and
+admits one optional array:
 
 | Version ≤ 4 | Version 5 |
 |-------------|-----------|
 | Poses and world data in COLMAP convention (cameras look down +Z with Y down; world orientation as produced by the solver) | Canonical convention: right-handed Z-up world; cameras look down −Z with +Y up |
+| (no normal confidence) | New **optional** per-point `uint8` column [`points3d/normal_confidence`](#points3dnormal_confidencenuint8zst-optional), flagged by `has_normal_confidence` in `points3d/metadata.json` and folded into `points3d_xxh128`. |
+
+The column was added while version 5 was already current, so a version 5 file
+written before it carries neither the flag nor the array, and reads, like a
+version 1–4 file, as having no confidence information. No other array is
+added, removed, or renamed.
 
 **Migration is mechanical and lossless.** A version ≤ 4 file upgrades on load
 by applying the fixed COLMAP→canonical conversion (`S` and `W` from
@@ -3718,7 +3772,8 @@ the migration section it links to.
   [Version 6 → Version 7](#version-6--version-7).
 - **Version 6**: optional per-observation `tracks/observation_confidence`. See
   [Version 5 → Version 6](#version-5--version-6).
-- **Version 5**: the canonical coordinate convention becomes normative. See
+- **Version 5**: the canonical coordinate convention becomes normative, and the
+  optional per-point `points3d/normal_confidence` column is added. See
   [Version 4 → Version 5](#version-4--version-5).
 - **Version 4**: `feature_source` and the `embedded_patches` observation mode.
   See [Version 3 → Version 4](#version-3--version-4).
