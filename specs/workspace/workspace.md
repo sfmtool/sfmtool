@@ -109,8 +109,9 @@ new workspace does not double an image whose width or height is 4096 or more; a
 workspace without the key has no such limit, and keeps its folder and its
 `.sift` files
 ([SIFT § 1. Scale-space pyramid](../core/features/sift.md#1-scale-space-pyramid)).
-`use_gpu` (COLMAP only) is excluded from the feature-cache hash since it does not affect feature output. In version 2 every
-tool's `feature_options` also carry the `image_to_gray` object
+`use_gpu` (COLMAP only) is excluded from the feature-cache hash since it does
+not affect feature output. In version 2 every tool's `feature_options` also
+carry the `image_to_gray` object
 ([Version 2: `image_to_gray`](#version-2-image_to_gray)).
 
 **Fields:**
