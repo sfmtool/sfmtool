@@ -78,10 +78,10 @@ are checked the same way before anything is written:
   row count;
 - a track row naming an image past the images, or an observation or per-image
   column (`keypoints_xy`, `feature_indexes`, the per-image hashes) whose length
-  is not the observation or image count
+  is not the observation or image count, or `keypoints_xy` without two columns
   (`SfmrReconstruction::validate_observation_columns`); the message names the
-  row and its image index, or the column and its length, with the count it must
-  match;
+  row and its image index, the column and its length with the count it must
+  match, or the keypoint column count;
 - an image whose camera index is past the cameras, or whose per-image
   adjustment its camera cannot take (`ImageSet::check_image_intrinsics`); the
   message names the image by index and name, and the camera index and camera

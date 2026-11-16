@@ -675,7 +675,8 @@ impl PointSet {
     /// Check that every track row names an image of the image set and that the
     /// observation-source columns are parallel to the structures they
     /// annotate: per-observation columns (`feature_indexes` / `keypoints_xy`)
-    /// must match the track count, and per-image columns (the hashes) must match
+    /// must match the track count, `keypoints_xy` with two columns, and
+    /// per-image columns (the hashes) must match
     /// `image_count`. Returns an error message describing the first mismatch.
     ///
     /// `from_sfmr_data` builds these in lockstep, but the in-memory editors
@@ -704,6 +705,22 @@ impl PointSet {
                 ));
             }
         }
+        // One `(x, y)` row per observation, in either observation source.
+        let check_keypoints = |keypoints_xy: &Array2<f32>| {
+            if keypoints_xy.nrows() != n_obs {
+                return Err(format!(
+                    "keypoints_xy row count ({}) must match observation count ({n_obs})",
+                    keypoints_xy.nrows()
+                ));
+            }
+            if keypoints_xy.ncols() != 2 {
+                return Err(format!(
+                    "keypoints_xy has {} columns, not 2: one (x, y) row per observation",
+                    keypoints_xy.ncols()
+                ));
+            }
+            Ok(())
+        };
         match &self.observations {
             ObservationSource::SiftFiles {
                 feature_indexes,
@@ -718,12 +735,7 @@ impl PointSet {
                     ));
                 }
                 if let Some(keypoints_xy) = keypoints_xy {
-                    if keypoints_xy.nrows() != n_obs {
-                        return Err(format!(
-                            "keypoints_xy row count ({}) must match observation count ({n_obs})",
-                            keypoints_xy.nrows()
-                        ));
-                    }
+                    check_keypoints(keypoints_xy)?;
                 }
                 if feature_tool_hashes.len() != n_img {
                     return Err(format!(
@@ -742,12 +754,7 @@ impl PointSet {
                 keypoints_xy,
                 image_file_hashes,
             } => {
-                if keypoints_xy.nrows() != n_obs {
-                    return Err(format!(
-                        "keypoints_xy row count ({}) must match observation count ({n_obs})",
-                        keypoints_xy.nrows()
-                    ));
-                }
+                check_keypoints(keypoints_xy)?;
                 if image_file_hashes.len() != n_img {
                     return Err(format!(
                         "image_file_hashes length ({}) must match image count ({n_img})",

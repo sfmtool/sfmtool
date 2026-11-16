@@ -649,7 +649,8 @@ fn an_image_column_that_does_not_fit_the_images_is_refused_naming_it() {
 /// or counts that do not add up to the track rows, are refused with an error
 /// naming the column, on a reconstruction whose patch bitmaps would be
 /// rendered from its photographs: the render reads each point's track rows
-/// and keypoints through the offsets, and would index past them.
+/// and keypoints through the offsets, and would index past them. Keypoints
+/// without two columns, whose second the render reads, are refused too.
 #[test]
 fn observation_offsets_that_do_not_fit_the_tracks_are_refused_naming_them() {
     // The Seoul bull ground truth: patch frames and inline keypoints, no
@@ -661,7 +662,7 @@ fn observation_offsets_that_do_not_fit_the_tracks_are_refused_naming_them() {
     let points = base.point_set.points.len();
     let rows = base.point_set.tracks.len();
     type Spoil = fn(&mut SfmrReconstruction);
-    let cases: [(&str, Spoil, String); 4] = [
+    let cases: [(&str, Spoil, String); 5] = [
         (
             "last offset past the tracks",
             |r| *r.point_set.observation_offsets.last_mut().unwrap() += 5,
@@ -709,6 +710,19 @@ fn observation_offsets_that_do_not_fit_the_tracks_are_refused_naming_them() {
                 "observation_counts add up to {rows}, not the {} track rows",
                 rows - 3
             ),
+        ),
+        (
+            "keypoints with one column",
+            |r| {
+                if let crate::reconstruction::ObservationSource::EmbeddedPatches {
+                    keypoints_xy,
+                    ..
+                } = &mut r.point_set.observations
+                {
+                    *keypoints_xy = keypoints_xy.slice(ndarray::s![.., ..1]).to_owned();
+                }
+            },
+            "keypoints_xy has 1 columns, not 2".to_string(),
         ),
     ];
     let options = WebExportOptions {
