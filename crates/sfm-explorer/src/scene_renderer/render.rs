@@ -142,8 +142,8 @@ impl SceneRenderer {
 impl SceneRenderer {
     /// Render the target indicator onto the EDL output texture.
     ///
-    /// This is Pass 2.5: renders after the EDL pass using additive blending,
-    /// with depth-aware transparency from sampling the linear depth texture.
+    /// This is Pass 3: renders after the EDL pass using additive blending,
+    /// with depth-aware transparency from sampling the hardware depth buffer.
     pub(crate) fn render_target_indicator(&self, encoder: &mut wgpu::CommandEncoder) {
         let Some(edl_output_view) = &self.edl_output_view else {
             return;
@@ -194,7 +194,7 @@ impl SceneRenderer {
 
     /// Render track rays onto the EDL output texture.
     ///
-    /// Pass 2.75: renders after the target indicator using alpha blending,
+    /// Pass 4: renders after the target indicator using alpha blending,
     /// with depth-aware occlusion from sampling the hardware depth buffer.
     pub(crate) fn render_track_rays(&self, encoder: &mut wgpu::CommandEncoder) {
         if self.track_ray_count == 0 {
@@ -234,12 +234,11 @@ impl SceneRenderer {
         }
     }
 
-    /// Render the scene.
-    ///
-    /// Pass 0:  Background image (camera view only) → edl_output
-    /// Pass 1:  Point splats + frustums → color + linear depth textures
-    /// Pass 2:  EDL post-process → edl_output (Load or Clear depending on Pass 0)
-    /// Pass 2b: The hidden part of each highlighted surfel's outline → edl_output
+    /// Render the scene: Passes 0 to 2b of `specs/gui/architecture.md`
+    /// § "Pass Order", which are the background image, the scene geometry
+    /// (Passes 1a to 1e, one render pass), the EDL post-process and the hidden
+    /// part of each highlighted surfel's outline. The passes drawn over the
+    /// result, from the target indicator on, are recorded by the caller.
     pub(crate) fn render(
         &self,
         encoder: &mut wgpu::CommandEncoder,

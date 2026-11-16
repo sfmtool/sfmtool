@@ -292,14 +292,11 @@ depth > 0     → point cloud pixel (apply full EDL shading)
 
 ### Render order
 
-```
-Pass 0:  Background image   (camera view only; writes edl_output, see below)
-Pass 1a: Point splats        (writes color + hw depth + linear depth + pick ID)
-Pass 1b: Frustum wireframes  (writes color + hw depth + 0.0 depth + pick ID)
-Pass 1c: Image quads         (writes color + hw depth + 0.0 depth + pick ID)
-Pass 2:  EDL post-process    (reads color + linear depth, writes edl_output)
-Pass 3:  Target indicator    (reads linear depth, writes edl_output color, no pick)
-```
+[architecture.md](architecture.md#pass-order) § "Pass Order" lists every pass
+the renderer records, with what each reads and writes. The ones this spec
+covers are Pass 0 (the background image), Pass 1b (frustum wireframes) and
+Pass 1c (image quads); Passes 1b and 1c write color, hardware depth, `0.0`
+linear depth and a pick ID.
 
 Pass 0 only runs when in camera view mode. It renders the selected camera's
 full-resolution photograph into `edl_output_view`, cleared to `BG_COLOR` so
@@ -733,11 +730,11 @@ padding required on modern GPUs.
 #### Rendering the background image
 
 The background image renders into the EDL output texture (`edl_output_view`)
-in a new pass that runs before the EDL post-process. The EDL pass then
+in a pass that runs before the EDL post-process. The EDL pass then
 preserves this pre-rendered background for pixels where no geometry was
 rendered.
 
-**Background pass** (new, only runs when `camera_view` is active):
+**Background pass** (only runs when `camera_view` is active):
 - Target: `edl_output_view`
 - Clear: `BG_COLOR` (the standard dark background — fills the letterbox/
   pillarbox bars)
@@ -747,7 +744,7 @@ rendered.
 - Uses a simple shader: vertex positions the quad in NDC, fragment samples
   the image texture
 
-**EDL pass changes:**
+**EDL pass:**
 - When `camera_view` is active: `LoadOp::Load` (preserves the background
   rendered in the previous pass)
 - When `camera_view` is inactive: `LoadOp::Clear(BG_COLOR)`
@@ -770,18 +767,9 @@ The `BG_COLOR` constant is not used for compositing in the shader.
 It remains only in the `LoadOp::Clear` value for normal (non-camera-view)
 rendering.
 
-The complete render pass order in camera view mode becomes:
-
-```
-Pass 0:  Background image   (writes edl_output; clear BG_COLOR + draw image quad)
-Pass 1a: Point splats        (writes color + hw depth + linear depth + pick ID)
-Pass 1b: Frustum wireframes  (writes color + hw depth + 0.0 depth + pick ID)
-Pass 1c: Image quads         (writes color + hw depth + 0.0 depth + pick ID)
-Pass 2:  EDL post-process    (reads color + linear depth, writes edl_output via Load)
-Pass 3:  Target indicator    (reads linear depth, writes edl_output color, no pick)
-```
-
-When not in camera view, Pass 0 is skipped and the render order is unchanged.
+In camera view the background pass is Pass 0, the first pass of the frame
+([architecture.md](architecture.md#pass-order) § "Pass Order"). When not in
+camera view it is skipped and the other passes run in the same order.
 
 #### Background mesh shader
 

@@ -172,10 +172,10 @@ The three-MRT + hardware-depth layout is identical to points/image-quads
 | HW depth `Depth32Float` | **real** reversed-Z depth, `depth_write = true`, `depth_compare = Greater` | correct occlusion against points, frustums, and other patches |
 
 Writing real hardware depth but `0.0` linear depth means patches **occlude
-correctly** yet are treated by the EDL pass and the target-indicator occlusion
-test as "surface" pixels (the existing `depth == 0` branch), which is the
-behavior we want. See [Open questions](#open-questions) for the EDL-on-patches
-alternative.
+correctly** yet are treated by the EDL pass as "surface" pixels (the existing
+`depth == 0` branch), which is the behavior we want. The target indicator,
+which reads the hardware depth, sees a patch at its real depth. See
+[Open questions](#open-questions) for the EDL-on-patches alternative.
 
 `PICK_TAG_POINT | point_index` is deliberate: a patch and its point are the same
 entity, so a patch click reuses all existing point selection/hover/track-detail
@@ -449,7 +449,7 @@ and the call-out from the mask word.
 A second pass draws the part of each highlighted surfel's band that the scene
 hides, after the EDL pass and onto its output, as the target indicator, the
 track rays and the bench figure are drawn
-([point-cloud-rendering.md](point-cloud-rendering.md#render-pipeline-summary)).
+([architecture.md](architecture.md#pass-order) § "Pass Order").
 It runs before those three, so they stay on top of it. It is recorded only in a
 frame where a drawn surfel is highlighted
 (`SceneRenderer::has_outlined_surfel`, read when the frame writes its uniforms).

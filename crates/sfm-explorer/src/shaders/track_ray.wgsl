@@ -3,7 +3,7 @@
 // Renders observation rays from camera centers to the selected 3D point as
 // semi-transparent glow lines. Each ray is drawn as a camera-facing ribbon
 // quad with depth-aware occlusion (discards fragments behind opaque scene
-// geometry). Rendered as a post-EDL pass (Pass 2.75) onto edl_output.
+// geometry). Rendered as a post-EDL pass (Pass 4) onto edl_output.
 
 struct Uniforms {
     view_proj: mat4x4<f32>,
