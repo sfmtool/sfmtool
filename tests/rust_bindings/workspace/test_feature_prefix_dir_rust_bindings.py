@@ -43,3 +43,25 @@ def test_integers_at_the_64_bit_edges_name_the_folder_python_gave(options, expec
 def test_options_json_cannot_hold_name_no_folder(options, message):
     with pytest.raises(ValueError, match=message):
         feature_prefix_dir("t", "sift-t", options)
+
+
+def _nested(depth):
+    options = {"x": None}
+    for _ in range(depth):
+        options = {"x": options}
+    return options
+
+
+def test_options_nested_past_the_limit_name_no_folder():
+    assert feature_prefix_dir("t", "sift-t", _nested(127)).startswith("features/")
+    with pytest.raises(ValueError, match="nested more than 128"):
+        feature_prefix_dir("t", "sift-t", _nested(128))
+    looped = []
+    looped.append(looped)
+    with pytest.raises(ValueError, match="nested more than 128"):
+        feature_prefix_dir("t", "sift-t", {"x": looped})
+
+
+def test_a_value_of_another_type_names_no_folder():
+    with pytest.raises(ValueError, match=r"feature_options\['x'\] has the type set"):
+        feature_prefix_dir("t", "sift-t", {"x": {1}})
