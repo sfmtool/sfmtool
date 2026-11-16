@@ -7,6 +7,7 @@ import sfmtool._sfmtool.sift as sift
 
 _EXPECTED_FUNCTIONS = (
     "build_sift_files",
+    "default_concurrent_images",
     "detect_sift_keypoints",
     "extract_sift",
     "gray_from_rgb",

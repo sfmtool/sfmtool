@@ -48,7 +48,8 @@ pub const WORKSPACE_CONFIG_FILE: &str = ".sfm-workspace.json";
 /// The environment variable that sets how many images [`build_sift_files`]
 /// runs at once when [`BuildSiftFilesOptions::concurrent_images`] is `None`:
 /// a whole number, raised to 1 if lower. The Python `sfmtool` backend of
-/// `sfm sift` reads the same variable.
+/// `sfm sift` reads the same variable, through
+/// [`default_concurrent_images_for_pixels`].
 pub const CONCURRENT_IMAGES_ENV_VAR: &str = "SFMTOOL_SIFT_EXTRACT_WORKERS";
 
 pub use sfmtool_sift_format::SIFT_ZSTD_LEVEL;
@@ -56,8 +57,7 @@ pub use sfmtool_sift_format::SIFT_ZSTD_LEVEL;
 /// About how many bytes one image in flight holds per source pixel: the decoded
 /// RGB frame plus the `f32` Gaussian pyramid of the doubled image the extraction
 /// keeps through description. Rounded up, since guessing high only gives up a
-/// few concurrent images while guessing low risks running out of memory. The
-/// Python backend uses the same figure.
+/// few concurrent images while guessing low risks running out of memory.
 const BYTES_PER_SOURCE_PIXEL: u64 = 192;
 
 /// The feature tool [`build_sift_files`] extracts with, as a workspace's
@@ -634,11 +634,34 @@ pub(crate) fn xxh128_of_file(path: &Path) -> std::io::Result<(String, u64)> {
     Ok((format!("{:032x}", hasher.digest128()), size))
 }
 
-/// How many images to run at once when the caller does not say: the
-/// [`CONCURRENT_IMAGES_ENV_VAR`] value when it is a whole number, otherwise the
-/// core count capped by memory at the size of `first_image`.
+/// How many images to run at once when the caller does not say, for a batch
+/// whose first image is `first_image`: [`default_concurrent_images_for_pixels`]
+/// at that image's size, read from its header, or of unknown size when the
+/// header cannot be read.
 pub(crate) fn default_concurrent_images(first_image: &Path, progress: &Progress) -> usize {
-    // An empty value counts as unset, as it does for the Python backend.
+    let pixels = image_dimensions(first_image)
+        .ok()
+        .map(|(w, h)| u64::from(w) * u64::from(h));
+    default_concurrent_images_for_pixels(pixels, progress)
+}
+
+/// How many images of `pixels` source pixels each to decode and extract at
+/// once when the caller does not say: the [`CONCURRENT_IMAGES_ENV_VAR`] value
+/// when it is a whole number, raised to 1 if lower, otherwise the core count
+/// capped so that that many images fit in half of physical memory at 192
+/// bytes per source pixel, or at most 4 when `pixels` is `None` or 0. It is
+/// never below 1. A value of the variable that is not a whole number is
+/// ignored, with a warning to `progress`.
+///
+/// ```
+/// use sfmtool_core::features::sift::default_concurrent_images_for_pixels;
+/// use sfmtool_core::Progress;
+///
+/// let k = default_concurrent_images_for_pixels(Some(4000 * 3000), &Progress::none());
+/// assert!(k >= 1);
+/// ```
+pub fn default_concurrent_images_for_pixels(pixels: Option<u64>, progress: &Progress) -> usize {
+    // An empty value counts as unset.
     if let Some(value) = std::env::var(CONCURRENT_IMAGES_ENV_VAR)
         .ok()
         .filter(|v| !v.is_empty())
@@ -653,9 +676,6 @@ pub(crate) fn default_concurrent_images(first_image: &Path, progress: &Progress)
         }
     }
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
-    let pixels = image_dimensions(first_image)
-        .ok()
-        .map(|(w, h)| u64::from(w) * u64::from(h));
     let budget = crate::machine::physical_memory_bytes()
         .unwrap_or(4 << 30)
         .div_euclid(2)
@@ -663,14 +683,14 @@ pub(crate) fn default_concurrent_images(first_image: &Path, progress: &Progress)
     concurrent_images_for(cores, pixels, budget)
 }
 
-/// [`default_concurrent_images`] without the environment: `cores`, capped so
+/// [`default_concurrent_images_for_pixels`] without the environment: `cores`, capped so
 /// that that many images of `pixels` source pixels fit in `budget` bytes, or
 /// at most 4 when the size is unknown. At least 1.
 fn concurrent_images_for(cores: usize, pixels: Option<u64>, budget: u64) -> usize {
     match pixels.filter(|&p| p > 0) {
         None => cores.clamp(1, 4),
         Some(pixels) => {
-            let by_memory = (budget / (pixels * BYTES_PER_SOURCE_PIXEL)).max(1);
+            let by_memory = (budget / pixels.saturating_mul(BYTES_PER_SOURCE_PIXEL)).max(1);
             cores.min(by_memory as usize).max(1)
         }
     }

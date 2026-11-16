@@ -13,7 +13,6 @@ concurrently and how many it runs at once: ``specs/cli/image-feature/sift-comman
 
 import collections
 import os
-import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -21,6 +20,7 @@ import cv2
 import numpy as np
 
 from sfmtool._sfmtool import THUMBNAIL_SIZE
+from sfmtool._sfmtool.sift import default_concurrent_images
 from sfmtool.fileio import read_image_rgb
 from sfmtool.sift.extract import SiftExtractionError, _image_readings_fields
 from sfmtool.sift.file import xxh128_of_file
@@ -170,7 +170,7 @@ def extract_sift_with_sfmtool(
     """Extract SIFT features from image files using the sfmtool Rust backend.
 
     Yields one result per image, in input order, decoding and extracting several
-    images concurrently (see ``_extract_workers``).
+    images concurrently (see ``_stream_sift_with_sfmtool``).
     Yielding incrementally lets the caller stream ``.sift`` writes rather than
     buffering a whole chunk in memory.
 
@@ -182,7 +182,8 @@ def extract_sift_with_sfmtool(
         num_threads: Accepted for interface compatibility. The Rust core
             parallelizes within each image via rayon (using all cores for
             ``-1``); cross-image concurrency is controlled by
-            ``SFMTOOL_SIFT_EXTRACT_WORKERS`` (see ``_extract_workers``), not this.
+            ``SFMTOOL_SIFT_EXTRACT_WORKERS`` (see
+            ``sfmtool.sift.default_concurrent_images``), not this.
 
     Returns:
         Iterator of tuples (feature_tool_metadata, metadata, positions,
@@ -211,70 +212,18 @@ def extract_sift_with_sfmtool(
     )
 
 
-# Rough peak heap one in-flight image adds while it is decoded + extracted: the
-# decoded RGB frame plus the f32 gaussian scale-space pyramid the Rust extract
-# holds through description. With image doubling the octave-0 base is 4x the
-# source pixels and the pyramid keeps s+3 gaussian levels per octave; summed over
-# the octave chain that is ~130 bytes per *source* pixel, and the decoded RGB
-# adds a few more. Rounded up for safety -- overestimating only forgoes a few
-# workers, while underestimating risks OOM on a many-core host with large images.
-_EXTRACT_BYTES_PER_SOURCE_PIXEL = 192
-
-
-def _extract_mem_budget_bytes() -> int:
-    """Heap budget shared across concurrently in-flight images (~half of RAM).
-
-    Falls back to a conservative fixed budget when the platform cannot report
-    physical memory (e.g. ``os.sysconf`` is absent on Windows).
-    """
-    try:
-        total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-    except AttributeError, ValueError, OSError:
-        total = 4 * 1024**3  # assume ~4 GiB when the platform won't report it
-    return max(1, total // 2)
-
-
-def _extract_workers(image_pixels: int | None = None) -> int:
-    """Return how many images to decode and extract concurrently (at least 1).
-
-    The default is ``os.cpu_count()``, capped so that the in-flight images fit in
-    ``_extract_mem_budget_bytes()`` at ``_EXTRACT_BYTES_PER_SOURCE_PIXEL`` per
-    source pixel of ``image_pixels`` (width x height). When ``image_pixels`` is
-    unknown it is ``min(os.cpu_count(), 4)``. An integer in
-    ``SFMTOOL_SIFT_EXTRACT_WORKERS`` overrides both, raised to 1 if lower (``1``
-    disables concurrency); a non-integer value is ignored with a warning. Why the
-    count scales with the core count: ``specs/cli/image-feature/sift-command.md``
-    § Extraction-orchestration pipelining.
-    """
-    override = os.environ.get("SFMTOOL_SIFT_EXTRACT_WORKERS")
-    if override:
-        try:
-            return max(1, int(override))
-        except ValueError:
-            warnings.warn(
-                f"Ignoring non-integer SFMTOOL_SIFT_EXTRACT_WORKERS={override!r}; "
-                "using the default concurrency.",
-                stacklevel=2,
-            )
-    cores = os.cpu_count() or 1
-    if not image_pixels:
-        return max(1, min(cores, 4))
-    footprint = image_pixels * _EXTRACT_BYTES_PER_SOURCE_PIXEL
-    by_memory = max(1, _extract_mem_budget_bytes() // footprint)
-    return max(1, min(cores, by_memory))
-
-
 def _stream_sift_with_sfmtool(
     image_filename_list, params, feature_options, rust_extract_sift
 ):
     """Generator backing ``extract_sift_with_sfmtool``.
 
-    Decodes and extracts up to ``_extract_workers()`` images concurrently while
-    still yielding one result per image in input order (a FIFO over the in-flight
-    futures), so the caller can stream ``.sift`` writes. The bounded look-ahead
-    caps memory to the worker count, and the ``ThreadPoolExecutor`` context
-    manager joins the workers on exit -- including when the consumer stops early
-    or a decode/extract raises (re-raised in input order by the FIFO).
+    Decodes and extracts up to ``default_concurrent_images(width, height)``
+    images concurrently, at image 0's size, while still yielding one result per
+    image in input order (a FIFO over the in-flight futures), so the caller can
+    stream ``.sift`` writes. The bounded look-ahead caps memory to the worker
+    count, and the ``ThreadPoolExecutor`` context manager joins the workers on
+    exit -- including when the consumer stops early or a decode/extract raises
+    (re-raised in input order by the FIFO).
 
     Image 0 is decoded on the calling thread so its dimensions can size the pool
     (peak memory scales with in-flight image count x pyramid size); that decode
@@ -289,12 +238,8 @@ def _stream_sift_with_sfmtool(
     # from them (a batch is like-sized -- one workspace's images). A decode error
     # on image 0 surfaces here, still at the first ``next()``, i.e. in input order.
     first_decoded = _decode_image(first_path)
-    try:
-        height, width = first_decoded[1].shape[:2]
-        image_pixels = height * width
-    except AttributeError, TypeError, ValueError:
-        image_pixels = None  # non-array frame (e.g. a test fake): size blind
-    workers = _extract_workers(image_pixels)
+    height, width = first_decoded[1].shape[:2]
+    workers = default_concurrent_images(width, height)
 
     def extract_decoded(decoded):
         return _extract_one(*decoded, params, feature_options, rust_extract_sift)

@@ -3,8 +3,10 @@
 
 import os
 import time
+import warnings
 from pathlib import Path
 
+import numpy as np
 import pytest
 from click.testing import CliRunner
 
@@ -189,60 +191,49 @@ def test_sfmtool_backend_propagates_decode_error(isolated_seoul_bull_image: Path
         next(results)
 
 
-def test_extract_workers_env_override(monkeypatch):
-    """SFMTOOL_SIFT_EXTRACT_WORKERS controls concurrency, clamped to >= 1."""
-    from sfmtool.sift.extract_sfmtool import _extract_workers
+def test_default_concurrent_images_env_override(monkeypatch):
+    """SFMTOOL_SIFT_EXTRACT_WORKERS sets the count, raised to 1 if lower, and a
+    value that is not a whole number is ignored with a warning."""
+    from sfmtool.sift import default_concurrent_images
 
-    default = max(1, min(os.cpu_count() or 1, 4))
+    monkeypatch.delenv("SFMTOOL_SIFT_EXTRACT_WORKERS", raising=False)
+    default = default_concurrent_images(270, 480)
 
     monkeypatch.setenv("SFMTOOL_SIFT_EXTRACT_WORKERS", "1")
-    assert _extract_workers() == 1  # restores one-at-a-time
+    assert default_concurrent_images(270, 480) == 1  # one at a time
     monkeypatch.setenv("SFMTOOL_SIFT_EXTRACT_WORKERS", "7")
-    assert _extract_workers() == 7
+    assert default_concurrent_images(270, 480) == 7
+    # The override wins over the memory cap too.
+    assert default_concurrent_images(2**32 - 1, 2**32 - 1) == 7
     monkeypatch.setenv("SFMTOOL_SIFT_EXTRACT_WORKERS", "0")
-    assert _extract_workers() == 1  # clamped up, never zero workers
+    assert default_concurrent_images(270, 480) == 1  # never zero
     monkeypatch.setenv("SFMTOOL_SIFT_EXTRACT_WORKERS", "-3")
-    assert _extract_workers() == 1  # clamped up
-    monkeypatch.delenv("SFMTOOL_SIFT_EXTRACT_WORKERS", raising=False)
-    assert _extract_workers() == default
+    assert default_concurrent_images(270, 480) == 1
+    # Empty counts as unset. (On Windows, setting a variable to "" removes it.)
+    monkeypatch.setenv("SFMTOOL_SIFT_EXTRACT_WORKERS", "")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # so a warning about "" fails the test
+        assert default_concurrent_images(270, 480) == default
 
     monkeypatch.setenv("SFMTOOL_SIFT_EXTRACT_WORKERS", "notanint")
-    with pytest.warns(UserWarning, match="non-integer"):
-        assert _extract_workers() == default  # falls back, doesn't crash
+    with pytest.warns(UserWarning, match="non-integer SFMTOOL_SIFT_EXTRACT_WORKERS"):
+        assert default_concurrent_images(270, 480) == default
 
 
-def test_extract_workers_scales_with_cores_bounded_by_memory(monkeypatch):
-    """Without an override the default scales with cores but stays within RAM.
-
-    A small image on a many-core host should fill the cores (that is the whole
-    point of cross-image concurrency); a large image against a tight memory
-    budget should be held below the core count so the in-flight pyramids fit.
-    An unknown image size keeps the historical conservative ``min(cores, 4)``.
-    """
-    from sfmtool.sift import extract_sfmtool
-    from sfmtool.sift.extract_sfmtool import _extract_workers
+def test_default_concurrent_images_scales_with_cores_bounded_by_memory(monkeypatch):
+    """Without an override a small image gets one image per core, an image too
+    large for half of physical memory gets one, and an image of unknown size
+    (a side of 0) gets at most 4. The arithmetic of the memory cap is tested in
+    Rust (`concurrency_is_the_core_count_capped_by_memory`)."""
+    from sfmtool.sift import default_concurrent_images
 
     monkeypatch.delenv("SFMTOOL_SIFT_EXTRACT_WORKERS", raising=False)
-    monkeypatch.setattr(os, "cpu_count", lambda: 64)
-
-    # Ample memory + a tiny image -> concurrency fills all cores.
-    monkeypatch.setattr(
-        extract_sfmtool, "_extract_mem_budget_bytes", lambda: 64 * 1024**3
-    )
-    assert _extract_workers(270 * 480) == 64
-
-    # A large image against a tight budget -> memory, not cores, is the cap.
-    monkeypatch.setattr(
-        extract_sfmtool, "_extract_mem_budget_bytes", lambda: 8 * 1024**3
-    )
-    large = 4032 * 3024
-    footprint = large * extract_sfmtool._EXTRACT_BYTES_PER_SOURCE_PIXEL
-    expected = max(1, (8 * 1024**3) // footprint)
-    assert 1 <= expected < 64
-    assert _extract_workers(large) == expected
-
-    # Unknown source size -> conservative default, never blind core-scaling.
-    assert _extract_workers(None) == 4
+    cores = os.process_cpu_count() or 1
+    # 64 pixels at 192 bytes each fit any machine's memory once per core.
+    assert default_concurrent_images(8, 8) == cores
+    # About 1.8e19 pixels fit no machine's memory even once.
+    assert default_concurrent_images(2**32 - 1, 2**32 - 1) == 1
+    assert default_concurrent_images(0, 480) == min(cores, 4)
 
 
 def test_stream_preserves_input_order_under_out_of_order_completion(monkeypatch):
@@ -257,7 +248,8 @@ def test_stream_preserves_input_order_under_out_of_order_completion(monkeypatch)
 
     count = 5
     monkeypatch.setenv("SFMTOOL_SIFT_EXTRACT_WORKERS", str(count))
-    monkeypatch.setattr(extract_sfmtool, "_decode_image", lambda p: (p, p, None))
+    frame = np.zeros((4, 4, 3), np.uint8)
+    monkeypatch.setattr(extract_sfmtool, "_decode_image", lambda p: (p, frame, None))
 
     def fake_extract_one(image_path, rgb, thumbnail, params, feature_options, rust):
         idx = int(image_path.name)
@@ -289,7 +281,7 @@ def test_stream_raises_error_in_input_order_not_completion_order(monkeypatch):
         if idx == 2:
             raise SiftExtractionError("boom on image 2")
         time.sleep(0.05)
-        return (p, p, None)
+        return (p, np.zeros((4, 4, 3), np.uint8), None)
 
     monkeypatch.setattr(extract_sfmtool, "_decode_image", fake_decode)
     monkeypatch.setattr(
