@@ -91,8 +91,12 @@ impl ImageU8 {
     /// part with grey as libjpeg does, unless it is a sequential JPEG with a
     /// scan of fewer components than the frame, which zune-jpeg misreads; that
     /// one stays with `jpeg-decoder` (see `decode_jpeg`).
+    ///
+    /// Every decoder refuses an image whose decoded buffer would exceed
+    /// [`MAX_DECODED_BYTES`].
     fn decode(path: &std::path::Path) -> Result<::image::DynamicImage, ::image::ImageError> {
-        let reader = ::image::ImageReader::open(path)?.with_guessed_format()?;
+        let mut reader = ::image::ImageReader::open(path)?.with_guessed_format()?;
+        reader.limits(decode_limits());
         if reader.format() == Some(::image::ImageFormat::Jpeg) {
             decode_jpeg(reader.into_inner())
         } else {
@@ -441,12 +445,12 @@ fn jpeg_header<R: std::io::Read>(
 /// OpenCV's conversion.
 ///
 /// Refused from the frame header, before any scan is decoded: a frame whose
-/// decoded buffer would exceed the `image` crate's default allocation limit,
-/// 512 MiB, and a lossless frame of a precision other than 8 bits (read from
-/// the frame header, since `jpeg-decoder` returns 2 bytes per sample for it
-/// while naming an 8-bit pixel format). `jpeg-decoder` itself refuses a DCT
-/// frame (baseline, extended or progressive) of any precision but 8, so a
-/// 12-bit JPEG is refused in colour and grey alike.
+/// decoded buffer would exceed [`MAX_DECODED_BYTES`], and a lossless frame
+/// of a precision other than 8 bits (read from the frame header, since
+/// `jpeg-decoder` returns 2 bytes per sample for it while naming an 8-bit
+/// pixel format). `jpeg-decoder` itself refuses a DCT frame (baseline,
+/// extended or progressive) of any precision but 8, so a 12-bit JPEG is
+/// refused in colour and grey alike.
 fn decode_jpeg<R: std::io::Read>(reader: R) -> Result<::image::DynamicImage, ::image::ImageError> {
     use std::io::Read;
     let mut bytes = Vec::new();
@@ -472,14 +476,46 @@ fn decode_jpeg<R: std::io::Read>(reader: R) -> Result<::image::DynamicImage, ::i
         ended.extend_from_slice(&[0xFF, 0xD9]);
         return decode_jpeg_with_jpeg_decoder(&mut EndTrackingReader::new(&ended), &ended);
     }
-    ::image::load_from_memory_with_format(&bytes, ::image::ImageFormat::Jpeg)
+    let mut reader =
+        ::image::ImageReader::with_format(std::io::Cursor::new(&bytes), ::image::ImageFormat::Jpeg);
+    reader.limits(decode_limits());
+    reader.decode()
 }
 
-/// The largest JPEG file [`decode_jpeg`] reads into memory, 1 GiB: twice the
-/// decoded size the `image` crate's default limit allows. A larger file is
-/// refused before it is read, as its pixels would be refused anyway unless
-/// it is padded with data after the image.
-const MAX_JPEG_FILE_BYTES: u64 = 1 << 30;
+/// The largest decoded buffer [`ImageU8::read_rgb`] and
+/// [`ImageU8::read_rgba`] allow a file's decoder, 4 GiB, in place of the
+/// `image` crate's default of 512 MiB.
+///
+/// A 200-megapixel phone photograph (16320 x 12240) decodes to 571 MiB of
+/// RGB, more than that default, and the same photograph as 16-bit RGBA to
+/// 1.5 GiB. 4 GiB holds those and an 8-bit RGB image of up to 1.4
+/// gigapixels, and still refuses a header that names a larger image, such as
+/// the largest frame a JPEG can name (65535 x 65535, 12 GiB as RGB), before
+/// the buffer is allocated.
+const MAX_DECODED_BYTES: u64 = 4 << 30;
+
+/// The `image` crate's limits with its allocation limit set to
+/// [`MAX_DECODED_BYTES`].
+fn decode_limits() -> ::image::Limits {
+    let mut limits = ::image::Limits::default();
+    limits.max_alloc = Some(MAX_DECODED_BYTES);
+    limits
+}
+
+/// The largest JPEG file [`decode_jpeg`] reads into memory, 8 GiB: twice
+/// [`MAX_DECODED_BYTES`]. A larger file is refused before it is read, as its
+/// pixels would be refused anyway unless it is padded with data after the
+/// image.
+const MAX_JPEG_FILE_BYTES: u64 = 2 * MAX_DECODED_BYTES;
+
+/// Refuse a decoded buffer of `bytes` bytes when it exceeds
+/// [`MAX_DECODED_BYTES`].
+fn check_decoded_bytes(bytes: u64) -> Result<(), ::image::ImageError> {
+    if bytes > MAX_DECODED_BYTES {
+        return Err(insufficient_memory());
+    }
+    Ok(())
+}
 
 /// The `image` crate's error for a decode that would need too much memory.
 fn insufficient_memory() -> ::image::ImageError {
@@ -514,11 +550,7 @@ fn decode_jpeg_with_jpeg_decoder(
         ));
     }
     let expected = u64::from(width) * u64::from(height) * channels;
-    if let Some(limit) = ::image::Limits::default().max_alloc {
-        if expected > limit {
-            return Err(insufficient_memory());
-        }
-    }
+    check_decoded_bytes(expected)?;
     let pixels = decoder.decode().map_err(jpeg_error)?;
     if pixels.len() as u64 != expected {
         return Err(jpeg_error(jpeg_decoder::Error::Format(
