@@ -6,7 +6,7 @@ Decided by the user, and followed here: full resolution is never stored again
 for an original that can be read by region (a JPEG whose restart markers allow
 it, § "Which originals can be read by region"), whose level 0 is the original
 file itself; for every other out-of-core photograph, full resolution is stored
-once as a tiled re-encode, `<file name>-mip0.jpg`, and every pyramid reader (the
+once as a tiled re-encode, `<file name>-mip0-q<quality>.jpg`, and every pyramid reader (the
 display and every kernel) reads level 0 from that file instead of the
 original, while the readers that decode a whole original and read no pyramid
 (SIFT extraction, the image readings at save, `read_image_rgb` and the
@@ -118,7 +118,7 @@ These are proposed for [GLOSSARY.md](../GLOSSARY.md), each with its reason.
 
 | Word | Means | Not | Why |
 |------|-------|-----|-----|
-| **mipmap** / **mip level** / **mip level file** | a photograph's **mipmap** is its whole stored chain of levels, kept under `.sfm-cache/`: its reduced levels, and its full-resolution copy when the original cannot be read by region. One stored level is a **mip level**, numbered as the pyramid's level is (level 0 full resolution, level `l` reduced by `2^l`), and the file holding it is a **mip level file**, `<file name>-mip<l>.jpg`: `IMG_0001.JPG-mip1.jpg` is half size, `-mip2.jpg` a quarter, and `-mip0.jpg` the full-resolution copy. The number in a file name is the level index the code uses; no factor is converted to a level anywhere. `sfmtool_core::camera::mipmap` | `mipmap set`, a single file called a mipmap, `level file`, `cache file`, `pyramid file`, factor names such as `-mipmap2` | the user chose the standard usage, so others find it familiar: Williams, "Pyramidal Parametrics" (SIGGRAPH 1983), coined *mip map* for the whole prefiltered set of an image at successive halvings; OpenGL says a texture has a mipmap whose images are *mipmap levels*, numbered by level of detail with level 0 the base image (`glTexImage2D`'s `level`); Direct3D and Vulkan say *mip chain* and *mip level* (`mipLevels`); KTX and DDS store a whole chain in one file. *Level* alone stays the in-memory pyramid level, which for a small photograph has no file. Names about the whole feature keep *mipmap* (`mipmap_options`, `sfm ws mipmaps`, `build_mipmaps`, `MipmapError`, `MipmapLocation`, `sfmtool_core::camera::mipmap`), since they act on photographs' mipmaps, plural in the standard sense. The viewer, the CLI and the Python messages use the same words as the code, with no separate user-facing ones: the quiet task *Build mipmaps*, the line *Building mipmaps: {done} of {total}*, a panel's *Building mipmap…* while the one photograph's mipmap it waits for is made, the phase *build mipmaps*, and *mip level* where a message is about one level. A mipmap is made inside the photograph cache's `get` or `get_many`, in the path's slot, with no builder object |
+| **mipmap** / **mip level** / **mip level file** | a photograph's **mipmap** is its whole stored chain of levels, kept under `.sfm-cache/`: its reduced levels, and its full-resolution copy when the original cannot be read by region. One stored level is a **mip level**, numbered as the pyramid's level is (level 0 full resolution, level `l` reduced by `2^l`), and the file holding it is a **mip level file**, `<file name>-mip<l>-q<quality>.jpg`: `IMG_0001.JPG-mip1-q95.jpg` is half size at quality 95, `-mip2-q95.jpg` a quarter, and `-mip0-q95.jpg` the full-resolution copy; this draft names a file by its level part alone (`-mip0`, `-mip1`) where the quality does not matter. The number after `mip` is the level index the code uses; no factor is converted to a level anywhere. `sfmtool_core::camera::mipmap` | `mipmap set`, a single file called a mipmap, `level file`, `cache file`, `pyramid file`, factor names such as `-mipmap2` | the user chose the standard usage, so others find it familiar: Williams, "Pyramidal Parametrics" (SIGGRAPH 1983), coined *mip map* for the whole prefiltered set of an image at successive halvings; OpenGL says a texture has a mipmap whose images are *mipmap levels*, numbered by level of detail with level 0 the base image (`glTexImage2D`'s `level`); Direct3D and Vulkan say *mip chain* and *mip level* (`mipLevels`); KTX and DDS store a whole chain in one file. *Level* alone stays the in-memory pyramid level, which for a small photograph has no file. Names about the whole feature keep *mipmap* (`mipmap_options`, `sfm ws mipmaps`, `build_mipmaps`, `MipmapError`, `MipmapLocation`, `sfmtool_core::camera::mipmap`), since they act on photographs' mipmaps, plural in the standard sense. The viewer, the CLI and the Python messages use the same words as the code, with no separate user-facing ones: the quiet task *Build mipmaps*, the line *Building mipmaps: {done} of {total}*, a panel's *Building mipmap…* while the one photograph's mipmap it waits for is made, the phase *build mipmaps*, and *mip level* where a message is about one level. A mipmap is made inside the photograph cache's `get` or `get_many`, in the path's slot, with no builder object |
 | **region-readable** (an original) | an original JPEG whose layout passes the test in § "Which originals can be read by region", so a rectangle of it decodes to exactly the pixels of the whole decode; its level 0 is the original, and it has no `-mip0` | `tiled`, `seekable`, `RST-capable` | names what the test decides, that a region can be read, rather than one ingredient of it |
 | **cache directory** | `.sfm-cache/` at a workspace's root, holding files derived from the workspace's images that can be deleted at any time and rebuilt; today only mip level files | `cache folder`, `.cache` | it names what is in it (files that are a cache) and where (the workspace's); a name without `sfm` would collide with other tools' caches |
 | **out-of-core photograph** / **in-core photograph** | a photograph of a workspace whose file has `mipmap_options`, with a width or height over that object's `out_of_core_long_side` (4096 as `sfm ws init` writes it), is out of core (§ "Which photographs are out of core"; one with a side of 65536 px or more is refused everywhere): its reduced levels come from mipmaps, its level 0 from the original or a `-mip0`, and every reader reads it a region at a time; any other photograph is in core: its whole pyramid is built in memory from one decode, as every pyramid is today | `large image`, `tiled image`, `big photograph` | the tier decides where the levels live, which is what *core* means here; *large* says nothing about what is done differently, and every photograph is shown in tiles |
@@ -137,7 +137,7 @@ workspace without the object or with no workspace at all.
 cache refuses any photograph whose level 0 is 65536 px or more wide or high
 (over `MAX_JPEG_SIDE`, 65535), in every workspace, with or without
 `mipmap_options`, and with no workspace, so the answer does not depend on the
-setting: every file the tier may write, a `-mip0.jpg` of a non-region-readable
+setting: every file the tier may write, a `-mip0` file of a non-region-readable
 original included, must fit in a JPEG frame, whose sides are at most 65535,
 and one rule for every photograph keeps a photograph's readability the same
 whatever the workspace sets. It is decided from the header
@@ -239,7 +239,7 @@ data. In-core photographs change nowhere else.
 
 Level 0 of an out-of-core photograph is read a tile at a time, by every
 reader. An original that allows it is read directly; every other one gets a
-`-mip0.jpg`, a tiled re-encode of full resolution, made once, and from then
+a `-mip0` file, a tiled re-encode of full resolution, made once, and from then
 on **every reader reads level 0 from `-mip0`, never from the original**:
 the display, every kernel, `clipped_share`, the grey reads of *Find Nearby
 Tracks*. This is the user's decision. No reader of level 0 holds a whole
@@ -342,13 +342,13 @@ workspace and every photograph of a workspace has a mirror path in
 file of level `l` is
 
 ```
-<root>/.sfm-cache/<parent of relative path>/<file name>-mip<l>.jpg
+<root>/.sfm-cache/<parent of relative path>/<file name>-mip<l>-q<quality>.jpg
 ```
 
-for example `<ws>/images/IMG_0001.JPG` has
-`<ws>/.sfm-cache/images/IMG_0001.JPG-mip1.jpg` to
-`<ws>/.sfm-cache/images/IMG_0001.JPG-mip5.jpg`, and a `-mip0.jpg` when
-it needs one. The user has decided this rule (open question 1). It is the rule
+for example `<ws>/images/IMG_0001.JPG` at the qualities `sfm ws init` writes
+has `<ws>/.sfm-cache/images/IMG_0001.JPG-mip1-q95.jpg` to
+`<ws>/.sfm-cache/images/IMG_0001.JPG-mip5-q95.jpg`, and an
+`IMG_0001.JPG-mip0-q95.jpg` when it needs one. The user has decided this rule (open question 1). It is the rule
 a `.sift` file's name follows (`sift_path_for_image` in
 [sift/files.rs](../../crates/sfmtool-core/src/features/sift/files.rs) appends
 `.sift` to `image_path.file_name()`, so `IMG_0001.JPG` has
@@ -357,17 +357,29 @@ a `.sift` file's name follows (`sift_path_for_image` in
 - **`<file name>`** is the original's whole file name, extension included, as
   `Path::file_name` gives it and in its own case, as for a `.sift`:
   `IMG_0001.JPG`, `a.b.png`, `README` for a name with no extension.
-- **The suffix** is `-mip<l>.jpg`, in lower case, whatever the
+- **The suffix** is `-mip<l>-q<quality>.jpg`, in lower case, whatever the
   original's format, where `l` is the level index the code uses: the number
-  in a file name equals the level it holds, so `-mip0` is full resolution
+  after `mip` equals the level the file holds, so `-mip0` is full resolution
   and `-mip1` half size, and no reader converts a reduction factor to a
-  level.
+  level. `quality` is the JPEG quality the file is encoded at, in decimal
+  without leading zeros: `full_resolution_jpeg_quality` for `-mip0`,
+  `jpeg_quality` for every other level (§ "The workspace setting").
+- **Why the quality is in the name.** A file at another quality is another
+  file, so a change of a quality setting is unambiguous: files at the new
+  quality have new names and are made as they are read, nothing at the old
+  quality becomes stale, and switching the setting back finds the earlier
+  files still there and current. Files made with different options never
+  mix, as `.sift` files made with different feature options never do, since
+  their feature folders are named by a hash of the options
+  (`features/sift-sfmtool-<hash>`). The size threshold, the tile size and the
+  restart interval are not in the name: none of them changes a file's
+  content.
 - **The directory parts are the relative path's own**, in their own case, with
   `/` between them.
 
 Two photographs in one directory have different file names, so their mip level
 files have different names: the rule is one-to-one, and `x.jpg` beside `x.png` gives
-`x.jpg-mip1.jpg` and `x.png-mip1.jpg`. A photograph's name with the
+`x.jpg-mip1-q95.jpg` and `x.png-mip1-q95.jpg`. A photograph's name with the
 suffix cannot equal another photograph's name with it either, since the suffix
 fixes where the original's name ends. Every mip level file still records the relative
 path of the photograph it was made from (below), because a cache file can
@@ -502,7 +514,10 @@ byte, then a JSON object in UTF-8, under 1 KB:
 ```
 
 `source` is the relative path with `/` separators. `jpeg_quality` is the
-quality this file was encoded with, from the key that applies to its level.
+quality this file was encoded with, from the key that applies to its level;
+it must equal the quality in the file's name, and a file whose record and
+name disagree is damaged and treated as stale (§ "When a mip level file is
+current", test 1).
 `region_readable_original` is the test's answer for the original, so a mipmap
 made when the original had no `-mip0` is not mixed with one that has. `source_xxh128` is the
 XXH128 of the original's bytes, the hash a `.sift` file records as
@@ -597,9 +612,13 @@ a block of settings for one kind of derived file:
   levels. The files are not deleted by any reader. `sfm ws mipmaps --prune`
   in a workspace without the object deletes every mip level file there, since none is
   read; with the object it deletes only orphans and stale files.
-- **Changing a quality** makes every mip level file at the old quality stale by the
-  record's `jpeg_quality` (§ "When a mip level file is current"), and the mipmaps are made
-  again as they are next read. A mipmap is never mixed across qualities.
+- **Changing a quality** makes nothing stale. The quality is in each mip
+  level file's name, so files at the new quality have new names and are made
+  as they are next read, the files at the old quality are left where they are
+  (`sfm ws mipmaps --prune` deletes them as orphans), and changing the
+  setting back finds them again, current. A mipmap is never mixed across
+  qualities, since a reader only ever opens the names of the current
+  setting.
 - **Changing the threshold** moves the photographs whose long side lies
   between the old and the new value from one tier to the other, and no
   other. Each record stores `out_of_core_long_side`, the value it was made
@@ -657,7 +676,8 @@ that are each a fixed copy), so nothing gains from it. Building from the exact
 decode keeps every reduced level at one JPEG loss rather than two, makes a
 photograph's reduced levels the same whether or not its original is
 region-readable (so a change of the region test, or of
-`full_resolution_jpeg_quality`, rebuilds `-mip0` alone), and lets
+`full_resolution_jpeg_quality`, makes a `-mip0` alone, the latter under a new
+name), and lets
 `-mip0` be encoded last.
 
 The alternative is to make level `l + 1` from the decoded JPEG of level `l`.
@@ -721,7 +741,8 @@ it has just written.
 A mip level file is **current** when all of these hold, checked in order, and **stale**
 naming the first that fails otherwise:
 
-1. It reads as a JPEG with a record of a known `version`, its frame is
+1. It reads as a JPEG with a record of a known `version`, and the record's
+   `level` and `jpeg_quality` equal the level and quality in its name, its frame is
    `width` x `height`, and it has a restart interval.
 2. Its `source` is the photograph's relative path, or differs from it only
    in letter case (both lower-cased with `str::to_lowercase` compare equal), in
@@ -738,10 +759,12 @@ naming the first that fails otherwise:
    remembers the answer, for as long as it lives, for this original and this
    spelling of its path, so it hashes it once per cache and spelling, not on
    every read. A different length is stale without a hash.
-5. Its `jpeg_quality` equals the workspace's setting for its level, and its
-   `region_readable_original` equals that of the mipmap's other files. A mipmap is
-   never mixed: a file encoded at another quality, or made under another
-   answer, is stale, and the mipmap is made again.
+5. Its `region_readable_original` equals that of the mipmap's other files. A
+   mipmap is never mixed: a file made under another answer is stale, and the
+   mipmap is made again. Its quality is not compared with the workspace's
+   setting: a reader opens only the names of the current setting, so the
+   quality of a file it opens is the setting's by its name, and test 1
+   checks that the record agrees.
 6. For a photograph whose record says the original is not region-readable,
    its `-mip0` is present and current; for one whose record says it is, no
    `-mip0` is read (one left from an earlier answer is an orphan for
@@ -818,8 +841,10 @@ current file counts as done) covers it if it does not.
   matches, is left where it is by every reader: deleting files is not a
   reader's business, and a stale file is rewritten when its photograph is next
   made. `sfm ws mipmaps --prune` (below) deletes the mip level files whose record names
-  a photograph that no longer exists or that they are stale for, and temporary
-  files older than an hour. Deleting `.sfm-cache/` by hand is always safe.
+  a photograph that no longer exists or that they are stale for, those whose
+  quality in the name differs from the workspace's current setting for their
+  level (orphans of an earlier setting), and temporary files older than an
+  hour. Deleting `.sfm-cache/` by hand is always safe.
 - `test-data` is never written: every image in it is in core.
 
 ### Is it a file format?
@@ -1080,8 +1105,7 @@ photograph whose layout is `Known` (its files current), never make a mipmap, and
 decode only tiles of current files, milliseconds each (`get_level` at most a
 few hundred milliseconds for a level of 48 tiles), so they take no
 `&Progress`. A kernel whose files go stale after its read phase found them
-current (another process rebuilt them at another quality, or the original
-changed) gets `TileError::Changed` from its next tile read and fails as
+current (another process rebuilt them, or the original changed) gets `TileError::Changed` from its next tile read and fails as
 § "Files that change while a kernel runs" says, rather than rebuilding inside
 a render and going on with levels of two versions.
 
@@ -1471,7 +1495,7 @@ is region-readable, and `-mip0`'s otherwise.
   through the caller's `Progress` with the phases, counts and cancellation it
   already has, and nothing in this design adds a reporter to it.
 - **No panics on caller input.** A mip level file that is missing, cut short, damaged,
-  encoded at another quality, or recording another photograph is stale and is
+  disagreeing with its name, or recording another photograph is stale and is
   made again; an original that cannot be read is an `Unreadable` answer, as
   today; a workspace file with an invalid `mipmap_options` is an error naming
   the key; a photograph with a side of 65536 px or more is refused from its
@@ -1969,7 +1993,7 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    `MipLevelFile::open` and `decode`, the staleness test, the writers' rules,
    `.gitignore` and `CACHEDIR.TAG`. Tests on 300 x 200 synthetic photographs
    in a temporary workspace whose `mipmap_options` sets a threshold of 64,
-   with a tile of 32: the names for `IMG_0001.JPG` (`IMG_0001.JPG-mip1.jpg`,
+   with a tile of 32: the names for `IMG_0001.JPG` (`IMG_0001.JPG-mip1-q95.jpg`,
    case kept), `a.b.png` and a name with no extension, the names of `x.jpg`
    beside `x.png` differing; a mip level file whose
    record names another path is stale; one whose `source` differs from the
@@ -1991,8 +2015,11 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    region-readable JPEG gets no `-mip0` and a PNG, a progressive JPEG, a
    JPEG without `DRI` and one with an interval wider than 1024 px do; each
    staleness case (length, time with equal hash, time with another hash,
-   another `source`, another quality, another region answer, cut short, no
-   record) and that a stale mipmap is made again; a record of another threshold
+   another `source`, a record whose quality or level disagrees with the
+   name, another region answer, cut short, no record) and that a stale mipmap
+   is made again; a change of `jpeg_quality` makes files under new names and
+   leaves the old ones unread and current, and changing it back reads the
+   old ones without making anything; a record of another threshold
    is still current; each invalid `mipmap_options` (a missing key, an unknown
    key, a float, a string, a quality of 0 or 101, a threshold of 0) is an
    error naming the key; a read-only cache directory gives the in-memory
@@ -2119,10 +2146,11 @@ ranges in this draft are over those runs.
 
 1. **The names of the mip level files.** *Decided by the user:* the whole
    original file name followed by the suffix, as a `.sift` is named
-   (`IMG_0001.JPG.sift`), which cannot collide, then `-mip<l>.jpg` with the
-   level number (`IMG_0001.JPG-mip1.jpg` for half size, `-mip0.jpg` for the
-   full-resolution copy), following the standard mipmap convention in which
-   levels are numbered and level 0 is the base image (§ "Terms").
+   (`IMG_0001.JPG.sift`), which cannot collide, then `-mip<l>-q<quality>.jpg`
+   with the level number and the JPEG quality (`IMG_0001.JPG-mip1-q95.jpg`
+   for half size, `-mip0-q95.jpg` for the full-resolution copy), following
+   the standard mipmap convention in which levels are numbered and level 0 is
+   the base image (§ "Terms"), and making a change of quality unambiguous.
 2. **The threshold's value and the other constants.** *Decided by the
    user:* `sfm ws init` writes `out_of_core_long_side` 4096. The tile size
    and the restart interval stay constants.
