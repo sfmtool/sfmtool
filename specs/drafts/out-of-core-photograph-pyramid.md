@@ -955,13 +955,23 @@ decoding a photograph in today's `PhotographCache`.
   group's estimated bytes to the count with one compare-exchange loop,
   granting as many of the `wanted` builds as fit under the budget, and returns
   a guard that gives each build's bytes back as that build ends and the rest
-  when it is dropped. The builds do not add to the count again. So two
+  when it is dropped. The builds do not add to the count again. A share
+  belongs to the caller that makes a set, not to one that waits: `get`
+  reserves its one build when it marks the slot as being made, whether the
+  slot was empty or a cancelled maker has just emptied it, and holds nothing
+  while it waits; a `get_many` member that finds its slot being made by
+  another caller keeps its share while it waits, since it may take the build
+  over, and gives it back when it reads the set or stops. A maker that is
+  cancelled, fails or unwinds gives its share back through the guard that
+  empties its slot. So two
   callers sizing a group at the same moment cannot both take the same free
   bytes: the second sees what the first reserved. Nothing waits on the
   count; it is not a semaphore. A caller that finds the budget used up is
   still granted one build, so that it makes progress, and that one build is
   the only way the count goes past the budget: by at most one set per caller
-  reserving at that moment. In-core misses are decoded in parallel as today.
+  reserving at that moment. In-core misses are decoded in parallel as today
+  and are not counted: as today, they are bounded by the rayon pool and the
+  in-core threshold.
 - **What bounds builds from independent callers.** Every build is reserved
   through `reserve_builds` before it starts, by `get_many` for its group and
   by `get` for its one set, so the count is always complete, and the count
@@ -1524,8 +1534,9 @@ pub enum PhotographSource {
 impl PhotographCache {
     pub fn new(options: PhotographCacheOptions) -> Self; // no `levels`: depth is by size
     /// Makes the set of an out-of-core photograph whose files are missing or
-    /// stale, in the path's slot on the calling thread, or waits for the
-    /// caller already making it; reports through `progress`.
+    /// stale, in the path's slot on the calling thread, reserving that one
+    /// build with `reserve_builds`, or waits for the caller already making it;
+    /// reports through `progress`.
     pub fn get(&self, path: &Path, progress: &Progress<'_>) -> Result<PhotographSource, GetError>;
     /// Makes its misses in parallel on the rayon pool, the out-of-core ones in
     /// groups sized by the build budget; the return type is today's.
@@ -1753,7 +1764,8 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    builds never add to the count beyond what was reserved; a burst of panel
    requests for twenty photographs without sets starts their builds one at a
    time; a caller cancelled mid-build stops within one stage and leaves the
-   slot empty, a waiter on that slot then makes the set, and a waiter that is
+   slot empty with its share given back, a waiter on that slot then reserves
+   and makes the set, and a waiter that is
    cancelled stops waiting within 50 ms; a build reports its phases through
    the caller's `Progress`; no GUI-thread reader requests a tile while its
    photograph is `Building`, and none calls `get` for an out-of-core
