@@ -24,7 +24,8 @@ or number of the photographs. That last part is specified in the companion
 draft [view-region-pyramid.md](view-region-pyramid.md), which this design
 requires: without it no kernel can read a large photograph within a bounded
 memory, so it is a numbered step here (§ "Implementation steps"), not a later
-optimization. Open: the questions at the end, each with a recommendation.
+optimization. Open: questions 6 onward at the end, each with a
+recommendation; the user has decided questions 1 to 5.
 
 Amends [core/camera/photograph-cache.md](../core/camera/photograph-cache.md)
 (the cache gains photograph tiles and an on-disk tier, and its pyramids a depth
@@ -1580,7 +1581,8 @@ impl PhotographCache {
         -> Result<(Vec<Option<PhotographSource>>, GetManyTally), Cancelled>;
     // peek and peek_state answer `PhotographSource` too; insert, forget and clear
     // as today; `stats` adds the tile entries, bytes, budget, hits and misses,
-    // the bytes reserved for builds, and the sets made by this cache
+    // the build budget, the bytes reserved for builds, and the sets made by
+    // this cache
 
     pub fn layout(&self, path: &Path) -> PeekedLayout;
     pub fn request_layout(&self, path: &Path);   // a header read, the region test, a record check
