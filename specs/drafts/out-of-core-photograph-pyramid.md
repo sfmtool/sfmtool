@@ -1003,12 +1003,12 @@ and 2.25 times that when it is kept for reuse with its margin (a quarter of
 the region on every side). A stretched footprint, a grazing view, or the
 `Bilinear` sampler reading level 0 over a large footprint, can make one
 render's bounding box far larger; the companion draft bounds that with a
-second sampling path and one region pool per kernel run for everything
-copied (§ "Bounding a render's memory" there). A kernel's patches do not map
+second sampling path and one region pool per kernel call, made by the
+kernel's caller and passed in, for everything copied (§ "Bounding a render's memory" there). A kernel's patches do not map
 one to a worker (*Refine all normals* runs a parallel loop over points whose
 normal kernels run parallel loops over views, and a worker waiting in an
 inner loop takes other points from the outer one), so the bound is not per
-patch. It has two parts. The copied regions of one kernel run, all its
+patch. It has two parts. The copied regions of one kernel call, all its
 patches together, reserve from a pool of 3.1 MB per rayon thread, 99 MB on
 the development machine's 32 threads; a render that cannot reserve takes the
 tile path and keeps nothing. The pinned tiles are 16 (12.7 MB) per render
@@ -1017,8 +1017,8 @@ go parallel on a worker, `parallelize_rows` in `camera/warp_map.rs`, and a
 render on the tile path keeps its rows serial on every thread), so at
 most 12.7 MB per thread that renders: the 32 rayon threads, the calling job
 thread, and in the viewer the other queue's job thread and the GUI thread.
-One kernel run on the command line holds at most 99 MB + 33 x 12.7 MB, about
-520 MB, on top of the tile budget; the viewer, with at most two kernel runs at
+One kernel call on the command line holds at most 99 MB + 33 x 12.7 MB, about
+520 MB, on top of the tile budget; the viewer, with at most two kernel calls at
 once (one per background queue) and Track View's renders, at most
 2 x 99 MB + 3.1 MB + 35 x 12.7 MB, about 650 MB. The common case is a few
 hundred kilobytes, whatever the number of views or photographs (estimates
@@ -1026,10 +1026,10 @@ from the sizes).
 
 | Case | Today (whole pyramids) | This design |
 |------|------------------------|-------------|
-| 17 x 200 MP, *Find matches by geometry* over the views the cull keeps (up to 151), `R = 24` | up to every photograph, 12.6 GiB for all 17 | up to 151 x 2.9 KB x 2.25 = 1.0 MB of regions kept for reuse (well inside the run's 99 MB pool), plus at most the tile budget (4 GiB at 64 GB of memory, 512 MiB at 8 GB) |
+| 17 x 200 MP, *Find matches by geometry* over the views the cull keeps (up to 151), `R = 24` | up to every photograph, 12.6 GiB for all 17 | up to 151 x 2.9 KB x 2.25 = 1.0 MB of regions kept for reuse (well inside the call's 99 MB pool), plus at most the tile budget (4 GiB at 64 GB of memory, 512 MiB at 8 GB) |
 | 17 x 200 MP, display patch bitmaps at open, one render per point | 12.6 GiB | 32 renders in flight x 2.9 KB, plus the tile budget |
 | 500 x 200 MP, any of the above | 372 GiB; fails | the same as for 17: regions plus the tile budget |
-| Any of the above, worst case (the run's region pool full and every rendering thread on a grazing view) | — | one run: 99 MB + 33 x 12.7 MB, about 520 MB; the viewer with two runs and Track View: about 650 MB; on top of the tile budget |
+| Any of the above, worst case (the kernel call's region pool full and every rendering thread on a grazing view) | — | one kernel call: 99 MB + 33 x 12.7 MB, about 520 MB; the viewer with two runs and Track View: about 650 MB; on top of the tile budget |
 | 500 x 6000 x 4000, any of the above | 500 x 96 MB = 48 GB | the same |
 | 17 x 200 MP, Track View on a 17-image track at `R = 64` | 12.6 GiB | 17 x 17 KB x 2.25 of regions, plus the tiles they are cut from, one to four per level read and one or two levels per view, 13 to 108 MB |
 | 368 x 3840 x 2160 (in core) | 12.2 GB held by a `get_many` over every frame | unchanged: in-core photographs keep whole pyramids |
@@ -1249,7 +1249,7 @@ says, for photographs of every size.
 | 3 | Track View's requests (`dock.rs` `cache_bench_track_images`, `cache_selected_point_images`) | a pyramid request per image per frame | in core: the same, admitted within the budget; out of core: the layout, then the tiles each render needs | no |
 | 4–6 | Track View's patch tiles, cluster-stage tiles, hover context (`track_view/body/mod.rs` `ensure_tile`, `ensure_context`; `tile.rs`, `patch.rs` → `render_tile`) | whole pyramid, `peek` | in core: whole pyramid; out of core: regions, from peeked tiles | out of core: the stored levels; depth |
 | 7–9 | Track View's crops, the Track Table's crop column and hover (`patch_pictures/crop.rs`, `track_table_panel.rs` `crop_picture`) | one level of the pyramid | the same level; out of core: the crop's rectangle of it, from peeked tiles | out of core: the stored levels; depth past a step of 64 |
-| 10 | Track Table reference picks (`track_table_panel/picks.rs` → `render_reference` → `render_view_tile`, `clipped_share`) | `get`, whole pyramid; level 0 inside the outline | in core: the same; out of core: regions, and `clipped_share` walks the level-0 tiles under the outline | out of core: the stored levels, and `clipped_share` reads `-mipmap1` for an original that is not region-readable |
+| 10 | Track Table reference picks (`track_table_panel/picks.rs` → `render_reference` → `render_view_tile`, `clipped_share`) | `get`, whole pyramid; level 0 inside the outline | in core: the same; out of core: regions, and `clipped_share` walks the level-0 tiles under the outline; each pick still fetches its views with one `get` per observation, and makes one region pool for its one `render_reference` call over all of them, so a point's views share one pool | out of core: the stored levels, and `clipped_share` reads `-mipmap1` for an original that is not region-readable |
 | 11–13 | Display patch bitmaps at open, conversion to embedded patches, `sfm web-export` (`display_bitmaps.rs`, `state/edits.rs` `convert_to_embedded_patches_job`, `web_export.rs`) | `get_many`, 6 levels, every photograph held at once; web-export with budget 0 | `get_many` answers sources; regions for out of core; web-export makes missing mipmaps in the workspace | out of core: the stored levels; depth |
 | 14–18 | The bench's steps and searches, live evaluation, *Find Nearby Tracks*, *Create Track Here*, *Add image to tracks*, *Refine all normals*, *Refit all points* (`bench.rs`, `state/edits.rs` `fetch`, `bench/nearby_tracks.rs`, `bench/track_at_pixel.rs`, `add_image_to_tracks.rs`, `state/edits/refine_all_normals.rs`, `refit_all_points.rs`) | `get_many`, levels per sample or per grid, `clipped_share` on level 0 | regions for out of core, `clipped_share` as in row 10 | out of core: the stored levels; depth |
 | 16a | *Find Nearby Tracks*' grey reads (`GreyImages`, `bench/nearby/grey.rs`) | level 0 of each view, blurred grey `f32`, whole: 800 MB per 200-megapixel view | in core: unchanged; out of core: each read blurs the level-0 region it samples, plus the blur's 4 px | out of core: level 0 from `-mipmap1` for an original that is not region-readable |
@@ -1512,7 +1512,9 @@ impl From<(TileError, PathBuf)> for PhotographReadError { /* … */ } // a mid-r
 only those (the Python bindings given arrays, the view-tile binding, tests)
 are not made to handle an error that cannot happen. Beside them,
 `render_source_tile` and `render_source_tile_with_grad_into` take a
-`&ProjectedImage` (and so a `PhotographSource`) and the run's region pool, and
+`&ProjectedImage` (and so a `PhotographSource`) and the region pool the
+kernel's caller made for this kernel call (`RegionPool::for_kernel_call()`,
+whatever way the caller fetched its sources), and
 return `Result<_, PhotographReadError>`: for `Whole` they call the infallible
 functions and answer `Ok`, for `Tiled` they assemble the view-region pyramid
 or sample through tiles, either of which can fail.
@@ -1637,7 +1639,7 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    each rule of the region test refuses a file made to break it alone.
 7. **View-region pyramids** ([view-region-pyramid.md](view-region-pyramid.md)
    steps 1 and 2): regions in `ImageU8Pyramid` and every sampler, the
-   tile-addressed sampling path for renders the run's region pool cannot hold, `required_regions`,
+   tile-addressed sampling path for renders the kernel call's region pool cannot hold, `required_regions`,
    `PhotographSource`, `clipped_share` over tiles, the grey reads by region,
    and the assembly from tiles, exercised on in-core photographs cut into
    tiles in memory. No reader changes yet. Tests: the companion draft's
@@ -1664,7 +1666,8 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
 9. **Track View and the Track Table** on view-region pyramids, peeking tiles
    (companion step 3), with the step-9 signature changes.
 10. **The bench's jobs and the reference picks** (companion step 4), with the
-    step-10 signature changes.
+    step-10 signature changes, and one region pool made by each bench step
+    and each reference pick for its kernel call.
 11. **Bulk kernels**: the display patch bitmaps, the conversion to embedded
     patches, the web export, *Refine all normals*, *Refit all points* and the
     cluster-patches build (companion step 5), with the step-11 signature

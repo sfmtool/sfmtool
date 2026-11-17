@@ -185,9 +185,9 @@ bounded by the patch resolution `R`:
 So a render samples one of two ways, and both give the same values:
 
 - **Copied regions**, as above, when the render can reserve its regions,
-  with the reuse margin, from the kernel run's **region pool**. The pool holds
+  with the reuse margin, from the kernel call's **region pool**. The pool holds
   four tiles' worth of pixels (4 x 512 x 512 x 3 bytes, 3.1 MB) per thread
-  of the rayon pool, 99 MB on 32 threads, for all the run's patches
+  of the rayon pool, 99 MB on 32 threads, for all the call's patches
   together, however many are in progress: a kernel's patches do not map one
   to a worker, since *Refine all normals* runs a parallel loop over points
   whose normal kernels run parallel loops over views
@@ -202,9 +202,20 @@ So a render samples one of two ways, and both give the same values:
   them; a run whose views are stretched fills the pool and sends the rest
   down the tile path. Sampling a copied region is the fast path: one
   contiguous image per level, and the AVX2 anisotropic kernel runs on it
-  unchanged. The pool belongs to the run: the sources one `get_many` returns
-  share one, a `get` makes one of 3.1 MB, and Track View's renders on the
-  GUI thread share one of 3.1 MB.
+  unchanged. **One rule decides who owns a pool: the caller of a kernel
+  makes one `RegionPool` for that kernel call and passes it in**, beside the
+  views. The pool is not tied to how the sources were fetched: a caller that
+  fetched its views with one `get_many`, or with one `get` per view as the
+  Track Table's reference picks do (`pick_reference` in
+  `track_table_panel/picks.rs` calls `get` once per observation and hands all
+  the views to one `render_reference` call), makes one pool for the one call,
+  so a 151-view point shares 99 MB rather than taking 3.1 MB per view.
+  `RegionPool::for_kernel_call()` sizes it at 3.1 MB per rayon thread. Track
+  View's renders on the GUI thread, which are not one kernel call but many
+  small ones a frame, share one pool of 3.1 MB that the panel owns. No other
+  caller builds one kernel call from several `get`s: the photograph cache's
+  other `get` callers are the panels' decode requests
+  (`state/photograph_requests.rs`), which fetch without rendering.
 - **Tile-addressed sampling** otherwise, for a render whose reservation
   fails. It keeps nothing for reuse: its pinned
   tiles are released when it ends, and the next render of the same view
@@ -231,7 +242,7 @@ So a render samples one of two ways, and both give the same values:
   taps through the same tile lookup and keeps its own arithmetic, so its
   values are unchanged.
 
-The bound has two parts. **Copied regions** are bounded by the run's pool,
+The bound has two parts. **Copied regions** are bounded by the kernel call's pool,
 99 MB on 32 threads, whatever the number of patches in progress. **Pinned
 tiles** are bounded per thread that renders: a thread runs one render at a
 time, because a render never waits inside itself (its rows run serially on a
@@ -245,9 +256,9 @@ whose first still holds tiles. On a thread that is not a rayon worker,
 serial on every thread, so its window has one owner. A copied-region render
 whose rows go to rayon pins no tiles while it samples. The threads that render are the rayon pool's
 32, the job thread that calls the kernel, and in the viewer the other
-queue's job thread and the GUI thread. One kernel run on the command line
+queue's job thread and the GUI thread. One kernel call on the command line
 holds at most 99 MB + 33 x 12.7 MB, about 520 MB, on top of the tile budget;
-the viewer, with at most two kernel runs at once (one per background queue)
+the viewer, with at most two kernel calls at once (one per background queue)
 and Track View's renders, at most 2 x 99 MB + 3.1 MB + 35 x 12.7 MB, about
 650 MB. The common case, footprints that are not stretched, stays at a few
 kilobytes per view. No view is refused and no result changes:
@@ -275,7 +286,7 @@ requesting the missing ones. The GUI thread never decodes and never waits.
 - **Bulk kernels** (the display patch bitmaps at open, *Refine all normals*,
   the web export) touch every photograph at the levels their patches need.
   What they hold is the regions of the patches in progress, a few kilobytes
-  each, all within the run's region pool (99 MB on 32 threads), plus at most
+  each, all within the kernel call's region pool (99 MB on 32 threads), plus at most
   12.7 MB of pinned tiles per rendering thread (§ "Bounding a render's
   memory"), plus the tile cache, which its budget
   bounds whatever the number of photographs; the tiles they touch can be many
@@ -306,7 +317,7 @@ source.
    gradient sampler (the AVX2 anisotropic kernel included), the
    tile-addressed path with its window of pinned tiles for the `remap.rs`
    samplers and tile-addressed versions of `sample_grid_window`,
-   `build_template` and the view selection's affine fast path, the run's
+   `build_template` and the view selection's affine fast path, the call's
    region pool that chooses between the paths, the `render_source_*` entry
    points returning `PhotographReadError`, and `required_regions` for each
    sampler. Tests: for
@@ -335,8 +346,12 @@ source.
    pyramid entry in the cache; the drawn tiles equal the whole-pyramid ones.
 4. **The bench's jobs and the reference picks**: `ViewSources` hands the
    kernels a tiled source and each render asks for its regions; `clipped_share`
-   reads a level-0 region. Tests: each step's result is identical with the two
-   sources on a small-threshold synthetic reconstruction.
+   reads a level-0 region; each bench step and each reference pick makes one
+   region pool for its kernel call and passes it in, the picks for every
+   `render_reference` call over the views their per-view `get`s fetched.
+   Tests: each step's result is identical with the two sources on a
+   small-threshold synthetic reconstruction; a reference pick over many views
+   whose regions exceed a small pool holds no more than that one pool.
 5. **Bulk kernels**: the display patch bitmaps, the conversion to embedded
    patches, the web export, *Refine all normals*, *Refit all points* and the
    cluster-patches build, each with a point order that keeps tile locality. Tests: identical results; a tile budget smaller
