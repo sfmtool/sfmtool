@@ -692,7 +692,8 @@ pub fn default_concurrent_images_for_dimensions(
             Ok(n) => return n.max(1) as usize,
             Err(_) => progress_warn!(
                 progress,
-                "Ignoring non-integer {CONCURRENT_IMAGES_ENV_VAR}={value:?}; using the default                  concurrency."
+                "Ignoring non-integer {CONCURRENT_IMAGES_ENV_VAR}={value:?}; using the default \
+                 concurrency."
             ),
         }
     }

@@ -224,9 +224,9 @@ def _stream_sift_with_sfmtool(
     """Generator backing ``extract_sift_with_sfmtool``.
 
     Decodes and extracts up to ``default_concurrent_images(width, height,
-    params)`` images concurrently, at image 0's size, while still yielding one result per
-    image in input order (a FIFO over the in-flight futures), so the caller can
-    stream ``.sift`` writes. The bounded look-ahead caps memory to the worker
+    params)`` images concurrently, at image 0's size, while still yielding one
+    result per image in input order (a FIFO over the in-flight futures), so the
+    caller can stream ``.sift`` writes. The bounded look-ahead caps memory to the worker
     count, and the ``ThreadPoolExecutor`` context manager joins the workers on
     exit -- including when the consumer stops early or a decode/extract raises
     (re-raised in input order by the FIFO).
