@@ -145,7 +145,7 @@ Why 4096 rather than 8192, the texture limit: once every photograph is drawn in
 tiles (below), the texture limit no longer separates anything, and the tier is
 about memory and the time of a first read. A 6000 x 4000 photograph is 72 MB
 at level 0 and 96 MB as a pyramid, so a few hundred of them, a normal camera
-capture, do not fit any budget, while their mipmaps cost one extra encode each.
+capture, do not fit any budget, while their mip level files cost one extra encode each.
 4096 is also where `sfm ws init` stops SIFT image doubling
 (`double_image_below_long_side`: an image is doubled only when both sides are
 below 4096), so at the default SIFT never doubles an out-of-core photograph.
@@ -1273,7 +1273,7 @@ are current only reads a layout and tiles, and is not limited.
 | Image Detail | asks for the layout once (a header read, the region test and a record check, on the rayon pool) and draws *Loading image…* | requests the photograph once, draws the coarsest level if the build has published it and *Building image levels…* otherwise | peeks the visible tiles and asks for the missing ones |
 | Track View's patch tiles, cluster-stage tiles, context and crops; the Track Table's crop column and hover | the same layout request; the cell draws its loading state | requests the photograph once; the cell says *Building image levels…* | computes the render's regions, peeks their tiles, asks for the missing ones, and renders when all are present |
 | The 3D background | the same layout request; nothing drawn | requests the photograph once; draws the coarsest level if published | asks for its level with `get_level`, which assembles it from tiles on the rayon pool, and draws the coarsest until it lands |
-| Display thumbnails | built in the open job, off the GUI thread: a photograph whose coarsest mip level file is not current gets the grey placeholder row | the row stays the placeholder | a placeholder row whose photograph has become `Known` is filled, on the rayon pool, from the coarsest mipmap |
+| Display thumbnails | built in the open job, off the GUI thread: a photograph whose coarsest mip level file is not current gets the grey placeholder row | the row stays the placeholder | a placeholder row whose photograph has become `Known` is filled, on the rayon pool, from the coarsest mip level file |
 
 A build publishes each reduced level to the slot's `Building` state as it is
 encoded, coarsest first, so a panel shows a photograph's coarsest level about a
@@ -1320,7 +1320,7 @@ The panel stops making a texture of the photograph and draws photograph tiles:
   (about 17 MB), so a jump to a new place spreads its uploads over a few
   frames instead of stalling one.
 - **Switching images** (`,` / `.`, the strip, animation). The new image's
-  coarsest resident level is drawn at once if its mipmap or pyramid have been
+  coarsest resident level is drawn at once if its mipmap or pyramid has been
   read this session, then its tiles at the current view. While animation plays,
   the next image's tiles for the current view are asked for one frame ahead.
   The view persistence rule (§ "View persistence across image, reconstruction
