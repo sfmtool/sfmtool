@@ -114,8 +114,9 @@ pub struct UpgradedFolder {
     pub sift_file_count: usize,
     /// Why the folder is kept rather than deleted, or `None` when the run
     /// deletes it: files the current reader refuses name it, a file of a
-    /// workspace outside the tree names it, it lies outside the tree, or the
-    /// tree holds a link.
+    /// workspace outside the tree names it, a file the run leaves because
+    /// another of its image names leaves the tree names it, it lies outside
+    /// the tree, or the tree holds a link.
     pub kept_because: Option<String>,
     /// Whether its version 1 `.sift` files were deleted (in a dry run,
     /// whether they would be).
@@ -447,9 +448,12 @@ struct NewHashes {
 ///    attribute each file to the workspace its record resolves to. A `.sift`
 ///    file the file system will not give up stops the run.
 /// 2. Map each physical version 1 folder to one new folder and one converted
-///    record. A version 1 folder is named by a record when it is
-///    `<image dir>/<feature_prefix_dir>` below the record's workspace; one
-///    no record names is an orphan. When a version 1 workspace file's record
+///    record. A version 1 folder is named by a file when it is
+///    `<image dir>/<feature_prefix_dir>` for one of the file's images, each
+///    `..` of an image name resolved by name, and by a version 1 workspace
+///    file when it is that record's folder below the deepest workspace it
+///    lies in, where the files naming it have their images; one nothing
+///    names is an orphan. When a version 1 workspace file's record
 ///    names the folder, that workspace file's converted record decides;
 ///    otherwise the folder's own `.sift` files do, under the tool's workspace
 ///    `feature_type` ([`feature_type_for_tool`](super::feature_type_for_tool)),
@@ -462,15 +466,19 @@ struct NewHashes {
 /// 4. Rewrite each `.sfmr` and `.matches` file that names an old folder or
 ///    is below the current version, each `.camrig` below version 2, at its
 ///    own path, and delete each `.kdf` built from an old folder.
-/// 5. Write each version 1 workspace file of the tree as version 2.
+/// 5. When no file failed, write each version 1 workspace file of the tree
+///    as version 2. When one did, leave them all at version 1, so that the
+///    next run maps each old folder to the same new folder as this one.
 /// 6. When no file failed, delete the version 1 `.sift` files of every
 ///    version 1 folder, orphans included, and the directories that leaves
-///    empty, except a folder that a file the current reader refuses or a
-///    file of a workspace outside the tree names; and nothing at all when a
+///    empty, except a folder that a file the current reader refuses, a file
+///    of a workspace outside the tree, or a file one of whose image names
+///    leaves the tree through `..` names; and nothing at all when a
 ///    folder it would delete lies outside the tree or the tree holds a
 ///    symbolic link or junction, behind which files are not examined.
 ///
-/// A file whose record resolves to a workspace outside the tree, a cluster
+/// A file whose record resolves to a workspace outside the tree or one of
+/// whose image names leaves the tree through `..`, a cluster
 /// `.matches` file below version 6 and a `.sfmr` or `.matches` file whose
 /// recorded `.sift` files are not the version 1 files in an old folder are
 /// left as they are, listed as not converted. A run that stops part way, by
@@ -559,6 +567,9 @@ pub fn upgrade_workspace(
             });
         }
         report.old_folders_deleted = !any_failed(&report.files) && plan.deletion_refused.is_none();
+        if any_failed(&report.files) {
+            leave_workspace_files(&mut report, &plan);
+        }
         report.folders = folder_reports(&plan, report.old_folders_deleted);
         finish_notes(&mut report, &plan);
         return Ok(report);
@@ -606,8 +617,12 @@ pub fn upgrade_workspace(
         }
     }
 
-    // Phase 5.
-    if plan.workspaces.iter().any(|w| w.new_file.is_some()) {
+    // Phase 5, only when no file failed. A workspace file left at version 1
+    // keeps the next run mapping each old folder to the same new folder as
+    // this one, so the files it rewrites join those this run rewrote.
+    if any_failed(&report.files) {
+        leave_workspace_files(&mut report, &plan);
+    } else if plan.workspaces.iter().any(|w| w.new_file.is_some()) {
         let phase = progress.phase("workspace file");
         phase.check_cancel()?;
         for (i, workspace) in plan.workspaces.iter().enumerate() {
@@ -654,6 +669,21 @@ pub fn upgrade_workspace(
     Ok(report)
 }
 
+/// Phase 5 when a file failed: each version 1 workspace file is left as it
+/// is, and its report row says why. The workspace files are the report's
+/// first rows, in the order of the plan's workspaces.
+fn leave_workspace_files(report: &mut UpgradeWorkspaceReport, plan: &Plan) {
+    for (row, workspace) in report.files.iter_mut().zip(&plan.workspaces) {
+        if workspace.new_file.is_some() {
+            row.outcome = UpgradeOutcome::NotConverted(
+                "it is left at version 1 because a file failed, so that the next run converts \
+                 the rest into the same new folders"
+                    .into(),
+            );
+        }
+    }
+}
+
 fn any_failed(files: &[UpgradedFile]) -> bool {
     files
         .iter()
@@ -697,6 +727,15 @@ fn finish_notes(report: &mut UpgradeWorkspaceReport, plan: &Plan) {
         report.notes.push(
             "The version 1 features folders were not deleted, because a file failed; fix the \
              files listed as failed and run the upgrade again."
+                .into(),
+        );
+    }
+    if any_failed(&report.files) && plan.workspaces.iter().any(|w| w.new_file.is_some()) {
+        report.notes.push(
+            "The version 1 workspace files were not written, because a file failed: while they \
+             are version 1, the next run converts the failed files into the same new folders \
+             as the files this run converted. Fix the files listed as failed and run the \
+             upgrade again."
                 .into(),
         );
     }

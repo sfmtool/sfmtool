@@ -1765,3 +1765,223 @@ fn a_sift_file_the_reader_rejects_is_reported_as_unreadable_not_changed() {
     );
     assert!(!reason.contains("changed"), "{reason}");
 }
+
+/// A file of the nested workspace whose image names reach the root's images
+/// through `..` names the root's old folder like any other file: it is
+/// converted, and keeps every `.sift` file it records.
+#[test]
+fn a_file_naming_images_through_a_parent_directory_is_converted() {
+    let fixture = fixture();
+    let mut recon = reconstruction(&fixture.root, &fixture.old_folder(), v1_record(), false);
+    for (i, image) in recon.image_set.images.iter_mut().enumerate() {
+        image.name = format!("../images/{}", image_name(i));
+    }
+    recon.metadata.workspace.relative_path = ".".into();
+    let path = fixture.nested().join("parent-dir.sfmr");
+    recon.save(&path, &Progress::none()).unwrap();
+    assert_eq!(missing_sift(&path), (0, 0));
+    let report = run(&fixture, false);
+    assert_eq!(
+        outcome_of(&report, &path),
+        &UpgradeOutcome::Converted,
+        "{report:?}"
+    );
+    assert_eq!(
+        record_of(&path).feature_prefix_dir,
+        v2_record().feature_prefix_dir
+    );
+    assert_sift_files_resolve(&path);
+}
+
+/// A file of the tree one of whose image names leaves the tree's root
+/// through `..` is not converted, since the run does not convert the folder
+/// outside the tree, and the old folder it names in the tree is kept.
+#[test]
+fn a_file_naming_images_outside_the_tree_keeps_its_folder() {
+    let fixture = fixture();
+    let elsewhere = fixture._dir.path().join("elsewhere");
+    let last = image_name(IMAGES - 1);
+    let elsewhere_sift = elsewhere.join(v1_record().feature_prefix_dir);
+    std::fs::create_dir_all(&elsewhere_sift).unwrap();
+    std::fs::copy(fixture.images().join(&last), elsewhere.join(&last)).unwrap();
+    let sift_name = format!("{last}.sift");
+    std::fs::copy(
+        fixture.old_folder().join(&sift_name),
+        elsewhere_sift.join(&sift_name),
+    )
+    .unwrap();
+    let mut recon = reconstruction(&fixture.root, &fixture.old_folder(), v1_record(), false);
+    recon.image_set.images[IMAGES - 1].name = format!("../elsewhere/{last}");
+    let path = fixture.path("sfmr/partly-outside.sfmr");
+    recon.save(&path, &Progress::none()).unwrap();
+    assert_eq!(missing_sift(&path), (0, 0));
+    let before_elsewhere = snapshot(&elsewhere);
+
+    let report = run(&fixture, false);
+    let UpgradeOutcome::NotConverted(reason) = outcome_of(&report, &path) else {
+        panic!("{report:?}")
+    };
+    assert!(reason.contains("outside this tree"), "{reason}");
+    let folder = report
+        .folders
+        .iter()
+        .find(|f| f.old_folder == fixture.old_folder())
+        .unwrap();
+    assert!(
+        folder
+            .kept_because
+            .as_deref()
+            .is_some_and(|k| k.contains("outside this tree")),
+        "{folder:?}"
+    );
+    assert_eq!(missing_sift(&path), (0, 0));
+    assert_eq!(snapshot(&elsewhere), before_elsewhere);
+}
+
+/// The workspace file's options differ from those its folder's `.sift` files
+/// record (KerryPark360's workspace file records another `feature_type`
+/// than the tool's), so the folder converts to the workspace file's new
+/// folder, not to the one the `.sift` files alone would name. A file locked
+/// during the rewrite fails, so the workspace file is left at version 1;
+/// the rerun then converts the failed file into the same new folder.
+#[cfg(windows)]
+#[test]
+fn a_file_that_fails_then_converts_into_the_workspace_files_new_folder() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let fixture = fixture();
+    let workspace_file = fixture.root.join(WORKSPACE_FILE_NAME);
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&workspace_file).unwrap()).unwrap();
+    config["feature_options"]["max_num_features"] = serde_json::json!(15);
+    let v1_config = serde_json::to_string_pretty(&config).unwrap();
+    std::fs::write(&workspace_file, &v1_config).unwrap();
+
+    let target = fixture.path("sfmr/sift.sfmr");
+    let lock = std::sync::Mutex::new(None);
+    let sink = |event: Event<'_>| {
+        if matches!(event, Event::Enter { phase, .. } if phase == "rewrite files") {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(&target)
+                .unwrap();
+            *lock.lock().unwrap() = Some(file);
+        }
+    };
+    let first = upgrade_workspace(
+        &fixture.root,
+        &UpgradeWorkspaceOptions::default(),
+        &Progress::to(&sink),
+    )
+    .unwrap();
+    drop(lock.lock().unwrap().take());
+    assert!(
+        matches!(outcome_of(&first, &target), UpgradeOutcome::Failed(_)),
+        "{first:?}"
+    );
+    assert!(not_converted(outcome_of(&first, &workspace_file)));
+    assert_eq!(std::fs::read_to_string(&workspace_file).unwrap(), v1_config);
+    assert!(first.notes.iter().any(|n| n.contains("workspace files")));
+
+    let again = run(&fixture, false);
+    assert!(again.old_folders_deleted, "{again:?}");
+    let written: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&workspace_file).unwrap()).unwrap();
+    assert_eq!(written["version"], 2);
+    let prefix = written["feature_prefix_dir"].as_str().unwrap();
+    for file in ["sfmr/sift.sfmr", "sfmr/embedded.sfmr"] {
+        assert_eq!(
+            record_of(&fixture.path(file)).feature_prefix_dir,
+            prefix,
+            "{file}"
+        );
+    }
+    assert_sift_files_resolve(&target);
+    // The one new folder is the only one beside the images.
+    let made: Vec<_> = std::fs::read_dir(fixture.images().join("features"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(made, vec![fixture.images().join(prefix)]);
+}
+
+/// A version 1 record carries no `double_image_below_long_side`, so its
+/// converted options carry none either and every image is doubled as it was
+/// when extracted. For the standard version 1 sfmtool options, the new
+/// folder is the one options without the key keep.
+#[test]
+fn a_version_1_record_keeps_doubling_every_image() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("ws");
+    std::fs::create_dir_all(&root).unwrap();
+    let options = serde_json::json!({
+        "octave_layers": 3,
+        "sigma": 1.6,
+        "blur_radius_factor": 2.25,
+        "input_sigma": 0.5,
+        "double_image": true,
+        "contrast_threshold": 0.0067,
+        "edge_threshold": 10.0,
+        "max_num_features": 8192,
+        "orientation_bins": 36,
+        "peak_ratio": 0.8,
+        "descriptor_width": 4,
+        "descriptor_bins": 8,
+        "descriptor_magnification": 3.0,
+        "descriptor_clamp": 0.2,
+        "gray_formula": "0.2126*R + 0.7152*G + 0.0722*B",
+    });
+    let config = serde_json::json!({
+        "version": 1,
+        "feature_tool": "sfmtool",
+        "feature_type": "sift-sfmtool",
+        "feature_options": options,
+        "feature_prefix_dir": feature_prefix_dir("sfmtool", "sift-sfmtool", &options),
+    });
+    assert_eq!(
+        config["feature_prefix_dir"],
+        "features/sift-sfmtool-3dcd2b2f8c892d12c3ffe28cedce19c9"
+    );
+    let workspace_file = root.join(WORKSPACE_FILE_NAME);
+    std::fs::write(&workspace_file, serde_json::to_string(&config).unwrap()).unwrap();
+    upgrade_workspace(
+        &root,
+        &UpgradeWorkspaceOptions::default(),
+        &Progress::none(),
+    )
+    .unwrap();
+    let written: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&workspace_file).unwrap()).unwrap();
+    assert_eq!(written["version"], 2);
+    assert!(written["feature_options"]
+        .get("double_image_below_long_side")
+        .is_none());
+    assert_eq!(written["feature_options"]["double_image"], true);
+    assert_eq!(
+        written["feature_prefix_dir"],
+        "features/sift-sfmtool-9017ec0d2c5dfc401da610578062b53d"
+    );
+}
+
+/// A workspace file names only folders of its own workspace, not those of a
+/// workspace nested in it: a version 1 folder of a version 2 nested
+/// workspace that no file names is an orphan, even where its path ends in
+/// the enclosing workspace file's prefix.
+#[test]
+fn a_workspace_file_does_not_name_a_nested_workspaces_folder() {
+    let fixture = fixture();
+    write_v2_workspace_file(&fixture.nested());
+    std::fs::remove_file(fixture.path("sfmr/other.sfmr")).unwrap();
+    let nested_old = fixture
+        .nested()
+        .join("images")
+        .join(v1_record().feature_prefix_dir);
+    let report = run(&fixture, true);
+    let folder = report
+        .folders
+        .iter()
+        .find(|f| f.old_folder == nested_old)
+        .unwrap_or_else(|| panic!("{report:?}"));
+    assert_eq!(folder.new_folder, None, "{folder:?}");
+    assert!(folder.deleted, "{folder:?}");
+}

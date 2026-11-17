@@ -524,10 +524,13 @@ fn feature_prefix_dir_py(
 /// old folder is rewritten at its own path to name the new one and the new
 /// files' content hashes, as is any older than the current version; a version
 /// 1 ``.camrig`` is rewritten as version 2; a ``.kdf`` index built from an old
-/// folder is deleted; each version 1 workspace file is written as version 2,
-/// keeping every other key; and when no file failed, the old folders are
-/// deleted, except those a file the current reader refuses or a file of a
-/// workspace outside the tree names, and any outside the tree. Each old
+/// folder is deleted; and when no file failed, each version 1 workspace file
+/// is written as version 2, keeping every other key, and the old folders are
+/// deleted, except those a file the current reader refuses, a file of a
+/// workspace outside the tree or a file with an image name that leaves the
+/// tree through ``..`` names, and any outside the tree. When a file failed,
+/// the workspace files are left at version 1, so the next run converts the
+/// failed files into the same new folders as the rest. Each old
 /// folder maps to one new folder, named from the converted record of the
 /// workspace file that names it or else from its own ``.sift`` files, and
 /// every file that names it is pointed there with that record. The walk does

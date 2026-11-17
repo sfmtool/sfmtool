@@ -141,16 +141,25 @@ fn is_plain_relative(path: &Path) -> bool {
         .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
 }
 
+/// The directory image `name` (workspace-relative, `/`-separated) is in, in
+/// the workspace at `workspace`, with each `..` of the name resolved by name,
+/// so that it is spelled as the walk spells the directories it finds.
+fn image_dir_of_name(workspace: &Path, name: &str) -> PathBuf {
+    let parent = Path::new(name).parent().unwrap_or(Path::new(""));
+    normalized(&lexically_resolved(&workspace.join(parent)))
+}
+
 /// The `.sift` path image `name` (workspace-relative, `/`-separated) has
 /// under `prefix` in the workspace at `workspace`:
-/// `<workspace>/<name's directory>/<prefix>/<name's file name>.sift`.
+/// `<workspace>/<name's directory>/<prefix>/<name's file name>.sift`, with
+/// each `..` resolved by name.
 pub(super) fn sift_path(workspace: &Path, name: &str, prefix: &str) -> PathBuf {
-    let image = Path::new(name);
-    let parent = image.parent().unwrap_or(Path::new(""));
-    let file_name = image.file_name().unwrap_or_default().to_string_lossy();
+    let file_name = Path::new(name)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
     normalized(
-        &workspace
-            .join(parent)
+        &image_dir_of_name(workspace, name)
             .join(prefix)
             .join(format!("{file_name}.sift")),
     )
@@ -271,18 +280,23 @@ fn record_key(workspace: usize, contents: &WorkspaceContents) -> String {
     )
 }
 
-/// A version 1 record of one workspace, and the files that name it.
+/// A version 1 record of one workspace, and the files that hold it.
 struct Record {
-    /// The directory of the workspace the record belongs to.
-    workspace: PathBuf,
     old: WorkspaceContents,
-    /// The workspace file and the files that can be read and name it.
+    /// The workspace file and the files that can be read and hold it.
     named_by: Vec<PathBuf>,
-    /// Of those, how many will be rewritten, the workspace file among them
-    /// when it is version 1.
-    rewritten_by: usize,
-    /// The files that name it and that the current reader refuses.
-    refused_by: usize,
+}
+
+/// What the run does with a `.sfmr` or `.matches` file of the tree, as far as
+/// the folders it names are concerned.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Naming {
+    /// The run rewrites it, so the folders it names are converted.
+    Rewritten,
+    /// The current reader refuses it, so the folders it names are kept.
+    Refused,
+    /// The run leaves it for another reason.
+    Left,
 }
 
 /// What phase 1 read of a `.sfmr` or `.matches` file from its metadata and
@@ -642,12 +656,19 @@ pub(super) fn plan(
 
     // The folders each file names, found from its record and image names
     // alone, by their paths on disk, so that a file the reader refuses names
-    // them too. A folder inside the tree that a file of a workspace outside
-    // the tree names is kept whatever else names it.
+    // them too, each with the directory of the images it names it for. An
+    // image name's `..` is resolved by name, as the root is spelled. A folder
+    // inside the tree that a file of a workspace outside the tree names is
+    // kept whatever else names it, and so is one that a file of the tree
+    // names when another of its image names leaves the tree's root through
+    // `..`: the run does not convert that file, since it does not convert
+    // the folders outside the tree it also names.
+    let root_lexical = normalized(&lexically_resolved(root));
     let mut sift_dirs: BTreeSet<PathBuf> = found.sift_dirs.iter().cloned().collect();
-    let mut named_from_outside: HashMap<PathBuf, PathBuf> = HashMap::new();
-    let mut file_dirs: Vec<Vec<PathBuf>> = Vec::with_capacity(read.len());
-    for (recorded, _) in &read {
+    let mut kept_for: HashMap<PathBuf, String> = HashMap::new();
+    let mut file_dirs: Vec<Vec<(PathBuf, PathBuf)>> = Vec::with_capacity(read.len());
+    let mut leaves_tree: Vec<Option<PathBuf>> = Vec::with_capacity(read.len());
+    for ((_, path), (recorded, _)) in candidates.iter().zip(&read) {
         let (workspace, record, names, from_outside) = match recorded {
             Recorded::Here {
                 workspace,
@@ -662,35 +683,56 @@ pub(super) fn plan(
             } => (dir.clone(), contents, names, true),
             Recorded::Leave(_) => {
                 file_dirs.push(Vec::new());
+                leaves_tree.push(None);
                 continue;
             }
         };
-        let mut dirs = BTreeSet::new();
+        let mut dirs = BTreeMap::new();
+        let mut outside = None;
         if !has_image_to_gray(&record.feature_options)
             && is_plain_relative(Path::new(&record.feature_prefix_dir))
         {
             for name in names.iter().flatten() {
-                let parent = Path::new(name).parent().unwrap_or(Path::new(""));
-                if !from_outside && !is_plain_relative(parent) {
+                let image_dir = image_dir_of_name(&workspace, name);
+                if !from_outside && !image_dir.starts_with(&root_lexical) {
+                    outside.get_or_insert(image_dir);
                     continue;
                 }
-                let dir = normalized(&lexically_resolved(
-                    &workspace.join(parent).join(&record.feature_prefix_dir),
-                ));
+                let dir = normalized(&image_dir.join(&record.feature_prefix_dir));
                 if !dir.is_dir() {
                     continue;
                 }
-                if from_outside {
-                    if outside_tree(&dir, root_canonical).is_some() {
-                        continue;
-                    }
-                    named_from_outside.insert(dir.clone(), workspace.clone());
+                if from_outside && outside_tree(&dir, root_canonical).is_some() {
+                    continue;
                 }
-                dirs.insert(dir);
+                dirs.entry(dir).or_insert(image_dir);
             }
         }
-        sift_dirs.extend(dirs.iter().cloned());
+        if from_outside {
+            for dir in dirs.keys() {
+                kept_for.entry(dir.clone()).or_insert_with(|| {
+                    format!(
+                        "kept: named by a file of the workspace {}, outside this tree, whose \
+                         other files this run cannot see",
+                        workspace.display()
+                    )
+                });
+            }
+        } else if let Some(outside) = &outside {
+            for dir in dirs.keys() {
+                kept_for.entry(dir.clone()).or_insert_with(|| {
+                    format!(
+                        "kept: named by {}, which also names images in {}, outside this tree, \
+                         and is not converted",
+                        path.display(),
+                        outside.display()
+                    )
+                });
+            }
+        }
+        sift_dirs.extend(dirs.keys().cloned());
         file_dirs.push(dirs.into_iter().collect());
+        leaves_tree.push(outside);
     }
 
     // The version 1 `.sift` files of each of those folders, by the rule every
@@ -776,75 +818,89 @@ pub(super) fn plan(
         };
     let reasons: Vec<Option<String>> = read
         .iter()
-        .map(|(recorded, contents)| match (recorded, contents) {
-            (
-                Recorded::Here {
-                    workspace,
-                    contents: record,
-                    names_sift_files: true,
-                    ..
-                },
-                Some(Contents::Read { names, hashes }),
-            ) if !has_image_to_gray(&record.feature_options) => missing(
-                &workspace_dirs[*workspace],
-                names,
-                hashes.as_deref().unwrap_or_default(),
-                &record.feature_prefix_dir,
-            ),
-            _ => None,
-        })
+        .zip(&leaves_tree)
+        .map(
+            |((recorded, contents), outside)| match (recorded, contents) {
+                (Recorded::Here { .. }, Some(Contents::Read { .. })) if outside.is_some() => {
+                    outside.as_ref().map(|outside| {
+                        format!(
+                            "it names images in {}, outside this tree, whose .sift files this run \
+                         does not convert; the old folders it names in the tree are kept",
+                            outside.display()
+                        )
+                    })
+                }
+                (
+                    Recorded::Here {
+                        workspace,
+                        contents: record,
+                        names_sift_files: true,
+                        ..
+                    },
+                    Some(Contents::Read { names, hashes }),
+                ) if !has_image_to_gray(&record.feature_options) => missing(
+                    &workspace_dirs[*workspace],
+                    names,
+                    hashes.as_deref().unwrap_or_default(),
+                    &record.feature_prefix_dir,
+                ),
+                _ => None,
+            },
+        )
         .collect();
 
     // The records: each version 1 workspace file's, and each one a file of
     // the tree holds, by the workspace it belongs to.
+    // What the run does with each file, as far as the folders it names are
+    // concerned. A cluster file the reader refuses names its folders like
+    // any file the run does not rewrite, and so does one that cannot be read
+    // now: neither may lose its folder.
+    let naming_of: Vec<Naming> = read
+        .iter()
+        .zip(&reasons)
+        .map(
+            |((recorded, contents), reason)| match (recorded, contents) {
+                (Recorded::Here { contents, .. }, Some(Contents::Read { .. }))
+                    if reason.is_none() && !has_image_to_gray(&contents.feature_options) =>
+                {
+                    Naming::Rewritten
+                }
+                (Recorded::Here { .. }, Some(Contents::Refused(_))) => Naming::Refused,
+                _ => Naming::Left,
+            },
+        )
+        .collect();
+
     let mut records: BTreeMap<String, Record> = BTreeMap::new();
-    let mut note_record = |workspace: usize,
-                           contents: &WorkspaceContents,
-                           path: &Path,
-                           rewritten: bool,
-                           is_refused: bool| {
+    let mut note_record = |workspace: usize, contents: &WorkspaceContents, path: &Path| {
         if has_image_to_gray(&contents.feature_options) {
             return;
         }
-        let record = records
+        records
             .entry(record_key(workspace, contents))
             .or_insert_with(|| Record {
-                workspace: workspace_dirs[workspace].clone(),
                 old: contents.clone(),
                 named_by: Vec::new(),
-                rewritten_by: 0,
-                refused_by: 0,
-            });
-        if is_refused {
-            record.refused_by += 1;
-        } else {
-            record.named_by.push(path.to_path_buf());
-            record.rewritten_by += usize::from(rewritten);
-        }
+            })
+            .named_by
+            .push(path.to_path_buf());
     };
     for (i, (record, workspace)) in workspace_records.iter().zip(&workspaces).enumerate() {
         if let Some(contents) = record {
-            note_record(i, contents, &workspace.file, true, false);
+            note_record(i, contents, &workspace.file);
         }
     }
-    for (((_, path), (recorded, contents)), reason) in candidates.iter().zip(&read).zip(&reasons) {
+    for (((_, path), (recorded, _)), naming) in candidates.iter().zip(&read).zip(&naming_of) {
         if let Recorded::Here {
             workspace,
             contents: record,
             ..
         } = recorded
         {
-            match contents {
-                Some(Contents::Refused(_)) => note_record(*workspace, record, path, false, true),
-                Some(Contents::Read { .. }) => {
-                    note_record(*workspace, record, path, reason.is_none(), false)
-                }
-                // A cluster file the reader refuses names the folder like any
-                // file the run does not rewrite, and so does one that cannot
-                // be read now: neither may lose its folder.
-                Some(Contents::Unreadable(_)) | None => {
-                    note_record(*workspace, record, path, false, false)
-                }
+            // A file the reader refuses is not converted, so its record need
+            // not convert.
+            if *naming != Naming::Refused {
+                note_record(*workspace, record, path);
             }
         }
     }
@@ -855,10 +911,6 @@ pub(super) fn plan(
     for record in records.values() {
         let old = &record.old;
         let mut files = record.named_by.clone();
-        if files.is_empty() {
-            // Only files the reader refuses name it; it is not converted.
-            continue;
-        }
         files.sort();
         if !is_plain_relative(Path::new(&old.feature_prefix_dir))
             || old.feature_prefix_dir.is_empty()
@@ -914,29 +966,81 @@ pub(super) fn plan(
     let mut conflicts = Vec::new();
     let mut jobs = Vec::new();
     let mut deletion_refused = None;
+    // The files of the tree that name each folder, with the directory of the
+    // images they name it for. A file whose image names cannot be read names
+    // the folders its record's prefix names below its workspace instead, so
+    // that a file the reader refuses keeps them all the same.
+    let mut named_by_files: HashMap<&Path, Vec<(Naming, &Path)>> = HashMap::new();
+    let mut named_by_prefix: Vec<(&Path, &str, Naming)> = Vec::new();
+    for (((recorded, _), dirs), naming) in read.iter().zip(&file_dirs).zip(&naming_of) {
+        let Recorded::Here {
+            workspace,
+            contents,
+            names,
+            ..
+        } = recorded
+        else {
+            continue;
+        };
+        if names.is_none() {
+            named_by_prefix.push((
+                &workspace_dirs[*workspace],
+                &contents.feature_prefix_dir,
+                *naming,
+            ));
+        }
+        for (dir, image_dir) in dirs {
+            named_by_files
+                .entry(dir)
+                .or_default()
+                .push((*naming, image_dir));
+        }
+    }
+    // The deepest workspace of the tree that `dir` lies in.
+    let deepest_workspace = |dir: &Path| -> Option<usize> {
+        workspace_dirs
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| dir.starts_with(w))
+            .max_by_key(|(_, w)| w.components().count())
+            .map(|(i, _)| i)
+    };
+
     for (dir, sift_files) in version_1_folders {
-        let naming: Vec<(&Record, PathBuf)> = records
-            .values()
-            .filter_map(|record| {
-                image_dir_of(&dir, &record.workspace, &record.old.feature_prefix_dir)
-                    .map(|d| (record, d))
-            })
-            .collect();
-        let refused_by: usize = naming.iter().map(|(r, _)| r.refused_by).sum();
-        // Converted only for a file this run rewrites: a file it leaves
-        // cannot read the new folder.
-        let needed = naming.iter().any(|(record, _)| record.rewritten_by > 0);
-        let image_dir = naming.first().map(|(_, d)| d.clone());
+        let mut naming: Vec<(Naming, PathBuf)> = named_by_files
+            .get(dir.as_path())
+            .map(|v| v.iter().map(|(n, d)| (*n, d.to_path_buf())).collect())
+            .unwrap_or_default();
+        for (workspace, prefix, n) in &named_by_prefix {
+            if let Some(image_dir) = image_dir_of(&dir, workspace, prefix) {
+                naming.push((*n, image_dir));
+            }
+        }
+        // A workspace file names the folder when its workspace is the deepest
+        // one the folder lies in, the folder is its record's prefix below a
+        // directory of that workspace, and that directory is where the
+        // images of the files that name the folder are, if any do.
+        let by_workspace = deepest_workspace(&dir).and_then(|i| {
+            let old = workspace_records[i].as_ref()?;
+            let new = workspace_new[i].as_ref()?;
+            let image_dir = image_dir_of(&dir, &workspaces[i].dir, &old.feature_prefix_dir)?;
+            (naming.is_empty() || naming.iter().any(|(_, d)| *d == image_dir))
+                .then(|| (image_dir, new.clone()))
+        });
+        let refused_by = naming.iter().filter(|(n, _)| *n == Naming::Refused).count();
+        // Converted only for a version 1 workspace file or a file this run
+        // rewrites: a file it leaves cannot read the new folder.
+        let needed = by_workspace.is_some() || naming.iter().any(|(n, _)| *n == Naming::Rewritten);
+        let image_dir = by_workspace
+            .as_ref()
+            .map(|(d, _)| d.clone())
+            .or_else(|| naming.iter().map(|(_, d)| d.clone()).min());
         let kept_because = if refused_by > 0 {
             Some(format!(
                 "kept: named by {refused_by} file(s) the current reader refuses"
             ))
-        } else if let Some(outside) = named_from_outside.get(&dir) {
-            Some(format!(
-                "kept: named by a file of the workspace {}, outside this tree, whose other \
-                 files this run cannot see",
-                outside.display()
-            ))
+        } else if let Some(reason) = kept_for.get(&dir) {
+            Some(reason.clone())
         } else if let Some(real) = outside_tree(&dir, root_canonical) {
             deletion_refused.get_or_insert_with(|| {
                 format!(
@@ -958,30 +1062,19 @@ pub(super) fn plan(
         } else {
             None
         };
-        let (Some(image_dir), true) = (image_dir, needed) else {
+        let (Some(image_dir), true) = (image_dir.clone(), needed) else {
             folders.push(OldFolder {
                 path: dir,
                 new_folder: None,
-                image_dir: naming.first().map(|(_, d)| d.clone()),
+                image_dir,
                 sift_files: sift_files.into_iter().map(|f| f.path).collect(),
                 kept_because,
             });
             continue;
         };
-        // The deepest version 1 workspace whose own record names the folder.
-        let by_workspace = workspaces
-            .iter()
-            .enumerate()
-            .filter_map(|(i, workspace)| {
-                let old = workspace_records[i].as_ref()?;
-                let new = workspace_new[i].as_ref()?;
-                let image_dir = image_dir_of(&dir, &workspace.dir, &old.feature_prefix_dir)?;
-                Some((workspace.dir.components().count(), image_dir, new.clone()))
-            })
-            .max_by_key(|(depth, _, _)| *depth);
-        let (image_dir, target) = match by_workspace {
-            Some((_, image_dir, new)) => (image_dir, new),
-            None => (image_dir, record_from_sift_files(&dir, &sift_files)?),
+        let target = match by_workspace {
+            Some((_, new)) => new,
+            None => record_from_sift_files(&dir, &sift_files)?,
         };
         let new_folder = normalized(&image_dir.join(&target.feature_prefix_dir));
         targets.insert(dir.clone(), target);
@@ -1055,11 +1148,11 @@ pub(super) fn plan(
     let converted_record = |file: &Path,
                             workspace: usize,
                             record: &WorkspaceContents,
-                            dirs: &[PathBuf]|
+                            dirs: &[(PathBuf, PathBuf)]|
      -> Result<WorkspaceContents, UpgradeWorkspaceError> {
         let mut found: Vec<(&PathBuf, &WorkspaceContents)> = dirs
             .iter()
-            .filter_map(|d| targets.get(d).map(|t| (d, t)))
+            .filter_map(|(d, _)| targets.get(d).map(|t| (d, t)))
             .collect();
         let mut seen = BTreeSet::new();
         found.retain(|(_, t)| seen.insert(record_key(0, t)));
