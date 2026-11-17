@@ -9,8 +9,9 @@ uses the out-of-core pyramid reads it through view-region pyramids, so its
 memory grows with the patches it renders rather than with the photographs;
 photographs under the size threshold keep whole in-memory pyramids. It is
 kept as a draft of its own because what it specifies, the samplers' regions,
-is separate from the files and caches the main draft specifies; its steps are
-steps 6 and 7 of the main draft. Open: the questions at the end. It amends
+is separate from the files and caches the main draft specifies; its steps 1
+and 2 are step 7 of the main draft, and its steps 3 to 6 are the main draft's
+steps 9 to 12. Open: the questions at the end. It amends
 [core/camera/photograph-cache.md](../core/camera/photograph-cache.md) and the
 samplers of [core/camera/image-warping.md](../core/camera/image-warping.md).
 
@@ -144,7 +145,61 @@ sub-pixel refinement, normal refinement). The region pyramid is assembled with
 a margin of a quarter of each level's region on every side, and a later render
 whose required regions lie inside the held ones reuses it; one that does not
 assembles a new one. Reuse does not change any value, only how often regions
-are copied.
+are copied. A kernel keeps a region pyramid for one view of the patch it is
+working on, and drops them all when it moves to the next patch (a fit's
+rounds, a refinement's steps and an evaluation's views of one track share
+them; the next track starts with none). So what it keeps is at most one region
+pyramid per view of one patch, with the margin, 2.25 times the area of the
+region itself.
+
+## Bounding a render's memory
+
+The region of a level is a bounding box, and the box of one render is not
+bounded by the patch resolution `R`:
+
+- **Anisotropic.** The level comes from `σ_minor`, but the `n` samples, capped
+  at 16 (`MAX_ANISOTROPY`, `aniso_footprint` in
+  [remap.rs](../../crates/sfmtool-core/src/camera/remap.rs)), still spread
+  over `±σ_major / 2`. The cap bounds the number of samples, not their reach.
+  A footprint stretched `a = σ_major / σ_minor` times along a diagonal has a
+  bounding box of about `(R·a)² / 2` pixels at its level: `a = 100` at
+  `R = 24` is about 8.7 MB for one render, 280 MB for 32 in flight, and a
+  grazing view can approach a whole level 0.
+- **One level per grid** (`level_for_map` in
+  [cluster_refine.rs](../../crates/sfmtool-core/src/patch/cluster_refine.rs))
+  picks its level from `s_min`, with the same effect for a stretched map.
+- **`Bilinear`**, which the kernels' sampler argument can select, reads level 0
+  over the whole footprint whatever `R` is: a 24 x 24 tile of a patch that
+  covers 2000 px reads a 2000 x 2000 box, 12 MB.
+
+So a render samples one of two ways, and both give the same values:
+
+- **Copied regions**, as above, when the boxes of all the levels the render
+  reads, with the reuse margin, total at most four tiles' worth of pixels
+  (4 x 512 x 512 x 3 bytes, 3.1 MB). Sampling a copied region is the fast
+  path: one contiguous image per level, and the AVX2 anisotropic kernel runs
+  on it unchanged.
+- **Tile-addressed sampling** otherwise. The render does not copy a region. It
+  reads each sample's taps from the photograph tile that holds them: the tap
+  pair `floor(x − 0.5)` and `floor(x − 0.5) + 1` (clamped to the level) always
+  lies within one tile's core and its one-pixel border, so the tile is the one
+  whose core holds the first tap, and the border pixel equals the neighbour's
+  pixel, or the edge pixel at the image's edge, which is what clamping reads.
+  The fractions are computed from the level coordinate as in the whole-level
+  sampler, so every value is bit-identical. The render keeps at most 16 tiles
+  pinned (12.7 MB), least recently used out, and fetches any other through
+  the cache (`get_tile`, a lookup when the tile is cached and a decode of a few
+  milliseconds when not). This path runs the scalar sampler, which the AVX2
+  kernel already equals bit for bit (`remap/aniso_avx2.rs`), with a tile
+  lookup only when consecutive samples change tile.
+
+The worst case of one render is then 3.1 MB of copied regions or 12.7 MB of
+pinned tiles, whatever the view; 32 renders in flight hold at most about
+500 MB on top of the tile budget, and the common case, a footprint that is not
+stretched, stays at a few kilobytes. No view is refused and no result changes:
+which path a render takes depends only on its boxes, and both read the same
+pixels. `clipped_share` already walks tiles one at a time (above). The cap of
+four tiles and the window of 16 are open question 4.
 
 **On the GUI thread** (Track View's tiles, crops and context, the Track
 Table's crop column), the panel acts on the photograph's layout state as the
@@ -166,7 +221,8 @@ requesting the missing ones. The GUI thread never decodes and never waits.
 - **Bulk kernels** (the display patch bitmaps at open, *Refine all normals*,
   the web export) touch every photograph at the levels their patches need.
   What they hold is the region pyramids of the renders in flight (one per
-  worker thread, a few kilobytes each) plus the tile cache, which its budget
+  worker thread, a few kilobytes each, at most 3.1 MB copied or 12.7 MB of
+  pinned tiles each, § "Bounding a render's memory") plus the tile cache, which its budget
   bounds whatever the number of photographs; the tiles they touch can be many
   more (level 2 of one 200-megapixel photograph is 48 tiles, 38 MB; level 0
   is 768 tiles, 607 MB), and the ones past the budget are decoded again when
@@ -182,19 +238,28 @@ requesting the missing ones. The GUI thread never decodes and never waits.
 
 ## Implementation steps
 
-Steps 1 and 2 are step 6 of the main draft; steps 3 to 6 are part of its
-step 7, because once photographs are out of core there is no whole pyramid of
-one for any of these readers to fall back on.
+Steps 1 and 2 are step 7 of the main draft, landed before the tier exists
+and exercised on in-core photographs cut into tiles in memory. Steps 3 to 6
+are the main draft's steps 9 to 12, each its own pull request after the tier
+lands switched off (main step 8) and before it is switched on (main step 15),
+because once photographs are out of core there is no whole pyramid of one for
+any of these readers to fall back on; until a reader moves, it refuses a tiled
+source.
 
 1. **Regions in the pyramid and the samplers**: `PyramidLevel`,
    `ImageU8Pyramid::from_regions`, the origin subtraction in every sampler and
-   gradient sampler (the AVX2 anisotropic kernel included), and
-   `required_regions` for each sampler. Tests: for random warps over a
-   synthetic photograph, every sampler, every value and gradient render
-   through a region pyramid built from `required_regions` is bit-identical to
+   gradient sampler (the AVX2 anisotropic kernel included), the
+   tile-addressed path with its window of pinned tiles, the choice between
+   them by the region cap, and `required_regions` for each sampler. Tests: for
+   random warps over a synthetic photograph, every sampler, every value and
+   gradient render through a region pyramid built from `required_regions`, and
+   through the tile-addressed path with a tile of 32 px, is bit-identical to
    the whole-pyramid render, including maps that run off every edge of the
-   image, NaN texels, and views shrunk past the top level; a region one pixel
-   smaller on an inner edge makes the comparison fail, so the test can fail.
+   image, NaN texels, views shrunk past the top level, a footprint stretched
+   100 times on a diagonal and a `Bilinear` render over a large footprint
+   (which take the tile path); the tile path pins no more than its window; a
+   region one pixel smaller on an inner edge makes the comparison fail, so
+   the test can fail.
 2. **`view_region_pyramid` in the cache**, with the reuse margin, and
    `clipped_share` over tiles, on in-core photographs cut into tiles in
    memory. Tests: the assembled regions equal the whole pyramid's pixels;
@@ -209,9 +274,8 @@ one for any of these readers to fall back on.
    reads a level-0 region. Tests: each step's result is identical with the two
    sources on a small-threshold synthetic reconstruction.
 5. **Bulk kernels**: the display patch bitmaps, the conversion to embedded
-   patches, the web export, *Refine all normals*, *Refit all points*, the
-   cluster-patches build and `ImagePyramidSet.read`, each with a point order
-   that keeps tile locality. Tests: identical results; a tile budget smaller
+   patches, the web export, *Refine all normals*, *Refit all points* and the
+   cluster-patches build, each with a point order that keeps tile locality. Tests: identical results; a tile budget smaller
    than one photograph's level 0 still completes.
 6. **`GreyImages` by region.** Tests: the nearby-track search's results are
    identical.
@@ -229,7 +293,12 @@ one for any of these readers to fall back on.
 3. **The point order of bulk kernels.** Grouped by reference image and
    position (as designed), or by tile. Recommendation: by reference image and
    position, which needs no knowledge of the tile grid in the kernel.
-4. **An interface for kernels.** Designed as a `PhotographSource` enum in
+4. **The region cap and the tile window.** Four tiles of copied regions per
+   render and 16 pinned tiles for the tile path (as designed), or other
+   values. Recommendation: keep them, and count in each kernel's phase note
+   how many renders took the tile path, so the cap is tuned on real captures;
+   the values change memory and speed, never a result.
+5. **An interface for kernels.** Designed as a `PhotographSource` enum in
    `ProjectedImage`, resolved to a region pyramid inside the render entry
    points. The other option is a `ProjectedImage` built per render with the
    region pyramid already in it, which would move the region computation into
