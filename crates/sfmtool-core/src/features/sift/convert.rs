@@ -11,8 +11,8 @@
 //! takes the two readings from the image file through the upgraded options'
 //! `image_to_gray`, after checking the image against the file's
 //! `image_file_xxh128`. See `specs/formats/sift-file-format.md` § "Converting
-//! a version 1 file", and `specs/drafts/ws-upgrade-files-amendment.md`, which
-//! plans a workspace upgrade that converts every version 1 file this way.
+//! a version 1 file", and `specs/cli/workspace/ws-upgrade-command.md`, whose
+//! workspace upgrade converts every version 1 file this way.
 //!
 //! The files are written into a [`Version2SiftFolder`], a folder checked once
 //! to hold no version 1 `.sift` file, since the two versions never share a

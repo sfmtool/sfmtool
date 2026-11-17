@@ -4,8 +4,8 @@
 """`sfmtool.workspace.upgrade_workspace`: the report it returns and the errors
 it raises. The conversion itself is tested in Rust
 (`crates/sfmtool-core/src/workspace/upgrade/tests.rs`); these tests check
-what the binding adds: the report as a dict, the keyword arguments, the
-progress counter and the exception types.
+what the binding adds: the report as a dict, with `nothing_to_do`, the
+keyword arguments, the progress counter and the exception types.
 """
 
 import json
@@ -56,6 +56,7 @@ def test_dry_run_reports_the_workspace_files_of_the_tree_and_writes_nothing(tmp_
     assert report["linked_directories"] == []
     assert report["folders"] == []
     assert report["old_folders_deleted"] is True
+    assert report["nothing_to_do"] is False
 
 
 def test_run_writes_the_workspace_file_as_version_2(tmp_path):
@@ -79,6 +80,7 @@ def test_run_writes_the_workspace_file_as_version_2(tmp_path):
     assert again["files"] == [
         {"path": str(config), "kind": "workspace_file", "outcome": "already_current"}
     ]
+    assert again["nothing_to_do"] is True
 
 
 def test_a_nested_workspace_raises_value_error_naming_the_root(tmp_path):

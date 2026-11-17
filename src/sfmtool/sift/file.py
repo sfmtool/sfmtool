@@ -15,15 +15,10 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xxhash
 
-# The feature type a workspace records for a tool, named by the one Rust
-# implementation, which the workspace upgrade also names folders with.
-from ..workspace import feature_type_for_tool as get_feature_type_for_tool
-
 if TYPE_CHECKING:
     from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
 __all__ = [
-    "get_feature_type_for_tool",
     "get_sift_path_for_image",
     "get_sift_path_from_recon",
     "get_used_features_from_reconstruction",
@@ -143,7 +138,11 @@ def get_sift_path_for_image(
     image_filename = Path(image_filename).resolve()
 
     from sfmtool._workspace import load_workspace_config
-    from sfmtool.workspace import feature_prefix_dir, find_workspace_for_path
+    from sfmtool.workspace import (
+        feature_prefix_dir,
+        feature_type_for_tool,
+        find_workspace_for_path,
+    )
 
     workspace_dir = (
         None if ignore_workspace else find_workspace_for_path(image_filename)
@@ -170,7 +169,7 @@ def get_sift_path_for_image(
         else:
             feature_options = get_colmap_feature_options()
 
-    feature_type = get_feature_type_for_tool(feature_tool, feature_options)
+    feature_type = feature_type_for_tool(feature_tool, feature_options)
     prefix = feature_prefix_dir(feature_tool, feature_type, feature_options)
     return image_filename.parent / prefix / (image_filename.name + ".sift")
 

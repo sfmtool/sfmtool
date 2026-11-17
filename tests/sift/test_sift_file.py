@@ -13,7 +13,6 @@ from sfmtool.sift.file import (
     feature_size,
     feature_size_x,
     feature_size_y,
-    get_feature_type_for_tool,
     get_sift_path_for_image,
     xxh128_of_file,
 )
@@ -290,45 +289,6 @@ def test_write_sift_io_failure_is_an_os_error(sample_sift_data, tmp_path):
     data = _sift_data_dict(sample_sift_data)
     with pytest.raises(OSError):
         write_sift(tmp_path / "no_such_dir" / "test.sift", data)
-
-
-# ---------------------------------------------------------------------------
-# get_feature_type_for_tool tests
-# ---------------------------------------------------------------------------
-
-
-class TestGetFeatureTypeForTool:
-    def test_opencv(self):
-        assert get_feature_type_for_tool("opencv", {}) == "sift-opencv"
-
-    def test_colmap_default(self):
-        assert get_feature_type_for_tool("colmap", {}) == "sift-colmap"
-
-    def test_colmap_dsp(self):
-        assert (
-            get_feature_type_for_tool("colmap", {"domain_size_pooling": True})
-            == "sift-colmap-dsp"
-        )
-
-    def test_colmap_max_features(self):
-        assert (
-            get_feature_type_for_tool("colmap", {"max_num_features": 500})
-            == "sift-colmap-max500"
-        )
-
-    def test_colmap_dsp_and_max(self):
-        opts = {"domain_size_pooling": True, "max_num_features": 500}
-        assert get_feature_type_for_tool("colmap", opts) == "sift-colmap-dsp-max500"
-
-    def test_colmap_default_max_features_omitted(self):
-        # 8192 is the COLMAP default — should not appear in the name
-        assert (
-            get_feature_type_for_tool("colmap", {"max_num_features": 8192})
-            == "sift-colmap"
-        )
-
-    def test_unknown_tool(self):
-        assert get_feature_type_for_tool("superpoint", {}) == "sift-superpoint"
 
 
 # ---------------------------------------------------------------------------

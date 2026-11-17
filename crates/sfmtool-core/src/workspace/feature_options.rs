@@ -230,10 +230,10 @@ pub fn upgrade_feature_options(
 /// matched in lower case.
 ///
 /// This is the one implementation: `sfm ws init` and the extractors name a
-/// record's `feature_type` with it through the Python name
-/// `get_feature_type_for_tool`, and the workspace upgrade names a converted
-/// folder with it. An option's value is read as Python reads it there: any
-/// value but `false`, `null`, `0`, `""`, `[]` and `{}` sets
+/// record's `feature_type` with it through its binding,
+/// `sfmtool.workspace.feature_type_for_tool`, and the workspace upgrade names
+/// a converted folder with it. An option's value is read as Python reads it
+/// there: any value but `false`, `null`, `0`, `""`, `[]` and `{}` sets
 /// `domain_size_pooling`, and `max_num_features` is written as Python writes
 /// it, so `8192.0` counts as 8192 and `1000.5` is written `max1000.5`.
 ///

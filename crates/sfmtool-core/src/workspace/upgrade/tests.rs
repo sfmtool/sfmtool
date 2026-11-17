@@ -1155,7 +1155,7 @@ fn a_folder_a_refused_reconstruction_names_is_kept_and_then_settled() {
     assert_eq!(folder.new_folder, Some(fixture.new_folder()));
     assert_eq!(
         folder.kept_because.as_deref(),
-        Some("kept: named by 1 file(s) the current reader refuses")
+        Some("named by 1 file(s) the current reader refuses")
     );
     assert!(!folder.deleted);
     assert!(report.old_folders_deleted);

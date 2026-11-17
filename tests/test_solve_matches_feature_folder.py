@@ -4,11 +4,11 @@
 """A `.matches` file is used with the `.sift` files it was matched on.
 
 The workspace here is matched once, then its feature definition is changed
-(`sfm ws init --force` with another grey conversion, as `sfm ws upgrade`
-changes it) and its `.sift` files extracted again into the new folder, where
-each image has a different number of features. A solve, or `sfm to-colmap-db`,
-from the earlier `.matches` file must read the earlier folder, and refuse
-before it builds anything when that folder's files are gone or changed.
+(`sfm ws init --force` with another grey conversion) and its `.sift` files
+extracted again into the new folder, where each image has a different number
+of features. A solve, or `sfm to-colmap-db`, from the earlier `.matches` file
+must read the earlier folder, and refuse before it builds anything when that
+folder's files are gone or changed.
 """
 
 import shutil
