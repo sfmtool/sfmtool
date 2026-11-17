@@ -71,6 +71,35 @@ fn test_doubling_octave0_dims() {
     assert_eq!((w0, h0), (128, 96));
 }
 
+/// `double_image_below_long_side` doubles an image whose width and height are
+/// both below it, and not one whose width or height equals it, with the
+/// pixel step and offset of an undoubled pyramid.
+#[test]
+fn test_doubling_stops_at_the_long_side_limit() {
+    let p = SiftParams {
+        double_image_below_long_side: Some(64),
+        ..SiftParams::default()
+    };
+    let octave0 = |w, h| ScaleSpace::build(&GrayImage::new_constant(w, h, 0.5), &p).octave_dims(0);
+    assert_eq!(octave0(63, 40), (126, 80));
+    assert_eq!(octave0(40, 63), (80, 126));
+    assert_eq!(octave0(64, 40), (64, 40));
+    assert_eq!(octave0(40, 64), (40, 64));
+
+    let ss = ScaleSpace::build(&GrayImage::new_constant(64, 40, 0.5), &p);
+    assert_eq!(ss.octave_pixel_step(0), 1.0);
+    assert_eq!(ss.octave_to_image(0, 0.0, 0.0), (0.5, 0.5));
+    assert_eq!(ss.abs_sigma_full(0, 0.0), 1.6);
+
+    // `double_image` off is not turned on by an image below the limit.
+    let off = SiftParams {
+        double_image: false,
+        ..p.clone()
+    };
+    let ss = ScaleSpace::build(&GrayImage::new_constant(32, 32, 0.5), &off);
+    assert_eq!(ss.octave_dims(0), (32, 32));
+}
+
 #[test]
 fn test_levels_per_octave() {
     let img = GrayImage::new_constant(64, 64, 0.5);

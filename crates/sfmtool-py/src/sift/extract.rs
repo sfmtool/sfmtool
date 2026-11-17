@@ -160,7 +160,9 @@ fn object_from_dict(dict: &Bound<'_, PyDict>, path: &str) -> PyResult<serde_json
 ///         default; grayscale is normalized by /255.
 ///     params: optional dict of overrides onto SiftParams::default(). Keys:
 ///         octave_layers, sigma, blur_radius_factor, input_sigma, double_image,
-///         contrast_threshold,
+///         double_image_below_long_side (int or None; absent or None doubles
+///         at any size, an int stops doubling an image whose width or height
+///         is at least that), contrast_threshold,
 ///         edge_threshold, max_num_features (int or None), orientation_bins,
 ///         peak_ratio, descriptor_width, descriptor_bins,
 ///         descriptor_magnification, descriptor_clamp (numeric/bool), and

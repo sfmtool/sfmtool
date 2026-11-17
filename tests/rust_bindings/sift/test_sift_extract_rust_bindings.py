@@ -43,6 +43,15 @@ class TestParamValidation:
         with pytest.raises(ValueError):
             extract_sift(_noise_image(64), params)
 
+    @pytest.mark.parametrize("limit", [0, -1, 64.5, "64", 2**32])
+    def test_a_doubling_limit_that_is_not_a_positive_integer_raises(self, limit):
+        with pytest.raises(
+            ValueError,
+            match=r"params\['double_image_below_long_side'\] must be an integer "
+            r"from 1 to 4294967295, or None",
+        ):
+            extract_sift(_noise_image(64), {"double_image_below_long_side": limit})
+
     def test_defaults_and_valid_overrides_work(self):
         img = _noise_image(96)
         assert extract_sift(img)[0].shape[1] == 2
@@ -50,6 +59,25 @@ class TestParamValidation:
         extract_sift(img, {"descriptor_magnification": 4.0, "descriptor_clamp": 0.3})
         # numpy scalars are read as the Python values they stand for.
         extract_sift(img, {"double_image": np.False_, "octave_layers": np.int64(3)})
+
+
+class TestDoubleImageBelowLongSide:
+    """An image whose long side reaches the limit is extracted as with
+    `double_image` off; below it, or with no limit, as with doubling on."""
+
+    def test_the_limit_turns_doubling_off_from_the_long_side(self):
+        img = _noise_image(96)
+        doubled = extract_sift(img)
+        undoubled = extract_sift(img, {"double_image": False})
+        assert len(doubled[0]) != len(undoubled[0])
+        for params, expected in [
+            ({"double_image_below_long_side": 96}, undoubled),
+            ({"double_image_below_long_side": np.int64(97)}, doubled),
+            ({"double_image_below_long_side": None}, doubled),
+        ]:
+            got = extract_sift(img, params)
+            for a, b in zip(got, expected):
+                assert np.array_equal(a, b), params
 
 
 class TestMaxDescribed:

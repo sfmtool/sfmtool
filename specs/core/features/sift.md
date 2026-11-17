@@ -149,6 +149,21 @@ images** → `s` levels at which extrema are searched.
   blur ≥ 0.5 (anti-aliasing minimum); after doubling that is σ = 1.0 relative to the
   new pixel spacing. The first level is then brought to σ = 1.6 with an incremental
   blur of `sqrt(1.6² − 1.0²)`.
+- **No doubling from a long side.** `double_image_below_long_side` stops the doubling
+  for a large image: with `double_image` on, an image is doubled only when its width
+  and its height are both below this value, so an image whose width or height equals
+  it or is larger is not (`SiftParams::doubles_image`). `ScaleSpace` decides once, at
+  the input's size, and every coordinate and sigma mapping reads that decision, so
+  the keypoints of an undoubled image are in source pixels and equal those of the same
+  image with `double_image` off. A `feature_options` object without the key, or with
+  `null`, puts no limit on doubling, which is `SiftParams::default()` and how every
+  record written before the key existed reads, so those records keep their features
+  and their folder name. `sfm ws init` records **4096** in a new workspace. A photo
+  with a long side of 4096 or more has enough fine detail at its own resolution,
+  and doubling it costs memory out of proportion to what it adds: a 16320×12240
+  (200-megapixel) photo doubled has a 32640×24480 octave-0 base, about 20 GiB of
+  `f32` pyramid. The 12-megapixel 4032×3024 and 4080×3060 frames common on phones
+  are still doubled.
 - **Incremental blur.** Within an octave, level `i` is produced from level `i−1` by a
   Gaussian of `σ_inc(i) = σ · sqrt(k^(2i) − k^(2(i−1)))`, so the absolute blur of
   level `i` is `σ · k^i`. Incremental blur is cheaper and numerically equivalent.
@@ -331,6 +346,7 @@ Together with the Tier 1.5 blur fusion this takes `sfm sift --extract` over thos
 | — | Blur radius factor | Blur kernel half-width in units of σ (`radius = ceil(factor · σ)`, `2·radius + 1` taps) | 2.25 |
 | σ_in | Input blur | Assumed blur of the source image | 0.5 |
 | — | Upsample | Double input before octave 0 | true |
+| — | Upsample below long side | Double only an image whose width and height are both below this; `None` = no limit | `None` (4096 in a new workspace) |
 | C | Contrast threshold | Discard if \|D(x̂)\| < C (matches COLMAP `peak_threshold`) | 0.0067 |
 | r | Edge threshold | Max ratio of principal curvatures | 10 |
 | N_max | Max features | Cap on output, keeping largest-scale (COLMAP `max_num_features`); `None` = unlimited | 8192 |
@@ -885,6 +901,8 @@ times the source pixels, the pyramid keeps `s + 3` Gaussian levels per octave
 in `f32`, and the octaves after the first add a third more, about 128 bytes per
 source pixel, to which the decoded RGB frame adds 3. Guessing high only gives
 up a few concurrent images, while guessing low risks running out of memory.
+The estimate assumes doubling for every image, so for an image whose long side
+turns doubling off it is about four times what the pyramid holds.
 
 It reports a `build_sift_files` phase, a message saying how many images were
 up to date, a status naming each image as it starts, and a count of images

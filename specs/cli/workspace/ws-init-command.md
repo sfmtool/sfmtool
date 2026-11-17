@@ -64,6 +64,14 @@ The COLMAP feature options — `domain_size_pooling`, `max_num_features`,
 (`use_gpu` maps to `FeatureExtractionOptions.use_gpu`; passing `--no-gpu`
 forces CPU SIFT, which is also required to combine with `--affine-shape`).
 
+The `sfmtool` feature options are the Rust SIFT's, with `max_num_features`
+from `--max-features` and `double_image_below_long_side: 4096`, so a new
+workspace does not double an image whose width or height is 4096 or more
+([SIFT § 1. Scale-space pyramid](../../core/features/sift.md#1-scale-space-pyramid)).
+No flag sets it. Editing the key in `.sfm-workspace.json` changes the options
+the next extraction uses, but not the recorded `feature_prefix_dir`, which
+keeps the name of the options `sfm ws init` wrote.
+
 `use_gpu` is the one option excluded from the feature-cache hash
 (`feature_prefix_dir`): GPU vs CPU is a hardware/performance choice, so toggling
 it does not change the cache directory.

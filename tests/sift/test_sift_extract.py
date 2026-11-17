@@ -140,6 +140,51 @@ def test_sift_cli_sfmtool_backend(isolated_seoul_bull_image: Path):
     assert descriptors.shape == (reader.metadata["feature_count"], 128)
 
 
+def test_a_workspace_without_the_doubling_limit_keeps_its_folder_and_files(
+    isolated_seoul_bull_image: Path,
+):
+    """A workspace whose options have no `double_image_below_long_side`, as
+    `sfm ws init` wrote before the key existed, extracts into its recorded
+    folder with its own options, which double every image, and its files stay
+    up to date."""
+    import json
+
+    from sfmtool import init_workspace
+    from sfmtool.fileio import read_image_rgb
+    from sfmtool.sift import extract_sift
+
+    workspace = isolated_seoul_bull_image.parent
+    config = init_workspace(workspace)
+    options = config["feature_options"]
+    del options["double_image_below_long_side"]
+    config["feature_prefix_dir"] = (
+        "features/sift-sfmtool-9017ec0d2c5dfc401da610578062b53d"
+    )
+    (workspace / ".sfm-workspace.json").write_text(json.dumps(config, indent=2))
+
+    command = ["sift", "--extract", str(isolated_seoul_bull_image)]
+    result = CliRunner().invoke(main, command)
+    assert result.exit_code == 0, result.output
+    sift_path = (
+        workspace
+        / config["feature_prefix_dir"]
+        / (isolated_seoul_bull_image.name + ".sift")
+    )
+    with SiftFile(sift_path) as reader:
+        assert reader.feature_tool_metadata["feature_options"] == options
+        positions = reader.read_positions()
+    expected = extract_sift(read_image_rgb(isolated_seoul_bull_image), options)[0]
+    assert np.array_equal(positions, expected)
+    undoubled = extract_sift(
+        read_image_rgb(isolated_seoul_bull_image), dict(options, double_image=False)
+    )[0]
+    assert not np.array_equal(positions, undoubled)
+
+    result = CliRunner().invoke(main, command)
+    assert result.exit_code == 0, result.output
+    assert "New SIFT feature extraction (SFMTOOL): 0 / 1 image(s)" in result.output
+
+
 def test_sfmtool_backend_streams_in_order(isolated_seoul_bull_17_images: list[Path]):
     """The sfmtool backend yields one result per image, in input order.
 

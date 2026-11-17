@@ -38,8 +38,10 @@ def get_default_sfmtool_feature_options(
 ) -> dict:
     """Get default options for the sfmtool SIFT backend.
 
-    The keys mirror the output-defining fields of ``SiftParams::default()`` in
-    ``sfmtool-core`` and are passed straight through to the
+    The keys mirror the output-defining fields of ``SiftParams`` in
+    ``sfmtool-core``, at the values of ``SiftParams::default()`` except
+    ``double_image_below_long_side``, which is 4096 here and absent (no limit)
+    in the Rust default, and are passed straight through to the
     ``sfmtool._sfmtool.sift.extract_sift`` binding. They also feed the feature-cache
     hash, so changing any of them yields a distinct cache directory.
 
@@ -62,6 +64,10 @@ def get_default_sfmtool_feature_options(
         "blur_radius_factor": 2.25,
         "input_sigma": 0.5,
         "double_image": True,
+        # A new workspace stops doubling at a 4096-pixel long side; why is in
+        # specs/core/features/sift.md § "1. Scale-space pyramid". A record
+        # without the key doubles every image, as before the key existed.
+        "double_image_below_long_side": 4096,
         "contrast_threshold": 0.0067,
         "edge_threshold": 10.0,
         "max_num_features": 8192 if max_num_features is None else max_num_features,

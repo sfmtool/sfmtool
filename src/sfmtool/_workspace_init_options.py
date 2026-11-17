@@ -194,6 +194,10 @@ def create_workspace(workspace_dir: Path, **options) -> None:
         click.echo(f"  contrast_threshold: {options_dict.get('contrast_threshold')}")
         click.echo(f"  octave_layers: {options_dict.get('octave_layers')}")
         click.echo(f"  max_num_features: {options_dict.get('max_num_features')}")
+        click.echo(
+            f"  double_image_below_long_side: "
+            f"{options_dict.get('double_image_below_long_side')}"
+        )
     else:
         click.echo(f"  nfeatures: {options_dict.get('nfeatures', 0)}")
     click.echo(f"  image_to_gray: {describe_image_to_gray(options_dict)}")

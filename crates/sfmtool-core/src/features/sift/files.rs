@@ -57,7 +57,8 @@ pub use sfmtool_sift_format::SIFT_ZSTD_LEVEL;
 /// About how many bytes one image in flight holds per source pixel: the decoded
 /// RGB frame plus the `f32` Gaussian pyramid of the doubled image the extraction
 /// keeps through description. Rounded up, since guessing high only gives up a
-/// few concurrent images while guessing low risks running out of memory.
+/// few concurrent images while guessing low risks running out of memory. It
+/// assumes doubling even for an image whose long side turns doubling off.
 const BYTES_PER_SOURCE_PIXEL: u64 = 192;
 
 /// The feature tool [`build_sift_files`] extracts with, as a workspace's
@@ -109,6 +110,9 @@ impl BuildSiftFilesOptions {
             "blur_radius_factor": 2.25,
             "input_sigma": 0.5,
             "double_image": true,
+            // A new workspace stops doubling at a 4096-pixel long side; why is
+            // in `specs/core/features/sift.md` § "1. Scale-space pyramid".
+            "double_image_below_long_side": 4096,
             "contrast_threshold": 0.0067,
             "edge_threshold": 10.0,
             "max_num_features": 8192,

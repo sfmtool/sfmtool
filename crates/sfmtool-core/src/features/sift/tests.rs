@@ -11,6 +11,7 @@ fn test_default_params() {
     assert_eq!(p.blur_radius_factor, 2.25);
     assert_eq!(p.input_sigma, 0.5);
     assert!(p.double_image);
+    assert_eq!(p.double_image_below_long_side, None);
     assert_eq!(p.contrast_threshold, 0.0067);
     assert_eq!(p.edge_threshold, 10.0);
     assert_eq!(p.max_num_features, Some(8192));
@@ -218,6 +219,52 @@ fn seoul_bull_gray(params: &SiftParams) -> GrayImage {
     let dynimg = image::open(path).expect("load test image").to_rgb8();
     let (w, h) = (dynimg.width(), dynimg.height());
     gray_from_rgb(w, h, dynimg.as_raw(), &params.image_to_gray)
+}
+
+/// The keypoints and descriptors of one extraction, for comparing two.
+fn extracted(img: &GrayImage, params: &SiftParams) -> (Vec<SiftKeypoint>, Vec<[u8; 128]>) {
+    let features = extract_sift(img, params);
+    (features.keypoints, features.descriptors.rows().to_vec())
+}
+
+/// An image whose long side reaches `double_image_below_long_side` is
+/// extracted exactly as with `double_image` off, so its keypoints are in source
+/// pixels; one whose long side is below it is extracted exactly as with no
+/// limit.
+#[test]
+fn test_double_image_below_long_side_extracts_as_doubling_off_or_on() {
+    let img = seoul_bull_gray(&SiftParams::default());
+    let long_side = img.width().max(img.height());
+    let with_limit = |limit| SiftParams {
+        double_image_below_long_side: Some(limit),
+        ..SiftParams::default()
+    };
+    let undoubled = extracted(
+        &img,
+        &SiftParams {
+            double_image: false,
+            ..SiftParams::default()
+        },
+    );
+    let doubled = extracted(&img, &SiftParams::default());
+    assert_ne!(undoubled.0.len(), doubled.0.len());
+
+    assert_eq!(extracted(&img, &with_limit(long_side)), undoubled);
+    assert_eq!(extracted(&img, &with_limit(long_side + 1)), doubled);
+
+    // Describing those keypoints at their own geometry reads the same
+    // undoubled pyramid.
+    let queries: Vec<QueryKeypoint> = undoubled
+        .0
+        .iter()
+        .map(|kp| QueryKeypoint {
+            x: kp.x,
+            y: kp.y,
+            affine_shape: kp.affine_shape,
+        })
+        .collect();
+    let described = describe_keypoints(&img, &with_limit(long_side), &queries).unwrap();
+    assert_eq!(described.rows(), undoubled.1.as_slice());
 }
 
 /// Describing a detected keypoint at its own position, shape and size
