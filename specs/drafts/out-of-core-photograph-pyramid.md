@@ -2,17 +2,24 @@
 
 **Status:** Draft
 
-Decided by the user, and followed here: level 0 of a photograph's pyramid is
-always the original image file and is never stored again; the reduced levels of
+Decided by the user, and followed here: full resolution is never stored again
+for an original that can be read by region (a JPEG whose restart markers allow
+it, § "Which originals can be read by region"), whose level 0 is the original
+file itself; for every other out-of-core photograph, full resolution is stored
+once as a tiled re-encode, `<base>-mipmap1.jpg`, and every reader reads level 0
+from that file instead of the original; the reduced levels of
 a large photograph are JPEG files in `.sfm-cache/` at the workspace root, one
 file per level, in directories that mirror the workspace; once a photograph has
 these files every reader, the display and the patch kernels alike, reads its
 reduced levels from them; the unit of display and of region reads is a 512 px
-square; and there is no stopgap fix. Open: the questions at the end, each with
-a recommendation. Building only the part of each level that one patch's render
-can reach is a separate, optional draft,
-[view-region-pyramid.md](view-region-pyramid.md), which this design does not
-depend on.
+square; there is no stopgap fix; and a kernel reading an out-of-core
+photograph reads only the region of each level that one render of one patch
+needs, so its memory grows with the patches it renders and not with the size
+or number of the photographs. That last part is specified in the companion
+draft [view-region-pyramid.md](view-region-pyramid.md), which this design
+requires: without it no kernel can read a large photograph within a bounded
+memory, so it is a numbered step here (§ "Implementation steps"), not a later
+optimization. Open: the questions at the end, each with a recommendation.
 
 Amends [core/camera/photograph-cache.md](../core/camera/photograph-cache.md)
 (the cache gains photograph tiles and an on-disk tier, and its pyramids a depth
@@ -33,16 +40,18 @@ and Image Detail uploads level 0 as a single GPU texture. That works for the
 test data and for 4K video frames, but a 200-megapixel phone photograph
 (16320 x 12240) is 571 MiB as RGB and 762 MiB as a pyramid, and wider than the
 8192 px texture the viewer's GPU device allows, so selecting one crashes the
-viewer. This draft makes the size of a photograph matter to the display only
-in how long its first read takes: the display draws 512 px tiles of the pyramid level that
-matches its zoom, so it never makes a texture larger than a tile and shows the
-original pixels when zoomed in far enough; and the reduced levels of a large
-photograph are computed once, stored as JPEG files beside the workspace, and
-read a tile at a time, so that a session that looks at a photograph decodes only
-what it shows, and every later session and every kernel reads the same levels.
-The kernels still read whole pyramids, so what they hold in memory still grows
-with the size and number of the photographs they read (§ "The caches in
-memory").
+viewer. This draft makes the size of a photograph matter only in how long its
+first read takes: the display draws 512 px tiles of the pyramid level that
+matches its zoom, so it never makes a texture larger than a tile and shows
+full-resolution pixels when zoomed in far enough; and every level of a large
+photograph, level 0 included, can be read a tile at a time, either from the
+original or from JPEG files computed once and stored beside the workspace, so
+that a session that looks at a photograph decodes only what it shows, and every
+later session and every kernel reads the same levels.
+A kernel never holds a whole pyramid of an out-of-core photograph: each render
+reads a view-region pyramid assembled from photograph tiles, and a kernel that
+renders many patches reads each photograph once, in turn, keeping only the
+regions its renders need (§ "The caches in memory").
 
 ## The problem, measured
 
@@ -102,9 +111,10 @@ These are proposed for [GLOSSARY.md](../GLOSSARY.md), each with its reason.
 
 | Word | Means | Not | Why |
 |------|-------|-----|-----|
-| **mipmap** | one JPEG file holding one reduced level of a photograph's pyramid, `<base>-mipmap<f>.jpg` under `.sfm-cache/`, where `f = 2^level` is the factor the level is reduced by; `sfmtool_core::camera::mipmap` | `level file`, `cache file`, `thumbnail`, `pyramid file` | the word the user chose for the files, and the suffix the file names carry; it is the graphics word for a stored reduced copy at a power-of-two factor. *Level* alone is the in-memory level, which for a small photograph has no file |
+| **mipmap** | one JPEG file holding one level of a photograph's pyramid, `<base>-mipmap<f>.jpg` under `.sfm-cache/`, where `f = 2^level` is the factor the level is reduced by: `-mipmap2` and coarser for the reduced levels, and `-mipmap1` for level 0 of a photograph whose original cannot be read by region; `sfmtool_core::camera::mipmap` | `level file`, `cache file`, `thumbnail`, `pyramid file` | the word the user chose for the files, and the suffix the file names carry; it is the graphics word for a stored copy of a level at a power-of-two factor, and factor 1 is the unreduced level. *Level* alone is the in-memory level, which for a small photograph has no file |
+| **region-readable** (an original) | an original JPEG whose layout passes the test in § "Which originals can be read by region", so a rectangle of it decodes to exactly the pixels of the whole decode; its level 0 is the original, and it has no `-mipmap1` | `tiled`, `seekable`, `RST-capable` | names what the test decides, that a region can be read, rather than one ingredient of it |
 | **cache directory** | `.sfm-cache/` at a workspace's root, holding files derived from the workspace's images that can be deleted at any time and rebuilt; today only mipmaps | `cache folder`, `.cache` | it names what is in it (files that are a cache) and where (the workspace's); a name without `sfm` would collide with other tools' caches |
-| **out-of-core photograph** / **in-core photograph** | a photograph whose width or height exceeds `OUT_OF_CORE_LONG_SIDE` (4096) is out of core (with one exception, § "Which photographs are out of core"): its reduced levels come from mipmaps and the display reads it a tile at a time; any other photograph is in core: its whole pyramid is built in memory from one decode, as every pyramid is today | `large image`, `tiled image`, `big photograph` | the tier decides where the levels live, which is what *core* means here; *large* says nothing about what is done differently, and every photograph is shown in tiles |
+| **out-of-core photograph** / **in-core photograph** | a photograph whose width or height exceeds `OUT_OF_CORE_LONG_SIDE` (4096) is out of core (with one exception, § "Which photographs are out of core"): its reduced levels come from mipmaps, its level 0 from the original or a `-mipmap1`, and every reader reads it a region at a time; any other photograph is in core: its whole pyramid is built in memory from one decode, as every pyramid is today | `large image`, `tiled image`, `big photograph` | the tier decides where the levels live, which is what *core* means here; *large* says nothing about what is done differently, and every photograph is shown in tiles |
 | **photograph tile** | a 512 x 512 block of one level of a photograph's pyramid, with a one-pixel border of its neighbours' pixels: the unit the display draws as one texture and that a level is read in; `PhotographTile`, keyed by level, column and row | bare `tile`, `block`, `chunk` | bare *tile* is a view's tile, the patch a kernel renders ([GLOSSARY.md](../GLOSSARY.md) § "Rendering a view's tile"), and Track View draws those beside photographs, so the photograph's blocks need a qualified name |
 | **level builder** | the viewer's worker that writes the missing mipmaps of the open reconstructions' out-of-core photographs, in the order of what is on screen | `mipmap generator`, `preprocessor` | it names what it does, build levels; the panel line says *Building image levels* because a person thinks of an image's levels, not of the files they are kept in |
 
@@ -147,7 +157,9 @@ can share the viewer's cache. The viewer's fixed 6 (`DISPLAY_PYRAMID_LEVELS`,
 which `PhotographCache::new` takes today) goes away. The extra levels cost
 under 0.1% of a pyramid's bytes.
 
-**Mipmap count.** An out-of-core photograph has mipmaps for levels 1 to `K`,
+**Mipmap count.** An out-of-core photograph has a level-0 mipmap,
+`-mipmap1`, exactly when its original is not region-readable (§ "Which
+originals can be read by region"), and mipmaps for levels 1 to `K`,
 where `K` is the first level whose longer side is at most one tile (512 px), or
 the last level whose sides are both at least 1 px if that comes first. Levels
 below `K` are not stored: they are box-filtered in memory from the decoded
@@ -189,6 +201,78 @@ more than level 5:
 These are views that shrink a patch more than 32 to 45 times, which happen on
 small patches seen from far away, in every photograph size including the test
 data. In-core photographs change nowhere else.
+
+## Which originals can be read by region
+
+Level 0 of an out-of-core photograph is read a tile at a time, by every
+reader. An original that allows it is read directly; every other one gets a
+`-mipmap1.jpg`, a tiled re-encode of full resolution, made once, and from then
+on **every reader reads level 0 from `-mipmap1`, never from the original**:
+the display, every kernel, `clipped_share`, the grey reads of *Find Nearby
+Tracks*. This is the user's decision. It replaces any path that would hold a
+whole decode of an original while regions of it are read, so no reader of
+level 0 holds more than tiles.
+
+**The test.** One function, `region_layout(bytes) -> Result<RegionLayout,
+NotRegionReadable>` in `sfmtool_core::camera::mipmap`, reads the original's
+bytes and nothing else (not its name, not its extension, not the machine), so
+every reader, in every process, decides the same way for the same file. An
+original is **region-readable** when all of these hold, checked in order; the
+first that fails is the reason recorded in `NotRegionReadable`:
+
+1. It starts with the JPEG start-of-image marker. (The contents decide, as for
+   the reader: a PNG named `.jpg` is not a JPEG.) Every non-JPEG format fails
+   here: PNG, TIFF, WebP, BMP, OpenEXR and the rest.
+2. Its frame is `SOF0` or `SOF1` (baseline or extended sequential, Huffman
+   coded) with 8-bit samples and a height that is not 0 (a `DNL` marker is
+   not followed). Progressive (`SOF2`), lossless (`SOF3`), arithmetic-coded
+   (`SOF9` and up) and 12-bit frames fail.
+3. It has one or three components. With three, the colour transform is the one
+   `ImageU8::read_rgb` applies as YCbCr (a JFIF file, or an Adobe segment with
+   transform 1, or neither marker); an Adobe transform 0 (stored RGB), CMYK and
+   YCCK fail.
+4. The chroma components are sampled 1 x 1 and the luma `H x V` with `H` and
+   `V` each 1 or 2: 4:4:4, 4:2:2, 4:4:0 or 4:2:0. Any other factors fail.
+5. It has exactly one scan before end-of-image, holding every component in
+   frame order, with spectral selection 0 to 63 and no successive
+   approximation.
+6. A `DRI` segment before the scan sets a restart interval `R > 0`, and `R`
+   divides the MCUs per row, `ceil(width / (8·H))`, so every interval lies in
+   one MCU row and every row starts one. An interval that runs from one row
+   into the next fails, because the two-dimensional small frame below cannot be
+   cut from it.
+7. Indexing the scan finds exactly `rows · (MCUs per row / R)` intervals, each
+   holding at least one byte, separated by `RST0` to `RST7` in sequence modulo
+   8, and the end-of-image marker after the last. A missing, repeated or
+   out-of-order marker, a file cut short, or any other marker inside the scan
+   fails. Bytes after end-of-image are ignored, as the reader ignores them.
+
+The user's 17 photographs pass (4:2:0, `R = 4` of 1020 MCUs per row, 195,075
+intervals each). A camera JPEG without a `DRI` segment, a progressive JPEG and
+every PNG or TIFF fail and get a `-mipmap1`.
+
+The test is part of the definition of each photograph's pixels: changing it
+moves photographs between reading the original and reading `-mipmap1`, which
+changes results, so it changes only with a test showing why. In particular,
+the region decode below is exact only because of how `jpeg-decoder` 0.3.2
+upsamples chroma and where its SIMD colour conversion stops; a decoder change
+that broke the equality test (step 5) would have to change this test to send
+the affected layouts to `-mipmap1`, as a deliberate change of results, rather
+than let region reads drift from whole decodes.
+
+**What still decodes an original whole.** Making a photograph's mipmaps
+(once per set, below); the readers that are not pyramid readers and are
+unchanged by this design: SIFT extraction (`build_sift_file`, the Python
+extractors, COLMAP), the image readings at save, `read_image_rgb` and
+`read_image_rgba` and every command that reads whole arrays through them
+(`undistort`, `to-nerfstudio`, optical flow's `load_gray`, the drawing
+commands, `xform --add-thumbnails`); and the display thumbnail of an in-core
+photograph. No pyramid reader of an out-of-core photograph does. SIFT
+therefore reads the original's exact pixels while the kernels read a
+non-region-readable photograph's level 0 from `-mipmap1`, which differs by
+0.07 to 0.09 grey levels on average for a JPEG original (measured below); the
+keypoints' positions are not affected by a difference that size in any way
+this design relies on.
 
 ## Mipmap files
 
@@ -253,15 +337,59 @@ A mipmap is a baseline JPEG that any program can open:
 | Setting | Value | Why |
 |---------|-------|-----|
 | encoder | the `jpeg-encoder` crate, as `ImageU8::write` uses | one JPEG encoder in the tree |
-| quality | 95 (`MIPMAP_JPEG_QUALITY`, equal to `DEFAULT_JPEG_QUALITY`) | at level 1 of the measured photograph the mean absolute error is 0.49 grey levels at 95 and 0.73 at 90, for 10.8 MB against 7.3 MB; the kernels read these pixels, so the lower error is worth the bytes |
+| quality | the workspace's `mipmap_options` (§ "The workspace setting"): `jpeg_quality` for levels 1 and coarser, `full_resolution_jpeg_quality` for `-mipmap1`; both 95 by default (`DEFAULT_JPEG_QUALITY`) | at level 1 of the measured photograph the mean absolute error is 0.49 grey levels at 95 and 0.73 at 90, for 10.8 MB against 7.3 MB; the kernels read these pixels, so the lower error is worth the bytes. Level 0 is measured separately below |
 | chroma | 4:4:4 (`SamplingFactor::F_1_1`) for colour; one component (`ColorType::Luma`) when every pixel of level 0 has R = G = B | a tile can be decoded exactly only without chroma subsampling (below); 4:2:0 would save 14% (9.2 MB against 10.8 MB at level 1) |
 | restart interval | 16 MCUs (`MIPMAP_RESTART_INTERVAL_MCUS`), 128 px of one MCU row at 4:4:4 | the unit a tile is decoded in (below); 2.4% larger than no restart markers (10.77 MB against 10.52 MB at level 1, quality 95) |
 | Huffman tables | the standard ones, not optimized | the encoder writes optimized tables as one scan per component, which a tile cannot be cut from |
 | metadata | the JFIF APP0 header `jpeg-encoder` always writes, at its default density, and one APP15 segment, the record below (`Encoder::add_app_segment`); no EXIF, no orientation | the record is how a reader knows the file is current |
 
-All five mipmaps of the measured photograph at quality 95 are 15.2 MB together
-(10.77, 3.21, 0.90, 0.25, 0.07 MB), half the original's 30.0 MB; at quality 90
-they are 10.2 MB.
+All five reduced-level mipmaps of the measured photograph at quality 95 are
+15.2 MB together (10.77, 3.21, 0.90, 0.25, 0.07 MB), half the original's
+30.0 MB; at quality 90 they are 10.2 MB.
+
+**Level 0, `-mipmap1`.** Measured on two of the user's photographs, encoding
+the whole decode of the original (16320 x 12240) with the settings above at
+several qualities, and comparing the decoded result with that whole decode
+(mean absolute error over every value, and the share of values off by 3 or
+more):
+
+| Quality | `164358.jpg` (30.0 MB) | `164648.jpg` (39.8 MB) | `164358.jpg` shifted by one pixel |
+|---------|------------------------|------------------------|-----------------------------------|
+| 90 | 24.2 MB, 0.42, 1.4% | 31.9 MB, 0.61, 2.9% | 22.7 MB, 0.47, 1.7% |
+| 95 | 33.0 MB, 0.067, 0.06% | 43.4 MB, 0.094, 0.07% | 33.8 MB, 0.32, 0.66% |
+| 97 | 40.0 MB, 0.088, 0.08% | 53.0 MB, 0.13, 0.11% | 42.9 MB, 0.23, 0.30% |
+| 98 | 42.3 MB, 0.074, 0.04% | 56.1 MB, 0.099, 0.05% | 47.7 MB, 0.19, 0.17% |
+| 100 | 61.6 MB, 0.053, 0.01% | 81.7 MB, 0.067, 0.01% | 72.9 MB, 0.085, 0.02% |
+
+Encoding took 1.4 to 2.1 s and decoding 0.5 to 1.1 s at these qualities. The
+first two columns are the common case for `-mipmap1`, a JPEG original without
+usable restart markers: the re-encode uses the same 8 x 8 block grid as the
+original, whose pixels are already the result of a quantised DCT on that grid,
+so quality 95 re-encodes it to within 0.07 to 0.09 grey levels, closer than 97
+does (the error is not monotonic in quality, since 95's tables fall near the
+original's). The third column crops the decode by one pixel, so the blocks no
+longer line up; it stands in for a source that has never been a JPEG (PNG,
+TIFF), where `-mipmap1` is the first loss. There 98 halves the error of 95
+(0.19 against 0.32) for 41% more bytes. The default is 95 for both keys: it is
+the best quality measured for JPEG originals, and a workspace of PNG or TIFF
+photographs that wants the lower error sets `full_resolution_jpeg_quality` to
+98 (open question 3). The reduced levels keep their own key because their
+trade-off differs: they are box-filtered, never on the original's grid, and
+small.
+
+Disk per 200-megapixel photograph, at the defaults:
+
+| Original | Files | Size, measured photograph |
+|----------|-------|---------------------------|
+| region-readable JPEG (the user's) | `-mipmap2` to `-mipmap32` | 15.2 MB, half the original |
+| JPEG without usable restart markers | `-mipmap1` to `-mipmap32` | 33 to 43 MB + 15 MB = 48 to 58 MB, about 1.5 times the original |
+| PNG or TIFF | `-mipmap1` to `-mipmap32` | about 34 MB + 15 MB = 49 MB at 95, 63 MB at 98 (estimated from the shifted column) |
+
+For the user's 17 photographs that is about 260 MB (15.2 MB measured for one,
+scaled by the others' sizes as an estimate); if they lacked restart markers it
+would be about 0.9 GB. A capture of 500 photographs of 6000 x 4000 without
+restart markers would be about 3 GB (estimated by scaling the 200-megapixel
+figures by pixel count).
 
 **The record** is one APP15 segment: the ASCII bytes `sfmtool-mipmap`, a zero
 byte, then a JSON object in UTF-8, under 1 KB:
@@ -276,6 +404,7 @@ byte, then a JSON object in UTF-8, under 1 KB:
   "source_width": 16320,
   "source_height": 12240,
   "level": 1,
+  "region_readable_original": true,
   "width": 8160,
   "height": 6120,
   "stored_levels": 5,
@@ -287,7 +416,10 @@ byte, then a JSON object in UTF-8, under 1 KB:
 }
 ```
 
-`source` is the relative path with `/` separators. `source_xxh128` is the
+`source` is the relative path with `/` separators. `jpeg_quality` is the
+quality this file was encoded with, from the key that applies to its level.
+`region_readable_original` is the test's answer for the original, so a set
+made when the original had no `-mipmap1` is not mixed with one that has. `source_xxh128` is the
 XXH128 of the original's bytes, the hash a `.sift` file records as
 `image_file_xxh128` (`xxh128_of_file` in
 [sift/files.rs](../../crates/sfmtool-core/src/features/sift/files.rs)). The
@@ -295,17 +427,95 @@ record lives in each file rather than in a manifest beside them, so a file
 cannot be separated from the facts about it, and two writers never edit one
 shared file.
 
+### The workspace setting
+
+The user has decided that the workspace file sets the JPEG quality of its
+mipmaps. `.sfm-workspace.json` gains one block beside `feature_options`,
+named the way the file already names a block of settings for one kind of
+derived file:
+
+```json
+{
+  "version": 2,
+  "feature_tool": "sfmtool",
+  "feature_type": "sift-sfmtool",
+  "feature_options": { "...": "..." },
+  "feature_prefix_dir": "features/sift-sfmtool-…",
+  "mipmap_options": {
+    "jpeg_quality": 95,
+    "full_resolution_jpeg_quality": 95
+  }
+}
+```
+
+- **`jpeg_quality`**: the quality of the reduced-level mipmaps, `-mipmap2` and
+  coarser. **`full_resolution_jpeg_quality`**: the quality of `-mipmap1`. Two
+  keys, because the measurements above put the two trade-offs in different
+  places: the reduced levels are small and box-filtered, and level 0 of a
+  non-JPEG source takes its first loss at this quality. The name says *full
+  resolution* rather than *level 0* because the key is read by a person
+  editing the file, who knows the image's resolution and not the pyramid's
+  numbering.
+- **Values.** Each is a JSON integer from 1 to 100, the range `ImageU8::write`
+  accepts. A value that is not an integer (`95.0`, `"95"`, `true`), is out of
+  range, or a key in the block that is neither of these two is an error that
+  names the file, the key and the value, raised when the workspace is loaded:
+  `RuntimeError` from `load_workspace_config` in Python, and in Rust a
+  `WorkspaceConfigError` from the reader the cache uses. Never a panic. An
+  unknown key is refused so that a misspelt key does not silently leave the
+  default in force.
+- **Absent means the default.** A file with no `mipmap_options`, or a block
+  without one of the keys, reads 95 for what is missing, as a file without
+  `double_image_below_long_side` reads no limit. Every existing workspace
+  therefore works unchanged and needs no new version number.
+- **`sfm ws init`** writes the block with both defaults, so a new workspace
+  records the qualities it was made with even if the defaults change later.
+- **`sfm ws upgrade`** leaves the block as it finds it, absent or present: an
+  absent block already means the defaults, and the command's job is the
+  version 1 to 2 move.
+- **Changing a value** makes every mipmap at the old quality stale by the
+  record's `jpeg_quality` (§ "When a mipmap is current"), and the sets are made
+  again as they are next read. A set is never mixed across qualities.
+- **One reader, in Rust.** The block is parsed and validated by
+  `read_mipmap_options(workspace_root)` beside `find_workspace_for_path` in
+  `sfmtool-archive-io`'s workspace module, and `load_workspace_config` calls
+  it through a binding rather than validating in Python. The photograph cache
+  reads it once per workspace root and again when the file's modification time
+  changes.
+- **No workspace.** A photograph with no workspace root above it uses the
+  defaults, in its in-memory equivalent. A photograph whose workspace file has
+  an invalid block is not read as out of core until the file is fixed: its
+  readers report the file's error (Image Detail says *Workspace file error:*
+  and the message), since reading it at the defaults would make pixels the
+  workspace did not ask for.
+
+`sfm ws init` and the viewer do not write the size threshold or the tile size
+into the block; open question 2 recommends which of them belong there.
+
 ### How the levels are made
 
 From one decode of the original, held in memory:
 
 1. Decode the original with `ImageU8::read_rgb`, the decoder every reader
-   uses; this is level 0 as the kernels see it.
+   uses.
 2. Make levels 1 to `K` by `downsample_2x`, each from the previous **exact**
    level in memory, as `ImageU8Pyramid::from_image` does.
 3. Encode each of levels 1 to `K` on its own, coarsest first, with the settings
-   above.
+   above; then, when the original is not region-readable, encode the decode of
+   step 1 as `-mipmap1`, last, because it is the largest (1.4 to 2.1 s for this
+   photograph) and nothing coarser waits on it.
 4. Write each through a temporary file renamed into place (below).
+
+**The reduced levels come from the exact decode, not from `-mipmap1`.** The
+other way would make level 1 the box filter of what the kernels read at level
+0, but no sampler relies on one level being the box filter of the level above
+(each reads a level by its own coordinates, and `Anisotropic` blends two levels
+that are each a fixed copy), so nothing gains from it. Building from the exact
+decode keeps every reduced level at one JPEG loss rather than two, makes a
+photograph's reduced levels the same whether or not its original is
+region-readable (so a change of the region test, or of
+`full_resolution_jpeg_quality`, rebuilds `-mipmap1` alone), and lets
+`-mipmap1` be encoded last.
 
 The alternative is to make level `l + 1` from the decoded JPEG of level `l`.
 Making each level from the exact level above it is chosen because:
@@ -344,17 +554,21 @@ measures it. The time is the decode (0.79 to 1.7 s), the reduction (0.18 to
 0.37 s) and the encode of all levels at quality 95 (1.2 and 2.8 s in two runs
 under load; about 0.6 s unloaded, estimated from level 1's 0.47 s in the
 quietest run and the other levels' third of its pixels), so about 1.6 s
-unloaded, estimated.
+unloaded, estimated. A photograph that needs a `-mipmap1` adds its encode, 1.4
+to 2.1 s, and 33 to 43 MB of encoded bytes held until written.
 
 ### The in-memory equivalent
 
 When a photograph's mipmaps cannot be written (no workspace root, a `..` in the
 relative path, a collision of both name forms, a read-only cache directory, a
-full disk), a reader still needs the pixels the files would hold, because the
+full disk), a reader still needs the pixels the files would hold, at the
+qualities the workspace sets (the defaults with no workspace), because the
 kernels must not read the exact box-filtered levels for one photograph and the
 JPEG ones for another. It makes the same files in memory instead: steps 1 to 3
-above, then decodes the encoded bytes instead of writing them. With the same
-build these are the pixels the files would have held. It costs the whole making
+above, then keeps the encoded bytes (up to 58 MB for this photograph, with a
+`-mipmap1`, counted against the tile budget) and decodes tiles from them
+instead of writing them. With the same build these are the pixels the files
+would have held. It costs the whole making
 of the set in every session, and a warning in the log says why the files were
 not written. The same path serves the session in which a set is first made: the
 reader decodes the bytes it has just encoded rather than reading back the files
@@ -378,6 +592,24 @@ naming the first that fails otherwise:
    remembers for the session that this original's time differs, so it hashes it
    once per session, not on every read. A different length is stale without a
    hash.
+5. Its `jpeg_quality` equals the workspace's setting for its level, and its
+   `region_readable_original` equals the other files' of the set. A set is
+   never mixed: a file encoded at another quality, or made under another
+   answer, is stale, and the set is made again.
+6. For a photograph whose record says the original is not region-readable,
+   its `-mipmap1` is present and current; for one whose record says it is, no
+   `-mipmap1` is read (one left from an earlier answer is an orphan for
+   `--prune`).
+
+The region test runs when a set is made, on the bytes the build decodes, and
+its answer is kept in the record. A reader takes the answer from the coarsest
+mipmap's record while test 4 holds, since the answer depends only on the
+original's bytes and test 4 is what says they have not changed; it does not
+index the original again at every session's start (20 to 63 ms and the whole
+file read, for this photograph). An original read by region is indexed when
+its first level-0 tile is asked for, and a failure of that index (a file
+changed without its length or time changing, which test 4's hash would not
+have looked at) makes the set stale.
 
 A mipmap that does not read, is cut short, or fails any test is treated as
 missing, and the photograph's whole set is made again: making one level costs
@@ -402,7 +634,8 @@ Two writers of one photograph in one process are one: the cache makes each
 photograph's set once, and every other asker waits for it. Two processes (two
 viewers, or `sfm sift` and a viewer) can make the same set at the same time;
 each writes the same pixels, and the last rename wins. A reader reads a whole
-mipmap into memory when it opens it (at most 10.8 MB for this photograph) and
+mipmap into memory when it opens it (10.8 MB for level 1 of this photograph,
+up to 43 MB for a `-mipmap1`) and
 keeps those bytes, so a session sees one version of each file even when another
 process replaces it, and holds a file open only while it reads it. Rust's
 standard library opens files on Windows with delete sharing, so an open
@@ -516,124 +749,152 @@ conversion, which it then does itself.
 
 ### A region of level 0
 
-Level 0 is the original, in any format the reader reads. Two ways to get a
-region of it:
+Every level-0 region of an out-of-core photograph is a tile decode, from one of
+two files:
 
-- **The whole decode**, always available: `ImageU8::read_rgb`, 0.79 to 1.7 s
-  and 571 MiB for this photograph, cut into tiles. The cache keeps the decoded
-  level 0 as one entry while tiles of it are being asked for (below), or cuts
-  them from the photograph's pyramid entry when one is held, so
-  panning at full resolution does not decode the file again for each tile.
-- **The restart-interval fast path**, for an original JPEG that allows it:
-  decode only the restart intervals the region needs. It must give exactly the
-  pixels of the whole decode, because a panel and a kernel can read the same
-  pixel through either. An original qualifies when it is a sequential Huffman
-  JPEG (baseline or extended, `SOF0` or `SOF1`) of 8-bit samples with one scan
-  holding every component; it has one component, or three with Cb and Cr at
-  1 x 1 and Y at 1 x 1, 2 x 1, 1 x 2 or 2 x 2; it has a restart interval `R`
-  that divides its MCUs per row, so every interval lies within one MCU row and
-  every row starts one; and indexing finds every interval, in order. Every
-  other original (progressive, arithmetic-coded, no restart interval, or one
-  that does not divide the row, PNG, TIFF, 16-bit, any other format) uses the
-  whole decode.
-
-  The small JPEG keeps the original's layout in two dimensions: its columns
-  are the region's MCU columns widened to interval boundaries, its rows are
-  the region's MCU rows, both with a margin, and its intervals are copied in
-  raster order. It is decoded to RGB by the same `jpeg-decoder` path
-  `read_rgb` uses, then cropped. The margins make the cropped pixels equal the
-  whole decode's: one MCU above, below and to the left, for the chroma
-  upsampling's neighbours; and on the right at least one MCU and at least 16
-  px, so the cropped pixels are never among the last 8 to 15 of a line, which
-  the decoder converts with its scalar formula. Where the region reaches the
-  image's right or bottom edge, the small frame's width or height is set to
-  the distance to that edge, so the edge is padded as in the whole decode, and
-  the scalar tail falls on the same pixels in both.
+- **A region-readable original** (§ "Which originals can be read by region")
+  is read directly. The small JPEG keeps the original's layout in two
+  dimensions: its columns are the region's MCU columns widened to interval
+  boundaries, its rows are the region's MCU rows, both with a margin, and its
+  intervals are copied in raster order. It is decoded to RGB by the same
+  `jpeg-decoder` path `read_rgb` uses, then cropped. The margins make the
+  cropped pixels equal the whole decode's: one MCU above, below and to the
+  left, for the chroma upsampling's neighbours; and on the right at least one
+  MCU and at least 16 px, so the cropped pixels are never among the last 8 to
+  15 of a line, which the decoder converts with its scalar formula. Where the
+  region reaches the image's right or bottom edge, the small frame's width or
+  height is set to the distance to that edge, so the edge is padded as in the
+  whole decode, and the scalar tail falls on the same pixels in both.
 
   Measured on the photograph (4:2:0, interval 4 MCUs, one interval per 64 px):
   five 512 px regions, among them the top-left corner and the bottom-right
   corner, 2.6 to 3.5 ms each, reading about 29 KB of the file each, every pixel
   equal to the whole decode. Indexing the original's 195,075 intervals took 20
   to 63 ms.
+- **Every other original** is read from its `-mipmap1`, by the tile decode of
+  a mipmap above, and never from the original.
 
-  This depends on how `jpeg-decoder` 0.3.2 upsamples and where its SIMD
-  conversion stops, so it is guarded by a test that compares every region of
-  a set of small JPEGs with the whole decode (step 9), and the reading spec
-  says the reader may change decoder: the fast path goes with the test, and a
-  decoder that fails it turns the fast path off rather than changing pixels.
+Neither path holds a whole level 0 in memory, so no reader of an out-of-core
+photograph's level 0 holds more than the tiles it asked for.
 
 ## The caches in memory
 
-`PhotographCache` keeps its job and its key, and gains a second kind of entry.
+`PhotographCache` keeps its job and its key, and holds two kinds of entry.
 
-**Pyramids** (the kernels' entries, as today). `get`, `peek`, `peek_state` and
-`get_many` answer with an `Arc<ImageU8Pyramid>` of the photograph's whole
-depth. For an in-core photograph it is built as today. For an out-of-core one,
-level 0 is `read_rgb` of the original, levels 1 to `K` are the mipmaps decoded
-whole through the raw path, and the levels below `K` are `downsample_2x` of
-decoded level `K`. When the mipmaps are missing or stale, the `get` that finds
-it makes them first (and is the asker that writes them; the level builder and
-any other asker wait on the same slot), so a kernel never reads levels that are
-not the files' pixels. Bytes and time are about today's: 762 MiB, and the
-decode plus 0.2 to 0.5 s of mipmap decodes (or the making of the set, once).
-The pyramid budget and its eviction are unchanged.
+**Pyramids, for in-core photographs only.** `get`, `peek`, `peek_state` and
+`get_many` answer an in-core photograph with an `Arc<ImageU8Pyramid>` of its
+whole depth, built as today, under the pyramid budget as today.
 
-**Photograph tiles** (the display's entries, new). Keyed by path, level,
-column and row; each holds the 512 x 512 core and a one-pixel border taken from
-the neighbouring tiles' pixels, or the edge pixel repeated at the image's edge
-(514 x 514 x 3 = 793 KB at most). The border is what lets the display draw
-tiles side by side with linear filtering and no seam. Where a tile comes from:
+**Tiled photographs, for out-of-core ones.** The same calls answer an
+out-of-core photograph with a `TiledPhotograph`: its layout, its coarsest
+levels and a handle to the cache's tiles, and no other pixels. A kernel never
+receives, and the cache never builds, a whole pyramid of an out-of-core
+photograph. The kernels read it through view-region pyramids
+([view-region-pyramid.md](view-region-pyramid.md)): each render computes from
+its warp map the rectangle of each level it reads, and the cache assembles
+those rectangles from photograph tiles. The answer is one type for both tiers,
+`PhotographSource::{Whole(Arc<ImageU8Pyramid>), Tiled(Arc<TiledPhotograph>)}`,
+which is what a kernel's `ProjectedImage` holds, so the kernels' loops do not
+branch on the tier. When an out-of-core photograph's mipmaps are missing or
+stale, `get` and `get_many` hand it to the level builder at the front of its
+queue and wait for it (on the calling thread, not on a rayon worker), so a
+kernel never reads levels that are not the files' pixels.
+
+**Photograph tiles.** Keyed by path, level, column and row; each holds the
+512 x 512 core and a one-pixel border taken from the neighbouring tiles'
+pixels, or the edge pixel repeated at the image's edge (514 x 514 x 3 = 793 KB
+at most). The border is what lets the display draw tiles side by side with
+linear filtering and no seam. Where a tile comes from:
 
 | Photograph | Level | Source |
 |------------|-------|--------|
 | in core | any | cut from the photograph's pyramid entry, which a tile request asks for |
-| out of core | 1 to `K` | the level's mipmap, a tile decode from its bytes, which the entry keeps once read (10.8 MB for level 1 here) |
+| out of core | 1 to `K` | the level's mipmap, a tile decode from its bytes |
 | out of core | below `K` | the levels computed from level `K`, kept whole with the coarsest |
-| out of core | 0 | the fast path from the original's bytes, which the entry keeps while level 0 is read (30 to 40 MB); otherwise the whole decode, kept as one entry |
+| out of core, region-readable original | 0 | a region decode from the original's bytes |
+| out of core, other original | 0 | the `-mipmap1`, a tile decode from its bytes |
 
-The tile entries have a budget of their own, so a kernel's pyramids cannot
-evict what the display is showing, and the other way round: by default a
+A file's bytes (10.8 MB for level 1 here, 30 to 43 MB for an original or a
+`-mipmap1`) and its restart index are an entry too, read once and kept while
+tiles of it are asked for, so a session reads one version of each file.
+
+The tile entries have a budget of their own, so a kernel's in-core pyramids
+cannot evict what the display is showing, and the other way round: by default a
 sixteenth of physical memory clamped to 512 MiB to 4 GiB, overridden by
 `SFM_EXPLORER_TILE_CACHE_MB` as the pyramid budget is by
-`SFM_EXPLORER_PHOTOGRAPH_CACHE_MB`. Eviction is least recently used, with two
-exceptions: the coarsest level of every out-of-core photograph whose mipmaps
+`SFM_EXPLORER_PHOTOGRAPH_CACHE_MB`. Eviction is least recently used, with one
+exception: the coarsest level of every out-of-core photograph whose mipmaps
 have been read, with the levels below it (at most one tile, 0.78 MB for this
-photograph), is evicted only after every other tile entry; and a whole level-0
-decode is evicted before any tile, since it is 571 MiB and is made again by
-the same decode.
+photograph), is evicted only after every other tile entry. A tile or region
+held by a running render stays alive until the render drops it, as a pyramid
+does today.
 
-The contract stays the one the viewer is built on: `peek_tile` never reads or
-waits, `get_tile` decodes or waits, and a remembered failure is not tried again
-until the file's stamp changes. A tile decode uses no rayon, so a tile asked
-for inside a rayon loop cannot deadlock on a slot, for the reason
-[photograph-cache.md](../core/camera/photograph-cache.md) § "Implementation
-notes" gives; making a set of mipmaps uses no rayon either.
+**States, and what a caller on the GUI thread may do.** `peek_tile` and
+`layout` answer without reading or waiting:
 
-**Memory, two cases.**
+```rust
+pub enum PeekedLayout {
+    Known(Arc<PyramidLayout>), // header read, files current: tiles may be asked for
+    Building { coarsest: Option<Arc<PhotographTile>> }, // set missing or stale; queued or being made
+    Unreadable(String),         // the original or the workspace file cannot be read; the message says which
+    NotKnown,                   // not checked yet
+}
+pub enum PeekedTile { Ready(Arc<PhotographTile>), Building, Unreadable, NotReady }
+```
 
-- *17 photographs of 16320 x 12240.* The display holds the visible tiles of one
-  level: at about one texel per screen pixel a 3840 x 2160 panel covers at most
-  9 x 6 = 54 tiles, 43 MB, plus the coarsest resident of each photograph,
-  13 MB, plus the mipmap bytes of what it has opened (15 MB per photograph at
-  most). A kernel that reads all 17 (opening a file whose patch bitmaps must be
-  rendered, `get_many`) holds 17 pyramids of 762 MiB, 12.6 GiB, as it would
-  today; that is what [view-region-pyramid.md](view-region-pyramid.md)
-  removes.
-- *368 frames of 3840 x 2160.* In core, as today: 33.2 MB per pyramid, 12.2 GB
-  for all of them. What the cache keeps is bounded by the pyramid budget, but a
-  `get_many` over every frame holds all of them while its kernel runs. The display cuts its tiles
-  from those pyramids; the coarsest level it keeps of each frame it has shown
-  is 480 x 270, 389 KB, 143 MB for all 368.
+`Known` is answered only once the photograph's files have been checked current
+(or its in-memory equivalent made); `peek_tile` answers `Building` for any tile
+of a photograph that is `Building`. A tile is asked for (`get_tile`) only for a
+photograph that is `Known`, so a tile request is always a decode of a file
+that exists, milliseconds of work, and never waits on a build. If the files
+change under a `Known` photograph, `get_tile` finds the record stale, answers
+`Building` without waiting, and the photograph goes back to `Building`. Making
+a set happens only on the level builder's threads, never on the rayon pool and
+never on the GUI thread.
 
-**Track View's requests.** Until the view-region pyramid lands, Track View
-reads whole pyramids, and with out-of-core photographs the endless
-decode-and-evict loop above is real. The panels' requests made in one frame are
-therefore admitted in the order they are made only while the estimated bytes of
-the pyramids they ask for (from header dimensions, levels counted) fit within
-80% of the pyramid budget, counting the pyramids already in the cache that the
-frame draws from; the photographs that do not fit are not asked for, and their
-tiles show *Not loaded: photograph cache is full* with a hover naming
-`SFM_EXPLORER_PHOTOGRAPH_CACHE_MB`.
+**Memory, under this design.** What a kernel holds for out-of-core photographs
+is the view-region pyramids of the renders it has in flight or keeps for reuse,
+plus the tile budget, whatever the number or size of the photographs. A
+render's region pyramid at patch resolution `R` is about `(R + 4)² x 3` bytes
+at its level and a quarter of that at the next (anisotropic blending), so
+2.9 KB at `R = 24` and 17 KB at `R = 64`; a view compressed `n` times along one
+axis widens it up to `n` times along that axis, at most 16 (estimates from the
+sizes).
+
+| Case | Today (whole pyramids) | This design |
+|------|------------------------|-------------|
+| 17 x 200 MP, *Find matches by geometry* over the views the cull keeps, `R = 24` | up to every photograph, 12.6 GiB for all 17 | under 1 MB of regions, plus at most the tile budget (4 GiB at 64 GB of memory, 512 MiB at 8 GB) |
+| 17 x 200 MP, display patch bitmaps at open, one render per point | 12.6 GiB | 32 renders in flight x 2.9 KB, plus the tile budget |
+| 500 x 200 MP, any of the above | 372 GiB; fails | the same as for 17: regions plus the tile budget |
+| 500 x 6000 x 4000, any of the above | 500 x 96 MB = 48 GB | the same |
+| 17 x 200 MP, Track View on a 17-image track at `R = 64` | 12.6 GiB | 17 x 17 KB of regions, plus the tiles they are cut from, one to four per level read, 13 to 54 MB |
+| 368 x 3840 x 2160 (in core) | 12.2 GB held by a `get_many` over every frame | unchanged: in-core photographs keep whole pyramids |
+
+The cost moves from memory to tile decodes: a render whose tiles are not
+cached costs 2.3 to 6 ms per tile it touches, one to four per level it reads.
+A bulk kernel whose tiles do not fit the budget decodes some tiles more than
+once; it takes its renders in an order that keeps them together (grouped by
+image and position where the kernel's structure allows, § "Bulk kernels" in
+the companion draft), and its phase notes report the tiles decoded and reused,
+so a run that decodes far more than once per tile shows it.
+
+The display holds, for 17 photographs of 200 MP, the visible tiles of one
+level (at about one texel per screen pixel a 3840 x 2160 panel covers at most
+9 x 6 = 54 tiles, 43 MB) plus the coarsest resident of each photograph
+(13 MB). For 368 frames of 3840 x 2160 it cuts tiles from their pyramids and
+keeps the coarsest level of each frame it has shown, 480 x 270, 389 KB, 143 MB
+for all 368.
+
+**Track View's requests.** Track View's photographs that are in core are
+asked for as whole pyramids, and the decode-and-evict loop above is real for
+them when a track's pyramids exceed the pyramid budget. Those requests made in
+one frame are admitted in the order they are made only while the estimated
+bytes of the pyramids they ask for (from header dimensions, levels counted) fit
+within 80% of the pyramid budget, counting the pyramids already in the cache
+that the frame draws from; the photographs that do not fit are not asked for,
+and their tiles show *Not loaded: photograph cache is full* with a hover naming
+`SFM_EXPLORER_PHOTOGRAPH_CACHE_MB`. Out-of-core photographs are asked for as
+tiles and do not count against it.
 
 ## Who makes the mipmaps, and when
 
@@ -642,40 +903,56 @@ tiles show *Not loaded: photograph cache is full* with a hover naming
   opens it. The Rust `build_sift_file` in
   [sift/files.rs](../../crates/sfmtool-core/src/features/sift/files.rs) (the
   viewer's *Build SIFT files* and `pick-images`) makes them from the decode it
-  already holds, adding only the reduction and the encode (about 0.8 s for this
-  photograph, estimated from the parts above, beside an extraction of the
-  same photograph that takes longer than its decode). The Python
-  extractors (`sfmtool` and OpenCV backends decode with `read_image_rgb`; COLMAP
-  decodes inside COLMAP) call one binding per photograph after the `.sift` is
-  written, which decodes the photograph again (0.8 to 1.7 s). The open
-  questions ask whether that binding should take the decoded array instead.
+  already holds, adding only the reduction and the encodes (about 0.8 s for this
+  photograph, estimated from the parts above, plus 1.4 to 2.1 s when it needs a
+  `-mipmap1`). The Python extractors (`sfmtool` and OpenCV backends decode with
+  `read_image_rgb`; COLMAP decodes inside COLMAP) call one binding per
+  photograph after the `.sift` is written, which decodes the photograph again
+  (0.8 to 1.7 s). The open questions ask whether that binding should take the
+  decoded array instead.
 - **`sfm ws mipmaps PATHS…`** makes them explicitly for the photographs under
   the paths (skipping in-core ones and current sets), with `--prune` to delete
   orphans and `--check` to report stale sets without writing. It is the way to
   prepare a workspace whose features came from somewhere else.
 - **The viewer's level builder.** When a reconstruction opens, the builder
-  queues every out-of-core photograph of it whose coarsest mipmap is missing or
-  stale (a `stat` and one small read each), and builds them on threads of its
-  own, not the rayon pool and not the background queues: the selected image
-  first, then the images the Image Browser strip shows, then the rest in image
-  order; a photograph a panel asks for moves to the front. Its concurrency is
-  the number of sets that fit in a quarter of physical memory at the estimated
-  1 GB per 200 megapixels (5 bytes per source pixel), at most half the cores,
-  at least one; `SFM_EXPLORER_LEVEL_BUILDS` overrides it. While it works,
-  the Background Tasks panel's quiet line says *Building image levels:
-  {done} of {total}*. It is not a quiet task: quiet tasks run one at a time in
-  a queue and give way to asked-for tasks, while this work touches no node and
-  must not wait behind a long edit. It stops when the viewer quits; a set it
-  did not finish has no partial files, and is built next time.
-- **A kernel** that needs an out-of-core photograph whose mipmaps are not
-  current makes them itself inside its read phase (the `get` above), counted in
-  the phase's note (*3 of 17 read, 2 levels made*). It does not read the exact
-  levels in the meantime.
-- **A panel** that needs one shows what exists: the coarsest level the moment
-  its file is written (or decoded in memory), finer tiles as the set
-  completes, and *Building image levels…* in place of *Loading image…* until
-  the coarsest exists. The display reads the encoded bytes the builder has just
-  made, so what it shows is the files' pixels from the first frame.
+  queues every out-of-core photograph of it whose files are missing or stale
+  (a `stat`, the original's header and markers for the region test, and one
+  small read each), and builds them on threads of its own, not the rayon pool
+  and not the background queues: the selected image first, then the images the
+  Image Browser strip shows, then the rest in image order. `prioritize(path)`
+  moves a photograph to the front; a panel calls it once per photograph it is
+  waiting for, not once per tile, and a kernel's `get` calls it and waits. Its
+  concurrency is the number of sets that fit in a quarter of physical memory
+  at the estimated 1 GB per 200 megapixels (5 bytes per source pixel), at most
+  half the cores, at least one; `SFM_EXPLORER_LEVEL_BUILDS` overrides it.
+  While it works, the Background Tasks panel's quiet line says *Building image
+  levels: {done} of {total}*. It is not a quiet task: quiet tasks run one at a
+  time in a queue and give way to asked-for tasks, while this work touches no
+  node and must not wait behind a long edit. It stops when the viewer quits; a
+  set it did not finish has no partial files, and is built next time. It
+  publishes each level as it is encoded, so a photograph's coarsest level is
+  drawn before its `-mipmap1` is written.
+- **A kernel** that needs an out-of-core photograph whose files are not
+  current waits for the builder inside its read phase, counted in the phase's
+  note (*3 of 17 read, 2 sets made*). It does not read the exact levels in the
+  meantime.
+
+**Readers on the GUI thread.** None of them makes a set, decodes a whole
+photograph or waits. Each asks `layout` and acts on the state:
+
+| Reader | `NotKnown` | `Building` | `Known` |
+|--------|------------|------------|---------|
+| Image Detail | asks for the layout once (a header read, the region test and a record check, on the rayon pool) and draws *Loading image…* | calls `prioritize` once, draws the coarsest level if it exists and *Building image levels…* otherwise | peeks the visible tiles and asks for the missing ones |
+| Track View's patch tiles, cluster-stage tiles, context and crops; the Track Table's crop column and hover | the same layout request; the cell draws its loading state | `prioritize` once per photograph; the cell says *Building image levels…* | computes the render's regions, peeks their tiles, asks for the missing ones, and renders when all are present |
+| The 3D background | the same layout request; nothing drawn | `prioritize` once; draws the coarsest level if it exists | asks for its level with `get_level`, which assembles it from tiles on the rayon pool, and draws the coarsest until it lands |
+| Display thumbnails | built in the open job, off the GUI thread: a photograph whose coarsest mipmap is not current gets the grey placeholder row | the builder fills the row when it publishes the coarsest level | the row from the coarsest mipmap |
+
+**A budget of 0.** `display_photograph` with `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB=0`
+calls `get` on the GUI thread today, since nothing it decodes would be kept for
+the next frame. That stays for in-core photographs only. An out-of-core
+photograph never takes that path: with a tile budget of 0, a tile decoded on
+the rayon pool is handed to the panel that asked for it, whose texture keeps
+it, and the cache keeps nothing.
 
 ## Display
 
@@ -687,14 +964,16 @@ The panel stops making a texture of the photograph and draws photograph tiles:
   pixel (`effective_scale` times the pixels per point), the level is
   `round(log2(1 / s))` clamped to the photograph's levels, so a displayed
   texel covers between 0.71 and 1.41 screen pixels; at `s ≥ 0.71` it is level
-  0, the original's own pixels. The coordinate transform, the overlays and
+  0, full resolution (the original's pixels, or `-mipmap1`'s). The coordinate transform, the overlays and
   the bench layer keep working in level-0 pixels; level `l`'s tile at column
   `c` and row `r` is drawn over level-0 pixels `c·512·2^l` to
   `(c+1)·512·2^l` (and the same for rows), clipped to `w_l·2^l`, so the
   dropped columns at the right and bottom edge are less than one texel wide.
 - **Which tiles.** Those that intersect the panel's visible rectangle, asked
-  for with `peek_tile`; a miss requests the tile on the rayon pool (it is
-  milliseconds of work) and repaints when it lands.
+  for with `peek_tile` once the photograph's layout is `Known`; a miss
+  requests the tile on the rayon pool (a decode of a current file,
+  milliseconds of work) and repaints when it lands. While the photograph is
+  `Building` the panel requests no tiles (§ "Readers on the GUI thread").
 - **While tiles load.** Each missing tile's area is drawn from the nearest
   coarser level that has its area loaded, ending at the coarsest resident
   level, so the panel is never blank once an image has been shown, and the
@@ -734,10 +1013,9 @@ The background becomes one texture of one level, made off the GUI thread:
   that is level 2 (4080 x 3060) of the 200-megapixel photograph; at 1920 px,
   level 3.
 - **Source.** For an in-core photograph the level from its pyramid; for an
-  out-of-core one the level's mipmap decoded whole, or level 0 from the
-  original when that is what the rule picks. It is asked for through the
-  cache on the rayon pool, as Image Detail's tiles are, and the coarsest level
-  is drawn until it lands. A photograph that cannot be read is remembered as
+  out-of-core one the level assembled from its tiles (`get_level`), once the
+  photograph is `Known`. It is asked for through the cache on the rayon pool,
+  and the coarsest level is drawn until it lands. A photograph that cannot be read is remembered as
   a failure, so it is not read again on every frame.
 - **Texture coordinates.** The mesh's texture coordinates are scaled by
   `width / (w_l·2^l)` and `height / (h_l·2^l)`, so the dropped edge columns do
@@ -773,61 +1051,74 @@ from level 0.
 
 The readers as they are today (all paths under `crates/` unless written
 otherwise), what each reads after this design, and whether its results change.
-"Mipmaps" means levels 1 to `K` of an out-of-core photograph read from its
-mipmaps; "depth" means the change of pyramid depth above.
+"Regions" means that for an out-of-core photograph the reader reads
+view-region pyramids assembled from photograph tiles: levels 1 to `K` from the
+mipmaps, level 0 from the original if it is region-readable and from
+`-mipmap1` otherwise. "Depth" means the change of pyramid depth above. Every
+row marked "regions" must go through the view-region pyramid before
+out-of-core photographs exist (step 7): it is the only way those readers get
+pixels of an out-of-core photograph, since the cache builds no whole pyramid
+of one.
 
 | # | Reader | Today | After | Results change |
 |---|--------|-------|-------|----------------|
 | 1 | Image Detail (`dock.rs` → `display_photograph` → `load_image`) | level 0 as one texture | photograph tiles of the zoom's level; coarsest resident | display only; no texture over 514 px |
 | 2 | 3D camera-view background (`bg_image.rs` `load_bg_texture`, from `app.rs`) | whole RGBA, one texture, decoded on the GUI thread | one level fitting viewport and limit, off the GUI thread, through the cache | display only; the alpha it reads today is not drawn |
-| 3 | Track View's requests (`dock.rs` `cache_bench_track_images`, `cache_selected_point_images`) | a pyramid request per image per frame | the same, admitted within the budget | no |
-| 4–6 | Track View's patch tiles, cluster-stage tiles, hover context (`track_view/body/mod.rs` `ensure_tile`, `ensure_context`; `tile.rs`, `patch.rs` → `render_tile`) | whole pyramid, `peek` | whole pyramid with mipmaps; view-region pyramid in the other draft | mipmaps for out-of-core; depth |
-| 7–9 | Track View's crops, the Track Table's crop column and hover (`patch_pictures/crop.rs`, `track_table_panel.rs` `crop_picture`) | one level of the pyramid | the same level, from mipmaps for out-of-core | mipmaps; depth past a step of 64 |
-| 10 | Track Table reference picks (`track_table_panel/picks.rs` → `render_reference` → `render_view_tile`, `clipped_share`) | `get`, whole pyramid; level 0 inside the outline | the same; level 0 is the original | mipmaps for the tile; `clipped_share` unchanged |
-| 11–13 | Display patch bitmaps at open, conversion to embedded patches, `sfm web-export` (`display_bitmaps.rs`, `state/edits.rs` `convert_to_embedded_patches_job`, `web_export.rs`) | `get_many`, 6 levels; web-export with budget 0 | `get_many`, full depth, mipmaps; web-export makes missing mipmaps in the workspace | mipmaps; depth |
-| 14–18 | The bench's steps and searches, live evaluation, *Find Nearby Tracks*, *Create Track Here*, *Add image to tracks*, *Refine all normals*, *Refit all points* (`bench.rs`, `state/edits.rs` `fetch`, `bench/nearby_tracks.rs`, `bench/track_at_pixel.rs`, `add_image_to_tracks.rs`, `state/edits/refine_all_normals.rs`, `refit_all_points.rs`) | `get_many`, levels per sample or per grid, `clipped_share` on level 0 | the same, mipmaps for out-of-core | mipmaps; depth |
-| 16a | *Find Nearby Tracks*' grey reads (`GreyImages`, `bench/nearby/grey.rs`) | level 0 of each view, blurred grey `f32`, whole | unchanged (level 0 is the original); 800 MB per 200-megapixel view, which the other draft addresses | no |
-| 19 | The viewer's cluster-patches build (`cluster_patches.rs` `read_photographs`) | `read_rgb`, full depth, outside the cache, all at once | `get_many` through the cache, so the CLI and the viewer read the same levels | mipmaps for out-of-core |
+| 3 | Track View's requests (`dock.rs` `cache_bench_track_images`, `cache_selected_point_images`) | a pyramid request per image per frame | in core: the same, admitted within the budget; out of core: the layout, then the tiles each render needs | no |
+| 4–6 | Track View's patch tiles, cluster-stage tiles, hover context (`track_view/body/mod.rs` `ensure_tile`, `ensure_context`; `tile.rs`, `patch.rs` → `render_tile`) | whole pyramid, `peek` | in core: whole pyramid; out of core: regions, from peeked tiles | out of core: the stored levels; depth |
+| 7–9 | Track View's crops, the Track Table's crop column and hover (`patch_pictures/crop.rs`, `track_table_panel.rs` `crop_picture`) | one level of the pyramid | the same level; out of core: the crop's rectangle of it, from peeked tiles | out of core: the stored levels; depth past a step of 64 |
+| 10 | Track Table reference picks (`track_table_panel/picks.rs` → `render_reference` → `render_view_tile`, `clipped_share`) | `get`, whole pyramid; level 0 inside the outline | in core: the same; out of core: regions, and `clipped_share` walks the level-0 tiles under the outline | out of core: the stored levels, and `clipped_share` reads `-mipmap1` for an original that is not region-readable |
+| 11–13 | Display patch bitmaps at open, conversion to embedded patches, `sfm web-export` (`display_bitmaps.rs`, `state/edits.rs` `convert_to_embedded_patches_job`, `web_export.rs`) | `get_many`, 6 levels, every photograph held at once; web-export with budget 0 | `get_many` answers sources; regions for out of core; web-export makes missing mipmaps in the workspace | out of core: the stored levels; depth |
+| 14–18 | The bench's steps and searches, live evaluation, *Find Nearby Tracks*, *Create Track Here*, *Add image to tracks*, *Refine all normals*, *Refit all points* (`bench.rs`, `state/edits.rs` `fetch`, `bench/nearby_tracks.rs`, `bench/track_at_pixel.rs`, `add_image_to_tracks.rs`, `state/edits/refine_all_normals.rs`, `refit_all_points.rs`) | `get_many`, levels per sample or per grid, `clipped_share` on level 0 | regions for out of core, `clipped_share` as in row 10 | out of core: the stored levels; depth |
+| 16a | *Find Nearby Tracks*' grey reads (`GreyImages`, `bench/nearby/grey.rs`) | level 0 of each view, blurred grey `f32`, whole: 800 MB per 200-megapixel view | in core: unchanged; out of core: each read blurs the level-0 region it samples, plus the blur's 4 px | out of core: level 0 from `-mipmap1` for an original that is not region-readable |
+| 19 | The viewer's cluster-patches build (`cluster_patches.rs` `read_photographs`) | `read_rgb`, full depth, outside the cache, all at once | `get_many` through the cache; regions for out of core | out of core: the stored levels |
 | 20 | Display thumbnails when none is stored (`display_thumbnails.rs` → `display_thumbnail_row`) | whole decode, resized to 128 | in core unchanged; out of core from the coarsest mipmap | display only |
-| 21 | `.sift` building (`features/sift/files.rs` `build_sift_file`) | whole decode | whole decode, then the mipmaps from it | no |
-| 22 | Image readings at save (`reconstruction/image_readings.rs`) | whole decode | unchanged | no |
+| 21 | `.sift` building (`features/sift/files.rs` `build_sift_file`) | whole decode | whole decode of the original, then the mipmaps from it | no |
+| 22 | Image readings at save (`reconstruction/image_readings.rs`) | whole decode | unchanged, the original | no |
 | P1 | `sfmtool.fileio.read_image_rgb` / `read_image_rgba` (`sfmtool-py/src/fileio/image.rs`) | whole decode | unchanged: they read files, not pyramids | no |
-| P2 | `ImagePyramidSet(recon, images)` and the kernels' `images` lists (`sfmtool-py/src/patches/views.rs`) | exact pyramids of the arrays passed | unchanged; a new `ImagePyramidSet.read(recon)` reads by path through the core cache | no for arrays; mipmaps through `read` |
-| P3 | `embed-patches`, the strip montages, the `xform` steps that read photographs (`src/sfmtool/_embed_patches.py`, `src/sfmtool/strips/`, `src/sfmtool/xform/_images.py`) | `read_workspace_image` arrays into the kernels | `ImagePyramidSet.read(recon)` | mipmaps for out-of-core, so they match the viewer |
-| P4 | `sfm cluster-patches` (`src/sfmtool/_cluster_patches.py`) | `read_image_rgb` arrays, full depth | through the same reader as #19 | mipmaps for out-of-core |
+| P2 | `ImagePyramidSet(recon, images)` and the kernels' `images` lists (`sfmtool-py/src/patches/views.rs`) | exact pyramids of the arrays passed | unchanged; a new `ImagePyramidSet.read(recon)` reads by path through the core cache, as sources | no for arrays; through `read`, as rows 11–18 |
+| P3 | `embed-patches`, the strip montages, the `xform` steps that read photographs (`src/sfmtool/_embed_patches.py`, `src/sfmtool/strips/`, `src/sfmtool/xform/_images.py`) | `read_workspace_image` arrays into the kernels | `ImagePyramidSet.read(recon)` | out of core: the stored levels, so they match the viewer |
+| P4 | `sfm cluster-patches` (`src/sfmtool/_cluster_patches.py`) | `read_image_rgb` arrays, full depth | through the same reader as #19 | out of core: the stored levels |
 | P5 | The view-tile binding (`sfmtool-py/src/patches/view_tile.rs`) | an exact pyramid of the array passed | unchanged | no |
-| P6 | Optical flow's pyramids (`sfmtool-py/src/flow/warp.rs`) | a grey pyramid of its own from an array | unchanged; flow reads level 0 | no |
+| P6 | Optical flow's pyramids (`sfmtool-py/src/flow/warp.rs`) | a grey pyramid of its own from an array | unchanged; flow reads level 0 from its array | no |
 
 The measurement harnesses under `scripts/` that build an `ImagePyramidSet` from
 `read_image_rgb` arrays (`track_at_pixel/context.py`,
 `add_image_to_tracks/harness.py` and `misses.py`) are P2 callers: they read
-exact pyramids until they move to `ImagePyramidSet.read`, which step 8 does.
+exact pyramids until they move to `ImagePyramidSet.read`, which step 9 does.
+A P2 caller that passes arrays of an out-of-core photograph holds them whole,
+as today; that is the caller's choice of input, and `read` is the bounded way.
 
 Every reader that reads a pyramid of an out-of-core photograph now reads the
 same levels whether it runs in the viewer or on the command line, and in any
-session; and a reader of level 0 reads the original's pixels exactly as before.
+session. A reader of level 0 reads the original's own pixels when the original
+is region-readable, and `-mipmap1`'s otherwise.
 
 ## Standards
 
 - **Progress.** `build_mipmaps` takes `&Progress`, counts levels and polls for
   cancellation between the decode, the reduction and each encode; a cancelled
   build writes nothing further and leaves no partial file. `PhotographCache::get`
-  gains a `&Progress` parameter, since a `get` can now make a set (2 s or more)
-  and already can take over a second to decode a 200-megapixel photograph;
-  callers with nothing to report pass `&Progress::none()`. `get_many` passes its
-  own down. `sfm ws mipmaps` reports through a `ProgressCounter`.
+  gains a `&Progress` parameter, since a `get` can now wait for a set to be
+  made (2 to 4 s) and already can take over a second to decode a large in-core
+  photograph; callers with nothing to report pass `&Progress::none()`.
+  `get_many` passes its own down. `sfm ws mipmaps` reports through a
+  `ProgressCounter`.
 - **No panics on caller input.** A mipmap that is missing, cut short, damaged,
-  or recording another photograph is stale and is made again; an original
-  that cannot be read is an `Unreadable` answer, as today. A photograph whose
-  level 1 would not fit a JPEG frame is in core by the tier rule, so
-  `MipmapError::TooLarge` is only the encoder's own refusal, reported rather
-  than unwrapped. The tile decoder's slicing is checked against the index,
-  never trusted from the file.
+  encoded at another quality, or recording another photograph is stale and is
+  made again; an original that cannot be read is an `Unreadable` answer, as
+  today; a workspace file with an invalid `mipmap_options` is an error naming
+  the key. A photograph whose level 1 would not fit a JPEG frame is in core by
+  the tier rule, so `MipmapError::TooLarge` is only the encoder's own refusal,
+  reported rather than unwrapped. The region test and the tile decoder's
+  slicing are checked against the index, never trusted from the file.
 - **Points at infinity.** Unaffected: the design changes where pixels come
-  from, not any geometry, and every projection that picks a region already
-  handles `w = 0` points.
-- **Logic in Rust.** The naming rule, the record, the staleness test, the
-  making and the reading are Rust in `sfmtool-core`; Python calls bindings.
+  from, not any geometry, and the region of a render is computed from its warp
+  map, whose invalid texels (a point at infinity behind the camera, a ray that
+  does not reach the patch) take no sample and so add nothing to the region.
+- **Logic in Rust.** The naming rule, the record, the region test, the
+  staleness test, the workspace block's validation, the making and the reading
+  are Rust in `sfmtool-core` and `sfmtool-archive-io`; Python calls bindings.
 - **Settings structs.** `MipmapOptions` and `PhotographCacheOptions`.
 - **Test cost.** Every test runs on synthetic images of a few hundred pixels,
   with `MipmapOptions` setting a threshold and a tile size small enough that
@@ -837,12 +1128,12 @@ session; and a reader of level 0 reads the original's pixels exactly as before.
 ## Interface
 
 New, in `crates/sfmtool-core/src/camera/mipmap.rs` (with submodules for the
-record and the tile decode), exported from `sfmtool_core::camera`:
+record, the region test and the tile decode), exported from
+`sfmtool_core::camera`:
 
 ```rust
 pub const OUT_OF_CORE_LONG_SIDE: u32 = 4096;
 pub const PHOTOGRAPH_TILE_SIZE: u32 = 512;
-pub const MIPMAP_JPEG_QUALITY: u8 = 95;
 pub const MIPMAP_RESTART_INTERVAL_MCUS: u16 = 16;
 pub const CACHE_DIR_NAME: &str = ".sfm-cache";
 
@@ -852,6 +1143,13 @@ pub const CACHE_DIR_NAME: &str = ".sfm-cache";
 pub struct MipmapOptions {
     pub out_of_core_long_side: u32,
     pub tile_size: u32,
+}
+
+/// A workspace's `mipmap_options` block, defaults filled in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MipmapQualities {
+    pub jpeg_quality: u8,                 // levels 1 and coarser; default 95
+    pub full_resolution_jpeg_quality: u8, // `-mipmap1`; default 95
 }
 
 /// Every level's size for a photograph's size, and how many are stored.
@@ -865,14 +1163,19 @@ impl PyramidLayout {
     pub fn tiles(&self, level: usize) -> (u32, u32);
 }
 
+/// The region test of § "Which originals can be read by region": the layout
+/// a region decode needs, or the first rule the bytes fail.
+pub fn region_layout(bytes: &[u8]) -> Result<RegionLayout, NotRegionReadable>;
+
 /// Where a photograph's mipmaps are, or why it has none.
 pub enum MipmapLocation {
     Files { root: PathBuf, relative: String, paths: Vec<PathBuf> },
     InMemory(NoFilesReason), // no workspace, `..`, both name forms taken
 }
-pub fn mipmap_location(photograph: &Path, layout: &PyramidLayout) -> MipmapLocation;
+pub fn mipmap_location(photograph: &Path, layout: &PyramidLayout, level0_file: bool) -> MipmapLocation;
 
-/// Make a photograph's mipmaps from one decode, writing what can be written.
+/// Make a photograph's mipmaps from one decode, writing what can be written:
+/// levels 1 to `K`, and `-mipmap1` when the original is not region-readable.
 /// `decoded` is `ImageU8::read_rgb(photograph)` when the caller already holds
 /// it (`build_sift_file` does), and is decoded here otherwise. Returns the
 /// encoded bytes of every stored level, which the caller decodes rather than
@@ -880,6 +1183,7 @@ pub fn mipmap_location(photograph: &Path, layout: &PyramidLayout) -> MipmapLocat
 pub fn build_mipmaps(
     photograph: &Path,
     decoded: Option<&ImageU8>,
+    qualities: &MipmapQualities,
     options: &MipmapOptions,
     progress: &Progress<'_>,
 ) -> Result<BuiltMipmaps, MipmapError>;
@@ -896,40 +1200,62 @@ impl MipmapFile {
     pub fn decode_region(&self, x0: u32, y0: u32, x1: u32, y1: u32) -> Result<ImageU8, MipmapError>;
 }
 
-/// The restart-interval fast path for an original JPEG, or `None` when the
-/// file does not qualify.
+/// Region reads of a region-readable original.
 pub struct OriginalRegions { /* … */ }
 impl OriginalRegions {
-    pub fn open(path: &Path) -> Result<Option<Self>, image::ImageError>;
+    /// `Err` names the rule of the region test the file fails.
+    pub fn from_bytes(bytes: Arc<[u8]>) -> Result<Self, NotRegionReadable>;
     /// Equal to the same pixels of `ImageU8::read_rgb(path)`.
     pub fn decode_region(&self, x0: u32, y0: u32, x1: u32, y1: u32) -> Result<ImageU8, image::ImageError>;
 }
 
 pub enum MipmapError { Io { path: PathBuf, error: std::io::Error }, Stale { path: PathBuf, why: String },
-    Source(image::ImageError), TooLarge { width: u32, height: u32 }, Encode(String), Cancelled }
+    Source(image::ImageError), Workspace(WorkspaceConfigError), TooLarge { width: u32, height: u32 },
+    Encode(String), Cancelled }
+```
+
+In `sfmtool-archive-io`'s workspace module, beside `find_workspace_for_path`:
+
+```rust
+/// The `mipmap_options` block of `<root>/.sfm-workspace.json`, defaults for
+/// what is absent; an error naming the file, the key and the value otherwise.
+pub fn read_mipmap_options(root: &Path) -> Result<MipmapQualities, WorkspaceConfigError>;
 ```
 
 Changed, in [photograph_cache.rs](../../crates/sfmtool-core/src/camera/photograph_cache.rs):
 
 ```rust
 pub struct PhotographCacheOptions {
-    pub budget_bytes: u64,          // default_budget_bytes()
-    pub tile_budget_bytes: u64,     // default_tile_budget_bytes()
+    pub budget_bytes: u64,          // default_budget_bytes(): in-core pyramids
+    pub tile_budget_bytes: u64,     // default_tile_budget_bytes(): tiles, file bytes, coarsest levels
     pub mipmaps: MipmapOptions,
+}
+
+/// What a kernel reads a photograph through.
+pub enum PhotographSource {
+    Whole(Arc<ImageU8Pyramid>),   // in core
+    Tiled(Arc<TiledPhotograph>),  // out of core: read by view-region pyramids
 }
 
 impl PhotographCache {
     pub fn new(options: PhotographCacheOptions) -> Self; // no `levels`: depth is by size
-    pub fn get(&self, path: &Path, progress: &Progress<'_>) -> Option<Arc<ImageU8Pyramid>>;
-    // peek, peek_state, get_many, insert, forget, clear, stats as today
+    pub fn get(&self, path: &Path, progress: &Progress<'_>) -> Option<PhotographSource>;
+    pub fn get_many(&self, paths: &[&Path], progress: &Progress<'_>)
+        -> Result<(Vec<Option<PhotographSource>>, GetManyTally), Cancelled>;
+    // peek and peek_state answer `PhotographSource` too; insert, forget, clear, stats as today
 
-    /// The photograph's level sizes, once its header has been read.
     pub fn layout(&self, path: &Path) -> PeekedLayout;
+    pub fn request_layout(&self, path: &Path);   // a header read, the region test, a record check
     pub fn peek_tile(&self, path: &Path, key: TileKey) -> PeekedTile;
-    pub fn get_tile(&self, path: &Path, key: TileKey, progress: &Progress<'_>) -> Option<Arc<PhotographTile>>;
-    /// One level whole, for the 3D background: from the pyramid entry in core,
-    /// the mipmap or the original out of core.
-    pub fn get_level(&self, path: &Path, level: usize, progress: &Progress<'_>) -> Option<Arc<ImageU8>>;
+    /// Only for a photograph whose layout is `Known`; answers `Building`
+    /// rather than waiting when its files have gone stale.
+    pub fn get_tile(&self, path: &Path, key: TileKey, progress: &Progress<'_>) -> Result<Arc<PhotographTile>, TileError>;
+    /// A view-region pyramid of an out-of-core photograph, assembled from
+    /// tiles ([view-region-pyramid.md](view-region-pyramid.md)).
+    pub fn view_region_pyramid(&self, path: &Path, regions: &LevelRegions, progress: &Progress<'_>)
+        -> Result<ImageU8Pyramid, TileError>;
+    /// One level whole, for the 3D background, assembled from tiles out of core.
+    pub fn get_level(&self, path: &Path, level: usize, progress: &Progress<'_>) -> Result<Arc<ImageU8>, TileError>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -944,37 +1270,46 @@ pub struct PhotographTile {
     pub pixels: ImageU8,
 }
 
-pub enum PeekedTile { Ready(Arc<PhotographTile>), Unreadable, NotReady }
-pub enum PeekedLayout { Known(Arc<PyramidLayout>), Unreadable, NotKnown }
+// `PeekedLayout` and `PeekedTile` as in § "The caches in memory".
+pub enum TileError { Building, Unreadable(String), Cancelled }
 ```
 
 `DISPLAY_PYRAMID_LEVELS` and the viewer's `state::PYRAMID_LEVELS` are removed.
-`render_display_patch_bitmaps` documents that it reads pyramids of the cache's
-depth.
+`ProjectedImage`'s `pyramid` field becomes a `PhotographSource`.
 
 The viewer's side, in
 [photograph_requests.rs](../../crates/sfm-explorer/src/state/photograph_requests.rs):
-`display_photograph` keeps its contract; a `display_tile` beside it peeks a
-tile and starts one `get_tile` on a miss; and the admission rule for pyramid
-requests lives there. The level builder is `state/level_builder.rs`.
+`display_photograph` keeps its contract for in-core photographs; a
+`display_tile` beside it acts on the layout state as § "Readers on the GUI
+thread" says, starting one `get_tile` per missing tile of a `Known`
+photograph; and the admission rule for in-core pyramid requests lives there.
+The level builder is `state/level_builder.rs`, with `prioritize(path)`.
 
 ## Python bindings
 
 - `sfmtool.fileio` gains nothing: mipmaps are not a format a caller reads.
 - `ImagePyramidSet.read(views_or_recon, workspace_dir=None, progress=None)`:
-  the set of pyramids of the reconstruction's photographs, read by path
-  through a `PhotographCache` of budget 0, so each is read the way the viewer
-  reads it, making missing mipmaps on the way. The `images` argument of the
-  constructor and of every kernel keeps meaning exact pyramids of the arrays
-  given.
+  the set of the reconstruction's photographs read by path through a
+  `PhotographCache` of pyramid budget 0, as sources: whole pyramids for
+  in-core photographs, tiled ones read by view-region pyramids for
+  out-of-core ones, so each is read the way the viewer reads it, making missing
+  mipmaps on the way, and the set holds no whole pyramid of an out-of-core
+  photograph. The `images` argument of the constructor and of every kernel
+  keeps meaning exact pyramids of the arrays given.
 - `sfmtool.workspace.build_mipmaps(paths, progress=None)`: makes the mipmaps of
   the out-of-core photographs among `paths`, the binding behind
   `sfm ws mipmaps` and the Python SIFT extractors' call.
+- `load_workspace_config` validates `mipmap_options` through a binding over
+  `read_mipmap_options`.
 
 ## Implementation steps
 
 Each is one pull request, useful on its own, with its tests. Steps 1 to 3 end
-the crash with in-memory pyramids, before any file is written.
+the crash with in-memory pyramids, before any file is written. Step 7 is where
+photographs become out of core, and every reader marked "regions" in § "Every
+reader of photograph pixels" moves to view-region pyramids in it or before
+it, since after it the cache builds no whole pyramid of an out-of-core
+photograph. Steps 4 to 6 build what it needs without changing any reader.
 
 1. **Depth by size.** Pyramids of `full_levels` depth everywhere;
    `PhotographCache::new` loses `levels`; `DISPLAY_PYRAMID_LEVELS` goes.
@@ -984,7 +1319,7 @@ the crash with in-memory pyramids, before any file is written.
 2. **Image Detail draws photograph tiles** cut from the in-memory pyramid,
    with the level rule, the coarser fallback, the per-frame upload cap and the
    texture limit of 256. This alone ends the crash in Image Detail for every
-   photograph, though a 200-megapixel one is still read whole until step 6.
+   photograph, though a 200-megapixel one is still read whole until step 7.
    Tests (headless, the panel's lib tests): the level for a set of
    scales; the tiles a view asks for; a 9000 x 16 synthetic photograph never makes
    a texture over 514 px; the fallback draws the coarser level where a tile is
@@ -994,51 +1329,65 @@ the crash with in-memory pyramids, before any file is written.
    camera view. Tests: the level rule; the texture coordinates' scale for odd
    sizes; an unreadable photograph is read once.
 4. **Mipmap files.** Image discovery skips `.sfm-cache` (`expand_paths`, the
-   camrig and rig-config finders) with a test each; then `PyramidLayout`,
-   `mipmap_location`, the record, `build_mipmaps`, `MipmapFile::open` and
-   `decode`, the staleness test, the writers' rules, `.gitignore` and
-   `CACHEDIR.TAG`. Tests on 300 x 200 synthetic photographs with a threshold of
-   64 and a tile of 32, in a temporary workspace: the name for `a.b.png`, a
-   name with no extension, `x.jpg` beside `x.png` (second form), both forms
-   taken (in memory), a `..` name and no workspace (in memory); two builds give
-   the same bytes; each staleness case (length, time with equal hash, time with
-   another hash, another `source`, cut short, no record) and that a stale set
-   is made again; a read-only cache directory gives the in-memory equivalent
-   with the same pixels; two threads and two processes building at once; the
-   peak memory of one build, measured.
-5. **Tile decode of a mipmap**: the restart index and `decode_region`. Tests:
-   every tile of several synthetic levels with odd sizes and a restart
-   interval of 2 and 16 MCUs, including the short last interval, equals the
-   same pixels of `decode`; a grey mipmap; a damaged interval is `Stale`.
-6. **The out-of-core tier in the cache**: pyramid entries from mipmaps,
-   photograph tiles from mipmaps and level 0, the tile budget and its two
-   eviction exceptions, `get` with `&Progress`, `get_level`, and the request
-   admission rule in the viewer. Image Detail and the background read
-   out-of-core photographs through it. Tests: with the small threshold, a
-   `get` on a photograph with no mipmaps writes them and returns their pixels;
-   a second cache reads them without decoding the original's levels; tiles
-   equal the pyramid's levels; the tile budget evicts tiles before the coarsest
-   residents; admission refuses what does not fit, with a fake budget.
-7. **Makers**: `sfm sift` and `build_sift_file`, the viewer's level builder
-   (priority, memory-sized concurrency, the panel line), `sfm ws mipmaps` with
-   `--prune` and `--check`, and the thumbnail from the coarsest mipmap. Tests:
-   `sfm sift` on a small-threshold synthetic workspace writes the files;
-   the builder's order follows the selection; `--prune` deletes an orphan and
-   keeps a current set; `--check` writes nothing.
-8. **Readers that must agree with the viewer**: the viewer's cluster-patches
-   build through the cache, `ImagePyramidSet.read`, and `embed-patches`, the
-   strips, the `xform` steps, `sfm cluster-patches` and the `scripts/`
-   harnesses on it. Tests: with the
-   small threshold, the CLI and the viewer's code give the same pyramids for
-   the same photograph; in-core results unchanged.
-9. **The level-0 fast path**: `OriginalRegions`. Tests: JPEGs written for the
-   test by `jpeg-encoder` with restart intervals at 4:2:0, 4:4:4 and grey, of
-   odd sizes, every region (including edges and corners) equals the same
-   pixels of `read_rgb`; a progressive file, one with no restart interval, and
-   one whose interval does not divide the row are refused.
-
-Then [view-region-pyramid.md](view-region-pyramid.md), if the memory of whole
-pyramids for the kernels matters on the machines in use.
+   camrig and rig-config finders, `match_pattern_and_padding_misses`, the
+   named-image-list walk) with a test each; then `PyramidLayout`, the region
+   test, `mipmap_location`, the record, `read_mipmap_options` and its
+   validation with `sfm ws init` writing the block, `build_mipmaps` with
+   `-mipmap1`, `MipmapFile::open` and `decode`, the staleness test, the
+   writers' rules, `.gitignore` and `CACHEDIR.TAG`. Tests on 300 x 200
+   synthetic photographs with a threshold of 64 and a tile of 32, in a
+   temporary workspace: the name for `a.b.png`, a name with no extension,
+   `x.jpg` beside `x.png` (second form), both forms taken (in memory), a `..`
+   name and no workspace (in memory, at the default qualities); two builds give
+   the same bytes; a region-readable JPEG gets no `-mipmap1` and a PNG,
+   a progressive JPEG and a JPEG without `DRI` do; each staleness case (length,
+   time with equal hash, time with another hash, another `source`, another
+   quality, another region answer, cut short, no record) and that a stale set
+   is made again; each invalid `mipmap_options` (a float, a string, 0, 101, an
+   unknown key) is an error naming the key; a read-only cache directory gives
+   the in-memory equivalent with the same pixels; two threads and two
+   processes building at once; the peak memory of one build, measured.
+5. **Tile and region decodes**: the restart index, `MipmapFile::decode_region`
+   and `OriginalRegions`. Tests: every tile of several synthetic levels with
+   odd sizes and a restart interval of 2 and 16 MCUs, including the short last
+   interval, equals the same pixels of `decode`; a grey mipmap; a damaged
+   interval is `Stale`; for JPEGs written by `jpeg-encoder` with restart
+   intervals at 4:2:0, 4:4:4 and grey, of odd sizes, every region (including
+   edges and corners) equals the same pixels of `read_rgb`; each rule of the
+   region test refuses a file made to break it alone.
+6. **View-region pyramids** ([view-region-pyramid.md](view-region-pyramid.md)
+   steps 1 and 2): regions in `ImageU8Pyramid` and every sampler,
+   `required_regions`, `PhotographSource`, `clipped_share` over tiles, the grey
+   reads by region, and the assembly from tiles, exercised on in-core
+   photographs cut into tiles in memory. No reader changes yet. Tests: the
+   companion draft's equality tests.
+7. **The out-of-core tier**: the tiled entries, the tile budget and its
+   eviction, the layout states, `get` and `get_many` answering sources and
+   waiting on the level builder (with `prioritize`, without the rest of the
+   builder), `get_level`, and every "regions" reader of the table moved to
+   view-region pyramids in this step: Track View and the Track Table on peeked
+   tiles, the reference picks, the display bitmaps, the conversion to embedded
+   patches, the web export, the bench's steps and searches, the nearby-track
+   grey reads, *Refine all normals*, *Refit all points*, the cluster-patches
+   build; and the in-core admission rule. Tests: with the small threshold, a
+   `get` on a photograph with no mipmaps waits for them and the kernel's
+   result equals the same kernel on whole pyramids of the stored levels; a
+   `get_many` over 20 out-of-core photographs holds no pyramid (the cache's
+   stats show only tiles, within a small tile budget); no GUI-thread reader
+   requests a tile while its photograph is `Building`; a tile budget smaller
+   than one photograph's level 0 still completes a bulk kernel.
+8. **Makers**: `sfm sift` and `build_sift_file`, the rest of the viewer's
+   level builder (the open-time queue, memory-sized concurrency, the panel
+   line, publishing the coarsest first), `sfm ws mipmaps` with `--prune` and
+   `--check`, and the thumbnail from the coarsest mipmap. Tests: `sfm sift` on a
+   small-threshold synthetic workspace writes the files; the builder's order
+   follows the selection; `--prune` deletes an orphan and keeps a current set;
+   `--check` writes nothing.
+9. **Readers that must agree with the viewer**: `ImagePyramidSet.read`, and
+   `embed-patches`, the strips, the `xform` steps, `sfm cluster-patches` and
+   the `scripts/` harnesses on it. Tests: with the small threshold, the CLI and
+   the viewer's code give the same results for the same photograph; in-core
+   results unchanged.
 
 ## Measurements
 
@@ -1050,8 +1399,11 @@ at quality 90 and 95, 4:4:4 and 4:2:0, with restart intervals of 0, 8, 16 and
 64 MCUs, decodes each back (time, mean absolute error against the exact level),
 encodes every level at both qualities, indexes the restart markers of the
 original and of level 1, and decodes 512 px regions as above, comparing each
-with the whole decode pixel by pixel. Times are wall clock of one run each,
-repeated two to four times; the ranges in this draft are over those runs.
+with the whole decode pixel by pixel. For `-mipmap1` it encodes the whole
+decode at qualities 90, 95, 97, 98 and 100 (4:4:4, interval 16 MCUs), as it is
+and cropped by one pixel on the top and left, and compares the decode with the
+source. Times are wall clock of one run each, repeated two to four times; the
+ranges in this draft are over those runs.
 
 ## Open questions
 
@@ -1062,13 +1414,32 @@ repeated two to four times; the ranges in this draft are over those runs.
    a `.sift` is named (`IMG_0001.JPG.sift`). Recommendation: (b), because a
    name that is one-to-one removes a rule, a fallback and an order dependence,
    at the cost of a doubled extension in the name.
-2. **The threshold.** Options: a long side over 4096 (as designed), over 8192
-   (only photographs no texture can hold), a pixel count (say 16 MP), or every
-   photograph. Recommendation: 4096, for the reasons above; every photograph
-   would write files for the test data and make every small capture pay for an
-   encode with nothing to gain.
-3. **Quality.** 95 (as designed: 15.2 MB per 200-megapixel photograph, 0.49 grey
-   levels of error at level 1) or 90 (10.2 MB, 0.73). Recommendation: 95.
+2. **What else goes in `mipmap_options`.** The size threshold (4096) and the
+   tile size (512) are constants in this design. Options for each: a constant,
+   or a key in the block that `sfm ws init` records. Recommendation: put the
+   threshold in the block as `out_of_core_long_side`, recorded at 4096 by
+   `sfm ws init` and read as 4096 when absent, because it decides which
+   photographs have files and which pixels the kernels read, so a workspace
+   should keep its own value if the default ever changes, as it keeps its
+   feature options; a change of it moves photographs between tiers, and the
+   stale-by-record rule needs a record field for it (`out_of_core_long_side`)
+   so files made under another threshold are not read. Keep the tile size a
+   constant: it decides only how pixels are cut for memory and textures, never
+   their values (a tile decode equals the whole decode), so no result depends
+   on it and nothing on disk records it. The restart interval likewise stays a
+   constant, since any value reads the same pixels. Whether the threshold
+   itself should be 4096 (as designed), 8192, a pixel count, or every
+   photograph: 4096, for the reasons in § "Which photographs are out of core".
+3. **Qualities.** Both keys default to 95. Options for
+   `full_resolution_jpeg_quality`: 95 (as designed: 33 to 43 MB and 0.07 to
+   0.09 grey levels for the user's JPEGs, the best of the qualities measured
+   for JPEG originals; 0.32 for the non-JPEG proxy), 98 (42 to 56 MB, 0.07 to
+   0.10 for JPEGs, 0.19 for the proxy), or a default that depends on whether
+   the original is a JPEG. Recommendation: 95 for both, with the measurements
+   in the setting's documentation so a workspace of PNG or TIFF photographs
+   chooses 98; a default that depends on the original's format would be a
+   second rule the record must carry, for a case the setting already covers.
+   For `jpeg_quality`, 95 (15.2 MB, 0.49) against 90 (10.2 MB, 0.73): 95.
 4. **Should the Python SIFT path hand its decode to the mipmap binding?** It
    saves one decode per out-of-core photograph (0.8 to 1.7 s) but the binding
    must then trust that the array is the decode of that file. Recommendation:
@@ -1080,35 +1451,41 @@ repeated two to four times; the ranges in this draft are over those runs.
 6. **The level builder in the Background Tasks panel.** A line of its own (as
    designed), a quiet task, or nothing. Recommendation: the line; a quiet task
    would wait behind every other quiet task and give way to every asked-for
-   one, and the display waits on this work.
+   one, and the display and the kernels wait on this work.
 7. **Image Detail's zoom limit.** `MAX_ZOOM` = 32 times the fit does not reach
-   the original's pixels of a 200-megapixel photograph in a small panel.
-   Options: keep it; make the limit `max(32, 8 / fit_scale)` so a level-0 pixel
-   can always be enlarged to 8 screen pixels. Recommendation: the second.
-8. **A tiled lossless copy of level 0** for originals that the fast path does
-   not cover (no restart interval, PNG, TIFF), so zooming to full resolution
-   does not cost a whole decode. It contradicts decision 1. Recommendation: no;
-   keep the whole decode as one cache entry, and revisit only if a capture of
-   such originals is in use.
-9. **Mipmaps written by another build.** A file is the record, so a newer
-    `jpeg-encoder` never rewrites it; but a read-only copy of the workspace
-    read through the in-memory equivalent by another build can differ from the
-    files by the encoders' differences. Options: accept it (as designed), or
-    rebuild when the record's `encoder` differs. Recommendation: accept it and
-    keep `encoder` in the record for diagnosis; rebuilding would change results
-    with no input changed.
-10. **The decoder.** The tile decode needs `jpeg-decoder`'s
-    `ColorTransform::None`, and the fast path its present upsampling and
-    conversion. [reading-and-writing-images.md](../core/camera/reading-and-writing-images.md)
-    plans to move JPEG reading to zune-jpeg when it is fixed. Recommendation:
-    the mipmap reader keeps `jpeg-decoder` until zune-jpeg passes the same
-    tile-equality tests; the fast path follows whichever decoder `read_rgb`
-    uses, and turns off if its test fails.
-11. **Budgets.** The tile budget's default (a sixteenth of memory, 512 MiB to
+   full resolution of a 200-megapixel photograph in a small panel. Options:
+   keep it; make the limit `max(32, 8 / fit_scale)` so a level-0 pixel can
+   always be enlarged to 8 screen pixels. Recommendation: the second.
+8. **Mipmaps written by another build.** A file is the record, so a newer
+   `jpeg-encoder` never rewrites it; but a read-only copy of the workspace
+   read through the in-memory equivalent by another build can differ from the
+   files by the encoders' differences. Options: accept it (as designed), or
+   rebuild when the record's `encoder` differs. Recommendation: accept it and
+   keep `encoder` in the record for diagnosis; rebuilding would change results
+   with no input changed.
+9. **The decoder.** The tile decode needs `jpeg-decoder`'s
+   `ColorTransform::None`, and the region decode of an original its present
+   upsampling and conversion.
+   [reading-and-writing-images.md](../core/camera/reading-and-writing-images.md)
+   plans to move JPEG reading to zune-jpeg when it is fixed. Recommendation:
+   the mipmap reader keeps `jpeg-decoder` until zune-jpeg passes the same
+   tile-equality tests; if `read_rgb` moves and the region decode no longer
+   equals it for some layout, the region test sends that layout to
+   `-mipmap1`, as a stated change of results.
+10. **Budgets.** The tile budget's default (a sixteenth of memory, 512 MiB to
     4 GiB) and the 256 GPU tile textures are estimates from the figures above.
-    Recommendation: ship them and report the cache's `stats`, with the tile
-    entries, in the Background Tasks panel's tooltip so they can be judged on
-    real captures.
+    With view-region pyramids the tile budget is also what bounds every
+    kernel's memory for out-of-core photographs, so it now trades memory
+    against tile decodes for bulk kernels. Recommendation: ship them, report
+    the tiles decoded and reused in each kernel's phase note and the cache's
+    `stats` in the Background Tasks panel's tooltip, and tune on real captures.
+11. **SIFT and the kernels read different level 0s** for an original that is
+    not region-readable: SIFT the original, the kernels `-mipmap1` (0.07 to
+    0.09 grey levels apart for the user's JPEGs, 0.19 to 0.32 for the non-JPEG
+    proxy). Options: accept it (as designed); have SIFT read `-mipmap1` too.
+    Recommendation: accept it; SIFT runs before the files exist and its output
+    is stored, and making it wait for them would make extraction depend on the
+    cache.
 
 ## Problems found with the decisions
 
@@ -1116,19 +1493,28 @@ repeated two to four times; the ranges in this draft are over those runs.
   with a record in every file and a second name form.
 - **Mirroring the workspace does not cover every photograph.** A photograph
   with no workspace above it, or with `..` in its image name, has no mirror
-  path. The in-memory equivalent gives those the same pixels without files.
+  path. The in-memory equivalent gives those the same pixels without files,
+  at the default qualities when there is no workspace.
 - **"Every later reader reads the files" needs a rule for when files cannot be
   written.** The in-memory equivalent is that rule; its pixels equal the files'
-  only with the same build (open question 9).
+  only with the same build (open question 8). For a photograph that needs a
+  `-mipmap1`, it holds up to 58 MB of encoded bytes in the tile budget.
 - **A coarsest level of about one tile is not deep enough for the kernels.**
   They need levels to about one pixel. The levels below the coarsest mipmap are
   computed in memory from it, which keeps every reader consistent because the
   input is the file.
-- **Level 0 as the original makes full-resolution regions as fast as the
-  original allows.** For the user's photographs (restart interval 4 MCUs) a
-  region decodes in about 3 ms; for an original with no restart interval, or
-  a PNG or TIFF, the first look at full resolution costs a whole decode, 0.8 s
-  or more and 571 MiB at this size (open question 8).
+- **Whole pyramids for the kernels did not scale** (the reason the view-region
+  pyramid is now required): `get_many` hands back every photograph's pyramid
+  and the caller holds them all while its kernel runs, 12.6 GiB for 17
+  photographs of 200 MP. The design now gives kernels no whole pyramid of an
+  out-of-core photograph.
+- **Region reads depend on the decoder's internals.** The region test admits a
+  layout only because `jpeg-decoder` 0.3.2 gives equal pixels for it with the
+  margins found; a decoder change can change which originals get a
+  `-mipmap1` (open question 9).
+- **A quality setting per workspace means files go stale when it changes.**
+  Every set at the old quality is made again as it is next read, a whole
+  decode and encode per photograph; the setting is meant to be chosen once.
 - **The mipmap directory is reachable by image discovery.** A directory scan
   at the workspace root would read mipmaps as images; step 4 makes every
   finder skip it before anything writes there.
