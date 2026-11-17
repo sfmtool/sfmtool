@@ -1301,10 +1301,20 @@ tiles and do not count against it.
   *Build mipmaps | fast | no; it pushes no version (it writes mip level files
   and fills the photograph cache), and it runs on a locked node | yes*.
 
-  Its job, on its job thread, keeps a list of photographs shared with the
-  viewer, takes photographs from the front of it in chunks of a group's size
-  and calls `get_many` on each chunk with its own `Progress` and collector,
-  so the parallelism is `get_many`'s. A job that is cancelled puts the
+  Its source keeps a list of photographs shared with the viewer. **Each run
+  of the task makes one chunk and ends**: its job, on its job thread, takes
+  one chunk from the front of the list and calls `get_many` on it with its
+  own `Progress` and collector, so the parallelism is `get_many`'s, and when
+  the job ends with the list not empty, the source queues the task again.
+  A chunk is the photographs the build budget lets the cache make at once
+  (as many as `reserve_builds` would grant from an empty count, at most the
+  rayon pool's size), at least one, so a run takes about one build, 2 to 4 s
+  at 200 MP. Because a quiet task that is running gives way only to a task
+  someone asked for (§ "Quiet tasks" applies `QuietRank` to waiting tasks),
+  ending after each chunk is what lets `QuietRank` decide between chunks:
+  a live evaluation, the Track Table's columns or picks, or a camera model
+  proposal's job waiting in the fast queue starts before the next chunk
+  rather than after the whole list. A job that is cancelled puts the
   photographs of the chunk it had not finished back at the front of the
   list, so the run queued again behind the displacing task makes them
   first. When a reconstruction opens, the list is
@@ -1313,9 +1323,9 @@ tiles and do not count against it.
   test, and one small read each): the selected image first, then the images
   the Image Browser strip shows, then the rest in image order. A panel that
   needs a photograph whose mipmap is not current **adds it to the front of
-  the list**: a running task takes it in its next chunk without being
-  cancelled, and when no task is running one is queued with it, under the
-  quiet-task rule that a source keeps at most one waiting entry. While it
+  the list**: the next run takes it in its chunk, the running chunk being
+  left to finish, and when no run is running or waiting one is queued, under
+  the quiet-task rule that a source keeps at most one waiting entry. While it
   runs, the Background Tasks panel's quiet line shows it as it shows every
   quiet task, as *Building mipmaps: {done} of {total}*.
 - **A kernel** inside another background task that needs an out-of-core
@@ -1819,8 +1829,9 @@ state as § "Readers on the GUI thread" says, queueing a photograph that is
 `Building` and starting one `get_tile` per missing tile of a `Known`
 photograph; and the admission rule for in-core pyramid requests lives there.
 The *Build mipmaps* quiet task is `state/build_mipmaps.rs`: a job that takes
-photographs from its shared list in the order § "Who makes the mipmaps, and
-when" gives and calls `get_many` on them.
+one chunk of photographs from its source's shared list, in the order § "Who
+makes the mipmaps, and when" gives, calls `get_many` on it and ends, its
+source queueing it again while the list is not empty.
 
 ## Python bindings
 
@@ -2125,8 +2136,11 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
     object), and the thumbnail from the coarsest mip level file.
     Tests: `sfm sift` on a small-threshold synthetic workspace writes the
     files; the quiet task runs on the fast queue, makes the selected image's
-    mipmap in its first group, takes a photograph a panel adds to the front
-    of its list in its next chunk without being cancelled, pushes no version,
+    mipmap in its first run, ends after each chunk and is queued again while
+    its list is not empty, takes a photograph a panel adds to the front of
+    its list in its next run without cancelling the running one, lets a
+    waiting quiet task of higher `QuietRank` (a camera model proposal's job)
+    start between its chunks while it has a long list, pushes no version,
     runs on a locked node, and gives way to an asked-for task, leaving no slot
     marked as being made;
     `--prune` deletes an orphan and
