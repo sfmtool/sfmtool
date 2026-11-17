@@ -1121,18 +1121,7 @@ fn write_refused_sfmr(fixture: &Fixture, path: &Path) {
     reconstruction(&fixture.root, &fixture.old_folder(), v1_record(), false)
         .save(path, &Progress::none())
         .unwrap();
-    rewrite_archive(
-        path,
-        "cameras/metadata.json.zst",
-        |cameras| {
-            let camera = &mut cameras.as_array_mut().unwrap()[0];
-            camera["parameters"]
-                .as_object_mut()
-                .unwrap()
-                .remove("focal_length_y");
-        },
-        |_| false,
-    );
+    make_refused(path);
 }
 
 #[test]
@@ -2000,7 +1989,6 @@ fn save_with_upper_case_image_dir(fixture: &Fixture, path: &Path) {
 
 /// Make the `.sfmr` at `path` one the current reader refuses: its camera
 /// lacks a parameter.
-#[cfg(windows)]
 fn make_refused(path: &Path) {
     rewrite_archive(
         path,
