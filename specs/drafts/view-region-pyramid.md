@@ -276,12 +276,11 @@ pool's four tiles per thread and the window of 16 are open question 4.
 **On the GUI thread** (Track View's tiles, crops and context, the Track
 Table's crop column), the panel acts on the photograph's layout state as the
 main draft's § "Readers on the GUI thread" says: while it is `Building` the
-panel requests the photograph once (one rayon task whose `get` makes the mipmap,
-or waits for the caller making it, with at most one such request in flight
-across the viewer) and requests no tiles;
+panel adds the photograph to the front of the *Build mipmaps* quiet task's
+list once, draws a spinner with *Building mipmap…*, and requests no tiles;
 once it is `Known` the panel computes the regions, peeks the tiles
 (`peek_tile`), and draws the view's tile only when all of them are there,
-requesting the missing ones. The GUI thread never decodes and never waits.
+requesting the missing ones. The GUI thread never decodes and never waits, and no panel makes a mipmap.
 
 ## Memory
 

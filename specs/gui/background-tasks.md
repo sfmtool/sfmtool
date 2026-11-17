@@ -257,7 +257,10 @@ lacks for the node the panel shows, and then the computed ones the panel needs (
 reference-view rule for each point on screen in the Track Table that stores no
 reference observation, one point after another, so its *Crop* cell knows which
 photograph to cut ([track-table.md](track-table.md) § "The reference
-photograph"). Nobody asked for any of them, so nothing someone
+photograph"). A fifth, `Build mipmaps`, which makes the stored mipmaps of
+large photographs that the panels are waiting for, is proposed in
+[out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md).
+Nobody asked for any of them, so nothing someone
 asked for waits behind them, and nothing reports them as the viewer being busy:
 
 - **It gives way to a task someone asks for.** When a task that is not quiet

@@ -38,7 +38,10 @@ set by image size),
 [gui/mcp-server.md](../gui/mcp-server.md) § "The Image Detail view" (two
 fields), and
 [workspace/workspace.md](../workspace/workspace.md) (the `mipmap_options`
-object, and the cache directory in § "Workspace Directory Layout"). Each links back here.
+object, and the cache directory in § "Workspace Directory Layout"), and
+[gui/background-tasks.md](../gui/background-tasks.md) (the quiet task *Build
+mipmaps*: a row in its operations table and a fifth quiet operation in
+§ "Quiet tasks"). Each links back here.
 
 SfM Explorer shows a photograph, and the patch kernels sample it, through one
 image pyramid per photograph: the photograph and successively halved copies of
@@ -994,11 +997,13 @@ photograph's mipmap works exactly like decoding a photograph in today's
   slot could steal another item for the same path and deadlock on itself).
   `jpeg-encoder` and `jpeg-decoder` use no rayon, so the whole build is safe
   there.
-- **Rayon workers wait.** A worker that builds or waits on a slot blocks for
-  the build, 2 to 4 s at 200 MP against 0.5 to 1.7 s for today's decode of
-  the same photograph. This is accepted, as it is for decodes today; the
-  panels' tile decodes and layout requests share the pool and are slowed
-  while it is busy, not stopped, since a waiting worker holds one thread.
+- **Where builds run in the viewer.** Only inside background tasks: the
+  quiet task *Build mipmaps* and the kernels of other tasks, each on its task's
+  job thread and on the rayon workers its `get_many` makes its group on, as
+  `get_many` decodes photographs in parallel today. No panel starts a build
+  or waits on a slot: a panel that needs a photograph whose mipmap is not
+  current adds it to *Build mipmaps*' list (§ "Readers on the GUI thread"), so
+  no rayon task a panel starts, and never the GUI thread, makes a mipmap.
 - **Cancellation.** The slot is no longer a `OnceLock`, which cannot be
   abandoned once a thread has started to fill it. It is a mutex over the
   slot's state (empty, being made by one caller, or made, with its result or
@@ -1079,15 +1084,14 @@ photograph's mipmap works exactly like decoding a photograph in today's
   group is granted within the budget: a caller that wants several photographs
   asks for them with one `get_many`, never with `get` from many workers of a
   parallel loop (no caller does today; the reference picks call `get` one
-  photograph at a time on their job thread). In the viewer the callers that
-  can build at once are the two background queues' tasks (one of them perhaps
-  the *Build mipmaps* task below) and **at most one panel request**:
-  the viewer keeps at most one out-of-core photograph request in flight across
-  all its panels (§ "Readers on the GUI thread"), and panels do not read the
-  count. All of them use the viewer's one session cache, so the builds in
-  progress hold at most the build budget plus three mipmaps: on the 64 GB
-  development machine 16 GiB plus 3 GB at 200 MP, and on a 16 GB machine
-  4 GiB plus 3 GB. A CLI command uses one cache for its run, and one
+  photograph at a time on their job thread). In the viewer the only callers
+  that build are background tasks, and the running ones are at most one per
+  queue, two in all (one of them perhaps the *Build mipmaps* task below);
+  panels start no builds and do not read the count. All of them use the
+  viewer's one session cache, so the builds in progress hold at most the
+  build budget plus one mipmap per running task, two: on the 64 GB
+  development machine 16 GiB plus 2 GB at 200 MP, and on a 16 GB machine
+  4 GiB plus 2 GB. A CLI command uses one cache for its run, and one
   `get_many` runs at a time, so its bound is the budget, or one mipmap when a
   single mipmap is larger than the budget; a Python script that holds one cache
   and calls it from one thread gets the same, and one that calls it from
@@ -1096,8 +1100,9 @@ photograph's mipmap works exactly like decoding a photograph in today's
   These are on top of the caches' other budgets, and are estimates from the
   buffer sizes.
 - **No build on the GUI thread, and no tile task that waits on one.** The
-  panels never call `get` on the GUI thread for an out-of-core photograph,
-  whatever the budget, and ask for tiles only once a photograph's files are
+  panels never call `get` for an out-of-core photograph, on the GUI thread or
+  on the rayon pool, whatever the budget, and ask for tiles only once a
+  photograph's files are
   current (§ "Readers on the GUI thread"), so a tile task never meets a build.
 
 `get_tile`, `view_region_pyramid` and `get_level` are asked only of a
@@ -1171,8 +1176,9 @@ photograph that is `Known`, so a tile request is always a decode of a file
 that exists, milliseconds of work, and never waits on a build. If the files
 change under a `Known` photograph, `get_tile` finds the record stale, answers
 `TileError::Changed` without waiting, and the photograph goes back to
-`Building`, so the panel requests it again. A mipmap is made only inside a
-`get` or `get_many`, never on the GUI thread.
+`Building`, so the panel adds it to *Build mipmaps*' list again. A mipmap is
+made only inside a `get` or `get_many` of a background task, never on the GUI
+thread and never by a panel.
 
 **Memory, under this design.** What a kernel holds for out-of-core photographs
 is the view-region pyramids of the renders it has in flight or keeps for reuse,
@@ -1275,49 +1281,63 @@ tiles and do not count against it.
   caller's `Progress` (a `ProgressCounter` from Python), before the work
   starts; `sfm ws mipmaps` calls `get_many` over every photograph under its
   paths in a phase *build mipmaps*.
-- **In the viewer**, when a reconstruction opens, the viewer starts a quiet
-  task, *Build mipmaps* (`Operation::BUILD_MIPMAPS`, a new quiet
-  source), on the fast queue. It is an ordinary background task with its own
-  `Progress` and collector: its job calls `get_many` over the
-  reconstruction's out-of-core photographs whose files are missing or stale
-  (found by a `stat`, the original's header and markers for the region test,
-  and one small read each), the selected image first, then the images the
-  Image Browser strip shows, then the rest in image order, and the order
-  decides which group each falls in. Being a quiet task, it gives way to an
-  asked-for task in its queue: its cancel flag is set, each build in progress
-  stops within one stage and leaves its slot empty, and the task is queued
-  again behind the one that displaced it, losing at most the stage each build
-  was in. While it runs, the Background Tasks panel's quiet line shows it as
-  it shows every quiet task, as *Building mipmaps: {done} of {total}*. A panel's request or a
-  bench step that needs a photograph meanwhile asks the cache for it
-  directly; if the task is making it, the slot makes the asker wait for that
-  build rather than start a second, and if not, the asker makes it. There is
-  no queue across callers.
-- **A kernel** that needs an out-of-core photograph whose files are not
-  current makes the mipmap inside its read phase (its `get_many`), counted in the
-  phase's note (*3 of 17 read, 2 mipmaps made*). It does not read the exact
-  levels in the meantime.
+- **In the viewer**, mipmaps are made by one cancellable quiet task, *Build
+  mipmaps* (`Operation::BUILD_MIPMAPS`, a fifth quiet source beside those of
+  [background-tasks.md](../gui/background-tasks.md) § "Quiet tasks"), like
+  the quiet tasks Track View and the Track Table use. It runs on the **fast
+  queue**, with the other quiet tasks: on the slow queue it would wait behind
+  a bundle adjustment or a *Refine all normals* of minutes while a panel shows
+  its spinner. It gives way to anything asked for in its queue under the
+  quiet-task rules: its cancel flag is set, each build in progress stops
+  within one stage and leaves its slot empty, and it is queued again behind
+  the task that displaced it, losing at most the stage each build was in.
+  In the `QuietRank` order it comes after the camera model proposal's job and
+  before the evaluations, since a panel is waiting on it. It does not lock
+  its node, runs on a locked node (it reads photographs, not the node's
+  version), and pushes no version: it writes mip level files and fills the
+  session cache. Its row in background-tasks.md's operations table is
+  *Build mipmaps | fast | no; it pushes no version (it writes mip level files
+  and fills the photograph cache), and it runs on a locked node | yes*.
+
+  Its job, on its job thread, keeps a list of photographs shared with the
+  viewer, takes photographs from the front of it in chunks of a group's size
+  and calls `get_many` on each chunk with its own `Progress` and collector,
+  so the parallelism is `get_many`'s. When a reconstruction opens, the list is
+  the reconstruction's out-of-core photographs whose files are missing or
+  stale (found by a `stat`, the original's header and markers for the region
+  test, and one small read each): the selected image first, then the images
+  the Image Browser strip shows, then the rest in image order. A panel that
+  needs a photograph whose mipmap is not current **adds it to the front of
+  the list**: a running task takes it in its next chunk without being
+  cancelled, and when no task is running one is queued with it, under the
+  quiet-task rule that a source keeps at most one waiting entry. While it
+  runs, the Background Tasks panel's quiet line shows it as it shows every
+  quiet task, as *Building mipmaps: {done} of {total}*.
+- **A kernel** inside another background task that needs an out-of-core
+  photograph whose files are not current makes the mipmap itself, as part of
+  its task, in its read phase (its `get_many`, on its job thread and the
+  rayon workers `get_many` uses), counted in the phase's note (*3 of 17 read,
+  2 mipmaps made*); if *Build mipmaps* is making that photograph, the kernel
+  waits on the slot on its job thread rather than start a second build. It
+  does not read the exact levels in the meantime.
 
 **Readers on the GUI thread.** None of them makes a mipmap, decodes a whole
-photograph or waits. Each asks `layout` and acts on the state. *Request the
-photograph* means what `display_photograph` does today for a decode: once per
-path, it starts one rayon task that calls `get`, which makes the mipmap (or waits
-for the caller already making it), records the path in `PhotographRequests`
-so later frames start no second task, and repaints when the task ends. For an
-out-of-core photograph whose files are not current, **at most one such
-request is in flight across the whole viewer**: a panel whose request cannot
-start because another is in flight keeps it wanted and tries again on a later
-frame, so twenty Track View cells that need mipmaps start them one after
-another, not twenty at once. Panels do not read the build count; the
-request's `get` reserves its one mipmap through the session cache's `reserve_builds` like any other
-caller, so the count stays complete. A request for a photograph whose files
-are current only reads a layout and tiles, and is not limited.
+out-of-core photograph or waits. Each asks `layout` and acts on the state.
+*Queue the photograph* means: add the photograph to the front of *Build
+mipmaps*' list, once per path (the viewer remembers the paths it has queued,
+as `PhotographRequests` remembers its decodes), and draw a loading spinner
+with *Building mipmap…* until the photograph's layout is `Known`, repainting
+when the task reports it made. In-core photographs are requested as today:
+`display_photograph` starts one rayon task that calls `get`, which decodes
+them, and is never used for an out-of-core photograph. Tile reads still go to
+the rayon pool, only for photographs whose files are current, milliseconds
+each.
 
 | Reader | `NotKnown` | `Building` | `Known` |
 |--------|------------|------------|---------|
-| Image Detail | asks for the layout once (a header read, the region test and a record check, on the rayon pool) and draws *Loading image…* | requests the photograph once, draws the coarsest level if the build has published it and *Building mipmap…* otherwise | peeks the visible tiles and asks for the missing ones |
-| Track View's patch tiles, cluster-stage tiles, context and crops; the Track Table's crop column and hover | the same layout request; the cell draws its loading state | requests the photograph once; the cell says *Building mipmap…* | computes the render's regions, peeks their tiles, asks for the missing ones, and renders when all are present |
-| The 3D background | the same layout request; nothing drawn | requests the photograph once; draws the coarsest level if published | asks for its level with `get_level`, which assembles it from tiles on the rayon pool, and draws the coarsest until it lands |
+| Image Detail | asks for the layout once (a header read, the region test and a record check, on the rayon pool) and draws *Loading image…* | queues the photograph, draws the coarsest level if the build has published it and the spinner with *Building mipmap…* otherwise | peeks the visible tiles and asks for the missing ones |
+| Track View's patch tiles, cluster-stage tiles, context and crops; the Track Table's crop column and hover | the same layout request; the cell draws its loading state | queues the photograph; the cell draws the spinner with *Building mipmap…* | computes the render's regions, peeks their tiles, asks for the missing ones, and renders when all are present |
+| The 3D background | the same layout request; nothing drawn | queues the photograph; draws the coarsest level if published | asks for its level with `get_level`, which assembles it from tiles on the rayon pool, and draws the coarsest until it lands |
 | Display thumbnails | built in the open job, off the GUI thread: a photograph whose coarsest mip level file is not current gets the grey placeholder row | the row stays the placeholder | a placeholder row whose photograph has become `Known` is filled, on the rayon pool, from the coarsest mip level file |
 
 A build publishes each reduced level to the slot's `Building` state as it is
@@ -1328,7 +1348,7 @@ written.
 **A budget of 0.** `display_photograph` with `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB=0`
 calls `get` on the GUI thread today, since nothing it decodes would be kept for
 the next frame. That stays for in-core photographs only. An out-of-core
-photograph never takes that path: it is requested on the rayon pool as above
+photograph never takes that path: it is queued for *Build mipmaps* as above
 whatever the budget, so a build never runs on the GUI thread; and with a tile
 budget of 0, a tile decoded on the rayon pool is handed to the panel that asked
 for it, whose texture keeps it, and the cache keeps nothing.
@@ -1786,13 +1806,14 @@ each in the step that moves its readers:
 
 The viewer's side, in
 [photograph_requests.rs](../../crates/sfm-explorer/src/state/photograph_requests.rs):
-`display_photograph` keeps its contract for in-core photographs; a
-`display_tile` beside it acts on the layout state as § "Readers on the GUI
-thread" says, starting one `get_tile` per missing tile of a `Known`
+`display_photograph` keeps its contract for in-core photographs and is never
+used for an out-of-core one; a `display_tile` beside it acts on the layout
+state as § "Readers on the GUI thread" says, queueing a photograph that is
+`Building` and starting one `get_tile` per missing tile of a `Known`
 photograph; and the admission rule for in-core pyramid requests lives there.
-The *Build mipmaps* quiet task is `state/build_mipmaps.rs`: a job
-that calls `get_many` over the reconstruction's out-of-core photographs in the
-order § "Who makes the mipmaps, and when" gives.
+The *Build mipmaps* quiet task is `state/build_mipmaps.rs`: a job that takes
+photographs from its shared list in the order § "Who makes the mipmaps, and
+when" gives and calls `get_many` on them.
 
 ## Python bindings
 
@@ -1800,8 +1821,8 @@ The user has decided that Python gets the same machinery as the viewer. All
 of it is in `sfmtool-core`; the bindings are thin wrappers over it, with no
 logic in Python ([STANDARDS.md](../STANDARDS.md#logic-lives-in-rust-not-in-python-wrappers)).
 **Only these parts are the viewer's own**: drawing photograph tiles as GPU
-textures, the rule of one out-of-core photograph request in flight across the
-panels, the *Build mipmaps* quiet task at open, and the admission rule
+textures, the panels queueing photographs for the *Build mipmaps* quiet task,
+the task itself, and the admission rule
 for in-core pyramid requests in `photograph_requests.rs`. Everything else in
 this design (the tiers, the mipmaps, the slots and build reservations, tiles,
 levels, regions, view-region pyramids, and the cache's statistics) is core and
@@ -2050,9 +2071,10 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    and `get_many` answering sources and
    making missing mipmaps in the slot (the out-of-core misses of a `get_many` in
    groups sized by the budget), `get_level`, `TileError::Changed`, Image
-   Detail and the 3D background on tiled photographs, with at most one
-   out-of-core request in flight across the viewer, and the in-core admission
-   rule. Every other
+   Detail and the 3D background on tiled photographs, queueing photographs
+   whose mipmap is not current for the *Build mipmaps* quiet task (the task
+   with its shared list, as far as step 13 needs it), and the in-core
+   admission rule. Every other
    reader refuses a tiled source. Tests: with the small threshold, a `get` on
    a photograph with no mipmap makes it and returns its pixels; two
    threads asking for one path make one mipmap; a `get_many` over 20 out-of-core
@@ -2062,9 +2084,13 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    count; several `get_many` callers on one cache started at the same moment
    on separate threads never reserve more than the budget plus one mipmap each,
    two caches in one process keep separate counts, and their
-   builds never add to the count beyond what was reserved; a burst of panel
-   requests for twenty photographs without mipmaps starts their builds one at a
-   time; a caller cancelled mid-build stops within one stage and leaves the
+   builds never add to the count beyond what was reserved; a panel that needs
+   a photograph without a current mipmap adds it to the front of *Build
+   mipmaps*' list once and draws the spinner, twenty such panels add twenty
+   photographs to the one task's list, and no rayon task a panel starts makes
+   or waits on a mipmap; a kernel in another task makes a missing mipmap on
+   its own job thread, and waits on the slot when *Build mipmaps* is making
+   it; a caller cancelled mid-build stops within one stage and leaves the
    slot empty with its share given back, a waiter on that slot then reserves
    and makes the mipmap, and a waiter that is
    cancelled stops waiting within 50 ms; a build reports its phases through
@@ -2091,8 +2117,11 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
     and `--check` (its `--enable` waits for step 15, since it writes the
     object), and the thumbnail from the coarsest mip level file.
     Tests: `sfm sift` on a small-threshold synthetic workspace writes the
-    files; the quiet task makes the selected image's mipmap in its first group
-    and gives way to an asked-for task, leaving no slot marked as being made;
+    files; the quiet task runs on the fast queue, makes the selected image's
+    mipmap in its first group, takes a photograph a panel adds to the front
+    of its list in its next chunk without being cancelled, pushes no version,
+    runs on a locked node, and gives way to an asked-for task, leaving no slot
+    marked as being made;
     `--prune` deletes an orphan and
     keeps a current mipmap, and deletes every mip level file in a workspace without the
     object; `--check` writes nothing.
@@ -2168,11 +2197,12 @@ ranges in this draft are over those runs.
 6. **The build budget and cancellation.** *Decided by the user:* (a) for
    both, as designed. Builds are bounded by reservations made at decision
    time on each cache's non-blocking count, each caller still granted one when
-   the budget is used up, with at most one panel request in flight (the
-   budget plus three mipmaps in the viewer); not a blocking semaphore, which
-   would make a rayon worker wait for another caller's permit, and not a
-   count per `get_many`, which would let two tasks and a panel each take the
-   budget. A cancelled maker abandons its build and a waiter takes it over,
+   the budget is used up, with builds in the viewer made only by background
+   tasks, the panels' needs going to the *Build mipmaps* quiet task (the
+   budget plus one mipmap per running task, two in the viewer); not a
+   blocking semaphore, which would make a rayon worker wait for another
+   caller's permit, and not a count per `get_many`, which would let two tasks
+   each take the budget. A cancelled maker abandons its build and a waiter takes it over,
    rather than every maker finishing.
 7. **Image Detail's zoom limit.** *Decided by the user:* the limit is
    `max(32, 8 / fit_scale)` times the fit, so a level-0 pixel can always be
