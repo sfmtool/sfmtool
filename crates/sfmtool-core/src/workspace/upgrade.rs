@@ -519,9 +519,10 @@ pub fn upgrade_workspace(
     // is the directory above it and the paths the report gives read
     // plainly, and two workspaces are compared by their real paths, so that
     // a path given as `<ws>/images/..` is the workspace `<ws>`. Where a `..`
-    // follows a symbolic link, the directory it names is not the one its
-    // spelling resolved by name names, and the workspace is spelled by its
-    // real path instead, so the run upgrades the workspace that was found.
+    // follows a symbolic link, the path can name a different directory on
+    // disk than it does with each `..` resolved by name; the workspace is
+    // then spelled by its real path, so the run upgrades the workspace that
+    // was found.
     let identity = |dir: &Path| std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
     let nearest = find_workspace_for_path(path)
         .map(|found| {
