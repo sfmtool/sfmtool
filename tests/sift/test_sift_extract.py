@@ -372,6 +372,32 @@ def test_stream_preserves_input_order_under_out_of_order_completion(monkeypatch)
     assert [r[1] for r in out] == list(range(count))
 
 
+def test_stream_sizes_its_pool_with_the_extraction_params(monkeypatch):
+    """The pool is sized from image 0's dimensions and the params the images
+    are extracted with, so whether they double the image counts."""
+    from sfmtool.sift import extract_sfmtool
+
+    calls = []
+
+    def fake_count(width, height, params=None):
+        calls.append((width, height, params))
+        return 1
+
+    monkeypatch.setattr(extract_sfmtool, "default_concurrent_images", fake_count)
+    frame = np.zeros((3, 5, 3), np.uint8)
+    monkeypatch.setattr(extract_sfmtool, "_decode_image", lambda p: (p, frame, None))
+    monkeypatch.setattr(
+        extract_sfmtool, "_extract_one", lambda image_path, *a: image_path
+    )
+
+    params = {"double_image": False}
+    out = list(
+        extract_sfmtool._stream_sift_with_sfmtool([Path("0")], params, params, object())
+    )
+    assert out == [Path("0")]
+    assert calls == [(5, 3, params)]
+
+
 def test_stream_raises_error_in_input_order_not_completion_order(monkeypatch):
     """A failure that completes first is still surfaced only at its input slot.
 
