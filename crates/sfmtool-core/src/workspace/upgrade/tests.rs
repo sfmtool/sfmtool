@@ -777,12 +777,16 @@ fn assert_upgraded(fixture: &Fixture, before: &BTreeMap<PathBuf, Bytes>) {
         .join(v1_record().feature_prefix_dir)
         .exists());
     assert_sift_files_resolve(&fixture.path("sfmr/other.sfmr"));
-    assert!(
-        SfmrReconstruction::load(&fixture.path("sfmr/other.sfmr"), &Progress::none())
-            .unwrap()
-            .sift_path_for_image(0)
-            .starts_with(fixture.nested())
-    );
+    // The reader resolves the workspace to its real path, which differs from
+    // the fixture's spelling where the temporary directory is reached
+    // through a link (`/var` on macOS) or a short name, so the two are
+    // compared by their real paths.
+    let sift = SfmrReconstruction::load(&fixture.path("sfmr/other.sfmr"), &Progress::none())
+        .unwrap()
+        .sift_path_for_image(0);
+    assert!(std::fs::canonicalize(&sift)
+        .unwrap()
+        .starts_with(std::fs::canonicalize(fixture.nested()).unwrap()));
 
     // The files not converted are as they were.
     let after = snapshot(&fixture.root);
