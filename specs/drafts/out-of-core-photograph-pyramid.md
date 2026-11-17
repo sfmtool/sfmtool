@@ -341,13 +341,33 @@ have different names: the rule is one-to-one, and `x.jpg` beside `x.png` gives
 `x.jpg-mipmap2.jpg` and `x.png-mipmap2.jpg`. A photograph's name with the
 suffix cannot equal another photograph's name with it either, since the suffix
 fixes where the original's name ends. Every mipmap still records the relative
-path of the photograph it was made from (below), and a reader that finds a
-mipmap recording another photograph treats it as stale; with this rule that
-happens only through a case-insensitive file system: a workspace made on a
-case-sensitive one with `X.jpg` and `x.jpg` and copied to a case-insensitive
-one has one cache file for the two, as it has one `.sift` for them and one
-file for the two originals, so the case cannot arise there between photographs
-that both exist.
+path of the photograph it was made from (below), because a cache file can
+still be reached for a photograph it was not made from, and the record is how
+a reader tells:
+
+- **A cache file copied or renamed by hand**, or left by an image that was
+  moved: its `source` names another path, and test 2 of § "When a mipmap is
+  current" finds it stale.
+- **Two originals whose names differ only in letter case sharing one cache
+  file.** An image folder that links to case-sensitive storage (a network
+  share, a Linux volume) can hold `X.jpg` and `x.jpg`, while `.sfm-cache/` in
+  the workspace sits on a case-insensitive file system, so both photographs'
+  mipmaps resolve to one file. The `source` of that file differs from the
+  other photograph's path only in case, so test 2 leaves the decision to the
+  original's stamp and hash (tests 3 and 4), which tell two different
+  originals apart; the photograph that is not the file's source finds it
+  stale and makes its own set over it. The two then replace each other's
+  files each time the other is read, which is slow but never serves one
+  photograph the other's pixels, and the reader logs a warning naming both
+  paths.
+- **One original reached by spellings that differ only in case.** On a
+  case-insensitive file system `images/IMG_0001.JPG` (a reconstruction's
+  image name) and `images/img_0001.jpg` (typed to `sfm ws mipmaps`) are the
+  same file. Test 2 again leaves the decision to tests 3 and 4, which find the
+  same stamp, so the set made under one spelling is current for the other and
+  is not made again each time the caller changes. An exact comparison would
+  find each other's record stale and rebuild the set at every change of
+  spelling.
 
 A photograph gets no files, and is read through the in-memory equivalent, when
 its workspace's mipmaps cannot be put in the cache directory: when its relative path has a `..`
@@ -666,9 +686,11 @@ naming the first that fails otherwise:
 
 1. It reads as a JPEG with a record of a known `version`, its frame is
    `width` x `height`, and it has a restart interval.
-2. Its `source` is the photograph's relative path, its `level` is the level
-   asked for, and its `width` and `height` are that level's size for the
-   original's size.
+2. Its `source` is the photograph's relative path, or differs from it only
+   in letter case (both lower-cased with `str::to_lowercase` compare equal), in
+   which case tests 3 and 4 decide whether it was made from this original;
+   its `level` is the level asked for; and its `width` and `height` are that
+   level's size for the original's size.
 3. The original's header size equals `source_width` x `source_height`.
 4. The original's length equals `source_size` and its modification time equals
    `source_modified_ns`. When the length matches and the time does not (a copy,
@@ -1895,7 +1917,14 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    in a temporary workspace whose `mipmap_options` sets a threshold of 64,
    with a tile of 32: the names for `IMG_0001.JPG` (`IMG_0001.JPG-mipmap2.jpg`,
    case kept), `a.b.png` and a name with no extension, the names of `x.jpg`
-   beside `x.png` differing, a `..` name (in memory); a workspace without the object and a photograph with no
+   beside `x.png` differing, a `..` name (in memory); a mipmap whose record
+   names another path is stale; a mipmap whose `source` differs from the
+   photograph's path only in case and whose stamp and hash match the original
+   is current and not made again (one original under two spellings), and one
+   whose `source` differs only in case but whose original has another length
+   or hash is stale and made again (two originals sharing a cache file), both
+   built by writing the record directly, so the tests run on any file
+   system; a workspace without the object and a photograph with no
    workspace are in core and write nothing; two builds give the same bytes; a
    region-readable JPEG gets no `-mipmap1` and a PNG, a progressive JPEG, a
    JPEG without `DRI` and one with an interval wider than 1024 px do; each
