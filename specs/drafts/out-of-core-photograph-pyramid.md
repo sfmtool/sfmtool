@@ -1003,22 +1003,32 @@ and 2.25 times that when it is kept for reuse with its margin (a quarter of
 the region on every side). A stretched footprint, a grazing view, or the
 `Bilinear` sampler reading level 0 over a large footprint, can make one
 render's bounding box far larger; the companion draft bounds that with a
-second sampling path and one allowance for everything kept for reuse
-(§ "Bounding a render's memory" there). A kernel works on one patch per
-worker thread, and a rayon worker runs one render at a time, so the workers
-in flight are the rayon pool's threads, 32 on the development machine. Each
-holds at most 3.1 MB of copied regions for its patch, all views together,
-and 16 pinned tiles (12.7 MB) for the render it is running, 15.8 MB; 32 of
-them hold at most about 510 MB on top of the tile budget, whatever the number
-of views or photographs, and a few hundred kilobytes in the common case
-(estimates from the sizes).
+second sampling path and one region pool per kernel run for everything
+copied (§ "Bounding a render's memory" there). A kernel's patches do not map
+one to a worker (*Refine all normals* runs a parallel loop over points whose
+normal kernels run parallel loops over views, and a worker waiting in an
+inner loop takes other points from the outer one), so the bound is not per
+patch. It has two parts. The copied regions of one kernel run, all its
+patches together, reserve from a pool of 3.1 MB per rayon thread, 99 MB on
+the development machine's 32 threads; a render that cannot reserve takes the
+tile path and keeps nothing. The pinned tiles are 16 (12.7 MB) per render
+running, and a thread runs one render at a time (a render's own rows never
+go parallel on a worker, `parallelize_rows` in `camera/warp_map.rs`), so at
+most 12.7 MB per thread that renders: the 32 rayon threads, the calling job
+thread, and in the viewer the other queue's job thread and the GUI thread.
+One kernel run on the command line holds at most 99 MB + 33 x 12.7 MB, about
+520 MB, on top of the tile budget; the viewer, with at most two kernel runs at
+once (one per background queue) and Track View's renders, at most
+2 x 99 MB + 3.1 MB + 35 x 12.7 MB, about 650 MB. The common case is a few
+hundred kilobytes, whatever the number of views or photographs (estimates
+from the sizes).
 
 | Case | Today (whole pyramids) | This design |
 |------|------------------------|-------------|
-| 17 x 200 MP, *Find matches by geometry* over the views the cull keeps (up to 151), `R = 24` | up to every photograph, 12.6 GiB for all 17 | up to 151 x 2.9 KB x 2.25 = 1.0 MB of regions kept for reuse (under the 3.1 MB allowance), plus at most the tile budget (4 GiB at 64 GB of memory, 512 MiB at 8 GB) |
+| 17 x 200 MP, *Find matches by geometry* over the views the cull keeps (up to 151), `R = 24` | up to every photograph, 12.6 GiB for all 17 | up to 151 x 2.9 KB x 2.25 = 1.0 MB of regions kept for reuse (well inside the run's 99 MB pool), plus at most the tile budget (4 GiB at 64 GB of memory, 512 MiB at 8 GB) |
 | 17 x 200 MP, display patch bitmaps at open, one render per point | 12.6 GiB | 32 renders in flight x 2.9 KB, plus the tile budget |
 | 500 x 200 MP, any of the above | 372 GiB; fails | the same as for 17: regions plus the tile budget |
-| Any of the above, worst case (every one of 32 workers at its allowance and on a grazing view) | — | 32 x (3.1 MB + 12.7 MB), about 510 MB of copied regions and pinned tiles on top of the tile budget |
+| Any of the above, worst case (the run's region pool full and every rendering thread on a grazing view) | — | one run: 99 MB + 33 x 12.7 MB, about 520 MB; the viewer with two runs and Track View: about 650 MB; on top of the tile budget |
 | 500 x 6000 x 4000, any of the above | 500 x 96 MB = 48 GB | the same |
 | 17 x 200 MP, Track View on a 17-image track at `R = 64` | 12.6 GiB | 17 x 17 KB x 2.25 of regions, plus the tiles they are cut from, one to four per level read and one or two levels per view, 13 to 108 MB |
 | 368 x 3840 x 2160 (in core) | 12.2 GB held by a `get_many` over every frame | unchanged: in-core photographs keep whole pyramids |
@@ -1467,6 +1477,65 @@ pub enum GetManyError { Building { paths: Vec<PathBuf> }, Cancelled }
 `DISPLAY_PYRAMID_LEVELS` and the viewer's `state::PYRAMID_LEVELS` are removed.
 `ProjectedImage`'s `pyramid` field becomes a `PhotographSource`.
 
+### Errors from reading pixels
+
+Rendering cannot fail today: `render_tile` returns an `ImageU8` and
+`render_tile_with_grad_into` returns nothing
+([sampler.rs](../../crates/sfmtool-core/src/camera/sampler.rs)). A render of a
+tiled source can: its files can go stale or change under it, and a kernel
+can be cancelled while it waits for tiles. So there is one error type for
+everything a kernel can meet while reading photographs, in
+`sfmtool_core::camera`:
+
+```rust
+/// Why a kernel could not read the photographs it was given.
+pub enum PhotographReadError {
+    Cancelled,
+    /// Sets not current; only on a rayon worker, which never waits for one.
+    Building { paths: Vec<PathBuf> },
+    /// A file's record differs from the one this run read, or went stale.
+    Changed { path: PathBuf },
+    Unreadable { path: PathBuf, why: String },
+    /// A reader that has not yet moved to view-region pyramids was handed a
+    /// tiled source; exists from step 8 until the last reader moves (step 14).
+    NotYetTiled { reader: &'static str },
+}
+impl From<Cancelled> for PhotographReadError { /* … */ }
+impl From<GetManyError> for PhotographReadError { /* … */ }
+impl From<(TileError, PathBuf)> for PhotographReadError { /* … */ } // a mid-run Building or Changed becomes Changed { path }
+```
+
+**In-memory pyramids stay infallible.** `render_tile`, `render_tile_with_grad_into`,
+`render_tiles` and the `remap_*` functions keep their signatures and take
+`&ImageU8Pyramid`: an in-memory pyramid cannot fail, and the callers that hold
+only those (the Python bindings given arrays, the view-tile binding, tests)
+are not made to handle an error that cannot happen. Beside them,
+`render_source_tile` and `render_source_tile_with_grad_into` take a
+`&ProjectedImage` (and so a `PhotographSource`) and the run's region pool, and
+return `Result<_, PhotographReadError>`: for `Whole` they call the infallible
+functions and answer `Ok`, for `Tiled` they assemble the view-region pyramid
+or sample through tiles, either of which can fail.
+
+**Kernels pass the error up.** Every kernel that renders from a
+`ProjectedImage` calls the `render_source_*` functions and returns the error
+with `?` through its loops, including its parallel ones (a `try_for_each` or
+a `collect::<Result<…>>` in place of a `for_each` or a plain `collect`). A
+kernel that already returns `Result` with an error enum of its own gains a
+`Photograph(PhotographReadError)` variant; one that returns plain values now
+returns `Result<_, PhotographReadError>`. The viewer's and the bindings'
+callers turn it into the step's failure (*The image levels of … changed while
+… ran; run it again*) or a Python `RuntimeError` naming the path. The changes,
+each in the step that moves its readers:
+
+| Step | Signatures that change |
+|------|------------------------|
+| 8 | `ViewSources::fetch` in [state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs) and the public `render_patch_bitmap_column` / `render_display_patch_bitmaps` in [display_bitmaps.rs](../../crates/sfmtool-core/src/patch/display_bitmaps.rs) return `PhotographReadError` instead of `Cancelled`, since `get_many` now returns `GetManyError`; `Building` cannot occur on their job threads but is handled as a failure naming the paths. Their kernels still render infallibly from `Whole` sources and refuse `Tiled` ones with `NotYetTiled` |
+| 9 | Track View's and the Track Table's renders, which draw a cell's error state instead of the tile |
+| 10 | the bench kernels (`bench::evaluate`, `evaluate_rendering_bitmap`, `score_bitmap`, `fit`, `render_bitmap_in_place`, `search_geometry`, `set_stage`, `build_track_at_pixel`, `classify`) and the patch kernels they and the reference picks share (`view_selection::select_patch_views`, `select_patch_cloud_views`, `reference_view::render_view_tile`, `read_track`, `stored_bitmap::render_reference`, `keypoint_localize`'s and `keypoint_subpixel`'s entry points, `member_coherence`'s, `observation_reading::read_cloud_observations`, `spawn::spawn_candidate_tracks`) |
+| 11 | `stored_bitmap::render_patch_bitmap`, `render_patch_cloud_bitmaps`, `refine_normals` and the normal kernels it runs (`pairwise_flow_normal`, `grown_plane_normal`, `grid_plane_normal`, `finite_difference_normal`), `refit_points`, and the cluster refinement's entry points with `sample_member_grid` |
+| 12 | `find_nearby_tracks` and the reads under it (`GreyImages::get`, `read_patch_along_ray`, `far_field_sweep`, `depth_layers`, `guided_matches`, `nearby_cluster_tracks`, `constellation_seeds`, `nearby_points`, `distance_range`) |
+| 14 | the Python bindings over all of these, raising the error; `NotYetTiled` is deleted |
+
 The viewer's side, in
 [photograph_requests.rs](../../crates/sfm-explorer/src/state/photograph_requests.rs):
 `display_photograph` keeps its contract for in-core photographs; a
@@ -1567,7 +1636,7 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    each rule of the region test refuses a file made to break it alone.
 7. **View-region pyramids** ([view-region-pyramid.md](view-region-pyramid.md)
    steps 1 and 2): regions in `ImageU8Pyramid` and every sampler, the
-   tile-addressed sampling path for renders past the per-patch allowance, `required_regions`,
+   tile-addressed sampling path for renders the run's region pool cannot hold, `required_regions`,
    `PhotographSource`, `clipped_share` over tiles, the grey reads by region,
    and the assembly from tiles, exercised on in-core photographs cut into
    tiles in memory. No reader changes yet. Tests: the companion draft's
@@ -1588,14 +1657,19 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    GUI-thread reader requests a tile while its photograph is `Building`; a file
    replaced by one with another record during a read fails with `Changed`, and
    one made stale during a kernel fails it with the named error rather than
-   waiting.
+   waiting; `PhotographReadError` and the `render_source_*` functions, with
+   the step-8 rows of § "Errors from reading pixels"; a reader not yet moved
+   refuses a tiled source with `NotYetTiled`.
 9. **Track View and the Track Table** on view-region pyramids, peeking tiles
-   (companion step 3).
-10. **The bench's jobs and the reference picks** (companion step 4).
+   (companion step 3), with the step-9 signature changes.
+10. **The bench's jobs and the reference picks** (companion step 4), with the
+    step-10 signature changes.
 11. **Bulk kernels**: the display patch bitmaps, the conversion to embedded
     patches, the web export, *Refine all normals*, *Refit all points* and the
-    cluster-patches build (companion step 5).
-12. **The nearby-track grey reads by region** (companion step 6).
+    cluster-patches build (companion step 5), with the step-11 signature
+    changes.
+12. **The nearby-track grey reads by region** (companion step 6), with the
+    step-12 signature changes.
 13. **Makers**: `sfm sift` and `build_sift_file`, the viewer's open-time queue
     and panel line over the cache's builder, `sfm ws mipmaps` with `--prune`
     and `--check` (its `--enable` waits for step 15, since it writes the
@@ -1606,9 +1680,11 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
     object; `--check` writes nothing.
 14. **Readers that must agree with the viewer**: `ImagePyramidSet.read`, and
     `embed-patches`, the strips, the `xform` steps, `sfm cluster-patches` and
-    the `scripts/` harnesses on it. Tests: with the small threshold, the CLI
-    and the viewer's code give the same results for the same photograph;
-    in-core results unchanged.
+    the `scripts/` harnesses on it, with the bindings raising
+    `PhotographReadError` and `NotYetTiled` deleted. Tests: with the small
+    threshold, the CLI and the viewer's code give the same results for the
+    same photograph; in-core results unchanged; a binding whose file changes
+    under it raises an error naming the path.
 15. **The tier on.** `sfm ws init` writes `mipmap_options` with its three
     values, `sfm ws mipmaps --enable` adds it to an existing workspace, the
     viewer's one-line notice for a workspace without it, and the workspace

@@ -134,10 +134,17 @@ therefore holds the same pixels as a whole pyramid of the stored levels would.
 An in-core photograph is not tiled for this: its whole pyramid is already in
 memory, and its renders read it as today (`PhotographSource::Whole`).
 
-A kernel's `ProjectedImage` holds a `PhotographSource`. `render_tile` and the
-other render entry points compute the regions from the map and, for a `Tiled`
-source, ask the cache for the region pyramid before sampling; for a `Whole`
-one they sample as today. The kernels' own loops do not change.
+A kernel's `ProjectedImage` holds a `PhotographSource`. The render entry
+points that take one (`render_source_tile` and its gradient form, beside the
+unchanged `render_tile` for in-memory pyramids) compute the regions from the
+map and, for a `Tiled` source, ask the cache for the region pyramid before
+sampling, or sample through tiles; for a `Whole` one they sample as today.
+They return `Result<_, PhotographReadError>`, since a tiled read can find its
+files changed or stale or be cancelled while it waits for tiles, and the
+kernels pass the error up with `?` through their loops, the parallel ones
+included; the main draft's § "Errors from reading pixels" lists the
+signatures that change and the step each changes in. The kernels' sampling
+arithmetic does not change.
 
 **Reuse across renders.** A kernel that optimizes a patch renders the same
 view many times with a slightly moved frame (the bench's fit rounds, the
@@ -150,7 +157,7 @@ working on, and drops them all when it moves to the next patch (a fit's
 rounds, a refinement's steps and an evaluation's views of one track share
 them; the next track starts with none). So what it keeps is at most one region
 pyramid per view of one patch, with the margin, 2.25 times the area of the
-region itself, and all of them together are held to one allowance
+region itself, and every copied region of the run reserves from one pool
 (§ "Bounding a render's memory").
 
 ## Bounding a render's memory
@@ -177,16 +184,29 @@ bounded by the patch resolution `R`:
 
 So a render samples one of two ways, and both give the same values:
 
-- **Copied regions**, as above, while the regions kept for the patch the
-  render belongs to, all its views together and this render's included, with
-  the reuse margin, total at most four tiles' worth of pixels
-  (4 x 512 x 512 x 3 bytes, 3.1 MB). This **allowance** is per patch, not per
-  view: a 151-view evaluation whose regions are 7 KB each keeps all of them,
-  and one whose views are stretched keeps what fits and sends the rest down
-  the tile path. Sampling a copied region is the fast path: one contiguous
-  image per level, and the AVX2 anisotropic kernel runs on it unchanged.
-- **Tile-addressed sampling** otherwise, for a render whose regions would
-  take the patch past its allowance. It keeps nothing for reuse: its pinned
+- **Copied regions**, as above, when the render can reserve its regions,
+  with the reuse margin, from the kernel run's **region pool**. The pool holds
+  four tiles' worth of pixels (4 x 512 x 512 x 3 bytes, 3.1 MB) per thread
+  of the rayon pool, 99 MB on 32 threads, for all the run's patches
+  together, however many are in progress: a kernel's patches do not map one
+  to a worker, since *Refine all normals* runs a parallel loop over points
+  whose normal kernels run parallel loops over views
+  (`bench/refine_normals.rs`, `bench/normal/pairwise_flow/crops.rs`), the
+  cluster refinement nests parallel loops too, and a worker waiting in an
+  inner loop takes other points from the outer one. A reservation is one
+  atomic compare-and-add that either succeeds or fails at once; it never
+  waits, so no worker can block on the pool, and nesting or work stealing
+  cannot deadlock it. A region's bytes go back to the pool when the region is
+  dropped (when its patch is done, or at once for a render that keeps
+  nothing). A 151-view evaluation whose regions are 7 KB each keeps all of
+  them; a run whose views are stretched fills the pool and sends the rest
+  down the tile path. Sampling a copied region is the fast path: one
+  contiguous image per level, and the AVX2 anisotropic kernel runs on it
+  unchanged. The pool belongs to the run: the sources one `get_many` returns
+  share one, a `get` makes one of 3.1 MB, and Track View's renders on the
+  GUI thread share one of 3.1 MB.
+- **Tile-addressed sampling** otherwise, for a render whose reservation
+  fails. It keeps nothing for reuse: its pinned
   tiles are released when it ends, and the next render of the same view
   computes its regions again. The render does not copy a region. It
   reads each sample's taps from the photograph tile that holds them: the tap
@@ -211,17 +231,24 @@ So a render samples one of two ways, and both give the same values:
   taps through the same tile lookup and keeps its own arithmetic, so its
   values are unchanged.
 
-A kernel works on one patch per worker thread and a worker runs one render
-at a time, so the **workers in flight** are the rayon pool's threads, 32 on
-the development machine. The worst case of one worker is its patch's
-allowance, 3.1 MB of copied regions, plus the 16 tiles pinned by the render
-it is running, 12.7 MB: 15.8 MB, whatever the views or the number of them.
-32 workers hold at most 32 x 15.8 MB, about 510 MB, on top of the tile
-budget; the common case, footprints that are not stretched, stays at a few
+The bound has two parts. **Copied regions** are bounded by the run's pool,
+99 MB on 32 threads, whatever the number of patches in progress. **Pinned
+tiles** are bounded per thread that renders: a thread runs one render at a
+time, because a render never waits inside itself (its rows run serially on a
+rayon worker, `parallelize_rows` in `camera/warp_map.rs` checking
+`current_thread_index`, and its tile reads decode on the calling thread
+without rayon), so work stealing cannot start a second render on a thread
+whose first still holds tiles. The threads that render are the rayon pool's
+32, the job thread that calls the kernel, and in the viewer the other
+queue's job thread and the GUI thread. One kernel run on the command line
+holds at most 99 MB + 33 x 12.7 MB, about 520 MB, on top of the tile budget;
+the viewer, with at most two kernel runs at once (one per background queue)
+and Track View's renders, at most 2 x 99 MB + 3.1 MB + 35 x 12.7 MB, about
+650 MB. The common case, footprints that are not stretched, stays at a few
 kilobytes per view. No view is refused and no result changes:
 which path a render takes depends on its boxes and on what its patch already keeps, and both read the same
 pixels. `clipped_share` already walks tiles one at a time (above). The
-allowance of four tiles and the window of 16 are open question 4.
+pool's four tiles per thread and the window of 16 are open question 4.
 
 **On the GUI thread** (Track View's tiles, crops and context, the Track
 Table's crop column), the panel acts on the photograph's layout state as the
@@ -242,9 +269,10 @@ requesting the missing ones. The GUI thread never decodes and never waits.
   measurements.
 - **Bulk kernels** (the display patch bitmaps at open, *Refine all normals*,
   the web export) touch every photograph at the levels their patches need.
-  What they hold is the regions of the patches in progress, one per worker
-  thread, a few kilobytes each and at most 3.1 MB copied plus 12.7 MB of
-  pinned tiles each (§ "Bounding a render's memory"), plus the tile cache, which its budget
+  What they hold is the regions of the patches in progress, a few kilobytes
+  each, all within the run's region pool (99 MB on 32 threads), plus at most
+  12.7 MB of pinned tiles per rendering thread (§ "Bounding a render's
+  memory"), plus the tile cache, which its budget
   bounds whatever the number of photographs; the tiles they touch can be many
   more (level 2 of one 200-megapixel photograph is 48 tiles, 38 MB; level 0
   is 768 tiles, 607 MB), and the ones past the budget are decoded again when
@@ -273,8 +301,9 @@ source.
    gradient sampler (the AVX2 anisotropic kernel included), the
    tile-addressed path with its window of pinned tiles for the `remap.rs`
    samplers and tile-addressed versions of `sample_grid_window`,
-   `build_template` and the view selection's affine fast path, the per-patch
-   allowance that chooses between the paths, and `required_regions` for each
+   `build_template` and the view selection's affine fast path, the run's
+   region pool that chooses between the paths, the `render_source_*` entry
+   points returning `PhotographReadError`, and `required_regions` for each
    sampler. Tests: for
    random warps over a synthetic photograph, every sampler, every value and
    gradient render through a region pyramid built from `required_regions`, and
@@ -284,9 +313,10 @@ source.
    100 times on a diagonal and a `Bilinear` render over a large footprint
    (which take the tile path); the cluster grid samplers and the affine fast
    path through tiles equal their whole-level results on stretched maps; a
-   patch whose views together exceed the allowance keeps no more than 3.1 MB,
-   the views past it taking the tile path; the tile path pins no more than its
-   window; a
+   run whose regions exceed its pool (sized small for the test) never holds
+   more than the pool, the renders past it taking the tile path, including
+   from nested parallel loops on many threads at once, and no reservation
+   waits; the tile path pins no more than its window; a
    region one pixel smaller on an inner edge makes the comparison fail, so
    the test can fail.
 2. **`view_region_pyramid` in the cache**, with the reuse margin, and
@@ -322,9 +352,11 @@ source.
 3. **The point order of bulk kernels.** Grouped by reference image and
    position (as designed), or by tile. Recommendation: by reference image and
    position, which needs no knowledge of the tile grid in the kernel.
-4. **The allowance and the tile window.** Four tiles of copied regions per
-   patch, all views together, and 16 pinned tiles for the tile path (as
-   designed), or other values. Recommendation: keep them, and count in each kernel's phase note
+4. **The pool and the tile window.** Four tiles of copied regions per rayon
+   thread, shared by the run, and 16 pinned tiles per render on the tile
+   path (as designed), or other values; or capping the patches in progress at
+   the worker count instead of pooling, which would need a wait that nested
+   loops could deadlock on. Recommendation: keep them, and count in each kernel's phase note
    how many renders took the tile path, so both are tuned on real captures;
    the values change memory and speed, never a result.
 5. **An interface for kernels.** Designed as a `PhotographSource` enum in
