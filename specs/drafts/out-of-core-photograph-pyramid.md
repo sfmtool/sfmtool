@@ -24,8 +24,9 @@ or number of the photographs. That last part is specified in the companion
 draft [view-region-pyramid.md](view-region-pyramid.md), which this design
 requires: without it no kernel can read a large photograph within a bounded
 memory, so it is a numbered step here (§ "Implementation steps"), not a later
-optimization. Open: questions 6 onward at the end, each with a
-recommendation; the user has decided questions 1 to 5.
+optimization. The user has decided every open question of this draft
+(§ "Open questions", 1 to 13); the five open questions of the companion draft
+remain open.
 
 Amends [core/camera/photograph-cache.md](../core/camera/photograph-cache.md)
 (the cache gains photograph tiles and an on-disk tier, and its pyramids a depth
@@ -565,7 +566,7 @@ a block of settings for one kind of derived file:
   `--full-resolution-jpeg-quality`), refuses a file that already has it, and
   then makes the sets.
 - **`sfm ws upgrade`** leaves the object as it finds it, absent or present;
-  open question 13 asks whether it should offer to add it.
+  the user has decided it does not offer to add it (open question 13).
 - **Removing the object** turns the tier off: from then on no reader reads
   `.sfm-cache/`, and every photograph is read in core again, with its exact
   levels. The files are not deleted by any reader. `sfm ws mipmaps --prune`
@@ -1322,10 +1323,13 @@ The panel stops making a texture of the photograph and draws photograph tiles:
   and panel changes") is unchanged; it computes `display_size` from the
   photograph's level-0 size, which the panel reads from the header (or the
   camera) rather than from a texture.
-- **Zoom limit.** `MAX_ZOOM` is 32 times the fit. For a 16320 px photograph in
-  a 400 px panel that reaches 0.78 screen pixels per level-0 pixel, so the
-  original's pixels cannot be enlarged at all. The open questions propose a
-  limit that also allows 8 screen pixels per level-0 pixel.
+- **Zoom limit.** The limit becomes `max(32, 8 / fit_scale)` times the fit,
+  where `fit_scale` is the screen pixels per level-0 pixel at the fit, so a
+  level-0 pixel can always be enlarged to 8 screen pixels (open question 7).
+  Today's `MAX_ZOOM` of 32 times the fit reaches only 0.78 screen pixels per
+  level-0 pixel for a 16320 px photograph in a 400 px panel, so the
+  original's pixels could not be enlarged at all; for a photograph that fits
+  a panel at 1/4 or larger, the limit stays 32.
 - **Agents.** A `screenshot` of the panel shows what the frame drew, coarser
   tiles included. `get_image_detail_view` gains `level`, the level the panel
   draws, and `tiles_pending`, how many visible tiles are not yet drawn at that
@@ -1900,11 +1904,14 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    now reads level 6, on a synthetic view shrunk 64 times; the tests that pin
    rendered values updated where they change, each change explained.
 2. **Image Detail draws photograph tiles** cut from the in-memory pyramid,
-   with the level rule, the coarser fallback, the per-frame upload cap and the
-   texture limit of 256. This alone ends the crash in Image Detail for every
+   with the level rule, the coarser fallback, the per-frame upload cap, the
+   texture limit of 256 and the zoom limit `max(32, 8 / fit_scale)`. This
+   alone ends the crash in Image Detail for every
    photograph, though a 200-megapixel one is still read whole until the tier
    is on for its workspace. Tests (headless, the panel's lib tests): the level
-   for a set of scales; the tiles a view asks for; a 9000 x 16 synthetic
+   for a set of scales; the zoom limit for a large and a small photograph
+   (8 screen pixels per level-0 pixel reached, and 32 kept); the tiles a view
+   asks for; a 9000 x 16 synthetic
    photograph never makes a texture over 514 px; the fallback draws the
    coarser level where a tile is missing; the test data's photographs look as
    they did.
@@ -2089,74 +2096,52 @@ ranges in this draft are over those runs.
    (0.8 to 1.7 s at 200 MP).
 5. **The command's name.** *Decided by the user:* `sfm ws mipmaps`, since the
    files belong to the workspace.
-6. **The build budget and cancellation.** Builds started by independent
-   callers are bounded by reservations made at decision time on a
-   non-blocking count against a quarter of physical memory, each caller still
-   granted one when it is used up, with at most one panel request in flight
-   (as designed: the budget plus three sets in the viewer). Options: (a) as designed; (b) a
-   blocking semaphore, which would bound memory exactly but make a rayon
-   worker wait on another caller's build for a permit, the cross-caller
-   coupling this design was simplified to remove; (c) no shared count, each
-   `get_many` sizing its groups alone, which would let two background tasks
-   and a panel each take a quarter of memory. And for cancellation: (a) a
-   cancelled maker abandons the build and a waiter takes it over (as
-   designed); (b) a maker always finishes, so a slot never changes hands but
-   a cancelled task keeps the machine busy for up to 4 s per set it started.
-   Recommendation: (a) for both.
-7. **Image Detail's zoom limit.** `MAX_ZOOM` = 32 times the fit does not reach
-   full resolution of a 200-megapixel photograph in a small panel. Options:
-   keep it; make the limit `max(32, 8 / fit_scale)` so a level-0 pixel can
-   always be enlarged to 8 screen pixels. Recommendation: the second.
-8. **Mipmaps written by another build.** A file is the record, so a newer
-   `jpeg-encoder` never rewrites it; but a read-only copy of the workspace
-   read through the in-memory equivalent by another build can differ from the
-   files by the encoders' differences. Options: accept it (as designed), or
-   rebuild when the record's `encoder` differs. Recommendation: accept it and
-   keep `encoder` in the record for diagnosis; rebuilding would change results
-   with no input changed.
-9. **The decoder.** The tile decode needs `jpeg-decoder`'s
-   `ColorTransform::None`, and the region decode of an original its present
-   upsampling and conversion.
+6. **The build budget and cancellation.** *Decided by the user:* (a) for
+   both, as designed. Builds are bounded by reservations made at decision
+   time on each cache's non-blocking count, each caller still granted one when
+   the budget is used up, with at most one panel request in flight (the
+   budget plus three sets in the viewer); not a blocking semaphore, which
+   would make a rayon worker wait for another caller's permit, and not a
+   count per `get_many`, which would let two tasks and a panel each take the
+   budget. A cancelled maker abandons its build and a waiter takes it over,
+   rather than every maker finishing.
+7. **Image Detail's zoom limit.** *Decided by the user:* the limit is
+   `max(32, 8 / fit_scale)` times the fit, so a level-0 pixel can always be
+   enlarged to 8 screen pixels (§ "Image Detail").
+8. **Mipmaps written by another build.** *Decided by the user:* accepted. A
+   file is the record, so a newer `jpeg-encoder` never rewrites a current
+   mipmap, though a read-only copy of the workspace read through the
+   in-memory equivalent by another build can differ from the files by the
+   encoders' differences; `encoder` stays in the record for diagnosis.
+9. **The decoder.** *Decided by the user:* the mipmap reader keeps
+   `jpeg-decoder` (whose `ColorTransform::None` the tile decode needs, and
+   whose upsampling and conversion the region decode of an original relies
+   on) until zune-jpeg passes the same tile-equality tests. If `read_rgb`
+   moves to zune-jpeg, as
    [reading-and-writing-images.md](../core/camera/reading-and-writing-images.md)
-   plans to move JPEG reading to zune-jpeg when it is fixed. Recommendation:
-   the mipmap reader keeps `jpeg-decoder` until zune-jpeg passes the same
-   tile-equality tests; if `read_rgb` moves and the region decode no longer
-   equals it for some layout, the region test sends that layout to
-   `-mipmap1`, as a stated change of results.
-10. **Budgets.** The tile budget's default (a sixteenth of memory, 512 MiB to
-    4 GiB) and the 256 GPU tile textures are estimates from the figures above.
-    With view-region pyramids the tile budget is also what bounds every
-    kernel's memory for out-of-core photographs, so it now trades memory
-    against tile decodes for bulk kernels. Recommendation: ship them, report
+   plans, and the region decode no longer equals it for some layout, the
+   region test sends that layout to `-mipmap1`, as a stated change of
+   results.
+10. **Budgets.** *Decided by the user:* ship the defaults (a tile budget of a
+    sixteenth of memory, 512 MiB to 4 GiB, and 256 GPU tile textures), report
     the tiles decoded and reused in each kernel's phase note and the cache's
-    `stats` in the Background Tasks panel's tooltip, and tune on real captures.
+    `stats` in the Background Tasks panel's tooltip, and tune them on real
+    captures.
 11. **SIFT and the kernels read different level 0s** for an original that is
-    not region-readable: SIFT the original, the kernels `-mipmap1` (0.07 to
-    0.09 grey levels apart for the user's JPEGs, 0.19 to 0.32 for the non-JPEG
-    proxy). Options: accept it (as designed); have SIFT read `-mipmap1` too.
-    Recommendation: accept it; SIFT runs before the files exist and its output
-    is stored, and making it wait for them would make extraction depend on the
-    cache.
-12. **Restart intervals wider than two tiles.** A camera may write one
-    interval per MCU row; then a 512 px tile of a 16320 px original decodes
-    the whole width, about 32 times the work (30 to 40 ms a tile, estimated).
-    Options: (a) refuse intervals wider than 1024 px in the region test, so
-    such originals get a `-mipmap1` (as designed); (b) admit them and accept
-    the slower tiles; (c) a wider limit, such as 4096 px. Recommendation: (a);
-    a `-mipmap1` costs 33 to 43 MB and one encode, once, and every tile read
-    after it is about 3 ms, where admitting them would make every full
-    resolution view and every level-0 kernel read about ten times slower for
-    the life of the workspace.
-13. **`sfm ws upgrade` and the object.** A workspace made before step 15 has
-    no `mipmap_options` and so keeps whole in-memory pyramids for every
-    photograph. Options: (a) `sfm ws upgrade` leaves the absence as it is,
-    and `sfm ws mipmaps --enable` adds the object (as designed); (b)
-    `sfm ws upgrade` adds the object with the defaults; (c) it asks.
-    Recommendation: (a). Adding the object changes which pixels the kernels
-    read for every large photograph, a change of results the owner should make
-    by a command named for it; `sfm ws upgrade` moves a workspace between
-    format versions and is run for that reason, and an absent object is a
-    valid state, not an old version. The viewer's notice names the command
+    not region-readable. *Decided by the user:* accepted. SIFT reads the
+    original and the kernels `-mipmap1` (0.07 to 0.09 grey levels apart for
+    the user's JPEGs, 0.19 to 0.32 for the non-JPEG proxy); SIFT runs before
+    the files exist and its output is stored.
+12. **Restart intervals wider than two tiles.** *Decided by the user:* (a),
+    as designed. The region test refuses intervals wider than 1024 px, so
+    such originals get a `-mipmap1` (33 to 43 MB and one encode, once) and
+    every tile after it reads in about 3 ms, rather than every full-resolution
+    read decoding a strip of the whole width.
+13. **`sfm ws upgrade` and the object.** *Decided by the user:* (a), as
+    designed. `sfm ws upgrade` leaves an absent `mipmap_options` absent, and
+    `sfm ws mipmaps --enable` adds the object; adding it changes which pixels
+    the kernels read for every large photograph, a change the owner makes by
+    a command named for it. The viewer's notice names the command
     (§ "The workspace setting").
 
 ## Problems found with the decisions
