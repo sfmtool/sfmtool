@@ -1013,7 +1013,8 @@ patches together, reserve from a pool of 3.1 MB per rayon thread, 99 MB on
 the development machine's 32 threads; a render that cannot reserve takes the
 tile path and keeps nothing. The pinned tiles are 16 (12.7 MB) per render
 running, and a thread runs one render at a time (a render's own rows never
-go parallel on a worker, `parallelize_rows` in `camera/warp_map.rs`), so at
+go parallel on a worker, `parallelize_rows` in `camera/warp_map.rs`, and a
+render on the tile path keeps its rows serial on every thread), so at
 most 12.7 MB per thread that renders: the 32 rayon threads, the calling job
 thread, and in the viewer the other queue's job thread and the GUI thread.
 One kernel run on the command line holds at most 99 MB + 33 x 12.7 MB, about
@@ -1534,7 +1535,7 @@ each in the step that moves its readers:
 | 10 | the bench kernels (`bench::evaluate`, `evaluate_rendering_bitmap`, `score_bitmap`, `fit`, `render_bitmap_in_place`, `search_geometry`, `set_stage`, `build_track_at_pixel`, `classify`) and the patch kernels they and the reference picks share (`view_selection::select_patch_views`, `select_patch_cloud_views`, `reference_view::render_view_tile`, `read_track`, `stored_bitmap::render_reference`, `keypoint_localize`'s and `keypoint_subpixel`'s entry points, `member_coherence`'s, `observation_reading::read_cloud_observations`, `spawn::spawn_candidate_tracks`) |
 | 11 | `stored_bitmap::render_patch_bitmap`, `render_patch_cloud_bitmaps`, `refine_normals` and the normal kernels it runs (`pairwise_flow_normal`, `grown_plane_normal`, `grid_plane_normal`, `finite_difference_normal`), `refit_points`, and the cluster refinement's entry points with `sample_member_grid` |
 | 12 | `find_nearby_tracks` and the reads under it (`GreyImages::get`, `read_patch_along_ray`, `far_field_sweep`, `depth_layers`, `guided_matches`, `nearby_cluster_tracks`, `constellation_seeds`, `nearby_points`, `distance_range`) |
-| 14 | the Python bindings over all of these, raising the error; `NotYetTiled` is deleted |
+| 14 | `ImagePyramidSet.read`, the first binding whose sources can be tiled; `NotYetTiled` is deleted. The bindings over the kernels above change with their kernels in steps 10 to 12 and raise the error from then on, though the `Whole` sources they build from arrays cannot fail |
 
 The viewer's side, in
 [photograph_requests.rs](../../crates/sfm-explorer/src/state/photograph_requests.rs):
@@ -1680,8 +1681,9 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
     object; `--check` writes nothing.
 14. **Readers that must agree with the viewer**: `ImagePyramidSet.read`, and
     `embed-patches`, the strips, the `xform` steps, `sfm cluster-patches` and
-    the `scripts/` harnesses on it, with the bindings raising
-    `PhotographReadError` and `NotYetTiled` deleted. Tests: with the small
+    the `scripts/` harnesses on it, with `ImagePyramidSet.read`'s sources
+    raising `PhotographReadError` through the bindings and `NotYetTiled`
+    deleted. Tests: with the small
     threshold, the CLI and the viewer's code give the same results for the
     same photograph; in-core results unchanged; a binding whose file changes
     under it raises an error naming the path.

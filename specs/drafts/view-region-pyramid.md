@@ -238,7 +238,12 @@ time, because a render never waits inside itself (its rows run serially on a
 rayon worker, `parallelize_rows` in `camera/warp_map.rs` checking
 `current_thread_index`, and its tile reads decode on the calling thread
 without rayon), so work stealing cannot start a second render on a thread
-whose first still holds tiles. The threads that render are the rayon pool's
+whose first still holds tiles. On a thread that is not a rayon worker,
+`parallelize_rows` hands a render of more than 2048 pixels
+(`REMAP_PAR_MIN_PIXELS`) to rayon row by row, as it does Track View's
+64 x 64 tiles on the GUI thread; the tile path does not, and keeps its rows
+serial on every thread, so its window has one owner. A copied-region render
+whose rows go to rayon pins no tiles while it samples. The threads that render are the rayon pool's
 32, the job thread that calls the kernel, and in the viewer the other
 queue's job thread and the GUI thread. One kernel run on the command line
 holds at most 99 MB + 33 x 12.7 MB, about 520 MB, on top of the tile budget;
