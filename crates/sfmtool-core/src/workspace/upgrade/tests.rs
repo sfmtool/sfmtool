@@ -2009,7 +2009,6 @@ fn make_refused(path: &Path) {
 }
 
 /// How many version 1 `.sift` files the fixture's old folder holds.
-#[cfg(windows)]
 fn old_folder_count(fixture: &Fixture) -> usize {
     std::fs::read_dir(fixture.old_folder())
         .map(|d| d.count())
@@ -2198,4 +2197,663 @@ fn a_root_given_with_a_parent_directory_after_a_link_upgrades_the_workspace_it_n
         report.files[0].path,
         report.workspace_dir.join(WORKSPACE_FILE_NAME)
     );
+}
+
+/// Each error says what stopped the run and what to do, and a list longer
+/// than the items it names gives the count of the rest.
+#[test]
+fn each_error_says_what_stopped_the_run() {
+    let p = |s: &str| PathBuf::from(s);
+    let many: Vec<PathBuf> = (0..NAMED_ITEMS + 2)
+        .map(|i| p(&format!("f{i}.sfmr")))
+        .collect();
+    let failure = SiftFileFailure {
+        sift_path: p("a.sift"),
+        problem: "locked".into(),
+    };
+    let conflict_text = format!(
+        "{} and {} would both become {}",
+        p("one/a.sift").display(),
+        p("two/a.sift").display(),
+        p("new/a.sift").display()
+    );
+    let cases = [
+        (
+            UpgradeWorkspaceError::WorkspaceFile {
+                path: p("ws.json"),
+                problem: "has no integer 'version'".into(),
+            },
+            vec!["the workspace file ws.json has no integer 'version'"],
+        ),
+        (
+            UpgradeWorkspaceError::ListFolder {
+                folder: p("dir"),
+                problem: "denied".into(),
+            },
+            vec!["failed to list dir: denied"],
+        ),
+        (
+            UpgradeWorkspaceError::FeatureOptions {
+                files: many.clone(),
+                error: FeatureOptionsError::Undistort,
+            },
+            vec!["cannot be converted to version 2", "f0.sfmr", "and 2 more"],
+        ),
+        (
+            UpgradeWorkspaceError::FeaturePrefixDir {
+                files: vec![p("x.sfmr")],
+                feature_prefix_dir: "../up".into(),
+            },
+            vec!["the feature_prefix_dir '../up'", "x.sfmr"],
+        ),
+        (
+            UpgradeWorkspaceError::NotTreeRoot { root: p("outer") },
+            vec!["nested in the workspace outer; run the upgrade there"],
+        ),
+        (
+            UpgradeWorkspaceError::UnreadableSiftFiles(vec![failure.clone()]),
+            vec!["1 .sift file(s) could not be read", "a.sift: locked"],
+        ),
+        (
+            UpgradeWorkspaceError::FolderFeatureOptions {
+                folder: p("old"),
+                first: p("old/a.sift"),
+                second: p("old/b.sift"),
+            },
+            vec!["the features folder old holds .sift files that record different"],
+        ),
+        (
+            UpgradeWorkspaceError::FolderTargets {
+                file: p("x.sfmr"),
+                folders: vec![p("one"), p("two")],
+            },
+            vec![
+                "x.sfmr names old features folders that convert to different",
+                "two",
+            ],
+        ),
+        (
+            UpgradeWorkspaceError::Conflicts(vec![SiftConflict {
+                new_file: p("new/a.sift"),
+                first: p("one/a.sift"),
+                second: p("two/a.sift"),
+            }]),
+            vec![conflict_text.as_str()],
+        ),
+        (
+            UpgradeWorkspaceError::SiftFiles(vec![failure]),
+            vec![
+                "1 version 1 .sift file(s) could not be converted",
+                "a.sift: locked",
+            ],
+        ),
+        (
+            UpgradeWorkspaceError::Cancelled,
+            vec!["cancelled; run it again"],
+        ),
+    ];
+    for (error, expected) in cases {
+        let text = error.to_string();
+        for part in expected {
+            assert!(text.contains(part), "{text:?} lacks {part:?}");
+        }
+    }
+}
+
+/// A file whose content no reader accepts fails, wherever it is in the
+/// plan: the workspace files are left at version 1 and nothing is deleted,
+/// in the dry run's report and in the run's. A `.camrig` that cannot be
+/// read fails too, and a `.kdf` that cannot be read is left.
+#[test]
+fn a_file_that_cannot_be_read_stops_the_deletion_and_the_workspace_files() {
+    let fixture = fixture();
+    for name in [
+        "sfmr/garbage.sfmr",
+        "matches/garbage.matches",
+        "bad.camrig",
+        "bad.kdf",
+    ] {
+        std::fs::write(fixture.path(name), b"not an archive").unwrap();
+    }
+    let workspace_file = fixture.root.join(WORKSPACE_FILE_NAME);
+    let before = std::fs::read(&workspace_file).unwrap();
+    for dry_run in [true, false] {
+        let report = run(&fixture, dry_run);
+        for name in ["sfmr/garbage.sfmr", "matches/garbage.matches", "bad.camrig"] {
+            let outcome = outcome_of(&report, &fixture.path(name));
+            assert!(
+                matches!(outcome, UpgradeOutcome::Failed(r) if r.contains("cannot be read")),
+                "{name}: {outcome:?}"
+            );
+        }
+        assert!(not_converted(outcome_of(&report, &fixture.path("bad.kdf"))));
+        let UpgradeOutcome::NotConverted(reason) = outcome_of(&report, &workspace_file) else {
+            panic!("{report:?}")
+        };
+        assert!(reason.contains("left at version 1"), "{reason}");
+        assert!(!report.old_folders_deleted);
+        assert!(report.folders.iter().all(|f| !f.deleted));
+        assert!(
+            report
+                .notes
+                .iter()
+                .any(|n| n.contains("workspace files were not written")
+                    && n.contains("move them out of the tree")),
+            "{:?}",
+            report.notes
+        );
+    }
+    assert_eq!(std::fs::read(&workspace_file).unwrap(), before);
+    assert_eq!(old_folder_count(&fixture), IMAGES);
+}
+
+/// A `.matches` file of a workspace outside the tree is left; a `.kdf` of a
+/// version 2 record is already current.
+#[test]
+fn a_matches_file_of_another_workspace_and_a_current_index_are_left() {
+    let fixture = fixture();
+    let outside = fixture._dir.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    write_v2_workspace_file(&outside);
+    let mut elsewhere = pairwise_matches(&fixture.old_folder(), v1_record());
+    elsewhere.metadata.workspace.relative_path = "../../outside".into();
+    sfmtool_matches_format::write_matches(
+        &fixture.path("matches/elsewhere.matches"),
+        &elsewhere,
+        3,
+    )
+    .unwrap();
+    let mut current = v2_record();
+    current.feature_prefix_dir = v1_record().feature_prefix_dir;
+    write_index(&fixture.path("current.kdf"), &fixture.old_folder(), current);
+
+    let report = run(&fixture, true);
+    let UpgradeOutcome::NotConverted(reason) =
+        outcome_of(&report, &fixture.path("matches/elsewhere.matches"))
+    else {
+        panic!("{report:?}")
+    };
+    assert!(reason.contains("outside this tree"), "{reason}");
+    assert_eq!(
+        outcome_of(&report, &fixture.path("current.kdf")),
+        &UpgradeOutcome::AlreadyCurrent
+    );
+}
+
+/// A refused `.sfmr` or `.matches` file whose image names cannot be read
+/// still names the folders its record's prefix names below its workspace,
+/// which are kept.
+#[test]
+fn a_refused_file_whose_image_names_cannot_be_read_keeps_its_folder() {
+    let fixture = fixture();
+    let names_entry = |name: &str| name == "images/names.json.zst";
+    let sfmr = fixture.path("sfmr/no-names.sfmr");
+    std::fs::copy(fixture.path("sfmr/sift.sfmr"), &sfmr).unwrap();
+    rewrite_archive(&sfmr, METADATA, |_| {}, names_entry);
+    let matches = fixture.path("matches/no-names.matches");
+    std::fs::copy(fixture.path("matches/clusters.matches"), &matches).unwrap();
+    rewrite_archive(&matches, METADATA, |_| {}, names_entry);
+
+    let report = run(&fixture, true);
+    for path in [&sfmr, &matches] {
+        assert!(not_converted(outcome_of(&report, path)), "{report:?}");
+    }
+    let folder = report
+        .folders
+        .iter()
+        .find(|f| f.old_folder == fixture.old_folder())
+        .unwrap();
+    assert_eq!(
+        folder.kept_because.as_deref(),
+        Some("kept: named by 2 file(s) the current reader refuses"),
+        "{folder:?}"
+    );
+    assert!(!folder.deleted);
+}
+
+/// A file whose record names no folder on disk takes its workspace file's
+/// converted record when the prefixes agree, and otherwise its own record
+/// converted under the tool's workspace `feature_type`.
+#[test]
+fn a_file_naming_no_folder_on_disk_takes_a_converted_record() {
+    let fixture = fixture();
+    let bare = fixture.root.join("bare");
+    std::fs::create_dir_all(&bare).unwrap();
+    // Options other than the workspace file's under its prefix: the file takes
+    // the workspace file's converted record, not its own.
+    let mut same_record = v1_record();
+    same_record.feature_options["max_num_features"] = serde_json::json!(15);
+    let mut same = reconstruction(&fixture.root, &fixture.old_folder(), same_record, true);
+    for (i, image) in same.image_set.images.iter_mut().enumerate() {
+        image.name = format!("./bare/{}", image_name(i));
+    }
+    let same_path = fixture.path("sfmr/same-prefix.sfmr");
+    same.save(&same_path, &Progress::none()).unwrap();
+    let mut gone = v1_record();
+    gone.feature_prefix_dir = "features/sift-gone".into();
+    gone.feature_type = "sift".into();
+    let gone_path = fixture.path("sfmr/gone-prefix.sfmr");
+    reconstruction(&fixture.root, &fixture.old_folder(), gone.clone(), true)
+        .save(&gone_path, &Progress::none())
+        .unwrap();
+
+    let report = run(&fixture, false);
+    for path in [&same_path, &gone_path] {
+        assert_eq!(outcome_of(&report, path), &UpgradeOutcome::Converted);
+    }
+    assert_eq!(fields(&record_of(&same_path)), fields(&v2_record()));
+    let options = upgrade_feature_options("sfmtool", &gone.feature_options).unwrap();
+    let feature_type = crate::workspace::feature_type_for_tool("sfmtool", &options);
+    assert_eq!(
+        fields(&record_of(&gone_path)),
+        fields(&WorkspaceContents {
+            feature_prefix_dir: feature_prefix_dir("sfmtool", &feature_type, &options),
+            feature_tool: "sfmtool".into(),
+            feature_type,
+            feature_options: options,
+        }),
+    );
+}
+
+/// A folder no workspace file names whose `.sift` files record options that
+/// cannot be converted stops the run, naming a file that holds them.
+#[test]
+fn a_folder_whose_sift_files_hold_options_that_cannot_convert_is_refused() {
+    let fixture = fixture();
+    let hand = fixture.images().join("features/sift-hand");
+    let mut bad = v1_record();
+    bad.feature_options["gray_formula"] = serde_json::json!("not a formula");
+    for i in 0..2 {
+        write_version_1_of(&fixture.images().join(image_name(i)), &hand, 5, bad.clone());
+    }
+    let mut record = v1_record();
+    record.feature_prefix_dir = "features/sift-hand".into();
+    reconstruction(&fixture.root, &fixture.old_folder(), record, true)
+        .save(&fixture.path("sfmr/hand.sfmr"), &Progress::none())
+        .unwrap();
+    let error = run_error(&fixture, true);
+    let UpgradeWorkspaceError::FeatureOptions { files, .. } = &error else {
+        panic!("{error}")
+    };
+    assert_eq!(files.len(), 1, "{error}");
+    assert!(files[0].starts_with(&hand), "{error}");
+}
+
+/// A file whose images lie in two directories whose same-named folders hold
+/// files of different options names folders that convert to two new
+/// folders; the run stops before writing, naming the file.
+#[test]
+fn a_file_naming_folders_that_convert_apart_is_refused() {
+    let fixture = fixture();
+    let images2 = fixture.root.join("images2");
+    std::fs::create_dir_all(&images2).unwrap();
+    let mut other = v1_record();
+    other.feature_options["max_num_features"] = serde_json::json!(15);
+    // Neither folder's options are the workspace file's, so neither converts
+    // into its new folder.
+    let mut first = v1_record();
+    first.feature_options["max_num_features"] = serde_json::json!(14);
+    let hand = fixture.images().join("features/sift-hand");
+    let hand2 = images2.join("features/sift-hand");
+    for i in 0..IMAGES {
+        let name = image_name(i);
+        if i < 4 {
+            write_version_1_of(&fixture.images().join(&name), &hand, 5, first.clone());
+        } else {
+            std::fs::copy(fixture.images().join(&name), images2.join(&name)).unwrap();
+            write_version_1_of(&images2.join(&name), &hand2, 5, other.clone());
+        }
+    }
+    let mut record = v1_record();
+    record.feature_prefix_dir = "features/sift-hand".into();
+    let mut recon = reconstruction(&fixture.root, &fixture.old_folder(), record, true);
+    for (i, image) in recon.image_set.images.iter_mut().enumerate() {
+        if i >= 4 {
+            image.name = format!("images2/{}", image_name(i));
+        }
+    }
+    let path = fixture.path("sfmr/span.sfmr");
+    recon.save(&path, &Progress::none()).unwrap();
+    let before = snapshot(&fixture.root);
+    for dry_run in [true, false] {
+        let error = run_error(&fixture, dry_run);
+        let UpgradeWorkspaceError::FolderTargets { file, folders } = &error else {
+            panic!("{error}")
+        };
+        assert_eq!(file, &path);
+        assert_eq!(folders.len(), 2, "{error}");
+    }
+    assert_eq!(snapshot(&fixture.root), before);
+}
+
+/// The same `.sift` file in two old folders that convert to one new folder
+/// is converted once.
+#[test]
+fn the_same_file_in_two_old_folders_is_converted_once() {
+    let fixture = fixture();
+    let copy = fixture.images().join("features/sift-copy");
+    std::fs::create_dir_all(&copy).unwrap();
+    for i in 0..IMAGES {
+        let name = format!("{}.sift", image_name(i));
+        std::fs::copy(fixture.old_folder().join(&name), copy.join(&name)).unwrap();
+    }
+    let mut record = v1_record();
+    record.feature_prefix_dir = "features/sift-copy".into();
+    reconstruction(&fixture.root, &copy, record, true)
+        .save(&fixture.path("sfmr/copy.sfmr"), &Progress::none())
+        .unwrap();
+    let report = run(&fixture, true);
+    let copy_row = report
+        .folders
+        .iter()
+        .find(|f| f.old_folder == copy)
+        .unwrap();
+    assert_eq!(copy_row.new_folder, Some(fixture.new_folder()));
+    assert_eq!(report.converted_sift_file_count, 2 * IMAGES);
+}
+
+/// A new folder that cannot be made fails the conversion, naming it, before
+/// any other file is written.
+#[test]
+fn a_new_folder_that_cannot_be_made_fails_the_run() {
+    let fixture = fixture();
+    std::fs::write(fixture.new_folder(), b"a file where the folder goes").unwrap();
+    let error = run_error(&fixture, false);
+    let UpgradeWorkspaceError::SiftFiles(failures) = &error else {
+        panic!("{error}")
+    };
+    assert!(
+        failures.iter().any(|f| f.sift_path == fixture.new_folder()),
+        "{error}"
+    );
+    assert_eq!(
+        record_of(&fixture.path("sfmr/sift.sfmr")).feature_prefix_dir,
+        v1_record().feature_prefix_dir
+    );
+}
+
+/// A file in the new folder that is not the conversion of the old one is
+/// not replaced: the run fails before rewriting any file.
+#[test]
+fn a_different_file_in_the_new_folder_is_not_replaced() {
+    let fixture = fixture();
+    let staging = fixture._dir.path().join("staging");
+    let image = fixture.images().join(image_name(0));
+    let other = write_version_1(&image, &staging, 3);
+    let converted = Version2SiftFolder::create(&fixture.new_folder())
+        .unwrap()
+        .convert_version_1_sift_file(&other, &image, &Progress::none())
+        .unwrap();
+    let present = std::fs::read(&converted.path).unwrap();
+    let error = run_error(&fixture, false);
+    let UpgradeWorkspaceError::SiftFiles(failures) = &error else {
+        panic!("{error}")
+    };
+    assert!(
+        failures
+            .iter()
+            .any(|f| f.problem.contains("not this file's conversion")),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(&converted.path).unwrap(), present);
+}
+
+/// A file in an old folder that is not a version 1 `.sift` file keeps the
+/// folder and is listed; an orphan folder that is not in a `features` folder
+/// is removed up to its parent.
+#[test]
+fn a_file_left_in_an_old_folder_keeps_it_and_a_loose_orphan_is_removed() {
+    let fixture = fixture();
+    let note = fixture.old_folder().join("notes.txt");
+    std::fs::write(&note, b"mine").unwrap();
+    let loose = fixture.images().join("sift-loose");
+    for i in 0..2 {
+        write_version_1(&fixture.images().join(image_name(i)), &loose, 9);
+    }
+    let report = run(&fixture, false);
+    let row = report
+        .folders
+        .iter()
+        .find(|f| f.old_folder == fixture.old_folder())
+        .unwrap();
+    assert_eq!(row.kept_files, vec![note.clone()]);
+    assert!(row.deleted);
+    assert_eq!(std::fs::read_dir(fixture.old_folder()).unwrap().count(), 1);
+    let loose_row = report
+        .folders
+        .iter()
+        .find(|f| f.old_folder == loose)
+        .unwrap();
+    assert_eq!(loose_row.new_folder, None);
+    assert!(loose_row.deleted);
+    assert!(!loose.exists());
+    assert!(fixture.images().is_dir());
+}
+
+/// A file naming images through a linked directory names a folder whose
+/// real path is outside the tree: the folder is kept, and the run deletes
+/// no old folder.
+#[test]
+fn a_folder_reached_through_a_link_is_kept_and_nothing_is_deleted() {
+    let fixture = fixture();
+    let outside = fixture._dir.path().join("outside-images");
+    let outside_old = outside.join(v1_record().feature_prefix_dir);
+    for i in 0..IMAGES {
+        let name = image_name(i);
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::copy(fixture.images().join(&name), outside.join(&name)).unwrap();
+        write_version_1(&outside.join(&name), &outside_old, 0);
+    }
+    let link = fixture.root.join("linked-images");
+    link_directory(&outside, &link);
+    let mut recon = reconstruction(&fixture.root, &outside_old, v1_record(), true);
+    for (i, image) in recon.image_set.images.iter_mut().enumerate() {
+        image.name = format!("linked-images/{}", image_name(i));
+    }
+    recon
+        .save(&fixture.path("sfmr/linked.sfmr"), &Progress::none())
+        .unwrap();
+    let report = run(&fixture, true);
+    #[cfg(windows)]
+    std::fs::remove_dir(&link).unwrap();
+    let row = report
+        .folders
+        .iter()
+        .find(|f| f.old_folder.starts_with(&link))
+        .unwrap_or_else(|| panic!("{report:?}"));
+    assert!(
+        row.kept_because
+            .as_deref()
+            .is_some_and(|k| k.starts_with("it lies outside the tree")),
+        "{row:?}"
+    );
+    assert!(!report.old_folders_deleted);
+    assert!(report.folders.iter().all(|f| !f.deleted));
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.starts_with("No version 1 features folder was deleted")),
+        "{:?}",
+        report.notes
+    );
+}
+
+/// Set the Unix permission bits of `path`.
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+/// Whether permission bits stop this process: false when it runs as root,
+/// which reads and writes whatever they say.
+#[cfg(unix)]
+fn permissions_apply(dir: &Path) -> bool {
+    let probe = dir.join("permission-probe");
+    std::fs::create_dir_all(&probe).unwrap();
+    set_mode(&probe, 0o555);
+    let applies = std::fs::write(probe.join("x"), b"").is_err();
+    set_mode(&probe, 0o755);
+    std::fs::remove_dir_all(&probe).unwrap();
+    applies
+}
+
+/// A `.sift` file the file system will not give up stops the run before
+/// anything is written, and so does a directory that cannot be listed.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_sift_file_or_folder_stops_the_run() {
+    let fixture = fixture();
+    if !permissions_apply(fixture._dir.path()) {
+        return;
+    }
+    let before = snapshot(&fixture.root);
+    let locked = fixture.old_folder().join(format!("{}.sift", image_name(3)));
+    set_mode(&locked, 0o000);
+    let error = run_error(&fixture, false);
+    set_mode(&locked, 0o644);
+    let UpgradeWorkspaceError::UnreadableSiftFiles(failures) = &error else {
+        panic!("{error}")
+    };
+    assert_eq!(failures.len(), 1, "{error}");
+    assert_eq!(failures[0].sift_path, locked);
+
+    let matches = fixture.path("matches");
+    set_mode(&matches, 0o000);
+    let error = run_error(&fixture, false);
+    set_mode(&matches, 0o755);
+    let UpgradeWorkspaceError::ListFolder { folder, .. } = &error else {
+        panic!("{error}")
+    };
+    assert_eq!(folder, &matches);
+    assert_eq!(snapshot(&fixture.root), before);
+}
+
+/// Run the upgrade of `fixture`, setting `mode` on each of `paths` when
+/// phase `phase` opens and restoring `restore` after the run.
+#[cfg(unix)]
+fn run_with_modes_from(
+    fixture: &Fixture,
+    phase_name: &'static str,
+    paths: &[(PathBuf, u32, u32)],
+) -> UpgradeWorkspaceReport {
+    let sink = |event: Event<'_>| {
+        if matches!(event, Event::Enter { phase, .. } if phase == phase_name) {
+            for (path, mode, _) in paths {
+                set_mode(path, *mode);
+            }
+        }
+    };
+    let report = upgrade_workspace(
+        &fixture.root,
+        &UpgradeWorkspaceOptions::default(),
+        &Progress::to(&sink),
+    )
+    .unwrap();
+    for (path, _, restore) in paths {
+        set_mode(path, *restore);
+    }
+    report
+}
+
+/// A file that cannot be read during the rewrite fails, as does one whose
+/// folder cannot be written and a `.kdf` that cannot be deleted; the old
+/// folders are kept.
+#[cfg(unix)]
+#[test]
+fn files_that_cannot_be_read_or_written_during_the_rewrite_fail() {
+    let reading = fixture();
+    if !permissions_apply(reading._dir.path()) {
+        return;
+    }
+    let read = [
+        reading.path("sfmr/sift.sfmr"),
+        reading.path("matches/pairs.matches"),
+        reading.path("rig.camrig"),
+    ];
+    let modes: Vec<_> = read.iter().map(|p| (p.clone(), 0o000, 0o644)).collect();
+    let report = run_with_modes_from(&reading, "rewrite files", &modes);
+    for path in &read {
+        let outcome = outcome_of(&report, path);
+        assert!(
+            matches!(outcome, UpgradeOutcome::Failed(r) if r.starts_with("it cannot be read")),
+            "{}: {outcome:?}",
+            path.display()
+        );
+    }
+    assert!(!report.old_folders_deleted);
+
+    let writing = fixture();
+    let fixture = writing;
+    let dirs = [
+        fixture.root.clone(),
+        fixture.path("sfmr"),
+        fixture.path("matches"),
+    ];
+    let modes: Vec<_> = dirs.iter().map(|p| (p.clone(), 0o555, 0o755)).collect();
+    let report = run_with_modes_from(&fixture, "rewrite files", &modes);
+    for name in ["sfmr/sift.sfmr", "matches/pairs.matches", "rig.camrig"] {
+        let outcome = outcome_of(&report, &fixture.path(name));
+        assert!(
+            matches!(outcome, UpgradeOutcome::Failed(r) if r.starts_with("it could not be written")),
+            "{name}: {outcome:?}"
+        );
+    }
+    let outcome = outcome_of(&report, &fixture.path("sfmr/sift-sift-index.kdf"));
+    assert!(
+        matches!(outcome, UpgradeOutcome::Failed(r) if r.starts_with("it could not be deleted")),
+        "{outcome:?}"
+    );
+    assert!(!report.old_folders_deleted);
+}
+
+/// A workspace file that cannot be written fails and keeps the old folders.
+#[cfg(unix)]
+#[test]
+fn a_workspace_file_that_cannot_be_written_fails() {
+    let fixture = fixture();
+    if !permissions_apply(fixture._dir.path()) {
+        return;
+    }
+    let modes = [(fixture.root.clone(), 0o555, 0o755)];
+    let report = run_with_modes_from(&fixture, "workspace file", &modes);
+    let outcome = outcome_of(&report, &fixture.root.join(WORKSPACE_FILE_NAME));
+    assert!(
+        matches!(outcome, UpgradeOutcome::Failed(r) if r.starts_with("it could not be written")),
+        "{outcome:?}"
+    );
+    assert!(!report.old_folders_deleted);
+    assert_eq!(old_folder_count(&fixture), IMAGES);
+}
+
+/// A version 1 `.sift` file that cannot be deleted keeps its folder and is
+/// listed.
+#[cfg(unix)]
+#[test]
+fn a_sift_file_that_cannot_be_deleted_keeps_its_folder() {
+    let fixture = fixture();
+    if !permissions_apply(fixture._dir.path()) {
+        return;
+    }
+    let modes = [(fixture.old_folder(), 0o555, 0o755)];
+    let report = run_with_modes_from(&fixture, "delete old folders", &modes);
+    let row = report
+        .folders
+        .iter()
+        .find(|f| f.old_folder == fixture.old_folder())
+        .unwrap();
+    assert!(!row.deleted, "{row:?}");
+    assert_eq!(row.kept_files.len(), IMAGES, "{row:?}");
+    assert!(!report.old_folders_deleted);
+}
+
+/// The four fields of a record, which `WorkspaceContents` does not compare.
+fn fields(contents: &WorkspaceContents) -> (String, String, String, serde_json::Value) {
+    (
+        contents.feature_tool.clone(),
+        contents.feature_type.clone(),
+        contents.feature_prefix_dir.clone(),
+        contents.feature_options.clone(),
+    )
 }

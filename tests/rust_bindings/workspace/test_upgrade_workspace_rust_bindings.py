@@ -9,6 +9,8 @@ progress counter and the exception types.
 """
 
 import json
+import os
+import sys
 
 import pytest
 
@@ -107,3 +109,19 @@ def test_an_undistort_workspace_raises_value_error(tmp_path):
     )
     with pytest.raises(ValueError, match="sfm undistort"):
         upgrade_workspace(directory, dry_run=True)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or os.geteuid() == 0,
+    reason="needs Unix permissions that stop this process",
+)
+def test_a_folder_that_cannot_be_listed_raises_os_error(tmp_path):
+    _write_v1_workspace(tmp_path / "ws")
+    hidden = tmp_path / "ws" / "hidden"
+    hidden.mkdir()
+    hidden.chmod(0)
+    try:
+        with pytest.raises(OSError, match="failed to list .*hidden"):
+            upgrade_workspace(tmp_path / "ws", dry_run=True)
+    finally:
+        hidden.chmod(0o755)
