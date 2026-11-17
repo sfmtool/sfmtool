@@ -948,24 +948,40 @@ decoding a photograph in today's `PhotographCache`.
   `par_iter` per group, the groups one after another, with the group's size
   set by memory as `default_concurrent_images_for_dimensions` sizes SIFT's:
   the number of sets that fit in the **build budget**, a quarter of physical
-  memory, less what other builds of the process already hold, at most the
+  memory, less what other builds of the process have reserved, at most the
   rayon pool's size and at least one. The process keeps one count of the
-  estimated bytes of the builds in progress, an atomic that each build adds to
-  when it starts and takes back when it ends; a group's size is read from it
-  when the group starts. Nothing waits on that count: it is not a semaphore,
-  and a caller whose budget is used up still starts one build, so that it
-  makes progress. In-core misses are decoded in parallel as today.
-- **What bounds builds from independent callers.** Each caller that finds
-  the budget used up still starts one. In the viewer the callers that can
-  build at once are the two background queues' tasks (each a `get_many`, one
-  of them perhaps the *Build image levels* task below) and the panels'
-  requests, which the viewer starts only while the count is under the budget
-  (§ "Readers on the GUI thread"), except one when nothing is building. So
-  the builds in progress hold at most the build budget plus three sets: on
-  the 64 GB development machine 16 GiB plus 3 GB at 200 MP, and on a 16 GB
-  machine 4 GiB plus 3 GB. On the command line one `get_many` runs at a time,
-  so the bound is the budget plus one set. These are on top of the caches'
-  budgets, and are estimates from the buffer sizes.
+  estimated bytes reserved for builds, an atomic. A caller **reserves at the
+  moment it decides**: `reserve_builds(bytes_per_build, wanted)` adds the
+  group's estimated bytes to the count with one compare-exchange loop,
+  granting as many of the `wanted` builds as fit under the budget, and returns
+  a guard that gives each build's bytes back as that build ends and the rest
+  when it is dropped. The builds do not add to the count again. So two
+  callers sizing a group at the same moment cannot both take the same free
+  bytes: the second sees what the first reserved. Nothing waits on the
+  count; it is not a semaphore. A caller that finds the budget used up is
+  still granted one build, so that it makes progress, and that one build is
+  the only way the count goes past the budget: by at most one set per caller
+  reserving at that moment. In-core misses are decoded in parallel as today.
+- **What bounds builds from independent callers.** Every build is reserved
+  through `reserve_builds` before it starts, by `get_many` for its group and
+  by `get` for its one set, so the count is always complete, and the count
+  goes past the budget by at most one set for each caller that reserved while
+  it was full. The number of such callers is bounded because each caller is
+  one thread that makes one set at a time unless it is a `get_many`, whose
+  group is granted within the budget: a caller that wants several photographs
+  asks for them with one `get_many`, never with `get` from many workers of a
+  parallel loop (no caller does today; the reference picks call `get` one
+  photograph at a time on their job thread). In the viewer the callers that
+  can build at once are the two background queues' tasks (one of them perhaps
+  the *Build image levels* task below) and **at most one panel request**:
+  the viewer keeps at most one out-of-core photograph request in flight across
+  all its panels (§ "Readers on the GUI thread"), and panels do not read the
+  count. So the builds in progress hold at most the build budget plus three
+  sets: on the 64 GB development machine 16 GiB plus 3 GB at 200 MP, and on a
+  16 GB machine 4 GiB plus 3 GB. On the command line one `get_many` runs at a
+  time, so the bound is the budget, or one set when a single set is larger
+  than the budget. These are on top of the caches' budgets, and are estimates
+  from the buffer sizes.
 - **No build on the GUI thread, and no tile task that waits on one.** The
   panels never call `get` on the GUI thread for an out-of-core photograph,
   whatever the budget, and ask for tiles only once a photograph's files are
@@ -1171,9 +1187,14 @@ photograph* means what `display_photograph` does today for a decode: once per
 path, it starts one rayon task that calls `get`, which makes the set (or waits
 for the caller already making it), records the path in `PhotographRequests`
 so later frames start no second task, and repaints when the task ends. For an
-out-of-core photograph the viewer starts such a task only while the build
-count is under the build budget, or when nothing is building; a request
-refused that way stays wanted and is tried again on a later frame.
+out-of-core photograph whose files are not current, **at most one such
+request is in flight across the whole viewer**: a panel whose request cannot
+start because another is in flight keeps it wanted and tries again on a later
+frame, so twenty Track View cells that need sets start them one after
+another, not twenty at once. Panels do not read the build count; the
+request's `get` reserves its one set through `reserve_builds` like any other
+caller, so the count stays complete. A request for a photograph whose files
+are current only reads a layout and tiles, and is not limited.
 
 | Reader | `NotKnown` | `Building` | `Known` |
 |--------|------------|------------|---------|
@@ -1435,9 +1456,17 @@ pub fn build_mipmaps(
     progress: &Progress<'_>,
 ) -> Result<BuiltMipmaps, MipmapError>;
 
-/// The process's count of estimated bytes held by builds in progress, read
-/// to size `get_many`'s groups; never waited on.
-pub fn builds_in_progress_bytes() -> u64;
+/// Reserve the estimated bytes of up to `wanted` builds against the build
+/// budget with one compare-exchange loop, at the moment the caller decides;
+/// never waits. Grants as many as fit, and one when none fit, so a caller
+/// always makes progress.
+pub fn reserve_builds(bytes_per_build: u64, wanted: usize) -> BuildReservation;
+/// Gives each granted build's bytes back as it ends, the rest on drop.
+pub struct BuildReservation { /* … */ }
+impl BuildReservation {
+    pub fn granted(&self) -> usize;
+    pub fn release_one(&self);
+}
 /// A quarter of physical memory: the build budget.
 pub fn default_build_budget_bytes() -> u64;
 
@@ -1710,15 +1739,20 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    count of builds in progress, `get` and `get_many` answering sources and
    making missing sets in the slot (the out-of-core misses of a `get_many` in
    groups sized by the budget), `get_level`, `TileError::Changed`, Image
-   Detail and the 3D background on tiled photographs with their requests
-   started only under the budget, and the in-core admission rule. Every other
+   Detail and the 3D background on tiled photographs, with at most one
+   out-of-core request in flight across the viewer, and the in-core admission
+   rule. Every other
    reader refuses a tiled source. Tests: with the small threshold, a `get` on
    a photograph with no mipmaps makes them and returns their pixels; two
    threads asking for one path make one set; a `get_many` over 20 out-of-core
    photographs holds no pyramid (the cache's stats show only tiles, within a
    small tile budget) and never has more builds in progress than the budget
    allows, with a budget set small for the test and checked through the
-   count; a caller cancelled mid-build stops within one stage and leaves the
+   count; several `get_many` callers started at the same moment on separate
+   threads never reserve more than the budget plus one set each, and their
+   builds never add to the count beyond what was reserved; a burst of panel
+   requests for twenty photographs without sets starts their builds one at a
+   time; a caller cancelled mid-build stops within one stage and leaves the
    slot empty, a waiter on that slot then makes the set, and a waiter that is
    cancelled stops waiting within 50 ms; a build reports its phases through
    the caller's `Progress`; no GUI-thread reader requests a tile while its
@@ -1816,9 +1850,10 @@ ranges in this draft are over those runs.
    `sfm mipmaps`, or no command and only `sfm sift` and the viewer.
    Recommendation: `sfm ws mipmaps`, since the files belong to the workspace.
 6. **The build budget and cancellation.** Builds started by independent
-   callers are bounded by a non-blocking count against a quarter of physical
-   memory, each caller still starting one when it is used up (as designed:
-   the budget plus three sets in the viewer). Options: (a) as designed; (b) a
+   callers are bounded by reservations made at decision time on a
+   non-blocking count against a quarter of physical memory, each caller still
+   granted one when it is used up, with at most one panel request in flight
+   (as designed: the budget plus three sets in the viewer). Options: (a) as designed; (b) a
    blocking semaphore, which would bound memory exactly but make a rayon
    worker wait on another caller's build for a permit, the cross-caller
    coupling this design was simplified to remove; (c) no shared count, each
@@ -1943,8 +1978,10 @@ ranges in this draft are over those runs.
   that no build or wait ever runs on the GUI thread.
 - **A build holds a whole decode.** Without the budget, a `get_many` over
   many out-of-core photographs would hold one 1 GB decode per rayon worker,
-  32 GB on the development machine; the groups sized by the build budget, and
-  the shared count, bound it to the budget plus one set per caller.
+  32 GB on the development machine; the groups sized by the build budget and
+  reserved on the shared count when they are decided, and the one panel
+  request in flight, bound it to the budget plus one set per caller, three in
+  the viewer.
 - **The mipmap directory is reachable by image discovery.** A directory scan
   at the workspace root would read mipmaps as images; step 5 makes every
   finder skip it before anything writes there.
