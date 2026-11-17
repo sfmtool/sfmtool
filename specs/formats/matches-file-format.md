@@ -337,11 +337,10 @@ matches were computed.
 Array of image names: each image's path **relative to the workspace
 directory**, with `/` between its components. Every entry is an image name by
 the rule of the `.sfmr` format's
-[`images/names.json.zst`](sfmr-file-format.md#imagesnamesjsonzst): not empty,
-no `\`, no leading `/`, no Windows drive prefix, no empty, `.` or `..`
-component and no control character. The writer refuses a value, and the
-readers (`read_matches_image_names` among them) and the verifier a file, that
-holds anything else, with an error naming the entry's index and the entry.
+[`images/names.json.zst`](sfmr-file-format.md#imagesnamesjsonzst). The writer
+refuses a value, and the readers (`read_matches_image_names` among them) and
+the verifier a file, that holds anything else, with an error naming the entry's
+index and the entry.
 
 ```json
 [
