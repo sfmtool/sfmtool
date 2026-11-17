@@ -350,14 +350,14 @@ class TestInitWorkspace:
         self, tmp_path: Path
     ):
         from sfmtool import init_workspace
-        from sfmtool.sift.file import get_feature_tool_xxh128
+        from sfmtool.workspace import feature_prefix_dir
 
         config = init_workspace(tmp_path / "s")
+        assert config["feature_prefix_dir"] != NO_DOUBLING_LIMIT_PREFIX
         options = dict(config["feature_options"])
         assert options.pop("double_image_below_long_side") == 4096
         assert (
-            f"features/sift-sfmtool-"
-            f"{get_feature_tool_xxh128('sfmtool', 'sift-sfmtool', options)}"
+            feature_prefix_dir("sfmtool", "sift-sfmtool", options)
             == NO_DOUBLING_LIMIT_PREFIX
         )
 
