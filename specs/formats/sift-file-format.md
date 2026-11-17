@@ -63,6 +63,37 @@ version 2 file into a directory that holds version 1 files, so a directory of
 `.sift` files is all of one version (see
 [workspace.md § Versions never mix](../workspace/workspace.md#versions-never-mix)).
 
+### Converting a version 1 file
+
+A version 1 file converts to version 2 losslessly, without extracting its
+features again, which would not give the same features: the `sfmtool` tool's
+grey conversion has changed since version 1, and a `colmap` extraction depends
+on the pycolmap build and the GPU. It writes a new file into a version 2
+directory, in which:
+
+- the positions, affine shapes, descriptors and thumbnail are copied byte for
+  byte, and `feature_tool`, `feature_type` and every `metadata` field but the
+  version are kept;
+- `feature_options` becomes `upgrade_feature_options(feature_tool,
+  feature_options)` of `sfmtool_core::workspace`: an `sfmtool` file's
+  `gray_formula` becomes `image_to_gray: {"formula": <gray_formula>}`, or the
+  tool's default when it has none, and a `colmap` or `opencv` file gains its
+  tool's conversion ([What each feature tool records](#what-each-feature-tool-records))
+  and loses any `gray_formula`, which neither tool reads;
+- `metadata.version` becomes `2`, and `metadata` gains the `sharpness` and
+  `gradient_structure_tensor_xx_yy_xy` of the image file, decoded as the
+  extractors decode it and read through the new `image_to_gray`. The image is
+  first checked against `image_file_xxh128`, and its decoded size against
+  `image_width` and `image_height`; an image that is missing, cannot be
+  decoded or does not match is not converted.
+
+All three hashes in `content_hash.json` change: `feature_tool_xxh128` because
+`feature_options` changes, `metadata_xxh128` because `metadata.json` does, and
+`content_xxh128` because it covers both. A file whose `feature_tool` is
+`sfmtool-undistort` is not converted; running `sfm undistort` again writes its
+version 2 files. The conversion is `Version2SiftFolder` in `sfmtool-core`
+([sift.md § Converting a version 1 `.sift` file](../core/features/sift.md#converting-a-version-1-sift-file)).
+
 A version 3 built on version 2 is proposed in
 [`../drafts/sift-incremental-extraction-amendment.md`](../drafts/sift-incremental-extraction-amendment.md):
 it would store descriptors as append-only range chunks so a keypoint pool can be
@@ -576,6 +607,11 @@ The code that reads, writes and verifies `.sift` files is:
   There is no Python wrapper over these bindings; the helpers in
   [`sfmtool.sift.file`](../../src/sfmtool/sift/file.py) find an image's
   `.sift` path and compute the feature-cache hash and affine-shape sizes.
+- The conversion of a version 1 file to version 2
+  ([above](#converting-a-version-1-file)): `Version2SiftFolder` in
+  [`sfmtool-core`](../../crates/sfmtool-core/src/features/sift/convert.rs),
+  bound for Python as `sfmtool.sift.Version2SiftFolder`. It reads and writes
+  through the Rust functions above.
 
 `SIFT_FORMAT_VERSION` in
 [`types.rs`](../../crates/sfmtool-sift-format/src/types.rs) is the newest
@@ -696,7 +732,8 @@ $ od -Ax --endian=little -tf4 -w8 features/positions_xy.*.2.float32 | head -5
   `gradient_structure_tensor_xx_yy_xy` to `metadata.json`. The entries, their
   names and the content-hash order are unchanged.
 - **Version 1**: the first version. It has no `image_to_gray` object and no
-  readings. Version 1 files stay valid and readable.
+  readings. Version 1 files stay valid and readable, and convert to version 2
+  losslessly ([Converting a version 1 file](#converting-a-version-1-file)).
 
 A proposed version 3, with incremental chunked descriptors and the identity
 hashes that go with them, is drafted in
