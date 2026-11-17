@@ -38,7 +38,7 @@ use crate::entries;
 use crate::types::*;
 use crate::validate::{
     check_backbone_counts, cluster_errors, cluster_patch_errors, config_index_errors,
-    image_dims_errors, inlier_errors, pair_errors, ClusterSlices,
+    image_dims_errors, image_name_errors, inlier_errors, pair_errors, ClusterSlices,
 };
 use sfmtool_archive_io::{format_hash, raw_to_f32, raw_to_u32, read_zst_entry};
 
@@ -364,7 +364,10 @@ fn verify_images_section<R: std::io::Read + Seek>(
     images_hasher.update(&read_zst_entry(archive, entries::images_metadata())?);
 
     // images/names.json
-    images_hasher.update(&read_zst_entry(archive, entries::images_names())?);
+    let names_raw = read_zst_entry(archive, entries::images_names())?;
+    images_hasher.update(&names_raw);
+    let image_names: Vec<String> = serde_json::from_slice(&names_raw)?;
+    image_name_errors(&image_names, errors);
 
     // images/sift_content_hashes
     images_hasher.update(&read_zst_entry(

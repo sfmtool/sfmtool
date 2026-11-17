@@ -807,7 +807,8 @@ must be consistent (i.e., `camera_indexes[j]` = `sensor_camera_indexes[image_sen
 
 #### `images/names.json.zst`
 
-Array of image paths **relative to workspace directory** (POSIX format):
+Array of image names, one per image: each image's path **relative to the
+workspace directory**, with `/` between its components:
 
 ```json
 [
@@ -818,6 +819,42 @@ Array of image paths **relative to workspace directory** (POSIX format):
 ```
 
 **Note**: All image paths are relative to the workspace directory specified in `metadata.workspace.absolute_path` or `metadata.workspace.relative_path`, not relative to the `.sfmr` file location.
+
+**Every entry is an image name**, and the writer refuses a value, and the
+reader and the verifier a file, that holds anything else, with an error naming
+the entry's index and the entry. An image name:
+
+- is not empty;
+- separates its components with `/` and holds no `\`;
+- does not start with `/`, so it is not absolute and has no UNC prefix
+  (`//server/share`);
+- does not start with an ASCII letter followed by `:`, a Windows drive prefix
+  (`C:`, `C:/x.jpg`, `C:x.jpg`);
+- has no empty component, so no leading, trailing or doubled `/`, and no
+  component that is `.` or `..`;
+- holds no control character (Unicode category `Cc`: U+0000 to U+001F and
+  U+007F to U+009F).
+
+The rule is what lets a reader join a name to the workspace directory on any
+platform and know the result names a file inside the workspace: a `..`
+component or an absolute or drive-prefixed name would name a file outside it,
+and a `\` is a separator on Windows and a file-name character elsewhere, so it
+would name different files on different platforms. A control character is
+refused because an operating system ends a path at U+0000 and Windows refuses
+U+0001 to U+001F in a file name. Nothing else is refused: a colon after the
+start, a space or a non-ASCII character is part of a valid file name on at
+least one platform and stays inside the workspace on all of them. Win32 path
+handling drops the trailing dots and spaces of a component, so `a./x.jpg` and
+`a/x.jpg` name one file on Windows, but it never turns a component such as
+`.. ` or `...` into a parent reference, so such names are not refused either.
+The rule checks a name and does not change it; a writer that builds names from
+platform paths writes them with `/` itself.
+
+The rule is
+[`sfmtool_archive_io::validate_image_name`](../../crates/sfmtool-archive-io/src/image_name.rs),
+which the [`.matches`](matches-file-format.md#imagesnamesjsonzst) and
+[`.kdf`](kdf-file-format.md#sift-references-and-descriptor-origins) formats
+apply to their own image lists.
 
 #### `images/camera_indexes.{N}.uint32.zst`
 

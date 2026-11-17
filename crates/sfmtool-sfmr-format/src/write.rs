@@ -359,6 +359,8 @@ fn write_sfmr_into<S: EntrySink>(
         .map_err(SfmrError::InvalidFormat)?;
     validate_world_space_unit(data.metadata.world_space_unit.as_deref())
         .map_err(SfmrError::InvalidFormat)?;
+    sfmtool_archive_io::validate_image_names(&data.image_names)
+        .map_err(SfmrError::InvalidFormat)?;
     if let Some(readings) = &data.image_readings {
         validate_image_readings(readings, data.metadata.image_count as usize)
             .map_err(SfmrError::InvalidFormat)?;

@@ -295,15 +295,13 @@ fn validate_input<S: KdfScalar>(
                 "image names and hash arrays differ in length".into(),
             ));
         }
+        sfmtool_archive_io::validate_image_names(&src.image_names)
+            .map_err(KdfError::InvalidFormat)?;
         let mut names = HashSet::new();
-        if !src
-            .image_names
-            .iter()
-            .all(|n| valid_relative_posix(n) && names.insert(n))
-        {
-            return Err(KdfError::InvalidFormat(
-                "image names must be unique relative POSIX paths".into(),
-            ));
+        if let Some(name) = src.image_names.iter().find(|n| !names.insert(*n)) {
+            return Err(KdfError::InvalidFormat(format!(
+                "image name {name:?} appears more than once; image names must be unique"
+            )));
         }
         if src
             .origins
@@ -332,13 +330,6 @@ fn validate_input<S: KdfScalar>(
         }
     }
     Ok(())
-}
-
-fn valid_relative_posix(name: &str) -> bool {
-    !name.is_empty()
-        && !name.starts_with('/')
-        && !name.contains('\\')
-        && name.split('/').all(|p| !matches!(p, "" | "." | ".."))
 }
 
 fn validate_tree<S: KdfScalar>(

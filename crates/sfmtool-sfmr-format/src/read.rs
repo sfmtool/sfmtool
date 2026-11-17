@@ -270,6 +270,7 @@ fn read_images_section(
             image_names.len()
         )));
     }
+    sfmtool_archive_io::validate_image_names(&image_names).map_err(SfmrError::InvalidFormat)?;
 
     let camera_indexes_vec: Vec<u32> = read_binary_array(
         archive,

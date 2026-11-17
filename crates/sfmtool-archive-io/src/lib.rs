@@ -11,7 +11,8 @@
 //! Each format crate owns its own schema, validation rules and error type;
 //! this crate owns only the container primitives they share, and the
 //! `workspace` metadata object with the rule a reader finds that workspace by
-//! ([`resolve_workspace_dir`]).
+//! ([`resolve_workspace_dir`]), and the rule an image name obeys
+//! ([`validate_image_name`]), which the formats that store image names share.
 //!
 //! See `specs/formats/archive-container.md` for the container contract and
 //! `specs/formats/archive-io-crate.md` for this crate's interface.
@@ -32,8 +33,10 @@ use xxhash_rust::xxh3::Xxh3;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
+mod image_name;
 mod workspace;
 
+pub use image_name::{validate_image_name, validate_image_names};
 pub use workspace::{find_workspace_for_path, resolve_workspace_dir, WORKSPACE_MARKER};
 
 /// Workspace contents configuration embedded in archive metadata.

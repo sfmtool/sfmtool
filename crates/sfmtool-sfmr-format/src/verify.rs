@@ -406,7 +406,12 @@ fn verify_images_section<R: Read + Seek>(
     let images_meta: serde_json::Value = serde_json::from_slice(&images_meta_raw)?;
     let has_thumbnails = crate::read::images_meta_has_thumbnails(&images_meta);
     // images/names.json
-    images_hasher.update(&read_zst_entry(archive, entries::images_names())?);
+    let names_raw = read_zst_entry(archive, entries::images_names())?;
+    images_hasher.update(&names_raw);
+    let image_names: Vec<String> = serde_json::from_slice(&names_raw)?;
+    if let Err(error) = sfmtool_archive_io::validate_image_names(&image_names) {
+        errors.push(error);
+    }
     // images/principal_point_adjustments_xy (version 13+; after names.json,
     // before quaternions_wxyz)
     let principal_point_raw = read_optional(archive, &principal_point_name, listed[1])?;

@@ -334,7 +334,13 @@ matches were computed.
 
 #### `images/names.json.zst`
 
-Array of image paths **relative to workspace directory** (POSIX format):
+Array of image names: each image's path **relative to the workspace
+directory**, with `/` between its components. Every entry is an image name by
+the rule of the `.sfmr` format's
+[`images/names.json.zst`](sfmr-file-format.md#imagesnamesjsonzst). The writer
+refuses a value, and the readers (`read_matches_image_names` among them) and
+the verifier a file, that holds anything else, with an error naming the entry's
+index and the entry.
 
 ```json
 [
@@ -1140,6 +1146,8 @@ the backbone — a file never carries both sets.
 4. **Feature index bounds**: All feature indexes must be less than the corresponding
    `feature_counts` entry (pairwise match arrays and cluster `member_features` alike)
 5. **Image dims positive**: Every `image_dims` value is ≥ 1
+6. **Image names**: Every `images/names.json.zst` entry is an image name
+   ([`images/names.json.zst`](#imagesnamesjsonzst))
 
 ### Cluster Constraints
 
