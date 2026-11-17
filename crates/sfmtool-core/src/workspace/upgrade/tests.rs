@@ -2159,3 +2159,39 @@ fn a_nested_workspace_given_with_a_parent_directory_is_refused_naming_the_root()
     };
     assert_eq!(root, &fixture.root);
 }
+
+/// A root given with `..` after a linked directory is the workspace the path
+/// names on disk, which on a system that follows the link before `..` (not
+/// Windows) is not the one its spelling names with each `..` resolved by
+/// name: the run upgrades the workspace the path names, never the other.
+#[test]
+fn a_root_given_with_a_parent_directory_after_a_link_upgrades_the_workspace_it_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let spelled = dir.path().join("spelled");
+    let linked = dir.path().join("linked");
+    write_workspace_file(&spelled);
+    write_workspace_file(&linked);
+    std::fs::create_dir_all(linked.join("images")).unwrap();
+    link_directory(&linked.join("images"), &spelled.join("images"));
+    let path = spelled.join("images").join("..");
+    let named = std::fs::canonicalize(&path).unwrap();
+    let report = upgrade_workspace(
+        &path,
+        &UpgradeWorkspaceOptions { dry_run: true },
+        &Progress::none(),
+    );
+    // A junction is removed as a directory, which leaves its target.
+    #[cfg(windows)]
+    std::fs::remove_dir(spelled.join("images")).unwrap();
+    let report = report.unwrap();
+    assert_eq!(
+        std::fs::canonicalize(&report.workspace_dir).unwrap(),
+        named,
+        "{report:?}"
+    );
+    assert_eq!(report.files.len(), 1, "{report:?}");
+    assert_eq!(
+        report.files[0].path,
+        report.workspace_dir.join(WORKSPACE_FILE_NAME)
+    );
+}

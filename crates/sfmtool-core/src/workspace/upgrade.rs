@@ -518,13 +518,23 @@ pub fn upgrade_workspace(
     // The workspace is spelled with each `..` resolved, so that its parent
     // is the directory above it and the paths the report gives read
     // plainly, and two workspaces are compared by their real paths, so that
-    // a path given as `<ws>/images/..` is the workspace `<ws>`.
+    // a path given as `<ws>/images/..` is the workspace `<ws>`. Where a `..`
+    // follows a symbolic link, the directory it names is not the one its
+    // spelling resolved by name names, and the workspace is spelled by its
+    // real path instead, so the run upgrades the workspace that was found.
+    let identity = |dir: &Path| std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
     let nearest = find_workspace_for_path(path)
-        .map(|found| normalized(&lexically_resolved(&found)))
+        .map(|found| {
+            let resolved = normalized(&lexically_resolved(&found));
+            if identity(&resolved) == identity(&found) {
+                resolved
+            } else {
+                identity(&found)
+            }
+        })
         .ok_or_else(|| UpgradeWorkspaceError::NoWorkspace {
             path: path.to_path_buf(),
         })?;
-    let identity = |dir: &Path| std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
     // The tree's root is the outermost workspace above `path`.
     let mut root = nearest.clone();
     while let Some(enclosing) = root.parent().and_then(find_workspace_for_path) {
