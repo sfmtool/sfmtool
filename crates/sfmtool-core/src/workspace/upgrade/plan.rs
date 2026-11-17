@@ -120,7 +120,7 @@ pub(super) fn normalized(path: &Path) -> PathBuf {
 
 /// `path` with each `..` taking off the name before it, without touching
 /// the file system.
-fn lexically_resolved(path: &Path) -> PathBuf {
+pub(super) fn lexically_resolved(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {

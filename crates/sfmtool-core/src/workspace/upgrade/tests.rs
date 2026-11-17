@@ -2094,3 +2094,68 @@ fn an_outside_file_spelling_the_image_directory_in_another_case_keeps_its_folder
     assert!(not_converted(outcome_of(&report, &path)), "{report:?}");
     assert_eq!(missing_sift(&path), (0, 0), "{report:?}");
 }
+
+/// A root given with `..` in it, absolute or relative to the current
+/// directory, is the workspace it names: the run plans and upgrades it as it
+/// does that workspace given plainly.
+#[test]
+fn a_root_given_with_a_parent_directory_upgrades_like_the_root() {
+    let fixture = fixture();
+    let plain = run(&fixture, true);
+    let dotted = upgrade_workspace(
+        &fixture.images().join(".."),
+        &UpgradeWorkspaceOptions { dry_run: true },
+        &Progress::none(),
+    )
+    .unwrap();
+    assert_eq!(dotted, plain);
+
+    // A relative path: `cargo test` runs a library's tests in its package
+    // directory, so a temporary directory under the target directory has a
+    // relative path from there whatever drive the system's temporary
+    // directory is on.
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    assert_eq!(
+        std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap(),
+        std::fs::canonicalize(manifest).unwrap()
+    );
+    let parent = manifest.join("../../target/upgrade-tests");
+    std::fs::create_dir_all(&parent).unwrap();
+    let dir = tempfile::tempdir_in(&parent).unwrap();
+    let root = dir.path().join("ws");
+    write_workspace_file(&root);
+    std::fs::create_dir_all(root.join("images")).unwrap();
+    let relative = Path::new("../../target/upgrade-tests")
+        .join(dir.path().file_name().unwrap())
+        .join("ws/images/..");
+    let report = upgrade_workspace(
+        &relative,
+        &UpgradeWorkspaceOptions::default(),
+        &Progress::none(),
+    )
+    .unwrap();
+    assert_eq!(
+        outcome_of(&report, &report.workspace_dir.join(WORKSPACE_FILE_NAME)),
+        &UpgradeOutcome::Converted
+    );
+    let written: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join(WORKSPACE_FILE_NAME)).unwrap()).unwrap();
+    assert_eq!(written["version"], 2);
+}
+
+/// A path in a nested workspace given with `..` in it is still refused,
+/// naming the tree's root.
+#[test]
+fn a_nested_workspace_given_with_a_parent_directory_is_refused_naming_the_root() {
+    let (fixture, inner, _) = fixture_with_inner_workspace();
+    let error = upgrade_workspace(
+        &inner.join("images").join(".."),
+        &UpgradeWorkspaceOptions { dry_run: true },
+        &Progress::none(),
+    )
+    .unwrap_err();
+    let UpgradeWorkspaceError::NotTreeRoot { root } = &error else {
+        panic!("{error}")
+    };
+    assert_eq!(root, &fixture.root);
+}

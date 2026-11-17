@@ -32,7 +32,7 @@ use crate::SfmrReconstruction;
 
 mod plan;
 
-use plan::{sift_path, Action, Plan};
+use plan::{lexically_resolved, normalized, sift_path, Action, Plan};
 
 /// The zstd level the upgrade writes `.matches` and `.camrig` files at, the
 /// level their bindings write by default.
@@ -515,16 +515,22 @@ pub fn upgrade_workspace(
     options: &UpgradeWorkspaceOptions,
     progress: &Progress<'_>,
 ) -> Result<UpgradeWorkspaceReport, UpgradeWorkspaceError> {
-    let nearest =
-        find_workspace_for_path(path).ok_or_else(|| UpgradeWorkspaceError::NoWorkspace {
+    // The workspace is spelled with each `..` resolved, so that its parent
+    // is the directory above it and the paths the report gives read
+    // plainly, and two workspaces are compared by their real paths, so that
+    // a path given as `<ws>/images/..` is the workspace `<ws>`.
+    let nearest = find_workspace_for_path(path)
+        .map(|found| normalized(&lexically_resolved(&found)))
+        .ok_or_else(|| UpgradeWorkspaceError::NoWorkspace {
             path: path.to_path_buf(),
         })?;
+    let identity = |dir: &Path| std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
     // The tree's root is the outermost workspace above `path`.
     let mut root = nearest.clone();
     while let Some(enclosing) = root.parent().and_then(find_workspace_for_path) {
-        root = enclosing;
+        root = normalized(&lexically_resolved(&enclosing));
     }
-    if root != nearest {
+    if identity(&root) != identity(&nearest) {
         return Err(UpgradeWorkspaceError::NotTreeRoot { root });
     }
     let root_canonical =
