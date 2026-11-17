@@ -914,7 +914,8 @@ decoding a photograph in today's `PhotographCache`.
   slot's state (empty, being made by one caller, or made, with its result or
   remembered failure) and a condition variable. A caller that finds the slot
   empty marks it as being made and makes the set; one that finds it being made
-  waits on the condition variable, waking every 50 ms to poll its own
+  waits on the condition variable with `Condvar::wait_timeout` of 50 ms,
+  polling its own
   `Progress` for cancellation, and stops with `Cancelled` if it is cancelled,
   leaving the build to its maker. The maker polls its `Progress` between the
   build's stages (after the decode, after the region test, after the
@@ -926,8 +927,12 @@ decoding a photograph in today's `PhotographCache`.
   others go on waiting. The levels already written by the cancelled maker are
   complete files: the next maker finds those current and makes only the
   rest. A slot is never left marked as being made by a caller that has
-  stopped. The same slot type serves in-core decodes, which gain the same
-  cancellation between the decode and the pyramid.
+  stopped, a panic included: a guard empties the slot and wakes the waiters
+  when the maker unwinds. The same slot type serves in-core decodes, which
+  gain the same cancellation between the decode and the pyramid. An
+  out-of-core photograph goes through its slot whatever the pyramid budget,
+  even at 0, where today's `get` decodes in-core photographs without one,
+  since a set is files that every asker reads, not memory the budget counts.
 - **Progress.** A build is part of the `get` or `get_many` that makes it and
   reports through that caller's `Progress`: a `get` opens phases *decode*,
   *reduce* and *encode* (the last counting levels); `get_many` counts the sets
@@ -937,7 +942,9 @@ decoding a photograph in today's `PhotographCache`.
   there is no reporter, queue or status object.
 - **Memory while building.** A build holds a whole decode, about 1 GB at
   200 MP (5 bytes per source pixel, estimated), so `get_many` does not start
-  all its misses at once. It makes its out-of-core misses in groups, one
+  all its misses at once. It first resolves each path's layout (a header
+  read, the region test and a record check) to know which are out-of-core
+  misses and their sizes, then makes those misses in groups, one
   `par_iter` per group, the groups one after another, with the group's size
   set by memory as `default_concurrent_images_for_dimensions` sizes SIFT's:
   the number of sets that fit in the **build budget**, a quarter of physical

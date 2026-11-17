@@ -124,7 +124,7 @@ sampler's footprint and to its region is one change.
 
 ## Where the pixels come from
 
-`PhotographCache::view_region_pyramid(path, &LevelRegions, progress)` assembles
+`PhotographCache::view_region_pyramid(path, &LevelRegions)` assembles
 the region of each level from photograph tiles (`get_tile`, decoding any tile
 not yet cached) and copies the rectangles out. The tiles come from the
 mipmaps, and level 0 from the original if it is region-readable or from its
@@ -140,7 +140,7 @@ unchanged `render_tile` for in-memory pyramids) compute the regions from the
 map and, for a `Tiled` source, ask the cache for the region pyramid before
 sampling, or sample through tiles; for a `Whole` one they sample as today.
 They return `Result<_, PhotographReadError>`, since a tiled read can find its
-files changed or stale or be cancelled while it waits for tiles, and the
+files changed, gone stale or unreadable, and the
 kernels pass the error up with `?` through their loops, the parallel ones
 included; the main draft's § "Errors from reading pixels" lists the
 signatures that change and the step each changes in. The kernels' sampling
