@@ -157,7 +157,7 @@ working on, and drops them all when it moves to the next patch (a fit's
 rounds, a refinement's steps and an evaluation's views of one track share
 them; the next track starts with none). So what it keeps is at most one region
 pyramid per view of one patch, with the margin, 2.25 times the area of the
-region itself, and every copied region of the run reserves from one pool
+region itself, and every copied region of the kernel call reserves from one pool
 (§ "Bounding a render's memory").
 
 ## Bounding a render's memory
@@ -199,7 +199,7 @@ So a render samples one of two ways, and both give the same values:
   cannot deadlock it. A region's bytes go back to the pool when the region is
   dropped (when its patch is done, or at once for a render that keeps
   nothing). A 151-view evaluation whose regions are 7 KB each keeps all of
-  them; a run whose views are stretched fills the pool and sends the rest
+  them; a kernel call whose views are stretched fills the pool and sends the rest
   down the tile path. Sampling a copied region is the fast path: one
   contiguous image per level, and the AVX2 anisotropic kernel runs on it
   unchanged. **One rule decides who owns a pool: the caller of a kernel
@@ -210,7 +210,14 @@ So a render samples one of two ways, and both give the same values:
   `track_table_panel/picks.rs` calls `get` once per observation and hands all
   the views to one `render_reference` call), makes one pool for the one call,
   so a 151-view point shares 99 MB rather than taking 3.1 MB per view.
-  `RegionPool::for_kernel_call()` sizes it at 3.1 MB per rayon thread. Track
+  `RegionPool::for_kernel_call()` sizes it at 3.1 MB per rayon thread. A
+  kernel call is a call into the kernels from code that is not itself a
+  kernel: a viewer job, a panel, a command or a binding. A kernel that calls
+  another kernel passes its own pool down and never makes one: `refine_normals`
+  calls `pairwise_flow_normal` or `grown_plane_normal` for each point from
+  `into_par_iter` and gives every point the one pool its caller made, and
+  every other bulk kernel does the same for its per-point work, so the pool
+  is not multiplied by the points in progress. Track
   View's renders on the GUI thread, which are not one kernel call but many
   small ones a frame, share one pool of 3.1 MB that the panel owns. No other
   caller builds one kernel call from several `get`s: the photograph cache's
@@ -329,7 +336,7 @@ source.
    100 times on a diagonal and a `Bilinear` render over a large footprint
    (which take the tile path); the cluster grid samplers and the affine fast
    path through tiles equal their whole-level results on stretched maps; a
-   run whose regions exceed its pool (sized small for the test) never holds
+   kernel call whose regions exceed its pool (sized small for the test) never holds
    more than the pool, the renders past it taking the tile path, including
    from nested parallel loops on many threads at once, and no reservation
    waits; the tile path pins no more than its window; a
@@ -355,7 +362,9 @@ source.
 5. **Bulk kernels**: the display patch bitmaps, the conversion to embedded
    patches, the web export, *Refine all normals*, *Refit all points* and the
    cluster-patches build, each with a point order that keeps tile locality. Tests: identical results; a tile budget smaller
-   than one photograph's level 0 still completes.
+   than one photograph's level 0 still completes; with a small pool, the
+   regions of all the points in progress together never exceed the one pool
+   the caller made.
 6. **`GreyImages` by region.** Tests: the nearby-track search's results are
    identical.
 
@@ -373,7 +382,7 @@ source.
    position (as designed), or by tile. Recommendation: by reference image and
    position, which needs no knowledge of the tile grid in the kernel.
 4. **The pool and the tile window.** Four tiles of copied regions per rayon
-   thread, shared by the run, and 16 pinned tiles per render on the tile
+   thread, shared by the kernel call, and 16 pinned tiles per render on the tile
    path (as designed), or other values; or capping the patches in progress at
    the worker count instead of pooling, which would need a wait that nested
    loops could deadlock on. Recommendation: keep them, and count in each kernel's phase note

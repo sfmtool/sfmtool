@@ -1029,7 +1029,7 @@ from the sizes).
 | 17 x 200 MP, *Find matches by geometry* over the views the cull keeps (up to 151), `R = 24` | up to every photograph, 12.6 GiB for all 17 | up to 151 x 2.9 KB x 2.25 = 1.0 MB of regions kept for reuse (well inside the call's 99 MB pool), plus at most the tile budget (4 GiB at 64 GB of memory, 512 MiB at 8 GB) |
 | 17 x 200 MP, display patch bitmaps at open, one render per point | 12.6 GiB | 32 renders in flight x 2.9 KB, plus the tile budget |
 | 500 x 200 MP, any of the above | 372 GiB; fails | the same as for 17: regions plus the tile budget |
-| Any of the above, worst case (the kernel call's region pool full and every rendering thread on a grazing view) | — | one kernel call: 99 MB + 33 x 12.7 MB, about 520 MB; the viewer with two runs and Track View: about 650 MB; on top of the tile budget |
+| Any of the above, worst case (the kernel call's region pool full and every rendering thread on a grazing view) | — | one kernel call: 99 MB + 33 x 12.7 MB, about 520 MB; the viewer with two kernel calls and Track View: about 650 MB; on top of the tile budget |
 | 500 x 6000 x 4000, any of the above | 500 x 96 MB = 48 GB | the same |
 | 17 x 200 MP, Track View on a 17-image track at `R = 64` | 12.6 GiB | 17 x 17 KB x 2.25 of regions, plus the tiles they are cut from, one to four per level read and one or two levels per view, 13 to 108 MB |
 | 368 x 3840 x 2160 (in core) | 12.2 GB held by a `get_many` over every frame | unchanged: in-core photographs keep whole pyramids |
@@ -1514,7 +1514,8 @@ are not made to handle an error that cannot happen. Beside them,
 `render_source_tile` and `render_source_tile_with_grad_into` take a
 `&ProjectedImage` (and so a `PhotographSource`) and the region pool the
 kernel's caller made for this kernel call (`RegionPool::for_kernel_call()`,
-whatever way the caller fetched its sources), and
+whatever way the caller fetched its sources; a kernel that calls another
+passes its own pool down), and
 return `Result<_, PhotographReadError>`: for `Whole` they call the infallible
 functions and answer `Ok`, for `Tiled` they assemble the view-region pyramid
 or sample through tiles, either of which can fail.
