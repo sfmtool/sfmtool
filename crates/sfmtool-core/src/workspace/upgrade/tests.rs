@@ -2686,6 +2686,20 @@ fn set_mode(path: &Path, mode: u32) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
 }
 
+/// Sets the permission bits of a path back when dropped, so a test that
+/// fails while they are restricted still leaves a tree its temporary
+/// directory can remove.
+#[cfg(unix)]
+struct RestoreMode(PathBuf, u32);
+
+#[cfg(unix)]
+impl Drop for RestoreMode {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(self.1));
+    }
+}
+
 /// Whether permission bits stop this process: false when it runs as root,
 /// which reads and writes whatever they say.
 #[cfg(unix)]
@@ -2710,9 +2724,11 @@ fn an_unreadable_sift_file_or_folder_stops_the_run() {
     }
     let before = snapshot(&fixture.root);
     let locked = fixture.old_folder().join(format!("{}.sift", image_name(3)));
-    set_mode(&locked, 0o000);
-    let error = run_error(&fixture, false);
-    set_mode(&locked, 0o644);
+    let error = {
+        let _restore = RestoreMode(locked.clone(), 0o644);
+        set_mode(&locked, 0o000);
+        run_error(&fixture, false)
+    };
     let UpgradeWorkspaceError::UnreadableSiftFiles(failures) = &error else {
         panic!("{error}")
     };
@@ -2720,9 +2736,11 @@ fn an_unreadable_sift_file_or_folder_stops_the_run() {
     assert_eq!(failures[0].sift_path, locked);
 
     let matches = fixture.path("matches");
-    set_mode(&matches, 0o000);
-    let error = run_error(&fixture, false);
-    set_mode(&matches, 0o755);
+    let error = {
+        let _restore = RestoreMode(matches.clone(), 0o755);
+        set_mode(&matches, 0o000);
+        run_error(&fixture, false)
+    };
     let UpgradeWorkspaceError::ListFolder { folder, .. } = &error else {
         panic!("{error}")
     };
@@ -2731,13 +2749,17 @@ fn an_unreadable_sift_file_or_folder_stops_the_run() {
 }
 
 /// Run the upgrade of `fixture`, setting `mode` on each of `paths` when
-/// phase `phase` opens and restoring `restore` after the run.
+/// phase `phase_name` opens and restoring `restore` after the run.
 #[cfg(unix)]
 fn run_with_modes_from(
     fixture: &Fixture,
     phase_name: &'static str,
     paths: &[(PathBuf, u32, u32)],
 ) -> UpgradeWorkspaceReport {
+    let _restore: Vec<_> = paths
+        .iter()
+        .map(|(path, _, restore)| RestoreMode(path.clone(), *restore))
+        .collect();
     let sink = |event: Event<'_>| {
         if matches!(event, Event::Enter { phase, .. } if phase == phase_name) {
             for (path, mode, _) in paths {
@@ -2745,16 +2767,12 @@ fn run_with_modes_from(
             }
         }
     };
-    let report = upgrade_workspace(
+    upgrade_workspace(
         &fixture.root,
         &UpgradeWorkspaceOptions::default(),
         &Progress::to(&sink),
     )
-    .unwrap();
-    for (path, _, restore) in paths {
-        set_mode(path, *restore);
-    }
-    report
+    .unwrap()
 }
 
 /// A file that cannot be read during the rewrite fails, as does one whose
