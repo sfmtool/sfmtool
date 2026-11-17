@@ -59,8 +59,8 @@ fn convert_err(e: ConvertSiftFileError) -> PyErr {
 ///
 /// Raises:
 ///     OSError: if the folder holds version 1 `.sift` files (the message is
-///         `str` of `version_1_sift_files`' result), or is there but cannot
-///         be listed, or cannot be made.
+///         `str` of `version_1_sift_files`' result), cannot be listed for a
+///         reason other than its not being there, or cannot be made.
 #[pyclass(name = "Version2SiftFolder", module = "sfmtool.sift", frozen)]
 pub struct PyVersion2SiftFolder {
     inner: Version2SiftFolder,

@@ -164,7 +164,8 @@ def test_a_failed_write_raises_through_the_format_error_table(images):
     # the OSError subclass for the I/O error's kind, not a plain OSError.
     with pytest.raises(OSError, match="^failed to write ") as raised:
         folder.convert_version_1_sift_file(source, image)
-    assert isinstance(raised.value, (IsADirectoryError, PermissionError))
+    expected = PermissionError if sys.platform == "win32" else IsADirectoryError
+    assert isinstance(raised.value, expected)
     assert str(blocked) in str(raised.value)
     assert list(folder.path.iterdir()) == [blocked]
 

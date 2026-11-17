@@ -37,7 +37,9 @@ pub enum ConvertSiftFileError {
     /// The destination folder holds version 1 `.sift` files, and a version 2
     /// file never goes beside one.
     Version1Files(Version1SiftFiles),
-    /// The destination folder is there but could not be listed.
+    /// Listing the destination folder failed for a reason other than its not
+    /// being there, such as a file in its place or, on Linux and macOS, a file
+    /// in place of a folder above it.
     ListFolder {
         /// The folder.
         folder: PathBuf,
@@ -257,9 +259,9 @@ impl Version2SiftFolder {
     /// # Errors
     ///
     /// [`ConvertSiftFileError::Version1Files`] when it holds version 1 files,
-    /// [`ConvertSiftFileError::ListFolder`] when it is there but cannot be
-    /// listed, and [`ConvertSiftFileError::CreateFolder`] when it cannot be
-    /// made.
+    /// [`ConvertSiftFileError::ListFolder`] when listing it fails for a reason
+    /// other than its not being there, and
+    /// [`ConvertSiftFileError::CreateFolder`] when it cannot be made.
     pub fn create(folder: &Path) -> Result<Self, ConvertSiftFileError> {
         let found = version_1_sift_files(folder).map_err(|e| ConvertSiftFileError::ListFolder {
             folder: folder.to_path_buf(),
