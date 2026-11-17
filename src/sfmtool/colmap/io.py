@@ -36,7 +36,7 @@ def _resolve_workspace_and_sift(
     are those in its ``feature_prefix_dir``, so the folder a ``.sfmr`` names
     is always the one its hashes, thumbnails and keypoints came from, even
     when it is not the workspace's current folder, as for a solve from a
-    ``.matches`` file made before ``sfm ws upgrade``.
+    ``.matches`` file made before ``sfm ws init --force``.
 
     Returns:
         (workspace_dir, resolved_names, feature_tool_hashes,

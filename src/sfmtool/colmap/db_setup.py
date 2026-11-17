@@ -249,7 +249,7 @@ def resolve_matched_sift_paths(
 
     The `.sift` files are those the file was matched on: the folder is the
     `feature_prefix_dir` of the file's own workspace contents, never the
-    workspace's current one, which `sfm ws upgrade` moves. Each file's content
+    workspace's current one, which `sfm ws init --force` moves. Each file's content
     hash is checked against the one the `.matches` file recorded for it.
     Raises `MatchedFeaturesError`, naming the `.matches` file, the folder and
     what to do, when any of them is missing or has changed, so a caller stops

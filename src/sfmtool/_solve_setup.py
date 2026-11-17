@@ -46,7 +46,7 @@ def prepare_solve_inputs(
     `.sift` files come from, as a workspace config holds it
     (`feature_tool`, `feature_options`, `feature_prefix_dir`): the
     `.matches` file's own when solving from one, which is not the
-    workspace's current one after `sfm ws upgrade`, and the workspace's
+    workspace's current one after `sfm ws init --force`, and the workspace's
     otherwise. The reconstruction records it, and reads its `.sift` files
     from its folder.
     """
