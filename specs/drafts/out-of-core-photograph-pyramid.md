@@ -121,7 +121,7 @@ These are proposed for [GLOSSARY.md](../GLOSSARY.md), each with its reason.
 | **cache directory** | `.sfm-cache/` at a workspace's root, holding files derived from the workspace's images that can be deleted at any time and rebuilt; today only mipmaps | `cache folder`, `.cache` | it names what is in it (files that are a cache) and where (the workspace's); a name without `sfm` would collide with other tools' caches |
 | **out-of-core photograph** / **in-core photograph** | a photograph of a workspace whose file has `mipmap_options`, with a width or height over that object's `out_of_core_long_side` (4096 as `sfm ws init` writes it), is out of core (with one exception, § "Which photographs are out of core"): its reduced levels come from mipmaps, its level 0 from the original or a `-mipmap1`, and every reader reads it a region at a time; any other photograph is in core: its whole pyramid is built in memory from one decode, as every pyramid is today | `large image`, `tiled image`, `big photograph` | the tier decides where the levels live, which is what *core* means here; *large* says nothing about what is done differently, and every photograph is shown in tiles |
 | **photograph tile** | a 512 x 512 block of one level of a photograph's pyramid, with a one-pixel border of its neighbours' pixels: the unit the display draws as one texture and that a level is read in; `PhotographTile`, keyed by level, column and row | bare `tile`, `block`, `chunk` | bare *tile* is a view's tile, the patch a kernel renders ([GLOSSARY.md](../GLOSSARY.md) § "Rendering a view's tile"), and Track View draws those beside photographs, so the photograph's blocks need a qualified name |
-| **level builder** | the photograph cache's worker that makes the missing or stale mipmap sets of out-of-core photographs on threads of its own, `sfmtool_core::camera::LevelBuilder`, owned by `PhotographCache`; every reader of the cache waits on it, in the viewer, the CLI and Python alike, and the viewer only orders its queue by what is on screen and reports it | `mipmap generator`, `preprocessor` | it names what it does, build levels; the viewer's panel line says *Building image levels* because a person thinks of an image's levels, not of the files they are kept in |
+| **image levels** (*Building image levels*) | the viewer's words for a photograph's mipmap set and for making it: the quiet task *Build image levels*, the line *Building image levels: {done} of {total}*, and a panel's *Building image levels…* while a set is being made. In code the set is made inside the photograph cache's `get` or `get_many`, in the path's slot, with no builder object | `level builder`, `mipmap generator`, `preprocessing` | a person thinks of an image's levels, not of the files they are kept in; there is no separate builder to name, since making a set is part of reading the photograph, as a decode is |
 
 ## Which photographs are out of core
 
@@ -883,50 +883,96 @@ those rectangles from photograph tiles. The answer is one type for both tiers,
 `PhotographSource::{Whole(Arc<ImageU8Pyramid>), Tiled(Arc<TiledPhotograph>)}`,
 which is what a kernel's `ProjectedImage` holds, so the kernels' loops do not
 branch on the tier. When an out-of-core photograph's mipmaps are missing or
-stale, the reader waits for the level builder (below), so a kernel never reads
-levels that are not the files' pixels.
+stale, the reader that finds it so builds the set itself, as a reader that
+finds an in-core photograph not decoded decodes it today (§ "Building a set
+in the slot"), so a kernel never reads levels that are not the files' pixels.
 
-**Waiting for a build never happens on a rayon worker.** Making a set takes 2
-to 4 s and about 1 GB at 200 MP; a rayon worker that waited that long would
-take a thread from the tile decodes, layout requests and background level
-that the panels send to the same pool. So:
+**Building a set in the slot.** The user has decided that there is no
+separate builder: making a photograph's mipmap set works exactly like
+decoding a photograph in today's `PhotographCache`.
 
-- `get_many` on a thread that is not a rayon worker, before its parallel loop, resolves
-  every path's layout (a header read, and the coarsest record's check), calls
-  `prioritize` for every out-of-core path whose set is not current, and waits
-  for those builds there, counting them in its phase (*waiting for image
-  levels: 2 of 3*). Only then does it run its `par_iter`, whose items are
-  decodes of in-core photographs and the making of tiled sources from current
-  files, none of which waits on a build.
-- `get_many` on a rayon worker does not wait either: when any of its paths is
-  an out-of-core photograph whose set is not current, it calls `prioritize`
-  for each of them and returns `Err(GetManyError::Building { paths })`
-  naming them, reading nothing. Its callers today (`ViewSources::fetch` in
-  `state/edits.rs`, `render_patch_bitmap_column` in `display_bitmaps.rs`) run
-  on job threads, not rayon workers, so they never see it; a caller on a
-  rayon worker gets a clear error instead of a worker blocked for seconds.
-- `get` on a rayon worker (`rayon::current_thread_index()` is `Some`) for an
-  out-of-core photograph whose set is not current returns
-  `Err(GetError::Building)` rather than waiting, and
-  calls `prioritize`. A caller inside a parallel loop (the photograph cache
-  spec already asks such callers to use `get` rather than `get_many`) resolves
-  its photographs with `get_many` before the loop. `get` on any other thread
-  waits.
-- `get_tile`, `view_region_pyramid` and `get_level` never wait on a build: a
-  photograph whose files are not current answers `TileError::Building`. A
-  kernel that gets it mid-run (its files went stale after its read phase
-  found them current: another process rebuilt them at another quality, or the
-  original changed) fails as for `TileError::Changed` below, with the error
-  *The image levels of images/IMG_0001.JPG went out of date while Refine all
-  normals ran; run it again*, and the set is queued to be made again. It does
-  not wait for the rebuild inside its renders, since that would be the wait on
-  a rayon worker this section rules out, and it does not go on with levels of
-  two versions.
-- The other paths that read photographs on the rayon pool have no build to
-  wait for: the panels' layout requests read a header and a record; tile
-  decodes read current files; the 3D background's `get_level` assembles tiles
-  of a `Known` photograph; `gather_image_readings` and the SIFT builders read
-  originals, not the cache.
+- **On the caller's thread, inside the path's slot.** A `get` that finds an
+  out-of-core photograph's files missing or stale makes the set itself, on
+  its own thread (a job thread, a rayon worker, a Python thread), and every
+  other caller asking for the same path waits on the slot and then reads what
+  it made. `get_many` makes its misses in parallel across photographs on the
+  rayon pool, as it decodes them today. Each set is made serially inside its
+  slot: decode, region test, reduction, and each encode and write in turn,
+  with no rayon inside, for the reason
+  [photograph-cache.md](../core/camera/photograph-cache.md) § "Implementation
+  notes" gives for decodes (a worker that waited in a nested join inside a
+  slot could steal another item for the same path and deadlock on itself).
+  `jpeg-encoder` and `jpeg-decoder` use no rayon, so the whole build is safe
+  there.
+- **Rayon workers wait.** A worker that builds or waits on a slot blocks for
+  the build, 2 to 4 s at 200 MP against 0.5 to 1.7 s for today's decode of
+  the same photograph. This is accepted, as it is for decodes today; the
+  panels' tile decodes and layout requests share the pool and are slowed
+  while it is busy, not stopped, since a waiting worker holds one thread.
+- **Cancellation.** The slot is no longer a `OnceLock`, which cannot be
+  abandoned once a thread has started to fill it. It is a mutex over the
+  slot's state (empty, being made by one caller, or made, with its result or
+  remembered failure) and a condition variable. A caller that finds the slot
+  empty marks it as being made and makes the set; one that finds it being made
+  waits on the condition variable, waking every 50 ms to poll its own
+  `Progress` for cancellation, and stops with `Cancelled` if it is cancelled,
+  leaving the build to its maker. The maker polls its `Progress` between the
+  build's stages (after the decode, after the region test, after the
+  reduction, and after each level's encode and write), so a cancelled maker
+  stops within one stage, at most one decode (0.8 to 1.7 s at 200 MP) or one
+  encode. It writes nothing further, removes its temporary file, sets the slot
+  back to empty and wakes the waiters; the first waiter to take the lock marks
+  the slot as being made and makes the set itself, from the start, and the
+  others go on waiting. The levels already written by the cancelled maker are
+  complete files: the next maker finds those current and makes only the
+  rest. A slot is never left marked as being made by a caller that has
+  stopped. The same slot type serves in-core decodes, which gain the same
+  cancellation between the decode and the pyramid.
+- **Progress.** A build is part of the `get` or `get_many` that makes it and
+  reports through that caller's `Progress`: a `get` opens phases *decode*,
+  *reduce* and *encode* (the last counting levels); `get_many` counts the sets
+  it made and the photographs it read in its own phase, under the name its
+  caller gives it (*build image levels*, *decode images*), with a note
+  (*3 of 17 read, 2 sets made*). Nothing on the cache reports on its own:
+  there is no reporter, queue or status object.
+- **Memory while building.** A build holds a whole decode, about 1 GB at
+  200 MP (5 bytes per source pixel, estimated), so `get_many` does not start
+  all its misses at once. It makes its out-of-core misses in groups, one
+  `par_iter` per group, the groups one after another, with the group's size
+  set by memory as `default_concurrent_images_for_dimensions` sizes SIFT's:
+  the number of sets that fit in the **build budget**, a quarter of physical
+  memory, less what other builds of the process already hold, at most the
+  rayon pool's size and at least one. The process keeps one count of the
+  estimated bytes of the builds in progress, an atomic that each build adds to
+  when it starts and takes back when it ends; a group's size is read from it
+  when the group starts. Nothing waits on that count: it is not a semaphore,
+  and a caller whose budget is used up still starts one build, so that it
+  makes progress. In-core misses are decoded in parallel as today.
+- **What bounds builds from independent callers.** Each caller that finds
+  the budget used up still starts one. In the viewer the callers that can
+  build at once are the two background queues' tasks (each a `get_many`, one
+  of them perhaps the *Build image levels* task below) and the panels'
+  requests, which the viewer starts only while the count is under the budget
+  (§ "Readers on the GUI thread"), except one when nothing is building. So
+  the builds in progress hold at most the build budget plus three sets: on
+  the 64 GB development machine 16 GiB plus 3 GB at 200 MP, and on a 16 GB
+  machine 4 GiB plus 3 GB. On the command line one `get_many` runs at a time,
+  so the bound is the budget plus one set. These are on top of the caches'
+  budgets, and are estimates from the buffer sizes.
+- **No build on the GUI thread, and no tile task that waits on one.** The
+  panels never call `get` on the GUI thread for an out-of-core photograph,
+  whatever the budget, and ask for tiles only once a photograph's files are
+  current (§ "Readers on the GUI thread"), so a tile task never meets a build.
+
+`get_tile`, `view_region_pyramid` and `get_level` are asked only of a
+photograph whose layout is `Known` (its files current), never make a set, and
+decode only tiles of current files, milliseconds each (`get_level` at most a
+few hundred milliseconds for a level of 48 tiles), so they take no
+`&Progress`. A kernel whose files go stale after its read phase found them
+current (another process rebuilt them at another quality, or the original
+changed) gets `TileError::Changed` from its next tile read and fails as
+§ "Files that change while a kernel runs" says, rather than rebuilding inside
+a render and going on with levels of two versions.
 
 **Files that change while a kernel runs.** A tiled source records, for each
 file it has read, the file's record. When a tile is decoded again after its
@@ -976,7 +1022,7 @@ does today.
 ```rust
 pub enum PeekedLayout {
     Known(Arc<PyramidLayout>), // header read, files current: tiles may be asked for
-    Building { coarsest: Option<Arc<PhotographTile>> }, // set missing or stale; queued or being made
+    Building { coarsest: Option<Arc<PhotographTile>> }, // set missing, stale or being made; the coarsest once published
     Unreadable(String),         // the original or the workspace file cannot be read; the message says which
     NotKnown,                   // not checked yet
 }
@@ -989,9 +1035,9 @@ of a photograph that is `Building`. A tile is asked for (`get_tile`) only for a
 photograph that is `Known`, so a tile request is always a decode of a file
 that exists, milliseconds of work, and never waits on a build. If the files
 change under a `Known` photograph, `get_tile` finds the record stale, answers
-`Building` without waiting, and the photograph goes back to `Building`. Making
-a set happens only on the level builder's threads, never on the rayon pool and
-never on the GUI thread.
+`TileError::Changed` without waiting, and the photograph goes back to
+`Building`, so the panel requests it again. A set is made only inside a
+`get` or `get_many`, never on the GUI thread.
 
 **Memory, under this design.** What a kernel holds for out-of-core photographs
 is the view-region pyramids of the renders it has in flight or keeps for reuse,
@@ -1020,9 +1066,12 @@ thread, and in the viewer the other queue's job thread and the GUI thread.
 One kernel call on the command line holds at most 99 MB + 33 x 12.7 MB, about
 520 MB, on top of the tile budget; the viewer, with at most two kernel calls at
 once (one per background queue) and Track View's renders, at most
-2 x 99 MB + 3.1 MB + 35 x 12.7 MB, about 650 MB. The common case is a few
-hundred kilobytes, whatever the number of views or photographs (estimates
-from the sizes).
+2 x 99 MB + 3.1 MB + 35 x 12.7 MB, about 650 MB. A build renders nothing
+and pins no tiles, so building sets on these threads does not change the
+count; a build's own memory is the build budget's bound in § "Building a set
+in the slot", separate from this one. The common case is a few hundred
+kilobytes, whatever the number of views or photographs (estimates from the
+sizes).
 
 | Case | Today (whole pyramids) | This design |
 |------|------------------------|-------------|
@@ -1078,59 +1127,66 @@ tiles and do not count against it.
   the paths (skipping in-core ones and current sets), with `--prune` to delete
   orphans and `--check` to report stale sets without writing. It is the way to
   prepare a workspace whose features came from somewhere else.
-- **The level builder**, in `sfmtool-core` and owned by `PhotographCache`,
-  makes every set any reader of the cache needs, in any process. It keeps a
-  queue of photographs, `prioritize(path)` to move one to the front (or add
-  it), threads of its own (not the rayon pool and not the viewer's background
-  queues), and a wait for one photograph's set that takes a `&Progress` and
-  polls it for cancellation; a cancelled wait leaves the build running for
-  the next asker. Its concurrency is the number of sets that fit in a quarter
-  of physical memory at the estimated 1 GB per 200 megapixels (5 bytes per
-  source pixel), at most half the cores, at least one; `SFM_LEVEL_BUILDS`
-  overrides it. It publishes each level as it is encoded, so a photograph's
-  coarsest level is readable before its `-mipmap1` is written. A set it did
-  not finish when its process ends has no partial files, and is built next
-  time.
-- **On the command line and in Python** the same builder runs inside the
-  process's cache. `ImagePyramidSet.read(recon, progress=…)`, `embed-patches`,
-  `sfm cluster-patches` and `sfm web-export` read through a cache; its
-  `get_many` prioritizes every set it is missing and waits for them on the
-  calling thread in a phase *build image levels*, counting sets through the
+- **Any reader of the cache** makes the sets it needs, in any process, as
+  § "Building a set in the slot" says. On the command line and in Python,
+  `ImagePyramidSet.read(recon, progress=…)`, `embed-patches`,
+  `sfm cluster-patches` and `sfm web-export` read through a cache whose
+  `get_many` makes every missing set in its phase, counting sets through the
   caller's `Progress` (a `ProgressCounter` from Python), before the work
-  starts. `sfm ws mipmaps` queues every photograph under its paths and waits
-  for all of them in the same phase.
-- **In the viewer** the builder is the cache's, and the viewer adds two
-  things: when a reconstruction opens it queues every out-of-core photograph
-  of it whose files are missing or stale (a `stat`, the original's header and
-  markers for the region test, and one small read each), the selected image
-  first, then the images the Image Browser strip shows, then the rest in image
-  order; and while the builder works the Background Tasks panel's quiet line
-  says *Building image levels: {done} of {total}*, read from the builder's
-  counts. A panel calls `prioritize` once per photograph it is waiting for,
-  not once per tile. The builder is not a quiet task: quiet tasks run one at
-  a time in a queue and give way to asked-for tasks, while this work touches
-  no node and must not wait behind a long edit.
+  starts; `sfm ws mipmaps` calls `get_many` over every photograph under its
+  paths in a phase *build image levels*.
+- **In the viewer**, when a reconstruction opens, the viewer starts a quiet
+  task, *Build image levels* (`Operation::BUILD_IMAGE_LEVELS`, a new quiet
+  source), on the fast queue. It is an ordinary background task with its own
+  `Progress` and collector: its job calls `get_many` over the
+  reconstruction's out-of-core photographs whose files are missing or stale
+  (found by a `stat`, the original's header and markers for the region test,
+  and one small read each), the selected image first, then the images the
+  Image Browser strip shows, then the rest in image order, and the order
+  decides which group each falls in. Being a quiet task, it gives way to an
+  asked-for task in its queue: its cancel flag is set, each build in progress
+  stops within one stage and leaves its slot empty, and the task is queued
+  again behind the one that displaced it, losing at most the stage each build
+  was in. While it runs, the Background Tasks panel's quiet line shows it as
+  it shows every quiet task, with its count of sets. A panel's request or a
+  bench step that needs a photograph meanwhile asks the cache for it
+  directly; if the task is making it, the slot makes the asker wait for that
+  build rather than start a second, and if not, the asker makes it. There is
+  no queue across callers.
 - **A kernel** that needs an out-of-core photograph whose files are not
-  current waits for the builder inside its read phase, on the calling thread,
-  counted in the phase's note (*3 of 17 read, 2 sets made*). It does not read
-  the exact levels in the meantime.
+  current makes the set inside its read phase (its `get_many`), counted in the
+  phase's note (*3 of 17 read, 2 sets made*). It does not read the exact
+  levels in the meantime.
 
 **Readers on the GUI thread.** None of them makes a set, decodes a whole
-photograph or waits. Each asks `layout` and acts on the state:
+photograph or waits. Each asks `layout` and acts on the state. *Request the
+photograph* means what `display_photograph` does today for a decode: once per
+path, it starts one rayon task that calls `get`, which makes the set (or waits
+for the caller already making it), records the path in `PhotographRequests`
+so later frames start no second task, and repaints when the task ends. For an
+out-of-core photograph the viewer starts such a task only while the build
+count is under the build budget, or when nothing is building; a request
+refused that way stays wanted and is tried again on a later frame.
 
 | Reader | `NotKnown` | `Building` | `Known` |
 |--------|------------|------------|---------|
-| Image Detail | asks for the layout once (a header read, the region test and a record check, on the rayon pool) and draws *Loading image…* | calls `prioritize` once, draws the coarsest level if it exists and *Building image levels…* otherwise | peeks the visible tiles and asks for the missing ones |
-| Track View's patch tiles, cluster-stage tiles, context and crops; the Track Table's crop column and hover | the same layout request; the cell draws its loading state | `prioritize` once per photograph; the cell says *Building image levels…* | computes the render's regions, peeks their tiles, asks for the missing ones, and renders when all are present |
-| The 3D background | the same layout request; nothing drawn | `prioritize` once; draws the coarsest level if it exists | asks for its level with `get_level`, which assembles it from tiles on the rayon pool, and draws the coarsest until it lands |
-| Display thumbnails | built in the open job, off the GUI thread: a photograph whose coarsest mipmap is not current gets the grey placeholder row | the builder fills the row when it publishes the coarsest level | the row from the coarsest mipmap |
+| Image Detail | asks for the layout once (a header read, the region test and a record check, on the rayon pool) and draws *Loading image…* | requests the photograph once, draws the coarsest level if the build has published it and *Building image levels…* otherwise | peeks the visible tiles and asks for the missing ones |
+| Track View's patch tiles, cluster-stage tiles, context and crops; the Track Table's crop column and hover | the same layout request; the cell draws its loading state | requests the photograph once; the cell says *Building image levels…* | computes the render's regions, peeks their tiles, asks for the missing ones, and renders when all are present |
+| The 3D background | the same layout request; nothing drawn | requests the photograph once; draws the coarsest level if published | asks for its level with `get_level`, which assembles it from tiles on the rayon pool, and draws the coarsest until it lands |
+| Display thumbnails | built in the open job, off the GUI thread: a photograph whose coarsest mipmap is not current gets the grey placeholder row | the row stays the placeholder | a placeholder row whose photograph has become `Known` is filled, on the rayon pool, from the coarsest mipmap |
+
+A build publishes each reduced level to the slot's `Building` state as it is
+encoded, coarsest first, so a panel shows a photograph's coarsest level about a
+second after the build starts, before its finer levels and its `-mipmap1` are
+written.
 
 **A budget of 0.** `display_photograph` with `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB=0`
 calls `get` on the GUI thread today, since nothing it decodes would be kept for
 the next frame. That stays for in-core photographs only. An out-of-core
-photograph never takes that path: with a tile budget of 0, a tile decoded on
-the rayon pool is handed to the panel that asked for it, whose texture keeps
-it, and the cache keeps nothing.
+photograph never takes that path: it is requested on the rayon pool as above
+whatever the budget, so a build never runs on the GUI thread; and with a tile
+budget of 0, a tile decoded on the rayon pool is handed to the panel that asked
+for it, whose texture keeps it, and the cache keeps nothing.
 
 ## Display
 
@@ -1278,14 +1334,18 @@ is region-readable, and `-mipmap1`'s otherwise.
 
 ## Standards
 
-- **Progress.** `build_mipmaps` takes `&Progress`, counts levels and polls for
-  cancellation between the decode, the reduction and each encode; a cancelled
-  build writes nothing further and leaves no partial file. `PhotographCache::get`
-  gains a `&Progress` parameter, since a `get` can now wait for a set to be
-  made (2 to 4 s) and already can take over a second to decode a large in-core
-  photograph; callers with nothing to report pass `&Progress::none()`.
-  `get_many` passes its own down. `sfm ws mipmaps` reports through a
-  `ProgressCounter`.
+- **Progress.** `build_mipmaps` takes `&Progress`, opens phases for the
+  decode, the reduction and the encodes, counts levels and polls for
+  cancellation between them; a cancelled build writes nothing further and
+  leaves no partial file. `PhotographCache::get` gains a `&Progress`
+  parameter, since a `get` can now make a set (2 to 4 s) and already can take
+  over a second to decode a large in-core photograph; callers with nothing to
+  report pass `&Progress::none()`. `get_many` passes its own down. `get_tile`,
+  `view_region_pyramid` and `get_level` take none, since they never make a set
+  and take milliseconds. `sfm ws mipmaps` reports through a
+  `ProgressCounter`. `sfmtool-progress` is used unchanged: a build reports
+  through the caller's `Progress` with the phases, counts and cancellation it
+  already has, and nothing in this design adds a reporter to it.
 - **No panics on caller input.** A mipmap that is missing, cut short, damaged,
   encoded at another quality, or recording another photograph is stale and is
   made again; an original that cannot be read is an `Unreadable` answer, as
@@ -1299,7 +1359,7 @@ is region-readable, and `-mipmap1`'s otherwise.
   map, whose invalid texels (a point at infinity behind the camera, a ray that
   does not reach the patch) take no sample and so add nothing to the region.
 - **Logic in Rust.** The naming rule, the record, the region test, the
-  staleness test, the workspace object's validation, the level builder, the
+  staleness test, the workspace object's validation, the slot, the
   making and the reading are Rust in `sfmtool-core`; Python calls bindings.
 - **Settings structs.** `MipmapOptions` is the workspace's `mipmap_options`
   object; `PhotographCacheOptions` holds the budgets and the tile size.
@@ -1368,17 +1428,11 @@ pub fn build_mipmaps(
     progress: &Progress<'_>,
 ) -> Result<BuiltMipmaps, MipmapError>;
 
-/// Makes sets on threads of its own; owned by `PhotographCache`.
-pub struct LevelBuilder { /* … */ }
-impl LevelBuilder {
-    /// Add `path` to the queue, or move it to the front.
-    pub fn prioritize(&self, path: &Path);
-    /// Wait for `path`'s set on the calling thread. Refused on a rayon
-    /// worker (`BuildWait::OnRayonWorker`), never blocking one.
-    pub fn wait(&self, path: &Path, progress: &Progress<'_>) -> Result<(), BuildWait>;
-    /// Sets queued, being made and made, for a status line.
-    pub fn counts(&self) -> LevelBuilderCounts;
-}
+/// The process's count of estimated bytes held by builds in progress, read
+/// to size `get_many`'s groups; never waited on.
+pub fn builds_in_progress_bytes() -> u64;
+/// A quarter of physical memory: the build budget.
+pub fn default_build_budget_bytes() -> u64;
 
 /// One mipmap's bytes, record and restart index, read and checked once.
 pub struct MipmapFile { /* … */ }
@@ -1433,28 +1487,28 @@ pub enum PhotographSource {
 
 impl PhotographCache {
     pub fn new(options: PhotographCacheOptions) -> Self; // no `levels`: depth is by size
-    /// Waits for a set on any thread but a rayon worker, where it answers
-    /// `GetError::Building` instead.
+    /// Makes the set of an out-of-core photograph whose files are missing or
+    /// stale, in the path's slot on the calling thread, or waits for the
+    /// caller already making it; reports through `progress`.
     pub fn get(&self, path: &Path, progress: &Progress<'_>) -> Result<PhotographSource, GetError>;
-    pub fn level_builder(&self) -> &LevelBuilder;
-    /// Waits for missing sets on the calling thread before reading; on a
-    /// rayon worker answers `GetManyError::Building` instead of waiting.
+    /// Makes its misses in parallel on the rayon pool, the out-of-core ones in
+    /// groups sized by the build budget; the return type is today's.
     pub fn get_many(&self, paths: &[&Path], progress: &Progress<'_>)
-        -> Result<(Vec<Option<PhotographSource>>, GetManyTally), GetManyError>;
+        -> Result<(Vec<Option<PhotographSource>>, GetManyTally), Cancelled>;
     // peek and peek_state answer `PhotographSource` too; insert, forget, clear, stats as today
 
     pub fn layout(&self, path: &Path) -> PeekedLayout;
     pub fn request_layout(&self, path: &Path);   // a header read, the region test, a record check
     pub fn peek_tile(&self, path: &Path, key: TileKey) -> PeekedTile;
-    /// Only for a photograph whose layout is `Known`; answers `Building`
-    /// rather than waiting when its files have gone stale.
-    pub fn get_tile(&self, path: &Path, key: TileKey, progress: &Progress<'_>) -> Result<Arc<PhotographTile>, TileError>;
+    /// Only for a photograph whose layout is `Known`; never makes a set, and
+    /// answers `Changed` rather than waiting when its files have gone stale.
+    pub fn get_tile(&self, path: &Path, key: TileKey) -> Result<Arc<PhotographTile>, TileError>;
     /// A view-region pyramid of an out-of-core photograph, assembled from
     /// tiles ([view-region-pyramid.md](view-region-pyramid.md)).
-    pub fn view_region_pyramid(&self, path: &Path, regions: &LevelRegions, progress: &Progress<'_>)
+    pub fn view_region_pyramid(&self, path: &Path, regions: &LevelRegions)
         -> Result<ImageU8Pyramid, TileError>;
     /// One level whole, for the 3D background, assembled from tiles out of core.
-    pub fn get_level(&self, path: &Path, level: usize, progress: &Progress<'_>) -> Result<Arc<ImageU8>, TileError>;
+    pub fn get_level(&self, path: &Path, level: usize) -> Result<Arc<ImageU8>, TileError>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1470,9 +1524,8 @@ pub struct PhotographTile {
 }
 
 // `PeekedLayout` and `PeekedTile` as in § "The caches in memory".
-pub enum TileError { Building, Changed { path: PathBuf }, Unreadable(String), Cancelled }
-pub enum GetError { Building, Unreadable(String), Workspace(WorkspaceConfigError), Cancelled }
-pub enum GetManyError { Building { paths: Vec<PathBuf> }, Cancelled }
+pub enum TileError { Changed { path: PathBuf }, Unreadable { path: PathBuf, why: String } }
+pub enum GetError { Unreadable(String), Workspace(WorkspaceConfigError), Cancelled }
 ```
 
 `DISPLAY_PYRAMID_LEVELS` and the viewer's `state::PYRAMID_LEVELS` are removed.
@@ -1492,9 +1545,8 @@ everything a kernel can meet while reading photographs, in
 /// Why a kernel could not read the photographs it was given.
 pub enum PhotographReadError {
     Cancelled,
-    /// Sets not current; only on a rayon worker, which never waits for one.
-    Building { paths: Vec<PathBuf> },
-    /// A file's record differs from the one this run read, or went stale.
+    /// A file's record differs from the one this kernel call read, or it went
+    /// stale after the call's read phase found it current.
     Changed { path: PathBuf },
     Unreadable { path: PathBuf, why: String },
     /// A reader that has not yet moved to view-region pyramids was handed a
@@ -1502,8 +1554,7 @@ pub enum PhotographReadError {
     NotYetTiled { reader: &'static str },
 }
 impl From<Cancelled> for PhotographReadError { /* … */ }
-impl From<GetManyError> for PhotographReadError { /* … */ }
-impl From<(TileError, PathBuf)> for PhotographReadError { /* … */ } // a mid-run Building or Changed becomes Changed { path }
+impl From<TileError> for PhotographReadError { /* … */ }
 ```
 
 **In-memory pyramids stay infallible.** `render_tile`, `render_tile_with_grad_into`,
@@ -1533,7 +1584,7 @@ each in the step that moves its readers:
 
 | Step | Signatures that change |
 |------|------------------------|
-| 8 | `ViewSources::fetch` in [state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs) and the public `render_patch_bitmap_column` / `render_display_patch_bitmaps` in [display_bitmaps.rs](../../crates/sfmtool-core/src/patch/display_bitmaps.rs) return `PhotographReadError` instead of `Cancelled`, since `get_many` now returns `GetManyError`; `Building` cannot occur on their job threads but is handled as a failure naming the paths. Their kernels still render infallibly from `Whole` sources and refuse `Tiled` ones with `NotYetTiled` |
+| 8 | `ViewSources::fetch` in [state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs) and the public `render_patch_bitmap_column` / `render_display_patch_bitmaps` in [display_bitmaps.rs](../../crates/sfmtool-core/src/patch/display_bitmaps.rs) return `PhotographReadError` instead of `Cancelled`; `get_many` still returns `Cancelled`, which converts, and the new variants are `NotYetTiled`, which their kernels return for a `Tiled` source until they move, and the `Unreadable` and `Changed` of a tiled read from then on. Their kernels still render infallibly from `Whole` sources |
 | 9 | Track View's and the Track Table's renders, which draw a cell's error state instead of the tile |
 | 10 | the bench kernels (`bench::evaluate`, `evaluate_rendering_bitmap`, `score_bitmap`, `fit`, `render_bitmap_in_place`, `search_geometry`, `set_stage`, `build_track_at_pixel`, `classify`) and the patch kernels they and the reference picks share (`view_selection::select_patch_views`, `select_patch_cloud_views`, `reference_view::render_view_tile`, `read_track`, `stored_bitmap::render_reference`, `keypoint_localize`'s and `keypoint_subpixel`'s entry points, `member_coherence`'s, `observation_reading::read_cloud_observations`, `spawn::spawn_candidate_tracks`) |
 | 11 | `stored_bitmap::render_patch_bitmap`, `render_patch_cloud_bitmaps`, `refine_normals` and the normal kernels it runs (`pairwise_flow_normal`, `grown_plane_normal`, `grid_plane_normal`, `finite_difference_normal`), `refit_points`, and the cluster refinement's entry points with `sample_member_grid` |
@@ -1546,8 +1597,9 @@ The viewer's side, in
 `display_tile` beside it acts on the layout state as § "Readers on the GUI
 thread" says, starting one `get_tile` per missing tile of a `Known`
 photograph; and the admission rule for in-core pyramid requests lives there.
-The viewer's part of the level builder (the open-time queue and the status
-line) is `state/level_builder.rs`, over the cache's `LevelBuilder`.
+The *Build image levels* quiet task is `state/build_image_levels.rs`: a job
+that calls `get_many` over the reconstruction's out-of-core photographs in the
+order § "Who makes the mipmaps, and when" gives.
 
 ## Python bindings
 
@@ -1646,22 +1698,27 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    tiles in memory. No reader changes yet. Tests: the companion draft's
    equality tests.
 8. **The out-of-core tier, off.** The tiled entries, the tile budget and its
-   eviction, the layout states, the `LevelBuilder` in `sfmtool-core` with
-   `prioritize`, `wait` and its memory-sized concurrency, `get` and
-   `get_many` answering sources and waiting for builds on the calling thread
-   only, `get_level`, `TileError::Changed`, Image Detail and the 3D background
-   on tiled photographs, and the in-core admission rule. Every other reader
-   refuses a tiled source. Tests: with the small threshold, a `get` on a
-   photograph with no mipmaps waits for them; a `get` on a rayon worker
-   answers `Building` and does not wait; a `get_many` over 20 out-of-core
+   eviction, the layout states, the slot as a mutex and condition variable
+   with cancellation between a build's stages, the build budget and its
+   count of builds in progress, `get` and `get_many` answering sources and
+   making missing sets in the slot (the out-of-core misses of a `get_many` in
+   groups sized by the budget), `get_level`, `TileError::Changed`, Image
+   Detail and the 3D background on tiled photographs with their requests
+   started only under the budget, and the in-core admission rule. Every other
+   reader refuses a tiled source. Tests: with the small threshold, a `get` on
+   a photograph with no mipmaps makes them and returns their pixels; two
+   threads asking for one path make one set; a `get_many` over 20 out-of-core
    photographs holds no pyramid (the cache's stats show only tiles, within a
-   small tile budget) and waits for its builds before its parallel loop; a
-   `get_many` on a rayon worker with a missing set returns
-   `GetManyError::Building` naming it, reads nothing and does not wait; no
-   GUI-thread reader requests a tile while its photograph is `Building`; a file
+   small tile budget) and never has more builds in progress than the budget
+   allows, with a budget set small for the test and checked through the
+   count; a caller cancelled mid-build stops within one stage and leaves the
+   slot empty, a waiter on that slot then makes the set, and a waiter that is
+   cancelled stops waiting within 50 ms; a build reports its phases through
+   the caller's `Progress`; no GUI-thread reader requests a tile while its
+   photograph is `Building`, and none calls `get` for an out-of-core
+   photograph on the GUI thread, with a pyramid budget of 0 too; a file
    replaced by one with another record during a read fails with `Changed`, and
-   one made stale during a kernel fails it with the named error rather than
-   waiting; `PhotographReadError` and the `render_source_*` functions, with
+   one made stale during a kernel fails it with the named error; `PhotographReadError` and the `render_source_*` functions, with
    the step-8 rows of § "Errors from reading pixels"; a reader not yet moved
    refuses a tiled source with `NotYetTiled`.
 9. **Track View and the Track Table** on view-region pyramids, peeking tiles
@@ -1675,12 +1732,14 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
     changes.
 12. **The nearby-track grey reads by region** (companion step 6), with the
     step-12 signature changes.
-13. **Makers**: `sfm sift` and `build_sift_file`, the viewer's open-time queue
-    and panel line over the cache's builder, `sfm ws mipmaps` with `--prune`
+13. **Makers**: `sfm sift` and `build_sift_file`, the viewer's *Build image
+    levels* quiet task, `sfm ws mipmaps` with `--prune`
     and `--check` (its `--enable` waits for step 15, since it writes the
     object), and the thumbnail from the coarsest mipmap.
     Tests: `sfm sift` on a small-threshold synthetic workspace writes the
-    files; the builder's order follows the selection; `--prune` deletes an orphan and
+    files; the quiet task makes the selected image's set in its first group
+    and gives way to an asked-for task, leaving no slot marked as being made;
+    `--prune` deletes an orphan and
     keeps a current set, and deletes every mipmap in a workspace without the
     object; `--check` writes nothing.
 14. **Readers that must agree with the viewer**: `ImagePyramidSet.read`, and
@@ -1749,10 +1808,19 @@ ranges in this draft are over those runs.
 5. **The command's name.** `sfm ws mipmaps` (as designed), a top-level
    `sfm mipmaps`, or no command and only `sfm sift` and the viewer.
    Recommendation: `sfm ws mipmaps`, since the files belong to the workspace.
-6. **The level builder in the Background Tasks panel.** A line of its own (as
-   designed), a quiet task, or nothing. Recommendation: the line; a quiet task
-   would wait behind every other quiet task and give way to every asked-for
-   one, and the display and the kernels wait on this work.
+6. **The build budget and cancellation.** Builds started by independent
+   callers are bounded by a non-blocking count against a quarter of physical
+   memory, each caller still starting one when it is used up (as designed:
+   the budget plus three sets in the viewer). Options: (a) as designed; (b) a
+   blocking semaphore, which would bound memory exactly but make a rayon
+   worker wait on another caller's build for a permit, the cross-caller
+   coupling this design was simplified to remove; (c) no shared count, each
+   `get_many` sizing its groups alone, which would let two background tasks
+   and a panel each take a quarter of memory. And for cancellation: (a) a
+   cancelled maker abandons the build and a waiter takes it over (as
+   designed); (b) a maker always finishes, so a slot never changes hands but
+   a cancelled task keeps the machine busy for up to 4 s per set it started.
+   Recommendation: (a) for both.
 7. **Image Detail's zoom limit.** `MAX_ZOOM` = 32 times the fit does not reach
    full resolution of a 200-megapixel photograph in a small panel. Options:
    keep it; make the limit `max(32, 8 / fit_scale)` so a level-0 pixel can
@@ -1858,10 +1926,18 @@ ranges in this draft are over those runs.
   readings every reconstruction is built from. For an original that is not
   region-readable, SIFT's level 0 and the kernels' therefore differ by 0.07 to
   0.09 grey levels on the user's JPEGs (open question 11).
-- **Waiting for builds on the rayon pool would starve the panels.** `get_many`
-  reads its misses in a parallel loop today; the design moves every wait for a
-  build to the calling thread, before that loop, and a `get` on a rayon worker
-  never waits.
+- **Builds on rayon workers slow the panels.** The user has decided that a
+  set is made the way a photograph is decoded today, in its slot on the
+  caller's thread, so a rayon worker that makes a set or waits on one is
+  blocked for 2 to 4 s at 200 MP, against 0.5 to 1.7 s for today's decode.
+  The panels' tile decodes and layout requests share the pool and wait longer
+  for a free worker while builds run. This is accepted; what keeps it bounded
+  is the build budget (open question 6), and what keeps the GUI responsive is
+  that no build or wait ever runs on the GUI thread.
+- **A build holds a whole decode.** Without the budget, a `get_many` over
+  many out-of-core photographs would hold one 1 GB decode per rayon worker,
+  32 GB on the development machine; the groups sized by the build budget, and
+  the shared count, bound it to the budget plus one set per caller.
 - **The mipmap directory is reachable by image discovery.** A directory scan
   at the workspace root would read mipmaps as images; step 5 makes every
   finder skip it before anything writes there.
