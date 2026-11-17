@@ -7,12 +7,14 @@ import sfmtool._sfmtool.workspace as workspace
 
 _EXPECTED_FUNCTIONS = (
     "feature_prefix_dir",
+    "feature_type_for_tool",
     "find_workspace_for_path",
     "is_named_image_list_name",
     "recorded_image_to_gray",
     "split_named_image_list_value",
     "tool_image_to_gray",
     "upgrade_feature_options",
+    "upgrade_workspace",
 )
 
 _EXPECTED_CLASSES = (

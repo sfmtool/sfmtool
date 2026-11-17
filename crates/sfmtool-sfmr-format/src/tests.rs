@@ -699,6 +699,60 @@ fn test_read_metadata_only() {
     assert_eq!(metadata.operation, "sfm_solve");
     assert_eq!(metadata.image_count, 3);
 
+    let (metadata, names) = read_sfmr_image_names(&path).unwrap();
+    assert_eq!(metadata.operation, "sfm_solve");
+    assert_eq!(names, data.image_names);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `read_sfmr_image_names` reports a file it cannot open with its path, and
+/// a names entry whose length is not the metadata's `image_count`.
+#[test]
+fn test_read_image_names_errors() {
+    use std::io::{Read, Write};
+
+    let dir = std::env::temp_dir().join("sfmr_test_image_names_errors");
+    std::fs::create_dir_all(&dir).unwrap();
+    let missing = dir.join("missing.sfmr");
+    let err = read_sfmr_image_names(&missing).unwrap_err();
+    assert!(
+        matches!(&err, SfmrError::IoPath { path, .. } if *path == missing),
+        "{err}"
+    );
+
+    let src = dir.join("current.sfmr");
+    write_sfmr(&src, &mut make_test_data()).unwrap();
+    let dst = dir.join("short.sfmr");
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(&src).unwrap()).unwrap();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|s| s.unwrap().into_owned())
+        .collect();
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&dst).unwrap());
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for name in &names {
+        let mut compressed = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap()
+            .read_to_end(&mut compressed)
+            .unwrap();
+        zip.start_file(name, stored).unwrap();
+        if name == "images/names.json.zst" {
+            let bytes = zstd::bulk::compress(br#"["only_one.jpg"]"#, 3).unwrap();
+            zip.write_all(&bytes).unwrap();
+        } else {
+            zip.write_all(&compressed).unwrap();
+        }
+    }
+    zip.finish().unwrap();
+    let err = read_sfmr_image_names(&dst).unwrap_err();
+    assert!(
+        matches!(&err, SfmrError::ShapeMismatch(m) if m.contains("1 != image_count 3")),
+        "{err}"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

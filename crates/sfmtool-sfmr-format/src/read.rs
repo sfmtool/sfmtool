@@ -31,6 +31,33 @@ pub fn read_sfmr_metadata(path: &Path) -> Result<SfmrMetadata, SfmrError> {
     Ok(metadata)
 }
 
+/// Read the top-level metadata and the image names of a `.sfmr` file, and no
+/// binary section.
+///
+/// For a caller that needs only which images a file records, and in which
+/// workspace, without decompressing its points and tracks: two JSON entries
+/// rather than the whole archive. The names are checked against the
+/// metadata's `image_count`, as [`read_sfmr`] checks them.
+pub fn read_sfmr_image_names(path: &Path) -> Result<(SfmrMetadata, Vec<String>), SfmrError> {
+    let file = std::fs::File::open(path).map_err(|e| SfmrError::IoPath {
+        operation: "Failed to open file",
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    let mut metadata: SfmrMetadata = read_json_entry(&mut archive, entries::metadata())?;
+    restore_write_timestamp(&mut archive, &mut metadata)?;
+    let names: Vec<String> = read_json_entry(&mut archive, entries::images_names())?;
+    if names.len() != metadata.image_count as usize {
+        return Err(SfmrError::ShapeMismatch(format!(
+            "image names count {} != image_count {}",
+            names.len(),
+            metadata.image_count
+        )));
+    }
+    Ok((metadata, names))
+}
+
 /// Put the write timestamp back on the in-memory metadata, wherever this file
 /// keeps it.
 ///

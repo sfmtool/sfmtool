@@ -12,20 +12,28 @@
 //! a new record's `.sift` files go in. [`find_workspace_for_path`], the
 //! upward search for `.sfm-workspace.json`, is `sfmtool-archive-io`'s, re-exported
 //! here; reading that file is the caller's (see `specs/workspace/workspace.md`).
+//! [`upgrade`] brings a workspace made by an earlier sfmtool to the current file
+//! versions: [`upgrade_workspace`].
 
 pub mod feature_options;
 pub mod named_image_lists;
+pub mod upgrade;
 
 pub use sfmtool_archive_io::find_workspace_for_path;
 
 pub use feature_options::{
-    feature_prefix_dir, has_image_to_gray, recorded_image_to_gray, tool_image_to_gray,
-    upgrade_feature_options, FeatureOptionsError, COLMAP_TOOL, OPENCV_TOOL, SFMTOOL_TOOL,
-    UNDISTORT_TOOL, WORKSPACE_VERSION,
+    feature_prefix_dir, feature_type_for_tool, has_image_to_gray, recorded_image_to_gray,
+    tool_image_to_gray, upgrade_feature_options, FeatureOptionsError, COLMAP_TOOL, OPENCV_TOOL,
+    SFMTOOL_TOOL, UNDISTORT_TOOL, WORKSPACE_VERSION,
 };
 pub use named_image_lists::{
     is_named_image_list_name, split_named_image_list_value, DuplicateMatch, NamedImageList,
     NamedImageListEntry, NamedImageListMember, NamedImageListSlice, NamedImageListSliceError,
     NamedImageLists, NamedImageListsError, NAMED_IMAGE_LISTS_FILE_NAME, NAMED_IMAGE_LISTS_VERSION,
     WORKSPACE_FILE_NAME,
+};
+pub use upgrade::{
+    upgrade_workspace, SiftConflict, SiftFileFailure, UpgradeFileKind, UpgradeOutcome,
+    UpgradeWorkspaceError, UpgradeWorkspaceOptions, UpgradeWorkspaceReport, UpgradedFile,
+    UpgradedFolder,
 };

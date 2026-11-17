@@ -14,7 +14,7 @@ mod types;
 mod verify;
 mod write;
 
-pub use read::KdfFile;
+pub use read::{read_kdf_workspace, KdfFile};
 pub use summary::{kdf_summary, KdfSection, KdfSummary};
 pub use types::*;
 pub use verify::{verify_kdf, verify_sift_sources};

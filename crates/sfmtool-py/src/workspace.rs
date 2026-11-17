@@ -3,8 +3,9 @@
 
 //! Bindings for the files in a workspace root that configure the workspace as
 //! a whole (`sfmtool_core::workspace`): its named image lists and their slices,
-//! the rules of the feature options its `.sfm-workspace.json` records, and the
-//! upward search that finds the workspace a path is in.
+//! the rules of the feature options its `.sfm-workspace.json` records, the
+//! upward search that finds the workspace a path is in, and the upgrade that
+//! brings a workspace's files to the current versions.
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -453,6 +454,29 @@ fn upgrade_feature_options_py(
     serde_to_py(py, &upgraded)
 }
 
+/// The ``feature_type`` a workspace records for ``feature_tool`` with
+/// ``feature_options``: ``sift-opencv``, ``sift-sfmtool``, and for
+/// ``colmap`` ``sift-colmap`` followed by ``-dsp`` when
+/// ``domain_size_pooling`` is set and ``-max<N>`` when ``max_num_features``
+/// is given and not 8192; any other tool gives ``sift-<tool>``. The tool name
+/// is matched in lower case. It is the name ``sfm ws init`` records, and the
+/// one the workspace upgrade names a converted folder with.
+///
+/// Raises:
+///     ValueError: for options that a JSON record cannot hold.
+#[pyfunction(name = "feature_type_for_tool")]
+fn feature_type_for_tool_py(
+    py: Python<'_>,
+    feature_tool: &str,
+    feature_options: &Bound<'_, PyAny>,
+) -> PyResult<String> {
+    let options = py_to_serde(py, feature_options)?;
+    Ok(sfmtool_core::workspace::feature_type_for_tool(
+        feature_tool,
+        &options,
+    ))
+}
+
 /// The folder, relative to an image's directory, that a new record's
 /// ``.sift`` files go in: ``features/{feature_type}-{hash}``.
 ///
@@ -486,6 +510,109 @@ fn feature_prefix_dir_py(
         feature_type,
         &options,
     ))
+}
+
+/// Bring the tree of workspaces at `path` to the current file versions, and
+/// return a report of every file and folder and what became of it.
+///
+/// The tree is the outermost workspace at or above `path` and every
+/// workspace nested in it; one run upgrades it all, since a file of one
+/// workspace can name the features of another, and a path in a nested
+/// workspace is refused, naming the outermost one. The version 1 ``.sift``
+/// files are converted to version 2 in new features folders without
+/// extracting them again; every ``.sfmr`` and ``.matches`` file that names an
+/// old folder is rewritten at its own path to name the new one and the new
+/// files' content hashes, as is any older than the current version; a version
+/// 1 ``.camrig`` is rewritten as version 2; a ``.kdf`` index built from an old
+/// folder is deleted; and when no file failed, each version 1 workspace file
+/// is written as version 2, keeping every other key, and the old folders are
+/// deleted, except those a file the current reader refuses, a file of a
+/// workspace outside the tree or a file with an image name that leaves the
+/// tree through ``..`` names, and any outside the tree. When a file failed,
+/// the workspace files are left at version 1, so the next run converts the
+/// failed files into the same new folders as the rest. Each old
+/// folder maps to one new folder, named from the converted record of the
+/// workspace file that names it or else from its own ``.sift`` files, and
+/// every file that names it is pointed there with that record. The walk does
+/// not enter a symbolic link or junction to a directory, and a tree that
+/// holds one has no old folder deleted. A stopped run can be run again to
+/// finish. See ``specs/drafts/ws-upgrade-files-amendment.md``.
+///
+/// Args:
+///     path: a directory or file in the outermost workspace of the tree.
+///     dry_run: find the files and plan the conversion, and write nothing;
+///         the report then gives what the run would do.
+///     progress: a ``ProgressCounter`` set to the count of the phase that is
+///         running: the folders walked, the ``.sift`` files converted, the
+///         files rewritten, then the folders deleted.
+///
+/// Returns:
+///     A dict: ``workspace_dir``, the tree's root; ``workspaces``, the root
+///     then each nested workspace; ``dry_run``; ``files``, a list of dicts
+///     with ``path``, ``kind`` (``workspace_file``, ``sfmr``, ``matches``,
+///     ``camrig`` or ``kdf``), ``outcome`` (``converted``,
+///     ``already_current``, ``not_converted``, ``failed`` or ``deleted``)
+///     and, for ``not_converted`` and ``failed``, ``reason``, each workspace
+///     file first; ``folders``, a list of dicts with ``old_folder``,
+///     ``new_folder`` (None when it is not converted: an orphan folder that
+///     no file names, deleted without converting, or one named only by files
+///     the run leaves), ``sift_file_count``, ``kept_because`` (None when it
+///     is deleted), ``deleted`` and ``kept_files``;
+///     ``converted_sift_file_count``; ``linked_directories``;
+///     ``old_folders_deleted``; and ``notes``, lines for the user.
+///
+/// Raises:
+///     ValueError: when ``path`` is in a nested workspace, a workspace file
+///         cannot be upgraded, a ``.sift`` file in a folder the run examines
+///         cannot be read (locked, or a placeholder that cannot be fetched;
+///         each is named), a version 1 record cannot be converted (an
+///         ``sfmtool-undistort`` one is told to run ``sfm undistort`` again)
+///         or its ``feature_prefix_dir`` would leave the image directory, a
+///         folder's ``.sift`` files record different options, a file names
+///         folders that map to different new folders, two old folders hold
+///         different files for one new file, or version 1
+///         ``.sift`` files cannot be converted (every one is named); nothing
+///         but new ``.sift`` files is written in each case.
+///     FileNotFoundError: when no workspace is found at or above ``path``.
+///     OSError: when a directory of the tree cannot be listed.
+///     InterruptedError: when a signal handler stopped the run.
+#[pyfunction(name = "upgrade_workspace")]
+#[pyo3(signature = (path, *, dry_run=false, progress=None))]
+fn upgrade_workspace_py(
+    py: Python<'_>,
+    path: PathBuf,
+    dry_run: bool,
+    progress: Option<ProgressCounter>,
+) -> PyResult<Py<PyAny>> {
+    use sfmtool_core::workspace::{
+        upgrade_workspace, UpgradeWorkspaceError, UpgradeWorkspaceOptions,
+    };
+    let options = UpgradeWorkspaceOptions { dry_run };
+    let counter = progress.as_ref().map(ProgressCounter::handle);
+    let watch = crate::signals::SignalWatch::new();
+    let sink = |event: Event<'_>| {
+        if let (Event::Count { done, .. }, Some(counter)) = (event, &counter) {
+            counter.store(done as usize, Ordering::Relaxed);
+        }
+        watch.check();
+    };
+    let result = py.detach(|| {
+        let progress = Progress::to(&sink).cancelled_by(watch.cancel_flag());
+        upgrade_workspace(&path, &options, &progress)
+    });
+    match watch.finish(result)? {
+        Ok(report) => crate::helpers::serde_to_py(py, &report),
+        Err(e) => Err(match e {
+            UpgradeWorkspaceError::NoWorkspace { .. } => {
+                pyo3::exceptions::PyFileNotFoundError::new_err(e.to_string())
+            }
+            UpgradeWorkspaceError::ListFolder { .. } => {
+                pyo3::exceptions::PyOSError::new_err(e.to_string())
+            }
+            UpgradeWorkspaceError::Cancelled => PyInterruptedError::new_err(e.to_string()),
+            _ => PyValueError::new_err(e.to_string()),
+        }),
+    }
 }
 
 /// How many lists and dicts deep [`record_json`] converts a value: the
@@ -576,12 +703,14 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyNamedImageListMember>()?;
     m.add_class::<PyNamedImageListSlice>()?;
     m.add_function(wrap_pyfunction!(feature_prefix_dir_py, m)?)?;
+    m.add_function(wrap_pyfunction!(feature_type_for_tool_py, m)?)?;
     m.add_function(wrap_pyfunction!(find_workspace_for_path_py, m)?)?;
     m.add_function(wrap_pyfunction!(is_named_image_list_name_py, m)?)?;
     m.add_function(wrap_pyfunction!(split_named_image_list_value_py, m)?)?;
     m.add_function(wrap_pyfunction!(tool_image_to_gray_py, m)?)?;
     m.add_function(wrap_pyfunction!(recorded_image_to_gray_py, m)?)?;
     m.add_function(wrap_pyfunction!(upgrade_feature_options_py, m)?)?;
+    m.add_function(wrap_pyfunction!(upgrade_workspace_py, m)?)?;
     m.add("NAMED_IMAGE_LISTS_FILE_NAME", NAMED_IMAGE_LISTS_FILE_NAME)?;
     m.add("WORKSPACE_VERSION", WORKSPACE_VERSION)?;
     Ok(())

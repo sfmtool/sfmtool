@@ -843,6 +843,31 @@ leaves as they are. The binding `sfmtool.sift.version_1_sift_files` returns the
 same `Version1SiftFiles` or `None`, and `image_files_to_sift_files` raises its
 `str` ([workspace.md § Versions never mix](../../workspace/workspace.md#versions-never-mix)).
 
+It is built on `scan_sift_folder`, which applies the same rule and also
+returns each `.sift` file whose metadata could not be read, with its error:
+
+```rust
+pub fn scan_sift_folder(folder: &Path) -> std::io::Result<SiftFolderScan>;
+
+pub struct SiftFolderScan {
+    pub version_1: Vec<ScannedSiftFile>,       // sorted by path
+    pub unreadable: Vec<(PathBuf, SiftError)>, // sorted
+}
+
+pub struct ScannedSiftFile {
+    pub path: PathBuf,
+    pub feature_tool: FeatureToolMetadata, // the tool, type and options it records
+    pub content_hash: SiftContentHash,
+}
+```
+
+Passing an unreadable file over is right for a writer deciding whether a
+folder is version 1. The workspace upgrade cannot pass one over: a `.sift`
+file that is locked, or a sync client's placeholder that cannot be fetched,
+may hold features a `.sfmr` needs, so the upgrade stops on any file whose
+error is the file system's rather than its content's
+([../../drafts/ws-upgrade-files-amendment.md](../../drafts/ws-upgrade-files-amendment.md)).
+
 `sfmtool_defaults` is the options a workspace initialized with the `sfmtool`
 tool and no other choice records: the default `feature_options` of
 `get_default_sfmtool_feature_options`, and the `feature_prefix_dir`

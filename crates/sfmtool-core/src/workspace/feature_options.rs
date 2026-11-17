@@ -222,6 +222,72 @@ pub fn upgrade_feature_options(
     Ok(serde_json::Value::Object(map))
 }
 
+/// The `feature_type` a workspace records for `feature_tool` with
+/// `feature_options`, the first part of its folder's name: `sift-opencv`,
+/// `sift-sfmtool`, and for `colmap` `sift-colmap` followed by `-dsp` when
+/// `domain_size_pooling` is set and `-max<N>` when `max_num_features` is
+/// present and not 8192; any other tool gives `sift-<tool>`. The tool name is
+/// matched in lower case.
+///
+/// This is the one implementation: `sfm ws init` and the extractors name a
+/// record's `feature_type` with it through the Python name
+/// `get_feature_type_for_tool`, and the workspace upgrade names a converted
+/// folder with it. An option's value is read as Python reads it there: any
+/// value but `false`, `null`, `0`, `""`, `[]` and `{}` sets
+/// `domain_size_pooling`, and `max_num_features` is written as Python writes
+/// it, so `8192.0` counts as 8192 and `1000.5` is written `max1000.5`.
+///
+/// ```
+/// use sfmtool_core::workspace::feature_type_for_tool;
+///
+/// let options = serde_json::json!({"domain_size_pooling": true, "max_num_features": 4000});
+/// assert_eq!(feature_type_for_tool("COLMAP", &options), "sift-colmap-dsp-max4000");
+/// assert_eq!(feature_type_for_tool("sfmtool", &options), "sift-sfmtool");
+/// ```
+pub fn feature_type_for_tool(feature_tool: &str, feature_options: &serde_json::Value) -> String {
+    use serde_json::Value;
+    let tool = feature_tool.to_lowercase();
+    match tool.as_str() {
+        OPENCV_TOOL => "sift-opencv".to_owned(),
+        SFMTOOL_TOOL => "sift-sfmtool".to_owned(),
+        COLMAP_TOOL => {
+            let mut name = "sift-colmap".to_owned();
+            let truthy = |value: &Value| match value {
+                Value::Null => false,
+                Value::Bool(b) => *b,
+                Value::Number(n) => n.as_f64() != Some(0.0),
+                Value::String(s) => !s.is_empty(),
+                Value::Array(a) => !a.is_empty(),
+                Value::Object(o) => !o.is_empty(),
+            };
+            if feature_options
+                .get("domain_size_pooling")
+                .is_some_and(truthy)
+            {
+                name.push_str("-dsp");
+            }
+            match feature_options.get("max_num_features") {
+                None | Some(Value::Null) => {}
+                Some(Value::Number(n)) if n.as_f64() == Some(8192.0) => {}
+                Some(value) => {
+                    name.push_str("-max");
+                    match value {
+                        Value::String(s) => name.push_str(s),
+                        Value::Bool(true) => name.push_str("True"),
+                        Value::Bool(false) => name.push_str("False"),
+                        Value::Number(n) if n.is_f64() => {
+                            write_python_float(n.as_f64().unwrap_or_default(), &mut name)
+                        }
+                        other => write_python_json(other, &mut name),
+                    }
+                }
+            }
+            name
+        }
+        _ => format!("sift-{tool}"),
+    }
+}
+
 /// The folder, relative to an image's directory, that a new record's `.sift`
 /// files go in: `features/{feature_type}-{hash}`, the hash being the XXH3-128
 /// of the compact JSON of `feature_tool`, `feature_type` and `feature_options`
