@@ -11,8 +11,7 @@ display and every kernel) reads level 0 from that file instead of the
 original, while the readers that decode a whole original and read no pyramid
 (SIFT extraction, the image readings at save, `read_image_rgb` and the
 commands built on it) keep reading the original (§ "What still decodes an
-original whole"; a departure listed in § "Problems found with the
-decisions"); the reduced levels of
+original whole"); the reduced levels of
 a large photograph are JPEG files in `.sfm-cache/` at the workspace root, one
 file per level, in directories that mirror the workspace; once a photograph has
 these files every reader, the display and the patch kernels alike, reads its
@@ -319,8 +318,11 @@ extractors, COLMAP), the image readings at save, `read_image_rgb` and
 `read_image_rgba` and every command that reads whole arrays through them
 (`undistort`, `to-nerfstudio`, optical flow's `load_gray`, the drawing
 commands, `xform --add-thumbnails`); and the display thumbnail of an in-core
-photograph. No pyramid reader of an out-of-core photograph does. SIFT
-therefore reads the original's exact pixels while the kernels read a
+photograph. No pyramid reader of an out-of-core photograph does. These
+readers keep the original because they run before the mip level files exist,
+or store what they compute from the exact pixels, and reading a lossy copy
+would change the features and readings every reconstruction is built from.
+SIFT therefore reads the original's exact pixels while the kernels read a
 non-region-readable photograph's level 0 from `-mip0`, which differs by
 0.07 to 0.09 grey levels on average for a JPEG original (measured below); the
 keypoints' positions are not affected by a difference that size in any way
@@ -2242,68 +2244,3 @@ ranges in this draft are over those runs.
     the kernels read for every large photograph, a change the owner makes by
     a command named for it. The viewer's notice names the command
     (§ "The workspace setting").
-
-## Problems found with the decisions
-
-- **Mirroring the workspace covers only photographs in a workspace.** A
-  photograph with no workspace above it is in core, as are all photographs of
-  a workspace without `mipmap_options`; a workspace whose cache directory
-  cannot be written reads its out-of-core photographs through the in-memory
-  equivalent.
-- **A workspace without `mipmap_options` keeps today's memory.** Every
-  existing workspace, the user's included, reads its large photographs as
-  whole pyramids until the object is added: 762 MiB for each 200-megapixel
-  photograph a panel or kernel reads, 12.6 GiB for a kernel over 17 of them.
-  The display no longer crashes (steps 2 and 3), but the memory and time the
-  tier saves are only had by adding the object (`sfm ws mipmaps --enable`),
-  which the viewer tells the user once per session (open question 13).
-- **"Every later reader reads the files" needs a rule for when files cannot be
-  written.** The in-memory equivalent is that rule; its pixels equal the files'
-  only with the same build (open question 8). For a photograph that needs a
-  `-mip0`, it holds up to 58 MB of encoded bytes in the tile budget.
-- **A coarsest level of about one tile is not deep enough for the kernels.**
-  They need levels to about one pixel. The levels below the coarsest mip level are
-  computed in memory from it, which keeps every reader consistent because the
-  input is the file.
-- **Whole pyramids for the kernels do not scale.** Today `get_many` hands
-  back every photograph's pyramid and the caller holds them all while its
-  kernel runs, 12.6 GiB for 17 photographs of 200 MP. So the design gives
-  kernels no whole pyramid of an out-of-core photograph, and reads it only
-  through view-region pyramids, which it requires.
-- **Region reads depend on the decoder's internals.** The region test admits a
-  layout only because `jpeg-decoder` 0.3.2 gives equal pixels for it with the
-  margins found; a decoder change can change which originals get a
-  `-mip0` (open question 9).
-- **A quality setting per workspace means files go stale when it changes.**
-  Every mipmap at the old quality is made again as it is next read, a whole
-  decode and encode per photograph; the setting is meant to be chosen once.
-  A change of the threshold moves photographs between tiers, which changes
-  their results; their files are made or left as orphans, not rewritten.
-- **Not every reader reads level 0 from `-mip0`.** Decisions 2 and 3 say
-  every reader reads the stored levels once they exist. The pyramid readers
-  do; the readers that decode a whole original and build no pyramid do not:
-  SIFT extraction, the image readings at save, and `read_image_rgb` with the
-  commands built on it (`undistort`, `to-nerfstudio`, the flow loader, the
-  drawing commands, `xform --add-thumbnails`) read the original, as today.
-  They run before the files exist or store what they compute from the exact
-  pixels, and making them read a lossy copy would change the features and
-  readings every reconstruction is built from. For an original that is not
-  region-readable, SIFT's level 0 and the kernels' therefore differ by 0.07 to
-  0.09 grey levels on the user's JPEGs (open question 11).
-- **Builds on rayon workers slow the panels.** The user has decided that a
-  mipmap is made the way a photograph is decoded today, in its slot on the
-  caller's thread, so a rayon worker that makes a mipmap or waits on one is
-  blocked for 2 to 4 s at 200 MP, against 0.5 to 1.7 s for today's decode.
-  The panels' tile decodes and layout requests share the pool and wait longer
-  for a free worker while builds run. This is accepted; what keeps it bounded
-  is the build budget (open question 6), and what keeps the GUI responsive is
-  that no build or wait ever runs on the GUI thread.
-- **A build holds a whole decode.** Without the budget, a `get_many` over
-  many out-of-core photographs would hold one 1 GB decode per rayon worker,
-  32 GB on the development machine; the groups sized by the build budget and
-  reserved on the shared count when they are decided, and the one panel
-  request in flight, bound it to the budget plus one mipmap per caller, three in
-  the viewer.
-- **The cache directory is reachable by image discovery.** A directory scan
-  at the workspace root would read mip level files as images; step 5 makes every
-  finder skip it before anything writes there.
