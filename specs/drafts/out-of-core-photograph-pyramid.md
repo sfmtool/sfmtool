@@ -674,9 +674,9 @@ naming the first that fails otherwise:
 4. The original's length equals `source_size` and its modification time equals
    `source_modified_ns`. When the length matches and the time does not (a copy,
    a `git checkout`), the original is hashed and compared with
-   `source_xxh128`; equal hashes make the mipmap current, and the reader
-   remembers for the session that this original's time differs, so it hashes it
-   once per session, not on every read. A different length is stale without a
+   `source_xxh128`; equal hashes make the mipmap current, and the cache
+   remembers, for as long as it lives, that this original's time differs, so
+   it hashes it once per cache, not on every read. A different length is stale without a
    hash.
 5. Its `jpeg_quality` equals the workspace's setting for its level, and its
    `region_readable_original` equals the other files' of the set. A set is
@@ -709,7 +709,10 @@ original.
 ### Writers that meet
 
 Every write goes through a temporary file in the same directory
-(`.<file name>.<process id>-<count>.tmp`), renamed over the target, as
+(`.<file name>.<process id>-<count>.tmp`, where the count is the one
+process-wide counter this design keeps, as `ImageU8::write` already does: it
+only makes temporary names unique between the threads of one process, holds
+no data, and so needs no owner), renamed over the target, as
 `ImageU8::write` already does. Unlike `ImageU8::write`, a mipmap writer whose
 rename fails does **not** write the target directly: if the target now exists
 and is current, another writer has made it, and the write counts as done;
@@ -947,11 +950,18 @@ decoding a photograph in today's `PhotographCache`.
   misses and their sizes, then makes those misses in groups, one
   `par_iter` per group, the groups one after another, with the group's size
   set by memory as `default_concurrent_images_for_dimensions` sizes SIFT's:
-  the number of sets that fit in the **build budget**, a quarter of physical
-  memory, less what other builds of the process have reserved, at most the
-  rayon pool's size and at least one. The process keeps one count of the
-  estimated bytes reserved for builds, an atomic. A caller **reserves at the
-  moment it decides**: `reserve_builds(bytes_per_build, wanted)` adds the
+  the number of sets that fit in the cache's **build budget**
+  (`PhotographCacheOptions::build_budget_bytes`, by default
+  `default_build_budget_bytes()`, a quarter of physical memory), less what
+  other callers of the same cache have reserved, at most the rayon pool's
+  size and at least one. **The count belongs to the `PhotographCache`
+  instance**, an atomic in it, not to the process: every caller that shares a
+  cache shares its count, and two caches in one process do not coordinate.
+  How many caches a process makes is the application's choice: SfM Explorer
+  holds one for its session (`AppState::photographs`), a CLI command makes one
+  for its run, and a Python script that holds one cache shares its count
+  across its calls. A caller **reserves at the moment it decides**:
+  `cache.reserve_builds(bytes_per_build, wanted)` adds the
   group's estimated bytes to the count with one compare-exchange loop,
   granting as many of the `wanted` builds as fit under the budget, and returns
   a guard that gives each build's bytes back as that build ends and the rest
@@ -972,8 +982,9 @@ decoding a photograph in today's `PhotographCache`.
   reserving at that moment. In-core misses are decoded in parallel as today
   and are not counted: as today, they are bounded by the rayon pool and the
   in-core threshold.
-- **What bounds builds from independent callers.** Every build is reserved
-  through `reserve_builds` before it starts, by `get_many` for its group and
+- **What bounds builds from independent callers.** The bound is per cache.
+  Every build is reserved through the cache's `reserve_builds` before it
+  starts, by `get_many` for its group and
   by `get` for its one set, so the count is always complete, and the count
   goes past the budget by at most one set for each caller that reserved while
   it was full. The number of such callers is bounded because each caller is
@@ -986,12 +997,17 @@ decoding a photograph in today's `PhotographCache`.
   the *Build image levels* task below) and **at most one panel request**:
   the viewer keeps at most one out-of-core photograph request in flight across
   all its panels (§ "Readers on the GUI thread"), and panels do not read the
-  count. So the builds in progress hold at most the build budget plus three
-  sets: on the 64 GB development machine 16 GiB plus 3 GB at 200 MP, and on a
-  16 GB machine 4 GiB plus 3 GB. On the command line one `get_many` runs at a
-  time, so the bound is the budget, or one set when a single set is larger
-  than the budget. These are on top of the caches' budgets, and are estimates
-  from the buffer sizes.
+  count. All of them use the viewer's one session cache, so the builds in
+  progress hold at most the build budget plus three sets: on the 64 GB
+  development machine 16 GiB plus 3 GB at 200 MP, and on a 16 GB machine
+  4 GiB plus 3 GB. A CLI command uses one cache for its run, and one
+  `get_many` runs at a time, so its bound is the budget, or one set when a
+  single set is larger than the budget; a Python script that holds one cache
+  and calls it from one thread gets the same, and one that calls it from
+  several threads at once adds at most one set per thread. A program that
+  makes several caches gets one such bound per cache, by its own choice.
+  These are on top of the caches' other budgets, and are estimates from the
+  buffer sizes.
 - **No build on the GUI thread, and no tile task that waits on one.** The
   panels never call `get` on the GUI thread for an out-of-core photograph,
   whatever the budget, and ask for tiles only once a photograph's files are
@@ -1152,9 +1168,9 @@ tiles and do not count against it.
   already holds, adding only the reduction and the encodes (about 0.8 s for this
   photograph, estimated from the parts above, plus 1.4 to 2.1 s when it needs a
   `-mipmap1`). The Python extractors (`sfmtool` and OpenCV backends decode with
-  `read_image_rgb`; COLMAP decodes inside COLMAP) call one binding per
+  `read_image_rgb`; COLMAP decodes inside COLMAP) call `PhotographCache.build_mipmaps` (§ "Python bindings") for each
   photograph after the `.sift` is written, which decodes the photograph again
-  (0.8 to 1.7 s). The open questions ask whether that binding should take the
+  (0.8 to 1.7 s). Open question 4 asks whether that call should take the
   decoded array instead.
 - **`sfm ws mipmaps PATHS…`** makes them explicitly for the photographs under
   the paths (skipping in-core ones and current sets), with `--prune` to delete
@@ -1202,7 +1218,7 @@ request is in flight across the whole viewer**: a panel whose request cannot
 start because another is in flight keeps it wanted and tries again on a later
 frame, so twenty Track View cells that need sets start them one after
 another, not twenty at once. Panels do not read the build count; the
-request's `get` reserves its one set through `reserve_builds` like any other
+request's `get` reserves its one set through the session cache's `reserve_builds` like any other
 caller, so the count stays complete. A request for a photograph whose files
 are current only reads a layout and tiles, and is not limited.
 
@@ -1466,18 +1482,16 @@ pub fn build_mipmaps(
     progress: &Progress<'_>,
 ) -> Result<BuiltMipmaps, MipmapError>;
 
-/// Reserve the estimated bytes of up to `wanted` builds against the build
-/// budget with one compare-exchange loop, at the moment the caller decides;
-/// never waits. Grants as many as fit, and one when none fit, so a caller
-/// always makes progress.
-pub fn reserve_builds(bytes_per_build: u64, wanted: usize) -> BuildReservation;
-/// Gives each granted build's bytes back as it ends, the rest on drop.
-pub struct BuildReservation { /* … */ }
-impl BuildReservation {
+/// Gives each granted build's bytes back to its cache's count as it ends,
+/// the rest on drop. Made by `PhotographCache::reserve_builds`.
+pub struct BuildReservation<'a> { /* … */ }
+impl BuildReservation<'_> {
     pub fn granted(&self) -> usize;
     pub fn release_one(&self);
 }
-/// A quarter of physical memory: the build budget.
+/// A quarter of physical memory, or the override in the environment: the
+/// default build budget. A pure function, like `default_budget_bytes`; it
+/// keeps no state.
 pub fn default_build_budget_bytes() -> u64;
 
 /// One mipmap's bytes, record and restart index, read and checked once.
@@ -1522,6 +1536,7 @@ Changed, in [photograph_cache.rs](../../crates/sfmtool-core/src/camera/photograp
 pub struct PhotographCacheOptions {
     pub budget_bytes: u64,          // default_budget_bytes(): in-core pyramids
     pub tile_budget_bytes: u64,     // default_tile_budget_bytes(): tiles, file bytes, coarsest levels
+    pub build_budget_bytes: u64,    // default_build_budget_bytes(): builds in progress on this cache
     pub tile_size: u32,             // PHOTOGRAPH_TILE_SIZE; only tests change it
 }
 
@@ -1538,11 +1553,27 @@ impl PhotographCache {
     /// build with `reserve_builds`, or waits for the caller already making it;
     /// reports through `progress`.
     pub fn get(&self, path: &Path, progress: &Progress<'_>) -> Result<PhotographSource, GetError>;
+    /// Reserve the estimated bytes of up to `wanted` builds against this
+    /// cache's build budget with one compare-exchange loop on its count, at
+    /// the moment the caller decides; never waits. Grants as many as fit, and
+    /// one when none fit, so a caller always makes progress.
+    pub fn reserve_builds(&self, bytes_per_build: u64, wanted: usize) -> BuildReservation<'_>;
+    /// The header, the tier, the level sizes and, out of core, the region
+    /// answer; makes no set. The blocking form of `layout`.
+    pub fn read_layout(&self, path: &Path) -> Result<Arc<PyramidLayout>, GetError>;
+    /// Pixels `rect` of `level` as every kernel samples them, making the set
+    /// first if its files are missing or stale (`get`), then cutting from the
+    /// pyramid in core or assembling from tiles out of core. Behind the
+    /// Python class's `read_level`, `read_tile` and `read_region`.
+    pub fn read_region(&self, path: &Path, level: usize, rect: [u32; 4], progress: &Progress<'_>)
+        -> Result<ImageU8, PhotographReadError>;
     /// Makes its misses in parallel on the rayon pool, the out-of-core ones in
     /// groups sized by the build budget; the return type is today's.
     pub fn get_many(&self, paths: &[&Path], progress: &Progress<'_>)
         -> Result<(Vec<Option<PhotographSource>>, GetManyTally), Cancelled>;
-    // peek and peek_state answer `PhotographSource` too; insert, forget, clear, stats as today
+    // peek and peek_state answer `PhotographSource` too; insert, forget and clear
+    // as today; `stats` adds the tile entries, bytes, budget, hits and misses,
+    // the bytes reserved for builds, and the sets made by this cache
 
     pub fn layout(&self, path: &Path) -> PeekedLayout;
     pub fn request_layout(&self, path: &Path);   // a header read, the region test, a record check
@@ -1650,20 +1681,131 @@ order § "Who makes the mipmaps, and when" gives.
 
 ## Python bindings
 
-- `sfmtool.fileio` gains nothing: mipmaps are not a format a caller reads.
-- `ImagePyramidSet.read(views_or_recon, workspace_dir=None, progress=None)`:
-  the set of the reconstruction's photographs read by path through a
-  `PhotographCache` of pyramid budget 0, as sources: whole pyramids for
-  in-core photographs, tiled ones read by view-region pyramids for
-  out-of-core ones, so each is read the way the viewer reads it, making missing
-  mipmaps on the way, and the set holds no whole pyramid of an out-of-core
-  photograph. The `images` argument of the constructor and of every kernel
-  keeps meaning exact pyramids of the arrays given.
-- `sfmtool.workspace.build_mipmaps(paths, progress=None)`: makes the mipmaps of
-  the out-of-core photographs among `paths`, the binding behind
-  `sfm ws mipmaps` and the Python SIFT extractors' call.
-- `load_workspace_config` validates `mipmap_options` through a binding over
-  `read_mipmap_options`.
+The user has decided that Python gets the same machinery as the viewer. All
+of it is in `sfmtool-core`; the bindings are thin wrappers over it, with no
+logic in Python ([STANDARDS.md](../STANDARDS.md#logic-lives-in-rust-not-in-python-wrappers)).
+**Only these parts are the viewer's own**: drawing photograph tiles as GPU
+textures, the rule of one out-of-core photograph request in flight across the
+panels, the *Build image levels* quiet task at open, and the admission rule
+for in-core pyramid requests in `photograph_requests.rs`. Everything else in
+this design (the tiers, the mipmaps, the slots and build reservations, tiles,
+levels, regions, view-region pyramids, and the cache's statistics) is core and
+reachable from Python. Core keeps no global state: every count, slot and entry
+belongs to a `PhotographCache` instance, and the viewer's session-wide cache
+is the one it holds in `AppState`, as a script holds its own.
+
+**A new submodule, `sfmtool.photographs`** (`_sfmtool.photographs`,
+`crates/sfmtool-py/src/photographs.rs`), the fourteenth, named for what the
+photograph cache holds ([GLOSSARY.md](../GLOSSARY.md), *photograph cache*).
+It is registered in `lib.rs` as the other submodules are, gets its public
+module `src/sfmtool/photographs.py` re-exporting its `__all__`, its row in
+the index of [python-bindings.md](../python-bindings.md) and in
+`tests/test_module_layout.py`'s expectations, its name in the lazy
+module list of `sfmtool/__init__.py` so `import sfmtool` loads nothing new,
+and a `tests/rust_bindings/photographs/test_photographs_registration.py`. It
+is not `sfmtool.fileio`, whose names are the I/O of sfmtool's file formats,
+which mipmaps are not (§ "Is it a file format?"), nor `sfmtool.patches`,
+whose names are the patch kernels'.
+
+```python
+class PhotographCache:
+    def __init__(self, budget_bytes: int | None = None,
+                 tile_budget_bytes: int | None = None,
+                 build_budget_bytes: int | None = None): ...
+    def layout(self, path) -> PhotographLayout: ...
+    def read_level(self, path, level: int, *, progress=None) -> np.ndarray: ...
+    def read_tile(self, path, level: int, col: int, row: int, *, progress=None) -> np.ndarray: ...
+    def read_region(self, path, level: int, x0: int, y0: int, x1: int, y1: int,
+                    *, progress=None) -> np.ndarray: ...
+    def build_mipmaps(self, paths, *, progress=None) -> BuildMipmapsReport: ...
+    def stats(self) -> PhotographCacheStats: ...
+```
+
+- **`PhotographCache(budget_bytes=None, tile_budget_bytes=None,
+  build_budget_bytes=None)`** holds one core `PhotographCache`; an omitted
+  budget is the core default (`default_budget_bytes()`,
+  `default_tile_budget_bytes()`, `default_build_budget_bytes()`), and a
+  pyramid or tile budget of 0 keeps nothing, as in the core. Every call on one
+  `PhotographCache` shares its build count, so a script that holds one cache
+  gets the same bound on builds in progress as the viewer (§ "Building a set
+  in the slot"). The tile size is not an argument: it is a
+  constant (§ "The workspace setting").
+- **`layout(path)`** returns a frozen `PhotographLayout` with `width`,
+  `height`, `out_of_core`, `levels`, `level_sizes` (a list of `(width,
+  height)` per level), `stored_levels` (`K`, 0 in core) and
+  `region_readable` (`None` in core). It reads the header, the workspace's
+  `mipmap_options` and, out of core, the region answer from a current record
+  or the region test; it makes no set. It is core's `read_layout`, the
+  blocking form of `layout` and `request_layout`.
+- **`read_level`, `read_tile` and `read_region`** return a level, a photograph
+  tile's core (without its border), or the pixels `x0..x1` by `y0..y1` of a
+  level, as `(H, W, 3)` `uint8` arrays in the `y_x_rgb` layout of
+  `read_image_rgb`, C-contiguous and **read-only** (numpy's writeable flag
+  cleared, as the reconstruction's array getters are; a caller that edits
+  takes `.copy()`). Their values are the pixels every kernel samples for that
+  photograph: in core the exact levels of its in-memory pyramid; out of core
+  level 0 from the original or `-mipmap1`, levels 1 to `K` from the mipmaps,
+  and the levels below `K` from level `K`. Out of core, a read makes the
+  photograph's set first if its files are missing or stale, in its slot, as
+  any `get` does, so each takes `progress=`; a read of a current file decodes
+  only the tiles it needs. Each is a call to core's `read_region` (a level is
+  its whole region; a tile is its key's rectangle) with the GIL released.
+- **`build_mipmaps(paths, progress=None)`** makes the mipmaps of the
+  out-of-core photographs among `paths` (directories expanded as
+  `sfm ws mipmaps` expands them, skipping `.sfm-cache`) through the cache's
+  `get_many`, so a set already made in this cache, or by another process, is
+  read rather than made again, and the build budget and its reservations
+  apply. It returns a `BuildMipmapsReport` with the paths made, already
+  current, in core, and failed with their messages. **It is the one way to
+  build mipmaps from Python**: the free function `sfmtool.workspace.build_mipmaps`
+  of earlier revisions of this draft is dropped. `sfm ws mipmaps` makes a
+  `PhotographCache()` and calls it; the Python SIFT extractors call it on a
+  short-lived cache after each `.sift` is written.
+- **`stats()`** returns a frozen `PhotographCacheStats`: the pyramid entries,
+  bytes, budget, hits and misses of today's `stats`, and the tile entries,
+  tile bytes, tile budget, tile hits and misses, and the sets made by this
+  cache.
+- **Errors raise, never panic.** A missing file raises `FileNotFoundError`
+  and an unreadable one `OSError`, as `read_image_rgb` does; a level, tile or
+  rectangle outside the photograph, an empty rectangle, a negative index or a
+  budget that is not a whole number raise `ValueError`; an invalid
+  `mipmap_options` raises `RuntimeError` naming the key, as
+  `load_workspace_config` does; a file whose record changes during a read
+  raises `RuntimeError` naming the path (`PhotographReadError::Changed`); a
+  cancelled `progress` raises the error cancellation raises in every other
+  binding. Each message names the path.
+
+**An optional `cache=` argument on every binding that reads a
+reconstruction's photographs by path**: `ImagePyramidSet.read(views_or_recon,
+workspace_dir=None, cache=None, progress=None)` and
+`sfmtool.fileio.write_web_export(…, cache=None)`. The other bindings that read
+photographs take arrays or an `ImagePyramidSet`, not paths. **There is no
+implicit process-wide default cache.** When `cache` is omitted the call makes
+its own short-lived cache, of pyramid budget 0, as before, and drops it when
+it returns; nothing is kept between calls unless the caller keeps it. A script
+that wants reuse across calls holds a cache itself and passes it:
+
+```python
+from sfmtool.patches import ImagePyramidSet
+from sfmtool.photographs import PhotographCache
+
+_photographs = PhotographCache()  # held by this script, reused by every call
+
+
+def pyramids_for(recon):
+    # The tiles and sets this reads stay in `_photographs` for the next call.
+    return ImagePyramidSet.read(recon, cache=_photographs)
+```
+
+`ImagePyramidSet.read` reads its photographs as sources: whole pyramids for
+in-core photographs and tiled ones, read by view-region pyramids, for
+out-of-core ones, so each is read the way the viewer reads it, making missing
+mipmaps on the way, and the set holds no whole pyramid of an out-of-core
+photograph. The `images` argument of the constructor and of every kernel
+keeps meaning exact pyramids of the arrays given.
+
+`load_workspace_config` validates `mipmap_options` through a binding over
+`read_mipmap_options`, in `sfmtool.workspace`.
 
 ## Implementation steps
 
@@ -1746,8 +1888,9 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    equality tests.
 8. **The out-of-core tier, off.** The tiled entries, the tile budget and its
    eviction, the layout states, the slot as a mutex and condition variable
-   with cancellation between a build's stages, the build budget and its
-   count of builds in progress, `get` and `get_many` answering sources and
+   with cancellation between a build's stages, the cache's build budget and
+   its count of builds in progress (`PhotographCache::reserve_builds`), `get`
+   and `get_many` answering sources and
    making missing sets in the slot (the out-of-core misses of a `get_many` in
    groups sized by the budget), `get_level`, `TileError::Changed`, Image
    Detail and the 3D background on tiled photographs, with at most one
@@ -1759,8 +1902,9 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    photographs holds no pyramid (the cache's stats show only tiles, within a
    small tile budget) and never has more builds in progress than the budget
    allows, with a budget set small for the test and checked through the
-   count; several `get_many` callers started at the same moment on separate
-   threads never reserve more than the budget plus one set each, and their
+   count; several `get_many` callers on one cache started at the same moment
+   on separate threads never reserve more than the budget plus one set each,
+   two caches in one process keep separate counts, and their
    builds never add to the count beyond what was reserved; a burst of panel
    requests for twenty photographs without sets starts their builds one at a
    time; a caller cancelled mid-build stops within one stage and leaves the
@@ -1795,14 +1939,29 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
     `--prune` deletes an orphan and
     keeps a current set, and deletes every mipmap in a workspace without the
     object; `--check` writes nothing.
-14. **Readers that must agree with the viewer**: `ImagePyramidSet.read`, and
-    `embed-patches`, the strips, the `xform` steps, `sfm cluster-patches` and
-    the `scripts/` harnesses on it, with `ImagePyramidSet.read`'s sources
-    raising `PhotographReadError` through the bindings and `NotYetTiled`
-    deleted. Tests: with the small
-    threshold, the CLI and the viewer's code give the same results for the
-    same photograph; in-core results unchanged; a binding whose file changes
-    under it raises an error naming the path.
+14. **Python and the readers that must agree with the viewer**: the
+    `sfmtool.photographs` submodule with the `PhotographCache` class (its
+    layout, level, tile and region reads, `build_mipmaps`, `stats`) and core's
+    `read_layout` and `read_region` behind it; `ImagePyramidSet.read` and
+    `write_web_export` with `cache=`; `sfm ws mipmaps` and the Python SIFT
+    extractors on `PhotographCache.build_mipmaps`; and `embed-patches`, the
+    strips, the `xform` steps, `sfm cluster-patches` and the `scripts/`
+    harnesses on `ImagePyramidSet.read`, with its sources raising
+    `PhotographReadError` through the bindings and `NotYetTiled` deleted.
+    Tests: with the small threshold, the CLI and the viewer's code give the
+    same results for the same photograph; in-core results unchanged; a
+    binding whose file changes under it raises an error naming the path; a
+    `PhotographCache` passed to two `ImagePyramidSet.read` calls makes and
+    decodes the tiles once (its `stats` show the second call's reads as hits),
+    while two calls without `cache=` share nothing; a level, a tile and a
+    region read through the class equal what a kernel samples from the same
+    file (a `Bilinear` render at level 0 and a `BilinearMip` render pinned to
+    a level read back the same pixels); the arrays are read-only; a level,
+    tile or rectangle outside the photograph, an empty rectangle, a negative
+    index and a non-integer budget raise `ValueError`, a missing file
+    `FileNotFoundError`, and an invalid `mipmap_options` `RuntimeError`; the
+    new submodule passes `tests/test_module_layout.py`, the registration
+    test and the lazy-loading test.
 15. **The tier on.** `sfm ws init` writes `mipmap_options` with its three
     values, `sfm ws mipmaps --enable` adds it to an existing workspace, the
     viewer's one-line notice for a workspace without it, and the workspace
