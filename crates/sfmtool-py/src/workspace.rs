@@ -453,10 +453,129 @@ fn upgrade_feature_options_py(
     serde_to_py(py, &upgraded)
 }
 
+/// The folder, relative to an image's directory, that a new record's
+/// ``.sift`` files go in: ``features/{feature_type}-{hash}``.
+///
+/// The hash is the XXH3-128 of the compact JSON of ``feature_tool``,
+/// ``feature_type`` and ``feature_options``, with every object's keys sorted
+/// and without the top-level ``use_gpu``, written as
+/// ``json.dumps(..., sort_keys=True, separators=(",", ":"))`` writes it, so
+/// it is the name every earlier version of sfmtool gave the same options.
+///
+/// Some options name no folder, because a JSON record cannot hold them as
+/// they are and so could not tell them apart from other options: a NaN or an
+/// infinite float, an integer outside the 64-bit range (below ``-2**63`` or
+/// above ``2**64 - 1``), a dict key that is not a ``str``, and a list or
+/// dict nested more than 128 levels deep, which no JSON record of sfmtool
+/// reads back.
+///
+/// Raises:
+///     ValueError: for options that name no folder, naming where the value
+///         is, as in ``feature_options['image_to_gray']['quantize_bits']``,
+///         and for a value that is not ``None``, a ``bool``, an ``int``, a
+///         ``float``, a ``str``, a ``list``, a ``tuple`` or a ``dict``.
+#[pyfunction(name = "feature_prefix_dir")]
+fn feature_prefix_dir_py(
+    feature_tool: &str,
+    feature_type: &str,
+    feature_options: &Bound<'_, PyAny>,
+) -> PyResult<String> {
+    let options = record_json(feature_options, "feature_options", 0)?;
+    Ok(sfmtool_core::workspace::feature_prefix_dir(
+        feature_tool,
+        feature_type,
+        &options,
+    ))
+}
+
+/// How many lists and dicts deep [`record_json`] converts a value: the
+/// recursion limit `serde_json` reads JSON with, which stops at the 128th
+/// nested list or object, so no sfmtool record holding a deeper value could be
+/// read back; it is far below what would overflow the stack.
+const RECORD_JSON_MAX_DEPTH: usize = 128;
+
+/// The JSON value a workspace record holds for `value`, the one at `path`,
+/// refusing what JSON cannot hold as it is rather than changing it: a
+/// `serde_json` number is an `i64`, a `u64` or a finite `f64`, so a larger
+/// integer would become a float and a NaN would have no value, and an object's
+/// keys are strings, so an `int` key would become one. `depth` counts the
+/// lists and dicts `value` is inside; past [`RECORD_JSON_MAX_DEPTH`] it is
+/// refused, which also stops a list or dict that holds itself.
+fn record_json(value: &Bound<'_, PyAny>, path: &str, depth: usize) -> PyResult<serde_json::Value> {
+    use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
+    if depth > RECORD_JSON_MAX_DEPTH {
+        return Err(PyValueError::new_err(format!(
+            "{path} is nested more than {RECORD_JSON_MAX_DEPTH} lists or dicts deep, \
+             which names no features folder"
+        )));
+    }
+    if value.is_none() {
+        Ok(serde_json::Value::Null)
+    } else if let Ok(b) = value.cast::<PyBool>() {
+        Ok(serde_json::Value::Bool(b.is_true()))
+    } else if value.is_instance_of::<PyInt>() {
+        if let Ok(v) = value.extract::<u64>() {
+            Ok(v.into())
+        } else if let Ok(v) = value.extract::<i64>() {
+            Ok(v.into())
+        } else {
+            Err(PyValueError::new_err(format!(
+                "{path} is an integer outside the 64-bit range, which names no features folder"
+            )))
+        }
+    } else if value.is_instance_of::<PyFloat>() {
+        let v: f64 = value.extract()?;
+        serde_json::Number::from_f64(v)
+            .map(serde_json::Value::Number)
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "{path} is {v}, and a NaN or infinite value names no features folder"
+                ))
+            })
+    } else if let Ok(s) = value.cast::<PyString>() {
+        Ok(serde_json::Value::String(s.to_str()?.to_owned()))
+    } else if let Ok(dict) = value.cast::<PyDict>() {
+        let mut map = serde_json::Map::new();
+        for (key, item) in dict.iter() {
+            let key: String = key
+                .cast::<PyString>()
+                .map_err(|_| {
+                    PyValueError::new_err(format!(
+                        "{path} has the key {}, which is not a str; a dict with a key \
+                         that is not a str names no features folder",
+                        key.repr()
+                            .map_or_else(|_| "?".to_owned(), |r| r.to_string())
+                    ))
+                })?
+                .to_str()?
+                .to_owned();
+            let at = format!("{path}['{key}']");
+            map.insert(key, record_json(&item, &at, depth + 1)?);
+        }
+        Ok(serde_json::Value::Object(map))
+    } else if value.is_instance_of::<PyList>() || value.is_instance_of::<PyTuple>() {
+        let items = value
+            .try_iter()?
+            .enumerate()
+            .map(|(i, item)| record_json(&item?, &format!("{path}[{i}]"), depth + 1))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(serde_json::Value::Array(items))
+    } else {
+        Err(PyValueError::new_err(format!(
+            "{path} has the type {}, which a workspace record cannot hold",
+            value
+                .get_type()
+                .fully_qualified_name()
+                .map_or_else(|_| "?".to_owned(), |n| n.to_string())
+        )))
+    }
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyNamedImageLists>()?;
     m.add_class::<PyNamedImageListMember>()?;
     m.add_class::<PyNamedImageListSlice>()?;
+    m.add_function(wrap_pyfunction!(feature_prefix_dir_py, m)?)?;
     m.add_function(wrap_pyfunction!(find_workspace_for_path_py, m)?)?;
     m.add_function(wrap_pyfunction!(is_named_image_list_name_py, m)?)?;
     m.add_function(wrap_pyfunction!(split_named_image_list_value_py, m)?)?;

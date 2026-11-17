@@ -12,7 +12,7 @@ from click.testing import CliRunner
 
 from sfmtool import load_workspace_config
 from sfmtool.cli import main
-from sfmtool.sift.file import get_feature_tool_xxh128
+from sfmtool.workspace import feature_prefix_dir
 
 from .conftest import SEOUL_BULL_DIR
 
@@ -55,8 +55,9 @@ def test_upgrade_keeps_hand_edited_options_and_converts_a_custom_gray_formula(
     assert new["feature_options"] == options
     assert new["feature_tool"] == config["feature_tool"]
     assert new["feature_type"] == config["feature_type"]
-    xxh128 = get_feature_tool_xxh128("sfmtool", "sift-sfmtool", options)
-    assert new["feature_prefix_dir"] == f"features/sift-sfmtool-{xxh128}"
+    assert new["feature_prefix_dir"] == feature_prefix_dir(
+        "sfmtool", "sift-sfmtool", options
+    )
     assert new["feature_prefix_dir"] != config["feature_prefix_dir"]
     assert f"old features folder: {config['feature_prefix_dir']}" in result.output
     assert f"new features folder: {new['feature_prefix_dir']}" in result.output

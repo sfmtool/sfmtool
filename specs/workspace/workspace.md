@@ -140,13 +140,28 @@ This is structured as `features/{feature_type}-{feature_cache_hash}`, where:
 - `feature_cache_hash` is a hash derived from `feature_tool`, `feature_type`, and
   `feature_options`, computed once when the folder is created
   ([The recorded folder name is authoritative](#the-recorded-folder-name-is-authoritative)).
-  The spec does not prescribe a specific
-  serialization algorithm — the implementation decides how to hash these values. It is a
+  It is the XXH3-128, as 32 lowercase hex digits, of the compact JSON of the
+  three with every object's keys sorted and without the top-level `use_gpu`,
+  written as Python's `json.dumps(..., sort_keys=True, separators=(",", ":"))`
+  writes it (a float in `repr` form such as `1e-05` or `3.0`, and every
+  character outside printable ASCII as a `\uXXXX` escape). One function
+  computes it, `feature_prefix_dir` in
+  [`sfmtool_core::workspace`](../../crates/sfmtool-core/src/workspace/feature_options.rs),
+  bound as `sfmtool.workspace.feature_prefix_dir`, so every writer, in Rust or
+  Python, names the same folder for the same settings, and reinitializing a
+  workspace with the same settings reuses its cached features. Options that a
+  JSON record cannot hold as they are name no folder, since they could not be
+  told apart from other options: a NaN or an infinite float, an integer outside
+  the 64-bit range (below `-2**63` or above `2**64 - 1`), and a dict key that is
+  not a string. The Rust function's `serde_json::Value` cannot hold any of
+  them, and the binding raises `ValueError` for them, naming where the value
+  is. It also raises `ValueError` for a list or dict nested more than 128
+  levels deep, which includes one that holds itself: `serde_json` stops
+  reading JSON at the 128th nested list or object, so no record holding it
+  could be read back. It is a
   different value from the `feature_tool_xxh128` field stored inside each `.sift` file, which is
   the hash of that file's `feature_tool_metadata.json` bytes (see
   [Feature tool hash computation](../formats/sift-file-format.md#feature-tool-hash-computation)).
-  Implementations should be deterministic so that reinitializing a workspace with the same
-  settings produces the same hash and reuses cached features
 
 This design means that if you change feature extraction settings (e.g., enable domain size pooling
 or change `max_num_features`), the hash changes and features are stored in a separate directory.
@@ -217,8 +232,7 @@ folder name is computed only when a folder is created: by `sfm ws init`,
 workspace, and the viewer's conversion of a version 1 record or switch of
 another tool's record to the `sfmtool` defaults. Because `image_to_gray` is part
 of the options a folder is named from, every folder created under version 2 is
-new, for every tool, even with otherwise identical settings. Two writers that
-name the same options differently cache the features twice, never wrongly.
+new, for every tool, even with otherwise identical settings.
 
 What this gives up: a hand edit of `feature_options` does not move the folder,
 so it can put `.sift` files made under different settings into one folder. Each

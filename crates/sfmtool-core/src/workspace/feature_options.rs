@@ -39,8 +39,7 @@ pub const UNDISTORT_TOOL: &str = "sfmtool-undistort";
 const BT601_GRAY_FORMULA: &str = "0.299*R + 0.587*G + 0.114*B";
 
 /// The feature options that describe hardware or performance choices rather
-/// than the features, and so do not name a folder. Python's
-/// `get_feature_tool_xxh128` leaves out the same keys.
+/// than the features, and so do not name a folder ([`feature_prefix_dir`]).
 const NON_DEFINING_OPTION_KEYS: &[&str] = &["use_gpu"];
 
 /// Why a record's conversion could not be read or upgraded.
@@ -226,14 +225,27 @@ pub fn upgrade_feature_options(
 /// The folder, relative to an image's directory, that a new record's `.sift`
 /// files go in: `features/{feature_type}-{hash}`, the hash being the XXH3-128
 /// of the compact JSON of `feature_tool`, `feature_type` and `feature_options`
-/// with every object's keys sorted and without `use_gpu`, as 32 lowercase hex
-/// digits.
+/// with every object's keys sorted and without the top-level `use_gpu`, as 32
+/// lowercase hex digits.
 ///
-/// This is the rule `get_feature_tool_xxh128` in `sfmtool.sift.file`
-/// computes, so for the same options the two usually agree; they need not,
-/// since a folder name is computed only when a folder is created and is read
-/// back from the record after that. Options that differ always name different
-/// folders.
+/// This is the one implementation of the folder name: Python calls it as
+/// `sfmtool.workspace.feature_prefix_dir`. The JSON is written byte for byte
+/// as Python's `json.dumps(..., sort_keys=True, separators=(",", ":"))` writes
+/// it, which named every folder before this function did, so the same options
+/// give the name an earlier `sfm ws init` or `sfm sift --extract` gave: a
+/// float in Python's `repr` form (`3.0`, `1e-05`, `1e+16`), and every
+/// character outside printable ASCII as a `\uXXXX` escape. Options that differ
+/// always name different folders. A NaN or infinite float, an integer outside
+/// the 64-bit range and a non-string key are not `serde_json::Value`s, so they
+/// name no folder; the Python binding refuses them.
+///
+/// ```
+/// use sfmtool_core::workspace::feature_prefix_dir;
+///
+/// let options = serde_json::json!({"peak_ratio": 0.8, "use_gpu": true});
+/// let folder = feature_prefix_dir("sfmtool", "sift-sfmtool", &options);
+/// assert!(folder.starts_with("features/sift-sfmtool-"));
+/// ```
 pub fn feature_prefix_dir(
     feature_tool: &str,
     feature_type: &str,
@@ -245,19 +257,161 @@ pub fn feature_prefix_dir(
             map.remove(*key);
         }
     }
-    // `serde_json` keeps an object's keys sorted (its `preserve_order`
-    // feature is off) and writes compact JSON, so this is Python's
-    // `json.dumps(..., sort_keys=True, separators=(",", ":"))` of the same
-    // values. A test holds the `sfmtool` defaults' result to the prefix of a
-    // workspace that `sfm ws init` wrote.
-    let canonical = serde_json::json!({
+    let record = serde_json::json!({
         "feature_tool": feature_tool,
         "feature_type": feature_type,
         "feature_options": hashed,
-    })
-    .to_string();
+    });
+    let mut canonical = String::new();
+    write_python_json(&record, &mut canonical);
     let hash = xxhash_rust::xxh3::xxh3_128(canonical.as_bytes());
     format!("features/{feature_type}-{hash:032x}")
+}
+
+/// Append `value` to `out` as Python's `json.dumps(value, sort_keys=True,
+/// separators=(",", ":"))` writes it.
+///
+/// `serde_json`'s own writer differs from Python's in two ways that change the
+/// bytes: it writes a float's exponent without a sign or a leading zero
+/// (`1e-5` for Python's `1e-05`), and it writes a character outside ASCII as
+/// UTF-8 where Python writes `\uXXXX`. Keys are sorted here rather than taken
+/// in the map's order, which a `preserve_order` build would change; `String`
+/// sorts by code point, as Python's `str` does.
+fn write_python_json(value: &serde_json::Value, out: &mut String) {
+    use serde_json::Value;
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Value::Number(n) => {
+            if let Some(u) = n.as_u64() {
+                out.push_str(&u.to_string());
+            } else if let Some(i) = n.as_i64() {
+                out.push_str(&i.to_string());
+            } else if let Some(f) = n.as_f64() {
+                write_python_float(f, out);
+            }
+        }
+        Value::String(s) => write_python_string(s, out),
+        Value::Array(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_python_json(item, out);
+            }
+            out.push(']');
+        }
+        Value::Object(map) => {
+            let mut entries: Vec<(&String, &Value)> = map.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            out.push('{');
+            for (i, (key, item)) in entries.into_iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_python_string(key, out);
+                out.push(':');
+                write_python_json(item, out);
+            }
+            out.push('}');
+        }
+    }
+}
+
+/// Append `f` as Python's `repr(float)` writes it: the shortest digits that
+/// read back as `f`, the closest to `f` of those, positional with at least one digit after the point when
+/// the decimal exponent is from -4 to 15, and otherwise `d.ddde±XX`, the
+/// exponent signed and of at least two digits. A `serde_json` number is never
+/// NaN or infinite, but those are written as Python writes them too.
+fn write_python_float(f: f64, out: &mut String) {
+    if f.is_nan() {
+        out.push_str("NaN");
+        return;
+    }
+    if f.is_infinite() {
+        out.push_str(if f > 0.0 { "Infinity" } else { "-Infinity" });
+        return;
+    }
+    // `{:e}` writes the fewest digits that read back as `f`, as
+    // `[-]d[.ddd]e[-]x`. When several strings of that length read back, it
+    // need not pick the one `repr` picks, which is the closest to `f`, ties
+    // going to the even digit (`1997913866023742.2`, where `{:e}` gives
+    // `...423e15`). `{:.N$e}` rounds the exact value that way, so it is
+    // `repr`'s digits whenever it reads back as `f`.
+    let shortest = format!("{f:e}");
+    let digit_count = shortest
+        .split('e')
+        .next()
+        .map_or(1, |m| m.chars().filter(char::is_ascii_digit).count());
+    let rounded = format!("{f:.prec$e}", prec = digit_count.saturating_sub(1));
+    let chosen = if rounded.parse::<f64>() == Ok(f) {
+        rounded
+    } else {
+        shortest
+    };
+    let (mantissa, exponent) = chosen.split_once('e').unwrap_or((&chosen, "0"));
+    let exponent: i32 = exponent.parse().unwrap_or(0);
+    let (negative, mantissa) = match mantissa.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, mantissa),
+    };
+    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    if negative {
+        out.push('-');
+    }
+    if !(-4..16).contains(&exponent) {
+        out.push_str(&digits[..1]);
+        if digits.len() > 1 {
+            out.push('.');
+            out.push_str(&digits[1..]);
+        }
+        let sign = if exponent < 0 { '-' } else { '+' };
+        out.push_str(&format!("e{sign}{:02}", exponent.unsigned_abs()));
+    } else if exponent >= 0 {
+        let point = exponent as usize + 1;
+        if digits.len() <= point {
+            out.push_str(&digits);
+            out.extend(std::iter::repeat_n('0', point - digits.len()));
+            out.push_str(".0");
+        } else {
+            out.push_str(&digits[..point]);
+            out.push('.');
+            out.push_str(&digits[point..]);
+        }
+    } else {
+        out.push_str("0.");
+        out.extend(std::iter::repeat_n('0', (-exponent - 1) as usize));
+        out.push_str(&digits);
+    }
+}
+
+/// Append `s` as a JSON string the way Python's `json.dumps` writes it with
+/// its default `ensure_ascii=True`: printable ASCII as it is, `"`, `\` and
+/// five control characters with their short escapes, and every other
+/// character as `\uXXXX` in lowercase hex, one outside the Basic Multilingual
+/// Plane as its UTF-16 surrogate pair.
+fn write_python_string(s: &str, out: &mut String) {
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            ' '..='~' => out.push(c),
+            _ => {
+                let mut units = [0u16; 2];
+                for unit in c.encode_utf16(&mut units) {
+                    out.push_str(&format!("\\u{unit:04x}"));
+                }
+            }
+        }
+    }
+    out.push('"');
 }
 
 /// The conversion a `gray_formula` value states, or why it states none.

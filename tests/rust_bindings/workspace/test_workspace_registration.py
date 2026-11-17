@@ -6,6 +6,7 @@
 import sfmtool._sfmtool.workspace as workspace
 
 _EXPECTED_FUNCTIONS = (
+    "feature_prefix_dir",
     "find_workspace_for_path",
     "is_named_image_list_name",
     "recorded_image_to_gray",

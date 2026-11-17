@@ -97,5 +97,6 @@ The conversion of the options is `upgrade_feature_options` in
 bound as `sfmtool.workspace.upgrade_feature_options`; the viewer's *Build SIFT
 Files* makes the same conversion in memory for a version 1 record
 ([index-files.md](../../gui/index-files.md#building-the-sift-files)). The new
-folder name comes from `get_feature_tool_xxh128` in
-[`sift/file.py`](../../../src/sfmtool/sift/file.py), as `sfm ws init`'s does.
+folder name comes from `feature_prefix_dir` in
+[`sfmtool_core::workspace`](../../../crates/sfmtool-core/src/workspace/feature_options.rs),
+bound as `sfmtool.workspace.feature_prefix_dir`, as `sfm ws init`'s does.

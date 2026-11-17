@@ -92,7 +92,8 @@ def init_workspace(
     from sfmtool.sift.extract_colmap import get_colmap_feature_options
     from sfmtool.sift.extract_opencv import get_default_opencv_feature_options
     from sfmtool.sift.extract_sfmtool import get_default_sfmtool_feature_options
-    from sfmtool.sift.file import get_feature_tool_xxh128, get_feature_type_for_tool
+    from sfmtool.sift.file import get_feature_type_for_tool
+    from sfmtool.workspace import feature_prefix_dir as named_feature_prefix_dir
 
     workspace_dir = Path(workspace_dir)
 
@@ -132,10 +133,9 @@ def init_workspace(
 
     feature_tool_lower = feature_tool.lower()
     feature_type = get_feature_type_for_tool(feature_tool_lower, feature_options)
-    feature_tool_xxh128 = get_feature_tool_xxh128(
+    feature_prefix_dir = named_feature_prefix_dir(
         feature_tool_lower, feature_type, feature_options
     )
-    feature_prefix_dir = f"features/{feature_type}-{feature_tool_xxh128}"
 
     workspace_config = {
         "version": 2,
@@ -179,8 +179,11 @@ def upgrade_workspace(path: str | Path) -> tuple[Path, dict, dict | None]:
             ``sfmtool-undistort`` workspace is told to run ``sfm undistort``
             again), or a ``gray_formula`` that does not parse.
     """
-    from sfmtool.sift.file import get_feature_tool_xxh128
-    from sfmtool.workspace import find_workspace_for_path, upgrade_feature_options
+    from sfmtool.workspace import (
+        feature_prefix_dir,
+        find_workspace_for_path,
+        upgrade_feature_options,
+    )
 
     path = Path(path).resolve()
     workspace_dir = find_workspace_for_path(path)
@@ -217,11 +220,12 @@ def upgrade_workspace(path: str | Path) -> tuple[Path, dict, dict | None]:
         raise WorkspaceUpgradeError(f"{config_path} cannot be upgraded: {e}.") from e
 
     feature_type = config["feature_type"]
-    xxh128 = get_feature_tool_xxh128(feature_tool, feature_type, feature_options)
     new_config = dict(config)
     new_config["version"] = 2
     new_config["feature_options"] = feature_options
-    new_config["feature_prefix_dir"] = f"features/{feature_type}-{xxh128}"
+    new_config["feature_prefix_dir"] = feature_prefix_dir(
+        feature_tool, feature_type, feature_options
+    )
     with open(config_path, "w") as f:
         json.dump(new_config, f, indent=2)
     return config_path, config, new_config

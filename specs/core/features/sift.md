@@ -821,17 +821,16 @@ same `Version1SiftFiles` or `None`, and `image_files_to_sift_files` raises its
 `sfmtool_defaults` is the options a workspace initialized with the `sfmtool`
 tool and no other choice records: the default `feature_options` of
 `get_default_sfmtool_feature_options`, and the `feature_prefix_dir`
-`features/sift-sfmtool-<hash>`, where the hash is the XXH128 that
-`get_feature_tool_xxh128` takes of the compact JSON of `feature_tool`
-(`SFMTOOL_FEATURE_TOOL`), `feature_type` (`SFMTOOL_FEATURE_TYPE`,
-`sift-sfmtool`) and `feature_options` with the keys sorted, computed by
-`sfmtool_core::workspace::feature_prefix_dir`. The options carry the
-`image_to_gray` object. A caller that switches a reconstruction's recorded
-feature tool to `sfmtool`, as the viewer's *Build SIFT Files* does, takes them,
-so its files land where such a workspace puts them; a Rust test and a Python
-test hold the folder name to the same string, which keeps the two default
-folder names equal, though nothing depends on their agreeing, since a folder
-name is read back from the record that holds it.
+`features/sift-sfmtool-<hash>`, where the hash is the XXH3-128 of the compact
+JSON of `feature_tool` (`SFMTOOL_FEATURE_TOOL`), `feature_type`
+(`SFMTOOL_FEATURE_TYPE`, `sift-sfmtool`) and `feature_options` with the keys
+sorted, computed by `sfmtool_core::workspace::feature_prefix_dir`, the function
+`sfm ws init` calls too. The options carry the `image_to_gray` object. A caller
+that switches a reconstruction's recorded feature tool to `sfmtool`, as the
+viewer's *Build SIFT Files* does, takes them, so its files land where such a
+workspace puts them; a Rust test and a Python test hold the folder name to the
+same string, which keeps the Rust defaults equal to
+`get_default_sfmtool_feature_options`.
 
 What it writes matches the Python `sfmtool` backend byte for byte, which
 `tests/rust_bindings/sift/test_build_sift_files_rust_bindings.py` checks by
