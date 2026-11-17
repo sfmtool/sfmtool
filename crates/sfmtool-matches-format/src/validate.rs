@@ -61,6 +61,16 @@ pub(crate) fn check_backbone_counts(metadata: &MatchesMetadata) -> Vec<String> {
     errors
 }
 
+/// Check that every entry of `images/names.json.zst` is an image name, a path
+/// relative to the workspace directory
+/// ([`sfmtool_archive_io::validate_image_name`]), reporting the first that is
+/// not.
+pub(crate) fn image_name_errors(image_names: &[String], errors: &mut Vec<String>) {
+    if let Err(error) = sfmtool_archive_io::validate_image_names(image_names) {
+        errors.push(error);
+    }
+}
+
 /// Check that no `image_dims` value is zero. `image_dims` is the `(N, 2)`
 /// width/height table, row-major.
 pub(crate) fn image_dims_errors(image_dims: &[u32], errors: &mut Vec<String>) {
@@ -449,7 +459,7 @@ pub(crate) fn cluster_patch_errors(
 }
 
 /// The findings of every content check above on `data`, in the order the
-/// checks run: image dimensions, then the pair table and the two-view
+/// checks run: image names, image dimensions, then the pair table and the two-view
 /// geometries over it, or the cluster backbone, its patches and their per-cell
 /// columns ([`MemberCellData`](crate::MemberCellData)'s own check).
 ///
@@ -461,6 +471,7 @@ pub(crate) fn content_errors(data: &MatchesData) -> Vec<String> {
     let image_count = data.metadata.image_count as usize;
     let feature_counts = row_major_elements(&data.feature_counts);
 
+    image_name_errors(&data.image_names, &mut errors);
     if let Some(image_dims) = &data.image_dims {
         image_dims_errors(&row_major_elements(image_dims), &mut errors);
     }

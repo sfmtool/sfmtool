@@ -5,6 +5,7 @@ use crate::*;
 use ndarray::{Array1, Array2, Array4};
 use std::collections::BTreeMap;
 
+mod image_names;
 mod image_readings;
 mod layout;
 mod lens_corrections;

@@ -199,6 +199,14 @@ The two stored halves of an `SfmrReconstruction`'s data, in Rust and in prose
 |------|-------|-----|-----|
 | **image set** / **point set** | the two stored halves of a reconstruction's data. The **image set** holds the cameras, the posed images, the rig frames and the per-image columns, all addressed by image index: `ImageSet`, the field `SfmrReconstruction::image_set`. The **point set** holds the points, their tracks and the per-point and per-observation columns: `PointSet`, the field `SfmrReconstruction::point_set` | `ImageTable`, `image_table`, "the image table" for the reconstruction's half | *table* is kept for a derived view a person sorts and filters, such as the track table, and a stored half named like one reads as derived. *Set* pairs the image half with the point half under one word. The image table of a `.kdf` or `.matches` file (`KdfImageTable`, the `image_table()` accessor of a `.kdf` reader) is a part of that file's format and keeps its name |
 
+## Image names
+
+How the formats, the bindings and the specs name the images a file covers.
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **image name** | an image's path relative to the workspace directory, with `/` between its components and no empty, `.` or `..` component, no leading `/`, no Windows drive prefix, no `\` and no control character: what `images/names.json.zst` holds in `.sfmr`, `.matches` and `.kdf` and what the bindings return as `image_names`. The rule is `sfmtool_archive_io::validate_image_name` ([formats/sfmr-file-format.md § `images/names.json.zst`](formats/sfmr-file-format.md#imagesnamesjsonzst)), and every reader and writer of those formats refuses a name that breaks it | `image path` for the stored value, `POSIX path`, `image file name` | a name is not yet a path on disk: it becomes one only when joined to a resolved workspace, and *path* is kept for that. *POSIX* says only which separator is used, and a POSIX path can be absolute or climb out of the workspace with `..`, which an image name cannot. The `.sift` metadata field `image_name` is an older use that holds the file name alone, without its directory; it is the field's name, not this word |
+
 ## Named image lists
 
 A named set of a workspace's images, in `sfmtool_core::workspace`, the

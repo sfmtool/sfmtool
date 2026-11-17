@@ -65,8 +65,8 @@ pub fn resolve_workspace_dir(matches_path: &Path, metadata: &MatchesMetadata) ->
 ///
 /// For a caller that needs to know which images a file covers, in which order,
 /// without decompressing its correspondences: two JSON entries rather than the
-/// whole archive. The names are checked against the metadata's `image_count`,
-/// as [`read_matches`] checks them.
+/// whole archive. The names are checked against the metadata's `image_count`
+/// and against the image-name rule, as [`read_matches`] checks them.
 pub fn read_matches_image_names(
     path: &Path,
 ) -> Result<(MatchesMetadata, Vec<String>), MatchesError> {
@@ -85,6 +85,7 @@ pub fn read_matches_image_names(
             metadata.image_count
         )));
     }
+    sfmtool_archive_io::validate_image_names(&image_names).map_err(MatchesError::InvalidFormat)?;
     Ok((metadata, image_names))
 }
 

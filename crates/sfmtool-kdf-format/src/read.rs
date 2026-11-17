@@ -796,6 +796,7 @@ impl<S: KdfScalar> KdfFile<S> {
         if names.len() != count {
             return Err(KdfError::ShapeMismatch("image names count mismatch".into()));
         }
+        sfmtool_archive_io::validate_image_names(&names).map_err(KdfError::InvalidFormat)?;
         if names_raw
             .len()
             .checked_add(count.saturating_mul(32))

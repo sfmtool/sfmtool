@@ -636,7 +636,10 @@ The dual-path approach handles different scenarios:
 All image paths stored in the `.sfmr` file (`images/names.json.zst`) are relative to the
 workspace directory, not relative to the `.sfmr` file. Once the workspace is resolved, an
 image path like `frames/scene_0001.jpg` resolves to
-`{resolved_workspace}/frames/scene_0001.jpg`.
+`{resolved_workspace}/frames/scene_0001.jpg`. Each is an image name, a path with `/`
+separators and no `.`, `..` or empty component, which a reader and a writer of the format
+refuse to hold anything else, so it always names a file inside the workspace
+([sfmr-file-format.md § `images/names.json.zst`](../formats/sfmr-file-format.md#imagesnamesjsonzst)).
 
 This separation between "where is the workspace" and "where are images within the workspace"
 is what makes `.sfmr` files portable. The workspace location can change, but the internal

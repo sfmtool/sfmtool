@@ -14,9 +14,11 @@ covers the Rust interface and why it is shaped that way.
 ## Rust API
 
 The primitives live in
-[sfmtool-archive-io/src/lib.rs](../../crates/sfmtool-archive-io/src/lib.rs), and
+[sfmtool-archive-io/src/lib.rs](../../crates/sfmtool-archive-io/src/lib.rs),
 the workspace lookup in
-[sfmtool-archive-io/src/workspace.rs](../../crates/sfmtool-archive-io/src/workspace.rs). The
+[sfmtool-archive-io/src/workspace.rs](../../crates/sfmtool-archive-io/src/workspace.rs),
+and the image-name rule in
+[sfmtool-archive-io/src/image_name.rs](../../crates/sfmtool-archive-io/src/image_name.rs). The
 five format crates
 ([sfmtool-sift-format](../../crates/sfmtool-sift-format/),
 [sfmtool-matches-format](../../crates/sfmtool-matches-format/),
@@ -56,6 +58,11 @@ pub const WORKSPACE_MARKER: &str = ".sfm-workspace.json";
 pub fn resolve_workspace_dir(file: &Path, relative_path: &str, absolute_path: &str)
     -> Option<PathBuf>;
 pub fn find_workspace_for_path(path: &Path) -> Option<PathBuf>;  // the upward search
+
+// The rule an image name obeys (src/image_name.rs): the reason one is refused,
+// and the first refused name of a list with its index.
+pub fn validate_image_name(name: &str) -> Result<(), String>;
+pub fn validate_image_names<S: AsRef<str>>(names: &[S]) -> Result<(), String>;
 
 // Whole-file content identity: push section digests in format-defined order.
 pub struct SectionDigests { /* streaming XXH128 hasher */ }
@@ -368,6 +375,15 @@ by reference and the section-level hashing lives in their write paths. A format 
 `zstd` directly (only the round-trip tests do) declares it as a dev-dependency;
 the library paths all go through `zstd_compress`.
 
+**The image-name rule is here because three formats store image names.**
+`.sfmr`, `.matches` and `.kdf` each hold an `images/names.json.zst` list of
+paths relative to the workspace directory, and each refuses, on write and on
+read, a name that is not one; the rule is defined in the `.sfmr` format's
+[`images/names.json.zst`](sfmr-file-format.md#imagesnamesjsonzst). One function
+keeps a name one format accepts from being one another refuses. It returns the
+reason as a `String`, as `sfmtool_camrig_format::validate_pattern` does, and
+each format crate wraps it in its own `InvalidFormat` error.
+
 ## Testing
 
 [sfmtool-archive-io/src/tests.rs](../../crates/sfmtool-archive-io/src/tests.rs)
@@ -407,6 +423,13 @@ error every reader gives. An element count whose byte size does not fit in a
 `usize` is a `ShapeMismatch`, not an overflow. A recorded stored size larger
 than the central directory's offset reserves no more than that offset.
 
+[sfmtool-archive-io/src/image_name/tests.rs](../../crates/sfmtool-archive-io/src/image_name/tests.rs)
+gives the image-name rule names it must accept (spaces, non-ASCII characters, a
+deep path, colons after the start, components such as `...` and `x.`) and each
+form it must refuse, with a fragment of the reason each refusal must give, and
+pins the whole error `validate_image_names` gives for the first refused name of
+a list.
+
 Two properties get dedicated tests because everything above rests on them:
 `write_binary_entry_hashed` must produce the same digest as hashing the two
 buffers by hand in write order *and* leave both entries readable in the archive,
@@ -430,7 +453,9 @@ as its standard-layout twin.
   keep one definition of it here. `.kdf` defines its own
   `KdfWorkspaceMetadata`. The rule a reader finds that workspace by
   (`resolve_workspace_dir`) is here for the same reason: every format that
-  records a workspace resolves it the same way.
+  records a workspace resolves it the same way. So is the image-name rule
+  (`validate_image_name`): every format that stores image names refuses the
+  same ones.
 - **No verification.** Recomputing and comparing digests is each format crate's
   `verify_*` function, since only the format knows its sections and its
   structural constraints.

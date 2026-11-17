@@ -836,3 +836,84 @@ fn unvisited_chunks_stay_unread_and_warm_chunks_cost_no_io() {
     assert_eq!(warm.decoded_bytes, cold.decoded_bytes);
     assert!(warm.cache_hits > cold.cache_hits);
 }
+
+/// One of each form the image-name rule refuses.
+const REFUSED_IMAGE_NAMES: &[&str] = &[
+    "",
+    "../x.jpg",
+    "a/../b.jpg",
+    "./a/b.jpg",
+    "a/./b.jpg",
+    "a//b.jpg",
+    "a/b/",
+    "a\\b.jpg",
+    "/abs/x.jpg",
+    "//server/share/x.jpg",
+    "C:/x.jpg",
+    "C:x.jpg",
+    "a\0b.jpg",
+];
+
+/// Write `sources` beside the descriptors `write_sourced` uses.
+fn write_with_sources(path: &Path, sources: &KdfSiftSources) -> Result<(), KdfError> {
+    let mut vectors = vec![0u8; 3 * 128];
+    vectors[128] = 1;
+    vectors[256] = 9;
+    let mut data = tiny_u8(&[0, 0, 1, 1, 9, 9], 1);
+    data.vectors = &vectors;
+    data.dimension = 128;
+    write_kdf(
+        path,
+        &data,
+        Some(sources),
+        &KdfWriteOptions::default(),
+        &Progress::none(),
+    )
+}
+
+#[test]
+fn write_refuses_each_image_name_form_and_keeps_accepted_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("names.kdf");
+    for &name in REFUSED_IMAGE_NAMES {
+        let mut bad = sources();
+        bad.image_names[1] = name.to_string();
+        let error = write_with_sources(&path, &bad).unwrap_err();
+        assert_invalid(error, &format!("image name 1 {name:?}"));
+        assert!(!path.exists(), "{name:?} left a file behind");
+    }
+    let mut duplicate = sources();
+    duplicate.image_names[1] = duplicate.image_names[0].clone();
+    assert_invalid(
+        write_with_sources(&path, &duplicate).unwrap_err(),
+        "image name \"bull.jpg\" appears more than once",
+    );
+
+    let mut accepted = sources();
+    accepted.image_names = vec![
+        "photos of the park/Fotos/Straße/写真 ü.jpg".into(),
+        "a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/frame_0001.jpg".into(),
+    ];
+    write_with_sources(&path, &accepted).unwrap();
+    let file = KdfFile::<u8>::open(&path, roomy()).unwrap();
+    assert_eq!(
+        file.image_table().unwrap().unwrap().names,
+        accepted.image_names
+    );
+}
+
+#[test]
+fn image_table_and_verify_refuse_each_image_name_form() {
+    let dir = tempfile::tempdir().unwrap();
+    let good = write_sourced(dir.path());
+    let bad = dir.path().join("bad-name.kdf");
+    for &name in REFUSED_IMAGE_NAMES {
+        mutate_rehashed(&good, &bad, "images/names.json.zst", |raw| {
+            *raw = serde_json::to_vec(&["bull.jpg", name]).unwrap();
+        });
+        let expected = format!("image name 1 {name:?}");
+        let file = KdfFile::<u8>::open(&bad, roomy()).unwrap();
+        assert_invalid(file.image_table().unwrap_err(), &expected);
+        assert_invalid(verify_kdf::<u8>(&bad, roomy()).unwrap_err(), &expected);
+    }
+}

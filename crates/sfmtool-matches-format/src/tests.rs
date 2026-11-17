@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 mod cells;
 mod clusters_write;
+mod image_names;
 mod layout;
 mod validation;
 mod workspace;

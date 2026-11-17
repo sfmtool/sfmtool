@@ -124,7 +124,7 @@ preserves the indices without renumbering.
 | Entry | Decoded contents |
 |-------|------------------|
 | `images/metadata.json.zst` | Object with `image_count` I, a nonnegative uint32-sized integer |
-| `images/names.json.zst` | Array of I unique workspace-relative POSIX image paths |
+| `images/names.json.zst` | Array of I unique image names, each image's path relative to the workspace directory under the rule of the `.sfmr` format's [`images/names.json.zst`](sfmr-file-format.md#imagesnamesjsonzst); the writer refuses a name that breaks the rule or repeats another, and the image table's read refuses one that breaks the rule |
 | `images/feature_tool_hashes.{I}.uint128.zst` | Per-image feature-tool identity hashes, 16 little-endian bytes each |
 | `images/sift_content_hashes.{I}.uint128.zst` | Per-image SIFT content hashes, 16 little-endian bytes each |
 | `origins/{b}/image_indexes.{R}.uint32.zst` | Image index for each original descriptor row in this block |
