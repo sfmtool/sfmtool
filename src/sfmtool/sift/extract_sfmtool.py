@@ -223,16 +223,17 @@ def _stream_sift_with_sfmtool(
 ):
     """Generator backing ``extract_sift_with_sfmtool``.
 
-    Decodes and extracts up to ``default_concurrent_images(width, height)``
-    images concurrently, at image 0's size, while still yielding one result per
-    image in input order (a FIFO over the in-flight futures), so the caller can
-    stream ``.sift`` writes. The bounded look-ahead caps memory to the worker
+    Decodes and extracts up to ``default_concurrent_images(width, height,
+    params)`` images concurrently, at image 0's size, while still yielding one
+    result per image in input order (a FIFO over the in-flight futures), so the
+    caller can stream ``.sift`` writes. The bounded look-ahead caps memory to the worker
     count, and the ``ThreadPoolExecutor`` context manager joins the workers on
     exit -- including when the consumer stops early or a decode/extract raises
     (re-raised in input order by the FIFO).
 
     Image 0 is decoded on the calling thread so its dimensions can size the pool
-    (peak memory scales with in-flight image count x pyramid size); that decode
+    (peak memory scales with in-flight image count x pyramid size, and the
+    pyramid with whether ``params`` double the image); that decode
     is reused as image 0's input, not repeated.
     """
     paths = iter(image_filename_list)
@@ -245,7 +246,7 @@ def _stream_sift_with_sfmtool(
     # on image 0 surfaces here, still at the first ``next()``, i.e. in input order.
     first_decoded = _decode_image(first_path)
     height, width = first_decoded[1].shape[:2]
-    workers = default_concurrent_images(width, height)
+    workers = default_concurrent_images(width, height, params)
 
     def extract_decoded(decoded):
         return _extract_one(*decoded, params, feature_options, rust_extract_sift)

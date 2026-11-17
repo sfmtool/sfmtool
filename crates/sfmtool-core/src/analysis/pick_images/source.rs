@@ -171,7 +171,8 @@ impl ExtractingSource {
     /// `concurrent_images` workers, or when `None` the count
     /// `build_sift_files` takes by default (the `SFMTOOL_SIFT_EXTRACT_WORKERS`
     /// environment variable, or the core count capped so that the images in
-    /// flight fit in half of physical memory at the first image's size).
+    /// flight fit in half of physical memory at the first image's size, as
+    /// the options double it or not).
     ///
     /// # Errors
     ///
@@ -184,12 +185,15 @@ impl ExtractingSource {
         if !crate::workspace::has_image_to_gray(&options.feature_options) {
             return Err(BuildSiftFilesError::Version1Settings);
         }
-        let threads = options.concurrent_images.map(|n| n.max(1));
+        let threads = match options.concurrent_images {
+            Some(n) => Threads::Fixed(n.max(1)),
+            None => Threads::Default(params.clone()),
+        };
         let job: Arc<Job> = Arc::new(move |frame, images, progress, wrote| {
             extract_frame(frame, images, &options, &params, progress, wrote)
         });
         Ok(Self {
-            pool: WorkerPool::new(job, threads.map_or(Threads::Default, Threads::Fixed)),
+            pool: WorkerPool::new(job, threads),
         })
     }
 }
@@ -313,11 +317,12 @@ pub(super) type Job = dyn Fn(FrameId, &[CaptureImage], &Progress, &mut bool) -> 
     + Sync;
 
 /// How many workers a [`WorkerPool`] runs.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(super) enum Threads {
     Fixed(usize),
-    /// [`default_concurrent_images`] at the first frame's first image.
-    Default,
+    /// [`default_concurrent_images`] at the first frame's first image,
+    /// extracted with these parameters.
+    Default(SiftParams),
 }
 
 /// Workers that run a [`Job`] for each frame asked for, the frames a wait is
@@ -397,7 +402,7 @@ impl WorkerPool {
         }
         match self.threads {
             Threads::Fixed(n) => n,
-            Threads::Default => std::thread::available_parallelism().map_or(1, |n| n.get()),
+            Threads::Default(_) => std::thread::available_parallelism().map_or(1, |n| n.get()),
         }
     }
 
@@ -406,12 +411,12 @@ impl WorkerPool {
         if !self.handles.is_empty() {
             return;
         }
-        let count = match (self.threads, first) {
-            (Threads::Fixed(n), _) => n,
-            (Threads::Default, Some(image)) => {
-                default_concurrent_images(&image.image_path, &Progress::none())
+        let count = match (&self.threads, first) {
+            (&Threads::Fixed(n), _) => n,
+            (Threads::Default(params), Some(image)) => {
+                default_concurrent_images(&image.image_path, params, &Progress::none())
             }
-            (Threads::Default, None) => self.concurrency(),
+            (Threads::Default(_), None) => self.concurrency(),
         }
         .max(1);
         for _ in 0..count {

@@ -860,7 +860,8 @@ walk would otherwise read a file other than the one written.
 Its workers follow `build_sift_files`: there are `concurrent_images` of them,
 or by default the `SFMTOOL_SIFT_EXTRACT_WORKERS` environment variable or the
 core count capped so that the images in flight fit in half of physical memory
-at the first image's size, and each decodes, hashes and makes the thumbnail
+at the first image's size, counted as doubled or not as the workspace's
+options decide for that size, and each decodes, hashes and makes the thumbnail
 of its frame's images on its own thread, then extracts and writes on the
 rayon pool, which keeps one thread per core. They take the frames a wait is
 blocked on first, in its order, then the last prefetch's in its order. A

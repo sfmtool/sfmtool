@@ -49,17 +49,24 @@ pub const WORKSPACE_CONFIG_FILE: &str = ".sfm-workspace.json";
 /// runs at once when [`BuildSiftFilesOptions::concurrent_images`] is `None`:
 /// a whole number, raised to 1 if lower. The Python `sfmtool` backend of
 /// `sfm sift` reads the same variable, through
-/// [`default_concurrent_images_for_pixels`].
+/// [`default_concurrent_images_for_dimensions`].
 pub const CONCURRENT_IMAGES_ENV_VAR: &str = "SFMTOOL_SIFT_EXTRACT_WORKERS";
 
 pub use sfmtool_sift_format::SIFT_ZSTD_LEVEL;
 
-/// About how many bytes one image in flight holds per source pixel: the decoded
-/// RGB frame plus the `f32` Gaussian pyramid of the doubled image the extraction
-/// keeps through description. Rounded up, since guessing high only gives up a
-/// few concurrent images while guessing low risks running out of memory. It
-/// assumes doubling even for an image whose long side turns doubling off.
-const BYTES_PER_SOURCE_PIXEL: u64 = 192;
+/// About how many bytes one image in flight holds per source pixel when the
+/// extraction doubles it ([`SiftParams::doubles_image`]): the decoded RGB frame,
+/// its thumbnail and readings, and the extraction of the doubled image, whose
+/// `f32` Gaussian pyramid it keeps through description. Measured at 109 to 164,
+/// rounded up, since guessing high only gives up a few concurrent images while
+/// guessing low risks running out of memory. The measurements are in
+/// `specs/core/features/sift.md` § "Building `.sift` files".
+const BYTES_PER_SOURCE_PIXEL_DOUBLED: u64 = 192;
+
+/// [`BYTES_PER_SOURCE_PIXEL_DOUBLED`] for an image the extraction does not
+/// double, whose pyramid starts at the source size. Measured at 32 to 57,
+/// rounded up.
+const BYTES_PER_SOURCE_PIXEL_UNDOUBLED: u64 = 64;
 
 /// The feature tool [`build_sift_files`] extracts with, as a workspace's
 /// `feature_tool` names it.
@@ -370,7 +377,7 @@ pub fn build_sift_files(
 
     let workers = options
         .concurrent_images
-        .unwrap_or_else(|| default_concurrent_images(&image_paths[todo[0]], &progress))
+        .unwrap_or_else(|| default_concurrent_images(&image_paths[todo[0]], &params, &progress))
         .clamp(1, todo.len());
     let total = todo.len() as u64;
     progress.count(0, Some(total), "image");
@@ -639,32 +646,43 @@ pub(crate) fn xxh128_of_file(path: &Path) -> std::io::Result<(String, u64)> {
 }
 
 /// How many images to run at once when the caller does not say, for a batch
-/// whose first image is `first_image`: [`default_concurrent_images_for_pixels`]
-/// at that image's size, read from its header, or of unknown size when the
-/// header cannot be read.
-pub(crate) fn default_concurrent_images(first_image: &Path, progress: &Progress) -> usize {
-    let pixels = image_dimensions(first_image)
-        .ok()
-        .map(|(w, h)| u64::from(w) * u64::from(h));
-    default_concurrent_images_for_pixels(pixels, progress)
+/// whose first image is `first_image`, extracted with `params`:
+/// [`default_concurrent_images_for_dimensions`] at that image's dimensions,
+/// read from its header, or unknown when the header cannot be read.
+pub(crate) fn default_concurrent_images(
+    first_image: &Path,
+    params: &SiftParams,
+    progress: &Progress,
+) -> usize {
+    default_concurrent_images_for_dimensions(image_dimensions(first_image).ok(), params, progress)
 }
 
-/// How many images of `pixels` source pixels each to decode and extract at
-/// once when the caller does not say: the [`CONCURRENT_IMAGES_ENV_VAR`] value
-/// when it is a whole number, raised to 1 if lower, otherwise the core count
-/// capped so that that many images fit in half of physical memory at 192
-/// bytes per source pixel, or at most 4 when `pixels` is `None` or 0. It is
-/// never below 1. A value of the variable that is not a whole number is
-/// ignored, with a warning to `progress`.
+/// How many images of `dimensions` (width, height) each to decode and extract
+/// with `params` at once when the caller does not say: the
+/// [`CONCURRENT_IMAGES_ENV_VAR`] value when it is a whole number, raised to 1
+/// if lower, otherwise the core count capped so that that many images fit in
+/// half of physical memory, at 192 bytes per source pixel for an image
+/// `params` doubles ([`SiftParams::doubles_image`]) and 64 for one it does
+/// not, or at most 4 when `dimensions` is `None` or has no pixels. It is never
+/// below 1. A value of the variable that is not a whole number is ignored,
+/// with a warning to `progress`.
 ///
 /// ```
-/// use sfmtool_core::features::sift::default_concurrent_images_for_pixels;
+/// use sfmtool_core::features::sift::{default_concurrent_images_for_dimensions, SiftParams};
 /// use sfmtool_core::Progress;
 ///
-/// let k = default_concurrent_images_for_pixels(Some(4000 * 3000), &Progress::none());
+/// let params = SiftParams {
+///     double_image_below_long_side: Some(4096),
+///     ..SiftParams::default()
+/// };
+/// let k = default_concurrent_images_for_dimensions(Some((16320, 12240)), &params, &Progress::none());
 /// assert!(k >= 1);
 /// ```
-pub fn default_concurrent_images_for_pixels(pixels: Option<u64>, progress: &Progress) -> usize {
+pub fn default_concurrent_images_for_dimensions(
+    dimensions: Option<(u32, u32)>,
+    params: &SiftParams,
+    progress: &Progress,
+) -> usize {
     // An empty value counts as unset.
     if let Some(value) = std::env::var(CONCURRENT_IMAGES_ENV_VAR)
         .ok()
@@ -684,18 +702,37 @@ pub fn default_concurrent_images_for_pixels(pixels: Option<u64>, progress: &Prog
         .unwrap_or(4 << 30)
         .div_euclid(2)
         .max(1);
-    concurrent_images_for(cores, pixels, budget)
+    concurrent_images_for(cores, bytes_per_image(dimensions, params), budget)
 }
 
-/// [`default_concurrent_images_for_pixels`] without the environment: `cores`, capped so
-/// that that many images of `pixels` source pixels fit in `budget` bytes, or
-/// at most 4 when the size is unknown. At least 1.
-fn concurrent_images_for(cores: usize, pixels: Option<u64>, budget: u64) -> usize {
-    match pixels.filter(|&p| p > 0) {
+/// About how many bytes one image of `dimensions` holds in flight while it is
+/// extracted with `params`, or `None` when the dimensions are unknown or the
+/// image has no pixels. It saturates rather than overflows.
+fn bytes_per_image(dimensions: Option<(u32, u32)>, params: &SiftParams) -> Option<u64> {
+    let (width, height) = dimensions?;
+    let pixels = u64::from(width) * u64::from(height);
+    if pixels == 0 {
+        return None;
+    }
+    let per_pixel = if params.doubles_image(width, height) {
+        BYTES_PER_SOURCE_PIXEL_DOUBLED
+    } else {
+        BYTES_PER_SOURCE_PIXEL_UNDOUBLED
+    };
+    Some(pixels.saturating_mul(per_pixel))
+}
+
+/// [`default_concurrent_images_for_dimensions`] without the environment:
+/// `cores`, capped so that that many images of `bytes_per_image` bytes each fit
+/// in `budget` bytes, or at most 4 when the footprint is unknown. At least 1.
+fn concurrent_images_for(cores: usize, bytes_per_image: Option<u64>, budget: u64) -> usize {
+    match bytes_per_image {
         None => cores.clamp(1, 4),
-        Some(pixels) => {
-            let by_memory = (budget / pixels.saturating_mul(BYTES_PER_SOURCE_PIXEL)).max(1);
-            cores.min(by_memory as usize).max(1)
+        Some(bytes) => {
+            let by_memory = (budget / bytes.max(1)).max(1);
+            cores
+                .min(usize::try_from(by_memory).unwrap_or(usize::MAX))
+                .max(1)
         }
     }
 }

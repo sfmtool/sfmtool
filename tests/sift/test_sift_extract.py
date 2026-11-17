@@ -276,9 +276,73 @@ def test_default_concurrent_images_scales_with_cores_bounded_by_memory(monkeypat
     cores = os.process_cpu_count() or 1
     # 64 pixels at 192 bytes each fit any machine's memory once per core.
     assert default_concurrent_images(8, 8) == cores
+    assert default_concurrent_images(8, 8, {"double_image": False}) == cores
     # About 1.8e19 pixels fit no machine's memory even once.
     assert default_concurrent_images(2**32 - 1, 2**32 - 1) == 1
     assert default_concurrent_images(0, 480) == min(cores, 4)
+
+
+def test_default_concurrent_images_follows_the_doubling_decision(monkeypatch):
+    """An image the params double is sized at 192 bytes per source pixel and
+    one they do not at 64, a third of that, and which it is follows
+    ``double_image_below_long_side`` at its boundary. The counts depend on the
+    machine's cores and memory, so the test compares calls with each other.
+    The counts themselves are tested in Rust
+    (``the_footprint_follows_the_doubling_decision``)."""
+    from sfmtool.sift import default_concurrent_images
+
+    monkeypatch.delenv("SFMTOOL_SIFT_EXTRACT_WORKERS", raising=False)
+    doubled = {"double_image": True}
+    undoubled = {"double_image": False}
+    height = 1000
+    # Widths from 1000 up by half each step, while three times the width
+    # still fits in a u32.
+    widths = [int(1000 * 1.5**i) for i in range(35)]
+    differs = []
+    for width in widths:
+        count = default_concurrent_images(width, height, doubled)
+        # The defaults double every image.
+        assert default_concurrent_images(width, height) == count
+        # Three times the pixels undoubled take the bytes these take doubled.
+        assert default_concurrent_images(3 * width, height, undoubled) == count
+        if default_concurrent_images(width, height, undoubled) != count:
+            differs.append(width)
+    if (os.process_cpu_count() or 1) == 1:
+        return  # one image at a time at every size
+    # Somewhere between one image per core and one in all, doubling changes
+    # the count; that is where the boundary is checked.
+    assert differs
+    width = differs[0]
+    below = {"double_image_below_long_side": width + 1}
+    at = {"double_image_below_long_side": width}
+    assert default_concurrent_images(width, height, below) == default_concurrent_images(
+        width, height, doubled
+    )
+    assert default_concurrent_images(width, height, at) == default_concurrent_images(
+        width, height, undoubled
+    )
+    # The long side is the limit either way round.
+    assert default_concurrent_images(height, width, at) == default_concurrent_images(
+        width, height, undoubled
+    )
+
+
+@pytest.mark.parametrize(
+    "params, match",
+    [
+        ({"no_such_option": 1}, "no_such_option"),
+        ({"double_image_below_long_side": 0}, "double_image_below_long_side"),
+        ({"double_image": "yes"}, "double_image"),
+        ({"image_to_gray": {"formula": "not a formula"}}, "image_to_gray"),
+    ],
+)
+def test_default_concurrent_images_refuses_bad_params(params, match):
+    """Params are checked as ``extract_sift`` checks them, and refused with a
+    ``ValueError`` naming the key."""
+    from sfmtool.sift import default_concurrent_images
+
+    with pytest.raises(ValueError, match=match):
+        default_concurrent_images(270, 480, params)
 
 
 def test_stream_preserves_input_order_under_out_of_order_completion(monkeypatch):
@@ -306,6 +370,32 @@ def test_stream_preserves_input_order_under_out_of_order_completion(monkeypatch)
     paths = [Path(str(i)) for i in range(count)]
     out = list(extract_sfmtool._stream_sift_with_sfmtool(paths, None, {}, object()))
     assert [r[1] for r in out] == list(range(count))
+
+
+def test_stream_sizes_its_pool_with_the_extraction_params(monkeypatch):
+    """The pool is sized from image 0's dimensions and the params the images
+    are extracted with, so whether they double the image counts."""
+    from sfmtool.sift import extract_sfmtool
+
+    calls = []
+
+    def fake_count(width, height, params=None):
+        calls.append((width, height, params))
+        return 1
+
+    monkeypatch.setattr(extract_sfmtool, "default_concurrent_images", fake_count)
+    frame = np.zeros((3, 5, 3), np.uint8)
+    monkeypatch.setattr(extract_sfmtool, "_decode_image", lambda p: (p, frame, None))
+    monkeypatch.setattr(
+        extract_sfmtool, "_extract_one", lambda image_path, *a: image_path
+    )
+
+    params = {"double_image": False}
+    out = list(
+        extract_sfmtool._stream_sift_with_sfmtool([Path("0")], params, params, object())
+    )
+    assert out == [Path("0")]
+    assert calls == [(5, 3, params)]
 
 
 def test_stream_raises_error_in_input_order_not_completion_order(monkeypatch):

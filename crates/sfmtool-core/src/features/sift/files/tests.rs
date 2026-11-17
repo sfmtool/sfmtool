@@ -271,19 +271,76 @@ fn invalid_feature_options_fail_before_anything_is_written() {
 
 #[test]
 fn concurrency_is_the_core_count_capped_by_memory() {
-    let seoul = 270 * 480;
     // Plenty of memory: one image per core.
-    assert_eq!(concurrent_images_for(64, Some(seoul), 64 << 30), 64);
-    // A 2 GiB budget holds 8 images of 1.4 megapixels at 192 bytes a pixel.
-    let pixels = 1_400_000;
-    let expected = ((2u64 << 30) / (pixels * BYTES_PER_SOURCE_PIXEL)) as usize;
-    assert_eq!(concurrent_images_for(64, Some(pixels), 2 << 30), expected);
-    // Never fewer than one, and at most four when the size is unknown.
+    assert_eq!(concurrent_images_for(64, Some(25_000_000), 64 << 30), 64);
+    // A 2 GiB budget holds 7 images of 300 MB.
+    assert_eq!(concurrent_images_for(64, Some(300_000_000), 2 << 30), 7);
+    // Never fewer than one, and at most four when the footprint is unknown.
     assert_eq!(concurrent_images_for(8, Some(u64::MAX / 1024), 1), 1);
-    // A size whose footprint does not fit in 64 bits still gives one.
     assert_eq!(concurrent_images_for(8, Some(u64::MAX), u64::MAX), 1);
     assert_eq!(concurrent_images_for(16, None, 1 << 30), 4);
     assert_eq!(concurrent_images_for(2, None, 1 << 30), 2);
+}
+
+#[test]
+fn the_footprint_follows_the_doubling_decision() {
+    let limited = SiftParams {
+        double_image_below_long_side: Some(4096),
+        ..SiftParams::default()
+    };
+    let doubled = |w: u64, h: u64| Some(w * h * BYTES_PER_SOURCE_PIXEL_DOUBLED);
+    let undoubled = |w: u64, h: u64| Some(w * h * BYTES_PER_SOURCE_PIXEL_UNDOUBLED);
+    // A long side one short of the limit is doubled; at the limit, along
+    // either side, it is not.
+    assert_eq!(
+        bytes_per_image(Some((4095, 4095)), &limited),
+        doubled(4095, 4095)
+    );
+    assert_eq!(
+        bytes_per_image(Some((4096, 3000)), &limited),
+        undoubled(4096, 3000)
+    );
+    assert_eq!(
+        bytes_per_image(Some((3000, 4096)), &limited),
+        undoubled(3000, 4096)
+    );
+    // No limit doubles at any size, and `double_image` off doubles none.
+    let unlimited = SiftParams::default();
+    assert_eq!(
+        bytes_per_image(Some((16320, 12240)), &unlimited),
+        doubled(16320, 12240)
+    );
+    let off = SiftParams {
+        double_image: false,
+        ..SiftParams::default()
+    };
+    assert_eq!(bytes_per_image(Some((270, 480)), &off), undoubled(270, 480));
+    // Unknown dimensions and an image with no pixels have no footprint.
+    assert_eq!(bytes_per_image(None, &limited), None);
+    assert_eq!(bytes_per_image(Some((0, 480)), &limited), None);
+    // A footprint past 64 bits saturates.
+    assert_eq!(
+        bytes_per_image(Some((u32::MAX, u32::MAX)), &unlimited),
+        Some(u64::MAX)
+    );
+
+    // A 200-megapixel photograph on 32 cores with a 32 GiB budget: at 192
+    // bytes a source pixel one doubled image fits, at 64 two undoubled ones do.
+    let photo = Some((16320, 12240));
+    assert_eq!(
+        concurrent_images_for(32, bytes_per_image(photo, &unlimited), 32 << 30),
+        1
+    );
+    assert_eq!(
+        concurrent_images_for(32, bytes_per_image(photo, &limited), 32 << 30),
+        2
+    );
+    // A 12-megapixel photograph is doubled under the 4096 limit too: 14 fit.
+    let twelve = Some((4000, 3000));
+    assert_eq!(
+        concurrent_images_for(32, bytes_per_image(twelve, &limited), 32 << 30),
+        14
+    );
 }
 
 #[test]
