@@ -333,7 +333,12 @@ holding `.sfm-workspace.json`, found by `find_workspace_for_path`
 ([archive-io-crate.md](../formats/archive-io-crate.md); the walk goes up the
 path as given and does not resolve links, so an image folder that links to
 storage elsewhere still belongs to the workspace around the link). The
-photograph's **relative path** is its path relative to that root. The mip level
+photograph's **relative path** is its path relative to that root. Image names
+are normalized paths within the workspace, which the format requires
+([sfmr-file-format.md](../formats/sfmr-file-format.md#imagesnamesjsonzst)
+§ `images/names.json.zst`), so a photograph's relative path stays inside the
+workspace and every photograph of a workspace has a mirror path in
+`.sfm-cache/`. The mip level
 file of level `l` is
 
 ```
@@ -405,10 +410,7 @@ rebuild, never wrong pixels: a pair it calls different is found stale by test
 with the hash.
 
 A photograph gets no files, and is read through the in-memory equivalent, when
-its mip level files cannot be put in the cache directory: when its relative path has a `..`
-component (an image name such as `../other/x.jpg` is accepted in a
-reconstruction's image list and would put the mirror outside the cache
-directory), or when the cache directory cannot be written.
+the cache directory cannot be written.
 
 ### What is written in one
 
@@ -700,8 +702,8 @@ to 2.1 s, and 33 to 43 MB of encoded bytes held until written.
 
 ### The in-memory equivalent
 
-When a photograph's mip level files cannot be written (a `..` in the
-relative path, a read-only cache directory, a full disk), a reader still needs the pixels the files would hold, at the
+When a photograph's mip level files cannot be written (a read-only cache
+directory, a full disk), a reader still needs the pixels the files would hold, at the
 qualities the workspace sets, because the
 kernels must not read the exact box-filtered levels for one photograph and the
 JPEG ones for another. It makes the same files in memory instead: steps 1 to 3
@@ -1536,7 +1538,7 @@ pub fn region_layout(bytes: &[u8]) -> Result<RegionLayout, NotRegionReadable>;
 /// Where a photograph's mip level files are, or why it has none.
 pub enum MipmapLocation {
     Files { root: PathBuf, relative: String, paths: Vec<PathBuf> },
-    InMemory(NoFilesReason), // `..`, cache directory not writable
+    InMemory(NoFilesReason), // cache directory not writable
 }
 pub fn mipmap_location(photograph: &Path, layout: &PyramidLayout, level0_file: bool) -> MipmapLocation;
 
@@ -1969,7 +1971,7 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    in a temporary workspace whose `mipmap_options` sets a threshold of 64,
    with a tile of 32: the names for `IMG_0001.JPG` (`IMG_0001.JPG-mip1.jpg`,
    case kept), `a.b.png` and a name with no extension, the names of `x.jpg`
-   beside `x.png` differing, a `..` name (in memory); a mip level file whose
+   beside `x.png` differing; a mip level file whose
    record names another path is stale; one whose `source` differs from the
    photograph's path only in case and whose length, modification time and
    hash match the original is current, hashed once and not made again (one
@@ -2185,11 +2187,11 @@ ranges in this draft are over those runs.
 
 ## Problems found with the decisions
 
-- **Mirroring the workspace does not cover every photograph.** A photograph
-  with `..` in its image name has no mirror path; the in-memory equivalent
-  gives it the same pixels without files. A photograph with no workspace above
-  it is in core, as are all photographs of a workspace without
-  `mipmap_options`.
+- **Mirroring the workspace covers only photographs in a workspace.** A
+  photograph with no workspace above it is in core, as are all photographs of
+  a workspace without `mipmap_options`; a workspace whose cache directory
+  cannot be written reads its out-of-core photographs through the in-memory
+  equivalent.
 - **A workspace without `mipmap_options` keeps today's memory.** Every
   existing workspace, the user's included, reads its large photographs as
   whole pyramids until the object is added: 762 MiB for each 200-megapixel
