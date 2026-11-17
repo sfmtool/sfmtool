@@ -127,8 +127,8 @@ sampler's footprint and to its region is one change.
 `PhotographCache::view_region_pyramid(path, &LevelRegions)` assembles
 the region of each level from photograph tiles (`get_tile`, decoding any tile
 not yet cached) and copies the rectangles out. The tiles come from the
-mipmaps, and level 0 from the original if it is region-readable or from its
-`-mipmap1` otherwise, as the main draft describes; every one is a tile
+mip level files, and level 0 from the original if it is region-readable or from its
+`-mip0` otherwise, as the main draft describes; every one is a tile
 decode, so no region of any level needs a whole decode. A region pyramid
 therefore holds the same pixels as a whole pyramid of the stored levels would.
 An in-core photograph is not tiled for this: its whole pyramid is already in
@@ -276,7 +276,7 @@ pool's four tiles per thread and the window of 16 are open question 4.
 **On the GUI thread** (Track View's tiles, crops and context, the Track
 Table's crop column), the panel acts on the photograph's layout state as the
 main draft's § "Readers on the GUI thread" says: while it is `Building` the
-panel requests the photograph once (one rayon task whose `get` makes the set,
+panel requests the photograph once (one rayon task whose `get` makes the mipmap,
 or waits for the caller making it, with at most one such request in flight
 across the viewer) and requests no tiles;
 once it is `Known` the panel computes the regions, peeks the tiles
@@ -302,7 +302,7 @@ requesting the missing ones. The GUI thread never decodes and never waits.
   more (level 2 of one 200-megapixel photograph is 48 tiles, 38 MB; level 0
   is 768 tiles, 607 MB), and the ones past the budget are decoded again when
   read again, at 2.3 to 6 ms a tile. Level 0 is always read by tiles, from the
-  original or from `-mipmap1`, so no photograph's level 0 is ever held whole.
+  original or from `-mip0`, so no photograph's level 0 is ever held whole.
   The order a kernel takes its renders in decides how often a tile is decoded
   again: rendering points grouped by their reference image and position keeps
   the tiles each group needs together, and each kernel's phase note reports
