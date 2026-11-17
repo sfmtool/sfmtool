@@ -120,7 +120,13 @@ with the reason) and writes nothing.
    `<its workspace>/<image's directory>/<feature_prefix_dir>` for each image
    the file records, with each `..` of an image name resolved by name (a
    file of a nested workspace can name `../images/<image>`), from the file's
-   record and image names alone, read by
+   record and image names alone. Every folder, image directory and `.sift`
+   file is identified by its real path (`std::fs::canonicalize`, which gives
+   each name as it is on disk) and spelled as the walk spells it, so a file
+   that names `IMAGES/<image>`, as `sfm sift --extract IMAGES` records on a
+   file system that ignores case, names the same folder as the walk's
+   `images`; a path that does not exist keeps its spelling, and cannot be
+   taken for one that does. The names are read by
    the cheap readers (`read_sfmr_image_names`, `read_matches_image_names`)
    rather than a whole load, so a file the current reader refuses still
    names its folders, wherever its record resolves. A file of the tree an

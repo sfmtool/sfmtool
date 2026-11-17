@@ -1985,3 +1985,124 @@ fn a_workspace_file_does_not_name_a_nested_workspaces_folder() {
     assert_eq!(folder.new_folder, None, "{folder:?}");
     assert!(folder.deleted, "{folder:?}");
 }
+
+/// Save a `sift_files` reconstruction of the fixture's old folder at `path`
+/// whose image names spell the image directory `Images`, where the disk has
+/// `images`: on Windows, which ignores case, the same directory.
+#[cfg(windows)]
+fn save_with_upper_case_image_dir(fixture: &Fixture, path: &Path) {
+    let mut recon = reconstruction(&fixture.root, &fixture.old_folder(), v1_record(), false);
+    for (i, image) in recon.image_set.images.iter_mut().enumerate() {
+        image.name = format!("Images/{}", image_name(i));
+    }
+    recon.save(path, &Progress::none()).unwrap();
+}
+
+/// Make the `.sfmr` at `path` one the current reader refuses: its camera
+/// lacks a parameter.
+#[cfg(windows)]
+fn make_refused(path: &Path) {
+    rewrite_archive(
+        path,
+        "cameras/metadata.json.zst",
+        |cameras| {
+            let camera = &mut cameras.as_array_mut().unwrap()[0];
+            camera["parameters"]
+                .as_object_mut()
+                .unwrap()
+                .remove("focal_length_y");
+        },
+        |_| false,
+    );
+}
+
+/// How many version 1 `.sift` files the fixture's old folder holds.
+#[cfg(windows)]
+fn old_folder_count(fixture: &Fixture) -> usize {
+    std::fs::read_dir(fixture.old_folder())
+        .map(|d| d.count())
+        .unwrap_or(0)
+}
+
+/// A refused file that spells the image directory in another case than the
+/// disk keeps the one folder it names.
+#[cfg(windows)]
+#[test]
+fn a_refused_file_spelling_the_image_directory_in_another_case_keeps_its_folder() {
+    let fixture = fixture();
+    let path = fixture.path("sfmr/refused.sfmr");
+    save_with_upper_case_image_dir(&fixture, &path);
+    make_refused(&path);
+    let report = run(&fixture, false);
+    assert!(not_converted(outcome_of(&report, &path)), "{report:?}");
+    assert_eq!(old_folder_count(&fixture), IMAGES, "{report:?}");
+}
+
+/// The same with a version 2 workspace file, so only files name the folder:
+/// one rewritten and one refused, both spelling `Images`.
+#[cfg(windows)]
+#[test]
+fn a_refused_file_in_another_case_keeps_its_folder_under_a_version_2_workspace_file() {
+    let fixture = fixture();
+    write_v2_workspace_file(&fixture.root);
+    let refused = fixture.path("sfmr/refused.sfmr");
+    save_with_upper_case_image_dir(&fixture, &refused);
+    make_refused(&refused);
+    let readable = fixture.path("sfmr/upper.sfmr");
+    save_with_upper_case_image_dir(&fixture, &readable);
+    let report = run(&fixture, false);
+    assert_eq!(outcome_of(&report, &readable), &UpgradeOutcome::Converted);
+    assert_sift_files_resolve(&readable);
+    assert_eq!(old_folder_count(&fixture), IMAGES, "{report:?}");
+}
+
+/// A readable file that spells the image directory in another case than the
+/// disk is converted with the others into the one new folder: each folder
+/// is listed once, each `.sift` file converted once, and the old folders
+/// deleted.
+#[cfg(windows)]
+#[test]
+fn a_file_spelling_the_image_directory_in_another_case_converts_with_the_others() {
+    let fixture = fixture();
+    let path = fixture.path("sfmr/upper.sfmr");
+    save_with_upper_case_image_dir(&fixture, &path);
+    let report = run(&fixture, false);
+    assert_eq!(outcome_of(&report, &path), &UpgradeOutcome::Converted);
+    let folders: BTreeSet<_> = report
+        .folders
+        .iter()
+        .map(|f| f.old_folder.to_string_lossy().to_lowercase())
+        .collect();
+    assert_eq!(folders.len(), report.folders.len(), "{report:?}");
+    assert_eq!(report.folders.len(), 3, "{report:?}");
+    assert_eq!(report.converted_sift_file_count, 2 * IMAGES);
+    assert!(report.old_folders_deleted, "{report:?}");
+    assert_eq!(
+        record_of(&path).feature_prefix_dir,
+        v2_record().feature_prefix_dir
+    );
+    assert_sift_files_resolve(&path);
+    assert!(run(&fixture, false).nothing_to_do());
+}
+
+/// A readable file of a workspace outside the tree that names the root's
+/// images as `../ws/Images/...` keeps the folder it names.
+#[cfg(windows)]
+#[test]
+fn an_outside_file_spelling_the_image_directory_in_another_case_keeps_its_folder() {
+    let fixture = fixture();
+    let outside = fixture._dir.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    write_v2_workspace_file(&outside);
+    let mut recon = reconstruction(&outside, &fixture.old_folder(), v1_record(), false);
+    for (i, image) in recon.image_set.images.iter_mut().enumerate() {
+        image.name = format!("../ws/Images/{}", image_name(i));
+    }
+    recon.metadata.workspace.relative_path = "../../outside".into();
+    let path = fixture.path("sfmr/from-outside.sfmr");
+    recon.save(&path, &Progress::none()).unwrap();
+    assert_eq!(missing_sift(&path), (0, 0));
+    let report = run(&fixture, false);
+    assert!(not_converted(outcome_of(&report, &path)), "{report:?}");
+    assert_eq!(missing_sift(&path), (0, 0), "{report:?}");
+}

@@ -536,6 +536,86 @@ fn image_dir_of(folder: &Path, workspace: &Path, prefix: &str) -> Option<PathBuf
     ))
 }
 
+/// One spelling for each path of the tree, so that two spellings of one
+/// directory or file on disk (`Images` and `images` on a file system that
+/// ignores case, a prefix typed as `Features/...`) are one key.
+///
+/// A path that exists and whose real path ([`std::fs::canonicalize`], which
+/// gives each name as it is on disk) lies in the tree is spelled as the root
+/// was given followed by the real path below the root's real path, which is
+/// how the walk spells the directories and files it lists. Any other path,
+/// one that does not exist or lies outside the tree, keeps its spelling with
+/// `..` resolved by name: a path that does not exist cannot collide with one
+/// that does, and the run deletes nothing outside the tree. Spellings are
+/// cached, since every image name of every file is spelled.
+struct TreePaths<'a> {
+    root: &'a Path,
+    root_canonical: &'a Path,
+    cache: std::cell::RefCell<HashMap<PathBuf, PathBuf>>,
+}
+
+impl<'a> TreePaths<'a> {
+    fn new(root: &'a Path, root_canonical: &'a Path) -> Self {
+        Self {
+            root,
+            root_canonical,
+            cache: Default::default(),
+        }
+    }
+
+    /// The tree's one spelling of `path`.
+    fn spell(&self, path: &Path) -> PathBuf {
+        let lexical = normalized(&lexically_resolved(path));
+        if let Some(spelled) = self.cache.borrow().get(&lexical) {
+            return spelled.clone();
+        }
+        let spelled = match std::fs::canonicalize(&lexical) {
+            Ok(real) => match real.strip_prefix(self.root_canonical) {
+                Ok(below) => normalized(&self.root.join(below)),
+                Err(_) => lexical.clone(),
+            },
+            Err(_) => lexical.clone(),
+        };
+        self.cache.borrow_mut().insert(lexical, spelled.clone());
+        spelled
+    }
+
+    /// Whether `path` lies in the tree: by its real path when it exists, and
+    /// otherwise by its spelling with `..` resolved.
+    fn is_inside(&self, path: &Path) -> bool {
+        match std::fs::canonicalize(path) {
+            Ok(real) => real.starts_with(self.root_canonical),
+            Err(_) => normalized(&lexically_resolved(path))
+                .starts_with(normalized(&lexically_resolved(self.root))),
+        }
+    }
+
+    /// The directory `folder` (spelled by [`spell`](Self::spell)) is in when
+    /// it is `<image_dir>/<prefix>` below `workspace`, the prefix matched by
+    /// what it names on disk rather than by its spelling, or `None` when it
+    /// is not.
+    fn image_dir_of(&self, folder: &Path, workspace: &Path, prefix: &str) -> Option<PathBuf> {
+        let count = Path::new(prefix)
+            .components()
+            .filter(|c| matches!(c, Component::Normal(_)))
+            .count();
+        let relative = folder.strip_prefix(workspace).ok()?;
+        let parts: Vec<_> = relative.components().collect();
+        if count == 0 || parts.len() < count {
+            return None;
+        }
+        let image_dir = normalized(
+            &parts[..parts.len() - count]
+                .iter()
+                .fold(workspace.to_path_buf(), |dir, part| dir.join(part)),
+        );
+        if let Some(found) = image_dir_of(folder, workspace, prefix) {
+            return Some(found);
+        }
+        (self.spell(&image_dir.join(prefix)) == folder).then_some(image_dir)
+    }
+}
+
 /// The real path of `folder` when it lies outside the tree at
 /// `root_canonical`, reached through a link.
 fn outside_tree(folder: &Path, root_canonical: &Path) -> Option<PathBuf> {
@@ -663,7 +743,9 @@ pub(super) fn plan(
     // names when another of its image names leaves the tree's root through
     // `..`: the run does not convert that file, since it does not convert
     // the folders outside the tree it also names.
-    let root_lexical = normalized(&lexically_resolved(root));
+    // Every folder is keyed by the tree's one spelling of it, so that a file
+    // naming `Images/<image>` and the walk finding `images` name one folder.
+    let paths = TreePaths::new(root, root_canonical);
     let mut sift_dirs: BTreeSet<PathBuf> = found.sift_dirs.iter().cloned().collect();
     let mut kept_for: HashMap<PathBuf, String> = HashMap::new();
     let mut file_dirs: Vec<Vec<(PathBuf, PathBuf)>> = Vec::with_capacity(read.len());
@@ -694,11 +776,13 @@ pub(super) fn plan(
         {
             for name in names.iter().flatten() {
                 let image_dir = image_dir_of_name(&workspace, name);
-                if !from_outside && !image_dir.starts_with(&root_lexical) {
+                let parent = Path::new(name).parent().unwrap_or(Path::new(""));
+                if !from_outside && !is_plain_relative(parent) && !paths.is_inside(&image_dir) {
                     outside.get_or_insert(image_dir);
                     continue;
                 }
-                let dir = normalized(&image_dir.join(&record.feature_prefix_dir));
+                let image_dir = paths.spell(&image_dir);
+                let dir = paths.spell(&image_dir.join(&record.feature_prefix_dir));
                 if !dir.is_dir() {
                     continue;
                 }
@@ -791,7 +875,14 @@ pub(super) fn plan(
     let missing =
         |workspace: &Path, names: &[String], hashes: &[[u8; 16]], prefix: &str| -> Option<String> {
             for (name, hash) in names.iter().zip(hashes) {
+                // Spelled as the scan spells it only when the name's spelling
+                // differs from the disk's, which saves a lookup per file.
                 let path = sift_path(workspace, name, prefix);
+                let path = if version_1_hashes.contains_key(&path) || rejected.contains(&path) {
+                    path
+                } else {
+                    paths.spell(&path)
+                };
                 if version_1_hashes.get(&path) == Some(hash) {
                     continue;
                 }
@@ -1012,7 +1103,7 @@ pub(super) fn plan(
             .map(|v| v.iter().map(|(n, d)| (*n, d.to_path_buf())).collect())
             .unwrap_or_default();
         for (workspace, prefix, n) in &named_by_prefix {
-            if let Some(image_dir) = image_dir_of(&dir, workspace, prefix) {
+            if let Some(image_dir) = paths.image_dir_of(&dir, workspace, prefix) {
                 naming.push((*n, image_dir));
             }
         }
@@ -1023,7 +1114,8 @@ pub(super) fn plan(
         let by_workspace = deepest_workspace(&dir).and_then(|i| {
             let old = workspace_records[i].as_ref()?;
             let new = workspace_new[i].as_ref()?;
-            let image_dir = image_dir_of(&dir, &workspaces[i].dir, &old.feature_prefix_dir)?;
+            let image_dir =
+                paths.image_dir_of(&dir, &workspaces[i].dir, &old.feature_prefix_dir)?;
             (naming.is_empty() || naming.iter().any(|(_, d)| *d == image_dir))
                 .then(|| (image_dir, new.clone()))
         });
@@ -1076,7 +1168,7 @@ pub(super) fn plan(
             Some((_, new)) => new,
             None => record_from_sift_files(&dir, &sift_files)?,
         };
-        let new_folder = normalized(&image_dir.join(&target.feature_prefix_dir));
+        let new_folder = paths.spell(&image_dir.join(&target.feature_prefix_dir));
         targets.insert(dir.clone(), target);
         let index = *new_folder_index
             .entry(new_folder.clone())

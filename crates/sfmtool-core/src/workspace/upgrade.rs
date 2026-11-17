@@ -446,7 +446,10 @@ struct NewHashes {
 ///    folders of version 1 `.sift` files
 ///    ([`scan_sift_folder`](crate::features::sift::scan_sift_folder)), and
 ///    attribute each file to the workspace its record resolves to. A `.sift`
-///    file the file system will not give up stops the run.
+///    file the file system will not give up stops the run. Every folder and
+///    file is identified by its real path and spelled as the walk spells
+///    it, so two spellings of one folder (`Images` beside `images` where
+///    the file system ignores case) are one folder.
 /// 2. Map each physical version 1 folder to one new folder and one converted
 ///    record. A version 1 folder is named by a file when it is
 ///    `<image dir>/<feature_prefix_dir>` for one of the file's images, each
@@ -726,7 +729,7 @@ fn finish_notes(report: &mut UpgradeWorkspaceReport, plan: &Plan) {
     } else if any_failed(&report.files) && !report.folders.is_empty() {
         report.notes.push(
             "The version 1 features folders were not deleted, because a file failed; fix the \
-             files listed as failed and run the upgrade again."
+             files listed as failed, or move them out of the tree, then run the upgrade again."
                 .into(),
         );
     }
@@ -734,8 +737,8 @@ fn finish_notes(report: &mut UpgradeWorkspaceReport, plan: &Plan) {
         report.notes.push(
             "The version 1 workspace files were not written, because a file failed: while they \
              are version 1, the next run converts the failed files into the same new folders \
-             as the files this run converted. Fix the files listed as failed and run the \
-             upgrade again."
+             as the files this run converted. Fix the files listed as failed, or move them out \
+             of the tree, then run the upgrade again."
                 .into(),
         );
     }
