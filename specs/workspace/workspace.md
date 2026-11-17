@@ -451,7 +451,7 @@ if you have a specific reason to nest.
 
 A workspace has no mandatory internal structure beyond the `.sfm-workspace.json` file. Images can
 live in any subdirectory. No directory in a workspace holds a cache of files derived from its
-images; a `.sfm-cache/` directory at the root, holding reduced copies of large photographs and
+images; a `.sfm-mipmaps/` directory at the root, holding reduced copies of large photographs and
 a full-resolution copy of those whose originals cannot be read by region, is
 proposed in [out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md).
 A typical workspace looks like this:
