@@ -150,7 +150,8 @@ working on, and drops them all when it moves to the next patch (a fit's
 rounds, a refinement's steps and an evaluation's views of one track share
 them; the next track starts with none). So what it keeps is at most one region
 pyramid per view of one patch, with the margin, 2.25 times the area of the
-region itself.
+region itself, and all of them together are held to one allowance
+(§ "Bounding a render's memory").
 
 ## Bounding a render's memory
 
@@ -176,12 +177,18 @@ bounded by the patch resolution `R`:
 
 So a render samples one of two ways, and both give the same values:
 
-- **Copied regions**, as above, when the boxes of all the levels the render
-  reads, with the reuse margin, total at most four tiles' worth of pixels
-  (4 x 512 x 512 x 3 bytes, 3.1 MB). Sampling a copied region is the fast
-  path: one contiguous image per level, and the AVX2 anisotropic kernel runs
-  on it unchanged.
-- **Tile-addressed sampling** otherwise. The render does not copy a region. It
+- **Copied regions**, as above, while the regions kept for the patch the
+  render belongs to, all its views together and this render's included, with
+  the reuse margin, total at most four tiles' worth of pixels
+  (4 x 512 x 512 x 3 bytes, 3.1 MB). This **allowance** is per patch, not per
+  view: a 151-view evaluation whose regions are 7 KB each keeps all of them,
+  and one whose views are stretched keeps what fits and sends the rest down
+  the tile path. Sampling a copied region is the fast path: one contiguous
+  image per level, and the AVX2 anisotropic kernel runs on it unchanged.
+- **Tile-addressed sampling** otherwise, for a render whose regions would
+  take the patch past its allowance. It keeps nothing for reuse: its pinned
+  tiles are released when it ends, and the next render of the same view
+  computes its regions again. The render does not copy a region. It
   reads each sample's taps from the photograph tile that holds them: the tap
   pair `floor(x − 0.5)` and `floor(x − 0.5) + 1` (clamped to the level) always
   lies within one tile's core and its one-pixel border, so the tile is the one
@@ -191,15 +198,28 @@ So a render samples one of two ways, and both give the same values:
   sampler, so every value is bit-identical. The render keeps at most 16 tiles
   pinned (12.7 MB), least recently used out, and fetches any other through
   the cache (`get_tile`, a lookup when the tile is cached and a decode of a few
-  milliseconds when not). This path runs the scalar sampler, which the AVX2
-  kernel already equals bit for bit (`remap/aniso_avx2.rs`), with a tile
-  lookup only when consecutive samples change tile.
+  milliseconds when not). For the samplers of `remap.rs` this path runs the
+  scalar per-pixel code, which the AVX2 kernel already equals bit for bit
+  (`remap/aniso_avx2.rs`), with a tile lookup only when consecutive samples
+  change tile. The cluster refinement's grid samplers, `sample_grid_window`
+  and `build_template` in
+  [cluster_refine.rs](../../crates/sfmtool-core/src/patch/cluster_refine.rs),
+  and the view selection's affine fast path in
+  [view_selection.rs](../../crates/sfmtool-core/src/patch/view_selection.rs)
+  are their own arithmetic (in `f64` for the cluster grids), not those
+  samplers, so each gets a tile-addressed version of its own that reads its
+  taps through the same tile lookup and keeps its own arithmetic, so its
+  values are unchanged.
 
-The worst case of one render is then 3.1 MB of copied regions or 12.7 MB of
-pinned tiles, whatever the view; 32 renders in flight hold at most about
-500 MB on top of the tile budget, and the common case, a footprint that is not
-stretched, stays at a few kilobytes. No view is refused and no result changes:
-which path a render takes depends only on its boxes, and both read the same
+A kernel works on one patch per worker thread and a worker runs one render
+at a time, so the **workers in flight** are the rayon pool's threads, 32 on
+the development machine. The worst case of one worker is its patch's
+allowance, 3.1 MB of copied regions, plus the 16 tiles pinned by the render
+it is running, 12.7 MB: 15.8 MB, whatever the views or the number of them.
+32 workers hold at most 32 x 15.8 MB, about 510 MB, on top of the tile
+budget; the common case, footprints that are not stretched, stays at a few
+kilobytes per view. No view is refused and no result changes:
+which path a render takes depends on its boxes and on what its patch already keeps, and both read the same
 pixels. `clipped_share` already walks tiles one at a time (above). The cap of
 four tiles and the window of 16 are open question 4.
 
@@ -222,9 +242,9 @@ requesting the missing ones. The GUI thread never decodes and never waits.
   measurements.
 - **Bulk kernels** (the display patch bitmaps at open, *Refine all normals*,
   the web export) touch every photograph at the levels their patches need.
-  What they hold is the region pyramids of the renders in flight (one per
-  worker thread, a few kilobytes each, at most 3.1 MB copied or 12.7 MB of
-  pinned tiles each, § "Bounding a render's memory") plus the tile cache, which its budget
+  What they hold is the regions of the patches in progress, one per worker
+  thread, a few kilobytes each and at most 3.1 MB copied plus 12.7 MB of
+  pinned tiles each (§ "Bounding a render's memory"), plus the tile cache, which its budget
   bounds whatever the number of photographs; the tiles they touch can be many
   more (level 2 of one 200-megapixel photograph is 48 tiles, 38 MB; level 0
   is 768 tiles, 607 MB), and the ones past the budget are decoded again when
@@ -251,15 +271,22 @@ source.
 1. **Regions in the pyramid and the samplers**: `PyramidLevel`,
    `ImageU8Pyramid::from_regions`, the origin subtraction in every sampler and
    gradient sampler (the AVX2 anisotropic kernel included), the
-   tile-addressed path with its window of pinned tiles, the choice between
-   them by the region cap, and `required_regions` for each sampler. Tests: for
+   tile-addressed path with its window of pinned tiles for the `remap.rs`
+   samplers and tile-addressed versions of `sample_grid_window`,
+   `build_template` and the view selection's affine fast path, the per-patch
+   allowance that chooses between the paths, and `required_regions` for each
+   sampler. Tests: for
    random warps over a synthetic photograph, every sampler, every value and
    gradient render through a region pyramid built from `required_regions`, and
    through the tile-addressed path with a tile of 32 px, is bit-identical to
    the whole-pyramid render, including maps that run off every edge of the
    image, NaN texels, views shrunk past the top level, a footprint stretched
    100 times on a diagonal and a `Bilinear` render over a large footprint
-   (which take the tile path); the tile path pins no more than its window; a
+   (which take the tile path); the cluster grid samplers and the affine fast
+   path through tiles equal their whole-level results on stretched maps; a
+   patch whose views together exceed the allowance keeps no more than 3.1 MB,
+   the views past it taking the tile path; the tile path pins no more than its
+   window; a
    region one pixel smaller on an inner edge makes the comparison fail, so
    the test can fail.
 2. **`view_region_pyramid` in the cache**, with the reuse margin, and
@@ -295,9 +322,9 @@ source.
 3. **The point order of bulk kernels.** Grouped by reference image and
    position (as designed), or by tile. Recommendation: by reference image and
    position, which needs no knowledge of the tile grid in the kernel.
-4. **The region cap and the tile window.** Four tiles of copied regions per
-   render and 16 pinned tiles for the tile path (as designed), or other
-   values. Recommendation: keep them, and count in each kernel's phase note
+4. **The allowance and the tile window.** Four tiles of copied regions per
+   patch, all views together, and 16 pinned tiles for the tile path (as
+   designed), or other values. Recommendation: keep them, and count in each kernel's phase note
    how many renders took the tile path, so the cap is tuned on real captures;
    the values change memory and speed, never a result.
 5. **An interface for kernels.** Designed as a `PhotographSource` enum in

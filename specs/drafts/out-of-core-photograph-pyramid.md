@@ -6,8 +6,13 @@ Decided by the user, and followed here: full resolution is never stored again
 for an original that can be read by region (a JPEG whose restart markers allow
 it, § "Which originals can be read by region"), whose level 0 is the original
 file itself; for every other out-of-core photograph, full resolution is stored
-once as a tiled re-encode, `<base>-mipmap1.jpg`, and every reader reads level 0
-from that file instead of the original; the reduced levels of
+once as a tiled re-encode, `<base>-mipmap1.jpg`, and every pyramid reader (the
+display and every kernel) reads level 0 from that file instead of the
+original, while the readers that decode a whole original and read no pyramid
+(SIFT extraction, the image readings at save, `read_image_rgb` and the
+commands built on it) keep reading the original (§ "What still decodes an
+original whole"; a departure listed in § "Problems found with the
+decisions"); the reduced levels of
 a large photograph are JPEG files in `.sfm-cache/` at the workspace root, one
 file per level, in directories that mirror the workspace; once a photograph has
 these files every reader, the display and the patch kernels alike, reads its
@@ -886,13 +891,20 @@ to 4 s and about 1 GB at 200 MP; a rayon worker that waited that long would
 take a thread from the tile decodes, layout requests and background level
 that the panels send to the same pool. So:
 
-- `get_many`, on the calling thread and before its parallel loop, resolves
+- `get_many` on a thread that is not a rayon worker, before its parallel loop, resolves
   every path's layout (a header read, and the coarsest record's check), calls
   `prioritize` for every out-of-core path whose set is not current, and waits
   for those builds there, counting them in its phase (*waiting for image
   levels: 2 of 3*). Only then does it run its `par_iter`, whose items are
   decodes of in-core photographs and the making of tiled sources from current
   files, none of which waits on a build.
+- `get_many` on a rayon worker does not wait either: when any of its paths is
+  an out-of-core photograph whose set is not current, it calls `prioritize`
+  for each of them and returns `Err(GetManyError::Building { paths })`
+  naming them, reading nothing. Its callers today (`ViewSources::fetch` in
+  `state/edits.rs`, `render_patch_bitmap_column` in `display_bitmaps.rs`) run
+  on job threads, not rayon workers, so they never see it; a caller on a
+  rayon worker gets a clear error instead of a worker blocked for seconds.
 - `get` on a rayon worker (`rayon::current_thread_index()` is `Some`) for an
   out-of-core photograph whose set is not current returns
   `Err(GetError::Building)` rather than waiting, and
@@ -901,7 +913,15 @@ that the panels send to the same pool. So:
   its photographs with `get_many` before the loop. `get` on any other thread
   waits.
 - `get_tile`, `view_region_pyramid` and `get_level` never wait on a build: a
-  photograph whose files are not current answers `TileError::Building`.
+  photograph whose files are not current answers `TileError::Building`. A
+  kernel that gets it mid-run (its files went stale after its read phase
+  found them current: another process rebuilt them at another quality, or the
+  original changed) fails as for `TileError::Changed` below, with the error
+  *The image levels of images/IMG_0001.JPG went out of date while Refine all
+  normals ran; run it again*, and the set is queued to be made again. It does
+  not wait for the rebuild inside its renders, since that would be the wait on
+  a rayon worker this section rules out, and it does not go on with levels of
+  two versions.
 - The other paths that read photographs on the rayon pool have no build to
   wait for: the panels' layout requests read a header and a record; tile
   decodes read current files; the 3D background's `get_level` assembles tiles
@@ -983,18 +1003,22 @@ and 2.25 times that when it is kept for reuse with its margin (a quarter of
 the region on every side). A stretched footprint, a grazing view, or the
 `Bilinear` sampler reading level 0 over a large footprint, can make one
 render's bounding box far larger; the companion draft bounds that with a
-second sampling path (§ "Bounding a render's memory" there): no render holds
-more than 3.1 MB of copied regions and 16 pinned tiles (12.7 MB), so 32
-renders in flight hold at most about 500 MB on top of the tile budget in the
-worst case, and a few hundred kilobytes in the common one (estimates from the
-sizes).
+second sampling path and one allowance for everything kept for reuse
+(§ "Bounding a render's memory" there). A kernel works on one patch per
+worker thread, and a rayon worker runs one render at a time, so the workers
+in flight are the rayon pool's threads, 32 on the development machine. Each
+holds at most 3.1 MB of copied regions for its patch, all views together,
+and 16 pinned tiles (12.7 MB) for the render it is running, 15.8 MB; 32 of
+them hold at most about 510 MB on top of the tile budget, whatever the number
+of views or photographs, and a few hundred kilobytes in the common case
+(estimates from the sizes).
 
 | Case | Today (whole pyramids) | This design |
 |------|------------------------|-------------|
-| 17 x 200 MP, *Find matches by geometry* over the views the cull keeps (up to 151), `R = 24` | up to every photograph, 12.6 GiB for all 17 | up to 151 x 2.9 KB x 2.25 = 1.0 MB of regions kept for reuse, plus at most the tile budget (4 GiB at 64 GB of memory, 512 MiB at 8 GB) |
+| 17 x 200 MP, *Find matches by geometry* over the views the cull keeps (up to 151), `R = 24` | up to every photograph, 12.6 GiB for all 17 | up to 151 x 2.9 KB x 2.25 = 1.0 MB of regions kept for reuse (under the 3.1 MB allowance), plus at most the tile budget (4 GiB at 64 GB of memory, 512 MiB at 8 GB) |
 | 17 x 200 MP, display patch bitmaps at open, one render per point | 12.6 GiB | 32 renders in flight x 2.9 KB, plus the tile budget |
 | 500 x 200 MP, any of the above | 372 GiB; fails | the same as for 17: regions plus the tile budget |
-| Any of the above, worst case (every render in flight on a grazing view) | — | about 500 MB of copied regions and pinned tiles on top of the tile budget |
+| Any of the above, worst case (every one of 32 workers at its allowance and on a grazing view) | — | 32 x (3.1 MB + 12.7 MB), about 510 MB of copied regions and pinned tiles on top of the tile budget |
 | 500 x 6000 x 4000, any of the above | 500 x 96 MB = 48 GB | the same |
 | 17 x 200 MP, Track View on a 17-image track at `R = 64` | 12.6 GiB | 17 x 17 KB x 2.25 of regions, plus the tiles they are cut from, one to four per level read and one or two levels per view, 13 to 108 MB |
 | 368 x 3840 x 2160 (in core) | 12.2 GB held by a `get_many` over every frame | unchanged: in-core photographs keep whole pyramids |
@@ -1402,8 +1426,10 @@ impl PhotographCache {
     /// `GetError::Building` instead.
     pub fn get(&self, path: &Path, progress: &Progress<'_>) -> Result<PhotographSource, GetError>;
     pub fn level_builder(&self) -> &LevelBuilder;
+    /// Waits for missing sets on the calling thread before reading; on a
+    /// rayon worker answers `GetManyError::Building` instead of waiting.
     pub fn get_many(&self, paths: &[&Path], progress: &Progress<'_>)
-        -> Result<(Vec<Option<PhotographSource>>, GetManyTally), Cancelled>;
+        -> Result<(Vec<Option<PhotographSource>>, GetManyTally), GetManyError>;
     // peek and peek_state answer `PhotographSource` too; insert, forget, clear, stats as today
 
     pub fn layout(&self, path: &Path) -> PeekedLayout;
@@ -1435,6 +1461,7 @@ pub struct PhotographTile {
 // `PeekedLayout` and `PeekedTile` as in § "The caches in memory".
 pub enum TileError { Building, Changed { path: PathBuf }, Unreadable(String), Cancelled }
 pub enum GetError { Building, Unreadable(String), Workspace(WorkspaceConfigError), Cancelled }
+pub enum GetManyError { Building { paths: Vec<PathBuf> }, Cancelled }
 ```
 
 `DISPLAY_PYRAMID_LEVELS` and the viewer's `state::PYRAMID_LEVELS` are removed.
@@ -1540,7 +1567,7 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    each rule of the region test refuses a file made to break it alone.
 7. **View-region pyramids** ([view-region-pyramid.md](view-region-pyramid.md)
    steps 1 and 2): regions in `ImageU8Pyramid` and every sampler, the
-   tile-addressed sampling path for regions over the cap, `required_regions`,
+   tile-addressed sampling path for renders past the per-patch allowance, `required_regions`,
    `PhotographSource`, `clipped_share` over tiles, the grey reads by region,
    and the assembly from tiles, exercised on in-core photographs cut into
    tiles in memory. No reader changes yet. Tests: the companion draft's
@@ -1555,9 +1582,13 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    photograph with no mipmaps waits for them; a `get` on a rayon worker
    answers `Building` and does not wait; a `get_many` over 20 out-of-core
    photographs holds no pyramid (the cache's stats show only tiles, within a
-   small tile budget) and waits for its builds before its parallel loop; no
+   small tile budget) and waits for its builds before its parallel loop; a
+   `get_many` on a rayon worker with a missing set returns
+   `GetManyError::Building` naming it, reads nothing and does not wait; no
    GUI-thread reader requests a tile while its photograph is `Building`; a file
-   replaced by one with another record during a read fails with `Changed`.
+   replaced by one with another record during a read fails with `Changed`, and
+   one made stale during a kernel fails it with the named error rather than
+   waiting.
 9. **Track View and the Track Table** on view-region pyramids, peeking tiles
    (companion step 3).
 10. **The bench's jobs and the reference picks** (companion step 4).
@@ -1734,6 +1765,17 @@ ranges in this draft are over those runs.
   decode and encode per photograph; the setting is meant to be chosen once.
   A change of the threshold moves photographs between tiers, which changes
   their results; their files are made or left as orphans, not rewritten.
+- **Not every reader reads level 0 from `-mipmap1`.** Decisions 2 and 3 say
+  every reader reads the stored levels once they exist. The pyramid readers
+  do; the readers that decode a whole original and build no pyramid do not:
+  SIFT extraction, the image readings at save, and `read_image_rgb` with the
+  commands built on it (`undistort`, `to-nerfstudio`, the flow loader, the
+  drawing commands, `xform --add-thumbnails`) read the original, as today.
+  They run before the files exist or store what they compute from the exact
+  pixels, and making them read a lossy copy would change the features and
+  readings every reconstruction is built from. For an original that is not
+  region-readable, SIFT's level 0 and the kernels' therefore differ by 0.07 to
+  0.09 grey levels on the user's JPEGs (open question 11).
 - **Waiting for builds on the rayon pool would starve the panels.** `get_many`
   reads its misses in a parallel loop today; the design moves every wait for a
   build to the calling thread, before that loop, and a `get` on a rayon worker
