@@ -328,7 +328,10 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 - **Display thumbnails and the 3D view's background image** keep their own
   decodes. The first make small images once per open; the second is a GPU
   texture the renderer caches.
-- **No cache on disk.** Pyramids are rebuilt from the JPEGs in each session.
+- **No cache on disk.** Pyramids are rebuilt from the JPEGs in each session,
+  and every pyramid is held whole. Stored reduced levels and photograph tiles
+  for large photographs are proposed in
+  [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md).
 - **The budget is set only by the environment variable**, not in the viewer's
   UI.
 

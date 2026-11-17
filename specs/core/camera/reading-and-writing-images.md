@@ -224,6 +224,10 @@ since OpenCV draws a tuple in whatever channel order the array has.
   to encode (1.6 s against 6.0 s).
   The images sfmtool writes as PNG are overlays and montages that are read
   once, so encode time matters more than the last few percent of size.
+- **Reduced copies.** Nothing here stores a reduced copy of a photograph. A
+  JPEG writer and reader for the reduced levels of large photographs, with
+  restart markers so that a file can be read a tile at a time, are proposed in
+  [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md).
 
 ## Code that reads images
 
