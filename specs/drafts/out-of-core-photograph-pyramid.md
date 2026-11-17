@@ -6,7 +6,7 @@ Decided by the user, and followed here: full resolution is never stored again
 for an original that can be read by region (a JPEG whose restart markers allow
 it, § "Which originals can be read by region"), whose level 0 is the original
 file itself; for every other out-of-core photograph, full resolution is stored
-once as a tiled re-encode, `<base>-mipmap1.jpg`, and every pyramid reader (the
+once as a tiled re-encode, `<file name>-mipmap1.jpg`, and every pyramid reader (the
 display and every kernel) reads level 0 from that file instead of the
 original, while the readers that decode a whole original and read no pyramid
 (SIFT extraction, the image readings at save, `read_image_rgb` and the
@@ -116,7 +116,7 @@ These are proposed for [GLOSSARY.md](../GLOSSARY.md), each with its reason.
 
 | Word | Means | Not | Why |
 |------|-------|-----|-----|
-| **mipmap** | one JPEG file holding one level of a photograph's pyramid, `<base>-mipmap<f>.jpg` under `.sfm-cache/`, where `f = 2^level` is the factor the level is reduced by: `-mipmap2` and coarser for the reduced levels, and `-mipmap1` for level 0 of a photograph whose original cannot be read by region; `sfmtool_core::camera::mipmap` | `level file`, `cache file`, `thumbnail`, `pyramid file` | the word the user chose for the files, and the suffix the file names carry; it is the graphics word for a stored copy of a level at a power-of-two factor, and factor 1 is the unreduced level. *Level* alone is the in-memory level, which for a small photograph has no file |
+| **mipmap** | one JPEG file holding one level of a photograph's pyramid, `<file name>-mipmap<f>.jpg` under `.sfm-cache/` (`IMG_0001.JPG-mipmap2.jpg`), where `f = 2^level` is the factor the level is reduced by: `-mipmap2` and coarser for the reduced levels, and `-mipmap1` for level 0 of a photograph whose original cannot be read by region; `sfmtool_core::camera::mipmap` | `level file`, `cache file`, `thumbnail`, `pyramid file` | the word the user chose for the files, and the suffix the file names carry; it is the graphics word for a stored copy of a level at a power-of-two factor, and factor 1 is the unreduced level. *Level* alone is the in-memory level, which for a small photograph has no file |
 | **region-readable** (an original) | an original JPEG whose layout passes the test in § "Which originals can be read by region", so a rectangle of it decodes to exactly the pixels of the whole decode; its level 0 is the original, and it has no `-mipmap1` | `tiled`, `seekable`, `RST-capable` | names what the test decides, that a region can be read, rather than one ingredient of it |
 | **cache directory** | `.sfm-cache/` at a workspace's root, holding files derived from the workspace's images that can be deleted at any time and rebuilt; today only mipmaps | `cache folder`, `.cache` | it names what is in it (files that are a cache) and where (the workspace's); a name without `sfm` would collide with other tools' caches |
 | **out-of-core photograph** / **in-core photograph** | a photograph of a workspace whose file has `mipmap_options`, with a width or height over that object's `out_of_core_long_side` (4096 as `sfm ws init` writes it), is out of core (with one exception, § "Which photographs are out of core"): its reduced levels come from mipmaps, its level 0 from the original or a `-mipmap1`, and every reader reads it a region at a time; any other photograph is in core: its whole pyramid is built in memory from one decode, as every pyramid is today | `large image`, `tiled image`, `big photograph` | the tier decides where the levels live, which is what *core* means here; *large* says nothing about what is done differently, and every photograph is shown in tiles |
@@ -315,41 +315,38 @@ photograph's **relative path** is its path relative to that root. The mipmap of
 level `l` is
 
 ```
-<root>/.sfm-cache/<parent of relative path>/<base>-mipmap<2^l>.jpg
+<root>/.sfm-cache/<parent of relative path>/<file name>-mipmap<2^l>.jpg
 ```
 
 for example `<ws>/images/IMG_0001.JPG` has
-`<ws>/.sfm-cache/images/IMG_0001-mipmap2.jpg` to
-`<ws>/.sfm-cache/images/IMG_0001-mipmap32.jpg`. The parts:
+`<ws>/.sfm-cache/images/IMG_0001.JPG-mipmap2.jpg` to
+`<ws>/.sfm-cache/images/IMG_0001.JPG-mipmap32.jpg`, and a `-mipmap1.jpg` when
+it needs one. The user has decided this rule (open question 1). It is the rule
+a `.sift` file's name follows (`sift_path_for_image` in
+[sift/files.rs](../../crates/sfmtool-core/src/features/sift/files.rs) appends
+`.sift` to `image_path.file_name()`, so `IMG_0001.JPG` has
+`IMG_0001.JPG.sift`). The parts:
 
-- **`<base>`** is the file name without its last extension, as Rust's
-  `Path::file_stem` gives it, kept in its own case: `a.b.png` gives `a.b`,
-  `IMG_0001.JPG` gives `IMG_0001`, a name with no extension keeps the whole
-  name, and a name that starts with a dot and has no other (`.x`) keeps `.x`.
-- **The extension is always `.jpg`**, in lower case, whatever the original's
-  format.
+- **`<file name>`** is the original's whole file name, extension included, as
+  `Path::file_name` gives it and in its own case, as for a `.sift`:
+  `IMG_0001.JPG`, `a.b.png`, `README` for a name with no extension.
+- **The suffix** is `-mipmap<2^l>.jpg`, in lower case, whatever the
+  original's format.
 - **The directory parts are the relative path's own**, in their own case, with
   `/` between them.
 
-That name is not one-to-one: `x.jpg` and `x.png` in one directory, or `x.jpg`
-and `x.jpeg`, have the same `<base>`. Every mipmap therefore records the
-relative path of the photograph it was made from (below), and a reader that
-finds a mipmap recording another photograph does not use it. A photograph
-whose first-form name is taken that way uses the **second form**,
-`<file name>-mipmap<2^l>.jpg`, its whole file name with its extension
-(`x.png-mipmap2.jpg`). If the second form is taken too (a photograph named
-`x.png.jpg` beside `x.png`), the photograph gets no files and is read through
-the in-memory equivalent (below), with a warning naming both photographs.
-Which of two colliding photographs takes the first form depends on which was
-built first, which is why the record and not the name is what a reader trusts.
-The open questions ask whether to use the second form for every photograph.
-
-On a case-insensitive file system two relative paths that differ only in case
-are one file, so they cannot both exist, and their mipmaps cannot either. A
-workspace made on a case-sensitive file system with `X.jpg` and `x.jpg` and
-copied to a case-insensitive one collides in the cache directory; the records
-catch it and the two photographs fall to the second form and, colliding again,
-to the in-memory equivalent.
+Two photographs in one directory have different file names, so their mipmaps
+have different names: the rule is one-to-one, and `x.jpg` beside `x.png` gives
+`x.jpg-mipmap2.jpg` and `x.png-mipmap2.jpg`. A photograph's name with the
+suffix cannot equal another photograph's name with it either, since the suffix
+fixes where the original's name ends. Every mipmap still records the relative
+path of the photograph it was made from (below), and a reader that finds a
+mipmap recording another photograph treats it as stale; with this rule that
+happens only through a case-insensitive file system: a workspace made on a
+case-sensitive one with `X.jpg` and `x.jpg` and copied to a case-insensitive
+one has one cache file for the two, as it has one `.sift` for them and one
+file for the two originals, so the case cannot arise there between photographs
+that both exist.
 
 A photograph gets no files, and is read through the in-memory equivalent, when
 its workspace's mipmaps cannot be put in the cache directory: when its relative path has a `..`
@@ -397,10 +394,12 @@ does (the error is not monotonic in quality, since 95's tables fall near the
 original's). The third column crops the decode by one pixel, so the blocks no
 longer line up; it stands in for a source that has never been a JPEG (PNG,
 TIFF), where `-mipmap1` is the first loss. There 98 halves the error of 95
-(0.19 against 0.32) for 41% more bytes. `sfm ws init` writes 95 for both keys: it is
-the best quality measured for JPEG originals, and a workspace of PNG or TIFF
-photographs that wants the lower error sets `full_resolution_jpeg_quality` to
-98 (open question 3). The reduced levels keep their own key because their
+(0.19 against 0.32) for 41% more bytes. The user has decided that
+`sfm ws init` writes 95 for both keys, the best quality measured for JPEG
+originals, and that no quality depends on the original's format (open
+question 3); a workspace of PNG or TIFF photographs that wants the lower
+error edits its `full_resolution_jpeg_quality` to 98 itself. The reduced
+levels keep their own key because their
 trade-off differs: they are box-filtered, never on the original's grid, and
 small.
 
@@ -646,8 +645,7 @@ to 2.1 s, and 33 to 43 MB of encoded bytes held until written.
 ### The in-memory equivalent
 
 When a photograph's mipmaps cannot be written (a `..` in the
-relative path, a collision of both name forms, a read-only cache directory, a
-full disk), a reader still needs the pixels the files would hold, at the
+relative path, a read-only cache directory, a full disk), a reader still needs the pixels the files would hold, at the
 qualities the workspace sets, because the
 kernels must not read the exact box-filtered levels for one photograph and the
 JPEG ones for another. It makes the same files in memory instead: steps 1 to 3
@@ -1164,18 +1162,21 @@ tiles and do not count against it.
 
 - **`sfm sift --extract`** makes them for every out-of-core photograph it
   reads, after the `.sift`, so a solve's workspace has them before the viewer
-  opens it. The Rust `build_sift_file` in
-  [sift/files.rs](../../crates/sfmtool-core/src/features/sift/files.rs) (the
-  viewer's *Build SIFT files* and `pick-images`) makes them from the decode it
-  already holds, adding only the reduction and the encodes (about 0.8 s for this
-  photograph, estimated from the parts above, plus 1.4 to 2.1 s when it needs a
-  `-mipmap1`). The Python extractors (`sfmtool` and OpenCV backends decode with
-  `read_image_rgb`; COLMAP decodes inside COLMAP) call
-  `PhotographCache.build_mipmaps` (§ "Python bindings") for each photograph
-  after the `.sift` is written, on one cache the extraction run holds, so its
-  worker threads share one build count; the call decodes the photograph again
-  (0.8 to 1.7 s). Open question 4 asks whether that call should take the
-  decoded array instead.
+  opens it. `sfm sift` runs the Python extractors (`sfmtool` and OpenCV
+  backends decode with `read_image_rgb`; COLMAP decodes inside COLMAP), and
+  the user has decided that the SIFT path and the mipmap build stay separate
+  (open question 4): after each `.sift` is written, the extractor calls
+  `PhotographCache.build_mipmaps` (§ "Python bindings") for the photograph,
+  on one cache the extraction run holds, so its worker threads share one
+  build count, and that call decodes the photograph itself. So on the command
+  line the mipmaps cost a second decode (0.8 to 1.7 s at 200 MP) besides the
+  reduction and the encodes (about 0.8 s, plus 1.4 to 2.1 s for a
+  `-mipmap1`, estimated from the parts above). Only the Rust `build_sift_file`
+  in [sift/files.rs](../../crates/sfmtool-core/src/features/sift/files.rs),
+  behind the viewer's *Build SIFT files* and `pick-images`, makes them from
+  the decode it already holds, passing it as `build_mipmaps`'s `decoded`
+  argument, since there the decode is in Rust and handing it over is a
+  borrow, not a binding's array.
 - **`sfm ws mipmaps PATHS…`** makes them explicitly for the photographs under
   the paths (skipping in-core ones and current sets), with `--prune` to delete
   orphans and `--check` to report stale sets without writing. It is the way to
@@ -1468,7 +1469,7 @@ pub fn region_layout(bytes: &[u8]) -> Result<RegionLayout, NotRegionReadable>;
 /// Where a photograph's mipmaps are, or why it has none.
 pub enum MipmapLocation {
     Files { root: PathBuf, relative: String, paths: Vec<PathBuf> },
-    InMemory(NoFilesReason), // `..`, both name forms taken, cache directory not writable
+    InMemory(NoFilesReason), // `..`, cache directory not writable
 }
 pub fn mipmap_location(photograph: &Path, layout: &PyramidLayout, level0_file: bool) -> MipmapLocation;
 
@@ -1736,8 +1737,8 @@ class PhotographCache:
     def read_tile(self, path, level: int, col: int, row: int, *, progress=None) -> np.ndarray: ...
     def read_region(self, path, level: int, x0: int, y0: int, x1: int, y1: int,
                     *, progress=None) -> np.ndarray: ...
-    def build_mipmaps(self, paths, *, progress=None) -> BuildMipmapsReport: ...
-    def stats(self) -> PhotographCacheStats: ...
+    def build_mipmaps(self, paths, *, progress=None) -> dict: ...
+    def stats(self) -> dict: ...
 ```
 
 - **`PhotographCache(budget_bytes=None, tile_budget_bytes=None,
@@ -1776,17 +1777,23 @@ class PhotographCache:
   `get_many`, so a set already made in this cache, or by another cache or
   process, is
   read rather than made again, and the build budget and its reservations
-  apply. It returns a `BuildMipmapsReport` with the paths made, already
-  current, in core, and failed with their messages. **It is the one way to
+  apply. It returns a dict, as the bindings' other reports are dicts
+  (`write_web_export`'s, `pick_images`' through `serde_to_py`, the bench's),
+  with the keys `made`, `current` and `in_core` (lists of the paths in each
+  case, as given) and `failed` (a list of `(path, message)` pairs). **It is the one way to
   build mipmaps from Python**: the free function `sfmtool.workspace.build_mipmaps`
   of earlier revisions of this draft is dropped. `sfm ws mipmaps` makes a
   `PhotographCache()` and calls it; the Python SIFT extractors call it after
   each `.sift` is written, on one cache the extraction run holds (§ "Who
   makes the mipmaps, and when").
-- **`stats()`** returns a frozen `PhotographCacheStats`: the pyramid entries,
-  bytes, budget, hits and misses of today's `stats`, and the tile entries,
-  tile bytes, tile budget, tile hits and misses, the bytes reserved for
-  builds, and the sets made by this cache.
+- **`stats()`** returns a dict, as reports are, with the keys `entries`,
+  `bytes`, `budget_bytes`, `hits` and `misses` (today's `stats`, for the
+  pyramids), `tile_entries`, `tile_bytes`, `tile_budget_bytes`, `tile_hits`
+  and `tile_misses`, `build_budget_bytes` and `build_reserved_bytes` (the
+  cache's build count), and `sets_made`. `PhotographLayout` stays a frozen
+  class: it is a value describing one photograph that a caller passes around
+  and reads fields of, as `ImagePyramidSet` is, where a report or a set of
+  statistics is a snapshot printed or logged once.
 - **Errors raise, never panic.** A missing file raises `FileNotFoundError`
   and an unreadable one `OSError`, as `read_image_rgb` does; a level, tile or
   rectangle outside the photograph or an empty rectangle
@@ -1884,9 +1891,9 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    `MipmapFile::open` and `decode`, the staleness test, the writers' rules,
    `.gitignore` and `CACHEDIR.TAG`. Tests on 300 x 200 synthetic photographs
    in a temporary workspace whose `mipmap_options` sets a threshold of 64,
-   with a tile of 32: the name for `a.b.png`, a name with no extension,
-   `x.jpg` beside `x.png` (second form), both forms taken (in memory), a `..`
-   name (in memory); a workspace without the object and a photograph with no
+   with a tile of 32: the names for `IMG_0001.JPG` (`IMG_0001.JPG-mipmap2.jpg`,
+   case kept), `a.b.png` and a name with no extension, the names of `x.jpg`
+   beside `x.png` differing, a `..` name (in memory); a workspace without the object and a photograph with no
    workspace are in core and write nothing; two builds give the same bytes; a
    region-readable JPEG gets no `-mipmap1` and a PNG, a progressive JPEG, a
    JPEG without `DRI` and one with an interval wider than 1024 px do; each
@@ -2017,39 +2024,24 @@ ranges in this draft are over those runs.
 
 ## Open questions
 
-1. **The name of a mipmap.** The decided rule (`<base>-mipmap2.jpg`) needs the
-   collision handling above for `x.jpg` beside `x.png`. Options: (a) keep it,
-   with the second form on collision, as designed; (b) always use the whole
-   file name, `IMG_0001.JPG-mipmap2.jpg`, which cannot collide and matches how
-   a `.sift` is named (`IMG_0001.JPG.sift`). Recommendation: (b), because a
-   name that is one-to-one removes a rule, a fallback and an order dependence,
-   at the cost of a doubled extension in the name.
-2. **The threshold's value and the other constants.** Decided: the threshold
-   is the workspace's `out_of_core_long_side`, and the tile size and the
-   restart interval stay constants, because neither changes a pixel any reader
-   gets. Open: the value `sfm ws init` writes. Options: 4096 (as designed),
-   8192 (only photographs no texture can hold), a pixel count, or 1 (every
-   photograph). Recommendation: 4096, for the reasons in § "Which photographs
-   are out of core"; 1 would make every small capture pay an encode and read
-   its kernels from lossy levels with nothing to gain.
-3. **Qualities.** `sfm ws init` writes 95 for both. Options for
-   `full_resolution_jpeg_quality`: 95 (as designed: 33 to 43 MB and 0.07 to
-   0.09 grey levels for the user's JPEGs, the best of the qualities measured
-   for JPEG originals; 0.32 for the non-JPEG proxy), 98 (42 to 56 MB, 0.07 to
-   0.10 for JPEGs, 0.19 for the proxy), or a default that depends on whether
-   the original is a JPEG. Recommendation: 95 for both, with the measurements
-   in the setting's documentation so a workspace of PNG or TIFF photographs
-   chooses 98; a default that depends on the original's format would be a
-   second rule the record must carry, for a case the setting already covers.
-   For `jpeg_quality`, 95 (15.2 MB, 0.49) against 90 (10.2 MB, 0.73): 95.
-4. **Should the Python SIFT path hand its decode to the mipmap binding?** It
-   saves one decode per out-of-core photograph (0.8 to 1.7 s) but the binding
-   must then trust that the array is the decode of that file. Recommendation:
-   decode again; the extraction dominates, and a binding that reads by path
-   cannot be handed the wrong pixels.
-5. **The command's name.** `sfm ws mipmaps` (as designed), a top-level
-   `sfm mipmaps`, or no command and only `sfm sift` and the viewer.
-   Recommendation: `sfm ws mipmaps`, since the files belong to the workspace.
+1. **The name of a mipmap.** *Decided by the user:* the whole original file
+   name followed by the suffix, `IMG_0001.JPG-mipmap2.jpg`, as a `.sift` is
+   named (`IMG_0001.JPG.sift`). It cannot collide, so there is no second
+   name form.
+2. **The threshold's value and the other constants.** *Decided by the
+   user:* `sfm ws init` writes `out_of_core_long_side` 4096. The tile size
+   and the restart interval stay constants.
+3. **Qualities.** *Decided by the user:* `sfm ws init` writes 95 for both
+   `jpeg_quality` and `full_resolution_jpeg_quality`, with no rule that
+   depends on the original's format; a workspace changes them by editing its
+   object.
+4. **The Python SIFT path and the mipmap build.** *Decided by the user:* they
+   stay separate. The mipmap build decodes the file itself rather than being
+   handed the array SIFT decoded, which is simpler and cannot be handed the
+   wrong pixels, at the cost of a second decode per out-of-core photograph
+   (0.8 to 1.7 s at 200 MP).
+5. **The command's name.** *Decided by the user:* `sfm ws mipmaps`, since the
+   files belong to the workspace.
 6. **The build budget and cancellation.** Builds started by independent
    callers are bounded by reservations made at decision time on a
    non-blocking count against a quarter of physical memory, each caller still
@@ -2122,8 +2114,9 @@ ranges in this draft are over those runs.
 
 ## Problems found with the decisions
 
-- **The decided name is not one-to-one** (open question 1). Designed around
-  with a record in every file and a second name form.
+- **The first decided name was not one-to-one** (`<stem>-mipmap2.jpg`, where
+  `x.jpg` and `x.png` share a stem). The user has since decided the whole file
+  name (open question 1), which is one-to-one, so no collision rule remains.
 - **Mirroring the workspace does not cover every photograph.** A photograph
   with `..` in its image name has no mirror path; the in-memory equivalent
   gives it the same pixels without files. A photograph with no workspace above
