@@ -4,7 +4,10 @@
 """`Version2SiftFolder` converts a version 1 `.sift` file to version 2 through
 the binding, and raises each refusal as a Python exception."""
 
+import json
+import os
 import shutil
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -77,7 +80,9 @@ def test_an_opencv_file_converts_losslessly(images):
     old = read_sift(source)
 
     folder = Version2SiftFolder(image.parent / "features" / "v2")
+    assert repr(folder) == f"Version2SiftFolder({json.dumps(str(folder.path))})"
     converted = folder.convert_version_1_sift_file(source, image)
+    assert set(converted) == {"path", "source_content_hash", "content_hash"}
     assert converted["path"] == folder.path / source.name
     new = read_sift(converted["path"])
 
@@ -133,3 +138,45 @@ def test_each_refusal_raises(images):
     )
     with pytest.raises(ValueError, match="run 'sfm undistort' again"):
         folder.convert_version_1_sift_file(undistorted, other)
+
+
+def test_a_folder_that_cannot_be_made_raises(images, tmp_path):
+    # A path that is not there and cannot be made: on Windows one under a
+    # regular file, and on Linux and macOS, where that is a failure to list
+    # instead, a symbolic link to nothing.
+    if sys.platform == "win32":
+        blocked = images[0] / "v2"
+    else:
+        blocked = tmp_path / "v2"
+        os.symlink(tmp_path / "nowhere", blocked)
+    with pytest.raises(OSError, match="^failed to create the folder ") as raised:
+        Version2SiftFolder(blocked)
+    assert type(raised.value) is OSError
+
+
+def test_a_failed_write_raises_through_the_format_error_table(images):
+    image = images[0]
+    source = _write_version_1(image, "sfmtool", {})
+    folder = Version2SiftFolder(image.parent / "features" / "v2")
+    blocked = folder.path / source.name
+    blocked.mkdir()
+    # A file cannot be renamed over a directory. The format-error table raises
+    # the OSError subclass for the I/O error's kind, not a plain OSError.
+    with pytest.raises(OSError, match="^failed to write ") as raised:
+        folder.convert_version_1_sift_file(source, image)
+    assert isinstance(raised.value, (IsADirectoryError, PermissionError))
+    assert str(blocked) in str(raised.value)
+    assert list(folder.path.iterdir()) == [blocked]
+
+
+def test_readings_that_are_not_finite_raise(images):
+    image = images[0]
+    # The square root of -1 is NaN at every pixel.
+    source = _write_version_1(image, "sfmtool", {"gray_formula": "-1 ** 0.5"})
+    folder = Version2SiftFolder(image.parent / "features" / "v2")
+    with pytest.raises(
+        OSError, match="^failed to take the readings of the image"
+    ) as raised:
+        folder.convert_version_1_sift_file(source, image)
+    assert type(raised.value) is OSError
+    assert list(folder.path.iterdir()) == []

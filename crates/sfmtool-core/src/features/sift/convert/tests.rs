@@ -347,7 +347,75 @@ fn an_image_of_another_size_is_refused() {
         ),
         "{error:?}"
     );
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "the image {} decodes to 270 x 480 pixels, and its .sift file records 271 x 480",
+            image.display()
+        )
+    );
     assert_nothing_written(&folder);
+}
+
+#[test]
+fn readings_that_are_not_finite_are_refused() {
+    let (_dir, [image, _]) = images();
+    // The square root of -1 is NaN at every pixel, so every reading is NaN.
+    let formula = "-1 ** 0.5";
+    let source = write_version_1(
+        &image,
+        "sfmtool",
+        serde_json::json!({"gray_formula": formula}),
+    );
+    let folder = Version2SiftFolder::create(&destination(&image)).unwrap();
+    let error = folder
+        .convert_version_1_sift_file(&source, &image, &Progress::none())
+        .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            ConvertSiftFileError::Readings { image_path, error: ImageReadingsError::NotFinite { .. } }
+                if *image_path == image
+        ),
+        "{error:?}"
+    );
+    let message = error.to_string();
+    let prefix = format!(
+        "failed to take the readings of the image {}: ",
+        image.display()
+    );
+    assert!(message.starts_with(&prefix), "{message}");
+    assert!(message[prefix.len()..].contains(formula), "{message}");
+    assert_nothing_written(&folder);
+}
+
+#[test]
+fn a_directory_in_place_of_the_converted_file_is_refused() {
+    let (_dir, [image, _]) = images();
+    let source = write_version_1(&image, "sfmtool", serde_json::json!({}));
+    let folder = Version2SiftFolder::create(&destination(&image)).unwrap();
+    let blocked = folder.path().join(source.file_name().unwrap());
+    std::fs::create_dir(&blocked).unwrap();
+    let error = folder
+        .convert_version_1_sift_file(&source, &image, &Progress::none())
+        .unwrap_err();
+    assert!(
+        matches!(&error, ConvertSiftFileError::Write { path, .. } if *path == blocked),
+        "{error:?}"
+    );
+    let message = error.to_string();
+    let prefix = format!("failed to write {}: ", blocked.display());
+    assert!(
+        message.starts_with(&prefix) && message.len() > prefix.len(),
+        "{message}"
+    );
+    // The directory is left as it was, and no temporary file is left beside it.
+    let entries: Vec<_> = std::fs::read_dir(folder.path())
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(entries, vec![blocked.clone()]);
+    assert!(std::fs::read_dir(&blocked).unwrap().next().is_none());
 }
 
 #[test]
@@ -415,8 +483,46 @@ fn a_folder_holding_version_1_files_is_refused() {
     // A file in the folder's place cannot be listed.
     let error = Version2SiftFolder::create(&image).unwrap_err();
     assert!(
-        matches!(error, ConvertSiftFileError::ListFolder { .. }),
+        matches!(&error, ConvertSiftFileError::ListFolder { folder, .. } if *folder == image),
         "{error:?}"
+    );
+    let message = error.to_string();
+    let prefix = format!("failed to list the folder {}: ", image.display());
+    assert!(
+        message.starts_with(&prefix) && message.len() > prefix.len(),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_folder_that_cannot_be_made_is_refused() {
+    let (dir, [image, _]) = images();
+    // A path that is not there, so there is nothing to list, and that cannot
+    // be made. On Windows a path under a regular file is reported as not
+    // found; on Linux and macOS it is "not a directory", which is a failure
+    // to list, so there the path is a symbolic link to nothing.
+    #[cfg(windows)]
+    let blocked = {
+        let _ = &dir;
+        image.join("v2")
+    };
+    #[cfg(unix)]
+    let blocked = {
+        let link = dir.path().join("v2");
+        std::os::unix::fs::symlink(dir.path().join("nowhere"), &link).unwrap();
+        let _ = &image;
+        link
+    };
+    let error = Version2SiftFolder::create(&blocked).unwrap_err();
+    assert!(
+        matches!(&error, ConvertSiftFileError::CreateFolder { folder, .. } if *folder == blocked),
+        "{error:?}"
+    );
+    let message = error.to_string();
+    let prefix = format!("failed to create the folder {}: ", blocked.display());
+    assert!(
+        message.starts_with(&prefix) && message.len() > prefix.len(),
+        "{message}"
     );
 }
 
@@ -432,6 +538,10 @@ fn a_cancelled_conversion_writes_nothing() {
     assert!(
         matches!(error, ConvertSiftFileError::Cancelled),
         "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "the conversion was cancelled; nothing was written"
     );
     assert_nothing_written(&folder);
 }
