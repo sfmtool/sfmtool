@@ -124,8 +124,9 @@ carry the `image_to_gray` object
 | `feature_options` | object | All parameters that affect feature output. Keys are tool-defined. See the `.sift` format spec for details |
 | `feature_prefix_dir` | string | Relative path to the features subdirectory, including a content hash of the tool configuration |
 
-The file has no other keys. A `mipmap_options` block setting the JPEG quality
-of those reduced copies is proposed in
+The file has no other keys. A `mipmap_options` object, which turns on stored
+reduced copies of large photographs and holds their size threshold and JPEG
+qualities, is proposed in
 [out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md).
 An optional second file beside it in the workspace
 root, `.sfm-named-image-lists.json`, names sets of the workspace's images by

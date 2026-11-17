@@ -30,8 +30,8 @@ set by image size),
 § "Image Detail" (the panel draws photograph tiles),
 [gui/mcp-server.md](../gui/mcp-server.md) § "The Image Detail view" (two
 fields), and
-[workspace/workspace.md](../workspace/workspace.md) § "Workspace Directory
-Layout" (the cache directory). Each links back here.
+[workspace/workspace.md](../workspace/workspace.md) (the `mipmap_options`
+object, and the cache directory in § "Workspace Directory Layout"). Each links back here.
 
 SfM Explorer shows a photograph, and the patch kernels sample it, through one
 image pyramid per photograph: the photograph and successively halved copies of
@@ -1201,8 +1201,9 @@ mipmaps, level 0 from the original if it is region-readable and from
 row marked "regions" must go through the view-region pyramid before
 `sfm ws init` writes `mipmap_options` (step 15): it is the only way those
 readers get pixels of an out-of-core photograph, since the cache builds no
-whole pyramid of one. Until a reader has moved (steps 9 to 12), it refuses a
-tiled source with an error, which only a test workspace can reach. In a
+whole pyramid of one. Until a reader has moved (steps 9 to 12 and 14), it
+refuses a tiled source with an error, which only a test workspace, or one
+whose owner wrote the object by hand, can reach. In a
 workspace without `mipmap_options`, every row reads as its in-core column
 says, for photographs of every size.
 
@@ -1471,11 +1472,12 @@ Each is one pull request, useful on its own, with its tests. Steps 1 to 3 end
 the crash with in-memory pyramids, before any file is written, and step 4
 bounds the one other whole-photograph reader that runs unbounded. Steps 5 to
 8 build the tier without turning it on anywhere but in tests: until step 15,
-`sfm ws init` does not write `mipmap_options`, so no real workspace has the
-object and every photograph stays in core. Steps 9 to 12 move the readers to
-view-region pyramids, one group per pull request; a reader that has not moved
-refuses a tiled source with an error, which only a test workspace reaches.
-Step 15 turns the tier on.
+neither `sfm ws init` nor any other command writes `mipmap_options`, so no
+workspace has the object unless its owner writes it by hand, and every
+photograph stays in core. Steps 9 to 12 and 14 move the readers to view-region
+pyramids, one group per pull request; a reader that has not moved refuses a
+tiled source with an error, which only a test workspace, or one whose owner
+wrote the object by hand, reaches. Step 15 turns the tier on.
 
 1. **Depth by size.** Pyramids of `full_levels` depth everywhere;
    `PhotographCache::new` loses `levels`; `DISPLAY_PYRAMID_LEVELS` goes.
@@ -1564,11 +1566,11 @@ Step 15 turns the tier on.
     cluster-patches build (companion step 5).
 12. **The nearby-track grey reads by region** (companion step 6).
 13. **Makers**: `sfm sift` and `build_sift_file`, the viewer's open-time queue
-    and panel line over the cache's builder, `sfm ws mipmaps` with `--enable`,
-    `--prune` and `--check`, and the thumbnail from the coarsest mipmap.
+    and panel line over the cache's builder, `sfm ws mipmaps` with `--prune`
+    and `--check` (its `--enable` waits for step 15, since it writes the
+    object), and the thumbnail from the coarsest mipmap.
     Tests: `sfm sift` on a small-threshold synthetic workspace writes the
-    files; the builder's order follows the selection; `--enable` writes the
-    object and refuses a file that has one; `--prune` deletes an orphan and
+    files; the builder's order follows the selection; `--prune` deletes an orphan and
     keeps a current set, and deletes every mipmap in a workspace without the
     object; `--check` writes nothing.
 14. **Readers that must agree with the viewer**: `ImagePyramidSet.read`, and
@@ -1577,10 +1579,11 @@ Step 15 turns the tier on.
     and the viewer's code give the same results for the same photograph;
     in-core results unchanged.
 15. **The tier on.** `sfm ws init` writes `mipmap_options` with its three
-    values, the viewer's one-line notice for a workspace without it, and the
-    workspace spec gains the object. Tests: a new workspace has the object
-    with 4096, 95 and 95; the test data's workspaces, which have no object,
-    still write nothing.
+    values, `sfm ws mipmaps --enable` adds it to an existing workspace, the
+    viewer's one-line notice for a workspace without it, and the workspace
+    spec gains the object. Tests: a new workspace has the object with 4096,
+    95 and 95; `--enable` writes the object and refuses a file that has one;
+    the test data's workspaces, which have no object, still write nothing.
 
 ## Measurements
 

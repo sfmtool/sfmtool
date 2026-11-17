@@ -158,7 +158,9 @@ The region of a level is a bounding box, and the box of one render is not
 bounded by the patch resolution `R`:
 
 - **Anisotropic.** The level comes from `σ_minor`, but the `n` samples, capped
-  at 16 (`MAX_ANISOTROPY`, `aniso_footprint` in
+  at 16 (`MAX_ANISOTROPY` in
+  [sampler.rs](../../crates/sfmtool-core/src/camera/sampler.rs), applied by
+  `aniso_footprint` in
   [remap.rs](../../crates/sfmtool-core/src/camera/remap.rs)), still spread
   over `±σ_major / 2`. The cap bounds the number of samples, not their reach.
   A footprint stretched `a = σ_major / σ_minor` times along a diagonal has a
