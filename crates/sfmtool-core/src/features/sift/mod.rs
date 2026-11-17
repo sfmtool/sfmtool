@@ -49,7 +49,7 @@ pub(crate) use files::{
     build_sift_file, default_concurrent_images, sift_file_up_to_date, xxh128_of_file,
 };
 pub use files::{
-    build_sift_files, default_concurrent_images_for_pixels, version_1_sift_files,
+    build_sift_files, default_concurrent_images_for_dimensions, version_1_sift_files,
     BuildSiftFilesError, BuildSiftFilesOptions, BuildSiftFilesReport, Version1SiftFiles,
     CONCURRENT_IMAGES_ENV_VAR, SFMTOOL_FEATURE_TOOL, SFMTOOL_FEATURE_TYPE, SIFT_ZSTD_LEVEL,
     WORKSPACE_CONFIG_FILE,

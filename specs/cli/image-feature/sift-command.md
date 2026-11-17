@@ -76,7 +76,8 @@ to 4096 and an older workspace does not have
 ([SIFT § 1. Scale-space pyramid](../../core/features/sift.md#1-scale-space-pyramid)).
 It needs no external library and parallelizes internally, so it ignores
 `--num-threads`. It chooses how many images to decode and extract at
-once from the core count and available memory, and the
+once from the core count, available memory and whether it doubles the
+images, and the
 `SFMTOOL_SIFT_EXTRACT_WORKERS` environment variable overrides that number (see
 [Extraction-orchestration pipelining](#extraction-orchestration-pipelining)).
 
@@ -185,12 +186,14 @@ low-risk overlaps:
   the core count. A decode is short beside an extract (about 13 ms against
   several hundred on dino, below), so that overlap is brief. *K* must scale *with*
   the core count to fill a many-core host. The backend takes it from the
-  `default_concurrent_images(width, height)` binding, the Rust count that
-  `build_sift_files` also uses
+  `default_concurrent_images(width, height, params)` binding, the Rust count
+  that `build_sift_files` also uses
   ([SIFT § Building `.sift` files](../../core/features/sift.md#building-sift-files)):
   the core count, capped by memory, since each in-flight image holds a decoded
-  frame plus its f32 gaussian pyramid, about 192 B per source pixel, so *K* is
-  capped to keep the in-flight set within half of physical memory. The
+  frame plus its f32 gaussian pyramid, measured at up to 164 B per source
+  pixel when the image is doubled and 57 when it is not and counted as 192 and
+  64, so *K* is capped to keep the in-flight set within half of physical
+  memory. The
   per-image footprint is estimated from the first image's dimensions — decoded
   once on the calling thread to size the pool, then reused as image 0's input —
   assuming a batch of like-sized images (one workspace).

@@ -88,7 +88,7 @@ fn image_to_gray(
 /// [`SiftParams::from_feature_options`], the reader `build_sift_files` uses for
 /// a workspace's options, so the two read every key alike. An unknown key or a
 /// value of the wrong type raises `PyValueError`.
-fn parse_sift_params(params: Option<&Bound<'_, PyDict>>) -> PyResult<SiftParams> {
+pub(crate) fn parse_sift_params(params: Option<&Bound<'_, PyDict>>) -> PyResult<SiftParams> {
     let options = match params {
         Some(dict) => feature_options_from_dict(dict)?,
         None => serde_json::Value::Null,

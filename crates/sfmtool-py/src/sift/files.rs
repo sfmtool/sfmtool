@@ -5,7 +5,7 @@
 //! Rust writer of `.sift` files for the `sfmtool` feature tool, and for
 //! [`sfmtool_core::features::sift::version_1_sift_files`], the check every
 //! writer of version 2 files makes of a folder, and for
-//! [`sfmtool_core::features::sift::default_concurrent_images_for_pixels`], how
+//! [`sfmtool_core::features::sift::default_concurrent_images_for_dimensions`], how
 //! many images both extractors run at once.
 
 use std::path::{Path, PathBuf};
@@ -16,14 +16,14 @@ use pyo3::types::PyDict;
 
 use sfmtool_core::features::sift::{
     build_sift_files as core_build_sift_files,
-    default_concurrent_images_for_pixels as core_default_concurrent_images_for_pixels,
+    default_concurrent_images_for_dimensions as core_default_concurrent_images_for_dimensions,
     version_1_sift_files as core_version_1_sift_files, BuildSiftFilesError, BuildSiftFilesOptions,
     Version1SiftFiles,
 };
 use sfmtool_core::progress::{Event, Level};
 use sfmtool_core::Progress;
 
-use super::extract::{feature_options_error, feature_options_from_dict};
+use super::extract::{feature_options_error, feature_options_from_dict, parse_sift_params};
 
 /// Extract SIFT features with the sfmtool backend and write each image's
 /// `.sift` file, skipping an image whose `.sift` is at least as new as it.
@@ -170,23 +170,39 @@ pub fn version_1_sift_files(
 /// The `SFMTOOL_SIFT_EXTRACT_WORKERS` environment variable when it holds a
 /// whole number, raised to 1 if lower; otherwise the core count, capped so
 /// that that many images fit in half of physical memory at 192 bytes per
-/// source pixel, or at most 4 when either side is 0. Always at least 1. This
-/// is the count `build_sift_files` uses when `concurrent_images` is `None`,
-/// and the Python `sfmtool` backend of `sfm sift` sizes its pool with it from
-/// the first image.
+/// source pixel for an image `params` doubles and 64 for one it does not, or
+/// at most 4 when either side is 0. Always at least 1. This is the count
+/// `build_sift_files` uses when `concurrent_images` is `None`, and the Python
+/// `sfmtool` backend of `sfm sift` sizes its pool with it from the first
+/// image.
 ///
 /// Args:
 ///     width: the image's width in pixels.
 ///     height: the image's height in pixels.
+///     params: the extraction's options, the dict `extract_sift` takes, or
+///         `None` for its defaults, which double every image. Only whether
+///         they double an image of this size (`double_image` and
+///         `double_image_below_long_side`) changes the count, but the whole
+///         dict is checked as `extract_sift` checks it.
 ///
 /// Returns:
 ///     The number of images, at least 1.
+///
+/// Raises:
+///     ValueError: if `params` is invalid.
 ///
 /// Warns:
 ///     UserWarning: when `SFMTOOL_SIFT_EXTRACT_WORKERS` is set to something
 ///         other than a whole number, which is then ignored.
 #[pyfunction]
-pub fn default_concurrent_images(py: Python<'_>, width: u32, height: u32) -> PyResult<usize> {
+#[pyo3(signature = (width, height, params=None))]
+pub fn default_concurrent_images(
+    py: Python<'_>,
+    width: u32,
+    height: u32,
+    params: Option<&Bound<'_, PyDict>>,
+) -> PyResult<usize> {
+    let params = parse_sift_params(params)?;
     let warnings = Mutex::new(Vec::<String>::new());
     let sink = |event: Event<'_>| {
         if let Event::Message {
@@ -201,8 +217,11 @@ pub fn default_concurrent_images(py: Python<'_>, width: u32, height: u32) -> PyR
                 .push(text.to_owned());
         }
     };
-    let pixels = u64::from(width) * u64::from(height);
-    let count = core_default_concurrent_images_for_pixels(Some(pixels), &Progress::to(&sink));
+    let count = core_default_concurrent_images_for_dimensions(
+        Some((width, height)),
+        &params,
+        &Progress::to(&sink),
+    );
     let category = py.get_type::<pyo3::exceptions::PyUserWarning>();
     for text in warnings.into_inner().unwrap_or_else(|e| e.into_inner()) {
         let message = std::ffi::CString::new(text)
