@@ -118,12 +118,11 @@ These are proposed for [GLOSSARY.md](../GLOSSARY.md), each with its reason.
 
 | Word | Means | Not | Why |
 |------|-------|-----|-----|
-| **mipmap** / **mip level** / **mip level file** | a photograph's **mipmap** is its whole stored chain of levels, kept under `.sfm-cache/`: its reduced levels, and its full-resolution copy when the original cannot be read by region. One stored level is a **mip level**, numbered as the pyramid's level is (level 0 full resolution, level `l` reduced by `2^l`), and the file holding it is a **mip level file**, `<file name>-mip<l>.jpg`: `IMG_0001.JPG-mip1.jpg` is half size, `-mip2.jpg` a quarter, and `-mip0.jpg` the full-resolution copy. The number in a file name is the level index the code uses; no factor is converted to a level anywhere. `sfmtool_core::camera::mipmap` | `mipmap set`, a single file called a mipmap, `level file`, `cache file`, `pyramid file`, factor names such as `-mipmap2` | the user chose the standard usage, so others find it familiar: Williams, "Pyramidal Parametrics" (SIGGRAPH 1983), coined *mip map* for the whole prefiltered set of an image at successive halvings; OpenGL says a texture has a mipmap whose images are *mipmap levels*, numbered by level of detail with level 0 the base image (`glTexImage2D`'s `level`); Direct3D and Vulkan say *mip chain* and *mip level* (`mipLevels`); KTX and DDS store a whole chain in one file. *Level* alone stays the in-memory pyramid level, which for a small photograph has no file. Names about the whole feature keep *mipmap* (`mipmap_options`, `sfm ws mipmaps`, `build_mipmaps`, `MipmapError`, `MipmapLocation`, `sfmtool_core::camera::mipmap`), since they act on photographs' mipmaps, plural in the standard sense |
+| **mipmap** / **mip level** / **mip level file** | a photograph's **mipmap** is its whole stored chain of levels, kept under `.sfm-cache/`: its reduced levels, and its full-resolution copy when the original cannot be read by region. One stored level is a **mip level**, numbered as the pyramid's level is (level 0 full resolution, level `l` reduced by `2^l`), and the file holding it is a **mip level file**, `<file name>-mip<l>.jpg`: `IMG_0001.JPG-mip1.jpg` is half size, `-mip2.jpg` a quarter, and `-mip0.jpg` the full-resolution copy. The number in a file name is the level index the code uses; no factor is converted to a level anywhere. `sfmtool_core::camera::mipmap` | `mipmap set`, a single file called a mipmap, `level file`, `cache file`, `pyramid file`, factor names such as `-mipmap2` | the user chose the standard usage, so others find it familiar: Williams, "Pyramidal Parametrics" (SIGGRAPH 1983), coined *mip map* for the whole prefiltered set of an image at successive halvings; OpenGL says a texture has a mipmap whose images are *mipmap levels*, numbered by level of detail with level 0 the base image (`glTexImage2D`'s `level`); Direct3D and Vulkan say *mip chain* and *mip level* (`mipLevels`); KTX and DDS store a whole chain in one file. *Level* alone stays the in-memory pyramid level, which for a small photograph has no file. Names about the whole feature keep *mipmap* (`mipmap_options`, `sfm ws mipmaps`, `build_mipmaps`, `MipmapError`, `MipmapLocation`, `sfmtool_core::camera::mipmap`), since they act on photographs' mipmaps, plural in the standard sense. The viewer, the CLI and the Python messages use the same words as the code, with no separate user-facing ones: the quiet task *Build mipmaps*, the line *Building mipmaps: {done} of {total}*, a panel's *Building mipmap…* while the one photograph's mipmap it waits for is made, the phase *build mipmaps*, and *mip level* where a message is about one level. A mipmap is made inside the photograph cache's `get` or `get_many`, in the path's slot, with no builder object |
 | **region-readable** (an original) | an original JPEG whose layout passes the test in § "Which originals can be read by region", so a rectangle of it decodes to exactly the pixels of the whole decode; its level 0 is the original, and it has no `-mip0` | `tiled`, `seekable`, `RST-capable` | names what the test decides, that a region can be read, rather than one ingredient of it |
 | **cache directory** | `.sfm-cache/` at a workspace's root, holding files derived from the workspace's images that can be deleted at any time and rebuilt; today only mip level files | `cache folder`, `.cache` | it names what is in it (files that are a cache) and where (the workspace's); a name without `sfm` would collide with other tools' caches |
 | **out-of-core photograph** / **in-core photograph** | a photograph of a workspace whose file has `mipmap_options`, with a width or height over that object's `out_of_core_long_side` (4096 as `sfm ws init` writes it), is out of core (with one exception, § "Which photographs are out of core"): its reduced levels come from mipmaps, its level 0 from the original or a `-mip0`, and every reader reads it a region at a time; any other photograph is in core: its whole pyramid is built in memory from one decode, as every pyramid is today | `large image`, `tiled image`, `big photograph` | the tier decides where the levels live, which is what *core* means here; *large* says nothing about what is done differently, and every photograph is shown in tiles |
 | **photograph tile** | a 512 x 512 block of one level of a photograph's pyramid, with a one-pixel border of its neighbours' pixels to assist bilinear interpolation: the unit the display draws as one texture and that a level is read in; `PhotographTile`, keyed by level, column and row | bare `tile`, `block`, `chunk` | bare *tile* is a view's tile, the patch a kernel renders ([GLOSSARY.md](../GLOSSARY.md) § "Rendering a view's tile"), and Track View draws those beside photographs, so the photograph's blocks need a qualified name |
-| **image levels** (*Building image levels*) | the viewer's words for a photograph's mipmap and for making it: the quiet task *Build image levels*, the line *Building image levels: {done} of {total}*, and a panel's *Building image levels…* while a mipmap is being made. In code the mipmap is made inside the photograph cache's `get` or `get_many`, in the path's slot, with no builder object | `level builder`, `mipmap generator`, `preprocessing` | a person thinks of an image's levels, not of the files they are kept in; there is no separate builder to name, since making a mipmap is part of reading the photograph, as a decode is |
 
 ## Which photographs are out of core
 
@@ -981,7 +980,7 @@ decoding a photograph in today's `PhotographCache`.
   reports through that caller's `Progress`: a `get` opens phases *decode*,
   *reduce* and *encode* (the last counting levels); `get_many` counts the mipmaps
   it made and the photographs it read in its own phase, under the name its
-  caller gives it (*build image levels*, *decode images*), with a note
+  caller gives it (*build mipmaps*, *decode images*), with a note
   (*3 of 17 read, 2 mipmaps made*). Nothing on the cache reports on its own:
   there is no reporter, queue or status object.
 - **Memory while building.** A build holds a whole decode, about 1 GB at
@@ -1035,7 +1034,7 @@ decoding a photograph in today's `PhotographCache`.
   parallel loop (no caller does today; the reference picks call `get` one
   photograph at a time on their job thread). In the viewer the callers that
   can build at once are the two background queues' tasks (one of them perhaps
-  the *Build image levels* task below) and **at most one panel request**:
+  the *Build mipmaps* task below) and **at most one panel request**:
   the viewer keeps at most one out-of-core photograph request in flight across
   all its panels (§ "Readers on the GUI thread"), and panels do not read the
   count. All of them use the viewer's one session cache, so the builds in
@@ -1070,7 +1069,7 @@ file's bytes were evicted, the file is read again and its record compared
 with the one recorded: equal (the same source stamp, quality, region answer,
 encoder and sfmtool version, so the same deterministic output) and the kernel
 goes on; different, and the read fails with `TileError::Changed`, naming the
-file, which the kernel reports as its failure (*The image levels of
+file, which the kernel reports as its failure (*The mipmap of
 images/IMG_0001.JPG changed while Refine all normals ran; run it again*). The
 source does not pin the bytes of every file for the kernel's whole run, since
 for hundreds of photographs that would be the very memory this design removes,
@@ -1229,9 +1228,9 @@ tiles and do not count against it.
   `get_many` makes every missing mipmap in its phase, counting mipmaps through the
   caller's `Progress` (a `ProgressCounter` from Python), before the work
   starts; `sfm ws mipmaps` calls `get_many` over every photograph under its
-  paths in a phase *build image levels*.
+  paths in a phase *build mipmaps*.
 - **In the viewer**, when a reconstruction opens, the viewer starts a quiet
-  task, *Build image levels* (`Operation::BUILD_IMAGE_LEVELS`, a new quiet
+  task, *Build mipmaps* (`Operation::BUILD_MIPMAPS`, a new quiet
   source), on the fast queue. It is an ordinary background task with its own
   `Progress` and collector: its job calls `get_many` over the
   reconstruction's out-of-core photographs whose files are missing or stale
@@ -1243,7 +1242,7 @@ tiles and do not count against it.
   stops within one stage and leaves its slot empty, and the task is queued
   again behind the one that displaced it, losing at most the stage each build
   was in. While it runs, the Background Tasks panel's quiet line shows it as
-  it shows every quiet task, with its count of mipmaps. A panel's request or a
+  it shows every quiet task, as *Building mipmaps: {done} of {total}*. A panel's request or a
   bench step that needs a photograph meanwhile asks the cache for it
   directly; if the task is making it, the slot makes the asker wait for that
   build rather than start a second, and if not, the asker makes it. There is
@@ -1270,8 +1269,8 @@ are current only reads a layout and tiles, and is not limited.
 
 | Reader | `NotKnown` | `Building` | `Known` |
 |--------|------------|------------|---------|
-| Image Detail | asks for the layout once (a header read, the region test and a record check, on the rayon pool) and draws *Loading image…* | requests the photograph once, draws the coarsest level if the build has published it and *Building image levels…* otherwise | peeks the visible tiles and asks for the missing ones |
-| Track View's patch tiles, cluster-stage tiles, context and crops; the Track Table's crop column and hover | the same layout request; the cell draws its loading state | requests the photograph once; the cell says *Building image levels…* | computes the render's regions, peeks their tiles, asks for the missing ones, and renders when all are present |
+| Image Detail | asks for the layout once (a header read, the region test and a record check, on the rayon pool) and draws *Loading image…* | requests the photograph once, draws the coarsest level if the build has published it and *Building mipmap…* otherwise | peeks the visible tiles and asks for the missing ones |
+| Track View's patch tiles, cluster-stage tiles, context and crops; the Track Table's crop column and hover | the same layout request; the cell draws its loading state | requests the photograph once; the cell says *Building mipmap…* | computes the render's regions, peeks their tiles, asks for the missing ones, and renders when all are present |
 | The 3D background | the same layout request; nothing drawn | requests the photograph once; draws the coarsest level if published | asks for its level with `get_level`, which assembles it from tiles on the rayon pool, and draws the coarsest until it lands |
 | Display thumbnails | built in the open job, off the GUI thread: a photograph whose coarsest mip level file is not current gets the grey placeholder row | the row stays the placeholder | a placeholder row whose photograph has become `Known` is filled, on the rayon pool, from the coarsest mip level file |
 
@@ -1718,7 +1717,7 @@ a `collect::<Result<…>>` in place of a `for_each` or a plain `collect`). A
 kernel that already returns `Result` with an error enum of its own gains a
 `Photograph(PhotographReadError)` variant; one that returns plain values now
 returns `Result<_, PhotographReadError>`. The viewer's and the bindings'
-callers turn it into the step's failure (*The image levels of … changed while
+callers turn it into the step's failure (*The mipmap of … changed while
 … ran; run it again*) or a Python `RuntimeError` naming the path. The changes,
 each in the step that moves its readers:
 
@@ -1737,7 +1736,7 @@ The viewer's side, in
 `display_tile` beside it acts on the layout state as § "Readers on the GUI
 thread" says, starting one `get_tile` per missing tile of a `Known`
 photograph; and the admission rule for in-core pyramid requests lives there.
-The *Build image levels* quiet task is `state/build_image_levels.rs`: a job
+The *Build mipmaps* quiet task is `state/build_mipmaps.rs`: a job
 that calls `get_many` over the reconstruction's out-of-core photographs in the
 order § "Who makes the mipmaps, and when" gives.
 
@@ -1748,7 +1747,7 @@ of it is in `sfmtool-core`; the bindings are thin wrappers over it, with no
 logic in Python ([STANDARDS.md](../STANDARDS.md#logic-lives-in-rust-not-in-python-wrappers)).
 **Only these parts are the viewer's own**: drawing photograph tiles as GPU
 textures, the rule of one out-of-core photograph request in flight across the
-panels, the *Build image levels* quiet task at open, and the admission rule
+panels, the *Build mipmaps* quiet task at open, and the admission rule
 for in-core pyramid requests in `photograph_requests.rs`. Everything else in
 this design (the tiers, the mipmaps, the slots and build reservations, tiles,
 levels, regions, view-region pyramids, and the cache's statistics) is core and
@@ -2024,8 +2023,8 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
     changes.
 12. **The nearby-track grey reads by region** (companion step 6), with the
     step-12 signature changes.
-13. **Makers**: `sfm sift` and `build_sift_file`, the viewer's *Build image
-    levels* quiet task, `sfm ws mipmaps` with `--prune`
+13. **Makers**: `sfm sift` and `build_sift_file`, the viewer's *Build
+    mipmaps* quiet task, `sfm ws mipmaps` with `--prune`
     and `--check` (its `--enable` waits for step 15, since it writes the
     object), and the thumbnail from the coarsest mip level file.
     Tests: `sfm sift` on a small-threshold synthetic workspace writes the
