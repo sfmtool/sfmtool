@@ -1304,7 +1304,10 @@ tiles and do not count against it.
   Its job, on its job thread, keeps a list of photographs shared with the
   viewer, takes photographs from the front of it in chunks of a group's size
   and calls `get_many` on each chunk with its own `Progress` and collector,
-  so the parallelism is `get_many`'s. When a reconstruction opens, the list is
+  so the parallelism is `get_many`'s. A job that is cancelled puts the
+  photographs of the chunk it had not finished back at the front of the
+  list, so the run queued again behind the displacing task makes them
+  first. When a reconstruction opens, the list is
   the reconstruction's out-of-core photographs whose files are missing or
   stale (found by a `stat`, the original's header and markers for the region
   test, and one small read each): the selected image first, then the images
@@ -1327,7 +1330,9 @@ tiles and do not count against it.
 out-of-core photograph or waits. Each asks `layout` and acts on the state.
 *Queue the photograph* means: add the photograph to the front of *Build
 mipmaps*' list, once per path (the viewer remembers the paths it has queued,
-as `PhotographRequests` remembers its decodes), and draw a loading spinner
+as `PhotographRequests` remembers its decodes, and forgets a path when the
+task reports its mipmap made or failed, so a photograph that goes back to
+`Building` is queued again), and draw a loading spinner
 with *Building mipmap…* until the photograph's layout is `Known`, repainting
 when the task reports it made. In-core photographs are requested as today:
 `display_photograph` starts one rayon task that calls `get`, which decodes
