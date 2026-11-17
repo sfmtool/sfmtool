@@ -108,7 +108,7 @@ COLMAP database, skipping feature extraction and matching.
 The file's feature indexes are rows of the `.sift` files it was matched on, in
 the feature folder its own `workspace.contents.feature_prefix_dir` names, so
 the solve reads those files and not the workspace's current folder, which
-`sfm ws upgrade` moves. The database, the reconstruction's keypoints, its
+`sfm ws init --force` moves. The database, the reconstruction's keypoints, its
 recorded feature definition (`workspace.contents`), its `.sift` content
 hashes, its thumbnails and its image readings all come from that folder, and
 the command prints the folder when it is not the workspace's current one.

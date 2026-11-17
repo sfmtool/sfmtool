@@ -837,9 +837,9 @@ its place, is the listing's error, which `build_sift_files` returns as
 refusal, and `BuildSiftFilesError::Version1Files` wraps it: it names the
 folder and the files (the first five, and a count of the rest) and says to
 remove those files from the folder and run again, which extracts version 2
-files in their place. That is the fix, rather than `sfm ws upgrade`, because
-the folder is checked only for version 2 settings, which `sfm ws upgrade`
-leaves as they are. The binding `sfmtool.sift.version_1_sift_files` returns the
+files in their place. The folder is checked only for version 2 settings,
+since version 1 settings are refused first, so that fix is the same for every
+caller. The binding `sfmtool.sift.version_1_sift_files` returns the
 same `Version1SiftFiles` or `None`, and `image_files_to_sift_files` raises its
 `str` ([workspace.md § Versions never mix](../../workspace/workspace.md#versions-never-mix)).
 
@@ -866,7 +866,7 @@ folder is version 1. The workspace upgrade cannot pass one over: a `.sift`
 file that is locked, or a sync client's placeholder that cannot be fetched,
 may hold features a `.sfmr` needs, so the upgrade stops on any file whose
 error is the file system's rather than its content's
-([../../drafts/ws-upgrade-files-amendment.md](../../drafts/ws-upgrade-files-amendment.md)).
+([ws-upgrade-command.md § What it does](../../cli/workspace/ws-upgrade-command.md#what-it-does)).
 
 `sfmtool_defaults` is the options a workspace initialized with the `sfmtool`
 tool and no other choice records: the default `feature_options` of
