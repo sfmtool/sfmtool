@@ -28,11 +28,11 @@ whole pyramid and get the same values, so a kernel's results do not change, and
 the memory a kernel touches grows with the number of patches it renders instead
 of with the size of the photographs.
 
-The name: the request called this the *per-match local pyramid*. In this tree
-*match* means a feature correspondence (`.matches` files, `sfm match`), and the
-unit here is one view of one patch, the unit the glossary's "Rendering a view's
-tile" section names, so the proposed term is **view-region pyramid**: the
-pyramid of the region one view's render reads.
+The name: in this tree *match* means a feature correspondence (`.matches`
+files, `sfm match`), so a name such as *per-match local pyramid* would point
+at the wrong thing; the unit here is one view of one patch, the unit the
+glossary's "Rendering a view's tile" section names, so the term is
+**view-region pyramid**: the pyramid of the region one view's render reads.
 
 ## What it holds
 

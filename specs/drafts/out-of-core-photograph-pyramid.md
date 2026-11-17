@@ -145,10 +145,9 @@ whatever the workspace sets. It is decided from the header
 `GetError::TooLarge { path, width, height }` (`PhotographReadError::TooLarge`
 for a kernel), which names the photograph and its size; the Python bindings
 raise it as `OSError`, as `read_image_rgb` raises a decoder's limit. Only a
-non-JPEG original can be that large. An earlier revision kept such a
-photograph in core only when its level 1 would not fit a frame, which was
-wrong for `-mip0`: a 70000 x 3000 PNG would have been out of core with a
-`-mip0` that cannot be written. The readers outside the photograph cache,
+non-JPEG original can be that large. The limit applies to level 0, not to
+level 1, because `-mip0` is a level-0 file: a 70000 x 3000 PNG out of core
+would need a `-mip0` that cannot be written. The readers outside the photograph cache,
 `read_image_rgb` and the commands built on it, SIFT extraction, the display
 thumbnails and the image readings at save, are unchanged: they write no mip
 level file, so no JPEG frame limits them, and their own limit stays the
@@ -243,9 +242,9 @@ reader. An original that allows it is read directly; every other one gets a
 `-mip0.jpg`, a tiled re-encode of full resolution, made once, and from then
 on **every reader reads level 0 from `-mip0`, never from the original**:
 the display, every kernel, `clipped_share`, the grey reads of *Find Nearby
-Tracks*. This is the user's decision. It replaces any path that would hold a
-whole decode of an original while regions of it are read, so no reader of
-level 0 holds more than tiles.
+Tracks*. This is the user's decision. No reader of level 0 holds a whole
+decode of an original while it reads regions of it: every reader of level 0
+holds only tiles.
 
 **The test.** One function, `region_layout(bytes) -> Result<RegionLayout,
 NotRegionReadable>` in `sfmtool_core::camera::mipmap`, reads the original's
@@ -951,9 +950,9 @@ stale, the reader that finds it so builds the mipmap itself, as a reader that
 finds an in-core photograph not decoded decodes it today (§ "Building a mipmap
 in the slot"), so a kernel never reads levels that are not the files' pixels.
 
-**Building a mipmap in the slot.** The user has decided that there is no
-separate builder: making a photograph's mipmap works exactly like
-decoding a photograph in today's `PhotographCache`.
+**Building a mipmap in the slot.** The user has decided that making a
+photograph's mipmap works exactly like decoding a photograph in today's
+`PhotographCache`, with no builder object or queue of its own.
 
 - **On the caller's thread, inside the path's slot.** A `get` that finds an
   out-of-core photograph's files missing or stale makes the mipmap itself, on
@@ -1854,8 +1853,7 @@ class PhotographCache:
   (`write_web_export`'s, `pick_images`' through `serde_to_py`, the bench's),
   with the keys `made`, `current` and `in_core` (lists of the paths in each
   case, as given) and `failed` (a list of `(path, message)` pairs). **It is the one way to
-  build mipmaps from Python**: the free function `sfmtool.workspace.build_mipmaps`
-  of earlier revisions of this draft is dropped. `sfm ws mipmaps` makes a
+  build mipmaps from Python**; there is no free function for it. `sfm ws mipmaps` makes a
   `PhotographCache()` and calls it; the Python SIFT extractors call it after
   each `.sift` is written, on one cache the extraction run holds (§ "Who
   makes the mipmaps, and when").
@@ -2119,13 +2117,10 @@ ranges in this draft are over those runs.
 
 1. **The names of the mip level files.** *Decided by the user:* the whole
    original file name followed by the suffix, as a `.sift` is named
-   (`IMG_0001.JPG.sift`); it cannot collide, so there is no second name form.
-   The user first decided a suffix with the reduction factor
-   (`IMG_0001.JPG-mipmap2.jpg` for half size) and later chose the level
-   number instead, `-mip<l>.jpg` (`IMG_0001.JPG-mip1.jpg` for half size,
-   `-mip0.jpg` for the full-resolution copy), to follow the standard
-   mipmap convention in which levels are numbered and level 0 is the base
-   image (§ "Terms").
+   (`IMG_0001.JPG.sift`), which cannot collide, then `-mip<l>.jpg` with the
+   level number (`IMG_0001.JPG-mip1.jpg` for half size, `-mip0.jpg` for the
+   full-resolution copy), following the standard mipmap convention in which
+   levels are numbered and level 0 is the base image (§ "Terms").
 2. **The threshold's value and the other constants.** *Decided by the
    user:* `sfm ws init` writes `out_of_core_long_side` 4096. The tile size
    and the restart interval stay constants.
@@ -2190,10 +2185,6 @@ ranges in this draft are over those runs.
 
 ## Problems found with the decisions
 
-- **The first decided name was not one-to-one** (`<stem>-mipmap2.jpg`, where
-  `x.jpg` and `x.png` share a stem). The user has since decided the whole file
-  name, which is one-to-one, so no collision rule remains, and the level
-  number in place of the factor (`IMG_0001.JPG-mip1.jpg`, open question 1).
 - **Mirroring the workspace does not cover every photograph.** A photograph
   with `..` in its image name has no mirror path; the in-memory equivalent
   gives it the same pixels without files. A photograph with no workspace above
@@ -2214,11 +2205,11 @@ ranges in this draft are over those runs.
   They need levels to about one pixel. The levels below the coarsest mip level are
   computed in memory from it, which keeps every reader consistent because the
   input is the file.
-- **Whole pyramids for the kernels did not scale** (the reason the view-region
-  pyramid is now required): `get_many` hands back every photograph's pyramid
-  and the caller holds them all while its kernel runs, 12.6 GiB for 17
-  photographs of 200 MP. The design now gives kernels no whole pyramid of an
-  out-of-core photograph.
+- **Whole pyramids for the kernels do not scale.** Today `get_many` hands
+  back every photograph's pyramid and the caller holds them all while its
+  kernel runs, 12.6 GiB for 17 photographs of 200 MP. So the design gives
+  kernels no whole pyramid of an out-of-core photograph, and reads it only
+  through view-region pyramids, which it requires.
 - **Region reads depend on the decoder's internals.** The region test admits a
   layout only because `jpeg-decoder` 0.3.2 gives equal pixels for it with the
   margins found; a decoder change can change which originals get a
