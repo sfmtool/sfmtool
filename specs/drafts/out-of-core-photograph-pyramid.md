@@ -353,21 +353,32 @@ a reader tells:
   share, a Linux volume) can hold `X.jpg` and `x.jpg`, while `.sfm-cache/` in
   the workspace sits on a case-insensitive file system, so both photographs'
   mipmaps resolve to one file. The `source` of that file differs from the
-  other photograph's path only in case, so test 2 leaves the decision to the
-  original's stamp and hash (tests 3 and 4), which tell two different
-  originals apart; the photograph that is not the file's source finds it
-  stale and makes its own set over it. The two then replace each other's
+  other photograph's path only in case, so test 2 leaves the decision to
+  tests 3 and 4, and test 4 then always compares the original's hash with
+  `source_xxh128`, even when its length and modification time both match
+  (archive extraction and sync tools can give two files the same time, and
+  photographs of one size in an uncompressed format have the same length).
+  The hash tells two different originals apart, so the photograph that is not
+  the file's source finds it stale and makes its own set over it. The two then replace each other's
   files each time the other is read, which is slow but never serves one
   photograph the other's pixels, and the reader logs a warning naming both
   paths.
 - **One original reached by spellings that differ only in case.** On a
   case-insensitive file system `images/IMG_0001.JPG` (a reconstruction's
   image name) and `images/img_0001.jpg` (typed to `sfm ws mipmaps`) are the
-  same file. Test 2 again leaves the decision to tests 3 and 4, which find the
-  same stamp, so the set made under one spelling is current for the other and
-  is not made again each time the caller changes. An exact comparison would
-  find each other's record stale and rebuild the set at every change of
-  spelling.
+  same file. Test 2 again leaves the decision to tests 3 and 4; test 4 hashes
+  the original once and finds the hash equal, so the set made under one
+  spelling is current for the other and is not made again each time the
+  caller changes, and the cache remembers the answer, so the hash runs once
+  per cache for each spelling. An exact comparison would find each other's
+  record stale and rebuild the set at every change of spelling.
+
+`str::to_lowercase` may disagree with what a file system treats as the same
+name (NTFS compares through its own upper-case table, APFS folds case its own
+way, `ß` against `SS`, the Turkish dotted `İ`). A disagreement can only cost a
+rebuild, never wrong pixels: a pair it calls different is found stale by test
+2 and made again, and a pair it calls equal is still checked by tests 3 and 4,
+with the hash.
 
 A photograph gets no files, and is read through the in-memory equivalent, when
 its workspace's mipmaps cannot be put in the cache directory: when its relative path has a `..`
@@ -688,17 +699,19 @@ naming the first that fails otherwise:
    `width` x `height`, and it has a restart interval.
 2. Its `source` is the photograph's relative path, or differs from it only
    in letter case (both lower-cased with `str::to_lowercase` compare equal), in
-   which case tests 3 and 4 decide whether it was made from this original;
+   which case tests 3 and 4 decide whether it was made from this original,
+   and test 4 compares the hash whatever the length and modification time;
    its `level` is the level asked for; and its `width` and `height` are that
    level's size for the original's size.
 3. The original's header size equals `source_width` x `source_height`.
 4. The original's length equals `source_size` and its modification time equals
    `source_modified_ns`. When the length matches and the time does not (a copy,
-   a `git checkout`), the original is hashed and compared with
+   a `git checkout`), or when `source` matched the path only after
+   lower-casing (test 2), the original is hashed and compared with
    `source_xxh128`; equal hashes make the mipmap current, and the cache
-   remembers, for as long as it lives, that this original's time differs, so
-   it hashes it once per cache, not on every read. A different length is stale without a
-   hash.
+   remembers the answer, for as long as it lives, for this original and this
+   spelling of its path, so it hashes it once per cache and spelling, not on
+   every read. A different length is stale without a hash.
 5. Its `jpeg_quality` equals the workspace's setting for its level, and its
    `region_readable_original` equals the other files' of the set. A set is
    never mixed: a file encoded at another quality, or made under another
@@ -1919,12 +1932,15 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    case kept), `a.b.png` and a name with no extension, the names of `x.jpg`
    beside `x.png` differing, a `..` name (in memory); a mipmap whose record
    names another path is stale; a mipmap whose `source` differs from the
-   photograph's path only in case and whose stamp and hash match the original
-   is current and not made again (one original under two spellings), and one
-   whose `source` differs only in case but whose original has another length
-   or hash is stale and made again (two originals sharing a cache file), both
-   built by writing the record directly, so the tests run on any file
-   system; a workspace without the object and a photograph with no
+   photograph's path only in case and whose length, modification time and
+   hash match the original is current, hashed once and not made again (one
+   original under two spellings); one whose `source` differs only in case but
+   whose original has another length or hash is stale and made again (two
+   originals sharing a cache file); and one whose `source` differs only in
+   case, whose length and modification time match the original but whose
+   hash does not, is stale and made again (two originals of equal length and
+   time); all built by writing the record directly, so the tests run on any
+   file system; a workspace without the object and a photograph with no
    workspace are in core and write nothing; two builds give the same bytes; a
    region-readable JPEG gets no `-mipmap1` and a PNG, a progressive JPEG, a
    JPEG without `DRI` and one with an interval wider than 1024 px do; each
