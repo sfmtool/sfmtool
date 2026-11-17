@@ -24,7 +24,7 @@ set by image size),
 [gui/mcp-server.md](../gui/mcp-server.md) § "The Image Detail view" (two
 fields), and
 [workspace/workspace.md](../workspace/workspace.md) § "Workspace Directory
-Layout" (the cache directory). The first two link back here.
+Layout" (the cache directory). Each links back here.
 
 SfM Explorer shows a photograph, and the patch kernels sample it, through one
 image pyramid per photograph: the photograph and successively halved copies of
@@ -33,13 +33,16 @@ and Image Detail uploads level 0 as a single GPU texture. That works for the
 test data and for 4K video frames, but a 200-megapixel phone photograph
 (16320 x 12240) is 571 MiB as RGB and 762 MiB as a pyramid, and wider than the
 8192 px texture the viewer's GPU device allows, so selecting one crashes the
-viewer. This draft makes the size of a photograph matter only to how long its
-first read takes: the display draws 512 px tiles of the pyramid level that
+viewer. This draft makes the size of a photograph matter to the display only
+in how long its first read takes: the display draws 512 px tiles of the pyramid level that
 matches its zoom, so it never makes a texture larger than a tile and shows the
 original pixels when zoomed in far enough; and the reduced levels of a large
 photograph are computed once, stored as JPEG files beside the workspace, and
 read a tile at a time, so that a session that looks at a photograph decodes only
 what it shows, and every later session and every kernel reads the same levels.
+The kernels still read whole pyramids, so what they hold in memory still grows
+with the size and number of the photographs they read (§ "The caches in
+memory").
 
 ## The problem, measured
 
@@ -254,7 +257,7 @@ A mipmap is a baseline JPEG that any program can open:
 | chroma | 4:4:4 (`SamplingFactor::F_1_1`) for colour; one component (`ColorType::Luma`) when every pixel of level 0 has R = G = B | a tile can be decoded exactly only without chroma subsampling (below); 4:2:0 would save 14% (9.2 MB against 10.8 MB at level 1) |
 | restart interval | 16 MCUs (`MIPMAP_RESTART_INTERVAL_MCUS`), 128 px of one MCU row at 4:4:4 | the unit a tile is decoded in (below); 2.4% larger than no restart markers (10.77 MB against 10.52 MB at level 1, quality 95) |
 | Huffman tables | the standard ones, not optimized | the encoder writes optimized tables as one scan per component, which a tile cannot be cut from |
-| metadata | one APP15 segment, the record below; no JFIF density, no EXIF, no orientation | the record is how a reader knows the file is current |
+| metadata | the JFIF APP0 header `jpeg-encoder` always writes, at its default density, and one APP15 segment, the record below (`Encoder::add_app_segment`); no EXIF, no orientation | the record is how a reader knows the file is current |
 
 All five mipmaps of the measured photograph at quality 95 are 15.2 MB together
 (10.77, 3.21, 0.90, 0.25, 0.07 MB), half the original's 30.0 MB; at quality 90
@@ -418,10 +421,15 @@ current file counts as done) covers it if it does not.
   `rglob("*")`, so `sfm sift --extract .` at a workspace root, or a `solve` or
   `pick-images` over it, would take every mipmap for an image. The same holds
   for `_sensor_images` in
-  [camrig/from_rig_config.py](../../src/sfmtool/camrig/from_rig_config.py) and
-  `find_images` in [camrig/create.py](../../src/sfmtool/camrig/create.py), whose
-  `**` pattern can reach it. Each skips any path under a directory named
-  `.sfm-cache`. This lands before anything writes the directory (step 4).
+  [camrig/from_rig_config.py](../../src/sfmtool/camrig/from_rig_config.py)
+  (`rglob("*")`), for `match_pattern_and_padding_misses` in
+  [camrig/pattern.py](../../src/sfmtool/camrig/pattern.py), which
+  `sfm camrig create` and the `.camrig` resolver match image patterns with,
+  and for the Rust walk behind named image lists
+  ([named_image_lists/walk.rs](../../crates/sfmtool-core/src/workspace/named_image_lists/walk.rs)),
+  where a `**` segment descends into every directory. Each skips any path
+  under a directory named `.sfm-cache`. This lands before anything writes the
+  directory (step 4).
 - **Orphans.** A mipmap whose original is gone, or whose record no longer
   matches, is left where it is by every reader: deleting files is not a
   reader's business, and a stale file is rewritten when its photograph is next
@@ -612,7 +620,8 @@ notes" gives; making a set of mipmaps uses no rayon either.
   today; that is what [view-region-pyramid.md](view-region-pyramid.md)
   removes.
 - *368 frames of 3840 x 2160.* In core, as today: 33.2 MB per pyramid, 12.2 GB
-  for all of them, bounded by the pyramid budget. The display cuts its tiles
+  for all of them. What the cache keeps is bounded by the pyramid budget, but a
+  `get_many` over every frame holds all of them while its kernel runs. The display cuts its tiles
   from those pyramids; the coarsest level it keeps of each frame it has shown
   is 480 x 270, 389 KB, 143 MB for all 368.
 
@@ -788,6 +797,11 @@ mipmaps; "depth" means the change of pyramid depth above.
 | P4 | `sfm cluster-patches` (`src/sfmtool/_cluster_patches.py`) | `read_image_rgb` arrays, full depth | through the same reader as #19 | mipmaps for out-of-core |
 | P5 | The view-tile binding (`sfmtool-py/src/patches/view_tile.rs`) | an exact pyramid of the array passed | unchanged | no |
 | P6 | Optical flow's pyramids (`sfmtool-py/src/flow/warp.rs`) | a grey pyramid of its own from an array | unchanged; flow reads level 0 | no |
+
+The measurement harnesses under `scripts/` that build an `ImagePyramidSet` from
+`read_image_rgb` arrays (`track_at_pixel/context.py`,
+`add_image_to_tracks/harness.py` and `misses.py`) are P2 callers: they read
+exact pyramids until they move to `ImagePyramidSet.read`, which step 8 does.
 
 Every reader that reads a pyramid of an out-of-core photograph now reads the
 same levels whether it runs in the viewer or on the command line, and in any
@@ -1013,7 +1027,8 @@ the crash with in-memory pyramids, before any file is written.
    keeps a current set; `--check` writes nothing.
 8. **Readers that must agree with the viewer**: the viewer's cluster-patches
    build through the cache, `ImagePyramidSet.read`, and `embed-patches`, the
-   strips, the `xform` steps and `sfm cluster-patches` on it. Tests: with the
+   strips, the `xform` steps, `sfm cluster-patches` and the `scripts/`
+   harnesses on it. Tests: with the
    small threshold, the CLI and the viewer's code give the same pyramids for
    the same photograph; in-core results unchanged.
 9. **The level-0 fast path**: `OriginalRegions`. Tests: JPEGs written for the

@@ -446,7 +446,10 @@ if you have a specific reason to nest.
 ## Workspace Directory Layout
 
 A workspace has no mandatory internal structure beyond the `.sfm-workspace.json` file. Images can
-live in any subdirectory. However, a typical workspace looks like this:
+live in any subdirectory. No directory in a workspace holds a cache of files derived from its
+images; a `.sfm-cache/` directory at the root, holding reduced copies of large photographs, is
+proposed in [out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md).
+A typical workspace looks like this:
 
 ```
 my_project/

@@ -526,7 +526,11 @@ widget instead of a wgpu background pass. The pixels come from the viewer's phot
 cache and are never decoded on the GUI thread: on a miss `state::display_photograph`
 starts the decode on the rayon pool and repaints when it lands, and until then the panel
 shows "Loading image…", or "Failed to load image" for a file that cannot be read
-([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)).
+([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)). The texture
+is the whole photograph, so a photograph wider or taller than the GPU device's texture
+limit (8192 px) cannot be shown; drawing the panel from 512 px tiles of the pyramid level
+that matches the zoom is proposed in
+[out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md).
 
 **Display**: The image is shown fitted to the panel dimensions (maintaining aspect ratio)
 using `egui::Image` with `fit_to_exact_size` or `max_size`. Pan/zoom within the detail

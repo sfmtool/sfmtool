@@ -331,7 +331,9 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 - **No cache on disk.** Pyramids are rebuilt from the JPEGs in each session,
   and every pyramid is held whole. Stored reduced levels and photograph tiles
   for large photographs are proposed in
-  [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md).
+  [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md),
+  and a pyramid holding only the region of each level one render reads in
+  [view-region-pyramid.md](../../drafts/view-region-pyramid.md).
 - **The budget is set only by the environment variable**, not in the viewer's
   UI.
 
