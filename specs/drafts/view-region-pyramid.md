@@ -160,8 +160,8 @@ requesting the missing ones. The GUI thread never decodes and never waits.
   tile whose patch covers `F` level-0 pixels reads level `≈ log2(F / 64)` over
   about 66 x 66 pixels, 13 KB, and a quarter of that at the next level for
   anisotropic blending; the photograph tiles it is cut from, one to four per
-  level, are 0.8 to 3.2 MB in the tile cache. Seventeen views: about 50 MB,
-  against 12.6 GiB of whole pyramids. These are estimates from the sizes, not
+  level and one or two levels, are 0.8 to 6.3 MB in the tile cache. Seventeen
+  views: 13 to 108 MB, against 12.6 GiB of whole pyramids. These are estimates from the sizes, not
   measurements.
 - **Bulk kernels** (the display patch bitmaps at open, *Refine all normals*,
   the web export) touch every photograph at the levels their patches need.

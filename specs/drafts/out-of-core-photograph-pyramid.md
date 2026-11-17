@@ -137,8 +137,8 @@ about memory and the time of a first read. A 6000 x 4000 photograph is 72 MB
 at level 0 and 96 MB as a pyramid, so a few hundred of them, a normal camera
 capture, do not fit any budget, while their mipmaps cost one extra encode each.
 4096 is also where `sfm ws init` stops SIFT image doubling
-(`double_image_below_long_side`), so a photograph in core is one SIFT may
-double. The threshold is a constant, not a setting, because which tier a
+(`double_image_below_long_side`: an image is doubled only when both sides are
+below 4096), so SIFT never doubles an out-of-core photograph. The threshold is a constant, not a setting, because which tier a
 photograph is in decides which pixels the kernels read; a change to it is a
 change of results and is made as one. Tests pass a smaller threshold through
 `MipmapOptions` (below), which production code does not.
@@ -227,28 +227,38 @@ first that fails is the reason recorded in `NotRegionReadable`:
    coded) with 8-bit samples and a height that is not 0 (a `DNL` marker is
    not followed). Progressive (`SOF2`), lossless (`SOF3`), arithmetic-coded
    (`SOF9` and up) and 12-bit frames fail.
-3. It has one or three components. With three, the colour transform is the one
-   `ImageU8::read_rgb` applies as YCbCr (a JFIF file, or an Adobe segment with
-   transform 1, or neither marker); an Adobe transform 0 (stored RGB), CMYK and
-   YCCK fail.
+3. It has one or three components. With three, the colour transform
+   `jpeg-decoder` 0.3.2 chooses for the file, and so `ImageU8::read_rgb`
+   applies, is YCbCr. That decoder decides by the component identifiers first
+   (1, 2, 3 is YCbCr; `R`, `G`, `B` is RGB; two other sets are the big-gamut
+   transforms), then by a JFIF segment (YCbCr), then by an Adobe segment's
+   transform (1 is YCbCr, 0 is RGB), and takes YCbCr when none of them
+   decides (`determine_color_transform` in its `decoder.rs`). Any other
+   answer fails, as do CMYK and YCCK.
 4. The chroma components are sampled 1 x 1 and the luma `H x V` with `H` and
    `V` each 1 or 2: 4:4:4, 4:2:2, 4:4:0 or 4:2:0. Any other factors fail.
 5. It has exactly one scan before end-of-image, holding every component in
    frame order, with spectral selection 0 to 63 and no successive
    approximation.
 6. A `DRI` segment before the scan sets a restart interval `R > 0`, and `R`
-   divides the MCUs per row, `ceil(width / (8·H))`, so every interval lies in
-   one MCU row and every row starts one. An interval that runs from one row
-   into the next fails, because the two-dimensional small frame below cannot be
-   cut from it.
+   divides the MCUs per row, so every interval lies in
+   one MCU row and every row starts one. The MCUs per row are
+   `ceil(width / (8·H))` with three components; with one, the scan is not
+   interleaved and an MCU is one 8 x 8 block whatever the component's
+   sampling factors, so they are `ceil(width / 8)`. The rows are counted the
+   same way, with `V` and 8. An interval that runs from one row into the next
+   fails, because the two-dimensional small frame below cannot be cut from
+   it.
 7. Indexing the scan finds exactly `rows · (MCUs per row / R)` intervals, each
    holding at least one byte, separated by `RST0` to `RST7` in sequence modulo
    8, and the end-of-image marker after the last. A missing, repeated or
    out-of-order marker, a file cut short, or any other marker inside the scan
    fails. Bytes after end-of-image are ignored, as the reader ignores them.
 
-The user's 17 photographs pass (4:2:0, `R = 4` of 1020 MCUs per row, 195,075
-intervals each). A camera JPEG without a `DRI` segment, a progressive JPEG and
+The measured photograph passes (4:2:0, `R = 4` of 1020 MCUs per row, 195,075
+intervals), and the other 16 of the user's photographs have the same restart
+interval; whether all 17 pass every rule is checked once the test exists
+(step 4). A camera JPEG without a `DRI` segment, a progressive JPEG and
 every PNG or TIFF fail and get a `-mipmap1`.
 
 The test is part of the definition of each photograph's pixels: changing it
@@ -477,8 +487,10 @@ derived file:
   record's `jpeg_quality` (§ "When a mipmap is current"), and the sets are made
   again as they are next read. A set is never mixed across qualities.
 - **One reader, in Rust.** The block is parsed and validated by
-  `read_mipmap_options(workspace_root)` beside `find_workspace_for_path` in
-  `sfmtool-archive-io`'s workspace module, and `load_workspace_config` calls
+  `read_mipmap_options(workspace_root)` in `sfmtool_core::workspace`, beside
+  the rules of `feature_options` (`sfmtool-archive-io` only finds the
+  workspace and reads none of its files, and it cannot name a type of
+  `sfmtool-core`, which depends on it), and `load_workspace_config` calls
   it through a binding rather than validating in Python. The photograph cache
   reads it once per workspace root and again when the file's modification time
   changes.
@@ -742,8 +754,9 @@ Two choices are needed for that identity:
   block's pixels depend only on its own coefficients.
 
 **A whole level** is decoded from the whole file through the same raw path and
-conversion, which is what the identity was measured against. It is what the
-kernel pyramids read (below). A whole decode of level 1 of this photograph to
+conversion, which is what the identity was measured against. Only the coarsest
+mipmap, level `K`, is decoded whole in use: the levels below it are computed
+from that decode (§ "Levels by size"). A whole decode of level 1 of this photograph to
 RGB took 0.16 to 0.45 s; the raw path does the same work less the colour
 conversion, which it then does itself.
 
@@ -867,7 +880,7 @@ sizes).
 | 17 x 200 MP, display patch bitmaps at open, one render per point | 12.6 GiB | 32 renders in flight x 2.9 KB, plus the tile budget |
 | 500 x 200 MP, any of the above | 372 GiB; fails | the same as for 17: regions plus the tile budget |
 | 500 x 6000 x 4000, any of the above | 500 x 96 MB = 48 GB | the same |
-| 17 x 200 MP, Track View on a 17-image track at `R = 64` | 12.6 GiB | 17 x 17 KB of regions, plus the tiles they are cut from, one to four per level read, 13 to 54 MB |
+| 17 x 200 MP, Track View on a 17-image track at `R = 64` | 12.6 GiB | 17 x 17 KB of regions, plus the tiles they are cut from, one to four per level read and one or two levels per view, 13 to 108 MB |
 | 368 x 3840 x 2160 (in core) | 12.2 GB held by a `get_many` over every frame | unchanged: in-core photographs keep whole pyramids |
 
 The cost moves from memory to tile decodes: a render whose tiles are not
@@ -1118,7 +1131,7 @@ is region-readable, and `-mipmap1`'s otherwise.
   does not reach the patch) take no sample and so add nothing to the region.
 - **Logic in Rust.** The naming rule, the record, the region test, the
   staleness test, the workspace block's validation, the making and the reading
-  are Rust in `sfmtool-core` and `sfmtool-archive-io`; Python calls bindings.
+  are Rust in `sfmtool-core`; Python calls bindings.
 - **Settings structs.** `MipmapOptions` and `PhotographCacheOptions`.
 - **Test cost.** Every test runs on synthetic images of a few hundred pixels,
   with `MipmapOptions` setting a threshold and a tile size small enough that
@@ -1214,7 +1227,8 @@ pub enum MipmapError { Io { path: PathBuf, error: std::io::Error }, Stale { path
     Encode(String), Cancelled }
 ```
 
-In `sfmtool-archive-io`'s workspace module, beside `find_workspace_for_path`:
+In `sfmtool_core::workspace` (a new `mipmap_options` module beside
+`feature_options`), with `WorkspaceConfigError` new beside it:
 
 ```rust
 /// The `mipmap_options` block of `<root>/.sfm-workspace.json`, defaults for
@@ -1346,13 +1360,15 @@ photograph. Steps 4 to 6 build what it needs without changing any reader.
    is made again; each invalid `mipmap_options` (a float, a string, 0, 101, an
    unknown key) is an error naming the key; a read-only cache directory gives
    the in-memory equivalent with the same pixels; two threads and two
-   processes building at once; the peak memory of one build, measured.
+   processes building at once. Outside the tests, the peak memory of one build
+   of a 200-megapixel photograph is measured once and the estimate in § "How
+   the levels are made" replaced by it.
 5. **Tile and region decodes**: the restart index, `MipmapFile::decode_region`
    and `OriginalRegions`. Tests: every tile of several synthetic levels with
    odd sizes and a restart interval of 2 and 16 MCUs, including the short last
    interval, equals the same pixels of `decode`; a grey mipmap; a damaged
    interval is `Stale`; for JPEGs written by `jpeg-encoder` with restart
-   intervals at 4:2:0, 4:4:4 and grey, of odd sizes, every region (including
+   intervals at 4:2:0, 4:2:2, 4:4:0, 4:4:4 and grey, of odd sizes, every region (including
    edges and corners) equals the same pixels of `read_rgb`; each rule of the
    region test refuses a file made to break it alone.
 6. **View-region pyramids** ([view-region-pyramid.md](view-region-pyramid.md)
