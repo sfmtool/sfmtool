@@ -220,8 +220,8 @@ it is running, 12.7 MB: 15.8 MB, whatever the views or the number of them.
 budget; the common case, footprints that are not stretched, stays at a few
 kilobytes per view. No view is refused and no result changes:
 which path a render takes depends on its boxes and on what its patch already keeps, and both read the same
-pixels. `clipped_share` already walks tiles one at a time (above). The cap of
-four tiles and the window of 16 are open question 4.
+pixels. `clipped_share` already walks tiles one at a time (above). The
+allowance of four tiles and the window of 16 are open question 4.
 
 **On the GUI thread** (Track View's tiles, crops and context, the Track
 Table's crop column), the panel acts on the photograph's layout state as the
@@ -325,7 +325,7 @@ source.
 4. **The allowance and the tile window.** Four tiles of copied regions per
    patch, all views together, and 16 pinned tiles for the tile path (as
    designed), or other values. Recommendation: keep them, and count in each kernel's phase note
-   how many renders took the tile path, so the cap is tuned on real captures;
+   how many renders took the tile path, so both are tuned on real captures;
    the values change memory and speed, never a result.
 5. **An interface for kernels.** Designed as a `PhotographSource` enum in
    `ProjectedImage`, resolved to a region pyramid inside the render entry
