@@ -2462,7 +2462,7 @@ fn a_refused_file_whose_image_names_cannot_be_read_keeps_its_folder() {
         .unwrap();
     assert_eq!(
         folder.kept_because.as_deref(),
-        Some("kept: named by 2 file(s) the current reader refuses"),
+        Some("named by 2 file(s) the current reader refuses"),
         "{folder:?}"
     );
     assert!(!folder.deleted);
