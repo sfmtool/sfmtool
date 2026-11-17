@@ -711,22 +711,24 @@ original.
 Every write goes through a temporary file in the same directory
 (`.<file name>.<process id>-<count>.tmp`, where the count is the one
 process-wide counter this design keeps, as `ImageU8::write` already does: it
-only makes temporary names unique between the threads of one process, holds
-no data, and so needs no owner), renamed over the target, as
+only makes temporary names unique between the threads of one process,
+whichever cache they write for, holds no data, and so needs no owner),
+renamed over the target, as
 `ImageU8::write` already does. Unlike `ImageU8::write`, a mipmap writer whose
 rename fails does **not** write the target directly: if the target now exists
 and is current, another writer has made it, and the write counts as done;
-otherwise the photograph falls to the in-memory equivalent for this session.
-The temporary file is removed either way.
+otherwise the photograph falls to the in-memory equivalent, held by that cache
+for as long as it lives. The temporary file is removed either way.
 
-Two writers of one photograph in one process are one: the cache makes each
-photograph's set once, and every other asker waits for it. Two processes (two
-viewers, or `sfm sift` and a viewer) can make the same set at the same time;
+Two writers of one photograph through one cache are one: the cache makes each
+photograph's set once, and every other asker waits for it. Two caches, in one
+process or in two (two viewers, or `sfm sift` and a viewer), can make the same
+set at the same time;
 each writes the same pixels, and the last rename wins. A reader reads a whole
 mipmap into memory when it opens it (10.8 MB for level 1 of this photograph,
 up to 43 MB for a `-mipmap1`) and
-keeps those bytes, so a session sees one version of each file even when another
-process replaces it, and holds a file open only while it reads it. Rust's
+keeps those bytes, so a cache sees one version of each file even when another
+writer replaces it, and holds a file open only while it reads it. Rust's
 standard library opens files on Windows with delete sharing, so an open
 mipmap should not block another process's rename over it; the two-process test
 in step 5 confirms this on Windows, and the rule above (a failed rename over a
@@ -1168,8 +1170,10 @@ tiles and do not count against it.
   already holds, adding only the reduction and the encodes (about 0.8 s for this
   photograph, estimated from the parts above, plus 1.4 to 2.1 s when it needs a
   `-mipmap1`). The Python extractors (`sfmtool` and OpenCV backends decode with
-  `read_image_rgb`; COLMAP decodes inside COLMAP) call `PhotographCache.build_mipmaps` (§ "Python bindings") for each
-  photograph after the `.sift` is written, which decodes the photograph again
+  `read_image_rgb`; COLMAP decodes inside COLMAP) call
+  `PhotographCache.build_mipmaps` (§ "Python bindings") for each photograph
+  after the `.sift` is written, on one cache the extraction run holds, so its
+  worker threads share one build count; the call decodes the photograph again
   (0.8 to 1.7 s). Open question 4 asks whether that call should take the
   decoded array instead.
 - **`sfm ws mipmaps PATHS…`** makes them explicitly for the photographs under
@@ -1560,11 +1564,13 @@ impl PhotographCache {
     pub fn reserve_builds(&self, bytes_per_build: u64, wanted: usize) -> BuildReservation<'_>;
     /// The header, the tier, the level sizes and, out of core, the region
     /// answer; makes no set. The blocking form of `layout`.
-    pub fn read_layout(&self, path: &Path) -> Result<Arc<PyramidLayout>, GetError>;
+    pub fn read_layout(&self, path: &Path) -> Result<PhotographLayout, GetError>;
     /// Pixels `rect` of `level` as every kernel samples them, making the set
     /// first if its files are missing or stale (`get`), then cutting from the
-    /// pyramid in core or assembling from tiles out of core. Behind the
-    /// Python class's `read_level`, `read_tile` and `read_region`.
+    /// pyramid in core or assembling from tiles out of core. A level or
+    /// rectangle outside the photograph, or an empty rectangle, is
+    /// `OutOfRange`. Behind the Python class's `read_level`, `read_tile` and
+    /// `read_region`.
     pub fn read_region(&self, path: &Path, level: usize, rect: [u32; 4], progress: &Progress<'_>)
         -> Result<ImageU8, PhotographReadError>;
     /// Makes its misses in parallel on the rayon pool, the out-of-core ones in
@@ -1603,7 +1609,11 @@ pub struct PhotographTile {
 
 // `PeekedLayout` and `PeekedTile` as in § "The caches in memory".
 pub enum TileError { Changed { path: PathBuf }, Unreadable { path: PathBuf, why: String } }
-pub enum GetError { Unreadable(String), Workspace(WorkspaceConfigError), Cancelled }
+pub enum GetError { NotFound(PathBuf), Unreadable(String), Workspace(WorkspaceConfigError), Cancelled }
+
+/// `read_layout`'s answer: the layout, and `None` in core or whether the
+/// original is region-readable out of core.
+pub struct PhotographLayout { pub layout: Arc<PyramidLayout>, pub region_readable: Option<bool> }
 ```
 
 `DISPLAY_PYRAMID_LEVELS` and the viewer's `state::PYRAMID_LEVELS` are removed.
@@ -1626,13 +1636,19 @@ pub enum PhotographReadError {
     /// A file's record differs from the one this kernel call read, or it went
     /// stale after the call's read phase found it current.
     Changed { path: PathBuf },
+    /// The photograph does not exist (`GetError::NotFound`).
+    NotFound { path: PathBuf },
     Unreadable { path: PathBuf, why: String },
+    /// `read_region` was asked for a level or rectangle the photograph does
+    /// not have, or an empty one.
+    OutOfRange { path: PathBuf, why: String },
     /// A reader that has not yet moved to view-region pyramids was handed a
     /// tiled source; exists from step 8 until the last reader moves (step 14).
     NotYetTiled { reader: &'static str },
 }
 impl From<Cancelled> for PhotographReadError { /* … */ }
 impl From<TileError> for PhotographReadError { /* … */ }
+impl From<GetError> for PhotographReadError { /* … */ }
 ```
 
 **In-memory pyramids stay infallible.** `render_tile`, `render_tile_with_grad_into`,
@@ -1697,12 +1713,15 @@ is the one it holds in `AppState`, as a script holds its own.
 **A new submodule, `sfmtool.photographs`** (`_sfmtool.photographs`,
 `crates/sfmtool-py/src/photographs.rs`), the fourteenth, named for what the
 photograph cache holds ([GLOSSARY.md](../GLOSSARY.md), *photograph cache*).
-It is registered in `lib.rs` as the other submodules are, gets its public
-module `src/sfmtool/photographs.py` re-exporting its `__all__`, its row in
-the index of [python-bindings.md](../python-bindings.md) and in
-`tests/test_module_layout.py`'s expectations, its name in the lazy
-module list of `sfmtool/__init__.py` so `import sfmtool` loads nothing new,
-and a `tests/rust_bindings/photographs/test_photographs_registration.py`. It
+It is wired as `sfmtool.workspace` was: an `install_submodule` call in
+`lib.rs` and its name in that file's list of submodules, its public module
+`src/sfmtool/photographs.py` re-exporting its `__all__`, its row in the index
+of [python-bindings.md](../python-bindings.md), its name in
+`_LAZY_SUBPACKAGES` and the `if TYPE_CHECKING:` imports of
+`sfmtool/__init__.py` and in `tests/test_lazy_loading.py`'s list, so
+`import sfmtool` loads nothing new, and a `tests/rust_bindings/photographs/`
+package with `test_photographs_registration.py`, which
+`tests/test_module_layout.py` already allows to name the extension. It
 is not `sfmtool.fileio`, whose names are the I/O of sfmtool's file formats,
 which mipmaps are not (§ "Is it a file format?"), nor `sfmtool.patches`,
 whose names are the patch kernels'.
@@ -1736,7 +1755,8 @@ class PhotographCache:
   `region_readable` (`None` in core). It reads the header, the workspace's
   `mipmap_options` and, out of core, the region answer from a current record
   or the region test; it makes no set. It is core's `read_layout`, the
-  blocking form of `layout` and `request_layout`.
+  blocking form of `layout` and `request_layout`, and its
+  `region_readable` is that call's `PhotographLayout::region_readable`.
 - **`read_level`, `read_tile` and `read_region`** return a level, a photograph
   tile's core (without its border), or the pixels `x0..x1` by `y0..y1` of a
   level, as `(H, W, 3)` `uint8` arrays in the `y_x_rgb` layout of
@@ -1753,33 +1773,43 @@ class PhotographCache:
 - **`build_mipmaps(paths, progress=None)`** makes the mipmaps of the
   out-of-core photographs among `paths` (directories expanded as
   `sfm ws mipmaps` expands them, skipping `.sfm-cache`) through the cache's
-  `get_many`, so a set already made in this cache, or by another process, is
+  `get_many`, so a set already made in this cache, or by another cache or
+  process, is
   read rather than made again, and the build budget and its reservations
   apply. It returns a `BuildMipmapsReport` with the paths made, already
   current, in core, and failed with their messages. **It is the one way to
   build mipmaps from Python**: the free function `sfmtool.workspace.build_mipmaps`
   of earlier revisions of this draft is dropped. `sfm ws mipmaps` makes a
-  `PhotographCache()` and calls it; the Python SIFT extractors call it on a
-  short-lived cache after each `.sift` is written.
+  `PhotographCache()` and calls it; the Python SIFT extractors call it after
+  each `.sift` is written, on one cache the extraction run holds (§ "Who
+  makes the mipmaps, and when").
 - **`stats()`** returns a frozen `PhotographCacheStats`: the pyramid entries,
   bytes, budget, hits and misses of today's `stats`, and the tile entries,
-  tile bytes, tile budget, tile hits and misses, and the sets made by this
-  cache.
+  tile bytes, tile budget, tile hits and misses, the bytes reserved for
+  builds, and the sets made by this cache.
 - **Errors raise, never panic.** A missing file raises `FileNotFoundError`
   and an unreadable one `OSError`, as `read_image_rgb` does; a level, tile or
-  rectangle outside the photograph, an empty rectangle, a negative index or a
-  budget that is not a whole number raise `ValueError`; an invalid
+  rectangle outside the photograph or an empty rectangle
+  (`PhotographReadError::OutOfRange`), and a negative index or budget, raise
+  `ValueError`, and an argument that is not an integer raises `TypeError`
+  from PyO3's conversion; an invalid
   `mipmap_options` raises `RuntimeError` naming the key, as
   `load_workspace_config` does; a file whose record changes during a read
-  raises `RuntimeError` naming the path (`PhotographReadError::Changed`); a
-  cancelled `progress` raises the error cancellation raises in every other
-  binding. Each message names the path.
+  raises `RuntimeError` naming the path (`PhotographReadError::Changed`).
+  `progress` is a `ProgressCounter`, as in every other binding, and counts
+  sets made; Ctrl+C stops a read or a build within one stage through the
+  binding's `SignalWatch` and raises `KeyboardInterrupt`, as `pick_images`
+  does. Each message names the path.
 
 **An optional `cache=` argument on every binding that reads a
 reconstruction's photographs by path**: `ImagePyramidSet.read(views_or_recon,
 workspace_dir=None, cache=None, progress=None)` and
-`sfmtool.fileio.write_web_export(…, cache=None)`. The other bindings that read
-photographs take arrays or an `ImagePyramidSet`, not paths. **There is no
+`sfmtool.fileio.write_web_export(…, cache=None)`. The kernels take arrays or
+an `ImagePyramidSet`, not paths. The other bindings that read photographs by
+path decode each whole and keep no pyramid, so they take no cache:
+`read_image_rgb`, `read_image_rgba` and `image_has_alpha` (row P1), and the
+SIFT extraction of `build_sift_files`, `pick_images` and the `.sift`
+conversion (row 21). **There is no
 implicit process-wide default cache.** When `cache` is omitted the call makes
 its own short-lived cache, of pyramid budget 0, as before, and drops it when
 it returns; nothing is kept between calls unless the caller keeps it. A script
@@ -1958,7 +1988,7 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
     file (a `Bilinear` render at level 0 and a `BilinearMip` render pinned to
     a level read back the same pixels); the arrays are read-only; a level,
     tile or rectangle outside the photograph, an empty rectangle, a negative
-    index and a non-integer budget raise `ValueError`, a missing file
+    index and a negative budget raise `ValueError`, a missing file
     `FileNotFoundError`, and an invalid `mipmap_options` `RuntimeError`; the
     new submodule passes `tests/test_module_layout.py`, the registration
     test and the lazy-loading test.
