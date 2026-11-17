@@ -121,24 +121,41 @@ These are proposed for [GLOSSARY.md](../GLOSSARY.md), each with its reason.
 | **mipmap** / **mip level** / **mip level file** | a photograph's **mipmap** is its whole stored chain of levels, kept under `.sfm-cache/`: its reduced levels, and its full-resolution copy when the original cannot be read by region. One stored level is a **mip level**, numbered as the pyramid's level is (level 0 full resolution, level `l` reduced by `2^l`), and the file holding it is a **mip level file**, `<file name>-mip<l>.jpg`: `IMG_0001.JPG-mip1.jpg` is half size, `-mip2.jpg` a quarter, and `-mip0.jpg` the full-resolution copy. The number in a file name is the level index the code uses; no factor is converted to a level anywhere. `sfmtool_core::camera::mipmap` | `mipmap set`, a single file called a mipmap, `level file`, `cache file`, `pyramid file`, factor names such as `-mipmap2` | the user chose the standard usage, so others find it familiar: Williams, "Pyramidal Parametrics" (SIGGRAPH 1983), coined *mip map* for the whole prefiltered set of an image at successive halvings; OpenGL says a texture has a mipmap whose images are *mipmap levels*, numbered by level of detail with level 0 the base image (`glTexImage2D`'s `level`); Direct3D and Vulkan say *mip chain* and *mip level* (`mipLevels`); KTX and DDS store a whole chain in one file. *Level* alone stays the in-memory pyramid level, which for a small photograph has no file. Names about the whole feature keep *mipmap* (`mipmap_options`, `sfm ws mipmaps`, `build_mipmaps`, `MipmapError`, `MipmapLocation`, `sfmtool_core::camera::mipmap`), since they act on photographs' mipmaps, plural in the standard sense. The viewer, the CLI and the Python messages use the same words as the code, with no separate user-facing ones: the quiet task *Build mipmaps*, the line *Building mipmaps: {done} of {total}*, a panel's *Building mipmap…* while the one photograph's mipmap it waits for is made, the phase *build mipmaps*, and *mip level* where a message is about one level. A mipmap is made inside the photograph cache's `get` or `get_many`, in the path's slot, with no builder object |
 | **region-readable** (an original) | an original JPEG whose layout passes the test in § "Which originals can be read by region", so a rectangle of it decodes to exactly the pixels of the whole decode; its level 0 is the original, and it has no `-mip0` | `tiled`, `seekable`, `RST-capable` | names what the test decides, that a region can be read, rather than one ingredient of it |
 | **cache directory** | `.sfm-cache/` at a workspace's root, holding files derived from the workspace's images that can be deleted at any time and rebuilt; today only mip level files | `cache folder`, `.cache` | it names what is in it (files that are a cache) and where (the workspace's); a name without `sfm` would collide with other tools' caches |
-| **out-of-core photograph** / **in-core photograph** | a photograph of a workspace whose file has `mipmap_options`, with a width or height over that object's `out_of_core_long_side` (4096 as `sfm ws init` writes it) and both sides under 65536 px, is out of core (§ "Which photographs are out of core"): its reduced levels come from mipmaps, its level 0 from the original or a `-mip0`, and every reader reads it a region at a time; any other photograph is in core: its whole pyramid is built in memory from one decode, as every pyramid is today | `large image`, `tiled image`, `big photograph` | the tier decides where the levels live, which is what *core* means here; *large* says nothing about what is done differently, and every photograph is shown in tiles |
+| **out-of-core photograph** / **in-core photograph** | a photograph of a workspace whose file has `mipmap_options`, with a width or height over that object's `out_of_core_long_side` (4096 as `sfm ws init` writes it), is out of core (§ "Which photographs are out of core"; one with a side of 65536 px or more is refused everywhere): its reduced levels come from mipmaps, its level 0 from the original or a `-mip0`, and every reader reads it a region at a time; any other photograph is in core: its whole pyramid is built in memory from one decode, as every pyramid is today | `large image`, `tiled image`, `big photograph` | the tier decides where the levels live, which is what *core* means here; *large* says nothing about what is done differently, and every photograph is shown in tiles |
 | **photograph tile** | a 512 x 512 block of one level of a photograph's pyramid, with a one-pixel border of its neighbours' pixels to assist bilinear interpolation: the unit the display draws as one texture and that a level is read in; `PhotographTile`, keyed by level, column and row | bare `tile`, `block`, `chunk` | bare *tile* is a view's tile, the patch a kernel renders ([GLOSSARY.md](../GLOSSARY.md) § "Rendering a view's tile"), and Track View draws those beside photographs, so the photograph's blocks need a qualified name |
 
 ## Which photographs are out of core
 
 A photograph is **out of core** when its workspace's file has a
-`mipmap_options` object (§ "The workspace setting"), the photograph's width
+`mipmap_options` object (§ "The workspace setting") and the photograph's width
 or height, read from its header with `image_dimensions`, is greater than that
 object's `out_of_core_long_side` (4096 as `sfm ws init` writes it,
-`DEFAULT_OUT_OF_CORE_LONG_SIDE`), and both its sides are under 65536 px
-(`MAX_JPEG_SIDE`, 65535, the most a JPEG frame holds), because every file the
-tier may write, a `-mip0.jpg` of a non-region-readable original included,
-must fit in a JPEG frame. It is **in core** otherwise: always in a workspace
-without the object or with no workspace at all, and when a side is 65536 px
-or more, which only a non-JPEG original can be. An earlier revision kept in
-core only a photograph whose level 1 would not fit a frame, which was wrong
-for `-mip0`: a 70000 x 3000 PNG would have been out of core with a `-mip0`
-that cannot be written. The test data (270 x 480 to 2040 x 1536 and 480 x 480),
+`DEFAULT_OUT_OF_CORE_LONG_SIDE`); it is **in core** otherwise, and always in a
+workspace without the object or with no workspace at all.
+
+**A photograph with a side of 65536 px or more is refused.** The photograph
+cache refuses any photograph whose level 0 is 65536 px or more wide or high
+(over `MAX_JPEG_SIDE`, 65535), in every workspace, with or without
+`mipmap_options`, and with no workspace, so the answer does not depend on the
+setting: every file the tier may write, a `-mip0.jpg` of a non-region-readable
+original included, must fit in a JPEG frame, whose sides are at most 65535,
+and one rule for every photograph keeps a photograph's readability the same
+whatever the workspace sets. It is decided from the header
+(`image_dimensions`), before any decode, and is the error
+`GetError::TooLarge { path, width, height }` (`PhotographReadError::TooLarge`
+for a kernel), which names the photograph and its size; the Python bindings
+raise it as `OSError`, as `read_image_rgb` raises a decoder's limit. Only a
+non-JPEG original can be that large. An earlier revision kept such a
+photograph in core only when its level 1 would not fit a frame, which was
+wrong for `-mip0`: a 70000 x 3000 PNG would have been out of core with a
+`-mip0` that cannot be written. The readers outside the photograph cache,
+`read_image_rgb` and the commands built on it, SIFT extraction, the display
+thumbnails and the image readings at save, are unchanged: they write no mip
+level file, so no JPEG frame limits them, and their own limit stays the
+reader's 4 GiB decode limit. A photograph with a side of 65536 px or more
+that today decodes within that limit is therefore readable by them but
+refused by every pyramid reader, in the viewer and in the kernels alike. The
+test data (270 x 480 to 2040 x 1536 and 480 x 480),
 3840 x 2160 video frames and 4032 x 3024 phone photographs are in core and keep
 today's in-memory pyramids, so nothing is written for them and no result
 changes except through the pyramid depth (below). A 24-megapixel camera
@@ -1456,9 +1473,10 @@ is region-readable, and `-mip0`'s otherwise.
   encoded at another quality, or recording another photograph is stale and is
   made again; an original that cannot be read is an `Unreadable` answer, as
   today; a workspace file with an invalid `mipmap_options` is an error naming
-  the key. A photograph with a side of 65536 px or more is in core by the
-  tier rule, so every file the tier writes fits a JPEG frame and
-  `MipmapError::TooLarge` is only the encoder's own refusal,
+  the key; a photograph with a side of 65536 px or more is refused from its
+  header with `GetError::TooLarge`, before any decode. So every file the tier
+  writes fits a JPEG frame, and `MipmapError::TooLarge` is only the encoder's
+  own refusal,
   reported rather than unwrapped. The region test and the tile decoder's
   slicing are checked against the index, never trusted from the file.
 - **Points at infinity.** Unaffected: the design changes where pixels come
@@ -1483,7 +1501,7 @@ record, the region test and the tile decode), exported from
 
 ```rust
 pub const DEFAULT_OUT_OF_CORE_LONG_SIDE: u32 = 4096; // what `sfm ws init` writes
-pub const MAX_JPEG_SIDE: u32 = 65535; // a side of 65536 px or more stays in core
+pub const MAX_JPEG_SIDE: u32 = 65535; // a photograph with a larger side is refused
 pub const PHOTOGRAPH_TILE_SIZE: u32 = 512;
 pub const MIPMAP_RESTART_INTERVAL_MCUS: u16 = 16;
 pub const MAX_REGION_INTERVAL_WIDTH: u32 = 1024;
@@ -1500,8 +1518,8 @@ pub struct MipmapOptions {
 
 /// Every level's size for a photograph's size, and how many are stored.
 /// `options` is `None` for a workspace without `mipmap_options`, or no
-/// workspace: then every photograph is in core, as is one with a side over
-/// `MAX_JPEG_SIDE`.
+/// workspace: then every photograph is in core. A photograph with a side
+/// over `MAX_JPEG_SIDE` has no layout: the cache refuses it first.
 pub struct PyramidLayout { /* … */ }
 impl PyramidLayout {
     pub fn for_size(width: u32, height: u32, options: Option<&MipmapOptions>, tile_size: u32) -> Self;
@@ -1661,7 +1679,9 @@ pub struct PhotographTile {
 
 // `PeekedLayout` and `PeekedTile` as in § "The caches in memory".
 pub enum TileError { Changed { path: PathBuf }, Unreadable { path: PathBuf, why: String } }
-pub enum GetError { NotFound(PathBuf), Unreadable(String), Workspace(WorkspaceConfigError), Cancelled }
+pub enum GetError { NotFound(PathBuf), Unreadable(String), Workspace(WorkspaceConfigError),
+    /// A side of 65536 px or more, read from the header; in every workspace.
+    TooLarge { path: PathBuf, width: u32, height: u32 }, Cancelled }
 
 /// `read_layout`'s answer: the layout, and `None` in core or whether the
 /// original is region-readable out of core.
@@ -1690,6 +1710,8 @@ pub enum PhotographReadError {
     Changed { path: PathBuf },
     /// The photograph does not exist (`GetError::NotFound`).
     NotFound { path: PathBuf },
+    /// A side of 65536 px or more (`GetError::TooLarge`).
+    TooLarge { path: PathBuf, width: u32, height: u32 },
     Unreadable { path: PathBuf, why: String },
     /// `read_region` was asked for a level or rectangle the photograph does
     /// not have, or an empty one.
@@ -1853,7 +1875,9 @@ class PhotographCache:
   from PyO3's conversion; an invalid
   `mipmap_options` raises `RuntimeError` naming the key, as
   `load_workspace_config` does; a file whose record changes during a read
-  raises `RuntimeError` naming the path (`PhotographReadError::Changed`).
+  raises `RuntimeError` naming the path (`PhotographReadError::Changed`); a
+  photograph with a side of 65536 px or more raises `OSError` naming it and
+  its size (`GetError::TooLarge`).
   `progress` is a `ProgressCounter`, as in every other binding, and counts
   mipmaps made; Ctrl+C stops a read or a build within one stage through the
   binding's `SignalWatch` and raises `KeyboardInterrupt`, as `pick_images`
@@ -1959,9 +1983,11 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    time); all built by writing the record directly, so the tests run on any
    file system; a workspace without the object and a photograph with no
    workspace are in core and write nothing; with the small threshold, a
-   65535 x 100 photograph is out of core and a 65536 x 100 one in core, each
-   a synthetic PNG of which only the header is read (`PyramidLayout` and
-   `read_layout` decide from it), never decoded at that size; two builds give the same bytes; a
+   65535 x 100 photograph is out of core and a 65536 x 100 one refused with
+   `GetError::TooLarge` naming it and its size, the latter also in a
+   workspace without the object and with no workspace, each a synthetic PNG
+   of which only the header is read (`read_layout` and `get` decide from it),
+   never decoded at that size; two builds give the same bytes; a
    region-readable JPEG gets no `-mip0` and a PNG, a progressive JPEG, a
    JPEG without `DRI` and one with an interval wider than 1024 px do; each
    staleness case (length, time with equal hash, time with another hash,
