@@ -1818,10 +1818,15 @@ otherwise.
   "put this place at the centre of the panel", and all take the optional
   `zoom`. **`rect`** and **`fit`** settle their own, so a `zoom` beside either
   is refused rather than silently dropped.
-- **`zoom` is absolute**, 1.0 being the fit and 32.0 the closest the panel goes.
-  It is clamped to that range and **the reply reports the zoom that was
-  applied**, so a caller that asked for 500 reads back 32 rather than assuming
-  it got what it sent.
+- **`zoom` is absolute**, 1.0 being the fit. The closest the panel goes is
+  `max(32, 8 / fit_scale)`, where `fit_scale` is the panel points one
+  photograph pixel spans at the fit: 32.0 for a photograph that fits at a
+  quarter of its size or larger, and for a larger one as far as one photograph
+  pixel spanning 8 points ([multi-panel-image-browser.md](multi-panel-image-browser.md)
+  § "Image Detail: 2D pan and zoom navigation"). It is clamped to that range
+  and **the reply reports the zoom that was applied**, so a caller that asked
+  for 500 of a photograph that fits at half size reads back 32 rather than
+  assuming it got what it sent.
 - **`point` never chooses the photograph for you.** It is looked for in the one
   being looked at, and a track that holds no sighting there is a refusal naming
   `get_point`, which lists the camera images the track does hold. A point

@@ -101,7 +101,7 @@ All four panels share `AppState::selected_image` as the central image selection 
 - Image Detail: shows the new full-resolution image from the viewer's photograph cache
   ([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)), which decodes
   it on the rayon pool on a miss while the panel says "Loading image…" (same path as
-  `upload_bg_image` in camera view mode, but rendered to an egui texture instead of a wgpu
+  `upload_bg_image` in camera view mode, but drawn as egui textures of photograph tiles instead of a wgpu
   background pass)
 
 ### 3D Point Selection
@@ -519,27 +519,57 @@ Full-resolution image display for the selected camera, with SIFT feature overlay
 
 #### Base Image
 
-**Image loading**: When `selected_image` changes, load the full-resolution image from
-`workspace_dir.join(&img.name)` into an egui texture. This is the same image path used by
-`SceneRenderer::upload_bg_image` for camera view mode, but rendered as an egui `Image`
-widget instead of a wgpu background pass. The pixels come from the viewer's photograph
-cache and are never decoded on the GUI thread: on a miss `state::display_photograph`
-starts the decode on the rayon pool and repaints when it lands, and until then the panel
-shows "Loading image…", or "Failed to load image" for a file that cannot be read
-([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)). The texture
-is the whole photograph, so a photograph wider or taller than the GPU device's texture
-limit (8192 px) cannot be shown; drawing the panel from 512 px tiles of the pyramid level
-that matches the zoom is proposed in
-[out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md).
+**Image loading**: The panel draws the photograph at `workspace_dir.join(&img.name)`, the
+same path `SceneRenderer::upload_bg_image` reads for camera view mode. Its pixels come
+from the viewer's photograph cache, as the photograph's whole pyramid, and are never
+decoded on the GUI thread: on a miss `state::display_photograph` starts the decode on the
+rayon pool and repaints when it lands, and until then the panel shows "Loading image…",
+or "Failed to load image" for a file that cannot be read
+([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)).
 
-**Display**: The image is shown fitted to the panel dimensions (maintaining aspect ratio)
-using `egui::Image` with `fit_to_exact_size` or `max_size`. Pan/zoom within the detail
-pane is a future enhancement.
+**Display: photograph tiles.** The panel never makes a texture of the whole photograph.
+It draws **photograph tiles**: 512 x 512 blocks of one pyramid level, each uploaded as
+one egui texture with a one-pixel border of its neighbours' pixels, so no texture is
+larger than 514 x 514 and a photograph of any size is drawn within the GPU device's
+8192 px texture limit. The GUI thread copies only the tiles it uploads, never the whole
+level 0. The code is
+[image_detail/photograph_tiles.rs](../../crates/sfm-explorer/src/image_detail/photograph_tiles.rs).
+
+- **Which level.** With `s` the physical screen pixels one level-0 pixel spans
+  (`effective_scale` times the pixels per point), the level is `round(log2(1 / s))`,
+  clamped to the pyramid's levels (`level_for_scale`), so a drawn texel covers between
+  0.71 and 1.41 screen pixels; at `s ≥ 0.71` it is level 0, full resolution.
+- **Where a tile goes.** Every coordinate the panel uses, the overlays', the bench
+  layer's and the intrinsics layer's included, stays in level-0 pixels. Level `l`'s tile
+  at column `c` and row `r` is drawn over level-0 pixels `c·512·2^l` to
+  `(c+1)·512·2^l` (and the same for rows), clipped to the level's width times `2^l`, so
+  a coarse level ends less than one of its texels short of the right and bottom edges.
+  Its texture coordinates are inset by the border texel, and the textures are linearly
+  filtered, so neighbouring tiles blend across their shared edge from each other's
+  pixels as one texture would, and at level 0 a tile draws exactly the pixels a single
+  texture of the photograph did.
+- **Which tiles.** Those of the level whose core meets the part of the photograph the
+  panel shows.
+- **Uploads.** At most 16 tiles are uploaded in one frame. The first is the overview
+  level's, the finest level that is one tile (or the coarsest level when none is), when
+  it is coarser than the level drawn; the rest are the drawn level's visible tiles. The
+  panel asks for a repaint while a visible tile of the drawn level is still to be
+  uploaded, so a jump to a new place spreads its uploads over a few frames.
+- **While tiles load.** A tile that is not uploaded yet is drawn from the nearest
+  coarser level whose tiles over its area are all uploaded, clipped to its area, so once
+  a photograph has been drawn the panel is never blank and sharpens tile by tile.
+- **Textures kept.** At most 256 tile textures (about 270 MB of GPU memory), of any of
+  the images shown, the least recently drawn dropped first. The panel also keeps the
+  level sizes of the image it showed last, so when the cache has dropped that image's
+  pyramid its uploaded tiles are still drawn while it is decoded again.
+
+Reading the tiles from the photograph cache instead of cutting them from a whole pyramid,
+with the next image's tiles asked for a frame ahead while animation plays and the
+level and the tiles still to draw reported to agents, is specified in
+[out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md)
+§ "Image Detail".
 
 **Empty state**: When no image is selected, show "No image selected" centered in the panel.
-
-**Cache**: Store a single `Option<(usize, egui::TextureHandle)>` — the currently loaded
-image index and its texture. Only reload when `selected_image` changes.
 
 #### Feature Overlays
 
@@ -1064,7 +1094,7 @@ both display a full-resolution image, but they serve different purposes and don'
 |--------|-----------------|-------------------|
 | **Purpose** | Navigate the 3D scene from a camera's perspective | Inspect the image itself |
 | **Trigger** | Z key with frustum selected | Automatic on selection |
-| **Rendering** | wgpu background pass behind point cloud | egui `Image` widget in its own panel |
+| **Rendering** | wgpu background pass behind point cloud | egui textures of photograph tiles in its own panel |
 | **Navigation** | Overrides viewport pose + FOV | No 3D navigation effect |
 | **Exits when** | Any navigation input (orbit, pan, zoom) | Never (always shows selected) |
 
@@ -1093,7 +1123,7 @@ image, similar to how the 3D viewer navigates the point cloud but in 2D.
 **State** (in `ImageDetail`):
 
 - `pan: egui::Vec2` — offset of image center from panel center, in panel pixels
-- `zoom: f32` — zoom level (1.0 = fit to panel, max 32×)
+- `zoom: f32` — zoom level (1.0 = fit to panel, at most the zoom limit below)
 - `last_display_size: Option<egui::Vec2>` — the displayed image extent `pan` was
   measured against, recorded at the end of each frame that drew an image and
   cleared by a view reset. See "View persistence" below.
@@ -1123,7 +1153,14 @@ image, similar to how the 3D viewer navigates the point cloud but in 2D.
   (`platform::gesture_scroll_events`), so the photograph moves by `-dx, dy`.
 - **Zoom-to-cursor**: Zoom is anchored at the cursor position so the point
   under the cursor stays fixed: `pan = pan * ratio + cursor_rel * (1 - ratio)`.
-- **Zoom limits**: Minimum = 1.0 (fit-to-panel). Maximum = 32×.
+- **Zoom limits**: Minimum = 1.0 (fit-to-panel). Maximum = `max(32, 8 / fit_scale)`,
+  where `fit_scale` is the panel points one level-0 pixel spans at the fit
+  (`view::zoom_limit`, `ViewGeometry::zoom_limit`): one pixel of any photograph can be
+  enlarged to 8 points, and a photograph that fits at a quarter of its size or larger
+  keeps 32×. A 16320 px photograph in a 400 point panel fits at 0.0245, where 32× would
+  reach only 0.78 points a pixel; its limit is 326×. The limit is the frame's: a zoom
+  carried over from a larger photograph or a larger panel that is past it is brought back
+  to it about the panel centre.
 - **Pan limits**: Clamped so the image overlaps the panel by at least 50px.
 - **View persistence**: The view outlives the image it was set on — see below.
 - **What a double-click means is decided before the view input runs.** On a
@@ -1328,7 +1365,7 @@ centre:
 anchor = 0.5 - pan / display_size          (per axis)
 ```
 
-Each frame computes `display_size` from the current texture, panel rect and
+Each frame computes `display_size` from the photograph's level-0 size, panel rect and
 zoom, then rescales `pan` by the ratio against `last_display_size` before
 anything else uses it, and re-clamps to the pan limits. A change of image
 resolution, of aspect ratio, or of panel size therefore all keep the same
@@ -1366,6 +1403,8 @@ impl ViewGeometry {
     /// Panel points one source pixel spans at zoom 1, and at the standing zoom.
     pub(crate) fn fit_scale(&self) -> f32;
     pub(crate) fn scale(&self) -> f32;
+    /// The closest the panel zooms in this frame: `zoom_limit(fit_scale)`.
+    pub(crate) fn zoom_limit(&self) -> f32;
     pub(crate) fn display_size(&self) -> [f32; 2];
     /// The rectangle of the photograph the panel shows, `[x0, y0, x1, y1]`.
     pub(crate) fn visible_rect(&self) -> [f32; 4];
@@ -1382,6 +1421,10 @@ pub(crate) enum Look {
 /// The view `look` settles on, starting from `view`. Only `pan` and `zoom`
 /// move.
 pub(crate) fn look_at(view: ViewGeometry, look: &Look) -> ViewGeometry;
+
+/// The closest the panel zooms for a photograph that fits at `fit_scale` panel
+/// points a pixel: `max(ZOOM_LIMIT_FLOOR, PIXEL_ZOOM / fit_scale)`, 32 and 8.
+pub(crate) fn zoom_limit(fit_scale: f32) -> f32;
 ```
 
 - **`Pixel`** puts that place at the panel centre, at the zoom it names or at
@@ -1392,7 +1435,7 @@ pub(crate) fn look_at(view: ViewGeometry, look: &Look) -> ViewGeometry;
 - **`Reveal`** is the row click's rule, below.
 
 Every outcome obeys the two limits a hand obeys: the zoom is clamped to
-`[1, MAX_ZOOM]` and the pan to the rule that keeps `PAN_MARGIN` points of the
+between 1 and the zoom limit and the pan to the rule that keeps `PAN_MARGIN` points of the
 image on the panel. `visible_rect` is **not** clipped to the photograph -- at
 fit zoom the letterboxed axis runs past both edges -- because the invariant
 worth having is that its centre is the image pixel at the centre of the panel,

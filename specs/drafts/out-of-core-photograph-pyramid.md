@@ -32,7 +32,7 @@ pyramids, and gains an on-disk tier),
 [core/camera/reading-and-writing-images.md](../core/camera/reading-and-writing-images.md)
 (a second JPEG writer and reader, for mip level files),
 [gui/multi-panel-image-browser.md](../gui/multi-panel-image-browser.md)
-§ "Image Detail" (the panel draws photograph tiles),
+§ "Image Detail" (the panel reads its photograph tiles from the cache),
 [gui/mcp-server.md](../gui/mcp-server.md) § "The Image Detail view" (two
 fields), and
 [workspace/workspace.md](../workspace/workspace.md) (the `mipmap_options`
@@ -117,7 +117,8 @@ frame asks for again, and the decodes never end.
 
 ## Terms
 
-These are proposed for [GLOSSARY.md](../GLOSSARY.md), each with its reason.
+These are proposed for [GLOSSARY.md](../GLOSSARY.md), each with its reason;
+*photograph tile* is in it since step 2.
 
 | Word | Means | Not | Why |
 |------|-------|-----|-----|
@@ -1438,7 +1439,13 @@ an out-of-core photograph is still queued for *Build mipmaps*.
 
 ### Image Detail
 
-The panel stops making a texture of the photograph and draws photograph tiles:
+The panel stops making a texture of the photograph and draws photograph tiles.
+Step 2 built this from the cache's in-memory pyramids, as
+[gui/multi-panel-image-browser.md](../gui/multi-panel-image-browser.md)
+§ "Image Detail" describes, except the tiles asked for from the cache
+(`peek_tile`), the `Building` state, the next image's tiles asked for a frame
+ahead and the two `get_image_detail_view` fields, which come with step 13 or
+later:
 
 - **Which level.** With `s` the panel's physical screen pixels per level-0
   pixel (`effective_scale` times the pixels per point), the level is
@@ -1476,7 +1483,7 @@ The panel stops making a texture of the photograph and draws photograph tiles:
 - **Zoom limit.** The limit becomes `max(32, 8 / fit_scale)` times the fit,
   where `fit_scale` is the screen pixels per level-0 pixel at the fit, so a
   level-0 pixel can always be enlarged to 8 screen pixels (open question 7).
-  Today's `MAX_ZOOM` of 32 times the fit reaches only 0.78 screen pixels per
+  The fixed limit of 32 times the fit before step 2 reached only 0.78 screen pixels per
   level-0 pixel for a 16320 px photograph in a 400 px panel, so the
   original's pixels could not be enlarged at all; for a photograph that fits
   a panel at 1/4 or larger, the limit stays 32.
@@ -2108,18 +2115,19 @@ in core. Step 17 turns the tier on.
    everywhere, `PhotographCache::new` without `levels`, and no
    `DISPLAY_PYRAMID_LEVELS`; specified in
    [core/camera/photograph-cache.md](../core/camera/photograph-cache.md).
-2. **Image Detail draws photograph tiles** cut from the in-memory pyramid,
-   with the level rule, the coarser fallback, the per-frame upload cap, the
-   texture limit of 256 and the zoom limit `max(32, 8 / fit_scale)`. This
-   alone ends the crash in Image Detail for every
-   photograph, though a 200-megapixel one is still read whole until step 13.
-   Tests (headless, the panel's lib tests): the level
-   for a set of scales; the zoom limit for a large and a small photograph
-   (8 screen pixels per level-0 pixel reached, and 32 kept); the tiles a view
-   asks for; a 9000 x 16 synthetic
-   photograph never makes a texture over 514 px; the fallback draws the
-   coarser level where a tile is missing; the test data's photographs look as
-   they did.
+2. **Image Detail draws photograph tiles.** Built: the panel cuts photograph
+   tiles from the cache's in-memory pyramid itself, a few per frame, with the
+   level rule, the coarser fallback, the per-frame upload cap of 16, the
+   texture limit of 256 and the zoom limit `max(32, 8 / fit_scale)`, so no
+   texture is larger than 514 x 514 and Image Detail no longer crashes on any
+   photograph, though a 200-megapixel one is still read whole until step 13;
+   specified in [gui/multi-panel-image-browser.md](../gui/multi-panel-image-browser.md)
+   § "Image Detail" and § "Image Detail: 2D pan and zoom navigation". Two
+   parts of § "Image Detail" are not in it and come with the cache's
+   tiles in step 13: asking for the next image's tiles a frame ahead while
+   animation plays, and the `level` and `tiles_pending` fields of
+   `get_image_detail_view`. The zoom limit's `fit_scale` is in panel points, the unit
+   the panel's view arithmetic and `set_image_detail_view` work in.
 3. **The 3D background** from one level by the viewport and the limit, off the
    GUI thread, through the cache, with a remembered failure. Ends the crash in
    camera view. Tests: the level rule; the texture coordinates' scale for odd
@@ -2257,7 +2265,9 @@ in core. Step 17 turns the tier on.
     `try_reserve_build` for panels), which in-core whole decodes reserve
     from; `get_level`; `display_tile` in place of `display_photograph`, so
     Image Detail, the 3D background and every other reader read tiles from
-    the cache; `from_pyramid` deleted. Tests: an in-core photograph's tiles
+    the cache; Image Detail asking for the next image's tiles a frame ahead while
+    animation plays, and `get_image_detail_view`'s `level` and
+    `tiles_pending`; `from_pyramid` deleted. Tests: an in-core photograph's tiles
     equal the same pixels of today's pyramid; a request for one tile decodes
     the photograph once and leaves its other tiles as unused, evicted first;
     a tile evicted and asked for again decodes the photograph again, counted

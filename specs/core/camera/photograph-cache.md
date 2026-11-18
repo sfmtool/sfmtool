@@ -251,7 +251,9 @@ reconstruction's photographs goes through it except the ones under
   rayon pool, records the path in `PhotographRequests` so later frames do not
   start a second, and asks egui for a repaint when the decode ends. Until then
   Image Detail says "Loading image…", and "Failed to load image" once the
-  decode has failed. Under a budget of 0 nothing would be kept for the next
+  decode has failed. Once it has the pyramid, Image Detail cuts the
+  photograph tiles it draws out of it, a few at a time, rather than copying
+  the photograph whole. Under a budget of 0 nothing would be kept for the next
   frame to find, so there the photograph is decoded where it is asked for
   ([track-view.md](../../gui/track-view.md),
   [multi-panel-image-browser.md](../../gui/multi-panel-image-browser.md)).

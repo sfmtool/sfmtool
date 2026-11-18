@@ -828,7 +828,7 @@ impl TabContext<'_> {
             });
             let detail_photograph = match &photograph {
                 Some(crate::state::DisplayPhotograph::Decoded(pyramid)) => {
-                    crate::image_detail::DetailPhotograph::Decoded(pyramid.level(0))
+                    crate::image_detail::DetailPhotograph::Decoded(pyramid)
                 }
                 Some(crate::state::DisplayPhotograph::Decoding) => {
                     crate::image_detail::DetailPhotograph::Decoding
