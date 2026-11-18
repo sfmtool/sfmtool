@@ -6635,8 +6635,9 @@ where a test hands no host over.
   the same rectangle given from its far corner frames the same region; `fit` ends
   at zoom 1 on the middle of the photograph. A `bench_observation` ends on the
   photograph that sighting is in and moves the selection there. A zoom outside
-  the panel's range comes back clamped, and the `zoom` argument's own description
-  carries `MAX_ZOOM`, read off the panel. Each refusal is exercised: no target,
+  the panel's range comes back clamped, the limit past 32 for a photograph that
+  fits at less than a quarter of its size, and the `zoom` argument's own
+  description carries `ZOOM_LIMIT_FLOOR` and `PIXEL_ZOOM`, read off the panel. Each refusal is exercised: no target,
   two, a `zoom` beside a target that settles its own, a `track` with no
   `bench_observation`, a rectangle of no area, a point whose track has no
   sighting in the photograph being looked at (which leaves the selection where it
