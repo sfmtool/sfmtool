@@ -134,7 +134,8 @@ with the reason) and writes nothing.
    ([sfmr-file-format.md § `images/names.json.zst`](../formats/sfmr-file-format.md#imagesnamesjsonzst)),
    such as one with `..`, and the reader refuses such a file. When a cheap
    reader refuses its names, they are read from the file's names entry
-   without that reader's checks, and each `..` is resolved by name, so that
+   without that reader's checks (`read_sfmr_image_names_unchecked`,
+   `read_matches_image_names_unchecked`), and each `..` is resolved by name, so that
    its folders are still found and kept: a file of a nested workspace naming
    `../images/<image>` keeps the enclosing workspace's folder. A file of the tree an image name
    of which leaves the tree's root through `..` is likewise not converted,

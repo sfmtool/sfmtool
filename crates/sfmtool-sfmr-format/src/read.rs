@@ -58,6 +58,23 @@ pub fn read_sfmr_image_names(path: &Path) -> Result<(SfmrMetadata, Vec<String>),
     Ok((metadata, names))
 }
 
+/// Read the image names entry of a `.sfmr` file as it is, with no image-name
+/// rule and no count check, and nothing else.
+///
+/// For finding which folders a file names when its names break the
+/// image-name rule, so that the readers refuse the file: the workspace
+/// upgrade keeps those folders for it. Never use what it returns to convert or
+/// write a file; [`read_sfmr_image_names`] is the reader for that.
+pub fn read_sfmr_image_names_unchecked(path: &Path) -> Result<Vec<String>, SfmrError> {
+    let file = std::fs::File::open(path).map_err(|e| SfmrError::IoPath {
+        operation: "Failed to open file",
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    Ok(read_json_entry(&mut archive, entries::images_names())?)
+}
+
 /// Put the write timestamp back on the in-memory metadata, wherever this file
 /// keeps it.
 ///

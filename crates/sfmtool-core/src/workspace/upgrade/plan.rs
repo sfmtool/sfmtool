@@ -351,32 +351,24 @@ fn cannot_read(e: impl std::fmt::Display) -> Recorded {
     Recorded::Leave(UpgradeOutcome::Failed(format!("it cannot be read: {e}")))
 }
 
-/// The entry of a `.sfmr` and of a `.matches` file that holds its image
-/// names.
-const IMAGE_NAMES_ENTRY: &str = "images/names.json.zst";
-
-/// The image names the names entry of the `.sfmr` or `.matches` file at
-/// `path` holds, without the checks its format's reader makes, or `None` when
-/// the entry does not read as a list of names. For a file that reader
-/// refuses, such as one naming `../images/<image>`, which the image-name rule
-/// refuses: the run converts no such file, but its names still say which
-/// folders hold its features, and those are kept.
-fn read_unchecked_image_names(path: &Path) -> Option<Vec<String>> {
-    let file = std::fs::File::open(path).ok()?;
-    let mut archive = zip::ZipArchive::new(file).ok()?;
-    sfmtool_archive_io::read_json_entry(&mut archive, IMAGE_NAMES_ENTRY).ok()
-}
-
 /// A file's image names: those its format's reader gave (`checked`), or else
-/// those its names entry holds, unchecked; and whether they are trusted, that
-/// is, the reader gave them and each obeys the image-name rule.
-fn image_names_of(checked: Option<Vec<String>>, path: &Path) -> (Option<Vec<String>>, bool) {
+/// those its names entry holds, read by its format's unchecked reader
+/// (`unchecked`), or `None` when that entry does not read as a list of names;
+/// and whether they are trusted, that is, the reader gave them and each obeys
+/// the image-name rule. A file whose names break the rule, such as one naming
+/// `../images/<image>`, is one the reader refuses: the run converts no such
+/// file, but its names still say which folders hold its features, and those
+/// are kept.
+fn image_names_of<E>(
+    checked: Option<Vec<String>>,
+    unchecked: impl FnOnce() -> Result<Vec<String>, E>,
+) -> (Option<Vec<String>>, bool) {
     match checked {
         Some(names) => {
             let trusted = sfmtool_archive_io::validate_image_names(&names).is_ok();
             (Some(names), trusted)
         }
-        None => (read_unchecked_image_names(path), false),
+        None => (unchecked().ok(), false),
     }
 }
 
@@ -392,7 +384,9 @@ fn read_sfmr_record(path: &Path, canonical: &[PathBuf]) -> Recorded {
             Err(e) => return cannot_read(e),
         },
     };
-    let (names, names_trusted) = image_names_of(names, path);
+    let (names, names_trusted) = image_names_of(names, || {
+        sfmtool_sfmr_format::read_sfmr_image_names_unchecked(path)
+    });
     match sfmtool_sfmr_format::resolve_workspace_dir(path, &metadata) {
         Ok(dir) => match workspace_index(&dir, canonical) {
             Some(workspace) => Recorded::Here {
@@ -424,7 +418,9 @@ fn read_matches_record(path: &Path, canonical: &[PathBuf]) -> Recorded {
             Err(e) => return cannot_read(e),
         },
     };
-    let (names, names_trusted) = image_names_of(names, path);
+    let (names, names_trusted) = image_names_of(names, || {
+        sfmtool_matches_format::read_matches_image_names_unchecked(path)
+    });
     match sfmtool_matches_format::resolve_workspace_dir(path, &metadata) {
         Some(dir) => match workspace_index(&dir, canonical) {
             Some(workspace) => Recorded::Here {
