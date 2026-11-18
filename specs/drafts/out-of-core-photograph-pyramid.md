@@ -990,8 +990,8 @@ builds the mipmap itself (§ "Building a mipmap in the slot"), so a kernel
 never reads levels that are not the files' pixels.
 
 **Tiles of an in-core photograph.** An in-core photograph has no mip level
-files. When a tile of it is needed and not cached, the cache decodes the
-photograph whole in its slot (as `get` decodes it today), builds its pyramid to
+files. Its tiles are made by decoding the photograph whole in its slot (as
+`get` decodes it today), building its pyramid to
 `full_levels` depth, and cuts every level into photograph tiles with their
 one-pixel borders. The tiles the request asked for go into the tile cache as
 used; the other tiles of the decode go in as *unused*, the first entries
@@ -999,8 +999,27 @@ evicted when the budget needs room, oldest first, and the whole decode is
 dropped; an unused tile becomes used when a request reads it. So the
 tiles a reader touches stay, and the rest of a decode stays only while nothing
 needs the room, which lets the next render in the same photograph find its
-tiles without decoding again. A later request for a tile that was evicted
-decodes the photograph whole again: about 0.05 s at 3840 x 2160 and less for
+tiles without decoding again. Who decodes:
+
+- **A kernel's read phase.** `get_many` decodes its in-core misses (the
+  photographs none of whose tiles are cached) into tiles during its read
+  phase, in groups sized by the build budget with reservations made when the
+  group is decided, exactly as it makes mipmaps, and keeps each decode's tiles
+  as unused, so the kernel's renders find them. `get` does the same for its
+  one photograph, on its own thread. A render decodes a photograph only when a
+  tile it needs was evicted while the kernel ran.
+- **A panel.** A panel starts one decode task per in-core photograph, with
+  the tiles it is missing, never one per tile. The task claims the slot
+  without waiting: if another caller is decoding the photograph, the task
+  ends at once and the panel peeks again on a later frame, and a second panel
+  that needs the same photograph while its decode runs finds it in
+  `PhotographRequests` and peeks on a later frame too. So no panel task waits
+  on a slot. A panel's decode reserves with `try_reserve_build`, which refuses
+  a decode that does not fit under the build budget (below); a refused
+  request is tried again on a later frame.
+
+A decode of a photograph whose tiles were evicted costs the whole decode
+again: about 0.05 s at 3840 x 2160 and less for
 smaller photographs (estimated from the 85 `dino_dog_toy` decodes at 2040 x
 1536 taking 0.9 s from one thread, plus the reduction), and 0.8 to 1.7 s for a
 200-megapixel photograph in a workspace without `mipmap_options`. The budget
@@ -1008,8 +1027,8 @@ and the bulk kernels' point order keep this rare: bulk kernels take their
 renders grouped by reference image and position (the companion draft's
 § "Bulk kernels" and its open question 3), so the renders of one photograph
 follow each other while its tiles are cached. Each whole decode reserves its
-estimated bytes through `reserve_builds` (below) like a build, so the decodes
-in progress are bounded by the same budget.
+estimated bytes on the build count (below) like a build, so the decodes in
+progress are bounded with the builds.
 
 **Tiles from an array.** A caller that has the pixels already, such as a
 Python binding given numpy arrays, makes a `TiledPhotograph` with
@@ -1034,7 +1053,9 @@ photograph's mipmap works exactly like decoding a photograph in today's
   slot could steal another item for the same path and deadlock on itself).
   `jpeg-encoder` and `jpeg-decoder` use no rayon, so the whole build is safe
   there. An in-core photograph's whole decode into tiles runs in its slot the
-  same way.
+  same way. A kernel caller that finds the slot being made waits on it; a
+  panel's decode task (`try_decode_tiles`) claims the slot only when it is
+  empty and otherwise ends at once, so it never waits on a slot.
 - **Where builds run in the viewer.** Only inside background tasks: the
   quiet task *Build mipmaps* and the kernels of other tasks, each on its task's
   job thread and on the rayon workers its `get_many` makes its group on, as
@@ -1103,49 +1124,71 @@ photograph's mipmap works exactly like decoding a photograph in today's
   that is cancelled, fails or unwinds gives its share back through the guard
   that empties its slot. So two callers sizing a group at the same moment
   cannot both take the same free bytes: the second sees what the first
-  reserved. Nothing waits on the count; it is not a semaphore. A caller that
-  finds the budget used up is still granted one decode, so that it makes
-  progress, and that one decode is the only way the count goes past the
-  budget: by at most one whole decode per caller reserving at that moment.
+  reserved. Nothing waits on the count; it is not a semaphore. A kernel
+  caller, reserving with `reserve_builds`, that finds the budget used up is
+  still granted one decode, so that it makes progress, and that one decode is
+  the only way the count goes past the budget: by at most one whole decode per
+  kernel caller reserving at that moment. A panel's decode reserves with
+  `try_reserve_build`, which is refused when the decode does not fit, so it
+  never takes the count past the budget.
 - **What bounds builds and decodes from independent callers.** The bound is
-  per cache. Every build and every whole decode is reserved through the
-  cache's `reserve_builds` before it starts, by `get_many` for its group and
-  by `get` or a tile request for its one photograph, so the count is always
-  complete, and it goes past the budget by at most one whole decode for each
-  caller that reserved while it was full. The number of such callers is
-  bounded because each caller is one thread that decodes one photograph at a
-  time unless it is a `get_many`, whose group is granted within the budget: a
-  caller that wants several photographs asks for them with one `get_many`,
-  never with `get` from many workers of a parallel loop (no caller does today;
-  the reference picks call `get` one photograph at a time on their job
-  thread). In the viewer the callers that build mipmaps are background tasks,
-  at most one running per queue, two in all (one of them perhaps the *Build
-  mipmaps* task below); the panels' tile requests decode in-core photographs
-  on the rayon pool, one photograph per request. All of them use the viewer's
-  one session cache, so the builds in progress hold at most the build budget
-  plus one mipmap per running task, two: on the 64 GB development machine
-  16 GiB plus 2 GB at 200 MP, and on a 16 GB machine 4 GiB plus 2 GB, and
-  each panel request in flight that finds the budget used adds one in-core
-  decode, at most 40 MB at 3840 x 2160. A CLI command uses one cache for its
-  run, and one `get_many` runs at a time, so its bound is the budget, or one
-  whole decode when a single decode is larger than the budget; a Python
-  script that holds one cache and calls it from one thread gets the same, and
-  one that calls it from several threads at once adds at most one decode per
-  thread. A program that makes several caches gets one such bound per cache,
-  by its own choice. These are on top of the cache's budget, and are estimates
-  from the buffer sizes.
+  per cache. Every build and every whole decode is reserved on the cache's
+  count before it starts, so the count is always complete. Kernel callers
+  reserve with `reserve_builds`, which grants one decode even when the budget
+  is used up, so that a kernel always makes progress: `get_many` for its
+  group, `get` for its one photograph, and a render for a photograph whose
+  tile was evicted during the kernel. Panels reserve with `try_reserve_build`,
+  which refuses a decode that does not fit under the budget, so panel
+  decodes stay within the budget and a refused one is tried again on a
+  later frame. The count therefore goes past the budget only by the kernel
+  callers that reserved while it was full, one whole decode each. A read
+  phase is one such caller (its group is granted within the budget, and only
+  the one granted past it can overshoot); the renders are the others, at most
+  one per thread that renders, since a render decodes only a photograph whose
+  tile was evicted during the kernel. A caller that wants several photographs
+  asks for them with one `get_many`, never with `get` from many workers of a
+  parallel loop (no caller does today; the reference picks call `get` one
+  photograph at a time on their job thread). So the worst case is the build
+  budget plus one whole decode per thread that renders or reads: in the
+  viewer, with the 32 rayon threads and the two background queues' job
+  threads, the build budget plus 34 decodes, about 1.4 GB at 3840 x 2160, and
+  about 34 GB at 200 MP in a workspace without `mipmap_options`, where every
+  photograph is in core and every decode is whole; avoiding that second
+  figure is what the out-of-core tier is for, since an out-of-core
+  photograph's tiles decode alone, a few milliseconds and under a megabyte
+  each, and only its mipmap build holds a whole decode, made in a read phase
+  or by *Build mipmaps*. Panel decodes add nothing past the budget. Mipmaps
+  are made only in the read phases of background tasks, at most one running
+  per queue, so at most two of the decodes past the budget are mipmap
+  builds, 2 GB at 200 MP; the build budget is 16 GiB on the 64 GB development
+  machine and 4 GiB on a 16 GB machine. The figures are the worst case, every
+  rendering thread finding an evicted photograph at once; a kernel whose
+  photographs' tiles fit the cache's budget decodes each photograph once, in
+  its read phase. A CLI command uses one cache for its run, so its bound is the
+  build budget plus one decode per thread of its one kernel call (33 on the
+  development machine); a Python script that holds one cache gets the same,
+  plus one decode per extra thread calling it at once. A program that makes
+  several caches gets one such bound per cache, by its own choice. These are
+  on top of the cache's budget, and are estimates from the buffer sizes.
 - **No build on the GUI thread, and no tile task that waits on one.** The
   panels never call `get` for an out-of-core photograph, on the GUI thread or
   on the rayon pool, whatever the budget, and ask for its tiles only once its
   files are current (§ "Readers on the GUI thread"), so a tile task never
-  meets a build. No panel decodes on the GUI thread either.
+  meets a build. A panel's decode of an in-core photograph is one task per
+  photograph that claims the slot and reserves without waiting
+  (`try_decode_tiles`), so no tile task a panel starts waits on a slot or on
+  the count. No panel decodes on the GUI thread either.
 
 `get_tile`, `view_region_pyramid` and `get_level` never make a mipmap, and
 take no `&Progress`. For an out-of-core photograph they are asked only once its
 layout is `Known` (its files current), and decode only tiles of current files,
 milliseconds each (`get_level` at most a few hundred milliseconds for a level
-of 48 tiles). For an in-core photograph a miss decodes the photograph into
-tiles, as above: about 0.05 s at 3840 x 2160. A kernel whose files go stale
+of 48 tiles). For an in-core photograph, `get_tile` is a kernel's read: a
+miss decodes the photograph into tiles, as above, about 0.05 s at 3840 x 2160,
+reserving with `reserve_builds` and waiting on the slot if another caller
+holds it; inside a kernel this happens only for a tile evicted after the read
+phase decoded its photograph. Panels read an in-core photograph's missing
+tiles with `try_decode_tiles` instead. A kernel whose files go stale
 after its read phase found them current (another process rebuilt them, or the
 original changed) gets `TileError::Changed` from its next tile read and fails
 as § "Files that change while a kernel runs" says, rather than rebuilding
@@ -1214,7 +1257,9 @@ in-memory equivalent made); `peek_tile` answers `Building` for any tile of a
 photograph that is `Building`. A tile is asked for (`get_tile`) only for a
 photograph that is `Known`, so a tile request never waits on a build: it
 decodes a tile of a current file (milliseconds) or decodes an in-core
-photograph into tiles (about 0.05 s at 3840 x 2160). If the files change under
+photograph into tiles (about 0.05 s at 3840 x 2160), a panel's through
+`try_decode_tiles`, which ends at once rather than wait on a slot or on the
+build budget. If the files change under
 a `Known` out-of-core photograph, `get_tile` finds the record stale, answers
 `TileError::Changed` without waiting, and the photograph goes back to
 `Building`, so the panel adds it to *Build mipmaps*' list again. A mipmap is
@@ -1264,7 +1309,7 @@ a few hundred kilobytes, whatever the number of views or photographs
 | Any of the above, worst case (the kernel call's region pool full and every rendering thread on a grazing view) | — | one kernel call: 99 MB + 33 x 12.7 MB, about 520 MB; the viewer with two kernel calls and Track View: about 650 MB; on top of the budget |
 | 500 x 6000 x 4000, any of the above | 500 x 96 MB = 48 GB | the same |
 | 17 x 200 MP, Track View on a 17-image track at `R = 64` | 12.6 GiB | 17 x 17 KB x 2.25 of regions, plus the tiles they are cut from, one to four per level read and one or two levels per view, 13 to 108 MB |
-| 368 x 3840 x 2160 (in core), a `get_many` over every frame | 12.2 GB held while its kernel runs | the regions of the renders in flight plus the budget; each frame decoded whole once into tiles (about 0.05 s, 40 MB transient, at most the build budget's worth at once), and again only for a frame whose tiles were evicted |
+| 368 x 3840 x 2160 (in core), a `get_many` over every frame | 12.2 GB held while its kernel runs | the regions of the renders in flight plus the budget; each frame decoded whole once into tiles in the kernel's read phase (about 0.05 s and 40 MB while it decodes), as many at once as the build budget allows, and again, by a render, only for a frame whose tiles were evicted during the kernel |
 | The test data (17 x 270 x 480 to 85 x 2040 x 1536, in core) | 8.8 MB (17 x 270 x 480) to 1.1 GB (85 x 2040 x 1536) of pyramids | regions plus the tiles touched, within the budget; a whole decode is 0.6 to 16 MB and about 11 ms at 2040 x 1536 |
 
 The cost moves from memory to decodes: a render whose tiles are not cached
@@ -1383,11 +1428,14 @@ as `PhotographRequests` remembers its decodes, and forgets a path when the
 task reports its mipmap made or failed, so a photograph that goes back to
 `Building` is queued again), and draw a loading spinner
 with *Building mipmap…* until the photograph's layout is `Known`, repainting
-when the task reports it made. Tile reads go to the rayon pool, one task per
-missing tile and only for a photograph that is `Known`: for an out-of-core
-photograph a tile decode of a current file, milliseconds; for an in-core one,
-the first missing tile decodes the photograph into tiles (about 0.05 s at
-3840 x 2160) and the others of the same decode are found in the cache.
+when the task reports it made. Tile reads go to the rayon pool, only for a
+photograph that is `Known`: for an out-of-core photograph one task per missing
+tile, a tile decode of a current file, milliseconds; for an in-core one, one
+decode task per photograph with all the tiles the panel is missing (about
+0.05 s at 3840 x 2160), which claims the slot without waiting and reserves
+with `try_reserve_build`, ending at once when another caller holds the slot
+or its reservation is refused, so the panel peeks again on a later frame and no
+rayon task a panel starts waits.
 
 | Reader | `NotKnown` | `Building` | `Known` |
 |--------|------------|------------|---------|
@@ -1734,14 +1782,24 @@ impl PhotographCache {
     /// Makes the mipmap of an out-of-core photograph whose files are missing or
     /// stale, in the path's slot on the calling thread, reserving that one
     /// build with `reserve_builds`, or waits for the caller already making it;
-    /// reports through `progress`. Decodes no in-core photograph: its tiles
-    /// are decoded when one is asked for.
+    /// reports through `progress`. Decodes an in-core photograph none of
+    /// whose tiles are cached into tiles, kept as unused.
     pub fn get(&self, path: &Path, progress: &Progress<'_>) -> Result<Arc<TiledPhotograph>, GetError>;
     /// Reserve the estimated bytes of up to `wanted` builds against this
     /// cache's build budget with one compare-exchange loop on its count, at
     /// the moment the caller decides; never waits. Grants as many as fit, and
-    /// one when none fit, so a caller always makes progress.
+    /// one when none fit, so a kernel caller always makes progress.
     pub fn reserve_builds(&self, bytes_per_build: u64, wanted: usize) -> BuildReservation<'_>;
+    /// A panel's reservation for one decode: `None` when it does not fit
+    /// under the build budget, never one past it; the panel asks again on a
+    /// later frame. Never waits.
+    pub fn try_reserve_build(&self, bytes: u64) -> Option<BuildReservation<'_>>;
+    /// A panel's decode of an in-core photograph into tiles, the `keys` it
+    /// asked for kept as used and the rest as unused: claims the slot only
+    /// when it is empty and reserves with `try_reserve_build`, and answers
+    /// `Busy` without waiting when another caller holds the slot or the
+    /// reservation is refused.
+    pub fn try_decode_tiles(&self, path: &Path, keys: &[TileKey]) -> Result<TryDecode, TileError>;
     /// The header, the tier, the level sizes and, out of core, the region
     /// answer; makes no mipmap. The blocking form of `layout`.
     pub fn read_layout(&self, path: &Path) -> Result<PhotographLayout, GetError>;
@@ -1753,8 +1811,9 @@ impl PhotographCache {
     /// `read_region`.
     pub fn read_region(&self, path: &Path, level: usize, rect: [u32; 4], progress: &Progress<'_>)
         -> Result<ImageU8, PhotographReadError>;
-    /// Makes its missing mipmaps in parallel on the rayon pool, in groups
-    /// sized by the build budget; the error type is today's.
+    /// Makes its missing mipmaps, and decodes into tiles its in-core
+    /// photographs none of whose tiles are cached, in parallel on the rayon
+    /// pool, in groups sized by the build budget; the error type is today's.
     pub fn get_many(&self, paths: &[&Path], progress: &Progress<'_>)
         -> Result<(Vec<Option<Arc<TiledPhotograph>>>, GetManyTally), Cancelled>;
     // peek and peek_state answer `Arc<TiledPhotograph>` too; insert takes an
@@ -1767,8 +1826,10 @@ impl PhotographCache {
     pub fn request_layout(&self, path: &Path);   // a header read, the region test, a record check
     pub fn peek_tile(&self, path: &Path, key: TileKey) -> PeekedTile;
     /// Only for a photograph whose layout is `Known`; never makes a mipmap; for
-    /// an in-core photograph a miss decodes it into tiles. Answers `Changed`
-    /// rather than waiting when its files have gone stale.
+    /// an in-core photograph a miss decodes it into tiles, reserving with
+    /// `reserve_builds` and waiting on the slot (a kernel's read; panels use
+    /// `try_decode_tiles`). Answers `Changed` rather than waiting when its
+    /// files have gone stale.
     pub fn get_tile(&self, path: &Path, key: TileKey) -> Result<Arc<PhotographTile>, TileError>;
     /// A view-region pyramid of a photograph, assembled from its tiles
     /// ([view-region-pyramid.md](view-region-pyramid.md)).
@@ -1792,6 +1853,7 @@ pub struct PhotographTile {
 
 // `PeekedLayout` and `PeekedTile` as in § "The caches in memory".
 pub enum TileError { Changed { path: PathBuf }, Unreadable { path: PathBuf, why: String } }
+pub enum TryDecode { Decoded, Busy }
 pub enum GetError { NotFound(PathBuf), Unreadable(String), Workspace(WorkspaceConfigError),
     /// A side of 65536 px or more, read from the header; in every workspace.
     TooLarge { path: PathBuf, width: u32, height: u32 }, Cancelled }
@@ -1873,8 +1935,10 @@ The viewer's side, in
 [photograph_requests.rs](../../crates/sfm-explorer/src/state/photograph_requests.rs):
 `display_photograph` gives way to a `display_tile`, which acts on the layout
 state as § "Readers on the GUI thread" says, queueing a photograph that is
-`Building` and starting one `get_tile` per missing tile of a `Known`
-photograph, for every photograph.
+`Building` and, for a `Known` photograph, starting one `get_tile` per missing
+tile out of core and one `try_decode_tiles` per in-core photograph with the
+tiles it is missing, at most one in flight per photograph, for every
+photograph.
 The *Build mipmaps* quiet task is `state/build_mipmaps.rs`: a job that takes
 one chunk of photographs from its source's shared list, in the order § "Who
 makes the mipmaps, and when" gives, calls `get_many` on it and ends, its
@@ -2151,22 +2215,37 @@ in core. Step 16 turns the tier on.
     step-11 signature changes and their bindings.
 12. **The tiled photograph cache.** The cache hands out `Arc<TiledPhotograph>`
     for every photograph and keeps no whole pyramid: an in-core photograph is
-    decoded whole into tiles when a tile of it is missing, the requested tiles
-    kept as used and the rest as unused; one budget for tiles and file bytes
+    decoded whole into tiles, the requested tiles kept as used and the rest
+    as unused, by a kernel's `get_many` in its read phase (its misses in
+    groups sized by the build budget), by `get`, by a render only for a tile
+    evicted during its kernel, and by a panel's one `try_decode_tiles` task
+    per photograph; one budget for tiles and file bytes
     (`budget_bytes`, the pyramid budget's default and variable); the layout
     states; the slot as a mutex and condition variable with cancellation
     between a decode and its cutting; the cache's build budget and its count
-    (`PhotographCache::reserve_builds`), which in-core whole decodes reserve
+    (`PhotographCache::reserve_builds` for kernel callers,
+    `try_reserve_build` for panels), which in-core whole decodes reserve
     from; `get_level`; `display_tile` in place of `display_photograph`, so
     Image Detail, the 3D background and every other reader read tiles from
     the cache; `from_pyramid` deleted. Tests: an in-core photograph's tiles
     equal the same pixels of today's pyramid; a request for one tile decodes
     the photograph once and leaves its other tiles as unused, evicted first;
     a tile evicted and asked for again decodes the photograph again, counted
-    in `stats`; a `get_many` over 20 photographs holds no pyramid (the
+    in `stats`; a kernel's `get_many` over 20 in-core photographs decodes
+    them all into tiles in its read phase, in groups that never exceed the
+    build budget (set small for the test, checked through the count), so
+    its renders decode nothing when the tiles fit the budget; a panel
+    needing ten tiles of one in-core photograph starts one task, and a
+    second panel needing the same photograph starts none while it runs; a
+    panel decode whose `try_reserve_build` is refused (the budget used up by
+    another caller's reservation) starts no decode, is asked again on a later
+    frame and decodes once the reservation is given back, and no rayon
+    worker waits on a slot or the count meanwhile; a `get_many` over 20
+    photographs holds no pyramid (the
     cache's stats show only tiles, within a small budget); several
     `get_many` callers on one cache started at the same moment on separate
     threads never reserve more than the build budget plus one decode each,
+    panel decodes never take the count past the build budget,
     two caches in one process keep separate counts, and their decodes never
     add to the count beyond what was reserved; a caller cancelled mid-decode
     stops before the cutting and leaves the slot empty with its share given
@@ -2284,8 +2363,9 @@ ranges in this draft are over those runs.
    files belong to the workspace.
 6. **The build budget and cancellation.** *Decided by the user:* (a) for
    both, as designed. Builds are bounded by reservations made at decision
-   time on each cache's non-blocking count, each caller still granted one when
-   the budget is used up, with builds in the viewer made only by background
+   time on each cache's non-blocking count, each kernel caller still granted
+   one when the budget is used up and a panel's decode refused and asked
+   again on a later frame, with builds in the viewer made only by background
    tasks, the panels' needs going to the *Build mipmaps* quiet task (the
    budget plus one mipmap per running task, two in the viewer); not a
    blocking semaphore, which would make a rayon worker wait for another

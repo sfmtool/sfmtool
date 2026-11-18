@@ -131,8 +131,10 @@ mip level files, and level 0 from the original if it is region-readable or from 
 decode, so no region of any level needs a whole decode. A region pyramid
 therefore holds the same pixels as a whole pyramid of the stored levels would.
 An in-core photograph is read the same way: its tiles are cut from a whole
-decode of the original made when a tile of it is missing, and only the tiles
-stay (the main draft's § "The caches in memory"), so a region pyramid of it
+decode of the original, made by a kernel's `get_many` in its read phase (its
+misses in groups sized by the build budget), or by a panel's one decode task
+for the photograph, and again by a render only for a tile evicted during its
+kernel; only the tiles stay (the main draft's § "The caches in memory"), so a region pyramid of it
 holds today's exact levels. Tiles cut from an array a caller already has
 (`TiledPhotograph::from_image`) are read the same way too.
 
@@ -238,7 +240,9 @@ So a render samples one of two ways, and both give the same values:
   sampler, so every value is bit-identical. The render keeps at most 16 tiles
   pinned (12.7 MB), least recently used out, and fetches any other through
   the cache (`get_tile`, a lookup when the tile is cached and a decode of a few
-  milliseconds when not). For the samplers of `remap.rs` this path runs the
+  milliseconds when not, or, for an in-core photograph whose tiles were
+  evicted after the kernel's read phase decoded it, one whole decode of the
+  photograph, as the main draft's § "The caches in memory" says). For the samplers of `remap.rs` this path runs the
   scalar per-pixel code, which the AVX2 kernel already equals bit for bit
   (`remap/aniso_avx2.rs`), with a tile lookup only when consecutive samples
   change tile. The cluster refinement's grid samplers, `sample_grid_window`
@@ -282,7 +286,13 @@ panel adds the photograph to the front of the *Build mipmaps* quiet task's
 list once, draws a spinner with *Building mipmap…*, and requests no tiles;
 once it is `Known` the panel computes the regions, peeks the tiles
 (`peek_tile`), and draws the view's tile only when all of them are there,
-requesting the missing ones. The GUI thread never decodes and never waits, and no panel makes a mipmap.
+requesting the missing ones: one tile task per missing tile out of core, and
+one decode task per in-core photograph with all the tiles it is missing
+(`try_decode_tiles`), which ends at once when another caller holds the
+photograph's slot or the build budget refuses its reservation, the panel
+peeking again on a later frame. The GUI thread never decodes and never waits,
+no task a panel starts waits on a slot or the build budget, and no panel
+makes a mipmap.
 
 ## Memory
 
@@ -379,10 +389,11 @@ there is no whole pyramid for any reader to fall back on.
 
 1. **In-core photographs.** *Decided by the user:* every photograph is read
    through tiles and view-region pyramids, whatever its size. An in-core
-   photograph is decoded once when a tile of it is needed, its pyramid cut
-   into tiles, and only the tiles stay, under the cache's budget; a request
-   for a tile that was evicted decodes it again, about 0.05 s at 3840 x 2160,
-   which the budget and the bulk kernels' point order (question 3) keep rare.
+   photograph is decoded once, in a kernel's read phase or by a panel's one
+   decode task for it, its pyramid cut into tiles, and only the tiles stay,
+   under the cache's budget; a render that needs a tile evicted during its
+   kernel decodes the photograph again, about 0.05 s at 3840 x 2160, which
+   the budget and the bulk kernels' point order (question 3) keep rare.
 2. **The reuse margin.** A quarter of the region (as designed), a fixed number
    of pixels, or none. Recommendation: a quarter, then measure how often the
    bench's fits reassemble.
