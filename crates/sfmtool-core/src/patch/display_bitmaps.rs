@@ -24,10 +24,6 @@ use crate::patch::PatchCloud;
 use crate::progress::{Cancelled, Progress};
 use crate::{progress_note, SfmrReconstruction};
 
-/// Levels in the photograph pyramids the display patch bitmaps are rendered from,
-/// and the level count SfM Explorer builds every photograph pyramid with.
-pub const DISPLAY_PYRAMID_LEVELS: usize = 6;
-
 /// Render `recon`'s patch bitmap column at its stored frames and keypoints,
 /// moving nothing.
 ///
@@ -43,11 +39,9 @@ pub const DISPLAY_PYRAMID_LEVELS: usize = 6;
 /// reference observation's photograph is left out, or a point at `-1` that two
 /// readable views do not see, gets a zero row.
 ///
-/// `photographs` should build pyramids of [`DISPLAY_PYRAMID_LEVELS`] levels.
 /// SfM Explorer passes its own cache, so the photographs this decodes stay
 /// for its panels and later operations; a caller with no cache to share, such
-/// as `sfm web-export`, passes `PhotographCache::new(0, DISPLAY_PYRAMID_LEVELS)`,
-/// which keeps nothing.
+/// as `sfm web-export`, passes `PhotographCache::new(0)`, which keeps nothing.
 ///
 /// `Ok(None)` when `recon` has no patch frames it can read (none, or columns
 /// that are not one row per point, which

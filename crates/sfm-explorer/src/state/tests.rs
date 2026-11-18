@@ -245,9 +245,9 @@ fn the_panels_read_the_pyramid_the_cache_holds_for_the_path() {
     assert!(recon.image_count() > 1, "the demo has two images");
     let pyramid = Arc::new(ImageU8Pyramid::from_image(
         sfmtool_core::camera::image::ImageU8::new(8, 8, 3, vec![42u8; 8 * 8 * 3]),
-        PYRAMID_LEVELS,
+        ImageU8Pyramid::full_levels(8, 8),
     ));
-    let cache = PhotographCache::new(1 << 30, PYRAMID_LEVELS);
+    let cache = PhotographCache::new(1 << 30);
     let path = photograph_path(&recon, 0).expect("the demo has an image 0");
     cache.insert(&path, Arc::clone(&pyramid));
 

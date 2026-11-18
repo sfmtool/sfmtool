@@ -1948,10 +1948,7 @@ fn converting_renders_and_persists_patch_bitmaps_when_photographs_are_available(
         .expect("a value with patch frames carries the reference column");
     let rendered = sfmtool_core::patch::display_bitmaps::render_patch_bitmap_column(
         recon,
-        &sfmtool_core::camera::PhotographCache::new(
-            0,
-            sfmtool_core::patch::display_bitmaps::DISPLAY_PYRAMID_LEVELS,
-        ),
+        &sfmtool_core::camera::PhotographCache::new(0),
         &sfmtool_core::progress::Progress::none(),
     )
     .expect("not cancelled")
@@ -2532,7 +2529,7 @@ fn a_step_over_cached_photographs_takes_their_pyramids_as_they_are() {
         .map(|index| {
             let pyramid = Arc::new(ImageU8Pyramid::from_image(
                 ImageU8::new(8, 8, 3, vec![index as u8; 8 * 8 * 3]),
-                crate::state::PYRAMID_LEVELS,
+                ImageU8Pyramid::full_levels(8, 8),
             ));
             let path = crate::state::photograph_path(state.scene[0].recon(), index)
                 .expect("an image of the node");

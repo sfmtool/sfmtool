@@ -137,10 +137,7 @@ fn opening_renders_the_patch_bitmaps_a_file_does_not_carry() {
         .all(|&r| r == -1));
     let picked = sfmtool_core::patch::display_bitmaps::render_patch_bitmap_column(
         &on_disk,
-        &sfmtool_core::camera::PhotographCache::new(
-            0,
-            sfmtool_core::patch::display_bitmaps::DISPLAY_PYRAMID_LEVELS,
-        ),
+        &sfmtool_core::camera::PhotographCache::new(0),
         &sfmtool_core::progress::Progress::none(),
     )
     .expect("not cancelled")
@@ -194,10 +191,7 @@ fn opening_renders_display_bitmaps_from_the_file_s_references() {
     let first = saved_with_photographs(&dir);
     let mut recon = SfmrReconstruction::load(&first, &sfmtool_core::progress::Progress::none())
         .expect("the file reads");
-    let photographs = sfmtool_core::camera::PhotographCache::new(
-        0,
-        sfmtool_core::patch::display_bitmaps::DISPLAY_PYRAMID_LEVELS,
-    );
+    let photographs = sfmtool_core::camera::PhotographCache::new(0);
     let render = |recon: &SfmrReconstruction| {
         sfmtool_core::patch::display_bitmaps::render_patch_bitmap_column(
             recon,

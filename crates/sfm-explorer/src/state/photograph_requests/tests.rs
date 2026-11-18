@@ -6,7 +6,6 @@ use std::time::{Duration, Instant};
 use sfmtool_core::camera::image::ImageU8;
 
 use super::*;
-use crate::state::PYRAMID_LEVELS;
 
 /// A demo reconstruction whose workspace is `dir`, with a PNG written for
 /// image 0 and none for image 1.
@@ -39,7 +38,7 @@ fn wait_for(requests: &PhotographRequests, path: &Path) {
 fn a_miss_is_decoded_off_the_calling_thread_and_found_on_a_later_look() {
     let dir = tempfile::tempdir().unwrap();
     let recon = demo_in(dir.path());
-    let cache = Arc::new(PhotographCache::new(1 << 30, PYRAMID_LEVELS));
+    let cache = Arc::new(PhotographCache::new(1 << 30));
     let requests = PhotographRequests::default();
     let ctx = egui::Context::default();
     let path = photograph_path(&recon, 0).unwrap();
@@ -66,7 +65,7 @@ fn a_miss_is_decoded_off_the_calling_thread_and_found_on_a_later_look() {
 fn a_file_that_cannot_be_read_ends_as_unreadable_rather_than_decoding_forever() {
     let dir = tempfile::tempdir().unwrap();
     let recon = demo_in(dir.path());
-    let cache = Arc::new(PhotographCache::new(1 << 30, PYRAMID_LEVELS));
+    let cache = Arc::new(PhotographCache::new(1 << 30));
     let requests = PhotographRequests::default();
     let ctx = egui::Context::default();
     let path = photograph_path(&recon, 1).unwrap();
@@ -94,11 +93,11 @@ fn a_file_that_cannot_be_read_ends_as_unreadable_rather_than_decoding_forever() 
 fn a_cached_photograph_is_answered_without_a_request() {
     let dir = tempfile::tempdir().unwrap();
     let recon = demo_in(dir.path());
-    let cache = Arc::new(PhotographCache::new(1 << 30, PYRAMID_LEVELS));
+    let cache = Arc::new(PhotographCache::new(1 << 30));
     let path = photograph_path(&recon, 1).unwrap();
     let pyramid = Arc::new(ImageU8Pyramid::from_image(
         ImageU8::new(2, 2, 3, vec![9; 12]),
-        PYRAMID_LEVELS,
+        ImageU8Pyramid::full_levels(2, 2),
     ));
     cache.insert(&path, Arc::clone(&pyramid));
     let requests = PhotographRequests::default();
@@ -115,7 +114,7 @@ fn a_cached_photograph_is_answered_without_a_request() {
 fn a_cache_that_keeps_nothing_decodes_on_the_calling_thread() {
     let dir = tempfile::tempdir().unwrap();
     let recon = demo_in(dir.path());
-    let cache = Arc::new(PhotographCache::new(0, PYRAMID_LEVELS));
+    let cache = Arc::new(PhotographCache::new(0));
     let requests = PhotographRequests::default();
     let ctx = egui::Context::default();
     assert!(matches!(

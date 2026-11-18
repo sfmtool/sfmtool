@@ -146,7 +146,8 @@ impl Inner {
 /// Decoded photographs as pyramids, keyed by path, shared across threads.
 ///
 /// Every pyramid is `ImageU8::read_rgb` of the file followed by
-/// [`ImageU8Pyramid::from_image`] with the cache's level count. A file that
+/// [`ImageU8Pyramid::from_image`] at [`ImageU8Pyramid::full_levels`] of the
+/// photograph's own size, so each entry's depth is set by its image. A file that
 /// cannot be read is remembered as `None` and costs nothing against the
 /// budget. An entry records the file's length and modification time when it
 /// is made; `get` and `get_many` compare them with the file on disk and decode
@@ -159,7 +160,6 @@ impl Inner {
 /// pyramid keeps it alive.
 pub struct PhotographCache {
     budget_bytes: u64,
-    levels: usize,
     inner: Mutex<Inner>,
     tick: AtomicU64,
     hits: AtomicU64,
@@ -169,7 +169,6 @@ pub struct PhotographCache {
 impl std::fmt::Debug for PhotographCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PhotographCache")
-            .field("levels", &self.levels)
             .field("stats", &self.stats())
             .finish()
     }
@@ -183,18 +182,13 @@ enum Found {
 }
 
 impl PhotographCache {
-    /// A cache holding up to `budget_bytes` of pyramids of `levels` levels.
+    /// A cache holding up to `budget_bytes` of pyramids, each of
+    /// [`ImageU8Pyramid::full_levels`] depth for its photograph's size.
     /// A budget of 0 keeps nothing: every call decodes and hands back a
     /// pyramid no one else will see.
-    ///
-    /// # Panics
-    ///
-    /// When `levels` is 0.
-    pub fn new(budget_bytes: u64, levels: usize) -> Self {
-        assert!(levels >= 1, "PhotographCache: a pyramid needs a level");
+    pub fn new(budget_bytes: u64) -> Self {
         Self {
             budget_bytes,
-            levels,
             inner: Mutex::new(Inner {
                 map: HashMap::new(),
                 bytes: 0,
@@ -203,11 +197,6 @@ impl PhotographCache {
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
         }
-    }
-
-    /// The pyramid depth every entry is built with.
-    pub fn levels(&self) -> usize {
-        self.levels
     }
 
     /// The budget the cache was made with. At 0 it keeps nothing, so a decode
@@ -324,7 +313,8 @@ impl PhotographCache {
     /// on disk. The entry records the file's length and modification time as
     /// they are now (or that there is no file), so `get` answers with
     /// `pyramid` until the file changes. The pyramid should have
-    /// [`Self::levels`] levels, as a decoded one would.
+    /// [`ImageU8Pyramid::full_levels`] levels for its size, as a decoded one
+    /// would.
     pub fn insert(&self, path: &Path, pyramid: Arc<ImageU8Pyramid>) {
         if self.budget_bytes == 0 {
             return;
@@ -394,7 +384,8 @@ impl PhotographCache {
     /// take no work from the global pool; see the photograph-cache spec.
     fn decode(&self, path: &Path) -> Option<Arc<ImageU8Pyramid>> {
         let image = ImageU8::read_rgb(path).ok()?;
-        Some(Arc::new(ImageU8Pyramid::from_image(image, self.levels)))
+        let levels = ImageU8Pyramid::full_levels(image.width, image.height);
+        Some(Arc::new(ImageU8Pyramid::from_image(image, levels)))
     }
 
     fn get_found(&self, path: &Path) -> (Option<Arc<ImageU8Pyramid>>, Found) {

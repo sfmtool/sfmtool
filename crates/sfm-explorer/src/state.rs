@@ -1038,7 +1038,7 @@ impl AppState {
             sift_cache: HashMap::new(),
             sift_indexes: HashMap::new(),
             cluster_patches: HashMap::new(),
-            photographs: Arc::new(PhotographCache::new(default_budget_bytes(), PYRAMID_LEVELS)),
+            photographs: Arc::new(PhotographCache::new(default_budget_bytes())),
             photograph_requests: PhotographRequests::default(),
             show_demo_dialog: false,
             demo_num_points: 1000,
@@ -1749,15 +1749,6 @@ pub(crate) fn ensure_sift_cached<'a>(
     cache.get(&image)
 }
 
-/// How many pyramid levels a decoded photograph is kept at: what the
-/// photometric fit's sampler needs, and what the kernels' own callers build.
-///
-/// One constant, because the cluster sampler mip-selects by the grid's
-/// footprint and Track View draws the tile the kernel measured: two
-/// depths would be two pictures of one surface.
-pub(crate) const PYRAMID_LEVELS: usize =
-    sfmtool_core::patch::display_bitmaps::DISPLAY_PYRAMID_LEVELS;
-
 /// The refusal every operation gives when the node it was asked about was
 /// closed after its id was taken, whichever surface asked.
 pub(crate) const NOT_LOADED: &str = "That reconstruction is no longer loaded.";
@@ -1787,9 +1778,10 @@ pub(crate) fn peek_full_res_pyramid(
 
 #[cfg(test)]
 impl AppState {
-    /// Put `image`, pyramided, in the photograph cache as the photograph of
-    /// image `index` of node `id`: what a fixture whose photographs are not on
-    /// disk does in place of the decode.
+    /// Put `image`, pyramided at the depth the cache's decode gives its size,
+    /// in the photograph cache as the photograph of image `index` of node `id`:
+    /// what a fixture whose photographs are not on disk does in place of the
+    /// decode.
     pub(crate) fn insert_photograph(
         &self,
         id: ReconId,
@@ -1800,7 +1792,10 @@ impl AppState {
         let path = photograph_path(recon, index).expect("an image of the node");
         self.photographs.insert(
             &path,
-            Arc::new(ImageU8Pyramid::from_image(image, PYRAMID_LEVELS)),
+            Arc::new({
+                let levels = ImageU8Pyramid::full_levels(image.width(), image.height());
+                ImageU8Pyramid::from_image(image, levels)
+            }),
         );
     }
 
