@@ -1751,6 +1751,10 @@ that can only fit the whole photograph cannot look at a feature, and a
 `screenshot` of a 4000-pixel frame scaled into a panel shows nothing a
 reprojection error is visible in.
 
+Two more fields, the pyramid level the panel draws and how many visible tiles
+are not yet drawn at it, are proposed in
+[out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md).
+
 `get_image_detail_view` takes no arguments and returns the document both tools
 answer with:
 

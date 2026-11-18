@@ -124,7 +124,11 @@ carry the `image_to_gray` object
 | `feature_options` | object | All parameters that affect feature output. Keys are tool-defined. See the `.sift` format spec for details |
 | `feature_prefix_dir` | string | Relative path to the features subdirectory, including a content hash of the tool configuration |
 
-The file has no other keys. An optional second file beside it in the workspace
+The file has no other keys. A `mipmap_options` object, which turns on stored
+reduced copies of large photographs and holds their size threshold and JPEG
+qualities, is proposed in
+[out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md).
+An optional second file beside it in the workspace
 root, `.sfm-named-image-lists.json`, names sets of the workspace's images by
 pattern and frame range; it is described in
 [`named-image-lists.md`](named-image-lists.md). The commands that take
@@ -446,7 +450,11 @@ if you have a specific reason to nest.
 ## Workspace Directory Layout
 
 A workspace has no mandatory internal structure beyond the `.sfm-workspace.json` file. Images can
-live in any subdirectory. However, a typical workspace looks like this:
+live in any subdirectory. No directory in a workspace holds a cache of files derived from its
+images; a `.sfm-mipmaps/` directory at the root, holding reduced copies of large photographs and
+a full-resolution copy of those whose originals cannot be read by region, is
+proposed in [out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md).
+A typical workspace looks like this:
 
 ```
 my_project/
