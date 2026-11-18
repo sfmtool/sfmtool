@@ -116,12 +116,14 @@ The command runs these phases in order.
    or one edited by hand, can hold a name that breaks the image-name rule
    ([sfmr-file-format.md § `images/names.json.zst`](../../formats/sfmr-file-format.md#imagesnamesjsonzst)),
    such as one with `..`, and the reader refuses such a file. When a cheap
-   reader refuses its names, they are read from the file's names entry without
+   reader refuses its names, as both do when their count differs from the
+   record's `image_count`, they are read from the file's names entry without
    that reader's checks (`read_sfmr_image_names_unchecked`,
-   `read_matches_image_names_unchecked`), and each `..` is resolved by name, so
-   that the folders the file names are still found and kept. A file whose image
-   names cannot be read, or whose names break the image-name rule, also names
-   the folders its record's `feature_prefix_dir` names below its workspace.
+   `read_matches_image_names_unchecked`). Each `..` of a name is resolved by
+   name, so that the folders the file names are still found and kept. A file
+   whose image names cannot be read, are refused by a cheap reader, or break
+   the image-name rule also names the folders its record's
+   `feature_prefix_dir` names below its workspace.
    Every folder, image directory and `.sift` file is identified by its real
    path (`std::fs::canonicalize`) and spelled as the walk spells it, so a file
    that names `IMAGES/<image>`, as `sfm sift --extract IMAGES` records on a
