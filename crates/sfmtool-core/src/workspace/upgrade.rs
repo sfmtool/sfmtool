@@ -11,7 +11,7 @@
 //! to version 2 without extracting it again, rewrites each file that records
 //! an old folder so that it records the new one and the new files' hashes,
 //! rewrites the workspace file as version 2, and deletes the old folders. See
-//! `specs/drafts/ws-upgrade-files-amendment.md`, whose phases 1 to 6 the
+//! `specs/cli/workspace/ws-upgrade-command.md`, whose phases 1 to 6 the
 //! function runs in order.
 
 use std::collections::HashMap;
@@ -439,7 +439,7 @@ struct NewHashes {
 /// nested in it. One run upgrades the whole tree, since a file of one
 /// workspace can name the features of another; `path` must be in the
 /// outermost one. It runs the phases of
-/// `specs/drafts/ws-upgrade-files-amendment.md`:
+/// `specs/cli/workspace/ws-upgrade-command.md`:
 ///
 /// 1. Walk the tree, nested workspaces included but no symbolic link or
 ///    junction, for `.sfmr`, `.matches`, `.camrig` and `.kdf` files and for

@@ -536,7 +536,7 @@ fn feature_prefix_dir_py(
 /// every file that names it is pointed there with that record. The walk does
 /// not enter a symbolic link or junction to a directory, and a tree that
 /// holds one has no old folder deleted. A stopped run can be run again to
-/// finish. See ``specs/drafts/ws-upgrade-files-amendment.md``.
+/// finish. See ``specs/cli/workspace/ws-upgrade-command.md``.
 ///
 /// Args:
 ///     path: a directory or file in the outermost workspace of the tree.
@@ -559,7 +559,10 @@ fn feature_prefix_dir_py(
 ///     the run leaves), ``sift_file_count``, ``kept_because`` (None when it
 ///     is deleted), ``deleted`` and ``kept_files``;
 ///     ``converted_sift_file_count``; ``linked_directories``;
-///     ``old_folders_deleted``; and ``notes``, lines for the user.
+///     ``old_folders_deleted``; ``notes``, lines for the user; and
+///     ``nothing_to_do``, true when every workspace file is current, no
+///     file is converted or deleted, and every old folder found is neither
+///     converted nor deleted, for a reason a rerun would find again.
 ///
 /// Raises:
 ///     ValueError: when ``path`` is in a nested workspace, a workspace file
@@ -575,7 +578,9 @@ fn feature_prefix_dir_py(
 ///         but new ``.sift`` files is written in each case.
 ///     FileNotFoundError: when no workspace is found at or above ``path``.
 ///     OSError: when a directory of the tree cannot be listed.
-///     InterruptedError: when a signal handler stopped the run.
+///     The exception a signal handler raised while the run went
+///     (``KeyboardInterrupt`` for Ctrl+C), which stops it.
+///     InterruptedError: when the run was cancelled otherwise.
 #[pyfunction(name = "upgrade_workspace")]
 #[pyo3(signature = (path, *, dry_run=false, progress=None))]
 fn upgrade_workspace_py(
@@ -601,7 +606,12 @@ fn upgrade_workspace_py(
         upgrade_workspace(&path, &options, &progress)
     });
     match watch.finish(result)? {
-        Ok(report) => crate::helpers::serde_to_py(py, &report),
+        Ok(report) => {
+            let dict = crate::helpers::serde_to_py(py, &report)?;
+            dict.bind(py)
+                .set_item("nothing_to_do", report.nothing_to_do())?;
+            Ok(dict)
+        }
         Err(e) => Err(match e {
             UpgradeWorkspaceError::NoWorkspace { .. } => {
                 pyo3::exceptions::PyFileNotFoundError::new_err(e.to_string())

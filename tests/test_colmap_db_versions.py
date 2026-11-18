@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """`sfm to-colmap-db` on a reconstruction whose record holds version 1
-settings, made before its workspace was moved to version 2 by `sfm ws upgrade`:
-the record is converted in memory and its `.sift` files are extracted into and
-read from the converted folder, for every feature tool."""
+settings in a version 2 workspace, as one `sfm ws upgrade` lists as not
+converted does: the record is converted in memory and its `.sift` files are
+extracted into and read from the converted folder, for every feature tool."""
 
 import json
 import shutil
@@ -21,11 +21,28 @@ from sfmtool.fileio import read_sift, write_sift
 from sfmtool.sift.extract import SiftExtractionError, image_files_to_sift_files
 from sfmtool.sift.extract_opencv import get_default_opencv_feature_options
 from sfmtool.sift.extract_sfmtool import get_default_sfmtool_feature_options
+from sfmtool.workspace import feature_prefix_dir, upgrade_feature_options
 
 from . import conftest
 from .conftest import SEOUL_BULL_DIR, SEOUL_BULL_GROUND_TRUTH
 
 _CONVERTED = "Converted the version 1 SIFT extraction record"
+
+
+def _write_version_2_workspace_file(workspace: Path) -> None:
+    """Write the version 1 workspace file of `workspace` as version 2, as
+    `sfm ws upgrade` writes it, and leave every other file as it is, so a
+    `.sfmr` keeps its version 1 record, as a file the upgrade does not
+    convert keeps it."""
+    path = workspace / ".sfm-workspace.json"
+    config = json.loads(path.read_text())
+    options = upgrade_feature_options(config["feature_tool"], config["feature_options"])
+    config["version"] = 2
+    config["feature_options"] = options
+    config["feature_prefix_dir"] = feature_prefix_dir(
+        config["feature_tool"], config["feature_type"], options
+    )
+    path.write_text(json.dumps(config, indent=2))
 
 
 def _export(sfmr: Path, db: Path):
@@ -36,9 +53,9 @@ def _export(sfmr: Path, db: Path):
 
 def test_an_embedded_patches_record_of_version_1_is_converted(tmp_path):
     """The seoul_bull ground truth (embedded patches, no .sift files, a
-    version 1 sfmtool record) exports from its upgraded workspace: its files
+    version 1 sfmtool record) exports from a version 2 workspace: its files
     are extracted into the folder the converted record names, which is the one
-    `sfm ws upgrade` named for the same settings, and one line says so."""
+    `sfm ws upgrade` names for the same settings, and one line says so."""
     shutil.copy(SEOUL_BULL_GROUND_TRUTH, tmp_path / SEOUL_BULL_GROUND_TRUTH.name)
     shutil.copy(SEOUL_BULL_DIR / ".sfm-workspace.json", tmp_path)
     for image in SEOUL_BULL_DIR.glob("seoul_bull_sculpture_*.jpg"):
@@ -46,8 +63,7 @@ def test_an_embedded_patches_record_of_version_1_is_converted(tmp_path):
     old_prefix = json.loads((tmp_path / ".sfm-workspace.json").read_text())[
         "feature_prefix_dir"
     ]
-    upgraded = CliRunner().invoke(main, ["ws", "upgrade", str(tmp_path)])
-    assert upgraded.exit_code == 0, upgraded.output
+    _write_version_2_workspace_file(tmp_path)
     new_prefix = json.loads((tmp_path / ".sfm-workspace.json").read_text())[
         "feature_prefix_dir"
     ]
@@ -64,7 +80,7 @@ def test_an_embedded_patches_record_of_version_1_is_converted(tmp_path):
     assert len(new_files) == 17
     assert all(read_sift(p)["metadata"]["version"] == 2 for p in new_files)
 
-    # The folder is the one `sfm ws upgrade` named for the same settings, though
+    # The folder is the one `sfm ws upgrade` names for the same settings, though
     # the .sfmr's record holds a bare "sift" feature type.
     assert {p.parent for p in new_files} == {tmp_path / new_prefix}
     assert f"read from {new_prefix}," in line
@@ -87,7 +103,7 @@ def _version_1_sift_files_reconstruction(
 ) -> Path:
     """A `sift_files` reconstruction of six seoul_bull images made in a
     version 1 `tool` workspace, at the ground truth's poses, with the
-    workspace then moved to version 2 by `sfm ws upgrade`."""
+    workspace file then written as version 2."""
     workspace = tmp_path / "ws"
     images_dir = workspace / "images"
     images_dir.mkdir(parents=True)
@@ -139,8 +155,7 @@ def _version_1_sift_files_reconstruction(
         sfmr = conftest.build_reconstruction_at_poses(
             workspace, images, SEOUL_BULL_GROUND_TRUTH, workspace / "recon.sfmr"
         )
-    upgraded = CliRunner().invoke(main, ["ws", "upgrade", str(workspace)])
-    assert upgraded.exit_code == 0, upgraded.output
+    _write_version_2_workspace_file(workspace)
     return sfmr
 
 

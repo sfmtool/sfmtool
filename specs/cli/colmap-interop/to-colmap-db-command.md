@@ -64,9 +64,9 @@ When every file is present and current, nothing is extracted.
 The reconstruction's workspace must be version 2, and a version 1 one is
 refused before any work
 ([workspace.md § A command that uses a workspace requires version 2](../../workspace/workspace.md#a-command-that-uses-a-workspace-requires-version-2)).
-A record with version 1 settings (no `image_to_gray`), made before the
-workspace was upgraded, lives in the `.sfmr`, so `sfm ws upgrade` does not
-change it. When such a record has files to extract, the
+A `.sfmr` in a version 2 workspace can still hold a record with version 1
+settings (no `image_to_gray`), as one that `sfm ws upgrade` listed as not
+converted does. When such a record has files to extract, the
 command converts it in memory as `sfm ws upgrade` converts a workspace file, the
 way the viewer's *Build SIFT Files* does, extracts every file into the folder
 named from the converted options, reads them from there, and prints one line:

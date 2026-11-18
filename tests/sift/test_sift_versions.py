@@ -104,9 +104,9 @@ def _write_version_1_sift(sift_path: Path, image_path: Path) -> None:
 def test_a_version_2_workspace_whose_folder_holds_version_1_files_is_told_to_remove_them(
     images, tmp_path
 ):
-    """`sfm ws upgrade` does nothing to a version 2 workspace, so the advice is
-    to remove the version 1 files from its folder and run again, which then
-    works."""
+    """The folder is checked only for version 2 settings, so the advice is
+    the same for every caller: remove the version 1 files from the folder and
+    run again, which then works."""
     result = CliRunner().invoke(
         main, ["ws", "init", "--feature-tool", "sfmtool", str(tmp_path)]
     )

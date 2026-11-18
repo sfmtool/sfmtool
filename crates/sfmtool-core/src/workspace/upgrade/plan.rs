@@ -831,7 +831,7 @@ pub(super) fn plan(
             for dir in dirs.keys() {
                 kept_for.entry(dir.clone()).or_insert_with(|| {
                     format!(
-                        "kept: named by a file of the workspace {}, outside this tree, whose \
+                        "named by a file of the workspace {}, outside this tree, whose \
                          other files this run cannot see",
                         workspace.display()
                     )
@@ -841,7 +841,7 @@ pub(super) fn plan(
             for dir in dirs.keys() {
                 kept_for.entry(dir.clone()).or_insert_with(|| {
                     format!(
-                        "kept: named by {}, which also names images in {}, outside this tree, \
+                        "named by {}, which also names images in {}, outside this tree, \
                          and is not converted",
                         path.display(),
                         outside.display()
@@ -1172,7 +1172,7 @@ pub(super) fn plan(
             .or_else(|| naming.iter().map(|(_, d)| d.clone()).min());
         let kept_because = if refused_by > 0 {
             Some(format!(
-                "kept: named by {refused_by} file(s) the current reader refuses"
+                "named by {refused_by} file(s) the current reader refuses"
             ))
         } else if let Some(reason) = kept_for.get(&dir) {
             Some(reason.clone())
@@ -1193,7 +1193,7 @@ pub(super) fn plan(
                  file behind a link needs them"
                     .to_string()
             });
-            Some("kept: the tree holds linked directories, whose files are not examined".into())
+            Some("the tree holds linked directories, whose files are not examined".into())
         } else {
             None
         };

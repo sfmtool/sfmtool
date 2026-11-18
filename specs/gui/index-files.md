@@ -270,8 +270,9 @@ extraction record of ‹label› to version 2"*, only once every file is built,
 so the node then looks in the new folder. Undo puts the old record back and a
 save writes the new one. The workspace's `.sfm-workspace.json` is neither read
 nor changed, so it may still be version 1, and the command-line writers keep
-refusing there until `sfm ws upgrade` names its own new folder. The old folder
-stays, and other reconstructions still find it through their own records.
+refusing there until `sfm ws upgrade` converts the workspace. Until then the
+old folder stays, and other reconstructions still find it through their own
+records.
 
 **When it is refused.** It is greyed, with the sentence the starter and the
 wire also give (`AppState::build_sift_files_refusal`), on a busy node, on a

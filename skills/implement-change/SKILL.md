@@ -207,8 +207,9 @@ and hosts the pictures:
    beside the source, so pointing it at `test-data` directly writes into
    `test-data`. The `test-data` workspaces are version 1, so run
    `pixi run sfm ws upgrade <copy>` on the copy before any command that uses
-   its features or settings, which refuses a version 1 workspace; leave
-   `test-data` itself unchanged.
+   its features or settings, which refuses a version 1 workspace. The upgrade
+   also rewrites the copy's `.sfmr` files in place, so run it on the copy only
+   and leave `test-data` itself unchanged.
 2. **After.** `pixi run cargo build --release -p sfm-explorer`, then
    `pixi run python skills/gui-bug-bash/viewer.py launch --session
    <scratchpad>/shots-after --copy <copy>.sfmr`. It picks a random free port

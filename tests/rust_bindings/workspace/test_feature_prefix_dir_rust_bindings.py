@@ -1,7 +1,8 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""`sfmtool.workspace.feature_prefix_dir`: which options name a folder.
+"""`sfmtool.workspace.feature_prefix_dir`: which options name a folder; and
+`sfmtool.workspace.feature_type_for_tool`, the feature type in its name.
 
 The expected folder names were computed by `get_feature_tool_xxh128`, the
 Python function that named every folder before the binding did.
@@ -9,7 +10,7 @@ Python function that named every folder before the binding did.
 
 import pytest
 
-from sfmtool.workspace import feature_prefix_dir
+from sfmtool.workspace import feature_prefix_dir, feature_type_for_tool
 
 
 @pytest.mark.parametrize(
@@ -67,3 +68,41 @@ def test_options_nested_past_the_limit_name_no_folder():
 def test_a_value_of_another_type_names_no_folder():
     with pytest.raises(ValueError, match=r"feature_options\['x'\] has the type set"):
         feature_prefix_dir("t", "sift-t", {"x": {1}})
+
+
+# ---------------------------------------------------------------------------
+# feature_type_for_tool tests
+# ---------------------------------------------------------------------------
+
+
+class TestFeatureTypeForTool:
+    def test_opencv(self):
+        assert feature_type_for_tool("opencv", {}) == "sift-opencv"
+
+    def test_colmap_default(self):
+        assert feature_type_for_tool("colmap", {}) == "sift-colmap"
+
+    def test_colmap_dsp(self):
+        assert (
+            feature_type_for_tool("colmap", {"domain_size_pooling": True})
+            == "sift-colmap-dsp"
+        )
+
+    def test_colmap_max_features(self):
+        assert (
+            feature_type_for_tool("colmap", {"max_num_features": 500})
+            == "sift-colmap-max500"
+        )
+
+    def test_colmap_dsp_and_max(self):
+        opts = {"domain_size_pooling": True, "max_num_features": 500}
+        assert feature_type_for_tool("colmap", opts) == "sift-colmap-dsp-max500"
+
+    def test_colmap_default_max_features_omitted(self):
+        # 8192 is the COLMAP default — should not appear in the name
+        assert (
+            feature_type_for_tool("colmap", {"max_num_features": 8192}) == "sift-colmap"
+        )
+
+    def test_unknown_tool(self):
+        assert feature_type_for_tool("superpoint", {}) == "sift-superpoint"

@@ -121,10 +121,9 @@ Version 1 and version 2 files never mix
 When `--extract` has at least one file to write, it refuses, before writing
 anything:
 
-- **a folder holding version 1 files**, where `sfm ws upgrade` has nothing to
-  do: the error names the folder and the version 1 files in it, and says to
-  remove those files from the folder and run again, which extracts version 2
-  files in their place;
+- **a folder holding version 1 files**: the error names the folder and the
+  version 1 files in it, and says to remove those files from the folder and
+  run again, which extracts version 2 files in their place;
 - **a `colmap` or `opencv` conversion other than the tool's**: the error names
   the tool and the one conversion it makes;
 - **the `sfmtool-undistort` tool**: the files of an undistorted workspace are

@@ -11,14 +11,13 @@ import pytest
 from click.testing import CliRunner
 
 from sfmtool.cli import main
-from sfmtool.sift.file import get_feature_type_for_tool
 from sfmtool.fileio import SiftFile
 from sfmtool.sift.extract_colmap import get_colmap_feature_options
-from sfmtool.workspace import feature_prefix_dir
+from sfmtool.workspace import feature_prefix_dir, feature_type_for_tool
 
 # The features folder of the default feature tool options (COLMAP without DSP)
 _default_options = get_colmap_feature_options()
-_default_feature_type = get_feature_type_for_tool("colmap", _default_options)
+_default_feature_type = feature_type_for_tool("colmap", _default_options)
 EXPECTED_FEATURE_PREFIX_DIR = feature_prefix_dir(
     "colmap", _default_feature_type, _default_options
 )
@@ -111,7 +110,7 @@ def test_sift_cli_sfmtool_backend(isolated_seoul_bull_image: Path):
     from sfmtool.sift.extract_sfmtool import get_default_sfmtool_feature_options
 
     options = get_default_sfmtool_feature_options()
-    feature_type = get_feature_type_for_tool("sfmtool", options)
+    feature_type = feature_type_for_tool("sfmtool", options)
     assert feature_type == "sift-sfmtool"
     prefix = feature_prefix_dir("sfmtool", feature_type, options)
 

@@ -1155,7 +1155,7 @@ fn a_folder_a_refused_reconstruction_names_is_kept_and_then_settled() {
     assert_eq!(folder.new_folder, Some(fixture.new_folder()));
     assert_eq!(
         folder.kept_because.as_deref(),
-        Some("kept: named by 1 file(s) the current reader refuses")
+        Some("named by 1 file(s) the current reader refuses")
     );
     assert!(!folder.deleted);
     assert!(report.old_folders_deleted);
@@ -1835,7 +1835,7 @@ fn a_refused_file_naming_images_through_a_parent_directory_keeps_their_folder() 
             .unwrap();
         assert_eq!(
             folder.kept_because.as_deref(),
-            Some("kept: named by 1 file(s) the current reader refuses"),
+            Some("named by 1 file(s) the current reader refuses"),
             "{name}: {folder:?}"
         );
         assert_eq!(old_folder_count(&fixture), IMAGES, "{name}");
@@ -1884,7 +1884,7 @@ fn a_file_naming_images_outside_the_tree_keeps_its_folder() {
             .unwrap();
         assert_eq!(
             folder.kept_because.as_deref(),
-            Some("kept: named by 1 file(s) the current reader refuses"),
+            Some("named by 1 file(s) the current reader refuses"),
             "{name}: {folder:?}"
         );
         assert_eq!(old_folder_count(&fixture), IMAGES, "{name}");
@@ -2462,7 +2462,7 @@ fn a_refused_file_whose_image_names_cannot_be_read_keeps_its_folder() {
         .unwrap();
     assert_eq!(
         folder.kept_because.as_deref(),
-        Some("kept: named by 2 file(s) the current reader refuses"),
+        Some("named by 2 file(s) the current reader refuses"),
         "{folder:?}"
     );
     assert!(!folder.deleted);
@@ -2502,7 +2502,7 @@ fn a_refused_file_with_too_few_image_names_keeps_the_folders_of_its_prefix() {
                 .unwrap();
             assert_eq!(
                 upgraded.kept_because.as_deref(),
-                Some("kept: named by 1 file(s) the current reader refuses"),
+                Some("named by 1 file(s) the current reader refuses"),
                 "{name}: {upgraded:?}"
             );
         }

@@ -207,7 +207,7 @@ def _check_inputs(
 
     # The merged reconstruction records one feature folder, so every input
     # must record the same one. A folder records the features as they were
-    # extracted, not the workspace's current folder, which `sfm ws upgrade`
+    # extracted, not the workspace's current folder, which `sfm ws init --force`
     # moves.
     feature_folders = [_feature_prefix_dir(r) for r in reconstructions]
     if len(set(feature_folders)) > 1:

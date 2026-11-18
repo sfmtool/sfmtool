@@ -27,8 +27,8 @@ with an error naming the inputs, writing nothing, when:
   reconstructions it was made from, if there are any, and convert the result
   with `sfm xform --to-embedded-patches`;
 - the inputs record different feature folders (`feature_prefix_dir` in their
-  workspace metadata), such as one solved before `sfm ws upgrade` and one
-  after; the error names each input's folder. The merged reconstruction
+  workspace metadata), such as one solved before `sfm ws init --force` and
+  one after; the error names each input's folder. The merged reconstruction
   records the first input's folder;
 - two cameras that took the same image vary different parameters per image
   (their `per_image_adjustments`, see
