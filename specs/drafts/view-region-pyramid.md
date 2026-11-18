@@ -12,7 +12,7 @@ regions, is separate from the files and caches the main draft specifies; its
 steps 1 and 2 are step 7 of the main draft, and its steps 3 to 6 are the main
 draft's steps 9 to 12. The main draft's step 8, between them, limits the
 cluster members' elongation (§ "The members' elongation limit"). Open:
-questions 4 and 5 at the end. It amends
+question 5 at the end. It amends
 [core/camera/photograph-cache.md](../core/camera/photograph-cache.md) and the
 samplers of [core/camera/image-warping.md](../core/camera/image-warping.md).
 
@@ -559,7 +559,8 @@ cascade wanders, so this bounds each request, not what one member holds
 kilobytes per view. No view is refused and no result changes:
 which path a render takes depends on its boxes and on what its patch already keeps, and both read the same
 pixels. `clipped_share` already walks tiles one at a time (above). The
-pool's four tiles per thread and the window of 16 are open question 4.
+pool's four tiles per thread and the window of 16 are decided (open
+question 4).
 
 **On the GUI thread** (Track View's tiles, crops and context, the Track
 Table's crop column), the panel acts on the photograph's layout state as the
@@ -696,7 +697,9 @@ there is no whole pyramid for any reader to fall back on.
    sample through their own code". Each bench step's phase note counts the
    region pyramids its renders reused and the ones they assembled again, so
    the pull request reports how often the bench's fits reassemble at
-   `REGION_REUSE_MARGIN`.
+   `REGION_REUSE_MARGIN`. It also counts the renders that took the tile
+   path, so the pull request reports how often renders take it on the test
+   data and on a real capture.
 5. **Bulk kernels**: the display patch bitmaps, the conversion to embedded
    patches, the web export, *Refine all normals*, *Refit all points* and the
    cluster-patches build fetch tiled photographs, each taking its points in
@@ -709,7 +712,9 @@ there is no whole pyramid for any reader to fall back on.
    whose points it sees, and the same points in shuffled order decode more,
    so the test can fail; with a small pool, the
    regions of all the points in progress together never exceed the one pool
-   the caller made.
+   the caller made. Each bulk kernel's phase note counts the renders that
+   took the tile path, and the pull request reports that count for each
+   kernel on the test data and on a real capture.
 6. **`GreyImages` by region.** Tests: the nearby-track search's results are
    identical.
 
@@ -730,13 +735,12 @@ there is no whole pyramid for any reader to fall back on.
    reference image and then by the reference keypoint's row and column, not
    by tile, because a point order that does not depend on how photographs
    are cut into tiles is better (§ "Memory").
-4. **The pool and the tile window.** Four tiles of copied regions per rayon
-   thread, shared by the kernel call, and 16 pinned tiles per render on the tile
-   path (as designed), or other values; or capping the patches in progress at
-   the worker count instead of pooling, which would need a wait that nested
-   loops could deadlock on. Recommendation: keep them, and count in each kernel's phase note
-   how many renders took the tile path, so both are tuned on real captures;
-   the values change memory and speed, never a result.
+4. **The pool and the tile window.** *Decided by the user:* four tiles'
+   worth of copied regions per rayon thread in the kernel call's region pool,
+   16 pinned tiles per render on the tile path, and no cap on the patches in
+   progress. Where the memory involved is small, here hundreds of megabytes
+   at worst against budgets of several gigabytes, speed comes before tighter
+   memory limits. The values change memory and speed, never a result.
 5. **An interface for kernels.** Designed as a `&TiledPhotograph` in
    `ProjectedImage`, resolved to a region pyramid inside the render entry
    points. The other option is a `ProjectedImage` built per render with the
