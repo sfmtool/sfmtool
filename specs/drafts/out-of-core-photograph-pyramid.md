@@ -1481,8 +1481,12 @@ later:
   photograph's level-0 size, which the panel reads from the header (or the
   camera) rather than from a texture.
 - **Zoom limit.** The limit becomes `max(32, 8 / fit_scale)` times the fit,
-  where `fit_scale` is the screen pixels per level-0 pixel at the fit, so a
-  level-0 pixel can always be enlarged to 8 screen pixels (open question 7).
+  where `fit_scale` is the panel points per level-0 pixel at the fit, so a
+  level-0 pixel can always be enlarged to 8 points, which is 8 screen pixels
+  at one physical pixel a point and more on a denser display (open question
+  7). Points are the unit the panel's view arithmetic and
+  `set_image_detail_view` work in; the level rule above alone reads physical
+  pixels.
   The fixed limit of 32 times the fit before step 2 reached only 0.78 screen pixels per
   level-0 pixel for a 16320 px photograph in a 400 px panel, so the
   original's pixels could not be enlarged at all; for a photograph that fits
