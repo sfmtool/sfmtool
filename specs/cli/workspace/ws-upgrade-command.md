@@ -110,15 +110,23 @@ The command runs these phases in order.
    (by the rule every reader resolves it with), and its image names and
    folders are relative to that workspace. The folders a file names are
    `<its workspace>/<image's directory>/<feature_prefix_dir>` for each image it
-   records, each `..` of an image name resolved by name, read from the file's
-   record and image names alone with `read_sfmr_image_names` and
-   `read_matches_image_names`, so a file the current reader refuses still names
-   its folders. A file whose image names cannot be read names the folders its
-   record's `feature_prefix_dir` names below its workspace. Every folder, image
-   directory and `.sift` file is identified by its real path
-   (`std::fs::canonicalize`) and spelled as the walk spells it, so a file that
-   names `IMAGES/<image>`, as `sfm sift --extract IMAGES` records on a file
-   system that ignores case, names the same folder as the walk's `images`.
+   records, read from the file's record and image names alone with
+   `read_sfmr_image_names` and `read_matches_image_names`, so a file the
+   current reader refuses still names its folders. A file another tool wrote,
+   or one edited by hand, can hold a name that breaks the image-name rule
+   ([sfmr-file-format.md § `images/names.json.zst`](../../formats/sfmr-file-format.md#imagesnamesjsonzst)),
+   such as one with `..`, and the reader refuses such a file. When a cheap
+   reader refuses its names, they are read from the file's names entry without
+   that reader's checks (`read_sfmr_image_names_unchecked`,
+   `read_matches_image_names_unchecked`), and each `..` is resolved by name, so
+   that the folders the file names are still found and kept. A file whose image
+   names cannot be read, or whose names break the image-name rule, also names
+   the folders its record's `feature_prefix_dir` names below its workspace.
+   Every folder, image directory and `.sift` file is identified by its real
+   path (`std::fs::canonicalize`) and spelled as the walk spells it, so a file
+   that names `IMAGES/<image>`, as `sfm sift --extract IMAGES` records on a
+   file system that ignores case, names the same folder as the walk's
+   `images`.
 
    Each `.sfmr` and `.matches` file the run would rewrite is read whole here,
    in a dry run too, so a file the current reader refuses is told apart, by the
@@ -263,8 +271,8 @@ the deletion of the old folders:
 - a `.sfmr` or `.matches` file whose `workspace` record resolves to a
   workspace outside the tree, which that workspace's upgrade converts;
 - a `.sfmr` or `.matches` file of the tree an image name of which leaves the
-  tree's root through `..`, since the run does not convert the folder outside
-  the tree it names;
+  tree's root through `..`, which the current reader refuses, since the
+  image-name rule refuses a name with `..`;
 - a `.kdf` file that cannot be read.
 
 A file the file system will not give up, or whose metadata cannot be read at
