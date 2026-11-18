@@ -11,8 +11,8 @@ It is kept as a draft of its own because what it specifies, the samplers'
 regions, is separate from the files and caches the main draft specifies; its
 steps 1 and 2 are step 7 of the main draft, and its steps 3 to 6 are the main
 draft's steps 9 to 12. The main draft's step 8, between them, limits the
-cluster members' elongation (§ "The members' elongation limit"). Open:
-question 5 at the end. It amends
+cluster members' elongation (§ "The members' elongation limit"). The user
+has decided every open question (§ "Open questions"). It amends
 [core/camera/photograph-cache.md](../core/camera/photograph-cache.md) and the
 samplers of [core/camera/image-warping.md](../core/camera/image-warping.md).
 
@@ -720,6 +720,9 @@ there is no whole pyramid for any reader to fall back on.
 
 ## Open questions
 
+The user has decided every question below; the section records the
+decisions.
+
 1. **In-core photographs.** *Decided by the user:* every photograph is read
    through tiles and view-region pyramids, whatever its size. An in-core
    photograph is decoded once, in a kernel's read phase or by a panel's one
@@ -741,11 +744,12 @@ there is no whole pyramid for any reader to fall back on.
    progress. Where the memory involved is small, here hundreds of megabytes
    at worst against budgets of several gigabytes, speed comes before tighter
    memory limits. The values change memory and speed, never a result.
-5. **An interface for kernels.** Designed as a `&TiledPhotograph` in
-   `ProjectedImage`, resolved to a region pyramid inside the render entry
-   points. The other option is a `ProjectedImage` built per render with the
-   region pyramid already in it, which would move the region computation into
-   every kernel. Recommendation: the tiled photograph, as designed.
+5. **An interface for kernels.** *Decided by the user:* a kernel holds a
+   `&TiledPhotograph` in `ProjectedImage`, and the render entry points
+   resolve each render's region pyramid, copied from the pool or read
+   through tiles; kernels never compute or request regions. The region logic
+   lives in one place, and the tiling details stay out of the kernels, as
+   with the point order of question 3.
 6. **The cluster refinement's evaluation tile.** *Decided by the user:* a
    cluster member's elongation is limited to `MAX_PATCH_ELONGATION`, 16,
    since the extreme cases are rarely correct photometric matches; a member

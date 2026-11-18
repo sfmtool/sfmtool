@@ -24,8 +24,7 @@ draft [view-region-pyramid.md](view-region-pyramid.md), which this design
 requires: without it no kernel can read a large photograph within a bounded
 memory, so it is a numbered step here (§ "Implementation steps"), not a later
 optimization. The user has decided every open question of this draft
-(§ "Open questions", 1 to 13); of the companion draft's six, the user has
-decided questions 1, 2, 3, 4 and 6, and question 5 remains open.
+(§ "Open questions", 1 to 13) and every one of the companion draft's six.
 
 Amends [core/camera/photograph-cache.md](../core/camera/photograph-cache.md)
 (the cache hands out photograph tiles for every photograph instead of whole
@@ -2389,6 +2388,9 @@ source. Times are wall clock of one run each, repeated two to four times; the
 ranges in this draft are over those runs.
 
 ## Open questions
+
+The user has decided every question below; the section records the
+decisions.
 
 1. **The names of the mip level files.** *Decided by the user:* the whole
    original file name followed by the suffix, as a `.sift` is named
