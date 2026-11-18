@@ -851,7 +851,8 @@ impl App {
                     let transform = crate::camera_lock::background_transform(&self.viewer_3d, node)
                         .unwrap_or_else(|| node.transform().clone());
                     // The photograph comes from the photograph cache, decoded
-                    // on the rayon pool on a miss, never on this thread.
+                    // on the rayon pool on a miss (on this thread only under a
+                    // cache budget of 0).
                     let (photographs, requests, ctx) = (
                         &self.state.photographs,
                         &self.state.photograph_requests,

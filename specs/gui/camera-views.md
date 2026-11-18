@@ -578,7 +578,7 @@ length_scale / frustum_size_multiplier changes (same as frustum wireframes).
 `upload_bg_image()` draws the viewed camera's photograph from one level of its
 pyramid, the coarsest that covers the viewport within the GPU's texture limit.
 The pixels come from the viewer's photograph cache, decoded on the rayon pool
-on a miss, never on the GUI thread, and `clear_bg_image()` releases the texture
+on a miss, not on the GUI thread, and `clear_bg_image()` releases the texture
 on leaving camera view. Exactly one background texture is resident at a time;
 there is no prefetch — see [Photograph background](#photograph-background) and
 [Non-goals](#non-goals).
@@ -709,7 +709,11 @@ asks for a repaint when it lands. The decode is the cache's `ImageU8::read_rgb`
 (the file's contents choose the decoder and the EXIF orientation is ignored, as
 in [reading-and-writing-images.md](../core/camera/reading-and-writing-images.md))
 and its pyramid of `ImageU8Pyramid::full_levels` levels, so nothing is decoded
-on the GUI thread and the background shares its pixels with Image Detail. The
+on the GUI thread and the background shares its pixels with Image Detail. A
+cache with a budget of 0 keeps nothing for a later frame to find, so there, as
+for the panels, `display_photograph` decodes where it is asked: the background
+then decodes on the GUI thread once per change of image or level, and reads an
+unreadable photograph again on every frame. The
 whole photograph is still decoded to make the level; assembling the level from
 photograph tiles instead is proposed in
 [out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md)
@@ -744,8 +748,8 @@ When viewing camera N, each frame:
   - **Decoded**: the chosen level is copied into a new `Rgba8UnormSrgb`
     texture of its size, RGB to RGBA with alpha 255 (the pipeline draws with
     no blending, so the alpha has no visible effect), and the bind group is
-    rebuilt. This copy, of at most about four times the viewport's pixels, is
-    the only work on the GUI thread.
+    rebuilt. This copy, of a level whose longer side is less than twice the
+    viewport's, is the only work on the GUI thread.
   - **Decoding**: the texture keeps what it holds, so on a camera switch or
     while the Image Browser animates, the previous image's photograph stays on
     its own mesh until the next one lands; a background of another node is
@@ -1871,7 +1875,7 @@ mode.
 | Pick buffer (R32Uint, 1920×1080) | 8.3 MB |
 | Readback staging buffers (2 × 256 × 5 bytes) | 2.5 KB |
 | Thumbnail texture array atlas (128×128 RGBA × 10K cameras) | 625 MB (across multiple pages if needed) |
-| Background texture: one level, at most about four times the viewport's pixels (level 2 of a 16320×12240 photograph, 4080×3060 RGBA, for a 3840 px viewport) | ~50 MB |
+| Background texture: one level, its longer side less than twice the viewport's (level 2 of a 16320×12240 photograph, 4080×3060 RGBA, for a 3840 px viewport) | ~50 MB |
 | Background uniform buffer (view_proj mat4) | 64 bytes |
 
 † Fisheye cameras at 10K scale are unlikely in practice — fisheye is

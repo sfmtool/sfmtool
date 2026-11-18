@@ -1685,6 +1685,17 @@ fn the_texture_coordinates_scale_by_the_pixels_a_level_covers() {
     );
     // Even sizes cover the photograph exactly.
     assert_eq!(level_uv_scale((64, 32), (16, 8), 2), [1.0, 1.0]);
+
+    // The mesh carries the scale: each texture coordinate is the unscaled
+    // one times it, so the photograph's far corner lands past the level's.
+    let recon = demo(4);
+    let scale = [67.0 / 64.0, 33.0 / 32.0];
+    let (whole, _) = super::bg_image::bg_image_mesh(&recon, 0, [1.0, 1.0]);
+    let (scaled, _) = super::bg_image::bg_image_mesh(&recon, 0, scale);
+    assert!(whole.iter().any(|v| v.uv == [1.0, 1.0]));
+    for (w, s) in whole.iter().zip(&scaled) {
+        assert_eq!(s.uv, [w.uv[0] * scale[0], w.uv[1] * scale[1]]);
+    }
 }
 
 #[test]
@@ -3502,7 +3513,7 @@ fn the_background_mesh_is_built_through_its_image_s_own_intrinsics() {
     for recon in [demo(16), with_camera_model(demo(16), fisheye())] {
         let (shared, adjusted, own) = adjusted_triple(recon);
         let mesh = |recon: &SfmrReconstruction| {
-            let (vertices, indices) = super::bg_image::bg_image_mesh(recon, ADJUSTED);
+            let (vertices, indices) = super::bg_image::bg_image_mesh(recon, ADJUSTED, [1.0, 1.0]);
             (bytemuck::cast_slice::<_, u8>(&vertices).to_vec(), indices)
         };
         assert_eq!(mesh(&adjusted), mesh(&own));
@@ -3548,8 +3559,8 @@ fn zero_adjustments_draw_exactly_the_shared_camera() {
             frustum_bytes(&super::frustums::frustum_geometry(&recon, 1.0, true)),
         );
         let (a, b) = (
-            super::bg_image::bg_image_mesh(&listed, ADJUSTED),
-            super::bg_image::bg_image_mesh(&recon, ADJUSTED),
+            super::bg_image::bg_image_mesh(&listed, ADJUSTED, [1.0, 1.0]),
+            super::bg_image::bg_image_mesh(&recon, ADJUSTED, [1.0, 1.0]),
         );
         assert_eq!(
             (bytemuck::cast_slice::<_, u8>(&a.0), a.1),
@@ -3648,7 +3659,7 @@ fn the_background_mesh_is_built_through_its_image_s_lens_corrections() {
     for scanlines in SCANLINES {
         let (shared, corrected, own) = corrected_triple(demo(16), scanlines);
         let mesh = |recon: &SfmrReconstruction| {
-            let (vertices, indices) = super::bg_image::bg_image_mesh(recon, ADJUSTED);
+            let (vertices, indices) = super::bg_image::bg_image_mesh(recon, ADJUSTED, [1.0, 1.0]);
             (bytemuck::cast_slice::<_, u8>(&vertices).to_vec(), indices)
         };
         assert_eq!(mesh(&corrected), mesh(&own));
@@ -3703,8 +3714,8 @@ fn zero_lens_corrections_draw_exactly_the_shared_camera() {
             frustum_bytes(&super::frustums::frustum_geometry(&recon, 1.0, true)),
         );
         let (a, b) = (
-            super::bg_image::bg_image_mesh(&listed, ADJUSTED),
-            super::bg_image::bg_image_mesh(&recon, ADJUSTED),
+            super::bg_image::bg_image_mesh(&listed, ADJUSTED, [1.0, 1.0]),
+            super::bg_image::bg_image_mesh(&recon, ADJUSTED, [1.0, 1.0]),
         );
         assert_eq!(
             (bytemuck::cast_slice::<_, u8>(&a.0), a.1),

@@ -6,8 +6,9 @@
 //! The background is one texture of one level of the photograph's pyramid:
 //! the coarsest level that still covers the viewport, and no finer than the
 //! GPU's texture limit allows ([`background_level`]). The pixels come from the
-//! viewer's photograph cache through a closure the caller passes, which never
-//! decodes on the GUI thread (`state::display_photograph`); the renderer calls
+//! viewer's photograph cache through a closure the caller passes,
+//! `state::display_photograph`, which decodes on the rayon pool on a miss
+//! (on the calling thread only under a cache budget of 0); the renderer calls
 //! it only when the level it wants is not the one it holds.
 
 use super::super::distorted_mesh::generate_bg_distorted_mesh;
@@ -26,8 +27,8 @@ use wgpu::util::DeviceExt;
 /// grid of world-space ray directions through the image's own intrinsics (its
 /// camera with its intrinsic adjustment applied), so the photograph lies where
 /// its pixels' rays point. Its texture coordinates run from 0 to 1 over the
-/// whole photograph; the upload scales them for the level it draws
-/// ([`level_uv_scale`]).
+/// whole photograph, multiplied by `uv_scale`, the [`level_uv_scale`] of the
+/// level the texture holds.
 ///
 /// Uses the same camera-to-world rotation as the frustum wireframes, so the
 /// background shader can use the standard `view_proj = projection * view`
@@ -40,6 +41,7 @@ use wgpu::util::DeviceExt;
 pub(super) fn bg_image_mesh(
     recon: &SfmrReconstruction,
     image_index: usize,
+    uv_scale: [f32; 2],
 ) -> (Vec<BgDistortedVertex>, Vec<u32>) {
     let img = &recon.image_set.images[image_index];
     let camera = recon.image_set.image_intrinsics(image_index);
@@ -51,7 +53,11 @@ pub(super) fn bg_image_mesh(
     } else {
         BG_PINHOLE_SUBDIVISIONS
     };
-    generate_bg_distorted_mesh(&camera, &r, subdivisions)
+    let (mut vertices, indices) = generate_bg_distorted_mesh(&camera, &r, subdivisions);
+    for vertex in &mut vertices {
+        vertex.uv = [vertex.uv[0] * uv_scale[0], vertex.uv[1] * uv_scale[1]];
+    }
+    (vertices, indices)
 }
 
 /// The pyramid level the background draws a photograph at, from the sizes of
@@ -163,8 +169,9 @@ impl SceneRenderer {
     /// (`current_size`, in physical pixels) and the device's texture limit,
     /// and calls `photograph` for the pixels only when that level is not the
     /// one the texture already holds for this image: on a change of image, or
-    /// a change of viewport size that changes the level. `photograph` must not
-    /// decode on the calling thread; the app passes `state::display_photograph`.
+    /// a change of viewport size that changes the level. The app passes
+    /// `state::display_photograph`, which decodes on the rayon pool on a miss
+    /// (on the calling thread only under a cache budget of 0).
     /// What it answers decides what is drawn:
     ///
     /// - **Decoded**: the chosen level is copied into a new texture, and the
@@ -256,10 +263,7 @@ impl SceneRenderer {
         }) {
             return; // the mesh is the one a rebuild would make
         }
-        let (mut vertices, indices) = bg_image_mesh(recon, image.index());
-        for vertex in &mut vertices {
-            vertex.uv = [vertex.uv[0] * uv_scale[0], vertex.uv[1] * uv_scale[1]];
-        }
+        let (vertices, indices) = bg_image_mesh(recon, image.index(), uv_scale);
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("bg distorted vertices"),
             contents: bytemuck::cast_slice(&vertices),
