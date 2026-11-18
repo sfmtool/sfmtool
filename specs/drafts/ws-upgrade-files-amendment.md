@@ -118,10 +118,9 @@ with the reason) and writes nothing.
 
    The folders a file's record names are found by their paths on disk,
    `<its workspace>/<image's directory>/<feature_prefix_dir>` for each image
-   the file records, with each `..` of an image name resolved by name (a
-   file of a nested workspace can name `../images/<image>`), from the file's
-   record and image names alone. Every folder, image directory and `.sift`
-   file is identified by its real path (`std::fs::canonicalize`, which gives
+   the file records, from the file's record and image names alone. Every
+   folder, image directory and `.sift` file is identified by its real path
+   (`std::fs::canonicalize`, which gives
    each name as it is on disk) and spelled as the walk spells it, so a file
    that names `IMAGES/<image>`, as `sfm sift --extract IMAGES` records on a
    file system that ignores case, names the same folder as the walk's
@@ -129,12 +128,21 @@ with the reason) and writes nothing.
    taken for one that does. The names are read by
    the cheap readers (`read_sfmr_image_names`, `read_matches_image_names`)
    rather than a whole load, so a file the current reader refuses still
-   names its folders, wherever its record resolves. A file of the tree an
-   image name of which leaves the tree's root through `..` is not converted,
-   since the run does not convert the folder outside the tree it names, and
-   the folders it names in the tree are kept in phase 6. A file whose
-   image names cannot be read names the folders its record's
-   `feature_prefix_dir` names below its workspace. A file whose metadata or
+   names its folders, wherever its record resolves. A file another tool
+   wrote, or one edited by hand, can hold a name that breaks the image-name
+   rule
+   ([sfmr-file-format.md § `images/names.json.zst`](../formats/sfmr-file-format.md#imagesnamesjsonzst)),
+   such as one with `..`, and the reader refuses such a file. When a cheap
+   reader refuses its names, they are read from the file's names entry
+   without that reader's checks (`read_sfmr_image_names_unchecked`,
+   `read_matches_image_names_unchecked`), and each `..` is resolved by name, so that
+   its folders are still found and kept: a file of a nested workspace naming
+   `../images/<image>` keeps the enclosing workspace's folder. A file of the tree an image name
+   of which leaves the tree's root through `..` is likewise not converted,
+   and the folders it names in the tree are kept in phase 6. A file whose
+   image names cannot be read, or whose names break the image-name rule,
+   names the folders its record's `feature_prefix_dir` names below its
+   workspace as well. A file whose metadata or
    image names the file system will not give up fails, wherever its record
    would resolve, and stops the deletion. Each `.sfmr` and `.matches` file the run would rewrite
    is read whole here, in a dry run too: a file the current reader refuses is
@@ -338,8 +346,9 @@ those folders by the current reader anyway:
   workspace outside the tree, which that workspace's upgrade converts; a
   folder inside the tree that it names is kept;
 - a `.sfmr` or `.matches` file of the tree an image name of which leaves
-  the tree's root through `..`; a folder inside the tree that it names is
-  kept;
+  the tree's root through `..`, which the current reader refuses, since the
+  image-name rule refuses a name with `..`; a folder inside the tree that it
+  names is kept;
 - a `.kdf` file that cannot be read.
 
 ### Backing up

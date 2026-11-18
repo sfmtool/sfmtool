@@ -35,8 +35,8 @@ pub use observation_readings::{
 };
 pub use patch_normals::{patch_frame_is_stored, patch_normal};
 pub use read::{
-    read_sfmr, read_sfmr_content_hash, read_sfmr_image_names, read_sfmr_metadata,
-    resolve_workspace_dir,
+    read_sfmr, read_sfmr_content_hash, read_sfmr_image_names, read_sfmr_image_names_unchecked,
+    read_sfmr_metadata, resolve_workspace_dir,
 };
 pub use types::*;
 pub use verify::verify_sfmr;

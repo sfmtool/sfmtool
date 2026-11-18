@@ -89,6 +89,23 @@ pub fn read_matches_image_names(
     Ok((metadata, image_names))
 }
 
+/// Read the image names entry of a `.matches` file as it is, with no
+/// image-name rule and no count check, and nothing else.
+///
+/// For finding which folders a file names when its names break the
+/// image-name rule, so that the readers refuse the file: the workspace
+/// upgrade keeps those folders for it. Never use what it returns to convert or
+/// write a file; [`read_matches_image_names`] is the reader for that.
+pub fn read_matches_image_names_unchecked(path: &Path) -> Result<Vec<String>, MatchesError> {
+    let file = std::fs::File::open(path).map_err(|e| MatchesError::IoPath {
+        operation: "Failed to open file",
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    Ok(read_json_entry(&mut archive, entries::images_names())?)
+}
+
 /// Read a complete `.matches` file into columnar data.
 ///
 /// The file stores exactly one correspondence backbone: `image_pairs/`
