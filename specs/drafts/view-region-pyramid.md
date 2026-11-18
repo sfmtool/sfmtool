@@ -348,14 +348,16 @@ there is no whole pyramid for any reader to fall back on.
    waits; the tile path pins no more than its window; a
    region one pixel smaller on an inner edge makes the comparison fail, so
    the test can fail.
-2. **`view_region_pyramid` in the cache**, with the reuse margin, and
-   `clipped_share` over tiles, on in-core photographs cut into tiles in
-   memory. Tests: the assembled regions equal the whole pyramid's pixels;
+2. **View-region pyramids assembled from a `TiledPhotograph`'s tiles**,
+   with the reuse margin, and `clipped_share` over tiles, on photographs cut
+   into tiles in memory (`from_image` and `from_pyramid`); the cache's
+   `view_region_pyramid` comes with the main draft's step 12. Tests: the assembled regions equal the whole pyramid's pixels;
    `clipped_share` over tiles equals it over the whole level 0, for outlines
    that cross tile edges and the image's edges; reuse when inside, reassembly
    when not.
-3. **Track View and the Track Table** on region pyramids, peeking tiles.
-   Tests: the drawn tiles of a synthetic track equal the whole-pyramid ones.
+3. **Track View and the Track Table** on region pyramids, peeking the
+   cache's whole pyramids as today and reading them through `from_pyramid`;
+   they peek tiles once the main draft's step 12 adds `peek_tile`. Tests: the drawn tiles of a synthetic track equal the whole-pyramid ones.
 4. **The bench's jobs and the reference picks**: `ViewSources` hands the
    kernels a tiled source and each render asks for its regions; `clipped_share`
    reads a level-0 region; each bench step and each reference pick makes one

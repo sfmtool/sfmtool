@@ -995,7 +995,8 @@ photograph whole in its slot (as `get` decodes it today), builds its pyramid to
 `full_levels` depth, and cuts every level into photograph tiles with their
 one-pixel borders. The tiles the request asked for go into the tile cache as
 used; the other tiles of the decode go in as *unused*, the first entries
-evicted when the budget needs room, and the whole decode is dropped. So the
+evicted when the budget needs room, oldest first, and the whole decode is
+dropped; an unused tile becomes used when a request reads it. So the
 tiles a reader touches stay, and the rest of a decode stays only while nothing
 needs the room, which lets the next render in the same photograph find its
 tiles without decoding again. A later request for a tile that was evicted
@@ -1264,7 +1265,7 @@ a few hundred kilobytes, whatever the number of views or photographs
 | 500 x 6000 x 4000, any of the above | 500 x 96 MB = 48 GB | the same |
 | 17 x 200 MP, Track View on a 17-image track at `R = 64` | 12.6 GiB | 17 x 17 KB x 2.25 of regions, plus the tiles they are cut from, one to four per level read and one or two levels per view, 13 to 108 MB |
 | 368 x 3840 x 2160 (in core), a `get_many` over every frame | 12.2 GB held while its kernel runs | the regions of the renders in flight plus the budget; each frame decoded whole once into tiles (about 0.05 s, 40 MB transient, at most the build budget's worth at once), and again only for a frame whose tiles were evicted |
-| The test data (17 x 270 x 480 to 85 x 2040 x 1536, in core) | 8.8 MB (17 x 270 x 480) to 1.1 GB (85 x 2040 x 1536) of pyramids | regions plus the tiles touched, within the budget; a whole decode is 0.4 to 9 MB and about 11 ms at 2040 x 1536 |
+| The test data (17 x 270 x 480 to 85 x 2040 x 1536, in core) | 8.8 MB (17 x 270 x 480) to 1.1 GB (85 x 2040 x 1536) of pyramids | regions plus the tiles touched, within the budget; a whole decode is 0.6 to 16 MB and about 11 ms at 2040 x 1536 |
 
 The cost moves from memory to decodes: a render whose tiles are not cached
 costs 2.3 to 6 ms per tile it touches out of core, one to four per level it
@@ -1714,12 +1715,17 @@ pub struct PhotographCacheOptions {
 /// cache's handle to its tiles, or tiles the source owns.
 pub struct TiledPhotograph { /* … */ }
 impl TiledPhotograph {
-    /// Tiles cut from an image's pyramid, owned by the source, outside any
-    /// cache: the Python bindings given arrays, and tests.
+    /// Tiles cut from the image's pyramid of `full_levels` depth, built by
+    /// `ImageU8Pyramid::build` as the bindings build it today, so the same
+    /// pixels; owned by the source, outside any cache: the Python bindings
+    /// given arrays, and tests.
     pub fn from_image(image: ImageU8) -> Self;
-    /// Tiles cut lazily from a whole pyramid the cache handed out; only from
-    /// step 8, when the first reader moves, to step 12, when the cache hands
-    /// out tiled photographs itself.
+    /// A whole pyramid the cache handed out, read in place: a tile or region
+    /// read copies only the pixels it asks for from the pyramid's levels, and
+    /// the source keeps no tile, so a reader that moves holds no more than
+    /// the pyramid it held before. Made in step 7, read by moved readers from
+    /// step 8, and deleted in step 12, when the cache hands out tiled
+    /// photographs itself.
     pub fn from_pyramid(pyramid: Arc<ImageU8Pyramid>) -> Self;
 }
 
@@ -2129,9 +2135,10 @@ in core. Step 16 turns the tier on.
    region, and the assembly from tiles, exercised on photographs cut into
    tiles in memory. No reader changes yet. Tests: the companion draft's
    equality tests.
-8. **Track View and the Track Table** on view-region pyramids, peeking tiles
-   (companion step 3), with the step-8 signature changes, reading the cache's
-   whole pyramids through `from_pyramid`.
+8. **Track View and the Track Table** on view-region pyramids (companion
+   step 3), with the step-8 signature changes, peeking the cache's whole
+   pyramids as today and reading them through `from_pyramid`; they peek
+   tiles from step 12.
 9. **The bench's jobs and the reference picks** (companion step 4), with the
    step-9 signature changes, one region pool made by each bench step and each
    reference pick for its kernel call, and the bindings over these kernels
