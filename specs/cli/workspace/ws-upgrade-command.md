@@ -133,8 +133,9 @@ The command runs these phases in order.
    Each `.sfmr` and `.matches` file the run would rewrite is read whole here,
    in a dry run too, so a file the current reader refuses is told apart, by the
    error's type, from one the file system will not give up (locked, or it
-   cannot be opened or read), which **fails**. A file whose metadata or image
-   names cannot be read at all fails too. A `.sift` file a file records that is
+   cannot be opened or read), which **fails**. A file whose metadata cannot be
+   read fails too; one whose names entry does not read as a list of names
+   names its record's prefix folders instead. A `.sift` file a file records that is
    not on disk, or is not the version 1 file it records, is found here, before
    anything is written.
 2. **Map each old folder to a new one.** A version 1 folder is named by a file
