@@ -10,7 +10,9 @@ the patches it renders rather than with the photographs (open question 1).
 It is kept as a draft of its own because what it specifies, the samplers'
 regions, is separate from the files and caches the main draft specifies; its
 steps 1 and 2 are step 7 of the main draft, and its steps 3 to 6 are the main
-draft's steps 8 to 11. Open: questions 2 to 6 at the end. It amends
+draft's steps 9 to 12. The main draft's step 8, between them, limits the
+cluster members' elongation (§ "The members' elongation limit"). Open:
+questions 2 to 5 at the end. It amends
 [core/camera/photograph-cache.md](../core/camera/photograph-cache.md) and the
 samplers of [core/camera/image-warping.md](../core/camera/image-warping.md).
 
@@ -147,13 +149,13 @@ the region pool and the tile path:
 - `render_tile` with the map's own sampler: Track View's patch tile and its
   track-stage hover context (`track_view/body/patch.rs`
   `patch_frame_color_image`, a 64 x 64 tile and a 192 x 192 context over
-  three times the patch frame, both at the tile's sampler), step 3 [8]; the
+  three times the patch frame, both at the tile's sampler), step 3 [9]; the
   bench's tiles, the keypoint localizer's context tiles of side
   `R + 2 · margin` (`keypoint_localize.rs`), the sub-pixel refiner's value
   and gradient renders (`keypoint_subpixel/kernels/render.rs`), the stored
   bitmap's and the reference picks' renders (`render_view_tile`), the
   observation readings, *Add image to tracks*, and normal refinement's
-  renders (`patch/normal_refine/znorm.rs`, `render_tiles`), step 4 [9];
+  renders (`patch/normal_refine/znorm.rs`, `render_tiles`), step 4 [10];
 - the normal kernels that render through `render_tile` (below);
 - `clipped_share`, the cluster grid samplers `sample_grid_window` and
   `build_template` (Track View's cluster-stage tile and its hover context
@@ -172,13 +174,13 @@ photograph.
 
 | Kernel | Photograph reads | Level and region | Typical region | Step |
 |--------|------------------|------------------|----------------|------|
-| `pairwise_flow_normal` (`bench/normal/pairwise_flow/crops.rs` `render_crop`) | one `render_tile` per view per round, of the crop: a square of side `2 · half_width` samples on the round's plane, at least 48 px of the finest view on each side of the point and at least 3 patch half-extents, at most `max_crop_samples` (512 by default, 4096 at most) | the general rule for the view's sampler (`SamplerChoice::per_view`) over the crop's map | the finest view reads about `side + 2` px a side at level 0: 98 px (29 KB) for a patch of 24 px, 194 px (113 KB) for one of 64 px; any facing view at most about `√2 · side` px at its level, 725 px (1.6 MB) at the 512 cap; copied within the pool. A view up to the 80° limit reads a stretched footprint, and a crop of 4096 samples up to about 100 MB; these take the tile path | 4 [9] |
+| `pairwise_flow_normal` (`bench/normal/pairwise_flow/crops.rs` `render_crop`) | one `render_tile` per view per round, of the crop: a square of side `2 · half_width` samples on the round's plane, at least 48 px of the finest view on each side of the point and at least 3 patch half-extents, at most `max_crop_samples` (512 by default, 4096 at most) | the general rule for the view's sampler (`SamplerChoice::per_view`) over the crop's map | the finest view reads about `side + 2` px a side at level 0: 98 px (29 KB) for a patch of 24 px, 194 px (113 KB) for one of 64 px; any facing view at most about `√2 · side` px at its level, 725 px (1.6 MB) at the 512 cap; copied within the pool. A view up to the 80° limit reads a stretched footprint, and a crop of 4096 samples up to about 100 MB; these take the tile path | 4 [10] |
 | | after the renders: the crop's grey image (`matcher_gray_from_rgb`), its Gaussian pyramid (`CropPyramid`, the flow's `ImagePyramid`), the DIS flow between crops and the noise fields of `texture.rs`, which are synthetic | no photograph read | — | — |
-| `grid_plane_normal` (`bench/normal/grid_plane.rs` `render`) | one `render_tile` per view per pass of the working grid, `r` samples a side (about one sample per photograph pixel, clamped to `R ..= 2R`), widened by `margin = ceil(cell_shift_bound_px)`, 2 by default, so `r + 4` a side | the general rule for the view's sampler | up to 52 samples a side at `R = 24` and 132 at `R = 64`: about 76 px (17 KB) and 190 px (108 KB) at the level read; copied | 4 [9] |
-| `grown_plane_normal` (`bench/normal/grown_plane/render.rs` `ViewImage`) | its own sampler: one level per view, `bilinear_mip_level(σ_major)` of the anchored patch frame's Jacobian at the working grid's centre, clamped to the levels, chosen once; each render (`ViewImage::sample`) reads the value at each grid sample's projected pixel plus the view's image shift, divided by `2^l`, with `sample_bilinear_u8`, and `ViewImage::gradients` reads the Sobel gradient there from the 4 x 4 pixels about it (`sobel_gradient`) | per render, `LevelRegions::for_samples(l, (pixels + shift) / 2^l, 1)`: the samples' pixels are projected before the render reads them, so the region is exact; the value's tap pair lies inside the 4 x 4 window | the grid is `R ..= 2R` a side and the level keeps the major axis at most `√2` px a sample, so a frame near the starting one reads at most `(√2 · side + 4)` px a side: about 72 px (15 KB) at `R = 24` and 185 px (103 KB) at `R = 64`; the tilt the fit moves to can stretch it further, which the per-render region follows. Copied, with the reuse margin across the fit's iterations | 4 [9] |
-| `finite_difference_normal` (`bench/normal.rs`) | the bench's `fit` for each piece and `evaluate_rendering_bitmap` at the turned normal (`turn_and_read`) | the general rules, through those kernels | as the bench's tiles | 4 [9] |
-| `refine_normals` (`bench/refine_normals.rs`) | `pairwise_flow_normal` or `grown_plane_normal` per point, then `evaluate_rendering_bitmap` | as those kernels; the pool its caller made is passed to each point | as above | 4 [9]; *Refine all normals*' fetch and point order 5 [10] |
-| normal refinement (`patch/normal_refine/znorm.rs`) | `render_tiles` over the views | the general rules | as the bench's tiles | 4 [9] |
+| `grid_plane_normal` (`bench/normal/grid_plane.rs` `render`) | one `render_tile` per view per pass of the working grid, `r` samples a side (about one sample per photograph pixel, clamped to `R ..= 2R`), widened by `margin = ceil(cell_shift_bound_px)`, 2 by default, so `r + 4` a side | the general rule for the view's sampler | up to 52 samples a side at `R = 24` and 132 at `R = 64`: about 76 px (17 KB) and 190 px (108 KB) at the level read; copied | 4 [10] |
+| `grown_plane_normal` (`bench/normal/grown_plane/render.rs` `ViewImage`) | its own sampler: one level per view, `bilinear_mip_level(σ_major)` of the anchored patch frame's Jacobian at the working grid's centre, clamped to the levels, chosen once; each render (`ViewImage::sample`) reads the value at each grid sample's projected pixel plus the view's image shift, divided by `2^l`, with `sample_bilinear_u8`, and `ViewImage::gradients` reads the Sobel gradient there from the 4 x 4 pixels about it (`sobel_gradient`) | per render, `LevelRegions::for_samples(l, (pixels + shift) / 2^l, 1)`: the samples' pixels are projected before the render reads them, so the region is exact; the value's tap pair lies inside the 4 x 4 window | the grid is `R ..= 2R` a side and the level keeps the major axis at most `√2` px a sample, so a frame near the starting one reads at most `(√2 · side + 4)` px a side: about 72 px (15 KB) at `R = 24` and 185 px (103 KB) at `R = 64`; the tilt the fit moves to can stretch it further, which the per-render region follows. Copied, with the reuse margin across the fit's iterations | 4 [10] |
+| `finite_difference_normal` (`bench/normal.rs`) | the bench's `fit` for each piece and `evaluate_rendering_bitmap` at the turned normal (`turn_and_read`) | the general rules, through those kernels | as the bench's tiles | 4 [10] |
+| `refine_normals` (`bench/refine_normals.rs`) | `pairwise_flow_normal` or `grown_plane_normal` per point, then `evaluate_rendering_bitmap` | as those kernels; the pool its caller made is passed to each point | as above | 4 [10]; *Refine all normals*' fetch and point order 5 [11] |
+| normal refinement (`patch/normal_refine/znorm.rs`) | `render_tiles` over the views | the general rules | as the bench's tiles | 4 [10] |
 
 The grown plane's tile path reads the value's tap pair as the other samplers
 do. Its 4 x 4 Sobel window reaches one pixel further than a photograph tile's
@@ -220,7 +222,7 @@ memory") and released when the picture is cut, since the cell and the hover
 keep the picture, not the region; a context of a large patch while the pool
 is busy takes the tile path, which reads each texel's tap pair as the other
 samplers do. `picture` reads `level(0)` only for the photograph's size and
-`num_levels()` for the clamp: layout reads. Step 3 [8]. Test: the crop and
+`num_levels()` for the clamp: layout reads. Step 3 [9]. Test: the crop and
 the context of a synthetic photograph at steps of 1, 3 and 40 px per texel,
 over outlines that cross tile edges and the image's edges, equal the
 whole-pyramid pictures byte for byte, through a copied region and through
@@ -242,13 +244,98 @@ corner and its values to its mean), so it must stay exactly as it is.
 tiles, row by row in the same order, so its pixels, its mean and every score
 are the same; it reads no region pyramid. At `R = 25` and a SIFT shape near a
 similarity, the grid covers at most 50 px a side at its level, a rectangle of
-about 70 px: 59 KB in `f32` RGB. Step 4 [9], through the bench's evaluation
+about 70 px: 59 KB in `f32` RGB. Step 4 [10], through the bench's evaluation
 of a cluster-stage track; the cluster-patches build moves its fetch in step 5
-[10]. Test: `refine_cluster_patches` gives identical shapes, positions and
+[11]. Test: `refine_cluster_patches` gives identical shapes, positions and
 scores with whole pyramids and with tiled sources of 32 px tiles, including
 members whose rectangle crosses tile edges and is grown during the cascade.
-The tile is a copy of its own, outside the region pool, and the evaluation
-has no tile path (open question 6).
+The evaluation has no tile path, since it must stay bit-identical and its
+AVX2 form agrees with the scalar one only to about `1e-4`. So a `LevelTile`
+reserves its bytes from the kernel call's region pool and is built whether
+or not the reservation succeeds; the members' elongation limit below bounds
+it (open question 6).
+
+#### The members' elongation limit
+
+The **elongation** of a member's affine shape, or of an evaluation's map, is
+the ratio of its larger singular value to its smaller, `s_max / s_min`, from
+the closed form `level_for_map` already uses (`s_max = q + r`,
+`s_min = |q − r|`); the map is the shape scaled by the grid's step, so the
+two have the same elongation. `MAX_MEMBER_ELONGATION` in
+`patch/cluster_refine/params.rs`, `MAX_ANISOTROPY as f64` (16), bounds it:
+
+- **At validation**, beside the determinant test, a member whose detected
+  shape's elongation is over the limit, or not finite, is not usable: its
+  status is `not_evaluated`, and it takes no part in the member gate, the
+  choice of reference or the cascade.
+- **At every evaluation** (`refine_member`'s rotation starts, its cascade
+  and its final parts read, `read_member_at`, `member_zncc_at`), a map whose
+  elongation is over the limit scores as a support out of frame does,
+  before any `LevelTile` is asked for: the simplex scores it worst (+1.0)
+  and retreats, and a member whose every rotation start is past the limit
+  is `not_evaluated`, as one whose every start is out of frame is today. The
+  shape the refinement returns is one it evaluated, so it is within the
+  limit too.
+
+The value is the samplers' own: `MAX_ANISOTROPY` is the most samples the
+anisotropic sampler takes along a footprint's major axis, so the renders
+already resample a footprint stretched past 16 times with aliasing. A circle
+on the surface foreshortened 16 times is seen at `acos(1/16)`, 86.4°, from
+its normal, well past the 80° the normal kernels take a view at
+(`max_view_angle_deg`). It is a named constant, not a setting, because the
+memory bound below rests on it and a setting would let a caller remove the
+bound; tying it to `MAX_ANISOTROPY` keeps one number for how stretched a
+footprint the tree reads. A member past it keeps the status `not_evaluated`
+(the `.matches` format's description of that status gains "or an affine
+shape elongated past `MAX_MEMBER_ELONGATION`") rather than a status of its
+own, since a new status is a new `.matches` version and a reader does nothing
+different with it. The reason is stated where the members are counted:
+`ClusterRefineResult` counts the members refused for their elongation and
+the evaluations scored out of frame for it, and `sfm cluster-patches`'
+summary, the viewer's cluster-patches build and the bench's evaluation of a
+cluster-stage track print how many of their `not_evaluated` members were
+elongated past the limit.
+
+**The bound on a `LevelTile`.** With the level from `s_min`, the map's
+singular values at its level are `s_min / 2^l` under 2 and `s_max / 2^l`
+under `2 · MAX_MEMBER_ELONGATION`, so their sum is under 34 (also at level 0,
+where `s_min` is under 2). The affine image of the `R x R` grid spans `W`
+by `H` pixels with `W + H ≤ 2 (R − 1)(s_max + s_min) / 2^l`, so
+`W · H ≤ ((R − 1)(s_max + s_min) / 2^l)²`; `grid_bbox`'s flooring, ceiling
+and 2 px add at most 6 px to each side and `TILE_MARGIN` 16 more, so one
+evaluation's rectangle holds at most `((R − 1) · 34 + 22)²` pixels. The
+rectangle a `TileCache` holds is the union of the requests made at that
+level, which the cascade's travel could widen without bound, so the same step
+caps it: a rebuild whose grown union would hold more than
+`((R − 1) · 34 + 22)²` pixels is built from the request alone, widened by
+`TILE_MARGIN` and clipped. A `LevelTile` then holds at most that many pixels,
+12 bytes each for RGB:
+
+| Resolution `R` | A member near a similarity | A member at the limit |
+|----------------|----------------------------|-----------------------|
+| 24 | about 68 px a side, 55 KB | 804² pixels, 7.8 MB |
+| 25 (the default) | about 70 px a side, 59 KB | 838² pixels, 8.4 MB |
+| 64 | about 148 px a side, 263 KB | 2164² pixels, 56 MB |
+
+A level so coarse that the grid reaches past it is clipped to it, and the top
+levels are a few pixels. A member holds one `LevelTile` per level its
+cascade evaluates at, one or two since the scale moves little within a
+cascade, and the rotation starts' own tiles are dropped before the cascade.
+`refine_member` runs no parallel loop, so a thread holds one member's tiles
+at a time. The tiles reserve from the kernel call's pool and are built when
+the pool is full, so a kernel call that runs the cluster refinement holds at
+most 8.4 MB per level a member touches on each of its 33 rendering threads
+past the pool at the default resolution, 280 MB for one level, on top of the
+bounds of § "Bounding a render's memory"; members near a similarity, the
+common case, stay within the pool. The phase note counts the tiles built past
+the pool and the most levels one member touched.
+
+Both rules change results whether or not tiles are used, so they are the
+main draft's step 8, before the cluster refinement reads tiles in step 4
+[10]. They change a member refused at validation, a member whose cascade
+evaluated a map past the limit or whose tile hit the cap, and every member of
+a cluster whose reference was a refused member (the reference is the usable
+member of largest scale); every other member's result is unchanged.
 
 ### Reads of the size and channels only
 
@@ -333,7 +420,8 @@ bounded by the patch resolution `R`:
   grazing view can approach a whole level 0.
 - **One level per grid** (`level_for_map` in
   [cluster_refine.rs](../../crates/sfmtool-core/src/patch/cluster_refine.rs))
-  picks its level from `s_min`, with the same effect for a stretched map.
+  picks its level from `s_min`, with the same effect for a stretched map, up
+  to the cluster members' elongation limit of 16.
 - **`Bilinear`**, which the kernels' sampler argument can select, reads level 0
   over the whole footprint whatever `R` is: a 24 x 24 tile of a patch that
   covers 2000 px reads a 2000 x 2000 box, 12 MB.
@@ -427,7 +515,10 @@ queue's job thread and the GUI thread. One kernel call on the command line
 holds at most 99 MB + 33 x 12.7 MB, about 520 MB, on top of the cache's budget;
 the viewer, with at most two kernel calls at once (one per background queue)
 and the two panels' renders, at most 2 x 99 MB + 2 x 3.1 MB + 35 x 12.7 MB, about
-650 MB. The common case, footprints that are not stretched, stays at a few
+650 MB. A kernel call that runs the cluster refinement adds the evaluation
+tiles it builds past the pool, at most 8.4 MB per level a member touches on
+each rendering thread at the default resolution, 280 MB for one level
+(§ "The members' elongation limit"). The common case, footprints that are not stretched, stays at a few
 kilobytes per view. No view is refused and no result changes:
 which path a render takes depends on its boxes and on what its patch already keeps, and both read the same
 pixels. `clipped_share` already walks tiles one at a time (above). The
@@ -482,11 +573,12 @@ makes a mipmap.
 ## Implementation steps
 
 Steps 1 and 2 are step 7 of the main draft, exercised on photographs cut
-into tiles in memory. Steps 3 to 6 are the main draft's steps 8 to 11, each
-its own pull request, made while the cache still hands out whole pyramids:
+into tiles in memory. Steps 3 to 6 are the main draft's steps 9 to 12, after
+its step 8, the members' elongation limit, each its own pull request, made
+while the cache still hands out whole pyramids:
 each moved reader wraps the pyramid it gets in a `TiledPhotograph`
 (`from_pyramid`), so every reader works at every step. Once all have moved,
-the main draft's step 12 makes the cache hand out tiled photographs only, and
+the main draft's step 13 makes the cache hand out tiled photographs only, and
 there is no whole pyramid for any reader to fall back on.
 
 1. **Regions in the pyramid and the samplers**: `PyramidLevel`,
@@ -519,13 +611,13 @@ there is no whole pyramid for any reader to fall back on.
 2. **View-region pyramids assembled from a `TiledPhotograph`'s tiles**,
    with the reuse margin, and `clipped_share` over tiles, on photographs cut
    into tiles in memory (`from_image` and `from_pyramid`); the cache's
-   `view_region_pyramid` comes with the main draft's step 12. Tests: the assembled regions equal the whole pyramid's pixels;
+   `view_region_pyramid` comes with the main draft's step 13. Tests: the assembled regions equal the whole pyramid's pixels;
    `clipped_share` over tiles equals it over the whole level 0, for outlines
    that cross tile edges and the image's edges; reuse when inside, reassembly
    when not.
 3. **Track View and the Track Table** on region pyramids, peeking the
    cache's whole pyramids as today and reading them through `from_pyramid`;
-   they peek tiles once the main draft's step 12 adds `peek_tile`. Track
+   they peek tiles once the main draft's step 13 adds `peek_tile`. Track
    View's tiles and track-stage hover contexts call `render_tile`, and its
    cluster-stage tiles and contexts `sample_member_grid`, on the region
    pyramid they assembled, so no kernel signature changes here; the crops
@@ -593,28 +685,12 @@ there is no whole pyramid for any reader to fall back on.
    points. The other option is a `ProjectedImage` built per render with the
    region pyramid already in it, which would move the region computation into
    every kernel. Recommendation: the tiled photograph, as designed.
-6. **The cluster refinement's evaluation tile.** `LevelTile` is a copy of
-   its own (§ "Readers that sample through their own code"), in `f32`, 12
-   bytes a pixel for RGB, at the level `level_for_map` picks from the map's
-   smaller singular value, so a member whose shape is stretched `a` times
-   copies a rectangle about `a` times longer than the grid, as the grid
-   samplers' regions are (§ "Bounding a render's memory"). Its values must
-   stay bit-identical, and they depend on its rectangle and on the AVX2
-   evaluation, which agrees with the scalar one only to about `1e-4`, so a
-   tile path would have to repeat the AVX2 kernel's arithmetic with its
-   gathers addressed through tiles. Options: (a) reserve the tile's bytes
-   from the kernel call's pool and build it whether or not the reservation
-   succeeds, and count the overflow in the phase note. Memory past the pool
-   then grows with the members in progress and their stretch, and is bounded
-   only by the level: the rectangle is clipped to the level, and a member
-   stretched so its smaller singular value is under 2 reads level 0, so a
-   member stretched far enough on a diagonal copies all of level 0, 288 MB at
-   6000 x 4000 and 2.4 GB at 200 MP, and one such member on each of the 33
-   threads that render is 9.5 GB and 79 GB past the pool; (b) a tile-addressed evaluation, scalar and AVX2, that reads
-   each centred value as the pixel from its tile minus the rectangle's mean
-   (the mean summed over the rectangle row by row through the tiles, as
-   `LevelTile::build` sums it), held to the pool like the renders; (c) a cap
-   on the rectangle that reads a coarser level past it, which changes results
-   and so is not taken. Recommendation: (a), since SIFT shapes are close to
-   similarities and the rectangle is about 70 px at `R = 25`, and (b) if the
-   phase notes show stretched members on real captures.
+6. **The cluster refinement's evaluation tile.** *Decided by the user:* a
+   cluster member's elongation is limited to `MAX_MEMBER_ELONGATION`, 16,
+   since the extreme cases are rarely correct photometric matches; a member
+   past it is `not_evaluated`, and an evaluation past it scores as out of
+   frame. With the limit and the cap on the held rectangle, a `LevelTile`
+   holds at most `((R − 1) · 34 + 22)²` pixels, 8.4 MB at the default
+   resolution of 25; it reserves from the kernel call's region pool and is
+   always built, and has no tile path (§ "The members' elongation limit").
+   The limit is the main draft's step 8.

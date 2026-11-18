@@ -24,8 +24,8 @@ draft [view-region-pyramid.md](view-region-pyramid.md), which this design
 requires: without it no kernel can read a large photograph within a bounded
 memory, so it is a numbered step here (§ "Implementation steps"), not a later
 optimization. The user has decided every open question of this draft
-(§ "Open questions", 1 to 13); of the companion draft's five, the user has
-decided question 1, and questions 2 to 5 remain open.
+(§ "Open questions", 1 to 13); of the companion draft's six, the user has
+decided questions 1 and 6, and questions 2 to 5 remain open.
 
 Amends [core/camera/photograph-cache.md](../core/camera/photograph-cache.md)
 (the cache hands out photograph tiles for every photograph instead of whole
@@ -1311,7 +1311,7 @@ a few hundred kilobytes, whatever the number of views or photographs
 | 17 x 200 MP, *Find matches by geometry* over the views the cull keeps (up to 151), `R = 24` | up to every photograph, 12.6 GiB for all 17 | up to 151 x 2.9 KB x 2.25 = 1.0 MB of regions kept for reuse (well inside the call's 99 MB pool), plus at most the budget (16 GiB at 64 GB of memory, 2 GiB at 8 GB) |
 | 17 x 200 MP, display patch bitmaps at open, one render per point | 12.6 GiB | 32 renders in flight x 2.9 KB, plus the budget |
 | 500 x 200 MP, any of the above | 372 GiB; fails | the same as for 17: regions plus the budget |
-| Any of the above, worst case (the kernel call's region pool full and every rendering thread on a grazing view) | — | one kernel call: 99 MB + 33 x 12.7 MB, about 520 MB; the viewer with two kernel calls and Track View: about 650 MB; on top of the budget |
+| Any of the above, worst case (the kernel call's region pool full and every rendering thread on a grazing view) | — | one kernel call: 99 MB + 33 x 12.7 MB, about 520 MB; the viewer with two kernel calls and Track View: about 650 MB; a kernel call that runs the cluster refinement adds at most 280 MB of evaluation tiles past the pool at the default resolution, per level a member touches (the companion's § "The members' elongation limit"); on top of the budget |
 | 500 x 6000 x 4000, any of the above | 500 x 96 MB = 48 GB | the same |
 | 17 x 200 MP, Track View on a 17-image track at `R = 64` | 12.6 GiB | 17 x 17 KB x 2.25 of regions, plus the tiles they are cut from, one to four per level read and one or two levels per view, 13 to 108 MB |
 | 368 x 3840 x 2160 (in core), a `get_many` over every frame | 12.2 GB held while its kernel runs | the regions of the renders in flight plus the budget; each frame decoded whole once into tiles in the kernel's read phase (about 0.05 s and 40 MB while it decodes), as many at once as the build budget allows, and again, by a render, only for a frame whose tiles were evicted during the kernel |
@@ -1568,10 +1568,10 @@ region-readable or of its `-mip0` otherwise. "Depth" means the change of
 pyramid depth above. "The stored levels" means the results change for an
 out-of-core photograph, whose levels 1 to `K` (and `-mip0`) are JPEG files;
 an in-core photograph's tiles hold today's exact levels. Each row marked
-"regions" moves to view-region pyramids in its own step (steps 8 to 11 and
-15), while the cache still hands out whole pyramids, which a moved reader wraps
+"regions" moves to view-region pyramids in its own step (steps 9 to 12 and
+16), while the cache still hands out whole pyramids, which a moved reader wraps
 in a `TiledPhotograph`; once every reader has moved, the cache hands out
-tiled photographs only (step 12), so no step leaves a reader without pixels.
+tiled photographs only (step 13), so no step leaves a reader without pixels.
 
 | # | Reader | Today | After | Results change |
 |---|--------|-------|-------|----------------|
@@ -1600,7 +1600,7 @@ The measurement harnesses under `scripts/` that build an `ImagePyramidSet` from
 `read_image_rgb` arrays (`track_at_pixel/context.py`,
 `add_image_to_tracks/harness.py` and `misses.py`) are P2 callers: they read
 the arrays' exact levels until they move to `ImagePyramidSet.read`, which step
-15 does. A P2 caller that passes arrays holds them whole, as today; that is the
+16 does. A P2 caller that passes arrays holds them whole, as today; that is the
 caller's choice of input, and `read` is the bounded way.
 
 Every reader that reads a pyramid of a photograph now reads the same levels
@@ -1778,7 +1778,7 @@ impl TiledPhotograph {
     /// read copies only the pixels it asks for from the pyramid's levels, and
     /// the source keeps no tile, so a reader that moves holds no more than
     /// the pyramid it held before. Made in step 7, read by moved readers from
-    /// step 8, and deleted in step 12, when the cache hands out tiled
+    /// step 9, and deleted in step 13, when the cache hands out tiled
     /// photographs itself.
     pub fn from_pyramid(pyramid: Arc<ImageU8Pyramid>) -> Self;
     /// Every level's size and the number of levels, read with no pixel: what
@@ -1939,11 +1939,11 @@ each in the step that moves its readers:
 
 | Step | Signatures that change |
 |------|------------------------|
-| 8 | Track View's and the Track Table's renders, which draw a cell's error state instead of the tile |
-| 9 | `ViewSources::fetch` in [state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs), which returns `PhotographReadError` instead of `Cancelled` (`get_many` still returns `Cancelled`, which converts), and the bench kernels (`bench::evaluate`, `evaluate_rendering_bitmap`, `score_bitmap`, `fit`, `render_bitmap_in_place`, `search_geometry`, `set_stage`, `build_track_at_pixel`, `classify`) and the patch kernels they and the reference picks share (`view_selection::select_patch_views`, `select_patch_cloud_views`, `reference_view::render_view_tile`, `read_track`, `stored_bitmap::render_reference`, `keypoint_localize`'s and `keypoint_subpixel`'s entry points, `member_coherence`'s, `observation_reading::read_cloud_observations`, `spawn::spawn_candidate_tracks`), and every kernel that calls one of them or that the bench runs, since a kernel passes its caller's pool down and its errors up: the normal kernels the bench's normal steps run (`pairwise_flow_normal`, `grown_plane_normal`, `grid_plane_normal`, `finite_difference_normal`) and `refine_normals`, which runs them; the cluster refinement's entry points (`refine_cluster_patches`, `refine_cluster_patches_borrowed`), which the bench's evaluation of a cluster-stage track runs, and the source form of `sample_member_grid` beside its region-pyramid form; `stored_bitmap::render_patch_bitmap`, `render_patch_cloud_bitmaps` and `refit_points`. Their callers that step 10 moves keep their fetch: each wraps the whole pyramids it holds with `from_pyramid` (the cluster-patches build its decoded images with `from_image`), makes the region pool for its call, and reports the error as its step's failure |
-| 10 | the public `render_patch_bitmap_column` / `render_display_patch_bitmaps` in [display_bitmaps.rs](../../crates/sfmtool-core/src/patch/display_bitmaps.rs), which return `PhotographReadError` instead of `Cancelled`; the viewer's bulk jobs (the conversion to embedded patches, *Refine all normals*, *Refit all points*, the cluster-patches build) and `sfm web-export` fetch tiled photographs instead of wrapping whole pyramids |
-| 11 | `find_nearby_tracks` and the reads under it (`GreyImages::get`, `read_patch_along_ray`, `far_field_sweep`, `depth_layers`, `guided_matches`, `nearby_cluster_tracks`, `constellation_seeds`, `nearby_points`, `distance_range`) |
-| 15 | `ImagePyramidSet.read`, the first binding whose photographs come from the cache. The bindings over the kernels above change with their kernels in steps 9 to 11, build their tiled photographs from arrays with `from_image`, and raise the error from then on, though tiles cut from arrays cannot fail |
+| 9 | Track View's and the Track Table's renders, which draw a cell's error state instead of the tile |
+| 10 | `ViewSources::fetch` in [state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs), which returns `PhotographReadError` instead of `Cancelled` (`get_many` still returns `Cancelled`, which converts), and the bench kernels (`bench::evaluate`, `evaluate_rendering_bitmap`, `score_bitmap`, `fit`, `render_bitmap_in_place`, `search_geometry`, `set_stage`, `build_track_at_pixel`, `classify`) and the patch kernels they and the reference picks share (`view_selection::select_patch_views`, `select_patch_cloud_views`, `reference_view::render_view_tile`, `read_track`, `stored_bitmap::render_reference`, `keypoint_localize`'s and `keypoint_subpixel`'s entry points, `member_coherence`'s, `observation_reading::read_cloud_observations`, `spawn::spawn_candidate_tracks`), and every kernel that calls one of them or that the bench runs, since a kernel passes its caller's pool down and its errors up: the normal kernels the bench's normal steps run (`pairwise_flow_normal`, `grown_plane_normal`, `grid_plane_normal`, `finite_difference_normal`) and `refine_normals`, which runs them; the cluster refinement's entry points (`refine_cluster_patches`, `refine_cluster_patches_borrowed`), which the bench's evaluation of a cluster-stage track runs, and the source form of `sample_member_grid` beside its region-pyramid form; `stored_bitmap::render_patch_bitmap`, `render_patch_cloud_bitmaps` and `refit_points`. Their callers that step 11 moves keep their fetch: each wraps the whole pyramids it holds with `from_pyramid` (the cluster-patches build its decoded images with `from_image`), makes the region pool for its call, and reports the error as its step's failure |
+| 11 | the public `render_patch_bitmap_column` / `render_display_patch_bitmaps` in [display_bitmaps.rs](../../crates/sfmtool-core/src/patch/display_bitmaps.rs), which return `PhotographReadError` instead of `Cancelled`; the viewer's bulk jobs (the conversion to embedded patches, *Refine all normals*, *Refit all points*, the cluster-patches build) and `sfm web-export` fetch tiled photographs instead of wrapping whole pyramids |
+| 12 | `find_nearby_tracks` and the reads under it (`GreyImages::get`, `read_patch_along_ray`, `far_field_sweep`, `depth_layers`, `guided_matches`, `nearby_cluster_tracks`, `constellation_seeds`, `nearby_points`, `distance_range`) |
+| 16 | `ImagePyramidSet.read`, the first binding whose photographs come from the cache. The bindings over the kernels above change with their kernels in steps 10 to 12, build their tiled photographs from arrays with `from_image`, and raise the error from then on, though tiles cut from arrays cannot fail |
 
 The viewer's side, in
 [photograph_requests.rs](../../crates/sfm-explorer/src/state/photograph_requests.rs):
@@ -2112,16 +2112,18 @@ Each is one pull request, useful on its own, with its tests, and each leaves
 every reader working. Steps 1 to 3 end the crash with in-memory pyramids,
 before any file is written, and step 4 bounds the one other whole-photograph
 reader that runs unbounded. Steps 5 to 7 build the mip level files and the
-view-region pyramids without changing any reader. Steps 8 to 11 move the
+view-region pyramids without changing any reader. Step 8 limits how
+elongated a cluster member's shape may be, which bounds the cluster
+refinement's own copies of a level before it reads tiles. Steps 9 to 12 move the
 readers to view-region pyramids, one group per pull request, while the cache
 still hands out whole pyramids: a moved reader wraps the pyramid it gets in a
 `TiledPhotograph` (`from_pyramid`), so readers that have moved and readers
-that have not both work. Step 12 makes the cache hand out tiled photographs
-only, once every reader takes them. Steps 13 to 15 build the out-of-core tier
-without turning it on anywhere but in tests: until step 16, neither
+that have not both work. Step 13 makes the cache hand out tiled photographs
+only, once every reader takes them. Steps 14 to 16 build the out-of-core tier
+without turning it on anywhere but in tests: until step 17, neither
 `sfm ws init` nor any other command writes `mipmap_options`, so no workspace
 has the object unless its owner writes it by hand, and every photograph stays
-in core. Step 16 turns the tier on.
+in core. Step 17 turns the tier on.
 
 1. **Depth by size.** Pyramids of `full_levels` depth everywhere;
    `PhotographCache::new` loses `levels`; `DISPLAY_PYRAMID_LEVELS` goes.
@@ -2132,7 +2134,7 @@ in core. Step 16 turns the tier on.
    with the level rule, the coarser fallback, the per-frame upload cap, the
    texture limit of 256 and the zoom limit `max(32, 8 / fit_scale)`. This
    alone ends the crash in Image Detail for every
-   photograph, though a 200-megapixel one is still read whole until step 12.
+   photograph, though a 200-megapixel one is still read whole until step 13.
    Tests (headless, the panel's lib tests): the level
    for a set of scales; the zoom limit for a large and a small photograph
    (8 screen pixels per level-0 pixel reached, and 32 kept); the tiles a view
@@ -2214,24 +2216,51 @@ in core. Step 16 turns the tier on.
    region, and the assembly from tiles, exercised on photographs cut into
    tiles in memory. No reader changes yet. Tests: the companion draft's
    equality tests.
-8. **Track View and the Track Table** on view-region pyramids (companion
-   step 3), with the step-8 signature changes, peeking the cache's whole
+8. **The cluster members' elongation limit** (the companion's § "The
+   members' elongation limit"), amending
+   [core/patch/cluster-patch-refinement.md](../core/patch/cluster-patch-refinement.md)
+   (§ "Which member anchors, and which members are eligible", § "The warp
+   and the cascade", the `TileCache` in § "Implementation notes", and the
+   constants under § "Parameters"), the `not_evaluated` status in
+   [formats/matches-file-format.md](../formats/matches-file-format.md), the
+   summary of [cli/image-feature/cluster-patches-command.md](../cli/image-feature/cluster-patches-command.md),
+   and a [GLOSSARY.md](../GLOSSARY.md) row for a shape's elongation:
+   `MAX_MEMBER_ELONGATION`, the refusal at validation, the evaluation scored
+   out of frame past it, the cap on the rectangle a `TileCache` holds, and
+   the counts in `ClusterRefineResult` and the summaries. It changes results
+   whether or not tiles are used, so it is its own pull request, before the
+   cluster refinement reads tiles in step 10. Tests: a member whose shape's
+   elongation is exactly the limit is refined, and one just past it is
+   `not_evaluated` and counted as elongated; a cascade driven towards a map
+   past the limit retreats and returns a shape within it; a `TileCache`
+   whose union would pass the cap is rebuilt from the request alone, and no
+   tile holds more than the cap; on a cluster whose members and evaluations
+   all stay within the limit and the cap, every result is bit-identical to
+   the result before the step. Measurement, in the pull request: on copies of
+   the checked-in reconstructions (`seoul_bull_sculpture`, `dino_dog_toy`,
+   `kerry_park`) and on the 200-megapixel capture of § "The problem,
+   measured" if it is at hand, `sfm cluster-patches` before and after: the
+   members refused at validation, the evaluations scored out of frame for
+   their elongation, the tiles capped, the clusters whose reference changed,
+   and the members whose status changed.
+9. **Track View and the Track Table** on view-region pyramids (companion
+   step 3), with the step-9 signature changes, peeking the cache's whole
    pyramids as today and reading them through `from_pyramid`; they peek
-   tiles from step 12.
-9. **The bench's jobs and the reference picks** (companion step 4), with the
-   step-9 signature changes, one region pool made by each bench step and each
-   reference pick for its kernel call, and the bindings over these kernels
-   building their tiled photographs from arrays with `from_image`. The
-   kernels the bulk readers share with the bench, the normal kernels and the
-   cluster refinement among them, change here, and the bulk readers wrap
-   what they fetch until step 10.
-10. **Bulk kernels**: the display patch bitmaps, the conversion to embedded
+   tiles from step 13.
+10. **The bench's jobs and the reference picks** (companion step 4), with the
+    step-10 signature changes, one region pool made by each bench step and each
+    reference pick for its kernel call, and the bindings over these kernels
+    building their tiled photographs from arrays with `from_image`. The
+    kernels the bulk readers share with the bench, the normal kernels and the
+    cluster refinement among them, change here, and the bulk readers wrap
+    what they fetch until step 11.
+11. **Bulk kernels**: the display patch bitmaps, the conversion to embedded
     patches, the web export, *Refine all normals*, *Refit all points* and the
     cluster-patches build (companion step 5) fetch tiled photographs, with
-    the step-10 signature changes and their bindings.
-11. **The nearby-track grey reads by region** (companion step 6), with the
-    step-11 signature changes and their bindings.
-12. **The tiled photograph cache.** The cache hands out `Arc<TiledPhotograph>`
+    the step-11 signature changes and their bindings.
+12. **The nearby-track grey reads by region** (companion step 6), with the
+    step-12 signature changes and their bindings.
+13. **The tiled photograph cache.** The cache hands out `Arc<TiledPhotograph>`
     for every photograph and keeps no whole pyramid: an in-core photograph is
     decoded whole into tiles, the requested tiles kept as used and the rest
     as unused, by a kernel's `get_many` in its read phase (its misses in
@@ -2271,13 +2300,13 @@ in core. Step 16 turns the tier on.
     is cancelled stops waiting within 50 ms; no panel decodes on the GUI
     thread, with a budget of 0 too; a bulk kernel whose photographs' tiles do
     not fit a small budget still completes, with its decodes counted.
-13. **The out-of-core tier, off.** Photographs of a workspace with
+14. **The out-of-core tier, off.** Photographs of a workspace with
     `mipmap_options` read through their mip level files: tiles from the
     files, mipmaps made in the slot when missing or stale (the misses of a
     `get_many` in groups sized by the build budget), `TileError::Changed`,
     and panels queueing photographs whose mipmap is not current for the
     *Build mipmaps* quiet task (the task with its shared list, as far as step
-    14 needs it). Tests: with the small threshold, a `get` on a photograph
+    15 needs it). Tests: with the small threshold, a `get` on a photograph
     with no mipmap makes it and returns its pixels; two threads asking for
     one path make one mipmap; a `get_many` over 20 out-of-core photographs
     never has more builds in progress than the build budget allows, with a
@@ -2293,9 +2322,9 @@ in core. Step 16 turns the tier on.
     none calls `get` for an out-of-core photograph; a file replaced by one
     with another record during a read fails with `Changed`, and one made
     stale during a kernel fails it with the named error.
-14. **Makers**: `sfm sift` and `build_sift_file`, the viewer's *Build
+15. **Makers**: `sfm sift` and `build_sift_file`, the viewer's *Build
     mipmaps* quiet task, `sfm ws mipmaps` with `--prune`
-    and `--check` (its `--enable` waits for step 16, since it writes the
+    and `--check` (its `--enable` waits for step 17, since it writes the
     object), and the thumbnail from the coarsest mip level file.
     Tests: `sfm sift` on a small-threshold synthetic workspace writes the
     files; the quiet task runs on the fast queue, makes the selected image's
@@ -2309,7 +2338,7 @@ in core. Step 16 turns the tier on.
     `--prune` deletes an orphan and
     keeps a current mipmap, and deletes every mip level file in a workspace without the
     object; `--check` writes nothing.
-15. **Python and the readers that must agree with the viewer**: the
+16. **Python and the readers that must agree with the viewer**: the
     `sfmtool.photographs` submodule with the `PhotographCache` class (its
     layout, level, tile and region reads, `build_mipmaps`, `stats`) and core's
     `read_layout` and `read_region` behind it; `ImagePyramidSet.read` and
@@ -2332,7 +2361,7 @@ in core. Step 16 turns the tier on.
     `FileNotFoundError`, and an invalid `mipmap_options` `RuntimeError`; the
     new submodule passes `tests/test_module_layout.py`, the registration
     test and the lazy-loading test.
-16. **The tier on.** `sfm ws init` writes `mipmap_options` with its three
+17. **The tier on.** `sfm ws init` writes `mipmap_options` with its three
     values, `sfm ws mipmaps --enable` adds it to an existing workspace, the
     viewer's one-line notice for a workspace without it, and the workspace
     spec gains the object. Tests: a new workspace has the object with 4096,
