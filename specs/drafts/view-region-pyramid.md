@@ -182,11 +182,12 @@ photograph.
 
 The grown plane's tile path reads the value's tap pair as the other samplers
 do. Its 4 x 4 Sobel window reaches one pixel further than a photograph tile's
-border, so the window can straddle up to four tiles: the tile path reads each
-of its 16 pixels by address through the same tile lookup, from the tile whose
-core holds it, or the border pixel where the window leaves the image, which
-is what its edge clamp reads. Every pixel is the stored pixel and the
-arithmetic is unchanged, so the gradients are bit-identical.
+border, so the window can straddle up to four tiles: the tile path clamps
+each of its 16 pixel addresses to the level as `sobel_gradient` does, which
+can move an address several pixels when the position lies off the image, and
+reads the pixel through the same tile lookup from the tile whose core holds
+the clamped address. Every pixel is the one the whole-level read takes and
+the arithmetic is unchanged, so the gradients are bit-identical.
 
 Tests, in step 4: on a small synthetic reconstruction, each of the four
 normal kernels and `refine_normals` gives the identical normal and report
@@ -603,9 +604,13 @@ there is no whole pyramid for any reader to fall back on.
    tile path would have to repeat the AVX2 kernel's arithmetic with its
    gathers addressed through tiles. Options: (a) reserve the tile's bytes
    from the kernel call's pool and build it whether or not the reservation
-   succeeds, so memory past the pool grows with the members in progress and
-   their stretch, never with the photograph, and count the overflow in the
-   phase note; (b) a tile-addressed evaluation, scalar and AVX2, that reads
+   succeeds, and count the overflow in the phase note. Memory past the pool
+   then grows with the members in progress and their stretch, and is bounded
+   only by the level: the rectangle is clipped to the level, and a member
+   stretched so its smaller singular value is under 2 reads level 0, so a
+   member stretched far enough on a diagonal copies all of level 0, 288 MB at
+   6000 x 4000 and 2.4 GB at 200 MP, and one such member on each of the 33
+   threads that render is 9.5 GB and 79 GB past the pool; (b) a tile-addressed evaluation, scalar and AVX2, that reads
    each centred value as the pixel from its tile minus the rectangle's mean
    (the mean summed over the rectangle row by row through the tiles, as
    `LevelTile::build` sums it), held to the pool like the renders; (c) a cap

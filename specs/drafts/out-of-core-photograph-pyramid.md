@@ -1016,7 +1016,11 @@ tiles without decoding again. Who decodes:
   `PhotographRequests` and peeks on a later frame too. So no panel task waits
   on a slot. A panel's decode reserves with `try_reserve_build`, which refuses
   a decode that does not fit under the build budget (below); a refused
-  request is tried again on a later frame.
+  request is tried again on a later frame. The task reserves first and
+  claims the slot only once its reservation is granted, giving the
+  reservation back when another caller is decoding in the slot, so a slot a
+  panel claims is always decoded, and a kernel caller that waits on it reads
+  the tiles it made.
 
 A decode of a photograph whose tiles were evicted costs the whole decode
 again: about 0.05 s at 3840 x 2160 and less for
@@ -1054,8 +1058,9 @@ photograph's mipmap works exactly like decoding a photograph in today's
   `jpeg-encoder` and `jpeg-decoder` use no rayon, so the whole build is safe
   there. An in-core photograph's whole decode into tiles runs in its slot the
   same way. A kernel caller that finds the slot being made waits on it; a
-  panel's decode task (`try_decode_tiles`) claims the slot only when it is
-  empty and otherwise ends at once, so it never waits on a slot.
+  panel's decode task (`try_decode_tiles`) claims the slot only when no other
+  caller is decoding in it and otherwise ends at once, so it never waits on a
+  slot.
 - **Where builds run in the viewer.** Only inside background tasks: the
   quiet task *Build mipmaps* and the kernels of other tasks, each on its task's
   job thread and on the rayon workers its `get_many` makes its group on, as
@@ -1803,10 +1808,11 @@ impl PhotographCache {
     /// later frame. Never waits.
     pub fn try_reserve_build(&self, bytes: u64) -> Option<BuildReservation<'_>>;
     /// A panel's decode of an in-core photograph into tiles, the `keys` it
-    /// asked for kept as used and the rest as unused: claims the slot only
-    /// when it is empty and reserves with `try_reserve_build`, and answers
-    /// `Busy` without waiting when another caller holds the slot or the
-    /// reservation is refused.
+    /// asked for kept as used and the rest as unused: reserves with
+    /// `try_reserve_build`, then claims the slot only when no other caller is
+    /// decoding in it, giving the reservation back if one is, and answers
+    /// `Busy` without waiting when the reservation is refused or another
+    /// caller holds the slot.
     pub fn try_decode_tiles(&self, path: &Path, keys: &[TileKey]) -> Result<TryDecode, TileError>;
     /// The header, the tier, the level sizes and, out of core, the region
     /// answer; makes no mipmap. The blocking form of `layout`.
