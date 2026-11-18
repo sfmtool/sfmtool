@@ -854,7 +854,6 @@ current file counts as done) covers it if it does not.
   quality in the name differs from the workspace's current setting for their
   level (orphans of an earlier setting), and temporary files older than an
   hour. Deleting `.sfm-mipmaps/` by hand is always safe.
-- `test-data` is never written: every image in it is in core.
 
 ### Is it a file format?
 
@@ -2179,7 +2178,8 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
     viewer's one-line notice for a workspace without it, and the workspace
     spec gains the object. Tests: a new workspace has the object with 4096,
     95 and 95; `--enable` writes the object and refuses a file that has one;
-    the test data's workspaces, which have no object, still write nothing.
+    a workspace without the object writes nothing (the checked-in `test-data`
+    workspaces are such workspaces).
 
 ## Measurements
 
