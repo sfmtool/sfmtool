@@ -25,7 +25,7 @@ requires: without it no kernel can read a large photograph within a bounded
 memory, so it is a numbered step here (§ "Implementation steps"), not a later
 optimization. The user has decided every open question of this draft
 (§ "Open questions", 1 to 13); of the companion draft's six, the user has
-decided questions 1 and 6, and questions 2 to 5 remain open.
+decided questions 1, 2 and 6, and questions 3 to 5 remain open.
 
 Amends [core/camera/photograph-cache.md](../core/camera/photograph-cache.md)
 (the cache hands out photograph tiles for every photograph instead of whole

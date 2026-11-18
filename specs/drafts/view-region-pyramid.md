@@ -12,7 +12,7 @@ regions, is separate from the files and caches the main draft specifies; its
 steps 1 and 2 are step 7 of the main draft, and its steps 3 to 6 are the main
 draft's steps 9 to 12. The main draft's step 8, between them, limits the
 cluster members' elongation (§ "The members' elongation limit"). Open:
-questions 2 to 5 at the end. It amends
+questions 3 to 5 at the end. It amends
 [core/camera/photograph-cache.md](../core/camera/photograph-cache.md) and the
 samplers of [core/camera/image-warping.md](../core/camera/image-warping.md).
 
@@ -54,6 +54,19 @@ pub struct PyramidLevel {
 `from_regions(levels: Vec<Option<PyramidLevel>>)`, where `None` is a level the
 render does not read, and `level_origin(l)` beside `level(l)`. A whole pyramid
 has every origin at zero, so every existing caller is unchanged.
+
+```rust
+/// How far a held region extends past the region a render requires, as a
+/// share of the required region's width (left and right) and height (above
+/// and below), each rounded up to whole pixels, before clipping to the level
+/// (§ "Where the pixels come from", "Reuse across renders").
+pub const REGION_REUSE_MARGIN: f64 = 0.25; // in camera/sampler.rs
+```
+
+It is one of the three values that size what a kernel holds, beside the
+kernel call's region pool and the tile path's window of 16 pinned tiles
+(§ "Bounding a render's memory"). Like them, it changes memory and speed,
+never a result.
 
 **Why the values are equal.** Every sampler reads level `l` at the level-0
 position divided by `2^l` with `bilinear_taps` in
@@ -401,15 +414,28 @@ arithmetic does not change.
 **Reuse across renders.** A kernel that optimizes a patch renders the same
 view many times with a slightly moved frame (the bench's fit rounds, the
 sub-pixel refinement, normal refinement). The region pyramid is assembled with
-a margin of a quarter of each level's region on every side, and a later render
-whose required regions lie inside the held ones reuses it; one that does not
-assembles a new one. Reuse does not change any value, only how often regions
+the **reuse margin**, `REGION_REUSE_MARGIN = 0.25` in
+[sampler.rs](../../crates/sfmtool-core/src/camera/sampler.rs), beside
+`required_regions` and `LevelRegions`: a level's held region is its required
+region, `w` by `h` pixels, grown by `ceil(REGION_REUSE_MARGIN · w)` pixels on
+the left and on the right and `ceil(REGION_REUSE_MARGIN · h)` pixels above
+and below, then clipped to the level. Clipping changes no value, since
+sampling clamps at the level's edge the same way (§ "What it holds"). A
+later render whose required regions lie inside the held ones reuses it; one
+that does not assembles a new one. Before clipping, the held region is 1.5
+times as wide and as tall as the required one when its sides are multiples
+of 4, so 2.25 times the area. Rounding up adds at most 1.5 px to each side,
+so in general the area is at most `(1.5 + 1.5 / w)(1.5 + 1.5 / h)` times,
+a bound of about 2.3 for square regions of about 60 px and 2.5 for ones of
+about 20 px. For
+regions of a few pixels it is well above 2.25, since a 1 px side grows to
+3 px and a 2 px side to 4 px. Reuse does not change any value, only how often regions
 are copied. A kernel keeps a region pyramid for one view of the patch it is
 working on, and drops them all when it moves to the next patch (a fit's
 rounds, a refinement's steps and an evaluation's views of one track share
 them; the next track starts with none). So what it keeps is at most one region
-pyramid per view of one patch, with the margin, 2.25 times the area of the
-region itself, and every copied region of the kernel call reserves from one pool
+pyramid per view of one patch, grown by `REGION_REUSE_MARGIN`, about 2.25
+times the area of the region itself, and every copied region of the kernel call reserves from one pool
 (§ "Bounding a render's memory").
 
 ## Bounding a render's memory
@@ -562,7 +588,8 @@ makes a mipmap.
 - **Bulk kernels** (the display patch bitmaps at open, *Refine all normals*,
   the web export) touch every photograph at the levels their patches need.
   What they hold is the regions of the patches in progress, a few kilobytes
-  each, all within the kernel call's region pool (99 MB on 32 threads), plus at most
+  each, grown by `REGION_REUSE_MARGIN` to about 2.25 times the area, all
+  within the kernel call's region pool (99 MB on 32 threads), plus at most
   12.7 MB of pinned tiles per rendering thread (§ "Bounding a render's
   memory"), plus the tile cache, which its budget
   bounds whatever the number of photographs; the tiles they touch can be many
@@ -614,7 +641,8 @@ there is no whole pyramid for any reader to fall back on.
    reads at given positions through `for_samples` regions and through tiles
    equal `sample_bilinear_u8` and `sobel_gradient` on the whole level; a
    kernel call whose regions exceed its pool (sized small for the test) never holds
-   more than the pool, the renders past it taking the tile path, including
+   more than the pool, each render reserving its required regions grown by
+   `REGION_REUSE_MARGIN`, the renders past it taking the tile path, including
    from nested parallel loops on many threads at once, and no reservation
    waits; the tile path pins no more than its window; a
    region one pixel smaller on an inner edge makes the comparison fail, so
@@ -624,8 +652,11 @@ there is no whole pyramid for any reader to fall back on.
    into tiles in memory (`from_image` and `from_pyramid`); the cache's
    `view_region_pyramid` comes with the main draft's step 13. Tests: the assembled regions equal the whole pyramid's pixels;
    `clipped_share` over tiles equals it over the whole level 0, for outlines
-   that cross tile edges and the image's edges; reuse when inside, reassembly
-   when not.
+   that cross tile edges and the image's edges; each held region is its
+   required region grown by `ceil(REGION_REUSE_MARGIN · w)` and
+   `ceil(REGION_REUSE_MARGIN · h)` px on each side and clipped to the level,
+   for regions of 1, 2, 3 and 61 px a side and at every edge of the image;
+   reuse when inside, reassembly when not.
 3. **Track View and the Track Table** on region pyramids, peeking the
    cache's whole pyramids as today and reading them through `from_pyramid`;
    they peek tiles once the main draft's step 13 adds `peek_tile`. Track
@@ -656,7 +687,10 @@ there is no whole pyramid for any reader to fall back on.
    small-threshold synthetic reconstruction; a reference pick over many views
    whose regions exceed a small pool holds no more than that one pool; the
    normal kernels' and the cluster refinement's tests of § "Readers that
-   sample through their own code".
+   sample through their own code". Each bench step's phase note counts the
+   region pyramids its renders reused and the ones they assembled again, so
+   the pull request reports how often the bench's fits reassemble at
+   `REGION_REUSE_MARGIN`.
 5. **Bulk kernels**: the display patch bitmaps, the conversion to embedded
    patches, the web export, *Refine all normals*, *Refit all points* and the
    cluster-patches build fetch tiled photographs, each with a point order
@@ -676,9 +710,10 @@ there is no whole pyramid for any reader to fall back on.
    under the cache's budget; a render that needs a tile evicted during its
    kernel decodes the photograph again, about 0.05 s at 3840 x 2160, which
    the budget and the bulk kernels' point order (question 3) keep rare.
-2. **The reuse margin.** A quarter of the region (as designed), a fixed number
-   of pixels, or none. Recommendation: a quarter, then measure how often the
-   bench's fits reassemble.
+2. **The reuse margin.** *Decided by the user:* a quarter of the region on
+   each side, `REGION_REUSE_MARGIN = 0.25`, as
+   [§ "Where the pixels come from"](#where-the-pixels-come-from) defines it
+   under "Reuse across renders".
 3. **The point order of bulk kernels.** Grouped by reference image and
    position (as designed), or by tile. Recommendation: by reference image and
    position, which needs no knowledge of the tile grid in the kernel, and
