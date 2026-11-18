@@ -1188,7 +1188,8 @@ photograph's mipmap works exactly like decoding a photograph in today's
 take no `&Progress`. For an out-of-core photograph they are asked only once its
 layout is `Known` (its files current), and decode only tiles of current files,
 milliseconds each (`get_level` at most a few hundred milliseconds for a level
-of 48 tiles). For an in-core photograph, `get_tile` is a kernel's read: a
+of 48 tiles). For an in-core photograph, `get_tile` called from a render
+entry point on a kernel's behalf is a kernel's read: a
 miss decodes the photograph into tiles, as above, about 0.05 s at 3840 x 2160,
 reserving with `reserve_builds` and waiting on the slot if another caller
 holds it; inside a kernel this happens only for a tile evicted after the read
@@ -1581,7 +1582,7 @@ tiled photographs only (step 13), so no step leaves a reader without pixels.
 | 7–9 | Track View's crops and their hover, the Track Table's crop column and hover (`patch_pictures/crop.rs` `picture`, `track_table_panel.rs` `crop_picture`, `track_table_panel/pictures.rs` `crop_context`) | one level of the pyramid, `level(0)` for the size | the crop's rectangle of the same level, from peeked tiles (the companion's § "Readers that sample through their own code"); the size from the layout | the stored levels; depth past a step of 64 |
 | 10 | Track Table reference picks (`track_table_panel/picks.rs` → `render_reference` → `render_view_tile`, `clipped_share`) | `get`, whole pyramid; level 0 inside the outline; `level(0)` for the size check | regions, and `clipped_share` walks the level-0 tiles under the outline; each pick still fetches its views with one `get` per observation, and makes one region pool for its one `render_reference` call over all of them, so a point's views share one pool; the size check from the layout | the stored levels, and `clipped_share` reads `-mip0` for an original that is not region-readable |
 | 11–13 | Display patch bitmaps at open, conversion to embedded patches, `sfm web-export` (`display_bitmaps.rs`, `state/edits.rs` `convert_to_embedded_patches_job`, `web_export.rs`) | `get_many`, 6 levels, every photograph held at once; web-export with budget 0 | `get_many` answers tiled photographs; regions; web-export makes missing mipmaps in the workspace | the stored levels; depth |
-| 14–18 | The bench's steps and searches, live evaluation, *Find Nearby Tracks*, *Create Track Here*, *Add image to tracks*, *Refine all normals*, *Refit all points* (`bench.rs`, `state/edits.rs` `fetch`, `bench/nearby_tracks.rs`, `bench/track_at_pixel.rs`, `add_image_to_tracks.rs`, `state/edits/refine_all_normals.rs`, `refit_all_points.rs`) | `get_many`, levels per sample or per grid, `clipped_share` on level 0; the normal kernels' renders, the grown plane's own sampler and the cluster refinement's `LevelTile` copies | regions, `clipped_share` as in row 10; the grown plane's reads by `for_samples` regions and `LevelTile` copied from tiles (the companion's § "Readers that sample through their own code") | the stored levels; depth |
+| 14–18 | The bench's steps and searches, live evaluation, *Find Nearby Tracks*, *Create Track Here*, *Add image to tracks*, *Refine all normals*, *Refit all points* (`bench.rs`, `state/edits.rs` `fetch`, `bench/nearby_tracks.rs`, `bench/track_at_pixel.rs`, `add_image_to_tracks.rs`, `state/edits/refine_all_normals.rs`, `refit_all_points.rs`) | `get_many`, levels per sample or per grid, `clipped_share` on level 0; the normal kernels' renders, the grown plane's own sampler and the cluster refinement's `LevelTile` copies | regions, `clipped_share` as in row 10; the grown plane's reads through `read_source_samples` and `LevelTile` through `read_source_rect` (the companion's § "Readers that sample through their own code") | the stored levels; depth |
 | 16a | *Find Nearby Tracks*' grey reads (`GreyImages`, `bench/nearby/grey.rs`) | level 0 of each view, blurred grey `f32`, whole: 800 MB per 200-megapixel view | each read blurs the level-0 region it samples, plus the blur's 4 px | level 0 from `-mip0` for an original that is not region-readable |
 | 19 | The viewer's cluster-patches build (`cluster_patches.rs` `read_photographs`) | `read_rgb`, full depth, outside the cache, all at once | `get_many` through the cache; regions | the stored levels |
 | 20 | Display thumbnails when none is stored (`display_thumbnails.rs` → `display_thumbnail_row`) | whole decode, resized to 128 | in core unchanged; out of core from the coarsest mip level file | display only |
@@ -1915,18 +1916,26 @@ impl From<GetError> for PhotographReadError { /* … */ }
 **The samplers stay infallible.** `render_tile`, `render_tile_with_grad_into`,
 `render_tiles` and the `remap_*` functions keep their signatures and take
 `&ImageU8Pyramid`, the region pyramid a render has already assembled, which
-cannot fail; the tests of the samplers call them. Beside them,
-`render_source_tile` and `render_source_tile_with_grad_into` take a
-`&ProjectedImage` (and so a `&TiledPhotograph`) and the region pool the
+cannot fail; the tests of the samplers call them. Beside them, the **render
+entry points**, which are the only way a kernel reads pixels (the companion's
+§ "Where the pixels come from" says what each takes and returns):
+`render_source_tile` and `render_source_tile_with_grad_into` for warp-map
+renders, `render_source_affine` for the view selection's affine fast path,
+`sample_source_grid` for the cluster refinement's grids,
+`read_source_samples` for the grown plane's value and Sobel reads,
+`read_source_rect` for the cluster refinement's `LevelTile` and the grey
+reads of *Find Nearby Tracks*, and `clipped_share`. Each takes the source
+(a `&ProjectedImage`, and so a `&TiledPhotograph`) and the region pool the
 kernel's caller made for this kernel call (`RegionPool::for_kernel_call()`,
 whatever way the caller fetched its sources; a kernel that calls another
-passes its own pool down), and
-return `Result<_, PhotographReadError>`: they assemble the view-region
-pyramid or sample through tiles, either of which can fail for a photograph
-the cache reads, and never fails for one built `from_image`.
+passes its own pool down), and returns `Result<_, PhotographReadError>`:
+it works out the regions the read needs and copies them from the pool or
+reads through tiles, either of which can fail for a photograph the cache
+reads, and never fails for one built `from_image`. No kernel computes a
+region or touches a photograph tile.
 
-**Kernels pass the error up.** Every kernel that renders from a
-`ProjectedImage` calls the `render_source_*` functions and returns the error
+**Kernels pass the error up.** Every kernel that reads from a
+`ProjectedImage` calls the render entry points and returns the error
 with `?` through its loops, including its parallel ones (a `try_for_each` or
 a `collect::<Result<…>>` in place of a `for_each` or a plain `collect`). A
 kernel that already returns `Result` with an error enum of its own gains a
@@ -2208,11 +2217,13 @@ in core. Step 17 turns the tier on.
 7. **View-region pyramids** ([view-region-pyramid.md](view-region-pyramid.md)
    steps 1 and 2): regions in `ImageU8Pyramid` and every sampler, the
    tile-addressed sampling path for renders the kernel call's region pool
-   cannot hold, `required_regions` and `LevelRegions::for_samples`,
-   `TiledPhotograph` with `from_image`, `from_pyramid`, `layout` and
-   `channels`, the `render_source_*` entry points and
-   `PhotographReadError`, `clipped_share` over tiles, the grey reads by
-   region, and the assembly from tiles, exercised on photographs cut into
+   cannot hold, the render entry points (`render_source_tile` and its
+   gradient form, `render_source_affine`, `sample_source_grid`,
+   `read_source_samples`, `read_source_rect` and `clipped_share` over
+   tiles) with `required_regions` and `LevelRegions::for_samples` behind
+   them, `TiledPhotograph` with `from_image`, `from_pyramid`, `layout` and
+   `channels`, `PhotographReadError`, the grey reads by region, and the
+   assembly from tiles, exercised on photographs cut into
    tiles in memory. No reader changes yet. Tests: the companion draft's
    equality tests.
 8. **The cluster members' elongation limit** (the companion's § "The

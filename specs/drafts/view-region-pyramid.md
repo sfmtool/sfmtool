@@ -118,31 +118,33 @@ the render applies, so it is exact rather than estimated:
   over the support's positions.
 - **`clipped_share`** in
   [reference_view/tile.rs](../../crates/sfmtool-core/src/patch/reference_view/tile.rs)
-  reads every level-0 pixel inside the tile's outline. It does not take a
-  region pyramid: for a tiled source it walks the level-0 tiles the outline's
-  bounding box covers, one at a time, applying the same even-odd rule to the
-  pixel centres of each and summing the counts, so it holds one tile at a time
+  reads every level-0 pixel inside the tile's outline. It becomes one of the
+  render entry points (§ "Where the pixels come from") and takes no region
+  pyramid: it walks the level-0 tiles the outline's bounding box covers,
+  one at a time, applying the same even-odd rule to the pixel centres of each and summing the counts, so it holds one tile at a time
   and gives the same share. A footprint of `F` level-0 pixels covers up to
   `(ceil(F / 512) + 1)^2` tiles; this is the one read whose cost grows with the
   footprint rather than with the patch resolution, as it does today.
 - **The grey reads of *Find Nearby Tracks*** (`GreyImages` in
   [bench/nearby/grey.rs](../../crates/sfmtool-core/src/bench/nearby/grey.rs))
-  blur level 0 with a nine-tap Gaussian, reflecting at the image's edges: the
-  region of a read is the bounding box of its samples plus 4 px for the blur
-  and 1 px for the bilinear tap, clipped to the image, and the blur reflects
-  only at the image's edges, never at an inner region edge.
+  blur level 0 with a nine-tap Gaussian, reflecting at the image's edges: a
+  read asks `read_source_rect` for the bounding box of its samples plus 4 px
+  for the blur and 1 px for the bilinear tap, clipped to the image, and the
+  blur reflects only at the image's edges, never at an inner edge of the
+  rectangle.
 
 A function per sampler, `required_regions(map, sampler, layout) ->
 LevelRegions`, walks the map once, as the render does; the region of a view's
 tile costs about what the render's own address arithmetic costs, and is a
 fraction of the sampling. It lives beside the samplers in
 [sampler.rs](../../crates/sfmtool-core/src/camera/sampler.rs) so a change to a
-sampler's footprint and to its region is one change. A reader that samples
-given positions through its own code, rather than a warp map, gets its
-regions from `LevelRegions::for_samples(level, positions, border)`: the
-bounding box of each position's tap pair widened by `border` pixels on every
-side (0 for a bilinear read, 1 for a read of the 4 x 4 pixels about it),
-clamped to the level.
+sampler's footprint and to its region is one change. A read at given
+positions rather than through a warp map has its regions from
+`LevelRegions::for_samples(level, positions, border)`: the bounding box of
+each position's tap pair widened by `border` pixels on every side (0 for a
+bilinear read, 1 for a read of the 4 x 4 pixels about it), clamped to the
+level. Both are called by the render entry points and the panels, never by
+a kernel (§ "Where the pixels come from").
 
 ## Readers that sample through their own code
 
@@ -151,7 +153,9 @@ of three kinds. Most render through `render_tile`, `render_tiles`,
 `render_tile_with_grad_into` or `render_view_tile`, and the rules above give
 their regions from the map they render. A few sample through code of their
 own, at a level and positions they choose; each has a region rule of its own
-below, worked out from the quantities it already computes before it samples.
+below, worked out from the quantities it already computes before it samples,
+which the render entry point it reads through applies (§ "Where the pixels
+come from"). The panels' crops are not kernels and apply theirs themselves.
 The rest read a level only for its size or its channels, which is a layout
 read (§ "Reads of the size and channels only"). The steps are this draft's,
 with the main draft's in brackets.
@@ -190,15 +194,15 @@ photograph.
 | `pairwise_flow_normal` (`bench/normal/pairwise_flow/crops.rs` `render_crop`) | one `render_tile` per view per round, of the crop: a square of side `2 · half_width` samples on the round's plane, at least 48 px of the finest view on each side of the point and at least 3 patch half-extents, at most `max_crop_samples` (512 by default, 4096 at most) | the general rule for the view's sampler (`SamplerChoice::per_view`) over the crop's map | the finest view reads about `side + 2` px a side at level 0: 98 px (29 KB) for a patch of 24 px, 194 px (113 KB) for one of 64 px; any facing view at most about `√2 · side` px at its level, 725 px (1.6 MB) at the 512 cap; copied within the pool. A view up to the 80° limit reads a stretched footprint, and a crop of 4096 samples up to about 100 MB; these take the tile path | 4 [10] |
 | | after the renders: the crop's grey image (`matcher_gray_from_rgb`), its Gaussian pyramid (`CropPyramid`, the flow's `ImagePyramid`), the DIS flow between crops and the noise fields of `texture.rs`, which are synthetic | no photograph read | — | — |
 | `grid_plane_normal` (`bench/normal/grid_plane.rs` `render`) | one `render_tile` per view per pass of the working grid, `r` samples a side (about one sample per photograph pixel, clamped to `R ..= 2R`), widened by `margin = ceil(cell_shift_bound_px)`, 2 by default, so `r + 4` a side | the general rule for the view's sampler | up to 52 samples a side at `R = 24` and 132 at `R = 64`: about 76 px (17 KB) and 190 px (108 KB) at the level read; copied | 4 [10] |
-| `grown_plane_normal` (`bench/normal/grown_plane/render.rs` `ViewImage`) | its own sampler: one level per view, `bilinear_mip_level(σ_major)` of the anchored patch frame's Jacobian at the working grid's centre, clamped to the levels, chosen once; each render (`ViewImage::sample`) reads the value at each grid sample's projected pixel plus the view's image shift, divided by `2^l`, with `sample_bilinear_u8`, and `ViewImage::gradients` reads the Sobel gradient there from the 4 x 4 pixels about it (`sobel_gradient`) | per render, `LevelRegions::for_samples(l, (pixels + shift) / 2^l, 1)`: the samples' pixels are projected before the render reads them, so the region is exact; the value's tap pair lies inside the 4 x 4 window | the grid is `R ..= 2R` a side and the level keeps the major axis at most `√2` px a sample, so a frame near the starting one reads at most `(√2 · side + 4)` px a side: about 72 px (15 KB) at `R = 24` and 185 px (103 KB) at `R = 64`; the tilt the fit moves to can stretch it further, which the per-render region follows. Copied, with the reuse margin across the fit's iterations | 4 [10] |
+| `grown_plane_normal` (`bench/normal/grown_plane/render.rs` `ViewImage`) | its own sampler: one level per view, `bilinear_mip_level(σ_major)` of the anchored patch frame's Jacobian at the working grid's centre, clamped to the levels, chosen once; each render (`ViewImage::sample`) reads the value at each grid sample's projected pixel plus the view's image shift, divided by `2^l`, with `sample_bilinear_u8`, and `ViewImage::gradients` reads the Sobel gradient there from the 4 x 4 pixels about it (`sobel_gradient`) | per render, the kernel hands its positions `(pixels + shift) / 2^l` at level `l` to `read_source_samples` with a border of 1, which computes the region with `LevelRegions::for_samples` and returns each position's 4 x 4 pixels and fractions; the kernel blends the value from the middle 2 x 2 with `sample_bilinear_u8`'s expression and the Sobel gradient from the 4 x 4 as `sobel_gradient` does. The pixels are projected before the read, so the region is exact | the grid is `R ..= 2R` a side and the level keeps the major axis at most `√2` px a sample, so a frame near the starting one reads at most `(√2 · side + 4)` px a side: about 72 px (15 KB) at `R = 24` and 185 px (103 KB) at `R = 64`; the tilt the fit moves to can stretch it further, which the per-render region follows. Copied, with the reuse margin across the fit's iterations | 4 [10] |
 | `finite_difference_normal` (`bench/normal.rs`) | the bench's `fit` for each piece and `evaluate_rendering_bitmap` at the turned normal (`turn_and_read`) | the general rules, through those kernels | as the bench's tiles | 4 [10] |
 | `refine_normals` (`bench/refine_normals.rs`) | `pairwise_flow_normal` or `grown_plane_normal` per point, then `evaluate_rendering_bitmap` | as those kernels; the pool its caller made is passed to each point | as above | 4 [10]; *Refine all normals*' fetch and point order 5 [11] |
 | normal refinement (`patch/normal_refine/znorm.rs`) | `render_tiles` over the views | the general rules | as the bench's tiles | 4 [10] |
 
-The grown plane's tile path reads the value's tap pair as the other samplers
-do. Its 4 x 4 Sobel window reaches one pixel further than a photograph tile's
-border, so the window can straddle up to four tiles: the tile path clamps
-each of its 16 pixel addresses to the level as `sobel_gradient` does, which
+On the tile path `read_source_samples` reads each window by address. A 4 x 4
+window reaches one pixel further than a photograph tile's border, so it can
+straddle up to four tiles: the entry point clamps each of its 16 pixel
+addresses to the level as `sobel_gradient` does, which
 can move an address several pixels when the position lies off the image, and
 reads the pixel through the same tile lookup from the tile whose core holds
 the clamped address. Every pixel is the one the whole-level read takes and
@@ -252,10 +256,14 @@ widened by 2 px (`grid_bbox`), joined with the rectangle already held and
 widened by `TILE_MARGIN` (8 px) when it does not cover the request, clipped
 to the level. The rectangle depends only on the maps and the level's size,
 and the scores depend on it (the evaluation's coordinates are relative to its
-corner and its values to its mean), so it must stay exactly as it is.
-`LevelTile::build` therefore copies its rectangle out of the photograph's
-tiles, row by row in the same order, so its pixels, its mean and every score
-are the same; it reads no region pyramid. At `R = 25` and a SIFT shape near a
+corner and its values to its mean), so it must stay exactly as it is: the
+rectangle is the algorithm's, not a choice of how to read. `LevelTile::build`
+therefore hands that rectangle to `read_source_rect`, which reserves its
+bytes from the kernel call's pool and returns its pixels, copied from a
+region the pool holds or read out of the photograph's tiles; the kernel then
+converts and centres them, row by row in the same order as today, so its
+pixels, its mean and every score are the same. The kernel never touches a
+tile or a region. At `R = 25` and a SIFT shape near a
 similarity, the grid covers at most 50 px a side at its level, a rectangle of
 about 70 px: 59 KB in `f32` RGB. Step 4 [10], through the bench's evaluation
 of a cluster-stage track; the cluster-patches build moves its fetch in step 5
@@ -263,9 +271,10 @@ of a cluster-stage track; the cluster-patches build moves its fetch in step 5
 scores with whole pyramids and with tiled sources of 32 px tiles, including
 members whose rectangle crosses tile edges and is grown during the cascade.
 The evaluation has no tile path, since it must stay bit-identical and its
-AVX2 form agrees with the scalar one only to about `1e-4`. So a `LevelTile`
-reserves its bytes from the kernel call's region pool and is built whether
-or not the reservation succeeds; the members' elongation limit below bounds
+AVX2 form agrees with the scalar one only to about `1e-4`. So
+`read_source_rect` reserves a `LevelTile`'s bytes from the kernel call's
+region pool and copies the rectangle whether or not the reservation
+succeeds; the members' elongation limit below bounds
 each of its requests (open question 6).
 
 ### The members' elongation limit
@@ -338,8 +347,8 @@ its tile has been built by then. A member holds one `LevelTile` per level
 its cascade evaluates at, one or two since the scale moves little within a
 cascade, and the rotation starts' own tiles are dropped before the cascade.
 `refine_member` runs no parallel loop, so a thread holds one member's tiles
-at a time. The tiles reserve from the kernel call's pool and are built when
-the pool is full. A kernel call that runs the cluster refinement therefore
+at a time. `read_source_rect` reserves each tile's bytes from the kernel
+call's pool and copies the tile when the pool is full too. A kernel call that runs the cluster refinement therefore
 builds past the pool, on each of its 33 rendering threads, tiles of at most
 8.4 MB per request at the default resolution, 280 MB for one level on all of
 them while no cascade wanders; a cascade that wanders holds more, by the
@@ -399,12 +408,33 @@ kernel; only the tiles stay (the main draft's § "The caches in memory"), so a r
 holds today's exact levels. Tiles cut from an array a caller already has
 (`TiledPhotograph::from_image`) are read the same way too.
 
-A kernel's `ProjectedImage` holds a `&TiledPhotograph`, for every photograph.
-The render entry points that take one (`render_source_tile` and its gradient
-form, beside the unchanged `render_tile`, which samples a region pyramid
-already assembled) compute the regions from the map and ask for the region
-pyramid before sampling, or sample through tiles.
-They return `Result<_, PhotographReadError>`, since a tiled read can find its
+A kernel's `ProjectedImage` holds a `&TiledPhotograph`, for every photograph,
+and a kernel reads pixels only through the **render entry points** in
+[sampler.rs](../../crates/sfmtool-core/src/camera/sampler.rs). Each takes the
+source and the region pool the kernel was given, works out the regions the
+read needs, takes them from the pool as copied regions or reads them through
+tiles, and returns what the kernel asked for. No kernel computes a region,
+assembles a region pyramid or touches a photograph tile:
+
+| Entry point | What the kernel passes | What it returns | Kernels |
+|-------------|------------------------|-----------------|---------|
+| `render_source_tile`, `render_source_tile_with_grad_into` | a warp map and a sampler | the rendered tile, and its gradients | every render through the general rules |
+| `render_source_affine` | the view selection's affine map, its level, the support's grid pixels and the sampler | the support's raw samples, by today's `sample_support_affine` or `sample_support_affine_aniso`, whose arithmetic moves behind it unchanged | the view selection's affine fast path |
+| `sample_source_grid` | a cluster grid's affine map and the grid points it reads (a window of the grid, or the support's pixels) with the edge rule | the raw samples, by today's `sample_grid_window` and `build_template` sampling, whose arithmetic moves behind it unchanged | the cluster refinement's grid samplers, `sample_member_grid` |
+| `read_source_samples` | a level, positions on it, and a border of 0 or 1 | for each position, the `(2 + 2 · border)²` pixels from `floor(x − 0.5) − border` and `floor(y − 0.5) − border`, each address clamped to the level as `bilinear_geometry` and `sobel_gradient` clamp it, with `bilinear_geometry`'s fractions | the grown plane's value and Sobel reads |
+| `read_source_rect` | a level and a rectangle of it that the kernel's own arithmetic defines | the rectangle's pixels, reserved from the pool and copied whether or not the reservation succeeds | the cluster refinement's `LevelTile`, the grey reads of *Find Nearby Tracks* |
+| `clipped_share` | the outline | the share of level-0 pixel centres inside it, walking the level-0 tiles under the outline one at a time | the reference view's tile readings |
+
+`required_regions` and `LevelRegions::for_samples` (§ "Which samples a render
+takes") are the entry points' own: the entry points call them, and so do the
+panels, which assemble regions from peeked tiles on the GUI thread
+(§ "Bounding a render's memory"); no kernel calls them. The two rectangle
+reads take a rectangle rather than positions because the rectangle is the
+algorithm's: a `LevelTile`'s scores depend on its corner and its mean, and
+the grey read's blur on how far past its samples it reads. The entry point
+still decides how the rectangle is read. The unchanged `render_tile`
+samples a region pyramid already assembled, for the panels and the tests.
+The entry points return `Result<_, PhotographReadError>`, since a tiled read can find its
 files changed, gone stale or unreadable, and the
 kernels pass the error up with `?` through their loops, the parallel ones
 included; the main draft's § "Errors from reading pixels" lists the
@@ -528,9 +558,10 @@ So a render samples one of two ways, and both give the same values:
   and the view selection's affine fast path in
   [view_selection.rs](../../crates/sfmtool-core/src/patch/view_selection.rs)
   are their own arithmetic (in `f64` for the cluster grids), not those
-  samplers, so each gets a tile-addressed version of its own that reads its
-  taps through the same tile lookup and keeps its own arithmetic, so its
-  values are unchanged.
+  samplers. Their sampling moves unchanged behind their entry points,
+  `sample_source_grid` and `render_source_affine`, and each has a
+  tile-addressed version there that reads its taps through the same tile
+  lookup and keeps its own arithmetic, so its values are unchanged.
 
 The bound has two parts. **Copied regions** are bounded by the kernel call's pool,
 99 MB on 32 threads, whatever the number of patches in progress. **Pinned
@@ -630,13 +661,16 @@ there is no whole pyramid for any reader to fall back on.
    `ImageU8Pyramid::from_regions`, the origin subtraction in every sampler and
    gradient sampler (the AVX2 anisotropic kernel included), the
    tile-addressed path with its window of pinned tiles for the `remap.rs`
-   samplers and tile-addressed versions of `sample_grid_window`,
-   `build_template` and the view selection's affine fast path, the call's
-   region pool that chooses between the paths, the `render_source_*` entry
-   points returning `PhotographReadError`, `required_regions` for each
-   sampler, `LevelRegions::for_samples` with the tile-addressed read of a
-   tap pair and of a 4 x 4 window at given positions, and
-   `TiledPhotograph::layout` and `channels`. Tests: for
+   samplers, the call's region pool that chooses between the paths, and the
+   render entry points of § "Where the pixels come from", each returning
+   `PhotographReadError`: `render_source_tile` and its gradient form;
+   `render_source_affine` and `sample_source_grid`, with the sampling of
+   the affine fast path, `sample_grid_window` and `build_template` moved
+   behind them unchanged and a tile-addressed version of each;
+   `read_source_samples`, with the tile-addressed read of a tap pair and of a
+   4 x 4 window; `read_source_rect`. Behind them, `required_regions` for each
+   sampler and `LevelRegions::for_samples`, which only the entry points and
+   the panels call. Also `TiledPhotograph::layout` and `channels`. Tests: for
    random warps over a synthetic photograph, every sampler, every value and
    gradient render through a region pyramid built from `required_regions`, and
    through the tile-addressed path with a tile of 32 px, is bit-identical to
@@ -645,8 +679,10 @@ there is no whole pyramid for any reader to fall back on.
    100 times on a diagonal and a `Bilinear` render over a large footprint
    (which take the tile path); the cluster grid samplers and the affine fast
    path through tiles equal their whole-level results on stretched maps;
-   reads at given positions through `for_samples` regions and through tiles
-   equal `sample_bilinear_u8` and `sobel_gradient` on the whole level; a
+   the value blended and the Sobel gradient computed from
+   `read_source_samples`' windows, through copied regions and through tiles,
+   equal `sample_bilinear_u8` and `sobel_gradient` on the whole level;
+   `read_source_rect` returns the rectangle's pixels through both paths; a
    kernel call whose regions exceed its pool (sized small for the test) never holds
    more than the pool, each render reserving its required regions grown by
    `REGION_REUSE_MARGIN`, the renders past it taking the tile path, including
@@ -655,7 +691,7 @@ there is no whole pyramid for any reader to fall back on.
    region one pixel smaller on an inner edge makes the comparison fail, so
    the test can fail.
 2. **View-region pyramids assembled from a `TiledPhotograph`'s tiles**,
-   with the reuse margin, and `clipped_share` over tiles, on photographs cut
+   with the reuse margin, and `clipped_share` as an entry point over tiles, on photographs cut
    into tiles in memory (`from_image` and `from_pyramid`); the cache's
    `view_region_pyramid` comes with the main draft's step 13. Tests: the assembled regions equal the whole pyramid's pixels;
    `clipped_share` over tiles equals it over the whole level 0, for outlines
@@ -675,15 +711,18 @@ there is no whole pyramid for any reader to fall back on.
    drawn tiles and hover contexts of a synthetic track at both stages equal
    the whole-pyramid ones, and the crop test of that section.
 4. **The bench's jobs and the reference picks**: `ViewSources` hands the
-   kernels a tiled source and each render asks for its regions; `clipped_share`
-   reads a level-0 region; each bench step and each reference pick makes one
+   kernels a tiled source, and every read goes through the render entry
+   points, which work out its regions; each bench step and each reference pick makes one
    region pool for its kernel call and passes it in, the picks for every
    `render_reference` call over the views their per-view `get`s fetched.
    Every kernel these steps run moves here, with every kernel that calls
    one of them, since a kernel passes its caller's pool down: the normal
    kernels the bench's normal steps run and `refine_normals`, the grown
-   plane's own sampler, the cluster refinement that the bench's evaluation
-   of a cluster-stage track runs, with `LevelTile` copied from tiles, and the
+   plane's reads through `read_source_samples`, the cluster refinement that
+   the bench's evaluation of a cluster-stage track runs, with its grid
+   samplers through `sample_source_grid` and `LevelTile` through
+   `read_source_rect`, the view selection's affine fast path through
+   `render_source_affine`, and the
    stored bitmap's, `refit_points`' and the display bitmaps' kernels. A
    caller that step 5 moves keeps its fetch until then: it wraps the whole
    pyramids it holds with `from_pyramid` (or the cluster-patches build its
