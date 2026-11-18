@@ -141,12 +141,16 @@ fn rgba_of(level: &ImageU8) -> Vec<u8> {
     match level.channels() {
         4 => data.to_vec(),
         3 => data
-            .chunks_exact(3)
-            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|&[r, g, b]| [r, g, b, 255])
             .collect(),
         2 => data
-            .chunks_exact(2)
-            .flat_map(|p| [p[0], p[0], p[0], p[1]])
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .flat_map(|&[g, a]| [g, g, g, a])
             .collect(),
         _ => data.iter().flat_map(|&g| [g, g, g, 255]).collect(),
     }
