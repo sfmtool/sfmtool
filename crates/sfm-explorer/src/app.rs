@@ -850,8 +850,23 @@ impl App {
                     // pose -- is turned by the model matrix instead of rebuilt.
                     let transform = crate::camera_lock::background_transform(&self.viewer_3d, node)
                         .unwrap_or_else(|| node.transform().clone());
+                    // The photograph comes from the photograph cache, decoded
+                    // on the rayon pool on a miss, never on this thread.
+                    let (photographs, requests, ctx) = (
+                        &self.state.photographs,
+                        &self.state.photograph_requests,
+                        &self.egui_ctx,
+                    );
                     self.scene_renderer
-                        .upload_bg_image(device, queue, node.recon(), image);
+                        .upload_bg_image(device, queue, node.recon(), image, || {
+                            crate::state::display_photograph(
+                                photographs,
+                                requests,
+                                node.recon(),
+                                image.index(),
+                                ctx,
+                            )
+                        });
                     Some(transform)
                 }
                 None => {

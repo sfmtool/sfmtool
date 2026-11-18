@@ -303,11 +303,11 @@ Pass 1c (image quads); Passes 1b and 1c write color, hardware depth, `0.0`
 linear depth and a pick ID.
 
 Pass 0 only runs when in camera view mode. It renders the selected camera's
-full-resolution photograph into `edl_output_view`, cleared to `BG_COLOR` so
+photograph into `edl_output_view`, cleared to `BG_COLOR` so
 that letterbox/pillarbox bars match the normal background. The EDL pass then
 uses `LoadOp::Load` (instead of `Clear`) to preserve this background, and
 `discard`s empty pixels so the image shows through. See
-[Full-resolution image background](#full-resolution-image-background) for
+[Photograph background](#photograph-background) for
 details.
 
 ---
@@ -573,13 +573,15 @@ length_scale / frustum_size_multiplier changes (same as frustum wireframes).
 
 ---
 
-## Full-Resolution Image Loading
+## Background Photograph Loading
 
-`upload_bg_image()` loads the selected camera's full-resolution image
-synchronously, decoding from disk and creating the GPU texture in one call, and
-`clear_bg_image()` releases it on leaving camera view. Exactly one full-res
-texture is resident at a time; there is no cache, no prefetch and no background
-decode — see [Non-goals](#non-goals).
+`upload_bg_image()` draws the viewed camera's photograph from one level of its
+pyramid, the coarsest that covers the viewport within the GPU's texture limit.
+The pixels come from the viewer's photograph cache, decoded on the rayon pool
+on a miss, never on the GUI thread, and `clear_bg_image()` releases the texture
+on leaving camera view. Exactly one background texture is resident at a time;
+there is no prefetch — see [Photograph background](#photograph-background) and
+[Non-goals](#non-goals).
 
 ---
 
@@ -686,50 +688,91 @@ constraining axis and has bars on the other. 3D geometry aligns with the
 photograph because the FOVs match on the fitted axis and the projection
 is correct on both axes.
 
-### Full-resolution image background
+### Photograph background
 
-The selected camera's photograph is drawn as a full-resolution textured quad
-behind the 3D scene. The quad is positioned and sized so that it exactly fills
-the image's portion of the viewport (the area inside the letterbox/pillarbox
-bars). This requires loading the image at full resolution (not the 128×128
-thumbnail used for frustum far-plane textures).
+The selected camera's photograph is drawn as a textured mesh behind the 3D
+scene, laid along the rays of the image's pixels, so that it fills the image's
+portion of the viewport (the area inside the letterbox/pillarbox bars). The
+texture is one level of the photograph's pyramid, chosen for the viewport, not
+the 128×128 thumbnail used for frustum far-plane textures.
 
 #### Image loading
 
-`upload_bg_image()` on `SceneRenderer` handles full-resolution image loading.
-Only one full-res image is loaded at a time (the viewed camera). The loader
-is synchronous — it decodes the image from disk and creates the GPU texture
-in the same frame. This is simple and works well for typical image sizes; on a
-very large image the decode is visible as a stalled frame, which is the cost of
-having no async path (see [Non-goals](#non-goals)).
+`upload_bg_image()` on `SceneRenderer`
+([bg_image.rs](../../crates/sfm-explorer/src/scene_renderer/upload/bg_image.rs))
+holds one photograph level at a time, the viewed camera's. It takes the pixels
+from a closure the app passes, `state::display_photograph` over the viewer's
+photograph cache
+([photograph-cache.md](../core/camera/photograph-cache.md) § "In the viewer"),
+which looks in the cache and on a miss starts the decode on the rayon pool and
+asks for a repaint when it lands. The decode is the cache's `ImageU8::read_rgb`
+(the file's contents choose the decoder and the EXIF orientation is ignored, as
+in [reading-and-writing-images.md](../core/camera/reading-and-writing-images.md))
+and its pyramid of `ImageU8Pyramid::full_levels` levels, so nothing is decoded
+on the GUI thread and the background shares its pixels with Image Detail. The
+whole photograph is still decoded to make the level; assembling the level from
+photograph tiles instead is proposed in
+[out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md)
+§ "The 3D view's camera-view background".
 
 The loader state:
 
 ```
-bg_image_texture: Option<Texture>       // GPU texture with full-res image
-bg_image_loaded: Option<ImageRef>       // which image is loaded
-bg_image_mesh_key: Option<BgMeshKey>    // what the mesh was built from
+bg_image_texture: Option<Texture>          // one level of one photograph
+bg_image_loaded: Option<LoadedBgLevel>     // its image, its level, and the
+                                           // sizes of every level
+bg_image_mesh_key: Option<BgMeshKey>       // what the mesh was built from
 ```
 
-When viewing camera N:
-- If `bg_image_loaded` already names this image: texture is loaded, skip
-- Otherwise: load from disk, decode to RGBA with `ImageU8::read_rgba` (the
-  file's contents choose the decoder and the EXIF orientation is ignored, as
-  in [reading-and-writing-images.md](../core/camera/reading-and-writing-images.md)),
-  create GPU texture at full resolution, rebuild bind group
-- Then, if `bg_image_mesh_key` does not hold this image with its intrinsics
-  (its camera with its intrinsic adjustment applied) and its camera-to-world
-  rotation, rebuild the mesh (below) and the key. The photograph depends on the
-  image alone and the mesh on all three, so a version that changes an image's
-  camera, its intrinsic adjustment (a bundle adjustment that releases it per
-  image writes one) or its pose redraws the photograph where its rays now point,
-  without decoding it again.
+**Which level** (`background_level`). The coarsest level whose longer side is
+still at least the viewport's longer side in physical pixels (the renderer's
+`current_size`), but no finer than the first level whose longer side fits the
+device's `max_texture_dimension_2d`. The viewer asks for
+`wgpu::Limits::default()`, whose limit is 8192, so a 16320 x 12240 photograph
+is drawn from level 2 (4080 x 3060) in a 3840 px viewport and from level 3
+(2040 x 1530) in a 1920 px one, and never from a texture wider than 8192.
+A photograph shorter than the viewport is drawn from level 0. A pyramid with no
+level inside the limit, which only a photograph a pixel or two tall can have,
+draws nothing.
+
+When viewing camera N, each frame:
+- If `bg_image_loaded` holds this image at the level the rule gives for the
+  current viewport, the texture is kept and the photograph is not asked for.
+  The level is chosen from the stored level sizes, so a resize that does not
+  change the level asks for nothing, and one that does asks the cache again.
+- Otherwise the photograph is asked for:
+  - **Decoded**: the chosen level is copied into a new `Rgba8UnormSrgb`
+    texture of its size, RGB to RGBA with alpha 255 (the pipeline draws with
+    no blending, so the alpha has no visible effect), and the bind group is
+    rebuilt. This copy, of at most about four times the viewport's pixels, is
+    the only work on the GUI thread.
+  - **Decoding**: the texture keeps what it holds, so on a camera switch or
+    while the Image Browser animates, the previous image's photograph stays on
+    its own mesh until the next one lands; a background of another node is
+    cleared, since the frame's node transform is not its node's. Before any
+    photograph has landed, nothing is drawn.
+  - **Unreadable**: nothing is drawn. The photograph cache remembers the
+    failure, so later frames ask again without reading the file.
+- Then, if `bg_image_mesh_key` does not hold the loaded image with its
+  intrinsics (its camera with its intrinsic adjustment applied), its
+  camera-to-world rotation and the level's texture-coordinate scale, rebuild
+  the mesh (below) and the key. The photograph depends on the image alone and
+  the mesh on all four, so a version that changes an image's camera, its
+  intrinsic adjustment (a bundle adjustment that releases it per image writes
+  one) or its pose redraws the photograph where its rays now point, without
+  asking for it again.
+
+**Texture coordinates** (`level_uv_scale`). Each halving drops an odd last
+column or row, so level `l`, of `w_l` x `h_l`, covers only the level-0 columns
+`0` to `w_l·2^l` and rows `0` to `h_l·2^l`. The mesh's texture coordinates,
+0 to 1 across the photograph, are multiplied by `width / (w_l·2^l)` and
+`height / (h_l·2^l)`, so each level-0 pixel lands on the texel that covers it
+and the dropped columns and rows, fewer than `2^l`, fall past the texture's
+edge, where the sampler clamps, instead of the level being stretched over them.
 
 When exiting camera view: `clear_bg_image()` releases the texture and bind
-group. (Future enhancement: retain the texture for faster re-entry.)
-
-The GPU texture is sized to the actual image dimensions — no power-of-2
-padding required on modern GPUs.
+group. Re-entering finds the photograph in the cache, if the budget kept it,
+and copies its level again.
 
 #### Rendering the background image
 
@@ -742,11 +785,12 @@ rendered.
 - Target: `edl_output_view`
 - Clear: `BG_COLOR` (the standard dark background — fills the letterbox/
   pillarbox bars)
-- Draw: a quad textured with the full-res image (or thumbnail placeholder),
-  positioned to cover exactly the image's NDC region
+- Draw: the background mesh (below) textured with the photograph's chosen
+  level. The pass is skipped while no photograph has landed (there is no bind
+  group), and the EDL pass then clears to `BG_COLOR` as outside camera view
 - No depth test, no depth write — this pass only touches `edl_output_view`
-- Uses a simple shader: vertex positions the quad in NDC, fragment samples
-  the image texture
+- Uses a simple shader: the vertex stage projects the mesh's ray directions,
+  the fragment stage samples the texture
 
 **EDL pass:**
 - When `camera_view` is active: `LoadOp::Load` (preserves the background
@@ -1796,11 +1840,13 @@ mode.
   legible only from the image texture on its far plane; see the
   [GPU data layout](#gpu-data-layout-for-frustum-wireframes) open question for
   what an indicator would cost in the per-edge vertex format.
-- **Thumbnail loading is synchronous**, on the upload path, and so is the
-  full-resolution background image (`upload_bg_image()`). There is no background
-  decode thread, no LRU texture cache with a memory budget, no speculative load
-  of the cameras near the selected one, and no thumbnail-to-full-res swap when a
-  load completes. A large reconstruction pays the decode cost at load time.
+- **Thumbnail loading is synchronous**, on the upload path. There is no
+  background decode thread for thumbnails, no LRU texture cache with a memory
+  budget, and a large reconstruction pays the decode cost at load time. The
+  background photograph is decoded off the GUI thread through the photograph
+  cache ([Photograph background](#photograph-background)), but nothing loads
+  the photographs of the cameras near the selected one ahead of time, and no
+  thumbnail stands in while it loads.
 - **No `FULL_OPENCV` (rational radial) distortion model** in the frustum and
   background meshes.
 - **Textures are uncompressed `Rgba8`.** BC7/ASTC would cut the thumbnail atlas
@@ -1825,7 +1871,7 @@ mode.
 | Pick buffer (R32Uint, 1920×1080) | 8.3 MB |
 | Readback staging buffers (2 × 256 × 5 bytes) | 2.5 KB |
 | Thumbnail texture array atlas (128×128 RGBA × 10K cameras) | 625 MB (across multiple pages if needed) |
-| Full-res background image (e.g. 4624×3472 RGBA) | ~61 MB |
+| Background texture: one level, at most about four times the viewport's pixels (level 2 of a 16320×12240 photograph, 4080×3060 RGBA, for a 3840 px viewport) | ~50 MB |
 | Background uniform buffer (view_proj mat4) | 64 bytes |
 
 † Fisheye cameras at 10K scale are unlikely in practice — fisheye is

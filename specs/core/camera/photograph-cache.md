@@ -256,6 +256,13 @@ reconstruction's photographs goes through it except the ones under
   ([track-view.md](../../gui/track-view.md),
   [multi-panel-image-browser.md](../../gui/multi-panel-image-browser.md)).
 
+- **The 3D view's camera-view background** takes its pixels through
+  `display_photograph` too, and only when the level it wants is not the one
+  its texture holds. It copies one level of the pyramid into its texture, the
+  coarsest that covers the viewport within the GPU's texture limit, and keeps
+  the level sizes, so a resize chooses the level again without the pyramid
+  ([camera-views.md](../../gui/camera-views.md) § "Photograph background").
+
 Because the key is a path, the cache is not touched when an edit renumbers a
 node's images, and it is not cleared when a node or the whole scene is closed:
 reopening the same file reuses the pixels, and the budget bounds the memory
@@ -329,7 +336,10 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   (a second open reads the photographs from the cache),
   [state/photograph_requests/tests.rs](../../../crates/sfm-explorer/src/state/photograph_requests/tests.rs)
   (a panel's miss is decoded off the calling thread, an unreadable file ends as
-  unreadable, a budget of 0 decodes on the calling thread), and
+  unreadable, a budget of 0 decodes on the calling thread),
+  [scene_renderer/upload/tests.rs](../../../crates/sfm-explorer/src/scene_renderer/upload/tests.rs)
+  (the camera-view background's photograph decoded off the calling thread and
+  drawn once it lands, an unreadable one read once), and
   [scene_graph/tests.rs](../../../crates/sfm-explorer/src/scene_graph/tests.rs)
   (closing everything keeps the photographs).
 
@@ -337,9 +347,8 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 
 - **Cluster patches** keeps its own reads. It builds the same full-depth
   pyramids, and it runs once per index build.
-- **Display thumbnails and the 3D view's background image** keep their own
-  decodes. The first make small images once per open; the second is a GPU
-  texture the renderer caches.
+- **Display thumbnails** keep their own decodes. They make small images once
+  per open.
 - **No cache on disk.** Pyramids are rebuilt from the JPEGs in each session,
   and every pyramid is held whole. Photograph tiles for every photograph, in
   place of whole pyramids, and stored reduced levels for large ones are

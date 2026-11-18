@@ -39,7 +39,9 @@ fields), and
 object, and the mipmap directory in § "Workspace Directory Layout"), and
 [gui/background-tasks.md](../gui/background-tasks.md) (the quiet task *Build
 mipmaps*: a row in its operations table and a fifth quiet operation in
-§ "Quiet tasks"). Each links back here.
+§ "Quiet tasks"), and
+[gui/camera-views.md](../gui/camera-views.md) § "Photograph background" (the
+level assembled from photograph tiles). Each links back here.
 
 SfM Explorer shows a photograph, and the patch kernels sample it, through one
 image pyramid per photograph: the photograph and successively halved copies of
@@ -1488,7 +1490,16 @@ The panel stops making a texture of the photograph and draws photograph tiles:
 
 ### The 3D view's camera-view background
 
-The background becomes one texture of one level, made off the GUI thread:
+The background becomes one texture of one level, made off the GUI thread.
+Built (step 3) from the level of the cache's whole in-memory pyramid, asked
+for with `display_photograph`, as
+[gui/camera-views.md](../gui/camera-views.md) § "Photograph background"
+describes; the level rule, the texture coordinates, the alpha and the
+remembered failure are as below. Until a photograph lands, the previous
+image's photograph stays on its own mesh (nothing is drawn before any has
+landed), since there is no coarsest level to draw before the tiled cache.
+Step 13 swaps the source for `get_level`, inside the closure the app passes to
+`upload_bg_image` and its `Decoded` answer:
 
 - **Level.** The coarsest level whose longer side is still at least the
   viewport's longer side in physical pixels, but no finer than the first level
@@ -2121,9 +2132,11 @@ in core. Step 17 turns the tier on.
    coarser level where a tile is missing; the test data's photographs look as
    they did.
 3. **The 3D background** from one level by the viewport and the limit, off the
-   GUI thread, through the cache, with a remembered failure. Ends the crash in
-   camera view. Tests: the level rule; the texture coordinates' scale for odd
-   sizes; an unreadable photograph is read once.
+   GUI thread, through the cache, with a remembered failure. Built: the level
+   comes from the cache's in-memory pyramid through `display_photograph`, never
+   decoded on the GUI thread, and no texture exceeds the limit, which ends the
+   crash in camera view; specified in
+   [gui/camera-views.md](../gui/camera-views.md) § "Photograph background".
 4. **Image readings at save, bounded.** `gather_image_readings` decodes the
    photographs that have no `.sift` row in an `into_par_iter` over every image,
    so at 200 MP each rayon thread holds a 571 MiB decode and its grey copy at
