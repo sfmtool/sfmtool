@@ -824,10 +824,14 @@ current file counts as done) covers it if it does not.
 
 ### Keeping the mipmap directory out of the way
 
-- On creating `.sfm-mipmaps/`, the writer puts in it a `.gitignore` holding `*`
-  and a `CACHEDIR.TAG` with the standard signature line
-  (`Signature: 8a477f597d28d172789f06886806bc55`), which backup tools skip.
-  No `.gitignore` of the user's is edited.
+- On creating `.sfm-mipmaps/`, the writer puts in it a `CACHEDIR.TAG` with
+  the standard signature line
+  (`Signature: 8a477f597d28d172789f06886806bc55`), the marker backup tools
+  honour by skipping the directory.
+- **No `.gitignore`.** sfmtool writes no `.gitignore` and edits none: whether
+  to keep the mip level files out of git is the user's choice. A user who
+  keeps the workspace in git and wants them ignored adds the line
+  `.sfm-mipmaps/` to the workspace's own `.gitignore`.
 - **Image discovery must skip it.** `expand_paths` in
   [_filenames.py](../../src/sfmtool/_filenames.py) expands a directory with
   `rglob("*")`, so `sfm sift --extract .` at a workspace root, or a `solve` or
@@ -2030,9 +2034,10 @@ wrote the object by hand, reaches. Step 15 turns the tier on.
    `MipmapOptions` and `read_mipmap_options` with their validation (but not
    yet `sfm ws init` writing the object), `build_mipmaps` with `-mip0`,
    `MipLevelFile::open` and `decode`, the staleness test, the writers' rules,
-   `.gitignore` and `CACHEDIR.TAG`. Tests on 300 x 200 synthetic photographs
+   and `CACHEDIR.TAG`. Tests on 300 x 200 synthetic photographs
    in a temporary workspace whose `mipmap_options` sets a threshold of 64,
-   with a tile of 32: the names for `IMG_0001.JPG` (`IMG_0001.JPG-mip1-q95.jpg`,
+   with a tile of 32: a first build creates `.sfm-mipmaps/CACHEDIR.TAG` and
+   no `.gitignore` anywhere in the workspace; the names for `IMG_0001.JPG` (`IMG_0001.JPG-mip1-q95.jpg`,
    case kept), `a.b.png` and a name with no extension, the names of `x.jpg`
    beside `x.png` differing; a mip level file whose
    record names another path is stale; one whose `source` differs from the
