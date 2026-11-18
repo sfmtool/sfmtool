@@ -804,9 +804,11 @@ A view renders with `Anisotropic` when **`σ_major ≥ √2` and `L ≥ a`**, an
 The rule was compared against `BilinearMip` everywhere on eleven samples, with
 a measurement harness that was written for this comparison and is not in the
 repository: up to 400 points per sample, all their views, and 40 tracks of
-each on the bench. The bench's pyramids then had six levels; they now have
-`full_levels`, which changes a `BilinearMip` render only where a view shrinks
-the photograph more than about 45 times (`σ_major ≥ 2^5.5`). Two samples are in the repository, the seoul_bull and
+each on the bench. The bench read pyramids of six levels for these
+measurements. A pyramid of `full_levels` depth renders the same views except
+where one shrinks the photograph past level 5: `BilinearMip` where
+`σ_major ≥ 2^5.5`, about 45, and `Anisotropic` where `σ_minor > 32`. Two
+samples are in the repository, the seoul_bull and
 kerry_park ground truths in `test-data/images/`. The other nine are local
 datasets that are not: a seed reconstruction of dino_dog_toy, two museum
 captures (masks, a tree stump exhibit), a gallery sculpture, a mossy railing,
