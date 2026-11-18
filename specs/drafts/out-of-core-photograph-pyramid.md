@@ -25,7 +25,7 @@ requires: without it no kernel can read a large photograph within a bounded
 memory, so it is a numbered step here (§ "Implementation steps"), not a later
 optimization. The user has decided every open question of this draft
 (§ "Open questions", 1 to 13); of the companion draft's six, the user has
-decided questions 1, 2 and 6, and questions 3 to 5 remain open.
+decided questions 1, 2, 3 and 6, and questions 4 and 5 remain open.
 
 Amends [core/camera/photograph-cache.md](../core/camera/photograph-cache.md)
 (the cache hands out photograph tiles for every photograph instead of whole
@@ -1028,8 +1028,9 @@ smaller photographs (estimated from the 85 `dino_dog_toy` decodes at 2040 x
 1536 taking 0.9 s from one thread, plus the reduction), and 0.8 to 1.7 s for a
 200-megapixel photograph in a workspace without `mipmap_options`. The budget
 and the bulk kernels' point order keep this rare: bulk kernels take their
-renders grouped by reference image and position (the companion draft's
-§ "Bulk kernels" and its open question 3), so the renders of one photograph
+points by the image of their reference observation, then by that
+keypoint's row and column (the companion draft's § "Memory" and its open
+question 3), so the renders of one photograph
 follow each other while its tiles are cached. Each whole decode reserves its
 estimated bytes on the build count (below) like a build, so the decodes in
 progress are bounded with the builds.
@@ -1322,9 +1323,8 @@ costs 2.3 to 6 ms per tile it touches out of core, one to four per level it
 reads, and a whole decode of an in-core photograph whose tiles were evicted
 (about 0.05 s at 3840 x 2160). A bulk kernel whose tiles do not fit the
 budget decodes some tiles, or some in-core photographs, more than once; it
-takes its renders in an order that keeps them together (grouped by image and
-position where the kernel's structure allows, § "Bulk kernels" in the
-companion draft), and its phase notes report the tiles decoded and reused and
+takes its points by reference image, then by the reference keypoint's row
+and column (§ "Memory" in the companion draft), and its phase notes report the tiles decoded and reused and
 the whole decodes, so a run that decodes far more than once per photograph
 shows it.
 

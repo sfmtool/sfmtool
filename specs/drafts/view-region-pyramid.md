@@ -12,7 +12,7 @@ regions, is separate from the files and caches the main draft specifies; its
 steps 1 and 2 are step 7 of the main draft, and its steps 3 to 6 are the main
 draft's steps 9 to 12. The main draft's step 8, between them, limits the
 cluster members' elongation (§ "The members' elongation limit"). Open:
-questions 3 to 5 at the end. It amends
+questions 4 and 5 at the end. It amends
 [core/camera/photograph-cache.md](../core/camera/photograph-cache.md) and the
 samplers of [core/camera/image-warping.md](../core/camera/image-warping.md).
 
@@ -601,9 +601,15 @@ makes a mipmap.
   photograph's decode, which is dropped once cut, so no photograph's level 0
   stays whole.
   The order a kernel takes its renders in decides how often a tile is decoded
-  again: rendering points grouped by their reference image and position keeps
-  the tiles each group needs together, and each kernel's phase note reports
-  the tiles decoded and reused.
+  again. **A bulk kernel takes its points in one order**: by the image of
+  each point's reference observation, then by that observation's keypoint,
+  its pixel row `floor(y)` and then its `x`, with ties broken by point
+  index; the points with no reference observation come last, by point
+  index. The renders of one photograph then follow each other, and so do
+  those of points near each other in it and, through the surface, near each
+  other in the views that also see them. The order uses only the
+  reconstruction, so it does not depend on how photographs are cut into
+  tiles. Each kernel's phase note reports the tiles decoded and reused.
 - **`GreyImages`** today holds a blurred `f32` grey copy of each view's
   level 0, 800 MB for a 200-megapixel view. With regions it holds a few
   kilobytes per read.
@@ -693,9 +699,15 @@ there is no whole pyramid for any reader to fall back on.
    `REGION_REUSE_MARGIN`.
 5. **Bulk kernels**: the display patch bitmaps, the conversion to embedded
    patches, the web export, *Refine all normals*, *Refit all points* and the
-   cluster-patches build fetch tiled photographs, each with a point order
-   that keeps tile locality. Tests: identical results; a cache budget smaller
-   than one photograph's level 0 still completes; with a small pool, the
+   cluster-patches build fetch tiled photographs, each taking its points in
+   the order § "Memory" gives (by reference image, then the keypoint's row
+   and column). Tests: identical results; a cache budget smaller than one
+   photograph's level 0 still completes; with a budget smaller than the
+   reconstruction's tiles but holding the tiles of every photograph one
+   reference image's points are seen in, each in-core photograph is decoded
+   at most once in the read phase and once more for each reference image
+   whose points it sees, and the same points in shuffled order decode more,
+   so the test can fail; with a small pool, the
    regions of all the points in progress together never exceed the one pool
    the caller made.
 6. **`GreyImages` by region.** Tests: the nearby-track search's results are
@@ -714,11 +726,10 @@ there is no whole pyramid for any reader to fall back on.
    each side, `REGION_REUSE_MARGIN = 0.25`, as
    [§ "Where the pixels come from"](#where-the-pixels-come-from) defines it
    under "Reuse across renders".
-3. **The point order of bulk kernels.** Grouped by reference image and
-   position (as designed), or by tile. Recommendation: by reference image and
-   position, which needs no knowledge of the tile grid in the kernel, and
-   keeps an in-core photograph's tiles cached while its renders run, so it is
-   rarely decoded twice.
+3. **The point order of bulk kernels.** *Decided by the user:* grouped by
+   reference image and then by the reference keypoint's row and column, not
+   by tile, because a point order that does not depend on how photographs
+   are cut into tiles is better (§ "Memory").
 4. **The pool and the tile window.** Four tiles of copied regions per rayon
    thread, shared by the kernel call, and 16 pinned tiles per render on the tile
    path (as designed), or other values; or capping the patches in progress at
