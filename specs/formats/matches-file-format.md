@@ -340,10 +340,10 @@ the rule of the `.sfmr` format's
 [`images/names.json.zst`](sfmr-file-format.md#imagesnamesjsonzst). The writer
 refuses a value, and the readers (`read_matches_image_names` among them) and
 the verifier a file, that holds anything else, with an error naming the entry's
-index and the entry. `read_matches_image_names_unchecked` reads this entry alone
-and returns it as it is, with no rule applied: it does not read the file, and
-is for finding which folders a file whose names break the rule names, as the
-workspace upgrade does to keep them; nothing converts or writes a file from
+index and the entry. `read_matches_image_names_unchecked` returns this entry as
+it is stored, with no rule applied and no other entry read. The workspace
+upgrade calls it when the readers refuse a file's names, to find the folders
+those names point into and keep them; nothing converts or writes a file from
 what it returns.
 
 ```json
