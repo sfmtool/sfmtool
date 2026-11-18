@@ -253,7 +253,7 @@ The evaluation has no tile path, since it must stay bit-identical and its
 AVX2 form agrees with the scalar one only to about `1e-4`. So a `LevelTile`
 reserves its bytes from the kernel call's region pool and is built whether
 or not the reservation succeeds; the members' elongation limit below bounds
-it (open question 6).
+each of its requests (open question 6).
 
 ### The members' elongation limit
 
@@ -261,7 +261,7 @@ The **elongation** of a member's affine shape, or of an evaluation's map, is
 the ratio of its larger singular value to its smaller, `s_max / s_min`, from
 the closed form `level_for_map` already uses (`s_max = q + r`,
 `s_min = |q − r|`); the map is the shape scaled by the grid's step, so the
-two have the same elongation. `MAX_MEMBER_ELONGATION` in
+two have the same elongation. `MAX_PATCH_ELONGATION` in
 `patch/cluster_refine/params.rs`, `MAX_ANISOTROPY as f64` (16), bounds it:
 
 - **At validation**, beside the determinant test, a member whose detected
@@ -287,7 +287,7 @@ memory bound below rests on it and a setting would let a caller remove the
 bound; tying it to `MAX_ANISOTROPY` keeps one number for how stretched a
 footprint the tree reads. A member past it keeps the status `not_evaluated`
 (the `.matches` format's description of that status gains "or an affine
-shape elongated past `MAX_MEMBER_ELONGATION`") rather than a status of its
+shape elongated past `MAX_PATCH_ELONGATION`") rather than a status of its
 own, since a new status is a new `.matches` version and a reader does nothing
 different with it. The reason is stated where the members are counted:
 `ClusterRefineResult` counts the members refused for their elongation and
@@ -296,21 +296,15 @@ summary, the viewer's cluster-patches build and the bench's evaluation of a
 cluster-stage track print how many of their `not_evaluated` members were
 elongated past the limit.
 
-**The bound on a `LevelTile`.** With the level from `s_min`, the map's
-singular values at its level are `s_min / 2^l` under 2 and `s_max / 2^l`
-under `2 · MAX_MEMBER_ELONGATION`, so their sum is under 34 (also at level 0,
-where `s_min` is under 2). The affine image of the `R x R` grid spans `W`
-by `H` pixels with `W + H ≤ 2 (R − 1)(s_max + s_min) / 2^l`, so
-`W · H ≤ ((R − 1)(s_max + s_min) / 2^l)²`; `grid_bbox`'s flooring, ceiling
-and 2 px add at most 6 px to the width and to the height and `TILE_MARGIN`
-16 more, so one
-evaluation's rectangle holds at most `((R − 1) · 34 + 22)²` pixels. The
-rectangle a `TileCache` holds is the union of the requests made at that
-level, which the cascade's travel could widen without bound, so the same step
-caps it: a rebuild whose grown union would hold more than
-`((R − 1) · 34 + 22)²` pixels is built from the request alone, widened by
-`TILE_MARGIN` and clipped. A `LevelTile` then holds at most that many pixels,
-12 bytes each for RGB:
+**The bound on a `LevelTile`'s request.** With the level from `s_min`, the
+map's singular values at its level are `s_min / 2^l` under 2 and
+`s_max / 2^l` under `2 · MAX_PATCH_ELONGATION`, so their sum is under 34
+(also at level 0, where `s_min` is under 2). The affine image of the `R x R`
+grid spans `W` by `H` pixels with `W + H ≤ 2 (R − 1)(s_max + s_min) / 2^l`,
+so `W · H ≤ ((R − 1)(s_max + s_min) / 2^l)²`; `grid_bbox`'s flooring,
+ceiling and 2 px add at most 6 px to the width and to the height and
+`TILE_MARGIN` 16 more, so one evaluation's request holds at most
+`((R − 1) · 34 + 22)²` pixels, 12 bytes each for RGB:
 
 | Resolution `R` | A member near a similarity | A member at the limit |
 |----------------|----------------------------|-----------------------|
@@ -319,22 +313,33 @@ caps it: a rebuild whose grown union would hold more than
 | 64 | about 148 px a side, 263 KB | 2164² pixels, 56 MB |
 
 A level so coarse that the grid reaches past it is clipped to it, and the top
-levels are a few pixels. A member holds one `LevelTile` per level its
-cascade evaluates at, one or two since the scale moves little within a
+levels are a few pixels. The limit bounds each request, not what a member's
+`TileCache` holds. The rectangle it holds at a level is the union of the
+requests made there, widened by `TILE_MARGIN` at each rebuild, as today, so
+it grows as far as the member's cascade moves the grid at that level, which
+nothing caps; capping it would change the rectangle, and so the scores, of
+the members whose cascades wander. A member that wanders far almost
+certainly fails the shift gate (`max_shift_scales`, 2 of the member's scales
+from its seed, a sixth of the grid's width at the default radius of 6), but
+its tile has been built by then. A member holds one `LevelTile` per level
+its cascade evaluates at, one or two since the scale moves little within a
 cascade, and the rotation starts' own tiles are dropped before the cascade.
 `refine_member` runs no parallel loop, so a thread holds one member's tiles
 at a time. The tiles reserve from the kernel call's pool and are built when
-the pool is full, so a kernel call that runs the cluster refinement holds at
-most 8.4 MB per level a member touches on each of its 33 rendering threads
-past the pool at the default resolution, 280 MB for one level, on top of the
-bounds of § "Bounding a render's memory"; members near a similarity, the
+the pool is full. A kernel call that runs the cluster refinement therefore
+builds past the pool, on each of its 33 rendering threads, tiles of at most
+8.4 MB per request at the default resolution, 280 MB for one level on all of
+them while no cascade wanders; a cascade that wanders holds more, by the
+area its grid swept at that level. This is a bound on each request, not a
+hard bound on what one member's cache holds. Members near a similarity, the
 common case, stay within the pool. The phase note counts the tiles built past
-the pool and the most levels one member touched.
+the pool, the largest tile one member held and the most levels one member
+touched.
 
-Both rules change results whether or not tiles are used, so they are the
+The limit changes results whether or not tiles are used, so it is the
 main draft's step 8, before the cluster refinement reads tiles in step 4
 [10]. They change a member refused at validation, a member whose cascade or
-piecewise stage evaluated a map past the limit or whose tile hit the cap, and,
+piecewise stage evaluated a map past the limit, and,
 through the cluster's own rules, the members those decide between: every
 member of a cluster whose reference was a refused member (the reference is the
 usable member of largest scale) or that a refusal leaves with fewer than two
@@ -520,8 +525,10 @@ holds at most 99 MB + 33 x 12.7 MB, about 520 MB, on top of the cache's budget;
 the viewer, with at most two kernel calls at once (one per background queue)
 and the two panels' renders, at most 2 x 99 MB + 2 x 3.1 MB + 35 x 12.7 MB, about
 650 MB. A kernel call that runs the cluster refinement adds the evaluation
-tiles it builds past the pool, at most 8.4 MB per level a member touches on
-each rendering thread at the default resolution, 280 MB for one level
+tiles it builds past the pool: at most 8.4 MB per request on each rendering
+thread at the default resolution, 280 MB for one level on all of them, but a
+member's tile is the union of its requests at a level and grows as far as its
+cascade wanders, so this bounds each request, not what one member holds
 (§ "The members' elongation limit"). The common case, footprints that are not stretched, stays at a few
 kilobytes per view. No view is refused and no result changes:
 which path a render takes depends on its boxes and on what its patch already keeps, and both read the same
@@ -690,11 +697,8 @@ there is no whole pyramid for any reader to fall back on.
    region pyramid already in it, which would move the region computation into
    every kernel. Recommendation: the tiled photograph, as designed.
 6. **The cluster refinement's evaluation tile.** *Decided by the user:* a
-   cluster member's elongation is limited to `MAX_MEMBER_ELONGATION`, 16,
+   cluster member's elongation is limited to `MAX_PATCH_ELONGATION`, 16,
    since the extreme cases are rarely correct photometric matches; a member
    past it is `not_evaluated`, and an evaluation past it scores as out of
-   frame. With the limit and the cap on the held rectangle, a `LevelTile`
-   holds at most `((R − 1) · 34 + 22)²` pixels, 8.4 MB at the default
-   resolution of 25; it reserves from the kernel call's region pool and is
-   always built, and has no tile path (§ "The members' elongation limit").
-   The limit is the main draft's step 8.
+   frame (§ "The members' elongation limit"). The limit is the main
+   draft's step 8.

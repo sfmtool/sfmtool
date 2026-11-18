@@ -1311,7 +1311,7 @@ a few hundred kilobytes, whatever the number of views or photographs
 | 17 x 200 MP, *Find matches by geometry* over the views the cull keeps (up to 151), `R = 24` | up to every photograph, 12.6 GiB for all 17 | up to 151 x 2.9 KB x 2.25 = 1.0 MB of regions kept for reuse (well inside the call's 99 MB pool), plus at most the budget (16 GiB at 64 GB of memory, 2 GiB at 8 GB) |
 | 17 x 200 MP, display patch bitmaps at open, one render per point | 12.6 GiB | 32 renders in flight x 2.9 KB, plus the budget |
 | 500 x 200 MP, any of the above | 372 GiB; fails | the same as for 17: regions plus the budget |
-| Any of the above, worst case (the kernel call's region pool full and every rendering thread on a grazing view) | — | one kernel call: 99 MB + 33 x 12.7 MB, about 520 MB; the viewer with two kernel calls and Track View: about 650 MB; a kernel call that runs the cluster refinement adds at most 280 MB of evaluation tiles past the pool at the default resolution, per level a member touches (the companion's § "The members' elongation limit"); on top of the budget |
+| Any of the above, worst case (the kernel call's region pool full and every rendering thread on a grazing view) | — | one kernel call: 99 MB + 33 x 12.7 MB, about 520 MB; the viewer with two kernel calls and Track View: about 650 MB; a kernel call that runs the cluster refinement adds evaluation tiles past the pool, at most 8.4 MB per request per rendering thread at the default resolution (280 MB for one level), though a member's tile is the union of its requests at a level and grows as far as its cascade wanders, so that bounds each request, not what one member holds (the companion's § "The members' elongation limit"); on top of the budget |
 | 500 x 6000 x 4000, any of the above | 500 x 96 MB = 48 GB | the same |
 | 17 x 200 MP, Track View on a 17-image track at `R = 64` | 12.6 GiB | 17 x 17 KB x 2.25 of regions, plus the tiles they are cut from, one to four per level read and one or two levels per view, 13 to 108 MB |
 | 368 x 3840 x 2160 (in core), a `get_many` over every frame | 12.2 GB held while its kernel runs | the regions of the renders in flight plus the budget; each frame decoded whole once into tiles in the kernel's read phase (about 0.05 s and 40 MB while it decodes), as many at once as the build budget allows, and again, by a render, only for a frame whose tiles were evicted during the kernel |
@@ -2113,7 +2113,7 @@ every reader working. Steps 1 to 3 end the crash with in-memory pyramids,
 before any file is written, and step 4 bounds the one other whole-photograph
 reader that runs unbounded. Steps 5 to 7 build the mip level files and the
 view-region pyramids without changing any reader. Step 8 limits how
-elongated a cluster member's shape may be, which bounds the cluster
+elongated a cluster member's shape may be, which bounds each request for the cluster
 refinement's own copies of a level before it reads tiles. Steps 9 to 12 move the
 readers to view-region pyramids, one group per pull request, while the cache
 still hands out whole pyramids: a moved reader wraps the pyramid it gets in a
@@ -2220,29 +2220,32 @@ in core. Step 17 turns the tier on.
    members' elongation limit"), amending
    [core/patch/cluster-patch-refinement.md](../core/patch/cluster-patch-refinement.md)
    (§ "Which member anchors, and which members are eligible", § "The warp
-   and the cascade", the `TileCache` in § "Implementation notes", and the
-   constants under § "Parameters"), the `not_evaluated` status in
+   and the cascade", and the constants under § "Parameters"), the
+   `not_evaluated` status in
    [formats/matches-file-format.md](../formats/matches-file-format.md), the
    summary of [cli/image-feature/cluster-patches-command.md](../cli/image-feature/cluster-patches-command.md),
-   and a [GLOSSARY.md](../GLOSSARY.md) row for a shape's elongation:
-   `MAX_MEMBER_ELONGATION`, the refusal at validation, the evaluation scored
-   out of frame past it, the cap on the rectangle a `TileCache` holds, and
-   the counts in `ClusterRefineResult` and the summaries. It changes results
-   whether or not tiles are used, so it is its own pull request, before the
+   and a [GLOSSARY.md](../GLOSSARY.md) row for a shape's elongation, the ratio
+   of its larger singular value to its smaller, which also settles
+   [gui/track-view.md](../gui/track-view.md): its *Self-sim.* cell calls
+   `1 − (minor / major)²` an ellipse's elongation, and the step rewords that
+   line to state the bar as a minor axis at most 0.71 of the major, which is
+   an elongation of at least `√2` in the glossary's sense:
+   `MAX_PATCH_ELONGATION`, the refusal at validation, the evaluation scored
+   out of frame past it, and the counts in `ClusterRefineResult` and the
+   summaries. It changes results whether or not tiles are used, so it is its
+   own pull request, before the
    cluster refinement reads tiles in step 10. Tests: a member whose shape's
    elongation is exactly the limit is refined, and one just past it is
    `not_evaluated` and counted as elongated; a cascade driven towards a map
-   past the limit retreats and returns a shape within it; a `TileCache`
-   whose union would pass the cap is rebuilt from the request alone, and no
-   tile holds more than the cap; on a cluster whose members and evaluations
-   all stay within the limit and the cap, every result is bit-identical to
-   the result before the step. Measurement, in the pull request: on copies of
+   past the limit retreats and returns a shape within it; on a cluster whose
+   members and evaluations all stay within the limit, every result is
+   bit-identical to the result before the step. Measurement, in the pull request: on copies of
    the checked-in reconstructions (`seoul_bull_sculpture`, `dino_dog_toy`,
    `kerry_park`) and on the 200-megapixel capture of § "The problem,
    measured" if it is at hand, `sfm cluster-patches` before and after: the
    members refused at validation, the evaluations scored out of frame for
-   their elongation, the tiles capped, the clusters whose reference changed,
-   and the members whose status changed.
+   their elongation, the largest `LevelTile` one member held, the clusters
+   whose reference changed, and the members whose status changed.
 9. **Track View and the Track Table** on view-region pyramids (companion
    step 3), with the step-9 signature changes, peeking the cache's whole
    pyramids as today and reading them through `from_pyramid`; they peek
