@@ -4,14 +4,13 @@
 
 The required companion of
 [out-of-core-photograph-pyramid.md](out-of-core-photograph-pyramid.md), which
-links here. Decided by the user: every kernel that reads a photograph that
-uses the out-of-core pyramid reads it through view-region pyramids, so its
-memory grows with the patches it renders rather than with the photographs;
-photographs under the size threshold keep whole in-memory pyramids. It is
-kept as a draft of its own because what it specifies, the samplers' regions,
-is separate from the files and caches the main draft specifies; its steps 1
-and 2 are step 7 of the main draft, and its steps 3 to 6 are the main draft's
-steps 9 to 12. Open: the questions at the end. It amends
+links here. Decided by the user: every kernel reads every photograph,
+whatever its size, through view-region pyramids, so its memory grows with
+the patches it renders rather than with the photographs (open question 1).
+It is kept as a draft of its own because what it specifies, the samplers'
+regions, is separate from the files and caches the main draft specifies; its
+steps 1 and 2 are step 7 of the main draft, and its steps 3 to 6 are the main
+draft's steps 8 to 11. Open: questions 2 to 5 at the end. It amends
 [core/camera/photograph-cache.md](../core/camera/photograph-cache.md) and the
 samplers of [core/camera/image-warping.md](../core/camera/image-warping.md).
 
@@ -131,14 +130,17 @@ mip level files, and level 0 from the original if it is region-readable or from 
 `-mip0` otherwise, as the main draft describes; every one is a tile
 decode, so no region of any level needs a whole decode. A region pyramid
 therefore holds the same pixels as a whole pyramid of the stored levels would.
-An in-core photograph is not tiled for this: its whole pyramid is already in
-memory, and its renders read it as today (`PhotographSource::Whole`).
+An in-core photograph is read the same way: its tiles are cut from a whole
+decode of the original made when a tile of it is missing, and only the tiles
+stay (the main draft's § "The caches in memory"), so a region pyramid of it
+holds today's exact levels. Tiles cut from an array a caller already has
+(`TiledPhotograph::from_image`) are read the same way too.
 
-A kernel's `ProjectedImage` holds a `PhotographSource`. The render entry
-points that take one (`render_source_tile` and its gradient form, beside the
-unchanged `render_tile` for in-memory pyramids) compute the regions from the
-map and, for a `Tiled` source, ask the cache for the region pyramid before
-sampling, or sample through tiles; for a `Whole` one they sample as today.
+A kernel's `ProjectedImage` holds a `&TiledPhotograph`, for every photograph.
+The render entry points that take one (`render_source_tile` and its gradient
+form, beside the unchanged `render_tile`, which samples a region pyramid
+already assembled) compute the regions from the map and ask for the region
+pyramid before sampling, or sample through tiles.
 They return `Result<_, PhotographReadError>`, since a tiled read can find its
 files changed, gone stale or unreadable, and the
 kernels pass the error up with `?` through their loops, the parallel ones
@@ -264,7 +266,7 @@ serial on every thread, so its window has one owner. A copied-region render
 whose rows go to rayon pins no tiles while it samples. The threads that render are the rayon pool's
 32, the job thread that calls the kernel, and in the viewer the other
 queue's job thread and the GUI thread. One kernel call on the command line
-holds at most 99 MB + 33 x 12.7 MB, about 520 MB, on top of the tile budget;
+holds at most 99 MB + 33 x 12.7 MB, about 520 MB, on top of the cache's budget;
 the viewer, with at most two kernel calls at once (one per background queue)
 and Track View's renders, at most 2 x 99 MB + 3.1 MB + 35 x 12.7 MB, about
 650 MB. The common case, footprints that are not stretched, stays at a few
@@ -300,8 +302,11 @@ requesting the missing ones. The GUI thread never decodes and never waits, and n
   bounds whatever the number of photographs; the tiles they touch can be many
   more (level 2 of one 200-megapixel photograph is 48 tiles, 38 MB; level 0
   is 768 tiles, 607 MB), and the ones past the budget are decoded again when
-  read again, at 2.3 to 6 ms a tile. Level 0 is always read by tiles, from the
-  original or from `-mip0`, so no photograph's level 0 is ever held whole.
+  read again, at 2.3 to 6 ms a tile out of core, or by one whole decode of
+  an in-core photograph (about 0.05 s at 3840 x 2160). Level 0 is always read
+  by tiles, from the original, from `-mip0`, or cut from an in-core
+  photograph's decode, which is dropped once cut, so no photograph's level 0
+  stays whole.
   The order a kernel takes its renders in decides how often a tile is decoded
   again: rendering points grouped by their reference image and position keeps
   the tiles each group needs together, and each kernel's phase note reports
@@ -312,13 +317,13 @@ requesting the missing ones. The GUI thread never decodes and never waits, and n
 
 ## Implementation steps
 
-Steps 1 and 2 are step 7 of the main draft, landed before the tier exists
-and exercised on in-core photographs cut into tiles in memory. Steps 3 to 6
-are the main draft's steps 9 to 12, each its own pull request after the tier
-lands switched off (main step 8) and before it is switched on (main step 15),
-because once photographs are out of core there is no whole pyramid of one for
-any of these readers to fall back on; until a reader moves, it refuses a tiled
-source.
+Steps 1 and 2 are step 7 of the main draft, exercised on photographs cut
+into tiles in memory. Steps 3 to 6 are the main draft's steps 8 to 11, each
+its own pull request, made while the cache still hands out whole pyramids:
+each moved reader wraps the pyramid it gets in a `TiledPhotograph`
+(`from_pyramid`), so every reader works at every step. Once all have moved,
+the main draft's step 12 makes the cache hand out tiled photographs only, and
+there is no whole pyramid for any reader to fall back on.
 
 1. **Regions in the pyramid and the samplers**: `PyramidLevel`,
    `ImageU8Pyramid::from_regions`, the origin subtraction in every sampler and
@@ -350,8 +355,7 @@ source.
    that cross tile edges and the image's edges; reuse when inside, reassembly
    when not.
 3. **Track View and the Track Table** on region pyramids, peeking tiles.
-   Tests: a track of synthetic out-of-core photographs draws its tiles with no
-   pyramid entry in the cache; the drawn tiles equal the whole-pyramid ones.
+   Tests: the drawn tiles of a synthetic track equal the whole-pyramid ones.
 4. **The bench's jobs and the reference picks**: `ViewSources` hands the
    kernels a tiled source and each render asks for its regions; `clipped_share`
    reads a level-0 region; each bench step and each reference pick makes one
@@ -362,7 +366,7 @@ source.
    whose regions exceed a small pool holds no more than that one pool.
 5. **Bulk kernels**: the display patch bitmaps, the conversion to embedded
    patches, the web export, *Refine all normals*, *Refit all points* and the
-   cluster-patches build, each with a point order that keeps tile locality. Tests: identical results; a tile budget smaller
+   cluster-patches build, each with a point order that keeps tile locality. Tests: identical results; a cache budget smaller
    than one photograph's level 0 still completes; with a small pool, the
    regions of all the points in progress together never exceed the one pool
    the caller made.
@@ -371,17 +375,20 @@ source.
 
 ## Open questions
 
-1. **In-core photographs.** 368 frames of 3840 x 2160 are 12.2 GB of whole
-   pyramids. Options: leave them whole (as designed); tile them too, from
-   in-memory decodes kept as tiles. Recommendation: leave them whole until a
-   capture of in-core photographs is measured to need it; their decode is
-   0.05 s, not 1 s.
+1. **In-core photographs.** *Decided by the user:* every photograph is read
+   through tiles and view-region pyramids, whatever its size. An in-core
+   photograph is decoded once when a tile of it is needed, its pyramid cut
+   into tiles, and only the tiles stay, under the cache's budget; a request
+   for a tile that was evicted decodes it again, about 0.05 s at 3840 x 2160,
+   which the budget and the bulk kernels' point order (question 3) keep rare.
 2. **The reuse margin.** A quarter of the region (as designed), a fixed number
    of pixels, or none. Recommendation: a quarter, then measure how often the
    bench's fits reassemble.
 3. **The point order of bulk kernels.** Grouped by reference image and
    position (as designed), or by tile. Recommendation: by reference image and
-   position, which needs no knowledge of the tile grid in the kernel.
+   position, which needs no knowledge of the tile grid in the kernel, and
+   keeps an in-core photograph's tiles cached while its renders run, so it is
+   rarely decoded twice.
 4. **The pool and the tile window.** Four tiles of copied regions per rayon
    thread, shared by the kernel call, and 16 pinned tiles per render on the tile
    path (as designed), or other values; or capping the patches in progress at
@@ -389,8 +396,8 @@ source.
    loops could deadlock on. Recommendation: keep them, and count in each kernel's phase note
    how many renders took the tile path, so both are tuned on real captures;
    the values change memory and speed, never a result.
-5. **An interface for kernels.** Designed as a `PhotographSource` enum in
+5. **An interface for kernels.** Designed as a `&TiledPhotograph` in
    `ProjectedImage`, resolved to a region pyramid inside the render entry
    points. The other option is a `ProjectedImage` built per render with the
    region pyramid already in it, which would move the region computation into
-   every kernel. Recommendation: the enum, as designed.
+   every kernel. Recommendation: the tiled photograph, as designed.

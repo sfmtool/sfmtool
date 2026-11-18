@@ -329,8 +329,9 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   decodes. The first make small images once per open; the second is a GPU
   texture the renderer caches.
 - **No cache on disk.** Pyramids are rebuilt from the JPEGs in each session,
-  and every pyramid is held whole. Stored reduced levels and photograph tiles
-  for large photographs are proposed in
+  and every pyramid is held whole. Photograph tiles for every photograph, in
+  place of whole pyramids, and stored reduced levels for large ones are
+  proposed in
   [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md),
   and a pyramid holding only the region of each level one render reads in
   [view-region-pyramid.md](../../drafts/view-region-pyramid.md).
