@@ -68,6 +68,11 @@ sfmtool-camrig-format = { path = "../sfmtool-camrig-format" }
 sfmtool-matches-format = { path = "../sfmtool-matches-format" }
 sfmtool-kdf-format = { path = "../sfmtool-kdf-format" }
 sfmtool-progress = { path = "../sfmtool-progress" }
+# The image names of a `.sfmr` or `.matches` file its reader refuses, read
+# without that reader's checks so that the workspace upgrade keeps the folders
+# they name (`workspace/upgrade/plan.rs`). Already in the tree through the
+# format crates.
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 # GPU compute (optional)
 wgpu = { version = "30", features = ["dx12", "vulkan"], optional = true }
@@ -87,9 +92,8 @@ libc = "0.2"
 [dev-dependencies]
 approx = "0.5"
 criterion = { version = "0.8", features = ["html_reports"] }
-# Used by the .sfmr v4→v5 upgrade-on-load tests to author version-4 fixture
-# bytes (rewriting the archive's metadata.json.zst version field).
-zip = { version = "9", default-features = false, features = ["deflate"] }
+# With `zip`, used by the .sfmr v4→v5 upgrade-on-load tests to author version-4
+# fixture bytes (rewriting the archive's metadata.json.zst version field).
 zstd = "0.14"
 tempfile = "3"
 

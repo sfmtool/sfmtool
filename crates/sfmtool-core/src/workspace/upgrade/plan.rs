@@ -301,18 +301,22 @@ enum Naming {
 
 /// What phase 1 read of a `.sfmr` or `.matches` file from its metadata and
 /// image names alone: which workspace of the tree it is in, if any, and the
-/// record it holds. `names` is `None` when the names entry does not read as
-/// the format holds it.
+/// record it holds. `names` is what its names entry holds, read without the
+/// format reader's checks when that reader refuses them, and `None` when the
+/// entry does not read as a list of names at all.
 enum Recorded {
     /// Its record resolves to the tree's workspace `workspace`: its version,
     /// its record, whether its observations name `.sift` files, and for a
     /// cluster `.matches` file below version 6, which the reader refuses,
-    /// `true`.
+    /// `true`. `names_trusted` is whether the format reader gave the names
+    /// and each obeys the image-name rule; when not, the file also names the
+    /// folders its record's prefix names below its workspace.
     Here {
         workspace: usize,
         version: u32,
         contents: WorkspaceContents,
         names: Option<Vec<String>>,
+        names_trusted: bool,
         names_sift_files: bool,
         unreadable_clusters: bool,
     },
@@ -347,6 +351,35 @@ fn cannot_read(e: impl std::fmt::Display) -> Recorded {
     Recorded::Leave(UpgradeOutcome::Failed(format!("it cannot be read: {e}")))
 }
 
+/// The entry of a `.sfmr` and of a `.matches` file that holds its image
+/// names.
+const IMAGE_NAMES_ENTRY: &str = "images/names.json.zst";
+
+/// The image names the names entry of the `.sfmr` or `.matches` file at
+/// `path` holds, without the checks its format's reader makes, or `None` when
+/// the entry does not read as a list of names. For a file that reader
+/// refuses, such as one naming `../images/<image>`, which the image-name rule
+/// refuses: the run converts no such file, but its names still say which
+/// folders hold its features, and those are kept.
+fn read_unchecked_image_names(path: &Path) -> Option<Vec<String>> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
+    sfmtool_archive_io::read_json_entry(&mut archive, IMAGE_NAMES_ENTRY).ok()
+}
+
+/// A file's image names: those its format's reader gave (`checked`), or else
+/// those its names entry holds, unchecked; and whether they are trusted, that
+/// is, the reader gave them and each obeys the image-name rule.
+fn image_names_of(checked: Option<Vec<String>>, path: &Path) -> (Option<Vec<String>>, bool) {
+    match checked {
+        Some(names) => {
+            let trusted = sfmtool_archive_io::validate_image_names(&names).is_ok();
+            (Some(names), trusted)
+        }
+        None => (read_unchecked_image_names(path), false),
+    }
+}
+
 fn read_sfmr_record(path: &Path, canonical: &[PathBuf]) -> Recorded {
     // The names entry is read with the metadata, by the cheap reader; a file
     // the reader would refuse whole still names its images there. A file the
@@ -359,6 +392,7 @@ fn read_sfmr_record(path: &Path, canonical: &[PathBuf]) -> Recorded {
             Err(e) => return cannot_read(e),
         },
     };
+    let (names, names_trusted) = image_names_of(names, path);
     match sfmtool_sfmr_format::resolve_workspace_dir(path, &metadata) {
         Ok(dir) => match workspace_index(&dir, canonical) {
             Some(workspace) => Recorded::Here {
@@ -368,6 +402,7 @@ fn read_sfmr_record(path: &Path, canonical: &[PathBuf]) -> Recorded {
                     == sfmtool_sfmr_format::FEATURE_SOURCE_SIFT_FILES,
                 contents: metadata.workspace.contents,
                 names,
+                names_trusted,
                 unreadable_clusters: false,
             },
             None => Recorded::Elsewhere {
@@ -389,6 +424,7 @@ fn read_matches_record(path: &Path, canonical: &[PathBuf]) -> Recorded {
             Err(e) => return cannot_read(e),
         },
     };
+    let (names, names_trusted) = image_names_of(names, path);
     match sfmtool_matches_format::resolve_workspace_dir(path, &metadata) {
         Some(dir) => match workspace_index(&dir, canonical) {
             Some(workspace) => Recorded::Here {
@@ -397,6 +433,7 @@ fn read_matches_record(path: &Path, canonical: &[PathBuf]) -> Recorded {
                 unreadable_clusters: metadata.has_clusters && metadata.version < 6,
                 contents: metadata.workspace.contents,
                 names,
+                names_trusted,
                 names_sift_files: true,
             },
             None => Recorded::Elsewhere {
@@ -736,7 +773,9 @@ pub(super) fn plan(
 
     // The folders each file names, found from its record and image names
     // alone, by their paths on disk, so that a file the reader refuses names
-    // them too, each with the directory of the images it names it for. An
+    // them too, each with the directory of the images it names it for. The
+    // image-name rule refuses a name with `..`, so only a file the reader
+    // refuses holds one, and the names it holds are read unchecked for it; an
     // image name's `..` is resolved by name, as the root is spelled. A folder
     // inside the tree that a file of a workspace outside the tree names is
     // kept whatever else names it, and so is one that a file of the tree
@@ -1058,26 +1097,31 @@ pub(super) fn plan(
     let mut jobs = Vec::new();
     let mut deletion_refused = None;
     // The files of the tree that name each folder, with the directory of the
-    // images they name it for. A file whose image names cannot be read names
-    // the folders its record's prefix names below its workspace instead, so
-    // that a file the reader refuses keeps them all the same.
+    // images they name it for. A file whose image names cannot be read, or
+    // are not trusted, names the folders its record's prefix names below its
+    // workspace as well, so that a file the reader refuses keeps them all the
+    // same; a folder its names name already is not counted twice.
     let mut named_by_files: HashMap<&Path, Vec<(Naming, &Path)>> = HashMap::new();
-    let mut named_by_prefix: Vec<(&Path, &str, Naming)> = Vec::new();
+    // A file's workspace, its record's prefix, what the run does with it, and
+    // the folders its names name.
+    type ByPrefix<'a> = (&'a Path, &'a str, Naming, &'a [(PathBuf, PathBuf)]);
+    let mut named_by_prefix: Vec<ByPrefix<'_>> = Vec::new();
     for (((recorded, _), dirs), naming) in read.iter().zip(&file_dirs).zip(&naming_of) {
         let Recorded::Here {
             workspace,
             contents,
-            names,
+            names_trusted,
             ..
         } = recorded
         else {
             continue;
         };
-        if names.is_none() {
+        if !names_trusted {
             named_by_prefix.push((
                 &workspace_dirs[*workspace],
                 &contents.feature_prefix_dir,
                 *naming,
+                dirs,
             ));
         }
         for (dir, image_dir) in dirs {
@@ -1102,7 +1146,10 @@ pub(super) fn plan(
             .get(dir.as_path())
             .map(|v| v.iter().map(|(n, d)| (*n, d.to_path_buf())).collect())
             .unwrap_or_default();
-        for (workspace, prefix, n) in &named_by_prefix {
+        for (workspace, prefix, n, by_names) in &named_by_prefix {
+            if by_names.iter().any(|(d, _)| *d == dir) {
+                continue;
+            }
             if let Some(image_dir) = paths.image_dir_of(&dir, workspace, prefix) {
                 naming.push((*n, image_dir));
             }

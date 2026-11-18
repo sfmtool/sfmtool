@@ -1374,21 +1374,29 @@ fn a_nested_file_recording_the_enclosing_workspace_loses_nothing() {
 }
 
 /// A folder of the tree that a file of a workspace outside the tree names is
-/// kept: the run cannot see that workspace's other files.
+/// kept: the run cannot see that workspace's other files. An image name is
+/// a path inside its workspace, so the outside workspace reaches the tree's
+/// images through a link of its own, `linked`, to the tree's `images`.
 #[test]
 fn a_folder_a_workspace_outside_the_tree_names_is_kept() {
     let fixture = fixture();
     let outside = fixture._dir.path().join("outside");
     std::fs::create_dir_all(&outside).unwrap();
     write_v2_workspace_file(&outside);
+    let link = outside.join("linked");
+    link_directory(&fixture.images(), &link);
     let mut recon = reconstruction(&outside, &fixture.old_folder(), v1_record(), false);
     for (i, image) in recon.image_set.images.iter_mut().enumerate() {
-        image.name = format!("../ws/images/{}", image_name(i));
+        image.name = format!("linked/{}", image_name(i));
     }
     recon.metadata.workspace.relative_path = "../../outside".into();
     let path = fixture.path("sfmr/from-outside.sfmr");
     recon.save(&path, &Progress::none()).unwrap();
+    assert_eq!(missing_sift(&path), (0, 0));
     let report = run(&fixture, false);
+    // A junction is removed as a directory, which leaves its target.
+    #[cfg(windows)]
+    std::fs::remove_dir(&link).unwrap();
     assert!(not_converted(outcome_of(&report, &path)), "{report:?}");
     let folder = report
         .folders
@@ -1693,51 +1701,96 @@ fn a_folder_whose_sift_files_record_different_options_is_refused() {
     assert_eq!(snapshot(&fixture.root), before);
 }
 
-/// A file of a workspace outside the tree that the reader refuses still
-/// keeps the folder it names in the tree.
-#[test]
-fn a_refused_file_outside_the_tree_keeps_its_folder() {
-    let fixture = fixture();
-    let outside = fixture._dir.path().join("outside");
-    std::fs::create_dir_all(&outside).unwrap();
-    write_v2_workspace_file(&outside);
-    let mut recon = reconstruction(&outside, &fixture.old_folder(), v1_record(), false);
-    for (i, image) in recon.image_set.images.iter_mut().enumerate() {
-        image.name = format!("../ws/images/{}", image_name(i));
+/// Write a version 1 `sift_files` `.sfmr` or pairwise `.matches` file of the
+/// fixture's images at `path`, by its extension, recording the workspace at
+/// `relative_path` from the file's directory, and then put each image name
+/// through `rename` (the name's index, the name). The writers refuse a name
+/// the image-name rule refuses, but a file another tool wrote or one edited
+/// by hand can hold one, so such a file is made by editing the names entry
+/// of one written with valid names; the reader refuses it.
+fn write_with_image_names(
+    fixture: &Fixture,
+    path: &Path,
+    relative_path: &str,
+    rename: impl Fn(usize, &str) -> String,
+) {
+    write_with_names_entry(fixture, path, relative_path, |names| {
+        for (i, name) in names.iter_mut().enumerate() {
+            *name = rename(i, name.as_str().unwrap()).into();
+        }
+    });
+}
+
+/// [`write_with_image_names`] with the names entry, a JSON list, put through
+/// `edit` as a whole.
+fn write_with_names_entry(
+    fixture: &Fixture,
+    path: &Path,
+    relative_path: &str,
+    edit: impl Fn(&mut Vec<serde_json::Value>),
+) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let old = fixture.old_folder();
+    let sfmr = path.extension().unwrap() == "sfmr";
+    if sfmr {
+        let mut recon = reconstruction(&fixture.root, &old, v1_record(), false);
+        recon.metadata.workspace.relative_path = relative_path.into();
+        recon.save(path, &Progress::none()).unwrap();
+    } else {
+        let mut data = pairwise_matches(&old, v1_record());
+        data.metadata.workspace.relative_path = relative_path.into();
+        sfmtool_matches_format::write_matches(path, &data, 3).unwrap();
     }
-    recon.metadata.workspace.relative_path = "../../outside".into();
-    let path = fixture.path("sfmr/from-outside.sfmr");
-    recon.save(&path, &Progress::none()).unwrap();
     rewrite_archive(
-        &path,
-        "cameras/metadata.json.zst",
-        |cameras| {
-            let camera = &mut cameras.as_array_mut().unwrap()[0];
-            camera["parameters"]
-                .as_object_mut()
-                .unwrap()
-                .remove("focal_length_y");
-        },
+        path,
+        "images/names.json.zst",
+        |names| edit(names.as_array_mut().unwrap()),
         |_| false,
     );
-    let report = run(&fixture, false);
-    assert!(not_converted(outcome_of(&report, &path)), "{report:?}");
-    let folder = report
-        .folders
-        .iter()
-        .find(|f| f.old_folder == fixture.old_folder())
-        .unwrap();
-    assert!(
-        folder
-            .kept_because
-            .as_deref()
-            .is_some_and(|k| k.contains("outside this tree")),
-        "{folder:?}"
-    );
-    assert_eq!(
-        std::fs::read_dir(fixture.old_folder()).unwrap().count(),
-        IMAGES
-    );
+    let error = if sfmr {
+        let Err(error) = sfmtool_sfmr_format::read_sfmr(path) else {
+            panic!("the reader accepts the names")
+        };
+        error.to_string()
+    } else {
+        let Err(error) = sfmtool_matches_format::read_matches(path) else {
+            panic!("the reader accepts the names")
+        };
+        error.to_string()
+    };
+    assert!(error.contains("image name"), "{error}");
+}
+
+/// A `.sfmr` or `.matches` file of a workspace outside the tree whose image
+/// names reach the tree's images through `..`, which the reader refuses,
+/// still keeps the folder it names in the tree.
+#[test]
+fn a_refused_file_outside_the_tree_keeps_its_folder() {
+    for name in ["sfmr/from-outside.sfmr", "matches/from-outside.matches"] {
+        let fixture = fixture();
+        let outside = fixture._dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        write_v2_workspace_file(&outside);
+        let path = fixture.path(name);
+        write_with_image_names(&fixture, &path, "../../outside", |_, n| {
+            format!("../ws/{n}")
+        });
+        let report = run(&fixture, false);
+        assert!(not_converted(outcome_of(&report, &path)), "{report:?}");
+        let folder = report
+            .folders
+            .iter()
+            .find(|f| f.old_folder == fixture.old_folder())
+            .unwrap();
+        assert!(
+            folder
+                .kept_because
+                .as_deref()
+                .is_some_and(|k| k.contains("outside this tree")),
+            "{name}: {folder:?}"
+        );
+        assert_eq!(old_folder_count(&fixture), IMAGES, "{name}");
+    }
 }
 
 /// A `.sift` file whose content the reader rejects is reported as not
@@ -1759,76 +1812,84 @@ fn a_sift_file_the_reader_rejects_is_reported_as_unreadable_not_changed() {
     assert!(!reason.contains("changed"), "{reason}");
 }
 
-/// A file of the nested workspace whose image names reach the root's images
-/// through `..` names the root's old folder like any other file: it is
-/// converted, and keeps every `.sift` file it records.
+/// A `.sfmr` or `.matches` file of the nested workspace whose image names
+/// reach the root's images through `..`, which the reader refuses, is not
+/// converted, and the root's old folder that holds its features is kept,
+/// though that folder is outside the file's own workspace.
 #[test]
-fn a_file_naming_images_through_a_parent_directory_is_converted() {
-    let fixture = fixture();
-    let mut recon = reconstruction(&fixture.root, &fixture.old_folder(), v1_record(), false);
-    for (i, image) in recon.image_set.images.iter_mut().enumerate() {
-        image.name = format!("../images/{}", image_name(i));
+fn a_refused_file_naming_images_through_a_parent_directory_keeps_their_folder() {
+    for name in ["parent-dir.sfmr", "parent-dir.matches"] {
+        let fixture = fixture();
+        let path = fixture.nested().join(name);
+        write_with_image_names(&fixture, &path, ".", |_, n| format!("../{n}"));
+        let before = Bytes(std::fs::read(&path).unwrap());
+        let report = run(&fixture, false);
+        let UpgradeOutcome::NotConverted(reason) = outcome_of(&report, &path) else {
+            panic!("{report:?}")
+        };
+        assert!(reason.contains("reader refuses"), "{name}: {reason}");
+        let folder = report
+            .folders
+            .iter()
+            .find(|f| f.old_folder == fixture.old_folder())
+            .unwrap();
+        assert_eq!(
+            folder.kept_because.as_deref(),
+            Some("kept: named by 1 file(s) the current reader refuses"),
+            "{name}: {folder:?}"
+        );
+        assert_eq!(old_folder_count(&fixture), IMAGES, "{name}");
+        assert_eq!(Bytes(std::fs::read(&path).unwrap()), before, "{name}");
     }
-    recon.metadata.workspace.relative_path = ".".into();
-    let path = fixture.nested().join("parent-dir.sfmr");
-    recon.save(&path, &Progress::none()).unwrap();
-    assert_eq!(missing_sift(&path), (0, 0));
-    let report = run(&fixture, false);
-    assert_eq!(
-        outcome_of(&report, &path),
-        &UpgradeOutcome::Converted,
-        "{report:?}"
-    );
-    assert_eq!(
-        record_of(&path).feature_prefix_dir,
-        v2_record().feature_prefix_dir
-    );
-    assert_sift_files_resolve(&path);
 }
 
-/// A file of the tree one of whose image names leaves the tree's root
-/// through `..` is not converted, since the run does not convert the folder
-/// outside the tree, and the old folder it names in the tree is kept.
+/// A `.sfmr` or `.matches` file of the tree one of whose image names leaves
+/// the tree's root through `..`, which the reader refuses, is not converted;
+/// the old folder it names in the tree is kept, and nothing outside the tree
+/// is touched.
 #[test]
 fn a_file_naming_images_outside_the_tree_keeps_its_folder() {
-    let fixture = fixture();
-    let elsewhere = fixture._dir.path().join("elsewhere");
-    let last = image_name(IMAGES - 1);
-    let elsewhere_sift = elsewhere.join(v1_record().feature_prefix_dir);
-    std::fs::create_dir_all(&elsewhere_sift).unwrap();
-    std::fs::copy(fixture.images().join(&last), elsewhere.join(&last)).unwrap();
-    let sift_name = format!("{last}.sift");
-    std::fs::copy(
-        fixture.old_folder().join(&sift_name),
-        elsewhere_sift.join(&sift_name),
-    )
-    .unwrap();
-    let mut recon = reconstruction(&fixture.root, &fixture.old_folder(), v1_record(), false);
-    recon.image_set.images[IMAGES - 1].name = format!("../elsewhere/{last}");
-    let path = fixture.path("sfmr/partly-outside.sfmr");
-    recon.save(&path, &Progress::none()).unwrap();
-    assert_eq!(missing_sift(&path), (0, 0));
-    let before_elsewhere = snapshot(&elsewhere);
-
-    let report = run(&fixture, false);
-    let UpgradeOutcome::NotConverted(reason) = outcome_of(&report, &path) else {
-        panic!("{report:?}")
-    };
-    assert!(reason.contains("outside this tree"), "{reason}");
-    let folder = report
-        .folders
-        .iter()
-        .find(|f| f.old_folder == fixture.old_folder())
+    for name in ["sfmr/partly-outside.sfmr", "matches/partly-outside.matches"] {
+        let fixture = fixture();
+        let elsewhere = fixture._dir.path().join("elsewhere");
+        let first = image_name(0);
+        let elsewhere_sift = elsewhere.join(v1_record().feature_prefix_dir);
+        std::fs::create_dir_all(&elsewhere_sift).unwrap();
+        std::fs::copy(fixture.images().join(&first), elsewhere.join(&first)).unwrap();
+        let sift_name = format!("{first}.sift");
+        std::fs::copy(
+            fixture.old_folder().join(&sift_name),
+            elsewhere_sift.join(&sift_name),
+        )
         .unwrap();
-    assert!(
-        folder
-            .kept_because
-            .as_deref()
-            .is_some_and(|k| k.contains("outside this tree")),
-        "{folder:?}"
-    );
-    assert_eq!(missing_sift(&path), (0, 0));
-    assert_eq!(snapshot(&elsewhere), before_elsewhere);
+        let path = fixture.path(name);
+        write_with_image_names(&fixture, &path, "..", |i, n| {
+            if i == 0 {
+                format!("../elsewhere/{first}")
+            } else {
+                n.to_string()
+            }
+        });
+        let before_elsewhere = snapshot(&elsewhere);
+
+        let report = run(&fixture, false);
+        let UpgradeOutcome::NotConverted(reason) = outcome_of(&report, &path) else {
+            panic!("{report:?}")
+        };
+        assert!(reason.contains("reader refuses"), "{name}: {reason}");
+        let folder = report
+            .folders
+            .iter()
+            .find(|f| f.old_folder == fixture.old_folder())
+            .unwrap();
+        assert_eq!(
+            folder.kept_because.as_deref(),
+            Some("kept: named by 1 file(s) the current reader refuses"),
+            "{name}: {folder:?}"
+        );
+        assert_eq!(old_folder_count(&fixture), IMAGES, "{name}");
+        assert_eq!(snapshot(&elsewhere), before_elsewhere, "{name}");
+    }
 }
 
 /// The workspace file's options differ from those its folder's `.sift` files
@@ -2076,8 +2137,8 @@ fn a_file_spelling_the_image_directory_in_another_case_converts_with_the_others(
     assert!(run(&fixture, false).nothing_to_do());
 }
 
-/// A readable file of a workspace outside the tree that names the root's
-/// images as `../ws/Images/...` keeps the folder it names.
+/// A file of a workspace outside the tree that names the root's images as
+/// `../ws/Images/...`, which the reader refuses, keeps the folder it names.
 #[cfg(windows)]
 #[test]
 fn an_outside_file_spelling_the_image_directory_in_another_case_keeps_its_folder() {
@@ -2085,17 +2146,13 @@ fn an_outside_file_spelling_the_image_directory_in_another_case_keeps_its_folder
     let outside = fixture._dir.path().join("outside");
     std::fs::create_dir_all(&outside).unwrap();
     write_v2_workspace_file(&outside);
-    let mut recon = reconstruction(&outside, &fixture.old_folder(), v1_record(), false);
-    for (i, image) in recon.image_set.images.iter_mut().enumerate() {
-        image.name = format!("../ws/Images/{}", image_name(i));
-    }
-    recon.metadata.workspace.relative_path = "../../outside".into();
     let path = fixture.path("sfmr/from-outside.sfmr");
-    recon.save(&path, &Progress::none()).unwrap();
-    assert_eq!(missing_sift(&path), (0, 0));
+    write_with_image_names(&fixture, &path, "../../outside", |i, _| {
+        format!("../ws/Images/{}", image_name(i))
+    });
     let report = run(&fixture, false);
     assert!(not_converted(outcome_of(&report, &path)), "{report:?}");
-    assert_eq!(missing_sift(&path), (0, 0), "{report:?}");
+    assert_eq!(old_folder_count(&fixture), IMAGES, "{report:?}");
 }
 
 /// A root given with `..` in it, absolute or relative to the current
@@ -2411,6 +2468,48 @@ fn a_refused_file_whose_image_names_cannot_be_read_keeps_its_folder() {
     assert!(!folder.deleted);
 }
 
+/// A `.sfmr` or `.matches` file whose names entry holds fewer names than it
+/// has images, which the reader refuses, may name images its names do not:
+/// it names the folders its record's prefix names below its workspace as
+/// well as those its names name, each once, so a folder only the prefix
+/// reaches is kept too.
+#[test]
+fn a_refused_file_with_too_few_image_names_keeps_the_folders_of_its_prefix() {
+    for name in ["sfmr/few-names.sfmr", "matches/few-names.matches"] {
+        let fixture = fixture();
+        // A second image directory, whose version 1 folder the file's names
+        // do not reach.
+        let images2 = fixture.root.join("images2");
+        let folder2 = images2.join(v1_record().feature_prefix_dir);
+        std::fs::create_dir_all(&folder2).unwrap();
+        for i in 0..IMAGES {
+            let image = image_name(i);
+            let sift = format!("{image}.sift");
+            std::fs::copy(fixture.images().join(&image), images2.join(&image)).unwrap();
+            std::fs::copy(fixture.old_folder().join(&sift), folder2.join(&sift)).unwrap();
+        }
+        let path = fixture.path(name);
+        write_with_names_entry(&fixture, &path, "..", |names| {
+            names.pop();
+        });
+        let report = run(&fixture, false);
+        assert!(not_converted(outcome_of(&report, &path)), "{report:?}");
+        for folder in [fixture.old_folder(), folder2.clone()] {
+            let upgraded = report
+                .folders
+                .iter()
+                .find(|f| f.old_folder == folder)
+                .unwrap();
+            assert_eq!(
+                upgraded.kept_because.as_deref(),
+                Some("kept: named by 1 file(s) the current reader refuses"),
+                "{name}: {upgraded:?}"
+            );
+        }
+        assert_eq!(std::fs::read_dir(&folder2).unwrap().count(), IMAGES);
+    }
+}
+
 /// A file whose record names no folder on disk takes its workspace file's
 /// converted record when the prefixes agree, and otherwise its own record
 /// converted under the tool's workspace `feature_type`.
@@ -2425,7 +2524,7 @@ fn a_file_naming_no_folder_on_disk_takes_a_converted_record() {
     same_record.feature_options["max_num_features"] = serde_json::json!(15);
     let mut same = reconstruction(&fixture.root, &fixture.old_folder(), same_record, true);
     for (i, image) in same.image_set.images.iter_mut().enumerate() {
-        image.name = format!("./bare/{}", image_name(i));
+        image.name = format!("bare/{}", image_name(i));
     }
     let same_path = fixture.path("sfmr/same-prefix.sfmr");
     same.save(&same_path, &Progress::none()).unwrap();
