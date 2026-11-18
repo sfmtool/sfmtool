@@ -4,7 +4,8 @@ Many of the viewer's operations read the reconstruction's photographs as
 pixels: the Image Detail panel draws one, Track View cuts patch tiles out of
 several, and the bench's searches and fits measure how well a patch matches in
 each image. Decoding a photograph from JPEG and building the image pyramid the
-patch samplers read (the photograph plus five successively halved copies) is
+patch samplers read (the photograph plus successively halved copies, down to
+one or two pixels on the short side) is
 the expensive part of all of them. The photograph cache holds those pyramids
 once decoded, so that whichever part of the program asks next, on whichever
 thread, gets the same pixels without reading the file again, and so that
@@ -30,7 +31,7 @@ which reads every photograph to render them, spends 3.95 s in `decode
 photographs` the first time and 10.7 ms when the same file is opened again.
 
 A pyramid of a 3840×2160 RGB photograph is 24.9 MB at level 0 and about 33 MB
-with its five lower levels, so all 368 would be 12 GB. That is why the cache
+with its eleven lower levels, so all 368 would be 12 GB. That is why the cache
 has a byte budget, and why the callers that ask for many photographs first
 leave out the ones they will not read.
 
@@ -51,11 +52,11 @@ calls, can take one.
 pub struct PhotographCache { /* … */ }
 
 impl PhotographCache {
-    /// A cache holding up to `budget_bytes` of pyramids of `levels` levels.
+    /// A cache holding up to `budget_bytes` of pyramids, each of
+    /// `ImageU8Pyramid::full_levels` depth for its photograph's size.
     /// A budget of 0 keeps nothing: every call decodes and hands back a
-    /// pyramid no one else will see. Panics when `levels` is 0.
-    pub fn new(budget_bytes: u64, levels: usize) -> Self;
-    pub fn levels(&self) -> usize;
+    /// pyramid no one else will see.
+    pub fn new(budget_bytes: u64) -> Self;
     pub fn budget_bytes(&self) -> u64;
 
     /// The pyramid for `path`, decoding on a miss. Blocks while another thread
@@ -129,9 +130,18 @@ Why it is shaped this way:
   caller names the phase (`decode images` in the viewer's bench steps, `decode
   photographs` in the bitmap render) and writes its note from the tally, since
   what the note should say depends on the caller.
-- **A fixed pyramid depth per cache.** Every consumer that shares pixels wants
-  `DISPLAY_PYRAMID_LEVELS` (6). A depth in the key would let two depths of one
-  photograph both occupy the budget.
+- **Each pyramid's depth set by its photograph's size.** Every entry has
+  `ImageU8Pyramid::full_levels(width, height)` levels, down to one or two
+  pixels on the short side: 14 for 16320×12240, 12 for 3840×2160, 9 for
+  270×480. That is the depth every other builder of a photograph pyramid for
+  the patch kernels uses (the cluster-patches build, in `sfm cluster-patches`
+  and in the viewer, and the Python patch bindings), so a kernel reads the same
+  levels from a photograph whichever caller handed it over, and a footprint of
+  any size finds a level: a kernel clamps its level at the pyramid's top only
+  where a view shrinks the photograph to about one pixel. Depth is not a
+  parameter, so the key need not hold it and two depths of one photograph never
+  both occupy the budget. The levels past the sixth cost under 0.1% of a
+  pyramid's bytes.
 - **`insert`** exists for pixels that are not a decode of the file on disk,
   such as a test fixture standing in for a photograph. The entry records the
   file's stamp as it is now, so `get` answers with those pixels until the file
@@ -218,7 +228,7 @@ file has changed. `forget` and `clear` are the other ways to retry.
 
 SfM Explorer holds one cache, `AppState::photographs` in
 [state.rs](../../../crates/sfm-explorer/src/state.rs), made with
-`default_budget_bytes()` and `DISPLAY_PYRAMID_LEVELS`. Every reader of the
+`default_budget_bytes()`. Every reader of the
 reconstruction's photographs goes through it except the ones under
 "Non-goals":
 
@@ -290,13 +300,15 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 |-----------|---------|---------|
 | budget | `default_budget_bytes()`: physical memory / 4, clamped to 1-16 GiB; 4 GiB when unknown | bytes of pyramids held before the least recently used are dropped; [photograph_cache.rs](../../../crates/sfmtool-core/src/camera/photograph_cache.rs) |
 | `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB` | unset | overrides the budget, in megabytes of 10^6 bytes (`BUDGET_ENV_VAR`) |
-| levels | `DISPLAY_PYRAMID_LEVELS` = 6 | pyramid depth of every entry; [display_bitmaps.rs](../../../crates/sfmtool-core/src/patch/display_bitmaps.rs), used by the viewer as `state::PYRAMID_LEVELS` |
+| levels | `ImageU8Pyramid::full_levels(width, height)` = `floor(log2(min(width, height))) + 1`, at least 2 | pyramid depth of each entry, from its photograph's size; [image.rs](../../../crates/sfmtool-core/src/camera/image.rs) |
 | footprint samples | 9 × 9 | grid `view_could_see_patch` projects over the patch (`FOOTPRINT_SAMPLES` in [view_selection.rs](../../../crates/sfmtool-core/src/patch/view_selection.rs)) |
 
 ## Testing
 
 - [photograph_cache/tests.rs](../../../crates/sfmtool-core/src/camera/photograph_cache/tests.rs):
-  one decode per path under contention, least-recently-used eviction within the
+  each entry at the `full_levels` depth of its own size, a view shrunk 64 times
+  read at level 6 by `BilinearMip` and `Anisotropic`, one decode per path
+  under contention, least-recently-used eviction within the
   budget, the entry just decoded kept over budget, a held pyramid surviving
   eviction, remembered failures, a file that appears or is rewritten being
   decoded again, `forget` and `clear` releasing bytes, `get_many` order, tally
@@ -323,8 +335,8 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 
 ## Non-goals
 
-- **Cluster patches** keeps its own reads. It wants full pyramid depth to
-  match `sfm cluster-patches` arithmetic, and it runs once per index build.
+- **Cluster patches** keeps its own reads. It builds the same full-depth
+  pyramids, and it runs once per index build.
 - **Display thumbnails and the 3D view's background image** keep their own
   decodes. The first make small images once per open; the second is a GPU
   texture the renderer caches.

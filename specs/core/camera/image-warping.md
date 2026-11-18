@@ -626,7 +626,14 @@ by the rule in § "Choosing the sampler per view".
 The Gaussian pyramid for `ImageU8` is built by repeated box-filter or Gaussian
 downsample-by-2, operating independently per channel. This is a separate lightweight
 implementation from the optical flow `ImagePyramid` (which operates on `GrayImage`
-f32 single-channel). The number of levels is `floor(log2(min(width, height)))`.
+f32 single-channel). A photograph's pyramid has
+`ImageU8Pyramid::full_levels(width, height)` levels,
+`floor(log2(min(width, height))) + 1` and at least two, down to one or two
+pixels on the short side: 12 for 3840×2160, 9 for 270×480. Every pyramid built
+from a photograph for the kernels has that depth, whether the photograph cache
+built it (SfM Explorer, `sfm web-export`) or a command or binding did, so a
+kernel clamps its level at the top only where a view shrinks the whole
+photograph to about one pixel.
 
 This filtering is primarily useful for undistorting fisheye images where the
 periphery represents a much larger field of view per pixel than the center. For
@@ -772,9 +779,9 @@ it to the top level `K` it has. Past `σ_major = 2^(K − 0.5)` the minor axis i
 read at `2^K / max(σ_minor, 1)`, less than `L`, and the major axis aliases by
 `σ_major / 2^K` instead. The rule reads `L` unclamped: the anisotropic sampler
 is the better of the two there too, since its samples along the major axis
-reduce that aliasing, and the depth differs between callers (the command line
-builds every level, SfM Explorer six), while the rule has to choose the same
-sampler for one observation in every kernel and caller. An infinite `σ_major`
+reduce that aliasing, and the rule judges a view by its Jacobian alone, so it
+chooses the same sampler for one observation in every kernel and caller
+whatever pyramid it is handed. An infinite `σ_major`
 gives an infinite `L`.
 
 #### The rule
@@ -797,7 +804,11 @@ A view renders with `Anisotropic` when **`σ_major ≥ √2` and `L ≥ a`**, an
 The rule was compared against `BilinearMip` everywhere on eleven samples, with
 a measurement harness that was written for this comparison and is not in the
 repository: up to 400 points per sample, all their views, and 40 tracks of
-each on the bench. Two samples are in the repository, the seoul_bull and
+each on the bench. The bench read pyramids of six levels for these
+measurements. A pyramid of `full_levels` depth renders the same views except
+where one shrinks the photograph past level 5: `BilinearMip` where
+`σ_major ≥ 2^5.5`, about 45, and `Anisotropic` where `σ_minor > 32`. Two
+samples are in the repository, the seoul_bull and
 kerry_park ground truths in `test-data/images/`. The other nine are local
 datasets that are not: a seed reconstruction of dino_dog_toy, two museum
 captures (masks, a tree stump exhibit), a gallery sculpture, a mossy railing,

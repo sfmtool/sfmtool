@@ -62,7 +62,7 @@ impl GroundTruth {
         let images = &recon.image_set.images;
         let paths: Vec<PathBuf> = images.iter().map(|i| dir.join(&i.name)).collect();
         let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-        let (pyramids, _) = PhotographCache::new(0, 8)
+        let (pyramids, _) = PhotographCache::new(0)
             .get_many(&refs, &Progress::none())
             .expect("nothing cancels the decode");
         let pyramids = pyramids

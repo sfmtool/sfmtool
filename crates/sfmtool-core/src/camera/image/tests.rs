@@ -178,6 +178,29 @@ fn test_pyramid_from_image_matches_build() {
     }
 }
 
+/// The full depth reaches one or two pixels on the short side, whichever way
+/// round the photograph is, and is never under two levels.
+#[test]
+fn full_levels_is_set_by_the_short_side() {
+    assert_eq!(ImageU8Pyramid::full_levels(16320, 12240), 14);
+    assert_eq!(ImageU8Pyramid::full_levels(3840, 2160), 12);
+    assert_eq!(ImageU8Pyramid::full_levels(2160, 3840), 12);
+    assert_eq!(ImageU8Pyramid::full_levels(270, 480), 9);
+    assert_eq!(ImageU8Pyramid::full_levels(30000, 1000), 10);
+    assert_eq!(ImageU8Pyramid::full_levels(64, 64), 7);
+    assert_eq!(ImageU8Pyramid::full_levels(63, 64), 6);
+    assert_eq!(ImageU8Pyramid::full_levels(4, 3), 2);
+    assert_eq!(ImageU8Pyramid::full_levels(1, 1), 2);
+    assert_eq!(ImageU8Pyramid::full_levels(0, 0), 2);
+    // A pyramid built at that depth ends at one or two pixels.
+    let pyr = ImageU8Pyramid::build(
+        &ImageU8::from_channels(270, 480, 1),
+        ImageU8Pyramid::full_levels(270, 480),
+    );
+    assert_eq!(pyr.num_levels(), 9);
+    assert_eq!((pyr.level(8).width(), pyr.level(8).height()), (1, 1));
+}
+
 #[test]
 fn test_pyramid_stops_at_small_dimension() {
     // 4x4 → 2x2 → 1x1. Requesting 10 levels should stop after 3

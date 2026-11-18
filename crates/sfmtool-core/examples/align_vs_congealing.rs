@@ -432,7 +432,7 @@ fn main() {
         .collect();
     let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
     let td = Instant::now();
-    let cache = PhotographCache::new(0, 12);
+    let cache = PhotographCache::new(0);
     let (pyramids, _) = cache.get_many(&refs, &Progress::none()).expect("decode");
     let pyramids: Vec<Option<Arc<ImageU8Pyramid>>> = pyramids;
     eprintln!(

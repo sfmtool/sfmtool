@@ -288,7 +288,7 @@ pub(crate) fn job_stops_when_cancelled() -> bool {
     }));
     let (sender, messages) = std::sync::mpsc::channel();
     let cancel = std::sync::atomic::AtomicBool::new(true);
-    let photographs = Arc::new(PhotographCache::new(0, 1));
+    let photographs = Arc::new(PhotographCache::new(0));
     work(edited, photographs, Arc::clone(&queue), sender, None)(
         &Progress::none().cancelled_by(&cancel),
     );

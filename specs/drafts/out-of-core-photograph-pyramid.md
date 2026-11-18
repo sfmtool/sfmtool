@@ -28,8 +28,7 @@ optimization. The user has decided every open question of this draft
 
 Amends [core/camera/photograph-cache.md](../core/camera/photograph-cache.md)
 (the cache hands out photograph tiles for every photograph instead of whole
-pyramids, gains an on-disk tier, and its levels a depth
-set by image size),
+pyramids, and gains an on-disk tier),
 [core/camera/reading-and-writing-images.md](../core/camera/reading-and-writing-images.md)
 (a second JPEG writer and reader, for mip level files),
 [gui/multi-panel-image-browser.md](../gui/multi-panel-image-browser.md)
@@ -84,7 +83,7 @@ written again.
 | level 5 | 510 x 382 (12240 / 32 is 382.5, and `downsample_2x` truncates) |
 | restart intervals in the file | 195,075 (1020 x 765 MCUs of 16 x 16 px, 4 MCUs each) |
 | the same restart interval in the other 16 photographs of the capture | 4 MCUs in every one |
-| a pyramid of 6 levels (`DISPLAY_PYRAMID_LEVELS`) | 798.8 MB (761.8 MiB) |
+| a pyramid of 6 levels (the viewer's depth before step 1) | 798.8 MB (761.8 MiB) |
 
 The viewer asks for `wgpu::Limits::default()` (`adapter.request_device(&wgpu::DeviceDescriptor::default())`
 in [lib.rs](../../crates/sfm-explorer/src/lib.rs)), whose
@@ -161,7 +160,7 @@ refused by every pyramid reader, in the viewer and in the kernels alike. The
 test data (270 x 480 to 2040 x 1536 and 480 x 480),
 3840 x 2160 video frames and 4032 x 3024 phone photographs are in core: no
 file is written for them, their tiles are cut from a decode, and no result
-changes except through the pyramid depth (below). The tier decides only
+changes. The tier decides only
 whether a photograph's levels are stored as mip level files; every
 photograph is read through tiles either way. A 24-megapixel camera
 (6000 x 4000) and the 200-megapixel phone photographs are out of core.
@@ -187,15 +186,11 @@ a temporary workspace (§ "The workspace setting").
 
 Two counts are decided by the photograph's size, not fixed.
 
-**Pyramid depth.** Every photograph pyramid has
-`ImageU8Pyramid::full_levels(width, height)` levels, down to one or two pixels
-on the short side: 14 levels for 16320 x 12240, 12 for 3840 x 2160, 9 for
-270 x 480. This is what `cluster-patches`, the viewer's cluster-patches build
-and the Python patch bindings already build, so the viewer, `sfm web-export`
-and the CLI patch commands read the same depth, and the cluster-patches build
-can share the viewer's cache. The viewer's fixed 6 (`DISPLAY_PYRAMID_LEVELS`,
-which `PhotographCache::new` takes today) goes away. The extra levels cost
-under 0.1% of a pyramid's bytes.
+**Pyramid depth.** Built (step 1): every photograph pyramid has
+`ImageU8Pyramid::full_levels(width, height)` levels, 14 for 16320 x 12240,
+as [core/camera/photograph-cache.md](../core/camera/photograph-cache.md)
+describes. The levels the mipmap stores and the photograph tiles cut are those
+levels.
 
 **Mip levels stored.** An out-of-core photograph's mipmap holds a level-0
 mip level file, `-mip0`, exactly when its original is not region-readable
@@ -220,29 +215,6 @@ is one tile, so `K = 3`. Level `l` is `floor(width / 2^l)` by
 `floor(height / 2^l)`, as repeated `downsample_2x` makes it, and its pixel `j`
 covers level-0 pixels `j·2^l` to `(j+1)·2^l − 1`; the level-0 columns past
 `w_l · 2^l` (fewer than `2^l`) are dropped, as today.
-
-**What changes for the kernels.** Where a kernel clamps its level at the
-pyramid's top today, a deeper pyramid lets it read a coarser level. With 6
-levels the top is level 5, so the result changes only for samples that ask for
-more than level 5:
-
-- `BilinearMip` (`mip_level_for_sigma` in
-  [remap.rs](../../crates/sfmtool-core/src/camera/remap.rs)): where
-  `σ_major ≥ 2^5.5 ≈ 45.3` photograph pixels per output pixel.
-- `Anisotropic` (`aniso_footprint`): where `σ_minor > 32`, which today reads
-  level 5 alone and now blends levels 5 and 6.
-- The cluster refinement's per-grid level (`level_for_map` in
-  [cluster_refine.rs](../../crates/sfmtool-core/src/patch/cluster_refine.rs)):
-  where the smaller singular value `s_min ≥ 64`, in Track View's cluster-stage
-  tiles (`sample_member_grid` on the viewer's pyramids). `cluster-patches` and
-  the viewer's cluster-patches build already read full depth and do not change.
-- Track View's crops (`patch_pictures/crop.rs`, `floor(log2 step)` clamped to
-  the top level): where the step is 64 or more.
-
-These are views that shrink a patch more than 32 to 45 times, which happen on
-small patches seen from far away, in every photograph size including the test
-data. In-core photographs change nowhere else: their tiles hold the same
-pixels as today's in-memory pyramids.
 
 ## Which originals can be read by region
 
@@ -587,7 +559,7 @@ a block of settings for one kind of derived file:
   `.sfm-mipmaps/`, and every photograph, whatever its size, is in core: its
   tiles are cut from a whole decode of the original. Every existing workspace
   is in this state until its owner adds the object, so it reads the same
-  pixels as today, except for the pyramid depth by size. For a large
+  pixels as today. For a large
   photograph that means:
   - **The display does not crash.** Image Detail draws photograph tiles and
     the 3D background one fitting level (steps 2 and 3), so no texture is
@@ -1565,8 +1537,7 @@ otherwise), what each reads after this design, and whether its results change.
 photograph tiles, for every photograph: an in-core photograph's tiles are cut
 from a decode of the original, and an out-of-core one's come from levels 1 to
 `K` of its mip level files and level 0 of the original if it is
-region-readable or of its `-mip0` otherwise. "Depth" means the change of
-pyramid depth above. "The stored levels" means the results change for an
+region-readable or of its `-mip0` otherwise. "The stored levels" means the results change for an
 out-of-core photograph, whose levels 1 to `K` (and `-mip0`) are JPEG files;
 an in-core photograph's tiles hold today's exact levels. Each row marked
 "regions" moves to view-region pyramids in its own step (steps 9 to 12 and
@@ -1579,11 +1550,11 @@ tiled photographs only (step 13), so no step leaves a reader without pixels.
 | 1 | Image Detail (`dock.rs` → `display_photograph` → `load_image`) | level 0 as one texture | photograph tiles of the zoom's level; coarsest resident | display only; no texture over 514 px |
 | 2 | 3D camera-view background (`bg_image.rs` `load_bg_texture`, from `app.rs`) | whole RGBA, one texture, decoded on the GUI thread | one level fitting viewport and limit, assembled from tiles off the GUI thread | display only; the alpha it reads today is not drawn |
 | 3 | Track View's requests (`dock.rs` `cache_bench_track_images`, `cache_selected_point_images`) | a pyramid request per image per frame | the layout, then the tiles each render needs | no |
-| 4–6 | Track View's patch tiles, cluster-stage tiles, hover context (`track_view/body/mod.rs` `ensure_tile`, `ensure_context`; `tile.rs`, `patch.rs` → `render_tile`; cluster stage → `sample_member_grid`) | whole pyramid, `peek` | regions, from peeked tiles, with `render_tile` and `sample_member_grid` reading the region pyramid; the *Zoom* cell and the *ZNCC* hover read no photograph | the stored levels; depth |
-| 7–9 | Track View's crops and their hover, the Track Table's crop column and hover (`patch_pictures/crop.rs` `picture`, `track_table_panel.rs` `crop_picture`, `track_table_panel/pictures.rs` `crop_context`) | one level of the pyramid, `level(0)` for the size | the crop's rectangle of the same level, from peeked tiles (the companion's § "Readers that sample through their own code"); the size from the layout | the stored levels; depth past a step of 64 |
+| 4–6 | Track View's patch tiles, cluster-stage tiles, hover context (`track_view/body/mod.rs` `ensure_tile`, `ensure_context`; `tile.rs`, `patch.rs` → `render_tile`; cluster stage → `sample_member_grid`) | whole pyramid, `peek` | regions, from peeked tiles, with `render_tile` and `sample_member_grid` reading the region pyramid; the *Zoom* cell and the *ZNCC* hover read no photograph | the stored levels |
+| 7–9 | Track View's crops and their hover, the Track Table's crop column and hover (`patch_pictures/crop.rs` `picture`, `track_table_panel.rs` `crop_picture`, `track_table_panel/pictures.rs` `crop_context`) | one level of the pyramid, `level(0)` for the size | the crop's rectangle of the same level, from peeked tiles (the companion's § "Readers that sample through their own code"); the size from the layout | the stored levels |
 | 10 | Track Table reference picks (`track_table_panel/picks.rs` → `render_reference` → `render_view_tile`, `clipped_share`) | `get`, whole pyramid; level 0 inside the outline; `level(0)` for the size check | regions, and `clipped_share` walks the level-0 tiles under the outline; each pick still fetches its views with one `get` per observation, and makes one region pool for its one `render_reference` call over all of them, so a point's views share one pool; the size check from the layout | the stored levels, and `clipped_share` reads `-mip0` for an original that is not region-readable |
-| 11–13 | Display patch bitmaps at open, conversion to embedded patches, `sfm web-export` (`display_bitmaps.rs`, `state/edits.rs` `convert_to_embedded_patches_job`, `web_export.rs`) | `get_many`, 6 levels, every photograph held at once; web-export with budget 0 | `get_many` answers tiled photographs; regions; web-export makes missing mipmaps in the workspace | the stored levels; depth |
-| 14–18 | The bench's steps and searches, live evaluation, *Find Nearby Tracks*, *Create Track Here*, *Add image to tracks*, *Refine all normals*, *Refit all points* (`bench.rs`, `state/edits.rs` `fetch`, `bench/nearby_tracks.rs`, `bench/track_at_pixel.rs`, `add_image_to_tracks.rs`, `state/edits/refine_all_normals.rs`, `refit_all_points.rs`) | `get_many`, levels per sample or per grid, `clipped_share` on level 0; the normal kernels' renders, the grown plane's own sampler and the cluster refinement's `LevelTile` copies | regions, `clipped_share` as in row 10; the grown plane's reads through `read_source_samples` and `LevelTile` through `read_source_rect` (the companion's § "Readers that sample through their own code") | the stored levels; depth |
+| 11–13 | Display patch bitmaps at open, conversion to embedded patches, `sfm web-export` (`display_bitmaps.rs`, `state/edits.rs` `convert_to_embedded_patches_job`, `web_export.rs`) | `get_many`, full depth, every photograph held at once; web-export with budget 0 | `get_many` answers tiled photographs; regions; web-export makes missing mipmaps in the workspace | the stored levels |
+| 14–18 | The bench's steps and searches, live evaluation, *Find Nearby Tracks*, *Create Track Here*, *Add image to tracks*, *Refine all normals*, *Refit all points* (`bench.rs`, `state/edits.rs` `fetch`, `bench/nearby_tracks.rs`, `bench/track_at_pixel.rs`, `add_image_to_tracks.rs`, `state/edits/refine_all_normals.rs`, `refit_all_points.rs`) | `get_many`, levels per sample or per grid, `clipped_share` on level 0; the normal kernels' renders, the grown plane's own sampler and the cluster refinement's `LevelTile` copies | regions, `clipped_share` as in row 10; the grown plane's reads through `read_source_samples` and `LevelTile` through `read_source_rect` (the companion's § "Readers that sample through their own code") | the stored levels |
 | 16a | *Find Nearby Tracks*' grey reads (`GreyImages`, `bench/nearby/grey.rs`) | level 0 of each view, blurred grey `f32`, whole: 800 MB per 200-megapixel view | each read blurs the level-0 region it samples, plus the blur's 4 px | level 0 from `-mip0` for an original that is not region-readable |
 | 19 | The viewer's cluster-patches build (`cluster_patches.rs` `read_photographs`) | `read_rgb`, full depth, outside the cache, all at once | `get_many` through the cache; regions | the stored levels |
 | 20 | Display thumbnails when none is stored (`display_thumbnails.rs` → `display_thumbnail_row`) | whole decode, resized to 128 | in core unchanged; out of core from the coarsest mip level file | display only |
@@ -1878,7 +1849,6 @@ pub enum GetError { NotFound(PathBuf), Unreadable(String), Workspace(WorkspaceCo
 pub struct PhotographLayout { pub layout: Arc<PyramidLayout>, pub region_readable: Option<bool> }
 ```
 
-`DISPLAY_PYRAMID_LEVELS` and the viewer's `state::PYRAMID_LEVELS` are removed.
 `ProjectedImage`'s `pyramid` field becomes a `&TiledPhotograph`. The
 `SFM_EXPLORER_TILE_CACHE_MB` variable does not exist: the cache has one
 budget, set by `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB` as today.
@@ -2134,11 +2104,10 @@ without turning it on anywhere but in tests: until step 17, neither
 has the object unless its owner writes it by hand, and every photograph stays
 in core. Step 17 turns the tier on.
 
-1. **Depth by size.** Pyramids of `full_levels` depth everywhere;
-   `PhotographCache::new` loses `levels`; `DISPLAY_PYRAMID_LEVELS` goes.
-   Tests: the depth for several sizes; a kernel render that clamped at level 5
-   now reads level 6, on a synthetic view shrunk 64 times; the tests that pin
-   rendered values updated where they change, each change explained.
+1. **Depth by size.** Built: photograph pyramids of `full_levels` depth
+   everywhere, `PhotographCache::new` without `levels`, and no
+   `DISPLAY_PYRAMID_LEVELS`; specified in
+   [core/camera/photograph-cache.md](../core/camera/photograph-cache.md).
 2. **Image Detail draws photograph tiles** cut from the in-memory pyramid,
    with the level rule, the coarser fallback, the per-frame upload cap, the
    texture limit of 256 and the zoom limit `max(32, 8 / fit_scale)`. This

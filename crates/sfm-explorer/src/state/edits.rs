@@ -52,7 +52,7 @@ use crate::document::{PointMap, VersionSerial};
 use crate::progress::Collector;
 use crate::scene::{ImageRef, PointRef, ReconId};
 
-use super::{AppState, NOT_LOADED, PYRAMID_LEVELS};
+use super::{AppState, NOT_LOADED};
 
 /// The patch-frame normal the viewer's `sift_files` → `embedded_patches`
 /// conversion seeds each point with: the mean of its point-to-camera
@@ -789,7 +789,7 @@ impl ViewSources {
     fn into_views(self, fetched: Fetched) -> DecodedViews {
         let placeholder = Arc::new(ImageU8Pyramid::from_image(
             ImageU8::new(1, 1, 3, vec![0u8; 3]),
-            PYRAMID_LEVELS,
+            1,
         ));
         let (pyramids, present) = fetched
             .into_iter()
