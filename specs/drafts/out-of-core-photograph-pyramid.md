@@ -1278,8 +1278,9 @@ budget, whatever the number or size of the photographs, in core or out. A
 render's region pyramid at patch resolution `R` with a footprint that is not
 stretched is about `(R + 4)^2 x 3` bytes at its level and a quarter of that at
 the next (anisotropic blending), so 2.9 KB at `R = 24` and 17 KB at `R = 64`,
-and 2.25 times that when it is kept for reuse with its margin (a quarter of
-the region on every side). A stretched footprint, a grazing view, or the
+and about 2.25 times that when it is kept for reuse, grown by
+`REGION_REUSE_MARGIN` (a quarter of the region's width and height on each
+side, § "Where the pixels come from" in the companion draft). A stretched footprint, a grazing view, or the
 `Bilinear` sampler reading level 0 over a large footprint, can make one
 render's bounding box far larger; the companion draft bounds that with a
 second sampling path and one region pool per kernel call, made by the

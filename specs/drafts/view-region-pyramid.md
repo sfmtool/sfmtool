@@ -420,7 +420,7 @@ assembles a region pyramid or touches a photograph tile:
 |-------------|------------------------|-----------------|---------|
 | `render_source_tile`, `render_source_tile_with_grad_into` | a warp map and a sampler | the rendered tile, and its gradients | every render through the general rules |
 | `render_source_affine` | the view selection's affine map, its level, the support's grid pixels and the sampler | the support's raw samples, by today's `sample_support_affine` or `sample_support_affine_aniso`, whose arithmetic moves behind it unchanged | the view selection's affine fast path |
-| `sample_source_grid` | a cluster grid's affine map and the grid points it reads (a window of the grid, or the support's pixels) with the edge rule | the raw samples, by today's `sample_grid_window` and `build_template` sampling, whose arithmetic moves behind it unchanged | the cluster refinement's grid samplers, `sample_member_grid` |
+| `sample_source_grid` | a cluster grid's affine map and the grid points it reads (a window of the grid, or the support's pixels) with the edge rule (a `GridEdge`, or every sample in frame as `build_template` requires) | the raw samples, by today's `sample_grid_window` and `build_template` sampling, whose arithmetic moves behind it unchanged | the cluster refinement's grid samplers, `sample_member_grid` |
 | `read_source_samples` | a level, positions on it, and a border of 0 or 1 | for each position, the `(2 + 2 · border)²` pixels from `floor(x − 0.5) − border` and `floor(y − 0.5) − border`, each address clamped to the level as `bilinear_geometry` and `sobel_gradient` clamp it, with `bilinear_geometry`'s fractions | the grown plane's value and Sobel reads |
 | `read_source_rect` | a level and a rectangle of it that the kernel's own arithmetic defines | the rectangle's pixels, reserved from the pool and copied whether or not the reservation succeeds | the cluster refinement's `LevelTile`, the grey reads of *Find Nearby Tracks* |
 | `clipped_share` | the outline | the share of level-0 pixel centres inside it, walking the level-0 tiles under the outline one at a time | the reference view's tile readings |
@@ -454,7 +454,7 @@ sampling clamps at the level's edge the same way (§ "What it holds"). A
 later render whose required regions lie inside the held ones reuses it; one
 that does not assembles a new one. Before clipping, the held region is 1.5
 times as wide and as tall as the required one when its sides are multiples
-of 4, so 2.25 times the area. Rounding up adds at most 1.5 px to each side,
+of 4, so 2.25 times the area. Rounding up adds at most 1.5 px to the width and to the height,
 so in general the area is at most `(1.5 + 1.5 / w)(1.5 + 1.5 / h)` times,
 a bound of about 2.3 for square regions of about 60 px and 2.5 for ones of
 about 20 px. For
@@ -641,7 +641,10 @@ makes a mipmap.
   those of points near each other in it and, through the surface, near each
   other in the views that also see them. The order uses only the
   reconstruction, so it does not depend on how photographs are cut into
-  tiles. Each kernel's phase note reports the tiles decoded and reused.
+  tiles. A parallel loop over the ordered points hands each worker runs of
+  consecutive points, so the workers are in at most as many reference
+  images at once as there are workers. Each kernel's phase note reports the
+  tiles decoded and reused.
 - **`GreyImages`** today holds a blurred `f32` grey copy of each view's
   level 0, 800 MB for a 200-megapixel view. With regions it holds a few
   kilobytes per read.
@@ -744,9 +747,11 @@ there is no whole pyramid for any reader to fall back on.
    cluster-patches build fetch tiled photographs, each taking its points in
    the order § "Memory" gives (by reference image, then the keypoint's row
    and column). Tests: identical results; a cache budget smaller than one
-   photograph's level 0 still completes; with a budget smaller than the
-   reconstruction's tiles but holding the tiles of every photograph one
-   reference image's points are seen in, each in-core photograph is decoded
+   photograph's level 0 still completes; on a rayon pool of one thread, so
+   that one reference image's points are in progress at a time, with a
+   budget smaller than the reconstruction's tiles but holding the tiles of
+   every photograph one reference image's points are seen in, each in-core
+   photograph is decoded
    at most once in the read phase and once more for each reference image
    whose points it sees, and the same points in shuffled order decode more,
    so the test can fail; with a small pool, the
