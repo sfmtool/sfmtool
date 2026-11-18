@@ -255,7 +255,7 @@ reserves its bytes from the kernel call's region pool and is built whether
 or not the reservation succeeds; the members' elongation limit below bounds
 it (open question 6).
 
-#### The members' elongation limit
+### The members' elongation limit
 
 The **elongation** of a member's affine shape, or of an evaluation's map, is
 the ratio of its larger singular value to its smaller, `s_max / s_min`, from
@@ -272,17 +272,17 @@ two have the same elongation. `MAX_MEMBER_ELONGATION` in
   and its final parts read, `read_member_at`, `member_zncc_at`), a map whose
   elongation is over the limit scores as a support out of frame does,
   before any `LevelTile` is asked for: the simplex scores it worst (+1.0)
-  and retreats, and a member whose every rotation start is past the limit
-  is `not_evaluated`, as one whose every start is out of frame is today. The
-  shape the refinement returns is one it evaluated, so it is within the
-  limit too.
+  and retreats. A rotation start turns the detected shape, which keeps its
+  singular values, so no start of a member that passed validation is past
+  the limit. The shape the refinement returns is one it evaluated, so it is
+  within the limit too.
 
 The value is the samplers' own: `MAX_ANISOTROPY` is the most samples the
 anisotropic sampler takes along a footprint's major axis, so the renders
 already resample a footprint stretched past 16 times with aliasing. A circle
 on the surface foreshortened 16 times is seen at `acos(1/16)`, 86.4°, from
-its normal, well past the 80° the normal kernels take a view at
-(`max_view_angle_deg`). It is a named constant, not a setting, because the
+its normal, past the 80° beyond which the pairwise-flow normal kernel takes
+no view (`max_view_angle_deg`). It is a named constant, not a setting, because the
 memory bound below rests on it and a setting would let a caller remove the
 bound; tying it to `MAX_ANISOTROPY` keeps one number for how stretched a
 footprint the tree reads. A member past it keeps the status `not_evaluated`
@@ -302,7 +302,8 @@ under `2 · MAX_MEMBER_ELONGATION`, so their sum is under 34 (also at level 0,
 where `s_min` is under 2). The affine image of the `R x R` grid spans `W`
 by `H` pixels with `W + H ≤ 2 (R − 1)(s_max + s_min) / 2^l`, so
 `W · H ≤ ((R − 1)(s_max + s_min) / 2^l)²`; `grid_bbox`'s flooring, ceiling
-and 2 px add at most 6 px to each side and `TILE_MARGIN` 16 more, so one
+and 2 px add at most 6 px to the width and to the height and `TILE_MARGIN`
+16 more, so one
 evaluation's rectangle holds at most `((R − 1) · 34 + 22)²` pixels. The
 rectangle a `TileCache` holds is the union of the requests made at that
 level, which the cascade's travel could widen without bound, so the same step
@@ -332,10 +333,13 @@ the pool and the most levels one member touched.
 
 Both rules change results whether or not tiles are used, so they are the
 main draft's step 8, before the cluster refinement reads tiles in step 4
-[10]. They change a member refused at validation, a member whose cascade
-evaluated a map past the limit or whose tile hit the cap, and every member of
-a cluster whose reference was a refused member (the reference is the usable
-member of largest scale); every other member's result is unchanged.
+[10]. They change a member refused at validation, a member whose cascade or
+piecewise stage evaluated a map past the limit or whose tile hit the cap, and,
+through the cluster's own rules, the members those decide between: every
+member of a cluster whose reference was a refused member (the reference is the
+usable member of largest scale) or that a refusal leaves with fewer than two
+usable members, and the other members of an image whose kept member changed,
+since one member is kept per image. Every other member's result is unchanged.
 
 ### Reads of the size and channels only
 
