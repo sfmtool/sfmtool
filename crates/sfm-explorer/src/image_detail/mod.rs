@@ -22,6 +22,7 @@ mod bench_track;
 mod input;
 mod intrinsics;
 mod overlay;
+mod photograph_tiles;
 #[cfg(test)]
 mod tests;
 mod view;
@@ -42,8 +43,7 @@ use crate::state::edits::PointGesture;
 use crate::state::{
     CachedSiftFeatures, FeatureDisplaySettings, IntrinsicsDisplaySettings, OverlayMode,
 };
-use crate::texture::rgb_to_color_image;
-use sfmtool_core::camera::image::ImageU8;
+use sfmtool_core::camera::image::ImageU8Pyramid;
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::spatial::PointCloud2;
 use sfmtool_core::EditedReconstruction;
@@ -55,8 +55,9 @@ use intrinsics::View;
 /// has got with it.
 #[derive(Clone, Copy)]
 pub(crate) enum DetailPhotograph<'a> {
-    /// Decoded: the full-resolution RGB pixels.
-    Decoded(&'a ImageU8),
+    /// Decoded: the photograph's whole pyramid, which the panel cuts its
+    /// photograph tiles from.
+    Decoded(&'a ImageU8Pyramid),
     /// Being decoded off the GUI thread. The panel says so and draws the
     /// photograph on the frame after it arrives.
     Decoding,
@@ -70,8 +71,14 @@ pub(crate) const DECODING_LABEL: &str = "Loading image…";
 /// What the panel says in place of a photograph that could not be read.
 pub(crate) const UNREADABLE_LABEL: &str = "Failed to load image";
 
-/// Maximum zoom level (32× = pixel-level inspection).
-pub(crate) const MAX_ZOOM: f32 = 32.0;
+/// The least the zoom limit is, relative to the fit: 32× is pixel-level
+/// inspection for a photograph that fits the panel at a quarter of its size or
+/// larger. See [`view::zoom_limit`].
+pub(crate) const ZOOM_LIMIT_FLOOR: f32 = 32.0;
+/// Panel points one source pixel can always be enlarged to, however large the
+/// photograph: what raises the zoom limit above [`ZOOM_LIMIT_FLOOR`] for one
+/// that fits at less than a quarter of its size. See [`view::zoom_limit`].
+pub(crate) const PIXEL_ZOOM: f32 = 8.0;
 /// Minimum overlap in pixels between image and panel when panning.
 const PAN_MARGIN: f32 = 50.0;
 /// How far in from the panel's edge a revealed pixel still counts as out of
@@ -103,8 +110,9 @@ struct FeatureOverlayState {
 
 /// Image detail panel state.
 pub(crate) struct ImageDetail {
-    /// Currently loaded full-res image and the texture built from it.
-    loaded_image: Option<(ImageRef, egui::TextureHandle)>,
+    /// The photograph tiles uploaded for the images shown, and the layout of
+    /// the one shown last.
+    tiles: photograph_tiles::PhotographTiles,
     /// Prepared feature overlay for the current image.
     feature_overlay: Option<FeatureOverlayState>,
     /// The intrinsics layer's products, keyed by the image intrinsics they
@@ -138,6 +146,9 @@ pub(crate) struct ImageDetail {
     pan: egui::Vec2,
     /// Zoom level. 1.0 = fit image to panel. >1.0 = zoomed in.
     zoom: f32,
+    /// The highest `zoom` the frame being drawn allows, from its fit
+    /// ([`view::zoom_limit`]). Set before the frame's input runs.
+    zoom_limit: f32,
     /// Displayed image extent that the current [`ImageDetail::pan`] was
     /// measured against, from the last frame that drew one. `None` until a
     /// frame has drawn, and again after a view reset. See
@@ -269,7 +280,7 @@ pub(crate) struct ImageDetailResponse {
 impl ImageDetail {
     pub(crate) fn new() -> Self {
         Self {
-            loaded_image: None,
+            tiles: photograph_tiles::PhotographTiles::new(),
             feature_overlay: None,
             intrinsics: HashMap::new(),
             change_layer: None,
@@ -277,6 +288,7 @@ impl ImageDetail {
             menu_pixel: None,
             pan: egui::Vec2::ZERO,
             zoom: 1.0,
+            zoom_limit: ZOOM_LIMIT_FLOOR,
             last_display_size: None,
             bench_drag: None,
             point_gesture: None,
@@ -312,16 +324,10 @@ impl ImageDetail {
     /// Drop everything cached for a reconstruction that has left the scene.
     ///
     /// A [`ReconId`] is never reused, so these entries could only ever go stale
-    /// rather than alias — this is about the GPU texture they hold, not about
+    /// rather than alias — this is about the GPU textures they hold, not about
     /// correctness.
     pub(crate) fn forget_recon(&mut self, id: ReconId) {
-        if self
-            .loaded_image
-            .as_ref()
-            .is_some_and(|(image, _)| image.recon == id)
-        {
-            self.loaded_image = None;
-        }
+        self.tiles.forget_recon(id);
         if self
             .feature_overlay
             .as_ref()
@@ -505,7 +511,7 @@ impl ImageDetail {
     /// Apply zoom centered at a cursor position (in panel coordinates relative to panel center).
     fn zoom_at(&mut self, zoom_factor: f32, cursor_rel: egui::Vec2) {
         let old_zoom = self.zoom;
-        self.zoom = (self.zoom * zoom_factor).clamp(1.0, MAX_ZOOM);
+        self.zoom = (self.zoom * zoom_factor).clamp(1.0, self.zoom_limit);
         let ratio = self.zoom / old_zoom;
         // Adjust pan so the point under the cursor stays fixed.
         self.pan = self.pan * ratio + cursor_rel * (1.0 - ratio);
@@ -714,28 +720,23 @@ impl ImageDetail {
             ui.centered_and_justified(|ui| {
                 ui.label("No image selected");
             });
-            if self.loaded_image.is_some() {
-                self.loaded_image = None;
-                self.feature_overlay = None;
-            }
+            self.feature_overlay = None;
             return response;
         };
 
         let image_ref = ImageRef::new(recon_id, img_idx);
 
-        // Load the full-resolution image if it changed. The CPU pixels come
-        // from the shared photograph cache (decoded once, on a worker thread
-        // that dock.rs asks for); this panel only uploads them to a GPU
-        // texture. Until they arrive nothing is loaded, so this runs again on
-        // each frame until the decode lands.
-        if self.loaded_image.as_ref().map(|(i, _)| *i) != Some(image_ref) {
-            let full_res = match photograph {
-                DetailPhotograph::Decoded(image) => Some(image),
-                DetailPhotograph::Decoding | DetailPhotograph::Unreadable => None,
-            };
-            self.load_image(ui.ctx(), full_res, image_ref);
-            self.feature_overlay = None; // reset overlay on image change
-        }
+        // The pyramid comes from the shared photograph cache (decoded once, on
+        // a worker thread that dock.rs asks for); this panel only cuts the
+        // photograph tiles it draws out of it and uploads them. Until it
+        // arrives the panel has no layout for a new image and says so below;
+        // an image it has drawn keeps its layout and its uploaded tiles, so a
+        // pyramid the cache has since dropped still draws what was uploaded.
+        let pyramid = match photograph {
+            DetailPhotograph::Decoded(pyramid) => Some(pyramid),
+            DetailPhotograph::Decoding | DetailPhotograph::Unreadable => None,
+        };
+        let layout_size = self.tiles.layout(image_ref, pyramid).map(|l| l.size());
 
         // Determine whether to show features based on overlay mode
         let show_features = feature_display.overlay_mode != OverlayMode::None;
@@ -768,14 +769,10 @@ impl ImageDetail {
             }
         }
 
-        // Display the image fitted to the panel. Read the texture's size and id
-        // out here rather than holding the handle: the view bookkeeping below
-        // needs `&mut self`.
-        let Some((tex_size, texture_id)) = self
-            .loaded_image
-            .as_ref()
-            .map(|(_, texture)| (texture.size_vec2(), texture.id()))
-        else {
+        // Display the image fitted to the panel, at the photograph's level-0
+        // size: every coordinate below, the overlays' included, is in level-0
+        // pixels whichever level the tiles are drawn from.
+        let Some(size) = layout_size else {
             ui.centered_and_justified(|ui| match photograph {
                 DetailPhotograph::Decoding => {
                     ui.label(DECODING_LABEL);
@@ -786,20 +783,33 @@ impl ImageDetail {
             });
             return response;
         };
+        let image_size = egui::vec2(size[0] as f32, size[1] as f32);
 
         let panel_rect = ui.available_rect_before_wrap();
         let panel_size = panel_rect.size();
         let panel_center = panel_rect.center();
 
         // Base scale: fits the image to the panel at zoom=1.0
-        let base_scale = (panel_size.x / tex_size.x).min(panel_size.y / tex_size.y);
+        let base_scale = (panel_size.x / image_size.x).min(panel_size.y / image_size.y);
         let effective_scale = base_scale * self.zoom;
-        let display_size = egui::vec2(tex_size.x * effective_scale, tex_size.y * effective_scale);
+        let display_size = egui::vec2(
+            image_size.x * effective_scale,
+            image_size.y * effective_scale,
+        );
 
         // Carry the framed region across an image or reconstruction switch and
         // across a panel resize — all of which reach here as a change of extent.
         self.rescale_view(display_size);
         self.clamp_pan(display_size, panel_size);
+
+        // The zoom limit is this frame's: it rises with the photograph's size
+        // against the panel, so a zoom carried over from a larger photograph,
+        // or from a larger panel, can be past it. Brought back about the panel
+        // centre, which keeps the framed region's centre where it was.
+        self.zoom_limit = view::zoom_limit(base_scale);
+        if self.zoom > self.zoom_limit {
+            self.zoom_at(self.zoom_limit / self.zoom, egui::Vec2::ZERO);
+        }
 
         // A row click elsewhere named a feature in this image, or a tool asked
         // for a place, a rectangle or the whole frame; look there. After the
@@ -807,12 +817,15 @@ impl ImageDetail {
         // this frame starts from and a reveal's test is whether *that* view
         // holds the pixel.
         if let Some(look) = look {
-            self.look(&look, self.geometry(image_ref, tex_size, panel_size));
+            self.look(&look, self.geometry(image_ref, image_size, panel_size));
         }
 
         // Re-derived, because a look that named a zoom moved it.
         let effective_scale = base_scale * self.zoom;
-        let display_size = egui::vec2(tex_size.x * effective_scale, tex_size.y * effective_scale);
+        let display_size = egui::vec2(
+            image_size.x * effective_scale,
+            image_size.y * effective_scale,
+        );
 
         // Image rect with pan offset
         let image_center = panel_center + self.pan;
@@ -826,13 +839,17 @@ impl ImageDetail {
             ui.interact(interact_rect, interact_id, egui::Sense::click_and_drag());
         response.has_pointer = interact_response.hovered();
 
-        // Draw the image (clipped to panel)
+        // Draw the image (clipped to panel) from the photograph tiles of the
+        // level that matches the zoom.
         let painter = ui.painter_at(panel_rect);
-        painter.image(
-            texture_id,
+        self.tiles.draw(
+            ui.ctx(),
+            &painter,
+            image_ref,
+            pyramid,
             image_rect,
-            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            egui::Color32::WHITE,
+            effective_scale,
+            ui.ctx().pixels_per_point(),
         );
 
         // --- Create Track Here's Control+Shift click, before anything else ---
@@ -904,12 +921,15 @@ impl ImageDetail {
 
         // Recompute image rect after pan/zoom changes from input
         let effective_scale = base_scale * self.zoom;
-        let display_size = egui::vec2(tex_size.x * effective_scale, tex_size.y * effective_scale);
+        let display_size = egui::vec2(
+            image_size.x * effective_scale,
+            image_size.y * effective_scale,
+        );
         // The extent `pan` is now measured against, for the next frame's rescale.
         self.last_display_size = Some(display_size);
         // And the view this frame settled on, for the wire, which has no other
         // way to know how big this panel's body is.
-        response.view = Some(self.geometry(image_ref, tex_size, panel_size));
+        response.view = Some(self.geometry(image_ref, image_size, panel_size));
         let image_center = panel_center + self.pan;
         let image_rect = egui::Rect::from_center_size(image_center, display_size);
 
@@ -1023,27 +1043,6 @@ impl ImageDetail {
         }
 
         response
-    }
-
-    /// Build the display texture from the shared full-res CPU image (decoded
-    /// once into `AppState::photographs`). `None` means there are no pixels
-    /// yet or the decode failed; the panel then draws [`DECODING_LABEL`] or
-    /// [`UNREADABLE_LABEL`] in their place.
-    fn load_image(&mut self, ctx: &egui::Context, full_res: Option<&ImageU8>, image: ImageRef) {
-        let Some(img) = full_res else {
-            self.loaded_image = None;
-            return;
-        };
-        let img_idx = image.index();
-        // Expand 3-channel RGB to RGBA for the GPU upload.
-        let (w, h) = (img.width() as usize, img.height() as usize);
-        let color_image = rgb_to_color_image(img.data(), [w, h]);
-        let texture = ctx.load_texture(
-            format!("detail_{img_idx}"),
-            color_image,
-            egui::TextureOptions::LINEAR,
-        );
-        self.loaded_image = Some((image, texture));
     }
 
     /// Build tracked-only feature list from the shared SIFT cache (for None overlay mode).
@@ -1297,7 +1296,7 @@ impl ImageDetail {
     /// Clear the cached image (e.g., when reconstruction changes).
     #[allow(dead_code)]
     pub(crate) fn clear(&mut self) {
-        self.loaded_image = None;
+        self.tiles.clear();
         self.feature_overlay = None;
         self.intrinsics.clear();
         self.change_layer = None;

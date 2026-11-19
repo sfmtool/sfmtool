@@ -246,7 +246,9 @@ fn a_feature_target_centres_that_feature() {
 }
 
 /// A zoom past the panel's own range is clamped, and the reply says where it
-/// landed rather than echoing what was asked for.
+/// landed rather than echoing what was asked for. The fixture fits its
+/// photograph at 0.42 points a pixel, above a quarter, so the limit is the
+/// floor of 32.
 #[test]
 fn a_zoom_past_the_panel_s_range_comes_back_clamped() {
     let (mut state, mut viewer) = looking_at(1.0);
@@ -258,7 +260,7 @@ fn a_zoom_past_the_panel_s_range_comes_back_clamped() {
     );
     assert_eq!(
         reply["image_detail_view"]["zoom"],
-        json!(f64::from(crate::image_detail::MAX_ZOOM)),
+        json!(f64::from(crate::image_detail::ZOOM_LIMIT_FLOOR)),
         "{reply}"
     );
     let floored = call(
@@ -274,6 +276,32 @@ fn a_zoom_past_the_panel_s_range_comes_back_clamped() {
     );
 }
 
+/// A photograph that fits at less than a quarter of its size zooms past 32,
+/// until one of its pixels spans 8 panel points.
+#[test]
+fn a_large_photograph_zooms_until_one_pixel_spans_eight_points() {
+    let (mut state, mut viewer) = looking_at(1.0);
+    let large = [16320.0, 12240.0];
+    if let Some(view) = state.image_detail_view.as_mut() {
+        view.image_size = large;
+    }
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "pixel": [8000.0, 6000.0], "zoom": 5000.0 }),
+    );
+    let zoom = reply["image_detail_view"]["zoom"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("a zoom: {reply}"));
+    let fit = f64::from((VIEW_PANEL[0] / large[0]).min(VIEW_PANEL[1] / large[1]));
+    assert!(
+        (zoom * fit - 8.0).abs() < 1e-3 && zoom > 32.0,
+        "one pixel should span 8 points at the limit, not {} (zoom {zoom}): {reply}",
+        zoom * fit
+    );
+}
+
 /// The tool's own description carries the closest the panel goes, and the panel
 /// owns that number.
 #[test]
@@ -283,14 +311,19 @@ fn the_view_tool_advertises_the_panel_s_own_zoom_limit() {
         .iter()
         .find(|spec| spec.name == "set_image_detail_view")
         .expect("the tool is in the catalog");
-    let limit = format!("{:.1}", crate::image_detail::MAX_ZOOM);
     let zoom = spec.schema["properties"]["zoom"]["description"]
         .as_str()
         .expect("the zoom argument is described");
-    assert!(
-        zoom.contains(&limit),
-        "the zoom argument does not name the panel's own limit {limit}: {zoom}"
-    );
+    for limit in [
+        crate::image_detail::ZOOM_LIMIT_FLOOR,
+        crate::image_detail::PIXEL_ZOOM,
+    ] {
+        let limit = format!("{limit:.1}");
+        assert!(
+            zoom.contains(&limit),
+            "the zoom argument does not name the panel's own limit {limit}: {zoom}"
+        );
+    }
 }
 
 /// Every way of asking for nothing, or for two things at once, or for

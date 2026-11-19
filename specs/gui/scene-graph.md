@@ -1469,7 +1469,7 @@ when more than one is contributing:
 | **3D Viewer** | Renders all visible nodes (per-recon draws). Camera view mode stores an `ImageRef`; `,` / `.` step within that recon's images, `[` / `]` step across reconstructions with same-named-image carry-over. Hover text gains the recon label. |
 | **Scene Graph** | New (this spec). |
 | **Image Browser** | Bound to the **selected** reconstruction; a small header names it, shown only once more than one file is loaded (with a single one it would be chrome in an already-short panel). Thumbnail cache guarded by the owning `ReconId` (fixing the count-only invalidation bug; index keys stay local since the strip only ever shows one reconstruction, so a recon switch drops the old textures instead of accumulating them). Animation and the color barcode are per-selected-recon. A thumbnail's right click opens the image menu for that image of the selected reconstruction. |
-| **Image Detail** | Selection-driven — works via `ImageRef` naturally. `loaded_image` and overlay state re-keyed by `ImageRef`. |
+| **Image Detail** | Selection-driven — works via `ImageRef` naturally. Its photograph tiles and overlay state are keyed by `ImageRef`. |
 | **Track View** | Selection-driven via `PointRef` in Viewed mode, and through the focused item, which names its node, in Edited mode. Its `pt3d_<hash>_<index>` IDs already embed the per-recon content hash, so displayed IDs are already unambiguous across files. Texture maps re-keyed by `ImageRef`. |
 
 Cross-panel selection semantics are otherwise untouched: clicking a frustum in

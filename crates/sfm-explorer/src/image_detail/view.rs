@@ -32,7 +32,7 @@
 
 use crate::scene::ImageRef;
 
-use super::{MAX_ZOOM, PAN_MARGIN, REVEAL_MARGIN};
+use super::{PAN_MARGIN, PIXEL_ZOOM, REVEAL_MARGIN, ZOOM_LIMIT_FLOOR};
 
 /// What the panel was looking at on the frame it last drew an image: the view
 /// it held, and the frame it held it in.
@@ -61,6 +61,12 @@ impl ViewGeometry {
     /// panel of another aspect ratio means -- the other axis is letterboxed.
     pub(crate) fn fit_scale(&self) -> f32 {
         (self.panel_size[0] / self.image_size[0]).min(self.panel_size[1] / self.image_size[1])
+    }
+
+    /// The closest the panel zooms in this frame, relative to the fit. See
+    /// [`zoom_limit`].
+    pub(crate) fn zoom_limit(&self) -> f32 {
+        zoom_limit(self.fit_scale())
     }
 
     /// Panel points one source pixel spans at the standing zoom.
@@ -141,7 +147,7 @@ pub(crate) enum Look {
 /// unchanged; only `pan` and `zoom` move.
 ///
 /// Every outcome obeys the two limits the hand obeys: the zoom is clamped to
-/// `[1, MAX_ZOOM]`, and the pan to the rule that keeps
+/// between 1 and [`ViewGeometry::zoom_limit`], and the pan to the rule that keeps
 /// [`PAN_MARGIN`] points of the image on the panel. Centring a pixel of the
 /// image asks for a pan of at most half the displayed extent, which the pan
 /// limit allows for any panel wider than twice the margin, so the clamp bites
@@ -150,7 +156,10 @@ pub(crate) fn look_at(view: ViewGeometry, look: &Look) -> ViewGeometry {
     match *look {
         Look::Reveal { pixel } => reveal(view, pixel),
         Look::Pixel { pixel, zoom } => {
-            let zoomed = view.with(view.pan, clamp_zoom(zoom.unwrap_or(view.zoom)));
+            let zoomed = view.with(
+                view.pan,
+                clamp_zoom(zoom.unwrap_or(view.zoom), view.zoom_limit()),
+            );
             centred_on(zoomed, pixel)
         }
         Look::Rect(rect) => {
@@ -166,7 +175,7 @@ pub(crate) fn look_at(view: ViewGeometry, look: &Look) -> ViewGeometry {
             let fit = view.fit_scale();
             let zoom =
                 ((view.panel_size[0] / width) / fit).min((view.panel_size[1] / height) / fit);
-            let zoomed = view.with(view.pan, clamp_zoom(zoom));
+            let zoomed = view.with(view.pan, clamp_zoom(zoom, view.zoom_limit()));
             centred_on(zoomed, [(x0 + x1) / 2.0, (y0 + y1) / 2.0])
         }
         Look::Fit => view.with([0.0, 0.0], 1.0),
@@ -214,13 +223,31 @@ fn centred_on(view: ViewGeometry, pixel: [f32; 2]) -> ViewGeometry {
     view.with(clamp_pan(pan, display, view.panel_size), view.zoom)
 }
 
-/// A zoom inside the panel's own range, and never a NaN: an unusable number
-/// lands on the fit rather than on a view nothing can be seen in.
-fn clamp_zoom(zoom: f32) -> f32 {
+/// A zoom inside the panel's own range, `[1, limit]`, and never a NaN: an
+/// unusable number lands on the fit rather than on a view nothing can be seen
+/// in.
+fn clamp_zoom(zoom: f32, limit: f32) -> f32 {
     if !zoom.is_finite() {
         return 1.0;
     }
-    zoom.clamp(1.0, MAX_ZOOM)
+    zoom.clamp(1.0, limit)
+}
+
+/// The closest the panel zooms, relative to the fit, for a photograph that
+/// fits the panel at `fit_scale` panel points per source pixel:
+/// `max(ZOOM_LIMIT_FLOOR, PIXEL_ZOOM / fit_scale)`.
+///
+/// So one source pixel can always be enlarged to [`PIXEL_ZOOM`] points,
+/// however large the photograph, and a photograph that fits at a quarter of
+/// its size or larger keeps the floor of 32. A `fit_scale` that is not a
+/// positive number gets the floor.
+pub(crate) fn zoom_limit(fit_scale: f32) -> f32 {
+    let pixel = PIXEL_ZOOM / fit_scale;
+    if pixel.is_finite() && pixel > ZOOM_LIMIT_FLOOR {
+        pixel
+    } else {
+        ZOOM_LIMIT_FLOOR
+    }
 }
 
 /// A pan that keeps at least [`PAN_MARGIN`] points of the image on the panel.

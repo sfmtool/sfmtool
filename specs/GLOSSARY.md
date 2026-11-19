@@ -332,6 +332,15 @@ their Python keyword arguments, and the specs in
 | **track views** | per patch, the image indices its source point's track observes, read from the reconstruction in track order (`patch::track_views_from_reconstruction`), and with them the **track keypoints**, the stored keypoint of each (`patch::track_keypoints_from_reconstruction`, `None` for a `sift_files` reconstruction). View selection's input is named for them (`select_patch_cloud_views(track_views, track_keypoints, …)`, `ViewSelection::track_view_count`), and so is the map that replaces them in `PatchCloud.select_views(track_views=…)`, since those views take the track's role whether or not a reconstruction supplied them | `view_indices`, `member_views` | one function reads them, so one name: the tree had four copies of it under three names, one per kernel that called it |
 | **patch views** | per patch, the ordered list of images a batch driver evaluates that patch against: either its track views or view selection's output (the track views first, then the admitted extra views), and with it the **patch keypoints**, the starting keypoint of each, parallel entry by entry. The batch drivers' arguments (`patch_views`, `patch_keypoints`), a one-patch kernel's (`localize_patch_keypoints(…, patch_views, patch_keypoints, …)`), and the bindings' keywords (`localize_keypoints`, `refine_keypoints`, `render_bitmaps`, `validate_member_coherence`, `spawn_candidate_tracks`). In prose, "the patch's views `G`" | `view set`, `view_sets`, `view_indices`, `member_views`; `starting_keypoints`, `member_keypoints`, `patch_view_keypoints` for the keypoints | the lists are ordered, so *set* misstates them: `ViewSelection::admitted` puts the track views first, `track_view_count` splits it by position, a `reference` is a position in it, and the keypoint lists run parallel to it entry by entry. *Member* is member coherence's word for one track view, and `members`, with `member_keypoints` parallel to it, stays the argument of its one-patch kernel (`member_zncc_matrix`), where the members are exactly what it validates |
 
+## Photograph tiles
+
+How the viewer draws a photograph of any size, in `sfm-explorer`'s
+`image_detail::photograph_tiles` and the specs.
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **photograph tile** | a 512 x 512 block of one level of a photograph's pyramid, with a one-pixel border of its neighbours' pixels to assist bilinear interpolation: the unit Image Detail draws as one texture, at most 514 x 514; `PhotographTileKey`, keyed by image, level, column and row. [drafts/out-of-core-photograph-pyramid.md](drafts/out-of-core-photograph-pyramid.md) makes it the unit a level is read in too | bare `tile`, `block`, `chunk` | bare *tile* is a view's tile, the patch a kernel renders (§ "Rendering a view's tile"), and Track View draws those beside photographs, so the photograph's blocks need a qualified name |
+
 ## Rendering a view's tile
 
 The words for how a patch kernel resamples a photograph into a patch's grid,

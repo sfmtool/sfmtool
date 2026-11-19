@@ -456,8 +456,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                             "exclusiveMinimum": 0,
                             "description":
                                 "Absolute magnification, 1.0 being the whole photograph fitted to \
-                                 the panel and 32.0 the closest the panel goes. Clamped to that \
-                                 range, and the reply reports the zoom that was applied.",
+                                 the panel. The closest the panel goes is 32.0, or more for a \
+                                 photograph that fits at less than a quarter of its size: as \
+                                 far as one photograph pixel spanning 8.0 panel points. Clamped \
+                                 to that range, and the reply reports the zoom that was applied.",
                         }),
                     ),
                 ],
