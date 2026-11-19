@@ -118,7 +118,7 @@ fn holds(held: &LevelRegions, required: &LevelRegions) -> bool {
 }
 
 /// Refuse a photograph with no pixels.
-fn check_source(source: &TiledPhotograph) -> Result<(), PhotographReadError> {
+pub(crate) fn check_source(source: &TiledPhotograph) -> Result<(), PhotographReadError> {
     let (w, h) = source.layout().level_size(0);
     if w == 0 || h == 0 || source.channels() == 0 {
         return Err(out_of_range(format!(
