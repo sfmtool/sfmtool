@@ -718,7 +718,7 @@ fn jpeg_unsupported(feature: &str) -> ::image::ImageError {
 }
 
 /// The `image` crate's error for a `jpeg-decoder` error.
-fn jpeg_error(e: jpeg_decoder::Error) -> ::image::ImageError {
+pub(crate) fn jpeg_error(e: jpeg_decoder::Error) -> ::image::ImageError {
     use ::image::error::{DecodingError, ImageFormatHint};
     match e {
         jpeg_decoder::Error::Io(io) => ::image::ImageError::IoError(io),

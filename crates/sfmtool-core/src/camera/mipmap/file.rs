@@ -10,7 +10,10 @@ use jpeg_encoder::{ColorType, Encoder, SamplingFactor};
 
 use super::record::MipLevelRecord;
 use super::region::{index_intervals, read_header};
-use super::{MipmapError, PyramidLayout, MIPMAP_RESTART_INTERVAL_MCUS};
+use super::tile::{
+    check_rectangle, decode_mip_level_region, ycbcr_to_rgb, RestartIndex, TileGeometry,
+};
+use super::{MipmapError, PyramidLayout};
 use crate::camera::image::ImageU8;
 
 /// What a mip level file must say to be current for one photograph and
@@ -55,8 +58,9 @@ impl ExpectedMipLevel {
 
 /// Encode one level as a mip level file: a baseline JPEG at `quality`,
 /// 4:4:4 (or one component when `grey`), standard Huffman tables, a restart
-/// interval of [`MIPMAP_RESTART_INTERVAL_MCUS`], and `record` in an APP15
-/// segment.
+/// interval of the record's `restart_interval_mcus` (a build's is
+/// [`MIPMAP_RESTART_INTERVAL_MCUS`](super::MIPMAP_RESTART_INTERVAL_MCUS)),
+/// and `record` in an APP15 segment.
 pub(super) fn encode_mip_level(
     image: &ImageU8,
     grey: bool,
@@ -74,7 +78,7 @@ pub(super) fn encode_mip_level(
     let mut bytes = Vec::new();
     let mut encoder = Encoder::new(&mut bytes, quality);
     encoder.set_sampling_factor(SamplingFactor::F_1_1);
-    encoder.set_restart_interval(MIPMAP_RESTART_INTERVAL_MCUS);
+    encoder.set_restart_interval(record.restart_interval_mcus);
     // Optimized tables would put each component in a scan of its own, which
     // a tile cannot be cut from.
     encoder.set_optimized_huffman_tables(false);
@@ -97,18 +101,23 @@ pub(super) fn encode_mip_level(
     Ok(bytes)
 }
 
-/// One mip level file's bytes and record, read and checked once.
+/// One mip level file's bytes, record and restart index, read and checked
+/// once.
 ///
 /// The whole file is held in memory, so a reader sees one version of it even
 /// when another writer replaces the file.
 #[derive(Clone, Debug)]
 pub struct MipLevelFile {
-    bytes: Arc<[u8]>,
+    /// Where it was read from; empty for bytes that were not read from a
+    /// file.
+    path: PathBuf,
+    index: RestartIndex,
     record: MipLevelRecord,
 }
 
 impl MipLevelFile {
-    /// Read the file at `path` and check it against `expected`.
+    /// Read the file at `path` and check it against `expected`, indexing its
+    /// restart intervals.
     ///
     /// # Errors
     ///
@@ -120,16 +129,17 @@ impl MipLevelFile {
             path: path.to_path_buf(),
             error,
         })?;
-        Self::check(bytes.into(), expected).map_err(|why| MipmapError::Stale {
+        Self::check(path, bytes.into(), expected).map_err(|why| MipmapError::Stale {
             path: path.to_path_buf(),
             why,
         })
     }
 
     /// [`open`](Self::open) for bytes already in memory, such as those a build
-    /// has just encoded. A [`MipmapError::Stale`] from it has an empty path.
+    /// has just encoded. A [`MipmapError`] from it or from its decodes has an
+    /// empty path.
     pub fn from_bytes(bytes: Arc<[u8]>, expected: &ExpectedMipLevel) -> Result<Self, MipmapError> {
-        Self::check(bytes, expected).map_err(|why| MipmapError::Stale {
+        Self::check(Path::new(""), bytes, expected).map_err(|why| MipmapError::Stale {
             path: PathBuf::new(),
             why,
         })
@@ -142,10 +152,10 @@ impl MipLevelFile {
 
     /// The file's bytes.
     pub fn bytes(&self) -> &Arc<[u8]> {
-        &self.bytes
+        self.index.bytes()
     }
 
-    fn check(bytes: Arc<[u8]>, expected: &ExpectedMipLevel) -> Result<Self, String> {
+    fn check(path: &Path, bytes: Arc<[u8]>, expected: &ExpectedMipLevel) -> Result<Self, String> {
         if bytes.get(..2) != Some(&[0xFF, 0xD8]) {
             return Err("it is not a JPEG".to_string());
         }
@@ -210,61 +220,88 @@ impl MipLevelFile {
         }
         // Whole: every restart interval present, in order, then end-of-image.
         let mcus = record.width.div_ceil(8) as usize * record.height.div_ceil(8) as usize;
-        index_intervals(&bytes, header.scan_data, mcus.div_ceil(usize::from(r)))
+        let intervals = index_intervals(&bytes, header.scan_data, mcus.div_ceil(usize::from(r)))
             .map_err(|e| format!("its scan is damaged or cut short ({e})"))?;
-        Ok(Self { bytes, record })
+        let index = RestartIndex::new(bytes, &header, intervals)?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            index,
+            record,
+        })
+    }
+
+    fn stale(&self, why: String) -> MipmapError {
+        MipmapError::Stale {
+            path: self.path.clone(),
+            why,
+        }
     }
 
     /// The whole level as RGB, decoded with `jpeg-decoder` returning the
     /// samples as coded and converted to RGB here with the fixed-point BT.601
-    /// formula of its scalar path, so a region decode can give the same
-    /// pixels. A grey file gives its value in all three channels.
+    /// formula of its scalar path, so [`decode_region`](Self::decode_region)
+    /// gives the same pixels. A grey file gives its value in all three
+    /// channels.
+    ///
+    /// # Errors
+    ///
+    /// [`MipmapError::Stale`] when the scan does not decode.
     pub fn decode(&self) -> Result<ImageU8, MipmapError> {
-        let stale = |why: String| MipmapError::Stale {
-            path: PathBuf::new(),
-            why,
-        };
-        let mut decoder = jpeg_decoder::Decoder::new(&self.bytes[..]);
+        let mut decoder = jpeg_decoder::Decoder::new(&self.bytes()[..]);
         decoder.set_color_transform(jpeg_decoder::ColorTransform::None);
         let samples = decoder
             .decode()
-            .map_err(|e| stale(format!("it does not decode: {e}")))?;
-        let (width, height) = (self.record.width, self.record.height);
-        let pixels = width as usize * height as usize;
+            .map_err(|e| self.stale(format!("it does not decode: {e}")))?;
+        let (width, height) = (self.record.width as usize, self.record.height as usize);
         let components = usize::from(self.record.components);
-        if samples.len() != pixels * components {
-            return Err(stale(
-                "it decodes to the wrong number of samples".to_string(),
-            ));
+        if samples.len() != width * height * components {
+            return Err(self.stale("it decodes to the wrong number of samples".to_string()));
         }
-        let mut data = Vec::with_capacity(pixels * 3);
+        let mut data = Vec::with_capacity(width * height * 3);
         if components == 1 {
-            for &y in &samples {
-                data.extend([y, y, y]);
-            }
+            data.extend(samples.iter().flat_map(|&y| [y, y, y]));
         } else {
-            for &[y, cb, cr] in samples.as_chunks::<3>().0 {
-                data.extend(ycbcr_to_rgb(y, cb, cr));
+            // Each line holds its Y samples, then its Cb, then its Cr.
+            for line in samples.chunks_exact(3 * width) {
+                let (y, chroma) = line.split_at(width);
+                let (cb, cr) = chroma.split_at(width);
+                for x in 0..width {
+                    data.extend(ycbcr_to_rgb(y[x], cb[x], cr[x]));
+                }
             }
         }
-        Ok(ImageU8::new(width, height, 3, data))
+        Ok(ImageU8::new(self.record.width, self.record.height, 3, data))
     }
-}
 
-/// `jpeg-decoder` 0.3.2's scalar YCbCr to RGB conversion (`ycbcr_to_rgb` in
-/// its `decoder.rs`, from libjpeg-turbo's `jdcolext.c`): 20-bit fixed point,
-/// rounded at half.
-fn ycbcr_to_rgb(y: u8, cb: u8, cr: u8) -> [u8; 3] {
-    const SHIFT: i32 = 20;
-    const HALF: i32 = 1 << (SHIFT - 1);
-    let fixed = |x: f32| (x * (1 << SHIFT) as f32 + 0.5) as i32;
-    let clamp = |v: i32| (v >> SHIFT).clamp(0, 255) as u8;
-    let y = i32::from(y) * (1 << SHIFT) + HALF;
-    let cb = i32::from(cb) - 128;
-    let cr = i32::from(cr) - 128;
-    [
-        clamp(y + fixed(1.40200) * cr),
-        clamp(y - fixed(0.34414) * cb - fixed(0.71414) * cr),
-        clamp(y + fixed(1.77200) * cb),
-    ]
+    /// Pixels `x0..x1` by `y0..y1` of the level as RGB, decoded from only
+    /// the restart intervals that hold them, equal to the same pixels of
+    /// [`decode`](Self::decode).
+    ///
+    /// # Errors
+    ///
+    /// [`MipmapError::OutOfRange`] for a rectangle that is empty or not
+    /// inside the level, and [`MipmapError::Stale`] when the intervals it
+    /// needs do not decode.
+    pub fn decode_region(
+        &self,
+        x0: u32,
+        y0: u32,
+        x1: u32,
+        y1: u32,
+    ) -> Result<ImageU8, MipmapError> {
+        let rectangle = (x0, y0, x1, y1);
+        check_rectangle(self.record.width, self.record.height, rectangle).map_err(|why| {
+            MipmapError::OutOfRange {
+                path: self.path.clone(),
+                why,
+            }
+        })?;
+        let geometry = TileGeometry {
+            width: self.record.width,
+            height: self.record.height,
+            components: usize::from(self.record.components),
+            restart_interval: usize::from(self.record.restart_interval_mcus),
+        };
+        decode_mip_level_region(&self.index, &geometry, rectangle).map_err(|why| self.stale(why))
+    }
 }
