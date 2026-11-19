@@ -255,12 +255,10 @@ fn as_version_15(name: &str, bytes: Vec<u8>) -> Option<(String, Vec<u8>)> {
         return Some((name.to_string(), bytes));
     }
     let widened: Vec<u8> = bytes
-        .chunks_exact(2)
-        .flat_map(|h| {
-            half::f16::from_le_bytes([h[0], h[1]])
-                .to_f32()
-                .to_le_bytes()
-        })
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .flat_map(|h| half::f16::from_le_bytes(*h).to_f32().to_le_bytes())
         .collect();
     Some((name.replace(".float16.", ".float32."), widened))
 }
