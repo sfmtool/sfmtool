@@ -24,6 +24,8 @@ pub const DEFAULT_JPEG_QUALITY: u8 = 95;
 impl ImageU8 {
     pub fn read_rgb(path: &Path) -> Result<ImageU8, image::ImageError>;  // 3 channels
     pub fn read_rgba(path: &Path) -> Result<ImageU8, image::ImageError>; // 4 channels
+    /// `read_rgb` of a file held in memory: the same decoders and limits.
+    pub fn decode_rgb(bytes: &[u8]) -> Result<ImageU8, image::ImageError>;
     pub fn write(&self, path: &Path, jpeg_quality: u8) -> Result<(), image::ImageError>;
 }
 pub fn image_has_alpha(path: &Path) -> Result<bool, image::ImageError>; // header only

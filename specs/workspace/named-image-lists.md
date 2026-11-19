@@ -657,7 +657,7 @@ NamedImageLists.write_lists(
   the tree cannot make the walk endless; a named or `*` segment does follow
   one. Names that are not UTF-8 cannot match a pattern and are skipped, and
   so is a directory named `.sfm-mipmaps`, where a workspace keeps its mip
-  level files, with everything
+  level files ([mipmaps.md](../core/camera/mipmaps.md)), with everything
   under it, so no pattern matches a mip level file. A
   segment with a frame field is compared with the field read as any run of
   digits (`sfmtool_camrig_format::pattern_matches_any_padding`), so the
