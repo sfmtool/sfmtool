@@ -227,20 +227,26 @@ fn remembers_a_failure_until_forgotten() {
     std::fs::write(&corrupt, b"not a png").unwrap();
     let cache = PhotographCache::new(GIB);
 
-    assert!(cache.get(&missing).is_none());
-    assert!(cache.get(&corrupt).is_none());
+    assert_eq!(
+        cache.get(&missing).err().unwrap(),
+        GetError::NotFound(missing.clone())
+    );
+    assert!(matches!(
+        cache.get(&corrupt).err().unwrap(),
+        GetError::Unreadable(why) if why.contains("corrupt.png")
+    ));
     assert_eq!(cache.stats().misses, 2);
-    assert!(cache.get(&missing).is_none());
-    assert!(cache.get(&corrupt).is_none());
+    assert!(cache.get(&missing).is_err());
+    assert!(cache.get(&corrupt).is_err());
     let stats = cache.stats();
     assert_eq!((stats.misses, stats.hits), (2, 2));
     assert_eq!((stats.entries, stats.bytes), (0, 0));
 
     cache.forget(&corrupt);
-    assert!(cache.get(&corrupt).is_none());
+    assert!(cache.get(&corrupt).is_err());
     assert_eq!(cache.stats().misses, 3);
     cache.clear();
-    assert!(cache.get(&missing).is_none());
+    assert!(cache.get(&missing).is_err());
     assert_eq!(cache.stats().misses, 4);
 }
 
@@ -249,9 +255,9 @@ fn a_file_that_appears_is_read() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("late.png");
     let cache = PhotographCache::new(GIB);
-    assert!(cache.get(&path).is_none());
+    assert!(cache.get(&path).is_err());
     write_png(dir.path(), "late.png", 8, 8);
-    assert_eq!(width(&cache.get(&path)), 8);
+    assert_eq!(width(&cache.get(&path).ok()), 8);
 }
 
 #[test]
@@ -259,12 +265,12 @@ fn a_rewritten_file_is_decoded_again() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_png(dir.path(), "a.png", 8, 8);
     let cache = PhotographCache::new(GIB);
-    let first = cache.get(&path);
+    let first = cache.get(&path).ok();
     assert_eq!(width(&first), 8);
     write_png(dir.path(), "a.png", 16, 8);
     // `peek` does not look at the file, so it still has the old pixels.
     assert_eq!(width(&cache.peek(&path)), 8);
-    assert_eq!(width(&cache.get(&path)), 16);
+    assert_eq!(width(&cache.get(&path).ok()), 16);
     let stats = cache.stats();
     assert_eq!(stats.misses, 2);
     assert_eq!(stats.entries, 1);
@@ -399,7 +405,7 @@ fn peek_state_tells_a_failure_from_no_answer_yet() {
     ));
 
     let got = cache.get(&a).unwrap();
-    assert!(cache.get(&missing).is_none());
+    assert!(cache.get(&missing).is_err());
     match cache.peek_state(&a) {
         PeekedPhotograph::Decoded(pyramid) => assert!(Arc::ptr_eq(&pyramid, &got)),
         _ => panic!("expected the decoded pyramid"),

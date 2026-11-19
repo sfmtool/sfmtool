@@ -60,7 +60,7 @@ impl PhotographRequests {
         let path = path.to_path_buf();
         let ctx = ctx.clone();
         rayon::spawn(move || {
-            cache.get(&path);
+            let _ = cache.get(&path);
             // After the get, so a frame that no longer finds the path in flight
             // finds its entry in the cache.
             in_flight
@@ -106,8 +106,8 @@ pub(crate) fn display_photograph(
         PeekedPhotograph::Decoded(pyramid) => DisplayPhotograph::Decoded(pyramid),
         PeekedPhotograph::Unreadable => DisplayPhotograph::Unreadable,
         PeekedPhotograph::NotDecoded if cache.budget_bytes() == 0 => match cache.get(&path) {
-            Some(pyramid) => DisplayPhotograph::Decoded(pyramid),
-            None => DisplayPhotograph::Unreadable,
+            Ok(pyramid) => DisplayPhotograph::Decoded(pyramid),
+            Err(_) => DisplayPhotograph::Unreadable,
         },
         PeekedPhotograph::NotDecoded => {
             requests.request(cache, &path, ctx);

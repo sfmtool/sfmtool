@@ -9,15 +9,36 @@
 //! `mipmap_options` object ([`MipmapOptions`], read by
 //! [`crate::workspace::read_mipmap_options`]) is out of core when a side is
 //! over the object's `out_of_core_long_side`; [`PyramidLayout`] says so and
-//! gives every level's size and how many levels are stored. The design is in
-//! the spec `specs/core/camera/mipmaps.md`.
+//! gives every level's size and how many levels are stored.
+//! [`photograph_layout`] reads both from a photograph's path. A photograph's
+//! mip level files are named by [`mipmap_location`]; [`build_mipmaps`] makes
+//! them from one decode of the original, [`check_mipmap`] says whether those
+//! on disk are current, and [`MipLevelFile`] reads one. [`region_layout`] is
+//! the region test, which decides whether an original needs a `-mip0`. The
+//! design is in the spec `specs/core/camera/mipmaps.md`.
 
+use std::fmt;
+use std::path::PathBuf;
+
+use crate::progress::Cancelled;
+use crate::workspace::WorkspaceConfigError;
+
+mod build;
+mod file;
 mod layout;
+mod location;
+mod record;
 mod region;
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+mod tests;
 
+pub use build::{build_mipmaps, check_mipmap, photograph_layout, BuiltMipmap};
+pub use file::{ExpectedMipLevel, MipLevelFile};
 pub use layout::PyramidLayout;
+pub use location::{mip_level_file_name, mipmap_location, MipmapLocation, CACHEDIR_TAG};
+pub use record::{MipLevelRecord, MipmapSource, MIP_LEVEL_RECORD_VERSION};
 pub use region::{region_layout, NotRegionReadable, RegionLayout};
 
 /// The directory at a workspace root that holds the workspace's mip level
@@ -71,5 +92,72 @@ impl MipmapOptions {
         } else {
             self.jpeg_quality
         }
+    }
+}
+
+/// Why a mipmap could not be made, read or found current.
+#[derive(Debug)]
+pub enum MipmapError {
+    /// A file could not be read or written.
+    Io {
+        path: PathBuf,
+        error: std::io::Error,
+    },
+    /// A mip level file is missing, damaged, or not current for its
+    /// photograph; `why` names the first test it fails. The path is empty
+    /// for bytes that were not read from a file.
+    Stale { path: PathBuf, why: String },
+    /// The original could not be decoded, or its header read.
+    Source {
+        path: PathBuf,
+        error: ::image::ImageError,
+    },
+    /// The workspace's `mipmap_options` is invalid.
+    Workspace(WorkspaceConfigError),
+    /// A side is over [`MAX_JPEG_SIDE`], so no JPEG can hold the level.
+    TooLarge {
+        path: PathBuf,
+        width: u32,
+        height: u32,
+    },
+    /// The photograph has no mipmap: it is in no workspace, its workspace
+    /// has no `mipmap_options`, or it is in core under them.
+    NotOutOfCore { path: PathBuf },
+    /// The JPEG encoder refused a level.
+    Encode(String),
+    /// The caller's progress asked the build to stop.
+    Cancelled,
+}
+
+impl fmt::Display for MipmapError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io { path, error } => write!(f, "{}: {error}", path.display()),
+            Self::Stale { path, why } => write!(f, "{} is not current: {why}", path.display()),
+            Self::Source { path, error } => write!(f, "{}: {error}", path.display()),
+            Self::Workspace(e) => write!(f, "{e}"),
+            Self::TooLarge {
+                path,
+                width,
+                height,
+            } => write!(
+                f,
+                "{} is {width} x {height}, and a photograph with a side over                  {MAX_JPEG_SIDE} px cannot be read",
+                path.display()
+            ),
+            Self::NotOutOfCore { path } => {
+                write!(f, "{} is not out of core, so it has no mipmap", path.display())
+            }
+            Self::Encode(why) => write!(f, "a mip level could not be encoded: {why}"),
+            Self::Cancelled => write!(f, "cancelled"),
+        }
+    }
+}
+
+impl std::error::Error for MipmapError {}
+
+impl From<Cancelled> for MipmapError {
+    fn from(_: Cancelled) -> Self {
+        Self::Cancelled
     }
 }

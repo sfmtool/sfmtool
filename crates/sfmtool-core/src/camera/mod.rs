@@ -6,7 +6,8 @@
 //! the image containers it reads and writes
 //! ([`image`]), the derived quantities a set of intrinsics
 //! implies ([`report`]), a byte-bounded cache of decoded photograph pyramids
-//! ([`PhotographCache`]), plus a 3D-viewport [`Camera`] for orbit-style
+//! ([`PhotographCache`]), the mip level files a large photograph's levels
+//! are stored in ([`mipmap`]), plus a 3D-viewport [`Camera`] for orbit-style
 //! navigation in `sfm-explorer`.
 
 pub mod distortion;
@@ -29,6 +30,13 @@ pub use intrinsics::{
     CameraIntrinsics, CameraIntrinsicsError, CameraModel, ImageIntrinsicsList, IntrinsicAdjustment,
     RollingShutter, RollingShutterScanlines,
 };
-pub use photograph_cache::{GetManyTally, PeekedPhotograph, PhotographCache, PhotographCacheStats};
+pub use mipmap::{
+    build_mipmaps, check_mipmap, photograph_layout, region_layout, BuiltMipmap, ExpectedMipLevel,
+    MipLevelFile, MipLevelRecord, MipmapError, MipmapLocation, MipmapOptions, MipmapSource,
+    NotRegionReadable, PyramidLayout, RegionLayout, MAX_JPEG_SIDE, MIPMAP_DIR_NAME,
+};
+pub use photograph_cache::{
+    GetError, GetManyTally, PeekedPhotograph, PhotographCache, PhotographCacheStats,
+};
 pub use viewport::Camera;
 pub use warp_map::WarpMap;
