@@ -306,10 +306,12 @@ one before it does any work**, whether or not the `.sift` files it needs are
 there. That work is extracting, matching, solving, transforming or refining a
 reconstruction, and drawing or measuring from its `.sift` features. Opening a
 file the user gives is not such work: it reads what the file records, at any
-version and in any workspace. `SfmrReconstruction.load` fills in an older
-`.sfmr`'s keypoints from the `.sift` files it records, and a reconstruction
-with no thumbnails takes them from those files, as the viewer and
-`sfm web-export` do.
+version its reader reads and in any workspace. `SfmrReconstruction.load` fills
+in an older `.sfmr`'s keypoints from the `.sift` files it records, and a
+reconstruction with no thumbnails takes them from those files, as the viewer
+and `sfm web-export` do; a version 1 `.sift` file it would read there is
+refused by the reader
+([sift-file-format.md § Format versions](../formats/sift-file-format.md#format-versions)).
 
 The refusal is one message: it names the workspace file, says it is version 1
 and that sfmtool works only in a version 2 workspace, and says that sfmtool

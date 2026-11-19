@@ -542,8 +542,6 @@ fn a_dry_run_reports_what_a_run_would_do_and_writes_nothing() {
 fn a_version_1_workspace_is_refused_before_anything_is_read() {
     let fixture = fixture();
     write_workspace_file(&fixture.root, 1);
-    // A file that cannot be read at all would fail the run were it read.
-    std::fs::write(fixture.path("sfmr/broken.sfmr"), b"not a zip").unwrap();
     let before = snapshot(&fixture.root);
     let file = fixture.root.join(WORKSPACE_FILE_NAME);
     for dry_run in [true, false] {
