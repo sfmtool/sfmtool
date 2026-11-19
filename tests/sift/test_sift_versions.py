@@ -5,10 +5,7 @@
 is written from version 1 settings, and a version 1 file is refused, naming the
 last release that reads it."""
 
-import json
 import shutil
-import zipfile
-from compression import zstd
 from pathlib import Path
 
 import pytest
@@ -28,7 +25,7 @@ from sfmtool.sift.extract_colmap import get_colmap_feature_options
 from sfmtool.sift.extract_opencv import get_default_opencv_feature_options
 from sfmtool.sift.extract_sfmtool import get_default_sfmtool_feature_options
 
-from ..conftest import SEOUL_BULL_DIR
+from ..conftest import SEOUL_BULL_DIR, rewrite_sift_as_version_1
 
 _IMAGES = ("seoul_bull_sculpture_01.jpg", "seoul_bull_sculpture_02.jpg")
 
@@ -87,10 +84,7 @@ def test_every_backend_writes_version_2_with_the_readings_of_its_decode(
 
 
 def _write_version_1_sift(sift_path: Path, image_path: Path) -> None:
-    """A version 1 `.sift` file for `image_path`, as a version 1 writer made it:
-    a version 2 file's entries with `metadata.json` at version 1 without the
-    readings, and the conversion recorded as a `gray_formula`. The readers do
-    not check the content hashes, so they are left as they are."""
+    """A version 1 `.sift` file for `image_path`, as a version 1 writer made it."""
     [v2_path] = image_files_to_sift_files(
         [image_path],
         feature_tool="sfmtool",
@@ -98,23 +92,8 @@ def _write_version_1_sift(sift_path: Path, image_path: Path) -> None:
         feature_path=sift_path.parent.parent / "scratch",
     )
     sift_path.parent.mkdir(parents=True, exist_ok=True)
-    with (
-        zipfile.ZipFile(v2_path) as source,
-        zipfile.ZipFile(sift_path, "w", zipfile.ZIP_STORED) as out,
-    ):
-        for name in source.namelist():
-            raw = source.read(name)
-            if name in ("metadata.json.zst", "feature_tool_metadata.json.zst"):
-                entry = json.loads(zstd.decompress(raw))
-                if name == "metadata.json.zst":
-                    entry["version"] = 1
-                    del entry["sharpness"]
-                    del entry["gradient_structure_tensor_xx_yy_xy"]
-                else:
-                    options = entry["feature_options"]
-                    options["gray_formula"] = options.pop("image_to_gray")["formula"]
-                raw = zstd.compress(json.dumps(entry).encode())
-            out.writestr(name, raw)
+    shutil.copy(v2_path, sift_path)
+    rewrite_sift_as_version_1(sift_path)
 
 
 def test_a_version_1_file_is_refused_naming_the_last_release_that_reads_it(

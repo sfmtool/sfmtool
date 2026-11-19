@@ -67,6 +67,30 @@ def relabel_camrig(path: Path, version: int) -> None:
             out.writestr(name, raw)
 
 
+def rewrite_sift_as_version_1(path: Path) -> None:
+    """Rewrite the version 2 `.sift` file at ``path`` as a version 1 writer
+    wrote it: ``metadata.json`` at version 1 without the readings, and the
+    conversion recorded as a ``gray_formula``. The readers do not check the
+    content hashes, so they are left as they are."""
+    import zipfile
+    from compression import zstd
+
+    with zipfile.ZipFile(path) as source:
+        entries = {name: source.read(name) for name in source.namelist()}
+    metadata = json.loads(zstd.decompress(entries["metadata.json.zst"]))
+    metadata["version"] = 1
+    del metadata["sharpness"]
+    del metadata["gradient_structure_tensor_xx_yy_xy"]
+    entries["metadata.json.zst"] = zstd.compress(json.dumps(metadata).encode())
+    tool = json.loads(zstd.decompress(entries["feature_tool_metadata.json.zst"]))
+    options = tool["feature_options"]
+    options["gray_formula"] = options.pop("image_to_gray")["formula"]
+    entries["feature_tool_metadata.json.zst"] = zstd.compress(json.dumps(tool).encode())
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as out:
+        for name, raw in entries.items():
+            out.writestr(name, raw)
+
+
 def write_version_1_workspace_file(workspace: Path) -> Path:
     """Write :data:`SFMTOOL_VERSION_1_WORKSPACE` as ``workspace``'s
     ``.sfm-workspace.json`` and return its path."""

@@ -27,6 +27,7 @@ from sfmtool.analysis import (
     pick_images,
 )
 from sfmtool.fileio import read_sift, write_sift
+from ...conftest import rewrite_sift_as_version_1
 from sfmtool.geometry import CameraIntrinsics
 from sfmtool.sift import build_sift_files
 
@@ -370,34 +371,13 @@ def test_errors_map_to_python_exceptions(tmp_path: Path):
     capture.sequence.frames[0].images[0].sift_path.write_bytes(b"not a zip")
     with pytest.raises(OSError, match="frame_0001.jpg.sift"):
         pick_images([capture.sequence])
-    # A folder in place of which there is a file cannot be listed.
-    blocker = tmp_path / "blocker"
-    blocker.write_text("a file")
-    blocked = CaptureSequence(
-        ["x_%d.jpg"],
-        [
-            CaptureFrame(
-                1, [CaptureImage(blocker / "x_1.jpg", blocker / "x_1.jpg.sift")]
-            )
-        ],
-    )
-    with pytest.raises(OSError, match="cannot be listed"):
-        pick_images([blocked])
-    # Version 1 files in a folder the capture's files go in.
+    # A version 1 file a frame reads is refused by the reader, naming the
+    # last release that reads it.
     v1_folder = tmp_path / "v1"
     v1 = _Capture(v1_folder, frames=40).write_all()
-    _rewrite_as_version_1(v1_folder / "frame_0001.jpg.sift")
-    with pytest.raises(ValueError, match="version 1 .sift files"):
+    rewrite_sift_as_version_1(v1.sequence.frames[0].images[0].sift_path)
+    with pytest.raises(OSError, match="is a version 1 .sift file.*sfmtool 0.4.1"):
         pick_images([v1.sequence])
-
-
-def _rewrite_as_version_1(path: Path) -> None:
-    data = read_sift(path)
-    data["metadata"]["version"] = 1
-    del data["metadata"]["sharpness"]
-    del data["metadata"]["gradient_structure_tensor_xx_yy_xy"]
-    data["feature_tool_metadata"]["feature_options"] = {}
-    write_sift(path, data)
 
 
 def test_capture_classes():

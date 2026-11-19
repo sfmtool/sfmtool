@@ -25,16 +25,18 @@ def _write_synthetic_sift(path: Path, descriptors: np.ndarray, image_name: str):
     feature_tool_metadata = {
         "feature_tool": "pytest",
         "feature_type": "sift",
-        "feature_options": {},
+        "feature_options": {"image_to_gray": {"formula": "G"}},
     }
     metadata = {
-        "version": 1,
+        "version": 2,
         "image_name": image_name,
         "image_file_xxh128": "a" * 32,
         "image_file_size": 12345,
         "image_width": 640,
         "image_height": 480,
         "feature_count": feature_count,
+        "sharpness": 0.0,
+        "gradient_structure_tensor_xx_yy_xy": [0.0, 0.0, 0.0],
     }
     rng = np.random.default_rng(0)
     position = rng.random((feature_count, 2), dtype=np.float32) * np.array(
