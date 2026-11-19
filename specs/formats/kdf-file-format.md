@@ -376,9 +376,10 @@ would be collapsed before entry-set validation could see it.
 ### Version
 
 How the version changes, and which older versions a reader keeps reading, is
-in [format-versions.md](format-versions.md).
+in [format-versions.md](format-versions.md). In sfmtool 0.5,
 [../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md)
-moves this section into the shape that spec gives.
+moves this section into a Format versions section near the top, in the shape
+format-versions.md gives.
 
 `metadata.json`'s `version` is 3. A reader accepts the current version and
 every version the previous release wrote. Every sfmtool release that writes
