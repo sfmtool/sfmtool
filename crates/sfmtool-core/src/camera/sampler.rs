@@ -494,7 +494,7 @@ pub use pool::{RegionPool, RegionPoolStats, REGION_POOL_BYTES_PER_THREAD};
 pub use regions::{required_regions, LevelRect, LevelRegions, REGION_REUSE_MARGIN};
 pub use source::{
     read_source_rect, read_source_samples, render_source_affine, render_source_tile,
-    render_source_tile_with_grad_into, sample_source_grid, SourceRect, SourceSamples,
+    render_source_tile_with_grad_into, sample_source_grid, SourceRect, SourceSamples, ViewRegions,
 };
 pub use tile_window::TILE_WINDOW_TILES;
 

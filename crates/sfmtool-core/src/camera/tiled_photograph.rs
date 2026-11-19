@@ -75,9 +75,9 @@ impl From<Cancelled> for PhotographReadError {
 /// What a kernel reads a photograph through.
 ///
 /// It is made in memory: from an image, whose pyramid it builds, or from a
-/// whole pyramid already built, read in place. A tile or rectangle read
-/// copies only the pixels it asks for from the pyramid's levels, and the
-/// photograph keeps no tile.
+/// whole pyramid already built, read in place. A tile read copies the tile,
+/// with its border, from its level; a rectangle read assembles the rectangle
+/// from the tiles it covers; and the photograph keeps no tile.
 pub struct TiledPhotograph {
     pyramid: Arc<ImageU8Pyramid>,
     layout: PyramidLayout,
@@ -94,7 +94,8 @@ impl TiledPhotograph {
         Self::from_pyramid(Arc::new(ImageU8Pyramid::from_image(image, levels)))
     }
 
-    /// A whole pyramid, read in place; a read of pixels a pyramid made by
+    /// A whole pyramid, read in place. Every read goes through its tiles, so
+    /// a read of a tile, with its border, whose pixels a pyramid made by
     /// [`ImageU8Pyramid::from_regions`] does not hold is refused with
     /// [`PhotographReadError::OutOfRange`]. Its levels are the layout's: level `l`
     /// is level 0's size halved `l` times, as [`ImageU8::downsample_2x`]
@@ -158,18 +159,50 @@ impl TiledPhotograph {
         }))
     }
 
-    /// The pixels `x0..x1` by `y0..y1` of level `level`.
+    /// The pixels `x0..x1` by `y0..y1` of level `level`, assembled from the
+    /// photograph tiles whose cores the rectangle covers, one tile at a time:
+    /// each tile's part inside the rectangle is copied from its core, and the
+    /// tile is dropped before the next is read.
     pub(crate) fn region(
         &self,
         level: usize,
         rect: crate::camera::sampler::LevelRect,
     ) -> Result<ImageU8, PhotographReadError> {
         check_rect(&self.layout, level, rect)?;
-        self.copy(
-            level,
-            [i64::from(rect.x0), i64::from(rect.y0)],
-            [rect.width(), rect.height()],
-        )
+        let c = self.channels as usize;
+        let w = rect.width() as usize;
+        let mut data = vec![0u8; w * rect.height() as usize * c];
+        let ts = self.layout.tile_size();
+        for row in rect.y0 / ts..=(rect.y1 - 1) / ts {
+            for col in rect.x0 / ts..=(rect.x1 - 1) / ts {
+                let tile = self.tile(TileKey {
+                    level: level as u8,
+                    col,
+                    row,
+                })?;
+                // The part of the tile's core inside the rectangle.
+                let x0 = rect.x0.max(tile.origin[0]);
+                let x1 = rect.x1.min(tile.origin[0] + tile.size[0]);
+                let y0 = rect.y0.max(tile.origin[1]);
+                let y1 = rect.y1.min(tile.origin[1] + tile.size[1]);
+                let tile_stride = tile.pixels.width() as usize * c;
+                let span = (x1 - x0) as usize * c;
+                for y in y0..y1 {
+                    // The tile's pixels start one pixel above and left of its
+                    // core.
+                    let from = (y - tile.origin[1] + 1) as usize * tile_stride
+                        + (x0 - tile.origin[0] + 1) as usize * c;
+                    let to = ((y - rect.y0) as usize * w + (x0 - rect.x0) as usize) * c;
+                    data[to..to + span].copy_from_slice(&tile.pixels.data()[from..from + span]);
+                }
+            }
+        }
+        Ok(ImageU8::new(
+            rect.width(),
+            rect.height(),
+            self.channels,
+            data,
+        ))
     }
 
     /// The `size` pixels from `start` of level `level`, each address clamped

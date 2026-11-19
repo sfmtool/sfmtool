@@ -55,13 +55,21 @@ fn every_value_and_gradient_render_equals_the_whole_pyramid() {
             render_tile_with_grad_into(&pyramid, &mut whole_map, sampler, &mut whole_grad);
             for (pool, fits) in pools() {
                 let mut map = copy(&map);
-                let (tile, path) = render_source_tile_path(&source, &pool, &mut map, sampler)
-                    .expect("an in-memory read");
+                let (tile, path) = render_source_tile_path(
+                    &mut ViewRegions::new(&source, &pool),
+                    &mut map,
+                    sampler,
+                )
+                .expect("an in-memory read");
                 assert_eq!(tile.data(), whole.data(), "map {m}, {sampler:?}, {path:?}");
                 let mut grad = ImageF32WithGrad::empty();
-                let grad_path =
-                    render_source_tile_with_grad_path(&source, &pool, &mut map, sampler, &mut grad)
-                        .expect("an in-memory read");
+                let grad_path = render_source_tile_with_grad_path(
+                    &mut ViewRegions::new(&source, &pool),
+                    &mut map,
+                    sampler,
+                    &mut grad,
+                )
+                .expect("an in-memory read");
                 assert_eq!(
                     grad_bits(&grad),
                     grad_bits(&whole_grad),
@@ -78,6 +86,7 @@ fn every_value_and_gradient_render_equals_the_whole_pyramid() {
                             assert!(stats.max_pinned <= TILE_WINDOW_TILES);
                             tiled += 1;
                         }
+                        ReadPath::Reused { .. } => panic!("a fresh view keeps no regions"),
                     }
                 }
             }
@@ -94,7 +103,12 @@ fn the_tile_path_pins_no_more_than_its_window() {
     // the image's 64 tiles.
     let mut map = affine_map(32, [7.5, 0.5, 4.0, 0.3, 7.5, 6.0], 0);
     let pool = RegionPool::with_capacity(0);
-    let (_, path) = render_source_tile_path(&source, &pool, &mut map, Sampler::Bilinear).unwrap();
+    let (_, path) = render_source_tile_path(
+        &mut ViewRegions::new(&source, &pool),
+        &mut map,
+        Sampler::Bilinear,
+    )
+    .unwrap();
     let ReadPath::Tiles(stats) = path else {
         panic!("an empty pool takes the tile path");
     };
@@ -137,7 +151,14 @@ fn the_cluster_grid_samplers_equal_their_whole_level_results() {
                 let whole = grid_cells(&a, points, edge, size)
                     .map(|cells| sample_grid(&HeldLevel::of(&pyramid, level), &cells));
                 for (pool, _) in pools() {
-                    let read = sample_source_grid(&source, &pool, &a, level, points, edge).unwrap();
+                    let read = sample_source_grid(
+                        &mut ViewRegions::new(&source, &pool),
+                        &a,
+                        level,
+                        points,
+                        edge,
+                    )
+                    .unwrap();
                     let bits = |v: &Option<Vec<f32>>| {
                         v.as_ref()
                             .map(|v| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>())
@@ -173,7 +194,13 @@ fn the_affine_fast_path_equals_its_whole_level_result() {
         for (pool, fits) in pools() {
             let mut out = vec![0f32; 3 * pixels.len()];
             let path = render_source_affine_path(
-                &source, &pool, &a, level, &pixels, 24, sampler, &mut out,
+                &mut ViewRegions::new(&source, &pool),
+                &a,
+                level,
+                &pixels,
+                24,
+                sampler,
+                &mut out,
             )
             .unwrap();
             assert_eq!(matches!(path, ReadPath::Copied { .. }), fits);
@@ -214,8 +241,13 @@ fn read_source_samples_gives_the_bilinear_value_of_the_whole_level() {
         let positions = positions(img.width(), img.height());
         for border in [0, 1] {
             for (pool, fits) in pools() {
-                let (samples, path) =
-                    read_source_samples_path(&source, &pool, level, &positions, border).unwrap();
+                let (samples, path) = read_source_samples_path(
+                    &mut ViewRegions::new(&source, &pool),
+                    level,
+                    &positions,
+                    border,
+                )
+                .unwrap();
                 assert_eq!(matches!(path, ReadPath::Copied { .. }), fits);
                 let side = samples.side();
                 let b = border as usize;
@@ -364,8 +396,12 @@ fn a_kernel_calls_renders_never_hold_more_than_its_pool() {
                     .map(|m| {
                         let sampler = SAMPLERS[(outer + m) % 3];
                         let mut map = copy(&maps[m]);
-                        let (tile, path) =
-                            render_source_tile_path(&source, &pool, &mut map, sampler).unwrap();
+                        let (tile, path) = render_source_tile_path(
+                            &mut ViewRegions::new(&source, &pool),
+                            &mut map,
+                            sampler,
+                        )
+                        .unwrap();
                         let whole = render_tile(&pyramid, &mut map, sampler);
                         let grown = required_regions(&mut map, sampler, source.layout())
                             .grown(REGION_REUSE_MARGIN)
@@ -480,10 +516,19 @@ fn a_read_past_the_regions_of_a_region_pyramid_is_refused() {
     for (pool, _) in pools() {
         let mut map = affine_map(16, [4.0, 0.0, 0.0, 0.0, 4.0, 0.0], 0);
         assert!(matches!(
-            render_source_tile(&source, &pool, &mut map, Sampler::BilinearMip),
+            render_source_tile(
+                &mut ViewRegions::new(&source, &pool),
+                &mut map,
+                Sampler::BilinearMip
+            ),
             Err(PhotographReadError::OutOfRange { .. })
         ));
         let mut map = affine_map(16, [1.0, 0.0, 8.0, 0.0, 1.0, 8.0], 0);
-        assert!(render_source_tile(&source, &pool, &mut map, Sampler::BilinearMip).is_ok());
+        assert!(render_source_tile(
+            &mut ViewRegions::new(&source, &pool),
+            &mut map,
+            Sampler::BilinearMip
+        )
+        .is_ok());
     }
 }
