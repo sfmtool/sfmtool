@@ -6,7 +6,9 @@
 //! The walk follows the pattern one path segment at a time and lists only the
 //! directories a segment can lead into, so `frames/walk1_%04d.jpg` lists the
 //! workspace root and `frames/` and nothing else. A `**` segment is the one
-//! place it descends into every directory below. Each segment is compared
+//! place it descends into every directory below. No segment leads into a
+//! directory named `.sfm-mipmaps` ([`MIPMAP_DIR_NAME`]), where the workspace
+//! keeps its mip level files, so no pattern matches one. Each segment is compared
 //! with the camrig matcher against the names the directory lists, never by
 //! asking the filesystem whether a name exists, so a literal segment matches
 //! case-sensitively on a case-insensitive filesystem too. A frame field is
@@ -25,6 +27,8 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use sfmtool_camrig_format::{pattern_literal, pattern_matches_any_padding};
+
+use crate::camera::mipmap::MIPMAP_DIR_NAME;
 use sfmtool_progress::{Cancelled, Progress};
 
 /// What a directory entry is, with a symbolic link classified by its target.
@@ -96,7 +100,8 @@ impl<'a> Walker<'a> {
 
     /// The listing of the workspace-relative directory `dir` (`""` is the
     /// root), read once per walk. Names that are not UTF-8 are left out, since
-    /// no pattern, which is UTF-8, can match them.
+    /// no pattern, which is UTF-8, can match them, and so is a directory named
+    /// [`MIPMAP_DIR_NAME`], with everything under it.
     fn list(&mut self, dir: &str) -> Result<Rc<Listing>, WalkError> {
         if let Some(items) = self.listings.get(dir) {
             return Ok(Rc::clone(items));
@@ -127,6 +132,9 @@ impl<'a> Walker<'a> {
             } else {
                 Kind::Other
             };
+            if name == MIPMAP_DIR_NAME && matches!(kind, Kind::Dir | Kind::LinkedDir) {
+                continue;
+            }
             items.push(Item { name, kind });
         }
         self.entries_read += items.len() as u64;

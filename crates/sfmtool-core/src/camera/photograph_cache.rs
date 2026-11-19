@@ -26,7 +26,8 @@ use std::time::SystemTime;
 
 use rayon::prelude::*;
 
-use crate::camera::image::{ImageU8, ImageU8Pyramid};
+use crate::camera::image::{image_dimensions, ImageU8, ImageU8Pyramid};
+use crate::camera::mipmap::MAX_JPEG_SIDE;
 use crate::progress::{Cancelled, Progress};
 
 /// The environment variable that overrides [`default_budget_bytes`], in
@@ -61,6 +62,45 @@ fn budget_from(env_megabytes: Option<&str>, physical_bytes: Option<u64>) -> u64 
         None => 4 * GIB,
     }
 }
+
+/// Why [`PhotographCache::get`] has no pyramid for a path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GetError {
+    /// The file does not exist.
+    NotFound(PathBuf),
+    /// The file could not be read or decoded; the message names it.
+    Unreadable(String),
+    /// A side of 65536 px or more (over [`MAX_JPEG_SIDE`]), read from the
+    /// header before any decode. Every photograph with such a side is
+    /// refused, whatever its workspace, since no JPEG frame could hold its
+    /// full-resolution mip level.
+    TooLarge {
+        path: PathBuf,
+        width: u32,
+        height: u32,
+    },
+}
+
+impl std::fmt::Display for GetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound(path) => write!(f, "{}: no such file", path.display()),
+            Self::Unreadable(why) => write!(f, "{why}"),
+            Self::TooLarge {
+                path,
+                width,
+                height,
+            } => write!(
+                f,
+                "{} is {width} x {height}, and a photograph with a side over \
+                 {MAX_JPEG_SIDE} px cannot be read",
+                path.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for GetError {}
 
 /// What [`PhotographCache::stats`] reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,7 +159,7 @@ fn file_stamp(path: &Path) -> FileStamp {
 /// One path's entry. Shared between the map and every thread using it, so a
 /// thread can decode into it with the map lock released.
 struct Slot {
-    value: OnceLock<Option<Arc<ImageU8Pyramid>>>,
+    value: OnceLock<Result<Arc<ImageU8Pyramid>, GetError>>,
     stamp: FileStamp,
     /// The cache's tick when the slot was last asked for, for LRU order.
     last_used: AtomicU64,
@@ -147,8 +187,10 @@ impl Inner {
 ///
 /// Every pyramid is `ImageU8::read_rgb` of the file followed by
 /// [`ImageU8Pyramid::from_image`] at [`ImageU8Pyramid::full_levels`] of the
-/// photograph's own size, so each entry's depth is set by its image. A file that
-/// cannot be read is remembered as `None` and costs nothing against the
+/// photograph's own size, so each entry's depth is set by its image. A
+/// photograph with a side over [`MAX_JPEG_SIDE`] is refused from its header,
+/// before any decode, as [`GetError::TooLarge`]. A file that cannot be read
+/// or is refused is remembered as its error and costs nothing against the
 /// budget. An entry records the file's length and modification time when it
 /// is made; `get` and `get_many` compare them with the file on disk and decode
 /// again when they differ, so a remembered failure is also retried once the
@@ -207,13 +249,14 @@ impl PhotographCache {
 
     /// The pyramid for `path`, decoding on a miss. Blocks while another thread
     /// is decoding the same path, and then returns its result rather than
-    /// decoding a second time. `None` when the file cannot be read; that
-    /// answer is remembered until `forget` or `clear`, or until the file's
-    /// length or modification time changes.
+    /// decoding a second time. An error when the file does not exist, cannot
+    /// be read, or has a side over [`MAX_JPEG_SIDE`]; that answer is
+    /// remembered until `forget` or `clear`, or until the file's length or
+    /// modification time changes.
     ///
     /// A caller already inside a rayon parallel loop calls this rather than
     /// [`Self::get_many`].
-    pub fn get(&self, path: &Path) -> Option<Arc<ImageU8Pyramid>> {
+    pub fn get(&self, path: &Path) -> Result<Arc<ImageU8Pyramid>, GetError> {
         self.get_found(path).0
     }
 
@@ -245,8 +288,8 @@ impl PhotographCache {
         };
         self.touch(&slot);
         match value {
-            Some(pyramid) => PeekedPhotograph::Decoded(Arc::clone(pyramid)),
-            None => PeekedPhotograph::Unreadable,
+            Ok(pyramid) => PeekedPhotograph::Decoded(Arc::clone(pyramid)),
+            Err(_) => PeekedPhotograph::Unreadable,
         }
     }
 
@@ -273,7 +316,7 @@ impl PhotographCache {
     ) -> Result<(Vec<Option<Arc<ImageU8Pyramid>>>, GetManyTally), Cancelled> {
         let total = paths.len();
         let answered = AtomicUsize::new(0);
-        let found: Vec<Option<(Option<Arc<ImageU8Pyramid>>, Found)>> = paths
+        let found: Vec<Option<(Result<Arc<ImageU8Pyramid>, GetError>, Found)>> = paths
             .par_iter()
             .map(|path| {
                 if progress.is_cancelled() {
@@ -293,11 +336,11 @@ impl PhotographCache {
                 // Every entry is `Some` when the call was not cancelled.
                 let (pyramid, how) = entry.ok_or(Cancelled)?;
                 match (&pyramid, how) {
-                    (None, _) => tally.unreadable += 1,
-                    (Some(_), Found::Decoded) => tally.read += 1,
-                    (Some(_), Found::Reused) => tally.reused += 1,
+                    (Err(_), _) => tally.unreadable += 1,
+                    (Ok(_), Found::Decoded) => tally.read += 1,
+                    (Ok(_), Found::Reused) => tally.reused += 1,
                 }
-                Ok(pyramid)
+                Ok(pyramid.ok())
             })
             .collect::<Result<Vec<_>, Cancelled>>()?;
         Ok((pyramids, tally))
@@ -321,7 +364,7 @@ impl PhotographCache {
         }
         let bytes = pyramid.byte_len() as u64;
         let slot = Arc::new(Slot {
-            value: OnceLock::from(Some(pyramid)),
+            value: OnceLock::from(Ok(pyramid)),
             stamp: file_stamp(path),
             last_used: AtomicU64::new(0),
             charged: AtomicU64::new(0),
@@ -353,7 +396,7 @@ impl PhotographCache {
         let entries = inner
             .map
             .values()
-            .filter(|slot| matches!(slot.value.get(), Some(Some(_))))
+            .filter(|slot| matches!(slot.value.get(), Some(Ok(_))))
             .count();
         PhotographCacheStats {
             entries,
@@ -382,13 +425,29 @@ impl PhotographCache {
     /// uses rayon's global pool. The decode may start threads of its own (one
     /// per colour component in `jpeg-decoder`, a private pool in `exr`), which
     /// take no work from the global pool; see the photograph-cache spec.
-    fn decode(&self, path: &Path) -> Option<Arc<ImageU8Pyramid>> {
-        let image = ImageU8::read_rgb(path).ok()?;
+    fn decode(&self, path: &Path) -> Result<Arc<ImageU8Pyramid>, GetError> {
+        let unreadable = |e: ::image::ImageError| match e {
+            ::image::ImageError::IoError(io) if io.kind() == std::io::ErrorKind::NotFound => {
+                GetError::NotFound(path.to_path_buf())
+            }
+            e => GetError::Unreadable(format!("{}: {e}", path.display())),
+        };
+        // The header decides the refusal, so a photograph too large for the
+        // pyramid readers is never decoded.
+        let (width, height) = image_dimensions(path).map_err(unreadable)?;
+        if width > MAX_JPEG_SIDE || height > MAX_JPEG_SIDE {
+            return Err(GetError::TooLarge {
+                path: path.to_path_buf(),
+                width,
+                height,
+            });
+        }
+        let image = ImageU8::read_rgb(path).map_err(unreadable)?;
         let levels = ImageU8Pyramid::full_levels(image.width, image.height);
-        Some(Arc::new(ImageU8Pyramid::from_image(image, levels)))
+        Ok(Arc::new(ImageU8Pyramid::from_image(image, levels)))
     }
 
-    fn get_found(&self, path: &Path) -> (Option<Arc<ImageU8Pyramid>>, Found) {
+    fn get_found(&self, path: &Path) -> (Result<Arc<ImageU8Pyramid>, GetError>, Found) {
         if self.budget_bytes == 0 {
             self.misses.fetch_add(1, Ordering::Relaxed);
             return (self.decode(path), Found::Decoded);
@@ -427,7 +486,7 @@ impl PhotographCache {
             return (value, Found::Reused);
         }
         self.misses.fetch_add(1, Ordering::Relaxed);
-        if let Some(pyramid) = &value {
+        if let Ok(pyramid) = &value {
             self.charge(path, &slot, pyramid.byte_len() as u64);
         }
         (value, Found::Decoded)

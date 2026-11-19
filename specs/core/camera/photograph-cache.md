@@ -41,7 +41,7 @@ The cache lives in
 [photograph_cache.rs](../../../crates/sfmtool-core/src/camera/photograph_cache.rs),
 beside `ImageU8Pyramid` in [image.rs](../../../crates/sfmtool-core/src/camera/image.rs),
 exported as `sfmtool_core::camera::PhotographCache` together with
-`PeekedPhotograph`, `GetManyTally` and `PhotographCacheStats`.
+`GetError`, `PeekedPhotograph`, `GetManyTally` and `PhotographCacheStats`.
 `default_budget_bytes` and `BUDGET_ENV_VAR` are reached through
 `sfmtool_core::camera::photograph_cache`. It is in `sfmtool-core` rather than
 the viewer so that `render_display_patch_bitmaps`, which `sfm web-export` also
@@ -61,8 +61,9 @@ impl PhotographCache {
 
     /// The pyramid for `path`, decoding on a miss. Blocks while another thread
     /// is decoding the same path, and then returns its result rather than
-    /// decoding a second time. `None` when the file cannot be read.
-    pub fn get(&self, path: &Path) -> Option<Arc<ImageU8Pyramid>>;
+    /// decoding a second time. An error when the file does not exist, cannot
+    /// be read, or has a side over `MAX_JPEG_SIDE` (65535).
+    pub fn get(&self, path: &Path) -> Result<Arc<ImageU8Pyramid>, GetError>;
 
     /// The pyramid for `path` if it is decoded, without reading or stat'ing
     /// anything and without waiting on a decode in flight.
@@ -90,6 +91,9 @@ impl PhotographCache {
     /// Entries, bytes held, the budget, and the hit and miss counters.
     pub fn stats(&self) -> PhotographCacheStats;
 }
+
+pub enum GetError { NotFound(PathBuf), Unreadable(String),
+                    TooLarge { path: PathBuf, width: u32, height: u32 } }
 
 pub enum PeekedPhotograph { Decoded(Arc<ImageU8Pyramid>), Unreadable, NotDecoded }
 
@@ -215,10 +219,17 @@ default is 16 GiB, about 490 pyramids at 3840×2160.
 
 ## A changed file and remembered failures
 
+Before decoding, the cache reads the photograph's size from its header and
+refuses one with a side of 65536 px or more as `GetError::TooLarge`, naming
+the path and the size, without decoding it, in every workspace and with no
+workspace. No JPEG frame could hold such a photograph's full-resolution
+[mip level](mipmaps.md#which-photographs-are-out-of-core), and one rule for
+every photograph keeps its readability the same whatever its workspace sets.
+
 An entry records the file's length and modification time when it is made.
 `get` and `get_many` stat the file and decode again when either differs. A file
-that cannot be read is remembered as a failure, which costs nothing against the
-budget, so a missing file is not reopened on every frame; because the failure
+that cannot be read or is refused is remembered as its error, which costs
+nothing against the budget, so a missing file is not reopened on every frame; because the failure
 also carries the stamp (or the absence of one), `get` retries it once the file
 appears or changes. `peek` and `peek_state` do not stat, since they run every
 frame, so they report a remembered failure until the next `get` notices the
@@ -352,9 +363,10 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 - **Display thumbnails** keep their own decodes. They make small images once
   per open.
 - **No cache on disk.** Pyramids are rebuilt from the JPEGs in each session,
-  and every pyramid is held whole. Photograph tiles for every photograph, in
-  place of whole pyramids, and stored reduced levels for large ones are
-  proposed in
+  and every pyramid is held whole. A large photograph's reduced levels can be
+  stored as [mip level files](mipmaps.md), but the cache does not read them.
+  Photograph tiles for every photograph, in place of whole pyramids, and
+  reading the stored levels of large ones are proposed in
   [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md),
   and a pyramid holding only the region of each level one render reads in
   [view-region-pyramid.md](../../drafts/view-region-pyramid.md).

@@ -655,7 +655,10 @@ NamedImageLists.write_lists(
   comparison with every name the folder holds. A `**`
   does not descend through a symbolic link to a directory, so a link back up
   the tree cannot make the walk endless; a named or `*` segment does follow
-  one. Names that are not UTF-8 cannot match a pattern and are skipped. A
+  one. Names that are not UTF-8 cannot match a pattern and are skipped, and
+  so is a directory named `.sfm-mipmaps`, where a workspace keeps its mip
+  level files ([mipmaps.md](../core/camera/mipmaps.md)), with everything
+  under it, so no pattern matches a mip level file. A
   segment with a frame field is compared with the field read as any run of
   digits (`sfmtool_camrig_format::pattern_matches_any_padding`), so the
   candidates include the files that are a [padding](#members-and-their-order)

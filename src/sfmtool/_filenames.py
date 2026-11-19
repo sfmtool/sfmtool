@@ -13,7 +13,27 @@ __all__ = [
     "expand_paths",
     "group_by_directory",
     "normalize_workspace_path",
+    "MIPMAP_DIR_NAME",
+    "under_mipmap_directory",
 ]
+
+# The directory at a workspace root that holds its mip level files, named as
+# `sfmtool_core::camera::mipmap::MIPMAP_DIR_NAME` names it. Every search for a
+# workspace's images skips it, since the mip level files are JPEGs named
+# after the photographs they reduce.
+MIPMAP_DIR_NAME = ".sfm-mipmaps"
+
+
+def under_mipmap_directory(path: Path, root: Path) -> bool:
+    """Whether `path`, a path below `root`, lies under a directory named
+    `.sfm-mipmaps` at or below `root`.
+
+    The searches that walk a directory for image files (`expand_paths`, the
+    rig-config converter and the `.camrig` pattern matcher) skip such paths,
+    so a search from a workspace root never takes a mip level file for an
+    image.
+    """
+    return MIPMAP_DIR_NAME in path.relative_to(root).parts[:-1]
 
 
 _NUMBER_FROM_FILENAME_RE = re.compile(r"\((\d+)\)$|(\d+)$")
@@ -78,7 +98,9 @@ def expand_paths(
     """
     Given a list of file and directory paths, keeps all the files and expands
     the directories recursively. If extensions or numbers are not None, they
-    filter the list of paths from directories.
+    filter the list of paths from directories. A directory's expansion skips
+    every file under a directory named `.sfm-mipmaps`, where a workspace keeps
+    its mip level files.
     """
     if numbers and not isinstance(numbers, set):
         numbers = set(numbers)
@@ -91,7 +113,11 @@ def expand_paths(
         if path.is_dir():
             # Recursively iterate over directory contents
             try:
-                dir_contents = [p for p in path.rglob("*") if p.is_file()]
+                dir_contents = [
+                    p
+                    for p in path.rglob("*")
+                    if p.is_file() and not under_mipmap_directory(p, path)
+                ]
 
                 # Filter by extension if needed
                 if extensions:

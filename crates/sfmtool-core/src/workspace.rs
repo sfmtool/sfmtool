@@ -9,13 +9,16 @@
 //! [`feature_options`] holds the rules of the feature options a
 //! `.sfm-workspace.json` records: each feature tool's grey conversion, the
 //! conversion of a version 1 record to version 2, and the name of the folder
-//! a new record's `.sift` files go in. [`find_workspace_for_path`], the
+//! a new record's `.sift` files go in. [`mipmap_options`] reads and
+//! validates the file's `mipmap_options` object ([`read_mipmap_options`]).
+//! [`find_workspace_for_path`], the
 //! upward search for `.sfm-workspace.json`, is `sfmtool-archive-io`'s, re-exported
-//! here; reading that file is the caller's (see `specs/workspace/workspace.md`).
+//! here; reading the rest of that file is the caller's (see `specs/workspace/workspace.md`).
 //! [`upgrade`] brings a workspace made by an earlier sfmtool to the current file
 //! versions: [`upgrade_workspace`].
 
 pub mod feature_options;
+pub mod mipmap_options;
 pub mod named_image_lists;
 pub mod upgrade;
 
@@ -26,6 +29,7 @@ pub use feature_options::{
     tool_image_to_gray, upgrade_feature_options, FeatureOptionsError, COLMAP_TOOL, OPENCV_TOOL,
     SFMTOOL_TOOL, UNDISTORT_TOOL, WORKSPACE_VERSION,
 };
+pub use mipmap_options::{read_mipmap_options, WorkspaceConfigError};
 pub use named_image_lists::{
     is_named_image_list_name, split_named_image_list_value, DuplicateMatch, NamedImageList,
     NamedImageListEntry, NamedImageListMember, NamedImageListSlice, NamedImageListSliceError,

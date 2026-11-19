@@ -253,3 +253,21 @@ class TestNormalizeWorkspacePath:
         """Test a complex but valid path."""
         # This should normalize: "a/b/c/../d/./e" -> "a/b/d/e"
         assert normalize_workspace_path("a/b/c/../d/./e/file.jpg") == "a/b/d/e/file.jpg"
+
+
+def test_expand_paths_skips_the_mipmap_directory(tmp_path: Path):
+    """A directory's expansion leaves out the mip level files under
+    `.sfm-mipmaps`, so `sfm sift --extract .` at a workspace root does not take
+    them for images; a file named on its own is still kept."""
+    (tmp_path / "images").mkdir()
+    (tmp_path / "images" / "IMG_0001.JPG").touch()
+    mip = tmp_path / ".sfm-mipmaps" / "images" / "IMG_0001.JPG-mip1-q95.jpg"
+    mip.parent.mkdir(parents=True)
+    mip.touch()
+    nested = tmp_path / "images" / ".sfm-mipmaps" / "x.jpg-mip1-q95.jpg"
+    nested.parent.mkdir()
+    nested.touch()
+
+    result = expand_paths([tmp_path], extensions=(".jpg",))
+    assert result == [tmp_path / "images" / "IMG_0001.JPG"]
+    assert expand_paths([mip]) == [mip]

@@ -41,7 +41,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .._filenames import has_extension
+from .._filenames import has_extension, under_mipmap_directory
 from .cp import CamrigCpError, _write
 
 # The image files `sfm solve` and `sfm pick-images` take from a directory.
@@ -60,7 +60,8 @@ def _names(names: list[str]) -> str:
 
 def _sensor_images(root: Path, rig_configs: list[dict]) -> dict[tuple, list[str]]:
     """The workspace-relative paths of the image files of each `(rig, sensor)`
-    of `rig_configs`, sorted, assigned by `_match_image_to_sensor`."""
+    of `rig_configs`, sorted, assigned by `_match_image_to_sensor`. Files under
+    a directory named `.sfm-mipmaps` are not images."""
     from ..rig.config import _match_image_to_sensor
 
     candidates: set[str] = set()
@@ -70,7 +71,11 @@ def _sensor_images(root: Path, rig_configs: list[dict]) -> dict[tuple, list[str]
             if not folder.is_dir():
                 continue
             for path in folder.rglob("*"):
-                if path.is_file() and has_extension(path, _IMAGE_EXTENSIONS):
+                if (
+                    path.is_file()
+                    and has_extension(path, _IMAGE_EXTENSIONS)
+                    and not under_mipmap_directory(path, root)
+                ):
                     candidates.add(path.relative_to(root).as_posix())
     images: dict[tuple, list[str]] = {}
     for rel in sorted(candidates):

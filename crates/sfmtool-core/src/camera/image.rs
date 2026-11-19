@@ -68,6 +68,22 @@ impl ImageU8 {
         Ok(Self::new(rgb.width(), rgb.height(), 3, rgb.into_raw()))
     }
 
+    /// Decode an image file held in memory to 3-channel RGB: the pixels
+    /// [`read_rgb`](Self::read_rgb) gives for a file holding `bytes`, read by
+    /// the same decoders under the same limits.
+    pub fn decode_rgb(bytes: &[u8]) -> Result<Self, ::image::ImageError> {
+        let mut reader =
+            ::image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
+        reader.limits(decode_limits());
+        let image = if reader.format() == Some(::image::ImageFormat::Jpeg) {
+            decode_jpeg(reader.into_inner())?
+        } else {
+            reader.decode()?
+        };
+        let rgb = image.into_rgb8();
+        Ok(Self::new(rgb.width(), rgb.height(), 3, rgb.into_raw()))
+    }
+
     /// Decode the image file at `path` to 4-channel RGBA.
     ///
     /// The colour channels equal [`read_rgb`](Self::read_rgb)'s, and the EXIF
@@ -350,12 +366,7 @@ impl ImageU8 {
 /// written. In that case the bytes are written to `path` directly, as
 /// `std::fs::write` alone would.
 fn write_via_temporary(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    // The process id and a per-process count keep two writers apart, whether
-    // they are threads of one process or separate processes.
-    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let count = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let temporary = path.with_file_name(format!(".{name}.{}-{count}.tmp", std::process::id()));
+    let temporary = temporary_path(path);
     let written = std::fs::write(&temporary, bytes)
         .and_then(|()| std::fs::rename(&temporary, path))
         .or_else(|e| match e.kind() {
@@ -366,6 +377,17 @@ fn write_via_temporary(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<
     // write.
     let _ = std::fs::remove_file(&temporary);
     written
+}
+
+/// A temporary file's path beside `path`, `.<file name>.<process id>-<count>.tmp`,
+/// for a write that is renamed into place. The process id and one
+/// process-wide count keep two writers apart, whether they are threads of
+/// one process or separate processes; the count holds no other state.
+pub(crate) fn temporary_path(path: &std::path::Path) -> std::path::PathBuf {
+    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let count = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    path.with_file_name(format!(".{name}.{}-{count}.tmp", std::process::id()))
 }
 
 /// Whether the image file at `path` stores an alpha channel, read from its

@@ -192,7 +192,9 @@ pub(super) fn pick_reference(
             let keypoint = view.keypoint_xy(k)?;
             let image = recon.image_set.images.get(index)?;
             let camera = crate::scene::image_intrinsics(&recon.image_set, index)?;
-            let pyramid = photographs.get(&crate::state::photograph_path(recon, index)?)?;
+            let pyramid = photographs
+                .get(&crate::state::photograph_path(recon, index)?)
+                .ok()?;
             let level = pyramid.level(0);
             (level.width() == camera.width && level.height() == camera.height).then_some((
                 k,

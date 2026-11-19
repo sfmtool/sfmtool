@@ -341,6 +341,18 @@ How the viewer draws a photograph of any size, in `sfm-explorer`'s
 |------|-------|-----|-----|
 | **photograph tile** | a 512 x 512 block of one level of a photograph's pyramid, with a one-pixel border of its neighbours' pixels to assist bilinear interpolation: the unit Image Detail draws as one texture, at most 514 x 514; `PhotographTileKey`, keyed by image, level, column and row. [drafts/out-of-core-photograph-pyramid.md](drafts/out-of-core-photograph-pyramid.md) makes it the unit a level is read in too | bare `tile`, `block`, `chunk` | bare *tile* is a view's tile, the patch a kernel renders (§ "Rendering a view's tile"), and Track View draws those beside photographs, so the photograph's blocks need a qualified name |
 
+## Mipmaps
+
+A large photograph's stored levels, in `sfmtool_core::camera::mipmap` and
+[core/camera/mipmaps.md](core/camera/mipmaps.md).
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **mipmap** / **mip level** / **mip level file** | a photograph's **mipmap** is its whole stored chain of levels under `.sfm-mipmaps/`: its reduced levels, and its full-resolution copy when the original is not region-readable. One stored level is a **mip level**, numbered as the pyramid's level is (0 full resolution, `l` reduced by `2^l`), and the file holding it is a **mip level file**, `<file name>-mip<l>-q<quality>.jpg`; `-mip0` names the full-resolution file where the quality does not matter. Names about the whole feature keep *mipmap* (`mipmap_options`, `build_mipmaps`, `MipmapError`) | `mipmap set`, a single file called a mipmap, `level file`, `cache file`, `pyramid file`, factor names such as `-mipmap2` | the standard usage, so others find it familiar: Williams coined *mip map* for the whole prefiltered set of an image at successive halvings, and OpenGL, Direct3D and Vulkan number its *mip levels* with level 0 the base image. *Level* alone stays the in-memory pyramid level, which a small photograph has with no file |
+| **mipmap directory** | `.sfm-mipmaps/` at a workspace's root, holding the mip level files of its out-of-core photographs in directories that mirror the workspace; it can be deleted at any time | `cache directory`, `.sfm-cache`, `cache folder` | the name says what is in it, and keeps it apart from other tools' directories at a workspace root |
+| **region-readable** (an original) | an original JPEG whose layout passes the region test (`region_layout`), so a rectangle of it decodes to exactly the pixels of the whole decode; it has no `-mip0` | `tiled`, `seekable`, `RST-capable` | names what the test decides, rather than one ingredient of it |
+| **out-of-core photograph** / **in-core photograph** | a photograph of a workspace whose file has `mipmap_options`, with a width or height over its `out_of_core_long_side`, is out of core: its levels are stored as mip level files. Any other photograph is in core and has none | `large image`, `tiled image`, `big photograph` | the tier decides where the levels live, on disk or only in memory, which is what *core* means here; *large* says nothing about what is done differently |
+
 ## Rendering a view's tile
 
 The words for how a patch kernel resamples a photograph into a patch's grid,
