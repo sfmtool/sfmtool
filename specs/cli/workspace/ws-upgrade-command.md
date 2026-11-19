@@ -10,8 +10,8 @@ old folder; rewrites the version 1 `.sfm-workspace.json` as version 2, keeping
 every option; and deletes the old features folders. After it, every file
 names version 2 `.sift` files, so nothing made before the upgrade is lost when
 readers drop the format versions older than those sfmtool 0.4 writes (`.sfmr`
-16, `.matches` 10, `.sift` 2, `.camrig` 2): sfmtool 0.5 drops the `.sfmr`,
-`.matches` and `.sift` ones and 0.6 the `.camrig` one, as
+16, `.matches` 10, `.sift` 2, `.camrig` 2): sfmtool 0.5 drops them all, and
+its `sfm ws upgrade` refuses a version 1 workspace, as
 [../../drafts/drop-pre-0-4-format-versions.md](../../drafts/drop-pre-0-4-format-versions.md)
 specifies. It rewrites files in place and
 deletes folders, so it cannot be undone: **back up the workspace first**

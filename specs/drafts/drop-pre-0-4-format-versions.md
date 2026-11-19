@@ -9,13 +9,15 @@ format specs it names: [`sfmr-file-format.md`](../formats/sfmr-file-format.md),
 [`sift-file-format.md`](../formats/sift-file-format.md),
 [`camrig-file-format.md`](../formats/camrig-file-format.md) and
 [`kdf-file-format.md`](../formats/kdf-file-format.md), with
-[`../cli/workspace/ws-upgrade-command.md`](../cli/workspace/ws-upgrade-command.md).
+[`../cli/workspace/ws-upgrade-command.md`](../cli/workspace/ws-upgrade-command.md)
+and [`../workspace/workspace.md`](../workspace/workspace.md).
 
 sfmtool 0.4.1's release notes say: "0.4.1 still reads the older `.sfmr`,
 `.matches` and `.sift` versions so that `sfm ws upgrade` can convert them. The
 next release will not." The next release is 0.5. This draft is that removal,
 done as [format-versions.md § Dropping a version](../formats/format-versions.md#dropping-a-version)
-says, one PR per format.
+says, one PR per format, with `.camrig` version 1 and the version 1 workspace
+file going in the same release.
 
 ## What stops being read
 
@@ -27,17 +29,15 @@ and `.kdf` 3, so 0.5's read window is exactly those versions.
 | `.sfmr` | 16 | 1 | 16 | 0.4.1 |
 | `.matches` | 10 | 1 (6 with clusters) | 10 | 0.4.1 |
 | `.sift` | 2 | 1 | 2 | 0.4.1 |
-| `.camrig` | 2 | 1 | 1 in 0.5, 2 in 0.6 | 0.5 |
+| `.camrig` | 2 | 1 | 2 | 0.4.1 |
 | `.kdf` | 3 | 3 | 3 | — |
 
-**`.camrig` version 1** is below the read window too: no release wrote it
-(the format came in after 0.2 and moved to version 2 before 0.3, so only
-development builds wrote version 1), and 0.4.1's `sfm ws upgrade` already
-rewrites it as version 2. But 0.4.1's notes did not name `.camrig`, and a
-version is dropped one release after the notes that announce it. So 0.5 keeps
-reading `.camrig` version 1, 0.5's release notes announce that the next
-release stops, and 0.6 removes it, in a PR of the same shape as the three
-below.
+**`.camrig` version 1** was written by no release: the format came in after
+0.2 and moved to version 2 before 0.3, so only development builds wrote
+version 1. It lies outside every release's read window, so 0.5 stops reading
+it with no announcement
+([format-versions.md § Dropping a version](../formats/format-versions.md#dropping-a-version)).
+0.4.1's `sfm ws upgrade` rewrites it as version 2.
 
 **`.kdf`** follows the same read window. Every release, 0.3 to 0.4.1, wrote
 version 3, so 0.5's window is version 3 alone, which is what its reader
@@ -58,11 +58,36 @@ install it, run `sfm ws upgrade` on the workspace, then use the file with this
 release.
 ```
 
+The `.camrig` message is the same with its own numbers: a version 1 `.camrig`
+file, read by version 2 or later, and sfmtool 0.4.1 named as the last release
+that reads it.
+
 The format crate holds the oldest version read beside its current-version
 constant (for example `SFMR_OLDEST_READ_VERSION`), and the release named in
 the message as a constant beside it. Each crate's tests check the refusal of
 the version just below the oldest read, and of a version above the current
 one; the tests that read each dropped version go.
+
+## `sfm ws upgrade` and the workspace file
+
+0.5's `sfm ws upgrade` upgrades from a version 2 workspace. It refuses a
+version 1 `.sfm-workspace.json` before reading anything else, with a message
+that names the workspace file, says it is version 1, and says to upgrade it
+with sfmtool 0.4.1 first, since 0.4.1 is the last release that reads the
+older `.sift`, `.sfmr`, `.matches` and `.camrig` versions it would have to
+convert. Every other command's refusal of a version 1 workspace
+([workspace.md § A command that uses a workspace requires version 2](../workspace/workspace.md#a-command-that-uses-a-workspace-requires-version-2))
+names sfmtool 0.4.1 the same way, in place of running `sfm ws upgrade`.
+
+What goes from the upgrade: its rewrite of a version 1 workspace file (phase
+5), its conversion of version 1 `.sift` folders and the deletion of the old
+folders (phases 3 and 6), and its deletion of a `.kdf` index built from a
+version 1 record. What stays: rewriting any file below the current version
+that the 0.5 readers accept, which is none until a format next changes
+version. `ws-upgrade-command.md` is rewritten to describe that, and
+`workspace.md` loses the version 1 workspace's rules ("Reading version 1 files
+stays allowed" and the version 1 column of its versions table) except the
+refusal, keeping a history line for the workspace file's version 1.
 
 ## `.sfmr`: versions 1 to 15 (one PR)
 
@@ -90,39 +115,49 @@ Goes:
 The save's gathering of image readings stays: it also fills the readings of a
 reconstruction a solve or an import builds in memory.
 
-The checked-in files below are at these versions today. Each one below the
-current version is rewritten at the current version in the PR for its format
-(`.camrig` in 0.6's), and the fixtures, scripts and tests that name it follow
-(see Open questions for the names):
+### The checked-in files
 
-| File | Version today |
-|------|---------------|
-| `test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr` | `.sfmr` 11 |
-| `test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v02.sfmr` | `.sfmr` 14 |
-| `test-data/images/kerry_park/kerry_park_ground_truth_v01.sfmr` | `.sfmr` 11 |
-| `test-data/images/kerry_park/kerry_park_ground_truth_v02.sfmr` | `.sfmr` 15 |
-| `test-data/images/dino_dog_toy/dino_dog_toy_ground_truth_v01.sfmr` | `.sfmr` 14 |
-| `test-data/images/kerry_park/kerry_park.camrig` | `.camrig` 2 (current) |
-| `test-data/images/{seoul_bull_sculpture,kerry_park,dino_dog_toy}/.sfm-workspace.json` | workspace file 1 |
+The PR rewrites every checked-in `.sfmr` file in place at version 16, keeping
+its name, and the three checked-in workspace files as version 2, before the
+reader stops reading the older versions (with sfmtool 0.4.1's `sfm ws upgrade`
+on each dataset directory, for instance, which writes both and each file's
+workspace record to match):
 
-All five `.sfmr` files are below 16, so the `.sfmr` PR rewrites them all,
-for instance with `sfm ws upgrade` on each dataset directory, which also
-writes its `.sfm-workspace.json` as version 2 and each file's workspace
-record to match. Saving at version 16 replaces the normal of each finite
-point with a patch by its frame's `normalize(u × v)`; the `.sfmr` spec
-records that the two `_v01` files' stored normals disagree with their frames
-by up to 49° (seoul_bull) and 1.7° (kerry_park), so for them the rewrite
-changes content, not only layout.
+| File | Version today | After |
+|------|---------------|-------|
+| `test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr` | `.sfmr` 11 | 16, normals derived from the patch frames (stored ones were up to 49° off) |
+| `test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v02.sfmr` | `.sfmr` 14 | 16, format only |
+| `test-data/images/kerry_park/kerry_park_ground_truth_v01.sfmr` | `.sfmr` 11 | 16, normals derived from the patch frames (stored ones were up to 1.7° off) |
+| `test-data/images/kerry_park/kerry_park_ground_truth_v02.sfmr` | `.sfmr` 15 | 16, format only |
+| `test-data/images/dino_dog_toy/dino_dog_toy_ground_truth_v01.sfmr` | `.sfmr` 14 | 16, format only |
+| `test-data/images/{seoul_bull_sculpture,kerry_park,dino_dog_toy}/.sfm-workspace.json` | workspace file 1 | workspace file 2 |
 
-The spec: "Versioning and Migration" becomes a "Format versions" section near
-the top, after "Design Principles", giving version 16 as both the current and
-the oldest version read, with no migration subsections. Every "(version N+)"
-tag goes ("(Optional, version 13+)" becomes "(Optional)"), as do "Reading
-older files", the migration note and the below-version-5 sentence in
-"Conversions happen at the I/O boundary", and each column's account of what
-writers of older versions stored, such as `points3d/reprojection_errors`'s
-mean-or-RMS list. "Version History" stays, each line made to stand alone in
-place of its link to a removed subsection.
+`test-data/images/kerry_park/kerry_park.camrig` is at `.camrig` version 2
+already. The names stay because the `_vNN` in a name versions the
+reconstruction, not its format (`AGENTS.md`, under `test-data/`): the only
+change to a reconstruction is that version 16 derives each patched finite
+point's normal from its patch frame, `normalize(u × v)`. For the two `_v01`
+files that replaces stored normals that disagreed with their frames by up to
+49° (seoul_bull) and 1.7° (kerry_park). The stored normals of the two `_v02`
+files and the dino file already equal their frames' to within 0.0001°
+(measured over every finite point with a frame), so for them the rewrite
+changes only the format. Every rewrite also adds or rounds what the format
+stores beside the reconstruction: the image readings, computed from the
+photographs for the files below version 15, and the `float16` columns.
+Each file's `content_xxh128` changes, so the fixtures, scripts and tests that
+record a hash or a Point ID into one follow.
+
+### The spec
+
+"Versioning and Migration" becomes a "Format versions" section near the top,
+after "Design Principles", giving version 16 as both the current and the
+oldest version read, with no migration subsections. Every "(version N+)" tag
+goes ("(Optional, version 13+)" becomes "(Optional)"), as do "Reading older
+files", the migration note and the below-version-5 sentence in "Conversions
+happen at the I/O boundary", and each column's account of what writers of
+older versions stored, such as `points3d/reprojection_errors`'s mean-or-RMS
+list. "Version History" stays, each line made to stand alone in place of its
+link to a removed subsection.
 
 ## `.matches`: versions 1 to 9 (one PR)
 
@@ -161,22 +196,28 @@ Goes:
 - `Version2SiftFolder` and `upgrade_feature_options`, the conversion of a
   version 1 file, and the `version_1_sift_files` check every writer makes
   before writing into a folder ([workspace.md § Versions never mix](../workspace/workspace.md#versions-never-mix));
-- `sfm ws upgrade`'s conversion of version 1 folders, and the viewer's
-  in-memory conversion of a version 1 record in *Build SIFT Files*;
+- `sfm ws upgrade`'s conversion of version 1 folders and of a version 1
+  workspace file, as [above](#sfm-ws-upgrade-and-the-workspace-file), and the
+  viewer's in-memory conversion of a version 1 record in *Build SIFT Files*;
 - the tests that read or convert version 1 files.
 
-No `.sift` file is checked in. The spec's "Format versions" section loses "Converting a version 1 file" and the table
-of the two versions; "Version History" stays.
+No `.sift` file is checked in. The spec's "Format versions" section loses
+"Converting a version 1 file" and the table of the two versions; "Version
+History" stays.
 
-## Open questions
+## `.camrig`: version 1 (one PR)
 
-- **The workspace file.** `.sfm-workspace.json` is not one of the five
-  formats, but a version 1 workspace names version 1 `.sift` folders. Once
-  0.5 reads no version 1 `.sift` file, should `sfm ws upgrade` still convert a
-  version 1 workspace file, or refuse it with the same message as the
-  formats, naming 0.4.1? The `.sfmr` PR's rewrite of `test-data` writes the
-  three checked-in workspace files as version 2 either way.
-- **The `test-data` file names.** Rewriting a ground truth changes its
-  `content_xxh128` and every Point ID into it. Is that a new version of each
-  file (`_v03` and so on), as the dataset rule in `AGENTS.md` asks for a
-  correction, or the same version in a newer format under the same name?
+Goes:
+
+- the reader's acceptance of version 1 and its upgrade of the version 1
+  poses to the canonical convention (`S`-conjugation for a body-anchored rig,
+  a left `S` multiply for a `spherical_tiles` rig), with
+  `CAMRIG_CANONICAL_CONVENTION_VERSION`;
+- `sfm ws upgrade`'s rewrite of a `.camrig` file below version 2;
+- the tests that read version 1 files.
+
+The one checked-in `.camrig` file is at version 2. The spec's "Versioning and
+migration" becomes a "Format versions" section near the top, after "Format
+design principles", giving version 2 as both the current and the oldest
+version read, without the "Version 1 → Version 2" subsection; "Version
+history" stays.

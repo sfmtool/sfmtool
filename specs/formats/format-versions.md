@@ -27,13 +27,15 @@ A version at which something changed that a reader gates on, such as
 of its own in the format crate, so a later version change does not move the
 gate.
 
-The readers still read the `.sfmr`, `.matches` and `.sift` versions older than
-those sfmtool 0.4 writes. sfmtool 0.4.1's release notes announced that the
-next release stops reading them, and sfmtool 0.5 does, as
+The readers still read the `.sfmr`, `.matches`, `.sift` and `.camrig`
+versions older than those sfmtool 0.4 writes. sfmtool 0.4.1's release notes
+announced that the next release stops reading the `.sfmr`, `.matches` and
+`.sift` ones; `.camrig` version 1 is one no release wrote. sfmtool 0.5 stops
+reading all of them, as
 [../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md)
 specifies. Of the format specs, the `.sift` one has its Format versions section
-near the top; that draft moves the `.sfmr`, `.matches` and `.kdf` ones there
-in 0.5, and the `.camrig` one in 0.6.
+near the top; that draft moves the `.sfmr`, `.matches`, `.camrig` and `.kdf`
+ones there in 0.5.
 
 ## When a format's version changes
 
@@ -115,7 +117,8 @@ One change, landed together:
    current one and, where the oldest version read is above 1, a version below
    it.
 6. **The checked-in files** under `test-data/` are rewritten at the current
-   version.
+   version, keeping their names: the `_vNN` in a file's name versions the
+   reconstruction it holds, not its format (`AGENTS.md`, under `test-data/`).
 7. **The format spec** is updated as
    [How a format spec presents its versions](#how-a-format-spec-presents-its-versions)
    says.
@@ -127,13 +130,18 @@ One change, landed together:
 A reader accepts the current version and every version the previous release
 wrote. That is the **read window**: a file written by the release before
 this one always reads, and `sfm ws upgrade` in this release converts it. A
-reader may read versions older than the window until a release drops them.
+reader may read versions older than the window until a release drops them. A
+version no release wrote, one only development builds wrote between two
+releases, lies outside every release's window.
 
 ## Dropping a version
 
-A version below the read window is dropped in two steps: one release's notes
-announce that the next release stops reading it, and the next release removes
-it. Removing it deletes its read path and conversion, its tests, and its
+A version below the read window that some release wrote is dropped in two
+steps: one release's notes announce that the next release stops reading it,
+and the next release removes it, so a user of the announcing release learns
+in time to upgrade the files that release wrote. A version no release wrote
+has no such users, so any release may stop reading it with no announcement.
+Removing a version deletes its read path and conversion, its tests, and its
 subsection of the format spec's Format versions section, and raises the
 oldest version read. A reader refuses a file below the oldest version it
 reads with a message that names the file, its version, the oldest version it

@@ -259,10 +259,16 @@ empty-handed". Name the thing and say what it does.
   adjustments and refined normals; its scale comes from four tape-measured
   distances between points on the toy. Its marker caps SIFT at 2500 features,
   as `scripts/init_dataset_dino_dog_toy.sh` does, so its `feature_prefix_dir`
-  differs from the other two. The `_v01` suffix is a version, so a file name
-  always means the same content: a later correction, such as one found with SfM
-  Explorer, goes into a new version (`_v02`, …) rather than overwriting an
-  earlier one, as seoul_bull's `_v02` sits beside its `_v01`. The fixtures and
+  differs from the other two. The `_v01` suffix versions the reconstruction
+  the file holds (its cameras, poses, points, tracks and patch frames), so a
+  file name always means the same reconstruction: a correction of any of
+  those, such as one found with SfM Explorer, goes into a new version (`_v02`,
+  …) rather than overwriting an earlier one, as seoul_bull's `_v02` sits
+  beside its `_v01`. A rewrite at the current format version that changes only
+  how the format stores that reconstruction or what the format derives from
+  it or from the images (a version 16 normal derived from the patch frame,
+  the image readings, `float16` storage) keeps the name
+  (`specs/formats/format-versions.md`). The fixtures and
   scripts still use the `_v01` files; some Python and Rust tests of camera
   models, per-image adjustments and the viewer read seoul_bull's `_v02`, and no
   test or script uses kerry_park's `_v02` or the dino file. The

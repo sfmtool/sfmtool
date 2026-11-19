@@ -343,7 +343,11 @@ folder. Version 1 settings cannot write a `.sift` file
 ([Versions never mix](#versions-never-mix)), so a command could do such work
 in a version 1 workspace only as long as every file it needed was already
 there; requiring version 2 takes away that case and the code that kept it
-working, and gives one answer for every command.
+working, and gives one answer for every command. sfmtool 0.5's `sfm ws
+upgrade` refuses a version 1 workspace too, saying to upgrade it with sfmtool
+0.4.1 first, as
+[../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md)
+specifies.
 
 The check is made in two places, both in
 [`_workspace.py`](../../src/sfmtool/_workspace.py), with the same message:
