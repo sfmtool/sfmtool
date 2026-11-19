@@ -357,6 +357,35 @@ scope: a function that only one format needs, such as `read_sift_partial`, and
 formats sfmtool reads or writes but does not define (COLMAP's binary model and
 database, image files).
 
+## A file format changes version only as format-versions.md says
+
+A change to one of the five formats changes its version whenever a reader of
+the previous version would refuse, misread, or silently drop or misinterpret a
+file written under it, and the change follows
+[formats/format-versions.md](formats/format-versions.md): the format crate's
+version constant goes up, the writer writes only the current version, the
+format crate's reader converts every older version it accepts at the I/O
+boundary, `sfm ws upgrade` brings each of them to the current version, tests
+read each one, the checked-in `test-data` files are at the current version,
+and the format spec presents its versions in the shape that spec gives. A
+reader accepts the current version and every version the previous release
+wrote; an older version stops being read one release after the release notes
+announce it. This exists because a file outlives the code that wrote it:
+without a version change an older reader misreads a newer file instead of
+refusing it, and without a fixed rule for keeping and dropping versions a
+user cannot know which release still reads their files.
+
+Report a change to a format's entries, keys, legends, meanings or hash
+coverage with no version change; a writer that writes a version other than
+the current one; a branch on a file's version, or a conversion of an older
+file, outside the format crate; an accepted version with no test that reads
+it; a version a reader still accepts after the release that was announced to
+drop it; a version in the read window that the reader refuses or `sfm ws
+upgrade` cannot convert; a `test-data` file below the current version; and a
+format spec with no Format versions section, no Version History, a migration
+subsection for a version no longer read, or a version tag on an entry that
+every version read has.
+
 ## Viewer items are no more visible than their users need
 
 In `sfm-explorer`, an item is private when only its module and that module's

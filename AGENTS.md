@@ -501,3 +501,10 @@ backlog and keep them honest as findings get addressed:
   `rig_config.json` at the workspace root, naming the `sfm camrig cp` command
   that converts it; that converter is the file's only reader
   (`specs/workspace/rig-config.md`).
+- **A change to a file format follows `specs/formats/format-versions.md`.**
+  Even a new optional entry or a new legend name changes the format's
+  version, and the change brings its reader conversion, `sfm ws upgrade`
+  support, tests and spec sections with it. A reader accepts the current
+  version and every version the previous release wrote; an older version is
+  dropped one release after the release notes announce it, so a format spec's
+  migration subsections disappear while its Version History stays.

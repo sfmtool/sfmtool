@@ -38,6 +38,9 @@ and bit/byte shuffling could be applied [like in blosc](https://www.blosc.org/po
 
 ## Format versions
 
+How the version changes, and which older versions a reader keeps reading, is
+in [format-versions.md](format-versions.md).
+
 `metadata.version` records the format version. There are two versions, `1` and
 `2`, and a conforming writer writes `2`. A reader reads both. It rejects a file
 whose version is `0`, which no version of the format has used, or is newer than

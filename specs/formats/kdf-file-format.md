@@ -374,6 +374,9 @@ would be collapsed before entry-set validation could see it.
 
 ### Version
 
+How the version changes, and which older versions a reader keeps reading, is
+in [format-versions.md](format-versions.md).
+
 `metadata.json`'s `version` is 3. A reader accepts that number and no other, in
 either direction: there is one on-disk shape at a time and no translation between
 shapes. A file carrying another version is refused with a message naming the

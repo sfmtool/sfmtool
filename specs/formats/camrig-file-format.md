@@ -472,6 +472,9 @@ $ jq . cameras/metadata.json
 
 ## Versioning and migration
 
+How the version changes, and which older versions a reader keeps reading, is
+in [format-versions.md](format-versions.md).
+
 The format has two released versions (`1` and `2`). The format is versioned
 (`metadata.json` `version`) precisely so that convention changes like the one
 below can upgrade on load instead of breaking old files.
