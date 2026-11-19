@@ -175,7 +175,9 @@ consumer reads the cells.
    last shape update was applied, and the status breakdown
    (references / kept / rejected / unlocalizable / unlocalizable at the
    refined shape / with too many capped cells / duplicate-image / not
-   evaluated).
+   evaluated, with how many of the members not evaluated were refused for an
+   affine shape elongated past `MAX_PATCH_ELONGATION`, 16: `… 717 not
+   evaluated (0 of them with an affine shape elongated past 16)`).
 
 ## Output statuses
 

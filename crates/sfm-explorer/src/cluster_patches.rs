@@ -512,6 +512,11 @@ pub(crate) struct ClusterSummary {
     pub(crate) path: PathBuf,
     pub(crate) clusters: usize,
     pub(crate) members: usize,
+    /// The members the refinement did not evaluate.
+    pub(crate) not_evaluated: usize,
+    /// Of those, the members refused because their detected affine shape is
+    /// elongated past `MAX_PATCH_ELONGATION`.
+    pub(crate) elongated: usize,
 }
 
 /// What one image's `.sift` metadata says, as the file records it.
@@ -558,6 +563,12 @@ pub(crate) fn build(
         &refining,
     )?;
     drop(pyramids);
+    let not_evaluated = refined
+        .member_status
+        .iter()
+        .filter(|&&status| status == MemberStatus::NotEvaluated)
+        .count();
+    let elongated = refined.elongated_members;
     let data = matches_data(
         &plan,
         forest,
@@ -582,6 +593,8 @@ pub(crate) fn build(
         path: plan.path,
         clusters,
         members,
+        not_evaluated,
+        elongated,
     })
 }
 
@@ -792,6 +805,8 @@ struct Refined {
     member_zncc: Vec<f32>,
     member_shift_px: Vec<f32>,
     member_consistency_residual: Vec<f32>,
+    /// The members refused for their elongation, over every batch.
+    elongated_members: usize,
 }
 
 /// `sfm cluster-patches`' refinement with its defaults, a batch of clusters at
@@ -857,6 +872,7 @@ fn refine(
         member_zncc: vec![f32::NAN; members],
         member_shift_px: vec![f32::NAN; members],
         member_consistency_residual: Vec::new(),
+        elongated_members: 0,
     };
     let mut first = 0;
     while first < cluster_count {
@@ -884,6 +900,7 @@ fn refine(
         refined.member_status[m0..m1].copy_from_slice(&batch.member_status);
         refined.member_zncc[m0..m1].copy_from_slice(&batch.member_zncc);
         refined.member_shift_px[m0..m1].copy_from_slice(&batch.member_shift_px);
+        refined.elongated_members += batch.elongated_members;
         refined
             .member_positions
             .slice_mut(ndarray::s![m0..m1, ..])

@@ -1424,9 +1424,9 @@ which reads "3 or more". Beside them is the grid of each ninth of the tile read
 alone: a box is green under `1`, yellow from `1` to `2`, orange from `2` to
 `3` and red at `3` or more, and carries a dark
 line along its ellipse's major axis where the ellipse is long and thin, its
-elongation `1 − (minor / major)²` at least `0.5` (a minor axis at most 0.71 of
-the major), so the ninth's matching shifts line up along one direction, as on an
-edge. Hovering it shows
+minor axis at most 0.71 of the major (`(minor / major)² ≤ 0.5`), an elongation
+of at least `√2`, so the ninth's matching shifts line up along one direction,
+as on an edge. Hovering it shows
 its nine numbers as the cell prints them. The self-similarity bar judges
 `whole`; the middle and the grid are shown and judged by no bar.
 
