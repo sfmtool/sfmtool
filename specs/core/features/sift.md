@@ -933,7 +933,10 @@ bytes per source pixel when the parameters double it
 (`SiftParams::doubles_image` at its dimensions, so `double_image_below_long_side`
 decides) and at 64 when they do not. The Python backend takes its count from
 the same function, through the `default_concurrent_images` binding, with the
-workspace's options.
+workspace's options. The cap by cores and memory, without the environment
+variable, is `concurrent_images_in_memory`, which also sizes the photograph
+decodes of the image readings a `.sfmr` save gathers
+([formats/sfmr-file-format.md § Implementations](../../formats/sfmr-file-format.md#implementations)).
 
 The two figures are measured. One image's footprint is what the Python backend
 holds for it while it is in flight: the decoded RGB frame, 3 bytes per source

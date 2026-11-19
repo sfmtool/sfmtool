@@ -29,13 +29,14 @@
 
 use std::fmt;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use rayon::prelude::*;
 use sfmtool_archive_io::parse_hash_bytes;
 use sfmtool_sift_format::SIFT_READINGS_VERSION;
 
-use crate::camera::image::ImageU8;
+use crate::camera::image::{image_dimensions, ImageU8};
 use crate::features::sift::{image_readings_from_rgb, ImageReadings, ImageToGray};
 use crate::progress::Progress;
 use crate::workspace::recorded_image_to_gray;
@@ -219,9 +220,15 @@ impl SfmrReconstruction {
     /// `.sift` files therefore cannot verify, and `image_file_hashes` in an
     /// `embedded_patches` one.
     ///
-    /// The images are read in parallel on the rayon pool, and `progress`
-    /// counts them; a photograph's decode and readings take a few tens of
-    /// milliseconds each.
+    /// The images are read on the rayon pool in two passes, and `progress`
+    /// counts them. The first takes every row that needs no decode, all in
+    /// parallel, and reads the size of each photograph left from its header.
+    /// The second decodes those photographs, at most as many at once as fit
+    /// in half of physical memory at about 16 bytes per pixel of the largest
+    /// of them, and never more than the core count: the rule `.sift`
+    /// building sizes its images in flight by. A JPEG's decode and readings
+    /// take under a tenth of a second at 12 megapixels and under a
+    /// second at 200, when one is counted at about 3 GiB.
     ///
     /// # Errors
     ///
@@ -251,44 +258,108 @@ impl SfmrReconstruction {
         &self,
         progress: &Progress<'_>,
     ) -> Result<GatheredImageReadings, ImageReadingsError> {
+        self.gather_image_readings_decoding(progress, None)
+    }
+
+    /// [`Self::gather_image_readings`] with at most `concurrent_decodes`
+    /// photographs decoded at once, or the number
+    /// [`concurrent_decodes_for`] gives when `None`.
+    fn gather_image_readings_decoding(
+        &self,
+        progress: &Progress<'_>,
+        concurrent_decodes: Option<usize>,
+    ) -> Result<GatheredImageReadings, ImageReadingsError> {
         let image_to_gray = self.image_to_gray_for_save();
         let own_rows = self.image_set.image_to_gray.as_ref() == Some(&image_to_gray);
         let total = self.image_set.images.len() as u64;
         let done = AtomicU64::new(0);
-        let results: Vec<Result<(ImageReadings, ImageReadingSource), UnavailableImageReadings>> =
-            (0..self.image_set.images.len())
-                .into_par_iter()
-                .map(|index| {
-                    if progress.is_cancelled() {
-                        return Err(UnavailableImageReadings {
-                            name: String::new(),
-                            reconstruction: String::new(),
-                            sift: String::new(),
-                            photograph: String::new(),
-                        });
+        let counted = || {
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+            progress.count(n, Some(total), "image");
+        };
+        // A placeholder for an image skipped after a cancel, which the cancel
+        // check after each pass discards.
+        let skipped = || {
+            Err(UnavailableImageReadings {
+                name: String::new(),
+                reconstruction: String::new(),
+                sift: String::new(),
+                photograph: String::new(),
+            })
+        };
+
+        // First every row that needs no decode, all in parallel, which leaves
+        // the photographs to decode.
+        let first: Vec<FirstPass> = (0..self.image_set.images.len())
+            .into_par_iter()
+            .map(|index| {
+                if progress.is_cancelled() {
+                    return FirstPass::Done(skipped());
+                }
+                let image = &self.image_set.images[index];
+                let found = match image.readings.filter(|_| own_rows) {
+                    Some(row) => FirstPass::Done(Ok((row, ImageReadingSource::Reconstruction))),
+                    None => {
+                        let reconstruction = if image.readings.is_some() {
+                            "the reconstruction's row is under no recorded image_to_gray"
+                        } else {
+                            "the reconstruction holds no row for it"
+                        };
+                        match self.image_readings_before_decode(index, &image_to_gray) {
+                            FirstPass::Done(found) => {
+                                FirstPass::Done(found.map_err(|mut unavailable| {
+                                    unavailable.reconstruction = reconstruction.into();
+                                    unavailable
+                                }))
+                            }
+                            FirstPass::Photograph(mut photograph) => {
+                                photograph.unavailable.reconstruction = reconstruction.into();
+                                return FirstPass::Photograph(photograph);
+                            }
+                        }
                     }
-                    let image = &self.image_set.images[index];
-                    let result = match image.readings.filter(|_| own_rows) {
-                        Some(row) => Ok((row, ImageReadingSource::Reconstruction)),
-                        None => self
-                            .image_readings_from_files(index, &image_to_gray)
-                            .map_err(|mut unavailable| {
-                                unavailable.reconstruction = if image.readings.is_some() {
-                                    "the reconstruction's row is under no recorded image_to_gray"
-                                        .into()
-                                } else {
-                                    "the reconstruction holds no row for it".into()
-                                };
-                                unavailable
-                            }),
-                    };
-                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    progress.count(n, Some(total), "image");
-                    result
-                })
-                .collect();
+                };
+                counted();
+                found
+            })
+            .collect();
         if progress.check_cancel().is_err() {
             return Err(ImageReadingsError::Cancelled);
+        }
+
+        // Then the photographs, with the number decoded at once bounded by
+        // memory.
+        let mut results = Vec::with_capacity(first.len());
+        let mut photographs = Vec::new();
+        for (index, pass) in first.into_iter().enumerate() {
+            match pass {
+                FirstPass::Done(found) => results.push(found),
+                FirstPass::Photograph(photograph) => {
+                    results.push(skipped());
+                    photographs.push((index, photograph));
+                }
+            }
+        }
+        if !photographs.is_empty() {
+            let k = concurrent_decodes
+                .unwrap_or_else(|| {
+                    concurrent_decodes_for(photographs.iter().map(|(_, p)| p.dimensions))
+                })
+                .clamp(1, photographs.len());
+            let decoded = map_at_most(&photographs, k, |(_, photograph)| {
+                if progress.is_cancelled() {
+                    return skipped();
+                }
+                let found = photograph.readings(&image_to_gray);
+                counted();
+                found
+            });
+            for ((index, _), found) in photographs.iter().zip(decoded) {
+                results[*index] = found;
+            }
+            if progress.check_cancel().is_err() {
+                return Err(ImageReadingsError::Cancelled);
+            }
         }
         let mut rows = Vec::with_capacity(results.len());
         let mut sources = Vec::with_capacity(results.len());
@@ -335,40 +406,39 @@ impl SfmrReconstruction {
         Ok(gathered)
     }
 
-    /// Image `index`'s readings under `image_to_gray` from its `.sift` file or
-    /// its photograph, or what was tried for each.
-    fn image_readings_from_files(
-        &self,
-        index: usize,
-        image_to_gray: &ImageToGray,
-    ) -> Result<(ImageReadings, ImageReadingSource), UnavailableImageReadings> {
+    /// Image `index`'s readings under `image_to_gray` from its `.sift` file,
+    /// or its photograph to read them from, or what was tried for each when
+    /// there is no workspace directory to look in.
+    fn image_readings_before_decode(&self, index: usize, image_to_gray: &ImageToGray) -> FirstPass {
         let name = self.image_set.images[index].name.clone();
         if self.workspace_dir.as_os_str().is_empty() {
-            return Err(UnavailableImageReadings {
+            return FirstPass::Done(Err(UnavailableImageReadings {
                 name,
                 reconstruction: String::new(),
                 sift: "the reconstruction has no workspace directory to find a .sift file in"
                     .into(),
                 photograph: "nor a photograph".into(),
-            });
+            }));
         }
         // The hash the photograph must have, once known.
         let mut image_hash = self.image_file_hashes().map(|hashes| hashes[index]);
         let sift = self.sift_path_for_image(index);
         let sift_reason = match self.sift_readings(index, &sift, image_to_gray, &mut image_hash) {
-            Ok(row) => return Ok((row, ImageReadingSource::Sift)),
+            Ok(row) => return FirstPass::Done(Ok((row, ImageReadingSource::Sift))),
             Err(reason) => format!("{}: {reason}", sift.display()),
         };
-        let photograph = self.workspace_dir.join(&name);
-        match photograph_readings(&photograph, image_hash, image_to_gray) {
-            Ok(row) => Ok((row, ImageReadingSource::Photograph)),
-            Err(reason) => Err(UnavailableImageReadings {
+        let path = self.workspace_dir.join(&name);
+        FirstPass::Photograph(PhotographToRead {
+            dimensions: image_dimensions(&path).ok(),
+            path,
+            image_hash,
+            unavailable: UnavailableImageReadings {
                 name,
                 reconstruction: String::new(),
                 sift: sift_reason,
-                photograph: format!("{}: {reason}", photograph.display()),
-            }),
-        }
+                photograph: String::new(),
+            },
+        })
     }
 
     /// The readings image `index`'s `.sift` at `path` records under
@@ -467,6 +537,107 @@ fn photograph_readings(
     let image = ImageU8::read_rgb(path).map_err(|e| format!("it could not be decoded: {e}"))?;
     image_readings_from_rgb(image.width(), image.height(), image.data(), image_to_gray)
         .map_err(|e| e.to_string())
+}
+
+/// About how many bytes one photograph holds per source pixel while
+/// [`photograph_readings`] reads it: the decoded RGB frame, 3 bytes, and what
+/// the decoder holds beside it, such as a JPEG's component planes or a PNG's
+/// RGBA or 16-bit frame before its conversion to 8-bit RGB. The readings make
+/// no grey copy of the frame, only the 480-pixel reading image. Measured at
+/// 4.7 to 5.4 for baseline JPEGs and up to 11.1 for a 16-bit RGBA PNG, rounded
+/// up, since guessing high only gives up a few concurrent decodes while
+/// guessing low risks running out of memory. The measurements are in
+/// `specs/formats/sfmr-file-format.md` § "Implementations".
+const BYTES_PER_SOURCE_PIXEL: u64 = 16;
+
+/// One image's outcome in the first pass of
+/// [`SfmrReconstruction::gather_image_readings`], which decodes nothing.
+enum FirstPass {
+    /// Its row, or what was tried, with nothing left to try.
+    Done(Result<(ImageReadings, ImageReadingSource), UnavailableImageReadings>),
+    /// Its row is to come from its photograph, in the second pass.
+    Photograph(PhotographToRead),
+}
+
+/// A photograph the second pass of
+/// [`SfmrReconstruction::gather_image_readings`] decodes.
+struct PhotographToRead {
+    /// Where it is.
+    path: std::path::PathBuf,
+    /// The hash its bytes must have, when the reconstruction records one.
+    image_hash: Option<[u8; 16]>,
+    /// Its size from its header, when that can be read.
+    dimensions: Option<(u32, u32)>,
+    /// What was tried before it, which the photograph's own reason completes
+    /// when it cannot be read either.
+    unavailable: UnavailableImageReadings,
+}
+
+impl PhotographToRead {
+    /// Its readings under `image_to_gray`, or what was tried for its image.
+    fn readings(
+        &self,
+        image_to_gray: &ImageToGray,
+    ) -> Result<(ImageReadings, ImageReadingSource), UnavailableImageReadings> {
+        photograph_readings(&self.path, self.image_hash, image_to_gray)
+            .map(|row| (row, ImageReadingSource::Photograph))
+            .map_err(|reason| UnavailableImageReadings {
+                photograph: format!("{}: {reason}", self.path.display()),
+                ..self.unavailable.clone()
+            })
+    }
+}
+
+/// About how many bytes the largest of the photographs of `dimensions` holds
+/// while it is read, at [`BYTES_PER_SOURCE_PIXEL`], or `None` when none of
+/// their sizes is known and above zero. It saturates rather than overflows.
+fn decode_footprint(dimensions: impl IntoIterator<Item = Option<(u32, u32)>>) -> Option<u64> {
+    dimensions
+        .into_iter()
+        .flatten()
+        .map(|(width, height)| u64::from(width) * u64::from(height))
+        .filter(|&pixels| pixels > 0)
+        .max()
+        .map(|pixels| pixels.saturating_mul(BYTES_PER_SOURCE_PIXEL))
+}
+
+/// How many of the photographs of `dimensions` to decode at once: as many as
+/// fit in half of physical memory at the largest one's
+/// [`decode_footprint`], at most the core count and at least 1, the rule
+/// `.sift` building is sized by.
+fn concurrent_decodes_for(dimensions: impl IntoIterator<Item = Option<(u32, u32)>>) -> usize {
+    crate::features::sift::concurrent_images_in_memory(decode_footprint(dimensions))
+}
+
+/// `f` of each of `items`, in order, run on the rayon pool with at most `k`
+/// calls in flight at once.
+///
+/// It spawns `k` jobs in a [`rayon::scope`], and each takes the next item
+/// until none is left. The bound is on the jobs rather than on threads: a
+/// thread that waits inside one call for rayon work the call started may
+/// steal another of the jobs and start a call of its own, but no more than
+/// `k` jobs exist, and each runs one call at a time. Nothing in it blocks but
+/// the scope, which a rayon thread waits on by running the pool's work, so it
+/// can be called from inside the rayon pool, even one of a single thread, and
+/// it adds no threads of its own.
+fn map_at_most<T: Sync, R: Send>(items: &[T], k: usize, f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let next = AtomicUsize::new(0);
+    let found = Mutex::new(Vec::with_capacity(items.len()));
+    rayon::scope(|scope| {
+        for _ in 0..k.max(1) {
+            scope.spawn(|_| loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                let Some(item) = items.get(index) else {
+                    return;
+                };
+                let result = f(item);
+                found.lock().unwrap().push((index, result));
+            });
+        }
+    });
+    let mut found = found.into_inner().unwrap();
+    found.sort_unstable_by_key(|(index, _)| *index);
+    found.into_iter().map(|(_, result)| result).collect()
 }
 
 #[cfg(test)]

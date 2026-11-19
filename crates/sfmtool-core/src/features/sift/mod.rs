@@ -49,8 +49,12 @@ mod simd;
 pub use convert::{ConvertSiftFileError, ConvertedSiftFile, Version2SiftFolder};
 pub use feature_options::FeatureOptionsError;
 pub(crate) use files::{
-    build_sift_file, default_concurrent_images, sift_file_up_to_date, xxh128_of_file,
+    build_sift_file, concurrent_images_in_memory, default_concurrent_images, sift_file_up_to_date,
+    xxh128_of_file,
 };
+// The image readings' tests size their decodes with it.
+#[cfg(test)]
+pub(crate) use files::concurrent_images_for;
 pub use files::{
     build_sift_files, default_concurrent_images_for_dimensions, scan_sift_folder,
     version_1_sift_files, BuildSiftFilesError, BuildSiftFilesOptions, BuildSiftFilesReport,

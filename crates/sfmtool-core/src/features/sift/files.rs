@@ -751,12 +751,26 @@ pub fn default_concurrent_images_for_dimensions(
             ),
         }
     }
+    concurrent_images_in_memory(bytes_per_image(dimensions, params))
+}
+
+/// How many images that each hold `bytes_per_image` bytes while in flight to
+/// run at once: the core count, capped so that that many fit in half of
+/// physical memory ([`crate::machine::physical_memory_bytes`], taken as 4 GiB
+/// when it cannot be read), or at most 4 when the footprint is `None`. At
+/// least 1.
+///
+/// [`default_concurrent_images_for_dimensions`] sizes `.sift` building with
+/// it, and
+/// [`SfmrReconstruction::gather_image_readings`](crate::SfmrReconstruction::gather_image_readings)
+/// its photograph decodes.
+pub(crate) fn concurrent_images_in_memory(bytes_per_image: Option<u64>) -> usize {
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
     let budget = crate::machine::physical_memory_bytes()
         .unwrap_or(4 << 30)
         .div_euclid(2)
         .max(1);
-    concurrent_images_for(cores, bytes_per_image(dimensions, params), budget)
+    concurrent_images_for(cores, bytes_per_image, budget)
 }
 
 /// About how many bytes one image of `dimensions` holds in flight while it is
@@ -776,10 +790,14 @@ fn bytes_per_image(dimensions: Option<(u32, u32)>, params: &SiftParams) -> Optio
     Some(pixels.saturating_mul(per_pixel))
 }
 
-/// [`default_concurrent_images_for_dimensions`] without the environment:
-/// `cores`, capped so that that many images of `bytes_per_image` bytes each fit
-/// in `budget` bytes, or at most 4 when the footprint is unknown. At least 1.
-fn concurrent_images_for(cores: usize, bytes_per_image: Option<u64>, budget: u64) -> usize {
+/// [`concurrent_images_in_memory`] with the machine's figures given: `cores`,
+/// capped so that that many images of `bytes_per_image` bytes each fit in
+/// `budget` bytes, or at most 4 when the footprint is unknown. At least 1.
+pub(crate) fn concurrent_images_for(
+    cores: usize,
+    bytes_per_image: Option<u64>,
+    budget: u64,
+) -> usize {
     match bytes_per_image {
         None => cores.clamp(1, 4),
         Some(bytes) => {

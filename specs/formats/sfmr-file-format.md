@@ -3146,7 +3146,54 @@ describes. Other parts of this spec are implemented by:
   `SfmrReconstruction.save` takes an optional `ProgressCounter` as `progress`
   and gathers with the GIL released. A save that reads `.sift` files costs one
   small read per image; one that decodes images costs about one decode per
-  image (a 1920-pixel JPEG decodes to grey in about 6 ms on one thread). The Python
+  image (a 1920-pixel JPEG decodes to grey in about 6 ms on one thread).
+  The gather runs in two passes on the rayon pool. The first takes every
+  row that needs no decode, from the value or a `.sift` file, all in
+  parallel, and reads the size of each photograph left from its header
+  (`image_dimensions`). The second decodes those photographs with at most `K`
+  at once: the core count capped so that `K` photographs fit in half of
+  physical memory at 16 bytes per pixel of the largest of them, at least 1,
+  which is the rule and the function (`concurrent_images_in_memory`) `.sift`
+  building sizes its images in flight by
+  ([core/features/sift.md § Building `.sift` files](../core/features/sift.md#building-sift-files)).
+  So a 64 GiB machine decodes 10 photographs of 200 megapixels at once
+  rather than one per rayon thread, and 12-megapixel ones on every core.
+  There is no environment variable to set `K`: a decode's footprint does not
+  depend on the extraction settings as SIFT's does, so the measured figure
+  and the memory are all that size it, and the second pass is short beside
+  a SIFT extraction of the same photographs. The bound is
+  on jobs, not threads: `K` jobs are spawned in one `rayon::scope` and each
+  decodes the next photograph until none is left, so a thread that steals a
+  second job while it waits inside a decode's rayon work still leaves at most
+  `K` decodes in flight. Nothing blocks but the scope, which a rayon thread
+  waits on by running the pool's work, so a gather called from inside the
+  rayon pool, even one of a single thread, neither deadlocks nor adds
+  threads. The 16 bytes per pixel are what one photograph holds while it is
+  read: the decoded RGB frame, 3 bytes, and the decoder's buffers beside it,
+  with the readings adding only their 480-pixel reading image, not a grey
+  copy of the frame. Each figure is the rise in the process's
+  `PeakPagefileUsage` (private commit) over its level just before, in a fresh
+  process after a warm-up on a 64×64 JPEG, for one photograph decoded with
+  `ImageU8::read_rgb` and read by `image_readings_from_rgb`, on a 32-core
+  Windows machine. Baseline JPEGs, centre crops of a 16320×12240 phone
+  photograph written at quality 95, and two of the originals:
+
+  | Photograph | Megapixels | Bytes per pixel |
+  |---|---|---|
+  | 2048×1536 JPEG | 3.1 | 5.4 |
+  | 4000×3000 JPEG | 12 | 4.9 |
+  | 8000×6000 JPEG | 48 | 4.7 |
+  | 12000×9000 JPEG | 108 | 4.8 |
+  | 16320×12240 JPEG (2 photographs) | 200 | 4.7, 4.9 |
+  | 4000×3000 progressive JPEG | 12 | 8.0 |
+  | 4000×3000 PNG, RGB / RGBA | 12 | 4.0 / 7.1 |
+  | 4000×3000 PNG, 16-bit RGB / RGBA | 12 | 9.1 / 11.1 |
+  | 4000×3000 TIFF | 12 | 6.1 |
+
+  The constant rounds the largest, 11.1, up to 16, since guessing high only
+  gives up some concurrent decodes, while guessing low risks running out of
+  memory. A 200-megapixel JPEG's decode and readings took under 0.9 s and a
+  12-megapixel one's under 0.09 s, the process's start included. The Python
   writers that copy thumbnails from `.sift` files (`sfm solve` and
   `sfm from-colmap-bin`, through
   [`sfmtool.colmap.io`](../../src/sfmtool/colmap/io.py)) copy the readings

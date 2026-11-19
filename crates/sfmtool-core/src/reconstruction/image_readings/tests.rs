@@ -8,6 +8,7 @@ use sfmtool_archive_io::parse_hash_bytes;
 use sfmtool_sift_format::*;
 
 use super::*;
+use crate::features::sift::concurrent_images_for;
 use crate::{ObservationSource, SfmrReconstruction};
 
 /// The BT.601 conversion rounded to 8 bits, which differs from the demo's.
@@ -369,4 +370,144 @@ fn a_cancelled_save_writes_nothing_and_says_it_was_interrupted() {
         0,
         "nor a temporary one"
     );
+}
+
+#[test]
+fn the_decodes_at_once_follow_the_largest_photograph_and_the_memory() {
+    let photo = (16320, 12240);
+    // The largest known size counts; unknown and empty sizes do not.
+    assert_eq!(
+        decode_footprint([Some((4000, 3000)), None, Some(photo), Some((0, 480))]),
+        Some(16320 * 12240 * 16)
+    );
+    assert_eq!(decode_footprint([None, Some((640, 0))]), None);
+    assert_eq!(decode_footprint([]), None);
+    assert_eq!(
+        decode_footprint([Some((u32::MAX, u32::MAX))]),
+        Some(u64::MAX)
+    );
+    let at = |cores, sizes: &[(u32, u32)], budget| {
+        concurrent_images_for(
+            cores,
+            decode_footprint(sizes.iter().copied().map(Some)),
+            budget,
+        )
+    };
+    // 200-megapixel photographs on 32 cores: 10 fit a 32 GiB budget, 1 a 4 GiB
+    // one, and a 12-megapixel one beside them changes nothing.
+    assert_eq!(at(32, &[photo], 32 << 30), 10);
+    assert_eq!(at(32, &[(4000, 3000), photo], 32 << 30), 10);
+    assert_eq!(at(32, &[photo], 4 << 30), 1);
+    // 48 megapixels in 16 GiB: 22; 12 megapixels in 8 GiB: every core.
+    assert_eq!(at(32, &[(8000, 6000)], 16 << 30), 22);
+    assert_eq!(at(32, &[(4000, 3000)], 8 << 30), 32);
+    // No size known: at most 4.
+    assert_eq!(
+        concurrent_images_for(32, decode_footprint([None]), 32 << 30),
+        4
+    );
+}
+
+/// The most calls of `map_at_most(items, k, ..)` in flight at once, run in a
+/// pool of `threads`, with each call starting rayon work of its own; and
+/// whether the results came back in order.
+///
+/// Until `gate` calls have been in flight together, each call waits for that
+/// to happen, so with a bound of at least `gate` and enough threads, `gate`
+/// calls overlap whatever the timing. A bound below `gate` never lets them,
+/// and the call panics when its wait times out rather than hanging. Once they
+/// overlap, the calls in flight wait up to 50 ms more for one past `gate`,
+/// which a bound above `gate` lets the pool's idle threads start; the wait
+/// ends at once when one does, and only the first wait to end takes the
+/// 50 ms, after which no call waits.
+fn most_in_flight(threads: usize, items: usize, k: usize, gate: usize) -> (usize, bool) {
+    use std::sync::{Condvar, Mutex};
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .unwrap();
+    // The calls in flight now, the most there have been at once, and whether
+    // the wait for one past `gate` is over.
+    let state = Mutex::new((0usize, 0usize, false));
+    let changed = Condvar::new();
+    let items: Vec<usize> = (0..items).collect();
+    let results = pool.install(|| {
+        map_at_most(&items, k, |&item| {
+            {
+                let mut s = state.lock().unwrap();
+                s.0 += 1;
+                s.1 = s.1.max(s.0);
+                changed.notify_all();
+                let (s, wait) = changed
+                    .wait_timeout_while(s, std::time::Duration::from_secs(10), |s| s.1 < gate)
+                    .unwrap();
+                assert!(
+                    !wait.timed_out(),
+                    "{gate} calls were never in flight at once"
+                );
+                let (mut s, _) = changed
+                    .wait_timeout_while(s, std::time::Duration::from_millis(50), |s| {
+                        s.1 <= gate && !s.2
+                    })
+                    .unwrap();
+                s.2 = true;
+                changed.notify_all();
+            }
+            // Rayon work inside the call, as the readings do, during which a
+            // waiting thread may steal another of the jobs.
+            let sum: usize = (0..16usize).into_par_iter().sum();
+            state.lock().unwrap().0 -= 1;
+            item + sum
+        })
+    });
+    let in_order = results == items.iter().map(|i| i + 120).collect::<Vec<_>>();
+    (state.into_inner().unwrap().1, in_order)
+}
+
+#[test]
+fn at_most_k_calls_run_at_once_and_the_results_keep_their_order() {
+    // Eight threads for three jobs: the first calls wait until three are in
+    // flight, so three overlap, and never four.
+    assert_eq!(most_in_flight(8, 12, 3, 3), (3, true));
+    // One thread, called from inside its pool, with no waiting: no deadlock,
+    // and the jobs a waiting thread steals still number at most three.
+    let (most, in_order) = most_in_flight(1, 12, 3, 0);
+    assert!((1..=3).contains(&most), "{most} calls at once");
+    assert!(in_order);
+}
+
+#[test]
+fn bounded_decodes_give_the_rows_of_each_photograph() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut recon = without_readings(dir.path());
+    let names = names(&recon);
+    let hashes: Vec<[u8; 16]> = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| write_photograph(dir.path(), name, &photograph(40, 30, i as u32)))
+        .collect();
+    recon.point_set.observations = ObservationSource::EmbeddedPatches {
+        keypoints_xy: Array2::zeros((recon.point_set.tracks.len(), 2)),
+        image_file_hashes: hashes,
+    };
+    let expected: Vec<ImageReadings> = names
+        .iter()
+        .map(|name| {
+            let image = ImageU8::read_rgb(&dir.path().join(name)).unwrap();
+            image_readings_from_rgb(
+                image.width(),
+                image.height(),
+                image.data(),
+                &ImageToGray::default(),
+            )
+            .unwrap()
+        })
+        .collect();
+    for k in [Some(1), Some(3), None] {
+        let gathered = recon
+            .gather_image_readings_decoding(&Progress::none(), k)
+            .unwrap();
+        assert_eq!(gathered.rows, expected, "at most {k:?} at once");
+        assert_eq!(gathered.count(ImageReadingSource::Photograph), names.len());
+    }
 }
