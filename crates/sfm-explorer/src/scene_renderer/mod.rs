@@ -46,7 +46,7 @@ use crate::scene::{ImageRef, PointRef, ReconId};
 use gpu_types::*;
 use picking::PickTables;
 use recon::ReconResources;
-use upload::BgMeshKey;
+use upload::{BgMeshKey, LoadedBgLevel};
 
 // Re-export public constants so external modules can use `crate::scene_renderer::*`.
 pub(crate) use gpu_types::{
@@ -176,17 +176,19 @@ pub(crate) struct SceneRenderer {
     bg_image_bind_group_layout: Option<wgpu::BindGroupLayout>,
     bg_image_bind_group: Option<wgpu::BindGroup>,
     bg_image_sampler: Option<wgpu::Sampler>,
-    /// Full-resolution background image texture (single image, not array).
+    /// The background texture: one pyramid level of one photograph.
     bg_image_texture: Option<wgpu::Texture>,
-    /// Which image is currently loaded into `bg_image_texture`. A ref rather
-    /// than an index: keyed by index alone, a file replacement kept showing the
-    /// old background for the same position in the new reconstruction.
-    bg_image_loaded: Option<ImageRef>,
+    /// Which image's photograph, at which level, is in `bg_image_texture`. The
+    /// image is a ref rather than an index: keyed by index alone, a file
+    /// replacement kept showing the old background for the same position in
+    /// the new reconstruction.
+    bg_image_loaded: Option<LoadedBgLevel>,
     /// What the background mesh in `bg_image_distorted_vertex_buffer` was
-    /// built from: the image, its intrinsics and its camera-to-world rotation.
-    /// The photograph depends on the image alone, the mesh on all three, so a
-    /// version that changes an image's intrinsics (its camera or its intrinsic
-    /// adjustment) or its pose rebuilds the mesh and keeps the texture.
+    /// built from: the image, its intrinsics, its camera-to-world rotation and
+    /// the texture coordinates' scale for the level held. The photograph
+    /// depends on the image alone, the mesh on all four, so a version that
+    /// changes an image's intrinsics (its camera or its intrinsic adjustment)
+    /// or its pose rebuilds the mesh and keeps the texture.
     bg_image_mesh_key: Option<BgMeshKey>,
 
     // ── Per-reconstruction resources ──

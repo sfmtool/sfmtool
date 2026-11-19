@@ -1,7 +1,15 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Full-resolution background image upload for camera view mode.
+//! The photograph behind the 3D view in camera view mode.
+//!
+//! The background is one texture of one level of the photograph's pyramid:
+//! the coarsest level that still covers the viewport, and no finer than the
+//! GPU's texture limit allows ([`background_level`]). The pixels come from the
+//! viewer's photograph cache through a closure the caller passes,
+//! `state::display_photograph`, which decodes on the rayon pool on a miss
+//! (on the calling thread only under a cache budget of 0); the renderer calls
+//! it only when the level it wants is not the one it holds.
 
 use super::super::distorted_mesh::generate_bg_distorted_mesh;
 use super::super::gpu_types::{
@@ -9,6 +17,7 @@ use super::super::gpu_types::{
 };
 use super::super::SceneRenderer;
 use crate::scene::ImageRef;
+use crate::state::DisplayPhotograph;
 use sfmtool_core::camera::image::ImageU8;
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::SfmrReconstruction;
@@ -17,12 +26,14 @@ use wgpu::util::DeviceExt;
 /// The background photograph's mesh for image `image_index`: a tessellated
 /// grid of world-space ray directions through the image's own intrinsics (its
 /// camera with its intrinsic adjustment applied), so the photograph lies where
-/// its pixels' rays point.
+/// its pixels' rays point. Its texture coordinates run from 0 to 1 over the
+/// whole photograph, multiplied by `uv_scale`, the [`level_uv_scale`] of the
+/// level the texture holds.
 ///
 /// Uses the same camera-to-world rotation as the frustum wireframes, so the
 /// background shader can use the standard `view_proj = projection * view`
 /// pipeline. Split out from [`SceneRenderer::upload_bg_image`] so the mesh is
-/// assertable without a photograph on disk or a GPU buffer readback.
+/// assertable without a photograph or a GPU buffer readback.
 ///
 /// # Panics
 ///
@@ -30,6 +41,7 @@ use wgpu::util::DeviceExt;
 pub(super) fn bg_image_mesh(
     recon: &SfmrReconstruction,
     image_index: usize,
+    uv_scale: [f32; 2],
 ) -> (Vec<BgDistortedVertex>, Vec<u32>) {
     let img = &recon.image_set.images[image_index];
     let camera = recon.image_set.image_intrinsics(image_index);
@@ -41,52 +53,217 @@ pub(super) fn bg_image_mesh(
     } else {
         BG_PINHOLE_SUBDIVISIONS
     };
-    generate_bg_distorted_mesh(&camera, &r, subdivisions)
+    let (mut vertices, indices) = generate_bg_distorted_mesh(&camera, &r, subdivisions);
+    for vertex in &mut vertices {
+        vertex.uv = [vertex.uv[0] * uv_scale[0], vertex.uv[1] * uv_scale[1]];
+    }
+    (vertices, indices)
+}
+
+/// The pyramid level the background draws a photograph at, from the sizes of
+/// its levels, level 0 first and each half the one before.
+///
+/// The coarsest level whose longer side is still at least `viewport_long_px`,
+/// the viewport's longer side in physical pixels, but no finer than the first
+/// level whose longer side fits `max_texture_dimension`, the device's
+/// `max_texture_dimension_2d`. Level 0 when even it is shorter than the
+/// viewport. `None` when no level fits the limit, which only a pyramid that
+/// stops before its long side is short enough can give: one of a photograph a
+/// pixel or two tall.
+pub(super) fn background_level(
+    level_sizes: &[(u32, u32)],
+    viewport_long_px: u32,
+    max_texture_dimension: u32,
+) -> Option<usize> {
+    let long = |&(w, h): &(u32, u32)| w.max(h);
+    let first_fit = level_sizes
+        .iter()
+        .position(|size| long(size) <= max_texture_dimension)?;
+    let covering = level_sizes
+        .iter()
+        .rposition(|size| long(size) >= viewport_long_px)
+        .unwrap_or(0);
+    Some(covering.max(first_fit))
+}
+
+/// The factors the background mesh's texture coordinates are multiplied by
+/// when the texture holds level `level`, of `level_size`, of a photograph of
+/// `size`: `width / (w_l·2^l)` and `height / (h_l·2^l)`.
+///
+/// Each halving drops an odd last column or row, so level `l` covers only the
+/// level-0 columns `0` to `w_l·2^l` and the rows `0` to `h_l·2^l`. The mesh's
+/// texture coordinates run from 0 to 1 over the whole photograph; scaled, each
+/// level-0 pixel lands on the texel that covers it, and the dropped columns and
+/// rows, fewer than `2^l`, fall past the texture's edge, where the sampler
+/// clamps, instead of the level being stretched over them.
+pub(super) fn level_uv_scale(size: (u32, u32), level_size: (u32, u32), level: usize) -> [f32; 2] {
+    let covered = |n: u32| f64::from(n) * 2f64.powi(level as i32);
+    [
+        (f64::from(size.0) / covered(level_size.0)) as f32,
+        (f64::from(size.1) / covered(level_size.1)) as f32,
+    ]
+}
+
+/// The level of a photograph the background texture holds, with the sizes of
+/// every level of that photograph, kept so the level can be chosen again when
+/// the viewport changes without asking the cache, whose pyramid may have been
+/// evicted since.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct LoadedBgLevel {
+    pub(crate) image: ImageRef,
+    pub(crate) level: usize,
+    pub(crate) level_sizes: Vec<(u32, u32)>,
+}
+
+impl LoadedBgLevel {
+    /// [`level_uv_scale`] for the level held.
+    fn uv_scale(&self) -> [f32; 2] {
+        level_uv_scale(
+            self.level_sizes[0],
+            self.level_sizes[self.level],
+            self.level,
+        )
+    }
 }
 
 /// What one background mesh was built from: the image, its intrinsics (its
-/// camera with its intrinsic adjustment applied) and its camera-to-world
-/// rotation. [`bg_image_mesh`] reads exactly these, so a mesh whose key still
-/// matches is the one a rebuild would make.
+/// camera with its intrinsic adjustment applied), its camera-to-world rotation
+/// and the texture coordinates' scale for the level the texture holds.
+/// [`bg_image_mesh`] and the scale read exactly these, so a mesh whose key
+/// still matches is the one a rebuild would make.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BgMeshKey {
     pub(crate) image: ImageRef,
     pub(crate) intrinsics: CameraIntrinsics,
     pub(crate) rotation: [f64; 9],
+    pub(crate) uv_scale: [f32; 2],
+}
+
+/// `level` as RGBA rows for an `Rgba8UnormSrgb` texture, with alpha 255 where
+/// the level has none. The cache's levels are RGB; the background pipeline
+/// draws with no blending, so the alpha has no visible effect.
+fn rgba_of(level: &ImageU8) -> Vec<u8> {
+    let data = level.data();
+    match level.channels() {
+        4 => data.to_vec(),
+        3 => data
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|&[r, g, b]| [r, g, b, 255])
+            .collect(),
+        2 => data
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .flat_map(|&[g, a]| [g, g, g, a])
+            .collect(),
+        _ => data.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+    }
 }
 
 impl SceneRenderer {
-    /// Load a full-resolution camera image for the background in camera view mode.
+    /// Show `image`'s photograph behind the 3D view in camera view mode.
     ///
-    /// Creates a single 2D texture at the image's native resolution and rebuilds
-    /// the background image bind group, skipping the reload when the same image
-    /// is already loaded. The mesh is rebuilt whenever what it is built from
-    /// changed, so a version that gives the image other intrinsics or another
-    /// pose redraws the photograph where its rays now point without decoding it
-    /// again.
+    /// Chooses the level with [`background_level`] from the viewport's size
+    /// (`current_size`, in physical pixels) and the device's texture limit,
+    /// and calls `photograph` for the pixels only when that level is not the
+    /// one the texture already holds for this image: on a change of image, or
+    /// a change of viewport size that changes the level. The app passes
+    /// `state::display_photograph`, which decodes on the rayon pool on a miss
+    /// (on the calling thread only under a cache budget of 0).
+    /// What it answers decides what is drawn:
+    ///
+    /// - **Decoded**: the chosen level is copied into a new texture, and the
+    ///   bind group rebuilt around it.
+    /// - **Decoding**: the texture keeps what it holds, so while the next
+    ///   image of a camera switch or an animation decodes, the previous one
+    ///   stays on its own mesh. A background of another node is cleared, since
+    ///   the frame's node transform is not its node's. Nothing is drawn when
+    ///   nothing was shown.
+    /// - **Unreadable**: nothing is drawn. The cache remembers the failure, so
+    ///   later frames ask again without reading the file.
+    ///
+    /// The mesh is then rebuilt, for the image whose photograph the texture
+    /// holds, whenever what it is built from changed, so a version that gives
+    /// the image other intrinsics or another pose redraws the photograph where
+    /// its rays now point without asking for the pixels again.
     pub(crate) fn upload_bg_image(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         recon: &SfmrReconstruction,
         image: ImageRef,
+        photograph: impl FnOnce() -> DisplayPhotograph,
     ) {
-        let image_index = image.index();
-        let Some(img) = recon.image_set.images.get(image_index) else {
-            return;
-        };
-        if self.bg_image_loaded != Some(image) && !self.load_bg_texture(device, queue, recon, image)
-        {
+        if image.index() >= recon.image_set.images.len() {
+            self.clear_bg_image();
             return;
         }
-        let intrinsics = recon.image_set.image_intrinsics(image_index);
+        let viewport_long_px = self.current_size.0.max(self.current_size.1);
+        let max_dimension = device.limits().max_texture_dimension_2d;
+        let held = self.bg_image_loaded.as_ref().is_some_and(|loaded| {
+            loaded.image == image
+                && background_level(&loaded.level_sizes, viewport_long_px, max_dimension)
+                    == Some(loaded.level)
+        });
+        if !held {
+            match photograph() {
+                DisplayPhotograph::Decoded(pyramid) => {
+                    let level_sizes: Vec<(u32, u32)> = (0..pyramid.num_levels())
+                        .map(|l| (pyramid.level(l).width(), pyramid.level(l).height()))
+                        .collect();
+                    match background_level(&level_sizes, viewport_long_px, max_dimension) {
+                        Some(level) => self.load_bg_texture(
+                            device,
+                            queue,
+                            LoadedBgLevel {
+                                image,
+                                level,
+                                level_sizes,
+                            },
+                            pyramid.level(level),
+                        ),
+                        None => self.clear_bg_image(),
+                    }
+                }
+                DisplayPhotograph::Decoding => {
+                    if self
+                        .bg_image_loaded
+                        .as_ref()
+                        .is_some_and(|loaded| loaded.image.recon != image.recon)
+                    {
+                        self.clear_bg_image();
+                    }
+                }
+                DisplayPhotograph::Unreadable => self.clear_bg_image(),
+            }
+        }
+        self.update_bg_mesh(device, recon);
+    }
+
+    /// Rebuild the background mesh for the image whose photograph the texture
+    /// holds, unless the mesh already is the one a rebuild would make.
+    fn update_bg_mesh(&mut self, device: &wgpu::Device, recon: &SfmrReconstruction) {
+        let Some(loaded) = &self.bg_image_loaded else {
+            return;
+        };
+        let (image, uv_scale) = (loaded.image, loaded.uv_scale());
+        let Some(img) = recon.image_set.images.get(image.index()) else {
+            self.clear_bg_image();
+            return;
+        };
+        let intrinsics = recon.image_set.image_intrinsics(image.index());
         let rotation = img.camera_to_world_rotation_flat();
         if self.bg_image_mesh_key.as_ref().is_some_and(|key| {
-            key.image == image && key.rotation == rotation && key.intrinsics == *intrinsics
+            key.image == image
+                && key.rotation == rotation
+                && key.uv_scale == uv_scale
+                && key.intrinsics == *intrinsics
         }) {
             return; // the mesh is the one a rebuild would make
         }
-        let (vertices, indices) = bg_image_mesh(recon, image_index);
+        let (vertices, indices) = bg_image_mesh(recon, image.index(), uv_scale);
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("bg distorted vertices"),
             contents: bytemuck::cast_slice(&vertices),
@@ -104,34 +281,21 @@ impl SceneRenderer {
             image,
             intrinsics: intrinsics.into_owned(),
             rotation,
+            uv_scale,
         });
     }
 
-    /// Decode `image`'s photograph into the background texture and rebuild
-    /// the bind group around it. Returns whether it did: a photograph that
-    /// cannot be read leaves every field as it was.
+    /// Copy `pixels`, the level `loaded` names, into a new background texture
+    /// and rebuild the bind group around it.
     fn load_bg_texture(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        recon: &SfmrReconstruction,
-        image: ImageRef,
-    ) -> bool {
-        let img = &recon.image_set.images[image.index()];
-        let image_path = recon.workspace_dir.join(&img.name);
-        // The photograph decoder every reader shares: the contents choose the
-        // format, and the EXIF orientation is ignored, so the texture lines up
-        // with the camera's width and height.
-        let photograph = match ImageU8::read_rgba(&image_path) {
-            Ok(img) => img,
-            Err(e) => {
-                log::warn!("Failed to load bg image {}: {}", image_path.display(), e);
-                return false;
-            }
-        };
-
-        let (w, h) = (photograph.width(), photograph.height());
-        let rgba = photograph.into_data();
+        loaded: LoadedBgLevel,
+        pixels: &ImageU8,
+    ) {
+        let (w, h) = (pixels.width(), pixels.height());
+        let rgba = rgba_of(pixels);
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("bg image"),
@@ -197,10 +361,15 @@ impl SceneRenderer {
             self.bg_image_bind_group = Some(bind_group);
         }
 
+        log::info!(
+            "Loaded bg image {} at level {} ({}×{})",
+            loaded.image.index(),
+            loaded.level,
+            w,
+            h
+        );
         self.bg_image_texture = Some(texture);
-        self.bg_image_loaded = Some(image);
-        log::info!("Loaded bg image {} ({}×{})", image_path.display(), w, h);
-        true
+        self.bg_image_loaded = Some(loaded);
     }
 
     /// Clear the background image when leaving camera view mode.

@@ -259,7 +259,7 @@ impl SceneRenderer {
         };
 
         // ── Pass 0: Background image (camera view only) ──
-        // Renders the full-res image into edl_output, cleared to BG_COLOR
+        // Renders the camera's photograph into edl_output, cleared to BG_COLOR
         // so letterbox/pillarbox bars match the normal background.
         let has_bg_image = in_camera_view && self.bg_image_bind_group.is_some();
         if has_bg_image {

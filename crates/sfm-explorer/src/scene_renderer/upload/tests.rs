@@ -31,10 +31,14 @@ use super::super::picking::{PickTarget, PICK_TAG_FRUSTUM, PICK_TAG_NONE, PICK_TA
 use super::super::recon::{NodeDisplay, ReconResources};
 use super::super::uniforms::recon_uniforms;
 use super::super::SceneRenderer;
+use super::bg_image::{background_level, level_uv_scale};
 use super::track_rays::track_ray_edges;
 use super::Uploaded;
 use crate::scene::{ImageRef, NodeTint, PointRef, ReconId, TINT_PALETTE};
 use crate::state::CachedSiftFeatures;
+use crate::state::{display_photograph, photograph_path, DisplayPhotograph, PhotographRequests};
+use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::PhotographCache;
 
 // ── Fixtures ────────────────────────────────────────────────────────────
 
@@ -1579,17 +1583,195 @@ fn recon_with_real_bg_image(tag: &str) -> (SfmrReconstruction, TempDir) {
     (recon, dir)
 }
 
+/// The photograph cache's pyramid of a `width` x `height` RGB photograph: the
+/// depth `PhotographCache` builds, so the levels are the ones the background
+/// chooses among in the viewer.
+fn pyramid_of(width: u32, height: u32) -> Arc<ImageU8Pyramid> {
+    let data = (0..width * height * 3).map(|i| (i % 251) as u8).collect();
+    Arc::new(ImageU8Pyramid::from_image(
+        ImageU8::new(width, height, 3, data),
+        ImageU8Pyramid::full_levels(width, height),
+    ))
+}
+
+/// The sizes of the levels `pyramid_of` would build, without the pixels, for
+/// photographs too large to allocate in a test.
+fn level_sizes_of(width: u32, height: u32) -> Vec<(u32, u32)> {
+    let mut sizes = vec![(width, height)];
+    while sizes.len() < ImageU8Pyramid::full_levels(width, height) {
+        let (w, h) = *sizes.last().unwrap();
+        if w < 2 || h < 2 {
+            break;
+        }
+        sizes.push((w / 2, h / 2));
+    }
+    sizes
+}
+
+/// A renderer whose viewport is `width` x `height` physical pixels.
+fn renderer_at(width: u32, height: u32) -> SceneRenderer {
+    let mut r = SceneRenderer::new();
+    r.current_size = (width, height);
+    r
+}
+
+/// A `photograph` argument that answers with `pyramid`.
+fn decoded(pyramid: &Arc<ImageU8Pyramid>) -> impl FnOnce() -> DisplayPhotograph {
+    let pyramid = Arc::clone(pyramid);
+    move || DisplayPhotograph::Decoded(pyramid)
+}
+
+/// A `photograph` argument for a frame that must not ask for the pixels.
+fn not_asked() -> DisplayPhotograph {
+    panic!("the background asked for the photograph again")
+}
+
+fn bg_texture_size(r: &SceneRenderer) -> Option<(u32, u32)> {
+    r.bg_image_texture.as_ref().map(|t| (t.width(), t.height()))
+}
+
+fn bg_loaded_image(r: &SceneRenderer) -> Option<ImageRef> {
+    r.bg_image_loaded.as_ref().map(|loaded| loaded.image)
+}
+
 #[test]
-fn upload_bg_image_loads_a_real_image_and_builds_its_mesh() {
+fn the_background_level_covers_the_viewport_within_the_texture_limit() {
+    // The 200-megapixel photograph: 16320, 8160, 4080, 2040, 1020 … px long.
+    let phone = level_sizes_of(16320, 12240);
+    assert_eq!(phone[2], (4080, 3060));
+    assert_eq!(background_level(&phone, 3840, 8192), Some(2));
+    assert_eq!(background_level(&phone, 1920, 8192), Some(3));
+    // A level exactly as long as the viewport covers it; one pixel more does
+    // not.
+    assert_eq!(background_level(&phone, 4080, 8192), Some(2));
+    assert_eq!(background_level(&phone, 4081, 8192), Some(1));
+    // A viewport longer than the photograph: the finest level that fits the
+    // limit, level 1 under 8192 and level 0 under 16384.
+    assert_eq!(background_level(&phone, 20000, 8192), Some(1));
+    assert_eq!(background_level(&phone, 20000, 16384), Some(0));
+    // The limit forcing a coarser level than the viewport asks for: 2000 px
+    // would cover 1920, but only 1000 px fits a limit of 1024.
+    let photo = level_sizes_of(4000, 3000);
+    assert_eq!(background_level(&photo, 1920, 8192), Some(1));
+    assert_eq!(background_level(&photo, 1920, 1024), Some(2));
+    // The test data's 270 x 480: shorter than the viewport, so level 0.
+    assert_eq!(
+        background_level(&level_sizes_of(270, 480), 1920, 8192),
+        Some(0)
+    );
+    // A tiny viewport gets the coarsest level.
+    let seoul = level_sizes_of(270, 480);
+    assert_eq!(background_level(&seoul, 1, 8192), Some(seoul.len() - 1));
+    // A pyramid with no level inside the limit draws nothing.
+    assert_eq!(background_level(&level_sizes_of(9000, 1), 1920, 8192), None);
+}
+
+#[test]
+fn the_texture_coordinates_scale_by_the_pixels_a_level_covers() {
+    // 67 x 33 halves to 33 x 16 and 16 x 8: level 2 covers 64 x 32 of the
+    // photograph's pixels, so a coordinate across the photograph stretches by
+    // 67 / 64 and 33 / 32 to land on the texel that covers it.
+    let pyramid = pyramid_of(67, 33);
+    let size_of = |l: usize| (pyramid.level(l).width(), pyramid.level(l).height());
+    assert_eq!(size_of(2), (16, 8));
+    assert_eq!(level_uv_scale((67, 33), size_of(0), 0), [1.0, 1.0]);
+    assert_eq!(
+        level_uv_scale((67, 33), size_of(1), 1),
+        [67.0 / 66.0, 33.0 / 32.0]
+    );
+    assert_eq!(
+        level_uv_scale((67, 33), size_of(2), 2),
+        [67.0 / 64.0, 33.0 / 32.0]
+    );
+    // Even sizes cover the photograph exactly.
+    assert_eq!(level_uv_scale((64, 32), (16, 8), 2), [1.0, 1.0]);
+
+    // The mesh carries the scale: each texture coordinate is the unscaled
+    // one times it, so the photograph's far corner lands past the level's.
+    let recon = demo(4);
+    let scale = [67.0 / 64.0, 33.0 / 32.0];
+    let (whole, _) = super::bg_image::bg_image_mesh(&recon, 0, [1.0, 1.0]);
+    let (scaled, _) = super::bg_image::bg_image_mesh(&recon, 0, scale);
+    assert!(whole.iter().any(|v| v.uv == [1.0, 1.0]));
+    for (w, s) in whole.iter().zip(&scaled) {
+        assert_eq!(s.uv, [w.uv[0] * scale[0], w.uv[1] * scale[1]]);
+    }
+}
+
+#[test]
+fn the_background_draws_the_level_its_viewport_needs_and_chooses_again_on_a_resize() {
+    let (device, queue) = device();
+    let recon = demo(4);
+    let pyramid = pyramid_of(67, 33);
+
+    // A viewport 40 px long needs level 0, the only level at least 40 long.
+    let mut r = renderer_at(40, 30);
+    r.upload_bg_image(&device, &queue, &recon, image(0), decoded(&pyramid));
+    assert_eq!(bg_texture_size(&r), Some((67, 33)));
+    assert_eq!(r.bg_image_mesh_key.as_ref().unwrap().uv_scale, [1.0, 1.0]);
+
+    // 20 px long: level 1, 33 x 16, with its texture coordinates scaled.
+    r.current_size = (20, 10);
+    r.upload_bg_image(&device, &queue, &recon, image(0), decoded(&pyramid));
+    assert_eq!(bg_texture_size(&r), Some((33, 16)));
+    assert_eq!(
+        r.bg_image_mesh_key.as_ref().unwrap().uv_scale,
+        [67.0 / 66.0, 33.0 / 32.0]
+    );
+
+    // A resize that keeps the level asks for nothing and keeps the texture.
+    r.current_size = (30, 10);
+    r.upload_bg_image(&device, &queue, &recon, image(0), not_asked);
+    assert_eq!(bg_texture_size(&r), Some((33, 16)));
+    assert_eq!(bg_loaded_image(&r), Some(image(0)));
+}
+
+#[test]
+fn a_photograph_wider_than_the_texture_limit_never_makes_a_texture_over_it() {
+    // The device's default limit is 8192. A viewport wider than the
+    // photograph would ask for level 0, 8200 px; the limit holds it to level
+    // 1. Creating a texture over the limit is a wgpu validation error, which
+    // panics on this device.
+    let (device, queue) = device();
+    let limit = device.limits().max_texture_dimension_2d;
+    assert_eq!(limit, 8192);
+    let recon = demo(4);
+    let mut r = renderer_at(16000, 9000);
+    r.upload_bg_image(
+        &device,
+        &queue,
+        &recon,
+        image(0),
+        decoded(&pyramid_of(8200, 6)),
+    );
+    assert_eq!(bg_texture_size(&r), Some((4100, 3)));
+    assert_eq!(r.bg_image_loaded.as_ref().unwrap().level, 1);
+}
+
+#[test]
+fn a_photograph_is_decoded_off_the_calling_thread_and_drawn_once_it_lands() {
     let (device, queue) = device();
     let (recon, dir) = recon_with_real_bg_image("load");
-    let mut r = SceneRenderer::new();
+    let cache = Arc::new(PhotographCache::new(1 << 30));
+    let requests = PhotographRequests::default();
+    let ctx = egui::Context::default();
+    let mut r = renderer_at(64, 64);
+    let frame = |r: &mut SceneRenderer| {
+        r.upload_bg_image(&device, &queue, &recon, image(0), || {
+            display_photograph(&cache, &requests, &recon, 0, &ctx)
+        })
+    };
 
-    r.upload_bg_image(&device, &queue, &recon, image(0));
+    frame(&mut r);
+    assert!(
+        r.bg_image_texture.is_none(),
+        "drawn before the decode landed"
+    );
+    wait_until_decoded(&requests, &photograph_path(&recon, 0).unwrap());
+    frame(&mut r);
 
-    let texture = r.bg_image_texture.as_ref().expect("bg texture");
-    assert_eq!((texture.width(), texture.height()), (8, 4));
-    assert_eq!(r.bg_image_loaded, Some(image(0)));
+    assert_eq!(bg_texture_size(&r), Some((8, 4)));
+    assert_eq!(bg_loaded_image(&r), Some(image(0)));
     // Pinhole cameras get the coarsest background mesh: two triangles.
     let n = BG_PINHOLE_SUBDIVISIONS + 1;
     assert_eq!(
@@ -1597,38 +1779,104 @@ fn upload_bg_image_loads_a_real_image_and_builds_its_mesh() {
         ((n - 1) * (n - 1) * 6) as u32
     );
     assert!(r.bg_image_distorted_vertex_buffer.is_some());
-
     drop(dir);
 }
 
+/// Wait for the decode `requests` started for `path` to end.
+fn wait_until_decoded(requests: &PhotographRequests, path: &std::path::Path) {
+    let start = std::time::Instant::now();
+    while requests.is_in_flight(path) {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(30),
+            "the decode never ended"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
 #[test]
-fn upload_bg_image_skips_reloading_the_same_image() {
+fn an_unreadable_photograph_is_read_once_and_draws_nothing() {
     let (device, queue) = device();
-    let (recon, dir) = recon_with_real_bg_image("reload");
-    let mut r = SceneRenderer::new();
+    // demo's workspace_dir is empty and its image names don't exist on disk.
+    let recon = demo(4);
+    let cache = Arc::new(PhotographCache::new(1 << 30));
+    let requests = PhotographRequests::default();
+    let ctx = egui::Context::default();
+    let mut r = renderer_at(64, 64);
+    let path = photograph_path(&recon, 0).unwrap();
 
-    r.upload_bg_image(&device, &queue, &recon, image(0));
-    assert_eq!(r.bg_image_texture.as_ref().map(|t| t.width()), Some(8));
+    // Each frame waits for any decode it started, so a second read would be
+    // counted before the next frame and before the assertion.
+    for _ in 0..5 {
+        r.upload_bg_image(&device, &queue, &recon, image(0), || {
+            display_photograph(&cache, &requests, &recon, 0, &ctx)
+        });
+        wait_until_decoded(&requests, &path);
+    }
 
-    // Replace the file with a differently-sized image and ask for the same
-    // index again. Deleting it instead would prove nothing: the load failure
-    // path also returns before mutating any field, so the assertions below
-    // would hold either way. A *readable* image of a new size is only ignored
-    // if the already-loaded early-out actually fires.
-    image::RgbImage::new(16, 8)
-        .save(dir.path().join(BG_NAME))
-        .expect("overwrite test png");
-    r.upload_bg_image(&device, &queue, &recon, image(0));
-
-    let texture = r.bg_image_texture.as_ref().expect("bg texture");
     assert_eq!(
-        (texture.width(), texture.height()),
-        (8, 4),
-        "the second call must have been skipped, not reloaded at the new size",
+        cache.stats().misses,
+        1,
+        "the file was not read exactly once"
     );
-    assert_eq!(r.bg_image_loaded, Some(image(0)));
+    assert!(r.bg_image_texture.is_none());
+    assert_eq!(r.bg_image_loaded, None);
+}
 
-    drop(dir);
+#[test]
+fn switching_images_keeps_the_previous_photograph_until_the_next_lands() {
+    let (device, queue) = device();
+    let recon = demo(4);
+    let mut r = renderer_at(64, 64);
+    r.upload_bg_image(
+        &device,
+        &queue,
+        &recon,
+        image(0),
+        decoded(&pyramid_of(8, 4)),
+    );
+
+    // Image 1 is decoding: image 0's photograph stays, on image 0's mesh.
+    r.upload_bg_image(&device, &queue, &recon, image(1), || {
+        DisplayPhotograph::Decoding
+    });
+    assert_eq!(bg_loaded_image(&r), Some(image(0)));
+    assert_eq!(bg_texture_size(&r), Some((8, 4)));
+    assert_eq!(r.bg_image_mesh_key.as_ref().unwrap().image, image(0));
+
+    // It lands: image 1's photograph on image 1's mesh.
+    r.upload_bg_image(
+        &device,
+        &queue,
+        &recon,
+        image(1),
+        decoded(&pyramid_of(6, 2)),
+    );
+    assert_eq!(bg_loaded_image(&r), Some(image(1)));
+    assert_eq!(bg_texture_size(&r), Some((6, 2)));
+    assert_eq!(r.bg_image_mesh_key.as_ref().unwrap().image, image(1));
+
+    // An image of another node that is decoding clears it: the frame's node
+    // transform is not the shown photograph's.
+    r.upload_bg_image(&device, &queue, &recon, ImageRef::new(OTHER, 0), || {
+        DisplayPhotograph::Decoding
+    });
+    assert!(r.bg_image_texture.is_none());
+    assert_eq!(r.bg_image_mesh_key, None);
+
+    // An unreadable one clears it too.
+    r.upload_bg_image(
+        &device,
+        &queue,
+        &recon,
+        image(0),
+        decoded(&pyramid_of(8, 4)),
+    );
+    r.upload_bg_image(&device, &queue, &recon, image(2), || {
+        DisplayPhotograph::Unreadable
+    });
+    assert!(r.bg_image_texture.is_none());
+    assert_eq!(r.bg_image_loaded, None);
 }
 
 #[test]
@@ -1636,17 +1884,19 @@ fn a_change_of_the_image_s_intrinsics_or_pose_rebuilds_the_mesh_and_keeps_the_ph
     // The photograph depends on the image, the mesh on its intrinsics and its
     // pose too. A version that gives the image an intrinsic adjustment, gives
     // its camera another focal, or turns it, rebuilds the mesh from what the
-    // image now has, and the photograph, replaced on disk to tell, is not
-    // decoded again.
+    // image now has, and the photograph is not asked for again.
     let (device, queue) = device();
-    let (mut recon, dir) = recon_with_real_bg_image("intrinsics");
-    let mut r = SceneRenderer::new();
-    r.upload_bg_image(&device, &queue, &recon, image(0));
+    let mut recon = demo(4);
+    let mut r = renderer_at(64, 64);
+    r.upload_bg_image(
+        &device,
+        &queue,
+        &recon,
+        image(0),
+        decoded(&pyramid_of(8, 4)),
+    );
     let key = |r: &SceneRenderer| r.bg_image_mesh_key.clone().expect("a mesh");
     assert_eq!(key(&r).intrinsics, recon.image_set.cameras[0]);
-    image::RgbImage::new(16, 8)
-        .save(dir.path().join(BG_NAME))
-        .expect("overwrite test png");
 
     recon.image_set.images[0].intrinsic_adjustment = sfmtool_core::IntrinsicAdjustment {
         focal: 0.02,
@@ -1654,7 +1904,7 @@ fn a_change_of_the_image_s_intrinsics_or_pose_rebuilds_the_mesh_and_keeps_the_ph
         radial_bspline: [0.0; 2],
         rolling_shutter: [0.0; 3],
     };
-    r.upload_bg_image(&device, &queue, &recon, image(0));
+    r.upload_bg_image(&device, &queue, &recon, image(0), not_asked);
     let adjusted = recon.image_set.image_intrinsics(0).into_owned();
     assert_ne!(adjusted, recon.image_set.cameras[0]);
     assert_eq!(key(&r).intrinsics, adjusted);
@@ -1669,7 +1919,7 @@ fn a_change_of_the_image_s_intrinsics_or_pose_rebuilds_the_mesh_and_keeps_the_ph
         },
         None,
     );
-    r.upload_bg_image(&device, &queue, &recon, image(0));
+    r.upload_bg_image(&device, &queue, &recon, image(0), not_asked);
     assert_eq!(
         key(&r).intrinsics,
         recon.image_set.image_intrinsics(0).into_owned()
@@ -1677,37 +1927,21 @@ fn a_change_of_the_image_s_intrinsics_or_pose_rebuilds_the_mesh_and_keeps_the_ph
 
     let turn = nalgebra::UnitQuaternion::from_euler_angles(0.0, 0.1, 0.0);
     recon.image_set.images[0].quaternion_wxyz = turn * recon.image_set.images[0].quaternion_wxyz;
-    r.upload_bg_image(&device, &queue, &recon, image(0));
+    r.upload_bg_image(&device, &queue, &recon, image(0), not_asked);
     assert_eq!(
         key(&r).rotation,
         recon.image_set.images[0].camera_to_world_rotation_flat()
     );
-
-    let texture = r.bg_image_texture.as_ref().expect("bg texture");
-    assert_eq!((texture.width(), texture.height()), (8, 4), "decoded again");
-    drop(dir);
-}
-
-#[test]
-fn upload_bg_image_ignores_an_unreadable_image() {
-    let (device, queue) = device();
-    // demo's workspace_dir is empty and its image names don't exist on disk.
-    let recon = demo(4);
-    let mut r = SceneRenderer::new();
-
-    r.upload_bg_image(&device, &queue, &recon, image(0));
-
-    assert!(r.bg_image_texture.is_none());
-    assert_eq!(r.bg_image_loaded, None);
+    assert_eq!(bg_texture_size(&r), Some((8, 4)));
 }
 
 #[test]
 fn upload_bg_image_ignores_an_out_of_range_index() {
     let (device, queue) = device();
     let recon = demo(4);
-    let mut r = SceneRenderer::new();
+    let mut r = renderer_at(64, 64);
 
-    r.upload_bg_image(&device, &queue, &recon, image(999));
+    r.upload_bg_image(&device, &queue, &recon, image(999), not_asked);
 
     assert!(r.bg_image_texture.is_none());
     assert_eq!(r.bg_image_loaded, None);
@@ -1716,9 +1950,15 @@ fn upload_bg_image_ignores_an_out_of_range_index() {
 #[test]
 fn clear_bg_image_resets_every_background_field() {
     let (device, queue) = device();
-    let (recon, dir) = recon_with_real_bg_image("clear");
-    let mut r = SceneRenderer::new();
-    r.upload_bg_image(&device, &queue, &recon, image(0));
+    let recon = demo(4);
+    let mut r = renderer_at(64, 64);
+    r.upload_bg_image(
+        &device,
+        &queue,
+        &recon,
+        image(0),
+        decoded(&pyramid_of(8, 4)),
+    );
     assert!(r.bg_image_texture.is_some());
 
     r.clear_bg_image();
@@ -1730,8 +1970,6 @@ fn clear_bg_image_resets_every_background_field() {
     assert!(r.bg_image_distorted_vertex_buffer.is_none());
     assert!(r.bg_image_distorted_index_buffer.is_none());
     assert_eq!(r.bg_image_distorted_index_count, 0);
-
-    drop(dir);
 }
 
 // ── Base identity and the deleted mask ──────────────────────────────────
@@ -3275,7 +3513,7 @@ fn the_background_mesh_is_built_through_its_image_s_own_intrinsics() {
     for recon in [demo(16), with_camera_model(demo(16), fisheye())] {
         let (shared, adjusted, own) = adjusted_triple(recon);
         let mesh = |recon: &SfmrReconstruction| {
-            let (vertices, indices) = super::bg_image::bg_image_mesh(recon, ADJUSTED);
+            let (vertices, indices) = super::bg_image::bg_image_mesh(recon, ADJUSTED, [1.0, 1.0]);
             (bytemuck::cast_slice::<_, u8>(&vertices).to_vec(), indices)
         };
         assert_eq!(mesh(&adjusted), mesh(&own));
@@ -3321,8 +3559,8 @@ fn zero_adjustments_draw_exactly_the_shared_camera() {
             frustum_bytes(&super::frustums::frustum_geometry(&recon, 1.0, true)),
         );
         let (a, b) = (
-            super::bg_image::bg_image_mesh(&listed, ADJUSTED),
-            super::bg_image::bg_image_mesh(&recon, ADJUSTED),
+            super::bg_image::bg_image_mesh(&listed, ADJUSTED, [1.0, 1.0]),
+            super::bg_image::bg_image_mesh(&recon, ADJUSTED, [1.0, 1.0]),
         );
         assert_eq!(
             (bytemuck::cast_slice::<_, u8>(&a.0), a.1),
@@ -3421,7 +3659,7 @@ fn the_background_mesh_is_built_through_its_image_s_lens_corrections() {
     for scanlines in SCANLINES {
         let (shared, corrected, own) = corrected_triple(demo(16), scanlines);
         let mesh = |recon: &SfmrReconstruction| {
-            let (vertices, indices) = super::bg_image::bg_image_mesh(recon, ADJUSTED);
+            let (vertices, indices) = super::bg_image::bg_image_mesh(recon, ADJUSTED, [1.0, 1.0]);
             (bytemuck::cast_slice::<_, u8>(&vertices).to_vec(), indices)
         };
         assert_eq!(mesh(&corrected), mesh(&own));
@@ -3476,8 +3714,8 @@ fn zero_lens_corrections_draw_exactly_the_shared_camera() {
             frustum_bytes(&super::frustums::frustum_geometry(&recon, 1.0, true)),
         );
         let (a, b) = (
-            super::bg_image::bg_image_mesh(&listed, ADJUSTED),
-            super::bg_image::bg_image_mesh(&recon, ADJUSTED),
+            super::bg_image::bg_image_mesh(&listed, ADJUSTED, [1.0, 1.0]),
+            super::bg_image::bg_image_mesh(&recon, ADJUSTED, [1.0, 1.0]),
         );
         assert_eq!(
             (bytemuck::cast_slice::<_, u8>(&a.0), a.1),

@@ -1,7 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Photographs for the panels, decoded off the GUI thread.
+//! Photographs for the panels and the 3D view's camera-view background,
+//! decoded off the GUI thread.
 //!
 //! A panel draws every frame and must not wait for a JPEG decode, which takes
 //! about 40 ms for a 4K photograph. So it asks [`display_photograph`],
