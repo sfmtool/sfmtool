@@ -203,12 +203,9 @@ JPEG and every PNG or TIFF fail and get a `-mip0`.
 
 The test is part of the definition of each photograph's pixels: changing it
 moves photographs between reading the original and reading `-mip0`, which
-changes results, so it changes only with a test showing why. In particular,
-the region decode below is exact only because of how `jpeg-decoder` 0.3.2
-upsamples chroma and where its SIMD colour conversion stops; a decoder change
-that broke the equality test (step 6) would have to change this test to send
-the affected layouts to `-mip0`, as a deliberate change of results, rather
-than let region reads drift from whole decodes.
+changes results, so it changes only with a test showing why. What a decoder
+change that broke the region decode's equality would require is in
+[core/camera/mipmaps.md](../core/camera/mipmaps.md#a-region-of-a-region-readable-original).
 
 **What still decodes an original whole.** Making a photograph's mipmap
 (once per mipmap, below); the readers that are not pyramid readers and are
@@ -341,65 +338,30 @@ written (measured separately, above).
 
 ### A tile of a mip level file
 
-A photograph tile of level `l ≥ 1` is decoded from the level's mip level file without
-decoding the rest of it. The method relies on the restart markers the writer
-put in:
+A photograph tile of level `l ≥ 1` is decoded from the level's mip level file
+without decoding the rest of it. Built (step 6): the restart index and
+`MipLevelFile::decode_region`, specified with the two choices the identity
+needs (converting colour outside the decoder, and 4:4:4) in
+[core/camera/mipmaps.md § "A tile of a mip level file"](../core/camera/mipmaps.md#a-tile-of-a-mip-level-file).
 
-1. **Index the file once** when it is opened: scan its entropy-coded data for
-   the markers `0xFFD0` to `0xFFD7` (stepping over the stuffed `0xFF00`) and
-   record the byte range of each restart interval. The count must equal the
-   level's MCUs divided by the interval, rounded up, and the markers must cycle
-   0 to 7; otherwise the file is stale (corrupt). Indexing level 1 of the
-   measured photograph (48,769 intervals) took 2 to 7 ms.
-2. **Find the intervals the rectangle needs.** With `M` MCUs per row and `N`
-   MCUs per interval, the MCU at row `r`, column `c` is in interval
-   `(r·M + c) div N`. The tile with its one-pixel border needs, in each MCU row
-   it spans, the MCUs that cover its columns; the intervals holding them are
-   the sorted union.
-3. **Assemble a small JPEG** from the file's own segments up to and including
-   its start of scan (quantization and Huffman tables, restart interval),
-   with the frame's size changed to `N·8` wide and `8·k` high for `k`
-   intervals, followed by the `k` intervals' bytes with restart markers
-   numbered 0 to 7 again between them, and an end-of-image marker. Each
-   interval starts with the DC predictions reset, so the intervals decode on
-   their own, and each becomes one row of MCUs of the small frame, wherever it
-   lies in the level (an interval may run from the end of one MCU row into the
-   start of the next). The level's last interval holds fewer than `N` MCUs when
-   the level's MCU count is not a multiple of `N`; it is decoded in a frame of
-   its own, as wide as it is.
-4. **Decode it with `jpeg-decoder` set to `ColorTransform::None`**, which
-   returns the Y, Cb and Cr samples as decoded, and convert them to RGB with
-   one fixed formula: the fixed-point BT.601 conversion `jpeg-decoder` uses on
-   its scalar path (`ycbcr_to_rgb`, from libjpeg-turbo's `jdcolext.c`). Then
-   copy each MCU's 8 x 8 pixels to its place in the level and crop the tile.
-
-Measured on level 1 of the photograph (8160 x 6120, quality 90, interval 16
-MCUs), nine tiles including the right and bottom edges: 2.3 to 6 ms per tile
-on an unloaded machine (up to 15 ms under load), each identical to the same
-pixels of a decode of the whole file through the same raw path.
-
-Two choices are needed for that identity:
-
-- **The raw path.** Decoded to RGB by `jpeg-decoder` itself, the tiles
-  differed from the whole decode by up to 1 grey level. Its SSSE3 colour
-  conversion (`color_convert_line_ycbcr` in its `arch/ssse3.rs`) converts all
-  but the last 8 to 15 pixels of each line and leaves those to the scalar
-  formula, which rounds differently; the small frame's lines end at different
-  places from the level's. Converting outside the decoder with one formula makes
-  every pixel's value depend on its decoded samples alone.
-- **4:4:4.** With 4:2:0 chroma, `jpeg-decoder` upsamples the chroma with the
-  triangle filter libjpeg calls fancy upsampling (`UpsamplerH2V2` in its
-  `upsampler.rs`), which reads the chroma samples of the neighbouring MCUs. In
-  the small frame those neighbours are other intervals, so the pixels at
-  interval edges would differ. A 4:4:4 file has no upsampling, and an 8 x 8
-  block's pixels depend only on its own coefficients.
+Measured before step 6 on level 1 of the photograph (8160 x 6120, quality 90,
+interval 16 MCUs), nine tiles including the right and bottom edges: 2.3 to 6 ms
+per tile on an unloaded machine (up to 15 ms under load), each identical to the
+same pixels of a decode of the whole file through the same raw path; indexing
+its 48,769 intervals took 2 to 7 ms. Measured again with step 6's code
+(§ "Measurements"): nine 514 px tiles (512 px with
+their one-pixel border) of level 1 built from one of the user's photographs,
+among them all four corners and the right and bottom edges, took 2.9 to 4.3 ms
+each at quality 90 and 3.1 to 4.7 ms at quality 95 (10.8 MB), each identical
+to the same pixels of `decode`; opening and indexing the file took 2.2 to
+3.7 ms. A whole `decode` of that level took 0.58 to 0.64 s, slower than the
+decoder's own SIMD conversion.
 
 **A whole level** is decoded from the whole file through the same raw path and
-conversion, which is what the identity was measured against. Only the coarsest
-mip level, level `K`, is decoded whole in use: the levels below it are computed
-from that decode (§ "Levels by size"). A whole decode of level 1 of this photograph to
-RGB took 0.16 to 0.45 s; the raw path does the same work less the colour
-conversion, which it then does itself.
+conversion. Only the coarsest mip level, level `K`, is decoded whole in use:
+the levels below it are computed from that decode (§ "Levels by size"). A whole
+decode of level 1 of this photograph to RGB took 0.16 to 0.45 s; the raw path
+does the same work less the colour conversion, which it then does itself.
 
 ### A region of level 0
 
@@ -407,24 +369,19 @@ Every level-0 region of an out-of-core photograph is a tile decode, from one of
 two files:
 
 - **A region-readable original** (§ "Which originals can be read by region")
-  is read directly. The small JPEG keeps the original's layout in two
-  dimensions: its columns are the region's MCU columns widened to interval
-  boundaries, its rows are the region's MCU rows, both with a margin, and its
-  intervals are copied in raster order. It is decoded to RGB by the same
-  `jpeg-decoder` path `read_rgb` uses, then cropped. The margins make the
-  cropped pixels equal the whole decode's: one MCU above, below and to the
-  left, for the chroma upsampling's neighbours; and on the right at least one
-  MCU and at least 16 px, so the cropped pixels are never among the last 8 to
-  15 of a line, which the decoder converts with its scalar formula. Where the
-  region reaches the image's right or bottom edge, the small frame's width or
-  height is set to the distance to that edge, so the edge is padded as in the
-  whole decode, and the scalar tail falls on the same pixels in both.
+  is read directly, by `OriginalRegions` (built in step 6), whose margins for
+  chroma upsampling and for the decoder's scalar line ends are specified in
+  [core/camera/mipmaps.md § "A region of a region-readable original"](../core/camera/mipmaps.md#a-region-of-a-region-readable-original).
 
-  Measured on the photograph (4:2:0, interval 4 MCUs, one interval per 64 px):
-  five 512 px regions, among them the top-left corner and the bottom-right
-  corner, 2.6 to 3.5 ms each, reading about 29 KB of the file each, every pixel
-  equal to the whole decode. Indexing the original's 195,075 intervals took 20
-  to 63 ms.
+  Measured before step 6 on the photograph (4:2:0, interval 4 MCUs, one
+  interval per 64 px): five 512 px regions, among them the top-left corner and
+  the bottom-right corner, 2.6 to 3.5 ms each, reading about 29 KB of the file
+  each, every pixel equal to the whole decode. Indexing the original's 195,075
+  intervals took 20 to 63 ms. Measured again with step 6's code: seven 513 to
+  514 px regions of one of the user's 16320 x 12240 photographs (4:2:0, interval
+  4 MCUs), among them all four corners and the centre, took 0.9 to 2.6 ms each,
+  every pixel equal to `read_rgb`; `OriginalRegions::from_bytes`, the region
+  test and the index of its 195,075 intervals, took 10 to 12 ms.
 - **Every other original** is read from its `-mip0`, by the tile decode of
   a mip level file above, and never from the original.
 
@@ -1667,14 +1624,24 @@ in core. Step 17 turns the tier on.
    photographs (§ "Which originals can be read by region"), and one build of
    a 200-megapixel photograph peaks at about 920 MiB and takes 1.8 s
    (§ "Measurements behind the files").
-6. **Tile and region decodes**: the restart index, `MipLevelFile::decode_region`
-   and `OriginalRegions`. Tests: every tile of several synthetic levels with
-   odd sizes and a restart interval of 2 and 16 MCUs, including the short last
-   interval, equals the same pixels of `decode`; a grey mip level file; a damaged
-   interval is `Stale`; for JPEGs written by `jpeg-encoder` with restart
-   intervals at 4:2:0, 4:2:2, 4:4:0, 4:4:4 and grey, of odd sizes, every
-   region (including edges and corners) equals the same pixels of `read_rgb`;
-   each rule of the region test refuses a file made to break it alone.
+6. **Tile and region decodes.** Built: the restart index,
+   `MipLevelFile::decode_region` and `OriginalRegions`, specified in
+   [core/camera/mipmaps.md § "Reading a rectangle"](../core/camera/mipmaps.md#reading-a-rectangle)
+   with its tests, and `build_mipmaps` reading the header before it decodes,
+   so an in-core or too-large photograph is refused without a decode. The
+   step also corrected `MipLevelFile::decode`, which read the
+   `ColorTransform::None` samples as interleaved where `jpeg-decoder` returns
+   each line's Y, Cb and Cr samples in turn. Three parts of the design above
+   took another shape: an empty or out-of-range rectangle of a mip level file
+   is the new `MipmapError::OutOfRange { path, why }`; `OriginalRegions` also
+   gives the original's `width` and `height`; and a region decode's right
+   margin is one MCU rather than at least 16 px, since a frame a whole number
+   of MCUs wide converts only its last 8 px with the scalar formula, and a
+   margin of 16 px could not be told from one MCU by any test.
+   Measured outside the tests (§ "A tile of a mip level file", § "A region
+   of level 0"): 2.9 to 4.7 ms a tile of level 1 and 0.9 to 2.6 ms a region
+   of the original, against the 2.3 to 6 ms and 2.6 to 3.5 ms measured
+   before.
 7. **View-region pyramids** ([view-region-pyramid.md](view-region-pyramid.md)
    steps 1 and 2): regions in `ImageU8Pyramid` and every sampler, the
    tile-addressed sampling path for renders the kernel call's region pool
@@ -1860,6 +1827,13 @@ decode at qualities 90, 95, 97, 98 and 100 (4:4:4, interval 16 MCUs), as it is
 and cropped by one pixel on the top and left, and compares the decode with the
 source. Times are wall clock of one run each, repeated two to four times; the
 ranges in this draft are over those runs.
+
+Step 6's figures come from a test of sfmtool-core's own code instead, run once
+in the test profile (optimized, with debug information) and kept out of the
+tree: it reads one of the user's photographs, builds level 1 with
+`downsample_2x` and encodes it as a mip level file at qualities 90 and 95, and
+times five runs of each tile and region decode, comparing each with `decode`
+or `read_rgb` pixel by pixel.
 
 ## Open questions
 

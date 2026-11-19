@@ -124,6 +124,13 @@ pub(super) struct JpegHeader {
     /// The offset of the first byte of entropy-coded data after the scan
     /// header; 0 when there is no scan.
     pub(super) scan_data: usize,
+    /// Every whole segment, its marker included, that a decode of the scan
+    /// reads: all but the APPn and COM segments, in file order, ending with
+    /// the scan header.
+    pub(super) decode_segments: Vec<Range<usize>>,
+    /// The offset of the frame header's body (its precision byte); 0 when
+    /// there is none.
+    pub(super) frame_at: usize,
 }
 
 /// The position just after the next marker at or after `at`, and its second
@@ -176,6 +183,9 @@ pub(super) fn read_header(bytes: &[u8]) -> Result<JpegHeader, String> {
                 "segment FF{marker:02X} runs past the end of the file"
             ));
         };
+        if !matches!(marker, 0xE0..=0xEF | 0xFE) {
+            header.decode_segments.push(at - 2..at + length);
+        }
         at += length;
         match marker {
             0xC0..=0xCF if !matches!(marker, 0xC4 | 0xC8 | 0xCC) => {
@@ -189,6 +199,7 @@ pub(super) fn read_header(bytes: &[u8]) -> Result<JpegHeader, String> {
                 let Some(list) = data.get(6..6 + 3 * count) else {
                     return Err("a frame header too short for its components".to_string());
                 };
+                header.frame_at = body.start;
                 header.frame = Some(Frame {
                     marker,
                     precision: data[0],

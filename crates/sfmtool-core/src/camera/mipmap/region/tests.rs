@@ -146,3 +146,66 @@ fn a_damaged_scan_is_refused() {
     trailing.extend_from_slice(b"trailing bytes");
     assert!(region_layout(&trailing).is_ok());
 }
+
+#[test]
+fn each_rule_refuses_a_file_that_breaks_only_it() {
+    // 4:4:4, 8 MCUs a row and 2 rows, an interval of 4 MCUs: readable.
+    let base = jpeg(64, 16, with_interval(SamplingFactor::F_1_1, 4));
+    assert!(region_layout(&base).is_ok());
+    let sof = find_marker(&base, 0xC0);
+    let sos = find_marker(&base, 0xDA);
+    let dri = find_marker(&base, 0xDD);
+    let patched = |at: usize, value: u8| {
+        let mut bytes = base.clone();
+        bytes[at] = value;
+        region_layout(&bytes)
+    };
+    // Rule 2. The frame header's body starts 4 bytes after its marker: the
+    // precision, the height, the width, then 3 bytes per component.
+    assert!(matches!(
+        patched(sof + 4, 12),
+        Err(NotRegionReadable::Frame(why)) if why.contains("12-bit")
+    ));
+    let mut no_width = base.clone();
+    no_width[sof + 7..sof + 9].copy_from_slice(&[0, 0]);
+    assert!(matches!(
+        region_layout(&no_width),
+        Err(NotRegionReadable::Frame(why)) if why.contains("0 x 16")
+    ));
+    // Rule 4: a component's sampling byte is its second.
+    assert!(matches!(
+        patched(sof + 11 + 3, 0x21),
+        Err(NotRegionReadable::Sampling(why)) if why.contains("chroma sampled 2 x 1")
+    ));
+    assert!(matches!(
+        patched(sof + 11, 0x31),
+        Err(NotRegionReadable::Sampling(why)) if why.contains("luma sampled 3 x 1")
+    ));
+    // Rule 5. The scan header's body is the count, two bytes per component,
+    // then the spectral selection and the approximation.
+    let mut reordered = base.clone();
+    reordered.swap(sos + 7, sos + 9);
+    assert!(matches!(
+        region_layout(&reordered),
+        Err(NotRegionReadable::Scan(why)) if why.contains("holds components")
+    ));
+    for (at, value) in [(sos + 11, 1), (sos + 12, 62), (sos + 13, 0x10)] {
+        assert!(matches!(
+            patched(at, value),
+            Err(NotRegionReadable::Scan(why)) if why.contains("spectral selection")
+        ));
+    }
+    let mut second_scan = base[..base.len() - 2].to_vec();
+    second_scan.extend_from_slice(&[0xFF, 0xDA, 0, 8, 1, 1, 0, 0, 63, 0, 0x12, 0xFF, 0xD9]);
+    assert!(matches!(
+        region_layout(&second_scan),
+        Err(NotRegionReadable::Scan(why)) if why.contains("a second scan")
+    ));
+    // Rule 6: the interval follows the DRI segment's length.
+    let mut zero = base.clone();
+    zero[dri + 4..dri + 6].copy_from_slice(&[0, 0]);
+    assert!(matches!(
+        region_layout(&zero),
+        Err(NotRegionReadable::RestartInterval(why)) if why.contains("an interval of 0")
+    ));
+}

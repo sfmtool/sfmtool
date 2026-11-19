@@ -171,6 +171,8 @@ impl BuiltMipmap {
 /// levels 1 to `K`, coarsest first, and `-mip0` last when the original is not
 /// region-readable.
 ///
+/// The photograph's header is read first, so a photograph in core under
+/// `options` or too large is refused without being read whole or decoded.
 /// `decoded` is `ImageU8::read_rgb(photograph)` when the caller already holds
 /// it, and is decoded here from the bytes otherwise. Each reduced level is
 /// box-filtered from the exact level above it in memory, never from a decoded
@@ -187,8 +189,9 @@ impl BuiltMipmap {
 /// # Errors
 ///
 /// [`MipmapError::NotOutOfCore`] when the photograph is in no workspace or
-/// is in core under `options`; [`MipmapError::Io`] and
-/// [`MipmapError::Source`] when the original cannot be read or decoded;
+/// is in core under `options`; [`MipmapError::Io`] when the original cannot
+/// be read; [`MipmapError::Source`] when its header cannot be read, it does
+/// not decode, or its decode (or `decoded`) is not its header's size;
 /// [`MipmapError::TooLarge`] for a side over
 /// [`MAX_JPEG_SIDE`](super::MAX_JPEG_SIDE); and [`MipmapError::Cancelled`],
 /// after which no further file is written and none is left partial.
@@ -203,6 +206,23 @@ pub fn build_mipmaps(
         path: photograph.to_path_buf(),
     };
     let location = mipmap_location(photograph).ok_or_else(not_out_of_core)?;
+    let source_error = |error| MipmapError::Source {
+        path: photograph.to_path_buf(),
+        error,
+    };
+    // The header decides whether there is a mipmap to make, before the
+    // photograph is read whole or decoded.
+    let (width, height) = image_dimensions(photograph).map_err(source_error)?;
+    let layout = PyramidLayout::for_size(width, height, Some(options), tile_size).ok_or(
+        MipmapError::TooLarge {
+            path: photograph.to_path_buf(),
+            width,
+            height,
+        },
+    )?;
+    if !layout.is_out_of_core() {
+        return Err(not_out_of_core());
+    }
     let io = |error| MipmapError::Io {
         path: photograph.to_path_buf(),
         error,
@@ -220,24 +240,17 @@ pub fn build_mipmaps(
     let level0 = match decoded {
         Some(image) => image,
         None => {
-            owned = ImageU8::decode_rgb(&bytes).map_err(|error| MipmapError::Source {
-                path: photograph.to_path_buf(),
-                error,
-            })?;
+            owned = ImageU8::decode_rgb(&bytes).map_err(source_error)?;
             &owned
         }
     };
     drop(phase);
-    let (width, height) = (level0.width(), level0.height());
-    let layout = PyramidLayout::for_size(width, height, Some(options), tile_size).ok_or(
-        MipmapError::TooLarge {
-            path: photograph.to_path_buf(),
-            width,
-            height,
-        },
-    )?;
-    if !layout.is_out_of_core() {
-        return Err(not_out_of_core());
+    if (level0.width(), level0.height()) != (width, height) {
+        return Err(source_error(::image::ImageError::Parameter(
+            ::image::error::ParameterError::from_kind(
+                ::image::error::ParameterErrorKind::DimensionMismatch,
+            ),
+        )));
     }
     progress.check_cancel()?;
     let source = MipmapSource::from_bytes(

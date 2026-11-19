@@ -553,6 +553,34 @@ fn a_side_of_65536_is_refused_from_the_header_in_every_workspace_kind() {
 }
 
 #[test]
+fn a_build_answers_in_core_or_too_large_from_the_header_without_decoding() {
+    let ws = Workspace::new(Some(options(95)));
+    let build = |relative: &str, width: u32, height: u32| {
+        let path = ws.photograph(relative, &header_only_png(width, height));
+        build_mipmaps(&path, None, &options(95), TILE, &Progress::none())
+    };
+    // The pixel data of these files does not decode, so the first two
+    // answers come from the header alone.
+    assert!(matches!(
+        build("images/small.png", 64, 40),
+        Err(MipmapError::NotOutOfCore { .. })
+    ));
+    assert!(matches!(
+        build("images/big.png", 65536, 100),
+        Err(MipmapError::TooLarge {
+            width: 65536,
+            height: 100,
+            ..
+        })
+    ));
+    assert!(matches!(
+        build("images/out.png", 300, 200),
+        Err(MipmapError::Source { .. })
+    ));
+    assert!(!ws.mipmaps().exists());
+}
+
+#[test]
 fn an_unwritable_mipmap_directory_gives_the_in_memory_equivalent() {
     let bytes = encode_png(&synthetic_rgb(300, 200));
     let writable = Workspace::new(Some(options(95)));
