@@ -21,6 +21,42 @@ TEST_DATA_DIR = Path(__file__).parent.parent / "test-data"
 SEOUL_BULL_DIR = TEST_DATA_DIR / "images" / "seoul_bull_sculpture"
 SEOUL_BULL_GROUND_TRUTH = SEOUL_BULL_DIR / "seoul_bull_sculpture_ground_truth_v01.sfmr"
 
+# The version 1 workspace record `sfm ws init --feature-tool sfmtool` wrote
+# before version 2, which test-data's workspace files held until `sfm ws
+# upgrade` converted them. Its `feature_prefix_dir` is the hash of the other
+# keys, as a version 1 writer computed it.
+SFMTOOL_VERSION_1_WORKSPACE = {
+    "version": 1,
+    "feature_tool": "sfmtool",
+    "feature_type": "sift-sfmtool",
+    "feature_options": {
+        "octave_layers": 3,
+        "sigma": 1.6,
+        "blur_radius_factor": 2.25,
+        "input_sigma": 0.5,
+        "double_image": True,
+        "contrast_threshold": 0.0067,
+        "edge_threshold": 10.0,
+        "max_num_features": 8192,
+        "orientation_bins": 36,
+        "peak_ratio": 0.8,
+        "descriptor_width": 4,
+        "descriptor_bins": 8,
+        "descriptor_magnification": 3.0,
+        "descriptor_clamp": 0.2,
+        "gray_formula": "0.2126*R + 0.7152*G + 0.0722*B",
+    },
+    "feature_prefix_dir": "features/sift-sfmtool-3dcd2b2f8c892d12c3ffe28cedce19c9",
+}
+
+
+def write_version_1_workspace_file(workspace: Path) -> Path:
+    """Write :data:`SFMTOOL_VERSION_1_WORKSPACE` as ``workspace``'s
+    ``.sfm-workspace.json`` and return its path."""
+    path = Path(workspace) / ".sfm-workspace.json"
+    path.write_text(json.dumps(SFMTOOL_VERSION_1_WORKSPACE, indent=2))
+    return path
+
 
 @pytest.fixture
 def sample_sift_data():
@@ -773,11 +809,8 @@ def seoul_bull_ground_truth_sfmr(tmp_path_factory) -> Path:
     metres, some points at infinity), copied with its ``.sfm-workspace.json``
     marker and its 17 images into a fresh tmp dir so it loads as-is and
     resolves its workspace there. Its features are embedded patches (no
-    ``.sift`` files, so ``track_feature_indexes`` is ``None``). The file is
-    older than ``.sfmr`` version 15, so it holds no image readings, and a save
-    of it computes them from the copied images, which its
-    ``image_file_hashes`` verify. For a SIFT-backed workspace at the same poses
-    use :func:`seoul_bull_workspace`.
+    ``.sift`` files, so ``track_feature_indexes`` is ``None``). For a
+    SIFT-backed workspace at the same poses use :func:`seoul_bull_workspace`.
     """
     workspace_dir = tmp_path_factory.mktemp("seoul_bull_ground_truth")
     shutil.copy(SEOUL_BULL_GROUND_TRUTH, workspace_dir / SEOUL_BULL_GROUND_TRUTH.name)
@@ -949,31 +982,16 @@ def assert_references_name_track_observations(
     return refs
 
 
-def with_image_readings(data: dict, workspace_dir: Path) -> dict:
-    """``data``, a ``read_sfmr`` dict of a file below ``.sfmr`` version 15, with
-    the image readings a version 15 ``write_sfmr`` requires.
-
-    The readings are computed from the images in ``workspace_dir``, through
-    BT.709 luma unrounded, the way a save of the file would compute them.
-    """
-    from sfmtool.fileio import read_image_rgb
-    from sfmtool.sift import ImageToGray, image_readings_from_rgb
-
-    image_to_gray = {"formula": "0.2126*R + 0.7152*G + 0.0722*B"}
-    conversion = ImageToGray.from_json(image_to_gray)
-    rows = [
-        image_readings_from_rgb(read_image_rgb(Path(workspace_dir) / name), conversion)
-        for name in data["image_names"]
-    ]
-    return dict(
-        data,
-        image_to_gray=image_to_gray,
-        sharpness=np.asarray([r.sharpness for r in rows], dtype=np.float32),
-        gradient_structure_tensors_xx_yy_xy=np.asarray(
-            [list(r.gradient_structure_tensor_xx_yy_xy) for r in rows],
-            dtype=np.float32,
-        ).reshape(len(rows), 3),
-    )
+def without_odd_finite_frames(data: dict) -> dict:
+    """``data`` with the patch frame of every other finite point cleared, so
+    that those points keep the normals the dict gives rather than deriving
+    them from a frame."""
+    u = data["patch_u_halfvec_xyz"].copy()
+    v = data["patch_v_halfvec_xyz"].copy()
+    odd = np.flatnonzero(data["positions_xyzw"][:, 3] != 0.0)[1::2]
+    u[odd] = 0.0
+    v[odd] = 0.0
+    return dict(data, patch_u_halfvec_xyz=u, patch_v_halfvec_xyz=v)
 
 
 def per_point_reprojection_error_stats(recon) -> tuple[np.ndarray, np.ndarray]:
@@ -1157,10 +1175,8 @@ def kerry_park_ground_truth_sfmr(tmp_path_factory) -> Path:
     SFMTOOL_FISHEYE cameras, metres, some points at infinity), copied with its
     ``.sfm-workspace.json`` marker and its 48 images into a fresh tmp dir so it
     loads as-is and resolves its workspace there. Its features are embedded
-    patches (no ``.sift`` files). The file is older than ``.sfmr`` version 15,
-    so it holds no image readings, and a save of it computes them from the
-    copied images. For a SIFT-backed workspace at the same poses use
-    :func:`kerry_park_workspace`.
+    patches (no ``.sift`` files). For a SIFT-backed workspace at the same
+    poses use :func:`kerry_park_workspace`.
     """
     workspace_dir = tmp_path_factory.mktemp("kerry_park_ground_truth")
     shutil.copy(KERRY_PARK_GROUND_TRUTH, workspace_dir / KERRY_PARK_GROUND_TRUTH.name)

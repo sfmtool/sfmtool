@@ -162,18 +162,23 @@ def test_inspect_sfmr_image_readings(seoul_bull_workspace):
     assert block[7:12] == [f"    {sharpness[i]:.4g}  {names[i]}" for i in order]
 
 
-def test_inspect_sfmr_below_version_15_has_no_readings(seoul_bull_ground_truth_sfmr):
-    """A file below version 15 holds no readings, and both summaries say so."""
-    result = CliRunner().invoke(main, ["inspect", str(seoul_bull_ground_truth_sfmr)])
-    assert result.exit_code == 0, result.output
-    assert _row_value(result.output, "Image readings") == "none"
+def test_the_verbose_summary_of_a_reconstruction_without_readings_says_none(
+    seoul_bull_ground_truth_sfmr, capsys
+):
+    """A reconstruction that holds no image readings, as one read from a file
+    below version 15 does, gets the one line saying so and no histogram."""
+    from sfmtool.analyze.summary import print_reconstruction_summary
+    from sfmtool.fileio import read_sfmr
 
-    verbose = CliRunner().invoke(
-        main, ["inspect", "-v", str(seoul_bull_ground_truth_sfmr)]
+    data = read_sfmr(seoul_bull_ground_truth_sfmr)
+    data.update(
+        sharpness=None, gradient_structure_tensors_xx_yy_xy=None, image_to_gray=None
     )
-    assert verbose.exit_code == 0, verbose.output
-    assert "Image readings: none" in verbose.output.splitlines()
-    assert "Sharpness distribution" not in verbose.output
+    recon = SfmrReconstruction.from_data(seoul_bull_ground_truth_sfmr.parent, data)
+    print_reconstruction_summary(recon, recon_name="no_readings.sfmr")
+    output = capsys.readouterr().out
+    assert "Image readings: none" in output.splitlines()
+    assert "Sharpness distribution" not in output
 
 
 def test_inspect_sfmr_verbose_says_mean_or_median_per_point(

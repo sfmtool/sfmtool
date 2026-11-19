@@ -17,14 +17,19 @@ from click.testing import CliRunner
 
 import sfmtool._workspace
 from sfmtool.cli import main
-from sfmtool.fileio import read_sift, write_sift
+from sfmtool.fileio import read_sfmr, read_sift, write_sfmr, write_sift
 from sfmtool.sift.extract import SiftExtractionError, image_files_to_sift_files
 from sfmtool.sift.extract_opencv import get_default_opencv_feature_options
 from sfmtool.sift.extract_sfmtool import get_default_sfmtool_feature_options
 from sfmtool.workspace import feature_prefix_dir, upgrade_feature_options
 
 from . import conftest
-from .conftest import SEOUL_BULL_DIR, SEOUL_BULL_GROUND_TRUTH
+from .conftest import (
+    SEOUL_BULL_DIR,
+    SEOUL_BULL_GROUND_TRUTH,
+    SFMTOOL_VERSION_1_WORKSPACE,
+    write_version_1_workspace_file,
+)
 
 _CONVERTED = "Converted the version 1 SIFT extraction record"
 
@@ -52,17 +57,24 @@ def _export(sfmr: Path, db: Path):
 
 
 def test_an_embedded_patches_record_of_version_1_is_converted(tmp_path):
-    """The seoul_bull ground truth (embedded patches, no .sift files, a
-    version 1 sfmtool record) exports from a version 2 workspace: its files
-    are extracted into the folder the converted record names, which is the one
+    """The seoul_bull ground truth (embedded patches, no .sift files) with a
+    version 1 sfmtool record exports from a version 2 workspace: its files are
+    extracted into the folder the converted record names, which is the one
     `sfm ws upgrade` names for the same settings, and one line says so."""
-    shutil.copy(SEOUL_BULL_GROUND_TRUTH, tmp_path / SEOUL_BULL_GROUND_TRUTH.name)
-    shutil.copy(SEOUL_BULL_DIR / ".sfm-workspace.json", tmp_path)
     for image in SEOUL_BULL_DIR.glob("seoul_bull_sculpture_*.jpg"):
         shutil.copy(image, tmp_path / image.name)
-    old_prefix = json.loads((tmp_path / ".sfm-workspace.json").read_text())[
-        "feature_prefix_dir"
-    ]
+    write_version_1_workspace_file(tmp_path)
+    old_prefix = SFMTOOL_VERSION_1_WORKSPACE["feature_prefix_dir"]
+    # The record as a version 1 writer stored it in a .sfmr, with a bare "sift"
+    # feature type.
+    data = read_sfmr(SEOUL_BULL_GROUND_TRUTH)
+    data["metadata"]["workspace"]["contents"] = {
+        "feature_tool": "sfmtool",
+        "feature_type": "sift",
+        "feature_options": SFMTOOL_VERSION_1_WORKSPACE["feature_options"],
+        "feature_prefix_dir": old_prefix,
+    }
+    write_sfmr(tmp_path / SEOUL_BULL_GROUND_TRUTH.name, data)
     _write_version_2_workspace_file(tmp_path)
     new_prefix = json.loads((tmp_path / ".sfm-workspace.json").read_text())[
         "feature_prefix_dir"
@@ -114,7 +126,7 @@ def _version_1_sift_files_reconstruction(
         images.append(images_dir / name)
 
     if tool == "sfmtool":
-        config = json.loads((SEOUL_BULL_DIR / ".sfm-workspace.json").read_text())
+        config = dict(SFMTOOL_VERSION_1_WORKSPACE)
         v2_options = get_default_sfmtool_feature_options()
     else:
         v2_options = get_default_opencv_feature_options()
@@ -167,9 +179,7 @@ def test_a_version_1_sfmtool_sift_files_record_reads_the_converted_folder(
     which shows the sfmtool extractor giving the same features run to run."""
     sfmr = _version_1_sift_files_reconstruction(tmp_path, "sfmtool", monkeypatch)
     workspace = sfmr.parent
-    prefix = json.loads((SEOUL_BULL_DIR / ".sfm-workspace.json").read_text())[
-        "feature_prefix_dir"
-    ]
+    prefix = SFMTOOL_VERSION_1_WORKSPACE["feature_prefix_dir"]
     gone = workspace / "images" / prefix / "seoul_bull_sculpture_03.jpg.sift"
     original = read_sift(gone)
     gone.unlink()

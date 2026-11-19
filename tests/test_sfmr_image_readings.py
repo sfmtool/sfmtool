@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The image readings of ``.sfmr`` version 15: each image's sharpness and
-gradient structure tensor, where every writer gets them, and how an older file
-is saved. From version 16 a file stores the sharpness as ``float16``. See
+gradient structure tensor, where every writer gets them, and how a
+reconstruction without them is saved. From version 16 a file stores the sharpness as ``float16``. See
 ``specs/formats/sfmr-file-format.md`` § "Image readings"."""
 
 from pathlib import Path
@@ -134,24 +134,36 @@ class TestWriters:
         )
 
 
-class TestOlderFiles:
-    def test_the_ground_truth_reads_without_readings(
+def _without_readings(path: Path) -> dict:
+    """The ``read_sfmr`` dict of ``path`` with its image readings taken out, as
+    a value read from a file below version 15, or built by a solve or an
+    import that has not gathered them, holds none."""
+    data = read_sfmr(path)
+    data.update(
+        sharpness=None, gradient_structure_tensors_xx_yy_xy=None, image_to_gray=None
+    )
+    return data
+
+
+class TestWithoutReadings:
+    def test_a_reconstruction_built_without_readings_has_none(
         self, seoul_bull_ground_truth_sfmr
     ):
-        data = read_sfmr(seoul_bull_ground_truth_sfmr)
-        assert data["metadata"]["version"] < 15
-        assert data["sharpness"] is None
-        assert data["gradient_structure_tensors_xx_yy_xy"] is None
-        assert data["image_to_gray"] is None
-        recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+        recon = SfmrReconstruction.from_data(
+            seoul_bull_ground_truth_sfmr.parent,
+            _without_readings(seoul_bull_ground_truth_sfmr),
+        )
         assert recon.sharpness is None
         assert recon.gradient_structure_tensors_xx_yy_xy is None
         assert recon.image_to_gray is None
 
-    def test_an_embedded_patches_file_is_saved_with_readings_from_its_images(
+    def test_an_embedded_patches_reconstruction_is_saved_with_readings_from_its_images(
         self, seoul_bull_ground_truth_sfmr
     ):
-        recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+        recon = SfmrReconstruction.from_data(
+            seoul_bull_ground_truth_sfmr.parent,
+            _without_readings(seoul_bull_ground_truth_sfmr),
+        )
         from sfmtool import ProgressCounter
 
         out = seoul_bull_ground_truth_sfmr.parent / "resaved.sfmr"
@@ -168,11 +180,13 @@ class TestOlderFiles:
         _assert_bits_equal(saved.sharpness, sharpness)
         _assert_bits_equal(saved.gradient_structure_tensors_xx_yy_xy, tensors)
 
-    def test_an_older_file_without_its_images_is_not_saved(
+    def test_a_reconstruction_without_its_images_is_not_saved(
         self, seoul_bull_ground_truth_sfmr
     ):
-        recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
         workspace = seoul_bull_ground_truth_sfmr.parent
+        recon = SfmrReconstruction.from_data(
+            workspace, _without_readings(seoul_bull_ground_truth_sfmr)
+        )
         missing = recon.image_names[3]
         (workspace / missing).unlink()
         changed = recon.image_names[5]
@@ -189,7 +203,7 @@ class TestOlderFiles:
     def test_write_sfmr_refuses_a_dict_without_readings(
         self, seoul_bull_ground_truth_sfmr
     ):
-        data = read_sfmr(seoul_bull_ground_truth_sfmr)
+        data = _without_readings(seoul_bull_ground_truth_sfmr)
         out = seoul_bull_ground_truth_sfmr.parent / "rewritten.sfmr"
         with pytest.raises(ValueError, match="has none"):
             write_sfmr(out, data)
