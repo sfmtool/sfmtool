@@ -57,15 +57,14 @@ from tests.rust_bindings.fileio.test_matches_file_rust_bindings import _pairwise
 from tests.rust_bindings.fileio.test_write_clusters_matches_rust_bindings import (
     _clusters_kwargs,
 )
-from tests.conftest import SEOUL_BULL_DIR, SEOUL_BULL_GROUND_TRUTH, with_image_readings
+from tests.conftest import SEOUL_BULL_DIR, SEOUL_BULL_GROUND_TRUTH
 
 _SFMR = SEOUL_BULL_GROUND_TRUTH
 
 
 def _sfmr_dict() -> dict:
-    """The ground truth's dict with the image readings a write needs, which
-    the file is too old to hold."""
-    return with_image_readings(read_sfmr(str(_SFMR)), SEOUL_BULL_DIR)
+    """The ground truth's dict."""
+    return read_sfmr(str(_SFMR))
 
 
 _CAMERA = {

@@ -3540,9 +3540,11 @@ were all `float16` values already, since the stored bytes are half as long.
 The save also replaces the normal of each finite point with a patch by its
 frame's `normalize(u × v)`, which changes `points3d_xxh128`. That is a change
 of content where a file's normals disagree with its frames, and older files
-whose normals disagree are not preserved: `seoul_bull_sculpture_ground_truth_v01`
-has normals up to 49° from their frames' and `kerry_park_ground_truth_v01` up
-to 1.7°, while the later ground truths agree within 0.0001°. A version 16 file
+whose normals disagree are not preserved: the version 11
+`seoul_bull_sculpture_ground_truth_v01` stored normals up to 49° from their
+frames' and `kerry_park_ground_truth_v01` up to 1.7°, which their rewrite at
+version 16 replaced, while the later ground truths' stored normals agreed with
+their frames within 0.0001°. A version 16 file
 maps back to version 15 by widening each `float16` column to `float32`, which
 is exact, writing each score as `1 − w`, renaming the entries, and storing the
 full `normals_xyz` column of the normals it reads, the derived ones among

@@ -21,6 +21,7 @@ from .conftest import (
     SEOUL_BULL_DIR,
     SEOUL_BULL_GROUND_TRUTH,
     build_reconstruction_at_poses,
+    write_version_1_workspace_file,
 )
 
 _IMAGES = [f"seoul_bull_sculpture_{i:02d}.jpg" for i in range(1, 4)]
@@ -72,13 +73,11 @@ def version_2_workspace(tmp_path_factory) -> Path:
 
 @pytest.fixture
 def version_1_workspace(version_2_workspace, tmp_path) -> Path:
-    """A copy of the workspace whose `.sfm-workspace.json` is seoul_bull's
-    version 1 file, with every `.sift` file, `.matches` and `.sfmr` kept."""
+    """A copy of the workspace whose `.sfm-workspace.json` is the version 1
+    `sfmtool` file, with every `.sift` file, `.matches` and `.sfmr` kept."""
     workspace = tmp_path / "ws"
     shutil.copytree(version_2_workspace, workspace)
-    shutil.copy(
-        SEOUL_BULL_DIR / ".sfm-workspace.json", workspace / ".sfm-workspace.json"
-    )
+    write_version_1_workspace_file(workspace)
     return workspace
 
 

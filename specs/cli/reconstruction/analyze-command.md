@@ -170,9 +170,9 @@ called finite:
 ```
     Points at infinity the test calls finite: 3
       Point              Views        Score        Bound       Lambda       z    Distance
-      pt3d_4ddeabf6_298     10        155.8        155.5        155.9    2.36       482.0
-      pt3d_4ddeabf6_294     21        102.2         98.2        102.2    2.01       994.6
-      pt3d_4ddeabf6_295     18         38.1         24.7         38.0    1.21     1,071.6
+      pt3d_abca4104_298     10        155.8        155.5        155.9    2.36       482.0
+      pt3d_abca4104_294     21        102.2         98.2        102.2    2.01       994.6
+      pt3d_abca4104_295     18         38.1         24.7         38.0    1.21     1,071.6
     Reclassification would promote 3 and demote 0
 ```
 

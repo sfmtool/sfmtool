@@ -24,7 +24,7 @@ from sfmtool.fileio import (
 )
 from sfmtool.patches import PatchCloud
 from sfmtool.reconstruction import SfmrReconstruction
-from tests.conftest import with_image_readings
+from tests.conftest import without_odd_finite_frames
 
 # Every numpy-array key `read_sfmr` emits. Optional columns are `None` when the
 # file does not carry them.
@@ -722,13 +722,8 @@ class TestNormals:
     def test_a_read_dict_writes_back_its_normals(
         self, seoul_bull_ground_truth_sfmr, tmp_path, skip
     ):
-        data = with_image_readings(
-            read_sfmr(seoul_bull_ground_truth_sfmr), seoul_bull_ground_truth_sfmr.parent
-        )
+        data = without_odd_finite_frames(read_sfmr(seoul_bull_ground_truth_sfmr))
         normals = data["normals_xyz"]
-        # The ground truth's normals are not its mean-viewing ones, so a write
-        # that replaced them would be seen.
-        assert not np.array_equal(normals, self._mean_viewing(data, tmp_path))
 
         out = tmp_path / "roundtrip.sfmr"
         write_sfmr(out, data, skip_recompute_depth_stats=skip)
@@ -741,14 +736,18 @@ class TestNormals:
         cross = np.cross(u.astype(np.float64), v.astype(np.float64))
         frame_normals = cross / np.linalg.norm(cross, axis=1, keepdims=True)
         np.testing.assert_allclose(written[derived], frame_normals[derived], atol=1e-6)
+        # The finite rows without a frame hold normals that are not their
+        # mean-viewing ones, so a write that replaced them would be seen.
+        unpatched = (data["positions_xyzw"][:, 3] != 0.0) & ~derived
+        assert unpatched.any()
+        mean_viewing = self._mean_viewing(data, tmp_path)
+        assert not np.allclose(normals[unpatched], mean_viewing[unpatched], atol=1e-3)
         assert written[~derived].tobytes() == normals[~derived].tobytes()
 
     def test_a_missing_key_gets_mean_viewing_normals(
         self, seoul_bull_ground_truth_sfmr, tmp_path
     ):
-        data = with_image_readings(
-            read_sfmr(seoul_bull_ground_truth_sfmr), seoul_bull_ground_truth_sfmr.parent
-        )
+        data = read_sfmr(seoul_bull_ground_truth_sfmr)
         mean_viewing = self._mean_viewing(data, tmp_path)
         assert mean_viewing.shape == data["normals_xyz"].shape
         finite = data["positions_xyzw"][:, 3] != 0.0
@@ -766,9 +765,7 @@ class TestNormals:
         )
 
     def test_none_writes_no_normals(self, seoul_bull_ground_truth_sfmr, tmp_path):
-        data = with_image_readings(
-            read_sfmr(seoul_bull_ground_truth_sfmr), seoul_bull_ground_truth_sfmr.parent
-        )
+        data = read_sfmr(seoul_bull_ground_truth_sfmr)
         data["normals_xyz"] = None
         # A confidence rates the stored normals, so it goes with them.
         data["normal_confidence"] = None
@@ -777,9 +774,7 @@ class TestNormals:
         assert read_sfmr(out)["normals_xyz"] is None
 
     def test_a_wrong_shape_is_refused(self, seoul_bull_ground_truth_sfmr, tmp_path):
-        data = with_image_readings(
-            read_sfmr(seoul_bull_ground_truth_sfmr), seoul_bull_ground_truth_sfmr.parent
-        )
+        data = read_sfmr(seoul_bull_ground_truth_sfmr)
         data["normals_xyz"] = data["normals_xyz"][:-1]
         with pytest.raises(ValueError, match="normals_xyz"):
             write_sfmr(tmp_path / "bad.sfmr", data)

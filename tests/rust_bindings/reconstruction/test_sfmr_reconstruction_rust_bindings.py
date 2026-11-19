@@ -11,7 +11,7 @@ import pytest
 from sfmtool.fileio import read_sfmr_content_hash, read_sfmr_metadata
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.patches import PatchCloud
-from tests.conftest import SEOUL_BULL_GROUND_TRUTH
+from tests.conftest import SEOUL_BULL_GROUND_TRUTH, without_odd_finite_frames
 
 
 class TestHomogeneousPointAccessors:
@@ -969,11 +969,16 @@ class TestFromDataNormals:
     def test_a_read_dict_keeps_its_normals(self):
         from sfmtool.fileio import read_sfmr
 
-        data = read_sfmr(SEOUL_BULL_GROUND_TRUTH)
+        data = without_odd_finite_frames(read_sfmr(SEOUL_BULL_GROUND_TRUTH))
         normals = data["normals_xyz"]
-        # The ground truth's normals are not its mean-viewing ones, so a build
-        # that replaced them would be seen.
-        assert not np.array_equal(normals, self._mean_viewing(data))
+        # The finite points left without a frame hold normals that are not
+        # their mean-viewing ones, so a build that replaced them would be seen.
+        unpatched = (data["positions_xyzw"][:, 3] != 0.0) & ~np.any(
+            data["patch_u_halfvec_xyz"] != 0.0, axis=1
+        )
+        assert unpatched.any()
+        mean_viewing = self._mean_viewing(data)
+        assert not np.allclose(normals[unpatched], mean_viewing[unpatched], atol=1e-3)
 
         built = self._build(data)
         assert built.has_normals

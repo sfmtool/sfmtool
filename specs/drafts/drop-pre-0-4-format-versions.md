@@ -115,37 +115,10 @@ Goes:
 The save's gathering of image readings stays: it also fills the readings of a
 reconstruction a solve or an import builds in memory.
 
-### The checked-in files
-
-The PR rewrites every checked-in `.sfmr` file in place at version 16, keeping
-its name, and the three checked-in workspace files as version 2, before the
-reader stops reading the older versions (with sfmtool 0.4.1's `sfm ws upgrade`
-on each dataset directory, for instance, which writes both and each file's
-workspace record to match):
-
-| File | Version today | After |
-|------|---------------|-------|
-| `test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr` | `.sfmr` 11 | 16, normals derived from the patch frames (stored ones were up to 49° off) |
-| `test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v02.sfmr` | `.sfmr` 14 | 16, format only |
-| `test-data/images/kerry_park/kerry_park_ground_truth_v01.sfmr` | `.sfmr` 11 | 16, normals derived from the patch frames (stored ones were up to 1.7° off) |
-| `test-data/images/kerry_park/kerry_park_ground_truth_v02.sfmr` | `.sfmr` 15 | 16, format only |
-| `test-data/images/dino_dog_toy/dino_dog_toy_ground_truth_v01.sfmr` | `.sfmr` 14 | 16, format only |
-| `test-data/images/{seoul_bull_sculpture,kerry_park,dino_dog_toy}/.sfm-workspace.json` | workspace file 1 | workspace file 2 |
-
-`test-data/images/kerry_park/kerry_park.camrig` is at `.camrig` version 2
-already. The names stay because the `_vNN` in a name versions the
-reconstruction, not its format (`AGENTS.md`, under `test-data/`): the only
-change to a reconstruction is that version 16 derives each patched finite
-point's normal from its patch frame, `normalize(u × v)`. For the two `_v01`
-files that replaces stored normals that disagreed with their frames by up to
-49° (seoul_bull) and 1.7° (kerry_park). The stored normals of the two `_v02`
-files and the dino file already equal their frames' to within 0.0001°
-(measured over every finite point with a frame), so for them the rewrite
-changes only the format. Every rewrite also adds or rounds what the format
-stores beside the reconstruction: the image readings, computed from the
-photographs for the files below version 15, and the `float16` columns.
-Each file's `content_xxh128` changes, so the fixtures, scripts and tests that
-record a hash or a Point ID into one follow.
+Every checked-in `.sfmr` file under `test-data/` is at version 16 already,
+and every checked-in workspace file at version 2, as
+[format-versions.md § What a version change consists of](../formats/format-versions.md#what-a-version-change-consists-of)
+item 6 requires, so the PR rewrites none of them.
 
 ### The spec
 

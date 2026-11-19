@@ -74,8 +74,8 @@ fn the_sfmtool_defaults_are_those_ws_init_writes() {
 
 /// Options without `double_image_below_long_side` name the folder they named
 /// before the key existed: the defaults without it are what `sfm ws init`
-/// wrote then, and `sfm ws upgrade` writes now from the test-data workspaces'
-/// version 1 options.
+/// wrote then, and what `sfm ws upgrade` writes from the default version 1
+/// options, as the test-data workspaces record.
 #[test]
 fn options_without_the_doubling_limit_keep_their_folder() {
     let mut options = BuildSiftFilesOptions::sfmtool_defaults().feature_options;
