@@ -738,8 +738,9 @@ refinement measured and which members stand.
     template/seed support out of frame, or the cluster itself was
     unrefinable. Whatever the reason, the member was never fitted and its row
     is its detection. A file written before the refinement had the
-    elongation limit may hold measured members elongated past it; the status
-    means the same in both, so the limit changed no format version
+    elongation limit may hold measured members elongated past it. The status
+    means the same in both, so the limit is a writer computing a value a
+    better way under the same definition, and changed no format version
     ([format-versions.md](format-versions.md#when-a-formats-version-changes))
   - `rejected_unlocalizable` — the member's own patch does not pin a position,
     so it was excluded before reference selection and refinement. The bar is

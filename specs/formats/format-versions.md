@@ -88,11 +88,7 @@ reader which rules an older file follows. The cases met so far:
 
 The version does not change for a change no reader of the previous version
 can observe: a writer that computes a value a better way under the same
-definition; a writer that gives an existing status to members a new rule
-reaches, where the status already means what a reader does with them, as
-cluster-patch refinement's elongation limit gives `.matches`' `not_evaluated`
-(never fitted, the row is the detection) to members whose shape is elongated
-past `MAX_PATCH_ELONGATION`; or retiring an optional key that current readers skip at every
+definition, or retiring an optional key that current readers skip at every
 version, as `.sfmr` retired the version 9 `lineage` key with no version change
 ([sfmr-file-format.md § The retired `lineage` key](sfmr-file-format.md#the-retired-lineage-key)).
 
