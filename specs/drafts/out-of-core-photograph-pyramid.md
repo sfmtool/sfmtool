@@ -701,7 +701,7 @@ stretched is about `(R + 4)^2 x 3` bytes at its level and a quarter of that at
 the next (anisotropic blending), so 2.9 KB at `R = 24` and 17 KB at `R = 64`,
 and about 2.25 times that when it is kept for reuse, grown by
 `REGION_REUSE_MARGIN` (a quarter of the region's width and height on each
-side, § "Where the pixels come from" in the companion draft). A stretched footprint, a grazing view, or the
+side, [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md) § "Theory"). A stretched footprint, a grazing view, or the
 `Bilinear` sampler reading level 0 over a large footprint, can make one
 render's bounding box far larger; the companion draft bounds that with a
 second sampling path and one region pool per kernel call, made by the
@@ -1665,12 +1665,19 @@ in core. Step 17 turns the tier on.
      subtracts a region's origin from its integer tap addresses after the
      `floor`, not from the coordinate, so the fractions are the whole level's
      for every coordinate.
-   - **7b, the companion's step 2, next:** the assembly of view-region
-     pyramids from a `TiledPhotograph`'s tiles with the reuse margin and the
-     reuse across renders, `clipped_share` as an entry point over tiles,
-     exercised on photographs cut into tiles in
-     memory. No reader changes yet. Tests: the companion draft's equality
-     tests for its step 2.
+   - **7b, the companion's step 2. Built**, so step 7 is complete: the
+     regions of a copied read assembled from a `TiledPhotograph`'s tiles with
+     the reuse margin, kept for reuse across renders, and the clipped share
+     read over tiles, exercised on photographs cut into tiles in memory;
+     specified in
+     [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md)
+     with its tests. No reader changes. Two parts took another shape than
+     the interface above: the entry points but `read_source_rect` take the
+     view's `ViewRegions`, made over the source and the kernel call's pool
+     and holding the regions kept for that view, in place of the source and
+     the pool; and the clipped share over tiles is `source_clipped_share`,
+     beside the whole-pyramid `clipped_share` that `render_view_tile` keeps
+     calling until step 10.
 8. **The cluster members' elongation limit** (the companion's § "The
    members' elongation limit"), amending
    [core/patch/cluster-patch-refinement.md](../core/patch/cluster-patch-refinement.md)
