@@ -645,3 +645,17 @@ def test_pattern_matches_case_insensitive_is_opt_in():
     # hit the (case-insensitive) Windows glob accepted.
     assert not camrig_pattern_matches("cam_%d.JPG", "cam_7.jpg", False)
     assert camrig_pattern_matches("cam_%d.JPG", "cam_7.jpg", True)
+
+
+def test_a_pattern_never_matches_a_mip_level_file(tmp_path: Path):
+    """`match_pattern_and_padding_misses`, which `sfm camrig create` and the
+    resolver match image patterns with, skips the mipmap directory, though a
+    mip level file's name ends in `.jpg`."""
+    from sfmtool.camrig.pattern import match_pattern_and_padding_misses
+
+    _touch_images(tmp_path / "cam", ["f_0001.jpg"])
+    _touch_images(tmp_path / ".sfm-mipmaps" / "cam", ["f_0001.jpg-mip1-q95.jpg"])
+
+    matches, misses = match_pattern_and_padding_misses(tmp_path, "**/*.jpg")
+    assert matches == [(tmp_path / "cam" / "f_0001.jpg").resolve()]
+    assert misses == []

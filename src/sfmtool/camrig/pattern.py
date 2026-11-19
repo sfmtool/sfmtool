@@ -25,6 +25,7 @@ field matches a number only as printf writes it with that field and `*` /
 import sys
 from pathlib import Path
 
+from .._filenames import under_mipmap_directory
 from .._sfmtool.fileio import (
     camrig_pattern_frame_index,
     camrig_pattern_matches,
@@ -56,12 +57,13 @@ def match_pattern_and_padding_misses(
     returns them, and the files it misses only because their number is padded
     otherwise than its frame field writes it (`cam_007.jpg` for
     `cam_%04d.jpg`), resolved and sorted the same way, from one glob.
+    Files under a directory named `.sfm-mipmaps` are never matched.
     """
     root = Path(root)
     matches: list[Path] = []
     misses: list[Path] = []
     for hit in root.glob(camrig_pattern_to_glob(pattern)):
-        if not hit.is_file():
+        if not hit.is_file() or under_mipmap_directory(hit, root):
             continue
         rel = hit.relative_to(root).as_posix()
         if camrig_pattern_matches(pattern, rel, _CASE_INSENSITIVE):

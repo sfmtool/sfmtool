@@ -380,3 +380,20 @@ def test_an_unusable_rig_config_is_refused(tmp_path: Path):
     assert "--rig 1 is out of range" in result.output and "has 1 rig(s)" in (
         result.output
     )
+
+
+def test_mip_level_files_are_not_sensor_images(tmp_path: Path):
+    """Mip level files under a `.sfm-mipmaps` directory inside a sensor's
+    folder are not taken for that sensor's images: with them present the
+    rig converts exactly as without them."""
+    _images(tmp_path, "a/f_1.jpg", "a/f_2.jpg", "b/f_1.jpg", "b/f_2.jpg")
+    _images(tmp_path, "a/.sfm-mipmaps/f_1.jpg-mip1-q95.jpg")
+    source = _rig_config(tmp_path, _two_sensor_rig())
+
+    result = _cp(str(source), str(tmp_path / "r.camrig"))
+    assert result.exit_code == 0, result.output
+    assert "2 sensors, 2 frames" in result.output
+    assert read_camrig(str(tmp_path / "r.camrig"))["sensor_image_patterns"] == [
+        "a/f_%d.jpg",
+        "b/f_%d.jpg",
+    ]

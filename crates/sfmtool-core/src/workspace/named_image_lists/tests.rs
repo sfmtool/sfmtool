@@ -1464,3 +1464,20 @@ fn a_pattern_that_json_escapes_reads_back_the_same() {
     let read = NamedImageLists::read(dir.path()).unwrap().unwrap();
     assert_eq!(read.get("q").unwrap().entries()[0].pattern(), pattern);
 }
+
+#[test]
+fn no_pattern_matches_a_file_in_the_mipmap_directory() {
+    let dir = workspace();
+    touch(dir.path(), "images/IMG_0001.jpg");
+    touch(dir.path(), ".sfm-mipmaps/images/IMG_0001.jpg-mip1-q95.jpg");
+    touch(dir.path(), "images/.sfm-mipmaps/x.jpg-mip1-q95.jpg");
+    let lists = write_lists(
+        dir.path(),
+        r#"{"all": [{"pattern": "**/*.jpg"}],
+            "named": [{"pattern": ".sfm-mipmaps/images/*.jpg"}]}"#,
+    );
+    let members = resolve(&lists, "all", None).unwrap();
+    assert_eq!(paths(&members), ["images/IMG_0001.jpg"]);
+    let e = resolve(&lists, "named", None).unwrap_err();
+    assert!(e.to_string().ends_with("matches no image"), "{e}");
+}

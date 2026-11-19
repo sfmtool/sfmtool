@@ -14,6 +14,7 @@ pub mod epipolar;
 pub mod frustum;
 pub mod image;
 pub mod intrinsics;
+pub mod mipmap;
 pub mod photograph_cache;
 pub mod rectification;
 pub mod refit_intrinsics;
