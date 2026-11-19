@@ -28,7 +28,7 @@
 //! recovers the relative warp through the cluster's `S_ref | x_ref` reference
 //! row.
 //!
-//! Sampling reuses the house conventions: the `bilinear_geometry` pixel-center
+//! Sampling reuses the house conventions: the `bilinear_cell` pixel-center
 //! convention (`x − 0.5`), the shared window `Support`, and the
 //! `weighted_moments_pub` / `znorm_write` z-normalization kernels. Pyramid
 //! levels follow the standard mip rule — per sampled image, level
@@ -52,6 +52,8 @@ use ndarray::{Array2, Array3};
 use rayon::prelude::*;
 
 use crate::camera::image::ImageU8Pyramid;
+use crate::camera::remap::HeldLevel;
+use crate::camera::sampler::{grid_cells, sample_grid, GridEdge, GridPoints};
 use crate::patch::cell_registration::{CellLayout, CellTemplates};
 use crate::patch::normal_refine::{
     build_support, weighted_moments_pub, znorm_write, PartZncc, Support, FLAT_NORM_SQ_EPS,
@@ -447,7 +449,7 @@ fn grid_self_similarity_radius(samples: &[f32], resolution: usize) -> f64 {
 }
 
 /// Sample a member's own full `R×R` grid at its SIFT geometry (identity
-/// warp, mip-selected level, bit-exact `bilinear_geometry` convention) into
+/// warp, mip-selected level, bit-exact `bilinear_cell` convention) into
 /// an interleaved `R×R×C` f32 patch. Unlike [`build_template`], every grid
 /// pixel is sampled, not just the windowed support, and samples outside the
 /// frame clamp to the nearest valid pixel (border replicate) so a border
@@ -474,17 +476,6 @@ fn sample_patch_grid(
     )
 }
 
-/// What [`sample_grid_window`] does with a sample whose taps leave the image.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum GridEdge {
-    /// Clamp to the nearest valid pixel (border replicate), and refuse the
-    /// whole window on a non-finite coordinate.
-    Clamp,
-    /// Write `NaN` in every channel of that sample, non-finite coordinates
-    /// included.
-    Missing,
-}
-
 /// Sample a `size × size` window of the template grid's positions, starting at
 /// grid index `first` on both axes, at position `pos` and shape `a`, into an
 /// interleaved `size × size × C` f32 patch. The map, the pyramid level and the
@@ -507,72 +498,14 @@ fn sample_grid_window(
     let map = warp_map(pos, [0.0, 0.0], a, step, off);
     let level = level_for_map(&map, pyramid.num_levels());
     let lmap = map_at_level(&map, level);
-    let img = pyramid.level(level);
-    let ch = img.channels() as usize;
-    let stride = img.width() as usize * ch;
-    let data = img.data();
-    let (w_img, h_img) = (img.width() as i64, img.height() as i64);
-    if w_img < 2 || h_img < 2 {
-        return None;
-    }
-    let (max_gx, max_gy) = ((w_img - 1) as f64, (h_img - 1) as f64);
-    let mut out = vec![0f32; size * size * ch];
-    for px in 0..size * size {
-        let col = (first + (px % size) as i64) as f64;
-        let row = (first + (px / size) as i64) as f64;
-        let x = lmap.a[0] * col + lmap.a[1] * row + lmap.a[2];
-        let y = lmap.a[3] * col + lmap.a[4] * row + lmap.a[5];
-        // `bilinear_geometry`'s pixel-center convention.
-        let gx = x - 0.5;
-        let gy = y - 0.5;
-        let (ix, iy, fx, fy) = match edge {
-            GridEdge::Clamp => {
-                if !gx.is_finite() || !gy.is_finite() {
-                    return None;
-                }
-                // Nearest-valid-pixel clamp (border replicate): the coordinate
-                // clamps to the outermost pixel center and the tap base to the
-                // last valid 2x2 cell, so fx/fy saturate and the blend reads
-                // the edge pixel.
-                let gx = gx.clamp(0.0, max_gx);
-                let gy = gy.clamp(0.0, max_gy);
-                let ix = (gx.floor() as i64).min(w_img - 2);
-                let iy = (gy.floor() as i64).min(h_img - 2);
-                (ix, iy, (gx - ix as f64) as f32, (gy - iy as f64) as f32)
-            }
-            GridEdge::Missing => {
-                let in_frame = gx.is_finite()
-                    && gy.is_finite()
-                    && gx >= 0.0
-                    && gy >= 0.0
-                    && (gx.floor() as i64) + 1 < w_img
-                    && (gy.floor() as i64) + 1 < h_img;
-                if !in_frame {
-                    out[px * ch..][..ch].fill(f32::NAN);
-                    continue;
-                }
-                let (x0, y0) = (gx.floor(), gy.floor());
-                (x0 as i64, y0 as i64, (gx - x0) as f32, (gy - y0) as f32)
-            }
-        };
-        let base = iy as usize * stride + ix as usize * ch;
-        for c in 0..ch {
-            let v00 = data[base + c] as f32;
-            let v10 = data[base + ch + c] as f32;
-            let v01 = data[base + stride + c] as f32;
-            let v11 = data[base + stride + ch + c] as f32;
-            out[px * ch + c] = (1.0 - fx) * (1.0 - fy) * v00
-                + fx * (1.0 - fy) * v10
-                + (1.0 - fx) * fy * v01
-                + fx * fy * v11;
-        }
-    }
-    Some(out)
+    let [w, h] = pyramid.level_full_size(level);
+    let cells = grid_cells(&lmap.a, GridPoints::Window { first, size }, edge, (w, h))?;
+    Some(sample_grid(&HeldLevel::of(pyramid, level), &cells))
 }
 
 /// Build the reference's z-normalized template kernel: sample every image
 /// channel over the support grid at the mip-selected level (bit-exact
-/// `bilinear_geometry` convention, all-in-frame required), z-normalize each
+/// `bilinear_cell` convention, all-in-frame required), z-normalize each
 /// channel with the sqrt-window fold, and drop flat channels. `None` when any
 /// support sample leaves the frame or every channel is flat — the candidate
 /// reference is unusable.
@@ -588,45 +521,22 @@ fn build_template(
     let map = warp_map(geo.pos, [0.0, 0.0], &geo.a, step, off);
     let level = level_for_map(&map, pyramid.num_levels());
     let lmap = map_at_level(&map, level);
-    let img = pyramid.level(level);
     let n = support.pixels.len();
-    let ch = img.channels() as usize;
-    let r = resolution as usize;
-    let stride = img.width() as usize * ch;
-    let data = img.data();
-    let (w_img, h_img) = (img.width() as i64, img.height() as i64);
+    let ch = pyramid.level(0).channels() as usize;
+    let [w, h] = pyramid.level_full_size(level);
+    let points = GridPoints::Pixels {
+        pixels: &support.pixels,
+        resolution: resolution as usize,
+    };
+    let cells = grid_cells(&lmap.a, points, GridEdge::InFrame, (w, h))?;
+    let samples = sample_grid(&HeldLevel::of(pyramid, level), &cells);
 
     // Raw support samples, planar per channel `[c·n + k]` (the ContextTile
     // layout), values un-rounded f32.
     let mut raw = vec![0f32; ch * n];
-    for (k, &p) in support.pixels.iter().enumerate() {
-        let col = (p % r) as f64;
-        let row = (p / r) as f64;
-        let x = lmap.a[0] * col + lmap.a[1] * row + lmap.a[2];
-        let y = lmap.a[3] * col + lmap.a[4] * row + lmap.a[5];
-        // `bilinear_geometry`'s pixel-center convention.
-        let gx = x - 0.5;
-        let gy = y - 0.5;
-        if !gx.is_finite() || !gy.is_finite() {
-            return None;
-        }
-        let x0 = gx.floor();
-        let y0 = gy.floor();
-        let (ix, iy) = (x0 as i64, y0 as i64);
-        if ix < 0 || iy < 0 || ix + 1 >= w_img || iy + 1 >= h_img {
-            return None;
-        }
-        let (fx, fy) = ((gx - x0) as f32, (gy - y0) as f32);
-        let base = iy as usize * stride + ix as usize * ch;
-        for c in 0..ch {
-            let v00 = data[base + c] as f32;
-            let v10 = data[base + ch + c] as f32;
-            let v01 = data[base + stride + c] as f32;
-            let v11 = data[base + stride + ch + c] as f32;
-            raw[c * n + k] = (1.0 - fx) * (1.0 - fy) * v00
-                + fx * (1.0 - fy) * v10
-                + (1.0 - fx) * fy * v01
-                + fx * fy * v11;
+    for (k, sample) in samples.chunks_exact(ch).enumerate() {
+        for (c, &v) in sample.iter().enumerate() {
+            raw[c * n + k] = v;
         }
     }
 
@@ -674,30 +584,16 @@ fn build_template(
     // The same channels over the whole square, for the ZNCC grid. A pixel off
     // the image is `NaN`, which leaves its cell unread rather than refusing the
     // template: the square reaches past the support the refinement scores.
+    let r = resolution as usize;
     let square = r * r;
     let mut square_samples = vec![f32::NAN; src_channels.len() * square];
-    for p in 0..square {
-        let x = lmap.a[0] * (p % r) as f64 + lmap.a[1] * (p / r) as f64 + lmap.a[2] - 0.5;
-        let y = lmap.a[3] * (p % r) as f64 + lmap.a[4] * (p / r) as f64 + lmap.a[5] - 0.5;
-        if !x.is_finite() || !y.is_finite() {
-            continue;
-        }
-        let (x0, y0) = (x.floor(), y.floor());
-        let (ix, iy) = (x0 as i64, y0 as i64);
-        if ix < 0 || iy < 0 || ix + 1 >= w_img || iy + 1 >= h_img {
-            continue;
-        }
-        let (fx, fy) = ((x - x0) as f32, (y - y0) as f32);
-        let base = iy as usize * stride + ix as usize * ch;
-        for (tc, &c) in src_channels.iter().enumerate() {
-            let v00 = data[base + c] as f32;
-            let v10 = data[base + ch + c] as f32;
-            let v01 = data[base + stride + c] as f32;
-            let v11 = data[base + stride + ch + c] as f32;
-            square_samples[tc * square + p] = (1.0 - fx) * (1.0 - fy) * v00
-                + fx * (1.0 - fy) * v10
-                + (1.0 - fx) * fy * v01
-                + fx * fy * v11;
+    let window = GridPoints::Window { first: 0, size: r };
+    if let Some(cells) = grid_cells(&lmap.a, window, GridEdge::Missing, (w, h)) {
+        let all = sample_grid(&HeldLevel::of(pyramid, level), &cells);
+        for (p, sample) in all.chunks_exact(ch).enumerate() {
+            for (tc, &c) in src_channels.iter().enumerate() {
+                square_samples[tc * square + p] = sample[c];
+            }
         }
     }
     Some(TemplateKernel {

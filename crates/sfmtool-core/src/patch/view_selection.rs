@@ -36,11 +36,8 @@
 //! `specs/core/patch/patch-view-selection.md` for the accepted admission-flip
 //! loss and the measured numbers.
 
-use crate::camera::image::{ImageU8, ImageU8Pyramid};
-
-use crate::camera::remap::{aniso_sample, mip_level_for_sigma, AnisoTally};
-use crate::camera::sampler::{render_phase, MAX_ANISOTROPY};
-use crate::camera::warp_map::svd_2x2;
+use crate::camera::remap::{mip_level_for_sigma, HeldLevel};
+use crate::camera::sampler::render_phase;
 use crate::camera::CameraIntrinsics;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::normal_refine::{
@@ -402,7 +399,7 @@ impl AffineCoreMap {
 ///
 /// Any other sampler resolves to level 0: [`Sampler::Bilinear`] reads it, and
 /// [`Sampler::Anisotropic`] takes its levels from the map's own footprint per
-/// sample ([`sample_support_affine_aniso`]), so its map stays in level-0 px.
+/// sample ([`sample_support_affine_aniso`](crate::camera::sampler::sample_support_affine_aniso)), so its map stays in level-0 px.
 /// Its walk along the major axis can read up to `σ_major / 2` source px past
 /// the quad; those taps are clamped at the frame edge exactly as the per-pixel
 /// path clamps them, so the border gate needs no wider margin for it.
@@ -491,126 +488,36 @@ fn affine_core_map(
     ))
 }
 
-/// Sample the reference-support pixels of `img` through the affine map into
-/// the planar `out` (`[channel · n + support_index]`, `f32`), with exactly
-/// [`remap_bilinear`](crate::camera::remap::remap_bilinear)'s per-sample value
-/// convention (same `x − 0.5` pixel-center geometry, same bilinear blend
-/// grouping, same `u8` rounding), so where the affine position matches the
-/// exact warp the sampled value is bit-identical.
-///
-/// `img` is whichever pyramid level [`affine_core_map`] selected, and `map` is
-/// already expressed in that level's pixels — one bilinear tap on the chosen
-/// level is precisely what
-/// [`remap_bilinear_mip`](crate::camera::remap::remap_bilinear_mip) does per
-/// pixel, so the same value convention carries over to the mip path unchanged.
-///
-/// The inner loop is hand-rolled rather than calling the generic
-/// [`crate::camera::remap::sample_bilinear_u8_all`]: the
-/// [`AFFINE_BORDER_MARGIN_PX`] gate on the map guarantees every sample sits
-/// ≥ 1 px inside the frame, so the per-pixel
-/// floor/clamp/saturate edge handling drops out entirely (the generic sampler
-/// is kept as the reference the `affine_sampler_matches_reference` test pins
-/// this against).
+/// [`sample_support_affine`](crate::camera::sampler::sample_support_affine)
+/// of a whole image, as the tests call it.
+#[cfg(test)]
 fn sample_support_affine(
-    img: &ImageU8,
+    img: &crate::camera::image::ImageU8,
     map: &AffineCoreMap,
     pixels: &[usize],
     resolution: usize,
     out: &mut [f32],
 ) {
-    let n = pixels.len();
-    let ch = img.channels() as usize;
-    let stride = img.width() as usize * ch;
-    let data = img.data();
-    let a = &map.a;
-    for (k, &p) in pixels.iter().enumerate() {
-        let col = (p % resolution) as f64;
-        let row = (p / resolution) as f64;
-        // Same pixel-center convention as `bilinear_geometry` (x − 0.5).
-        let gx = (a[0] * col + a[1] * row + a[2] - 0.5) as f32;
-        let gy = (a[3] * col + a[4] * row + a[5] - 0.5) as f32;
-        let x0 = gx.floor();
-        let y0 = gy.floor();
-        let fx = gx - x0;
-        let fy = gy - y0;
-        // Border-gated: x0/y0 are in-frame with the +1 neighbour, no clamping.
-        let base = (y0 as usize) * stride + (x0 as usize) * ch;
-        let w00 = (1.0 - fx) * (1.0 - fy);
-        let w10 = fx * (1.0 - fy);
-        let w01 = (1.0 - fx) * fy;
-        let w11 = fx * fy;
-        let top = &data[base..base + 2 * ch];
-        let bot = &data[base + stride..base + stride + 2 * ch];
-        for c in 0..ch {
-            let val = w00 * top[c] as f32
-                + w10 * top[ch + c] as f32
-                + w01 * bot[c] as f32
-                + w11 * bot[ch + c] as f32;
-            // remap_bilinear's u8 rounding, kept for value parity.
-            out[c * n + k] = (val + 0.5).clamp(0.0, 255.0).floor();
-        }
-    }
-    // Keep the shared resample counters honest (one call, n samples, one
-    // bilinear tap per sample per channel — same accounting as
-    // `remap_bilinear`, which the exact path routes through).
-    crate::camera::remap::prof::add(&crate::camera::remap::prof::CALLS, 1);
-    crate::camera::remap::prof::add(&crate::camera::remap::prof::PX_TOTAL, n as u64);
-    crate::camera::remap::prof::add(&crate::camera::remap::prof::PX_SAMPLED, n as u64);
-    crate::camera::remap::prof::add(&crate::camera::remap::prof::TAPS, (n * ch) as u64);
+    crate::camera::sampler::sample_support_affine(
+        &crate::camera::remap::HeldLevel::whole(img),
+        &map.a,
+        pixels,
+        resolution,
+        out,
+    );
 }
 
-/// Sample the reference-support pixels of `pyramid` through the affine map
-/// with the anisotropic sampler, into the planar `out` (`[channel · n +
-/// support_index]`, `f32`).
-///
-/// `map` is in level-0 px ([`affine_core_map`] under
-/// [`Sampler::Anisotropic`]). Its Jacobian `[[a0, a1], [a3, a4]]` is the same
-/// at every pixel, so one SVD ([`svd_2x2`], the arithmetic
-/// [`WarpMap::compute_svd`](crate::camera::WarpMap::compute_svd) applies per
-/// pixel) gives the footprint of every sample: the level from `σ_minor` and
-/// the samples along one major axis, the image direction the map compresses
-/// most. Each support pixel then takes [`aniso_sample`] at its affine
-/// position, rounded to `f32` as a warp map stores it, which is the per-pixel
-/// path's sample for that position and SVD. On a map that is exactly affine
-/// the two paths differ only through the per-pixel SVD, read from finite
-/// differences of the stored `f32` positions: where it lands on the other
-/// side of a level or sample-count boundary from the constant one, and by one
-/// where its rounding moves a tap enough to change the rounded value
-/// (`affine_aniso_sampling_matches_the_per_pixel_path`). On a real view the
-/// affine position error adds to that, as it does for the bilinear samplers
-/// (`affine_aniso_sampling_matches_exact_render_on_an_oblique_view`).
+/// [`sample_support_affine_aniso`](crate::camera::sampler::sample_support_affine_aniso)
+/// of a whole pyramid, as the tests call it.
+#[cfg(test)]
 fn sample_support_affine_aniso(
-    pyramid: &ImageU8Pyramid,
+    pyramid: &crate::camera::image::ImageU8Pyramid,
     map: &AffineCoreMap,
     pixels: &[usize],
     resolution: usize,
     out: &mut [f32],
 ) {
-    let n = pixels.len();
-    let ch = pyramid.level(0).channels() as usize;
-    let a = &map.a;
-    let svd = svd_2x2(a[0] as f32, a[1] as f32, a[3] as f32, a[4] as f32);
-    let mut tally = AnisoTally::default();
-    let mut sample = vec![0u8; ch];
-    for (k, &p) in pixels.iter().enumerate() {
-        let col = (p % resolution) as f64;
-        let row = (p / resolution) as f64;
-        let x = (a[0] * col + a[1] * row + a[2]) as f32;
-        let y = (a[3] * col + a[4] * row + a[5]) as f32;
-        aniso_sample(pyramid, x, y, svd, MAX_ANISOTROPY, &mut sample, &mut tally);
-        for (c, &v) in sample.iter().enumerate() {
-            out[c * n + k] = v as f32;
-        }
-    }
-    // The shared resample counters, as `remap_aniso_with_pyramid` keeps them.
-    use crate::camera::remap::prof;
-    prof::add(&prof::CALLS, 1);
-    prof::add(&prof::PX_TOTAL, n as u64);
-    prof::add(&prof::PX_SAMPLED, n as u64);
-    prof::add(&prof::TAPS, tally.taps);
-    prof::add(&prof::ANISO_FAST, tally.fast);
-    prof::add(&prof::ANISO_MULTI, tally.multi);
-    prof::add(&prof::ANISO_SUM_N, tally.sum_n);
+    crate::camera::sampler::sample_support_affine_aniso(pyramid, &map.a, pixels, resolution, out);
 }
 
 /// Whether `camera` can see `patch`'s centre from `cam_from_world`.
@@ -770,8 +677,7 @@ fn candidate_zncc(
         if level > 0 {
             prof::count(&prof::N_AFFINE_MIP, 1);
         }
-        let img = view.pyramid.level(level);
-        let channels = img.channels() as usize;
+        let channels = view.pyramid.level(0).channels() as usize;
         let n = reference.n;
         raw_scratch.clear();
         raw_scratch.resize(channels * n, 0.0);
@@ -779,15 +685,21 @@ fn candidate_zncc(
         prof::AFFINE_SAMPLE.time(|| {
             if sampler == Sampler::Anisotropic {
                 prof::count(&prof::N_AFFINE_ANISO, 1);
-                sample_support_affine_aniso(
+                crate::camera::sampler::sample_support_affine_aniso(
                     view.pyramid,
-                    &map,
+                    &map.a,
                     &single_ctx.pixels,
                     resolution,
                     raw_scratch,
                 )
             } else {
-                sample_support_affine(img, &map, &single_ctx.pixels, resolution, raw_scratch)
+                crate::camera::sampler::sample_support_affine(
+                    &HeldLevel::of(view.pyramid, level),
+                    &map.a,
+                    &single_ctx.pixels,
+                    resolution,
+                    raw_scratch,
+                )
             }
         });
         return score_raw_against_reference(

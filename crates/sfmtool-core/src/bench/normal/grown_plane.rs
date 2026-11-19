@@ -1828,4 +1828,6 @@ mod jacobian_tests;
 #[cfg(test)]
 mod laid_tests;
 #[cfg(test)]
+mod source_read_tests;
+#[cfg(test)]
 mod tests;

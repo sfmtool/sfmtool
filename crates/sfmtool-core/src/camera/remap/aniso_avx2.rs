@@ -30,9 +30,9 @@
 use std::arch::x86_64::*;
 
 #[cfg(target_arch = "x86_64")]
-use super::{aniso_footprint, aniso_pixel, AnisoTally};
+use super::{aniso_footprint, aniso_pixel, AnisoTally, HeldLevel};
 #[cfg(target_arch = "x86_64")]
-use crate::camera::image::{ImageU8, ImageU8Pyramid};
+use crate::camera::image::ImageU8Pyramid;
 #[cfg(target_arch = "x86_64")]
 use crate::camera::warp_map::WarpMap;
 
@@ -159,8 +159,8 @@ unsafe fn group(
     let v_dy = _mm256_loadu_ps(dy.as_ptr());
     let v_n = _mm256_loadu_ps(nf.as_ptr());
     let half = _mm256_set1_ps(0.5);
-    let lo = pyramid.level(level_lo);
-    let hi = pyramid.level(level_hi);
+    let lo = HeldLevel::of(pyramid, level_lo);
+    let hi = HeldLevel::of(pyramid, level_hi);
     let scale_lo = _mm256_set1_ps((1u32 << level_lo) as f32);
     let scale_hi = _mm256_set1_ps((1u32 << level_hi) as f32);
 
@@ -177,7 +177,7 @@ unsafe fn group(
         let x = _mm256_add_ps(v_sx, _mm256_mul_ps(ts, v_dx));
         let y = _mm256_add_ps(v_sy, _mm256_mul_ps(ts, v_dy));
         if !accumulate(
-            lo,
+            &lo,
             _mm256_div_ps(x, scale_lo),
             _mm256_div_ps(y, scale_lo),
             active,
@@ -188,7 +188,7 @@ unsafe fn group(
         }
         if need_hi
             && !accumulate(
-                hi,
+                &hi,
                 _mm256_div_ps(x, scale_hi),
                 _mm256_div_ps(y, scale_hi),
                 active,
@@ -245,7 +245,8 @@ pub(super) fn gatherable(len: usize) -> bool {
     (4..=i32::MAX as usize).contains(&len)
 }
 
-/// Add the bilinear samples of `img` at the eight `(x, y)` (level pixels) to
+/// Add the bilinear samples of `level` at the eight `(x, y)` (full-level
+/// pixels) to
 /// `sums`, per channel, in the lanes `active` sets, with the products and
 /// sums of the scalar `sample_bilinear_u8`. `false`, adding nothing, where a
 /// coordinate is past [`MAX_COORD`] or not a number, or where the level is not
@@ -254,13 +255,14 @@ pub(super) fn gatherable(len: usize) -> bool {
 #[target_feature(enable = "avx2")]
 #[inline]
 unsafe fn accumulate(
-    img: &ImageU8,
+    level: &HeldLevel<'_>,
     x: __m256,
     y: __m256,
     active: __m256,
     c: usize,
     sums: &mut [__m256; 4],
 ) -> bool {
+    let img = level.image();
     if !gatherable(img.data.len()) {
         return false;
     }
@@ -278,8 +280,12 @@ unsafe fn accumulate(
     let y0f = _mm256_floor_ps(gy);
     let fx = _mm256_sub_ps(gx, x0f);
     let fy = _mm256_sub_ps(gy, y0f);
-    let x0 = _mm256_cvttps_epi32(x0f);
-    let y0 = _mm256_cvttps_epi32(y0f);
+    // The taps in the held rectangle: the origin subtracted in integers,
+    // as `HeldLevel::corners` does (no lane is past `MAX_COORD`, so no
+    // subtraction overflows).
+    let [ox, oy] = level.origin();
+    let x0 = _mm256_sub_epi32(_mm256_cvttps_epi32(x0f), _mm256_set1_epi32(ox));
+    let y0 = _mm256_sub_epi32(_mm256_cvttps_epi32(y0f), _mm256_set1_epi32(oy));
     let one = _mm256_set1_epi32(1);
     let x1 = _mm256_add_epi32(x0, one);
     let y1 = _mm256_add_epi32(y0, one);

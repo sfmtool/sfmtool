@@ -69,12 +69,27 @@ impl PyramidLayout {
         })
     }
 
+    /// The layout of a pyramid held in memory, with `levels` levels of a
+    /// `width` x `height` level 0 and tiles of `tile_size` px (a size of 0 is
+    /// taken as 1): in core, so no level is stored.
+    pub(crate) fn in_memory(width: u32, height: u32, levels: usize, tile_size: u32) -> Self {
+        Self {
+            width,
+            height,
+            levels,
+            stored_levels: 0,
+            tile_size: tile_size.max(1),
+            options: None,
+        }
+    }
+
     /// The number of levels, [`ImageU8Pyramid::full_levels`] of the size.
     pub fn levels(&self) -> usize {
         self.levels
     }
 
-    /// The size of level `level`; `(0, 0)` past the last level.
+    /// The size of level `level`, level 0's halved `level` times; `(0, 0)`
+    /// past the last level.
     pub fn level_size(&self, level: usize) -> (u32, u32) {
         if level >= self.levels {
             return (0, 0);

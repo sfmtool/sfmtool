@@ -355,7 +355,7 @@ pub(super) fn eval_zncc(
     tmpl: &TemplateKernel,
 ) -> Option<f64> {
     // Tile-local f32 coefficients with the −0.5 pixel-center shift folded in:
-    // the per-lane result is directly `gx` of `bilinear_geometry`'s
+    // the per-lane result is directly `gx` of `bilinear_cell`'s
     // convention, in tile coordinates (small magnitudes keep f32 exact).
     let a = &map.a;
     let al = [

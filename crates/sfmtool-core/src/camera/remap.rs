@@ -10,6 +10,9 @@ use crate::camera::warp_map::{parallelize_rows, WarpMap, REMAP_PAR_MIN_PIXELS};
 
 mod aniso_avx2;
 pub mod prof;
+mod texels;
+
+pub(crate) use texels::{bilinear_cell, HeldLevel, LevelTexels, PyramidTexels};
 
 pub use crate::camera::image::{ImageF32WithGrad, ImageU8, ImageU8Pyramid};
 
@@ -61,7 +64,7 @@ fn remap_rows(
 /// fold across taps and removes the call overhead on that hot path.
 #[inline]
 pub fn sample_bilinear_u8(img: &ImageU8, x: f32, y: f32, channel: u32) -> f32 {
-    let (v00, v10, v01, v11, fx, fy) = bilinear_taps(img, x, y, channel);
+    let (v00, v10, v01, v11, fx, fy) = bilinear_taps(&HeldLevel::whole(img), x, y, channel);
     (1.0 - fx) * (1.0 - fy) * v00 + fx * (1.0 - fy) * v10 + (1.0 - fx) * fy * v01 + fx * fy * v11
 }
 
@@ -85,7 +88,13 @@ pub fn sample_bilinear_with_grad_u8(
     y: f32,
     channel: u32,
 ) -> (f32, f32, f32) {
-    let (v00, v10, v01, v11, fx, fy) = bilinear_taps(img, x, y, channel);
+    bilinear_with_grad(&HeldLevel::whole(img), x, y, channel)
+}
+
+/// [`sample_bilinear_with_grad_u8`] of one channel of any level.
+#[inline]
+fn bilinear_with_grad<T: LevelTexels>(level: &T, x: f32, y: f32, channel: u32) -> (f32, f32, f32) {
+    let (v00, v10, v01, v11, fx, fy) = bilinear_taps(level, x, y, channel);
     let val = (1.0 - fx) * (1.0 - fy) * v00
         + fx * (1.0 - fy) * v10
         + (1.0 - fx) * fy * v01
@@ -93,49 +102,6 @@ pub fn sample_bilinear_with_grad_u8(
     let di_dx = (1.0 - fy) * (v10 - v00) + fy * (v11 - v01);
     let di_dy = (1.0 - fx) * (v01 - v00) + fx * (v11 - v10);
     (val, di_dx, di_dy)
-}
-
-/// Channel-independent bilinear geometry for a sample at `(x, y)`: the four
-/// corner *base* indices (channel 0 of `v00, v10, v01, v11` — top-left,
-/// top-right, bottom-left, bottom-right) and the in-cell fractions `(fx, fy)`.
-///
-/// This is the single source of truth for the `x - 0.5` half-pixel convention,
-/// the `floor`/`saturating_add`/`clamp` edge handling, and the stride index math.
-/// Every bilinear sampler in this module — the per-channel [`bilinear_taps`], the
-/// weight-based [`bilinear_corners`], and the channel-batched value / value+grad
-/// gathers — builds on it, so they cannot drift apart (a fix here fixes all of
-/// them, keeping the "bit-identical to per-channel" guarantee intact). `(fx, fy)`
-/// feed both the bilinear weights ([`corner_weights`]) and the analytic gradient.
-#[inline]
-fn bilinear_geometry(img: &ImageU8, x: f32, y: f32) -> ([usize; 4], f32, f32) {
-    let gx = x - 0.5;
-    let gy = y - 0.5;
-
-    let w = img.width as i32;
-    let h = img.height as i32;
-    let c = img.channels as usize;
-
-    let x0 = gx.floor() as i32;
-    let y0 = gy.floor() as i32;
-    let x1 = x0.saturating_add(1);
-    let y1 = y0.saturating_add(1);
-
-    let fx = gx - x0 as f32;
-    let fy = gy - y0 as f32;
-
-    let cx0 = x0.clamp(0, w - 1) as usize;
-    let cx1 = x1.clamp(0, w - 1) as usize;
-    let cy0 = y0.clamp(0, h - 1) as usize;
-    let cy1 = y1.clamp(0, h - 1) as usize;
-
-    let stride = img.width as usize * c;
-    let idx = [
-        cy0 * stride + cx0 * c,
-        cy0 * stride + cx1 * c,
-        cy1 * stride + cx0 * c,
-        cy1 * stride + cx1 * c,
-    ];
-    (idx, fx, fy)
 }
 
 /// The four bilinear blend weights for `(v00, v10, v01, v11)` from the in-cell
@@ -155,58 +121,65 @@ fn corner_weights(fx: f32, fy: f32) -> [f32; 4] {
 /// Fetch the four bilinear taps `(v00, v10, v01, v11)` plus the in-cell fractions
 /// `(fx, fy)` for the sample at `(x, y)` in channel `channel`. Shared by the
 /// value-only and value+gradient single-channel samplers; builds on
-/// [`bilinear_geometry`].
+/// [`bilinear_cell`] and [`LevelTexels::with_cell`].
 #[inline]
-fn bilinear_taps(img: &ImageU8, x: f32, y: f32, channel: u32) -> (f32, f32, f32, f32, f32, f32) {
-    let (idx, fx, fy) = bilinear_geometry(img, x, y);
+fn bilinear_taps<T: LevelTexels>(
+    level: &T,
+    x: f32,
+    y: f32,
+    channel: u32,
+) -> (f32, f32, f32, f32, f32, f32) {
+    let (x0, y0, fx, fy) = bilinear_cell(x, y);
     let ch = channel as usize;
-    let data = &img.data;
-    (
-        data[idx[0] + ch] as f32,
-        data[idx[1] + ch] as f32,
-        data[idx[2] + ch] as f32,
-        data[idx[3] + ch] as f32,
-        fx,
-        fy,
-    )
-}
-
-/// Corner *base* indices + blend weights for a sample at `(x, y)` — the
-/// channel-independent inputs a batched gather needs. Builds on
-/// [`bilinear_geometry`] + [`corner_weights`].
-#[inline]
-fn bilinear_corners(img: &ImageU8, x: f32, y: f32) -> ([usize; 4], [f32; 4]) {
-    let (idx, fx, fy) = bilinear_geometry(img, x, y);
-    (idx, corner_weights(fx, fy))
+    level.with_cell(x0, y0, |data, idx| {
+        (
+            data[idx[0] + ch] as f32,
+            data[idx[1] + ch] as f32,
+            data[idx[2] + ch] as f32,
+            data[idx[3] + ch] as f32,
+            fx,
+            fy,
+        )
+    })
 }
 
 /// Bilinearly sample **every channel** of `img` at `(x, y)` in one shot, writing
-/// the rounded/clamped `u8` result to `dst[0..channels]`. The corner geometry is
-/// computed once (via [`bilinear_corners`]) and reused across channels, where
-/// per-channel [`sample_bilinear_u8`] recomputed floor/clamp/index/fractions for
-/// each channel. Output is bit-identical to calling `sample_bilinear_u8` per
-/// channel and rounding with `(val + 0.5).clamp(0.0, 255.0)`.
-///
-/// `dst.len()` must be at least `img.channels`. `pub(crate)` so view
-/// selection's affine fast path samples with exactly [`remap_bilinear`]'s
-/// value convention (same rounding, same clamping).
+/// the rounded/clamped `u8` result to `dst[0..channels]`: [`bilinear_all`] of
+/// the whole image, the reference the tests pin the affine fast path and the
+/// per-channel [`sample_bilinear_u8`] against.
+#[cfg(test)]
 #[inline]
 pub(crate) fn sample_bilinear_u8_all(img: &ImageU8, x: f32, y: f32, dst: &mut [u8]) {
-    let c = img.channels as usize;
+    bilinear_all(&HeldLevel::whole(img), x, y, dst);
+}
+
+/// Bilinearly sample **every channel** of `level` at `(x, y)` in one shot,
+/// writing the rounded/clamped `u8` result to `dst[0..channels]`. The corner
+/// geometry is computed once and reused across channels, where per-channel
+/// [`sample_bilinear_u8`] recomputes floor/clamp/index/fractions for each
+/// channel. Output is bit-identical to calling `sample_bilinear_u8` per
+/// channel and rounding with `(val + 0.5).clamp(0.0, 255.0)`.
+///
+/// `dst.len()` must be at least the level's channels.
+#[inline]
+pub(crate) fn bilinear_all<T: LevelTexels>(level: &T, x: f32, y: f32, dst: &mut [u8]) {
+    let c = level.channels();
     debug_assert!(
         dst.len() >= c,
         "sample_bilinear_u8_all: dst.len() {} < channels {c}",
         dst.len()
     );
-    let (idx, w) = bilinear_corners(img, x, y);
-    let data = &img.data;
-    for (ch, slot) in dst.iter_mut().take(c).enumerate() {
-        let val = w[0] * data[idx[0] + ch] as f32
-            + w[1] * data[idx[1] + ch] as f32
-            + w[2] * data[idx[2] + ch] as f32
-            + w[3] * data[idx[3] + ch] as f32;
-        *slot = (val + 0.5).clamp(0.0, 255.0) as u8;
-    }
+    let (x0, y0, fx, fy) = bilinear_cell(x, y);
+    let w = corner_weights(fx, fy);
+    level.with_cell(x0, y0, |data, idx| {
+        for (ch, slot) in dst.iter_mut().take(c).enumerate() {
+            let val = w[0] * data[idx[0] + ch] as f32
+                + w[1] * data[idx[1] + ch] as f32
+                + w[2] * data[idx[2] + ch] as f32
+                + w[3] * data[idx[3] + ch] as f32;
+            *slot = (val + 0.5).clamp(0.0, 255.0) as u8;
+        }
+    });
 }
 
 /// Bilinearly sample **every channel** of `img` at `(x, y)`, writing the raw
@@ -219,32 +192,33 @@ pub(crate) fn sample_bilinear_u8_all(img: &ImageU8, x: f32, y: f32, dst: &mut [u
 ///
 /// `value`, `grad_x`, `grad_y` must each have length at least `img.channels`.
 #[inline]
-fn sample_bilinear_with_grad_u8_all(
-    img: &ImageU8,
+fn sample_bilinear_with_grad_u8_all<T: LevelTexels>(
+    level: &T,
     x: f32,
     y: f32,
     value: &mut [f32],
     grad_x: &mut [f32],
     grad_y: &mut [f32],
 ) {
-    let c = img.channels as usize;
+    let c = level.channels();
     debug_assert!(
         value.len() >= c && grad_x.len() >= c && grad_y.len() >= c,
         "sample_bilinear_with_grad_u8_all: dst slices too short for {c} channels"
     );
-    let (idx, fx, fy) = bilinear_geometry(img, x, y);
+    let (x0, y0, fx, fy) = bilinear_cell(x, y);
     let w = corner_weights(fx, fy);
-    let data = &img.data;
-    for ch in 0..c {
-        let v00 = data[idx[0] + ch] as f32;
-        let v10 = data[idx[1] + ch] as f32;
-        let v01 = data[idx[2] + ch] as f32;
-        let v11 = data[idx[3] + ch] as f32;
-        // Same associativity as `sample_bilinear_with_grad_u8`.
-        value[ch] = w[0] * v00 + w[1] * v10 + w[2] * v01 + w[3] * v11;
-        grad_x[ch] = (1.0 - fy) * (v10 - v00) + fy * (v11 - v01);
-        grad_y[ch] = (1.0 - fx) * (v01 - v00) + fx * (v11 - v10);
-    }
+    level.with_cell(x0, y0, |data, idx| {
+        for ch in 0..c {
+            let v00 = data[idx[0] + ch] as f32;
+            let v10 = data[idx[1] + ch] as f32;
+            let v01 = data[idx[2] + ch] as f32;
+            let v11 = data[idx[3] + ch] as f32;
+            // Same associativity as `sample_bilinear_with_grad_u8`.
+            value[ch] = w[0] * v00 + w[1] * v10 + w[2] * v01 + w[3] * v11;
+            grad_x[ch] = (1.0 - fy) * (v10 - v00) + fy * (v11 - v01);
+            grad_y[ch] = (1.0 - fx) * (v01 - v00) + fx * (v11 - v10);
+        }
+    });
 }
 
 /// Apply a warp map to an image using bilinear interpolation.
@@ -259,35 +233,44 @@ fn sample_bilinear_with_grad_u8_all(
 /// number of channels as the input image. Rows are processed in parallel
 /// with rayon.
 pub fn remap_bilinear(src: &ImageU8, map: &WarpMap) -> ImageU8 {
-    let out_w = map.width();
-    let out_h = map.height();
-    let c = src.channels;
+    remap_bilinear_held(&HeldLevel::whole(src), map)
+}
 
-    let data = remap_rows(out_w, out_h, c, |row, row_data| {
-        let mut sampled = 0u64;
-        for col in 0..out_w {
-            let (sx, sy) = map.get(col, row);
-            if sx.is_nan() || sy.is_nan() {
-                // Leave as zero (black).
-                continue;
-            }
-            sampled += 1;
-            let base = col as usize * c as usize;
-            sample_bilinear_u8_all(src, sx, sy, &mut row_data[base..base + c as usize]);
-        }
-        prof::add(&prof::PX_SAMPLED, sampled);
-        prof::add(&prof::TAPS, sampled * c as u64);
+/// [`remap_bilinear`] of a held level: level 0 of a pyramid, whole or a
+/// region of it, as [`render_tile`](crate::camera::sampler::render_tile)
+/// reads it.
+pub(crate) fn remap_bilinear_held(src: &HeldLevel<'_>, map: &WarpMap) -> ImageU8 {
+    let c = src.image().channels();
+    let data = remap_rows(map.width(), map.height(), c, |row, row_data| {
+        bilinear_row(src, map, row, row_data);
     });
+    count_call(map);
+    ImageU8::new(map.width(), map.height(), c, data)
+}
 
+/// The `SFMTOOL_PROFILE` counters of one remap call.
+pub(crate) fn count_call(map: &WarpMap) {
     prof::add(&prof::CALLS, 1);
-    prof::add(&prof::PX_TOTAL, out_w as u64 * out_h as u64);
+    prof::add(&prof::PX_TOTAL, map.width() as u64 * map.height() as u64);
+}
 
-    ImageU8 {
-        width: out_w,
-        height: out_h,
-        channels: c,
-        data,
+/// One output row of [`remap_bilinear`] from any level, into `row_data`
+/// (zeroed beforehand).
+pub(crate) fn bilinear_row<T: LevelTexels>(src: &T, map: &WarpMap, row: u32, row_data: &mut [u8]) {
+    let c = src.channels();
+    let mut sampled = 0u64;
+    for col in 0..map.width() {
+        let (sx, sy) = map.get(col, row);
+        if sx.is_nan() || sy.is_nan() {
+            // Leave as zero (black).
+            continue;
+        }
+        sampled += 1;
+        let base = col as usize * c;
+        bilinear_all(src, sx, sy, &mut row_data[base..base + c]);
     }
+    prof::add(&prof::PX_SAMPLED, sampled);
+    prof::add(&prof::TAPS, sampled * c as u64);
 }
 
 /// Pick the pyramid level for a single bilinear tap from the warp's local
@@ -350,44 +333,45 @@ pub fn remap_bilinear_mip(pyramid: &ImageU8Pyramid, map: &WarpMap) -> ImageU8 {
         "remap_bilinear_mip requires WarpMap SVD data; call compute_svd() first"
     );
 
-    let out_w = map.width();
-    let out_h = map.height();
     let c = pyramid.level(0).channels();
-    let num_levels = pyramid.num_levels();
-
-    let data = remap_rows(out_w, out_h, c, |row, row_data| {
-        let mut sampled = 0u64;
-        for col in 0..out_w {
-            let (sx, sy) = map.get(col, row);
-            if sx.is_nan() || sy.is_nan() {
-                // Leave as zero (black).
-                continue;
-            }
-            sampled += 1;
-            let (sigma_major, _, _, _) = map.get_svd(col, row);
-            let level = mip_level_for_sigma(sigma_major, num_levels);
-            let scale = (1u32 << level) as f32;
-            let base = col as usize * c as usize;
-            sample_bilinear_u8_all(
-                pyramid.level(level),
-                sx / scale,
-                sy / scale,
-                &mut row_data[base..base + c as usize],
-            );
-        }
-        prof::add(&prof::PX_SAMPLED, sampled);
-        prof::add(&prof::TAPS, sampled * c as u64);
+    let data = remap_rows(map.width(), map.height(), c, |row, row_data| {
+        bilinear_mip_row(pyramid, map, row, row_data);
     });
+    count_call(map);
+    ImageU8::new(map.width(), map.height(), c, data)
+}
 
-    prof::add(&prof::CALLS, 1);
-    prof::add(&prof::PX_TOTAL, out_w as u64 * out_h as u64);
-
-    ImageU8 {
-        width: out_w,
-        height: out_h,
-        channels: c,
-        data,
+/// One output row of [`remap_bilinear_mip`] from any pyramid, into
+/// `row_data` (zeroed beforehand).
+pub(crate) fn bilinear_mip_row<P: PyramidTexels>(
+    pyramid: &P,
+    map: &WarpMap,
+    row: u32,
+    row_data: &mut [u8],
+) {
+    let c = pyramid.channels();
+    let num_levels = pyramid.num_levels();
+    let mut sampled = 0u64;
+    for col in 0..map.width() {
+        let (sx, sy) = map.get(col, row);
+        if sx.is_nan() || sy.is_nan() {
+            // Leave as zero (black).
+            continue;
+        }
+        sampled += 1;
+        let (sigma_major, _, _, _) = map.get_svd(col, row);
+        let level = mip_level_for_sigma(sigma_major, num_levels);
+        let scale = (1u32 << level) as f32;
+        let base = col as usize * c;
+        bilinear_all(
+            &pyramid.texels(level),
+            sx / scale,
+            sy / scale,
+            &mut row_data[base..base + c],
+        );
     }
+    prof::add(&prof::PX_SAMPLED, sampled);
+    prof::add(&prof::TAPS, sampled * c as u64);
 }
 
 /// Apply a warp map with anisotropic filtering.
@@ -463,11 +447,7 @@ pub(crate) fn remap_aniso_dispatch(
                 aniso_pixel(pyramid, map, col, row, max_anisotropy, row_data, &mut tally);
             }
         }
-        prof::add(&prof::PX_SAMPLED, tally.sampled);
-        prof::add(&prof::TAPS, tally.taps);
-        prof::add(&prof::ANISO_FAST, tally.fast);
-        prof::add(&prof::ANISO_MULTI, tally.multi);
-        prof::add(&prof::ANISO_SUM_N, tally.sum_n);
+        tally.count();
         simd_groups.fetch_add(tally.simd_groups, std::sync::atomic::Ordering::Relaxed);
     });
 
@@ -494,6 +474,17 @@ pub(crate) struct AnisoTally {
     pub(crate) taps: u64,
     /// Eight-pixel groups the AVX2 kernel rendered.
     pub(crate) simd_groups: u64,
+}
+
+impl AnisoTally {
+    /// Add the row's counts to the `SFMTOOL_PROFILE` counters.
+    pub(crate) fn count(&self) {
+        prof::add(&prof::PX_SAMPLED, self.sampled);
+        prof::add(&prof::TAPS, self.taps);
+        prof::add(&prof::ANISO_FAST, self.fast);
+        prof::add(&prof::ANISO_MULTI, self.multi);
+        prof::add(&prof::ANISO_SUM_N, self.sum_n);
+    }
 }
 
 /// The footprint walk of one output pixel: which pyramid levels it reads,
@@ -544,8 +535,8 @@ pub(crate) fn aniso_footprint(
 /// sample is computed once and shared by its channels, with the same products
 /// and sums as [`sample_bilinear_u8`] per channel.
 #[inline]
-pub(crate) fn aniso_pixel(
-    pyramid: &ImageU8Pyramid,
+pub(crate) fn aniso_pixel<P: PyramidTexels>(
+    pyramid: &P,
     map: &WarpMap,
     col: u32,
     row: u32,
@@ -558,7 +549,7 @@ pub(crate) fn aniso_pixel(
         return;
     }
     tally.sampled += 1;
-    let c = pyramid.level(0).channels() as usize;
+    let c = pyramid.channels();
     let base = col as usize * c;
     aniso_sample(
         pyramid,
@@ -587,8 +578,8 @@ pub(crate) fn aniso_pixel(
 /// given the same position and SVD the two write the same bytes. Takes any
 /// channel count; the channels are summed four at a time.
 #[inline]
-pub(crate) fn aniso_sample(
-    pyramid: &ImageU8Pyramid,
+pub(crate) fn aniso_sample<P: PyramidTexels>(
+    pyramid: &P,
     sx: f32,
     sy: f32,
     svd: (f32, f32, f32, f32),
@@ -596,14 +587,14 @@ pub(crate) fn aniso_sample(
     out: &mut [u8],
     tally: &mut AnisoTally,
 ) {
-    let c = pyramid.level(0).channels() as usize;
-    let (sigma_major, sigma_minor, major_dx, major_dy) = svd;
+    let c = pyramid.channels();
+    let (sigma_major, sigma_minor, _, _) = svd;
 
     // Non-compressive case: single bilinear sample from level 0.
     if sigma_major <= 1.0 {
         tally.fast += 1;
         tally.taps += c as u64;
-        sample_bilinear_u8_all(pyramid.level(0), sx, sy, out);
+        bilinear_all(&pyramid.texels(0), sx, sy, out);
         return;
     }
 
@@ -625,8 +616,8 @@ pub(crate) fn aniso_sample(
     tally.sum_n += n as u64;
     tally.taps += c as u64 * n as u64 * if need_hi { 2 } else { 1 };
 
-    let lo = pyramid.level(fp.level_lo);
-    let hi = pyramid.level(fp.level_hi);
+    let lo = pyramid.texels(fp.level_lo);
+    let hi = pyramid.texels(fp.level_hi);
     // Four channels per walk along the major axis: one walk for the 1 to 4
     // channels of a photograph, and as many as it takes for more. Each
     // channel's sum is the same whichever walk carries it.
@@ -634,11 +625,9 @@ pub(crate) fn aniso_sample(
         let mut sum_lo = [0.0f32; 4];
         let mut sum_hi = [0.0f32; 4];
         for i in 0..n {
-            let t = (i as f32 + 0.5) / n as f32 - 0.5;
-            let sample_x = sx + t * sigma_major * major_dx;
-            let sample_y = sy + t * sigma_major * major_dy;
+            let (sample_x, sample_y) = aniso_tap(sx, sy, svd, i, n);
             accumulate_bilinear(
-                lo,
+                &lo,
                 sample_x / scale_lo,
                 sample_y / scale_lo,
                 first,
@@ -646,7 +635,7 @@ pub(crate) fn aniso_sample(
             );
             if need_hi {
                 accumulate_bilinear(
-                    hi,
+                    &hi,
                     sample_x / scale_hi,
                     sample_y / scale_hi,
                     first,
@@ -668,23 +657,44 @@ pub(crate) fn aniso_sample(
 /// has) at `(x, y)` to `sums`: [`sample_bilinear_u8`]'s value per channel, its
 /// corner geometry computed once.
 #[inline]
-fn accumulate_bilinear(img: &ImageU8, x: f32, y: f32, first: usize, sums: &mut [f32; 4]) {
-    let (idx, fx, fy) = bilinear_geometry(img, x, y);
-    let data = &img.data;
-    let c = img.channels as usize;
+fn accumulate_bilinear<T: LevelTexels>(
+    level: &T,
+    x: f32,
+    y: f32,
+    first: usize,
+    sums: &mut [f32; 4],
+) {
+    let (x0, y0, fx, fy) = bilinear_cell(x, y);
+    let c = level.channels();
     let count = c.saturating_sub(first).min(4);
-    for (k, sum) in sums.iter_mut().take(count).enumerate() {
-        let ch = first + k;
-        let v00 = data[idx[0] + ch] as f32;
-        let v10 = data[idx[1] + ch] as f32;
-        let v01 = data[idx[2] + ch] as f32;
-        let v11 = data[idx[3] + ch] as f32;
-        // The grouping of `sample_bilinear_u8`.
-        *sum += (1.0 - fx) * (1.0 - fy) * v00
-            + fx * (1.0 - fy) * v10
-            + (1.0 - fx) * fy * v01
-            + fx * fy * v11;
-    }
+    level.with_cell(x0, y0, |data, idx| {
+        for (k, sum) in sums.iter_mut().take(count).enumerate() {
+            let ch = first + k;
+            let v00 = data[idx[0] + ch] as f32;
+            let v10 = data[idx[1] + ch] as f32;
+            let v01 = data[idx[2] + ch] as f32;
+            let v11 = data[idx[3] + ch] as f32;
+            // The grouping of `sample_bilinear_u8`.
+            *sum += (1.0 - fx) * (1.0 - fy) * v00
+                + fx * (1.0 - fy) * v10
+                + (1.0 - fx) * fy * v01
+                + fx * fy * v11;
+        }
+    });
+}
+
+/// The level-0 position of sample `i` of the `n` an anisotropic footprint
+/// takes along its major axis: `(sx, sy) + t·σ_major·u` with
+/// `t = (i + 0.5) / n − 0.5`. The value, gradient and region walks all take
+/// their positions from it, and the AVX2 kernel does the same operations.
+#[inline]
+pub(crate) fn aniso_tap(sx: f32, sy: f32, svd: (f32, f32, f32, f32), i: u32, n: u32) -> (f32, f32) {
+    let (sigma_major, _, major_dx, major_dy) = svd;
+    let t = (i as f32 + 0.5) / n as f32 - 0.5;
+    (
+        sx + t * sigma_major * major_dx,
+        sy + t * sigma_major * major_dy,
+    )
 }
 
 /// Per-pixel value+gradient anisotropic sample, mirroring the LOD selection /
@@ -701,8 +711,8 @@ fn accumulate_bilinear(img: &ImageU8, x: f32, y: f32, first: usize, sums: &mut [
 /// responsible for the NaN-guard on `(sx, sy)`.
 #[inline]
 #[allow(clippy::too_many_arguments)]
-fn sample_aniso_with_grad(
-    pyramid: &ImageU8Pyramid,
+fn sample_aniso_with_grad<P: PyramidTexels>(
+    pyramid: &P,
     sx: f32,
     sy: f32,
     sigma_major: f32,
@@ -716,7 +726,7 @@ fn sample_aniso_with_grad(
 
     // Non-compressive case: single bilinear sample from level 0 (no scaling).
     if sigma_major <= 1.0 {
-        return sample_bilinear_with_grad_u8(pyramid.level(0), sx, sy, channel);
+        return bilinear_with_grad(&pyramid.texels(0), sx, sy, channel);
     }
 
     // The same footprint the value-only path walks.
@@ -738,17 +748,14 @@ fn sample_aniso_with_grad(
     let mut sum_gx_hi = 0.0f32;
     let mut sum_gy_hi = 0.0f32;
 
+    let svd = (sigma_major, sigma_minor, major_dx, major_dy);
+    let lo = pyramid.texels(level_lo);
+    let hi = pyramid.texels(level_hi);
     for i in 0..n {
-        let t = (i as f32 + 0.5) / n as f32 - 0.5;
-        let sample_x = sx + t * sigma_major * major_dx;
-        let sample_y = sy + t * sigma_major * major_dy;
+        let (sample_x, sample_y) = aniso_tap(sx, sy, svd, i, n);
 
-        let (v_lo, gx_lo, gy_lo) = sample_bilinear_with_grad_u8(
-            pyramid.level(level_lo),
-            sample_x / scale_lo,
-            sample_y / scale_lo,
-            channel,
-        );
+        let (v_lo, gx_lo, gy_lo) =
+            bilinear_with_grad(&lo, sample_x / scale_lo, sample_y / scale_lo, channel);
         sum_lo += v_lo;
         // Per-level bilinear gradient is in that level's pixel coords; the
         // change of variables `x_level = x_0 / scale` gives
@@ -757,12 +764,8 @@ fn sample_aniso_with_grad(
         sum_gy_lo += gy_lo / scale_lo;
 
         if need_hi {
-            let (v_hi, gx_hi, gy_hi) = sample_bilinear_with_grad_u8(
-                pyramid.level(level_hi),
-                sample_x / scale_hi,
-                sample_y / scale_hi,
-                channel,
-            );
+            let (v_hi, gx_hi, gy_hi) =
+                bilinear_with_grad(&hi, sample_x / scale_hi, sample_y / scale_hi, channel);
             sum_hi += v_hi;
             sum_gx_hi += gx_hi / scale_hi;
             sum_gy_hi += gy_hi / scale_hi;
@@ -870,35 +873,17 @@ pub fn remap_aniso_with_grad_into(
     out.resize(out_w, out_h, c);
 
     let fill_row = |row: u32, val_row: &mut [f32], gx_row: &mut [f32], gy_row: &mut [f32]| {
-        for col in 0..out_w {
-            let (sx, sy) = map.get(col, row);
-            let base = col as usize * c as usize;
-            if sx.is_nan() || sy.is_nan() {
-                for ch in 0..c as usize {
-                    val_row[base + ch] = 0.0;
-                    gx_row[base + ch] = 0.0;
-                    gy_row[base + ch] = 0.0;
-                }
-                continue;
-            }
-            let (sigma_major, sigma_minor, major_dx, major_dy) = map.get_svd(col, row);
-            for ch in 0..c {
-                let (v, gx, gy) = sample_aniso_with_grad(
-                    pyramid,
-                    sx,
-                    sy,
-                    sigma_major,
-                    sigma_minor,
-                    major_dx,
-                    major_dy,
-                    max_anisotropy,
-                    ch,
-                );
-                val_row[base + ch as usize] = v;
-                gx_row[base + ch as usize] = gx;
-                gy_row[base + ch as usize] = gy;
-            }
-        }
+        aniso_grad_row(
+            pyramid,
+            map,
+            max_anisotropy,
+            row,
+            GradRow {
+                value: val_row,
+                grad_x: gx_row,
+                grad_y: gy_row,
+            },
+        );
     };
 
     remap_rows_f32x3_into(
@@ -910,6 +895,63 @@ pub fn remap_aniso_with_grad_into(
         &mut out.grad_y,
         fill_row,
     );
+}
+
+/// One output row of a value and gradient render: the row's slices of the
+/// value and of the two gradients.
+pub(crate) struct GradRow<'a> {
+    pub(crate) value: &'a mut [f32],
+    pub(crate) grad_x: &'a mut [f32],
+    pub(crate) grad_y: &'a mut [f32],
+}
+
+impl GradRow<'_> {
+    /// Zero the `c` channels of the pixel at `base`, as a NaN map entry is.
+    #[inline]
+    fn zero(&mut self, base: usize, c: usize) {
+        for ch in 0..c {
+            self.value[base + ch] = 0.0;
+            self.grad_x[base + ch] = 0.0;
+            self.grad_y[base + ch] = 0.0;
+        }
+    }
+}
+
+/// One output row of [`remap_aniso_with_grad_into`] from any pyramid.
+pub(crate) fn aniso_grad_row<P: PyramidTexels>(
+    pyramid: &P,
+    map: &WarpMap,
+    max_anisotropy: u32,
+    row: u32,
+    out: GradRow<'_>,
+) {
+    let mut out = out;
+    let c = pyramid.channels();
+    for col in 0..map.width() {
+        let (sx, sy) = map.get(col, row);
+        let base = col as usize * c;
+        if sx.is_nan() || sy.is_nan() {
+            out.zero(base, c);
+            continue;
+        }
+        let (sigma_major, sigma_minor, major_dx, major_dy) = map.get_svd(col, row);
+        for ch in 0..c {
+            let (v, gx, gy) = sample_aniso_with_grad(
+                pyramid,
+                sx,
+                sy,
+                sigma_major,
+                sigma_minor,
+                major_dx,
+                major_dy,
+                max_anisotropy,
+                ch as u32,
+            );
+            out.value[base + ch] = v;
+            out.grad_x[base + ch] = gx;
+            out.grad_y[base + ch] = gy;
+        }
+    }
 }
 
 /// Float bilinear remap that additionally returns the analytic image gradient
@@ -925,37 +967,32 @@ pub fn remap_bilinear_with_grad(src: &ImageU8, map: &WarpMap) -> ImageF32WithGra
 
 /// [`remap_bilinear_with_grad`] writing into an `out` scratch, resized in place.
 pub fn remap_bilinear_with_grad_into(src: &ImageU8, map: &WarpMap, out: &mut ImageF32WithGrad) {
+    remap_bilinear_with_grad_held_into(&HeldLevel::whole(src), map, out);
+}
+
+/// [`remap_bilinear_with_grad_into`] of a held level: level 0 of a pyramid,
+/// whole or a region of it.
+pub(crate) fn remap_bilinear_with_grad_held_into(
+    src: &HeldLevel<'_>,
+    map: &WarpMap,
+    out: &mut ImageF32WithGrad,
+) {
     let out_w = map.width();
     let out_h = map.height();
-    let c = src.channels;
+    let c = src.image().channels();
     out.resize(out_w, out_h, c);
 
     let fill_row = |row: u32, val_row: &mut [f32], gx_row: &mut [f32], gy_row: &mut [f32]| {
-        let mut sampled = 0u64;
-        for col in 0..out_w {
-            let (sx, sy) = map.get(col, row);
-            let base = col as usize * c as usize;
-            if sx.is_nan() || sy.is_nan() {
-                for ch in 0..c as usize {
-                    val_row[base + ch] = 0.0;
-                    gx_row[base + ch] = 0.0;
-                    gy_row[base + ch] = 0.0;
-                }
-                continue;
-            }
-            sampled += 1;
-            let end = base + c as usize;
-            sample_bilinear_with_grad_u8_all(
-                src,
-                sx,
-                sy,
-                &mut val_row[base..end],
-                &mut gx_row[base..end],
-                &mut gy_row[base..end],
-            );
-        }
-        prof::add(&prof::PX_SAMPLED, sampled);
-        prof::add(&prof::TAPS, sampled * c as u64);
+        bilinear_grad_row(
+            src,
+            map,
+            row,
+            GradRow {
+                value: val_row,
+                grad_x: gx_row,
+                grad_y: gy_row,
+            },
+        );
     };
 
     remap_rows_f32x3_into(
@@ -970,6 +1007,38 @@ pub fn remap_bilinear_with_grad_into(src: &ImageU8, map: &WarpMap, out: &mut Ima
 
     prof::add(&prof::CALLS, 1);
     prof::add(&prof::PX_TOTAL, out_w as u64 * out_h as u64);
+}
+
+/// One output row of [`remap_bilinear_with_grad_into`] from any level.
+pub(crate) fn bilinear_grad_row<T: LevelTexels>(
+    src: &T,
+    map: &WarpMap,
+    row: u32,
+    out: GradRow<'_>,
+) {
+    let mut out = out;
+    let c = src.channels();
+    let mut sampled = 0u64;
+    for col in 0..map.width() {
+        let (sx, sy) = map.get(col, row);
+        let base = col as usize * c;
+        if sx.is_nan() || sy.is_nan() {
+            out.zero(base, c);
+            continue;
+        }
+        sampled += 1;
+        let end = base + c;
+        sample_bilinear_with_grad_u8_all(
+            src,
+            sx,
+            sy,
+            &mut out.value[base..end],
+            &mut out.grad_x[base..end],
+            &mut out.grad_y[base..end],
+        );
+    }
+    prof::add(&prof::PX_SAMPLED, sampled);
+    prof::add(&prof::TAPS, sampled * c as u64);
 }
 
 /// Like [`remap_bilinear_mip`], but additionally returns the analytic image
@@ -1008,48 +1077,19 @@ pub fn remap_bilinear_mip_with_grad_into(
     let out_w = map.width();
     let out_h = map.height();
     let c = pyramid.level(0).channels();
-    let num_levels = pyramid.num_levels();
     out.resize(out_w, out_h, c);
 
     let fill_row = |row: u32, val_row: &mut [f32], gx_row: &mut [f32], gy_row: &mut [f32]| {
-        let mut sampled = 0u64;
-        for col in 0..out_w {
-            let (sx, sy) = map.get(col, row);
-            let base = col as usize * c as usize;
-            if sx.is_nan() || sy.is_nan() {
-                for ch in 0..c as usize {
-                    val_row[base + ch] = 0.0;
-                    gx_row[base + ch] = 0.0;
-                    gy_row[base + ch] = 0.0;
-                }
-                continue;
-            }
-            sampled += 1;
-            let (sigma_major, _, _, _) = map.get_svd(col, row);
-            let level = mip_level_for_sigma(sigma_major, num_levels);
-            let scale = (1u32 << level) as f32;
-            let end = base + c as usize;
-            sample_bilinear_with_grad_u8_all(
-                pyramid.level(level),
-                sx / scale,
-                sy / scale,
-                &mut val_row[base..end],
-                &mut gx_row[base..end],
-                &mut gy_row[base..end],
-            );
-            // Per-level bilinear gradient is in that level's pixel coords;
-            // rescale to full-res source-pixel coords (`/ scale`). Level 0 is
-            // untouched (division by 1 is exact), keeping the level-0 output
-            // bit-identical to `remap_bilinear_with_grad_into`.
-            if level > 0 {
-                for k in base..end {
-                    gx_row[k] /= scale;
-                    gy_row[k] /= scale;
-                }
-            }
-        }
-        prof::add(&prof::PX_SAMPLED, sampled);
-        prof::add(&prof::TAPS, sampled * c as u64);
+        bilinear_mip_grad_row(
+            pyramid,
+            map,
+            row,
+            GradRow {
+                value: val_row,
+                grad_x: gx_row,
+                grad_y: gy_row,
+            },
+        );
     };
 
     remap_rows_f32x3_into(
@@ -1064,6 +1104,52 @@ pub fn remap_bilinear_mip_with_grad_into(
 
     prof::add(&prof::CALLS, 1);
     prof::add(&prof::PX_TOTAL, out_w as u64 * out_h as u64);
+}
+
+/// One output row of [`remap_bilinear_mip_with_grad_into`] from any pyramid.
+pub(crate) fn bilinear_mip_grad_row<P: PyramidTexels>(
+    pyramid: &P,
+    map: &WarpMap,
+    row: u32,
+    out: GradRow<'_>,
+) {
+    let mut out = out;
+    let c = pyramid.channels();
+    let num_levels = pyramid.num_levels();
+    let mut sampled = 0u64;
+    for col in 0..map.width() {
+        let (sx, sy) = map.get(col, row);
+        let base = col as usize * c;
+        if sx.is_nan() || sy.is_nan() {
+            out.zero(base, c);
+            continue;
+        }
+        sampled += 1;
+        let (sigma_major, _, _, _) = map.get_svd(col, row);
+        let level = mip_level_for_sigma(sigma_major, num_levels);
+        let scale = (1u32 << level) as f32;
+        let end = base + c;
+        sample_bilinear_with_grad_u8_all(
+            &pyramid.texels(level),
+            sx / scale,
+            sy / scale,
+            &mut out.value[base..end],
+            &mut out.grad_x[base..end],
+            &mut out.grad_y[base..end],
+        );
+        // Per-level bilinear gradient is in that level's pixel coords;
+        // rescale to full-res source-pixel coords (`/ scale`). Level 0 is
+        // untouched (division by 1 is exact), keeping the level-0 output
+        // bit-identical to `remap_bilinear_with_grad_into`.
+        if level > 0 {
+            for k in base..end {
+                out.grad_x[k] /= scale;
+                out.grad_y[k] /= scale;
+            }
+        }
+    }
+    prof::add(&prof::PX_SAMPLED, sampled);
+    prof::add(&prof::TAPS, sampled * c as u64);
 }
 
 #[cfg(test)]
