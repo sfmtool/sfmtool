@@ -39,7 +39,8 @@ and bit/byte shuffling could be applied [like in blosc](https://www.blosc.org/po
 ## Format versions
 
 How the version changes, and which older versions a reader keeps reading, is
-in [format-versions.md](format-versions.md).
+in [format-versions.md](format-versions.md). sfmtool 0.5 stops reading version 1, as
+[../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md) specifies.
 
 `metadata.version` records the format version. There are two versions, `1` and
 `2`, and a conforming writer writes `2`. A reader reads both. It rejects a file

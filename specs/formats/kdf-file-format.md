@@ -377,11 +377,14 @@ would be collapsed before entry-set validation could see it.
 
 How the version changes, and which older versions a reader keeps reading, is
 in [format-versions.md](format-versions.md).
+[../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md)
+moves this section into the shape that spec gives.
 
 `metadata.json`'s `version` is 3. A reader accepts the current version and
-every version the previous release wrote. Every sfmtool release has written
-version 3, so that is the only version a reader accepts today; versions 1 and
-2 were written only by development builds before sfmtool 0.3. A file carrying
+every version the previous release wrote. Every sfmtool release that writes
+`.kdf` files, 0.3 and later, has written version 3, so that is the only
+version a reader accepts today; versions 1 and 2 were written only by
+development builds before sfmtool 0.3. A file carrying
 another version is refused with a message naming the version it holds and the
 version the reader reads, and saying to rebuild the index from the `.sift`
 files it was built over. When `.kdf` next changes version, its reader reads

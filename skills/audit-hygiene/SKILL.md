@@ -99,7 +99,8 @@ evidence, not a sample.
    progress variant (check 11), a kept caller-input panic (check 12), a
    Python wrapper that repeats a binding (check 13), a bare `pub` field in the
    viewer (check 16), a kept median or quantile (check 18), a kept precision
-   hit (check 19), a kept test that cannot fail (check 20), or a file of a
+   hit (check 19), a kept test that cannot fail (check 20), a kept branch on
+   a file's format version (check 22), or a file of a
    duplicate pair from checks 3 and 4 that shares 20 or more lines. A hit is
    *new* when no finding of the previous report lists it. A unit is pulled in
    when it holds a new kept hit, or holds any kept hit and its last deep read
@@ -766,8 +767,10 @@ worth more than a paragraph.
     version (`\.version\s*(<|<=|>|>=|==|!=)` and the format crates'
     `*_VERSION` constants), and read each hit: one that reads or converts an
     older file is a finding; `sfm ws upgrade` choosing which files to
-    rewrite is not. Feeds STANDARDS.md § "A file format changes version only
-    as format-versions.md says".
+    rewrite, or supplying what an older file lacks, as format-versions.md §
+    "What a version change consists of" says it does, is not. Feeds
+    STANDARDS.md § "A file format changes version only as format-versions.md
+    says".
 
 ## Output
 

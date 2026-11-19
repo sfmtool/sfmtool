@@ -61,8 +61,10 @@ library crate's public API never panics (it returns an error, which a binding
 raises as a Python exception); logic lives in Rust, with no Python wrapper that
 repeats what a binding does; medians and quantiles use `sfmtool_core::numeric`;
 every file format has the same I/O shape in `sfmtool.fileio`, validated in its
-format crate; an `sfm-explorer` item is private or `pub(crate)` unless the
-crate's public interface exports it, which the `unreachable_pub` lint checks
+format crate; a file format's version changes, and an old version stops
+being read, as `specs/formats/format-versions.md` says; an `sfm-explorer`
+item is private or `pub(crate)` unless the crate's public interface exports
+it, which the `unreachable_pub` lint checks
 for every item but struct fields; a convention has no documented exceptions; a
 test asserts something that can fail; a test takes only the time its
 assertions need, made faster by a cheaper input or shared work, never by

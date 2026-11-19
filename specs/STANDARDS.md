@@ -377,8 +377,9 @@ user cannot know which release still reads their files.
 
 Report a change to a format's entries, keys, legends, meanings or hash
 coverage with no version change; a writer that writes a version other than
-the current one; a branch on a file's version, or a conversion of an older
-file, outside the format crate; an accepted version with no test that reads
+the current one; a reader's conversion of an older file outside the format
+crate, or a branch on a file's version outside the format crate and `sfm ws
+upgrade`; an accepted version with no test that reads
 it; a version a reader still accepts after the release that was announced to
 drop it; a version in the read window that the reader refuses or `sfm ws
 upgrade` cannot convert; a `test-data` file below the current version; and a

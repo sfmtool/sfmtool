@@ -1581,7 +1581,8 @@ the pairs that pass verification, their matches and the
 ## Versioning and Migration
 
 How the version changes, and which older versions a reader keeps reading, is
-in [format-versions.md](format-versions.md).
+in [format-versions.md](format-versions.md). sfmtool 0.5 stops reading the versions below 10, as
+[../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md) specifies.
 
 The format has ten released versions (`1` through `10`). The format is versioned
 (`metadata.json` `version`) precisely so that changes like the ones below can upgrade

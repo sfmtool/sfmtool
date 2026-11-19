@@ -473,7 +473,8 @@ $ jq . cameras/metadata.json
 ## Versioning and migration
 
 How the version changes, and which older versions a reader keeps reading, is
-in [format-versions.md](format-versions.md).
+in [format-versions.md](format-versions.md). sfmtool 0.6 stops reading version 1, as
+[../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md) specifies.
 
 The format has two released versions (`1` and `2`). The format is versioned
 (`metadata.json` `version`) precisely so that convention changes like the one

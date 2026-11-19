@@ -31,7 +31,9 @@ The readers still read the `.sfmr`, `.matches` and `.sift` versions older than
 those sfmtool 0.4 writes. sfmtool 0.4.1's release notes announced that the
 next release stops reading them, and sfmtool 0.5 does, as
 [../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md)
-specifies.
+specifies. Of the format specs, the `.sift` one has its Format versions section
+near the top; that draft moves the `.sfmr`, `.matches` and `.kdf` ones there
+in 0.5, and the `.camrig` one in 0.6.
 
 ## When a format's version changes
 
@@ -177,7 +179,7 @@ recorded settings to `refine_options`. No entry changed its layout.
   them. A test relabels a written file as version 9 and checks that refusal.
 - **The spec** gained a "Version 9 → Version 10" subsection, with a table of
   what changed and a paragraph on how a version 9 file reads and why the
-  version changed, and the Version History line "Version 10: the member
+  version changed, and the Version History line "Version 10: The member
   statuses `rejected_unlocalizable_refined` and `rejected_unlocalizable_cells`
   … and the `refine_options` keys `regate_at_refined_shape` and
   `max_capped_cells`. Version 9 files read unchanged."

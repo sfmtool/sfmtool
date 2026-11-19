@@ -3451,7 +3451,8 @@ appropriate units (e.g., "xyz: (1234.0, -567.0, 2891.0) mm" instead of bare numb
 ## Versioning and Migration
 
 How the version changes, and which older versions a reader keeps reading, is
-in [format-versions.md](format-versions.md).
+in [format-versions.md](format-versions.md). sfmtool 0.5 stops reading the versions below 16, as
+[../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md) specifies.
 
 The format spans sixteen versions (`1` to `16`), all valid; each extends the
 previous, and how an older file maps to the current model is given below.

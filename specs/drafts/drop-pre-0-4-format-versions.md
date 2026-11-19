@@ -6,8 +6,9 @@ Amends [`../formats/format-versions.md`](../formats/format-versions.md), which
 says that sfmtool 0.5 stops reading these versions and points here, and the
 format specs it names: [`sfmr-file-format.md`](../formats/sfmr-file-format.md),
 [`matches-file-format.md`](../formats/matches-file-format.md),
-[`sift-file-format.md`](../formats/sift-file-format.md) and
-[`camrig-file-format.md`](../formats/camrig-file-format.md), with
+[`sift-file-format.md`](../formats/sift-file-format.md),
+[`camrig-file-format.md`](../formats/camrig-file-format.md) and
+[`kdf-file-format.md`](../formats/kdf-file-format.md), with
 [`../cli/workspace/ws-upgrade-command.md`](../cli/workspace/ws-upgrade-command.md).
 
 sfmtool 0.4.1's release notes say: "0.4.1 still reads the older `.sfmr`,
