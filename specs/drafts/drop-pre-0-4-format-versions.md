@@ -110,6 +110,10 @@ Goes:
   `sfmtool-core`'s
   [`reconstruction/data/conversion.rs`](../../crates/sfmtool-core/src/reconstruction/data/conversion.rs),
   which today runs outside the format crate;
+- `sfm inspect`'s branch on a file below version 15, which prints `none` for
+  its image readings (`_sfmr_readings_text` in
+  [`analyze/summary.py`](../../src/sfmtool/analyze/summary.py)), since every
+  file read then holds them;
 - the tests that read each older version.
 
 The save's gathering of image readings stays: it also fills the readings of a
