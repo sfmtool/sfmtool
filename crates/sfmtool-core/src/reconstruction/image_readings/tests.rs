@@ -411,42 +411,67 @@ fn the_decodes_at_once_follow_the_largest_photograph_and_the_memory() {
 /// The most calls of `map_at_most(items, k, ..)` in flight at once, run in a
 /// pool of `threads`, with each call starting rayon work of its own; and
 /// whether the results came back in order.
-fn most_in_flight(threads: usize, items: usize, k: usize) -> (usize, bool) {
-    use std::sync::atomic::AtomicUsize;
+///
+/// Until `gate` calls have been in flight together, each call waits for that
+/// to happen, so with a bound of at least `gate` and enough threads, `gate`
+/// calls overlap whatever the timing. A bound below `gate` never lets them,
+/// and the call panics when its wait times out rather than hanging. Once they
+/// overlap, the calls in flight wait up to 50 ms more for one past `gate`,
+/// which a bound above `gate` lets the pool's idle threads start; the wait
+/// ends at once when one does, and only the first wait to end takes the
+/// 50 ms, after which no call waits.
+fn most_in_flight(threads: usize, items: usize, k: usize, gate: usize) -> (usize, bool) {
+    use std::sync::{Condvar, Mutex};
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
         .build()
         .unwrap();
-    let (now, most) = (AtomicUsize::new(0), AtomicUsize::new(0));
+    // The calls in flight now, the most there have been at once, and whether
+    // the wait for one past `gate` is over.
+    let state = Mutex::new((0usize, 0usize, false));
+    let changed = Condvar::new();
     let items: Vec<usize> = (0..items).collect();
     let results = pool.install(|| {
         map_at_most(&items, k, |&item| {
-            let n = now.fetch_add(1, Ordering::SeqCst) + 1;
-            most.fetch_max(n, Ordering::SeqCst);
+            {
+                let mut s = state.lock().unwrap();
+                s.0 += 1;
+                s.1 = s.1.max(s.0);
+                changed.notify_all();
+                let (s, wait) = changed
+                    .wait_timeout_while(s, std::time::Duration::from_secs(10), |s| s.1 < gate)
+                    .unwrap();
+                assert!(
+                    !wait.timed_out(),
+                    "{gate} calls were never in flight at once"
+                );
+                let (mut s, _) = changed
+                    .wait_timeout_while(s, std::time::Duration::from_millis(50), |s| {
+                        s.1 <= gate && !s.2
+                    })
+                    .unwrap();
+                s.2 = true;
+                changed.notify_all();
+            }
             // Rayon work inside the call, as the readings do, during which a
             // waiting thread may steal another of the jobs.
-            let sum: usize = (0..16usize)
-                .into_par_iter()
-                .map(|i| {
-                    std::thread::sleep(std::time::Duration::from_micros(200));
-                    i
-                })
-                .sum();
-            now.fetch_sub(1, Ordering::SeqCst);
+            let sum: usize = (0..16usize).into_par_iter().sum();
+            state.lock().unwrap().0 -= 1;
             item + sum
         })
     });
     let in_order = results == items.iter().map(|i| i + 120).collect::<Vec<_>>();
-    (most.into_inner(), in_order)
+    (state.into_inner().unwrap().1, in_order)
 }
 
 #[test]
 fn at_most_k_calls_run_at_once_and_the_results_keep_their_order() {
-    // Eight threads for three jobs: three calls overlap, and never four.
-    assert_eq!(most_in_flight(8, 12, 3), (3, true));
-    // One thread, called from inside its pool: no deadlock, and the jobs a
-    // waiting thread steals still number at most three.
-    let (most, in_order) = most_in_flight(1, 12, 3);
+    // Eight threads for three jobs: the first calls wait until three are in
+    // flight, so three overlap, and never four.
+    assert_eq!(most_in_flight(8, 12, 3, 3), (3, true));
+    // One thread, called from inside its pool, with no waiting: no deadlock,
+    // and the jobs a waiting thread steals still number at most three.
+    let (most, in_order) = most_in_flight(1, 12, 3, 0);
     assert!((1..=3).contains(&most), "{most} calls at once");
     assert!(in_order);
 }
