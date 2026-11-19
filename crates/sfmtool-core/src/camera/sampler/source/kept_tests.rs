@@ -305,3 +305,40 @@ fn kept_regions_are_counted_in_the_pool_and_released_when_dropped() {
     assert_eq!(pool.held_bytes(), 0);
     assert_eq!(pool.stats().peak_bytes, one);
 }
+
+#[test]
+fn a_read_with_one_level_outside_the_kept_regions_reassembles() {
+    let (pyramid, source) = sources();
+    let pool = RegionPool::with_capacity(u64::MAX);
+    let mut view = ViewRegions::new(&source, &pool);
+    let mut regions = LevelRegions::new(source.layout());
+    regions.set_region(0, rect(60, 40, 100, 80));
+    regions.set_region(1, rect(30, 20, 50, 40));
+    let ((), path) = read_regions(&mut view, &regions, |_| ()).unwrap();
+    assert!(matches!(path, ReadPath::Copied { .. }), "{path:?}");
+
+    // Level 0 inside the kept region, level 1 past it: the read reassembles,
+    // and its pyramid holds level 1's new region with the whole level's
+    // pixels.
+    let mut moved = LevelRegions::new(source.layout());
+    moved.set_region(0, rect(62, 42, 98, 78));
+    moved.set_region(1, rect(60, 50, 80, 70));
+    let (level_1, path) = read_regions(&mut view, &moved, |held| match held {
+        Held::Copied(pyramid) => {
+            let r = moved.region(1).unwrap();
+            let [ox, oy] = pyramid.level_origin(1);
+            let level = pyramid.level(1);
+            let held = rect(ox, oy, ox + level.width(), oy + level.height());
+            assert!(held.contains(&r), "{held:?} holds {r:?}");
+            pixels_of(level, rect(r.x0 - ox, r.y0 - oy, r.x1 - ox, r.y1 - oy))
+        }
+        Held::Tiles(_) => panic!("the pool holds every read"),
+    })
+    .unwrap();
+    assert!(matches!(path, ReadPath::Copied { .. }), "{path:?}");
+    assert_eq!(
+        level_1,
+        pixels_of(pyramid.level(1), moved.region(1).unwrap())
+    );
+    assert!(holds(view.kept_regions().unwrap(), &moved));
+}

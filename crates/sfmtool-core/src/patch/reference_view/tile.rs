@@ -266,15 +266,17 @@ pub fn source_clipped_share(
         clipped_pixel(&tile.pixels.data()[at..at + ch])
     };
     let rows = outline_rows(outline, h);
-    // The columns of the centres inside the outline lie within its bounding
-    // box; one more on each side covers rounding in the crossings.
+    // The columns of the centres inside the outline: a centre counted lies at
+    // or past one crossing and before another, and a crossing lies within the
+    // outline's bounding box up to rounding far under half a pixel, so the
+    // centre's column lies within `floor(x0)..=ceil(x1)`, as its row lies
+    // within `outline_rows`.
     let (mut x0, mut x1) = (f64::MAX, f64::MIN);
     for p in outline {
         x0 = x0.min(p[0]);
         x1 = x1.max(p[0]);
     }
-    let cols = ((x0.floor() as i64).saturating_sub(1)).max(0)
-        ..=((x1.ceil() as i64).saturating_add(1)).min(w - 1);
+    let cols = (x0.floor() as i64).max(0)..=(x1.ceil() as i64).min(w - 1);
     let mut count = ClippedCount::default();
     if !rows.is_empty() && !cols.is_empty() {
         for row in rows.start() / ts..=rows.end() / ts {

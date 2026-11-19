@@ -225,8 +225,9 @@ crossings depend only on the outline and the row, not on which columns are
 counted, so counting the columns of each tile's core separately and summing
 counts each centre of the row exactly once, as the whole row does. The counts
 are integers, so the share is the same number. `source_clipped_share` walks
-the tiles under the outline's bounding box, widened by one column on each
-side for rounding in the crossings, row of tiles by row of tiles; an outline
+the tiles under the outline's bounding box, which holds every centre inside it
+(a crossing lies within the box up to rounding far under half a pixel), row of
+tiles by row of tiles; an outline
 smaller than one pixel, which holds no centre, reads the tile under each of
 its points, as `clipped_share` reads the pixel under each.
 
@@ -253,9 +254,10 @@ fails at once and never waits, so nested parallel loops on many threads cannot
 block on the pool or deadlock. On success the read assembles the grown regions
 from the photograph's tiles into a region pyramid, reads it with the
 whole-pyramid samplers, and keeps it, still reserved, in the `ViewRegions`
-until a later read replaces it or the `ViewRegions` is dropped; on failure, or
-when it reads no pixel, it takes the tile path and leaves what the view kept
-as it was. `read_source_rect` reserves the rectangle itself and assembles it
+until a later read replaces it or the `ViewRegions` is dropped. On failure it
+takes the tile path and the view keeps nothing, its old regions already given
+back; a read of no pixel takes the tile path and leaves what the view kept as
+it was. `read_source_rect` reserves the rectangle itself and assembles it
 either way, from the reserved bytes or through the tile path's window; its
 reservation lasts as long as the returned `SourceRect`. The pool counts the
 reads that assembled their regions, the reads that reused kept ones and the
@@ -294,7 +296,8 @@ every level, across tile edges and at the image's edges; that each kept region
 is its required region grown by the margin and clipped to the level, for sides
 of 1, 2, 3 and 61 px, inside the image and at and beside each of its edges;
 that renders whose required regions lie inside the kept ones reuse them, with
-the whole pyramid's values and a fresh view's, and renders outside reassemble;
+the whole pyramid's values and a fresh view's, and renders outside reassemble,
+as does a read with any one level outside;
 and that kept regions are counted in the pool, given back before a reassembly
 reserves, and released when their view is dropped.
 [regions/tests.rs](../../../crates/sfmtool-core/src/camera/sampler/regions/tests.rs)
