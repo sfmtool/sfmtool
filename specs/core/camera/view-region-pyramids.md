@@ -203,9 +203,11 @@ instead of the result.
 
 **Photographs in memory.** `from_image` builds the image's pyramid of
 `ImageU8Pyramid::full_levels` depth; `from_pyramid` reads a whole pyramid in
-place. Both cut a tile, with its border, or copy a rectangle only when a read
-asks for it, and keep neither. Their layout has the pyramid's own levels, each
-level 0's size halved, and no stored level. The tests cut tiles of 32 px.
+place, and refuses with `OutOfRange` a tile or rectangle with pixels that a
+pyramid made by `from_regions` does not hold, rather than read the black of a
+level it does not hold. Both cut a tile, with its border, or copy a rectangle
+only when a read asks for it, and keep neither. Their layout has the
+pyramid's own levels, each level 0's size halved, and no stored level. The tests cut tiles of 32 px.
 
 **Testing.** [source/tests.rs](../../../crates/sfmtool-core/src/camera/sampler/source/tests.rs)
 renders random warps over a synthetic photograph, including maps off every

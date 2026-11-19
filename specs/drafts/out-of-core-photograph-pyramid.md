@@ -1667,8 +1667,8 @@ in core. Step 17 turns the tier on.
      for every coordinate.
    - **7b, the companion's step 2, next:** the assembly of view-region
      pyramids from a `TiledPhotograph`'s tiles with the reuse margin and the
-     reuse across renders, `clipped_share` as an entry point over tiles, and
-     the grey reads by region, exercised on photographs cut into tiles in
+     reuse across renders, `clipped_share` as an entry point over tiles,
+     exercised on photographs cut into tiles in
      memory. No reader changes yet. Tests: the companion draft's equality
      tests for its step 2.
 8. **The cluster members' elongation limit** (the companion's § "The

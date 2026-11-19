@@ -461,3 +461,29 @@ fn the_grid_affine_and_sample_reads_need_no_more_than_their_exact_regions() {
         }
     }
 }
+
+#[test]
+fn a_read_past_the_regions_of_a_region_pyramid_is_refused() {
+    // Level 0 whole, levels 1 and 2 not held: a read of level 2 is an error
+    // on either path, not the black of a level the pyramid does not hold.
+    let levels = vec![
+        Some(PyramidLevel {
+            image: photograph(64, 64),
+            origin: [0, 0],
+            full_size: [64, 64],
+        }),
+        None,
+        None,
+    ];
+    let pyramid = Arc::new(ImageU8Pyramid::from_regions(levels).unwrap());
+    let source = TiledPhotograph::from_pyramid(pyramid).with_tile_size(TILE);
+    for (pool, _) in pools() {
+        let mut map = affine_map(16, [4.0, 0.0, 0.0, 0.0, 4.0, 0.0], 0);
+        assert!(matches!(
+            render_source_tile(&source, &pool, &mut map, Sampler::BilinearMip),
+            Err(PhotographReadError::OutOfRange { .. })
+        ));
+        let mut map = affine_map(16, [1.0, 0.0, 8.0, 0.0, 1.0, 8.0], 0);
+        assert!(render_source_tile(&source, &pool, &mut map, Sampler::BilinearMip).is_ok());
+    }
+}

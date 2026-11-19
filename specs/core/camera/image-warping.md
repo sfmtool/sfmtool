@@ -524,8 +524,9 @@ For performance, bilinear interpolation on `u8` data should:
   held rectangle, so where the rectangle holds every tap the values are the
   whole level's, bit for bit. The same per-pixel code also reads a
   photograph's tiles. See [view-region-pyramids.md](view-region-pyramids.md).
-  Opt-in sampler counters live in `camera::remap::prof` (gated on
-  [`SFMTOOL_PROFILE`](../README.md#phase-timing-with-sfmtool_profile)).
+
+Opt-in sampler counters live in `camera::remap::prof` (gated on
+[`SFMTOOL_PROFILE`](../README.md#phase-timing-with-sfmtool_profile)).
 
 ### Anisotropic Filtering
 

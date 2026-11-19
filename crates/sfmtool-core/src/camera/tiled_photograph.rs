@@ -94,7 +94,9 @@ impl TiledPhotograph {
         Self::from_pyramid(Arc::new(ImageU8Pyramid::from_image(image, levels)))
     }
 
-    /// A whole pyramid, read in place. Its levels are the layout's: level `l`
+    /// A whole pyramid, read in place; a read of pixels a pyramid made by
+    /// [`ImageU8Pyramid::from_regions`] does not hold is refused with
+    /// [`PhotographReadError::OutOfRange`]. Its levels are the layout's: level `l`
     /// is level 0's size halved `l` times, as [`ImageU8::downsample_2x`]
     /// halves it.
     pub fn from_pyramid(pyramid: Arc<ImageU8Pyramid>) -> Self {
@@ -147,7 +149,7 @@ impl TiledPhotograph {
             level,
             [i64::from(origin[0]) - 1, i64::from(origin[1]) - 1],
             [size[0] + 2, size[1] + 2],
-        );
+        )?;
         Ok(Arc::new(PhotographTile {
             key,
             origin,
@@ -163,20 +165,43 @@ impl TiledPhotograph {
         rect: crate::camera::sampler::LevelRect,
     ) -> Result<ImageU8, PhotographReadError> {
         check_rect(&self.layout, level, rect)?;
-        Ok(self.copy(
+        self.copy(
             level,
             [i64::from(rect.x0), i64::from(rect.y0)],
             [rect.width(), rect.height()],
-        ))
+        )
     }
 
     /// The `size` pixels from `start` of level `level`, each address clamped
-    /// to the level.
-    fn copy(&self, level: usize, start: [i64; 2], size: [u32; 2]) -> ImageU8 {
+    /// to the level. Refuses pixels the pyramid does not hold, as for a
+    /// pyramid made by [`ImageU8Pyramid::from_regions`] handed to
+    /// [`from_pyramid`](Self::from_pyramid), rather than read other pixels.
+    fn copy(
+        &self,
+        level: usize,
+        start: [i64; 2],
+        size: [u32; 2],
+    ) -> Result<ImageU8, PhotographReadError> {
         let held = HeldLevel::of(&self.pyramid, level);
         let img = held.image();
         let [ox, oy] = held.origin().map(i64::from);
         let (w, h) = self.layout.level_size(level);
+        // The span of full-level pixels the clamped addresses reach on one
+        // axis lies inside the held rectangle.
+        let holds = |start: i64, size: u32, origin: i64, full: u32, held: u32| {
+            let last = i64::from(full) - 1;
+            let lo = start.clamp(0, last);
+            let hi = (start + i64::from(size) - 1).clamp(0, last);
+            origin <= lo && hi < origin + i64::from(held)
+        };
+        if self.pyramid.level_full_size(level) != [w, h]
+            || !holds(start[0], size[0], ox, w, img.width())
+            || !holds(start[1], size[1], oy, h, img.height())
+        {
+            return Err(out_of_range(format!(
+                "pixels of level {level} the pyramid does not hold"
+            )));
+        }
         let c = self.channels as usize;
         let stride = img.width() as usize * c;
         let clamp = |v: i64, origin: i64, full: u32, held: u32| {
@@ -192,7 +217,7 @@ impl TiledPhotograph {
                 data.extend_from_slice(&row[col..col + c]);
             }
         }
-        ImageU8::new(size[0], size[1], self.channels, data)
+        Ok(ImageU8::new(size[0], size[1], self.channels, data))
     }
 }
 

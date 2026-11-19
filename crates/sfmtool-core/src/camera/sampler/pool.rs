@@ -37,7 +37,8 @@ pub struct RegionPoolStats {
     pub peak_bytes: u64,
     /// The reads that copied their regions from the pool.
     pub copied_reads: u64,
-    /// The reads that took the tile path because their reservation failed.
+    /// The reads that took the tile path: their reservation failed, or they
+    /// read no pixel.
     pub tiled_reads: u64,
 }
 
