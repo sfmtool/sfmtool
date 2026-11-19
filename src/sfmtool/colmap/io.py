@@ -111,11 +111,7 @@ def _resolve_workspace_and_sift(
                 sift_metadata = reader.metadata
                 if image_to_gray is None:
                     image_to_gray = recorded
-                if (
-                    sift_metadata["version"] >= 2
-                    and recorded is not None
-                    and recorded == image_to_gray
-                ):
+                if recorded == image_to_gray:
                     sharpness.append(sift_metadata["sharpness"])
                     tensors.append(sift_metadata["gradient_structure_tensor_xx_yy_xy"])
                 else:
