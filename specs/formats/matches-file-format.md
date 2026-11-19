@@ -732,8 +732,15 @@ refinement measured and which members stand.
     `max_shift_px`, further than that many source pixels)
   - `duplicate_image` — outscored by another kept member in the same image, or
     shares the reference's image
-  - `not_evaluated` — degenerate shape, template/seed support out of frame, or the
-    cluster itself was unrefinable
+  - `not_evaluated` — degenerate shape, an affine shape elongated past
+    `MAX_PATCH_ELONGATION` (its larger singular value more than 16 times its
+    smaller, [cluster-patch-refinement.md](../core/patch/cluster-patch-refinement.md#which-member-anchors-and-which-members-are-eligible)),
+    template/seed support out of frame, or the cluster itself was
+    unrefinable. Whatever the reason, the member was never fitted and its row
+    is its detection. A file written before the refinement had the
+    elongation limit may hold measured members elongated past it; the status
+    means the same in both, so the limit changed no format version
+    ([format-versions.md](format-versions.md#when-a-formats-version-changes))
   - `rejected_unlocalizable` — the member's own patch does not pin a position,
     so it was excluded before reference selection and refinement. The bar is
     `refine_options.max_member_zncc_self_similarity_radius`, in pixels of

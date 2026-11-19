@@ -45,6 +45,7 @@ pub mod prof;
 #[cfg(test)]
 mod tests;
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -73,7 +74,8 @@ pub use consistency::warp_consistency_residuals;
 pub use params::{
     capped_cell_count, ClusterRefineParams, ClusterRefineResult, FeatureGeometry, MemberStatus,
     CELL_COUNT, DEFAULT_MAX_CAPPED_CELLS, DEFAULT_MAX_SHIFT_SCALES,
-    DEFAULT_REGATE_AT_REFINED_SHAPE, DEFAULT_ROTATION_STARTS, REFERENCE_UNREFINABLE,
+    DEFAULT_REGATE_AT_REFINED_SHAPE, DEFAULT_ROTATION_STARTS, MAX_PATCH_ELONGATION,
+    REFERENCE_UNREFINABLE,
 };
 pub use piecewise::{
     member_cell_data, CellRefinement, LoopStop, PiecewiseParams, ACCEPT_ZNCC_TOLERANCE,
@@ -191,20 +193,62 @@ fn promote(theta: &[f64], from: Stage, to: Stage) -> Vec<f64> {
     out
 }
 
-// ── Pyramid-level selection (the mip rule) ─────────────────────────────────
+// ── Singular values: the mip rule and the elongation limit ─────────────────
+
+/// The singular values `(s_max, s_min)` of the 2×2 linear map
+/// `[[m00, m01], [m10, m11]]`, in closed form: with `q` and `r` the lengths of
+/// its similarity and anti-similarity parts, `s_max = q + r` and
+/// `s_min = |q − r|`.
+fn singular_values(m00: f64, m01: f64, m10: f64, m11: f64) -> (f64, f64) {
+    let e = (m00 + m11) * 0.5;
+    let f = (m00 - m11) * 0.5;
+    let g = (m10 + m01) * 0.5;
+    let h = (m10 - m01) * 0.5;
+    let q = (e * e + h * h).sqrt();
+    let r = (f * f + g * g).sqrt();
+    (q + r, (q - r).abs())
+}
+
+/// The elongation of the 2×2 linear map `[[m00, m01], [m10, m11]]`: its larger
+/// singular value over its smaller, `1` for a similarity. Infinite or `NaN`
+/// for a singular map.
+fn elongation(m00: f64, m01: f64, m10: f64, m11: f64) -> f64 {
+    let (s_max, s_min) = singular_values(m00, m01, m10, m11);
+    s_max / s_min
+}
+
+/// Whether an elongation is within the members' limit: at most
+/// [`MAX_PATCH_ELONGATION`]. A `NaN` or infinite elongation is not.
+fn within_elongation_limit(elongation: f64) -> bool {
+    elongation <= MAX_PATCH_ELONGATION
+}
+
+/// Whether a member's affine shape `a` is within the members' elongation
+/// limit, the test validation applies to a detected shape.
+fn shape_within_elongation_limit(a: &Mat2) -> bool {
+    within_elongation_limit(elongation(a[0][0], a[0][1], a[1][0], a[1][1]))
+}
+
+/// Whether an evaluation may read `map`: `false`, after counting the
+/// evaluation in `elongated`, when the map's linear part is elongated past
+/// [`MAX_PATCH_ELONGATION`]. Such an evaluation scores as a support out of
+/// frame does, and is turned away before it asks for any tile. The map is a
+/// shape scaled by the grid's step, so it has the shape's elongation.
+fn map_within_elongation_limit(map: &AffineCoreMap, elongated: &Cell<u64>) -> bool {
+    let a = &map.a;
+    let within = within_elongation_limit(elongation(a[0], a[1], a[3], a[4]));
+    if !within {
+        elongated.set(elongated.get() + 1);
+    }
+    within
+}
 
 /// Level `ℓ = clamp(⌊log₂ s_min⌋, 0, L−1)` from the smaller singular value of
 /// the map's linear part (closed form). A non-finite or shrinking map stays
 /// at level 0 (the degenerate warp is rejected by the sampler's frame test).
 fn level_for_map(map: &AffineCoreMap, num_levels: usize) -> usize {
     let a = &map.a;
-    let e = (a[0] + a[4]) * 0.5;
-    let f = (a[0] - a[4]) * 0.5;
-    let g = (a[3] + a[1]) * 0.5;
-    let h = (a[3] - a[1]) * 0.5;
-    let q = (e * e + h * h).sqrt();
-    let r = (f * f + g * g).sqrt();
-    let s_min = (q - r).abs();
+    let (_, s_min) = singular_values(a[0], a[1], a[3], a[4]);
     if !s_min.is_finite() || s_min < 2.0 {
         return 0;
     }
@@ -322,6 +366,12 @@ impl MemberOutcome {
 struct ClusterOutcome {
     reference: u32,
     members: Vec<MemberOutcome>,
+    /// Members refused at validation for their elongation
+    /// ([`ClusterRefineResult::elongated_members`]).
+    elongated_members: usize,
+    /// Evaluations scored out of frame for their map's elongation
+    /// ([`ClusterRefineResult::elongated_evaluations`]).
+    elongated_evaluations: u64,
 }
 
 /// The affine grid→source map of the anchored warp
@@ -636,6 +686,10 @@ fn rotation_start_warps(m0: &Mat2, starts: u32) -> Vec<Mat2> {
 /// absolute affine shape `S = W·S_ref`, last column its refined absolute
 /// keypoint position; `None` when the support is out of frame at every
 /// rotation start (→ `NotEvaluated`).
+///
+/// An evaluation whose map is elongated past [`MAX_PATCH_ELONGATION`] scores
+/// as one whose support is out of frame, before it reads a pixel, and is
+/// counted in `elongated`.
 #[allow(clippy::too_many_arguments)]
 fn refine_member(
     pyramid: &ImageU8Pyramid,
@@ -647,6 +701,7 @@ fn refine_member(
     step: f64,
     off: f64,
     params: &ClusterRefineParams,
+    elongated: &Cell<u64>,
 ) -> Option<(f64, PartZncc, f64, [[f64; 3]; 2])> {
     let a_ref_inv = inv2(&ref_geo.a);
     let num_levels = pyramid.num_levels();
@@ -655,6 +710,9 @@ fn refine_member(
         let id = [[1.0 + d[0][0], d[0][1]], [d[1][0], 1.0 + d[1][1]]];
         let b = mul2(&mul2(&id, m0), &ref_geo.a);
         let map = warp_map(mem_geo.pos, t, &b, step, off);
+        if !map_within_elongation_limit(&map, elongated) {
+            return None;
+        }
         let level = level_for_map(&map, num_levels);
         let lmap = map_at_level(&map, level);
         let bbox = grid_bbox(&lmap, resolution);
@@ -723,8 +781,9 @@ fn refine_member(
                 }
                 let (t, d) = unpack(x, stage);
                 match eval_raw(t, d) {
-                    // Any support sample out of frame scores worst (+1.0) so
-                    // the simplex retreats — the all-in-frame rule.
+                    // Any support sample out of frame, or a map elongated
+                    // past the limit, scores worst (+1.0) so the simplex
+                    // retreats — the all-in-frame rule.
                     Some(z) => -z,
                     None => 1.0,
                 }
@@ -757,14 +816,18 @@ fn refine_member(
         let id = [[1.0 + d[0][0], d[0][1]], [d[1][0], 1.0 + d[1][1]]];
         let b = mul2(&mul2(&id, &m0), &ref_geo.a);
         let map = warp_map(mem_geo.pos, t, &b, step, off);
-        let level = level_for_map(&map, num_levels);
-        let lmap = map_at_level(&map, level);
-        let bbox = grid_bbox(&lmap, resolution);
-        tiles
-            .get_or_build(pyramid, level, bbox)
-            .map_or(PartZncc::NAN, |tile| {
-                eval_zncc_parts(&lmap, tile, tables, tmpl)
-            })
+        if map_within_elongation_limit(&map, elongated) {
+            let level = level_for_map(&map, num_levels);
+            let lmap = map_at_level(&map, level);
+            let bbox = grid_bbox(&lmap, resolution);
+            tiles
+                .get_or_build(pyramid, level, bbox)
+                .map_or(PartZncc::NAN, |tile| {
+                    eval_zncc_parts(&lmap, tile, tables, tmpl)
+                })
+        } else {
+            PartZncc::NAN
+        }
     };
     let shift = (t[0] * t[0] + t[1] * t[1]).sqrt();
     // Absolute affine shape: the refined warp `W = (I + D)·M₀` composed onto
@@ -807,13 +870,19 @@ fn refine_cluster(
 ) -> ClusterOutcome {
     let size = k1 - k0;
     let mut members = vec![MemberOutcome::default(); size];
-    let unrefinable = |members| ClusterOutcome {
+    let unrefinable = |members, elongated_members| ClusterOutcome {
         reference: REFERENCE_UNREFINABLE,
         members,
+        elongated_members,
+        elongated_evaluations: 0,
     };
 
-    // 1. Validate members: feature index in bounds, |det A| ≥ MIN_ABS_DET.
+    // 1. Validate members: feature index in bounds, |det A| ≥ MIN_ABS_DET,
+    // and the shape's elongation within MAX_PATCH_ELONGATION. A member that
+    // fails stays NotEvaluated.
     let mut geo: Vec<Option<MemberGeo>> = vec![None; size];
+    let mut elongated_members = 0;
+    let elongated = Cell::new(0u64);
     for (j, slot) in geo.iter_mut().enumerate() {
         let k = k0 + j;
         let img = member_images[k] as usize;
@@ -837,6 +906,10 @@ fn refine_cluster(
         ];
         let det = det2(&a);
         if det.abs() < MIN_ABS_DET || !det.is_finite() {
+            continue;
+        }
+        if !shape_within_elongation_limit(&a) {
+            elongated_members += 1;
             continue;
         }
         *slot = Some(MemberGeo {
@@ -889,7 +962,7 @@ fn refine_cluster(
 
     let usable: Vec<usize> = (0..size).filter(|&j| geo[j].is_some()).collect();
     if usable.len() < 2 {
-        return unrefinable(members);
+        return unrefinable(members, elongated_members);
     }
 
     // 2–3. Reference selection (largest scale, ties to the lowest global
@@ -913,7 +986,7 @@ fn refine_cluster(
         }
     }
     let Some((ref_j, tmpl)) = reference else {
-        return unrefinable(members);
+        return unrefinable(members, elongated_members);
     };
     let ref_geo = geo[ref_j].clone().unwrap();
     // Reference row: `S_ref | x_ref` — the reference feature's own detector
@@ -965,6 +1038,7 @@ fn refine_cluster(
                 step,
                 off,
                 params,
+                &elongated,
             )
         }) {
             let status = if zncc < params.min_zncc {
@@ -1050,6 +1124,7 @@ fn refine_cluster(
                         off,
                         params,
                         pp,
+                        &elongated,
                     )
                 });
             }
@@ -1059,6 +1134,8 @@ fn refine_cluster(
     ClusterOutcome {
         reference: ref_geo.k_global,
         members,
+        elongated_members,
+        elongated_evaluations: elongated.get(),
     }
 }
 
@@ -1079,7 +1156,9 @@ fn refine_cluster(
 /// new map's support leaves the frame so nothing can be read, the member
 /// keeps its cascade shape, position and readings, the readings at the
 /// refined shape included, and every cell is stored as
-/// [`CellStatus::NotAttempted`] with the loop's iteration count.
+/// [`CellStatus::NotAttempted`] with the loop's iteration count. A shape
+/// elongated past [`MAX_PATCH_ELONGATION`] cannot be read either, and is
+/// counted in `elongated`.
 ///
 /// The stage never changes a member's status. The member passed every gate
 /// at its cascade shape, and the per-image dedupe has already run, so a
@@ -1099,6 +1178,7 @@ fn refine_kept_member_cells(
     off: f64,
     params: &ClusterRefineParams,
     pp: &PiecewiseParams,
+    elongated: &Cell<u64>,
 ) {
     let s = [
         [member.affine[0][0], member.affine[0][1]],
@@ -1108,7 +1188,7 @@ fn refine_kept_member_cells(
     // The cascade's own objective, which an update must not lower.
     let score = |shape: &Mat2, position: [f64; 2]| {
         member_zncc_at(
-            pyramid, position, shape, tmpl, tables, resolution, step, off,
+            pyramid, position, shape, tmpl, tables, resolution, step, off, elongated,
         )
     };
     let out = piecewise::refine_member_cells(
@@ -1133,13 +1213,12 @@ fn refine_kept_member_cells(
     // its own reading of the starting shape, which can differ from the
     // cascade's stored value in the last bits, so the stored value is the bar.
     let cascade_zncc = member.zncc;
-    let reread = read_member_at(pyramid, ps, &sh, tmpl, tables, resolution, step, off).filter(
-        |&(zncc, _)| {
-            zncc >= params.min_zncc
-                && zncc as f32 >= cascade_zncc
-                && params.admits_shift(shift, &sh)
-        },
-    );
+    let reread = read_member_at(
+        pyramid, ps, &sh, tmpl, tables, resolution, step, off, elongated,
+    )
+    .filter(|&(zncc, _)| {
+        zncc >= params.min_zncc && zncc as f32 >= cascade_zncc && params.admits_shift(shift, &sh)
+    });
     let Some((zncc, parts)) = reread else {
         member.cells = Some(CellRefinement::not_attempted(out.cells.iterations));
         return;
@@ -1162,7 +1241,8 @@ fn refine_kept_member_cells(
 
 /// The whole-patch windowed ZNCC and its part readings of a member at
 /// absolute position `p` and shape `s`; `None` when the support leaves the
-/// frame.
+/// frame, or when the shape is elongated past [`MAX_PATCH_ELONGATION`],
+/// which is counted in `elongated`.
 #[allow(clippy::too_many_arguments)]
 fn read_member_at(
     pyramid: &ImageU8Pyramid,
@@ -1173,8 +1253,12 @@ fn read_member_at(
     resolution: u32,
     step: f64,
     off: f64,
+    elongated: &Cell<u64>,
 ) -> Option<(f64, PartZncc)> {
     let map = warp_map(p, [0.0, 0.0], s, step, off);
+    if !map_within_elongation_limit(&map, elongated) {
+        return None;
+    }
     let level = level_for_map(&map, pyramid.num_levels());
     let lmap = map_at_level(&map, level);
     let bbox = grid_bbox(&lmap, resolution);
@@ -1186,7 +1270,8 @@ fn read_member_at(
 
 /// The whole-patch windowed ZNCC of a member at absolute position `p` and
 /// shape `s`, the objective the cascade maximises; `None` when the support
-/// leaves the frame.
+/// leaves the frame, or when the shape is elongated past
+/// [`MAX_PATCH_ELONGATION`], which is counted in `elongated`.
 #[allow(clippy::too_many_arguments)]
 fn member_zncc_at(
     pyramid: &ImageU8Pyramid,
@@ -1197,8 +1282,12 @@ fn member_zncc_at(
     resolution: u32,
     step: f64,
     off: f64,
+    elongated: &Cell<u64>,
 ) -> Option<f64> {
     let map = warp_map(p, [0.0, 0.0], s, step, off);
+    if !map_within_elongation_limit(&map, elongated) {
+        return None;
+    }
     let level = level_for_map(&map, pyramid.num_levels());
     let lmap = map_at_level(&map, level);
     let bbox = grid_bbox(&lmap, resolution);
@@ -1232,7 +1321,8 @@ fn member_zncc_at(
 /// at the member count; the two member arrays must have equal length). A
 /// member whose image index is out of range for `pyramids`, whose feature
 /// index is out of range for its image, or whose affine shape is degenerate
-/// is reported as [`MemberStatus::NotEvaluated`] rather than panicking.
+/// or elongated past [`MAX_PATCH_ELONGATION`] is reported as
+/// [`MemberStatus::NotEvaluated`] rather than panicking.
 pub fn refine_cluster_patches(
     pyramids: &[ImageU8Pyramid],
     features: &[FeatureGeometry<'_>],
@@ -1347,9 +1437,13 @@ pub fn refine_cluster_patches_borrowed(
         cells: vec![None; m],
         refined_zncc_self_similarity_radius: vec![f32::NAN; m],
         refined_zncc_self_similarity_radius_grid: vec![[[f32::NAN; 3]; 3]; m],
+        elongated_members: 0,
+        elongated_evaluations: 0,
     };
     for (c, out) in outcomes.into_iter().enumerate() {
         result.reference_members[c] = out.reference;
+        result.elongated_members += out.elongated_members;
+        result.elongated_evaluations += out.elongated_evaluations;
         let k0 = cluster_starts[c] as usize;
         for (j, mo) in out.members.into_iter().enumerate() {
             let k = k0 + j;

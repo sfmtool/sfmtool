@@ -9,6 +9,7 @@
 use ndarray::{Array2, Array3, ArrayView2, ArrayView3};
 use sfmtool_matches_format::{ClusterMemberStatus, CLUSTER_REFERENCE_UNREFINABLE};
 
+use crate::camera::sampler::MAX_ANISOTROPY;
 use crate::patch::keypoint_localize::DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS;
 use crate::patch::normal_refine::PatchWindow;
 
@@ -35,8 +36,9 @@ pub enum MemberStatus {
     /// Outscored by another kept member in the same image, or shares the
     /// reference's image.
     DuplicateImage = 4,
-    /// Not evaluated: degenerate shape, template/seed support out of frame,
-    /// or the cluster itself was unrefinable.
+    /// Not evaluated: degenerate shape, an affine shape elongated past
+    /// [`MAX_PATCH_ELONGATION`], template/seed support out of frame, or the
+    /// cluster itself was unrefinable.
     NotEvaluated = 5,
     /// Rejected: the member's own patch does not pin a position, its ZNCC
     /// self-similarity radius is above
@@ -100,6 +102,22 @@ pub const DEFAULT_MAX_SHIFT_SCALES: f64 = 2.0;
 
 /// The default of [`ClusterRefineParams::rotation_starts`].
 pub const DEFAULT_ROTATION_STARTS: u32 = 12;
+
+/// The largest elongation of a member's affine shape, and of the map of any
+/// evaluation of the cascade, that the refinement reads: the ratio of the
+/// shape's larger singular value to its smaller.
+///
+/// A member whose detected shape is elongated past it is
+/// [`MemberStatus::NotEvaluated`] and takes no part in the member gate, the
+/// choice of reference or the cascade; an evaluation whose map is elongated
+/// past it scores as a support out of frame does, before any pixel is read,
+/// so the simplex retreats from it. A shape stretched that far is rarely a
+/// correct photometric match, and the limit bounds how much of a photograph
+/// one evaluation reads. It is the anisotropic sampler's [`MAX_ANISOTROPY`],
+/// the most samples it takes along a footprint's major axis, so the tree has
+/// one number for how stretched a footprint it reads. A constant rather than
+/// a setting, because that bound rests on it.
+pub const MAX_PATCH_ELONGATION: f64 = MAX_ANISOTROPY as f64;
 
 /// Sentinel in [`ClusterRefineResult::reference_members`] for a cluster with
 /// no usable reference; the same value as [`CLUSTER_REFERENCE_UNREFINABLE`].
@@ -372,6 +390,9 @@ pub struct FeatureGeometry<'a> {
 /// [`Self::member_status`] is what says which, and a caller writing a
 /// `.matches` file leaves those members' detections in place rather than
 /// storing a zero.
+///
+/// Beside the member-parallel arrays it counts what the members' elongation
+/// limit, [`MAX_PATCH_ELONGATION`], turned away.
 pub struct ClusterRefineResult {
     /// `(C,)` global member index of each cluster's reference, or
     /// [`REFERENCE_UNREFINABLE`].
@@ -439,4 +460,12 @@ pub struct ClusterRefineResult {
     /// ([`capped_cell_count`]); `NaN` where
     /// [`Self::refined_zncc_self_similarity_radius`] is.
     pub refined_zncc_self_similarity_radius_grid: Vec<[[f32; 3]; 3]>,
+    /// How many members were refused at validation because their detected
+    /// affine shape is elongated past [`MAX_PATCH_ELONGATION`], or its
+    /// elongation is not finite. Each is [`MemberStatus::NotEvaluated`].
+    pub elongated_members: usize,
+    /// How many evaluations, over every member, the rotation starts, the
+    /// cascade and the readings after it, read a map elongated past
+    /// [`MAX_PATCH_ELONGATION`] and so scored as a support out of frame.
+    pub elongated_evaluations: u64,
 }

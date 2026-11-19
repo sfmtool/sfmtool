@@ -83,9 +83,9 @@ fn major_direction(s: &SelfSimilarity) -> [f64; 2] {
     [cos, sin]
 }
 
-/// How long and thin a reading's ellipse is: `1 − (minor / major)²`, 0 for a
-/// circle and near 1 for a long thin region.
-fn elongation(s: &SelfSimilarity) -> f64 {
+/// How long and thin a reading's ellipse is, as its eccentricity squared:
+/// `1 − (minor / major)²`, 0 for a circle and near 1 for a long thin region.
+fn eccentricity_squared(s: &SelfSimilarity) -> f64 {
     let [a, b] = s.ellipse.axes;
     1.0 - (b / a).powi(2)
 }
@@ -223,7 +223,7 @@ fn equal_luminance_colour_edge_scores_as_an_edge() {
     assert!(s.tolerance.is_finite(), "the colour edge carries texture");
     assert_eq!(s.radius, 3.0, "a vertical edge slides along itself");
     assert!(
-        major_direction(&s)[1].abs() > 0.99 && elongation(&s) > 0.9,
+        major_direction(&s)[1].abs() > 0.99 && eccentricity_squared(&s) > 0.9,
         "{:?}",
         s.ellipse
     );
@@ -326,7 +326,11 @@ fn a_straight_edge_scores_r_in_every_direction_with_its_major_axis_along_itself(
             let (sin, cos) = angle.to_radians().sin_cos();
             let [x, y] = major_direction(&s);
             let along = (x * cos + y * sin).abs();
-            assert!(elongation(&s) > 0.5, "r={r} angle={angle}: {:?}", s.ellipse);
+            assert!(
+                eccentricity_squared(&s) > 0.5,
+                "r={r} angle={angle}: {:?}",
+                s.ellipse
+            );
             assert!(along > 0.95, "r={r} angle={angle}: {:?}", s.ellipse);
             assert!(
                 s.radius_is_at_least(),
@@ -392,7 +396,7 @@ fn a_repeat_inside_the_square_lengthens_the_ellipse() {
     });
     let s = centred(&diagonal, 1, 16, 3);
     assert!(s.radius > 1.0 && s.radius < 2.5, "{s:?}");
-    assert!(elongation(&s) > 0.9, "{:?}", s.ellipse);
+    assert!(eccentricity_squared(&s) > 0.9, "{:?}", s.ellipse);
     let [x, y] = major_direction(&s);
     assert!((x * y - 0.5).abs() < 0.01, "{:?}", s.ellipse);
     assert!(!s.radius_is_at_least(), "{:?}", s.ellipse);
@@ -557,7 +561,7 @@ fn overlap_an_edge_reads_its_major_axis_along_itself() {
         let [x, y] = major_direction(&s);
         let along = (x * cos + y * sin).abs();
         assert!(
-            elongation(&s) > 0.5 && along > 0.95,
+            eccentricity_squared(&s) > 0.5 && along > 0.95,
             "angle={angle}: {:?}",
             s.ellipse
         );

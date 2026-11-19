@@ -14,6 +14,8 @@
 //! measures the cells at the cascade's shape and leaves the member
 //! bit-identical to the cascade's.
 
+use std::cell::Cell;
+
 use super::super::kernels::{SupportTables, TemplateKernel};
 use super::super::{
     build_template, inv2, member_zncc_at, mul2, read_member_at, refine_cluster_patches,
@@ -210,6 +212,7 @@ impl Fixture {
                 self.params.resolution,
                 self.step,
                 self.off,
+                &Cell::new(0),
             )
         }
     }
@@ -878,6 +881,7 @@ impl Fixture {
             self.off,
             params,
             &self.pp(),
+            &Cell::new(0),
         );
         out
     }
@@ -949,6 +953,7 @@ fn an_update_whose_support_leaves_the_frame_is_not_applied() {
             fx.params.resolution,
             fx.step,
             fx.off,
+            &Cell::new(0),
         )
         .is_some()
     };
