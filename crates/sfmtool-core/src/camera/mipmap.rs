@@ -13,8 +13,12 @@
 //! the spec `specs/core/camera/mipmaps.md`.
 
 mod layout;
+mod region;
+#[cfg(test)]
+mod test_support;
 
 pub use layout::PyramidLayout;
+pub use region::{region_layout, NotRegionReadable, RegionLayout};
 
 /// The directory at a workspace root that holds the workspace's mip level
 /// files. Every search for a workspace's images skips a directory of this
