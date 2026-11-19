@@ -476,7 +476,8 @@ How the version changes, and which older versions a reader keeps reading, is
 in [format-versions.md](format-versions.md). sfmtool 0.5 stops reading version 1, as
 [../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md) specifies.
 
-The format has two released versions (`1` and `2`). The format is versioned
+The format has two versions (`1` and `2`). No sfmtool release wrote version
+1: only development builds between 0.2 and 0.3 did. The format is versioned
 (`metadata.json` `version`) precisely so that convention changes like the one
 below can upgrade on load instead of breaking old files.
 
@@ -518,4 +519,5 @@ for the canonical convention and the `S`/`W` conversion math.
   files (COLMAP convention) upgrade on load by flipping the stored
   `sensor_from_rig` poses (`S`-conjugation for body-anchored rigs, a left `S`
   multiply for world-anchored `spherical_tiles` rigs).
-- **Version 1**: Initial release.
+- **Version 1**: Initial version, written only by development builds before
+  sfmtool 0.3.

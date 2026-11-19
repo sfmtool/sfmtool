@@ -371,10 +371,10 @@ and the format spec presents its versions in the shape that spec gives. A
 reader accepts the current version and every version the previous release
 wrote; an older version that some release wrote stops being read one release
 after the release notes announce it, and one that no release wrote may stop
-being read at any release. This exists because a file outlives the code that wrote it:
-without a version change an older reader misreads a newer file instead of
-refusing it, and without a fixed rule for keeping and dropping versions a
-user cannot know which release still reads their files.
+being read at any release. This exists because a file outlives the code that
+wrote it: without a version change an older reader misreads a newer file
+instead of refusing it, and without a fixed rule for keeping and dropping
+versions a user cannot know which release still reads their files.
 
 Report a change to a format's entries, keys, legends, meanings or hash
 coverage with no version change; a writer that writes a version other than
@@ -383,8 +383,9 @@ crate, or a branch on a file's version outside the format crate and `sfm ws
 upgrade`; an accepted version with no test that reads
 it; a version a reader stops accepting without the announcement a version
 some release wrote needs; a version a reader still accepts after the release
-that was announced to drop it; a version in the read window that the reader refuses or `sfm ws
-upgrade` cannot convert; a `test-data` file below the current version; and a
+that was announced to drop it; a version in the read window that the reader
+refuses or `sfm ws upgrade` cannot convert; a `test-data` file below the
+current version; and a
 format spec with no Format versions section, no Version History, a migration
 subsection for a version no longer read, or a version tag on an entry that
 every version read has.
