@@ -287,9 +287,10 @@ Without the object there are no mipmaps.
 photograph that is in core under the options, or has a side over 65535 px, is
 refused without being read whole or decoded. It then reads the original once,
 decodes it with the decoder every reader uses (`ImageU8::decode_rgb` of the
-bytes, equal to `read_rgb` of the file) unless the caller passes the decode, runs the region test on the same
-bytes, and makes levels 1 to `K` by `downsample_2x`, each from the exact level
-above it in memory. Each level is encoded on its own, coarsest first, and
+bytes, equal to `read_rgb` of the file) unless the caller passes the decode,
+refuses a decode that is not the header's size, runs the region test on the
+same bytes, and makes levels 1 to `K` by `downsample_2x`, each from the exact
+level above it in memory. Each level is encoded on its own, coarsest first, and
 `-mip0` from the decode last, since it is the largest. Every file therefore
 carries one JPEG loss, any level can be made again alone to the same bytes,
 and the reduced levels are the same whether or not the original is
@@ -459,7 +460,10 @@ decodes.
   then its Cr, and converts them to RGB with the fixed-point BT.601 formula of
   its scalar path (`ycbcr_to_rgb` in its `decoder.rs`, from libjpeg-turbo's
   `jdcolext.c`). A tile decode converts with the same formula
-  (§ "Reading a rectangle").
+  (§ "Reading a rectangle"). Converting outside the decoder costs time: a
+  whole decode of a 4080 x 3060 level took 0.58 to 0.64 s, against 0.16 to
+  0.45 s with the decoder's own SIMD conversion. The pyramid reader of the
+  draft decodes only the coarsest level whole.
 - **The marker walk** finds markers as `jpeg-decoder` does (bytes up to the
   next `FF` skipped, fill bytes skipped, `FF 00` not a marker), so the region
   test and the reader agree on which segments a file has.
