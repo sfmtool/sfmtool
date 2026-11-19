@@ -155,6 +155,10 @@ impl LevelTile {
             &prof::N_TILE_PIXELS,
             ((rect.x1 - rect.x0) * (rect.y1 - rect.y0)) as u64 * img.channels() as u64,
         );
+        prof::count_max(
+            &prof::N_TILE_MAX_PIXELS,
+            ((rect.x1 - rect.x0) * (rect.y1 - rect.y0)) as u64,
+        );
         let w = (rect.x1 - rect.x0) as usize;
         let h = (rect.y1 - rect.y0) as usize;
         let ch = img.channels() as usize;
