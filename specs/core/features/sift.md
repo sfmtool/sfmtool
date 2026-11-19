@@ -18,11 +18,9 @@ it possible to describe a keypoint the detector did not find
 [§ Describing a keypoint nothing detected](#describing-a-keypoint-nothing-detected)).
 
 This spec covers the library functions in sfmtool-core. The detector, the descriptor and
-the grey conversion work on images in memory. Two parts read and write `.sift` files:
+the grey conversion work on images in memory. One part writes `.sift` files:
 `build_sift_files` writes a workspace's `.sift` files the way `sfm sift --extract` does
-(see [§ Building `.sift` files](#building-sift-files)), and `Version2SiftFolder` converts a
-version 1 file to version 2 (see
-[§ Converting a version 1 `.sift` file](#converting-a-version-1-sift-file)).
+(see [§ Building `.sift` files](#building-sift-files)).
 Their interface follows COLMAP's conventions rather than OpenCV's: keypoint coordinates use
 COLMAP's pixel-center convention (the upper-left pixel's center is `(0.5, 0.5)`), and each
 keypoint's geometry is a 2×2 affine shape matrix `[[a11, a12], [a21, a22]]`, exactly as
@@ -108,9 +106,8 @@ infinity, a NaN or a value too large for an `f32`, is an `ImageReadingsError`. I
 to call from the extractors' own threads and from inside `rayon::scope`, and
 takes a few milliseconds on a 2040 × 1536 image. A formula of more than 1000
 tokens is refused by `parse_gray_formula`, so its recursive parse and evaluation
-stay within a thread's stack. Each feature tool's own conversion, the
-conversion of a record of either version, and the version 1 to version 2
-conversion `sfm ws upgrade` makes are in
+stay within a thread's stack. Each feature tool's own conversion and the
+conversion a record states are in
 [`sfmtool_core::workspace::feature_options`](../../../crates/sfmtool-core/src/workspace/feature_options.rs)
 ([workspace.md § Versions](../../workspace/workspace.md#versions)).
 
@@ -724,7 +721,6 @@ sfmtool-core/src/features/sift/
 ├── image_readings.rs # image_readings_from_rgb: an image's sharpness and gradient structure tensor
 ├── feature_options.rs # SiftParams::from_feature_options: a workspace's feature_options object -> SiftParams
 ├── files.rs        # build_sift_files: extract and write a set of images' .sift files
-├── convert.rs      # Version2SiftFolder: convert a version 1 .sift file to version 2
 └── simd.rs         # runtime-dispatched AVX2+FMA / SSE2 kernels the stages above share
 ```
 
@@ -742,7 +738,6 @@ Each of those modules carries a `tests.rs` beside it, in a directory of its own 
 - `affine_shapes_from_similarity(scales (N,) f32, orientations (N,) f32) -> affine_shapes (N,2,2) f32` -- the similarity-to-shape conversion, so a caller holding a size and an angle does not restate it
 - `build_sift_files(image_paths, feature_options, feature_prefix_dir, *, concurrent_images=None) -> (sift_paths, extracted, skipped)` -- the binding for `build_sift_files` ([files.rs](../../../crates/sfmtool-py/src/sift/files.rs)), raising `ValueError` for invalid options and `OSError` naming the image or file that failed
 - `default_concurrent_images(width, height, params=None) -> int` -- the binding for `default_concurrent_images_for_dimensions` at `(width, height)` with `params` read as `extract_sift` reads them ([files.rs](../../../crates/sfmtool-py/src/sift/files.rs)), raising `ValueError` for params `extract_sift` refuses; it issues a `UserWarning` for each warning it gives, so a value of `SFMTOOL_SIFT_EXTRACT_WORKERS` that is not a whole number warns; the Python `sfmtool` backend sizes its pool with it
-- `Version2SiftFolder(folder)`, with the `path` property and `convert_version_1_sift_file(sift_path, image_path) -> {"path", "source_content_hash", "content_hash"}` -- the binding for `Version2SiftFolder` ([convert.rs](../../../crates/sfmtool-py/src/sift/convert.rs)), raising as [§ Converting a version 1 `.sift` file](#converting-a-version-1-sift-file) says
 - `ImageToGray(formula, quantize_bits=None)`, with `ImageToGray.from_json(dict or str)`, `ImageToGray.from_gray_formula(str)`, `to_dict()`, `gray(r, g, b)` (in single precision) and the `formula` and `quantize_bits` properties, `gray_from_rgb(image (H,W,3) u8, image_to_gray) -> (H,W) float32`, the detector's grey image, and `image_readings_from_rgb(image (H,W,3) u8, image_to_gray) -> ImageReadings` with `sharpness`, `gradient_structure_tensor_xx_yy_xy`, `axis_ratio` (`None` for a flat image) and `coherence`, and `ImageReadings(sharpness, gradient_structure_tensor_xx_yy_xy)` from stored readings -- the bindings for `ImageToGray`, `gray_from_rgb`, `image_readings_from_rgb` and `ImageReadings::new` ([image_readings.rs](../../../crates/sfmtool-py/src/sift/image_readings.rs)), raising `ValueError` for a refused conversion, a last axis other than 3, a reading that is not finite or stored readings `ImageReadings::new` refuses
 
 The `params` dict the first three take is read as the `feature_options` JSON
@@ -811,62 +806,11 @@ The viewer takes them from the node's `.sfmr` record.
 
 The files are `.sift` version 2. When at least one file is to be written,
 `build_sift_files` refuses options with no `image_to_gray`
-(`BuildSiftFilesError::Version1Settings`) and then a folder that already holds a
-version 1 `.sift` file (`BuildSiftFilesError::Version1Files`), before writing
-anything, since the two versions never share a folder; when every file is up
-to date it refuses nothing.
-
-The folder check is a public function of its own, so every writer of version 2
-files makes the same one:
-
-```rust
-pub fn version_1_sift_files(folder: &Path) -> std::io::Result<Option<Version1SiftFiles>>;
-
-pub struct Version1SiftFiles {
-    pub folder: PathBuf,
-    pub files: Vec<PathBuf>, // sorted, never empty
-}
-```
-
-It lists the folder itself, not its subfolders, and returns the files whose
-name ends in `.sift` and whose metadata reads with a version below 2. A file
-whose metadata cannot be read is passed over, and a folder that is not there
-holds nothing; a folder that is there but cannot be listed, such as a file in
-its place, is the listing's error, which `build_sift_files` returns as
-`BuildSiftFilesError::ListFolder`. The `Display` of `Version1SiftFiles` is the
-refusal, and `BuildSiftFilesError::Version1Files` wraps it: it names the
-folder and the files (the first five, and a count of the rest) and says to
-remove those files from the folder and run again, which extracts version 2
-files in their place. The folder is checked only for version 2 settings,
-since version 1 settings are refused first, so that fix is the same for every
-caller. The binding `sfmtool.sift.version_1_sift_files` returns the
-same `Version1SiftFiles` or `None`, and `image_files_to_sift_files` raises its
-`str` ([workspace.md § Versions never mix](../../workspace/workspace.md#versions-never-mix)).
-
-It is built on `scan_sift_folder`, which applies the same rule and also
-returns each `.sift` file whose metadata could not be read, with its error:
-
-```rust
-pub fn scan_sift_folder(folder: &Path) -> std::io::Result<SiftFolderScan>;
-
-pub struct SiftFolderScan {
-    pub version_1: Vec<ScannedSiftFile>,       // sorted by path
-    pub unreadable: Vec<(PathBuf, SiftError)>, // sorted
-}
-
-pub struct ScannedSiftFile {
-    pub path: PathBuf,
-    pub feature_tool: FeatureToolMetadata, // the tool, type and options it records
-    pub content_hash: SiftContentHash,
-}
-```
-
-Passing an unreadable file over is right for a writer deciding whether a
-folder is version 1. The workspace upgrade cannot pass one over: a `.sift`
-file that is locked, or a sync client's placeholder that cannot be fetched,
-may hold features a `.sfmr` needs, so the upgrade stops on any file whose
-error is the file system's rather than its content's
-([ws-upgrade-command.md § What it does](../../cli/workspace/ws-upgrade-command.md#what-it-does)).
+(`BuildSiftFilesError::Version1Settings`) before writing anything, since no
+`.sift` file is written from version 1 settings; the message says that sfmtool
+0.4.1 is the last release that converts them. When every file is up to date
+it refuses nothing
+([workspace.md § No `.sift` file is written from version 1 settings](../../workspace/workspace.md#no-sift-file-is-written-from-version-1-settings)).
 
 `sfmtool_defaults` is the options a workspace initialized with the `sfmtool`
 tool and no other choice records: the default `feature_options` of
@@ -992,95 +936,6 @@ pipeline in `image_files_to_sift_files` with the COLMAP and OpenCV backends,
 and its own pipelining code is tested and benchmarked separately; the
 byte-for-byte test above is what keeps the two writers in agreement.
 
-## Converting a version 1 `.sift` file
-
-`Version2SiftFolder` converts a version 1 `.sift` file to version 2 without
-extracting its features again, as
-[sift-file-format.md § Converting a version 1 file](../../formats/sift-file-format.md#converting-a-version-1-file)
-defines the conversion. It is in
-[convert.rs](../../../crates/sfmtool-core/src/features/sift/convert.rs):
-
-```rust
-pub struct Version2SiftFolder { /* the folder */ }
-impl Version2SiftFolder {
-    pub fn create(folder: &Path) -> Result<Self, ConvertSiftFileError>;
-    pub fn path(&self) -> &Path;
-    pub fn convert_version_1_sift_file(
-        &self,
-        sift_path: &Path,
-        image_path: &Path,
-        progress: &Progress,
-    ) -> Result<ConvertedSiftFile, ConvertSiftFileError>;
-}
-
-pub struct ConvertedSiftFile {
-    pub path: PathBuf,                        // the version 2 file
-    pub source_content_hash: SiftContentHash, // the version 1 file's hashes
-    pub content_hash: SiftContentHash,        // the version 2 file's hashes
-}
-```
-
-```rust
-let folder = Version2SiftFolder::create(&images_dir.join(new_prefix))?;
-let converted = folder.convert_version_1_sift_file(
-    &images_dir.join(old_prefix).join("0001.jpg.sift"),
-    &images_dir.join("0001.jpg"),
-    &progress,
-)?;
-// converted.source_content_hash.content_xxh128 -> converted.content_hash
-```
-
-It is a folder value with a method, rather than one function that takes a
-destination path, because of the rule that the two versions never share a
-folder. `create` checks the folder with `version_1_sift_files`, as the other
-writers of version 2 files do, and makes it when it is not there. That check
-opens every `.sift` file in the folder; made again for each file converted
-into a folder of a thousand images it would open about half a million files.
-So it is made once per folder, and the method, which takes `&self`, can then
-be called from several threads at once. A version 1 file put into the folder by
-another program after the check is not noticed.
-
-The method writes `<folder>/<the source file's name>`, through a temporary
-file renamed over any file already there, and returns both files' content
-hashes, which is what a `.sfmr` or `.matches` file that records the old file
-needs to be rewritten. The caller names the image because the `.sift` file
-does not say where it is: the image is in the directory that the record's
-`feature_prefix_dir` is relative to, which the file does not record, and a
-version 1 extractor's `image_name` is sometimes a path relative to another
-directory (`fisheye_left/frame_001039.jpg`) rather than the file name.
-
-The readings are computed as extraction computes them: the image is decoded by
-`ImageU8::read_rgb` and read by `image_readings_from_rgb` through the upgraded
-options' `image_to_gray`, the decode and the function `build_sift_files`, the
-Python extractors and the `.sfmr` readings gather use. A call takes about
-0.04 s for a 2040 x 1536 photograph with 8,000 features. It takes a `Progress`
-all the same, since it reads and writes a whole `.sift` file
-([STANDARDS.md](../../STANDARDS.md#long-running-functions-take-a-progress)), and
-a caller converting a workspace cancels it through that: it opens a
-`convert_version_1_sift_file` detail phase and checks for cancellation after
-reading the file's options and before writing.
-
-`ConvertSiftFileError` says what was refused, and nothing is written when a
-conversion is refused:
-
-| Variant | When | Python exception |
-|---------|------|------------------|
-| `Version1Files`, `ListFolder`, `CreateFolder` | `create`: the folder holds version 1 `.sift` files (the message is that of `Version1SiftFiles`), or cannot be listed or made | `OSError` |
-| `Read` | the `.sift` file cannot be read | the format-error table ([python-bindings.md § Format errors](../../python-bindings.md#format-errors)), so `FileNotFoundError` for a missing file |
-| `NotVersion1` | the file is not version 1; the message names its version | `ValueError` |
-| `FeatureOptions` | `upgrade_feature_options` refuses the options: an `sfmtool-undistort` file, whose message says to run `sfm undistort` again, an unknown feature tool, or a `gray_formula` that does not parse | `ValueError` |
-| `ImageMissing` | the image is not there | `FileNotFoundError` |
-| `ImageUnreadable`, `ImageChanged`, `ImageSize` | the image cannot be read or decoded, does not hash to `image_file_xxh128`, or decodes to another size than recorded | `OSError` |
-| `Readings` | a reading is not finite under the conversion | `OSError` |
-| `Write` | the file cannot be written, or its hashes read back | the format-error table |
-| `Cancelled` | the caller cancelled | `InterruptedError` |
-
-The binding `sfmtool.sift.Version2SiftFolder` makes the folder in its
-constructor and returns a dict from `convert_version_1_sift_file`, with
-`path` and the two `content_hash.json` dicts. It releases the GIL and passes no
-progress: a call is a fraction of a second, and Python has no caller that
-converts a workspace's files.
-
 ## Testing & validation
 
 - **Cross-validation against OpenCV** (`cv2.SIFT_create`) on the checked-in datasets
@@ -1103,15 +958,6 @@ converts a workspace's files.
   checks that `build_sift_files` and the Python `sfmtool` backend write files
   with equal content hashes, including thumbnails on OpenCV's integer and 2 x 2
   reduction paths.
-- **Converting a version 1 file:** Rust tests in `features/sift/convert/tests.rs`
-  write version 1 files of the `sfmtool`, `colmap` and `opencv` tools for
-  seoul_bull images and check that the conversion copies the features and the
-  thumbnail byte for byte, records `upgrade_feature_options` of the options and
-  the readings `image_readings_from_rgb` takes from the image, returns the
-  hashes the two files store and writes a file that verifies; and that each
-  refusal is its error and writes nothing. The PyO3 test
-  `tests/rust_bindings/sift/test_convert_version_1_sift_rust_bindings.py`
-  checks the binding's result and the exception each refusal raises.
 - **Describe-at-a-detection** (Rust, and mirrored in the PyO3 surface test):
   describing every detected keypoint at its own position, shape and size returns
   the extractor's descriptors byte for byte, by both query forms; a keypoint

@@ -36,37 +36,33 @@ fn write_photograph(workspace: &Path, name: &str, image: &ImageU8) -> [u8; 16] {
     parse_hash_bytes(&hash).unwrap()
 }
 
-/// Write the `.sift` of `name` under `workspace`: version 2 with `readings`
-/// computed through `image_to_gray`, or version 1 when `readings` is `None`,
-/// recorded as extracted from a photograph hashing to `image_hash`. Returns
-/// the file's content hash.
+/// Write the `.sift` of `name` under `workspace`, with `readings` computed
+/// through `image_to_gray`, recorded as extracted from a photograph hashing
+/// to `image_hash`. Returns the file's content hash.
 fn write_sift_for(
     workspace: &Path,
     name: &str,
     image_hash: [u8; 16],
-    readings: Option<(&ImageToGray, ImageReadings)>,
+    (image_to_gray, readings): (&ImageToGray, ImageReadings),
 ) -> [u8; 16] {
-    let mut feature_options = serde_json::json!({});
-    if let Some((conversion, _)) = readings {
-        feature_options["image_to_gray"] = conversion.to_json();
-    }
     let data = SiftData {
         feature_tool_metadata: FeatureToolMetadata {
             feature_tool: "sfmtool".into(),
             feature_type: "sift".into(),
-            feature_options,
+            feature_options: serde_json::json!({"image_to_gray": image_to_gray.to_json()}),
         },
         metadata: SiftMetadata {
-            version: if readings.is_some() { 2 } else { 1 },
+            version: 2,
             image_name: name.into(),
             image_file_xxh128: sfmtool_archive_io::format_hash(u128::from_be_bytes(image_hash)),
             image_file_size: 1,
             image_width: 64,
             image_height: 48,
             feature_count: 0,
-            sharpness: readings.map(|(_, r)| f64::from(r.sharpness)),
+            sharpness: f64::from(readings.sharpness),
             gradient_structure_tensor_xx_yy_xy: readings
-                .map(|(_, r)| r.gradient_structure_tensor_xx_yy_xy.map(f64::from)),
+                .gradient_structure_tensor_xx_yy_xy
+                .map(f64::from),
         },
         content_hash: SiftContentHash::default(),
         positions_xy: Array2::zeros((0, 2)),
@@ -153,18 +149,16 @@ fn each_source_in_order_and_a_conversion_mismatch_recomputes() {
             sharpness: 0.01 * (i + 1) as f32,
             gradient_structure_tensor_xx_yy_xy: [0.003, 0.002, -0.0001 * i as f32],
         };
-        // Images 1 and 2 have a version 2 .sift under the file's conversion,
-        // image 3 one under another conversion, image 4 a version 1 .sift,
-        // and the rest one under the file's conversion too.
+        // Image 3 has a .sift under another conversion, and the others one
+        // under the file's conversion.
         let hash = match i {
             3 => write_sift_for(
                 dir.path(),
                 name,
                 image_hash,
-                Some((&ImageToGray::default(), stored)),
+                (&ImageToGray::default(), stored),
             ),
-            4 => write_sift_for(dir.path(), name, image_hash, None),
-            _ => write_sift_for(dir.path(), name, image_hash, Some((&conversion, stored))),
+            _ => write_sift_for(dir.path(), name, image_hash, (&conversion, stored)),
         };
         set_sift_content_hash(&mut recon, i, hash);
     }
@@ -184,9 +178,6 @@ fn each_source_in_order_and_a_conversion_mismatch_recomputes() {
     assert_eq!(gathered.sources[3], ImageReadingSource::Photograph);
     assert_eq!(gathered.rows[3], computed(3, &conversion));
     assert_ne!(gathered.rows[3].sharpness, 0.04);
-    // A version 1 .sift records no readings but does record the photograph.
-    assert_eq!(gathered.sources[4], ImageReadingSource::Photograph);
-    assert_eq!(gathered.rows[4], computed(4, &conversion));
 
     // A row the value holds under no recorded conversion is not used: the
     // file's conversion is then the workspace's, and image 0's .sift has it.
@@ -199,17 +190,21 @@ fn each_source_in_order_and_a_conversion_mismatch_recomputes() {
 fn an_image_with_no_source_fails_the_gather_naming_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut recon = without_readings(dir.path());
+    recon.image_set.image_to_gray = Some(ImageToGray::default());
     let names = names(&recon);
-    // Image 0 is complete: photograph and a version 1 .sift that records it.
+    // Each .sift holds readings under another conversion than the save's, so
+    // none is copied, but it records the photograph.
+    let other = (&bt601(), ImageReadings::ZERO);
+    // Image 0 is complete: photograph and a .sift that records it.
     let hash = write_photograph(dir.path(), &names[0], &photograph(64, 48, 0));
-    let sift_hash = write_sift_for(dir.path(), &names[0], hash, None);
+    let sift_hash = write_sift_for(dir.path(), &names[0], hash, other);
     set_sift_content_hash(&mut recon, 0, sift_hash);
     // Image 1's photograph has changed since its .sift was written.
     write_photograph(dir.path(), &names[1], &photograph(64, 48, 1));
-    let sift_hash = write_sift_for(dir.path(), &names[1], [9; 16], None);
+    let sift_hash = write_sift_for(dir.path(), &names[1], [9; 16], other);
     set_sift_content_hash(&mut recon, 1, sift_hash);
     // Image 2's .sift is another extraction; the others have nothing.
-    write_sift_for(dir.path(), &names[2], [9; 16], None);
+    write_sift_for(dir.path(), &names[2], [9; 16], other);
 
     let Err(ImageReadingsError::Unavailable { images, .. }) =
         recon.gather_image_readings(&Progress::none())
@@ -219,7 +214,12 @@ fn an_image_with_no_source_fails_the_gather_naming_it() {
     let named: Vec<&str> = images.iter().map(|i| i.name.as_str()).collect();
     assert_eq!(named, &names[1..]);
     assert!(images[0].photograph.contains("do not hash"), "{images:?}");
-    assert!(images[0].sift.contains("version 1"), "{images:?}");
+    assert!(
+        images[0]
+            .sift
+            .contains("were computed through image_to_gray"),
+        "{images:?}"
+    );
     assert!(images[1].sift.contains("another extraction"), "{images:?}");
     assert!(images[2].sift.contains("no such file"), "{images:?}");
     assert!(images[2].photograph.contains("no such file"), "{images:?}");
@@ -269,20 +269,21 @@ fn an_embedded_patches_value_without_sift_files_reads_its_photographs() {
 fn the_conversion_for_a_save_follows_the_order_the_format_gives() {
     let dir = tempfile::tempdir().unwrap();
     let mut recon = without_readings(dir.path());
-    // Nothing recorded and a colmap record: its version 1 conversion.
+    // Nothing recorded and a colmap record with no image_to_gray: the
+    // tool's conversion.
     recon.metadata.workspace.contents.feature_tool = "colmap".into();
     recon.metadata.workspace.contents.feature_options = serde_json::json!({});
     assert_eq!(
         recon.image_to_gray_for_save(),
         ImageToGray::new("0.2126*R + 0.7152*G + 0.0722*B", Some(8)).unwrap()
     );
-    // A version 2 .sift of a later image comes before the tool's conversion.
+    // A .sift of a later image comes before the tool's conversion.
     let names = names(&recon);
     write_sift_for(
         dir.path(),
         &names[3],
         [0; 16],
-        Some((&bt601(), ImageReadings::ZERO)),
+        (&bt601(), ImageReadings::ZERO),
     );
     assert_eq!(recon.image_to_gray_for_save(), bt601());
     // The workspace record comes before the .sift files.
@@ -309,12 +310,7 @@ fn a_save_writes_the_gathered_rows_and_leaves_the_value_unchanged() {
             sharpness: 0.5 + i as f32,
             gradient_structure_tensor_xx_yy_xy: [0.25, 0.125, 0.0],
         };
-        let hash = write_sift_for(
-            dir.path(),
-            name,
-            [0; 16],
-            Some((&ImageToGray::default(), stored)),
-        );
+        let hash = write_sift_for(dir.path(), name, [0; 16], (&ImageToGray::default(), stored));
         set_sift_content_hash(&mut recon, i, hash);
     }
     let out = dir.path().join("out.sfmr");
@@ -341,7 +337,7 @@ fn a_cancelled_save_writes_nothing_and_says_it_was_interrupted() {
             dir.path(),
             name,
             [0; 16],
-            Some((&ImageToGray::default(), ImageReadings::ZERO)),
+            (&ImageToGray::default(), ImageReadings::ZERO),
         );
         set_sift_content_hash(&mut recon, i, hash);
     }

@@ -7,14 +7,13 @@
 //! the named sets of the workspace's images, and resolves one list to the
 //! workspace's image files or to a reconstruction's image names.
 //! [`feature_options`] holds the rules of the feature options a
-//! `.sfm-workspace.json` records: each feature tool's grey conversion, the
-//! conversion of a version 1 record to version 2, and the name of the folder
-//! a new record's `.sift` files go in. [`mipmap_options`] reads and
+//! `.sfm-workspace.json` records: each feature tool's grey conversion and the
+//! name of the folder a new record's `.sift` files go in. [`mipmap_options`] reads and
 //! validates the file's `mipmap_options` object ([`read_mipmap_options`]).
 //! [`find_workspace_for_path`], the
 //! upward search for `.sfm-workspace.json`, is `sfmtool-archive-io`'s, re-exported
 //! here; reading the rest of that file is the caller's (see `specs/workspace/workspace.md`).
-//! [`upgrade`] brings a workspace made by an earlier sfmtool to the current file
+//! [`upgrade`] brings a version 2 workspace's files to the current file
 //! versions: [`upgrade_workspace`].
 
 pub mod feature_options;
@@ -26,8 +25,8 @@ pub use sfmtool_archive_io::find_workspace_for_path;
 
 pub use feature_options::{
     feature_prefix_dir, feature_type_for_tool, has_image_to_gray, recorded_image_to_gray,
-    tool_image_to_gray, upgrade_feature_options, FeatureOptionsError, COLMAP_TOOL, OPENCV_TOOL,
-    SFMTOOL_TOOL, UNDISTORT_TOOL, WORKSPACE_VERSION,
+    tool_image_to_gray, FeatureOptionsError, COLMAP_TOOL, OPENCV_TOOL, SFMTOOL_TOOL,
+    UNDISTORT_TOOL, WORKSPACE_LAST_RELEASE_READING_VERSION_1, WORKSPACE_VERSION,
 };
 pub use mipmap_options::{read_mipmap_options, WorkspaceConfigError};
 pub use named_image_lists::{
@@ -37,7 +36,6 @@ pub use named_image_lists::{
     WORKSPACE_FILE_NAME,
 };
 pub use upgrade::{
-    upgrade_workspace, SiftConflict, SiftFileFailure, UpgradeFileKind, UpgradeOutcome,
-    UpgradeWorkspaceError, UpgradeWorkspaceOptions, UpgradeWorkspaceReport, UpgradedFile,
-    UpgradedFolder,
+    upgrade_workspace, UpgradeFileKind, UpgradeOutcome, UpgradeWorkspaceError,
+    UpgradeWorkspaceOptions, UpgradeWorkspaceReport, UpgradedFile,
 };

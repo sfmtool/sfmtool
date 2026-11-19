@@ -103,7 +103,7 @@ compound string `sift-sfmtool-undistort`. `source_feature_tool` and
 `source_feature_options` are the `feature_tool` and `feature_options` recorded
 in the input `.sfmr`'s `workspace.contents`, the features it was built from,
 kept as the source recorded them, a version 1 `gray_formula` included.
-`image_to_gray` is the source's conversion, read as `sfm ws upgrade` reads one:
+`image_to_gray` is the source's conversion, as `recorded_image_to_gray` reads it:
 the source's own top-level object, else its `gray_formula` as
 `{"formula": …}`, else the source tool's conversion, and for a version 1
 `sfmtool-undistort` source, the same reading of its own nested record. The
@@ -114,8 +114,7 @@ Features in this workspace are produced by undistortion, not extraction. The
 sentinel `feature_tool` value is reserved so that extraction tooling can
 distinguish an undistort workspace from a regular one. `sfm sift --extract`
 does not currently recognize this value — do not run it on an undistort
-workspace; the pre-existing `.sift` files are the features. `sfm ws upgrade`
-refuses an undistort workspace and says to run `sfm undistort` again.
+workspace; the pre-existing `.sift` files are the features.
 
 ## Behavior
 

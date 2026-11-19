@@ -4,9 +4,9 @@
 """A command that uses a workspace requires version 2.
 
 A version 1 workspace is refused before any work, with one message naming
-`sfm ws upgrade`, whether or not its `.sift` files are there. Commands that
-only read a given file keep working, and `sfm ws upgrade` moves the workspace
-to version 2.
+sfmtool 0.4.1 as the last release that upgrades it, whether or not its `.sift`
+files are there. Commands that only read a given file keep working, and
+`sfm ws upgrade` refuses it too.
 """
 
 import shutil
@@ -84,8 +84,10 @@ def version_1_workspace(version_2_workspace, tmp_path) -> Path:
 def _version_1_message(workspace: Path) -> str:
     return (
         f"The workspace file {workspace / '.sfm-workspace.json'} is version 1, and "
-        "sfmtool works only in a version 2 workspace. Run 'sfm ws upgrade', which "
-        "moves the workspace to version 2 and a new features folder."
+        "sfmtool works only in a version 2 workspace. sfmtool 0.4.1 is the last "
+        "release that upgrades a version 1 workspace: install it, run "
+        "`sfm ws upgrade` on the workspace, then use the workspace with this "
+        "release."
     )
 
 
@@ -194,15 +196,21 @@ def test_a_command_that_only_reads_a_given_file_works(
     assert result.exit_code == 0, result.output
 
 
-def test_ws_upgrade_lets_the_commands_run_again(version_1_workspace, monkeypatch):
-    """After `sfm ws upgrade` the workspace is version 2, and the commands it
-    refused run."""
+def test_ws_upgrade_refuses_a_version_1_workspace_naming_sfmtool_0_4_1(
+    version_1_workspace, monkeypatch
+):
+    """`sfm ws upgrade` upgrades from a version 2 workspace, and refuses a
+    version 1 one before it reads anything else, changing nothing."""
     workspace = version_1_workspace
     monkeypatch.chdir(workspace)
+    before = {p: p.read_bytes() for p in workspace.rglob("*") if p.is_file()}
     result = _invoke("ws", "upgrade")
-    assert result.exit_code == 0, result.output
-    result = _invoke("sift", "--extract", "images")
-    assert result.exit_code == 0, result.output
-    result = _invoke("to-colmap-db", "pairs.matches", "out.db")
-    assert result.exit_code == 0, result.output
-    assert (workspace / "out.db").is_file()
+    assert result.exit_code != 0
+    output = " ".join(result.output.split())
+    assert (
+        f"The workspace file {workspace / '.sfm-workspace.json'} is version 1, "
+        "and this sfmtool upgrades a version 2 workspace. sfmtool 0.4.1 is the "
+        "last release that reads the older .sift, .sfmr, .matches and .camrig "
+        "versions a version 1 workspace holds"
+    ) in output
+    assert {p: p.read_bytes() for p in workspace.rglob("*") if p.is_file()} == before

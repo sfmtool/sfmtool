@@ -240,14 +240,15 @@ class TestLoadWorkspaceVersions:
         # The recorded folder name comes back as it is.
         assert load_workspace_config(tmp_path) == config
 
-    def test_version_1_is_refused_naming_ws_upgrade(self, tmp_path: Path):
+    def test_version_1_is_refused_naming_sfmtool_0_4_1(self, tmp_path: Path):
         path = _write_workspace_config(tmp_path, _v2({"gray_formula": "G"}, version=1))
         with pytest.raises(Version1WorkspaceError) as info:
             load_workspace_config(tmp_path)
         assert str(info.value) == (
             f"The workspace file {path} is version 1, and sfmtool works only in "
-            "a version 2 workspace. Run 'sfm ws upgrade', which moves the "
-            "workspace to version 2 and a new features folder."
+            "a version 2 workspace. sfmtool 0.4.1 is the last release that "
+            "upgrades a version 1 workspace: install it, run `sfm ws upgrade` on "
+            "the workspace, then use the workspace with this release."
         )
         # The check that needs no settings refuses it the same way.
         with pytest.raises(Version1WorkspaceError) as again:

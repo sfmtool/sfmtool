@@ -15,7 +15,6 @@ use super::frame_pair::{FramePairError, FramePairOptions};
 use super::source::FrameSourceError;
 use crate::camera::CameraIntrinsics;
 use crate::features::kdforest::KdForestParams;
-use crate::features::sift::Version1SiftFiles;
 
 /// Where one image of a capture is and where its `.sift` file goes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -194,24 +193,13 @@ pub enum PickImagesError {
     /// count that differs from the sensor count, frame numbers not in
     /// increasing order, or two images with one `.sift` path.
     Sequence { reason: String },
-    /// A folder the capture's `.sift` files go in holds version 1 `.sift`
-    /// files, found before anything is extracted.
-    Version1Files(Version1SiftFiles),
-    /// A folder the capture's `.sift` files go in is there but cannot be
-    /// listed, such as a file in its place.
-    ListFolder {
-        folder: PathBuf,
-        source: std::io::Error,
-    },
     /// The [`super::FrameSource`] could not make a frame's `.sift` files
     /// exist; the error names the frame.
     Source(FrameSourceError),
-    /// A `.sift` file the source made exist cannot be read, or holds readings
-    /// or features that break the format's rules.
+    /// A `.sift` file the source made exist cannot be read, is of a version
+    /// the reader does not read, or holds readings or features that break the
+    /// format's rules.
     ReadSift { path: PathBuf, source: SiftError },
-    /// A `.sift` file read is version 1, which records no readings: one put
-    /// in its folder after the up-front check.
-    Version1Sift { path: PathBuf },
     /// Two frames could not be matched: their reference sensor's images
     /// differ in size, or the essential split's camera is of another size
     /// than they are.
@@ -231,23 +219,10 @@ impl fmt::Display for PickImagesError {
         match self {
             Self::Options { name, reason } => write!(f, "{name} {reason}"),
             Self::Sequence { reason } => f.write_str(reason),
-            Self::Version1Files(found) => write!(f, "{found}"),
-            Self::ListFolder { folder, source } => write!(
-                f,
-                "the folder {} that .sift files go in cannot be listed: {source}",
-                folder.display()
-            ),
             Self::Source(error) => write!(f, "{error}"),
             Self::ReadSift { path, source } => {
                 write!(f, "cannot read {}: {source}", path.display())
             }
-            Self::Version1Sift { path } => write!(
-                f,
-                "{} is a version 1 .sift file, which records no sharpness or gradient \
-                 structure tensor; remove it and run again, which extracts a version 2 file \
-                 in its place",
-                path.display()
-            ),
             Self::Pair { images, error, .. } => write!(
                 f,
                 "cannot match {} with {}: {error}",
@@ -262,7 +237,6 @@ impl fmt::Display for PickImagesError {
 impl std::error::Error for PickImagesError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::ListFolder { source, .. } => Some(source),
             Self::ReadSift { source, .. } => Some(source),
             Self::Pair { error, .. } => Some(error),
             Self::Source(error) => Some(error),

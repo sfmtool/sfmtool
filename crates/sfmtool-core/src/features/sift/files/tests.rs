@@ -74,8 +74,8 @@ fn the_sfmtool_defaults_are_those_ws_init_writes() {
 
 /// Options without `double_image_below_long_side` name the folder they named
 /// before the key existed: the defaults without it are what `sfm ws init`
-/// wrote then, and what `sfm ws upgrade` writes from the default version 1
-/// options, as the test-data workspaces record.
+/// wrote then, and what sfmtool 0.4.1's `sfm ws upgrade` wrote from the
+/// default version 1 options, as the test-data workspaces record.
 #[test]
 fn options_without_the_doubling_limit_keep_their_folder() {
     let mut options = BuildSiftFilesOptions::sfmtool_defaults().feature_options;
@@ -135,10 +135,10 @@ fn a_built_file_holds_what_the_extractor_finds() {
     );
     let readings = image_readings_from_rgb(270, 480, rgb.data(), &params.image_to_gray).unwrap();
     // The file holds the f32 readings as doubles, exactly.
-    assert_eq!(data.metadata.sharpness, Some(f64::from(readings.sharpness)));
+    assert_eq!(data.metadata.sharpness, f64::from(readings.sharpness));
     assert_eq!(
         data.metadata.gradient_structure_tensor_xx_yy_xy,
-        Some(readings.gradient_structure_tensor_xx_yy_xy.map(f64::from))
+        readings.gradient_structure_tensor_xx_yy_xy.map(f64::from)
     );
     assert!(readings.sharpness > 0.0);
 
@@ -452,7 +452,11 @@ fn version_1_settings_are_refused_when_there_is_something_to_write() {
     options.feature_options["gray_formula"] = object["formula"].clone();
     let err = build_sift_files(&images, &options, &Progress::none()).unwrap_err();
     assert_eq!(err, BuildSiftFilesError::Version1Settings);
-    assert!(err.to_string().contains("sfm ws upgrade"), "{err}");
+    assert!(
+        err.to_string()
+            .contains("sfmtool 0.4.1 is the last release that converts them"),
+        "{err}"
+    );
     assert!(!dir.path().join("images/features").exists());
 
     // With every file up to date there is nothing to write, so nothing is
@@ -465,154 +469,6 @@ fn version_1_settings_are_refused_when_there_is_something_to_write() {
     };
     let report = build_sift_files(&images, &up_to_date, &Progress::none()).unwrap();
     assert_eq!((report.extracted, report.skipped), (0, 1));
-}
-
-/// A `.sift` file of no features at `path`, of `version`, with the metadata
-/// and options that version requires.
-fn write_empty_sift(path: &Path, version: u32) {
-    let (feature_options, readings) = if version < SIFT_READINGS_VERSION {
-        (serde_json::json!({"gray_formula": "G"}), None)
-    } else {
-        (
-            serde_json::json!({"image_to_gray": {"formula": "G"}}),
-            Some(()),
-        )
-    };
-    let data = sfmtool_sift_format::SiftData {
-        feature_tool_metadata: FeatureToolMetadata {
-            feature_tool: "sfmtool".into(),
-            feature_type: "sift".into(),
-            feature_options,
-        },
-        metadata: SiftMetadata {
-            version,
-            image_name: "seoul_bull_sculpture_02.jpg".into(),
-            image_file_xxh128: "0".repeat(32),
-            image_file_size: 1,
-            image_width: 270,
-            image_height: 480,
-            feature_count: 0,
-            sharpness: readings.map(|()| 0.0),
-            gradient_structure_tensor_xx_yy_xy: readings.map(|()| [0.0; 3]),
-        },
-        content_hash: SiftContentHash::default(),
-        positions_xy: Array2::zeros((0, 2)),
-        affine_shapes: Array3::zeros((0, 2, 2)),
-        descriptors: Array2::zeros((0, 128)),
-        thumbnail_y_x_rgb: Array3::zeros((THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3)),
-    };
-    sfmtool_sift_format::write_sift(path, &data, 1).unwrap();
-}
-
-#[test]
-fn a_folder_holding_version_1_files_is_refused() {
-    let (dir, images) = workspace_with_images(2);
-    let options = BuildSiftFilesOptions::sfmtool_defaults();
-    // A version 1 file of the second image in the folder the first goes in.
-    let v1_path = options.sift_path_for_image(&images[1]);
-    let folder = v1_path.parent().unwrap().to_path_buf();
-    std::fs::create_dir_all(&folder).unwrap();
-    write_empty_sift(&v1_path, 1);
-    let err = build_sift_files(&images[..1], &options, &Progress::none()).unwrap_err();
-    assert_eq!(
-        err,
-        BuildSiftFilesError::Version1Files(Version1SiftFiles {
-            folder: folder.clone(),
-            files: vec![v1_path.clone()],
-        })
-    );
-    // The options are version 2 settings, so the fix is to remove the files:
-    // `sfm ws upgrade` does nothing to a version 2 workspace.
-    let message = err.to_string();
-    assert!(message.contains(&folder.display().to_string()), "{message}");
-    assert!(
-        message.contains("(seoul_bull_sculpture_02.jpg.sift)"),
-        "{message}"
-    );
-    assert!(
-        message.contains("remove those files from the folder and run again"),
-        "{message}"
-    );
-    assert!(!message.contains("sfm ws upgrade"), "{message}");
-    assert!(!options.sift_path_for_image(&images[0]).exists());
-
-    // Once it is replaced by a version 2 file, as the message says, the
-    // build writes into the folder: a version 2 file beside it is no reason
-    // to refuse.
-    std::fs::remove_file(&v1_path).unwrap();
-    write_empty_sift(&v1_path, 2);
-    let report = build_sift_files(&images[..1], &options, &Progress::none()).unwrap();
-    assert_eq!(report.extracted, 1);
-    assert!(options.sift_path_for_image(&images[0]).exists());
-    drop(dir);
-}
-
-#[test]
-fn version_1_sift_files_lists_only_the_folder_s_own_version_1_files() {
-    let dir = tempfile::tempdir().unwrap();
-    let folder = dir.path().join("features");
-    // A folder that is not there holds nothing.
-    assert_eq!(version_1_sift_files(&folder).unwrap(), None);
-
-    std::fs::create_dir(&folder).unwrap();
-    assert_eq!(version_1_sift_files(&folder).unwrap(), None);
-    write_empty_sift(&folder.join("b.jpg.sift"), 1);
-    write_empty_sift(&folder.join("a.jpg.sift"), 1);
-    write_empty_sift(&folder.join("c.jpg.sift"), 2);
-    // A version 1 file under another name, or in a subfolder, is not one of
-    // the folder's .sift files.
-    write_empty_sift(&folder.join("d.jpg.sift.bak"), 1);
-    std::fs::create_dir(folder.join("sub")).unwrap();
-    write_empty_sift(&folder.join("sub").join("e.jpg.sift"), 1);
-    // A file that does not read as a .sift says nothing about the folder.
-    std::fs::write(folder.join("broken.jpg.sift"), b"not a zip").unwrap();
-
-    let found = version_1_sift_files(&folder)
-        .unwrap()
-        .expect("version 1 files");
-    assert_eq!(found.folder, folder);
-    assert_eq!(
-        found.files,
-        vec![folder.join("a.jpg.sift"), folder.join("b.jpg.sift")]
-    );
-    assert_eq!(
-        found.to_string(),
-        format!(
-            "the folder {} holds version 1 .sift files (a.jpg.sift, b.jpg.sift), and version 2 \
-             files are never written beside them; remove those files from the folder and run \
-             again, which extracts version 2 files in their place",
-            folder.display()
-        )
-    );
-
-    // Only version 2 files left: nothing to report.
-    std::fs::remove_file(folder.join("a.jpg.sift")).unwrap();
-    std::fs::remove_file(folder.join("b.jpg.sift")).unwrap();
-    assert_eq!(version_1_sift_files(&folder).unwrap(), None);
-}
-
-#[test]
-fn the_message_names_five_files_and_counts_the_rest() {
-    let folder = PathBuf::from("features");
-    let found = Version1SiftFiles {
-        folder: folder.clone(),
-        files: (1..=7)
-            .map(|i| folder.join(format!("{i}.jpg.sift")))
-            .collect(),
-    };
-    let message = found.to_string();
-    assert!(
-        message.contains("(1.jpg.sift, 2.jpg.sift, 3.jpg.sift, 4.jpg.sift, 5.jpg.sift and 2 more)"),
-        "{message}"
-    );
-}
-
-#[test]
-fn a_file_in_place_of_the_folder_is_an_error() {
-    let dir = tempfile::tempdir().unwrap();
-    let not_a_folder = dir.path().join("features");
-    std::fs::write(&not_a_folder, b"").unwrap();
-    assert!(version_1_sift_files(&not_a_folder).is_err());
 }
 
 #[test]

@@ -1,8 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The feature options a workspace records, and how a version 1 record becomes
-//! a version 2 one.
+//! The feature options a workspace records.
 //!
 //! `.sfm-workspace.json`, and the `workspace.contents` of every `.sfmr` written
 //! from it, record the feature extraction as `feature_tool`, `feature_type`,
@@ -12,10 +11,8 @@
 //! conversion as a `gray_formula` string and the other tools' not at all. See
 //! `specs/workspace/workspace.md`.
 //!
-//! [`upgrade_feature_options`] is the conversion `sfm ws upgrade` makes, and
-//! the viewer's *Build SIFT Files* makes the same one in memory for a version 1
-//! record. [`recorded_image_to_gray`] reads the conversion a record of either
-//! version states, which is what `sfm undistort` records for its output.
+//! [`recorded_image_to_gray`] reads the conversion a record states, which is
+//! what `sfm undistort` records for its output.
 //! [`feature_prefix_dir`] names the folder a new record's `.sift` files go in.
 
 use std::fmt;
@@ -24,6 +21,11 @@ use crate::features::sift::{ImageToGray, ImageToGrayError, DEFAULT_GRAY_FORMULA}
 
 /// The `.sfm-workspace.json` version a writer writes.
 pub const WORKSPACE_VERSION: u32 = 2;
+
+/// The last sfmtool release that reads a version 1 `.sfm-workspace.json` and
+/// the `.sift`, `.sfmr`, `.matches` and `.camrig` versions it holds, and so the
+/// last that upgrades it, which the refusal of one names.
+pub const WORKSPACE_LAST_RELEASE_READING_VERSION_1: &str = "0.4.1";
 
 /// The `feature_tool` of the toolkit's own SIFT extractor.
 pub const SFMTOOL_TOOL: &str = "sfmtool";
@@ -42,17 +44,11 @@ const BT601_GRAY_FORMULA: &str = "0.299*R + 0.587*G + 0.114*B";
 /// than the features, and so do not name a folder ([`feature_prefix_dir`]).
 const NON_DEFINING_OPTION_KEYS: &[&str] = &["use_gpu"];
 
-/// Why a record's conversion could not be read or upgraded.
+/// Why a record's conversion could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FeatureOptionsError {
     /// `feature_options` is not a JSON object.
     NotAnObject,
-    /// The options already carry a top-level `image_to_gray`, so they are
-    /// version 2 settings.
-    AlreadyVersion2,
-    /// The record is `sfmtool-undistort`'s, whose `.sift` files are made from
-    /// its source's and cannot be extracted again.
-    Undistort,
     /// A feature tool this build knows no conversion for.
     UnknownTool(String),
     /// The `sfmtool-undistort` record has no `source_feature_tool` or
@@ -68,16 +64,6 @@ impl fmt::Display for FeatureOptionsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotAnObject => write!(f, "feature_options is not a JSON object"),
-            Self::AlreadyVersion2 => write!(
-                f,
-                "feature_options already carry 'image_to_gray', so they are version 2 settings"
-            ),
-            Self::Undistort => write!(
-                f,
-                "the feature tool is 'sfmtool-undistort', whose .sift files are made from its \
-                 source's and cannot be extracted again; run 'sfm undistort' again to write a \
-                 version 2 workspace"
-            ),
             Self::UnknownTool(tool) => write!(
                 f,
                 "the feature tool '{tool}' is not one of 'sfmtool', 'colmap' or 'opencv'"
@@ -126,16 +112,14 @@ pub fn has_image_to_gray(feature_options: &serde_json::Value) -> bool {
     feature_options.get("image_to_gray").is_some()
 }
 
-/// The conversion a record of either version states for `feature_tool`'s
-/// `feature_options`.
+/// The conversion a record states for `feature_tool`'s `feature_options`.
 ///
 /// It is the top-level `image_to_gray` object when there is one; otherwise a
-/// `gray_formula` string, read with no rounding; otherwise the tool's
-/// conversion ([`tool_image_to_gray`]). An `sfmtool-undistort` record without
-/// its own object states its source's, read from `source_feature_tool` and
-/// `source_feature_options` the same way. This is what `sfm undistort` records
-/// as its output's `image_to_gray`, and what a reader takes a version 1 file's
-/// conversion to be.
+/// version 1 record's `gray_formula` string, read with no rounding; otherwise
+/// the tool's conversion ([`tool_image_to_gray`]). An `sfmtool-undistort`
+/// record without its own object states its source's, read from
+/// `source_feature_tool` and `source_feature_options` the same way. This is
+/// what `sfm undistort` records as its output's `image_to_gray`.
 ///
 /// # Errors
 ///
@@ -167,61 +151,6 @@ pub fn recorded_image_to_gray(
         .ok_or_else(|| FeatureOptionsError::UnknownTool(feature_tool.to_owned()))
 }
 
-/// Make version 1 `feature_options` of `feature_tool` into version 2 ones,
-/// keeping every other option as it is.
-///
-/// For `sfmtool`, a `gray_formula` becomes `image_to_gray: {"formula":
-/// <gray_formula>}`, and options without one gain the tool's default. For
-/// `colmap` and `opencv`, the options gain the tool's conversion; a
-/// `gray_formula`, which neither tool reads, is dropped. This is the
-/// conversion `sfm ws upgrade` makes, and the viewer makes for a version 1
-/// `sfmtool` record before it builds `.sift` files from it.
-///
-/// ```
-/// use sfmtool_core::workspace::upgrade_feature_options;
-///
-/// let v1 = serde_json::json!({"peak_ratio": 0.7, "gray_formula": "G"});
-/// let v2 = upgrade_feature_options("sfmtool", &v1)?;
-/// assert_eq!(v2, serde_json::json!({"peak_ratio": 0.7, "image_to_gray": {"formula": "G"}}));
-/// # Ok::<(), sfmtool_core::workspace::FeatureOptionsError>(())
-/// ```
-///
-/// # Errors
-///
-/// [`FeatureOptionsError::AlreadyVersion2`] for options that already carry
-/// `image_to_gray`, [`FeatureOptionsError::Undistort`] for an
-/// `sfmtool-undistort` record, [`FeatureOptionsError::UnknownTool`] for any
-/// other tool than the three, [`FeatureOptionsError::GrayFormula`] for a
-/// `gray_formula` that does not parse, and
-/// [`FeatureOptionsError::NotAnObject`].
-pub fn upgrade_feature_options(
-    feature_tool: &str,
-    feature_options: &serde_json::Value,
-) -> Result<serde_json::Value, FeatureOptionsError> {
-    let mut map = feature_options
-        .as_object()
-        .ok_or(FeatureOptionsError::NotAnObject)?
-        .clone();
-    if map.contains_key("image_to_gray") {
-        return Err(FeatureOptionsError::AlreadyVersion2);
-    }
-    let tool = feature_tool.to_ascii_lowercase();
-    let image_to_gray = match tool.as_str() {
-        SFMTOOL_TOOL => match map.remove("gray_formula") {
-            Some(value) => gray_formula_conversion(&value)?,
-            None => tool_image_to_gray(SFMTOOL_TOOL).expect("sfmtool has a conversion"),
-        },
-        COLMAP_TOOL | OPENCV_TOOL => {
-            map.remove("gray_formula");
-            tool_image_to_gray(&tool).expect("the tool has a conversion")
-        }
-        UNDISTORT_TOOL => return Err(FeatureOptionsError::Undistort),
-        _ => return Err(FeatureOptionsError::UnknownTool(feature_tool.to_owned())),
-    };
-    map.insert("image_to_gray".to_owned(), image_to_gray.to_json());
-    Ok(serde_json::Value::Object(map))
-}
-
 /// The `feature_type` a workspace records for `feature_tool` with
 /// `feature_options`, the first part of its folder's name: `sift-opencv`,
 /// `sift-sfmtool`, and for `colmap` `sift-colmap` followed by `-dsp` when
@@ -231,8 +160,8 @@ pub fn upgrade_feature_options(
 ///
 /// This is the one implementation: `sfm ws init` and the extractors name a
 /// record's `feature_type` with it through its binding,
-/// `sfmtool.workspace.feature_type_for_tool`, and the workspace upgrade names
-/// a converted folder with it. An option's value is read as Python reads it
+/// `sfmtool.workspace.feature_type_for_tool`. An option's value is read as
+/// Python reads it
 /// there: any value but `false`, `null`, `0`, `""`, `[]` and `{}` sets
 /// `domain_size_pooling`, and `max_num_features` is written as Python writes
 /// it, so `8192.0` counts as 8192 and `1000.5` is written `max1000.5`.

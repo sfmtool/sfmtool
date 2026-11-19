@@ -246,11 +246,10 @@ def test_inspect_sift_verbose(seoul_bull_workspace):
 def _write_sift(
     sample_sift_data,
     path: Path,
-    version: int,
     tensor_xx_yy_xy=(0.004, 0.001, 0.001),
 ) -> Path:
-    """A `.sift` at ``path`` from the sample data: version 2 with readings
-    chosen so the derived values are round, or version 1 with none."""
+    """A `.sift` at ``path`` from the sample data, with readings chosen so the
+    derived values are round."""
     from sfmtool.fileio import write_sift
 
     feature_tool_metadata, metadata, positions, affine, descriptors, thumbnail = (
@@ -258,14 +257,8 @@ def _write_sift(
     )
     feature_tool_metadata = dict(feature_tool_metadata)
     metadata = dict(metadata)
-    if version == 2:
-        metadata["sharpness"] = 0.0125
-        metadata["gradient_structure_tensor_xx_yy_xy"] = list(tensor_xx_yy_xy)
-    else:
-        metadata["version"] = 1
-        del metadata["sharpness"]
-        del metadata["gradient_structure_tensor_xx_yy_xy"]
-        feature_tool_metadata["feature_options"] = {"gray_formula": "G"}
+    metadata["sharpness"] = 0.0125
+    metadata["gradient_structure_tensor_xx_yy_xy"] = list(tensor_xx_yy_xy)
     write_sift(
         path,
         {
@@ -291,7 +284,7 @@ def _row_value(out: str, label: str) -> str:
 def test_inspect_sift_shows_version_and_readings(sample_sift_data, tmp_path: Path):
     """A version 2 .sift shows its version, its two readings and the axis
     ratio and coherence derived from the tensor; verbose adds the conversion."""
-    path = _write_sift(sample_sift_data, tmp_path / "v2.sift", version=2)
+    path = _write_sift(sample_sift_data, tmp_path / "v2.sift")
     result = CliRunner().invoke(main, ["inspect", str(path)])
     assert result.exit_code == 0, result.output
     out = result.output
@@ -328,7 +321,7 @@ def test_inspect_sift_shows_version_and_readings(sample_sift_data, tmp_path: Pat
 def test_inspect_sift_derived_value_edge_cases(
     sample_sift_data, tmp_path: Path, tensor, axis_ratio, coherence
 ):
-    path = _write_sift(sample_sift_data, tmp_path / "v2.sift", 2, tensor)
+    path = _write_sift(sample_sift_data, tmp_path / "v2.sift", tensor)
     result = CliRunner().invoke(main, ["inspect", str(path)])
     assert result.exit_code == 0, result.output
     assert _row_value(result.output, "Axis ratio") == axis_ratio
@@ -343,7 +336,7 @@ def test_inspect_sift_with_invalid_readings(sample_sift_data, tmp_path: Path):
     import zipfile
     from compression import zstd
 
-    good = _write_sift(sample_sift_data, tmp_path / "good.sift", version=2)
+    good = _write_sift(sample_sift_data, tmp_path / "good.sift")
     bad = tmp_path / "bad.sift"
     with zipfile.ZipFile(good) as src, zipfile.ZipFile(bad, "w") as dst:
         for info in src.infolist():
@@ -361,20 +354,6 @@ def test_inspect_sift_with_invalid_readings(sample_sift_data, tmp_path: Path):
     assert _row_value(out, "Integrity") == "FAILED"
     assert "Axis ratio" not in out
     assert "Coherence" not in out
-
-
-def test_inspect_sift_version_1_has_no_readings(sample_sift_data, tmp_path: Path):
-    """A version 1 .sift, which holds no readings, inspects cleanly and says so."""
-    path = _write_sift(sample_sift_data, tmp_path / "v1.sift", version=1)
-    for args in (["inspect", str(path)], ["inspect", "-v", str(path)]):
-        result = CliRunner().invoke(main, args)
-        assert result.exit_code == 0, result.output
-        out = result.output
-        assert _row_value(out, "Format") == ".sift version 1"
-        assert _row_value(out, "Image readings") == "none"
-        assert _row_value(out, "Integrity") == "OK"
-        assert "Sharpness" not in out
-        assert "Image to gray" not in out
 
 
 def test_inspect_workspace_sift_reads_its_own_readings(seoul_bull_workspace):

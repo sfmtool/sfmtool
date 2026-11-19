@@ -58,32 +58,21 @@ The keypoints and descriptors are read from each image's `.sift` file in the
 `feature_prefix_dir` the reconstruction records. An image whose `.sift` file is
 missing or older than the image is extracted again with the feature tool and
 options the reconstruction records, and the extraction writes `.sift` version 2
-([workspace.md § Versions never mix](../../workspace/workspace.md#versions-never-mix)).
+([workspace.md § Versions](../../workspace/workspace.md#versions)).
 When every file is present and current, nothing is extracted.
 
 The reconstruction's workspace must be version 2, and a version 1 one is
 refused before any work
 ([workspace.md § A command that uses a workspace requires version 2](../../workspace/workspace.md#a-command-that-uses-a-workspace-requires-version-2)).
 A `.sfmr` in a version 2 workspace can still hold a record with version 1
-settings (no `image_to_gray`), as one that `sfm ws upgrade` listed as not
-converted does. When such a record has files to extract, the
-command converts it in memory as `sfm ws upgrade` converts a workspace file, the
-way the viewer's *Build SIFT Files* does, extracts every file into the folder
-named from the converted options, reads them from there, and prints one line:
-
-```
-Converted the version 1 SIFT extraction record of the reconstruction ‹path› to version 2 in memory, so its .sift files are read from ‹new folder›, moved from ‹old folder›; the .sfmr is not rewritten.
-```
-
-This holds for every feature tool, and for both `embedded_patches` and
-`sift_files` reconstructions: the export writes keypoints and descriptors from
-the `.sift` files and no matches or tracks, so it reads all its features from
-one folder and needs no correspondence with the reconstruction's feature
-indexes. (The viewer's *Build SIFT Files* refuses a version 1 record on a
-`sift_files` node, because that node goes on using its feature indexes against
-the folder it builds.) A record of `sfmtool-undistort` is refused, since only
-`sfm undistort` makes those files. No refusal about a `.sfmr`'s record
-suggests `sfm ws upgrade`.
+settings (no `image_to_gray`), as one made in a version 1 workspace that
+sfmtool 0.4.1's `sfm ws upgrade` did not rewrite does. When such a record has
+files to extract, the extraction refuses it, since no `.sift` file is written
+from version 1 settings: the message says so and names sfmtool 0.4.1 as the
+last release that converts them. When every file is present and current, they
+are read, and a version 1 `.sift` file among them is refused by the reader,
+naming sfmtool 0.4.1 as the last release that reads it. A record of
+`sfmtool-undistort` is refused, since only `sfm undistort` makes those files.
 
 The cameras follow `sfm to-colmap-bin`'s rule
 ([to-colmap-bin-command.md](to-colmap-bin-command.md#cameras)): a camera with a

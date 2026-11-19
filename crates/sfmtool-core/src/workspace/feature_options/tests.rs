@@ -25,80 +25,6 @@ fn each_tool_records_its_own_conversion() {
 }
 
 #[test]
-fn an_sfmtool_upgrade_keeps_every_option_and_converts_the_gray_formula() {
-    let v1 = json!({
-        "peak_ratio": 0.7,
-        "max_num_features": 2500,
-        "gray_formula": "0.5*R + 0.5*G",
-    });
-    let v2 = upgrade_feature_options("sfmtool", &v1).unwrap();
-    assert_eq!(
-        v2,
-        json!({
-            "peak_ratio": 0.7,
-            "max_num_features": 2500,
-            "image_to_gray": {"formula": "0.5*R + 0.5*G"},
-        })
-    );
-    // Options with no gray_formula took the extractor's default.
-    assert_eq!(
-        upgrade_feature_options("sfmtool", &json!({})).unwrap(),
-        json!({"image_to_gray": {"formula": "0.2126*R + 0.7152*G + 0.0722*B"}})
-    );
-}
-
-#[test]
-fn a_colmap_or_opencv_upgrade_gains_the_tool_conversion() {
-    let v1 = json!({"max_image_size": 2000, "use_gpu": false});
-    assert_eq!(
-        upgrade_feature_options("colmap", &v1).unwrap(),
-        json!({
-            "max_image_size": 2000,
-            "use_gpu": false,
-            "image_to_gray": {"formula": "0.2126*R + 0.7152*G + 0.0722*B", "quantize_bits": 8},
-        })
-    );
-    assert_eq!(
-        upgrade_feature_options("opencv", &json!({"nfeatures": 0})).unwrap(),
-        json!({
-            "nfeatures": 0,
-            "image_to_gray": {"formula": "0.299*R + 0.587*G + 0.114*B", "quantize_bits": 8},
-        })
-    );
-}
-
-#[test]
-fn an_upgrade_refuses_what_it_cannot_convert() {
-    let err = |tool: &str, options: serde_json::Value| {
-        upgrade_feature_options(tool, &options).unwrap_err()
-    };
-    assert_eq!(
-        err("sfmtool", json!({"image_to_gray": {"formula": "G"}})),
-        FeatureOptionsError::AlreadyVersion2
-    );
-    assert_eq!(
-        err("sfmtool-undistort", json!({})),
-        FeatureOptionsError::Undistort
-    );
-    assert!(err("sfmtool-undistort", json!({}))
-        .to_string()
-        .contains("run 'sfm undistort' again"));
-    assert_eq!(
-        err("mytool", json!({})),
-        FeatureOptionsError::UnknownTool("mytool".into())
-    );
-    assert!(matches!(
-        err("sfmtool", json!({"gray_formula": "R +"})),
-        FeatureOptionsError::GrayFormula(_)
-    ));
-    assert!(matches!(
-        err("sfmtool", json!({"gray_formula": 3})),
-        FeatureOptionsError::GrayFormula(_)
-    ));
-    assert_eq!(err("sfmtool", json!([])), FeatureOptionsError::NotAnObject);
-}
-
-#[test]
 fn the_recorded_conversion_reads_either_version() {
     let read = |tool: &str, options: serde_json::Value| {
         recorded_image_to_gray(tool, &options).unwrap().to_json()
@@ -207,24 +133,19 @@ fn the_folder_names_of_the_tool_defaults_are_the_ones_python_gave() {
 }
 
 #[test]
-fn a_version_1_record_and_its_upgrade_name_the_folders_python_gave() {
+fn a_record_with_a_nested_conversion_names_the_folder_python_gave() {
     // The record of a real workspace `sfm ws init` wrote with a cap of 2500
-    // features, and the same record after `upgrade_feature_options`.
-    let v1 = json!({
+    // features, as sfmtool 0.4.1's `sfm ws upgrade` rewrote it.
+    let options = json!({
         "blur_radius_factor": 2.25, "contrast_threshold": 0.0067, "descriptor_bins": 8,
         "descriptor_clamp": 0.2, "descriptor_magnification": 3.0, "descriptor_width": 4,
         "double_image": true, "edge_threshold": 10.0,
-        "gray_formula": "0.2126*R + 0.7152*G + 0.0722*B", "input_sigma": 0.5,
+        "image_to_gray": {"formula": "0.2126*R + 0.7152*G + 0.0722*B"}, "input_sigma": 0.5,
         "max_num_features": 2500, "octave_layers": 3, "orientation_bins": 36,
         "peak_ratio": 0.8, "sigma": 1.6,
     });
     assert_eq!(
-        feature_prefix_dir("sfmtool", "sift-sfmtool", &v1),
-        "features/sift-sfmtool-fcc10056c50160cb2ca677365606978e"
-    );
-    let v2 = upgrade_feature_options("sfmtool", &v1).unwrap();
-    assert_eq!(
-        feature_prefix_dir("sfmtool", "sift-sfmtool", &v2),
+        feature_prefix_dir("sfmtool", "sift-sfmtool", &options),
         "features/sift-sfmtool-37ce76962479ffbf2752277c1fdcd2ba"
     );
 }

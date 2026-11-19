@@ -83,7 +83,7 @@ macro_rules! impl_format_error {
                     Self::IoPath { source, .. } => FormatFault::Io(source.kind()),
                     Self::Zip(_) | Self::Json(_) => FormatFault::Container,
                     Self::InvalidFormat(_) | Self::ShapeMismatch(_) => FormatFault::Content,
-                    $(Self::$content(_) => FormatFault::Content,)*
+                    $(Self::$content { .. } => FormatFault::Content,)*
                     $(Self::$request(_) => FormatFault::Request,)*
                 }
             }
@@ -92,6 +92,10 @@ macro_rules! impl_format_error {
 }
 
 impl_format_error!(sfmtool_sfmr_format::SfmrError, request: Unsupported);
-impl_format_error!(sfmtool_sift_format::SiftError, content: InvalidMetadata);
+impl_format_error!(
+    sfmtool_sift_format::SiftError,
+    content: InvalidMetadata,
+    content: VersionNoLongerRead
+);
 impl_format_error!(sfmtool_matches_format::MatchesError);
 impl_format_error!(sfmtool_camrig_format::CamRigError);

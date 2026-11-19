@@ -26,8 +26,8 @@ fn make_test_data() -> SiftData {
             image_width: 640,
             image_height: 480,
             feature_count,
-            sharpness: Some(0.004_120_6),
-            gradient_structure_tensor_xx_yy_xy: Some([0.000_931_14, 0.000_714_02, -8.351e-5]),
+            sharpness: 0.004_120_6,
+            gradient_structure_tensor_xx_yy_xy: [0.000_931_14, 0.000_714_02, -8.351e-5],
         },
         content_hash: SiftContentHash::default(),
         positions_xy: Array2::from_shape_vec(
@@ -137,18 +137,18 @@ fn test_read_thumbnail_only() {
 
 #[test]
 fn test_content_hash_populated() {
-    // Version 1 data, so the bytes are those a version 1 writer wrote.
-    let data = make_version_1_data();
+    let data = make_test_data();
     let dir = std::env::temp_dir().join("sift_test_hash");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("test.sift");
 
     write_sift(&path, &data, 3).unwrap();
     let loaded = read_sift(&path).unwrap();
-    // Frozen from the original writer at HEAD 6528c746.
+    // Frozen from the writer at 6ab59c8d, before the in-memory readings
+    // stopped being optional, so a change to the bytes written shows here.
     assert_eq!(
         loaded.content_hash.content_xxh128,
-        "577fc9bd3d53068b8e198073ffa7d840"
+        "eb7a54df84a0952b22f90a22a373b26d"
     );
 
     // All hashes should be 32-char hex strings
@@ -441,9 +441,103 @@ fn test_read_rejects_unsupported_versions() {
     }
 }
 
+/// Write a version 1 file at `path` as a version 1 writer wrote it: the
+/// entries of [`make_test_data`], with `feature_options` holding no
+/// `image_to_gray`, `metadata.json` holding version 1 and no readings, and
+/// the content hashes over those bytes.
+fn write_version_1_file(path: &std::path::Path) {
+    use sfmtool_archive_io::{row_major_bytes, write_binary_entry, write_json_entry};
+    let data = make_test_data();
+    let n = data.metadata.feature_count as usize;
+    let feature_tool = serde_json::json!({
+        "feature_tool": "colmap",
+        "feature_type": "sift",
+        "feature_options": {"max_num_features": 8192},
+    });
+    let mut metadata = serde_json::to_value(&data.metadata).unwrap();
+    let object = metadata.as_object_mut().unwrap();
+    object.insert("version".into(), serde_json::json!(1));
+    object.remove("sharpness");
+    object.remove("gradient_structure_tensor_xx_yy_xy");
+
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+    let mut digests = sfmtool_archive_io::SectionDigests::new();
+    let tool_bytes =
+        write_json_entry(&mut zip, "feature_tool_metadata.json.zst", &feature_tool, 3).unwrap();
+    let metadata_bytes = write_json_entry(&mut zip, "metadata.json.zst", &metadata, 3).unwrap();
+    digests.push_bytes(&tool_bytes);
+    digests.push_bytes(&metadata_bytes);
+    for (name, bytes) in [
+        (positions_entry_name(n), row_major_bytes(&data.positions_xy)),
+        (
+            affine_shapes_entry_name(n),
+            row_major_bytes(&data.affine_shapes),
+        ),
+        (
+            descriptors_entry_name(n),
+            row_major_bytes(&data.descriptors),
+        ),
+        (
+            thumbnail_entry_name(),
+            row_major_bytes(&data.thumbnail_y_x_rgb),
+        ),
+    ] {
+        write_binary_entry(&mut zip, &name, &bytes, 3).unwrap();
+        digests.push_bytes(&bytes);
+    }
+    let content_hash = SiftContentHash {
+        metadata_xxh128: sfmtool_archive_io::format_hash(xxhash_rust::xxh3::xxh3_128(
+            &metadata_bytes,
+        )),
+        feature_tool_xxh128: sfmtool_archive_io::format_hash(xxhash_rust::xxh3::xxh3_128(
+            &tool_bytes,
+        )),
+        content_xxh128: sfmtool_archive_io::format_hash(digests.finish()),
+    };
+    write_json_entry(&mut zip, "content_hash.json.zst", &content_hash, 3).unwrap();
+    zip.finish().unwrap();
+}
+
+/// Every reader, `read_sift_metadata` and `verify_sift` refuse a version 1
+/// file, which a release wrote, with the message that names the file, its
+/// version, the oldest version read and the last release that reads it.
+#[test]
+fn test_readers_refuse_version_1_naming_the_last_release_that_reads_it() {
+    let dir = std::env::temp_dir().join("sift_test_version_1_refused");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("image.jpg.sift");
+    write_version_1_file(&path);
+    let expected = format!(
+        "{} is a version 1 .sift file, and this sfmtool reads .sift files of version 2 or \
+         later. sfmtool 0.4.1 is the last release that reads version 1: install it, run `sfm \
+         ws upgrade` on the workspace, then use the file with this release.",
+        path.display()
+    );
+    for result in [
+        read_sift(&path).err(),
+        read_sift_partial(&path, 2).err(),
+        read_sift_positions(&path, 2).err(),
+        read_sift_keypoints(&path, 2).err(),
+        read_sift_features(&path).err(),
+        read_sift_positions_descriptors(&path).err(),
+        read_sift_thumbnail(&path).err(),
+        read_sift_metadata(&path).err(),
+    ] {
+        let err = result.expect("a version 1 file must be refused");
+        assert!(
+            matches!(err, SiftError::VersionNoLongerRead { version: 1, .. }),
+            "{err:?}"
+        );
+        assert_eq!(err.to_string(), expected);
+    }
+    // The file is sound, so the version is the one error verification reports.
+    assert_eq!(verify_sift(&path).unwrap(), (false, vec![expected]));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn test_write_rejects_unsupported_versions() {
-    for version in [0, SIFT_FORMAT_VERSION + 1] {
+    for version in [0, 1, SIFT_FORMAT_VERSION + 1] {
         let mut data = make_test_data();
         data.metadata.version = version;
         let dir = std::env::temp_dir().join(format!("sift_test_write_version_{version}"));
@@ -627,16 +721,6 @@ fn test_read_ignores_unknown_metadata_keys() {
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 
-/// [`make_test_data`] as version 1 data: no `image_to_gray` and no readings.
-fn make_version_1_data() -> SiftData {
-    let mut data = make_test_data();
-    data.metadata.version = 1;
-    data.metadata.sharpness = None;
-    data.metadata.gradient_structure_tensor_xx_yy_xy = None;
-    data.feature_tool_metadata.feature_options = serde_json::json!({"max_num_features": 8192});
-    data
-}
-
 #[test]
 fn test_version_2_round_trip_keeps_readings_exactly() {
     let data = make_test_data();
@@ -662,36 +746,8 @@ fn test_version_2_round_trip_keeps_readings_exactly() {
 }
 
 #[test]
-fn test_version_1_round_trip_reads_readings_absent() {
-    let data = make_version_1_data();
-    let dir = std::env::temp_dir().join("sift_test_v1_round_trip");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.sift");
-    write_sift(&path, &data, 3).unwrap();
-    let loaded = read_sift(&path).unwrap();
-    assert_eq!(loaded.metadata.version, 1);
-    assert_eq!(loaded.metadata.sharpness, None);
-    assert_eq!(loaded.metadata.gradient_structure_tensor_xx_yy_xy, None);
-    // The keys are not written at all, so a version 1 file holds only the
-    // keys a version 1 writer wrote.
-    let json = serde_json::to_value(&loaded.metadata).unwrap();
-    assert!(json.get("sharpness").is_none());
-    assert!(json.get("gradient_structure_tensor_xx_yy_xy").is_none());
-    assert_eq!(verify_sift(&path).unwrap(), (true, vec![]));
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
 fn test_validate_version_rules() {
     let invalid = |data: &SiftData| validate_sift_data(data).unwrap_err().to_string();
-
-    let mut data = make_test_data();
-    data.metadata.sharpness = None;
-    assert!(invalid(&data).contains("has no 'sharpness'"));
-
-    let mut data = make_test_data();
-    data.metadata.gradient_structure_tensor_xx_yy_xy = None;
-    assert!(invalid(&data).contains("has no 'gradient_structure_tensor_xx_yy_xy'"));
 
     let mut data = make_test_data();
     data.feature_tool_metadata.feature_options = serde_json::json!({"max_num_features": 8192});
@@ -733,7 +789,7 @@ fn test_validate_version_rules() {
 
     for sharpness in [f64::NAN, f64::INFINITY, -1e-9] {
         let mut data = make_test_data();
-        data.metadata.sharpness = Some(sharpness);
+        data.metadata.sharpness = sharpness;
         assert!(invalid(&data).contains("sharpness must be finite"));
     }
     for tensor in [
@@ -743,44 +799,34 @@ fn test_validate_version_rules() {
         [0.0, 0.0, f64::INFINITY],
     ] {
         let mut data = make_test_data();
-        data.metadata.gradient_structure_tensor_xx_yy_xy = Some(tensor);
+        data.metadata.gradient_structure_tensor_xx_yy_xy = tensor;
         assert!(invalid(&data).contains("gradient_structure_tensor_xx_yy_xy must be finite"));
     }
     // A negative cross term is an ordinary value.
     let mut data = make_test_data();
-    data.metadata.gradient_structure_tensor_xx_yy_xy = Some([1.0, 1.0, -0.5]);
+    data.metadata.gradient_structure_tensor_xx_yy_xy = [1.0, 1.0, -0.5];
     validate_sift_data(&data).unwrap();
-
-    let mut data = make_version_1_data();
-    data.metadata.sharpness = Some(0.1);
-    assert!(invalid(&data).contains("which belongs to version 2"));
-
-    let mut data = make_version_1_data();
-    data.feature_tool_metadata.feature_options["image_to_gray"] =
-        serde_json::json!({"formula": "G"});
-    assert!(invalid(&data).contains("which belongs to version 2"));
 
     // Only the top level of feature_options records the conversion.
-    let mut data = make_version_1_data();
+    let mut data = make_test_data();
     data.feature_tool_metadata.feature_options =
         serde_json::json!({"source_feature_options": {"image_to_gray": {"formula": "G"}}});
-    validate_sift_data(&data).unwrap();
+    assert!(invalid(&data).contains("must carry 'image_to_gray'"));
 }
 
 #[test]
-fn test_read_and_verify_reject_version_2_without_readings() {
-    let mut data = make_test_data();
-    data.metadata.sharpness = None;
-    let dir = std::env::temp_dir().join("sift_test_v2_no_readings");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.sift");
-    crate::write::write_sift_any_version(&path, &data, 3).unwrap();
-    let message = read_sift(&path).err().unwrap().to_string();
-    assert!(message.contains("has no 'sharpness'"), "{message}");
-    let (ok, errors) = verify_sift(&path).unwrap();
-    assert!(!ok);
-    assert_eq!(errors.len(), 1, "{errors:?}");
-    std::fs::remove_dir_all(&dir).unwrap();
+fn test_read_rejects_version_2_without_readings() {
+    for reading in ["sharpness", "gradient_structure_tensor_xx_yy_xy"] {
+        let mut metadata = valid_metadata_json();
+        metadata.as_object_mut().unwrap().remove(reading);
+        let path = write_raw_metadata_archive("sift_test_v2_no_readings", &metadata);
+        let message = read_sift_metadata(&path).err().unwrap().to_string();
+        assert!(
+            message.contains(&format!("missing field `{reading}`")),
+            "{message}"
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
 }
 
 #[test]

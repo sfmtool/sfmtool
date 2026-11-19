@@ -51,7 +51,7 @@ with an error naming the inputs, writing nothing, when:
   the single images after the `.camrig` rig, merges with a solve of the rig
   frames alone. The cameras of step 1 are merged with the checks, before any
   step prints;
-- the first input's workspace is version 1 (the `sfm ws upgrade` error),
+- the first input's workspace is version 1 (the error naming sfmtool 0.4.1),
   since the poses are refined from the `.sift` files there.
 
 Points at infinity are accepted (step 5 says how they merge). The checks live

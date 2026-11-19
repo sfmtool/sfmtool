@@ -231,8 +231,8 @@ for it. An image whose `.sift` file is at least as new as the photograph is
 skipped, so the entry is live when every file is already there: running it
 then writes nothing. The files are `.sift` version 2, with each image's
 sharpness and gradient structure tensor, and the build never writes one from
-version 1 settings or beside a version 1 file
-([workspace.md § Versions never mix](../workspace/workspace.md#versions-never-mix)).
+version 1 settings
+([workspace.md § Versions](../workspace/workspace.md#versions)).
 
 **The options are the node's own.** The feature options and the
 `feature_prefix_dir` come from the workspace definition the node's `.sfmr`
@@ -255,33 +255,22 @@ into the `.sfmr`. A build that is cancelled or fails pushes no switch, and the
 files it wrote stay, so the next build skips them. The default options are the
 version 2 ones, with the `image_to_gray` object.
 
-**A version 1 `sfmtool` definition is converted.** A definition whose
+**A version 1 `sfmtool` definition is refused.** A definition whose
 `feature_options` carry no `image_to_gray` holds version 1 settings, and no
 `.sift` file is written from those. The entry keeps its label, *Build SIFT
-Files*, and its hover says what happens first: the build converts the
-definition the viewer holds as `sfm ws upgrade` converts a workspace file
-(`sfmtool_core::workspace::upgrade_feature_options`, the conversion
-`sfmtool.workspace.upgrade_feature_options` binds), keeping every option and
-making its `gray_formula` the `image_to_gray` object, and names a new
-`feature_prefix_dir` from the converted options
-(`sfmtool_core::workspace::feature_prefix_dir`). The files go into that new
-folder, and the conversion is pushed as one version, *"Converted the SIFT
-extraction record of ‹label› to version 2"*, only once every file is built,
-so the node then looks in the new folder. Undo puts the old record back and a
-save writes the new one. The workspace's `.sfm-workspace.json` is neither read
-nor changed, so it may still be version 1, and the command-line writers keep
-refusing there until `sfm ws upgrade` converts the workspace. Until then the
-old folder stays, and other reconstructions still find it through their own
-records.
+Files*, and is greyed with the sentence *"‹label› records version 1 sfmtool
+settings, with no image_to_gray, and no .sift file is written from version 1
+settings. sfmtool 0.4.1 is the last release that converts them: install it
+and run `sfm ws upgrade` on the workspace."*, whatever the node's
+observations.
 
 **When it is refused.** It is greyed, with the sentence the starter and the
 wire also give (`AppState::build_sift_files_refusal`), on a busy node, on a
-node with no images, on a node whose workspace directory is not there, and,
-for a switch or a conversion, on a node whose observations are `.sift` feature
-indexes: those indexes name features of the files the node was made from, and
-a new folder would not hold them, so the sentence suggests converting the node
-to embedded patches. A version 1 definition whose `gray_formula` does not parse
-is refused too, since it cannot be converted.
+node with no images, on a node whose workspace directory is not there, on a
+version 1 `sfmtool` definition (above), and, for a switch, on a node whose
+observations are `.sift` feature indexes: those indexes name features of the
+files the node was made from, and a new folder would not hold them, so the
+sentence suggests converting the node to embedded patches.
 
 **What it refreshes.** However the build ends, an open SIFT index of the node
 is classified again, since whether it is current depends on the `.sift`
@@ -369,7 +358,6 @@ pub(crate) const SWITCH_AND_BUILD_SIFT_FILES: &str =
 pub(crate) enum RecordChange {
     Keep,
     Switch(String),
-    Upgrade,
 }
 
 /// The entry's hover, for what the build does first.
@@ -470,11 +458,9 @@ version with the default options and prefix, leaving `.sfm-workspace.json`
 as it was, and undone by Undo; a cancelled switch pushing nothing; an
 open index going stale, without being opened again, when a build rewrites a
 `.sift` file under it; and an open index judged again when the switch is
-undone, stale over the old prefix and current again after the redo; a
-version 1 `sfmtool` definition converted, keeping its options, built into a
-new folder named from them as version 2 files, pushed as one version whose
-sentence names both folders, and undone by Undo; and the refusals of a version
-1 definition over feature indexes and of one that cannot be converted. The
+undone, stale over the old prefix and current again after the redo; and the
+refusal of a version 1 `sfmtool` definition, on embedded patches and on
+feature indexes, naming sfmtool 0.4.1 and writing nothing. The
 entry's place above *Build Index Files* is tested in
 [scene_graph/tests.rs](../../crates/sfm-explorer/src/scene_graph/tests.rs) and
 [track_view/body/tests.rs](../../crates/sfm-explorer/src/track_view/body/tests.rs),

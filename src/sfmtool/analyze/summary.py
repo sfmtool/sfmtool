@@ -238,12 +238,8 @@ def print_sfmr_summary(path: Path, verbose: bool = False) -> None:
 
 
 def _sift_conversion_rows(feature_options) -> list[tuple[str, str]]:
-    """The verbose ``Image to gray`` row of a version 2 file; a version 1
-    file has no ``image_to_gray`` and gets none."""
-    if isinstance(feature_options, dict) and "image_to_gray" in feature_options:
-        text = _image_to_gray_text(feature_options["image_to_gray"])
-        return [("Image to gray", text)]
-    return []
+    """The verbose ``Image to gray`` row of a ``.sift`` file."""
+    return [("Image to gray", _image_to_gray_text(feature_options["image_to_gray"]))]
 
 
 def print_sift_summary(path: Path, verbose: bool = False) -> None:
@@ -269,17 +265,14 @@ def print_sift_summary(path: Path, verbose: bool = False) -> None:
         ("Features", f"{meta['feature_count']:,}"),
         ("Feature tool", tool_meta["feature_tool"]),
     ]
-    if "sharpness" in meta:
-        try:
-            readings = ImageReadings(
-                meta["sharpness"], meta["gradient_structure_tensor_xx_yy_xy"]
-            )
-        except ValueError as e:
-            rows.append(("Image readings", f"invalid ({e})"))
-        else:
-            rows += _image_reading_rows(readings)
+    try:
+        readings = ImageReadings(
+            meta["sharpness"], meta["gradient_structure_tensor_xx_yy_xy"]
+        )
+    except ValueError as e:
+        rows.append(("Image readings", f"invalid ({e})"))
     else:
-        rows.append(("Image readings", "none"))
+        rows += _image_reading_rows(readings)
     rows.append(("Integrity", "OK" if valid else "FAILED"))
     _print_block(rows)
 

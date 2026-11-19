@@ -6,18 +6,20 @@ Amends [`../formats/format-versions.md`](../formats/format-versions.md), which
 says that sfmtool 0.5 stops reading these versions and points here, and the
 format specs it names: [`sfmr-file-format.md`](../formats/sfmr-file-format.md),
 [`matches-file-format.md`](../formats/matches-file-format.md),
-[`sift-file-format.md`](../formats/sift-file-format.md),
 [`camrig-file-format.md`](../formats/camrig-file-format.md) and
 [`kdf-file-format.md`](../formats/kdf-file-format.md), with
-[`../cli/workspace/ws-upgrade-command.md`](../cli/workspace/ws-upgrade-command.md)
-and [`../workspace/workspace.md`](../workspace/workspace.md).
+[`../cli/workspace/ws-upgrade-command.md`](../cli/workspace/ws-upgrade-command.md).
 
 sfmtool 0.4.1's release notes say: "0.4.1 still reads the older `.sfmr`,
 `.matches` and `.sift` versions so that `sfm ws upgrade` can convert them. The
 next release will not." The next release is 0.5. This draft is that removal,
 done as [format-versions.md § Dropping a version](../formats/format-versions.md#dropping-a-version)
-says, one PR per format, with `.camrig` version 1 and the version 1 workspace
-file going in the same release.
+says, one PR per format, with `.camrig` version 1 going in the same release.
+`.sift` version 1 and the version 1 workspace file are no longer read
+([`sift-file-format.md` § Format versions](../formats/sift-file-format.md#format-versions),
+[`workspace.md` § Versions](../workspace/workspace.md#versions)), and
+`sfm ws upgrade` refuses a version 1 workspace; this draft holds what is still
+to do.
 
 ## What stops being read
 
@@ -28,7 +30,6 @@ and `.kdf` 3, so 0.5's read window is exactly those versions.
 |--------|---------|-------------------|--------------------|----------------------------------------------|
 | `.sfmr` | 16 | 1 | 16 | 0.4.1 |
 | `.matches` | 10 | 1 (6 with clusters) | 10 | 0.4.1 |
-| `.sift` | 2 | 1 | 2 | 0.4.1 |
 | `.camrig` | 2 | 1 | 2 | 0.4.1 |
 | `.kdf` | 3 | 3 | 3 | — |
 
@@ -49,7 +50,8 @@ of its own, so all five specs share the shape.
 ## The refusal
 
 Each format crate's reader, `read_<fmt>_metadata` and `verify_<fmt>` refuse a
-file below the oldest version read with one message:
+file below the oldest version read with one message, as the `.sift` readers
+already refuse a version 1 file (`SiftError::VersionNoLongerRead`):
 
 ```
 <path> is a version 12 .sfmr file, and this sfmtool reads .sfmr files of
@@ -64,30 +66,20 @@ that reads it.
 
 The format crate holds the oldest version read beside its current-version
 constant (for example `SFMR_OLDEST_READ_VERSION`), and the release named in
-the message as a constant beside it. Each crate's tests check the refusal of
+the message as a constant beside it (`SFMR_LAST_RELEASE_READING_OLDER_VERSIONS`),
+as the `.sift` crate holds `SIFT_OLDEST_READ_VERSION` and
+`SIFT_LAST_RELEASE_READING_OLDER_VERSIONS`. Each crate's tests check the refusal of
 the version just below the oldest read, and of a version above the current
 one; the tests that read each dropped version go.
 
-## `sfm ws upgrade` and the workspace file
+## `sfm ws upgrade`
 
-0.5's `sfm ws upgrade` upgrades from a version 2 workspace. It refuses a
-version 1 `.sfm-workspace.json` before reading anything else, with a message
-that names the workspace file, says it is version 1, and says to upgrade it
-with sfmtool 0.4.1 first, since 0.4.1 is the last release that reads the
-older `.sift`, `.sfmr`, `.matches` and `.camrig` versions it would have to
-convert. Every other command's refusal of a version 1 workspace
-([workspace.md § A command that uses a workspace requires version 2](../workspace/workspace.md#a-command-that-uses-a-workspace-requires-version-2))
-names sfmtool 0.4.1 the same way, in place of running `sfm ws upgrade`.
-
-What goes from the upgrade: its rewrite of a version 1 workspace file (phase
-5), its conversion of version 1 `.sift` folders and the deletion of the old
-folders (phases 3 and 6), and its deletion of a `.kdf` index built from a
-version 1 record. What stays: rewriting any file below the current version
-that the 0.5 readers accept, which is none until a format next changes
-version. `ws-upgrade-command.md` is rewritten to describe that, and
-`workspace.md` loses the version 1 workspace's rules ("Reading version 1 files
-stays allowed" and the version 1 column of its versions table) except the
-refusal, keeping a history line for the workspace file's version 1.
+`sfm ws upgrade` rewrites each `.sfmr`, `.matches` and `.camrig` file below
+the current version that the readers accept
+([ws-upgrade-command.md](../cli/workspace/ws-upgrade-command.md)). Each PR
+below removes its format's older versions from what the upgrade rewrites, so
+once all three land it rewrites none until a format next changes version, and
+`ws-upgrade-command.md` is updated in each PR to say which it still rewrites.
 
 ## `.sfmr`: versions 1 to 15 (one PR)
 
@@ -152,35 +144,15 @@ Goes:
   ([`fileio/matches.rs`](../../crates/sfmtool-py/src/fileio/matches.rs),
   [`fileio/matches_file.rs`](../../crates/sfmtool-py/src/fileio/matches_file.rs)),
   and `sfm estimate-intrinsics`'s message for a file with no dimensions;
-- `sfm ws upgrade`'s handling of a cluster file below version 6
-  (`unreadable_clusters` in `workspace/upgrade/plan.rs`), which the general
+- `sfm ws upgrade`'s handling of a cluster file below version 6 (the cluster
+  check of `plan_matches` in `workspace/upgrade/plan.rs`), which the general
   refusal replaces, and its filling of a version 3 or older file's image
-  dimensions from the new `.sift` files;
+  dimensions from the `.sift` files (`rewrite_matches` in
+  `workspace/upgrade.rs`);
 - the tests that read each older version.
 
 No `.matches` file is checked in. The spec is trimmed as for `.sfmr`, keeping
 "Version History".
-
-## `.sift`: version 1 (one PR)
-
-Goes:
-
-- the version 1 branches of the reader (`SIFT_READINGS_VERSION`): a version 1
-  file's absent `image_to_gray` and readings;
-- every caller's branch on a version 1 file, which today sits outside the
-  format crate: `sfmtool-core`'s `analysis/pick_images/frames.rs`,
-  `features/sift/files.rs` and `reconstruction/image_readings.rs`;
-- `Version2SiftFolder` and `upgrade_feature_options`, the conversion of a
-  version 1 file, and the `version_1_sift_files` check every writer makes
-  before writing into a folder ([workspace.md § Versions never mix](../workspace/workspace.md#versions-never-mix));
-- `sfm ws upgrade`'s conversion of version 1 folders and of a version 1
-  workspace file, as [above](#sfm-ws-upgrade-and-the-workspace-file), and the
-  viewer's in-memory conversion of a version 1 record in *Build SIFT Files*;
-- the tests that read or convert version 1 files.
-
-No `.sift` file is checked in. The spec's "Format versions" section loses
-"Converting a version 1 file" and the table of the two versions; "Version
-History" stays.
 
 ## `.camrig`: version 1 (one PR)
 

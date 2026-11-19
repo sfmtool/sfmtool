@@ -1,21 +1,28 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Every extractor writes `.sift` version 2 with the image's readings, and no
-writer mixes the two versions: no file from version 1 settings, and none beside
-a version 1 file."""
+"""Every extractor writes `.sift` version 2 with the image's readings, no file
+is written from version 1 settings, and a version 1 file is refused, naming the
+last release that reads it."""
 
 import json
-import os
 import shutil
+import zipfile
+from compression import zstd
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
 from sfmtool.cli import main
-from sfmtool.fileio import SiftFile, read_image_rgb, read_sift, write_sift
-from sfmtool.sift import ImageToGray, image_readings_from_rgb, version_1_sift_files
+from sfmtool.fileio import (
+    SiftFile,
+    read_image_rgb,
+    read_sift,
+    read_sift_metadata,
+    verify_sift,
+)
+from sfmtool.sift import ImageToGray, image_readings_from_rgb
 from sfmtool.sift.extract import SiftExtractionError, image_files_to_sift_files
 from sfmtool.sift.extract_colmap import get_colmap_feature_options
 from sfmtool.sift.extract_opencv import get_default_opencv_feature_options
@@ -80,89 +87,57 @@ def test_every_backend_writes_version_2_with_the_readings_of_its_decode(
 
 
 def _write_version_1_sift(sift_path: Path, image_path: Path) -> None:
-    """A version 1 `.sift` file for `image_path`, as a version 1 writer made it,
-    newer than the image."""
-    data = read_sift(
-        image_files_to_sift_files(
-            [image_path],
-            feature_tool="sfmtool",
-            feature_options=get_default_sfmtool_feature_options(),
-            feature_path=sift_path.parent.parent / "scratch",
-        )[0]
+    """A version 1 `.sift` file for `image_path`, as a version 1 writer made it:
+    a version 2 file's entries with `metadata.json` at version 1 without the
+    readings, and the conversion recorded as a `gray_formula`. The readers do
+    not check the content hashes, so they are left as they are."""
+    [v2_path] = image_files_to_sift_files(
+        [image_path],
+        feature_tool="sfmtool",
+        feature_options=get_default_sfmtool_feature_options(),
+        feature_path=sift_path.parent.parent / "scratch",
     )
-    data["metadata"]["version"] = 1
-    del data["metadata"]["sharpness"]
-    del data["metadata"]["gradient_structure_tensor_xx_yy_xy"]
-    options = data["feature_tool_metadata"]["feature_options"]
-    options["gray_formula"] = options.pop("image_to_gray")["formula"]
     sift_path.parent.mkdir(parents=True, exist_ok=True)
-    write_sift(sift_path, data)
-    later = image_path.stat().st_mtime + 10
-    os.utime(sift_path, (later, later))
+    with (
+        zipfile.ZipFile(v2_path) as source,
+        zipfile.ZipFile(sift_path, "w", zipfile.ZIP_STORED) as out,
+    ):
+        for name in source.namelist():
+            raw = source.read(name)
+            if name in ("metadata.json.zst", "feature_tool_metadata.json.zst"):
+                entry = json.loads(zstd.decompress(raw))
+                if name == "metadata.json.zst":
+                    entry["version"] = 1
+                    del entry["sharpness"]
+                    del entry["gradient_structure_tensor_xx_yy_xy"]
+                else:
+                    options = entry["feature_options"]
+                    options["gray_formula"] = options.pop("image_to_gray")["formula"]
+                raw = zstd.compress(json.dumps(entry).encode())
+            out.writestr(name, raw)
 
 
-def test_a_version_2_workspace_whose_folder_holds_version_1_files_is_told_to_remove_them(
+def test_a_version_1_file_is_refused_naming_the_last_release_that_reads_it(
     images, tmp_path
 ):
-    """The folder is checked only for version 2 settings, so the advice is
-    the same for every caller: remove the version 1 files from the folder and
-    run again, which then works."""
-    result = CliRunner().invoke(
-        main, ["ws", "init", "--feature-tool", "sfmtool", str(tmp_path)]
+    """Every reader refuses a version 1 file with one message, raised as
+    `OSError`, and `sfm inspect` prints it."""
+    sift_path = tmp_path / "v1" / (images[0].name + ".sift")
+    _write_version_1_sift(sift_path, images[0])
+    message = (
+        f"{sift_path} is a version 1 .sift file, and this sfmtool reads .sift files "
+        "of version 2 or later. sfmtool 0.4.1 is the last release that reads "
+        "version 1: install it, run `sfm ws upgrade` on the workspace, then use "
+        "the file with this release."
     )
-    assert result.exit_code == 0, result.output
-    prefix = json.loads((tmp_path / ".sfm-workspace.json").read_text())[
-        "feature_prefix_dir"
-    ]
-    folder = images[1].parent / prefix
-    v1_path = folder / (images[1].name + ".sift")
-    _write_version_1_sift(v1_path, images[1])
-
-    result = CliRunner().invoke(main, ["sift", "--extract", str(tmp_path / "images")])
+    for read in (read_sift, read_sift_metadata, SiftFile):
+        with pytest.raises(OSError) as raised:
+            read(sift_path)
+        assert str(raised.value) == message
+    assert verify_sift(sift_path) == (False, [message])
+    result = CliRunner().invoke(main, ["inspect", str(sift_path)])
     assert result.exit_code != 0
-    assert f"the folder {folder} holds version 1 .sift files" in result.output
-    assert f"({v1_path.name})" in result.output
-    assert "remove those files from the folder and run again" in result.output
-    assert "sfm ws upgrade" not in result.output
-    assert not (folder / (images[0].name + ".sift")).exists()
-
-    v1_path.unlink()
-    result = CliRunner().invoke(main, ["sift", "--extract", str(tmp_path / "images")])
-    assert result.exit_code == 0, result.output
-    for image in images:
-        with SiftFile(folder / (image.name + ".sift")) as reader:
-            assert reader.metadata["version"] == 2
-
-
-def test_version_1_files_in_the_folder_are_refused(images, tmp_path):
-    options = get_default_sfmtool_feature_options()
-    folder = tmp_path / "images" / "features" / "mixed"
-    _write_version_1_sift(folder / (images[1].name + ".sift"), images[1])
-    with pytest.raises(SiftExtractionError) as raised:
-        image_files_to_sift_files(
-            images[:1],
-            feature_tool="sfmtool",
-            feature_options=options,
-            feature_prefix_dir="features/mixed",
-        )
-    # The message is the binding's, so Rust and Python say the same.
-    found = version_1_sift_files(folder)
-    assert found is not None
-    assert str(raised.value) == str(found)
-    assert found.folder == folder
-    assert found.files == [folder / (images[1].name + ".sift")]
-    assert not (folder / (images[0].name + ".sift")).exists()
-
-
-def test_version_1_sift_files_passes_over_what_is_not_a_version_1_sift(tmp_path):
-    folder = tmp_path / "features"
-    assert version_1_sift_files(folder) is None
-    folder.mkdir()
-    (folder / "broken.jpg.sift").write_bytes(b"not a zip")
-    (folder / "notes.txt").write_text("")
-    assert version_1_sift_files(folder) is None
-    with pytest.raises(OSError, match="failed to list the folder"):
-        version_1_sift_files(folder / "notes.txt")
+    assert "sfmtool 0.4.1 is the last release that reads version 1" in result.output
 
 
 @pytest.mark.parametrize(
@@ -190,7 +165,9 @@ def test_options_without_image_to_gray_are_refused(images):
         )
     assert str(raised.value) == (
         "The feature options carry no 'image_to_gray', so they are version 1 "
-        "settings, and no .sift file is written from version 1 settings."
+        "settings, and no .sift file is written from version 1 settings. sfmtool "
+        "0.4.1 is the last release that converts them: install it and run "
+        "`sfm ws upgrade` on the workspace."
     )
     assert not list(images[0].parent.rglob("*.sift"))
 

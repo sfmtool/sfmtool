@@ -24,12 +24,10 @@ pub fn write_sift(path: &Path, data: &SiftData, zstd_level: i32) -> Result<(), S
 
 /// Check that `data` is a `.sift` file's content, without writing anything.
 ///
-/// Rejects a `metadata.version` that [`crate::read_sift`] would reject
-/// ([`SiftError::InvalidFormat`]), including a version 2 file without the two
-/// image readings and a version 1 file with either; `feature_options` that is
-/// not a JSON object, a version 2 file whose `feature_options` carry no valid
-/// `image_to_gray` object, a version 1 file whose `feature_options` carry one,
-/// and a reading that is not finite or, for the sharpness, `Exx` and `Eyy`, is
+/// Rejects a `metadata.version` other than [`SIFT_FORMAT_VERSION`], the only
+/// version a writer writes ([`SiftError::InvalidFormat`]); `feature_options`
+/// that is not a JSON object or carries no valid `image_to_gray` object, and a
+/// reading that is not finite or, for the sharpness, `Exx` and `Eyy`, is
 /// negative ([`SiftError::InvalidMetadata`]); and an array whose shape does
 /// not match `metadata.feature_count` or, for the thumbnail, the
 /// [`THUMBNAIL_SIZE`] square ([`SiftError::ShapeMismatch`]). A writer that
@@ -47,55 +45,47 @@ pub fn write_sift(path: &Path, data: &SiftData, zstd_level: i32) -> Result<(), S
 /// failed write, such as the Python binding, which raises `ValueError` for
 /// one and `OSError` for the other, calls it first.
 pub fn validate_sift_data(data: &SiftData) -> Result<(), SiftError> {
-    crate::read::check_metadata(&data.metadata)?;
+    if data.metadata.version != SIFT_FORMAT_VERSION {
+        return Err(SiftError::InvalidFormat(format!(
+            "unsupported .sift format version {} (this build writes version \
+             {SIFT_FORMAT_VERSION})",
+            data.metadata.version
+        )));
+    }
     if !data.feature_tool_metadata.feature_options.is_object() {
         return Err(SiftError::InvalidMetadata(format!(
             "feature_options must be a JSON object, got {}",
             data.feature_tool_metadata.feature_options
         )));
     }
-    check_version_content(&data.feature_tool_metadata, &data.metadata)?;
+    check_content(&data.feature_tool_metadata, &data.metadata)?;
     validate_dimensions(data, data.metadata.feature_count as usize)
 }
 
-/// The rules on `feature_options.image_to_gray` and the two readings that
-/// depend on the version: required and valid from version 2, absent before.
-/// [`validate_sift_data`] and [`crate::verify_sift`] apply them.
-pub(crate) fn check_version_content(
+/// The rules on `feature_options.image_to_gray` and the two readings: the
+/// object is required and valid, and the readings are finite, with the
+/// sharpness, `Exx` and `Eyy` not negative. [`validate_sift_data`] and
+/// [`crate::verify_sift`] apply them.
+pub(crate) fn check_content(
     feature_tool_metadata: &FeatureToolMetadata,
     metadata: &SiftMetadata,
 ) -> Result<(), SiftError> {
     let invalid = |message: String| Err(SiftError::InvalidMetadata(message));
-    let image_to_gray = feature_tool_metadata.feature_options.get("image_to_gray");
-    if metadata.version < SIFT_READINGS_VERSION {
-        if image_to_gray.is_some() {
-            return invalid(format!(
-                "version {} feature_options carry 'image_to_gray', which belongs to version {SIFT_READINGS_VERSION}",
-                metadata.version
-            ));
-        }
-        return Ok(());
-    }
-    let Some(image_to_gray) = image_to_gray else {
-        return invalid(format!(
-            "version {} feature_options must carry 'image_to_gray'",
-            metadata.version
-        ));
+    let Some(image_to_gray) = feature_tool_metadata.feature_options.get("image_to_gray") else {
+        return invalid("feature_options must carry 'image_to_gray'".to_owned());
     };
     validate_image_to_gray(image_to_gray).map_err(SiftError::InvalidMetadata)?;
-    if let Some(sharpness) = metadata.sharpness {
-        if !sharpness.is_finite() || sharpness < 0.0 {
-            return invalid(format!(
-                "sharpness must be finite and not negative, got {sharpness}"
-            ));
-        }
+    let sharpness = metadata.sharpness;
+    if !sharpness.is_finite() || sharpness < 0.0 {
+        return invalid(format!(
+            "sharpness must be finite and not negative, got {sharpness}"
+        ));
     }
-    if let Some([xx, yy, xy]) = metadata.gradient_structure_tensor_xx_yy_xy {
-        if !(xx.is_finite() && yy.is_finite() && xy.is_finite()) || xx < 0.0 || yy < 0.0 {
-            return invalid(format!(
-                "gradient_structure_tensor_xx_yy_xy must be finite with Exx and Eyy not negative, got [{xx}, {yy}, {xy}]"
-            ));
-        }
+    let [xx, yy, xy] = metadata.gradient_structure_tensor_xx_yy_xy;
+    if !(xx.is_finite() && yy.is_finite() && xy.is_finite()) || xx < 0.0 || yy < 0.0 {
+        return invalid(format!(
+            "gradient_structure_tensor_xx_yy_xy must be finite with Exx and Eyy not negative, got [{xx}, {yy}, {xy}]"
+        ));
     }
     Ok(())
 }

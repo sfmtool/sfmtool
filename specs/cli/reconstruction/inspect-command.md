@@ -203,10 +203,11 @@ The default output is a compact label/value block. The fields per type:
   measured through, or reads `none` for a file below version 15 (see
   [Image readings](#image-readings)).
 - **`.sift`** — format version, image name and dimensions, feature count,
-  feature tool, the image readings, integrity. A version 2 file's readings are
-  four lines, `Sharpness`, `Gradient structure tensor` (`Exx`, `Eyy`,
-  `Exy`), `Axis ratio` and `Coherence`; a version 1 file, which holds none,
-  gets one line `Image readings: none`, and a file whose stored readings no
+  feature tool, the image readings, integrity. The readings are four lines,
+  `Sharpness`, `Gradient structure tensor` (`Exx`, `Eyy`, `Exy`), `Axis
+  ratio` and `Coherence`; a version 1 file is refused with the reader's
+  message, which names sfmtool 0.4.1 as the last release that reads it, and a
+  file whose stored readings no
   image reads (a value that is not finite, or a negative sharpness, `Exx` or
   `Eyy`) one line `Image readings: invalid (<reason>)`. The writer refuses
   such readings, so a file holds them only when it was changed after it was
@@ -428,7 +429,7 @@ sfm inspect --strips sfmr/solve_001.sfmr 0-9 pt3d_220747a8_96414 -o strips.png
 
 - [`tests/test_inspect.py`](../../../tests/test_inspect.py) — the default and
   verbose summaries of each file type, the image readings of a version 2
-  `.sift`, a version 1 `.sift`, a version 15 and an older `.sfmr`, and an
+  `.sift`, a version 15 and an older `.sfmr`, and an
   image inside and outside a workspace, the point-ID summary and its verbose
   triangulation analysis (on a `sift_files` and an `embedded_patches` file),
   the point-or-bearing counts, and the argument errors.

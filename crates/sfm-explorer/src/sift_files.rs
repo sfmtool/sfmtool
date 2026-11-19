@@ -10,16 +10,13 @@
 //! Index Files* look for them. The build is
 //! `sfmtool_core::features::sift::build_sift_files`, run with the feature
 //! options the node records in its `.sfmr` workspace definition. It writes
-//! `.sift` version 2 files, which never come from version 1 settings or go
-//! beside version 1 files, and it can only extract with the `sfmtool` feature
-//! tool. So the entry first changes the definition, in the viewer's memory
-//! only, in two cases: a definition naming another tool is switched to the
-//! `sfmtool` tool with its default options, and a version 1 `sfmtool`
-//! definition (one with no `image_to_gray`) is converted to version 2 as
-//! `sfm ws upgrade` converts a workspace
-//! (`sfmtool_core::workspace::upgrade_feature_options`), with a new folder
-//! named from the converted options. Either change is pushed as a version
-//! when the build succeeds.
+//! `.sift` version 2 files, which never come from version 1 settings, and it
+//! can only extract with the `sfmtool` feature tool. So a definition naming
+//! another tool is first switched to the `sfmtool` tool with its default
+//! options, in the viewer's memory only, and the switch is pushed as a version
+//! when the build succeeds. A version 1 `sfmtool` definition (one with no
+//! `image_to_gray`) is refused: sfmtool 0.4.1 is the last release that
+//! converts it.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -29,7 +26,7 @@ use sfmtool_core::features::sift::{
     SFMTOOL_FEATURE_TYPE,
 };
 use sfmtool_core::progress::Progress;
-use sfmtool_core::workspace::{feature_prefix_dir, has_image_to_gray, upgrade_feature_options};
+use sfmtool_core::workspace::{has_image_to_gray, WORKSPACE_LAST_RELEASE_READING_VERSION_1};
 use sfmtool_core::{EditedReconstruction, ObservationSource, PointMap};
 
 use crate::background::{Finished, Job, Operation};
@@ -58,9 +55,6 @@ pub(crate) enum RecordChange {
     /// The definition names this other tool, and is switched to the
     /// `sfmtool` defaults.
     Switch(String),
-    /// The definition is a version 1 `sfmtool` one, and is converted to
-    /// version 2, with a new folder.
-    Upgrade,
 }
 
 /// What a build of `node` does to its definition first.
@@ -68,8 +62,6 @@ fn record_change(node: &SceneNode) -> RecordChange {
     let contents = &node.recon().metadata.workspace.contents;
     if !extracts_with_sfmtool(node) {
         RecordChange::Switch(contents.feature_tool.clone())
-    } else if !has_image_to_gray(&contents.feature_options) {
-        RecordChange::Upgrade
     } else {
         RecordChange::Keep
     }
@@ -85,16 +77,6 @@ pub(crate) fn build_sift_files_hover(change: &RecordChange) -> String {
                  skipped. Runs on a worker thread and can be cancelled.";
     match change {
         RecordChange::Keep => build.to_string(),
-        RecordChange::Upgrade => format!(
-            "This reconstruction records version 1 sfmtool settings, and no .sift file is \
-             written from version 1 settings. First convert the record to version 2 as \
-             'sfm ws upgrade' converts a workspace, in this reconstruction only: every option \
-             is kept, its gray_formula becomes image_to_gray, and the files go in a new \
-             folder named from the converted options. The workspace's .sfm-workspace.json is \
-             not changed. Then: {build} The conversion is a version once every file is \
-             built; Undo (Ctrl+Z) puts the old record back, and a save writes the new one \
-             into the .sfmr."
-        ),
         RecordChange::Switch(from) => format!(
             "This reconstruction records '{from}' as its SIFT extraction, and only the sfmtool \
              tool can build .sift files here. First switch the record to sfmtool with its \
@@ -177,35 +159,20 @@ impl AppState {
         );
         let contents = &recon.metadata.workspace.contents;
         match record_change(node) {
-            RecordChange::Switch(_) if sift_files => {
-                return Some(format!(
-                    "The observations of {label} are feature indexes into its '{}' .sift \
-                     files, so its SIFT extraction cannot switch to sfmtool: the new files \
-                     would hold other features. Convert it to embedded patches first.",
-                    contents.feature_tool
-                ));
-            }
-            RecordChange::Upgrade if sift_files => {
-                return Some(format!(
-                    "The observations of {label} are feature indexes into its version 1 .sift \
-                     files, so its record cannot move to a version 2 folder: the feature \
-                     indexes name features of the old files, which a new folder would not \
-                     hold. Convert it to embedded patches first."
-                ));
-            }
-            RecordChange::Upgrade => {
-                if let Err(e) =
-                    upgrade_feature_options(&contents.feature_tool, &contents.feature_options)
-                {
-                    return Some(format!(
-                        "The version 1 SIFT extraction record of {label} cannot be converted to \
-                         version 2: {e}."
-                    ));
-                }
-            }
-            _ => {}
+            RecordChange::Switch(_) if sift_files => Some(format!(
+                "The observations of {label} are feature indexes into its '{}' .sift \
+                 files, so its SIFT extraction cannot switch to sfmtool: the new files \
+                 would hold other features. Convert it to embedded patches first.",
+                contents.feature_tool
+            )),
+            RecordChange::Keep if !has_image_to_gray(&contents.feature_options) => Some(format!(
+                "{label} records version 1 sfmtool settings, with no image_to_gray, and no \
+                 .sift file is written from version 1 settings. sfmtool \
+                 {WORKSPACE_LAST_RELEASE_READING_VERSION_1} is the last release that converts \
+                 them: install it and run `sfm ws upgrade` on the workspace."
+            )),
+            _ => None,
         }
-        None
     }
 
     /// Build `id`'s `.sift` files on a worker thread, switching its workspace
@@ -225,11 +192,10 @@ impl AppState {
     /// The work a build does, as a closure that owns everything it reads.
     ///
     /// The images are `<workspace>/<image name>`, and the options are the
-    /// node's own workspace definition when it is a version 2 `sfmtool` one,
-    /// that definition converted to version 2 with a new folder when it is a
-    /// version 1 `sfmtool` one, or the `sfmtool` defaults when the definition
-    /// names another tool. None reads the workspace's `.sfm-workspace.json`:
-    /// the files go where the node looks for them, after the change.
+    /// node's own workspace definition when it is an `sfmtool` one, or the
+    /// `sfmtool` defaults when the definition names another tool. Neither
+    /// reads the workspace's `.sfm-workspace.json`: the files go where the
+    /// node looks for them, after the switch.
     pub(crate) fn build_sift_files_job(&self, id: ReconId) -> Result<Job, String> {
         if let Some(why) = self.build_sift_files_refusal(id) {
             return Err(why);
@@ -249,32 +215,12 @@ impl AppState {
                 },
                 None,
             ),
-            // The conversion `sfm ws upgrade` makes, with a folder named from
-            // the converted options, as every folder made under version 2 is.
-            RecordChange::Upgrade => {
-                let feature_options =
-                    upgrade_feature_options(&own.feature_tool, &own.feature_options)
-                        .map_err(|e| e.to_string())?;
-                let folder = feature_prefix_dir(
-                    SFMTOOL_FEATURE_TOOL,
-                    SFMTOOL_FEATURE_TYPE,
-                    &feature_options,
-                );
-                (
-                    BuildSiftFilesOptions {
-                        feature_options,
-                        feature_prefix_dir: PathBuf::from(folder),
-                        concurrent_images: None,
-                    },
-                    Some(change),
-                )
-            }
             // After a switch, the definition `sfm ws init` writes for the tool:
             // its default options and the prefix directory named from them.
-            RecordChange::Switch(_) => (BuildSiftFilesOptions::sfmtool_defaults(), Some(change)),
+            RecordChange::Switch(from) => (BuildSiftFilesOptions::sfmtool_defaults(), Some(from)),
         };
-        let switch = switch.map(|change| Switch {
-            change,
+        let switch = switch.map(|from| Switch {
+            from,
             old_folder: own.feature_prefix_dir.clone(),
             edited: node.history.current().clone(),
         });
@@ -307,11 +253,11 @@ impl AppState {
     }
 }
 
-/// A change of the node's workspace definition, a switch to the `sfmtool` tool
-/// or a conversion to version 2, pushed as a version when the build succeeds.
+/// A switch of the node's workspace definition to the `sfmtool` tool, pushed
+/// as a version when the build succeeds.
 struct Switch {
-    /// Which change, with the tool a switch moves from, for the sentences.
-    change: RecordChange,
+    /// The tool the switch moves from, for the sentences.
+    from: String,
     /// The folder the definition named, for the sentences.
     old_folder: String,
     /// The value at the cursor, which the change is made on.
@@ -328,12 +274,12 @@ struct SiftFilesPlan {
     switch: Option<Switch>,
 }
 
-/// The build, then the change of the definition when there is one.
+/// The build, then the switch of the definition when there is one.
 ///
-/// The change is pushed only when every file was built, so a build that is
+/// The switch is pushed only when every file was built, so a build that is
 /// cancelled or fails leaves the definition as it was. The files it wrote stay,
 /// and a later build skips them. The Background panel's message and the
-/// sentence name the folder written to and, after a change, the folder the
+/// sentence name the folder written to and, after a switch, the folder the
 /// definition moved from.
 fn build(plan: SiftFilesPlan, progress: &Progress<'_>) -> Finished {
     let SiftFilesPlan {
@@ -365,7 +311,7 @@ fn build(plan: SiftFilesPlan, progress: &Progress<'_>) -> Finished {
         options.feature_prefix_dir.display()
     );
     let Some(Switch {
-        change,
+        from,
         old_folder,
         edited,
     }) = switch
@@ -391,24 +337,12 @@ fn build(plan: SiftFilesPlan, progress: &Progress<'_>) -> Finished {
     contents.feature_options = options.feature_options;
     contents.feature_prefix_dir = options.feature_prefix_dir.to_string_lossy().into_owned();
     let moved = format!("moved from {old_folder}");
-    let (version_label, text) = match change {
-        RecordChange::Switch(from) => {
-            let version_label = format!("Switched the SIFT extraction of {label} to sfmtool");
-            let from = match from.is_empty() {
-                true => "no tool".to_string(),
-                false => format!("'{from}'"),
-            };
-            let text =
-                format!("{version_label} from {from}, and built its .sift files: {built}, {moved}");
-            (version_label, text)
-        }
-        _ => {
-            let version_label =
-                format!("Converted the SIFT extraction record of {label} to version 2");
-            let text = format!("{version_label}, and built its .sift files: {built}, {moved}");
-            (version_label, text)
-        }
+    let version_label = format!("Switched the SIFT extraction of {label} to sfmtool");
+    let from = match from.is_empty() {
+        true => "no tool".to_string(),
+        false => format!("'{from}'"),
     };
+    let text = format!("{version_label} from {from}, and built its .sift files: {built}, {moved}");
     Finished::Produced {
         value,
         map,

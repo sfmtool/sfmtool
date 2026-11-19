@@ -50,6 +50,23 @@ SFMTOOL_VERSION_1_WORKSPACE = {
 }
 
 
+def relabel_camrig(path: Path, version: int) -> None:
+    """Rewrite the `.camrig` file at ``path`` with ``metadata.json`` at
+    ``version``. The reader does not check the content hashes, so an older
+    writer's file is made this way."""
+    import zipfile
+    from compression import zstd
+
+    with zipfile.ZipFile(path) as source:
+        entries = {name: source.read(name) for name in source.namelist()}
+    metadata = json.loads(zstd.decompress(entries["metadata.json.zst"]))
+    metadata["version"] = version
+    entries["metadata.json.zst"] = zstd.compress(json.dumps(metadata).encode())
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as out:
+        for name, raw in entries.items():
+            out.writestr(name, raw)
+
+
 def write_version_1_workspace_file(workspace: Path) -> Path:
     """Write :data:`SFMTOOL_VERSION_1_WORKSPACE` as ``workspace``'s
     ``.sfm-workspace.json`` and return its path."""

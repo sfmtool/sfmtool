@@ -337,15 +337,14 @@ files and extracts none of them.
 
 ### The version 1 refusals
 
-Every reading comes from a version 2 `.sift` file. `pick_images` refuses
-version 1 files in a folder the capture's `.sift` files go in before anything
-is extracted, and a version 1 file it reads
+Every reading comes from a version 2 `.sift` file. `pick_images` refuses a
+version 1 file it reads with the reader's message, which names sfmtool 0.4.1
+as the last release that reads it
 ([core/analysis/pick-images.md § Version 1 files](../../core/analysis/pick-images.md#version-1-files)).
-That covers a version 2 workspace whose folder holds version 1 files. A
-version 1 workspace is refused before that, when the workspace file is loaded,
-with the message every command gives
+A version 1 workspace is refused before anything is read, when the workspace
+file is loaded, with the message every command gives
 ([workspace.md § A command that uses a workspace requires version 2](../../workspace/workspace.md#a-command-that-uses-a-workspace-requires-version-2)),
-which says to run [`sfm ws upgrade`](../workspace/ws-upgrade-command.md).
+which names sfmtool 0.4.1 as the last release that upgrades it.
 
 ## From videos: `--new-workspace`
 

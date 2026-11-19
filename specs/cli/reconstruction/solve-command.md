@@ -84,7 +84,7 @@ When `PATHS` are image files or directories, the command extracts features (if n
 matching, and then solves. The matching strategy is exhaustive by default, or flow-based with
 `--flow-match`. Extraction writes `.sift` version 2 with the workspace's options. A version 1
 workspace is refused before any work, from images or from a `.matches` file, naming the
-workspace file and pointing at `sfm ws upgrade`
+workspace file and sfmtool 0.4.1, the last release that upgrades it
 ([workspace.md § A command that uses a workspace requires version 2](../../workspace/workspace.md#a-command-that-uses-a-workspace-requires-version-2)).
 
 ### From a named image list

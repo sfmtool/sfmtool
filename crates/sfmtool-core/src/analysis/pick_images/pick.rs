@@ -5,7 +5,6 @@
 //! the report.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use super::capture::{
@@ -18,7 +17,6 @@ use super::report::{
 };
 use super::source::{FrameSource, SourceWork};
 use super::walk::{walk_sequence, Walked};
-use crate::features::sift::version_1_sift_files;
 use crate::progress::Progress;
 
 /// Choose the frames of a capture a solve should use.
@@ -49,17 +47,12 @@ use crate::progress::Progress;
 /// [`FrameSource::finish`]. [`PickImagesReport::times`] says where the
 /// call's wall time went.
 ///
-/// Before anything is extracted, every folder the capture's `.sift` files go
-/// in is checked for version 1 files with [`version_1_sift_files`].
-///
 /// # Errors
 ///
 /// [`PickImagesError::Options`] and [`PickImagesError::Sequence`] for
-/// input out of range, [`PickImagesError::Version1Files`] and
-/// [`PickImagesError::ListFolder`] from the folder check,
-/// [`PickImagesError::Source`] when the source cannot make a frame read
-/// exist, naming the frame, [`PickImagesError::ReadSift`] and
-/// [`PickImagesError::Version1Sift`] for a `.sift` file that cannot be used,
+/// input out of range, [`PickImagesError::Source`] when the source cannot
+/// make a frame read exist, naming the frame, [`PickImagesError::ReadSift`]
+/// for a `.sift` file that cannot be used,
 /// [`PickImagesError::Pair`] for two frames whose reference images differ in
 /// size, and [`PickImagesError::Cancelled`] when `progress` is cancelled,
 /// which is checked before every wait on the source, while it waits, and
@@ -73,7 +66,6 @@ pub fn pick_images(
     let start = Instant::now();
     options.validate()?;
     validate_sequences(sequences)?;
-    check_folders(sequences)?;
     progress.check_cancel()?;
     let checked = start.elapsed();
 
@@ -158,27 +150,6 @@ fn walk_all(
             Ok(walked)
         })
         .collect()
-}
-
-/// Refuse a capture whose `.sift` folders hold version 1 files.
-fn check_folders(sequences: &[CaptureSequence]) -> Result<(), PickImagesError> {
-    let folders: BTreeSet<PathBuf> = sequences
-        .iter()
-        .flat_map(|s| &s.frames)
-        .flat_map(|f| &f.images)
-        .map(|image| match image.sift_path.parent() {
-            Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
-            _ => Path::new(".").to_path_buf(),
-        })
-        .collect();
-    for folder in folders {
-        match version_1_sift_files(&folder) {
-            Ok(None) => {}
-            Ok(Some(found)) => return Err(PickImagesError::Version1Files(found)),
-            Err(source) => return Err(PickImagesError::ListFolder { folder, source }),
-        }
-    }
-    Ok(())
 }
 
 /// The report from what was read and walked, and the frames the source
