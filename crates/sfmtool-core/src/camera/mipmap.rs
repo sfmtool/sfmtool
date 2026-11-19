@@ -142,11 +142,16 @@ impl fmt::Display for MipmapError {
                 height,
             } => write!(
                 f,
-                "{} is {width} x {height}, and a photograph with a side over                  {MAX_JPEG_SIDE} px cannot be read",
+                "{} is {width} x {height}, and a photograph with a side over \
+                 {MAX_JPEG_SIDE} px cannot be read",
                 path.display()
             ),
             Self::NotOutOfCore { path } => {
-                write!(f, "{} is not out of core, so it has no mipmap", path.display())
+                write!(
+                    f,
+                    "{} is not out of core, so it has no mipmap",
+                    path.display()
+                )
             }
             Self::Encode(why) => write!(f, "a mip level could not be encoded: {why}"),
             Self::Cancelled => write!(f, "cancelled"),

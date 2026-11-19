@@ -523,6 +523,15 @@ fn a_side_of_65536_is_refused_from_the_header_in_every_workspace_kind() {
     ];
     let cache = PhotographCache::new(1 << 30);
     for path in &paths {
+        let message = format!(
+            "{} is 65536 x 100, and a photograph with a side over 65535 px cannot be read",
+            path.display()
+        );
+        assert_eq!(
+            photograph_layout(path, TILE).unwrap_err().to_string(),
+            message
+        );
+        assert_eq!(cache.get(path).err().unwrap().to_string(), message);
         match photograph_layout(path, TILE) {
             Err(MipmapError::TooLarge {
                 path: named,
@@ -671,8 +680,12 @@ fn two_processes_building_at_once_leave_current_files() {
     let photograph = ws.photograph("images/a.png", &encode_png(&synthetic_rgb(300, 200)));
     let built = build(&photograph, &options(95));
     // Hold a file open while the children rename over it: a reader keeps an
-    // open file, and that must not block another process's write.
-    let held = std::fs::File::open(location(&photograph).level_path(1, 95)).unwrap();
+    // open file, and that must not block another process's write. The held
+    // file is made stale first, so a rename it blocked would not count as
+    // written and the children would report it in `not_written`.
+    let held_path = location(&photograph).level_path(1, 95);
+    rewrite_record(&held_path, |r| r.source_xxh128 = "0".repeat(32));
+    let held = std::fs::File::open(&held_path).unwrap();
     let exe = std::env::current_exe().unwrap();
     let children: Vec<_> = (0..2)
         .map(|_| {

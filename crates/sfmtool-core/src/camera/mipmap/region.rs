@@ -410,7 +410,9 @@ pub(super) fn index_intervals(
     expected: usize,
 ) -> Result<Vec<Range<usize>>, NotRegionReadable> {
     use NotRegionReadable as N;
-    let mut intervals = Vec::with_capacity(expected);
+    // Each interval takes at least three bytes (one of data and a marker), so
+    // a header declaring more than the file can hold does not reserve them.
+    let mut intervals = Vec::with_capacity(expected.min(bytes.len() / 3));
     let mut begin = start;
     let mut i = start;
     loop {
