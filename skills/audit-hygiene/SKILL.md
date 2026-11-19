@@ -1,6 +1,6 @@
 ---
 name: audit-hygiene
-description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation — and for code that breaks the quality standards in specs/STANDARDS.md (points at infinity, Progress on long-running work, no panics on caller input, no Python wrappers over bindings, medians and quantiles from sfmtool_core::numeric, the smallest numeric precision the use justifies, one I/O shape per file format, viewer item visibility, Python names and lazy loading, Rust module files and *Options settings structs, license headers, rustdoc, MSRV and mcp-less builds, no documented exceptions, tests that can fail, tests that cost only what their assertions need). Use when the user asks to clean up, reorganize, or review codebase structure.
+description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation — and for code that breaks the quality standards in specs/STANDARDS.md (points at infinity, Progress on long-running work, no panics on caller input, no Python wrappers over bindings, medians and quantiles from sfmtool_core::numeric, the smallest numeric precision the use justifies, one I/O shape per file format, file format versions changed and dropped as format-versions.md says, viewer item visibility, Python names and lazy loading, Rust module files and *Options settings structs, license headers, rustdoc, MSRV and mcp-less builds, no documented exceptions, tests that can fail, tests that cost only what their assertions need). Use when the user asks to clean up, reorganize, or review codebase structure.
 ---
 
 # Codebase hygiene audit
@@ -500,7 +500,7 @@ how this audit runs them.
 
 - **Check per function, not per convention split.** A breach is a finding
   even where the whole module is consistent with itself. Run the
-  mechanical checks 9–21 below, and the standards' tallies in check 5,
+  mechanical checks 9–22 below, and the standards' tallies in check 5,
   first, then read each hit against the standard it feeds.
 - **Cite the standard.** Each finding names the standard by its heading
   and links it (`specs/STANDARDS.md#caller-input-never-panics`).
@@ -755,6 +755,19 @@ worth more than a paragraph.
     test covers. A test over the limits that no way would make faster
     without doing one of those meets the standard and is not a finding.
     Feeds STANDARDS.md § "Tests cost what their assertions need".
+22. **Format versions** — one row per on-disk format: its version constant,
+    the oldest version its reader accepts (from the reader's refusal), the
+    version the last release wrote (`git show <latest tag>:<the crate's
+    types.rs>`), the versions of the format's files under `test-data/`
+    (read with `sfmtool.fileio.read_<fmt>_metadata`), and whether its spec
+    has a "Format versions" and a "Version History" section. Report the
+    table even when every row is clean. Then grep `crates/` outside the five
+    format crates, and `src/sfmtool/`, for branches on a file's format
+    version (`\.version\s*(<|<=|>|>=|==|!=)` and the format crates'
+    `*_VERSION` constants), and read each hit: one that reads or converts an
+    older file is a finding; `sfm ws upgrade` choosing which files to
+    rewrite is not. Feeds STANDARDS.md § "A file format changes version only
+    as format-versions.md says".
 
 ## Output
 

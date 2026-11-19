@@ -38,8 +38,12 @@ reading `.camrig` version 1, 0.5's release notes announce that the next
 release stops, and 0.6 removes it, in a PR of the same shape as the three
 below.
 
-**`.kdf`** has had one version, 3, since sfmtool 0.3, and its reader already
-reads only that version. Nothing is dropped.
+**`.kdf`** follows the same read window. Every release, 0.3 to 0.4.1, wrote
+version 3, so 0.5's window is version 3 alone, which is what its reader
+already reads (versions 1 and 2 were written only by development builds).
+Nothing is dropped. Its spec's "Version" subsection still becomes a "Format
+versions" section near the top, with a Version History at the end, in a PR
+of its own, so all five specs share the shape.
 
 ## The refusal
 

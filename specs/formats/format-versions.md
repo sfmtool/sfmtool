@@ -102,11 +102,12 @@ One change, landed together:
    saving, this follows from the reader and the writer. A `.sift` change needs
    a lossless conversion of its own, as `Version2SiftFolder` converts
    version 1, because extracting the features again does not reproduce them
-   and every file that records their indexes and hashes would break. A `.kdf`
-   index is derived from its `.sift` files: the upgrade deletes one built from
-   a version 1 workspace record, since it would be stale, and the change that
-   moves the `.kdf` version makes the upgrade delete or rebuild an index of the
-   older version.
+   and every file that records their indexes and hashes would break. Every
+   `.kdf` file a release has written is at the current version, so the upgrade
+   rewrites none today (it deletes an index built from a version 1 workspace
+   record, which would read as stale); the change that next moves the `.kdf`
+   version makes the upgrade rewrite a version 3 index as the current version,
+   as it rewrites the other formats.
 5. **Tests** read a file of each accepted older version and check what it
    converts to, and check that the reader refuses a version newer than the
    current one and, where the oldest version read is above 1, a version below
