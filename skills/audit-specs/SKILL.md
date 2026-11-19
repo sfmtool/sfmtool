@@ -196,8 +196,12 @@ subject, say so in the report — that is a proposed amendment to
      and a repo path link anywhere else is a hit.
    - **Unnamed enumerations.** A per-element code column with no legend in the
      file, or a per-file enumeration stored as a number.
-   - **Versioning gaps.** An optional entry with no introducing version, or a
-     version with no migration statement.
+   - **Versioning gaps.** Versions not presented as
+     `specs/formats/format-versions.md` § "How a format spec presents its
+     versions" says: no Format versions section or no Version History, an
+     entry that some version still read lacks with no introducing-version
+     tag, a version still read with no "Version N → Version N+1"
+     subsection, or a tag or subsection kept for a version no longer read.
 
    Quote the sentence and say which of the four actors should replace the name,
    or where the definition should be restated. When a format spec's only

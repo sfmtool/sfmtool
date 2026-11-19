@@ -103,9 +103,10 @@ There is no implicit SIFT normalization or distance conversion.
 
 Readers reject unsupported scalar, metric, kind, or source names. Unknown JSON fields are
 ignored. Source entries below are conditional; unexpected ZIP entries are
-rejected. Changes to binary interpretation, required entries, or required
-semantics require a version increment. An older reader rejects rather than
-partially interpreting such a file.
+rejected. A change that a reader of the previous version would refuse,
+misread, or silently drop or misinterpret changes the version, as
+[format-versions.md](format-versions.md) says, so an older reader rejects
+such a file rather than partially interpreting it.
 
 ## SIFT references and descriptor origins
 
@@ -374,12 +375,21 @@ would be collapsed before entry-set validation could see it.
 
 ### Version
 
-`metadata.json`'s `version` is 3. A reader accepts that number and no other, in
-either direction: there is one on-disk shape at a time and no translation between
-shapes. A file carrying another version is refused with a message naming the
-version it holds, the version the reader wants, and the remedy — a `.kdf` is
-derived from the `.sift` files it was built over, so rebuilding it is always
-available and is always the fix.
+How the version changes, and which older versions a reader keeps reading, is
+in [format-versions.md](format-versions.md). In sfmtool 0.5,
+[../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md)
+moves this section into a Format versions section near the top, in the shape
+format-versions.md gives.
+
+`metadata.json`'s `version` is 3. A reader accepts the current version and
+every version the previous release wrote. Every sfmtool release that writes
+`.kdf` files, 0.3 and later, has written version 3, so that is the only
+version a reader accepts today; versions 1 and 2 were written only by
+development builds before sfmtool 0.3. A file carrying
+another version is refused with a message naming the version it holds and the
+version the reader reads, and saying to rebuild the index from the `.sift`
+files it was built over. When `.kdf` next changes version, its reader reads
+version 3 too and converts it at the I/O boundary.
 
 Version 2 replaced version 1's two layouts (a shared descriptor corpus, or
 descriptors copied into each tree) with the single shared corpus, and added the

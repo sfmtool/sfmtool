@@ -3497,6 +3497,10 @@ appropriate units (e.g., "xyz: (1234.0, -567.0, 2891.0) mm" instead of bare numb
 
 ## Versioning and Migration
 
+How the version changes, and which older versions a reader keeps reading, is
+in [format-versions.md](format-versions.md). sfmtool 0.5 stops reading the versions below 16, as
+[../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md) specifies.
+
 The format spans sixteen versions (`1` to `16`), all valid; each extends the
 previous, and how an older file maps to the current model is given below.
 Version 16 is the current format version: a reader accepts any version up to
@@ -3538,7 +3542,7 @@ frame's `normalize(u × v)`, which changes `points3d_xxh128`. That is a change
 of content where a file's normals disagree with its frames, and older files
 whose normals disagree are not preserved: `seoul_bull_sculpture_ground_truth_v01`
 has normals up to 49° from their frames' and `kerry_park_ground_truth_v01` up
-to 1.7°, while the later ground truths agree within 0.03°. A version 16 file
+to 1.7°, while the later ground truths agree within 0.0001°. A version 16 file
 maps back to version 15 by widening each `float16` column to `float32`, which
 is exact, writing each score as `1 − w`, renaming the entries, and storing the
 full `normals_xyz` column of the normals it reads, the derived ones among

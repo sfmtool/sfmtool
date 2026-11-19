@@ -263,7 +263,9 @@ are settled — a stale open question reads as a live one.
 - **`specs/formats/`** — the on-disk layout is the interface. The equivalent of
   "Rust API / why it is shaped this way" is the entry table plus the versioning
   rules; keep Theory for the encoding decisions. A format spec is held to a
-  stricter standard than the others, below.
+  stricter standard than the others, below, and presents its versions as
+  [formats/format-versions.md](formats/format-versions.md) says: a Format
+  versions section near the top and a Version History at the end.
 - **`specs/gui/`** — describe the panel's behaviour and state, and the user-facing
   contract. A Rust API section is only warranted where other modules call in.
 
