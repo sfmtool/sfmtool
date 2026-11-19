@@ -1581,7 +1581,7 @@ tiled photographs only (step 13), so no step leaves a reader without pixels.
 | 19 | The viewer's cluster-patches build (`cluster_patches.rs` `read_photographs`) | `read_rgb`, full depth, outside the cache, all at once | `get_many` through the cache; regions | the stored levels |
 | 20 | Display thumbnails when none is stored (`display_thumbnails.rs` → `display_thumbnail_row`) | whole decode, resized to 128 | in core unchanged; out of core from the coarsest mip level file | display only |
 | 21 | `.sift` building (`features/sift/files.rs` `build_sift_file`) | whole decode | whole decode of the original, then the mipmap from it | no |
-| 22 | Image readings at save (`reconstruction/image_readings.rs` `gather_image_readings`) | whole decode of every photograph with no `.sift` row, in a `into_par_iter` over all images, so one 571 MiB decode per rayon thread at 200 MP | the original, decoded whole, with the number decoded at once bounded by memory as SIFT's is (step 4) | no |
+| 22 | Image readings at save (`reconstruction/image_readings.rs` `gather_image_readings`) | whole decode of every photograph with no `.sift` row, with the number decoded at once bounded by memory as SIFT's is (built in step 4) | unchanged | no |
 | P1 | `sfmtool.fileio.read_image_rgb` / `read_image_rgba` (`sfmtool-py/src/fileio/image.rs`) | whole decode | unchanged: they read files, not pyramids | no |
 | P2 | `ImagePyramidSet(recon, images)` and the kernels' `images` lists (`sfmtool-py/src/patches/views.rs`) | exact pyramids of the arrays passed | tiled photographs cut from the arrays (`TiledPhotograph::from_image`), the same pixels; a new `ImagePyramidSet.read(recon)` reads by path through the core cache | no for arrays; through `read`, as rows 11–18 |
 | P3 | `embed-patches`, the strip montages, the `xform` steps that read photographs (`src/sfmtool/_embed_patches.py`, `src/sfmtool/strips/`, `src/sfmtool/xform/_images.py`) | `read_workspace_image` arrays into the kernels | `ImagePyramidSet.read(recon)` | the stored levels, so they match the viewer |
@@ -2149,13 +2149,12 @@ in core. Step 17 turns the tier on.
    decoded on the GUI thread, and no texture exceeds the limit, which ends the
    crash in camera view; specified in
    [gui/camera-views.md](../gui/camera-views.md) § "Photograph background".
-4. **Image readings at save, bounded.** `gather_image_readings` decodes the
-   photographs that have no `.sift` row in an `into_par_iter` over every image,
-   so at 200 MP each rayon thread holds a 571 MiB decode and its grey copy at
-   once. Its decodes run on a pool sized by memory the way SIFT's are since
-   #1306 (`default_concurrent_images_for_dimensions`, from the photographs'
-   header sizes), and the rows that need no decode stay parallel. Tests: the
-   concurrency for a set of sizes and memory figures; the rows are identical.
+4. **Image readings at save, bounded.** Built: `gather_image_readings` takes
+   the rows that need no decode in parallel, then decodes the photographs
+   left with at most as many at once as fit in half of physical memory at 16
+   bytes per pixel of the largest, by `concurrent_images_in_memory`, the rule
+   `.sift` building is sized by; specified, with the measurement, in
+   [formats/sfmr-file-format.md § Implementations](../formats/sfmr-file-format.md#implementations).
 5. **Mip level files.** Image discovery skips `.sfm-mipmaps` (`expand_paths`, the
    camrig and rig-config finders, `match_pattern_and_padding_misses`, the
    named-image-list walk) with a test each; then `PyramidLayout`, the region
