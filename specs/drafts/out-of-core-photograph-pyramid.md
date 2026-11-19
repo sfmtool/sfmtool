@@ -2145,9 +2145,10 @@ in core. Step 17 turns the tier on.
    the panel's view arithmetic and `set_image_detail_view` work in.
 3. **The 3D background** from one level by the viewport and the limit, off the
    GUI thread, through the cache, with a remembered failure. Built: the level
-   comes from the cache's in-memory pyramid through `display_photograph`, never
-   decoded on the GUI thread, and no texture exceeds the limit, which ends the
-   crash in camera view; specified in
+   comes from the cache's in-memory pyramid through `display_photograph`, which
+   decodes on the rayon pool on a miss (on the GUI thread only under a cache
+   budget of 0), and no texture exceeds the limit, which ends the crash in
+   camera view; specified in
    [gui/camera-views.md](../gui/camera-views.md) § "Photograph background".
 4. **Image readings at save, bounded.** Built: `gather_image_readings` takes
    the rows that need no decode in parallel, then decodes the photographs
