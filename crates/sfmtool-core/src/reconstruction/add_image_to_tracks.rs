@@ -32,7 +32,7 @@ use rayon::prelude::*;
 
 use sfmtool_sfmr_format::ContentHash;
 
-use crate::camera::image::ImageU8Pyramid;
+use crate::camera::TiledPhotograph;
 use crate::geometry::RigidTransform;
 use crate::numeric::median_in_place;
 use crate::patch::cloud::{split_halfvec, OrientedPatch};
@@ -484,8 +484,8 @@ pub enum AddImageToTracksError {
     },
     /// The image carries no pose.
     Unposed(usize),
-    /// Fewer pyramids were supplied than the value has images.
-    PyramidsMissing {
+    /// Fewer photographs were supplied than the value has images.
+    PhotographsMissing {
         /// How many were supplied.
         got: usize,
         /// How many the value has.
@@ -510,7 +510,7 @@ impl std::fmt::Display for AddImageToTracksError {
                 "image {image} is not one of this reconstruction's {image_count} images"
             ),
             Self::Unposed(image) => write!(f, "image {image} has no pose to project into"),
-            Self::PyramidsMissing { got, expected } => write!(
+            Self::PhotographsMissing { got, expected } => write!(
                 f,
                 "{got} images were supplied and the reconstruction has {expected}"
             ),
@@ -543,7 +543,7 @@ impl From<Cancelled> for AddImageToTracksError {
 /// Add observations of `image` to the points of `recon` it does not observe,
 /// where it sees them and its view agrees with theirs.
 ///
-/// `pyramids` holds one entry per image of `recon`: the decoded photograph, or
+/// `photographs` holds one entry per image of `recon`: its photograph, or
 /// `None` for one not to hand. The target's own must be there. An image
 /// without one is left out of every reference set, so a point whose
 /// observations are mostly in images not supplied is refused for too few
@@ -572,12 +572,12 @@ impl From<Cancelled> for AddImageToTracksError {
 /// };
 /// # fn run(
 /// #     recon: &sfmtool_core::SfmrReconstruction,
-/// #     pyramids: &[Option<&sfmtool_core::camera::image::ImageU8Pyramid>],
+/// #     photographs: &[Option<&sfmtool_core::camera::TiledPhotograph>],
 /// # ) -> Result<(), Box<dyn std::error::Error>> {
 /// let (next, report) = add_image_to_tracks(
 ///     recon,
 ///     3,
-///     pyramids,
+///     photographs,
 ///     &AddImageToTracksOptions::default(),
 ///     &Progress::none(),
 /// )?;
@@ -594,7 +594,7 @@ impl From<Cancelled> for AddImageToTracksError {
 pub fn add_image_to_tracks(
     recon: &SfmrReconstruction,
     image: usize,
-    pyramids: &[Option<&ImageU8Pyramid>],
+    photographs: &[Option<&TiledPhotograph>],
     options: &AddImageToTracksOptions,
     progress: &Progress<'_>,
 ) -> Result<(SfmrReconstruction, AddImageToTracksReport), AddImageToTracksError> {
@@ -603,9 +603,9 @@ pub fn add_image_to_tracks(
     if image >= image_count {
         return Err(AddImageToTracksError::NoSuchImage { image, image_count });
     }
-    if pyramids.len() < image_count {
-        return Err(AddImageToTracksError::PyramidsMissing {
-            got: pyramids.len(),
+    if photographs.len() < image_count {
+        return Err(AddImageToTracksError::PhotographsMissing {
+            got: photographs.len(),
             expected: image_count,
         });
     }
@@ -613,7 +613,7 @@ pub fn add_image_to_tracks(
     if !target.is_posed() {
         return Err(AddImageToTracksError::Unposed(image));
     }
-    if pyramids[image].is_none() {
+    if photographs[image].is_none() {
         return Err(AddImageToTracksError::NoTargetImage(image));
     }
     let keypoints = match &recon.point_set.observations {
@@ -663,11 +663,11 @@ pub fn add_image_to_tracks(
     let views: Vec<Option<ProjectedImage<'_>>> = (0..image_count)
         .map(|i| {
             let im = &image_set.images[i];
-            let pyramid = pyramids[i]?;
+            let source = photographs[i]?;
             im.is_posed().then(|| ProjectedImage {
                 camera: &intrinsics[i],
                 cam_from_world: &poses[i],
-                pyramid,
+                source,
             })
         })
         .collect();

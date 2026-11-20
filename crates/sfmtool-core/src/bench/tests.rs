@@ -3002,7 +3002,7 @@ fn a_track_from_a_point_fits_to_the_kernels_own_numbers() {
             resolution as u32,
         );
         map.compute_svd();
-        let rendered = crate::camera::remap::remap_bilinear_mip(view.pyramid, &map);
+        let rendered = crate::camera::remap::remap_bilinear_mip(view.source.held_pyramid(), &map);
         let colour = (rendered.channels() as usize).min(3);
         let mut planes = Vec::with_capacity(colour * resolution * resolution);
         for c in 0..colour {
@@ -3759,7 +3759,7 @@ fn a_pixel_cluster_spans_the_radius_it_was_asked_for() {
     let outermost = radius_px - half_cell;
     assert!(
         sample_member_grid(
-            scene.views()[0].pyramid,
+            scene.views()[0].source.held_pyramid(),
             measurement.seed_position,
             measurement.seed_shape,
             &params,
@@ -3863,7 +3863,7 @@ fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
         };
         let views = scene.views();
         let samples = sample_member_grid(
-            views[observation.image as usize].pyramid,
+            views[observation.image as usize].source.held_pyramid(),
             m.seed_position,
             m.seed_shape,
             &params,
@@ -3880,7 +3880,7 @@ fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
         assert_eq!(
             m.zncc_self_similarity_radius,
             crate::patch::cluster_refine::member_zncc_self_similarity_radius(
-                views[observation.image as usize].pyramid,
+                views[observation.image as usize].source.held_pyramid(),
                 m.seed_position,
                 m.seed_shape,
                 &params,

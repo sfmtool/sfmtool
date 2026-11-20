@@ -299,7 +299,7 @@ fn render_crop(
     let sampler =
         SamplerChoice::per_view().for_patch_frame(&patch, view.camera, view.cam_from_world, side);
     let mut map = WarpMap::from_patch(&patch, view.camera, view.cam_from_world, side);
-    let tile = render_tile(view.pyramid, &mut map, sampler);
+    let tile = render_tile(view.source.held_pyramid(), &mut map, sampler);
     let n = side as usize * side as usize;
     let channels = tile.channels() as usize;
     let data = tile.data();

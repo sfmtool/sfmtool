@@ -368,13 +368,15 @@ fn the_sampler_gradient_is_the_derivative_of_its_value_at_the_edge() {
         })
         .collect();
     let image = ImageU8::new(w, h, 2, data);
-    let pyramid = crate::camera::image::ImageU8Pyramid::build(&image, 2);
+    let source = crate::camera::TiledPhotograph::from_pyramid(std::sync::Arc::new(
+        crate::camera::image::ImageU8Pyramid::build(&image, 2),
+    ));
     let camera = camera("pinhole");
     let pose = crate::geometry::RigidTransform::identity();
     let view = crate::patch::normal_refine::ProjectedImage {
         camera: &camera,
         cam_from_world: &pose,
-        pyramid: &pyramid,
+        source: &source,
     };
     for level in [0usize, 1] {
         let read = ViewImage::at_level(&view, level);
@@ -503,13 +505,15 @@ fn the_sobel_read_is_a_bilinear_read_of_the_sobel_images() {
         }
     }
     // The ramp, channel 1: 3 per px in x and 7 in y.
-    let pyramid = crate::camera::image::ImageU8Pyramid::build(&image, 1);
+    let source = crate::camera::TiledPhotograph::from_pyramid(std::sync::Arc::new(
+        crate::camera::image::ImageU8Pyramid::build(&image, 1),
+    ));
     let camera = camera("pinhole");
     let pose = crate::geometry::RigidTransform::identity();
     let view = crate::patch::normal_refine::ProjectedImage {
         camera: &camera,
         cam_from_world: &pose,
-        pyramid: &pyramid,
+        source: &source,
     };
     let read = ViewImage::at_level(&view, 0);
     let pixels: Vec<Option<[f64; 2]>> =

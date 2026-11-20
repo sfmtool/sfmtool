@@ -361,7 +361,7 @@ fn render_context(
     // the process inside one of them. `try_zeroed_f32` asks for exactly what
     // will be filled below.
     let cr = context_res as usize;
-    let channels = view.pyramid.level(0).channels() as usize;
+    let channels = view.source.channels() as usize;
     let istride = cache_istride(cr);
     let mut planes: Vec<Vec<f32>> = Vec::new();
     planes
@@ -414,7 +414,7 @@ fn render_context(
     }
     let img = prof::RENDER_REMAP.time(|| {
         let _phase = render_phase(progress, sampler, 1);
-        render_tile(view.pyramid, &mut map, sampler)
+        render_tile(view.source.held_pyramid(), &mut map, sampler)
     });
     debug_assert_eq!(channels, img.channels() as usize);
 

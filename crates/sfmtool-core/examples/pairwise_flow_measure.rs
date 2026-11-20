@@ -27,8 +27,7 @@ use sfmtool_core::bench::{
     create_track, pairwise_flow_normal, tilt_patch, Bench, CreateTrackOptions, NormalEstimate,
     PairwiseFlowNormalOptions, PairwiseFlowOutcome,
 };
-use sfmtool_core::camera::image::ImageU8Pyramid;
-use sfmtool_core::camera::{CameraIntrinsics, PhotographCache};
+use sfmtool_core::camera::{CameraIntrinsics, PhotographCache, TiledPhotograph};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::numeric::median;
 use sfmtool_core::patch::normal_refine::ProjectedImage;
@@ -81,9 +80,9 @@ fn main() {
     let decode = Instant::now();
     let cache = PhotographCache::new(0);
     let (pyramids, _) = cache.get_many(&refs, &Progress::none()).expect("decode");
-    let pyramids: Vec<Arc<ImageU8Pyramid>> = pyramids
+    let sources: Vec<TiledPhotograph> = pyramids
         .into_iter()
-        .map(|p| p.expect("every image decodes"))
+        .map(|p| TiledPhotograph::from_pyramid(p.expect("every image decodes")))
         .collect();
     eprintln!(
         "decoded {} images in {:.1}s",
@@ -94,7 +93,7 @@ fn main() {
         .map(|i| ProjectedImage {
             camera: cams[i],
             cam_from_world: &poses[i],
-            pyramid: &pyramids[i],
+            source: &sources[i],
         })
         .collect();
 

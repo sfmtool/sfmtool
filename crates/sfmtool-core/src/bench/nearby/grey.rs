@@ -173,7 +173,7 @@ impl GreyImages {
     /// [`Self::get`] for an `image` the caller has already checked is an
     /// index into both the cache and `views`.
     pub(super) fn checked(&self, views: &[ProjectedImage<'_>], image: usize) -> &GreyImage {
-        self.images[image].get_or_init(|| blurred_grey(views[image].pyramid.level(0)))
+        self.images[image].get_or_init(|| blurred_grey(views[image].source.held_pyramid().level(0)))
     }
 }
 

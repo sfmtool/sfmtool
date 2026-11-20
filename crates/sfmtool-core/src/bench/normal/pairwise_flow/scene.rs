@@ -7,10 +7,12 @@
 //! The crops are then rendered from these photographs by the real code path,
 //! through each camera's model.
 
+use std::sync::Arc;
+
 use nalgebra::{Matrix3, Point3, Vector3};
 
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
-use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::geometry::{RigidTransform, RotQuaternion};
 use crate::patch::normal_refine::ProjectedImage;
 
@@ -124,7 +126,7 @@ impl Texture {
 pub(super) struct Scene {
     cameras: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
-    pyramids: Vec<ImageU8Pyramid>,
+    sources: Vec<TiledPhotograph>,
 }
 
 impl Scene {
@@ -145,7 +147,7 @@ impl Scene {
         let camera = pinhole();
         let mut grain = Gaussian::new(seed ^ 0xA5A5);
         let mut poses = Vec::new();
-        let mut pyramids = Vec::new();
+        let mut sources = Vec::new();
         for &centre in centres {
             let pose = look_at(centre, Vector3::zeros());
             let r = pose.to_rotation_matrix();
@@ -169,13 +171,15 @@ impl Scene {
                 }
             }
             let image = ImageU8::new(IMAGE_SIDE, IMAGE_SIDE, 1, data);
-            pyramids.push(ImageU8Pyramid::build(&image, 4));
+            sources.push(TiledPhotograph::from_pyramid(Arc::new(
+                ImageU8Pyramid::build(&image, 4),
+            )));
             poses.push(pose);
         }
         Self {
             cameras: vec![camera; centres.len()],
             poses,
-            pyramids,
+            sources,
         }
     }
 
@@ -185,7 +189,7 @@ impl Scene {
             .map(|k| ProjectedImage {
                 camera: &self.cameras[k],
                 cam_from_world: &self.poses[k],
-                pyramid: &self.pyramids[k],
+                source: &self.sources[k],
             })
             .collect()
     }

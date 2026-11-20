@@ -182,7 +182,7 @@ impl AppState {
                 None => &edited.base,
             };
 
-            let slots = views.pyramid_slots();
+            let slots = views.source_slots();
             let (next, report) = match add_image_to_tracks(
                 source,
                 index,

@@ -1021,7 +1021,7 @@ impl<'a, 'v> Cells<'a, 'v> {
         let mut map = WarpMap::from_patch(&context, view.camera, view.cam_from_world, side as u32);
         let tile = {
             let _phase = render_phase(self.progress, sampler, 1);
-            render_tile(view.pyramid, &mut map, sampler)
+            render_tile(view.source.held_pyramid(), &mut map, sampler)
         };
         // A fourth channel is the photograph's alpha, which carries no
         // texture.

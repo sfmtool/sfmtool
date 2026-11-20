@@ -51,7 +51,7 @@ use std::time::Instant;
 use nalgebra::{Matrix3, Vector3};
 use serde_json::{json, Value};
 use sfmtool_core::camera::image::ImageU8Pyramid;
-use sfmtool_core::camera::{CameraIntrinsics, PhotographCache};
+use sfmtool_core::camera::{CameraIntrinsics, PhotographCache, TiledPhotograph};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
 #[cfg(not(congeal))]
@@ -435,6 +435,10 @@ fn main() {
     let cache = PhotographCache::new(0);
     let (pyramids, _) = cache.get_many(&refs, &Progress::none()).expect("decode");
     let pyramids: Vec<Option<Arc<ImageU8Pyramid>>> = pyramids;
+    let sources: Vec<Option<TiledPhotograph>> = pyramids
+        .into_iter()
+        .map(|p| p.map(TiledPhotograph::from_pyramid))
+        .collect();
     eprintln!(
         "decoded {} images in {:.1}s",
         needed.len(),
@@ -447,7 +451,7 @@ fn main() {
         .map(|(c, &i)| ProjectedImage {
             camera: cams[i],
             cam_from_world: &poses[i],
-            pyramid: pyramids[c].as_ref().expect("image decoded"),
+            source: sources[c].as_ref().expect("image decoded"),
         })
         .collect();
 

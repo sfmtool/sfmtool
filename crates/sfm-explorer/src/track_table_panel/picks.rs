@@ -40,7 +40,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 
-use sfmtool_core::camera::PhotographCache;
+use sfmtool_core::camera::{PhotographCache, TiledPhotograph};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::keypoint_subpixel::KeypointSubpixelParams;
 use sfmtool_core::patch::normal_refine::ProjectedImage;
@@ -181,7 +181,8 @@ pub(super) fn pick_reference(
     let recon = &edited.base;
     let [decode, rule] = progress.split(DECODE_AND_STEP);
     let observations = view.observations();
-    // The observation each view is, its keypoint, its pose and its pyramid.
+    // The observation each view is, its keypoint, its pose and its photograph,
+    // its whole pyramid read in place until the picks read regions.
     let mut found = Vec::with_capacity(observations.len());
     for (k, observation) in observations.iter().enumerate() {
         if decode.is_cancelled() {
@@ -201,7 +202,7 @@ pub(super) fn pick_reference(
                 camera,
                 crate::scene::cam_from_world(image),
                 [f64::from(keypoint[0]), f64::from(keypoint[1])],
-                pyramid,
+                TiledPhotograph::from_pyramid(pyramid),
             ))
         })();
         found.extend(read);
@@ -217,7 +218,7 @@ pub(super) fn pick_reference(
         .map(|(f, cam_from_world)| ProjectedImage {
             camera: &f.1,
             cam_from_world,
-            pyramid: &f.4,
+            source: &f.4,
         })
         .collect();
     let patch_views: Vec<u32> = (0..views.len() as u32).collect();

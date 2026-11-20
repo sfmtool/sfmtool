@@ -1162,7 +1162,7 @@ pub(super) fn evaluate_cluster(
             affine_shapes: s.view(),
         })
         .collect();
-    let pyramids: Vec<&ImageU8Pyramid> = images.iter().map(|v| v.pyramid).collect();
+    let pyramids: Vec<&ImageU8Pyramid> = images.iter().map(|v| v.source.held_pyramid()).collect();
 
     let result = {
         let mut phase = progress.phase("refine");
@@ -1245,7 +1245,7 @@ pub(super) fn evaluate_cluster(
                 .as_mut()
                 .expect("the same member");
             let similarity = tile_self_similarity(
-                images[observation.image as usize].pyramid,
+                images[observation.image as usize].source.held_pyramid(),
                 measurement.seed_position,
                 measurement.seed_shape,
                 &params,
@@ -1269,7 +1269,7 @@ pub(super) fn evaluate_cluster(
         let observation = &track.observations[i];
         let measurement = observation.cluster.as_ref()?;
         let grid = sample_member_grid(
-            images[observation.image as usize].pyramid,
+            images[observation.image as usize].source.held_pyramid(),
             measurement.seed_position,
             measurement.seed_shape,
             &params,
@@ -1951,7 +1951,7 @@ pub(super) fn round_cache_bytes(
         .iter()
         .map(|&i| {
             let view = &images[track.observations[i].image as usize];
-            let channels = view.pyramid.level(0).channels() as usize;
+            let channels = view.source.channels() as usize;
             view_cache_bytes(params, channels)
         })
         .fold(0usize, |total, bytes| total.saturating_add(bytes))

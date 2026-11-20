@@ -1629,10 +1629,10 @@ fn views_of<'a>(
         .iter()
         .zip(&posed.poses)
         .zip(pyramids.as_slice())
-        .map(|((camera, cam_from_world), pyramid)| ProjectedImage {
+        .map(|((camera, cam_from_world), source)| ProjectedImage {
             camera,
             cam_from_world,
-            pyramid,
+            source,
         })
         .collect()
 }

@@ -3,10 +3,12 @@
 
 //! The crops' grid, sights, renders, pyramids and pair levels.
 
+use std::sync::Arc;
+
 use nalgebra::{Point3, Vector3};
 
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
-use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::features::optical_flow::GrayImage;
 use crate::geometry::RigidTransform;
 use crate::patch::normal_refine::ProjectedImage;
@@ -34,7 +36,7 @@ fn pinhole(focal: f64) -> CameraIntrinsics {
 struct Facing {
     cameras: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
-    pyramid: ImageU8Pyramid,
+    source: TiledPhotograph,
 }
 
 impl Facing {
@@ -43,7 +45,10 @@ impl Facing {
         Self {
             cameras: focals.iter().map(|&f| pinhole(f)).collect(),
             poses: vec![pose; focals.len()],
-            pyramid: ImageU8Pyramid::build(&ImageU8::new(8, 8, 1, vec![128; 64]), 1),
+            source: TiledPhotograph::from_pyramid(Arc::new(ImageU8Pyramid::build(
+                &ImageU8::new(8, 8, 1, vec![128; 64]),
+                1,
+            ))),
         }
     }
 
@@ -52,7 +57,7 @@ impl Facing {
             .map(|k| ProjectedImage {
                 camera: &self.cameras[k],
                 cam_from_world: &self.poses[k],
-                pyramid: &self.pyramid,
+                source: &self.source,
             })
             .collect()
     }
@@ -113,7 +118,10 @@ fn the_crop_cap_coarsens_the_grid_and_keeps_the_extent() {
 #[test]
 fn views_too_oblique_or_at_the_point_are_left_out() {
     let camera = pinhole(100.0);
-    let pyramid = ImageU8Pyramid::build(&ImageU8::new(8, 8, 1, vec![128; 64]), 1);
+    let source = TiledPhotograph::from_pyramid(Arc::new(ImageU8Pyramid::build(
+        &ImageU8::new(8, 8, 1, vec![128; 64]),
+        1,
+    )));
     let at = |deg: f64| {
         let r = deg.to_radians();
         Vector3::new(4.0 * r.sin(), 0.0, 4.0 * r.cos())
@@ -129,7 +137,7 @@ fn views_too_oblique_or_at_the_point_are_left_out() {
         .map(|pose| ProjectedImage {
             camera: &camera,
             cam_from_world: pose,
-            pyramid: &pyramid,
+            source: &source,
         })
         .collect();
     let (grid, sights) = CropGrid::new(

@@ -494,8 +494,8 @@ impl<'a> ViewImage<'a> {
         let level = jacobian
             .map(|j| bilinear_mip_level(singular_values_2x2(j)[0]) as usize)
             .unwrap_or(0)
-            .min(view.pyramid.num_levels().saturating_sub(1));
-        let image = view.pyramid.level(level);
+            .min(view.source.held_pyramid().num_levels().saturating_sub(1));
+        let image = view.source.held_pyramid().level(level);
         ViewImage {
             camera: view.camera,
             cam_from_world: view.cam_from_world,
@@ -515,7 +515,7 @@ impl<'a> ViewImage<'a> {
     /// `view` read at pyramid level `level`, with no offset.
     #[cfg(test)]
     pub(super) fn at_level(view: &ProjectedImage<'a>, level: usize) -> Self {
-        let image = view.pyramid.level(level);
+        let image = view.source.held_pyramid().level(level);
         ViewImage {
             camera: view.camera,
             cam_from_world: view.cam_from_world,

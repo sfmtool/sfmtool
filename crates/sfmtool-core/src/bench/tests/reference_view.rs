@@ -17,10 +17,9 @@ use crate::bench::{
     CreateTrackOptions, EditableTrack, EvaluateOptions, FitOptions, Provenance, StageKind,
     TrackEditError, Unmeasured, Verdict,
 };
-use crate::camera::image::ImageU8Pyramid;
 use crate::camera::sampler::render_tile;
 use crate::camera::warp_map::patch_grid_jacobian;
-use crate::camera::{PhotographCache, WarpMap};
+use crate::camera::{PhotographCache, TiledPhotograph, WarpMap};
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocalizeParams};
@@ -46,7 +45,7 @@ const MIN_TRACK: usize = 8;
 /// The seoul_bull ground truth with its decoded photographs and poses.
 pub(super) struct GroundTruth {
     pub(super) recon: SfmrReconstruction,
-    pyramids: Vec<Arc<ImageU8Pyramid>>,
+    sources: Vec<TiledPhotograph>,
     poses: Vec<RigidTransform>,
 }
 
@@ -65,9 +64,9 @@ impl GroundTruth {
         let (pyramids, _) = PhotographCache::new(0)
             .get_many(&refs, &Progress::none())
             .expect("nothing cancels the decode");
-        let pyramids = pyramids
+        let sources = pyramids
             .into_iter()
-            .map(|p| p.expect("every photograph is checked in"))
+            .map(|p| TiledPhotograph::from_pyramid(p.expect("every photograph is checked in")))
             .collect();
         let poses = images
             .iter()
@@ -79,7 +78,7 @@ impl GroundTruth {
             .collect();
         Self {
             recon,
-            pyramids,
+            sources,
             poses,
         }
     }
@@ -90,11 +89,11 @@ impl GroundTruth {
             .images
             .iter()
             .zip(&self.poses)
-            .zip(&self.pyramids)
-            .map(|((image, cam_from_world), pyramid)| ProjectedImage {
+            .zip(&self.sources)
+            .map(|((image, cam_from_world), source)| ProjectedImage {
                 camera: &self.recon.image_set.cameras[image.camera_index as usize],
                 cam_from_world,
-                pyramid,
+                source,
             })
             .collect()
     }
@@ -214,11 +213,11 @@ fn the_shared_tile_leaves_the_self_similarity_readings_as_a_direct_render_gives_
             view.cam_from_world,
             resolution as u32,
         );
-        let rendered = render_tile(view.pyramid, &mut map, sampler);
+        let rendered = render_tile(view.source.held_pyramid(), &mut map, sampler);
         let valid: Vec<bool> = (0..resolution * resolution)
             .map(|k| map.is_valid((k % resolution) as u32, (k / resolution) as u32))
             .collect();
-        let channels = view.pyramid.level(0).channels() as usize;
+        let channels = view.source.channels() as usize;
         let samples = Array3::from_shape_fn((resolution, resolution, channels), |(r, c, k)| {
             if k >= 3 || (channels == 2 && k == 1) {
                 u8::MAX

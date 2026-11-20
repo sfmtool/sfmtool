@@ -9,8 +9,8 @@ use nalgebra::{Point3, Quaternion, UnitQuaternion, Vector3};
 use ndarray::Array2;
 
 use super::*;
-use crate::camera::image::ImageU8;
-use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::camera::image::{ImageU8, ImageU8Pyramid};
+use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::reconstruction::data::{Point3D, SfmrImage};
 
 const IMG: u32 = 128;
@@ -99,14 +99,19 @@ fn render(
     ImageU8::new(IMG, IMG, 1, data)
 }
 
+/// `pyramid` as the tiled photograph a kernel reads.
+fn in_memory(pyramid: ImageU8Pyramid) -> TiledPhotograph {
+    TiledPhotograph::from_pyramid(std::sync::Arc::new(pyramid))
+}
+
 struct Capture {
     recon: SfmrReconstruction,
-    pyramids: Vec<ImageU8Pyramid>,
+    photographs: Vec<TiledPhotograph>,
 }
 
 impl Capture {
-    fn pyramids(&self) -> Vec<Option<&ImageU8Pyramid>> {
-        self.pyramids.iter().map(Some).collect()
+    fn photographs(&self) -> Vec<Option<&TiledPhotograph>> {
+        self.photographs.iter().map(Some).collect()
     }
 
     /// Where `world` lands in image `i`.
@@ -130,7 +135,7 @@ impl Capture {
     ) {
         self.recon.image_set.images[i].quaternion_wxyz = q;
         self.recon.image_set.images[i].translation_xyz = t;
-        self.pyramids[i] = ImageU8Pyramid::build(&render(&pinhole(), &q, &t, tex), 4);
+        self.photographs[i] = in_memory(ImageU8Pyramid::build(&render(&pinhole(), &q, &t, tex), 4));
     }
 }
 
@@ -163,14 +168,17 @@ fn capture(points: &[(Point3<f64>, &[u32])]) -> Capture {
         .depth_histogram_counts
         .resize(n, histogram_row);
 
-    let pyramids: Vec<ImageU8Pyramid> = CENTERS
+    let photographs: Vec<TiledPhotograph> = CENTERS
         .iter()
         .map(|&c| {
             let (q, t) = down_z(c);
-            ImageU8Pyramid::build(&render(&pinhole(), &q, &t, texture), 4)
+            in_memory(ImageU8Pyramid::build(
+                &render(&pinhole(), &q, &t, texture),
+                4,
+            ))
         })
         .collect();
-    let mut cap = Capture { recon, pyramids };
+    let mut cap = Capture { recon, photographs };
 
     let mut tracks = Vec::new();
     let mut counts = Vec::new();
@@ -264,7 +272,7 @@ fn run(
     add_image_to_tracks(
         &cap.recon,
         TARGET,
-        &cap.pyramids(),
+        &cap.photographs(),
         options,
         &Progress::none(),
     )
@@ -591,12 +599,12 @@ fn a_position_gate_refuses_what_lands_too_far() {
 fn the_calls_preconditions_are_refused_by_name() {
     let cap = capture(&[(Point3::new(0.0, 0.0, PLANE_Z), FOUR)]);
     let options = fixed();
-    let pyr = cap.pyramids();
+    let photos = cap.photographs();
     assert!(matches!(
-        add_image_to_tracks(&cap.recon, 9, &pyr, &options, &Progress::none()),
+        add_image_to_tracks(&cap.recon, 9, &photos, &options, &Progress::none()),
         Err(AddImageToTracksError::NoSuchImage { .. })
     ));
-    let mut missing = pyr.clone();
+    let mut missing = photos.clone();
     missing[TARGET] = None;
     assert!(matches!(
         add_image_to_tracks(&cap.recon, TARGET, &missing, &options, &Progress::none()),
@@ -605,7 +613,7 @@ fn the_calls_preconditions_are_refused_by_name() {
     let mut unposed = cap.recon.clone();
     unposed.image_set.images[TARGET].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
     assert!(matches!(
-        add_image_to_tracks(&unposed, TARGET, &pyr, &options, &Progress::none()),
+        add_image_to_tracks(&unposed, TARGET, &photos, &options, &Progress::none()),
         Err(AddImageToTracksError::Unposed(TARGET))
     ));
 }
@@ -614,15 +622,15 @@ fn the_calls_preconditions_are_refused_by_name() {
 fn a_missing_reference_image_leaves_that_reference_out() {
     let points: Vec<(Point3<f64>, &[u32])> = vec![(Point3::new(0.0, 0.0, PLANE_Z), FOUR)];
     let cap = capture(&points);
-    let mut pyr = cap.pyramids();
-    pyr[0] = None;
-    pyr[1] = None;
+    let mut photos = cap.photographs();
+    photos[0] = None;
+    photos[1] = None;
     let (_, report) =
-        add_image_to_tracks(&cap.recon, TARGET, &pyr, &fixed(), &Progress::none()).unwrap();
+        add_image_to_tracks(&cap.recon, TARGET, &photos, &fixed(), &Progress::none()).unwrap();
     assert_eq!(report.candidates[0].references, vec![2, 3]);
-    pyr[2] = None;
+    photos[2] = None;
     let (_, report) =
-        add_image_to_tracks(&cap.recon, TARGET, &pyr, &fixed(), &Progress::none()).unwrap();
+        add_image_to_tracks(&cap.recon, TARGET, &photos, &fixed(), &Progress::none()).unwrap();
     assert_eq!(
         report.candidates[0].refusal,
         Some(Refusal::TooFewReferences)
@@ -675,7 +683,7 @@ fn stored_bitmaps(
         .map(|i| ProjectedImage {
             camera: &camera,
             cam_from_world: &poses[i],
-            pyramid: &cap.pyramids[i],
+            source: &cap.photographs[i],
         })
         .collect();
     let mut column = ndarray::Array4::<u8>::zeros((points.len(), r, r, 4));
@@ -802,7 +810,7 @@ fn rendered_template_rows_are_scored_against_the_stored_bitmap() {
     let target = ProjectedImage {
         camera: &camera,
         cam_from_world: &poses[TARGET],
-        pyramid: &cap.pyramids[TARGET],
+        source: &cap.photographs[TARGET],
     };
     for resolution in [bitmap_r as u32, 16] {
         let mut options = AddImageToTracksOptions {
@@ -948,7 +956,7 @@ fn without_a_stored_reference_the_rule_picks_one() {
             .map(|i| ProjectedImage {
                 camera: &camera,
                 cam_from_world: &poses[i],
-                pyramid: &cap.pyramids[i],
+                source: &cap.photographs[i],
             })
             .collect();
         points
@@ -1065,7 +1073,7 @@ fn the_new_views_score_is_blur_matched_against_the_template() {
     let view = |i: usize| ProjectedImage {
         camera: &camera,
         cam_from_world: &poses[i],
-        pyramid: &cap.pyramids[i],
+        source: &cap.photographs[i],
     };
     for template in [TemplateSource::Rendered, TemplateSource::StoredBitmap] {
         let options = AddImageToTracksOptions {

@@ -6,12 +6,14 @@
 //! `bilinear_mip` renders the same tile as under `Fixed(BilinearMip)`, bit for
 //! bit, and a moved view renders a different one.
 
+use std::sync::Arc;
+
 use nalgebra::{Point3, Vector3};
 
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use crate::camera::sampler::{Sampler, SamplerChoice};
 use crate::camera::warp_map::patch_grid_jacobian;
-use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocalizeParams};
@@ -103,14 +105,14 @@ fn bench_choice(patch: &OrientedPatch, view: &ProjectedImage<'_>, kp: [f64; 2]) 
 fn unmoved_views_render_the_same_tiles_and_moved_views_do_not() {
     let cams = [camera(500.0), camera(100.0), camera(500.0)];
     let poses = [pose(-0.2), pose(0.0), pose(0.2)];
-    let pyr = pyramid();
+    let source = TiledPhotograph::from_pyramid(Arc::new(pyramid()));
     let views: Vec<ProjectedImage<'_>> = cams
         .iter()
         .zip(&poses)
         .map(|(camera, cam_from_world)| ProjectedImage {
             camera,
             cam_from_world,
-            pyramid: &pyr,
+            source: &source,
         })
         .collect();
     let patch = tilted(65.0);
@@ -181,14 +183,14 @@ fn unmoved_views_render_the_same_tiles_and_moved_views_do_not() {
 fn the_stored_bitmap_changes_only_where_a_view_moves() {
     let cams = [camera(500.0), camera(500.0), camera(500.0)];
     let poses = [pose(-0.2), pose(0.0), pose(0.2)];
-    let pyr = pyramid();
+    let source = TiledPhotograph::from_pyramid(Arc::new(pyramid()));
     let views: Vec<ProjectedImage<'_>> = cams
         .iter()
         .zip(&poses)
         .map(|(camera, cam_from_world)| ProjectedImage {
             camera,
             cam_from_world,
-            pyramid: &pyr,
+            source: &source,
         })
         .collect();
     let render = |patch: &OrientedPatch, sampler: SamplerChoice| {
@@ -273,19 +275,21 @@ fn the_kernels_choose_the_sampler_the_bench_reads() {
 
     for (tilt, chosen, other) in [(0.0, mip, aniso), (65.0, aniso, mip)] {
         let patch = tilted(tilt);
-        let pyramids: Vec<ImageU8Pyramid> = cams
+        let sources: Vec<TiledPhotograph> = cams
             .iter()
             .zip(&poses)
-            .map(|(camera, pose)| plane_photograph(&patch, camera, pose))
+            .map(|(camera, pose)| {
+                TiledPhotograph::from_pyramid(Arc::new(plane_photograph(&patch, camera, pose)))
+            })
             .collect();
         let views: Vec<ProjectedImage<'_>> = cams
             .iter()
             .zip(&poses)
-            .zip(&pyramids)
-            .map(|((camera, cam_from_world), pyramid)| ProjectedImage {
+            .zip(&sources)
+            .map(|((camera, cam_from_world), source)| ProjectedImage {
                 camera,
                 cam_from_world,
-                pyramid,
+                source,
             })
             .collect();
         let kps = keypoints(&patch, &views);
@@ -391,14 +395,14 @@ fn the_kernels_choose_the_sampler_the_bench_reads() {
 fn every_kernel_reads_the_rule_from_the_stored_frame() {
     let cams = [camera(500.0), camera(500.0)];
     let poses = [pose(-0.1), pose(0.1)];
-    let pyr = pyramid();
+    let source = TiledPhotograph::from_pyramid(Arc::new(pyramid()));
     let views: Vec<ProjectedImage<'_>> = cams
         .iter()
         .zip(&poses)
         .map(|(camera, cam_from_world)| ProjectedImage {
             camera,
             cam_from_world,
-            pyramid: &pyr,
+            source: &source,
         })
         .collect();
     let s = 30f64.to_radians();

@@ -5,7 +5,7 @@ use nalgebra::{Point3, Vector3};
 
 use super::*;
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
-use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::geometry::RigidTransform;
 use crate::patch::blur_matched::test_tiles::{grained, textured};
 use crate::patch::pair_sharpness::MAX_MATCHED_LENGTH;
@@ -200,7 +200,7 @@ fn pose_at(x: f64) -> RigidTransform {
 
 /// The photograph a camera at `(x, 0, 0)` takes of the plane `z = 4` painted
 /// with `paint(X, Y)`.
-fn photograph(x: f64, paint: impl Fn(f64, f64) -> f64) -> ImageU8Pyramid {
+fn photograph(x: f64, paint: impl Fn(f64, f64) -> f64) -> TiledPhotograph {
     let data: Vec<u8> = (0..128u32)
         .flat_map(|v| (0..128u32).map(move |u| (u, v)))
         .map(|(u, v)| {
@@ -209,7 +209,10 @@ fn photograph(x: f64, paint: impl Fn(f64, f64) -> f64) -> ImageU8Pyramid {
             paint(wx, wy).clamp(0.0, 255.0) as u8
         })
         .collect();
-    ImageU8Pyramid::build(&ImageU8::new(128, 128, 1, data), 4)
+    TiledPhotograph::from_pyramid(std::sync::Arc::new(ImageU8Pyramid::build(
+        &ImageU8::new(128, 128, 1, data),
+        4,
+    )))
 }
 
 /// Fine and coarse sinusoids on the plane; `fine` scales the fine ones, so a
@@ -229,7 +232,7 @@ fn paint(fine: f64) -> impl Fn(f64, f64) -> f64 {
 struct Scene {
     camera: CameraIntrinsics,
     poses: Vec<RigidTransform>,
-    pyramids: Vec<ImageU8Pyramid>,
+    sources: Vec<TiledPhotograph>,
 }
 
 impl Scene {
@@ -239,7 +242,7 @@ impl Scene {
         Self {
             camera: pinhole(),
             poses: xs.iter().map(|&x| pose_at(x)).collect(),
-            pyramids: xs
+            sources: xs
                 .iter()
                 .zip(fine)
                 .map(|(&x, f)| photograph(x, paint(f)))
@@ -250,11 +253,11 @@ impl Scene {
     fn views(&self) -> Vec<ProjectedImage<'_>> {
         self.poses
             .iter()
-            .zip(&self.pyramids)
-            .map(|(pose, pyramid)| ProjectedImage {
+            .zip(&self.sources)
+            .map(|(pose, source)| ProjectedImage {
                 camera: &self.camera,
                 cam_from_world: pose,
-                pyramid,
+                source,
             })
             .collect()
     }

@@ -7,9 +7,14 @@
 use super::decide::max_support_block;
 use super::*;
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
-use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::geometry::RigidTransform;
 use nalgebra::{Point3, Vector3};
+
+/// `pyramid` as the tiled photograph a kernel reads.
+fn in_memory(pyramid: ImageU8Pyramid) -> TiledPhotograph {
+    TiledPhotograph::from_pyramid(std::sync::Arc::new(pyramid))
+}
 
 /// Build a matrix from a k×k table of pairwise ZNCC (diagonal ignored).
 fn matrix(rows: &[&[f64]]) -> MemberMatrix {
@@ -466,7 +471,7 @@ fn render_plane_view(center: [f64; 3], tex: fn(f64, f64) -> f64) -> ImageU8 {
 struct Scene {
     cams: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
-    pyrs: Vec<ImageU8Pyramid>,
+    sources: Vec<TiledPhotograph>,
 }
 
 impl Scene {
@@ -478,23 +483,27 @@ impl Scene {
                 RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-c[0], c[1], c[2]])
             })
             .collect();
-        let pyrs = centers
+        let sources = centers
             .iter()
             .zip(texs)
-            .map(|(c, tex)| ImageU8Pyramid::build(&render_plane_view(*c, *tex), 5))
+            .map(|(c, tex)| in_memory(ImageU8Pyramid::build(&render_plane_view(*c, *tex), 5)))
             .collect();
-        Self { cams, poses, pyrs }
+        Self {
+            cams,
+            poses,
+            sources,
+        }
     }
 
     fn views(&self) -> Vec<ProjectedImage<'_>> {
         self.cams
             .iter()
             .zip(&self.poses)
-            .zip(&self.pyrs)
-            .map(|((camera, cam_from_world), pyramid)| ProjectedImage {
+            .zip(&self.sources)
+            .map(|((camera, cam_from_world), source)| ProjectedImage {
                 camera,
                 cam_from_world,
-                pyramid,
+                source,
             })
             .collect()
     }
@@ -1525,7 +1534,10 @@ fn blur_matching_lifts_a_blurred_member_and_leaves_the_plain_tables_alone() {
         ],
         &[surface_round, surface_round, surface_round, surface_round],
     );
-    scene.pyrs[3] = ImageU8Pyramid::build(&blurred_image(scene.pyrs[3].level(0), 5.0), 5);
+    scene.sources[3] = in_memory(ImageU8Pyramid::build(
+        &blurred_image(scene.sources[3].held_pyramid().level(0), 5.0),
+        5,
+    ));
     let views = scene.views();
     let members = [0, 1, 2, 3];
     let plain = member_zncc_matrix(&plane_patch(), &views, &members, None, &render_params());

@@ -454,7 +454,7 @@ fn affine_core_map(
     let level = match sampler {
         Sampler::BilinearMip => mip_level_for_sigma(
             affine_sigma_major(a[0], a[1], a[3], a[4]),
-            view.pyramid.num_levels(),
+            view.source.held_pyramid().num_levels(),
         ),
         _ => 0,
     };
@@ -464,7 +464,7 @@ fn affine_core_map(
     // square is the parallelogram {p00, p10, p01, p11_pred} (true p11 included
     // for the residual slack); its bounding box inside the margin keeps every
     // interior sample in-frame.
-    let img = view.pyramid.level(level);
+    let img = view.source.held_pyramid().level(level);
     let (w, h) = (img.width() as f64, img.height() as f64);
     let xs = [p00.0, p10.0, p01.0, p11.0, p11_pred.0];
     let ys = [p00.1, p10.1, p01.1, p11.1, p11_pred.1];
@@ -677,7 +677,7 @@ fn candidate_zncc(
         if level > 0 {
             prof::count(&prof::N_AFFINE_MIP, 1);
         }
-        let channels = view.pyramid.level(0).channels() as usize;
+        let channels = view.source.channels() as usize;
         let n = reference.n;
         raw_scratch.clear();
         raw_scratch.resize(channels * n, 0.0);
@@ -686,7 +686,7 @@ fn candidate_zncc(
             if sampler == Sampler::Anisotropic {
                 prof::count(&prof::N_AFFINE_ANISO, 1);
                 crate::camera::sampler::sample_support_affine_aniso(
-                    view.pyramid,
+                    view.source.held_pyramid(),
                     &map.a,
                     &single_ctx.pixels,
                     resolution,
@@ -694,7 +694,7 @@ fn candidate_zncc(
                 )
             } else {
                 crate::camera::sampler::sample_support_affine(
-                    &HeldLevel::of(view.pyramid, level),
+                    &HeldLevel::of(view.source.held_pyramid(), level),
                     &map.a,
                     &single_ctx.pixels,
                     resolution,
