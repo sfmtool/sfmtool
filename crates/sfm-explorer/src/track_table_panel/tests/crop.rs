@@ -978,6 +978,14 @@ fn crop_cells_drawn_through_regions_equal_the_whole_pyramid_crops() {
     for panel_pool in [true, false] {
         let mut clock = Clock(0.0);
         let (mut state, id) = crop_state();
+        // Hashed pixels, so that a crop read from the wrong place, level or
+        // channel differs from the right one.
+        let camera = state.node(id).expect("loaded").recon().image_set.cameras[0].clone();
+        let (w, h) = (camera.width, camera.height);
+        let data = (0..w * h * 3)
+            .map(|i: u32| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+            .collect();
+        state.insert_photograph(id, 0, ImageU8::new(w, h, 3, data));
         let ctx = egui::Context::default();
         ctx.all_styles_mut(|style| {
             style.interaction.tooltip_delay = 0.0;

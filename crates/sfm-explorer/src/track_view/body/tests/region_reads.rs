@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use sfmtool_core::bench::{EditableTrack, Stage, StageKind};
-use sfmtool_core::camera::image::ImageU8Pyramid;
+use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::camera::sampler::render_tile;
 use sfmtool_core::camera::WarpMap;
 use sfmtool_core::patch::cluster_refine::{sample_member_grid, ClusterRefineParams};
@@ -251,6 +251,7 @@ fn whole_crop(
 #[test]
 fn track_stage_pictures_drawn_through_regions_equal_the_whole_pyramid() {
     let (state, id, label, _, _) = on_the_bench();
+    cache_hashed_photographs(&state, id);
     let track = state.bench_track(id, &label).expect("on the bench");
     assert!(matches!(track.stage, Stage::Track(_)));
     drawn_pictures_equal_the_whole_pyramids(&state, id, &label);
@@ -261,6 +262,7 @@ fn track_stage_pictures_drawn_through_regions_equal_the_whole_pyramid() {
 #[test]
 fn cluster_stage_pictures_drawn_through_regions_equal_the_whole_pyramid() {
     let (mut state, id, label, _, _) = on_the_bench();
+    cache_hashed_photographs(&state, id);
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
         .expect("a track with a patch frame downgrades");
@@ -275,7 +277,7 @@ fn cluster_stage_pictures_drawn_through_regions_equal_the_whole_pyramid() {
 /// rows whose photographs read draw their pictures.
 #[test]
 fn a_photograph_that_cannot_be_read_draws_the_cells_error_state() {
-    use sfmtool_core::camera::image::{ImageU8, PyramidLevel};
+    use sfmtool_core::camera::image::PyramidLevel;
     let (state, id, label, _, _) = on_the_bench();
     let track = state.bench_track(id, &label).expect("on the bench").clone();
     let image = track.observations[0].image as usize;
@@ -332,5 +334,22 @@ fn a_photograph_that_cannot_be_read_draws_the_cells_error_state() {
             );
         }
         assert!(texts.contains(&said), "{said:?} not in {texts:?}");
+    }
+}
+
+/// A photograph of hashed pixels in the cache for every image of `id`, in
+/// place of the fixture's pattern, so that each channel, each pixel and each
+/// photograph differs from its neighbours and a picture read from the wrong
+/// place, level or channel differs from the right one.
+fn cache_hashed_photographs(state: &AppState, id: ReconId) {
+    let recon = state.node(id).expect("loaded").recon();
+    let camera = &recon.image_set.cameras[0];
+    let (w, h) = (camera.width, camera.height);
+    for image in 0..recon.image_set.images.len() {
+        let seed = (image as u32).wrapping_mul(0x9e37_79b9);
+        let data = (0..w * h * 3)
+            .map(|i: u32| (i.wrapping_add(seed).wrapping_mul(2_654_435_761) >> 13) as u8)
+            .collect();
+        state.insert_photograph(id, image, ImageU8::new(w, h, 3, data));
     }
 }
