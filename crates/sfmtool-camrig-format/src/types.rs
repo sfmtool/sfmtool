@@ -35,76 +35,42 @@ pub enum CamRigError {
 
     #[error("Shape mismatch: {0}")]
     ShapeMismatch(String),
+
+    /// A file of a version this build no longer reads, below
+    /// [`CAMRIG_OLDEST_READ_VERSION`]. The message names the last release
+    /// that reads it, [`CAMRIG_LAST_RELEASE_READING_OLDER_VERSIONS`], so the
+    /// user can upgrade the workspace with that release.
+    #[error(
+        "{} is a version {version} .camrig file, and this sfmtool reads .camrig files of \
+         version {CAMRIG_OLDEST_READ_VERSION} or later. sfmtool \
+         {CAMRIG_LAST_RELEASE_READING_OLDER_VERSIONS} is the last release that reads version \
+         {version}: install it, run `sfm ws upgrade` on the workspace, then use the file with \
+         this release.",
+        path.display()
+    )]
+    VersionNoLongerRead {
+        /// The file.
+        path: std::path::PathBuf,
+        /// Its `metadata.version`.
+        version: u32,
+    },
 }
 
 sfmtool_archive_io::impl_from_archive_io_error!(CamRigError);
 
 /// Current `.camrig` format version. [`crate::write_camrig`] always writes
-/// this version; [`crate::read_camrig`] accepts any version up to it.
-///
-/// Version 2 made the canonical camera convention normative for the stored
-/// `sensor_from_rig` poses (sensors looking down −Z with +Y up — see
-/// `specs/formats/camrig-file-format.md` § "Versioning and migration"),
-/// mirroring the `.sfmr` version 5 bump. The bump is purely semantic: no
-/// member was added, removed, or renamed. Version 1 files hold
-/// COLMAP-convention sensor poses and are upgraded on load by S-conjugation
-/// ([`s_conjugate_sensor_pose`]).
+/// this version; [`crate::read_camrig`] accepts every version from
+/// [`CAMRIG_OLDEST_READ_VERSION`] to this one. See
+/// `specs/formats/camrig-file-format.md` § "Format versions".
 pub const CAMRIG_FORMAT_VERSION: u32 = 2;
 
-/// The first `.camrig` version whose stored `sensor_from_rig` poses are in the
-/// canonical camera convention.
-///
-/// A file stored **below** this version holds COLMAP-convention sensor poses
-/// and is S-conjugated on load; a file at or above it is already canonical and
-/// is loaded untouched. This
-/// is a fixed fact about the format's history and deliberately *not*
-/// [`CAMRIG_FORMAT_VERSION`] — gating the upgrade on the current version
-/// re-applies it to already-canonical files as soon as the version is bumped
-/// for an unrelated reason.
-pub const CAMRIG_CANONICAL_CONVENTION_VERSION: u32 = 2;
+/// The oldest `.camrig` format version a reader accepts. A file of an older
+/// version is refused with [`CamRigError::VersionNoLongerRead`].
+pub const CAMRIG_OLDEST_READ_VERSION: u32 = 2;
 
-/// Conjugate a `sensor_from_rig` pose with the camera-frame flip
-/// `S = diag(1, −1, −1)`: `R' = S·R·S`, `t' = S·t`.
-///
-/// In quaternion terms, conjugating by the 180°-about-X rotation negates the
-/// y and z components: `(w, x, y, z) → (w, x, −y, −z)`; the translation's y
-/// and z flip likewise. Rig-relative poses never touch the world frame, so
-/// the `.sfmr` world canonicalization `W` does not apply. Involutive, so the
-/// same function maps COLMAP ↔ canonical in both directions.
-///
-/// This is a local copy of the relative-pose case of
-/// `sfmtool_core::geometry::convention::relative_pose_conjugate_s`
-/// (the single source of truth for the convention math): `sfmtool-camrig-format`
-/// sits below `sfmtool-core` in the crate graph and cannot depend on it, and
-/// the operation is an exact component permutation with no rotation-matrix
-/// round trip, so duplicating it here is loss-free.
-pub fn s_conjugate_sensor_pose(quaternion_wxyz: &mut [f64; 4], translation_xyz: &mut [f64; 3]) {
-    quaternion_wxyz[2] = -quaternion_wxyz[2];
-    quaternion_wxyz[3] = -quaternion_wxyz[3];
-    translation_xyz[1] = -translation_xyz[1];
-    translation_xyz[2] = -translation_xyz[2];
-}
-
-/// Left-multiply a `sensor_from_rig` pose by the camera-frame flip
-/// `S = diag(1, −1, −1)`: `R' = S·R`, `t' = S·t`.
-///
-/// In quaternion terms, pre-multiplying by the 180°-about-X rotation maps
-/// `(w, x, y, z) → (−x, w, −z, y)`; the translation's y and z flip.
-///
-/// This is the transport for a **world-anchored** sensor pose — one whose rig
-/// frame *is* the reconstruction world (a `spherical_tiles` rig; see
-/// [`CamRigData::upgrade_sensor_poses_from_v1`]). Only the sensor's camera
-/// frame flips by `S`; the world frame is left fixed, so unlike the
-/// body-anchored [`s_conjugate_sensor_pose`] there is no right `S` factor (and
-/// unlike a `.sfmr` world pose no `W` factor — the `.camrig` world is never
-/// canonicalized). Involutive (`S·S = I`), so it maps COLMAP ↔ canonical in
-/// both directions.
-pub fn s_premultiply_sensor_pose(quaternion_wxyz: &mut [f64; 4], translation_xyz: &mut [f64; 3]) {
-    let [w, x, y, z] = *quaternion_wxyz;
-    *quaternion_wxyz = [-x, w, -z, y];
-    translation_xyz[1] = -translation_xyz[1];
-    translation_xyz[2] = -translation_xyz[2];
-}
+/// The last sfmtool release whose readers accept the `.camrig` versions below
+/// [`CAMRIG_OLDEST_READ_VERSION`], which a refusal of such a file names.
+pub const CAMRIG_LAST_RELEASE_READING_OLDER_VERSIONS: &str = "0.4.1";
 
 /// A camera in the shared camera pool (`cameras/metadata.json.zst`).
 ///
@@ -126,8 +92,7 @@ pub struct CamRigCamera {
 /// Top-level rig metadata from `metadata.json.zst`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CamRigMetadata {
-    /// Format version number. `1` (COLMAP-convention sensor poses, upgraded
-    /// on load) or [`CAMRIG_FORMAT_VERSION`] (canonical convention).
+    /// Format version. The current version is [`CAMRIG_FORMAT_VERSION`].
     pub version: u32,
     /// Human-readable rig name. May be empty.
     pub name: String,
@@ -191,56 +156,6 @@ impl CamRigData {
         self.sensor_image_patterns.is_empty()
     }
 
-    /// S-conjugate every `sensor_from_rig` pose in place (COLMAP ↔
-    /// canonical; see [`s_conjugate_sensor_pose`]).
-    pub fn s_conjugate_sensor_poses(&mut self) {
-        self.map_sensor_poses(s_conjugate_sensor_pose);
-    }
-
-    /// Upgrade version-1 `sensor_from_rig` poses (COLMAP convention) to the
-    /// canonical convention in place, dispatching on how the rig is anchored.
-    ///
-    /// Most rigs are **body-anchored**: the rig frame is a reference-sensor
-    /// frame, so both frames flip under the convention change and the poses
-    /// S-conjugate ([`s_conjugate_sensor_pose`]). A `spherical_tiles` rig is
-    /// **world-anchored** — its rig frame *is* the reconstruction world, which
-    /// the convention change leaves fixed — so only the sensor frame flips and
-    /// the poses transport by a left `S` multiply ([`s_premultiply_sensor_pose`]).
-    /// Applying S-conjugation to a world-anchored rig would leave every sensor
-    /// rotated 180° about the world X axis (the wrong hemisphere), yet still
-    /// pass structural validation.
-    pub fn upgrade_sensor_poses_from_v1(&mut self) {
-        if self.metadata.rig_type == "spherical_tiles" {
-            self.map_sensor_poses(s_premultiply_sensor_pose);
-        } else {
-            self.map_sensor_poses(s_conjugate_sensor_pose);
-        }
-    }
-
-    /// Apply a per-pose transform to every `sensor_from_rig` pose in place.
-    fn map_sensor_poses(&mut self, f: fn(&mut [f64; 4], &mut [f64; 3])) {
-        for i in 0..self.quaternions_wxyz.nrows() {
-            let mut q = [
-                self.quaternions_wxyz[[i, 0]],
-                self.quaternions_wxyz[[i, 1]],
-                self.quaternions_wxyz[[i, 2]],
-                self.quaternions_wxyz[[i, 3]],
-            ];
-            let mut t = [
-                self.translations_xyz[[i, 0]],
-                self.translations_xyz[[i, 1]],
-                self.translations_xyz[[i, 2]],
-            ];
-            f(&mut q, &mut t);
-            for (k, &v) in q.iter().enumerate() {
-                self.quaternions_wxyz[[i, k]] = v;
-            }
-            for (k, &v) in t.iter().enumerate() {
-                self.translations_xyz[[i, k]] = v;
-            }
-        }
-    }
-
     /// Check the structural constraints from the format spec
     /// (*Data ordering and constraints*).
     ///
@@ -252,9 +167,10 @@ impl CamRigData {
         let m = &self.metadata;
         let s = self.camera_indexes.len();
 
-        if m.version == 0 || m.version > CAMRIG_FORMAT_VERSION {
+        if !(CAMRIG_OLDEST_READ_VERSION..=CAMRIG_FORMAT_VERSION).contains(&m.version) {
             return Err(CamRigError::InvalidFormat(format!(
-                "unsupported format version {} (expected 1 to {CAMRIG_FORMAT_VERSION})",
+                "unsupported .camrig format version {} (this build reads versions \
+                 {CAMRIG_OLDEST_READ_VERSION} to {CAMRIG_FORMAT_VERSION})",
                 m.version
             )));
         }

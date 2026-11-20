@@ -105,4 +105,7 @@ impl_format_error!(
     sfmtool_matches_format::MatchesError,
     content: VersionNoLongerRead
 );
-impl_format_error!(sfmtool_camrig_format::CamRigError);
+impl_format_error!(
+    sfmtool_camrig_format::CamRigError,
+    content: VersionNoLongerRead
+);

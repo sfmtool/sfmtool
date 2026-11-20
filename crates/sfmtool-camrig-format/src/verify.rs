@@ -17,6 +17,11 @@ use sfmtool_archive_io::{format_hash, read_zst_entry};
 /// that disagrees with a table length — and both classes of problem are
 /// reported.
 ///
+/// A `metadata.version` the readers refuse (below
+/// [`CAMRIG_OLDEST_READ_VERSION`], 0 or newer than [`CAMRIG_FORMAT_VERSION`])
+/// is reported as the one error, with the readers' message, and nothing else
+/// is checked.
+///
 /// Returns `Ok((true, []))` if everything passes, `Ok((false, errors))` with
 /// details otherwise. Returns `Err` for I/O errors or a malformed archive
 /// (one that cannot be opened, or that is missing or cannot decode a
@@ -26,12 +31,20 @@ pub fn verify_camrig(path: &Path) -> Result<(bool, Vec<String>), CamRigError> {
     let mut archive = zip::ZipArchive::new(file)?;
     let mut errors = Vec::new();
 
+    // Read metadata before anything else so a version the readers refuse stops
+    // without producing misleading diagnostics.
+    let metadata_raw = read_zst_entry(&mut archive, "metadata.json.zst")?;
+    let metadata = match crate::read::parse_metadata(serde_json::from_slice(&metadata_raw)?, path) {
+        Ok(metadata) => metadata,
+        Err(e @ (CamRigError::VersionNoLongerRead { .. } | CamRigError::InvalidFormat(_))) => {
+            return Ok((false, vec![e.to_string()]));
+        }
+        Err(e) => return Err(e),
+    };
+    let s = metadata.sensor_count;
+
     let content_hash_raw = read_zst_entry(&mut archive, "content_hash.json.zst")?;
     let stored: CamRigContentHash = serde_json::from_slice(&content_hash_raw)?;
-
-    let metadata_raw = read_zst_entry(&mut archive, "metadata.json.zst")?;
-    let metadata: CamRigMetadata = serde_json::from_slice(&metadata_raw)?;
-    let s = metadata.sensor_count;
 
     // metadata_xxh128
     let metadata_hash = xxhash_rust::xxh3::xxh3_128(&metadata_raw);

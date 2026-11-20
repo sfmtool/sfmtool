@@ -29,6 +29,45 @@ that share intrinsics reference a single shared camera (see *Cameras* below),
 and a co-centric rig, where every sensor has the same optical center, will
 have all zero translations — both compress to almost nothing under zstd.
 
+## Format versions
+
+`metadata.version` records the format version. The current version, which a
+conforming writer writes, is `2`, and it is also the oldest version a reader
+reads. A reader refuses a file of any other version:
+
+- **Version 1**, which only development builds between sfmtool 0.2 and 0.3
+  wrote, with a message that names the file, its version, the oldest version
+  read and the last release that reads it, so the user can upgrade the
+  workspace with that release:
+
+  ```
+  <path> is a version 1 .camrig file, and this sfmtool reads .camrig files of
+  version 2 or later. sfmtool 0.4.1 is the last release that reads version 1:
+  install it, run `sfm ws upgrade` on the workspace, then use the file with
+  this release.
+  ```
+
+  `read_camrig` and `read_camrig_metadata` return it as
+  `CamRigError::VersionNoLongerRead`, which the Python bindings raise as
+  `OSError` (`SphericalTileRig.read_camrig` too), and `verify_camrig` reports
+  it as the file's one error. The version is checked before the rest of the
+  file is parsed.
+- **Version 0**, which no version of the format has used, and a version newer
+  than the current one, whose layout it cannot know, as an unsupported
+  version: `unsupported .camrig format version V (this build reads versions
+  2 to 2)`.
+
+The format crate holds the current version as `CAMRIG_FORMAT_VERSION`, the
+oldest version read as `CAMRIG_OLDEST_READ_VERSION` and the release the
+refusal names as `CAMRIG_LAST_RELEASE_READING_OLDER_VERSIONS`
+([`types.rs`](../../crates/sfmtool-camrig-format/src/types.rs)). A writer
+always writes the current version. How the version changes, which older
+versions a reader keeps reading, and how one stops being read are in
+[format-versions.md](format-versions.md)
+([Dropping a version](format-versions.md#dropping-a-version)).
+[Version history](#version-history) at the end of this spec lists what each
+version changed.
+
 ## Concepts
 
 A **rig** is an ordered list of `sensor_count` **sensors**. A rig always has
@@ -90,12 +129,6 @@ be recorded in `rig_attributes` as a hint; see *Rig type and attributes*.)
   principal-point origin, distortion model) follow COLMAP, as documented for
   `.sfmr` cameras — only the camera-space axes differ.
 
-> **Migration note.** The canonical sensor-frame convention was formalized
-> after the format was already in use; files written by earlier sfmtool
-> releases (format version 1) hold COLMAP-convention sensor poses (sensors
-> looking down +Z with Y down). See
-> [Versioning and migration](#versioning-and-migration).
-
 ## Specification
 
 A `.camrig` file is an [archive-container](archive-container.md) file containing
@@ -116,8 +149,8 @@ content_hash.json.zst
 JSON. Fields (consumers ignore unknown fields, for forward-compatible
 extension):
 
-* `version`: (integer) Format version. `1` or `2` (see
-  [Versioning and migration](#versioning-and-migration)).
+* `version`: (integer) Format version, `2` (see
+  [Format versions](#format-versions)).
 * `name`: (string) A human-readable name for the rig, e.g. `"insv2_x5"`,
   `"cubemap"`, `"spherical_tiles_n1280"`. May be empty.
 * `sensor_count`: (integer) Number of sensors, `S ≥ 1`.
@@ -197,8 +230,8 @@ and combined, and for the hex encoding.
 
 ## Data ordering and constraints
 
-- `version` is a known version (`1` or `2` — see
-  [Versioning and migration](#versioning-and-migration)).
+- `version` is a version the reader reads (`2` — see
+  [Format versions](#format-versions)).
 - `sensor_count ≥ 1`, `camera_count ≥ 1`.
 - `sensor_count` equals the length of every per-sensor table
   (`camera_indexes`, `quaternions_wxyz`, `translations_xyz`, and
@@ -470,54 +503,15 @@ $ jq . cameras/metadata.json
 ]
 ```
 
-## Versioning and migration
-
-How the version changes, and which older versions a reader keeps reading, is
-in [format-versions.md](format-versions.md). sfmtool 0.5 stops reading version 1, as
-[../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md) specifies.
-
-The format has two versions (`1` and `2`). No sfmtool release wrote version
-1: only development builds between 0.2 and 0.3 did. The format is versioned
-(`metadata.json` `version`) precisely so that convention changes like the one
-below can upgrade on load instead of breaking old files.
-
-### Version 1 → Version 2
-
-Version 2 makes the canonical `.sfmr` coordinate convention normative for
-sensor poses (see *Coordinate and quaternion conventions*), mirroring the
-`.sfmr` version 5 bump. No member is added, removed, or renamed; the change
-is purely semantic:
-
-| Version 1 | Version 2 |
-|-----------|-----------|
-| `sensor_from_rig` poses in COLMAP convention (sensors look down +Z with Y down) | Canonical convention: sensors look down −Z with +Y up |
-
-**Migration is mechanical and lossless**, but the transport depends on how the
-rig is anchored. Most rigs are **body-anchored** — the rig frame is a
-reference-sensor frame, so both frames flip under the convention change and a
-version 1 file upgrades on load by conjugating each stored `sensor_from_rig`
-pose with the camera-frame flip `S = diag(1, −1, −1)`: `R' = S · R · S`,
-`t' = S · t` (the rig frame never touches the world, so the `.sfmr` world
-canonicalization `W` does not apply). A `spherical_tiles` rig (`rig_type ==
-"spherical_tiles"`) is instead **world-anchored** — its rig frame *is* the
-reconstruction world, which the convention change leaves fixed — so only the
-sensor frame flips and the upgrade is a left multiply `R' = S · R`,
-`t' = S · t`. Applying the body-anchored conjugation to a tile rig would
-leave every sensor rotated 180° about the world X axis (the wrong hemisphere)
-while still passing structural validation, so the upgrade dispatches on
-`rig_type`. Saving always writes version 2. Content hashes cover the stored
-bytes, so hashes verify before conversion; a converted-then-saved file is a
-new version 2 file with new hashes.
-
-See [`sfmr-file-format.md`](sfmr-file-format.md#coordinate-system-conventions)
-for the canonical convention and the `S`/`W` conversion math.
-
 ## Version history
 
-- **Version 2**: Canonical coordinate convention — sensor frames
-  look down −Z with +Y up, matching `.sfmr` — becomes normative; version 1
-  files (COLMAP convention) upgrade on load by flipping the stored
-  `sensor_from_rig` poses (`S`-conjugation for body-anchored rigs, a left `S`
-  multiply for world-anchored `spherical_tiles` rigs).
-- **Version 1**: Initial version, written only by development builds before
-  sfmtool 0.3.
+One line per version, newest first. sfmtool 0.4.1 is the last release that
+reads version 1; this build reads version 2 only
+([Format versions](#format-versions)).
+
+- **Version 2**: the current version. The stored `sensor_from_rig` poses are
+  in the canonical camera convention, sensors looking down −Z with +Y up, as
+  in `.sfmr`. No member was added, removed or renamed.
+- **Version 1**: the stored `sensor_from_rig` poses are in the COLMAP camera
+  convention, sensors looking down +Z with Y down. Written only by development
+  builds between sfmtool 0.2 and 0.3, never by a release.

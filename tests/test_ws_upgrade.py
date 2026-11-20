@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """`sfm ws upgrade` end to end through Click: on a small version 2 workspace
-holding a `.camrig` file below the current version, the line asking for a
-back-up, the report it prints, a dry run that writes nothing, and a second run
-with nothing to do.
+holding a current `.camrig` file and a version 1 one, which the reader
+refuses, the line asking for a back-up, the report it prints, and a dry run
+that writes nothing.
 
 What the upgrade does to each file is tested in Rust
 (`crates/sfmtool-core/src/workspace/upgrade/tests.rs`) and the binding in
@@ -21,7 +21,6 @@ from click.testing import CliRunner
 
 from sfmtool._commands import ws as ws_command
 from sfmtool.cli import main
-from sfmtool.fileio import read_camrig
 
 from .conftest import TEST_DATA_DIR, relabel_camrig
 
@@ -32,7 +31,7 @@ BACK_UP = "Back up the workspace before upgrading it"
 @pytest.fixture
 def workspace(tmp_path: Path) -> Path:
     """A version 2 workspace holding a current `.camrig` file and a version 1
-    one under `rigs/`."""
+    one, which the reader refuses, under `rigs/`."""
     root = tmp_path / "ws"
     result = CliRunner().invoke(main, ["ws", "init", str(root)])
     assert result.exit_code == 0, result.output
@@ -65,13 +64,12 @@ def test_dry_run_prints_the_plan_and_writes_nothing(workspace: Path):
     assert BACK_UP not in result.output
     assert lines[0].startswith("Dry run: nothing was written.")
     assert f"Workspace tree: {workspace}" in lines
-    assert "  .camrig: 1 converted, 1 already current" in lines
-    assert not any(line.startswith("Nothing to do") for line in lines)
+    assert "  .camrig: 1 already current, 1 not converted" in lines
+    assert lines[-1] == "Nothing to do: no file is left to convert."
 
 
-def test_run_asks_for_a_back_up_first_then_reports_and_a_rerun_has_nothing_to_do(
-    workspace: Path,
-):
+def test_run_asks_for_a_back_up_first_then_reports_each_file(workspace: Path):
+    before = _snapshot(workspace)
     result = _upgrade(workspace)
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
@@ -80,15 +78,19 @@ def test_run_asks_for_a_back_up_first_then_reports_and_a_rerun_has_nothing_to_do
         "and .camrig files in place, which cannot be undone."
     )
     assert lines[1] == f"Workspace tree: {workspace}"
-    assert "  .camrig: 1 converted, 1 already current" in lines
-    # What it reports is what it did.
-    assert read_camrig(workspace / "rigs" / "old.camrig")["metadata"]["version"] == 2
-
-    again = _upgrade(workspace / "rigs")
-    assert again.exit_code == 0, again.output
-    lines = again.output.splitlines()
-    assert "  .camrig: 2 already current" in lines
+    assert "  .camrig: 1 already current, 1 not converted" in lines
+    # The version 1 file is listed with the reader's message, its path relative
+    # to the tree's root, and left as it is.
+    at = lines.index("Not converted:")
+    assert lines[at + 1] == (
+        "  rigs/old.camrig: the current reader refuses it, so it is left as it "
+        f"is: {Path('rigs') / 'old.camrig'} is a version 1 .camrig file, and this "
+        "sfmtool reads .camrig files of version 2 or later. sfmtool 0.4.1 is the "
+        "last release that reads version 1: install it, run `sfm ws upgrade` on "
+        "the workspace, then use the file with this release."
+    )
     assert lines[-1] == "Nothing to do: no file is left to convert."
+    assert _snapshot(workspace) == before
 
 
 def test_no_workspace_is_an_error(tmp_path: Path):

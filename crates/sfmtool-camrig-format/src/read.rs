@@ -11,13 +11,51 @@ use zip::ZipArchive;
 use crate::types::*;
 use sfmtool_archive_io::{read_binary_array, read_json_entry};
 
+/// Refuse a `metadata.version` this build does not read: one below
+/// [`CAMRIG_OLDEST_READ_VERSION`], with [`CamRigError::VersionNoLongerRead`],
+/// which names `path` and the last release that reads it; and one of 0, which
+/// no writer has ever produced, or newer than [`CAMRIG_FORMAT_VERSION`], whose
+/// layout is unknown so reading it with current-version assumptions would
+/// misparse silently.
+fn check_version(version: u32, path: &Path) -> Result<(), CamRigError> {
+    if (1..CAMRIG_OLDEST_READ_VERSION).contains(&version) {
+        return Err(CamRigError::VersionNoLongerRead {
+            path: path.to_path_buf(),
+            version,
+        });
+    }
+    if !(CAMRIG_OLDEST_READ_VERSION..=CAMRIG_FORMAT_VERSION).contains(&version) {
+        return Err(CamRigError::InvalidFormat(format!(
+            "unsupported .camrig format version {version} (this build reads versions \
+             {CAMRIG_OLDEST_READ_VERSION} to {CAMRIG_FORMAT_VERSION})"
+        )));
+    }
+    Ok(())
+}
+
+/// Parse `metadata.json` from its JSON value, checking its version with
+/// [`check_version`] first, so that a file of a version this build does not
+/// read is refused for its version rather than for a key that version lacks.
+pub(crate) fn parse_metadata(
+    value: serde_json::Value,
+    path: &Path,
+) -> Result<CamRigMetadata, CamRigError> {
+    if let Some(version) = value.get("version").and_then(serde_json::Value::as_u64) {
+        check_version(u32::try_from(version).unwrap_or(u32::MAX), path)?;
+    }
+    Ok(serde_json::from_value(value)?)
+}
+
 /// Read only metadata from a `.camrig` file (fast, no binary data).
+///
+/// A file of a version this build does not read is refused, as
+/// [`read_camrig`] refuses it.
 pub fn read_camrig_metadata(
     path: &Path,
 ) -> Result<(CamRigMetadata, CamRigContentHash), CamRigError> {
     let file = open_file(path)?;
     let mut archive = ZipArchive::new(file)?;
-    let metadata: CamRigMetadata = read_json_entry(&mut archive, "metadata.json.zst")?;
+    let metadata = parse_metadata(read_json_entry(&mut archive, "metadata.json.zst")?, path)?;
     let content_hash: CamRigContentHash = read_json_entry(&mut archive, "content_hash.json.zst")?;
     Ok((metadata, content_hash))
 }
@@ -30,23 +68,13 @@ pub fn read_camrig_metadata(
 /// mismatched counts) is rejected here rather than panicking a downstream
 /// consumer.
 ///
-/// Version 1 files store their `sensor_from_rig` poses in the COLMAP camera
-/// convention and are upgraded to the canonical convention on load
-/// ([`CamRigData::upgrade_sensor_poses_from_v1`], which S-conjugates
-/// body-anchored rigs but left-`S`-multiplies world-anchored `spherical_tiles`
-/// rigs). Content hashes cover the stored bytes ([`crate::verify_camrig`]
-/// re-reads the file), so integrity verification is unaffected by the
-/// in-memory upgrade; a re-written file is a new version-2 file with new
-/// hashes.
+/// A file of a version below [`CAMRIG_OLDEST_READ_VERSION`] is refused with
+/// [`CamRigError::VersionNoLongerRead`], and one of version 0 or newer than
+/// [`CAMRIG_FORMAT_VERSION`] as unsupported, before anything that depends on
+/// the version is parsed.
 pub fn read_camrig(path: &Path) -> Result<CamRigData, CamRigError> {
-    let mut data = read_camrig_unchecked(path)?;
+    let data = read_camrig_unchecked(path)?;
     data.validate()?;
-    // Gate on the version the canonical convention became normative in, not on
-    // the current format version — see `CAMRIG_CANONICAL_CONVENTION_VERSION`.
-    if data.metadata.version < CAMRIG_CANONICAL_CONVENTION_VERSION {
-        data.upgrade_sensor_poses_from_v1();
-    }
-    data.metadata.version = CAMRIG_FORMAT_VERSION;
     Ok(data)
 }
 
@@ -59,7 +87,7 @@ pub(crate) fn read_camrig_unchecked(path: &Path) -> Result<CamRigData, CamRigErr
     let file = open_file(path)?;
     let mut archive = ZipArchive::new(file)?;
 
-    let metadata: CamRigMetadata = read_json_entry(&mut archive, "metadata.json.zst")?;
+    let metadata = parse_metadata(read_json_entry(&mut archive, "metadata.json.zst")?, path)?;
     let content_hash: CamRigContentHash = read_json_entry(&mut archive, "content_hash.json.zst")?;
     let cameras: Vec<CamRigCamera> = read_json_entry(&mut archive, "cameras/metadata.json.zst")?;
     let sensor_image_patterns: Vec<String> =

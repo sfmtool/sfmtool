@@ -251,7 +251,7 @@ whichever format it came from. That covers the `fileio` functions, the
 shared variants, and
 [`format_errors.rs`](../crates/sfmtool-py/src/format_errors.rs) maps them, with
 the variants one format adds, such as `.sift`'s `InvalidMetadata` and the
-`VersionNoLongerRead` of `.sfmr`, `.matches` and `.sift`; the
+`VersionNoLongerRead` of `.sfmr`, `.matches`, `.sift` and `.camrig`; the
 `.kdf` bindings map the variants only `.kdf` has in
 [`spatial/kdf.rs`](../crates/sfmtool-py/src/spatial/kdf.rs) and hand the
 shared ones to the same table. The split is by who is at fault:
@@ -260,7 +260,7 @@ shared ones to the same table. The split is by who is at fault:
 |-------|---------------------|------------|
 | A filesystem call failed (`Io`, `IoPath`) | `OSError`, as the subclass for its kind: `FileNotFoundError` for a missing file, `PermissionError`, `FileExistsError`, `NotADirectoryError`, … | the same |
 | The ZIP container or a JSON entry could not be parsed or written (`Zip`, `Json`) | `OSError` | `OSError` |
-| The data breaks a rule of the format (`InvalidFormat`, `ShapeMismatch`, `.sift`'s `InvalidMetadata`, the `VersionNoLongerRead` of `.sfmr`, `.matches` and `.sift`, `.kdf`'s `Integrity`) | `OSError`: the file is damaged | `ValueError`: the caller's data cannot be stored |
+| The data breaks a rule of the format (`InvalidFormat`, `ShapeMismatch`, `.sift`'s `InvalidMetadata`, the `VersionNoLongerRead` of `.sfmr`, `.matches`, `.sift` and `.camrig`, `.kdf`'s `Integrity`) | `OSError`: the file is damaged | `ValueError`: the caller's data cannot be stored |
 | The call asks for something the data cannot give (`.sfmr`'s `Unsupported`, `.kdf`'s `InvalidQuery` and `ScalarType`) | `ValueError` | `ValueError` |
 
 A write here also covers building an in-memory value from the caller's data,

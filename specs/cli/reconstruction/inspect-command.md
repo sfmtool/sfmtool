@@ -217,7 +217,9 @@ The default output is a compact label/value block. The fields per type:
   cluster and cluster-member counts and whether cluster patches are stored;
   then whether two-view geometries are present, and integrity.
 - **`.camrig`** — format version, name, rig type, sensor / camera counts,
-  integrity.
+  integrity. A version 1 file is refused with the reader's message, which
+  names sfmtool 0.4.1 as the last release that reads it
+  ([camrig-file-format.md § Format versions](../../formats/camrig-file-format.md#format-versions)).
 - **image** — format, dimensions, file size.
 
 ## Verbose Output (`--verbose` / `-v`)
