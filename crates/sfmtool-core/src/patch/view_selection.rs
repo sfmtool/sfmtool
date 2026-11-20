@@ -976,8 +976,9 @@ fn select_patch_views_impl(
     let track_kps: Option<Vec<Option<[f64; 2]>>> =
         track_keypoints.map(|kps| keep.iter().map(|&i| kps[i]).collect());
     let is_track = seen; // the dedup set doubles as the membership test
-                         // One view's regions per track view, which its reference render and its
-                         // own score share.
+
+    // One view's regions per track view, which its reference render and its
+    // own score share.
     let mut track_regions: Vec<ViewRegions<'_>> = track_views
         .iter()
         .map(|&i| ViewRegions::new(views[i as usize].source, pool))
