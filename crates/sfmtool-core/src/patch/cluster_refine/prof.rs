@@ -16,7 +16,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-pub use crate::profiling::{count, enabled, Phase};
+pub use crate::profiling::{count, count_max, enabled, Phase};
 use crate::profiling::{report_overhead, report_phases, reset_all, PATCH_ROWS};
 
 // Enclosing phase (overlaps the leaves; reported as the 100% denominator).
@@ -88,6 +88,9 @@ pub static N_PIECEWISE: AtomicU64 = AtomicU64::new(0);
 pub static N_TILE_BUILDS: AtomicU64 = AtomicU64::new(0);
 /// Pixels copied into (re)built `LevelTile`s (tile area × channels).
 pub static N_TILE_PIXELS: AtomicU64 = AtomicU64::new(0);
+/// The largest `LevelTile` built, in pixels of its level (width × height):
+/// the most one member's cascade held of one level at a time.
+pub static N_TILE_MAX_PIXELS: AtomicU64 = AtomicU64::new(0);
 
 const PHASES: [&Phase; 9] = [
     &TOTAL,
@@ -121,6 +124,7 @@ pub fn reset() {
             &N_PIECEWISE,
             &N_TILE_BUILDS,
             &N_TILE_PIXELS,
+            &N_TILE_MAX_PIXELS,
         ],
     );
 }
@@ -151,7 +155,7 @@ pub fn report(clusters: usize, wall_secs: f64) {
     let n_tiles = N_TILE_BUILDS.load(Ordering::Relaxed);
     eprintln!(
         "[sfmtool-profile]   members {}  gated {} (rejected {})  refines {}  evals {} \
-         ({:.1}/refine)  tile builds {} ({:.1} px/build)",
+         ({:.1}/refine)  tile builds {} ({:.1} px/build, largest {} px)",
         N_MEMBERS.load(Ordering::Relaxed),
         N_GATED.load(Ordering::Relaxed),
         N_GATE_REJECTED.load(Ordering::Relaxed),
@@ -168,6 +172,7 @@ pub fn report(clusters: usize, wall_secs: f64) {
         } else {
             0.0
         },
+        N_TILE_MAX_PIXELS.load(Ordering::Relaxed),
     );
     let per_refine = |c: &AtomicU64| {
         let v = c.load(Ordering::Relaxed);

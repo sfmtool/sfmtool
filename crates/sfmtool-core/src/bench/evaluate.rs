@@ -38,7 +38,7 @@ use crate::camera::image::ImageU8Pyramid;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{
     refine_cluster_patches_borrowed, sample_member_grid, ClusterRefineParams, FeatureGeometry,
-    CELL_COUNT, REFERENCE_UNREFINABLE,
+    CELL_COUNT, MAX_PATCH_ELONGATION, REFERENCE_UNREFINABLE,
 };
 use crate::patch::keypoint_localize::{
     keypoint_grid_offset, project_unclipped, try_localize_patch_keypoints, view_cache_bytes,
@@ -349,6 +349,14 @@ pub struct EvaluateReport {
     /// kernel picks it -- the largest-scale usable member -- so this is where
     /// it landed, and it is `None` when no member could anchor one.
     pub reference: Option<usize>,
+    /// At the cluster stage, how many of the [`Self::unmeasured`]
+    /// observations the kernel did not evaluate because their seed's affine
+    /// shape is elongated past
+    /// [`MAX_PATCH_ELONGATION`],
+    /// its larger singular value over its smaller
+    /// ([`ClusterRefineResult::elongated_members`](crate::patch::cluster_refine::ClusterRefineResult::elongated_members)).
+    /// Zero at the track stage.
+    pub elongated: usize,
     /// At the track stage, where the track's point stands: what the reading was
     /// made against, rather than anything this step computed. A unit bearing
     /// direction when [`Self::at_infinity`], and a world point otherwise.
@@ -377,9 +385,17 @@ impl std::fmt::Display for EvaluateReport {
             StageKind::Cluster => {
                 write!(f, "measured {} of {total} observations", self.measured)?;
                 match self.reference {
-                    Some(reference) => write!(f, " against observation {reference}"),
-                    None => write!(f, "; no observation could anchor a template"),
+                    Some(reference) => write!(f, " against observation {reference}")?,
+                    None => write!(f, "; no observation could anchor a template")?,
                 }
+                if self.elongated > 0 {
+                    write!(
+                        f,
+                        "; {} not evaluated for an affine shape elongated past {}",
+                        self.elongated, MAX_PATCH_ELONGATION
+                    )?;
+                }
+                Ok(())
             }
             StageKind::Track => {
                 write!(f, "measured {} of {total} observations", self.measured)?;
@@ -1278,6 +1294,7 @@ pub(super) fn evaluate_cluster(
             measured,
             unmeasured: evaluated(track).len() - measured,
             reference,
+            elongated: result.elongated_members,
             position: None,
             at_infinity: false,
             condition_number: None,
@@ -1776,6 +1793,7 @@ fn evaluate_track(
             measured,
             unmeasured,
             reference: None,
+            elongated: 0,
             position: payload.position,
             // The payload's flag, not the patch frame's `w`: the two agree wherever a
             // patch frame exists, and the flag is the one a track without a patch frame also

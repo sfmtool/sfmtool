@@ -97,6 +97,9 @@ class TestRefineClusterPatches:
             "regate_at_refined_shape",
             "max_capped_cells",
             "rotation_starts",
+            "elongated_members",
+            "elongated_evaluations",
+            "max_patch_elongation",
             "member_cell_shift_px",
             "member_cell_zncc",
             "member_cell_status",
@@ -286,6 +289,24 @@ class TestRefineClusterPatches:
             STATUS_NOT_EVALUATED,
         ]
         assert np.isnan(result["member_zncc"]).all()
+
+    def test_elongated_member_is_not_evaluated_and_counted(self):
+        images, pos, aff, starts, m_img, m_feat = _inputs()
+        # Image 1's feature stretched 17 times along y: past the limit of 16.
+        aff[1] = np.array([[[3.0, 0.0], [0.0, 51.0]]], dtype=np.float32)
+        result = refine_cluster_patches(images, pos, aff, starts, m_img, m_feat)
+        assert result["max_patch_elongation"] == 16.0
+        assert result["elongated_members"] == 1
+        assert result["elongated_evaluations"] == 0
+        # One usable member is left, so the cluster is unrefinable.
+        assert result["reference_members"][0] == 0xFFFFFFFF
+        assert result["member_status"].tolist() == [
+            STATUS_NOT_EVALUATED,
+            STATUS_NOT_EVALUATED,
+        ]
+        plain = refine_cluster_patches(*_inputs())
+        assert plain["elongated_members"] == 0
+        assert plain["elongated_evaluations"] == 0
 
     def test_unlocalizable_member_excluded(self):
         # The member's image is flat: its own patch matches itself at every

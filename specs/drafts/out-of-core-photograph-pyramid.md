@@ -1678,8 +1678,27 @@ in core. Step 17 turns the tier on.
      the pool; and the clipped share over tiles is `source_clipped_share`,
      beside the whole-pyramid `clipped_share` that `render_view_tile` keeps
      calling until step 10.
-8. **The cluster members' elongation limit** (the companion's § "The
-   members' elongation limit"), amending
+8. **The cluster members' elongation limit.** Built: `MAX_PATCH_ELONGATION`,
+   the refusal at validation, the evaluation scored out of frame past the
+   limit, `ClusterRefineResult::elongated_members` and
+   `elongated_evaluations`, the bench's `EvaluateReport::elongated`, the
+   counts in the summaries of `sfm cluster-patches` and the viewer's
+   cluster-patches build, and the spec amendments below, with the tests
+   below; the format version did not change, since `not_evaluated` keeps its
+   meaning ([formats/format-versions.md](../formats/format-versions.md#when-a-formats-version-changes)).
+   Measured with `sfm cluster-patches`' defaults on copies of the three
+   checked-in captures, from features extracted and clustered afresh: no
+   detected shape is past the limit (sfmtool's SIFT shapes are
+   similarities), so no member is refused at validation and no cluster's
+   reference changes; the cascades scored 744, 2847 and 1260 evaluations out
+   of frame for their elongation (seoul_bull_sculpture, dino_dog_toy,
+   kerry_park), which changed the outputs of 35 of 10985, 167 of 137708 and
+   71 of 39381 members and the status of 1, 12 and 3 of them, and left no
+   measured shape past the limit where 21, 83 and 42 had been. The largest
+   `LevelTile` one member held fell from 155,040 to 118,720 px on
+   dino_dog_toy and stayed at 13,528 and 24,235 px on the other two. The
+   design follows (the companion's § "The members' elongation limit"),
+   amending
    [core/patch/cluster-patch-refinement.md](../core/patch/cluster-patch-refinement.md)
    (§ "Which member anchors, and which members are eligible", § "The warp
    and the cascade", and the constants under § "Parameters"), the
@@ -1701,7 +1720,8 @@ in core. Step 17 turns the tier on.
    `not_evaluated` and counted as elongated; a cascade driven towards a map
    past the limit retreats and returns a shape within it; on a cluster whose
    members and evaluations all stay within the limit, every result is
-   bit-identical to the result before the step. Measurement, in the pull request: on copies of
+   bit-identical to the result on the same clusters with the limit switched
+   off. Measurement, in the pull request: on copies of
    the checked-in reconstructions (`seoul_bull_sculpture`, `dino_dog_toy`,
    `kerry_park`) and on the 200-megapixel capture of § "The problem,
    measured" if it is at hand, `sfm cluster-patches` before and after: the

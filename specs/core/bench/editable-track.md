@@ -894,6 +894,8 @@ pub struct EvaluateReport {
     pub scored: usize,                   // rows the bars can judge: track stage, measured
                                          // and with a score against the bitmap
     pub reference: Option<usize>,        // the cluster stage's
+    pub elongated: usize,                // the cluster stage's rows not evaluated for a seed
+                                         // shape elongated past MAX_PATCH_ELONGATION
     pub position: Option<Point3<f64>>,   // where the track stands; a bearing at w = 0
     pub at_infinity: bool,               // which of the two that coordinate is
     pub condition_number: Option<f64>,
@@ -3826,7 +3828,8 @@ leaves the bitmap to be rendered (an unpin that reports `bitmap_pending`,
 `set_stage` takes
 the stage as the word `"cluster"` or `"track"`. Their reports are dicts:
 `stage`, `measured`, `unmeasured`, `scored`, and `turned_in` and `turned_out`
-for what the repaint moved, with `reference` at the cluster stage and
+for what the repaint moved, with `reference` and `elongated` at the cluster
+stage and
 `at_infinity` with `position` or `direction` and `condition_number` at the track
 stage; `placed`, `kept_at_seed`, `at_infinity` with `position` or `direction`,
 `condition_number`, `classification` and the reading's own `evaluate` report for

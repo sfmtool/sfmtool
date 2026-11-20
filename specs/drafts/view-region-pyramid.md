@@ -17,7 +17,8 @@ points with `source_clipped_share` among them, and view-region pyramids
 assembled from tiles and kept for reuse across renders are specified in
 [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md),
 and this draft keeps only what is still proposed. The main draft's step 8, between them, limits the
-cluster members' elongation (§ "The members' elongation limit"). The user
+cluster members' elongation (§ "The members' elongation limit"), and is
+built. The user
 has decided every open question (§ "Open questions"). It amends
 [core/camera/photograph-cache.md](../core/camera/photograph-cache.md) and the
 samplers of [core/camera/image-warping.md](../core/camera/image-warping.md).
@@ -203,6 +204,9 @@ succeeds; the members' elongation limit below bounds
 each of its requests (open question 6).
 
 ### The members' elongation limit
+
+Built in the main draft's step 8, and specified in
+[core/patch/cluster-patch-refinement.md](../core/patch/cluster-patch-refinement.md).
 
 The **elongation** of a member's affine shape, or of an evaluation's map, is
 the ratio of its larger singular value to its smaller, `s_max / s_min`, from
@@ -683,4 +687,4 @@ decisions.
    since the extreme cases are rarely correct photometric matches; a member
    past it is `not_evaluated`, and an evaluation past it scores as out of
    frame (§ "The members' elongation limit"). The limit is the main
-   draft's step 8.
+   draft's step 8, which is built.

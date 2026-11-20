@@ -10,6 +10,7 @@ The cluster-bearing input file is produced the way users produce it: by
 `../matching/test_pairs_from_matches.py`).
 """
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -202,6 +203,12 @@ def test_enriched_output_states_the_refinement(cluster_matches_file: Path):
         main, ["cluster-patches", "-i", str(cluster_matches_file), "--resolution", "16"]
     )
     assert result.exit_code == 0, result.output
+    # The summary says how many of the members not evaluated were refused for
+    # their elongation.
+    assert re.search(
+        r"\d+ not evaluated \(\d+ of them with an affine shape elongated past 16\)",
+        result.output,
+    ), result.output
     src = read_matches(cluster_matches_file)
     data = read_matches(cluster_matches_file.with_name("clusters-patches.matches"))
 

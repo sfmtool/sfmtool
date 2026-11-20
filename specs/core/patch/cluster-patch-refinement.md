@@ -115,6 +115,8 @@ pub struct ClusterRefineResult {
                                               // when `params.piecewise` is set
     pub refined_zncc_self_similarity_radius: Vec<f32>,             // (M,), at the refined shape
     pub refined_zncc_self_similarity_radius_grid: Vec<[[f32; 3]; 3]>, // (M,), its nine cells
+    pub elongated_members: usize,     // refused at validation for their elongation
+    pub elongated_evaluations: u64,   // evaluations scored out of frame for it
 }
 
 pub fn refine_cluster_patches(
@@ -164,6 +166,9 @@ pub const DEFAULT_REGATE_AT_REFINED_SHAPE: bool = true;
 pub const DEFAULT_MAX_CAPPED_CELLS: u8 = 8;
 pub const DEFAULT_MAX_SHIFT_SCALES: f64 = 2.0;
 pub const DEFAULT_ROTATION_STARTS: u32 = 12;
+/// The largest elongation, larger singular value over smaller, of a member's
+/// shape or an evaluation's map: the anisotropic sampler's `MAX_ANISOTROPY`.
+pub const MAX_PATCH_ELONGATION: f64 = 16.0;
 
 impl ClusterRefineParams {
     pub fn admits_shift(&self, shift_px: f64, shape: &[[f64; 2]; 2]) -> bool; // |t| / √|det S| ≤ bar
@@ -427,6 +432,23 @@ iteration cap long after the score stopped moving. There is no multi-view
 congealing pass — at raw-cluster sizes it measurably adds nothing over pairwise
 refinement.
 
+**Every evaluation is within the members' elongation limit.** The
+**elongation** of an evaluation's map is the ratio of its larger singular value
+to its smaller, from the closed form [Pyramid levels](#pyramid-levels) uses
+(`s_max = q + r`, `s_min = |q − r|`, with `q` and `r` the lengths of the map's
+similarity and anti-similarity parts); the map is the shape `(I + D)·M₀·A_ref`
+scaled by the grid's step, so the two have the same elongation. A map whose
+elongation is over `MAX_PATCH_ELONGATION` (16), or not finite, scores as a
+support out of frame does, before any tile is asked for: the simplex scores it
+worst (+1.0) and retreats, a rotation start is skipped, and the readings after
+the cascade (its part readings and the piecewise stage's re-readings) read
+nothing there. Every member that reaches the cascade passed the same limit at
+validation ([Which member anchors](#which-member-anchors-and-which-members-are-eligible)),
+so the cascade starts within it, and the shape it returns is one it evaluated,
+so it is within the limit too. `ClusterRefineResult::elongated_evaluations`
+counts the evaluations turned away. The limit bounds each evaluation's tile
+request (see [Implementation notes](#implementation-notes)).
+
 ### Rotation starts
 
 The cascade starts from one seed, and its simplex steps (0.05 for `φ`, about
@@ -445,7 +467,10 @@ under every start), and keeps the seed's scale, skew and translation, since
 `R · M₀` has the singular values of `M₀`. Each start costs one evaluation of
 the cascade's own objective at `t = 0`, `D = 0` (one render of the member tile
 and one windowed ZNCC), with no optimisation. A start whose support leaves the
-frame scores nothing and is skipped. The best score wins, ties to the lowest
+frame scores nothing and is skipped. A start turns the seed, which keeps its
+singular values, so a start is past the elongation limit only where rounding
+puts a member at the limit just over it, and is then skipped as well. The best
+score wins, ties to the lowest
 `k`, so the SIFT seed wins a tie. The cascade then runs from `M₀,k` exactly as
 it would from `M₀`, and everything after it, the gates included, reads the
 warp it returns. The start scores read tiles of their own, and the cascade
@@ -488,6 +513,20 @@ choice the other patch kernels make, differing only in the level rule
 
 ### Which member anchors, and which members are eligible
 
+A member is first validated: its feature index is in range for its image, its
+SIFT shape `A` is not degenerate (`|det A| ≥ 1e-9`), and the shape's
+elongation, its larger singular value over its smaller, is at most
+`MAX_PATCH_ELONGATION`, 16. A member that fails any of the three is
+`NotEvaluated` and takes no part in the member gate, the choice of reference or
+the cascade; `ClusterRefineResult::elongated_members` counts those refused for
+their elongation, a non-finite elongation included. A shape stretched that far
+is rarely a correct photometric match, and the limit bounds how much of a
+photograph each evaluation reads. The value is the anisotropic sampler's
+`MAX_ANISOTROPY`, the most samples it takes along a footprint's major axis, so
+the tree has one number for how stretched a footprint it reads; a circle on the
+surface foreshortened 16 times is seen at `acos(1/16)`, 86.4°, from its normal.
+It is a constant rather than a setting because the bound on a tile rests on it.
+
 Before anything is refined, each member's own patch is read for its
 [ZNCC self-similarity radius](zncc-self-similarity-radius.md): how far, in
 template-grid px, the member's full `resolution²` grid at its own SIFT geometry
@@ -520,8 +559,7 @@ format change. If the best candidate's template proves unusable the next
 candidate by scale is tried, and a cluster where every candidate fails is
 *unrefinable*: `reference_members[c] = REFERENCE_UNREFINABLE`, and every member
 not already gated is `NotEvaluated`. The same follows when fewer than two
-members survive validation, which also drops members with an out-of-range
-feature index or a degenerate shape (`|det A| < 1e-9`).
+members survive validation and the member gate.
 
 ### Acceptance
 
@@ -1037,6 +1075,19 @@ always covers the evaluation's *clipped* footprint, an out-of-tile tap is exactl
 an out-of-frame tap — the lane-bounds test doubles as the all-in-frame test and
 as the early-out, and the hot loop needs no separate image-bounds check.
 
+**The elongation limit bounds each tile request.** The level comes from
+`s_min`, so at its level the map's singular values are under 2 and under
+`2 · MAX_PATCH_ELONGATION`, and their sum under 34. The grid's image spans `W`
+by `H` level px with `W + H ≤ 2 (R − 1)(s_max + s_min) / 2^ℓ`, so
+`W · H < ((R − 1) · 34)²`; `grid_bbox`'s rounding and its 2 px add at most 6 px
+to each side's length and `TILE_MARGIN` 16 more, so one evaluation's request
+holds at most `((R − 1) · 34 + 22)²` pixels: 838² at the default `R = 25`,
+8.4 MB in `f32` RGB. That bounds each request, not what a member's `TileCache` holds: the tile
+at a level is the union of the requests made there, widened at each rebuild, so
+it grows as far as the member's cascade moves its grid, which nothing caps,
+since a cap would change the tile, and so the scores, of a member whose cascade
+wanders.
+
 **The tile is centered for a numerical reason.** Windowed ZNCC needs a variance,
 accumulated as `S2 − S1²/W` in f32. On raw 0–255 intensities that difference
 cancels catastrophically for low-contrast patches; subtracting the tile mean at
@@ -1075,7 +1126,7 @@ as much as the arithmetic; removing it changed no result.
 
 **Profiling is opt-in and free when off.** `cluster_refine::prof` carries the
 house phase timers and counters — gate, template, cascade, tile builds and their
-pixel volume, evaluations per cascade stage — behind [`SFMTOOL_PROFILE=1`](../README.md#phase-timing-with-sfmtool_profile),
+pixel volume and the largest tile built, evaluations per cascade stage — behind [`SFMTOOL_PROFILE=1`](../README.md#phase-timing-with-sfmtool_profile),
 compiling to one branch on a cached flag when the variable is unset.
 
 ### Measured cost
@@ -1171,8 +1222,8 @@ whole call rose by 2.5% to 12.0% on the five subset entries, most on
 ## Parameters
 
 Defaults are `ClusterRefineParams::default()` in
-`crates/sfmtool-core/src/patch/cluster_refine/params.rs`, except for the two
-module constants the last column marks. The CLI's `--patch-size` is the **full**
+`crates/sfmtool-core/src/patch/cluster_refine/params.rs`, except for the
+constants the last column marks. The CLI's `--patch-size` is the **full**
 template edge length while the kernel's `radius` is a half-width;
 `src/sfmtool/_cluster_patches.py` is the sole conversion site
 (`radius = patch_size / 2`).
@@ -1194,6 +1245,7 @@ template edge length while the kernel's `radius` is a half-width;
 | `stall_iters` | `20` | Iterations without progress before a stage exits |
 | `stall_tol` | `1e-4` | Best-value improvement (ZNCC units) that counts as progress |
 | `MIN_ABS_DET` | `1e-9` | Floor on a usable SIFT shape's `det A` magnitude (`cluster_refine.rs`) |
+| `MAX_PATCH_ELONGATION` | `16.0` | The largest elongation, larger singular value over smaller, of a usable SIFT shape and of any evaluation's map; `MAX_ANISOTROPY` ([Which member anchors](#which-member-anchors-and-which-members-are-eligible); public constant in `params.rs`) |
 | `SIGMA_CLAMP` | `1.5` | Log-scale clamp of the similarity stage (`cluster_refine.rs`) |
 
 The piecewise stage is `ClusterRefineParams::piecewise`, `None` by default (CLI
@@ -1350,6 +1402,18 @@ where the seed scores best, twelve starts give the one-start result bit for
 bit; and with one start the recovery cases and the 60° member reproduce
 fingerprints of every output recorded from the single-start build (checked on
 x86-64 with AVX2, where they were recorded).
+**The elongation limit**: `MAX_PATCH_ELONGATION` is the anisotropic
+sampler's `MAX_ANISOTROPY`; a member whose detected shape's elongation is
+exactly the limit is refined, and one just past it is `NotEvaluated` and
+counted in `elongated_members`; a member whose surface is stretched 20 times,
+seeded 15 times, drives the cascade towards maps past the limit, which are
+counted in `elongated_evaluations`, and the shape returned is within the
+limit; and on the recovery cases and the 60° member, whose members and
+evaluations all stay within the limit, the limit turns nothing away and every
+output is bit-identical to the refinement's on the same clusters with the
+limit switched off. The comparison runs the same build twice, so it holds on
+every platform, where a fingerprint recorded on one would depend on how its
+math library rounds.
 
 `cluster_refine/piecewise/tests.rs` covers the piecewise stage, including the
 cell registration kernel as the stage runs it. **The

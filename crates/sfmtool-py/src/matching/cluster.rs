@@ -19,6 +19,7 @@ use sfmtool_core::features::cluster_match::{self, BackgroundFloorParams, Cluster
 use sfmtool_core::patch::cluster_refine::{
     member_cell_data, refine_cluster_patches as core_refine_cluster_patches,
     warp_consistency_residuals, ClusterRefineParams, FeatureGeometry, LoopStop, PiecewiseParams,
+    MAX_PATCH_ELONGATION,
 };
 
 use crate::patches::args::parse_patch_window;
@@ -490,7 +491,13 @@ pub fn clusters_to_pair_matches(
 ///     used, and ``rotation_starts`` (int) the number of rotation starts it
 ///     used, the Rust defaults where the arguments were None;
 ///     ``regate_at_refined_shape`` is False when the member gate's bar is 0,
-///     since the whole grid's gate shares that bar and does not run. With
+///     since the whole grid's gate shares that bar and does not run.
+///     ``elongated_members`` (int) is how many members were refused at
+///     validation, and so marked not_evaluated, because their detected
+///     affine shape's elongation (its larger singular value over its smaller)
+///     is past ``max_patch_elongation`` (float, 16.0), and
+///     ``elongated_evaluations`` (int) how many of the cascade's evaluations
+///     read a map elongated past it and so scored as out of frame. With
 ///     ``piecewise`` the dict also
 ///     carries the per-cell columns of
 ///     the ``cluster_patches/`` section, cells ``[m, row, col]`` from the
@@ -729,6 +736,9 @@ pub fn refine_cluster_patches<'py>(
     dict.set_item("regate_at_refined_shape", params.refined_shape_gate_is_on())?;
     dict.set_item("max_capped_cells", params.max_capped_cells)?;
     dict.set_item("rotation_starts", params.rotation_starts)?;
+    dict.set_item("elongated_members", result.elongated_members)?;
+    dict.set_item("elongated_evaluations", result.elongated_evaluations)?;
+    dict.set_item("max_patch_elongation", MAX_PATCH_ELONGATION)?;
     dict.set_item("member_shift_px", result.member_shift_px.into_pyarray(py))?;
     dict.set_item("member_consistency_residual", consistency.into_pyarray(py))?;
     let cell_keys = [

@@ -45,11 +45,15 @@ fn one_build_makes_both_files_and_both_read_current() {
     assert!(index_of(dir.path()).is_file());
     assert!(dir.path().join("demo-cluster-patches.matches").is_file());
     assert!(
-        state
-            .action_log
-            .entries()
-            .any(|entry| entry.text.starts_with("Built the index files of demo")),
-        "the build writes one row naming both files"
+        state.action_log.entries().any(|entry| entry
+            .text
+            .starts_with("Built the index files of demo")
+            && entry.text.contains(" not evaluated (")
+            && entry
+                .text
+                .contains(" of them with an affine shape elongated past 16)")),
+        "the build writes one row naming both files, and how many members were not \
+         evaluated and how many of those for their elongation"
     );
 }
 

@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use sfmtool_core::features::kdforest::LazyKdForestU8;
+use sfmtool_core::patch::cluster_refine::MAX_PATCH_ELONGATION;
 use sfmtool_core::progress::Progress;
 
 use crate::background::{Finished, IndexFilesEnd, Job, Operation};
@@ -365,10 +366,14 @@ fn build(plan: IndexFilesPlan, progress: &Progress<'_>) -> Finished {
     match made {
         Ok(summary) => {
             let patches = format!(
-                "the cluster patches {} with {} clusters of {} members",
+                "the cluster patches {} with {} clusters of {} members, {} not evaluated \
+                 ({} of them with an affine shape elongated past {})",
                 summary.path.display(),
                 summary.clusters,
-                summary.members
+                summary.members,
+                summary.not_evaluated,
+                summary.elongated,
+                MAX_PATCH_ELONGATION
             );
             let text = match &index_text {
                 Some(index_text) => {

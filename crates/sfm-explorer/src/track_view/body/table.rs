@@ -2243,9 +2243,9 @@ pub(super) enum CellMark {
 }
 
 /// The [`CellMark`] of a self-similarity cell with ellipse `ellipse`: a line
-/// along its major axis where the ellipse is long and thin, its elongation
-/// `1 − (minor / major)²` at least `0.5` (a minor axis at most 0.71 of the
-/// major), so the cell's matching shifts line up along one direction, and
+/// along its major axis where the ellipse is long and thin, its minor axis at
+/// most 0.71 of the major (`(minor / major)² ≤ 0.5`), an elongation of at least
+/// `√2`, so the cell's matching shifts line up along one direction, and
 /// nothing otherwise, nor for a circle or a cell with no reading.
 pub(super) fn ellipse_mark(ellipse: &SelfSimilarityEllipse) -> CellMark {
     let [major, minor] = ellipse.axes;
@@ -2253,8 +2253,8 @@ pub(super) fn ellipse_mark(ellipse: &SelfSimilarityEllipse) -> CellMark {
     if !(angle.is_finite() && major > 0.0) {
         return CellMark::Nothing;
     }
-    let elongation = 1.0 - (minor / major).powi(2);
-    if elongation.is_nan() || elongation < 0.5 {
+    let eccentricity_squared = 1.0 - (minor / major).powi(2);
+    if eccentricity_squared.is_nan() || eccentricity_squared < 0.5 {
         return CellMark::Nothing;
     }
     let (sin, cos) = angle.sin_cos();

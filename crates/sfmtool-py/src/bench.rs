@@ -1652,6 +1652,9 @@ fn evaluate_report_dict<'py>(
     if let Some(reference) = report.reference {
         d.set_item("reference", reference)?;
     }
+    if report.stage == StageKind::Cluster {
+        d.set_item("elongated", report.elongated)?;
+    }
     d.set_item("at_infinity", report.at_infinity)?;
     if let Some(p) = report.position {
         let key = if report.at_infinity {

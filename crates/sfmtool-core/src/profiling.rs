@@ -90,6 +90,15 @@ pub fn count(c: &AtomicU64, n: u64) {
     }
 }
 
+/// Raise the event counter `c` to `n` when profiling is on and `n` is larger,
+/// for a counter that records the largest of something rather than a total.
+#[inline]
+pub fn count_max(c: &AtomicU64, n: u64) {
+    if enabled() {
+        c.fetch_max(n, Ordering::Relaxed);
+    }
+}
+
 /// Zero every phase in `phases` and every event counter in `counters`.
 pub(crate) fn reset_all(phases: &[&Phase], counters: &[&AtomicU64]) {
     for p in phases {

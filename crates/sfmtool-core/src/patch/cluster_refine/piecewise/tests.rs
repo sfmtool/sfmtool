@@ -17,8 +17,8 @@
 use super::super::kernels::{SupportTables, TemplateKernel};
 use super::super::{
     build_template, inv2, member_zncc_at, mul2, read_member_at, refine_cluster_patches,
-    refine_kept_member_cells, ClusterRefineParams, ClusterRefineResult, FeatureGeometry, Mat2,
-    MemberGeo, MemberOutcome, MemberStatus,
+    refine_kept_member_cells, ClusterRefineParams, ClusterRefineResult, ElongationLimit,
+    FeatureGeometry, Mat2, MemberGeo, MemberOutcome, MemberStatus, MAX_PATCH_ELONGATION,
 };
 use super::*;
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
@@ -210,6 +210,7 @@ impl Fixture {
                 self.params.resolution,
                 self.step,
                 self.off,
+                &ElongationLimit::new(MAX_PATCH_ELONGATION),
             )
         }
     }
@@ -878,6 +879,7 @@ impl Fixture {
             self.off,
             params,
             &self.pp(),
+            &ElongationLimit::new(MAX_PATCH_ELONGATION),
         );
         out
     }
@@ -949,6 +951,7 @@ fn an_update_whose_support_leaves_the_frame_is_not_applied() {
             fx.params.resolution,
             fx.step,
             fx.off,
+            &ElongationLimit::new(MAX_PATCH_ELONGATION),
         )
         .is_some()
     };

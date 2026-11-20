@@ -152,6 +152,7 @@ def _run_cluster_patches(
     n_unloc = int((statuses == 6).sum())
     n_unloc_refined = int((statuses == 7).sum())
     n_unloc_cells = int((statuses == 8).sum())
+    n_elongated = int(result["elongated_members"])
 
     # The output's stage is refinement, so the backbone's geometry becomes the
     # refinement's — for the members the cascade measured. Those are exactly
@@ -256,5 +257,7 @@ def _run_cluster_patches(
         f"Done: {n_ref} references, {n_kept} kept, {n_rejected} rejected, "
         f"{n_unloc} unlocalizable, {n_unloc_refined} unlocalizable at the "
         f"refined shape, {n_unloc_cells} with too many capped cells, "
-        f"{n_dup} duplicate-image, {n_skip} not evaluated"
+        f"{n_dup} duplicate-image, {n_skip} not evaluated ({n_elongated} of "
+        f"them with an affine shape elongated past "
+        f"{result['max_patch_elongation']:g})"
     )

@@ -3816,6 +3816,7 @@ fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
     let (refined, report) = evaluate_over(&scene, &edited, &track).expect("a cluster of two");
     assert_eq!(report.stage, StageKind::Cluster);
     assert_eq!(report.measured, 2);
+    assert_eq!(report.elongated, 0);
     let reference = report.reference.expect("a reference was cut");
     let payload = refined.cluster().expect("the cluster stage");
     assert_eq!(payload.reference, reference);
@@ -3922,6 +3923,41 @@ fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
     let written = next.point(report.point).expect("just written");
     assert!((written.point().position - WORLD).norm() < 0.1);
     assert_eq!(written.observations().len(), 2);
+}
+
+/// A sighting whose seed shape is elongated past the cluster refinement's
+/// limit is not evaluated, and the evaluation's report counts it and says so.
+#[test]
+fn a_cluster_evaluation_reports_a_sighting_elongated_past_the_limit() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let seed = ClusterSeed::from_pixel(0, "image_0", scene.project(0, WORLD), PIXEL_SEED_RADIUS_PX);
+    let (bench, created) = create_cluster(&Bench::new(), &seed).expect("a usable seed");
+    let track = track_of(&bench, &created.label);
+    let (track, added) = add_observation(
+        &track,
+        &ObservationSeed::at_pixel(1, scene.project(1, WORLD)),
+    )
+    .expect("a finite pixel");
+    let (track, _) =
+        shape_observation(&track, added.observation, [[1.0, 0.0], [0.0, 20.0]]).expect("an area");
+    let (track, _) = set_verdict(&track, added.observation, Verdict::In).expect("a live row");
+
+    let (refined, report) = evaluate_over(&scene, &edited, &track).expect("a cluster of two");
+    assert_eq!(report.elongated, 1);
+    // One member is left to refine, so nothing is measured.
+    assert_eq!(report.measured, 0);
+    let m = refined.observations[added.observation]
+        .cluster
+        .as_ref()
+        .expect("a cluster slot");
+    assert_eq!(m.status, Some(MemberStatus::NotEvaluated));
+    assert!(
+        report
+            .to_string()
+            .ends_with("; 1 not evaluated for an affine shape elongated past 16"),
+        "{report}"
+    );
 }
 
 #[test]
