@@ -34,11 +34,13 @@ use nalgebra::{Point3, Vector3};
 use ndarray::{Array2, Array3};
 
 use crate::camera::image::ImageU8Pyramid;
+use crate::camera::sampler::{RegionPool, ViewRegions};
+use crate::camera::PhotographReadError;
 
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{
-    refine_cluster_patches_borrowed, sample_member_grid, ClusterRefineParams, FeatureGeometry,
-    CELL_COUNT, MAX_PATCH_ELONGATION, REFERENCE_UNREFINABLE,
+    refine_cluster_patches_borrowed, sample_source_member_grid, ClusterRefineParams,
+    FeatureGeometry, CELL_COUNT, MAX_PATCH_ELONGATION, REFERENCE_UNREFINABLE,
 };
 use crate::patch::keypoint_localize::{
     keypoint_grid_offset, project_unclipped, try_localize_patch_keypoints, view_cache_bytes,
@@ -251,6 +253,8 @@ pub enum EvaluateError {
         /// What the allocator refused, in bytes.
         bytes: usize,
     },
+    /// A photograph could not be read.
+    Photograph(PhotographReadError),
     /// The caller asked the evaluation to stop.
     Cancelled,
 }
@@ -283,6 +287,7 @@ impl std::fmt::Display for EvaluateError {
             EvaluateError::OutOfMemory { bytes } => {
                 write!(f, "{bytes} bytes could not be allocated for the reading")
             }
+            EvaluateError::Photograph(e) => write!(f, "a photograph could not be read: {e}"),
             EvaluateError::Cancelled => write!(f, "the reading was cancelled"),
         }
     }
@@ -311,6 +316,16 @@ pub(super) fn shown_bytes(bytes: usize) -> String {
 impl From<Cancelled> for EvaluateError {
     fn from(_: Cancelled) -> Self {
         EvaluateError::Cancelled
+    }
+}
+
+/// A cancelled read is the evaluation's own [`EvaluateError::Cancelled`].
+impl From<PhotographReadError> for EvaluateError {
+    fn from(e: PhotographReadError) -> Self {
+        match e {
+            PhotographReadError::Cancelled => EvaluateError::Cancelled,
+            e => EvaluateError::Photograph(e),
+        }
     }
 }
 
@@ -521,6 +536,7 @@ impl std::fmt::Display for EvaluateReport {
 ///     track,
 ///     edited,
 ///     images,
+///     &sfmtool_core::camera::sampler::RegionPool::for_kernel_call(),
 ///     &EvaluateOptions::default(),
 ///     &Progress::none(),
 /// )?;
@@ -533,10 +549,11 @@ pub fn evaluate(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &EvaluateOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, EvaluateReport), EvaluateError> {
-    evaluate_keeping_tiles(track, edited, images, options, progress)
+    evaluate_keeping_tiles(track, edited, images, pool, options, progress)
         .map(|(read, report, _)| (read, report))
 }
 
@@ -559,6 +576,7 @@ fn read_keeping_tiles(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &EvaluateOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, EvaluateReport, Option<KeptTiles>), EvaluateError> {
@@ -566,7 +584,7 @@ fn read_keeping_tiles(
     evaluate_preconditions(track)?;
     match &track.stage {
         Stage::Cluster(payload) => {
-            let (read, report) = evaluate_cluster(track, payload, images, options, progress)?;
+            let (read, report) = evaluate_cluster(track, payload, images, pool, options, progress)?;
             Ok((read, report, None))
         }
         Stage::Track(payload) => {
@@ -602,10 +620,12 @@ fn evaluate_keeping_tiles(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &EvaluateOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, EvaluateReport, Option<KeptTiles>), EvaluateError> {
-    let (read, mut report, kept) = read_keeping_tiles(track, edited, images, options, progress)?;
+    let (read, mut report, kept) =
+        read_keeping_tiles(track, edited, images, pool, options, progress)?;
     let painted = repaint(track, read, &mut report);
     report.scored = judged_count(&painted);
     Ok((painted, report, kept))
@@ -678,11 +698,13 @@ pub fn evaluate_rendering_bitmap(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &EvaluateOptions,
     fit: &super::fit::FitOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, EvaluateReport), EvaluateError> {
-    let (read, mut report, kept) = read_keeping_tiles(track, edited, images, options, progress)?;
+    let (read, mut report, kept) =
+        read_keeping_tiles(track, edited, images, pool, options, progress)?;
     let placed = read.track().is_some_and(|p| p.patch_frame.is_some());
     let Some(kept) = kept.filter(|_| placed) else {
         let painted = repaint(track, read, &mut report);
@@ -1109,6 +1131,7 @@ pub(super) fn evaluate_cluster(
     track: &EditableTrack,
     payload: &ClusterPayload,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &EvaluateOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, EvaluateReport), EvaluateError> {
@@ -1232,6 +1255,9 @@ pub(super) fn evaluate_cluster(
 
     // The tile self-similarity, at each member's **seed** geometry, where the
     // kernel cuts the tile it registers.
+    // One view's kept regions per image the members are in: the reference
+    // member's template below reads the grid its self-similarity read.
+    let mut regions: Vec<Option<ViewRegions<'_>>> = images.iter().map(|_| None).collect();
     {
         let mut phase = progress.phase("self-similarity");
         for &i in &members {
@@ -1245,11 +1271,13 @@ pub(super) fn evaluate_cluster(
                 .as_mut()
                 .expect("the same member");
             let similarity = tile_self_similarity(
-                images[observation.image as usize].source.held_pyramid(),
+                regions[observation.image as usize].get_or_insert_with(|| {
+                    ViewRegions::new(images[observation.image as usize].source, pool)
+                }),
                 measurement.seed_position,
                 measurement.seed_shape,
                 &params,
-            );
+            )?;
             next_measurement.zncc_self_similarity_radius = similarity.radius;
             next_measurement.zncc_self_similarity_radius_middle = similarity.middle;
             next_measurement.zncc_self_similarity_radius_grid = similarity.grid;
@@ -1265,21 +1293,30 @@ pub(super) fn evaluate_cluster(
     // Where the kernel cut the template, and the tile it cut.
     let reference = (result.reference_members[0] != REFERENCE_UNREFINABLE)
         .then(|| members[result.reference_members[0] as usize]);
-    let template = reference.and_then(|i| {
-        let observation = &track.observations[i];
-        let measurement = observation.cluster.as_ref()?;
-        let grid = sample_member_grid(
-            images[observation.image as usize].source.held_pyramid(),
-            measurement.seed_position,
-            measurement.seed_shape,
-            &params,
-        )?;
+    let template = match reference {
+        Some(i) => {
+            let observation = &track.observations[i];
+            match observation.cluster.as_ref() {
+                Some(measurement) => sample_source_member_grid(
+                    regions[observation.image as usize].get_or_insert_with(|| {
+                        ViewRegions::new(images[observation.image as usize].source, pool)
+                    }),
+                    measurement.seed_position,
+                    measurement.seed_shape,
+                    &params,
+                )?,
+                None => None,
+            }
+        }
+        None => None,
+    };
+    let template = template.map(|grid| {
         let resolution = params.resolution.max(2) as usize;
         let channels = grid.len() / (resolution * resolution);
-        Some(ClusterTemplate {
+        ClusterTemplate {
             samples: Array3::from_shape_vec((resolution, resolution, channels), grid)
                 .expect("the sampler fills every grid cell of every channel"),
-        })
+        }
     });
     next.stage = Stage::Cluster(ClusterPayload {
         reference: reference.unwrap_or(payload.reference),
@@ -1389,18 +1426,18 @@ fn score_self_similarity(
 }
 
 /// One observation's own tile self-similarity, at its seed geometry: the
-/// member's `R×R` grid ([`sample_member_grid`]), which cluster refinement's
-/// member gate reads, so the whole radius here is the number that gate
-/// judges. All `None` when the geometry is degenerate or the tile leaves the
-/// pyramid.
+/// member's `R×R` grid read through `view`
+/// ([`sample_source_member_grid`]), which cluster refinement's member gate
+/// reads, so the whole radius here is the number that gate judges. All `None`
+/// when the geometry is degenerate or the tile leaves the photograph.
 fn tile_self_similarity(
-    pyramid: &ImageU8Pyramid,
+    view: &mut ViewRegions<'_>,
     position: [f64; 2],
     shape: [[f64; 2]; 2],
     params: &ClusterRefineParams,
-) -> TileSelfSimilarity {
-    let Some(tile) = sample_member_grid(pyramid, position, shape, params) else {
-        return TileSelfSimilarity::default();
+) -> Result<TileSelfSimilarity, PhotographReadError> {
+    let Some(tile) = sample_source_member_grid(view, position, shape, params)? else {
+        return Ok(TileSelfSimilarity::default());
     };
     let resolution = params.resolution.max(2) as usize;
     let channels = tile.len() / (resolution * resolution);
@@ -1412,7 +1449,9 @@ fn tile_self_similarity(
         jacobian: Some(shape.map(|row| row.map(|v| v * step))),
         patch_frame: None,
     };
-    score_self_similarity(&tile, channels, resolution, None, &geometry)
+    Ok(score_self_similarity(
+        &tile, channels, resolution, None, &geometry,
+    ))
 }
 
 // ---- The track stage -------------------------------------------------------

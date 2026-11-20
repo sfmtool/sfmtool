@@ -38,8 +38,9 @@ use crate::background::{Finished, Job, Operation};
 use crate::document::{CreatedPoints, PointMap};
 use crate::index_files::IndexFileState;
 use crate::scene::{ImageRef, PointRef};
-use crate::state::edits::DECODE_AND_STEP;
+use crate::state::edits::{note_region_reads, DECODE_AND_STEP};
 use crate::state::AppState;
+use sfmtool_core::camera::sampler::RegionPool;
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -702,9 +703,11 @@ fn run(
             _ => None,
         },
     };
+    let pool = RegionPool::for_kernel_call();
     let found = find_nearby_tracks(
         edited,
         views,
+        &pool,
         &grey,
         &sources,
         plan.image,
@@ -712,6 +715,7 @@ fn run(
         &plan.options,
         progress,
     );
+    note_region_reads(progress, &pool);
     match found {
         Ok(found) => Finished::NearbyTracks(Box::new(NearbyTracksRun {
             pixel: plan.pixel,

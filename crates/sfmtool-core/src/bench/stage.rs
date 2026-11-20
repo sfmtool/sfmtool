@@ -15,6 +15,7 @@
 
 use nalgebra::{Point3, Vector3};
 
+use crate::camera::sampler::RegionPool;
 use crate::patch::cloud::{mean_viewing_normal, OrientedPatch};
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::Progress;
@@ -171,6 +172,7 @@ impl std::fmt::Display for StageReport {
 ///     track,
 ///     edited,
 ///     images,
+///     &sfmtool_core::camera::sampler::RegionPool::for_kernel_call(),
 ///     StageKind::Track,
 ///     &FitOptions::default(),
 ///     &Progress::none(),
@@ -184,6 +186,7 @@ pub fn set_stage(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     stage: StageKind,
     options: &FitOptions,
     progress: &Progress<'_>,
@@ -204,7 +207,7 @@ pub fn set_stage(
     }
     match stage {
         StageKind::Track => {
-            let (next, report) = upgrade(track, edited, images, options, progress)?;
+            let (next, report) = upgrade(track, edited, images, pool, options, progress)?;
             Ok((
                 next,
                 StageReport {
@@ -293,6 +296,7 @@ fn upgrade(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &FitOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, FitReport), StageError> {
@@ -400,6 +404,7 @@ fn upgrade(
         &seeded,
         edited,
         images,
+        pool,
         &patch_frame,
         options,
         None,

@@ -42,6 +42,7 @@ use sfmtool_core::bench::{
     ImageDeletion, ItemId, NormalError, Observation, ObservationSeed, PairwiseFlowNormalOptions,
     PieceLayout, Provenance, SearchOptions, Stage, StageKind, Thresholds, Verdict,
 };
+use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::features::kdforest::ImageKeypoints;
 use sfmtool_core::readable::Readable;
 use sfmtool_core::EditedReconstruction;
@@ -49,7 +50,7 @@ use sfmtool_core::EditedReconstruction;
 use crate::action_log::{version_step_text, Kind};
 use crate::background::{Finished, Job, Operation};
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
-use crate::state::edits::{version_before, DECODE_AND_STEP};
+use crate::state::edits::{note_region_reads, version_before, DECODE_AND_STEP};
 use crate::state::AppState;
 
 pub(crate) mod geometry;
@@ -2829,20 +2830,24 @@ pub(crate) fn evaluate_job(
             return live::Measured::Cancelled;
         }
         let views = decoded.views();
+        let pool = RegionPool::for_kernel_call();
         // A step that drops the patch bitmap -- one that moves the patch, or
         // removes, re-sights or turns out the row it is the render of --
         // leaves the track without one. The photographs are decoded here
         // anyway, so the evaluation renders it again where the patch stands,
         // moving nothing, and scores every row against it, rather than leave
         // the track without one until a fit.
-        match bench::evaluate_rendering_bitmap(
+        let evaluated = bench::evaluate_rendering_bitmap(
             &track,
             &edited,
             &views,
+            &pool,
             &options,
             &FitOptions::default(),
             &p_work,
-        ) {
+        );
+        note_region_reads(&p_work, &pool);
+        match evaluated {
             Ok((measured, report)) => {
                 live::Measured::Track(Box::new(measured), (report.turned_in, report.turned_out))
             }
@@ -2884,7 +2889,10 @@ impl AppState {
                 return Finished::Cancelled;
             }
             let views = decoded.views();
-            match bench::fit(&track, &edited, &views, &options, &p_work) {
+            let pool = RegionPool::for_kernel_call();
+            let fitted = bench::fit(&track, &edited, &views, &pool, &options, &p_work);
+            note_region_reads(&p_work, &pool);
+            match fitted {
                 Err(sfmtool_core::bench::FitError::Cancelled) => Finished::Cancelled,
                 Err(e) => Finished::Failed(format!("Cannot fit {label}: {e}")),
                 Ok((fitted, report)) => Finished::BenchTrack {
@@ -2932,17 +2940,21 @@ impl AppState {
                 return Finished::Cancelled;
             }
             let views = decoded.views();
-            match bench::set_stage(
+            let pool = RegionPool::for_kernel_call();
+            let staged = bench::set_stage(
                 &track,
                 &edited,
                 &views,
+                &pool,
                 stage,
                 &FitOptions {
                     sigma_px,
                     ..FitOptions::default()
                 },
                 &p_work,
-            ) {
+            );
+            note_region_reads(&p_work, &pool);
+            match staged {
                 Err(sfmtool_core::bench::StageError::Fit(
                     sfmtool_core::bench::FitError::Cancelled,
                 )) => Finished::Cancelled,
@@ -2990,11 +3002,13 @@ impl AppState {
                 return Finished::Cancelled;
             }
             let views = decoded.views();
+            let pool = RegionPool::for_kernel_call();
             let outcome = match &step {
                 NormalStep::FiniteDifference(split) => bench::finite_difference_normal(
                     &track,
                     &edited,
                     &views,
+                    &pool,
                     &split.options(PieceLayout::Cross),
                     &p_work,
                 ),
@@ -3002,6 +3016,7 @@ impl AppState {
                     &track,
                     &edited,
                     &views,
+                    &pool,
                     &split.options(PieceLayout::Grid),
                     &p_work,
                 ),
@@ -3009,6 +3024,7 @@ impl AppState {
                     &track,
                     &edited,
                     &views,
+                    &pool,
                     &GrownPlaneNormalOptions::default(),
                     &p_work,
                 ),
@@ -3016,10 +3032,12 @@ impl AppState {
                     &track,
                     &edited,
                     &views,
+                    &pool,
                     &PairwiseFlowNormalOptions::default(),
                     &p_work,
                 ),
             };
+            note_region_reads(&p_work, &pool);
             match outcome {
                 Err(NormalError::Cancelled) => Finished::Cancelled,
                 Err(e) => failed(&e),

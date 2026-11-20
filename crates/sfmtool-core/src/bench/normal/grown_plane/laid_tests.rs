@@ -11,10 +11,11 @@
 use nalgebra::{Matrix2, Rotation3, Unit, Vector3};
 
 use super::combine::{sigmas_deg, sigmas_deg_at};
-use super::render::{Frame, Grid, ViewImage, ViewRender};
+use super::render::{Frame, Grid, StepReads, ViewImage, ViewRender};
 use super::solve::carried_information;
 use super::Laid;
 use crate::bench::tests::scene::{texture, Scene, PLANE_Z, WORLD};
+use crate::camera::sampler::RegionPool;
 use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::normal_refine::ProjectedImage;
@@ -106,6 +107,8 @@ fn a_grid_laid_at_the_starting_normal_is_the_starting_grid() {
 /// and the starting axes turned by the least rotation.
 #[test]
 fn a_laid_grid_covers_the_turned_square() {
+    let pool = RegionPool::for_kernel_call();
+    let reads = StepReads::new(&pool);
     let scene = scene();
     let views = scene.views();
     let side = 24;
@@ -155,6 +158,7 @@ fn a_laid_grid_covers_the_turned_square() {
     );
     let view = ViewImage::new(
         &views[1],
+        &reads,
         &grid.anchored_patch_frame,
         side,
         Vector3::zeros(),
@@ -172,12 +176,15 @@ fn a_laid_grid_covers_the_turned_square() {
 /// of the turned square's samples.
 #[test]
 fn the_template_is_rendered_on_the_turned_square() {
+    let pool = RegionPool::for_kernel_call();
+    let reads = StepReads::new(&pool);
     let scene = scene();
     let views = scene.views();
     let side = 24;
     let grid = starting_grid(&views, side);
     let reference = ViewImage::new(
         &views[0],
+        &reads,
         &grid.anchored_patch_frame,
         side,
         Vector3::zeros(),
@@ -218,6 +225,7 @@ fn the_template_is_rendered_on_the_turned_square() {
     // samples, moved by its offset (zero here).
     let view = ViewImage::new(
         &views[1],
+        &reads,
         &grid.anchored_patch_frame,
         side,
         Vector3::zeros(),
@@ -244,6 +252,8 @@ fn the_template_is_rendered_on_the_turned_square() {
 /// central difference of its projection.
 #[test]
 fn a_laid_grids_pixel_derivatives_follow_its_projection() {
+    let pool = RegionPool::for_kernel_call();
+    let reads = StepReads::new(&pool);
     let scene = scene();
     let views = scene.views();
     let side = 16;
@@ -251,6 +261,7 @@ fn a_laid_grids_pixel_derivatives_follow_its_projection() {
     let laid = grid.laid_at(turned(&grid, Vector3::new(1.0, -0.5, 0.0), 35.0));
     let view = ViewImage::new(
         &views[1],
+        &reads,
         &grid.anchored_patch_frame,
         side,
         Vector3::zeros(),

@@ -12,10 +12,12 @@
 //! pair order, so the round does not depend on the thread count.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use nalgebra::{Point3, Vector3};
 use rayon::prelude::*;
 
+use crate::camera::sampler::ViewRegions;
 use crate::numeric::splitmix64;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::Progress;
@@ -51,6 +53,9 @@ pub(super) struct Point<'a, 'v> {
     pub(super) attempted: Vec<(usize, u32)>,
     /// Each attempted observation's view.
     pub(super) views: Vec<ProjectedImage<'v>>,
+    /// Each attempted observation's kept regions, which every round's crop of
+    /// that view reads through.
+    pub(super) regions: Vec<Mutex<ViewRegions<'a>>>,
     /// The unit mean of the directions from the point to the attempted
     /// views' camera centres.
     pub(super) mean_view: Vector3<f64>,
@@ -85,7 +90,7 @@ impl Point<'_, '_> {
                 options,
             );
             let crops: Vec<Option<Crop>> = match &grid {
-                Some(grid) => render_crops(grid, &self.views, &sights),
+                Some(grid) => render_crops(grid, &self.views, &self.regions, &sights)?,
                 None => self.views.iter().map(|_| None).collect(),
             };
             (grid, sights, crops)

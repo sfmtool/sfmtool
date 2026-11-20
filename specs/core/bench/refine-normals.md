@@ -61,6 +61,7 @@ impl RefineNormalsStep {
 pub fn refine_normals(
     recon: &SfmrReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &RefineNormalsOptions,
     progress: &Progress<'_>,
 ) -> Result<(SfmrReconstruction, RefineNormalsReport), RefineNormalsError>;

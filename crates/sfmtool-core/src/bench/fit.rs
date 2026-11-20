@@ -25,6 +25,8 @@ use std::collections::HashMap;
 use nalgebra::Point3;
 use ndarray::Array3;
 
+use crate::camera::sampler::RegionPool;
+use crate::camera::PhotographReadError;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::{
     try_localize_patch_keypoints, KeypointLocalizeParams, LocalizeError,
@@ -215,6 +217,8 @@ pub enum FitError {
     /// reconstruction's could not be measured. The sentence says why.
     NoNoiseLevel(String),
     /// The caller asked the fit to stop.
+    /// A photograph could not be read.
+    Photograph(PhotographReadError),
     Cancelled,
 }
 
@@ -266,6 +270,7 @@ impl std::fmt::Display for FitError {
                 f,
                 "the track cannot be classified as a point or a bearing: {why}"
             ),
+            FitError::Photograph(e) => write!(f, "a photograph could not be read: {e}"),
             FitError::Cancelled => write!(f, "the fit was cancelled"),
         }
     }
@@ -283,6 +288,7 @@ impl From<EvaluateError> for FitError {
             EvaluateError::NoPatchFrame => FitError::NoPatchFrame,
             EvaluateError::TooLarge { bytes, budget } => FitError::TooLarge { bytes, budget },
             EvaluateError::OutOfMemory { bytes } => FitError::OutOfMemory { bytes },
+            EvaluateError::Photograph(e) => FitError::Photograph(e),
             EvaluateError::Cancelled => FitError::Cancelled,
         }
     }
@@ -423,6 +429,7 @@ impl std::fmt::Display for FitReport {
 ///     track,
 ///     edited,
 ///     images,
+///     &sfmtool_core::camera::sampler::RegionPool::for_kernel_call(),
 ///     &FitOptions::default(),
 ///     &Progress::none(),
 /// )?;
@@ -435,6 +442,7 @@ pub fn fit(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &FitOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, FitReport), FitError> {
@@ -443,7 +451,7 @@ pub fn fit(
     match &track.stage {
         Stage::Cluster(payload) => {
             let (next, report) =
-                evaluate_cluster(track, payload, images, &options.evaluate, progress)?;
+                evaluate_cluster(track, payload, images, pool, &options.evaluate, progress)?;
             Ok((
                 next,
                 FitReport {
@@ -468,6 +476,7 @@ pub fn fit(
                 track,
                 edited,
                 images,
+                pool,
                 &patch_frame,
                 &options,
                 None,
@@ -930,6 +939,7 @@ pub(super) fn fit_track(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     patch_frame: &OrientedPatch,
     options: &FitOptions,
     range: Option<PointDistance>,
@@ -1103,7 +1113,7 @@ pub(super) fn fit_track(
     });
 
     // ── What the fitted track says about itself ──
-    let (read, report) = evaluate(&next, edited, images, &options.evaluate, progress)?;
+    let (read, report) = evaluate(&next, edited, images, pool, &options.evaluate, progress)?;
     Ok((
         read,
         FitReport {

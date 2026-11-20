@@ -19,6 +19,7 @@ use sfmtool_core::bench::{
     FarFieldWhen, LayerRankBy, NearbyFinding, NearbySource, NearbyTrackOptions, NearbyTrackSources,
     NearbyTracks, SiftIndexSource, SourceReport, StopRule,
 };
+use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::progress::Progress;
 
 use super::far_field::{reading_dict, set_option as set_far_field_option};
@@ -238,6 +239,7 @@ pub(super) fn find_nearby_tracks(
             core_find_nearby_tracks(
                 &edited.inner,
                 &views,
+                &RegionPool::for_kernel_call(),
                 &grey,
                 &core_sources,
                 image,

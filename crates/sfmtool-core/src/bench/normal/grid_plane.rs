@@ -27,7 +27,7 @@ use std::cell::RefCell;
 
 use nalgebra::Vector3;
 
-use crate::camera::sampler::{render_phase, render_tile};
+use crate::camera::sampler::{render_phase, render_source_tile, RegionPool, ViewRegions};
 use crate::camera::warp_map::{patch_grid_jacobian, singular_values_2x2};
 use crate::camera::WarpMap;
 use crate::patch::cell_plane_fit::{
@@ -447,6 +447,7 @@ impl std::fmt::Display for GridPlaneCells {
 ///     track,
 ///     edited,
 ///     images,
+///     &sfmtool_core::camera::sampler::RegionPool::for_kernel_call(),
 ///     &GridPlaneNormalOptions::default(),
 ///     &Progress::none(),
 /// )?;
@@ -459,6 +460,7 @@ pub fn grid_plane_normal(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &GridPlaneNormalOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, NormalReport), NormalError> {
@@ -469,7 +471,7 @@ pub fn grid_plane_normal(
     let base = stored_patch_resolution(&edited.base)
         .unwrap_or(options.fit.refine.resolution)
         .max(MIN_WORKING_RESOLUTION);
-    let cells = Cells::new(track, images, base, options, progress);
+    let cells = Cells::new(track, images, pool, base, options, progress);
     // One entry per render: `measure` opens it, `propose` fills in the turn,
     // and the loop's decisions mark the turns it took.
     let trace: RefCell<Vec<GridPlaneIteration>> = RefCell::new(Vec::new());
@@ -571,6 +573,7 @@ pub fn grid_plane_normal(
         track,
         edited,
         images,
+        pool,
         normal,
         NormalEstimate::GridPlaneCells(Box::new(report)),
         &options.fit,
@@ -581,6 +584,9 @@ pub fn grid_plane_normal(
 /// What every render of one [`grid_plane_normal`] shares.
 struct Cells<'a, 'v> {
     images: &'a [ProjectedImage<'v>],
+    /// One view's kept regions per image, which every render of that view
+    /// through the loop's turning patch frames reads through.
+    regions: Vec<RefCell<ViewRegions<'a>>>,
     options: &'a GridPlaneNormalOptions,
     progress: &'a Progress<'a>,
     layout: CellLayout,
@@ -695,6 +701,7 @@ impl<'a, 'v> Cells<'a, 'v> {
     fn new(
         track: &EditableTrack,
         images: &'a [ProjectedImage<'v>],
+        pool: &'a RegionPool,
         base: u32,
         options: &'a GridPlaneNormalOptions,
         progress: &'a Progress<'a>,
@@ -774,6 +781,10 @@ impl<'a, 'v> Cells<'a, 'v> {
         );
         Self {
             images,
+            regions: images
+                .iter()
+                .map(|view| RefCell::new(ViewRegions::new(view.source, pool)))
+                .collect(),
             options,
             progress,
             layout,
@@ -828,7 +839,12 @@ impl<'a, 'v> Cells<'a, 'v> {
         self.progress.check_cancel()?;
         let ref_observation = &track.observations[reference];
         let ref_view = &self.images[ref_observation.image as usize];
-        let Some(ref_render) = self.render(&patch_frame, ref_view, seed_of(ref_observation), 0)
+        let Some(ref_render) = self.render(
+            &patch_frame,
+            ref_observation.image,
+            seed_of(ref_observation),
+            0,
+        )?
         else {
             return Ok(nothing(view_cells, record));
         };
@@ -874,8 +890,12 @@ impl<'a, 'v> Cells<'a, 'v> {
             self.progress.check_cancel()?;
             let observation = &track.observations[row];
             let view = &self.images[observation.image as usize];
-            let Some(render) =
-                self.render(&patch_frame, view, seed_of(observation), self.layout.margin)
+            let Some(render) = self.render(
+                &patch_frame,
+                observation.image,
+                seed_of(observation),
+                self.layout.margin,
+            )?
             else {
                 continue;
             };
@@ -1001,10 +1021,11 @@ impl<'a, 'v> Cells<'a, 'v> {
     fn render(
         &self,
         patch_frame: &OrientedPatch,
-        view: &ProjectedImage<'_>,
+        image: u32,
         keypoint: Option<[f64; 2]>,
         margin: usize,
-    ) -> Option<Render> {
+    ) -> Result<Option<Render>, NormalError> {
+        let view = &self.images[image as usize];
         let r = self.layout.resolution;
         let anchored_patch_frame =
             patch_frame.seen_at_keypoint(view.camera, view.cam_from_world, keypoint);
@@ -1021,7 +1042,11 @@ impl<'a, 'v> Cells<'a, 'v> {
         let mut map = WarpMap::from_patch(&context, view.camera, view.cam_from_world, side as u32);
         let tile = {
             let _phase = render_phase(self.progress, sampler, 1);
-            render_tile(view.source.held_pyramid(), &mut map, sampler)
+            render_source_tile(
+                &mut self.regions[image as usize].borrow_mut(),
+                &mut map,
+                sampler,
+            )?
         };
         // A fourth channel is the photograph's alpha, which carries no
         // texture.
@@ -1040,12 +1065,12 @@ impl<'a, 'v> Cells<'a, 'v> {
                 }
             }
         }
-        any.then_some(Render {
+        Ok(any.then_some(Render {
             patch_frame: anchored_patch_frame,
             samples,
             side,
             channels,
-        })
+        }))
     }
 }
 

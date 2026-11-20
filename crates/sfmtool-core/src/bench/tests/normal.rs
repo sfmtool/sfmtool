@@ -77,9 +77,15 @@ fn finite_difference_normal_turns_a_tilted_patch_back_toward_the_plane() {
             overlap,
             ..Default::default()
         };
-        let (turned, report) =
-            finite_difference_normal(&track, &edited, &scene.views(), &options, &Progress::none())
-                .expect("the pieces fit");
+        let (turned, report) = finite_difference_normal(
+            &track,
+            &edited,
+            &scene.views(),
+            &RegionPool::for_kernel_call(),
+            &options,
+            &Progress::none(),
+        )
+        .expect("the pieces fit");
         let after = degrees(patch_frame_of(&turned).normal(), truth());
         assert!(
             after < before / 2.0,
@@ -113,9 +119,15 @@ fn a_grid_of_pieces_turns_a_tilted_patch_back_toward_the_plane() {
             overlap,
             ..Default::default()
         };
-        let (turned, report) =
-            finite_difference_normal(&track, &edited, &scene.views(), &options, &Progress::none())
-                .expect("the pieces fit");
+        let (turned, report) = finite_difference_normal(
+            &track,
+            &edited,
+            &scene.views(),
+            &RegionPool::for_kernel_call(),
+            &options,
+            &Progress::none(),
+        )
+        .expect("the pieces fit");
         let after = degrees(patch_frame_of(&turned).normal(), truth());
         assert!(
             after < before / 2.0,
@@ -174,8 +186,15 @@ fn the_normal_steps_refuse_what_the_track_alone_rules_out() {
             ..Default::default()
         };
         assert_eq!(
-            finite_difference_normal(&track, &edited, &scene.views(), &options, &Progress::none())
-                .err(),
+            finite_difference_normal(
+                &track,
+                &edited,
+                &scene.views(),
+                &RegionPool::for_kernel_call(),
+                &options,
+                &Progress::none()
+            )
+            .err(),
             Some(refusal)
         );
     }
@@ -195,8 +214,9 @@ fn the_finite_difference_normal_refuses_an_observation_with_no_view() {
             &stray,
             &edited,
             &scene.views(),
+            &RegionPool::for_kernel_call(),
             &FiniteDifferenceOptions::default(),
-            &Progress::none()
+            &Progress::none(),
         )
         .err(),
         Some(NormalError::Evaluate(EvaluateError::NoView { image: 99 }))

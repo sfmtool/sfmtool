@@ -45,6 +45,7 @@ impl Default for RefitPointsOptions { /* FitOptions::default(), BENCH_MAX_SHIFT_
 pub fn refit_points(
     recon: &SfmrReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &RefitPointsOptions,
     progress: &Progress<'_>,
 ) -> Result<(SfmrReconstruction, RefitPointsReport), RefitPointsError>;

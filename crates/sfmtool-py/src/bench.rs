@@ -41,6 +41,7 @@ use sfmtool_core::bench::{
     ResizeReport, SearchOptions, SearchReport, StageKind, TiltReport, TrackClassification, Verdict,
     Viewpoint, DEFAULT_RADIUS_PX,
 };
+use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::features::kdforest::{ConstellationParams, ImageKeypoints};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
 use sfmtool_core::patch::self_similarity::{
@@ -1870,6 +1871,7 @@ fn evaluate(
             &track.inner,
             &edited.inner,
             &views,
+            &RegionPool::for_kernel_call(),
             &options,
             &FitOptions::default(),
             &Progress::none(),
@@ -1879,6 +1881,7 @@ fn evaluate(
             &track.inner,
             &edited.inner,
             &views,
+            &RegionPool::for_kernel_call(),
             &options,
             &Progress::none(),
         )
@@ -1959,6 +1962,7 @@ fn fit(
         &track.inner,
         &edited.inner,
         &views,
+        &RegionPool::for_kernel_call(),
         &fit_options(
             max_seed_offset_px,
             max_cache_bytes,
@@ -2031,6 +2035,7 @@ fn set_stage(
         &track.inner,
         &edited.inner,
         &views,
+        &RegionPool::for_kernel_call(),
         stage,
         &fit_options(None, None, sigma_px, depth_likelihood_ratio_threshold),
         &Progress::none(),

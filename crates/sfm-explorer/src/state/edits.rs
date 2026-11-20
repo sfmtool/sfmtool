@@ -685,6 +685,18 @@ type Fetched = Vec<Option<Option<Arc<ImageU8Pyramid>>>>;
 /// answers takes milliseconds, and one that reads every file takes seconds.
 pub(crate) const DECODE_AND_STEP: [f32; 2] = [1.0, 1.0];
 
+/// Write the `read regions` phase's note after a step's kernel call: how
+/// many region pyramids the call's reads assembled from the photographs'
+/// tiles, how many reused the regions a view kept, and how many read through
+/// the tiles instead ([`RegionPoolStats`](sfmtool_core::camera::sampler::RegionPoolStats)).
+pub(crate) fn note_region_reads(
+    progress: &sfmtool_core::progress::Progress<'_>,
+    pool: &sfmtool_core::camera::sampler::RegionPool,
+) {
+    let mut phase = progress.phase("read regions");
+    progress_note!(phase, "{}", pool.stats());
+}
+
 /// Bytes in a GiB, for the cache occupancy in the `decode images` note.
 const GIB: f64 = (1u64 << 30) as f64;
 

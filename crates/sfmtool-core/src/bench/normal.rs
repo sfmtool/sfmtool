@@ -19,6 +19,8 @@
 
 use nalgebra::{Point3, SymmetricEigen, Vector3};
 
+use crate::camera::sampler::RegionPool;
+use crate::camera::PhotographReadError;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Progress};
@@ -185,6 +187,8 @@ pub enum NormalError {
     /// step ends with failed.
     Evaluate(EvaluateError),
     /// The caller asked the step to stop.
+    /// A photograph could not be read.
+    Photograph(PhotographReadError),
     Cancelled,
 }
 
@@ -242,6 +246,7 @@ impl std::fmt::Display for NormalError {
             NormalError::Flow(e) => write!(f, "the optical flow refused its settings: {e}"),
             NormalError::Tilt(e) => write!(f, "{e}"),
             NormalError::Evaluate(e) => write!(f, "{e}"),
+            NormalError::Photograph(e) => write!(f, "a photograph could not be read: {e}"),
             NormalError::Cancelled => write!(f, "the step was cancelled"),
         }
     }
@@ -259,7 +264,18 @@ impl From<EvaluateError> for NormalError {
     fn from(e: EvaluateError) -> Self {
         match e {
             EvaluateError::Cancelled => NormalError::Cancelled,
+            EvaluateError::Photograph(e) => NormalError::Photograph(e),
             e => NormalError::Evaluate(e),
+        }
+    }
+}
+
+/// A cancelled read is the step's own [`NormalError::Cancelled`].
+impl From<PhotographReadError> for NormalError {
+    fn from(e: PhotographReadError) -> Self {
+        match e {
+            PhotographReadError::Cancelled => NormalError::Cancelled,
+            e => NormalError::Photograph(e),
         }
     }
 }
@@ -436,8 +452,14 @@ pub fn normal_preconditions(track: &EditableTrack) -> Result<(), NormalError> {
 /// #     images: &[sfmtool_core::patch::normal_refine::ProjectedImage<'_>],
 /// # ) -> Result<(), Box<dyn std::error::Error>> {
 /// let options = FiniteDifferenceOptions { pieces: 3, overlap: 0.25, ..Default::default() };
-/// let (turned, report) =
-///     finite_difference_normal(track, edited, images, &options, &Progress::none())?;
+/// let (turned, report) = finite_difference_normal(
+///     track,
+///     edited,
+///     images,
+///     &sfmtool_core::camera::sampler::RegionPool::for_kernel_call(),
+///     &options,
+///     &Progress::none(),
+/// )?;
 /// println!("{report}");   // "3 pieces fitted along u, 3 along v, turned 8.0°, …"
 /// # let _ = turned;
 /// # Ok(())
@@ -447,6 +469,7 @@ pub fn finite_difference_normal(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &FiniteDifferenceOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, NormalReport), NormalError> {
@@ -462,6 +485,7 @@ pub fn finite_difference_normal(
         track,
         edited,
         images,
+        pool,
         options,
         progress,
         was,
@@ -482,6 +506,7 @@ pub fn finite_difference_normal(
         track,
         edited,
         images,
+        pool,
         normal,
         estimate,
         &options.fit,
@@ -494,6 +519,7 @@ struct Pieces<'a, 'v> {
     track: &'a EditableTrack,
     edited: &'a EditedReconstruction,
     images: &'a [ProjectedImage<'v>],
+    pool: &'a RegionPool,
     options: &'a FiniteDifferenceOptions,
     progress: &'a Progress<'a>,
     /// The normal the patch had.
@@ -513,6 +539,7 @@ impl Pieces<'_, '_> {
             self.track,
             self.edited,
             self.images,
+            self.pool,
             self.half,
             by,
             self.options,
@@ -652,10 +679,12 @@ fn piece_layout(half: f64, pieces: usize, overlap: f64) -> (f64, Vec<f64>) {
 /// Fit one piece: the track resized to `half` about its centre, slid by `by` on
 /// its own axes, and fitted. Its centre, or `None` where the fit refused it or
 /// put it at infinity.
+#[allow(clippy::too_many_arguments)]
 fn fit_piece(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     half: f64,
     by: Vector3<f64>,
     options: &FiniteDifferenceOptions,
@@ -667,8 +696,9 @@ fn fit_piece(
     let Ok((piece, _)) = translate_patch(&piece, edited, by) else {
         return Ok(None);
     };
-    match fit(&piece, edited, images, &options.fit, progress) {
+    match fit(&piece, edited, images, pool, &options.fit, progress) {
         Err(FitError::Cancelled) => Err(NormalError::Cancelled),
+        Err(FitError::Photograph(e)) => Err(NormalError::Photograph(e)),
         Err(_) => Ok(None),
         Ok((_, report)) => Ok(report
             .classification
@@ -735,10 +765,12 @@ fn perpendicular_part(normal: Vector3<f64>, line: Vector3<f64>) -> Option<Vector
 /// Turn the track to `normal` with [`tilt_patch`], read the result back and
 /// render its bitmap, as a fit ends, with every row scored against that
 /// bitmap ([`evaluate_rendering_bitmap`]).
+#[allow(clippy::too_many_arguments)]
 fn turn_and_read(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     normal: Vector3<f64>,
     estimate: NormalEstimate,
     options: &FitOptions,
@@ -750,6 +782,7 @@ fn turn_and_read(
         &turned,
         edited,
         images,
+        pool,
         &options.evaluate,
         options,
         progress,

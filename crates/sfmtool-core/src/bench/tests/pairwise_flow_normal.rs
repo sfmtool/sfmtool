@@ -161,8 +161,15 @@ fn run(
     track: &EditableTrack,
     options: &PairwiseFlowNormalOptions,
 ) -> (EditableTrack, NormalReport) {
-    pairwise_flow_normal(track, edited, &scene.views(), options, &Progress::none())
-        .expect("the step runs on a finite track")
+    pairwise_flow_normal(
+        track,
+        edited,
+        &scene.views(),
+        &RegionPool::for_kernel_call(),
+        options,
+        &Progress::none(),
+    )
+    .expect("the step runs on a finite track")
 }
 
 fn rounds_of(report: &NormalReport) -> &PairwiseFlowRounds {
@@ -673,8 +680,9 @@ fn the_step_refuses_a_bearing_and_bad_options_and_stops_when_cancelled() {
             &bearing,
             &edited,
             &scene.views(),
+            &RegionPool::for_kernel_call(),
             &options,
-            &Progress::none()
+            &Progress::none(),
         )
         .err(),
         Some(NormalError::AtInfinity)
@@ -684,14 +692,30 @@ fn the_step_refuses_a_bearing_and_bad_options_and_stops_when_cancelled() {
         ..Default::default()
     };
     assert_eq!(
-        pairwise_flow_normal(&track, &edited, &scene.views(), &bad, &Progress::none()).err(),
+        pairwise_flow_normal(
+            &track,
+            &edited,
+            &scene.views(),
+            &RegionPool::for_kernel_call(),
+            &bad,
+            &Progress::none()
+        )
+        .err(),
         Some(NormalError::BadPairwiseFlowOption("rounds"))
     );
     // An observation naming an image with no view is refused, not indexed.
     let mut stray = track.clone();
     stray.observations[1].image = 99;
     assert_eq!(
-        pairwise_flow_normal(&stray, &edited, &scene.views(), &options, &Progress::none()).err(),
+        pairwise_flow_normal(
+            &stray,
+            &edited,
+            &scene.views(),
+            &RegionPool::for_kernel_call(),
+            &options,
+            &Progress::none()
+        )
+        .err(),
         Some(NormalError::Evaluate(EvaluateError::NoView { image: 99 }))
     );
 
@@ -710,8 +734,16 @@ fn the_step_refuses_a_bearing_and_bad_options_and_stops_when_cancelled() {
         .num_threads(1)
         .build()
         .unwrap();
-    let result = one_thread
-        .install(|| pairwise_flow_normal(&track, &edited, &scene.views(), &options, &progress));
+    let result = one_thread.install(|| {
+        pairwise_flow_normal(
+            &track,
+            &edited,
+            &scene.views(),
+            &RegionPool::for_kernel_call(),
+            &options,
+            &progress,
+        )
+    });
     assert_eq!(result.err(), Some(NormalError::Cancelled));
     assert_eq!(pairs_done.load(Ordering::SeqCst), 1);
 }

@@ -19,6 +19,7 @@ use sfmtool_core::bench::{
     RefineNormalsError, RefineNormalsOptions, RefineNormalsOutcome, RefineNormalsReport,
     RefineNormalsStep,
 };
+use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::progress::{Event, Progress};
 
 use super::normal::GrownPlaneKeywords;
@@ -384,7 +385,8 @@ fn refine_normals(
             let (sink, cancel, views, options) = (&sink, watch.cancel_flag(), &views, &options);
             let run = scope.spawn(move || {
                 let progress = Progress::to(sink).cancelled_by(cancel);
-                let result = core_refine_normals(recon, views, options, &progress);
+                let pool = RegionPool::for_kernel_call();
+                let result = core_refine_normals(recon, views, &pool, options, &progress);
                 // The calling thread receives until this arrives, so the send succeeds.
                 let _ = sender.send(result);
             });
@@ -510,6 +512,7 @@ fn normal_error_name(e: &NormalError) -> &'static str {
         NormalError::Flow(_) => "flow",
         NormalError::Tilt(_) => "tilt",
         NormalError::Evaluate(_) => "evaluate",
+        NormalError::Photograph(_) => "photograph",
         NormalError::Cancelled => "cancelled",
     }
 }

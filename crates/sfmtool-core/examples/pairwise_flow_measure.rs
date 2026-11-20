@@ -27,6 +27,7 @@ use sfmtool_core::bench::{
     create_track, pairwise_flow_normal, tilt_patch, Bench, CreateTrackOptions, NormalEstimate,
     PairwiseFlowNormalOptions, PairwiseFlowOutcome,
 };
+use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::camera::{CameraIntrinsics, PhotographCache, TiledPhotograph};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::numeric::median;
@@ -146,7 +147,16 @@ fn main() {
             .normalize();
         let (start, _) = tilt_patch(&track, &edited, mean_view).expect("a finite track");
         let t0 = Instant::now();
-        let run = || pairwise_flow_normal(&start, &edited, &views, &options, &Progress::none());
+        let run = || {
+            pairwise_flow_normal(
+                &start,
+                &edited,
+                &views,
+                &RegionPool::for_kernel_call(),
+                &options,
+                &Progress::none(),
+            )
+        };
         let result = match &pool {
             Some(pool) => pool.install(run),
             None => run(),

@@ -14,6 +14,7 @@ use pyo3::types::{PyDict, PyList};
 use sfmtool_core::bench::{
     far_field_sweep as core_far_field_sweep, FarFieldOptions, FarFieldReading, Refit, WideAmong,
 };
+use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::progress::Progress;
 
 use super::views_of;
@@ -121,6 +122,7 @@ pub(super) fn far_field_sweep(
             core_far_field_sweep(
                 &edited.inner,
                 &views,
+                &RegionPool::for_kernel_call(),
                 &grey,
                 image,
                 pixel,

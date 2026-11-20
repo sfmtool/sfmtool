@@ -11,6 +11,7 @@ use sfmtool_core::bench::{
     refit_points as core_refit_points, FitError, RefitOutcome, RefitPointsOptions,
     RefitPointsReport, RefitRange, BENCH_MAX_SHIFT_PX,
 };
+use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::progress::Progress;
 
 use super::{classification_dict, fit_options, refused, views_of};
@@ -105,7 +106,15 @@ fn refit_points(
         max_shift_px,
     };
     let (next, report) = py
-        .detach(|| core_refit_points(recon.inner(), &views, &options, &Progress::none()))
+        .detach(|| {
+            core_refit_points(
+                recon.inner(),
+                &views,
+                &RegionPool::for_kernel_call(),
+                &options,
+                &Progress::none(),
+            )
+        })
         .map_err(refused)?;
     let d = report_dict(py, &report)?;
     Ok((PySfmrReconstruction::new(next), d.unbind()))
@@ -183,6 +192,7 @@ fn fit_error_name(e: &FitError) -> &'static str {
         FitError::OutOfMemory { .. } => "out_of_memory",
         FitError::TooFewRays { .. } => "too_few_rays",
         FitError::NoNoiseLevel(_) => "no_noise_level",
+        FitError::Photograph(_) => "photograph",
         FitError::Cancelled => "cancelled",
     }
 }

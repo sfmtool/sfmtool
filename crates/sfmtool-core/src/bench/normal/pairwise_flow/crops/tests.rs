@@ -3,11 +3,12 @@
 
 //! The crops' grid, sights, renders, pyramids and pair levels.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use nalgebra::{Point3, Vector3};
 
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
+use crate::camera::sampler::{RegionPool, ViewRegions};
 use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::features::optical_flow::GrayImage;
 use crate::geometry::RigidTransform;
@@ -216,7 +217,13 @@ fn crops_on_the_photographed_plane_line_up() {
         &options,
     );
     let grid = grid.unwrap();
-    let crops: Vec<Crop> = render_crops(&grid, &views, &sights)
+    let pool = RegionPool::for_kernel_call();
+    let regions: Vec<Mutex<ViewRegions<'_>>> = views
+        .iter()
+        .map(|v| Mutex::new(ViewRegions::new(v.source, &pool)))
+        .collect();
+    let crops: Vec<Crop> = render_crops(&grid, &views, &regions, &sights)
+        .unwrap()
         .into_iter()
         .map(Option::unwrap)
         .collect();

@@ -12,6 +12,7 @@ use nalgebra::{Point3, Vector3};
 use crate::bench::tests::scene::{edited, Scene};
 use crate::bench::track_at_pixel::ViewCamera;
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
+use crate::camera::sampler::RegionPool;
 use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::geometry::RigidTransform;
 use crate::patch::normal_refine::ProjectedImage;
@@ -36,8 +37,17 @@ fn sweep(scene: &Scene, depth: f64, options: &FarFieldOptions) -> FarFieldSweep 
     let edited = edited(scene, Point3::new(0.0, 0.0, depth));
     let views = scene.views();
     let grey = GreyImages::new(views.len());
-    far_field_sweep(&edited, &views, &grey, 0, PIXEL, options, &Progress::none())
-        .expect("the query is valid")
+    far_field_sweep(
+        &edited,
+        &views,
+        &RegionPool::for_kernel_call(),
+        &grey,
+        0,
+        PIXEL,
+        options,
+        &Progress::none(),
+    )
+    .expect("the query is valid")
 }
 
 /// The pixels per unit of inverse distance of the image that moves the query
@@ -410,6 +420,7 @@ fn the_sweep_refuses_a_query_that_names_no_place() {
         far_field_sweep(
             &edited,
             &views,
+            &RegionPool::for_kernel_call(),
             grey,
             image,
             pixel,

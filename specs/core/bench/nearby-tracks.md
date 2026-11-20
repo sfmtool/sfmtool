@@ -44,6 +44,7 @@ re-exported from `sfmtool_core::bench`, and bound as
 pub fn find_nearby_tracks(
     edited: &EditedReconstruction,
     views: &[ProjectedImage<'_>],      // one decoded, posed view per image
+    pool: &RegionPool,
     grey: &GreyImages,                 // the blurred grey images, kept across queries
     sources: &NearbyTrackSources<'_>,  // the optional inputs of the sources
     image: u32,

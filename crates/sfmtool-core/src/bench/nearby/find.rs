@@ -12,12 +12,15 @@ use std::time::Instant;
 
 use rayon::prelude::*;
 
+use crate::bench::read_failure::ReadFailure;
 use crate::bench::steps::ClusterSeed;
 use crate::bench::track::{EditableTrack, Thresholds, Verdict};
 use crate::bench::track_at_pixel::{
     seed_cluster_with, upgrade_sightings, MatchesClusters, SiftIndexSource, ViewCamera,
 };
 use crate::bench::{check_label, BenchError};
+use crate::camera::sampler::RegionPool;
+use crate::camera::PhotographReadError;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::Progress;
 use crate::reconstruction::edited::EditedReconstruction;
@@ -476,6 +479,8 @@ pub enum NearbyTracksError {
     /// The depth layers refused a candidate the finders gave
     /// ([`DepthLayerError::BadDistance`] or [`DepthLayerError::NanRange`]).
     Layers(DepthLayerError),
+    /// A photograph could not be read.
+    Photograph(PhotographReadError),
     /// The progress handle was cancelled.
     Cancelled,
 }
@@ -518,12 +523,23 @@ impl std::fmt::Display for NearbyTracksError {
             ),
             Self::Label(e) => e.fmt(f),
             Self::Layers(e) => e.fmt(f),
+            Self::Photograph(e) => write!(f, "a photograph could not be read: {e}"),
             Self::Cancelled => write!(f, "finding the nearby tracks was cancelled"),
         }
     }
 }
 
 impl std::error::Error for NearbyTracksError {}
+
+/// A cancelled read is the search's own [`NearbyTracksError::Cancelled`].
+impl From<PhotographReadError> for NearbyTracksError {
+    fn from(e: PhotographReadError) -> Self {
+        match e {
+            PhotographReadError::Cancelled => Self::Cancelled,
+            e => Self::Photograph(e),
+        }
+    }
+}
 
 impl From<NearbySourceError> for NearbyTracksError {
     fn from(e: NearbySourceError) -> Self {
@@ -586,6 +602,7 @@ impl From<FarFieldError> for NearbyTracksError {
                 got,
                 image_count,
             },
+            FarFieldError::Photograph(e) => Self::Photograph(e),
             FarFieldError::Cancelled => Self::Cancelled,
         }
     }
@@ -679,6 +696,7 @@ fn image_stem(edited: &EditedReconstruction, image: u32) -> String {
 pub fn find_nearby_tracks(
     edited: &EditedReconstruction,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     grey: &GreyImages,
     sources: &NearbyTrackSources<'_>,
     image: u32,
@@ -810,6 +828,7 @@ pub fn find_nearby_tracks(
         let sweep = far_field_sweep(
             edited,
             views,
+            pool,
             grey,
             image,
             pixel,
@@ -884,6 +903,7 @@ pub fn find_nearby_tracks(
 
     let start = Instant::now();
     if options.tracks.build {
+        let failure = ReadFailure::default();
         let _phase = progress.phase("bench tracks");
         let stem = image_stem(edited, image);
         let todo: Vec<usize> = (0..tracks.len())
@@ -901,6 +921,8 @@ pub fn find_nearby_tracks(
                 bench_track(
                     edited,
                     views,
+                    pool,
+                    &failure,
                     &stem,
                     tracks[k].sightings(),
                     options.tracks.radius_px,
@@ -908,6 +930,9 @@ pub fn find_nearby_tracks(
             })
             .collect();
         progress.check_cancel().map_err(cancelled)?;
+        // A build whose reads failed counts as a refused track, so the
+        // failure is the search's answer.
+        failure.check()?;
         for (k, track) in todo.into_iter().zip(built) {
             tracks[k].track = Some(track);
         }
@@ -1099,6 +1124,8 @@ fn group_count(
 fn bench_track(
     edited: &EditedReconstruction,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
+    failure: &ReadFailure,
     stem: &str,
     sightings: &[(u32, [f64; 2])],
     radius_px: f64,
@@ -1106,5 +1133,5 @@ fn bench_track(
     let (image, pixel) = sightings[0];
     let seed = ClusterSeed::from_pixel(image, stem, pixel, radius_px);
     let track = seed_cluster_with(&seed, &Thresholds::default())?;
-    upgrade_sightings(edited, views, track, &sightings[1..])
+    upgrade_sightings(edited, views, pool, failure, track, &sightings[1..])
 }

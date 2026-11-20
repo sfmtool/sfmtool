@@ -54,6 +54,7 @@ pub mod fit;
 pub mod geometry_search;
 pub mod nearby;
 pub mod normal;
+mod read_failure;
 pub mod refine_normals;
 pub mod refit_points;
 pub mod search;
