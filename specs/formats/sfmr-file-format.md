@@ -2217,8 +2217,8 @@ either, or none of them. A writer refuses to write a combination that breaks one
 of these rules, and a reader and a verifier refuse a file whose
 `points3d/metadata.json` flags state one: `has_patch_bitmaps` without
 `has_uv_frames`, or `has_normal_confidence` without `has_normals`. The flags
-decide what a reader and a verifier look at: an optional entry whose flag is `false` or absent is not read, so these
-rules are checked on the flags alone.
+decide what a reader and a verifier look at: an optional entry whose flag is
+`false` or absent is not read, so these rules are checked on the flags alone.
 
 ##### `points3d/patch_u_halfvec_xyz.{N}.3.float32.zst` and `points3d/patch_v_halfvec_xyz.{N}.3.float32.zst`
 
@@ -2244,15 +2244,15 @@ rules are checked on the flags alone.
   zero. Present only when `has_patch_bitmaps` is `true`.
 - **What it holds**: a point's bitmap is the render of its reference
   observation, which `tracks/reference_observations` names: its colour as
-  rendered, alpha `255` on the samples on the photograph and `0` on the rest.
-  A point whose reference is `-1` has no reference observation in use, so its
-  bitmap is not the render of one of its observations. It is a fused
-  mean of its views, alpha their agreement and coverage, which a file
-  converted from one written before the stored bitmap stopped being a mean can
-  hold, and which a reader treats as any bitmap beside `-1`; or the render of
-  an observation that a later edit removed from the point, which keeps the bitmap (§ 9, "Keeping it true"); or a zero row.
-  A writer that renders a point the reference-view rule finds no eligible
-  view for writes a zero row and `-1`
+  rendered, alpha `255` on the samples on the photograph and `0` on the rest. A
+  point whose reference is `-1` has no reference observation in use, so its
+  bitmap is not the render of one of its observations. It is a fused mean of its
+  views, alpha their agreement and coverage, which a file converted from one
+  written before the stored bitmap stopped being a mean can hold, and which a
+  reader treats as any bitmap beside `-1`; or the render of an observation that
+  a later edit removed from the point, which keeps the bitmap (§ 9, "Keeping it
+  true"); or a zero row. A writer that renders a point the reference-view rule
+  finds no eligible view for writes a zero row and `-1`
   ([../core/patch/reference-view.md](../core/patch/reference-view.md) § "The
   stored bitmap").
 
@@ -2495,21 +2495,21 @@ Which observation each point's patch bitmap is, or is to be, rendered from:
   stored bitmap"). Where the file stores no bitmaps, a later render (`sfm
   xform --add-patch-bitmaps`, SfM Explorer's display bitmaps, `sfm
   web-export`) renders the point from this observation, so dropping the
-  bitmaps and adding them again gives the same bitmaps. `-1` where the point
-  has no reference observation in use: none in its track, or, after a writer
-  that aligns keypoints and renders bitmaps, a stored one that writer could no
-  longer render usefully and no pick to replace it (see "Keeping it true"). A
-  stored bitmap is then not the render of one of its observations -- a fused
-  mean, or the render of an observation that has since been removed from the
-  point -- and a later render runs the reference-view rule for the point and records its
+  bitmaps and adding them again gives the same bitmaps. `-1` where the point has
+  no reference observation in use: none in its track, or, after a writer that
+  aligns keypoints and renders bitmaps, a stored one that writer could no longer
+  render usefully and no pick to replace it (see "Keeping it true"). A stored
+  bitmap is then not the render of one of its observations -- a fused mean, or
+  the render of an observation that has since been removed from the point -- and
+  a later render runs the reference-view rule for the point and records its
   pick.
 - **Presence**: required in a file whose `points3d/metadata.json` has
   `has_uv_frames: true`, and absent otherwise, so it needs no flag of its own.
-  It is present with the patch frame, not with the bitmaps: a file without bitmaps keeps the column and its references. A
-  reader and a verifier refuse a value that is neither `-1` nor within its point's run; a
-  writer refuses the column missing beside a patch frame, present without one,
-  or out of range. All three accept a reference other than `-1` in a file
-  without bitmaps.
+  It is present with the patch frame, not with the bitmaps: a file without
+  bitmaps keeps the column and its references. A reader and a verifier refuse a
+  value that is neither `-1` nor within its point's run; a writer refuses the
+  column missing beside a patch frame, present without one, or out of range. All
+  three accept a reference other than `-1` in a file without bitmaps.
 - **Keeping it true**: where a stored bitmap and a reference `≥ 0` are both
   present, the bitmap is that observation's render as of the last render. A
   writer that removes a point removes its row, so a point filter leaves every
@@ -2991,12 +2991,12 @@ For the structure, a file fails verification when:
   `observation_count` rows of its shape, or
   `zncc_self_similarity_ellipse_axes_is_at_least` holds a value other than `0`
   or `1`;
-- either image-reading column or the `image_to_gray` key is missing, a
-  column is not `N` rows of its shape, a reading is not finite, a sharpness, `Exx` or `Eyy` is negative, or `image_to_gray` is not an
-  object with a non-empty string `formula`, an optional integer
-  `quantize_bits` from 1 to 16 and no other key. Whether `formula` follows the
-  [grammar](#image_to_gray) is checked by the reader that parses
-  it, not by the verifier;
+- either image-reading column or the `image_to_gray` key is missing, a column is
+  not `N` rows of its shape, a reading is not finite, a sharpness, `Exx` or
+  `Eyy` is negative, or `image_to_gray` is not an object with a non-empty string
+  `formula`, an optional integer `quantize_bits` from 1 to 16 and no other key.
+  Whether `formula` follows the [grammar](#image_to_gray) is checked by the
+  reader that parses it, not by the verifier;
 - with both `has_normals` and `has_uv_frames`, the
   full `normals_xyz` column is present, or `underived_normals_xyz` is missing,
   extra or holds another number of rows than the file has underived points,

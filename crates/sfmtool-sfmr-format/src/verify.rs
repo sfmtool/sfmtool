@@ -27,7 +27,10 @@ use sfmtool_archive_io::{format_hash, raw_to_u32, read_zst_entry};
 /// the readers' message, and nothing else is checked.
 ///
 /// Returns `Ok((true, []))` if all hashes match, `Ok((false, errors))` with
-/// details if verification fails. Returns `Err` only for I/O errors.
+/// details if verification fails. Returns `Err` for an I/O error and for an
+/// entry it must read that is missing or does not decode, such as a
+/// `content_hash.json` without `derived_xxh128`; a `metadata.json` the
+/// readers refuse is reported in the list.
 pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     let file = std::fs::File::open(path).map_err(|e| SfmrError::IoPath {
         operation: "Failed to open file",

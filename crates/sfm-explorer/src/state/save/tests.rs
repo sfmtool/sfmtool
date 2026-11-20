@@ -175,9 +175,10 @@ fn a_save_with_no_overlay_writes_the_value_and_mints_nothing() {
 }
 
 /// A node whose value holds no image readings, as one a solve or an import
-/// builds, and a save gathers them, here from each image's `.sift` file. The save folds
-/// them into a version of its own before it writes, so the version the session
-/// holds is the content of the file on disk and its hash is the file's.
+/// builds, and a save gathers them, here from each image's `.sift` file. The
+/// save folds them into a version of its own before it writes, so the version
+/// the session holds is the content of the file on disk and its hash is the
+/// file's.
 #[test]
 fn a_save_of_a_value_without_readings_records_the_hash_of_the_file_written() {
     use sfmtool_core::features::sift::ImageToGray;

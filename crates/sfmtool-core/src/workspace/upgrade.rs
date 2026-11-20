@@ -204,9 +204,9 @@ impl From<Cancelled> for UpgradeWorkspaceError {
 ///    up fails; one the current reader refuses is left as it is.
 /// 3. Rewrite each file below the current version at its own path: a `.sfmr`
 ///    by [`SfmrReconstruction::load`] and [`SfmrReconstruction::save`]; a
-///    `.matches` file by reading and writing it, taking a version 3 or older file's image
-///    sizes from its `.sift` files; a `.camrig` file by reading and writing
-///    it.
+///    `.matches` file by reading and writing it, taking a version 3 or older
+///    file's image sizes from its `.sift` files; a `.camrig` file by reading
+///    and writing it.
 ///
 /// A run that stops part way, by cancellation, can be run again to finish.
 ///

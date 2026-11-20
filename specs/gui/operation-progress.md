@@ -855,11 +855,12 @@ after using the viewer normally.
 
 **An open's stages are `SfmrReconstruction::load`'s own**, because they are
 where `sfm-explorer` cannot reach: it deliberately does not depend on
-`sfmtool-sfmr-format`, so the read and the derived-index build are named by
-the core function that does them. The viewer adds the two fill-in stages, `thumbnails` and `patch bitmaps`, for a file without those
-columns, and `append nodes`, which the GUI thread runs at depth 0 when the
-open's task lands ([background-tasks.md](background-tasks.md) § "Opening a
-file"). `read` is one row over `read_sfmr`, which decompresses and
+`sfmtool-sfmr-format`, so the read and the derived-index build are named by the
+core function that does them. The viewer adds the two fill-in stages,
+`thumbnails` and `patch bitmaps`, for a file without those columns, and `append
+nodes`, which the GUI thread runs at depth 0 when the open's task lands
+([background-tasks.md](background-tasks.md) § "Opening a file"). `read` is one
+row over `read_sfmr`, which decompresses and
 hash-checks inside itself. `keypoints` is the
 fill of a `sift_files` file's inline keypoint column from its `.sift` files
 (`SfmrReconstruction::fill_keypoints_from_sift`), and records no row for a file
