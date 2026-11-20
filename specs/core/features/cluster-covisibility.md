@@ -354,8 +354,7 @@ all-members otherwise. The backbone's `member_positions` pass through as the
 displacement arithmetic is `f64` at the point of computation), so the
 displacement queries and the isolation-ordered `thin` sweep answer on a
 matrix built this way. Every cluster file the reader opens carries positions:
-`read_matches` refuses a cluster file below format version 6, and from version
-6 on `member_positions` is mandatory. `num_images` is the image table's
+`member_positions` is mandatory in a cluster file. `num_images` is the image table's
 length. A file storing the pairwise backbone raises `ValueError`. Custom masks
 use `read_matches` + numpy + `from_arrays`.
 

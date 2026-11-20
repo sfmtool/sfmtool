@@ -34,9 +34,12 @@ struct PairMatches {
 
 /// Read matches and two-view geometries from a COLMAP database.
 ///
-/// Reads the `images` and `keypoints` tables to establish the image list
-/// and feature counts, then reads the `matches` table for candidate matches
-/// and optionally the `two_view_geometries` table.
+/// Reads the `images`, `cameras` and `keypoints` tables to establish the
+/// image list, each image's dimensions (its camera's `width` and `height`) and
+/// the feature counts, then reads the `matches` table for candidate matches
+/// and optionally the `two_view_geometries` table. An image whose camera the
+/// `cameras` table does not hold, or holds with a width or height outside
+/// `u32`, is an error.
 ///
 /// Descriptor distances are not stored in the COLMAP DB, so
 /// `match_descriptor_distances` is filled with `0.0` for every match.
@@ -51,20 +54,46 @@ pub fn read_colmap_db_matches(
 ) -> Result<MatchesData, ColmapDbError> {
     let conn = Connection::open(db_path)?;
 
-    // Read images, sorted by name (lexicographic, matching .matches spec recommendation)
-    let mut img_stmt = conn.prepare("SELECT image_id, name FROM images ORDER BY name")?;
-    let image_rows: Vec<(i64, String)> = img_stmt
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+    // Read images, sorted by name (lexicographic, matching .matches spec
+    // recommendation), with their cameras' dimensions.
+    let mut img_stmt = conn.prepare(
+        "SELECT images.image_id, images.name, cameras.width, cameras.height FROM images \
+         LEFT JOIN cameras ON images.camera_id = cameras.camera_id ORDER BY images.name",
+    )?;
+    type ImageRow = (i64, String, Option<i64>, Option<i64>);
+    let image_rows: Vec<ImageRow> = img_stmt
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?
         .collect::<Result<Vec<_>, _>>()?;
 
     let image_count = image_rows.len();
-    let image_names: Vec<String> = image_rows.iter().map(|(_, name)| name.clone()).collect();
+    let image_names: Vec<String> = image_rows
+        .iter()
+        .map(|(_, name, _, _)| name.clone())
+        .collect();
+    let mut image_dims = Array2::<u32>::zeros((image_count, 2));
+    for (i, (_, name, width, height)) in image_rows.iter().enumerate() {
+        let (Some(width), Some(height)) = (width, height) else {
+            return Err(ColmapDbError::InvalidData(format!(
+                "image {name:?} names a camera the cameras table does not hold"
+            )));
+        };
+        for (j, value) in [*width, *height].into_iter().enumerate() {
+            image_dims[[i, j]] = u32::try_from(value).map_err(|_| {
+                ColmapDbError::InvalidData(format!(
+                    "the camera of image {name:?} has a {} of {value}",
+                    ["width", "height"][j]
+                ))
+            })?;
+        }
+    }
 
     // Build db_id → 0-based index map
     let db_id_to_index: HashMap<i64, usize> = image_rows
         .iter()
         .enumerate()
-        .map(|(idx, (db_id, _))| (*db_id, idx))
+        .map(|(idx, (db_id, _, _, _))| (*db_id, idx))
         .collect();
 
     // Read keypoints to get feature counts
@@ -229,10 +258,7 @@ pub fn read_colmap_db_matches(
         feature_tool_hashes: vec![[0u8; 16]; image_count],
         sift_content_hashes: vec![[0u8; 16]; image_count],
         feature_counts,
-        // Placeholder like the hashes above: the caller fills the per-image
-        // dimensions in (from the `.sift` metadata) before write_matches,
-        // which requires them.
-        image_dims: None,
+        image_dims,
         image_pairs: Some(sfmtool_matches_format::PairsData {
             image_index_pairs,
             match_counts,

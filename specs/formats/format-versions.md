@@ -17,31 +17,32 @@ Each format crate has one constant for the version its writer writes:
 | Format | Constant | Current version | Oldest version read |
 |--------|----------|-----------------|---------------------|
 | `.sfmr` | [`SFMR_FORMAT_VERSION`](../../crates/sfmtool-sfmr-format/src/types.rs) | 16 | 16 |
-| `.matches` | [`MATCHES_FORMAT_VERSION`](../../crates/sfmtool-matches-format/src/types.rs) | 10 | 1 (6 for a cluster-backbone file) |
+| `.matches` | [`MATCHES_FORMAT_VERSION`](../../crates/sfmtool-matches-format/src/types.rs) | 10 | 10 |
 | `.sift` | [`SIFT_FORMAT_VERSION`](../../crates/sfmtool-sift-format/src/types.rs) | 2 | 2 |
 | `.camrig` | [`CAMRIG_FORMAT_VERSION`](../../crates/sfmtool-camrig-format/src/types.rs) | 2 | 1 |
 | `.kdf` | [`KDF_FORMAT_VERSION`](../../crates/sfmtool-kdf-format/src/types.rs) | 3 | 3 |
 
 A version at which something changed that a reader gates on, such as
-`REFINED_SHAPE_GATES_VERSION`, is a constant of its own in the format crate,
-so a later version change does not move the gate. A format whose readers have
-stopped reading a version some release wrote holds, beside its version
-constant, the oldest version read and
+`CAMRIG_CANONICAL_CONVENTION_VERSION`, is a constant of its own in the format
+crate, so a later version change does not move the gate. A format whose
+readers have stopped reading a version some release wrote holds, beside its
+version constant, the oldest version read and
 the last release that reads the older ones, which its refusal names
 ([Dropping a version](#dropping-a-version)): `SFMR_OLDEST_READ_VERSION` and
-`SFMR_LAST_RELEASE_READING_OLDER_VERSIONS` for `.sfmr`, and
-`SIFT_OLDEST_READ_VERSION` and `SIFT_LAST_RELEASE_READING_OLDER_VERSIONS` for
-`.sift`.
+`SFMR_LAST_RELEASE_READING_OLDER_VERSIONS` for `.sfmr`,
+`MATCHES_OLDEST_READ_VERSION` and `MATCHES_LAST_RELEASE_READING_OLDER_VERSIONS`
+for `.matches`, and `SIFT_OLDEST_READ_VERSION` and
+`SIFT_LAST_RELEASE_READING_OLDER_VERSIONS` for `.sift`.
 
-The `.sfmr` readers stop at version 16 and the `.sift` readers at version 2.
-The `.matches` and `.camrig` readers still read the versions older than those
-sfmtool 0.4 writes. sfmtool 0.4.1's release notes announced that the next
-release stops reading the older `.sfmr`, `.matches` and `.sift` versions;
-`.camrig` version 1 is one no release wrote. sfmtool 0.5 stops reading the
-`.matches` and `.camrig` ones too, as
+The `.sfmr` readers stop at version 16, the `.matches` readers at version 10
+and the `.sift` readers at version 2. The `.camrig` readers still read
+version 1, older than the version sfmtool 0.4 writes. sfmtool 0.4.1's release
+notes announced that the next release stops reading the older `.sfmr`,
+`.matches` and `.sift` versions; `.camrig` version 1 is one no release wrote.
+sfmtool 0.5 stops reading it too, as
 [../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md)
-specifies. Of the format specs, the `.sfmr` and `.sift` ones have their Format
-versions section near the top; that draft moves the `.matches`, `.camrig` and
+specifies. Of the format specs, the `.sfmr`, `.matches` and `.sift` ones have
+their Format versions section near the top; that draft moves the `.camrig` and
 `.kdf` ones there in 0.5.
 
 ## When a format's version changes
@@ -174,26 +175,29 @@ history records every version a file in the wild may hold.
 
 ## Worked example: `.matches` version 9 → version 10
 
-The `.matches` version 10 change
-([matches-file-format.md § Version 9 → Version 10](matches-file-format.md#version-9--version-10))
-added two member statuses, `rejected_unlocalizable_refined` and
-`rejected_unlocalizable_cells`, codes 7 and 8, to the names the
-`cluster_patches/metadata.json` `member_status_names` legend may give, and two
-recorded settings to `refine_options`. No entry changed its layout.
+The `.matches` version 10 change, which sfmtool 0.4 shipped, added two member
+statuses, `rejected_unlocalizable_refined` and `rejected_unlocalizable_cells`,
+codes 7 and 8, to the names the `cluster_patches/metadata.json`
+`member_status_names` legend may give, and two recorded settings to
+`refine_options`. No entry changed its layout.
 
 - **Why it changed the version.** A writer states the whole legend, so every
   new file with a `cluster_patches/` section names the new statuses, and a
   version 9 reader refuses a legend name it does not define. Without the
   change, such a file would claim a version that reader reads and then fail
   on a name; with it, the reader refuses the file as newer than it reads.
-- **The constant.** `MATCHES_FORMAT_VERSION` became 10, and
-  `REFINED_SHAPE_GATES_VERSION` (10) records where the new names start.
-- **The reader** reads a version 9 file unchanged, and refuses a version 9
-  file whose legend names either new status, since no version 9 writer wrote
-  them. A test relabels a written file as version 9 and checks that refusal.
+- **The constant.** `MATCHES_FORMAT_VERSION` became 10, and a constant of its
+  own, `REFINED_SHAPE_GATES_VERSION` (10), recorded where the new names start.
+- **The reader** read a version 9 file unchanged, and refused a version 9
+  file whose legend named either new status, since no version 9 writer wrote
+  them. A test relabelled a written file as version 9 and checked that
+  refusal.
 - **The spec** gained a "Version 9 → Version 10" subsection, with a table of
   what changed and a paragraph on how a version 9 file reads and why the
-  version changed, and the Version History line "Version 10: The member
-  statuses `rejected_unlocalizable_refined` and `rejected_unlocalizable_cells`
-  … and the `refine_options` keys `regate_at_refined_shape` and
-  `max_capped_cells`. Version 9 files read unchanged."
+  version changed, and a Version History line for version 10.
+- **Dropping version 9.** sfmtool 0.4.1's release notes announced that the
+  next release stops reading the older `.matches` versions, and sfmtool 0.5
+  did: its reader refuses a version 9 file with the message naming 0.4.1,
+  `REFINED_SHAPE_GATES_VERSION` and the subsection went, and the Version
+  History line stayed
+  ([matches-file-format.md § Version History](matches-file-format.md#version-history)).

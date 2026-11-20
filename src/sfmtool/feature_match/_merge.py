@@ -68,13 +68,6 @@ def _run_merge(paths, output_path):
     image_info = {}  # name -> {feature_count, tool_hash, content_hash, dims}
     for path, (data, _pairs_view) in zip(input_paths, all_data):
         names = list(data["image_names"])
-        # Mandatory since .matches format version 4; a pre-version-4 input
-        # (loaded without dims) cannot produce a valid merged file.
-        if "image_dims" not in data:
-            raise click.ClickException(
-                f"{path.name} predates per-image dimensions (.matches format "
-                "version 4); re-run matching to regenerate it before merging."
-            )
         for i, name in enumerate(names):
             tool_hash = bytes(data["feature_tool_hashes"][i])
             content_hash = bytes(data["sift_content_hashes"][i])

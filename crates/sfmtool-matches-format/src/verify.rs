@@ -50,12 +50,6 @@ fn structure_errors(metadata: &MatchesMetadata, entry_names: &[String]) -> Vec<S
     let has_prefix = |prefix: &str| entry_names.iter().any(|n| n.starts_with(prefix));
     let has_entry = |name: &str| entry_names.iter().any(|n| n == name);
 
-    if metadata.version < 3 && (metadata.has_clusters || metadata.has_cluster_patches) {
-        errors.push(format!(
-            "version {} file claims clusters/cluster_patches (introduced in version 3)",
-            metadata.version
-        ));
-    }
     if metadata.has_cluster_patches && !metadata.has_clusters {
         errors.push("has_cluster_patches requires has_clusters (cluster_patches requires the clusters section)".into());
     }
@@ -66,23 +60,11 @@ fn structure_errors(metadata: &MatchesMetadata, entry_names: &[String]) -> Vec<S
         );
     }
 
-    // Per-image dimensions are mandatory since version 4 and never stored
-    // before it.
-    let has_dims = has_prefix(entries::images_image_dims_prefix());
-    if metadata.version >= 4 && !has_dims {
-        errors.push(
-            "version 4+ file is missing images/image_dims (mandatory since version 4)".into(),
-        );
-    }
-    if metadata.version < 4 && has_dims {
-        errors.push(format!(
-            "version {} file contains images/image_dims (introduced in version 4)",
-            metadata.version
-        ));
+    if !has_prefix(entries::images_image_dims_prefix()) {
+        errors.push("file is missing images/image_dims".into());
     }
 
-    // The cluster backbone's member detections are mandatory from version 6
-    // and never stored before it.
+    // The cluster backbone's member geometry is mandatory in a cluster file.
     for (prefix, name) in [
         (
             entries::clusters_member_positions_prefix(),
@@ -93,17 +75,8 @@ fn structure_errors(metadata: &MatchesMetadata, entry_names: &[String]) -> Vec<S
             "member_affine_shapes",
         ),
     ] {
-        let present = has_prefix(prefix);
-        if metadata.has_clusters && metadata.version >= 6 && !present {
-            errors.push(format!(
-                "version 6+ cluster file is missing clusters/{name} (mandatory since version 6)"
-            ));
-        }
-        if metadata.version < 6 && present {
-            errors.push(format!(
-                "version {} file contains clusters/{name} (introduced in version 6)",
-                metadata.version
-            ));
+        if metadata.has_clusters && !has_prefix(prefix) {
+            errors.push(format!("cluster file is missing clusters/{name}"));
         }
     }
 
@@ -170,8 +143,15 @@ fn structure_errors(metadata: &MatchesMetadata, entry_names: &[String]) -> Vec<S
 /// Verify integrity of a `.matches` file using content hashes and
 /// structural constraints.
 ///
+/// A `metadata.version` the readers refuse (below
+/// [`MATCHES_OLDEST_READ_VERSION`], 0 or newer than [`MATCHES_FORMAT_VERSION`])
+/// is reported as the one error, with the readers' message, and nothing else
+/// is checked.
+///
 /// Returns `Ok((true, []))` if all checks pass, `Ok((false, errors))` with
-/// details if verification fails. Returns `Err` only for I/O errors.
+/// details if verification fails. Returns `Err` for an I/O error and for an
+/// entry it must read that is missing or does not decode; a `metadata.json`
+/// the readers refuse is reported in the list.
 pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> {
     let file = std::fs::File::open(path).map_err(|e| MatchesError::IoPath {
         operation: "Failed to open file",
@@ -181,24 +161,20 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
     let mut archive = zip::ZipArchive::new(file)?;
     let mut errors = Vec::new();
 
+    // Read metadata before anything else so a version the readers refuse stops
+    // without producing misleading diagnostics.
+    let metadata_raw = read_zst_entry(&mut archive, entries::metadata())?;
+    let metadata = match crate::read::parse_metadata(serde_json::from_slice(&metadata_raw)?, path) {
+        Ok(metadata) => metadata,
+        Err(e @ (MatchesError::VersionNoLongerRead { .. } | MatchesError::InvalidFormat(_))) => {
+            return Ok((false, vec![e.to_string()]));
+        }
+        Err(e) => return Err(e),
+    };
+
     // Read stored hashes
     let content_hash_bytes = read_zst_entry(&mut archive, entries::content_hash())?;
     let stored: MatchesContentHash = serde_json::from_slice(&content_hash_bytes)?;
-
-    // Read metadata for counts
-    let metadata_raw = read_zst_entry(&mut archive, entries::metadata())?;
-    let metadata: MatchesMetadata = serde_json::from_slice(&metadata_raw)?;
-
-    // A version newer than this build understands has unknown semantics;
-    // report it and stop rather than emit confusing per-file findings.
-    if metadata.version > MATCHES_FORMAT_VERSION {
-        errors.push(format!(
-            "unsupported .matches format version {} (this build supports up to \
-             {MATCHES_FORMAT_VERSION})",
-            metadata.version
-        ));
-        return Ok((false, errors));
-    }
 
     // Backbone / flag / entry consistency. A file that fails these is
     // structurally incoherent, so report and stop before section hashing
@@ -256,13 +232,8 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
         section_digests.push(clusters_hash);
 
         if metadata.has_cluster_patches {
-            let cp_hash = verify_cluster_patches_section(
-                &mut archive,
-                metadata.version,
-                &backbone,
-                &stored,
-                &mut errors,
-            )?;
+            let cp_hash =
+                verify_cluster_patches_section(&mut archive, &backbone, &stored, &mut errors)?;
             section_digests.push(cp_hash);
         }
     }
@@ -345,19 +316,17 @@ fn verify_images_section<R: std::io::Read + Seek>(
         &entries::images_feature_tool_hashes(image_count),
     )?);
 
-    // images/image_dims (version 4+ only; structure_errors gated presence)
-    if metadata.version >= 4 {
-        let dims_raw = read_zst_entry(archive, &entries::images_image_dims(image_count))?;
-        images_hasher.update(&dims_raw);
-        if dims_raw.len() != image_count * 8 {
-            errors.push(format!(
-                "image_dims byte length {} != expected {} ({image_count} uint32 pairs)",
-                dims_raw.len(),
-                image_count * 8
-            ));
-        } else {
-            image_dims_errors(&raw_to_u32(&dims_raw), errors);
-        }
+    // images/image_dims
+    let dims_raw = read_zst_entry(archive, &entries::images_image_dims(image_count))?;
+    images_hasher.update(&dims_raw);
+    if dims_raw.len() != image_count * 8 {
+        errors.push(format!(
+            "image_dims byte length {} != expected {} ({image_count} uint32 pairs)",
+            dims_raw.len(),
+            image_count * 8
+        ));
+    } else {
+        image_dims_errors(&raw_to_u32(&dims_raw), errors);
     }
 
     // images/metadata.json
@@ -551,10 +520,8 @@ struct ClusterBackbone {
     cluster_starts: Vec<u8>,
     member_images: Vec<u8>,
     member_features: Vec<u8>,
-    /// `None` before format version 6, which introduced the entry.
-    member_positions: Option<Vec<u8>>,
-    /// `None` before format version 6, which introduced the entry.
-    member_affine_shapes: Option<Vec<u8>>,
+    member_positions: Vec<u8>,
+    member_affine_shapes: Vec<u8>,
     consistent: bool,
 }
 
@@ -564,8 +531,8 @@ struct RawClusterSlices<'a> {
     cluster_starts: Cow<'a, [u32]>,
     member_images: Cow<'a, [u32]>,
     member_features: Cow<'a, [u32]>,
-    member_positions: Option<Cow<'a, [f32]>>,
-    member_affine_shapes: Option<Cow<'a, [f32]>>,
+    member_positions: Cow<'a, [f32]>,
+    member_affine_shapes: Cow<'a, [f32]>,
 }
 
 impl<'a> RawClusterSlices<'a> {
@@ -574,8 +541,8 @@ impl<'a> RawClusterSlices<'a> {
             cluster_starts: raw_to_u32(&backbone.cluster_starts),
             member_images: raw_to_u32(&backbone.member_images),
             member_features: raw_to_u32(&backbone.member_features),
-            member_positions: backbone.member_positions.as_deref().map(raw_to_f32),
-            member_affine_shapes: backbone.member_affine_shapes.as_deref().map(raw_to_f32),
+            member_positions: raw_to_f32(&backbone.member_positions),
+            member_affine_shapes: raw_to_f32(&backbone.member_affine_shapes),
         }
     }
 
@@ -584,8 +551,8 @@ impl<'a> RawClusterSlices<'a> {
             cluster_starts: &self.cluster_starts,
             member_images: &self.member_images,
             member_features: &self.member_features,
-            member_positions: self.member_positions.as_deref(),
-            member_affine_shapes: self.member_affine_shapes.as_deref(),
+            member_positions: Some(&self.member_positions),
+            member_affine_shapes: Some(&self.member_affine_shapes),
         }
     }
 }
@@ -613,18 +580,12 @@ fn verify_clusters_section<R: std::io::Read + Seek>(
     )?;
     clusters_hasher.update(&starts_raw);
 
-    // clusters/member_affine_shapes (version 6+ only; structure_errors
-    // gated presence)
-    let member_shapes_raw = if metadata.version >= 6 {
-        let raw = read_zst_entry(
-            archive,
-            &entries::clusters_member_affine_shapes(member_count),
-        )?;
-        clusters_hasher.update(&raw);
-        Some(raw)
-    } else {
-        None
-    };
+    // clusters/member_affine_shapes
+    let member_shapes_raw = read_zst_entry(
+        archive,
+        &entries::clusters_member_affine_shapes(member_count),
+    )?;
+    clusters_hasher.update(&member_shapes_raw);
 
     // clusters/member_features
     let member_features_raw =
@@ -636,14 +597,10 @@ fn verify_clusters_section<R: std::io::Read + Seek>(
         read_zst_entry(archive, &entries::clusters_member_images(member_count))?;
     clusters_hasher.update(&member_images_raw);
 
-    // clusters/member_positions (version 6+ only)
-    let member_positions_raw = if metadata.version >= 6 {
-        let raw = read_zst_entry(archive, &entries::clusters_member_positions(member_count))?;
-        clusters_hasher.update(&raw);
-        Some(raw)
-    } else {
-        None
-    };
+    // clusters/member_positions
+    let member_positions_raw =
+        read_zst_entry(archive, &entries::clusters_member_positions(member_count))?;
+    clusters_hasher.update(&member_positions_raw);
 
     // clusters/metadata.json
     let clusters_meta_raw = read_zst_entry(archive, entries::clusters_metadata())?;
@@ -740,14 +697,12 @@ fn check_clusters_structure(
             member_count * 16,
         ),
     ] {
-        if let Some(raw) = raw {
-            if raw.len() != expected {
-                errors.push(format!(
-                    "{name} byte length {} != expected {expected}",
-                    raw.len()
-                ));
-                clusters_ok = false;
-            }
+        if raw.len() != expected {
+            errors.push(format!(
+                "{name} byte length {} != expected {expected}",
+                raw.len()
+            ));
+            clusters_ok = false;
         }
     }
 
@@ -775,13 +730,11 @@ struct ClusterPatchRaw {
 /// Hash `cluster_patches/` and check the refinement record it stores against
 /// the cluster backbone it enriches.
 ///
-/// The `member_status` codes are resolved through the file's legend (the
-/// canonical one for a `version` 6 file, which carries none) before the
-/// per-cluster checks read them, so those checks see the canonical numbering
+/// The `member_status` codes are resolved through the file's legend before
+/// the per-cluster checks read them, so those checks see the canonical numbering
 /// whatever order the file stated its legend in.
 fn verify_cluster_patches_section<R: std::io::Read + Seek>(
     archive: &mut ZipArchive<R>,
-    version: u32,
     backbone: &ClusterBackbone,
     stored: &MatchesContentHash,
     errors: &mut Vec<String>,
@@ -795,12 +748,12 @@ fn verify_cluster_patches_section<R: std::io::Read + Seek>(
     let cp_meta_raw = read_zst_entry(archive, entries::cluster_patches_metadata())?;
     let cp_meta: serde_json::Value = serde_json::from_slice(&cp_meta_raw)?;
 
-    // cluster_patches/member_cell_* (optional, version 8). Every entry under
+    // cluster_patches/member_cell_* (optional). Every entry under
     // that name is hashed, in name order, whatever its shape, as the writer's
     // lexicographic order would have taken it; they sort before
     // member_consistency_residual. A wrong or unpaired entry is reported
     // below, not left out of the digest.
-    let cell_legend = match read_member_cell_status_legend(&cp_meta, version) {
+    let cell_legend = match read_member_cell_status_legend(&cp_meta) {
         Ok(legend) => legend,
         Err(e) => {
             errors.push(e);
@@ -895,7 +848,7 @@ fn verify_cluster_patches_section<R: std::io::Read + Seek>(
 
     // The legend the member_status codes index. Without a readable one the
     // codes say nothing, so the checks that read them are skipped.
-    let status_legend = match read_member_status_legend(&cp_meta, version) {
+    let status_legend = match read_member_status_legend(&cp_meta) {
         Ok(legend) => Some(legend),
         Err(e) => {
             errors.push(e);

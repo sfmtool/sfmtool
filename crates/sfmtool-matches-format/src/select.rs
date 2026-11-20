@@ -286,7 +286,7 @@ impl MatchesData {
             .collect();
         // The members' detections ride along on the same survival mask, so a
         // selection stays a self-describing cluster file. Absent together
-        // for a version ≤ 5 source, which never stored them.
+        // for a source built in memory without them.
         let out_member_positions: Option<Array2<f32>> =
             clusters.member_positions.as_ref().map(|src| {
                 let mut out = Array2::zeros((n_out_members, 2));
@@ -365,18 +365,15 @@ impl MatchesData {
                 .map(|(_, &v)| v),
         );
         let n_out_images = out_image_names.len();
-        let out_image_dims: Option<Array2<u32>> = self.image_dims.as_ref().map(|dims| {
-            let mut out = Array2::zeros((n_out_images, 2));
-            let mut row = 0;
-            for i in 0..n_img {
-                if keep_image(i) {
-                    out[[row, 0]] = dims[[i, 0]];
-                    out[[row, 1]] = dims[[i, 1]];
-                    row += 1;
-                }
+        let mut out_image_dims: Array2<u32> = Array2::zeros((n_out_images, 2));
+        let mut row = 0;
+        for i in 0..n_img {
+            if keep_image(i) {
+                out_image_dims[[row, 0]] = self.image_dims[[i, 0]];
+                out_image_dims[[row, 1]] = self.image_dims[[i, 1]];
+                row += 1;
             }
-            out
-        });
+        }
 
         // Metadata: inherited, with updated counts/flags and the derivation
         // provenance recorded under matching_options["cluster_selection"].

@@ -101,5 +101,8 @@ impl_format_error!(
     content: InvalidMetadata,
     content: VersionNoLongerRead
 );
-impl_format_error!(sfmtool_matches_format::MatchesError);
+impl_format_error!(
+    sfmtool_matches_format::MatchesError,
+    content: VersionNoLongerRead
+);
 impl_format_error!(sfmtool_camrig_format::CamRigError);

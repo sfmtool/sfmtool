@@ -38,6 +38,25 @@ pub enum MatchesError {
 
     #[error("Shape mismatch: {0}")]
     ShapeMismatch(String),
+
+    /// A file of a version some release wrote and this build no longer reads,
+    /// below [`MATCHES_OLDEST_READ_VERSION`]. The message names the last
+    /// release that reads it, [`MATCHES_LAST_RELEASE_READING_OLDER_VERSIONS`],
+    /// so the user can upgrade the workspace with that release.
+    #[error(
+        "{} is a version {version} .matches file, and this sfmtool reads .matches files of \
+         version {MATCHES_OLDEST_READ_VERSION} or later. sfmtool \
+         {MATCHES_LAST_RELEASE_READING_OLDER_VERSIONS} is the last release that reads version \
+         {version}: install it, run `sfm ws upgrade` on the workspace, then use the file with \
+         this release.",
+        path.display()
+    )]
+    VersionNoLongerRead {
+        /// The file.
+        path: PathBuf,
+        /// Its `metadata.version`.
+        version: u32,
+    },
 }
 
 sfmtool_archive_io::impl_from_archive_io_error!(MatchesError);
@@ -52,39 +71,19 @@ pub use sfmtool_archive_io::WorkspaceContents;
 pub use sfmtool_archive_io::WorkspaceMetadata;
 
 /// Current `.matches` format version. [`crate::write_matches`] always writes
-/// this version; [`crate::read_matches`] accepts any version up to it, except
-/// a cluster-backbone file below version 6, which it refuses.
-///
-/// Version 10 adds two member statuses, `rejected_unlocalizable_refined`
-/// ([`ClusterMemberStatus::RejectedUnlocalizableRefined`]) and
-/// `rejected_unlocalizable_cells`
-/// ([`ClusterMemberStatus::RejectedUnlocalizableCells`]), to the names the
-/// `member_status_names` legend may state, so a version 10 writer, which
-/// states the whole legend, writes a file a version 9 reader refuses. A
-/// version 9 file reads unchanged; one whose legend names either is refused,
-/// since no version 9 writer wrote those names.
-///
-/// Version 9 adds the cell status `refused_outlier`
-/// ([`crate::ClusterCellStatus::RefusedOutlier`]) to the names the
-/// `member_cell_status_names` legend may state, so a version 9 writer, which
-/// states the whole legend, writes a file a version 8 reader refuses. A
-/// version 8 file reads unchanged; one whose legend names `refused_outlier`
-/// is refused, since no version 8 writer wrote that name.
-///
-/// Version 8 adds the piecewise refinement's per-cell columns to
-/// `cluster_patches/`: four optional entries, `member_cell_shift_px`,
-/// `member_cell_zncc`, `member_cell_status` and `member_cell_iterations`,
-/// present together with a `member_cell_status_names` legend in the section's
-/// metadata or absent together with it ([`ClusterPatchData::member_cells`]).
-/// Nothing else changes, so a version 7 file reads unchanged and has no cells.
-///
-/// Version 7 gives `cluster_patches/member_status` a legend:
-/// `cluster_patches/metadata.json` carries `member_status_names`, and a stored
-/// code is an index into that list, whose canonical form is
-/// [`ClusterMemberStatus::NAMES`]. What each earlier version changed, and how
-/// a reader treats a file of that version, is in
-/// `specs/formats/matches-file-format.md` § "Versioning and Migration".
+/// this version; [`crate::read_matches`] accepts every version from
+/// [`MATCHES_OLDEST_READ_VERSION`] to this one. See
+/// `specs/formats/matches-file-format.md` § "Format versions".
 pub const MATCHES_FORMAT_VERSION: u32 = 10;
+
+/// The oldest `.matches` format version a reader accepts. A file of an older
+/// version that a release wrote is refused with
+/// [`MatchesError::VersionNoLongerRead`].
+pub const MATCHES_OLDEST_READ_VERSION: u32 = 10;
+
+/// The last sfmtool release whose readers accept the `.matches` versions below
+/// [`MATCHES_OLDEST_READ_VERSION`], which a refusal of such a file names.
+pub const MATCHES_LAST_RELEASE_READING_OLDER_VERSIONS: &str = "0.4.1";
 
 /// Conjugate a relative camera pose (`cam2_from_cam1`) with the camera-frame
 /// flip `S = diag(1, −1, −1)`: `R' = S·R·S`, `t' = S·t`.
@@ -110,8 +109,7 @@ pub fn s_conjugate_relative_pose(quaternion_wxyz: &mut [f64; 4], translation_xyz
 /// Top-level metadata from `metadata.json.zst`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchesMetadata {
-    /// Format version. The current version is [`MATCHES_FORMAT_VERSION`];
-    /// version 1 files (COLMAP-convention relative poses) upgrade on load.
+    /// Format version. The current version is [`MATCHES_FORMAT_VERSION`].
     pub version: u32,
     /// Type of matching used (e.g., "exhaustive", "sequential", "vocab_tree",
     /// "spatial", "transitive", "custom").
@@ -150,12 +148,17 @@ pub struct MatchesMetadata {
     /// backbone only).
     pub has_two_view_geometries: bool,
     /// Whether the file stores the cluster backbone (`clusters/`) instead of
-    /// the pairwise backbone (`image_pairs/`). Absent in version ≤ 2 files
-    /// (always pairwise), hence the serde default.
+    /// the pairwise backbone (`image_pairs/`).
+    ///
+    /// Required in a file's `metadata.json`, which the reader checks before it
+    /// deserialises; a value built in memory may leave it out, and is then a
+    /// pairwise value.
     #[serde(default)]
     pub has_clusters: bool,
     /// Whether the optional `cluster_patches/` enrichment section is present
     /// (requires `has_clusters`).
+    ///
+    /// Required in a file's `metadata.json`, as [`Self::has_clusters`] is.
     #[serde(default)]
     pub has_cluster_patches: bool,
 }
@@ -269,40 +272,11 @@ pub struct TwoViewGeometryData {
     /// `(P, 3, 3)` homography matrices, row-major.
     pub h_matrices: Array3<f64>,
     /// `(P, 4)` relative rotation quaternions in WXYZ format
-    /// (`cam2_from_cam1`, canonical camera convention — see
-    /// [`MATCHES_FORMAT_VERSION`]).
+    /// (`cam2_from_cam1`, canonical camera convention).
     pub quaternions_wxyz: Array2<f64>,
     /// `(P, 3)` relative translation vectors (`cam2_from_cam1`, canonical
     /// camera convention).
     pub translations_xyz: Array2<f64>,
-}
-
-impl TwoViewGeometryData {
-    /// S-conjugate every stored relative pose in place (COLMAP ↔ canonical;
-    /// see [`s_conjugate_relative_pose`]). The pixel-space F/E/H matrices are
-    /// convention-independent and are not touched.
-    pub fn s_conjugate_poses(&mut self) {
-        for i in 0..self.quaternions_wxyz.nrows() {
-            let mut q = [
-                self.quaternions_wxyz[[i, 0]],
-                self.quaternions_wxyz[[i, 1]],
-                self.quaternions_wxyz[[i, 2]],
-                self.quaternions_wxyz[[i, 3]],
-            ];
-            let mut t = [
-                self.translations_xyz[[i, 0]],
-                self.translations_xyz[[i, 1]],
-                self.translations_xyz[[i, 2]],
-            ];
-            s_conjugate_relative_pose(&mut q, &mut t);
-            for (k, &v) in q.iter().enumerate() {
-                self.quaternions_wxyz[[i, k]] = v;
-            }
-            for (k, &v) in t.iter().enumerate() {
-                self.translations_xyz[[i, k]] = v;
-            }
-        }
-    }
 }
 
 /// The pairwise correspondence backbone (`image_pairs/` section).
@@ -340,9 +314,9 @@ pub struct ClustersData {
     /// never fitted. Never `NaN`: [`ClusterPatchData::member_status`] is what
     /// says which a row is, and which members stand.
     ///
-    /// Mandatory since format version 6 — [`crate::write_matches`] requires
-    /// it, and a cluster file below version 6 is refused on read — so `None`
-    /// only for a pairwise file or a [`MatchesData`] built in memory. Present
+    /// Required in a cluster file — [`crate::write_matches`] requires it and
+    /// the reader reads it — so `None` only for a pairwise file or a
+    /// [`MatchesData`] built in memory. Present
     /// exactly when [`Self::member_affine_shapes`] is: the two are one
     /// member's geometry and are written and read together.
     pub member_positions: Option<Array2<f32>>,
@@ -409,8 +383,7 @@ pub const CLUSTER_REFERENCE_UNREFINABLE: u32 = u32::MAX;
 /// Per-member status in the `cluster_patches/` section — the meaning behind a
 /// `cluster_patches/member_status` code.
 ///
-/// Since format version 7 the stored code is an index into the
-/// `member_status_names` legend in `cluster_patches/metadata.json`, not a
+/// The stored code is an index into the `member_status_names` legend in `cluster_patches/metadata.json`, not a
 /// number the format fixes. [`crate::read_matches`] resolves every code
 /// through the file's legend and hands back the **canonical** numbering this
 /// enum's discriminants define, and [`crate::write_matches`] states that same
@@ -442,12 +415,12 @@ pub enum ClusterMemberStatus {
     /// Rejected: the member passed the refinement's ZNCC and shift gates, but
     /// its own patch read again at the refined shape and position does not
     /// pin a position: its ZNCC self-similarity radius there is above the
-    /// member gate's bar. Defined from version 10.
+    /// member gate's bar.
     RejectedUnlocalizableRefined = 7,
     /// Rejected: the member passed the refinement's ZNCC and shift gates, but
     /// more cells of a three-by-three split of its own patch at the refined
     /// shape and position read the largest ZNCC self-similarity radius than
-    /// the bar allows. Defined from version 10.
+    /// the bar allows.
     RejectedUnlocalizableCells = 8,
 }
 
@@ -530,17 +503,6 @@ impl fmt::Display for ClusterMemberStatus {
         f.write_str(self.as_str())
     }
 }
-
-/// The first format version whose `cluster_patches/metadata.json` carries the
-/// `member_status_names` legend. A version 6 file has none: its codes were the
-/// fixed numbering of [`ClusterMemberStatus::ALL`], so that is the legend it is
-/// read through.
-pub(crate) const MEMBER_STATUS_LEGEND_VERSION: u32 = 7;
-
-/// The first format version whose `member_status_names` legend may name
-/// [`ClusterMemberStatus::RejectedUnlocalizableRefined`] and
-/// [`ClusterMemberStatus::RejectedUnlocalizableCells`].
-pub(crate) const REFINED_SHAPE_GATES_VERSION: u32 = 10;
 
 /// The canonical code each name of a `*_names` legend denotes, in the order
 /// given: entry `i` is the canonical code that stored code `i` stands for.
@@ -632,53 +594,16 @@ pub(crate) fn normalize_codes(
 /// `cluster_patches/metadata.json`, as the canonical [`ClusterMemberStatus`]
 /// code each stored code stands for.
 ///
-/// From [`MEMBER_STATUS_LEGEND_VERSION`] on the metadata must carry
-/// `member_status_names`. A version 6 file must not — the key did not exist —
-/// and is read through the canonical legend its writer's fixed numbering
-/// amounts to. A file below [`REFINED_SHAPE_GATES_VERSION`] must not name the
-/// two statuses that version added. The legend rides inside that metadata
-/// entry, which is hashed into the `cluster_patches` section digest, so it is
-/// covered by the same integrity envelope as the column it describes.
-pub(crate) fn read_member_status_legend(
-    cp_meta: &serde_json::Value,
-    version: u32,
-) -> Result<Vec<u8>, String> {
-    let names = legend_names(cp_meta, "member_status_names")?;
-    if version < MEMBER_STATUS_LEGEND_VERSION {
-        return match names {
-            // The seven statuses a version 6 writer could store, in its
-            // fixed numbering.
-            None => Ok(ClusterMemberStatus::ALL
-                [..=ClusterMemberStatus::RejectedUnlocalizable as usize]
-                .iter()
-                .map(|s| *s as u8)
-                .collect()),
-            Some(_) => Err(format!(
-                "version {version} file carries cluster_patches/metadata.json \
-                 member_status_names (introduced in version {MEMBER_STATUS_LEGEND_VERSION})"
-            )),
-        };
-    }
-    let names = names.ok_or_else(|| {
+/// The metadata must carry `member_status_names`. The legend rides inside that
+/// metadata entry, which is hashed into the `cluster_patches` section digest,
+/// so it is covered by the same integrity envelope as the column it describes.
+pub(crate) fn read_member_status_legend(cp_meta: &serde_json::Value) -> Result<Vec<u8>, String> {
+    let names = legend_names(cp_meta, "member_status_names")?.ok_or_else(|| {
         "cluster_patches/metadata.json carries no member_status_names to read the \
          member_status codes through"
             .to_string()
     })?;
-    let legend = parse_legend("member_status_names", &names, &ClusterMemberStatus::NAMES)?;
-    if version < REFINED_SHAPE_GATES_VERSION {
-        for status in [
-            ClusterMemberStatus::RejectedUnlocalizableRefined,
-            ClusterMemberStatus::RejectedUnlocalizableCells,
-        ] {
-            if legend.contains(&(status as u8)) {
-                return Err(format!(
-                    "version {version} file names {status} in cluster_patches/metadata.json \
-                     member_status_names (introduced in version {REFINED_SHAPE_GATES_VERSION})"
-                ));
-            }
-        }
-    }
-    Ok(legend)
+    parse_legend("member_status_names", &names, &ClusterMemberStatus::NAMES)
 }
 
 /// Rewrite stored `member_status` codes in place onto the canonical numbering,
@@ -722,9 +647,8 @@ pub struct ClusterPatchData {
     /// `member_zncc` enables re-vetting. See
     /// `specs/core/patch/cluster-warp-consistency.md`.
     pub member_consistency_residual: Array1<f32>,
-    /// The piecewise refinement's per-cell columns (format version 8), or
-    /// `None` when the file carries none: a file below version 8, or one
-    /// whose refinement did not run the piecewise stage.
+    /// The piecewise refinement's per-cell columns, or `None` when the file
+    /// carries none: one whose refinement did not run the piecewise stage.
     pub member_cells: Option<MemberCellData>,
     /// Refinement options recorded in `cluster_patches/metadata.json.zst`.
     pub refine_options: serde_json::Value,
@@ -750,10 +674,8 @@ pub struct MatchesData {
     pub sift_content_hashes: Vec<[u8; 16]>,
     /// `(N,)` feature count per image as used during matching.
     pub feature_counts: Array1<u32>,
-    /// `(N, 2)` per-image pixel dimensions (width, height). Mandatory since
-    /// format version 4 — [`crate::write_matches`] requires it — and `None`
-    /// only for version ≤ 3 files loaded from disk, which never stored it.
-    pub image_dims: Option<Array2<u32>>,
+    /// `(N, 2)` per-image pixel dimensions (width, height), each ≥ 1.
+    pub image_dims: Array2<u32>,
 
     /// Pairwise backbone. Exactly one of `image_pairs` / `clusters` is `Some`.
     pub image_pairs: Option<PairsData>,
@@ -769,7 +691,7 @@ pub struct MatchesData {
 /// [`MatchesData::shared_image_dims`].
 ///
 /// Each variant is a property of the file, so a caller that needs one shared
-/// camera can report which of the three situations it met without re-walking
+/// camera can report which of the two situations it met without re-walking
 /// `image_dims` itself.
 #[derive(Error, Clone, Debug, PartialEq, Eq)]
 pub enum SharedDimsError {
@@ -777,11 +699,6 @@ pub enum SharedDimsError {
     /// from.
     #[error("this .matches file names no images")]
     NoImages,
-
-    /// The file records no `image_dims` at all (format version ≤ 3, which
-    /// never stored them).
-    #[error("this .matches file stores no image dimensions")]
-    NoDimensions,
 
     /// Two images carry different dimensions.
     #[error("{image} is {}x{}, not the {}x{} of the first image", found.0, found.1, expected.0, expected.1)]
@@ -806,11 +723,7 @@ impl MatchesData {
         if self.image_names.is_empty() {
             return Err(SharedDimsError::NoImages);
         }
-        let dims = self
-            .image_dims
-            .as_ref()
-            .ok_or(SharedDimsError::NoDimensions)?;
-        let mut rows = dims.rows().into_iter();
+        let mut rows = self.image_dims.rows().into_iter();
         let first = rows.next().ok_or(SharedDimsError::NoImages)?;
         let expected = (first[0], first[1]);
         for (i, row) in rows.enumerate() {

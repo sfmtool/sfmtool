@@ -66,18 +66,6 @@ pub(super) fn lexically_resolved(path: &Path) -> PathBuf {
     out
 }
 
-/// The `.sift` path image `name` (workspace-relative, `/`-separated) has
-/// under `prefix` in the workspace at `workspace`:
-/// `<workspace>/<name's directory>/<prefix>/<name's file name>.sift`.
-pub(super) fn sift_path(workspace: &Path, name: &str, prefix: &str) -> PathBuf {
-    let name = Path::new(name);
-    let file_name = name.file_name().unwrap_or_default().to_string_lossy();
-    workspace
-        .join(name.parent().unwrap_or(Path::new("")))
-        .join(prefix)
-        .join(format!("{file_name}.sift"))
-}
-
 /// Whether an error from reading a file is the file system's (the file could
 /// not be opened, read or was locked) rather than the reader refusing what
 /// the file holds. An I/O error of kind `InvalidData` or `UnexpectedEof` is
@@ -224,13 +212,6 @@ fn plan_matches(path: &Path) -> Action {
         Err(e) => Action::Leave(read_failure(e)),
         Ok(metadata) if metadata.version >= sfmtool_matches_format::MATCHES_FORMAT_VERSION => {
             Action::Leave(UpgradeOutcome::AlreadyCurrent)
-        }
-        Ok(metadata) if metadata.has_clusters && metadata.version < 6 => {
-            Action::Leave(UpgradeOutcome::NotConverted(
-                "it is a cluster .matches file below version 6, which the reader refuses; \
-                 regenerate it with 'sfm match --cluster'"
-                    .into(),
-            ))
         }
         Ok(_) => match sfmtool_matches_format::read_matches(path) {
             Ok(_) => Action::Rewrite,

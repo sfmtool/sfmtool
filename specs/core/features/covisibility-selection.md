@@ -48,7 +48,7 @@ impl ClusterCovisibility {
 ```
 
 Positions are optional because the shared-cluster counts do not need them, and
-a `.matches` file below format version 6 carries none. They are `f32` pairs
+a value built in memory may carry none. They are `f32` pairs
 parallel to `member_images`, the width the `.matches` backbone stores
 keypoints at, so `from_matches` passes a file's rows through without copying.
 Without positions the two displacement getters return `None` and thinning

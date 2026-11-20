@@ -907,7 +907,7 @@ fn matches_fixture() -> sfmtool_matches_format::MatchesData {
         feature_tool_hashes: Vec::new(),
         sift_content_hashes: Vec::new(),
         feature_counts: ndarray::Array1::zeros(0),
-        image_dims: None,
+        image_dims: ndarray::Array2::zeros((0, 2)),
         image_pairs: None,
         clusters: None,
         cluster_patches: None,

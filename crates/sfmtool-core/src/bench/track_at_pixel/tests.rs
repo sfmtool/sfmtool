@@ -206,10 +206,8 @@ pub(in crate::bench) fn matches_file(
         feature_tool_hashes: vec![[0u8; 16]; names.len()],
         sift_content_hashes: vec![[1u8; 16]; names.len()],
         feature_counts: Array1::from_vec(vec![m as u32; names.len()]),
-        image_dims: Some(
-            Array2::from_shape_vec((names.len(), 2), [128u32, 128].repeat(names.len()))
-                .expect("(N, 2)"),
-        ),
+        image_dims: Array2::from_shape_vec((names.len(), 2), [128u32, 128].repeat(names.len()))
+            .expect("(N, 2)"),
         image_pairs: None,
         clusters: Some(ClustersData {
             cluster_starts: Array1::from_vec(starts),

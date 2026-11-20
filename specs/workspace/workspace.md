@@ -399,8 +399,9 @@ No command rewrites the workspace file unless the user runs one of these:
   folders and rewrites the workspace file and every file that names them,
   keeping every option. This release's
   [`sfm ws upgrade`](../cli/workspace/ws-upgrade-command.md) rewrites the
-  `.matches` and `.camrig` files of a version 2 workspace that are below the
-  current version, lists a `.sfmr` below version 16 as one the reader refuses,
+  `.camrig` files of a version 2 workspace that are below the current
+  version, lists a `.sfmr` below version 16 and a `.matches` below version 10
+  as ones the reader refuses,
   never writes the workspace file, and refuses a
   version 1 one.
 - **`sfm ws init` and `sfm ws init --force`** write version 2 with fresh

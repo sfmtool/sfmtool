@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Round-trip tests for cluster-bearing `.matches` files through the
-`sfmtool.fileio` bindings (format version 6: `clusters/` +
-`cluster_patches/` sections, pairs-or-clusters backbone, per-image dims, and
+`sfmtool.fileio` bindings (`clusters/` + `cluster_patches/` sections,
+pairs-or-clusters backbone, per-image dims, and
 the backbone's own per-member geometry -- one position and one shape per
 member, whose content is the file's stage)."""
 
@@ -292,7 +292,7 @@ def test_write_rejects_cluster_file_with_stale_pair_counts(tmp_path):
 
 
 def test_write_requires_image_dims(tmp_path):
-    """image_dims is mandatory since format version 4."""
+    """image_dims is mandatory."""
     import pytest
 
     data = _cluster_data()
@@ -302,13 +302,13 @@ def test_write_requires_image_dims(tmp_path):
 
 
 def test_write_requires_member_geometry(tmp_path):
-    """A cluster file must state its members' geometry (format version 6)."""
+    """A cluster file must state its members' geometry."""
     import pytest
 
     for key in ("member_positions", "member_affine_shapes"):
         data = _cluster_data()
         del data[key]
-        with pytest.raises(ValueError, match="mandatory since format version 6"):
+        with pytest.raises(ValueError, match="member_affine_shapes are required"):
             write_matches(tmp_path / "bad.matches", data)
 
 

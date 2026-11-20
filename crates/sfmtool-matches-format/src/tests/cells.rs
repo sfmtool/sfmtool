@@ -1,8 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The per-cell columns of `cluster_patches/` (format version 8, with the
-//! `refused_outlier` status from version 9).
+//! The per-cell columns of `cluster_patches/`.
 
 use super::*;
 
@@ -13,16 +12,6 @@ const SHIFT: &str = "cluster_patches/member_cell_shift_px.5.3.3.2.float32.zst";
 const ZNCC: &str = "cluster_patches/member_cell_zncc.5.3.3.float32.zst";
 const STATUS: &str = "cluster_patches/member_cell_status.5.3.3.uint8.zst";
 const ITERATIONS: &str = "cluster_patches/member_cell_iterations.5.uint8.zst";
-
-/// Relabel a written file as `version`, below version 10, dropping the two
-/// member statuses version 10 added from its `member_status_names` legend, so
-/// the cell rules are what the reader meets first.
-fn relabel_below_refined_shape_gates(entries: &mut [(String, Vec<u8>)], version: u32) {
-    mutate_metadata(entries, |json| json["version"] = serde_json::json!(version));
-    mutate_cp_metadata(entries, |json| {
-        json["member_status_names"] = serde_json::json!(ClusterMemberStatus::NAMES[..7]);
-    });
-}
 
 /// `make_cluster_patch_test_data` with per-cell columns: member 1, the one
 /// `kept` member, carries readings with every cell status; the others carry
@@ -178,80 +167,6 @@ fn test_cluster_patches_without_cells_write_no_cell_entries() {
     assert_eq!(stored_cell_status_names(&path), serde_json::Value::Null);
     let loaded = read_matches(&path).unwrap();
     assert!(loaded.cluster_patches.unwrap().member_cells.is_none());
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn test_version_7_file_reads_with_no_cells() {
-    // A version 7 file has no per-cell columns: it reads and verifies, and
-    // reports no cells.
-    let dir = std::env::temp_dir().join("matches_test_member_cells_v7");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let current = dir.join("current.matches");
-    let v7 = dir.join("v7.matches");
-    write_matches(&current, &make_cell_test_data(), 3).unwrap();
-    rewrite_matches_version(&current, &v7, 7);
-    assert!(!load_archive_entries(&v7)
-        .iter()
-        .any(|(n, _)| n.starts_with("cluster_patches/member_cell_")));
-
-    let (valid, errors) = verify_matches(&v7).unwrap();
-    assert!(valid, "{errors:?}");
-    let loaded = read_matches(&v7).unwrap();
-    assert_eq!(loaded.metadata.version, MATCHES_FORMAT_VERSION);
-    let cp = loaded.cluster_patches.unwrap();
-    assert!(cp.member_cells.is_none());
-    assert_eq!(
-        cp.member_status,
-        make_cluster_patch_test_data()
-            .cluster_patches
-            .unwrap()
-            .member_status
-    );
-
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn test_version_8_file_reads_unchanged() {
-    // A version 8 file's legend cannot name refused_outlier: with the five
-    // statuses version 8 defined, it reads and verifies as before.
-    let mut expected = make_cell_test_data()
-        .cluster_patches
-        .unwrap()
-        .member_cells
-        .unwrap();
-    // The one refused_outlier cell becomes fitted, which version 8 knew.
-    expected.status[[1, 1, 2]] = ClusterCellStatus::Fitted as u8;
-    let dir = std::env::temp_dir().join("matches_test_member_cells_v8");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let current = dir.join("current.matches");
-    let v8 = dir.join("v8.matches");
-    let mut data = make_cell_test_data();
-    data.cluster_patches.as_mut().unwrap().member_cells = Some(expected.clone());
-    write_matches(&current, &data, 3).unwrap();
-    rewrite_matches_version(&current, &v8, 8);
-    assert_eq!(
-        stored_cell_status_names(&v8),
-        serde_json::json!(ClusterCellStatus::NAMES[..5])
-    );
-
-    let (valid, errors) = verify_matches(&v8).unwrap();
-    assert!(valid, "{errors:?}");
-    let loaded = read_matches(&v8).unwrap();
-    assert_eq!(loaded.metadata.version, MATCHES_FORMAT_VERSION);
-    assert_cells_eq(
-        loaded
-            .cluster_patches
-            .as_ref()
-            .unwrap()
-            .member_cells
-            .as_ref()
-            .unwrap(),
-        &expected,
-    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -426,18 +341,6 @@ fn test_malformed_member_cells_rejected() {
             "iterations_on_a_member_not_kept",
             Box::new(|entries| mutate_entry(entries, ITERATIONS, |bytes| bytes[0] = 2)),
             "member_cell_iterations[0] is 2, but member 0 is reference, not kept",
-        ),
-        (
-            "version_7_with_legend",
-            Box::new(|entries| relabel_below_refined_shape_gates(entries, 7)),
-            "version 7 file carries cluster_patches/metadata.json member_cell_status_names \
-             (introduced in version 8)",
-        ),
-        (
-            "version_8_names_refused_outlier",
-            Box::new(|entries| relabel_below_refined_shape_gates(entries, 8)),
-            "version 8 file names refused_outlier in cluster_patches/metadata.json \
-             member_cell_status_names (introduced in version 9)",
         ),
     ];
     for (label, mutate, expected) in cases {

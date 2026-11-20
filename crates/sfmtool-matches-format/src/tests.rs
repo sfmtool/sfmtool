@@ -60,9 +60,7 @@ fn make_test_data() -> MatchesData {
         feature_tool_hashes: vec![[0u8; 16]; image_count as usize],
         sift_content_hashes: vec![[1u8; 16]; image_count as usize],
         feature_counts: Array1::from_vec(vec![100, 150, 200]),
-        image_dims: Some(
-            Array2::from_shape_vec((3, 2), vec![640, 480, 640, 480, 1024, 768]).unwrap(),
-        ),
+        image_dims: Array2::from_shape_vec((3, 2), vec![640, 480, 640, 480, 1024, 768]).unwrap(),
         image_pairs: Some(PairsData {
             // Pair (0,1) has 3 matches, pair (0,2) has 2 matches
             image_index_pairs: Array2::from_shape_vec((pair_count, 2), vec![0, 1, 0, 2]).unwrap(),
@@ -570,7 +568,7 @@ fn test_empty_matches() {
     data.feature_tool_hashes = vec![];
     data.sift_content_hashes = vec![];
     data.feature_counts = Array1::from_vec(vec![]);
-    data.image_dims = Some(Array2::zeros((0, 2)));
+    data.image_dims = Array2::zeros((0, 2));
     data.image_pairs = Some(PairsData {
         image_index_pairs: Array2::zeros((0, 2)),
         match_counts: Array1::from_vec(vec![]),
@@ -774,16 +772,9 @@ fn test_write_validation_bad_csr() {
 }
 
 #[test]
-fn test_write_validation_missing_image_dims() {
-    let mut data = make_test_data();
-    data.image_dims = None;
-    expect_write_error("matches_test_missing_dims", &data, "image_dims is required");
-}
-
-#[test]
 fn test_write_validation_zero_image_dims() {
     let mut data = make_test_data();
-    data.image_dims.as_mut().unwrap()[[1, 1]] = 0;
+    data.image_dims[[1, 1]] = 0;
     expect_write_error(
         "matches_test_zero_dims",
         &data,
@@ -1143,82 +1134,6 @@ fn rebuild_matches_archive(entries: &[(String, Vec<u8>)], dst: &std::path::Path)
         .write_all(&zstd::bulk::compress(&serde_json::to_vec(&content_hash).unwrap(), 3).unwrap())
         .unwrap();
     zip_out.finish().unwrap();
-}
-
-/// Copy a written `.matches` archive, rewriting `metadata.json.zst` so its
-/// `version` field reads `version` (dropping the version-3 metadata fields
-/// for `version <= 2`, the version-4 `images/image_dims` entry for
-/// `version <= 3`, the version-6 `clusters/member_positions` /
-/// `clusters/member_affine_shapes` entries for `version <= 5` and the
-/// version-7 `member_status_names` legend for `version <= 6`, the version-8
-/// per-cell columns and their `member_cell_status_names` legend for
-/// `version <= 7` and the version-9 `refused_outlier` name from that legend
-/// for `version <= 8`, and the version-10 `rejected_unlocalizable_refined` and
-/// `rejected_unlocalizable_cells` names from the `member_status_names` legend
-/// for `version <= 9`, matching what old writers produced; a cell or member
-/// stored under a dropped name is left past the shortened legend), then
-/// recomputing the
-/// stored hashes so the result is an internally consistent file of that
-/// version — for authoring old- or future-version fixture bytes.
-fn rewrite_matches_version(src: &std::path::Path, dst: &std::path::Path, version: u32) {
-    let mut entries = load_archive_entries(src);
-    mutate_metadata(&mut entries, |json| {
-        let obj = json.as_object_mut().unwrap();
-        obj.insert("version".into(), serde_json::json!(version));
-        if version <= 2 {
-            obj.remove("has_clusters");
-            obj.remove("has_cluster_patches");
-            obj.remove("cluster_count");
-            obj.remove("cluster_member_count");
-        }
-    });
-    if version <= 3 {
-        entries.retain(|(n, _)| !n.starts_with("images/image_dims."));
-    }
-    if version <= 5 {
-        entries.retain(|(n, _)| {
-            !n.starts_with("clusters/member_positions.")
-                && !n.starts_with("clusters/member_affine_shapes.")
-        });
-    }
-    if (7..=9).contains(&version) && entries.iter().any(|(n, _)| n == CP_METADATA) {
-        mutate_cp_metadata(&mut entries, |json| {
-            if let Some(names) = json
-                .get_mut("member_status_names")
-                .and_then(|v| v.as_array_mut())
-            {
-                names.retain(|n| {
-                    n != "rejected_unlocalizable_refined" && n != "rejected_unlocalizable_cells"
-                });
-            }
-        });
-    }
-    if version == 8 && entries.iter().any(|(n, _)| n == CP_METADATA) {
-        mutate_cp_metadata(&mut entries, |json| {
-            if let Some(names) = json
-                .get_mut("member_cell_status_names")
-                .and_then(|v| v.as_array_mut())
-            {
-                names.retain(|n| n != "refused_outlier");
-            }
-        });
-    }
-    if version <= 7 {
-        entries.retain(|(n, _)| !n.starts_with("cluster_patches/member_cell_"));
-        if entries.iter().any(|(n, _)| n == CP_METADATA) {
-            mutate_cp_metadata(&mut entries, |json| {
-                json.as_object_mut()
-                    .unwrap()
-                    .remove("member_cell_status_names");
-            });
-        }
-    }
-    if version <= 6 && entries.iter().any(|(n, _)| n == CP_METADATA) {
-        mutate_cp_metadata(&mut entries, |json| {
-            json.as_object_mut().unwrap().remove("member_status_names");
-        });
-    }
-    rebuild_matches_archive(&entries, dst);
 }
 
 /// Craft an invalid cluster-bearing file from a valid one and assert that
@@ -1760,76 +1675,6 @@ fn test_writer_always_writes_current_version() {
 }
 
 #[test]
-fn test_version_1_relative_poses_upgrade_on_load() {
-    let data = make_test_data_with_tvg();
-    let dir = std::env::temp_dir().join("matches_test_v1_upgrade");
-    std::fs::create_dir_all(&dir).unwrap();
-    let current_path = dir.join("current.matches");
-    let v1_path = dir.join("v1.matches");
-
-    write_matches(&current_path, &data, 3).unwrap();
-    rewrite_matches_version(&current_path, &v1_path, 1);
-    assert_eq!(read_matches_metadata(&v1_path).unwrap().version, 1);
-
-    // Hashes cover the stored bytes: the v1 file verifies as written,
-    // before any in-memory conversion.
-    let (valid, errors) = verify_matches(&v1_path).unwrap();
-    assert!(valid, "v1 fixture failed verification: {errors:?}");
-
-    let loaded = read_matches(&v1_path).unwrap();
-    assert_eq!(loaded.metadata.version, MATCHES_FORMAT_VERSION);
-    let tvg = loaded.two_view_geometries.as_ref().unwrap();
-    let orig = data.two_view_geometries.as_ref().unwrap();
-
-    // Relative poses are S-conjugated: w/x keep, y/z negate; same for t.
-    for k in 0..tvg.quaternions_wxyz.nrows() {
-        assert_eq!(tvg.quaternions_wxyz[[k, 0]], orig.quaternions_wxyz[[k, 0]]);
-        assert_eq!(tvg.quaternions_wxyz[[k, 1]], orig.quaternions_wxyz[[k, 1]]);
-        assert_eq!(tvg.quaternions_wxyz[[k, 2]], -orig.quaternions_wxyz[[k, 2]]);
-        assert_eq!(tvg.quaternions_wxyz[[k, 3]], -orig.quaternions_wxyz[[k, 3]]);
-        assert_eq!(tvg.translations_xyz[[k, 0]], orig.translations_xyz[[k, 0]]);
-        assert_eq!(tvg.translations_xyz[[k, 1]], -orig.translations_xyz[[k, 1]]);
-        assert_eq!(tvg.translations_xyz[[k, 2]], -orig.translations_xyz[[k, 2]]);
-    }
-
-    // Pixel-space F/E/H matrices are untouched by the upgrade.
-    assert_eq!(tvg.f_matrices, orig.f_matrices);
-    assert_eq!(tvg.e_matrices, orig.e_matrices);
-    assert_eq!(tvg.h_matrices, orig.h_matrices);
-
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn test_version_2_loads_without_pose_conjugation() {
-    let data = make_test_data_with_tvg();
-    let dir = std::env::temp_dir().join("matches_test_v2_load");
-    std::fs::create_dir_all(&dir).unwrap();
-    let current_path = dir.join("current.matches");
-    let v2_path = dir.join("v2.matches");
-
-    write_matches(&current_path, &data, 3).unwrap();
-    rewrite_matches_version(&current_path, &v2_path, 2);
-    assert_eq!(read_matches_metadata(&v2_path).unwrap().version, 2);
-
-    let (valid, errors) = verify_matches(&v2_path).unwrap();
-    assert!(valid, "v2 fixture failed verification: {errors:?}");
-
-    // Version 2 poses are already canonical: loaded unchanged, and the
-    // in-memory version upgrades to current. Version ≤ 3 files never stored
-    // per-image dimensions, so they load with image_dims = None.
-    let loaded = read_matches(&v2_path).unwrap();
-    assert_eq!(loaded.metadata.version, MATCHES_FORMAT_VERSION);
-    assert_eq!(loaded.image_dims, None);
-    let tvg = loaded.two_view_geometries.as_ref().unwrap();
-    let orig = data.two_view_geometries.as_ref().unwrap();
-    assert_eq!(tvg.quaternions_wxyz, orig.quaternions_wxyz);
-    assert_eq!(tvg.translations_xyz, orig.translations_xyz);
-
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
 fn test_clusters_member_geometry_round_trip() {
     // The backbone's geometry survives write → verify → read with the same
     // f32 bits it went in with: in a matcher output the values are verbatim
@@ -1902,71 +1747,6 @@ fn test_enriched_geometry_is_the_refinement_where_it_measured() {
 }
 
 #[test]
-fn test_version_5_cluster_file_refused_on_read() {
-    // Version 6 moved every cluster file's geometry into the backbone, and an
-    // older cluster file's is only in the `.sift` files — so it is refused,
-    // with the regeneration named. Its stored bytes still verify.
-    for (label, data, wants_patches) in [
-        ("bare", make_cluster_test_data(), false),
-        ("enriched", make_cluster_patch_test_data(), true),
-    ] {
-        let dir = std::env::temp_dir().join(format!("matches_test_v5_refused_{label}"));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let current_path = dir.join("current.matches");
-        let v5_path = dir.join("v5.matches");
-
-        write_matches(&current_path, &data, 3).unwrap();
-        rewrite_matches_version(&current_path, &v5_path, 5);
-        assert_eq!(read_matches_metadata(&v5_path).unwrap().version, 5);
-
-        let (valid, errors) = verify_matches(&v5_path).unwrap();
-        assert!(valid, "{label} v5 fixture failed verification: {errors:?}");
-
-        let msg = format!("{}", read_matches(&v5_path).err().unwrap());
-        assert!(msg.contains("version 5 cluster-backbone file"), "{msg}");
-        assert!(
-            msg.contains("regenerate with `sfm match --cluster`"),
-            "{msg}"
-        );
-        assert_eq!(
-            msg.contains("then re-run `sfm cluster-patches`"),
-            wants_patches,
-            "{label}: the enrichment step is named exactly when it applies"
-        );
-
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-}
-
-#[test]
-fn test_pairwise_version_compatibility_is_untouched() {
-    // The version-6 cluster refusal is scoped to the cluster backbone: a
-    // version-3 pairwise file still loads (without dims, as before).
-    let data = make_test_data();
-    let dir = std::env::temp_dir().join("matches_test_v3_pairwise_loads");
-    std::fs::create_dir_all(&dir).unwrap();
-    let current_path = dir.join("current.matches");
-    let v3_path = dir.join("v3.matches");
-
-    write_matches(&current_path, &data, 3).unwrap();
-    rewrite_matches_version(&current_path, &v3_path, 3);
-
-    let (valid, errors) = verify_matches(&v3_path).unwrap();
-    assert!(valid, "v3 pairwise fixture failed verification: {errors:?}");
-
-    let loaded = read_matches(&v3_path).unwrap();
-    assert_eq!(loaded.metadata.version, MATCHES_FORMAT_VERSION);
-    assert_eq!(loaded.image_dims, None);
-    let pairs = loaded.image_pairs.as_ref().unwrap();
-    let orig = data.image_pairs.as_ref().unwrap();
-    assert_eq!(pairs.image_index_pairs, orig.image_index_pairs);
-    assert_eq!(pairs.match_feature_indexes, orig.match_feature_indexes);
-
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
 fn test_write_validation_missing_member_geometry() {
     let mut data = make_cluster_test_data();
     data.clusters.as_mut().unwrap().member_positions = None;
@@ -1974,7 +1754,7 @@ fn test_write_validation_missing_member_geometry() {
     expect_write_error(
         "matches_test_missing_member_geometry",
         &data,
-        "mandatory since format version 6",
+        "clusters.member_positions and clusters.member_affine_shapes are required",
     );
 }
 
@@ -2075,64 +1855,157 @@ fn test_relative_warp_recovered_from_reference_member() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-#[test]
-fn test_version_2_with_clusters_rejected() {
-    // A version <= 2 file can never carry the cluster backbone.
-    let data = make_cluster_test_data();
-    let dir = std::env::temp_dir().join("matches_test_v2_clusters");
-    std::fs::create_dir_all(&dir).unwrap();
-    let current_path = dir.join("current.matches");
-    let v2_path = dir.join("v2.matches");
-
-    write_matches(&current_path, &data, 3).unwrap();
-    let mut entries = load_archive_entries(&current_path);
+/// Copy the written archive at `src` to `dst` with `metadata.json`'s version
+/// set to `version` and `edit` applied to its decompressed entries, recomputing
+/// the stored hashes, so the version (and what `edit` did) is the only thing
+/// that differs from a valid file.
+fn relabel_matches_version(
+    src: &std::path::Path,
+    dst: &std::path::Path,
+    version: u32,
+    edit: impl FnOnce(&mut Vec<(String, Vec<u8>)>),
+) {
+    let mut entries = load_archive_entries(src);
     mutate_metadata(&mut entries, |json| {
-        json.as_object_mut()
-            .unwrap()
-            .insert("version".into(), serde_json::json!(2));
+        json["version"] = serde_json::json!(version);
     });
-    rebuild_matches_archive(&entries, &v2_path);
-
-    let expected = "claims clusters/cluster_patches (introduced in version 3)";
-    let err = read_matches(&v2_path).err().unwrap();
-    assert!(format!("{err}").contains(expected), "{err}");
-    let (valid, errors) = verify_matches(&v2_path).unwrap();
-    assert!(
-        !valid && errors.iter().any(|e| e.contains(expected)),
-        "{errors:?}"
-    );
-
-    std::fs::remove_dir_all(&dir).unwrap();
+    edit(&mut entries);
+    rebuild_matches_archive(&entries, dst);
 }
 
-#[test]
-fn test_unsupported_future_version_rejected() {
-    let data = make_test_data();
-    let dir = std::env::temp_dir().join("matches_test_future_version");
-    std::fs::create_dir_all(&dir).unwrap();
-    let src = dir.join("current.matches");
-    let dst = dir.join("future.matches");
+/// Every reader of the crate, each giving the error it returns for `path`, or
+/// `None` where it read the file.
+fn every_reader_error(path: &std::path::Path) -> Vec<(&'static str, Option<MatchesError>)> {
+    vec![
+        ("read_matches", read_matches(path).err()),
+        ("read_matches_metadata", read_matches_metadata(path).err()),
+        (
+            "read_matches_image_names",
+            read_matches_image_names(path).err(),
+        ),
+    ]
+}
 
-    write_matches(&src, &data, 3).unwrap();
-    let future_version = MATCHES_FORMAT_VERSION + 1;
-    let mut entries = load_archive_entries(&src);
-    mutate_metadata(&mut entries, |json| {
-        json.as_object_mut()
-            .unwrap()
-            .insert("version".into(), serde_json::json!(future_version));
-    });
-    rebuild_matches_archive(&entries, &dst);
-
-    let expected = format!("unsupported .matches format version {future_version}");
-    let err = read_matches(&dst).err().unwrap();
-    assert!(format!("{err}").contains(&expected), "{err}");
-    let (valid, errors) = verify_matches(&dst).unwrap();
-    assert!(
-        !valid && errors.iter().any(|e| e.contains(&expected)),
-        "{errors:?}"
+/// Assert that every reader and `verify_matches` refuse `path` as a file of
+/// `version`, no longer read, with the one message that names the file, its
+/// version, the oldest version read and the last release that reads it.
+fn assert_refused_as_no_longer_read(path: &std::path::Path, version: u32) {
+    let expected = format!(
+        "{} is a version {version} .matches file, and this sfmtool reads .matches files of \
+         version 10 or later. sfmtool 0.4.1 is the last release that reads version {version}: \
+         install it, run `sfm ws upgrade` on the workspace, then use the file with this release.",
+        path.display()
     );
+    for (reader, error) in every_reader_error(path) {
+        match error {
+            Some(MatchesError::VersionNoLongerRead {
+                path: p,
+                version: v,
+            }) => {
+                assert_eq!((p.as_path(), v), (path, version), "{reader}");
+            }
+            other => panic!("{reader} gave {other:?}"),
+        }
+    }
+    assert_eq!(read_matches(path).err().unwrap().to_string(), expected);
+    assert_eq!(verify_matches(path).unwrap(), (false, vec![expected]));
+}
 
-    std::fs::remove_dir_all(&dir).unwrap();
+/// A version 9 file, the version just below the oldest read, is refused by
+/// every reader for its version, whatever its backbone and sections: each file
+/// here is a current file labelled 9, whose other entries this build would
+/// read.
+#[test]
+fn a_version_9_file_is_refused_naming_the_last_release_that_reads_it() {
+    let dir = tempfile::tempdir().unwrap();
+    for (label, data) in [
+        ("pairwise", make_test_data_with_tvg()),
+        ("clusters", cells::make_cell_test_data()),
+    ] {
+        let current = dir.path().join(format!("{label}.matches"));
+        let old = dir.path().join(format!("{label}_v9.matches"));
+        write_matches(&current, &data, 3).unwrap();
+        relabel_matches_version(&current, &old, 9, |_| {});
+        assert_refused_as_no_longer_read(&old, 9);
+    }
+}
+
+/// A version 1 file lacks keys and entries the readers would otherwise
+/// require (the `has_clusters` and `has_cluster_patches` flags, the image
+/// dimensions), and is still refused for its version: the version is checked
+/// before anything that depends on it is parsed.
+#[test]
+fn a_version_1_file_is_refused_for_its_version_before_what_it_lacks() {
+    let dir = tempfile::tempdir().unwrap();
+    let current = dir.path().join("current.matches");
+    let v1 = dir.path().join("v1.matches");
+    write_matches(&current, &make_test_data_with_tvg(), 3).unwrap();
+    relabel_matches_version(&current, &v1, 1, |entries| {
+        mutate_metadata(entries, |json| {
+            let obj = json.as_object_mut().unwrap();
+            obj.remove("has_clusters");
+            obj.remove("has_cluster_patches");
+        });
+        entries.retain(|(n, _)| !n.starts_with("images/image_dims."));
+    });
+    assert_refused_as_no_longer_read(&v1, 1);
+}
+
+/// A version newer than this build's, and version 0, which no writer has
+/// produced, are refused as unsupported, by every reader and by
+/// `verify_matches`, without naming a release.
+#[test]
+fn a_version_above_the_current_one_or_zero_is_refused_as_unsupported() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("current.matches");
+    write_matches(&src, &make_test_data(), 3).unwrap();
+
+    for version in [MATCHES_FORMAT_VERSION + 1, 0] {
+        let dst = dir.path().join(format!("v{version}.matches"));
+        relabel_matches_version(&src, &dst, version, |_| {});
+        let expected = format!(
+            "unsupported .matches format version {version} (this build reads versions 10 to 10)"
+        );
+        for (reader, error) in every_reader_error(&dst) {
+            match error {
+                Some(MatchesError::InvalidFormat(m)) => assert_eq!(m, expected, "{reader}"),
+                other => panic!("{reader} gave {other:?}"),
+            }
+        }
+        assert_eq!(
+            verify_matches(&dst).unwrap(),
+            (false, vec![format!("Invalid format: {expected}")])
+        );
+    }
+}
+
+/// A current file's `metadata.json` holds both backbone flags; one without
+/// either is refused by every reader and by `verify_matches`, though a value
+/// built in memory may leave them out.
+#[test]
+fn a_current_file_without_a_backbone_flag_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("current.matches");
+    write_matches(&src, &make_test_data(), 3).unwrap();
+    for key in ["has_clusters", "has_cluster_patches"] {
+        let dst = dir.path().join(format!("no_{key}.matches"));
+        relabel_matches_version(&src, &dst, MATCHES_FORMAT_VERSION, |entries| {
+            mutate_metadata(entries, |json| {
+                json.as_object_mut().unwrap().remove(key);
+            });
+        });
+        let expected = format!("metadata.json.zst has no {key}");
+        for (reader, error) in every_reader_error(&dst) {
+            match error {
+                Some(MatchesError::InvalidFormat(m)) => assert_eq!(m, expected, "{reader}"),
+                other => panic!("{reader} gave {other:?}"),
+            }
+        }
+        assert_eq!(
+            verify_matches(&dst).unwrap(),
+            (false, vec![format!("Invalid format: {expected}")])
+        );
+    }
 }
 
 // Every entry in a .matches archive MUST use ZIP's STORE method. Entries are already
@@ -2212,13 +2085,11 @@ fn make_select_test_data() -> MatchesData {
     data.feature_tool_hashes = (0u8..5).map(|i| [i; 16]).collect();
     data.sift_content_hashes = (10u8..15).map(|i| [i; 16]).collect();
     data.feature_counts = Array1::from_vec(vec![100, 150, 200, 120, 50]);
-    data.image_dims = Some(
-        Array2::from_shape_vec(
-            (5, 2),
-            vec![640, 480, 640, 480, 1024, 768, 800, 600, 320, 240],
-        )
-        .unwrap(),
-    );
+    data.image_dims = Array2::from_shape_vec(
+        (5, 2),
+        vec![640, 480, 640, 480, 1024, 768, 800, 600, 320, 240],
+    )
+    .unwrap();
     data.clusters = Some(ClustersData {
         cluster_starts: Array1::from_vec(vec![0, 4, 6, 9, 12]),
         member_images: Array1::from_vec(vec![0, 1, 2, 3, 1, 2, 0, 1, 1, 2, 3, 0]),
@@ -2718,7 +2589,7 @@ fn test_select_clusters_restriction_absent_reference() {
     assert_eq!(sel.feature_counts, Array1::from_vec(vec![150, 200, 120]));
     assert_eq!(
         sel.image_dims,
-        Some(Array2::from_shape_vec((3, 2), vec![640, 480, 1024, 768, 800, 600]).unwrap())
+        Array2::from_shape_vec((3, 2), vec![640, 480, 1024, 768, 800, 600]).unwrap()
     );
     assert_eq!(
         sel.feature_tool_hashes,
@@ -3182,8 +3053,7 @@ fn archive_entry_names_pin_call_sites() {
 fn test_shared_image_dims_uniform() {
     let mut data = make_test_data();
     // Bring the third image onto the resolution of the first two.
-    data.image_dims =
-        Some(Array2::from_shape_vec((3, 2), vec![640, 480, 640, 480, 640, 480]).unwrap());
+    data.image_dims = Array2::from_shape_vec((3, 2), vec![640, 480, 640, 480, 640, 480]).unwrap();
     assert_eq!(data.shared_image_dims(), Ok((640, 480)));
 }
 
@@ -3203,17 +3073,14 @@ fn test_shared_image_dims_mixed() {
 }
 
 #[test]
-fn test_shared_image_dims_absent_and_empty() {
-    let mut data = make_test_data();
-    data.image_dims = None;
-    assert_eq!(data.shared_image_dims(), Err(SharedDimsError::NoDimensions));
-
+fn test_shared_image_dims_empty() {
     // An empty image table is its own answer, checked before the dimensions.
+    let mut data = make_test_data();
     data.image_names.clear();
     assert_eq!(data.shared_image_dims(), Err(SharedDimsError::NoImages));
 }
 
-// ── The member_status legend (format version 7) ────────────────────────────
+// ── The member_status legend ────────────────────────────
 
 /// Write [`make_cluster_patch_test_data`], apply `mutate` to its decompressed
 /// entries and rebuild it with fresh hashes, so the only thing wrong with the
@@ -3425,23 +3292,6 @@ fn test_malformed_member_status_legend_rejected() {
             }),
             "carries no member_status_names",
         ),
-        (
-            "version_6_with_legend",
-            Box::new(|entries| {
-                mutate_metadata(entries, |json| json["version"] = serde_json::json!(6))
-            }),
-            "version 6 file carries cluster_patches/metadata.json member_status_names",
-        ),
-        (
-            // The writer states the whole legend, so a file relabelled as
-            // version 9 names the two statuses version 10 added.
-            "version_9_names_refined_shape_statuses",
-            Box::new(|entries| {
-                mutate_metadata(entries, |json| json["version"] = serde_json::json!(9))
-            }),
-            "version 9 file names rejected_unlocalizable_refined in \
-             cluster_patches/metadata.json member_status_names (introduced in version 10)",
-        ),
     ];
     for (label, mutate, expected) in cases {
         let (dir, path) =
@@ -3513,76 +3363,6 @@ fn test_member_status_is_measured() {
             S::RejectedUnlocalizableCells,
         ]
     );
-}
-
-#[test]
-fn test_version_9_cluster_patches_read_unchanged() {
-    // A version 9 file's legend cannot name the two statuses version 10
-    // added: with the seven it defined, it reads and verifies as before.
-    let data = make_cluster_patch_test_data();
-    let dir = std::env::temp_dir().join("matches_test_v9_status_legend");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let current = dir.join("current.matches");
-    let v9 = dir.join("v9.matches");
-    write_matches(&current, &data, 3).unwrap();
-    rewrite_matches_version(&current, &v9, 9);
-    assert_eq!(
-        stored_member_status_names(&v9),
-        serde_json::json!(ClusterMemberStatus::NAMES[..7])
-    );
-    let (valid, errors) = verify_matches(&v9).unwrap();
-    assert!(valid, "{errors:?}");
-    let loaded = read_matches(&v9).unwrap();
-    assert_eq!(loaded.metadata.version, MATCHES_FORMAT_VERSION);
-    assert_eq!(
-        loaded.cluster_patches.as_ref().unwrap().member_status,
-        data.cluster_patches.as_ref().unwrap().member_status
-    );
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn test_version_6_cluster_patches_read_through_the_canonical_legend() {
-    // A version 6 file carries no legend: its writer stored the fixed
-    // numbering the canonical legend now states, so it reads and verifies
-    // through that legend.
-    let data = make_cluster_patch_test_data();
-    let dir = std::env::temp_dir().join("matches_test_v6_status_legend");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let current = dir.join("current.matches");
-    let v6 = dir.join("v6.matches");
-    write_matches(&current, &data, 3).unwrap();
-    rewrite_matches_version(&current, &v6, 6);
-    assert_eq!(stored_member_status_names(&v6), serde_json::Value::Null);
-
-    let (valid, errors) = verify_matches(&v6).unwrap();
-    assert!(valid, "{errors:?}");
-    let loaded = read_matches(&v6).unwrap();
-    assert_eq!(loaded.metadata.version, MATCHES_FORMAT_VERSION);
-    assert_eq!(
-        loaded.cluster_patches.as_ref().unwrap().member_status,
-        data.cluster_patches.as_ref().unwrap().member_status
-    );
-
-    // A code past the fixed numbering is still refused in a version 6 file.
-    let mut entries = load_archive_entries(&v6);
-    mutate_entry(
-        &mut entries,
-        "cluster_patches/member_status.5.uint8.zst",
-        |bytes| bytes[4] = 7,
-    );
-    let bad = dir.join("v6_bad.matches");
-    rebuild_matches_archive(&entries, &bad);
-    let expected = "member_status[4] is 7, past the 7 names its legend gives";
-    let msg = format!("{}", read_matches(&bad).err().unwrap());
-    assert!(msg.contains(expected), "{msg}");
-    let (valid, errors) = verify_matches(&bad).unwrap();
-    assert!(!valid);
-    assert!(errors.iter().any(|e| e.contains(expected)), "{errors:?}");
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]

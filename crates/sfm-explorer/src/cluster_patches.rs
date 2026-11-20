@@ -1017,13 +1017,11 @@ fn matches_data(
         feature_tool_hashes: facts.iter().map(|image| image.feature_tool).collect(),
         sift_content_hashes: facts.iter().map(|image| image.content).collect(),
         feature_counts: facts.iter().map(|image| image.features).collect(),
-        image_dims: Some(
-            Array2::from_shape_vec(
-                (facts.len(), 2),
-                facts.iter().flat_map(|image| image.dims).collect(),
-            )
-            .expect("two per image"),
-        ),
+        image_dims: Array2::from_shape_vec(
+            (facts.len(), 2),
+            facts.iter().flat_map(|image| image.dims).collect(),
+        )
+        .expect("two per image"),
         image_pairs: None,
         clusters: Some(ClustersData {
             cluster_starts: clusters.cluster_starts,

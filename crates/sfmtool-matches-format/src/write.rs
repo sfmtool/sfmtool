@@ -28,17 +28,16 @@ use sfmtool_archive_io::{
 /// correspondence backbone); `cluster_patches` requires `clusters`, and
 /// `two_view_geometries` requires `image_pairs`. The metadata `has_*` flags
 /// and summary counts must be consistent with the supplied sections.
-/// `image_dims` is mandatory (format version 4): `(N, 2)` width/height with
-/// every value ≥ 1. A cluster-backbone file additionally requires the
-/// members' detections (format version 6): `member_positions` `(M, 2)` and
-/// `member_affine_shapes` `(M, 2, 2)`. A `cluster_patches` section's
-/// `member_status` holds canonical [`ClusterMemberStatus`] discriminants, and
-/// the writer states the canonical `member_status_names` legend beside them
-/// (format version 7). Its optional per-cell columns
+/// `image_dims` is `(N, 2)` width/height with every value ≥ 1. A
+/// cluster-backbone file additionally requires the members' geometry:
+/// `member_positions` `(M, 2)` and `member_affine_shapes` `(M, 2, 2)`. A
+/// `cluster_patches` section's `member_status` holds canonical
+/// [`ClusterMemberStatus`] discriminants, and the writer states the canonical
+/// `member_status_names` legend beside them. Its optional per-cell columns
 /// ([`ClusterPatchData::member_cells`]) hold canonical [`ClusterCellStatus`]
 /// discriminants, are sized by the member count, carry readings only for
 /// `kept` members, and are written with the canonical
-/// `member_cell_status_names` legend (format version 8).
+/// `member_cell_status_names` legend.
 pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result<(), MatchesError> {
     let image_count = data.metadata.image_count as usize;
 
@@ -130,7 +129,7 @@ pub fn write_clusters_matches(
         feature_tool_hashes: data.feature_tool_hashes,
         sift_content_hashes: data.sift_content_hashes,
         feature_counts: data.feature_counts,
-        image_dims: Some(data.image_dims),
+        image_dims: data.image_dims,
         image_pairs: None,
         clusters: Some(data.clusters),
         cluster_patches: None,
@@ -229,13 +228,11 @@ fn write_images<W: std::io::Write + std::io::Seek>(
         &mut images_hasher,
     )?;
 
-    // images/image_dims (mandatory since format version 4; validated Some
-    // by validate_dimensions)
-    let image_dims = data.image_dims.as_ref().expect("validated Some");
+    // images/image_dims
     write_binary_entry_hashed(
         zip,
         &entries::images_image_dims(image_count),
-        &row_major_bytes(image_dims),
+        &row_major_bytes(&data.image_dims),
         zstd_level,
         &mut images_hasher,
     )?;
@@ -352,8 +349,8 @@ fn write_clusters<W: std::io::Write + std::io::Seek>(
             &mut clusters_hasher,
         )?;
 
-        // clusters/member_affine_shapes (mandatory since format version 6;
-        // validated Some by validate_dimensions)
+        // clusters/member_affine_shapes (validated Some by
+        // validate_dimensions)
         let member_affine_shapes = clusters
             .member_affine_shapes
             .as_ref()
@@ -384,7 +381,7 @@ fn write_clusters<W: std::io::Write + std::io::Seek>(
             &mut clusters_hasher,
         )?;
 
-        // clusters/member_positions (mandatory since format version 6)
+        // clusters/member_positions (validated Some likewise)
         let member_positions = clusters.member_positions.as_ref().expect("validated Some");
         write_binary_entry_hashed(
             zip,
@@ -427,7 +424,7 @@ fn write_cluster_patches<W: std::io::Write + std::io::Seek>(
         let member_count = cp.member_status.len();
         let mut cp_hasher = Xxh3::new();
 
-        // cluster_patches/member_cell_* (optional, version 8): they sort
+        // cluster_patches/member_cell_* (optional): they sort
         // before member_consistency_residual, so they are hashed first.
         if let Some(cells) = &cp.member_cells {
             write_binary_entry_hashed(

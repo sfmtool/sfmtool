@@ -578,14 +578,11 @@ pub enum MatchesInputError {
     /// The file stores the pairwise backbone, so it carries no cluster tracks
     /// to draw pairs from.
     NoClusters,
-    /// The cluster backbone carries no member positions — a file written
-    /// before format version 6 made them mandatory.
+    /// The cluster backbone carries no member positions, which only a value
+    /// built in memory can lack: a cluster file always stores them.
     NoMemberPositions,
     /// The file names no images at all.
     NoImages,
-    /// The file records no image dimensions (format version ≤ 3), so the
-    /// principal point cannot be placed.
-    NoImageDimensions,
     /// The images do not all share one resolution, and the vote estimates ONE
     /// shared camera with a centred principal point.
     MixedDimensions {
@@ -614,11 +611,6 @@ impl std::fmt::Display for MatchesInputError {
             MatchesInputError::NoImages => {
                 write!(f, "this .matches file names no images")
             }
-            MatchesInputError::NoImageDimensions => write!(
-                f,
-                "this .matches file stores no image dimensions, so the principal point \
-                 cannot be placed at the image centre"
-            ),
             MatchesInputError::MixedDimensions {
                 expected,
                 found,
@@ -637,16 +629,13 @@ impl std::fmt::Display for MatchesInputError {
 impl std::error::Error for MatchesInputError {}
 
 impl From<sfmtool_matches_format::SharedDimsError> for MatchesInputError {
-    /// The file-level reading, restated in the vote's terms: the three ways a
-    /// file states no one resolution are the three dimension variants here,
+    /// The file-level reading, restated in the vote's terms: the two ways a
+    /// file states no one resolution are the two dimension variants here,
     /// which keep their own wording because they say why the *vote* cannot
     /// proceed.
     fn from(e: sfmtool_matches_format::SharedDimsError) -> Self {
         match e {
             sfmtool_matches_format::SharedDimsError::NoImages => MatchesInputError::NoImages,
-            sfmtool_matches_format::SharedDimsError::NoDimensions => {
-                MatchesInputError::NoImageDimensions
-            }
             sfmtool_matches_format::SharedDimsError::Mixed {
                 expected,
                 found,

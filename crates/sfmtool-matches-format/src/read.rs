@@ -15,15 +15,70 @@ use crate::types::*;
 use crate::validate::{check_backbone_counts, content_errors};
 use sfmtool_archive_io::{read_json_entry, DecodedEntries};
 
-/// Read only the top-level metadata from a `.matches` file (fast, no binary data).
-pub fn read_matches_metadata(path: &Path) -> Result<MatchesMetadata, MatchesError> {
+fn open_archive(path: &Path) -> Result<zip::ZipArchive<std::fs::File>, MatchesError> {
     let file = std::fs::File::open(path).map_err(|e| MatchesError::IoPath {
         operation: "Failed to open file",
         path: path.to_path_buf(),
         source: e,
     })?;
-    let mut archive = zip::ZipArchive::new(file)?;
-    Ok(read_json_entry(&mut archive, entries::metadata())?)
+    Ok(zip::ZipArchive::new(file)?)
+}
+
+/// Refuse a `metadata.version` this build does not read: one below
+/// [`MATCHES_OLDEST_READ_VERSION`] that a release wrote, with
+/// [`MatchesError::VersionNoLongerRead`], which names `path` and the last
+/// release that reads it; and one of 0, which no writer has ever produced, or
+/// newer than [`MATCHES_FORMAT_VERSION`], whose layout is unknown so reading it
+/// with current-version assumptions would misparse silently.
+fn check_version(version: u32, path: &Path) -> Result<(), MatchesError> {
+    if (1..MATCHES_OLDEST_READ_VERSION).contains(&version) {
+        return Err(MatchesError::VersionNoLongerRead {
+            path: path.to_path_buf(),
+            version,
+        });
+    }
+    if !(MATCHES_OLDEST_READ_VERSION..=MATCHES_FORMAT_VERSION).contains(&version) {
+        return Err(MatchesError::InvalidFormat(format!(
+            "unsupported .matches format version {version} (this build reads versions \
+             {MATCHES_OLDEST_READ_VERSION} to {MATCHES_FORMAT_VERSION})"
+        )));
+    }
+    Ok(())
+}
+
+/// The keys a file's `metadata.json` holds that [`MatchesMetadata`] fills in
+/// when a value built in memory leaves them out.
+const REQUIRED_DEFAULTED_KEYS: [&str; 2] = ["has_clusters", "has_cluster_patches"];
+
+/// Parse `metadata.json` from its JSON value, checking its version with
+/// [`check_version`] first, so that a file of a version this build does not
+/// read is refused for its version rather than for a key that version lacks,
+/// and then that it holds every key a file requires.
+pub(crate) fn parse_metadata(
+    value: serde_json::Value,
+    path: &Path,
+) -> Result<MatchesMetadata, MatchesError> {
+    if let Some(version) = value.get("version").and_then(serde_json::Value::as_u64) {
+        check_version(u32::try_from(version).unwrap_or(u32::MAX), path)?;
+    }
+    if let Some(key) = REQUIRED_DEFAULTED_KEYS
+        .iter()
+        .find(|key| value.get(**key).is_none())
+    {
+        return Err(MatchesError::InvalidFormat(format!(
+            "metadata.json.zst has no {key}"
+        )));
+    }
+    Ok(serde_json::from_value(value)?)
+}
+
+/// Read only the top-level metadata from a `.matches` file (fast, no binary data).
+///
+/// A file of a version this build does not read is refused, as
+/// [`read_matches`] refuses it.
+pub fn read_matches_metadata(path: &Path) -> Result<MatchesMetadata, MatchesError> {
+    let mut archive = open_archive(path)?;
+    parse_metadata(read_json_entry(&mut archive, entries::metadata())?, path)
 }
 
 /// The workspace directory a `.matches` file records, or `None` when none of
@@ -65,18 +120,14 @@ pub fn resolve_workspace_dir(matches_path: &Path, metadata: &MatchesMetadata) ->
 ///
 /// For a caller that needs to know which images a file covers, in which order,
 /// without decompressing its correspondences: two JSON entries rather than the
-/// whole archive. The names are checked against the metadata's `image_count`
-/// and against the image-name rule, as [`read_matches`] checks them.
+/// whole archive. The version is checked, and the names against the
+/// metadata's `image_count` and against the image-name rule, as
+/// [`read_matches`] checks them.
 pub fn read_matches_image_names(
     path: &Path,
 ) -> Result<(MatchesMetadata, Vec<String>), MatchesError> {
-    let file = std::fs::File::open(path).map_err(|e| MatchesError::IoPath {
-        operation: "Failed to open file",
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-    let mut archive = zip::ZipArchive::new(file)?;
-    let metadata: MatchesMetadata = read_json_entry(&mut archive, entries::metadata())?;
+    let mut archive = open_archive(path)?;
+    let metadata = parse_metadata(read_json_entry(&mut archive, entries::metadata())?, path)?;
     let image_names: Vec<String> = read_json_entry(&mut archive, entries::images_names())?;
     if image_names.len() != metadata.image_count as usize {
         return Err(MatchesError::ShapeMismatch(format!(
@@ -89,56 +140,22 @@ pub fn read_matches_image_names(
     Ok((metadata, image_names))
 }
 
-/// Read the image names entry of a `.matches` file as it is, with no
-/// image-name rule and no count check, and nothing else.
-///
-/// For finding which folders a file names when its names break the
-/// image-name rule, so that the readers refuse the file: the workspace
-/// upgrade keeps those folders for it. Never use what it returns to convert or
-/// write a file; [`read_matches_image_names`] is the reader for that.
-pub fn read_matches_image_names_unchecked(path: &Path) -> Result<Vec<String>, MatchesError> {
-    let file = std::fs::File::open(path).map_err(|e| MatchesError::IoPath {
-        operation: "Failed to open file",
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-    let mut archive = zip::ZipArchive::new(file)?;
-    Ok(read_json_entry(&mut archive, entries::images_names())?)
-}
-
 /// Read a complete `.matches` file into columnar data.
 ///
 /// The file stores exactly one correspondence backbone: `image_pairs/`
-/// (pairwise, all versions) or `clusters/` (version 3+, indicated by the
-/// metadata `has_clusters` flag). The optional `cluster_patches/` section
-/// requires `clusters/`; the optional `two_view_geometries/` section
-/// requires `image_pairs/`.
+/// (pairwise) or `clusters/` (indicated by the metadata `has_clusters` flag).
+/// The optional `cluster_patches/` section requires `clusters/`; the optional
+/// `two_view_geometries/` section requires `image_pairs/`.
 ///
-/// Version 1 files store their two-view relative poses in the COLMAP camera
-/// convention and are upgraded to the canonical convention on load by
-/// S-conjugating every pose ([`s_conjugate_relative_pose`]); the pixel-space
-/// F/E/H matrices are identical in both versions and are left untouched.
-/// Content hashes cover the stored bytes ([`crate::verify_matches`] re-reads
-/// the file), so integrity verification is unaffected by the in-memory
-/// upgrade; a re-written file is a new current-version file with new hashes.
-///
-/// **A cluster-backbone file below version 6 is rejected.** Version 6 moved
-/// every member's geometry into `clusters/` and dropped
-/// `cluster_patches/member_affines`, and neither the older layout's semantics
-/// nor the geometry itself can be recovered here — it lives in the referenced
-/// `.sift` files, which this crate does not open. The error names the fix:
-/// regenerate with `sfm match --cluster`, then `sfm cluster-patches` if the
-/// file was enriched.
+/// A file of a version below [`MATCHES_OLDEST_READ_VERSION`] is refused with
+/// [`MatchesError::VersionNoLongerRead`], and one of version 0 or newer than
+/// [`MATCHES_FORMAT_VERSION`] as unsupported, before anything that depends on
+/// the version is parsed.
 ///
 /// `cluster_patches/member_status` codes are resolved through the file's
 /// `member_status_names` legend and returned in the canonical
-/// [`ClusterMemberStatus`] numbering; a version 6 file carries no legend and is
-/// read through the canonical one. A code past the legend's end, or a legend
-/// naming a status the format does not define, is rejected.
-///
-/// Pairwise-backbone files keep their full version compatibility; version ≤ 3
-/// ones never store `images/image_dims`, so they load with
-/// [`MatchesData::image_dims`] as `None`.
+/// [`ClusterMemberStatus`] numbering. A code past the legend's end, or a
+/// legend naming a status the format does not define, is rejected.
 ///
 /// The data read is held to the rules [`crate::write_matches`] holds its input
 /// to: every `image_dims` value at least 1, pairs sorted and within the image
@@ -150,38 +167,16 @@ pub fn read_matches_image_names_unchecked(path: &Path) -> Result<Vec<String>, Ma
 /// the format defines them. A file that breaks one is refused with the first
 /// finding as [`MatchesError::InvalidFormat`].
 pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
-    let file = std::fs::File::open(path).map_err(|e| MatchesError::IoPath {
-        operation: "Failed to open file",
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-    let mut archive = zip::ZipArchive::new(file)?;
+    let mut archive = open_archive(path)?;
     // A full read consumes every entry the file holds, so they are all
     // decompressed in one batch rather than one at a time; the section readers
     // below then look up the entries this file's metadata says exist.
     let decoded = DecodedEntries::read_all(&mut archive)?;
 
     // Top-level metadata
-    let mut metadata: MatchesMetadata = decoded.json_entry(entries::metadata())?;
+    let metadata = parse_metadata(decoded.json_entry(entries::metadata())?, path)?;
     let content_hash: MatchesContentHash = decoded.json_entry(entries::content_hash())?;
 
-    // Reject versions newer than this build understands; their semantics are
-    // unknown so reading with current-version assumptions would mislead.
-    if metadata.version > MATCHES_FORMAT_VERSION {
-        return Err(MatchesError::InvalidFormat(format!(
-            "unsupported .matches format version {} (this build supports up to \
-             {MATCHES_FORMAT_VERSION})",
-            metadata.version
-        )));
-    }
-    // Version ≤ 2 files always store the pairwise backbone; clusters arrived
-    // with version 3.
-    if metadata.version < 3 && (metadata.has_clusters || metadata.has_cluster_patches) {
-        return Err(MatchesError::InvalidFormat(format!(
-            "version {} file claims clusters/cluster_patches (introduced in version 3)",
-            metadata.version
-        )));
-    }
     if metadata.has_cluster_patches && !metadata.has_clusters {
         return Err(MatchesError::InvalidFormat(
             "has_cluster_patches requires has_clusters (cluster_patches requires the clusters \
@@ -195,27 +190,6 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
                 .into(),
         ));
     }
-    // Version 6 moved every cluster file's member geometry into the backbone
-    // and dropped `cluster_patches/member_affines`. An older cluster file's
-    // geometry is only in the `.sift` files this crate does not open, and its
-    // affines carry semantics no longer in the format, so it cannot be
-    // upgraded on load — refuse it and name the regeneration. Pairwise files
-    // are unaffected.
-    if metadata.version < 6 && metadata.has_clusters {
-        return Err(MatchesError::InvalidFormat(format!(
-            "version {} cluster-backbone file: member geometry moved into clusters/ in version \
-             6 and cannot be reconstructed on load (it lives in the referenced `.sift` files) — \
-             regenerate with `sfm match --cluster`{}",
-            metadata.version,
-            if metadata.has_cluster_patches {
-                ", then re-run `sfm cluster-patches`"
-            } else {
-                ""
-            }
-        )));
-    }
-    let needs_convention_upgrade = metadata.version < 2;
-    let stored_version = metadata.version;
 
     let image_count = metadata.image_count as usize;
 
@@ -250,18 +224,10 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
         decoded.binary_array(&entries::images_feature_counts(image_count), image_count)?;
     let feature_counts = Array1::from_vec(feature_counts_vec);
 
-    // Per-image dimensions: mandatory since version 4; version ≤ 3 files
-    // never stored them.
-    let image_dims = if stored_version >= 4 {
-        let dims_vec: Vec<u32> =
-            decoded.binary_array(&entries::images_image_dims(image_count), image_count * 2)?;
-        Some(
-            Array2::from_shape_vec((image_count, 2), dims_vec)
-                .map_err(|e| MatchesError::ShapeMismatch(format!("image_dims reshape: {e}")))?,
-        )
-    } else {
-        None
-    };
+    let dims_vec: Vec<u32> =
+        decoded.binary_array(&entries::images_image_dims(image_count), image_count * 2)?;
+    let image_dims = Array2::from_shape_vec((image_count, 2), dims_vec)
+        .map_err(|e| MatchesError::ShapeMismatch(format!("image_dims reshape: {e}")))?;
 
     // === Backbone: image pairs XOR clusters ===
     // Historically the reader rejected forbidden counts before missing
@@ -285,11 +251,7 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
 
     // === Cluster patches (optional) ===
     let cluster_patches = if metadata.has_cluster_patches {
-        Some(read_cluster_patches_section(
-            &decoded,
-            &metadata,
-            stored_version,
-        )?)
+        Some(read_cluster_patches_section(&decoded, &metadata)?)
     } else {
         None
     };
@@ -297,23 +259,10 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
     // === Two-view geometries (optional) ===
     let two_view_geometries = if metadata.has_two_view_geometries {
         let pair_count = metadata.image_pair_count.unwrap_or(0) as usize;
-        let mut tvg = read_tvg_section(&decoded, pair_count)?;
-        // Version 1 → 2 upgrade: relative poses were stored in the COLMAP
-        // camera convention; S-conjugate them to canonical. F/E/H are
-        // pixel-space and unchanged.
-        if needs_convention_upgrade {
-            tvg.s_conjugate_poses();
-        }
-        Some(tvg)
+        Some(read_tvg_section(&decoded, pair_count)?)
     } else {
         None
     };
-
-    // Older files are upgraded in memory; a re-written file is a new
-    // current-version file.
-    if metadata.version < MATCHES_FORMAT_VERSION {
-        metadata.version = MATCHES_FORMAT_VERSION;
-    }
 
     let data = MatchesData {
         metadata,
@@ -437,8 +386,7 @@ fn read_clusters_section(
     )?;
     let member_features = Array1::from_vec(member_features_vec);
 
-    // The members' geometry, mandatory since version 6 (older cluster files
-    // are refused before this point).
+    // The members' geometry.
     let positions_vec: Vec<f32> = decoded.binary_array(
         &entries::clusters_member_positions(member_count),
         member_count * 2,
@@ -466,14 +414,9 @@ fn read_clusters_section(
 }
 
 /// Read `cluster_patches/`, resolving `member_status` through the file's legend.
-///
-/// `stored_version` is the file's own version, not the upgraded one: it decides
-/// whether the legend is read from the metadata or is the canonical one a
-/// version 6 file's fixed numbering amounts to.
 fn read_cluster_patches_section(
     decoded: &DecodedEntries,
     metadata: &MatchesMetadata,
-    stored_version: u32,
 ) -> Result<ClusterPatchData, MatchesError> {
     let cluster_count = metadata.cluster_count.unwrap_or(0) as usize;
     let member_count = metadata.cluster_member_count.unwrap_or(0) as usize;
@@ -496,8 +439,7 @@ fn read_cluster_patches_section(
         .get("refine_options")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
-    let status_legend =
-        read_member_status_legend(&cp_meta, stored_version).map_err(MatchesError::InvalidFormat)?;
+    let status_legend = read_member_status_legend(&cp_meta).map_err(MatchesError::InvalidFormat)?;
 
     let reference_members_vec: Vec<u32> = decoded.binary_array(
         &entries::cluster_patches_reference_members(cluster_count),
@@ -533,7 +475,7 @@ fn read_cluster_patches_section(
     )?;
     let member_consistency_residual = Array1::from_vec(member_consistency_vec);
 
-    let member_cells = read_member_cells(decoded, &cp_meta, stored_version, member_count)?;
+    let member_cells = read_member_cells(decoded, &cp_meta, member_count)?;
 
     Ok(ClusterPatchData {
         reference_members,
@@ -546,21 +488,18 @@ fn read_cluster_patches_section(
     })
 }
 
-/// Read the optional per-cell columns of `cluster_patches/` (format version
-/// 8), resolving `member_cell_status` through the file's own
-/// `member_cell_status_names` legend.
+/// Read the optional per-cell columns of `cluster_patches/`, resolving
+/// `member_cell_status` through the file's own `member_cell_status_names`
+/// legend.
 ///
 /// The legend and the four columns are present together or absent together;
-/// a file with neither, which includes every file below version 8, has no
-/// cells and reads as `None`.
+/// a file with neither has no cells and reads as `None`.
 fn read_member_cells(
     decoded: &DecodedEntries,
     cp_meta: &serde_json::Value,
-    stored_version: u32,
     member_count: usize,
 ) -> Result<Option<MemberCellData>, MatchesError> {
-    let legend = read_member_cell_status_legend(cp_meta, stored_version)
-        .map_err(MatchesError::InvalidFormat)?;
+    let legend = read_member_cell_status_legend(cp_meta).map_err(MatchesError::InvalidFormat)?;
     if let Some(error) = cell_entry_errors(decoded.names(), member_count, legend.is_some())
         .into_iter()
         .next()

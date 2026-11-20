@@ -521,8 +521,8 @@ The report blocks then go to stderr, so stdout holds the JSON alone.
 - Keypoint positions come from the file's `member_positions` — the backbone's
   own array, whose content is whatever stage the file is at: the detections of
   a matcher output, the refinement's answer in a cluster-patches one. There is
-  no other source and no fallback; a `.matches` file predating format version 6
-  is refused by the reader, naming its regeneration. The values are stored
+  no other source and no fallback; every cluster file the reader reads carries
+  them. The values are stored
   float32 and widened by the kernel because the vote solves in float64. Member
   exclusion is the default selection's job, by status — the same rule the
   refined path has always used.

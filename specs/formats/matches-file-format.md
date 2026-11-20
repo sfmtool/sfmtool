@@ -72,6 +72,46 @@ COLMAP database starting from 1. One deliberate divergence is the camera-frame
 convention: two-view relative poses are stored in the canonical −Z-forward camera
 convention described below, **not** in COLMAP's +Z-forward, Y-down convention.
 
+## Format versions
+
+`metadata.version` records the format version. The current version, which a
+conforming writer writes, is `10`, and it is also the oldest version a reader
+reads: every entry and key below is that of version 10. A reader refuses a
+file of any other version:
+
+- **Versions 1 to 9**, which sfmtool wrote before 0.4, with a message that
+  names the file, its version, the oldest version read and the last release
+  that reads it, so the user can upgrade the workspace with that release:
+
+  ```
+  <path> is a version 7 .matches file, and this sfmtool reads .matches files of
+  version 10 or later. sfmtool 0.4.1 is the last release that reads version 7:
+  install it, run `sfm ws upgrade` on the workspace, then use the file with
+  this release.
+  ```
+
+  `read_matches`, `read_matches_metadata` and `read_matches_image_names`
+  return it as `MatchesError::VersionNoLongerRead`, which the Python bindings
+  raise as `OSError` (opening a `MatchesFile` too), and `verify_matches`
+  reports it as the file's one error. The version is checked before anything
+  that depends on it is parsed, so a file of an older version is refused for
+  its version rather than for a key or entry it lacks.
+- **Version 0**, which no version of the format has used, and a version newer
+  than the current one, whose layout it cannot know, as an unsupported
+  version: `unsupported .matches format version V (this build reads versions
+  10 to 10)`.
+
+The format crate holds the current version as `MATCHES_FORMAT_VERSION`, the
+oldest version read as `MATCHES_OLDEST_READ_VERSION` and the release the
+refusal names as `MATCHES_LAST_RELEASE_READING_OLDER_VERSIONS`
+([`types.rs`](../../crates/sfmtool-matches-format/src/types.rs)). A writer
+always writes the current version, whatever sections a file carries. How the
+version changes, which older versions a reader keeps reading, and how one
+stops being read are in [format-versions.md](format-versions.md)
+([Dropping a version](format-versions.md#dropping-a-version)).
+[Version History](#version-history) at the end of this spec lists what each
+version changed.
+
 ## Coordinate Conventions
 
 Match data (feature indexes, descriptor distances) lives in pixel space and carries no
@@ -99,11 +139,6 @@ pair of relative-pose arrays in the optional two-view geometries section:
   camera-frame rays. A consumer that instead *derives* `E` or `F` from the stored
   relative pose plus intrinsics must first map the pose back to the COLMAP/OpenCV
   frame by conjugating with the camera-frame flip `S = diag(1, −1, −1)`.
-
-> **Migration note.** The canonical camera convention was formalized after the format
-> was already in use; files of format version 1 hold COLMAP-convention relative
-> poses (cameras looking down +Z with Y down). See
-> [Versioning and Migration](#versioning-and-migration).
 
 ## File Structure
 
@@ -163,11 +198,10 @@ Where:
 - `{K}` = total number of cluster members across all clusters
 - `{I}` = total number of inlier matches across all pairs (two-view geometries)
 
-**The backbone rule (version 3):** every `.matches` file stores **exactly one** of
+**The backbone rule:** every `.matches` file stores **exactly one** of
 `image_pairs/` and `clusters/` as its correspondence backbone. The metadata `has_clusters`
 flag selects which. `two_view_geometries/` requires the pairwise backbone (its arrays are
-keyed per stored pair); `cluster_patches/` requires the cluster backbone. Version ≤ 2 files
-always store the pairwise backbone.
+keyed per stored pair); `cluster_patches/` requires the cluster backbone.
 
 ## File Format Details
 
@@ -224,8 +258,8 @@ A cluster-bearing file replaces the pairwise summary fields with cluster counts:
 ```
 
 **Field descriptions:**
-- `version`: Format version number. `1` through `10`; writers emit `10` (see
-  [Versioning and Migration](#versioning-and-migration))
+- `version`: Format version number, `10` (see
+  [Format versions](#format-versions))
 - `matching_method`: Type of matching used to produce these matches. The
   format does not restrict the string; these values have a defined meaning:
   - `"exhaustive"`: a pairwise file whose matcher compared the descriptors of
@@ -265,9 +299,9 @@ A cluster-bearing file replaces the pairwise summary fields with cluster counts:
 - `has_two_view_geometries`: Whether the optional two-view geometries section is present
   (pairwise backbone only)
 - `has_clusters`: Whether the file stores the `clusters/` backbone instead of
-  `image_pairs/`. Absent in version ≤ 2 files (readers treat absence as `false`)
+  `image_pairs/`. Required
 - `has_cluster_patches`: Whether the optional `cluster_patches/` section is present
-  (requires `has_clusters`). Absent in version ≤ 2 files
+  (requires `has_clusters`). Required
 
 ### 2. Content Hash (`content_hash.json.zst`)
 
@@ -299,8 +333,7 @@ a section digest is taken and how the digests combine.
   Present only when that section exists.
 - `content_xxh128`: The whole-file digest over all present section hashes, in the
   order metadata, images, pairs, clusters, cluster_patches, two_view_geometries
-  (each only if present). A pairwise file's byte stream is identical to the
-  pre-version-3 layout, so version ≤ 2 hashes verify unchanged.
+  (each only if present).
 
 ### 3. Images
 
@@ -340,11 +373,7 @@ the rule of the `.sfmr` format's
 [`images/names.json.zst`](sfmr-file-format.md#imagesnamesjsonzst). The writer
 refuses a value, and the readers (`read_matches_image_names` among them) and
 the verifier a file, that holds anything else, with an error naming the entry's
-index and the entry. `read_matches_image_names_unchecked` returns this entry as
-it is stored, with no rule applied and no other entry read. The workspace
-upgrade calls it when the readers refuse a file's names, to find the folders
-those names point into and keep them; nothing converts or writes a file from
-what it returns.
+index and the entry.
 
 ```json
 [
@@ -390,7 +419,7 @@ required to be sorted, but lexicographic ordering by name is recommended.
 - Makes the file self-contained for geometric consumers (principal-point priors,
   normalized coordinates, bounds checks) without opening the referenced `.sift` files
 - **Constraint**: Every value MUST be ≥ 1
-- Mandatory since format version 4; version ≤ 3 files never stored it
+- Mandatory
 
 ### 4. Pairs (Putative Matches — Backbone Alternative A)
 
@@ -514,9 +543,8 @@ rationale.
 #### Member geometry: one position, one shape, and the file's stage
 
 A cluster file holds exactly **one** keypoint position and **one** affine
-shape per member, in the two arrays below. They are mandatory: every version 6
-cluster file carries them, and a cluster file below version 6 is refused (see
-[Versioning and Migration](#versioning-and-migration)). What they *mean* is the
+shape per member, in the two arrays below. They are mandatory: every cluster
+file carries them. What they *mean* is the
 stage the file is at, and the presence of `cluster_patches/` tells the two
 apart:
 
@@ -572,8 +600,8 @@ write rounds. Detected values are never rounded at all — they are
   refinement's translation, whose magnitude is
   `cluster_patches/member_shift_px`. A cluster's reference member is refined
   against itself, so its refined position **is** its detected one
-- **Constraint**: Never `NaN`; mandatory in every version 6 cluster file,
-  alongside `member_affine_shapes`
+- **Constraint**: Never `NaN`; mandatory in every cluster file, alongside
+  `member_affine_shapes`
 
 #### `clusters/member_affine_shapes.{K}.2.2.float32.zst`
 
@@ -592,8 +620,8 @@ write rounds. Detected values are never rounded at all — they are
 - Because the composition runs through `S_ref`, a refined shape is a shape in
   the cluster's shared reference frame, not an independently re-measured
   ellipse for that one member
-- **Constraint**: Never `NaN`; mandatory in every version 6 cluster file,
-  alongside `member_positions`
+- **Constraint**: Never `NaN`; mandatory in every cluster file, alongside
+  `member_positions`
 - **Constraint**: A cluster's reference member's shape is non-singular — every
   consumer that wants a reference-relative warp inverts it
 
@@ -640,23 +668,17 @@ refinement measured and which members stand.
 **Field descriptions:**
 - `cluster_count` / `member_count`: Must equal the top-level `cluster_count` /
   `cluster_member_count` (and therefore the clusters section counts)
-- `member_status_names`: (version 7+) The legend `member_status` indexes, one
-  name per code in code order. Always present in a version 7+ file; absent in a
-  version 6 file, which is read through the canonical legend (see
-  [`member_status`](#cluster_patchesmember_statuskuint8zst)). A writer always
-  states the whole list in the canonical order; a reader accepts any legend and
-  normalises the column onto that order. A version 7 to 9 file's legend never
-  names `rejected_unlocalizable_refined` or `rejected_unlocalizable_cells`,
-  which version 10 added
-- `member_cell_status_names`: (version 8+, optional) The legend
-  `member_cell_status` indexes, one name per code in code order. Present
-  exactly when the section carries the
-  [per-cell entries](#per-cell-entries-optional-version-8), and absent
+- `member_status_names`: The legend `member_status` indexes, one name per code
+  in code order (see
+  [`member_status`](#cluster_patchesmember_statuskuint8zst)). Required. A
+  writer always states the whole list in the canonical order; a reader accepts
+  any legend and normalises the column onto that order
+- `member_cell_status_names`: (optional) The legend `member_cell_status`
+  indexes, one name per code in code order. Present exactly when the section
+  carries the [per-cell entries](#per-cell-entries-optional), and absent
   otherwise. A writer states the whole list in the canonical order; a reader
-  accepts any legend and normalises the column onto that order. A version 8
-  file's legend never names `refused_outlier`, which version 9 added
-- `refine_options`: The refinement parameters used, present since the section
-  was introduced in version 3. The patch extent appears
+  accepts any legend and normalises the column onto that order
+- `refine_options`: The refinement parameters used. The patch extent appears
   under one of two keys: `patch_size` (the full
   patch edge in pixels, current) or the legacy `radius` (a half-width).
   A consumer that needs the half-width uses `patch_size / 2`, or `radius`
@@ -686,14 +708,13 @@ refinement measured and which members stand.
 
   Which keys `refine_options` holds is not tied to the format version, since
   the object is a record of settings rather than a stored layout. `radius` was
-  written only into version 3 and 4 files, which are refused because they are
-  cluster files below version 6, so every file a reader accepts carries
-  `patch_size`; a reader still takes `radius` as a half-width when it finds
-  it. The member-gate key changed during version 6:
-  `max_keypoint_uncertainty` is in files refined before that change and
+  written only into files of versions no longer read, so every file a reader
+  accepts carries `patch_size`; a reader still takes `radius` as a half-width
+  when it finds it. `max_keypoint_uncertainty` is in files refined before the
+  member gate changed to the self-similarity radius and
   `max_member_zncc_self_similarity_radius` in files refined after it. A file
   rewritten at a later version, or a selection of it, keeps the keys of the
-  refinement it holds, so a version 7 or later file can carry either. A reader treats
+  refinement it holds, so a file can carry either. A reader treats
   a missing `refine_options`, or one with neither extent key, as recording no
   patch extent.
 
@@ -755,14 +776,14 @@ refinement measured and which members stand.
     edge reads the maximum, 3. A bar of `0` means the gate was off. Files that
     carry `max_keypoint_uncertainty` in place of that key hold members refused
     by an earlier score of the same patch with the same status
-  - `rejected_unlocalizable_refined` — (version 10+) the member passed the ZNCC
+  - `rejected_unlocalizable_refined` — the member passed the ZNCC
     and shift gates, but its own patch, sampled again at its refined position
     and affine shape (the ones the file stores for it), does not pin a
     position: its ZNCC self-similarity radius there, read as for
     `rejected_unlocalizable`, is above the same bar,
     `refine_options.max_member_zncc_self_similarity_radius`. Its measurement is
     kept
-  - `rejected_unlocalizable_cells` — (version 10+) the member passed the ZNCC
+  - `rejected_unlocalizable_cells` — the member passed the ZNCC
     and shift gates, but of the nine cells of a three-by-three split of its own
     patch at its refined position and affine shape (rows and columns cut at a
     third and two thirds of the side), more than
@@ -778,17 +799,14 @@ refinement measured and which members stand.
   accepts any legend, in any
   order and naming any subset of the defined names, and **normalises the column
   onto the canonical order as it loads**, so a file's own numbering stops at the
-  I/O boundary. A version 6 file carries no legend: its codes are the fixed
-  numbering `0` reference through `6` rejected_unlocalizable, the first seven
-  names of the canonical legend, so it is read through those.
+  I/O boundary.
 - A patch cluster = the reference plus its `kept` members; statuses preserve the
   rejected members so consumers can re-gate without re-running (the ZNCC/shift arrays
   are the signals, mirroring how `match_descriptor_distances` enables descriptor
   re-filtering)
-- **Constraint**: The legend is present (version 7+), is a non-empty list of
-  names, names only statuses this format defines, and names none twice — a
-  repeat would give one status two codes. A file below version 10 names
-  neither `rejected_unlocalizable_refined` nor `rejected_unlocalizable_cells`
+- **Constraint**: The legend is present, is a non-empty list of names, names
+  only statuses this format defines, and names none twice — a repeat would
+  give one status two codes
 - **Constraint**: Every value is below the legend's length, and so names one of
   its entries
 - **Constraint**: At most one member with status `reference` or `kept` per
@@ -837,7 +855,7 @@ The section records one patch extent and one sampling `resolution` for the
 whole file. A second, finer resolution is proposed in
 [two-tier-patch-density.md](../drafts/two-tier-patch-density.md).
 
-#### Per-cell entries (optional, version 8+)
+#### Per-cell entries (optional)
 
 A member's affine shape describes its whole patch. The four entries below
 describe the parts of the patch: the reference's `R × R` sampling grid
@@ -861,7 +879,7 @@ displacements and removes it.
 
 The four entries are present together or absent together, and present exactly
 when `cluster_patches/metadata.json` carries `member_cell_status_names`. A
-file without them carries no per-cell reading; a version 7 file never does.
+file without them carries no per-cell reading.
 Cells are indexed `[k, row, col]`, from the top-left cell of the grid in the
 orientation the grid is sampled in (columns along the grid's first axis, rows
 along its second). Only a member whose status is `kept` carries readings:
@@ -882,8 +900,8 @@ every other member's row is `NaN` displacements, `NaN` ZNCCs,
   present in full only when `refine_options.move_shape` is `false`: the
   refinement then sampled the image once, through the stored shape, and left
   that shape as the whole-patch fit found it. When `move_shape` is `true`, or
-  the key is absent (every version 8 file, and a version 9 file written before
-  the key was recorded), the refinement may have moved the shape by the affine
+  the key is absent (a file written before the key was recorded), the
+  refinement may have moved the shape by the affine
   map the cells agreed on, so the stored shape may have absorbed that part and
   the displacements hold what remained. The definition above holds either
   way. When the refinement did move the shape, the cell's ZNCC and status were
@@ -939,7 +957,7 @@ every other member's row is `NaN` displacements, `NaN` ZNCCs,
   - `refused_bound` — the best displacement lies on the edge of the range
     searched, so the optimum is at or past it and no sub-pixel displacement
     can be read
-  - `refused_outlier` — (version 9+) the displacement was measured and the
+  - `refused_outlier` — the displacement was measured and the
     cell passed the bars above, but it disagrees with the affine map the
     member's other fitted cells agree on by so much that the fit of that map
     gave it no weight
@@ -949,8 +967,7 @@ every other member's row is `NaN` displacements, `NaN` ZNCCs,
   legend, in any order and naming any subset of the defined names, and
   normalises the column onto the canonical order as it loads
 - **Constraint**: The legend is a non-empty list of names, names only cell
-  statuses this format defines, and names none twice. A version 8 file's
-  legend does not name `refused_outlier`
+  statuses this format defines, and names none twice
 - **Constraint**: Every value is below the legend's length
 
 ##### `cluster_patches/member_cell_iterations.{K}.uint8.zst`
@@ -1253,10 +1270,9 @@ depth, and the innermost `source_content_xxh128` names that archive. The key is
 absent whenever the source is an ordinary file.
 
 **Versions.** The record lives in `matching_options`, so adding it and its
-keys changed no stored layout and no format version. It was first written
-into version 4 files, and `restrict_cluster_ids` and `source_selection` were
-first written into version 5 files. Every cluster file a reader accepts
-(version 6 and later) may carry the record, with or without either key. A
+keys changed no stored layout and no format version. Every cluster file may
+carry the record, with or without `restrict_cluster_ids` and
+`source_selection`, which were first written after the record itself. A
 reader treats a file without the record as an ordinary file, a record without
 `restrict_cluster_ids` as a selection not restricted by cluster, and a record
 without `source_selection` as a selection of an ordinary file.
@@ -1390,27 +1406,26 @@ cluster_patches, two_view_geometries.
 
 ### Verification Process
 
-1. Check backbone/flag consistency (exactly one backbone's entries and summary counts
+1. Check the version, as the readers do ([Format versions](#format-versions)):
+   a file of a version the readers refuse is reported with their message as
+   its one error, and nothing else is checked
+2. Check backbone/flag consistency (exactly one backbone's entries and summary counts
    present, matching the `has_*` flags); a file that fails these is reported without
    further section checks
-2. Decompress each file and hash the raw uncompressed bytes
-3. Recompute section and overall hashes
-4. Compare with stored values in `content_hash.json.zst`
-5. Check every raw array a structural check indexes against the byte length its
+3. Decompress each file and hash the raw uncompressed bytes
+4. Recompute section and overall hashes
+5. Compare with stored values in `content_hash.json.zst`
+6. Check every raw array a structural check indexes against the byte length its
    declared count calls for
-6. Validate structural constraints (feature index bounds, count sums, pair ordering,
+7. Validate structural constraints (feature index bounds, count sums, pair ordering,
    inliers among their pair's candidate matches, config indexes within `config_types`;
    cluster CSR, member bounds, patch statuses and reference invariants; the
    per-cell entries paired with their legend, their codes within it and no
    reading on a member that is not `kept`; see
-   [Cluster Constraints](#cluster-constraints)), and reject a legend newer
-   than the file's version: `member_status_names` below version 7,
-   `member_cell_status_names` below version 8, `refused_outlier` below
-   version 9, and `rejected_unlocalizable_refined` or
-   `rejected_unlocalizable_cells` below version 10
+   [Cluster Constraints](#cluster-constraints))
 
-Step 6 walks the raw arrays by index, so a section's structural checks are skipped
-once one of its arrays fails step 5 — and the pairwise feature-bounds walk is
+Step 7 walks the raw arrays by index, so a section's structural checks are skipped
+once one of its arrays fails step 6 — and the pairwise feature-bounds walk is
 skipped as well when the per-pair `match_counts` do not sum to `match_count`,
 since those are the run lengths it advances through, and the inlier subset walk
 when either the match or the inlier counts do not sum to their totals. The
@@ -1537,10 +1552,6 @@ The writers in this repository and the `matching_method` they record:
   writes stored two-view geometries into a COLMAP database; it conjugates each
   relative pose by `S` when it builds the `pycolmap.Rigid3d`.
 
-The reader's refusal of a cluster file below version 6 names the migration as
-commands: regenerate with `sfm match --cluster`, then re-run
-`sfm cluster-patches` if the file was enriched.
-
 ## As part of a Pipeline
 
 The `.matches` file fits between `.sift` files and `.sfmr` files. The data in a collection
@@ -1586,236 +1597,42 @@ the pairs that pass verification, their matches and the
 [two-view geometries section](#7-two-view-geometries-optional-section), with
 `has_two_view_geometries` set to `true` in its metadata and its own content hash.
 
-## Versioning and Migration
-
-How the version changes, and which older versions a reader keeps reading, is
-in [format-versions.md](format-versions.md). sfmtool 0.5 stops reading the versions below 10, as
-[../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md) specifies.
-
-The format has ten released versions (`1` through `10`). The format is versioned
-(`metadata.json` `version`) precisely so that changes like the ones below can upgrade
-on load instead of breaking old files. Writers always emit the current version;
-readers accept any version up to it, with one exception — a cluster-backbone
-file below version 6, which is refused.
-
-### Version 9 → Version 10
-
-| Change | Detail |
-|---|---|
-| `cluster_patches/metadata.json` `member_status_names` | The legend may name two more member statuses, `rejected_unlocalizable_refined` and `rejected_unlocalizable_cells`, codes `7` and `8` in the canonical order. A writer states the whole legend, so every version 10 file with `cluster_patches/` names them. |
-| `cluster_patches/metadata.json` `refine_options` | A file may record `regate_at_refined_shape` and `max_capped_cells`, the settings of the two gates those statuses come from. They are recorded settings like the others and are not read back. |
-| `clusters/member_positions`, `clusters/member_affine_shapes` | A member with either new status was measured, so its rows hold the refinement's answer, as a `rejected_low_zncc` or `rejected_shift` member's do. |
-
-No entry a version 9 file stores changes its definition or layout, and a
-version 9 file reads unchanged. A version 9 file whose legend names either new
-status is refused, since no version 9 writer wrote those names. The bump exists
-because a version 9 reader refuses a legend name it does not define: without
-it, a version 9 reader would meet the new names in a file that claims a version
-it reads. Integrity verification follows the same rule. A re-written file is a
-new version 10 file, with new hashes. Pairwise files have no
-`cluster_patches/` section, so only their metadata `version` moves.
-
-### Version 8 → Version 9
-
-| Change | Detail |
-|---|---|
-| `cluster_patches/metadata.json` `member_cell_status_names` | The legend may name a sixth cell status, `refused_outlier`, code `5` in the canonical order. A writer states the whole legend, so every version 9 file with per-cell entries names it. |
-| `cluster_patches/metadata.json` `refine_options` | A file with per-cell entries may record `move_shape`, whether the refinement was allowed to change the member's shape. It is a recorded setting like the others and is not read back. |
-
-No entry a version 8 file stores changes its definition or layout, and a
-version 8 file reads unchanged. A version 8 file never records `move_shape`,
-so its cells are read as those of a refinement that may have moved the shape
-(see
-[`member_cell_shift_px`](#cluster_patchesmember_cell_shift_pxk332float32zst)).
-A version 8 file whose legend names `refused_outlier` is refused, since no
-version 8 writer wrote that name. The bump exists because
-a version 8 reader refuses a legend name it does not define: without it, a
-version 8 reader would meet `refused_outlier` in a file that claims a version
-it reads. Integrity verification follows the same rule. A re-written file is a
-new version 9 file, with new hashes.
-
-### Version 7 → Version 8
-
-| Change | Detail |
-|---|---|
-| `cluster_patches/member_cell_shift_px`, `member_cell_zncc`, `member_cell_status`, `member_cell_iterations` | Four new optional entries, present together or absent together: each member's per-cell displacement, ZNCC, status and refinement passes. See [Per-cell entries](#per-cell-entries-optional-version-8). They are files of the `cluster_patches/` section and are hashed into `cluster_patches_xxh128` with it. |
-| `cluster_patches/metadata.json` `member_cell_status_names` | New key, present exactly when the per-cell entries are: the legend `member_cell_status` indexes. |
-
-Nothing that a version 7 file stores changes meaning or layout. **A version 7
-file reads unchanged** and has no per-cell entries, so a reader reports that it
-carries no cells. A version 7 file that carries `member_cell_status_names` or
-any `member_cell_*` entry is refused, since no version 7 writer wrote one; a
-version 8 file with the entries but no legend, or the legend but not all four
-entries, is refused, since it would leave the column unexplained or the cells
-incomplete. Integrity verification follows the same rule. A re-written file is
-a new version 8 file, with new hashes. Pairwise files have no
-`cluster_patches/` section, so only their metadata `version` moves.
-
-### Version 6 → Version 7
-
-| Change | Detail |
-|---|---|
-| `cluster_patches/metadata.json` `member_status_names` | New key, present exactly when `cluster_patches/` is: the legend `cluster_patches/member_status` indexes. It rides inside `metadata.json`, which is already hashed into `cluster_patches_xxh128`, so no hash slot changes. |
-| `cluster_patches/member_status` | A code is now an index into that legend rather than a number the format fixes. |
-
-Version 7 makes `member_status` follow the pattern a per-element enumeration
-takes in the `.sfmr` format (`point_constraints` and its
-`point_constraint_names` legend): a numeric column, and a `*_names` legend in
-the same section's metadata that every code is resolved through. A writer
-states the canonical legend, so the column's bytes are the same as a version 6
-writer's; only the legend and the metadata `version` are new.
-
-**A version 6 file reads unchanged.** Every version 6 writer stored the fixed
-numbering `0` reference through `6` rejected_unlocalizable, which is exactly the
-canonical legend, so a version 6 `cluster_patches/` section is read through that
-legend and its codes keep their meaning. A version 6 file that carries
-`member_status_names` is refused, since no version 6 writer wrote one; a version
-7 file without it is refused, since it would leave its codes unexplained.
-Integrity verification follows the same rule. A re-written file is a new
-version 7 file that states the legend, with new hashes. Pairwise files have no
-`cluster_patches/` section, so only their metadata `version` moves.
-
-### Version 5 → Version 6
-
-Version 6 gives a cluster file **one** place for its members' geometry.
-`clusters/` gains a mandatory `member_positions.{K}.2.float32` and
-`member_affine_shapes.{K}.2.2.float32` pair, and
-`cluster_patches/member_affines.{K}.2.3.float64` is **removed**. There is now
-exactly one keypoint position and one affine shape per member, and its content
-is the file's stage: the `.sift` detections, verbatim, in a matcher output; the
-refinement's own answer for every member its cascade measured, and the
-untouched detection for every member it never fitted, in a cluster-patches
-output. Nothing is `NaN`; `cluster_patches/member_status` is the sole authority
-on what a row means and on exclusion. See
-[Member geometry](#member-geometry-one-position-one-shape-and-the-files-stage).
-
-The change is what removes the duplication two earlier versions had grown: a
-consumer no longer branches on whether the enrichment is present, no longer
-opens the `.sift` files the feature indexes name, and can no longer be handed
-two answers for one member. It also halves the geometry's storage, which the
-`float32` note in that section explains. A pairwise file's entries are
-unchanged — only its metadata `version` moves.
-
-**A cluster-backbone file below version 6 is refused on read**, bare or
-enriched. Its geometry is only in the referenced `.sift` files, which the
-format layer does not open, and its `member_affines` carries semantics the
-format no longer has, so there is nothing to upgrade from. The error names the
-migration: regenerate the backbone by clustering the `.sift` features again,
-then refine it again if the file was enriched. Pairwise-backbone
-compatibility is untouched, and integrity verification stays version-aware —
-it requires the geometry pair at version 6+, forbids it before, and continues
-to pass structurally sound older files.
-
-### Versions 3 → 4 → 5
-
-Version 4 added the mandatory `images/image_dims.{N}.2.uint32` array and gave
-`cluster_patches/member_affines`' last column the member's absolute refined
-keypoint position; version 5 gave its leading 2×2 the member's absolute affine
-shape. Both of those affine semantics are history: version 6 removed the member
-they described, and every cluster file below version 6 is refused, so no reader
-carries them.
-
-What survives for a **pairwise** file is `image_dims`: version ≤ 3 pairwise
-files never stored it and load with no dimensions (in-memory `image_dims` is
-absent/None); everything else loads with unchanged semantics. Integrity
-verification remains version-aware and continues to pass
-structurally sound older files of every version, cluster ones included — hashes
-cover the stored bytes.
-
-### Version 2 → Version 3
-
-Version 3 introduces the cluster backbone: the `clusters/` section (the cluster
-matcher's primary artifact) and the optional `cluster_patches/` enrichment, with the
-`image_pairs/` section — mandatory through version 2 — becoming the stored-pairs
-alternative (exactly one of the two backbones is present per file). Metadata gains
-`has_clusters` / `has_cluster_patches` flags and, in cluster-bearing files,
-`cluster_count` / `cluster_member_count` in place of `image_pair_count` /
-`match_count`; the content hash gains `clusters_xxh128` / `cluster_patches_xxh128`.
-
-**Version ≤ 2 files load unchanged.** They always store the pairwise backbone and
-never have clusters; readers treat the absent `has_clusters` / `has_cluster_patches`
-flags as `false`. No stored byte changes meaning: a pairwise version 3 file has
-exactly the pre-version-3 section layout and hash byte streams (the new metadata
-flags appear only in newly written files). Version 1 files additionally get the
-pose S-conjugation described below.
-
-### Version 1 → Version 2
-
-Version 2 makes the canonical camera convention normative for the stored two-view
-relative poses (see [Coordinate Conventions](#coordinate-conventions)), mirroring the
-`.sfmr` version 5 and `.camrig` version 2 bumps. No member is added, removed, or
-renamed; the change is purely semantic:
-
-| Version 1 | Version 2 |
-|-----------|-----------|
-| `cam2_from_cam1` poses in COLMAP convention (cameras look down +Z with Y down) | Canonical convention: cameras look down −Z with +Y up |
-| F/E/H matrices in pixel space | Unchanged — pixel space |
-
-**Migration is mechanical and lossless.** A version 1 file upgrades on load by
-conjugating each stored relative pose with the camera-frame flip
-`S = diag(1, −1, −1)`: `R' = S · R · S`, `t' = S · t`. The F/E/H matrices are
-untouched — they are pixel-space quantities, identical in both versions. Relative
-poses never touch the world frame, so the `.sfmr` world canonicalization `W` does not
-apply. Saving always writes the current version. Content hashes cover the stored
-bytes, so hashes verify before conversion; a converted-then-saved file is a new
-current-version file with new hashes.
-
-As a consequence, a consumer that writes these relative poses into a COLMAP
-database conjugates them by `S` back to COLMAP convention. The stored
-F/E/H matrices are pixel-space and unchanged by the flip; see
-[`sfmr-file-format.md`](sfmr-file-format.md#conversions-happen-at-the-io-boundary)
-for the invariant and the `S`/`W` conversion math.
-
 ## Version History
 
-- **Version 10**: The member statuses `rejected_unlocalizable_refined` and
-  `rejected_unlocalizable_cells` — `member_status_names` may name them, and a
-  writer always does — and the `refine_options` keys `regate_at_refined_shape`
-  and `max_capped_cells`. Version 9 files read unchanged.
-- **Version 9**: The cell status `refused_outlier` — `member_cell_status_names`
-  may name it, and a writer always does — and the `refine_options` key
-  `move_shape`, whether the refinement was allowed to change the member's
-  shape. Version 8 files read unchanged.
-- **Version 8**: Per-cell entries — `cluster_patches/` may carry
+One line per version, newest first. sfmtool 0.4.1 is the last release that
+reads versions 1 to 9; this build reads version 10 only
+([Format versions](#format-versions)).
+
+- **Version 10**: the current version. The `member_status_names` legend may
+  name two more member statuses, `rejected_unlocalizable_refined` and
+  `rejected_unlocalizable_cells`, and a writer always does; `refine_options`
+  may record `regate_at_refined_shape` and `max_capped_cells`, the settings of
+  the two gates those statuses come from.
+- **Version 9**: the `member_cell_status_names` legend may name the cell
+  status `refused_outlier`, and a writer always does; `refine_options` may
+  record `move_shape`, whether the refinement was allowed to change the
+  member's shape.
+- **Version 8**: the optional per-cell entries of `cluster_patches/`,
   `member_cell_shift_px`, `member_cell_zncc`, `member_cell_status` and
-  `member_cell_iterations`, present together with a `member_cell_status_names`
-  legend in its metadata: each member's displacement, ZNCC and status per cell
-  of a three-by-three split of its patch, and its refinement passes. Version 7
-  files read unchanged and carry no cells.
-- **Version 7**: Status legend — `cluster_patches/metadata.json` carries
-  `member_status_names`, and a `member_status` code is an index into it. A
-  writer states the canonical legend; a reader accepts any legend and
-  normalises the codes onto the canonical order. Version 6 files carry no
-  legend and are read through the canonical one, which is the fixed numbering
-  they were written with.
-- **Version 6**: One geometry per member — `clusters/` gains a mandatory
-  `member_positions` / `member_affine_shapes` pair and
-  `cluster_patches/member_affines` is removed, so a cluster file holds exactly
-  one keypoint position and one affine shape per member and its content is the
-  file's stage: the `.sift` detections verbatim in a matcher output; the
-  refinement's answer where its cascade measured, the untouched detection where
-  it did not, in a cluster-patches output. Nothing is `NaN` and
-  `member_status` is the sole authority. Cluster-backbone files below version 6
-  are refused (regenerate the clusters from the `.sift` features, then refine
-  again if enriched); pairwise files are unchanged.
-- **Version 5**: Absolute affine shapes — `cluster_patches/member_affines`'
-  leading 2×2 became the member's absolute affine shape `S = W·S_ref` rather
-  than the reference-relative warp. Superseded by version 6, which removed the
-  member; the shape definition itself survives in
-  `clusters/member_affine_shapes`.
-- **Version 4**: Self-contained geometry — mandatory per-image dimensions
-  (`images/image_dims`, still current), and `cluster_patches/member_affines`'
-  last column became the member's refined absolute keypoint position rather
-  than the affine translation. Superseded by version 6 as above.
-- **Version 3**: Cluster backbone — the `clusters/` section (CSR cluster
-  membership, the cluster matcher's primary artifact) becomes the alternative
-  correspondence backbone to `image_pairs/` (exactly one per file), and the optional
-  `cluster_patches/` section stores photometrically refined per-member affine warps.
-  Version ≤ 2 files (always pairwise) load unchanged.
-- **Version 2**: Canonical camera convention — `cam2_from_cam1` relative
-  poses in −Z-forward / +Y-up camera frames, matching `.sfmr` and `.camrig` — becomes
-  normative; version 1 files (COLMAP convention) upgrade on load via `S`-conjugation
-  of the stored poses. F/E/H matrices unchanged.
-- **Version 1**: the first version, written as the integer `1`. Its two-view
-  relative poses are in COLMAP convention; a reader upgrades them on load by
-  `S`-conjugation (see [Version 1 → Version 2](#version-1--version-2)).
+  `member_cell_iterations`, present together with the
+  `member_cell_status_names` legend.
+- **Version 7**: the `member_status_names` legend in
+  `cluster_patches/metadata.json`; a `member_status` code becomes an index into
+  it rather than a number the format fixes.
+- **Version 6**: the mandatory `clusters/member_positions` and
+  `clusters/member_affine_shapes` of a cluster file, holding one keypoint
+  position and one affine shape per member at the file's stage, and
+  `cluster_patches/member_affines` removed.
+- **Version 5**: the leading 2×2 of `cluster_patches/member_affines` (since
+  removed) holds the member's absolute affine shape rather than the
+  reference-relative warp.
+- **Version 4**: the mandatory `images/image_dims`, and the last column of
+  `cluster_patches/member_affines` (since removed) holds the member's refined
+  absolute keypoint position.
+- **Version 3**: the cluster backbone `clusters/`, the alternative to
+  `image_pairs/`, with the optional `cluster_patches/` section, the
+  `has_clusters` and `has_cluster_patches` metadata keys, and the
+  `cluster_count` and `cluster_member_count` keys of a cluster file.
+- **Version 2**: the canonical camera convention for the stored two-view
+  relative poses (earlier versions stored them in COLMAP convention).
+- **Version 1**: the first version.

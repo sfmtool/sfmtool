@@ -472,9 +472,7 @@ pub(crate) fn content_errors(data: &MatchesData) -> Vec<String> {
     let feature_counts = row_major_elements(&data.feature_counts);
 
     image_name_errors(&data.image_names, &mut errors);
-    if let Some(image_dims) = &data.image_dims {
-        image_dims_errors(&row_major_elements(image_dims), &mut errors);
-    }
+    image_dims_errors(&row_major_elements(&data.image_dims), &mut errors);
 
     if let Some(pairs) = &data.image_pairs {
         let match_counts = row_major_elements(&pairs.match_counts);
@@ -607,8 +605,7 @@ pub(crate) fn validate_structure(data: &MatchesData) -> Result<(), MatchesError>
 }
 
 /// Check that every array the writer is handed has the shape the metadata's
-/// counts declare, and that the arrays a format version made mandatory are
-/// present.
+/// counts declare, and that the arrays the format requires are present.
 pub(crate) fn validate_dimensions(
     data: &MatchesData,
     image_count: usize,
@@ -650,18 +647,11 @@ pub(crate) fn validate_dimensions(
             data.feature_counts.len()
         )
     );
-    let Some(image_dims) = &data.image_dims else {
-        return Err(MatchesError::ShapeMismatch(
-            "image_dims is required (mandatory since format version 4): supply an (N, 2) \
-             width/height array"
-                .into(),
-        ));
-    };
     check!(
-        image_dims.shape() == [image_count, 2],
+        data.image_dims.shape() == [image_count, 2],
         format!(
             "image_dims shape {:?} != [{image_count}, 2]",
-            image_dims.shape()
+            data.image_dims.shape()
         )
     );
 
@@ -727,17 +717,17 @@ pub(crate) fn validate_dimensions(
                 clusters.member_features.len()
             )
         );
-        // The members' detections, mandatory since format version 6. A file
-        // that predates them cannot gain them here: they live in the `.sift`
-        // rows `member_features` names, which this crate never opens.
+        // The members' geometry, required in a cluster file. A value without
+        // it cannot gain it here: the detections live in the `.sift` rows
+        // `member_features` names, which this crate never opens.
         let (Some(member_positions), Some(member_affine_shapes)) =
             (&clusters.member_positions, &clusters.member_affine_shapes)
         else {
             return Err(MatchesError::ShapeMismatch(
-                "clusters.member_positions and clusters.member_affine_shapes are required \
-                 (mandatory since format version 6): supply the members' detected keypoint \
-                 positions (M, 2) and affine shapes (M, 2, 2), copied from the referenced \
-                 `.sift` files, or re-run `sfm match --cluster` to regenerate the file"
+                "clusters.member_positions and clusters.member_affine_shapes are required: \
+                 supply the members' detected keypoint positions (M, 2) and affine shapes \
+                 (M, 2, 2), copied from the referenced `.sift` files, or re-run \
+                 `sfm match --cluster` to regenerate the file"
                     .into(),
             ));
         };

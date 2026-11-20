@@ -25,7 +25,7 @@ use crate::SfmrReconstruction;
 
 mod plan;
 
-use plan::{lexically_resolved, normalized, read_failure, sift_path, Action};
+use plan::{lexically_resolved, normalized, read_failure, Action};
 
 /// The zstd level the upgrade writes `.matches` and `.camrig` files at, the
 /// level their bindings write by default.
@@ -204,9 +204,7 @@ impl From<Cancelled> for UpgradeWorkspaceError {
 ///    up fails; one the current reader refuses is left as it is.
 /// 3. Rewrite each file below the current version at its own path: a `.sfmr`
 ///    by [`SfmrReconstruction::load`] and [`SfmrReconstruction::save`]; a
-///    `.matches` file by reading and writing it, taking a version 3 or older
-///    file's image sizes from its `.sift` files; a `.camrig` file by reading
-///    and writing it.
+///    `.matches` or `.camrig` file by reading and writing it.
 ///
 /// A run that stops part way, by cancellation, can be run again to finish.
 ///
@@ -336,39 +334,10 @@ fn rewrite_sfmr(path: &Path, progress: &Progress<'_>) -> Result<UpgradeOutcome, 
 
 /// Phase 3 for one `.matches` file.
 fn rewrite_matches(path: &Path) -> UpgradeOutcome {
-    let mut data = match sfmtool_matches_format::read_matches(path) {
+    let data = match sfmtool_matches_format::read_matches(path) {
         Ok(d) => d,
         Err(e) => return read_failure(e),
     };
-    // A file of version 3 or older stores no image sizes; each is taken from
-    // the image's `.sift` file in the folder it records.
-    if data.image_dims.is_none() {
-        let Some(workspace) = sfmtool_matches_format::resolve_workspace_dir(path, &data.metadata)
-        else {
-            return UpgradeOutcome::Failed(
-                "it stores no image sizes, and the workspace to take them from cannot be found"
-                    .into(),
-            );
-        };
-        let prefix = &data.metadata.workspace.contents.feature_prefix_dir;
-        let mut dims = Vec::with_capacity(2 * data.image_names.len());
-        for name in &data.image_names {
-            let sift = sift_path(&workspace, name, prefix);
-            match sfmtool_sift_format::read_sift_metadata(&sift) {
-                Ok((_, metadata, _)) => {
-                    dims.extend([metadata.image_width, metadata.image_height]);
-                }
-                Err(e) => {
-                    return UpgradeOutcome::Failed(format!(
-                        "it stores no image sizes, and the .sift file {} to take them from \
-                         cannot be read: {e}",
-                        sift.display()
-                    ))
-                }
-            }
-        }
-        data.image_dims = ndarray::Array2::from_shape_vec((data.image_names.len(), 2), dims).ok();
-    }
     match sfmtool_matches_format::write_matches(path, &data, ZSTD_LEVEL) {
         Ok(()) => UpgradeOutcome::Converted,
         Err(e) => UpgradeOutcome::Failed(format!("it could not be written: {e}")),

@@ -75,11 +75,11 @@ pub(crate) fn images_image_dims(image_count: impl std::fmt::Display) -> String {
 
 /// The `images/image_dims` name up to and including the dot before its count.
 ///
-/// `verify` tests for this entry's *presence* — it is mandatory from version 4
-/// and forbidden before it — without knowing `image_count`, so it matches on
-/// this prefix. Deriving it here rather than spelling it out there means a
-/// rename cannot silently turn that check into a no-op, which would report
-/// every valid version 4+ file as missing the entry.
+/// `verify` tests for this entry's *presence* — it is mandatory — without
+/// knowing `image_count`, so it matches on this prefix. Deriving it here
+/// rather than spelling it out there means a rename cannot silently turn that
+/// check into a no-op, which would report every valid file as missing the
+/// entry.
 pub(crate) fn images_image_dims_prefix() -> &'static str {
     "images/image_dims."
 }
@@ -214,8 +214,8 @@ pub(crate) fn clusters_member_positions(member_count: impl std::fmt::Display) ->
 /// The `clusters/member_positions` name up to and including the dot before
 /// its count.
 ///
-/// `verify` tests for this entry's *presence* — it is mandatory from version 6
-/// and forbidden before it — without knowing `member_count`, so it matches on
+/// `verify` tests for this entry's *presence* — it is mandatory in a cluster
+/// file — without knowing `member_count`, so it matches on
 /// this prefix, for the reason spelled out on
 /// [`images_image_dims_prefix`].
 pub(crate) fn clusters_member_positions_prefix() -> &'static str {
@@ -274,7 +274,7 @@ pub(crate) fn cluster_patches_member_consistency_residual(
 }
 
 /// `cluster_patches/member_cell_iterations` — renders of the piecewise
-/// refinement per member (format version 8, optional).
+/// refinement per member (optional).
 pub(crate) fn cluster_patches_member_cell_iterations(
     member_count: impl std::fmt::Display,
 ) -> String {
@@ -291,7 +291,7 @@ pub(crate) fn cluster_patches_member_cell_iterations_prefix() -> &'static str {
 }
 
 /// `cluster_patches/member_cell_shift_px` — each cell's displacement per
-/// member (format version 8, optional).
+/// member (optional).
 pub(crate) fn cluster_patches_member_cell_shift_px(member_count: impl std::fmt::Display) -> String {
     format!(
         "{}{member_count}.3.3.2.float32.zst",
@@ -306,7 +306,7 @@ pub(crate) fn cluster_patches_member_cell_shift_px_prefix() -> &'static str {
 }
 
 /// `cluster_patches/member_cell_status` — each cell's status code per member,
-/// an index into `member_cell_status_names` (format version 8, optional).
+/// an index into `member_cell_status_names` (optional).
 pub(crate) fn cluster_patches_member_cell_status(member_count: impl std::fmt::Display) -> String {
     format!(
         "{}{member_count}.3.3.uint8.zst",
@@ -320,8 +320,8 @@ pub(crate) fn cluster_patches_member_cell_status_prefix() -> &'static str {
     "cluster_patches/member_cell_status."
 }
 
-/// `cluster_patches/member_cell_zncc` — each cell's ZNCC per member (format
-/// version 8, optional).
+/// `cluster_patches/member_cell_zncc` — each cell's ZNCC per member
+/// (optional).
 pub(crate) fn cluster_patches_member_cell_zncc(member_count: impl std::fmt::Display) -> String {
     format!(
         "{}{member_count}.3.3.float32.zst",
