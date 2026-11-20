@@ -426,7 +426,7 @@ max 0.057 px (image 11)`.
 #### `--drop-image-adjustments parameters=<NAME>+<NAME>...[,cameras=<I>+<J>...]`
 
 Stops cameras varying per-image parameters
-([`../../../formats/sfmr-file-format.md`](../../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)):
+([`../../../formats/sfmr-file-format.md`](../../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional)):
 each chosen camera's flag for each parameter named is cleared, every image of
 the camera has that part of its adjustment set to zero, and the mean over the
 camera's posed images is folded into the camera, the focal's the geometric
@@ -498,7 +498,7 @@ of `SFMTOOL_FISHEYE` or `SFMTOOL_PINHOLE` (as `--camera-model` produces) is
 adjusted by sfmtool's own reconstruction-level bundle adjustment instead
 ([`../../../core/reconstruction/bundle-adjust.md`](../../../core/reconstruction/bundle-adjust.md)),
 and so is one with a non-zero per-image intrinsic adjustment on any image
-([`../../../formats/sfmr-file-format.md`](../../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13))
+([`../../../formats/sfmr-file-format.md`](../../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional))
 and any run given a per-image key,
 since pycolmap has no per-image intrinsics and sfmtool's adjustment holds each
 image's adjustment and writes it back, unchanged unless a per-image key releases
@@ -829,7 +829,7 @@ An `--add-*` step is a no-op, with one printed line, on a reconstruction that
 already carries the column. To re-render at a different resolution, drop first:
 `--drop-patch-bitmaps --add-patch-bitmaps resolution=32`. Bitmaps added at
 another resolution, or with another sampler, than the stored
-[observation readings](../../../formats/sfmr-file-format.md#observation-readings-optional-version-12)
+[observation readings](../../../formats/sfmr-file-format.md#observation-readings-optional)
 were taken at drop those readings, which no longer describe the renders the
 file names; added at the same ones, the readings stay, with the scores of any
 point whose reference the render picked cleared. `--drop-patch-bitmaps` keeps
@@ -1003,9 +1003,7 @@ smallest file, and the `--add-*` steps rebuild both: the thumbnails from the
 A caller that wants the thumbnails kept writes `--minimal --add-thumbnails`.
 The image readings (each image's sharpness and gradient structure tensor) are
 not in the shorthand: they are 16 bytes per image and required, and a minimal
-file keeps them. A minimal copy of a file older than version 15 therefore needs
-its `.sift` files or its images when it is written, as every save of such a
-file does ([Writing a `.sfmr`](../../README.md#writing-a-sfmr)).
+file keeps them ([Writing a `.sfmr`](../../README.md#writing-a-sfmr)).
 
 ##### `--minimal wspath=<path>`: stating the workspace path
 

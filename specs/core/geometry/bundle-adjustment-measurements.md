@@ -620,7 +620,7 @@ medians and tails of the run with both changes above.
 These measurements are behind the per-image release
 ([bundle-adjustment.md](bundle-adjustment.md#the-per-image-release)) and the
 `.sfmr` columns it writes
-([sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)).
+([sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional)).
 
 ### The evidence for adjusting per image
 

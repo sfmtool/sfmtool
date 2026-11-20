@@ -620,7 +620,7 @@ its nature — a `w = 0` patch is first-class throughout:
 ### Serialization
 
 A `PatchCloud` round-trips to the per-point patch frame in the `.sfmr`
-`points3d/` section (format version 3+) via
+`points3d/` section via
 `PatchCloud::to_halfvec_arrays(point_count)` /
 `PatchCloud::from_halfvec_arrays(half_u_xyz, half_v_xyz, centers_xyzw)`.
 `to_halfvec_arrays` scatters the cloud's patches into per-point rows by

@@ -827,7 +827,7 @@ The operations:
 
 | Phase | Where | Seen at |
 |-------|-------|---------|
-| `open`, with `read`, `convert convention`, `derive`, `keypoints`, then `thumbnails` and `patch bitmaps` when the file lacks them, under it; then `append nodes` on the GUI thread | `state::open::open_job` over `SfmrReconstruction::load`, `DisplayThumbnails::build` and `render_display_patch_bitmaps` | 143 ms for the read of a dino open |
+| `open`, with `read`, `derive`, `keypoints`, then `thumbnails` and `patch bitmaps` when the file lacks them, under it; then `append nodes` on the GUI thread | `state::open::open_job` over `SfmrReconstruction::load`, `DisplayThumbnails::build` and `render_display_patch_bitmaps` | 143 ms for the read of a dino open |
 | `save`, with `materialise` over `push version`, then `write` | `state::save` | |
 | `undo` / `redo` / `go to`, with `history step`, `selection follow` and `forget images` | `state::edits` | 447 ms to 2.36 s across a bulk edit |
 | `materialise` | wherever an edit folds an overlay before a kernel call | |
@@ -855,15 +855,12 @@ after using the viewer normally.
 
 **An open's stages are `SfmrReconstruction::load`'s own**, because they are
 where `sfm-explorer` cannot reach: it deliberately does not depend on
-`sfmtool-sfmr-format`, so the read, the convention upgrade and the derived-index
-build are named by the core function that does them. The viewer adds the two
+`sfmtool-sfmr-format`, so the read and the derived-index build are named by the core function that does them. The viewer adds the two
 fill-in stages, `thumbnails` and `patch bitmaps`, for a file without those
 columns, and `append nodes`, which the GUI thread runs at depth 0 when the
 open's task lands ([background-tasks.md](background-tasks.md) § "Opening a
 file"). `read` is one row over `read_sfmr`, which decompresses and
-hash-checks inside itself. `convert convention` is the upgrade a file below the
-canonical-convention version gets, and its guard is cancelled when the file is
-already canonical, so a current file records no row for it. `keypoints` is the
+hash-checks inside itself. `keypoints` is the
 fill of a `sift_files` file's inline keypoint column from its `.sift` files
 (`SfmrReconstruction::fill_keypoints_from_sift`), and records no row for a file
 that already carries the column or is `embedded_patches`.

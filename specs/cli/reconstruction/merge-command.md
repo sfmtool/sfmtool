@@ -32,7 +32,7 @@ with an error naming the inputs, writing nothing, when:
   records the first input's folder;
 - two cameras that took the same image vary different parameters per image
   (their `per_image_adjustments`, see
-  [sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13))
+  [sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional))
   or have different `rolling_shutter_scanlines` settings, since step 1 below
   makes them one camera; the error names the image and both cameras;
 - some inputs have rig frames and others do not, or an input's rig frames do
@@ -101,7 +101,7 @@ name.
    such an image's refinement fails and it keeps its pose, as any image whose
    refinement fails does.
 7. **Combine tracks** — Build the final unified track data. Where an input
-   carries [observation readings](../../formats/sfmr-file-format.md#observation-readings-optional-version-12),
+   carries [observation readings](../../formats/sfmr-file-format.md#observation-readings-optional),
    each merged observation takes the row of the input observation with the
    same image name and feature index, since the merge renders nothing; an
    observation no input read, or one from an input whose readings stand under

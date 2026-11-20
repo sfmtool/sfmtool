@@ -56,7 +56,7 @@ The relationship is: `recon.images[i]` (an `SfmrImage`) references
 intrinsic adjustment of its camera's focal and principal point, and on an
 `SFMTOOL_PINHOLE` camera a radial correction added to the camera's spline and
 rolling-shutter rates read on the camera's scanlines setting
-([../formats/sfmr-file-format.md](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13),
+([../formats/sfmr-file-format.md](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional),
 [../core/camera/sfmtool-pinhole-kernels.md](../core/camera/sfmtool-pinhole-kernels.md#per-image-corrections)),
 so the intrinsics an image was taken with are its camera's with that
 adjustment applied, `ImageSet::image_intrinsics(i)`. Everything in this spec

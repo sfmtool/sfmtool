@@ -413,7 +413,7 @@ column ([display_thumbnails.rs](../../crates/sfm-explorer/src/display_thumbnails
 
 - **The file's own column.** When the `.sfmr` carries thumbnails, the display column is
   the image set's own `Arc`, shared rather than copied.
-- **Rows the open builds.** When the file carries none (a version 11 file written
+- **Rows the open builds.** When the file carries none (one written
   without them), the open that reads it builds every row before the node appears, as a
   stage of its background task (`thumbnails`, [background-tasks.md](background-tasks.md)
   § "Opening a file"). `DisplayThumbnails::build` builds the rows in parallel, each from

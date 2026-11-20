@@ -287,7 +287,7 @@ u = cx + f·x_r,         v = cy − f·y_r
 `(ẋ, ẏ)` is the derivative of `(Px, Py)/(−Pz)` under `Ṗ = −ω × P`. The rates
 are in radians per short side of readout, whose meaning
 [sfmr-file-format.md § Per-image intrinsic
-adjustments](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)
+adjustments](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional)
 gives.
 
 The code runs the step in the kernels' optical frame, where the radial

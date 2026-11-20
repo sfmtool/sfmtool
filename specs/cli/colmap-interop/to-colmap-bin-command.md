@@ -90,7 +90,7 @@ infinity is written unchanged.
 
 COLMAP has one set of intrinsics per camera and none per image, while a `.sfmr`
 image can carry an intrinsic adjustment of its camera's focal and principal
-point ([sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)).
+point ([sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional)).
 So a camera with a non-zero adjustment on any of its images is written as one
 COLMAP camera per image of it, each that image's intrinsics (its camera's with
 its adjustment applied) in the camera's own model. Every other camera is
@@ -103,7 +103,7 @@ before anything is written. The implicit rigs written for a reconstruction
 without rig data are built from the written cameras, one per camera.
 
 An image of an `SFMTOOL_PINHOLE` camera may also carry a radial correction and
-rolling-shutter rates (format version 14). No COLMAP camera model holds either,
+rolling-shutter rates. No COLMAP camera model holds either,
 nor the `SFMTOOL_PINHOLE` spline itself, so a reconstruction whose images carry
 a non-zero value of either is refused before anything is written, with an error
 naming the camera and the correction and pointing at `sfm undistort`, which

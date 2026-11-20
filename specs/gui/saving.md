@@ -206,8 +206,9 @@ Saved a minimal copy of run_a at v7 to D:\published\run_a.sfmr
 ## What a plain save writes
 
 A Save or Save As writes the columns the file had, and the image readings
-the current format version requires. A file below version 15 has none, so its
-save gathers them from each image's `.sift` file, or else from the image
+the current format version requires. A value that lacks some image's
+readings, such as one a solve or an import built, has them gathered by the
+save from each image's `.sift` file, or else from the image
 itself, as every `.sfmr` save does
 ([sfmr-file-format.md § Where a writer gets the values](../formats/sfmr-file-format.md#where-a-writer-gets-the-values)),
 and the save is refused, naming each image, when an image has neither. The
@@ -408,5 +409,5 @@ where that content's rows went.
 **No file records ancestry.** The `.sfmr` format no longer defines the
 `lineage` key that versions 9 to 11 allowed. A file written earlier that carries
 one loads with the key skipped
-([the format spec's version 8 to 9 notes](../formats/sfmr-file-format.md#version-8--version-9)),
+([the format spec's retired `lineage` key](../formats/sfmr-file-format.md#the-retired-lineage-key)),
 so an id that only that record could have resolved gets the same refusal.

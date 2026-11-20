@@ -156,7 +156,7 @@ from the reference it then stores.
 
 **Observation readings.** Every observation was rendered at its refined
 keypoint, so each is read again there and the output stores its
-[observation readings](../../../formats/sfmr-file-format.md#observation-readings-optional-version-12):
+[observation readings](../../../formats/sfmr-file-format.md#observation-readings-optional):
 the tile at the stored `f32` keypoint and frame, at `resolution`, with
 `sampler`, read for its self-similarity ellipse, its viewing angle, tilt and
 zoom, and its plain and blur-matched scores against the bitmap the output

@@ -399,8 +399,9 @@ No command rewrites the workspace file unless the user runs one of these:
   folders and rewrites the workspace file and every file that names them,
   keeping every option. This release's
   [`sfm ws upgrade`](../cli/workspace/ws-upgrade-command.md) rewrites the
-  `.sfmr`, `.matches` and `.camrig` files of a version 2 workspace that are
-  below the current version, never writes the workspace file, and refuses a
+  `.matches` and `.camrig` files of a version 2 workspace that are below the
+  current version, lists a `.sfmr` below version 16 as one the reader refuses,
+  never writes the workspace file, and refuses a
   version 1 one.
 - **`sfm ws init` and `sfm ws init --force`** write version 2 with fresh
   options from the tool's defaults and the flags, the tool's `image_to_gray`
@@ -420,7 +421,7 @@ from a version 2 workspace holds the object in
 holds that file's version 1 settings. A `.sfmr` or `.matches` file finds its
 `.sift` files through its own record.
 
-A `.sfmr` of version 15 carries each image's sharpness and gradient structure
+A `.sfmr` carries each image's sharpness and gradient structure
 tensor under one `image_to_gray`. A writer takes the conversion from the value
 it writes, or else from `workspace.contents.feature_options.image_to_gray`, and
 copies each image's readings from its version 2 `.sift` file when that file

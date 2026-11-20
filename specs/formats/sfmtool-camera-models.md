@@ -226,7 +226,7 @@ camera's radial distortion, for a lens whose distortion changes from one
 photograph to the next, as it does when the focus moves. The change is two
 coefficients `e = (e_0, e_1)`, in units of `ρ`, stored per image in a `.sfmr`
 file ([sfmr-file-format.md § Per-image intrinsic
-adjustments](sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)).
+adjustments](sfmr-file-format.md#per-image-intrinsic-adjustments-optional)).
 Only an `SFMTOOL_PINHOLE` camera carries one.
 
 The correction is a spline of the same centre-anchored cubic basis as the

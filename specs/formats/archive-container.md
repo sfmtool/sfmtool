@@ -122,7 +122,7 @@ Three rules hold across all five formats:
    out of this digest: its bytes are still covered by their own section hash and
    still verified, but they are recomputable from sections that are in the digest
    and so say nothing about which value the file holds. `.sfmr` does this with
-   its `derived/` section from version 10; no other format has one.
+   its `derived/` section; no other format has one.
 
 Note the two byte orders, which are deliberately different and easy to confuse:
 numeric *data* is little-endian, while a 128-bit *digest* being folded into
