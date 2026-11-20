@@ -398,12 +398,11 @@ No command rewrites the workspace file unless the user runs one of these:
   workspace to version 2: it converts its `.sift` files to version 2 in new
   folders and rewrites the workspace file and every file that names them,
   keeping every option. This release's
-  [`sfm ws upgrade`](../cli/workspace/ws-upgrade-command.md) rewrites the
-  `.camrig` files of a version 2 workspace that are below the current
-  version, lists a `.sfmr` below version 16 and a `.matches` below version 10
-  as ones the reader refuses,
-  never writes the workspace file, and refuses a
-  version 1 one.
+  [`sfm ws upgrade`](../cli/workspace/ws-upgrade-command.md) rewrites no
+  file of a version 2 workspace until a format next changes version, lists a
+  `.sfmr` below version 16, a `.matches` below version 10 and a `.camrig`
+  below version 2 as ones the reader refuses, never writes the workspace
+  file, and refuses a version 1 one.
 - **`sfm ws init` and `sfm ws init --force`** write version 2 with fresh
   options from the tool's defaults and the flags, the tool's `image_to_gray`
   row, and a new folder named from them. `--force` drops any hand-edited option,
