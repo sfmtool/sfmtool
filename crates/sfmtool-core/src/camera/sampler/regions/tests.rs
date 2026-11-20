@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! A region pyramid of the required regions gives every sampler the whole
-//! pyramid's values, and one a pixel smaller does not.
+//! pyramid's values, one a pixel smaller does not, and the walk gives the
+//! same regions on the rayon pool as on one thread.
 
 use super::*;
 use crate::camera::image::{ImageU8, ImageU8Pyramid, PyramidLevel};
@@ -101,6 +102,33 @@ fn a_region_one_pixel_smaller_on_an_inner_edge_changes_the_render() {
                 whole.data(),
                 "{sampler:?}, side {side}"
             );
+        }
+    }
+}
+
+#[test]
+fn a_map_walked_on_the_rayon_pool_gives_the_serial_walks_regions() {
+    use crate::camera::sampler::test_support::diagonal_map;
+    use crate::camera::warp_map::{parallelize_rows, REMAP_PAR_MIN_PIXELS};
+    let image = photograph(200, 150);
+    let layout = layout(&whole(&image));
+    // On a rayon worker the walk takes the rows in order on that thread.
+    let serial_pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    let all_nan = WarpMap::new(64, 64, vec![f32::NAN; 2 * 64 * 64]);
+    for map in [
+        affine_map(64, [2.5, 0.4, -30.0, -0.3, 2.1, -20.0], 7),
+        diagonal_map(64, 6.0, 0.5, 100.0, 75.0),
+        all_nan,
+    ] {
+        assert!(parallelize_rows(64 * 64, REMAP_PAR_MIN_PIXELS));
+        for sampler in SAMPLERS {
+            let parallel = required_regions(&mut copy(&map), sampler, &layout);
+            let serial =
+                serial_pool.install(|| required_regions(&mut copy(&map), sampler, &layout));
+            assert_eq!(parallel, serial, "{sampler:?}");
         }
     }
 }

@@ -300,7 +300,9 @@ levels, each level 0's size halved, and no stored level. The tests cut tiles
 of 32 px.
 
 **What a read costs.** `required_regions` walks a map of more than 2048
-texels on the rayon pool, row by row, as the render does; the bounding boxes
+texels on the rayon pool, row by row, as the render does, and on the
+calling thread when that thread is already a rayon worker, so a read made
+inside a parallel loop takes no other work onto its thread; the bounding boxes
 of the rows are joined in any order, which gives the same rectangles. A copied
 read of a photograph in memory then costs the walk, the copy of its grown
 regions and the render of the region pyramid. Measured in a release build on
@@ -334,7 +336,8 @@ render finds the pool full of another view's kept regions takes the tile path
 and copies again once they are released.
 [regions/tests.rs](../../../crates/sfmtool-core/src/camera/sampler/regions/tests.rs)
 checks that a region pyramid of the required regions equals the whole
-pyramid, and that one a pixel smaller on any inner edge does not. The grown
+pyramid, that one a pixel smaller on any inner edge does not, and that a map
+walked on the rayon pool gives the regions the serial walk gives. The grown
 plane's value and Sobel reads through the windows are checked in
 [source_read_tests.rs](../../../crates/sfmtool-core/src/bench/normal/grown_plane/source_read_tests.rs).
 The reference view's
