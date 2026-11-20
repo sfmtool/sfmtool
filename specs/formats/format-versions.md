@@ -40,11 +40,11 @@ The `.sfmr` readers stop at version 16, the `.matches` readers at version 10
 and the `.sift` and `.camrig` readers at version 2, the versions sfmtool 0.4
 writes. sfmtool 0.4.1's release notes announced that the next release stops
 reading the older `.sfmr`, `.matches` and `.sift` versions; `.camrig` version
-1 is one no release wrote, so it was dropped with no announcement. Of the
-format specs, all but the `.kdf` one have their Format versions section near
-the top;
-[../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md)
-moves the `.kdf` one there in 0.5.
+1 is one no release wrote, so it was dropped with no announcement. Every
+release that writes `.kdf` files has written version 3, and no release has
+read `.kdf` versions 1 and 2, so the `.kdf` crate holds no oldest version read
+and no last release reading older versions
+([kdf-file-format.md § Format versions](kdf-file-format.md#format-versions)).
 
 ## When a format's version changes
 
