@@ -1059,3 +1059,38 @@ fn crop_cells_drawn_through_regions_equal_the_whole_pyramid_crops() {
         }
     }
 }
+
+/// A Crop cell whose photograph's read fails says *unreadable*, as for a
+/// photograph that cannot be decoded.
+#[test]
+fn a_crop_whose_read_fails_says_unreadable() {
+    use sfmtool_core::camera::image::{ImageU8Pyramid, PyramidLevel};
+    let mut clock = Clock(0.0);
+    let (mut state, id) = crop_state();
+    // Image 0's pyramid holds one pixel of it, so the crops of the points
+    // whose reference observation is in image 0 read past what it holds.
+    let recon = state.node(id).expect("loaded").recon();
+    let camera = &recon.image_set.cameras[0];
+    let one_pixel = ImageU8Pyramid::from_regions(vec![Some(PyramidLevel {
+        image: ImageU8::new(1, 1, 3, vec![0; 3]),
+        origin: [0, 0],
+        full_size: [camera.width, camera.height],
+    })])
+    .expect("a region pyramid");
+    let path = crate::state::photograph_path(recon, 0).expect("a path");
+    state.photographs.insert(&path, Arc::new(one_pixel));
+    let (_ctx, panel) = shown(&mut state, 4800.0, &mut clock);
+    assert_eq!(stored_reference(0), 0);
+    assert_eq!(
+        cell(&panel, 0, PictureColumn::Crop),
+        Some(CellPicture::Absent(Absent::Unreadable))
+    );
+    // A point whose reference observation is in image 1 still reads.
+    let in_image_1 = (FIRST_FAR..POINTS as u32)
+        .find(|&p| stored_reference(p as usize) == 1)
+        .unwrap();
+    assert!(matches!(
+        cell(&panel, in_image_1, PictureColumn::Crop),
+        Some(CellPicture::Texture(_))
+    ));
+}

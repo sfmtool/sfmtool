@@ -269,3 +269,68 @@ fn cluster_stage_pictures_drawn_through_regions_equal_the_whole_pyramid() {
     assert!(matches!(track.stage, Stage::Cluster(_)));
     drawn_pictures_equal_the_whole_pyramids(&state, id, &label);
 }
+
+/// A row whose photograph cannot be read draws the cells' error state: the
+/// tile and crop cells say *unreadable* and their hovers say why, while the
+/// rows whose photographs read draw their pictures.
+#[test]
+fn a_photograph_that_cannot_be_read_draws_the_cells_error_state() {
+    use sfmtool_core::camera::image::{ImageU8, PyramidLevel};
+    let (state, id, label, _, _) = on_the_bench();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let image = track.observations[0].image as usize;
+    // The cache's pyramid for the first row's photograph holds one pixel of
+    // it, so any read past that pixel fails.
+    let recon = state.node(id).expect("loaded").recon();
+    let camera = &recon.image_set.cameras[0];
+    let one_pixel = ImageU8Pyramid::from_regions(vec![Some(PyramidLevel {
+        image: ImageU8::new(1, 1, 3, vec![0; 3]),
+        origin: [0, 0],
+        full_size: [camera.width, camera.height],
+    })])
+    .expect("a region pyramid");
+    let path = crate::state::photograph_path(recon, image).expect("a path");
+    state
+        .photographs
+        .insert(&path, std::sync::Arc::new(one_pixel));
+
+    let mut panel = TrackBody::new();
+    let ctx = egui::Context::default();
+    ctx.all_styles_mut(|style| {
+        style.interaction.tooltip_delay = 0.0;
+        style.interaction.tooltip_grace_time = 0.0;
+    });
+    let texts = super::painted(&mut panel, &ctx, &state, Vec::new());
+    let why = panel
+        .read_failure(0)
+        .expect("the first row's read failed")
+        .to_string();
+    assert!(panel.tiles[&0].is_none() && panel.crops[&0].is_none());
+    for observation in 1..track.observations.len() {
+        assert!(panel.read_failure(observation).is_none());
+        assert!(panel.tiles[&observation].is_some());
+        assert!(panel.crops[&observation].is_some());
+    }
+    let unreadable = texts
+        .iter()
+        .filter(|t| *t == super::super::table::READ_FAILURE_CELL)
+        .count();
+    assert_eq!(unreadable, 2, "{texts:?}");
+
+    let y = row_y(&mut panel, &ctx, &state, image);
+    let layout = ColumnLayout::new();
+    let said = super::super::table::read_failure_text(&why);
+    for x in [layout.tile_x(), layout.crop_x()] {
+        let at = egui::pos2(x + TILE_SIZE / 2.0 + 8.0, y + 20.0);
+        let mut texts = Vec::new();
+        for _ in 0..14 {
+            texts = super::painted(
+                &mut panel,
+                &ctx,
+                &state,
+                vec![egui::Event::PointerMoved(at)],
+            );
+        }
+        assert!(texts.contains(&said), "{said:?} not in {texts:?}");
+    }
+}
