@@ -10,9 +10,11 @@ the patches it renders rather than with the photographs (open question 1).
 It is kept as a draft of its own because what it specifies, the samplers'
 regions, is separate from the files and caches the main draft specifies; its
 steps 1 and 2 are step 7 of the main draft, and its steps 3 to 6 are the main
-draft's steps 9 to 12. Step 1 (the main draft's step 7a) is built: the
-regions in the pyramid and the samplers, the region pool, the tile-addressed
-path and the render entry points but `clipped_share` are specified in
+draft's steps 9 to 12. Steps 1 and 2 (the main draft's steps 7a and 7b) are
+built, so the main draft's step 7 is complete: the regions in the pyramid and
+the samplers, the region pool, the tile-addressed path, the render entry
+points with `source_clipped_share` among them, and view-region pyramids
+assembled from tiles and kept for reuse across renders are specified in
 [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md),
 and this draft keeps only what is still proposed. The main draft's step 8, between them, limits the
 cluster members' elongation (§ "The members' elongation limit"). The user
@@ -54,17 +56,10 @@ and speed, never a result.
 The rules for every sampler, the affine fast path and the cluster grids, and
 `required_regions` and `LevelRegions::for_samples`, are built
 ([core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md)
-§ "Theory"). Two reads keep rules of their own, still proposed:
+§ "Theory"), and so is the clipped share's read over tiles,
+`source_clipped_share`, which the reference view's tile readings call from
+step 4 [10] on. One read keeps a rule of its own, still proposed:
 
-- **`clipped_share`** in
-  [reference_view/tile.rs](../../crates/sfmtool-core/src/patch/reference_view/tile.rs)
-  reads every level-0 pixel inside the tile's outline. It becomes one of the
-  render entry points (§ "Where the pixels come from") and takes no region
-  pyramid: it walks the level-0 tiles the outline's bounding box covers,
-  one at a time, applying the same even-odd rule to the pixel centres of each and summing the counts, so it holds one tile at a time
-  and gives the same share. A footprint of `F` level-0 pixels covers up to
-  `(ceil(F / 512) + 1)^2` tiles; this is the one read whose cost grows with the
-  footprint rather than with the patch resolution, as it does today.
 - **The grey reads of *Find Nearby Tracks*** (`GreyImages` in
   [bench/nearby/grey.rs](../../crates/sfmtool-core/src/bench/nearby/grey.rs))
   blur level 0 with a nine-tap Gaussian, reflecting at the image's edges: a
@@ -104,7 +99,7 @@ the region pool and the tile path:
   observation readings, *Add image to tracks*, and normal refinement's
   renders (`patch/normal_refine/znorm.rs`, `render_tiles`), step 4 [10];
 - the normal kernels that render through `render_tile` (below);
-- `clipped_share`, the cluster grid samplers `sample_grid_window` and
+- `clipped_share` (through `source_clipped_share`), the cluster grid samplers `sample_grid_window` and
   `build_template` (Track View's cluster-stage tile and its hover context
   through `sample_member_grid`, at 3 times the radius and resolution for the
   context; the bench's tile self-similarity; the piecewise refinement's
@@ -341,11 +336,12 @@ holds today's exact levels. Tiles cut from an array a caller already has
 A kernel's `ProjectedImage` holds a `&TiledPhotograph`, for every photograph,
 and a kernel reads pixels only through the **render entry points** in
 [sampler.rs](../../crates/sfmtool-core/src/camera/sampler.rs). Each takes the
-source and the region pool the kernel was given, works out the regions the
-read needs, takes them from the pool as copied regions or reads them through
-tiles, and returns what the kernel asked for. No kernel computes a region,
+view's `ViewRegions`, made over the source and the region pool the kernel
+was given, works out the regions the read needs, reuses the regions the view
+kept, assembles them from tiles into the pool or reads them through tiles,
+and returns what the kernel asked for. No kernel computes a region,
 assembles a region pyramid or touches a photograph tile. Every entry point
-but `clipped_share` is built
+is built
 ([core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md)
 § "Rust API"); the table says which kernels each will serve:
 
@@ -356,7 +352,7 @@ but `clipped_share` is built
 | `sample_source_grid` | a cluster grid's affine map and the grid points it reads (a window of the grid, or the support's pixels) with the edge rule (a `GridEdge`, or every sample in frame as `build_template` requires) | the raw samples, by the arithmetic of `sample_grid_window` and `build_template`, which moved behind it unchanged | the cluster refinement's grid samplers, `sample_member_grid` |
 | `read_source_samples` | a level, positions on it, and a border of 0 or 1 | for each position, the `(2 + 2 · border)²` pixels from `floor(x − 0.5) − border` and `floor(y − 0.5) − border`, each address clamped to the level as the bilinear samplers and `sobel_gradient` clamp it, with `bilinear_cell`'s fractions | the grown plane's value and Sobel reads |
 | `read_source_rect` | a level and a rectangle of it that the kernel's own arithmetic defines | the rectangle's pixels, reserved from the pool and copied whether or not the reservation succeeds | the cluster refinement's `LevelTile`, the grey reads of *Find Nearby Tracks* |
-| `clipped_share` | the outline | the share of level-0 pixel centres inside it, walking the level-0 tiles under the outline one at a time | the reference view's tile readings |
+| `source_clipped_share` | the outline | the share of level-0 pixel centres inside it, walking the level-0 tiles under the outline one at a time | the reference view's tile readings |
 
 `required_regions` and `LevelRegions::for_samples` (§ "Which samples a render
 takes") are the entry points' own: the entry points call them, and so do the
@@ -374,32 +370,16 @@ included; the main draft's § "Errors from reading pixels" lists the
 signatures that change and the step each changes in. The kernels' sampling
 arithmetic does not change.
 
-**Reuse across renders.** A kernel that optimizes a patch renders the same
-view many times with a slightly moved frame (the bench's fit rounds, the
-sub-pixel refinement, normal refinement). The region pyramid is assembled with
-the **reuse margin**, `REGION_REUSE_MARGIN = 0.25` in
-[sampler.rs](../../crates/sfmtool-core/src/camera/sampler.rs), beside
-`required_regions` and `LevelRegions`: a level's held region is its required
-region, `w` by `h` pixels, grown by `ceil(REGION_REUSE_MARGIN · w)` pixels on
-the left and on the right and `ceil(REGION_REUSE_MARGIN · h)` pixels above
-and below, then clipped to the level. Clipping changes no value, since
-sampling clamps at the level's edge the same way (§ "What it holds"). A
-later render whose required regions lie inside the held ones reuses it; one
-that does not assembles a new one. Before clipping, the held region is 1.5
-times as wide and as tall as the required one when its sides are multiples
-of 4, so 2.25 times the area. Rounding up adds at most 1.5 px to the width and to the height,
-so in general the area is at most `(1.5 + 1.5 / w)(1.5 + 1.5 / h)` times,
-a bound of about 2.3 for square regions of about 60 px and 2.5 for ones of
-about 20 px. For
-regions of a few pixels it is well above 2.25, since a 1 px side grows to
-3 px and a 2 px side to 4 px. Reuse does not change any value, only how often regions
-are copied. A kernel keeps a region pyramid for one view of the patch it is
-working on, and drops them all when it moves to the next patch (a fit's
-rounds, a refinement's steps and an evaluation's views of one track share
-them; the next track starts with none). So what it keeps is at most one region
-pyramid per view of one patch, grown by `REGION_REUSE_MARGIN`, about 2.25
-times the area of the region itself, and every copied region of the kernel call reserves from one pool
-(§ "Bounding a render's memory").
+**Reuse across renders.** Built: a view's `ViewRegions` keeps the region
+pyramid of its last copied read, its required regions grown by the **reuse
+margin**, `REGION_REUSE_MARGIN = 0.25`, and clipped to each level, and a
+later read whose required regions lie inside the kept ones reuses it
+([core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md)
+§ "Rust API" for a kernel's one `ViewRegions` per view of the patch it is
+working on, § "Theory" for what the margin costs). The kernels hold them so
+from step 4 [10] on, and what a kernel keeps is then at most one region
+pyramid per view of the patches in progress, about 2.25 times the area of the
+region itself, all reserved from one pool (§ "Bounding a render's memory").
 
 ## Bounding a render's memory
 
@@ -518,7 +498,7 @@ cascade wanders, so this bounds each request, not what one member holds
 (§ "The members' elongation limit"). The common case, footprints that are not stretched, stays at a few
 kilobytes per view. No view is refused and no result changes:
 which path a render takes depends on its boxes and on what its patch already keeps, and both read the same
-pixels. `clipped_share` already walks tiles one at a time (above). The
+pixels. `source_clipped_share` walks tiles one at a time (above). The
 pool's four tiles per thread and the window of 16 are decided (open
 question 4).
 
@@ -594,22 +574,18 @@ there is no whole pyramid for any reader to fall back on.
    subtraction in every sampler and gradient sampler (the AVX2 anisotropic
    kernel included), the tile-addressed path with its window of pinned
    tiles, the kernel call's region pool, the render entry points but
-   `clipped_share`, with `required_regions` and `LevelRegions::for_samples`
+   `source_clipped_share`, with `required_regions` and `LevelRegions::for_samples`
    behind them, and `TiledPhotograph` with `from_image`, `from_pyramid`,
    `layout` and `channels`; specified with its tests in
    [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md).
-   A copied read there reserves its grown regions and copies them for the
-   one read; keeping them for later renders is step 2.
-2. **View-region pyramids assembled from a `TiledPhotograph`'s tiles**,
-   with the reuse margin, and `clipped_share` as an entry point over tiles, on photographs cut
-   into tiles in memory (`from_image` and `from_pyramid`); the cache's
-   `view_region_pyramid` comes with the main draft's step 13. Tests: the assembled regions equal the whole pyramid's pixels;
-   `clipped_share` over tiles equals it over the whole level 0, for outlines
-   that cross tile edges and the image's edges; each held region is its
-   required region grown by `ceil(REGION_REUSE_MARGIN · w)` and
-   `ceil(REGION_REUSE_MARGIN · h)` px on each side and clipped to the level,
-   for regions of 1, 2, 3 and 61 px a side and at every edge of the image;
-   reuse when inside, reassembly when not.
+2. **View-region pyramids assembled from a `TiledPhotograph`'s tiles.**
+   Built, as the main draft's step 7b: the regions of a copied read
+   assembled from the photograph's tiles with the reuse margin, kept in the
+   view's `ViewRegions` and reused by a later read inside them, and
+   `source_clipped_share` over tiles, on photographs cut into tiles in memory
+   (`from_image` and `from_pyramid`); specified with its tests in
+   [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md).
+   The cache's `view_region_pyramid` comes with the main draft's step 13.
 3. **Track View and the Track Table** on region pyramids, peeking the
    cache's whole pyramids as today and reading them through `from_pyramid`;
    they peek tiles once the main draft's step 13 adds `peek_tile`. Track
@@ -622,7 +598,8 @@ there is no whole pyramid for any reader to fall back on.
    the whole-pyramid ones, and the crop test of that section.
 4. **The bench's jobs and the reference picks**: `ViewSources` hands the
    kernels a tiled source, and every read goes through the render entry
-   points, which work out its regions; each bench step and each reference pick makes one
+   points, which work out its regions, each kernel passing them one
+   `ViewRegions` per view of the patch it is working on; each bench step and each reference pick makes one
    region pool for its kernel call and passes it in, the picks for every
    `render_reference` call over the views their per-view `get`s fetched.
    Every kernel these steps run moves here, with every kernel that calls
@@ -683,8 +660,8 @@ decisions.
    the budget and the bulk kernels' point order (question 3) keep rare.
 2. **The reuse margin.** *Decided by the user:* a quarter of the region on
    each side, `REGION_REUSE_MARGIN = 0.25`, as
-   [§ "Where the pixels come from"](#where-the-pixels-come-from) defines it
-   under "Reuse across renders".
+   [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md)
+   defines it.
 3. **The point order of bulk kernels.** *Decided by the user:* grouped by
    reference image and then by the reference keypoint's row and column, not
    by tile, because a point order that does not depend on how photographs

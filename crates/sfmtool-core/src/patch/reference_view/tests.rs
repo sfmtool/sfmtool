@@ -185,6 +185,69 @@ fn the_row_spans_count_the_pixels_a_test_of_every_centre_counts() {
     }
 }
 
+#[test]
+fn the_clipped_share_over_tiles_equals_it_over_the_whole_level() {
+    use crate::camera::TiledPhotograph;
+    use std::sync::Arc;
+
+    // Clipped pixels scattered through a photograph that is not a whole
+    // number of 32 px tiles, in grey and in colour.
+    let value = |x: u32, y: u32| match (x * 7 + y * 13) % 11 {
+        0 => 0,
+        1 => 255,
+        _ => 100 + (x % 5) as u8,
+    };
+    let colour = {
+        let data = (0..70u32)
+            .flat_map(|y| (0..100u32).map(move |x| (x, y)))
+            .flat_map(|(x, y)| [100, value(x, y), value(y, x)])
+            .collect();
+        ImageU8Pyramid::build(&ImageU8::new(100, 70, 3, data), 1)
+    };
+    // Outlines across tile edges (32 and 64 on each axis), along a tile
+    // edge's pixel centres, off each of the image's edges, concave,
+    // self-crossing, inside one tile, and smaller than a pixel at a tile
+    // corner.
+    let outlines: Vec<Vec<[f64; 2]>> = vec![
+        vec![[5.3, 2.1], [90.7, 8.4], [74.2, 67.9], [1.1, 50.6]],
+        vec![[31.5, 31.5], [64.5, 31.5], [64.5, 64.5], [31.5, 64.5]],
+        vec![[32.0, 10.0], [64.0, 10.0], [64.0, 40.0], [32.0, 40.0]],
+        vec![
+            [2.0, 2.0],
+            [60.0, 2.0],
+            [33.0, 32.0],
+            [60.0, 65.0],
+            [2.0, 65.0],
+        ],
+        vec![[3.5, 3.5], [95.5, 65.5], [95.5, 3.5], [3.5, 65.5]],
+        vec![[-10.0, -5.0], [55.0, 4.0], [33.0, 45.0]],
+        vec![[70.0, 20.0], [130.0, 35.0], [80.0, 90.0]],
+        vec![[-20.0, -20.0], [120.0, -20.0], [120.0, 90.0], [-20.0, 90.0]],
+        vec![[40.2, 40.1], [55.7, 41.3], [47.0, 58.8]],
+        vec![[31.9, 31.9], [32.1, 31.9], [32.0, 32.1]],
+        vec![[99.6, 69.6], [99.9, 69.7], [99.8, 69.9]],
+    ];
+    for pyramid in [grey(100, 70, value), colour] {
+        let pyramid = Arc::new(pyramid);
+        let source = TiledPhotograph::from_pyramid(pyramid.clone()).with_tile_size(32);
+        for outline in &outlines {
+            let whole = clipped_share(&pyramid, outline).unwrap();
+            let tiles = source_clipped_share(&source, outline).unwrap().unwrap();
+            assert_eq!(tiles, whole, "{outline:?}");
+            if pyramid.level(0).channels() == 1 {
+                // NaN for an outline that holds no centre, read by the
+                // pixels under its points.
+                let by_pixel = clipped_share_by_pixel(&pyramid, outline);
+                assert!(by_pixel.is_nan() || by_pixel == whole, "{outline:?}");
+            }
+        }
+        assert_eq!(
+            source_clipped_share(&source, &[[1.0, 1.0], [40.0, 40.0]]),
+            Ok(None)
+        );
+    }
+}
+
 // ---- One view's tile --------------------------------------------------------
 
 fn pinhole(width: u32, height: u32) -> CameraIntrinsics {

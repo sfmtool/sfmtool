@@ -21,12 +21,16 @@ pub const REGION_POOL_BYTES_PER_THREAD: u64 =
 /// compare-and-add that succeeds or fails at once and never waits, so nested
 /// parallel loops on many threads cannot block on the pool. A render whose
 /// reservation fails reads through photograph tiles instead, with the same
-/// values. The bytes go back to the pool when the copied regions are dropped.
+/// values. The bytes go back to the pool when the regions are dropped: when
+/// the [`ViewRegions`](super::ViewRegions) that kept them reads elsewhere or
+/// is dropped, and for a rectangle, when its
+/// [`SourceRect`](super::SourceRect) is dropped.
 pub struct RegionPool {
     capacity: u64,
     held: AtomicU64,
     peak: AtomicU64,
     copied: AtomicU64,
+    reused: AtomicU64,
     tiled: AtomicU64,
 }
 
@@ -35,8 +39,11 @@ pub struct RegionPool {
 pub struct RegionPoolStats {
     /// The most bytes held at once.
     pub peak_bytes: u64,
-    /// The reads that copied their regions from the pool.
+    /// The reads that assembled their regions, reserved from the pool,
+    /// from the photograph's tiles.
     pub copied_reads: u64,
+    /// The reads that reused the regions a view kept from an earlier read.
+    pub reused_reads: u64,
     /// The reads that took the tile path: their reservation failed, or they
     /// read no pixel.
     pub tiled_reads: u64,
@@ -56,6 +63,7 @@ impl RegionPool {
             held: AtomicU64::new(0),
             peak: AtomicU64::new(0),
             copied: AtomicU64::new(0),
+            reused: AtomicU64::new(0),
             tiled: AtomicU64::new(0),
         }
     }
@@ -75,6 +83,7 @@ impl RegionPool {
         RegionPoolStats {
             peak_bytes: self.peak.load(Ordering::Relaxed),
             copied_reads: self.copied.load(Ordering::Relaxed),
+            reused_reads: self.reused.load(Ordering::Relaxed),
             tiled_reads: self.tiled.load(Ordering::Relaxed),
         }
     }
@@ -105,6 +114,11 @@ impl RegionPool {
         self.copied.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Count a read that reused kept regions.
+    pub(crate) fn count_reused(&self) {
+        self.reused.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Count a read that took the tile path.
     pub(crate) fn count_tiled(&self) {
         self.tiled.fetch_add(1, Ordering::Relaxed);
@@ -115,6 +129,13 @@ impl RegionPool {
 pub(crate) struct Reservation<'p> {
     pool: &'p RegionPool,
     bytes: u64,
+}
+
+impl Reservation<'_> {
+    /// The bytes reserved.
+    pub(crate) fn bytes(&self) -> u64 {
+        self.bytes
+    }
 }
 
 impl Drop for Reservation<'_> {

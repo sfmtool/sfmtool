@@ -64,6 +64,8 @@ pub fn render_view_tile(patch: &OrientedPatch, view: &ProjectedImage<'_>,
     keypoint: Option<[f64; 2]>, resolution: usize, sampler: SamplerChoice,
     progress: &Progress<'_>) -> ViewTile;
 pub fn clipped_share(pyramid: &ImageU8Pyramid, outline: &[[f64; 2]]) -> Option<f64>;
+pub fn source_clipped_share(source: &TiledPhotograph, outline: &[[f64; 2]])
+    -> Result<Option<f64>, PhotographReadError>; // the same share, a tile at a time
 impl ViewTile { pub fn planes(&self) -> TilePlanes; } // what blur matching reads
 
 pub fn pair_zncc_grid(a: &ViewTile, b: &ViewTile) -> [[f64; 3]; 3];
@@ -1293,6 +1295,10 @@ outline's bounding box one row of pixel centres at a time, finds where the row
 crosses the outline's edges, and reads the pixels between alternate crossings,
 so it counts the same pixels a test of every centre against every edge counts,
 which a test checks on concave, self-crossing and off-photograph outlines.
+`source_clipped_share` counts the same way through a photograph's tiles, one
+level-0 tile at a time, and gives the same share
+([view-region-pyramids.md](../camera/view-region-pyramids.md) § "Theory");
+`render_view_tile` still reads the whole pyramid.
 
 **A keypoint the slide refuses.** A view's tile is cut through the patch slid
 onto its keypoint's ray, where that ray meets the plane through the patch's

@@ -8,7 +8,10 @@
 use ndarray::Array3;
 
 use crate::camera::image::ImageU8Pyramid;
-use crate::camera::sampler::{render_phase, render_tile, Sampler, SamplerChoice};
+use crate::camera::sampler::{check_source, render_phase, render_tile, Sampler, SamplerChoice};
+use crate::camera::tiled_photograph::{
+    PhotographReadError, PhotographTile, TileKey, TiledPhotograph,
+};
 use crate::camera::warp_map::patch_grid_jacobian;
 use crate::camera::WarpMap;
 use crate::patch::blur_matched::TilePlanes;
@@ -216,64 +219,180 @@ pub fn clipped_share(pyramid: &ImageU8Pyramid, outline: &[[f64; 2]]) -> Option<f
     let (w, h) = (i64::from(image.width()), i64::from(image.height()));
     let ch = image.channels() as usize;
     let data = image.data();
-    let is_clipped = |x: i64, y: i64| {
-        let at = (y * w + x) as usize * ch;
-        data[at..at + ch.min(3)]
-            .iter()
-            .any(|&v| v == 0 || v == u8::MAX)
+    let is_clipped = |x: i64, y: i64| clipped_pixel(&data[(y * w + x) as usize * ch..][..ch]);
+    let mut count = ClippedCount::default();
+    count.add_spans(outline, outline_rows(outline, h), 0..w, is_clipped);
+    if count.total == 0 {
+        for p in outline {
+            let (x, y) = pixel_under(p, w, h);
+            count.add(is_clipped(x, y));
+        }
+    }
+    Some(count.share())
+}
+
+/// [`clipped_share`] of a photograph read through its tiles: the same share
+/// of level 0's pixel centres inside `outline`, read from the level-0 tiles
+/// the outline's bounding box covers, one at a time.
+///
+/// Each tile's pixel centres inside the outline are counted by the same
+/// even-odd rule, row by row, and the counts summed, so the share equals the
+/// whole level's. A footprint of `F` level-0 pixels covers about
+/// `(ceil(F / T) + 1)²` tiles of side `T`; this is the one read whose cost
+/// grows with the footprint rather than with the patch resolution. Refuses a
+/// photograph with no pixels, and passes up a tile read that fails.
+pub fn source_clipped_share(
+    source: &TiledPhotograph,
+    outline: &[[f64; 2]],
+) -> Result<Option<f64>, PhotographReadError> {
+    check_source(source)?;
+    if outline.len() < 3 {
+        return Ok(None);
+    }
+    let (w, h) = source.layout().level_size(0);
+    let (w, h) = (i64::from(w), i64::from(h));
+    let ts = i64::from(source.layout().tile_size());
+    let ch = source.channels() as usize;
+    let tile_of = |x: i64, y: i64| TileKey {
+        level: 0,
+        col: (x / ts) as u32,
+        row: (y / ts) as u32,
     };
+    // The pixel of `tile` at level-0 `(x, y)`, inside its core.
+    let pixel = |tile: &PhotographTile, x: i64, y: i64| {
+        let lx = (x - i64::from(tile.origin[0]) + 1) as usize;
+        let ly = (y - i64::from(tile.origin[1]) + 1) as usize;
+        let at = (ly * tile.pixels.width() as usize + lx) * ch;
+        clipped_pixel(&tile.pixels.data()[at..at + ch])
+    };
+    let rows = outline_rows(outline, h);
+    // The columns of the centres inside the outline: a centre counted lies at
+    // or past one crossing and before another, and a crossing lies within the
+    // outline's bounding box up to rounding far under half a pixel, so the
+    // centre's column lies within `floor(x0)..=ceil(x1)`, as its row lies
+    // within `outline_rows`.
+    let (mut x0, mut x1) = (f64::MAX, f64::MIN);
+    for p in outline {
+        x0 = x0.min(p[0]);
+        x1 = x1.max(p[0]);
+    }
+    let cols = (x0.floor() as i64).max(0)..=(x1.ceil() as i64).min(w - 1);
+    let mut count = ClippedCount::default();
+    if !rows.is_empty() && !cols.is_empty() {
+        for row in rows.start() / ts..=rows.end() / ts {
+            for col in cols.start() / ts..=cols.end() / ts {
+                let tile = source.tile(tile_of(col * ts, row * ts))?;
+                let (ox, oy) = (i64::from(tile.origin[0]), i64::from(tile.origin[1]));
+                let tile_rows =
+                    (*rows.start()).max(oy)..=(*rows.end()).min(oy + i64::from(tile.size[1]) - 1);
+                let tile_cols = ox..ox + i64::from(tile.size[0]);
+                count.add_spans(outline, tile_rows, tile_cols, |x, y| pixel(&tile, x, y));
+            }
+        }
+    }
+    if count.total == 0 {
+        for p in outline {
+            let (x, y) = pixel_under(p, w, h);
+            let tile = source.tile(tile_of(x, y))?;
+            count.add(pixel(&tile, x, y));
+        }
+    }
+    Ok(Some(count.share()))
+}
+
+/// Whether a pixel is clipped: `0` or `255` in any of its first three
+/// channels.
+fn clipped_pixel(pixel: &[u8]) -> bool {
+    pixel[..pixel.len().min(3)]
+        .iter()
+        .any(|&v| v == 0 || v == u8::MAX)
+}
+
+/// The rows of pixel centres an outline can hold on a level `h` rows high.
+fn outline_rows(outline: &[[f64; 2]], h: i64) -> std::ops::RangeInclusive<i64> {
     let (mut y0, mut y1) = (f64::MAX, f64::MIN);
     for p in outline {
         y0 = y0.min(p[1]);
         y1 = y1.max(p[1]);
     }
-    // One row of pixel centres at a time: where the row crosses the outline's
-    // edges, sorted. A centre is inside when an odd number of crossings lie to
-    // its right, the even-odd rule, so the inside of a row is a set of spans
-    // between crossings and each pixel is read once. A tile far from its
-    // camera covers hundreds of thousands of photograph pixels, which a test
-    // of every pixel against every edge would make the evaluation's largest
-    // cost.
-    let (mut total, mut clipped) = (0usize, 0usize);
-    let mut crossings: Vec<f64> = Vec::new();
-    for y in (y0.floor() as i64).max(0)..=(y1.ceil() as i64).min(h - 1) {
-        let yc = y as f64 + 0.5;
-        crossings.clear();
-        let mut j = outline.len() - 1;
-        for i in 0..outline.len() {
-            let ([xi, yi], [xj, yj]) = (outline[i], outline[j]);
-            if (yi > yc) != (yj > yc) {
-                crossings.push((xj - xi) * (yc - yi) / (yj - yi) + xi);
+    (y0.floor() as i64).max(0)..=(y1.ceil() as i64).min(h - 1)
+}
+
+/// The pixel under an outline's point, clamped to a `w` x `h` level.
+fn pixel_under(p: &[f64; 2], w: i64, h: i64) -> (i64, i64) {
+    (
+        (p[0].floor() as i64).clamp(0, w - 1),
+        (p[1].floor() as i64).clamp(0, h - 1),
+    )
+}
+
+/// The pixels counted inside an outline, and the clipped ones among them.
+#[derive(Default)]
+struct ClippedCount {
+    total: usize,
+    clipped: usize,
+    /// Where the current row crosses the outline's edges.
+    crossings: Vec<f64>,
+}
+
+impl ClippedCount {
+    fn add(&mut self, clipped: bool) {
+        self.total += 1;
+        self.clipped += usize::from(clipped);
+    }
+
+    fn share(&self) -> f64 {
+        self.clipped as f64 / self.total as f64
+    }
+
+    /// Count the pixels of rows `rows` and columns `cols` whose centres,
+    /// `(x + 0.5, y + 0.5)`, are inside `outline` by the even-odd rule.
+    ///
+    /// One row of pixel centres at a time: where the row crosses the
+    /// outline's edges, sorted. A centre is inside when an odd number of
+    /// crossings lie to its right, so the inside of a row is a set of spans
+    /// between crossings and each pixel is read once. A tile far from its
+    /// camera covers hundreds of thousands of photograph pixels, which a test
+    /// of every pixel against every edge would make the evaluation's largest
+    /// cost. The crossings do not depend on `cols`, so counts over columns
+    /// that partition a row sum to the count over the whole row.
+    fn add_spans(
+        &mut self,
+        outline: &[[f64; 2]],
+        rows: std::ops::RangeInclusive<i64>,
+        cols: std::ops::Range<i64>,
+        is_clipped: impl Fn(i64, i64) -> bool,
+    ) {
+        for y in rows {
+            let yc = y as f64 + 0.5;
+            self.crossings.clear();
+            let mut j = outline.len() - 1;
+            for i in 0..outline.len() {
+                let ([xi, yi], [xj, yj]) = (outline[i], outline[j]);
+                if (yi > yc) != (yj > yc) {
+                    self.crossings.push((xj - xi) * (yc - yi) / (yj - yi) + xi);
+                }
+                j = i;
             }
-            j = i;
-        }
-        crossings.sort_by(f64::total_cmp);
-        let m = crossings.len();
-        // The centres at or past crossing `k - 1` and before crossing `k` have
-        // `m - k` crossings to their right.
-        for k in 1..m {
-            if (m - k).is_multiple_of(2) {
-                continue;
-            }
-            let (from, to) = (crossings[k - 1], crossings[k]);
-            let mut x = ((from - 0.5).ceil() as i64).max(0);
-            while (x as f64 + 0.5) < from {
-                x += 1;
-            }
-            while x < w && (x as f64 + 0.5) < to {
-                total += 1;
-                clipped += usize::from(is_clipped(x, y));
-                x += 1;
+            self.crossings.sort_by(f64::total_cmp);
+            let m = self.crossings.len();
+            // The centres at or past crossing `k - 1` and before crossing `k`
+            // have `m - k` crossings to their right.
+            for k in 1..m {
+                if (m - k).is_multiple_of(2) {
+                    continue;
+                }
+                let (from, to) = (self.crossings[k - 1], self.crossings[k]);
+                let mut x = ((from - 0.5).ceil() as i64).max(cols.start);
+                while (x as f64 + 0.5) < from {
+                    x += 1;
+                }
+                while x < cols.end && (x as f64 + 0.5) < to {
+                    self.total += 1;
+                    self.clipped += usize::from(is_clipped(x, y));
+                    x += 1;
+                }
             }
         }
     }
-    if total == 0 {
-        for p in outline {
-            let x = (p[0].floor() as i64).clamp(0, w - 1);
-            let y = (p[1].floor() as i64).clamp(0, h - 1);
-            total += 1;
-            clipped += usize::from(is_clipped(x, y));
-        }
-    }
-    Some(clipped as f64 / total as f64)
 }

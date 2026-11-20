@@ -40,7 +40,7 @@ pub use rule::{
     choose_reference_view, ReferenceChoice, ReferenceCost, ReferenceExclusion, ReferenceReadings,
     ReferenceStanding, ReferenceTerm, ReferenceViewOptions,
 };
-pub use tile::{clipped_share, render_view_tile, ViewTile};
+pub use tile::{clipped_share, render_view_tile, source_clipped_share, ViewTile};
 pub use track::{
     read_track, readings_of, tile_max_radius, tile_semi_axes, TileSemiAxes, TrackReading,
 };
