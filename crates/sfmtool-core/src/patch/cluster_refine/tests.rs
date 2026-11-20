@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use super::kernels::{eval_zncc_scalar, SupportTables, TileCache};
 use super::*;
-use crate::camera::image::{ImageU8, ImageU8Pyramid};
+use crate::camera::image::{ImageU8, ImageU8Pyramid, PyramidLevel};
 use ndarray::{Array2, Array3 as NdArray3};
 
 /// Band-limited analytic texture in `[2, 252]` (no u8 clipping).
@@ -1899,4 +1899,98 @@ fn a_cascade_driven_past_the_elongation_limit_retreats_within_it() {
     let e = stored_elongation(&r, 1);
     assert!(e <= MAX_PATCH_ELONGATION, "returned elongation {e}");
     assert!(e > 15.5, "the cascade did not move towards the limit: {e}");
+}
+
+// ── A read that fails inside the cascade ────────────────────────────────────
+
+/// The template grid's map at `shape` reads level 1 above this scale and
+/// level 0 below it: the map's singular values are the shape's times the
+/// grid step, and level 1 starts where they reach 2.
+fn level_one_scale(params: &ClusterRefineParams) -> f64 {
+    2.0 / (2.0 * params.radius / params.resolution.max(2) as f64)
+}
+
+/// `pyramid` holding its level 1 whole and, of every other level, only an 8
+/// px square in the corner of level 0: a read of level 1 succeeds and a read
+/// near the middle of level 0 asks for pixels it does not hold.
+fn level_one_only(pyramid: &ImageU8Pyramid) -> TiledPhotograph {
+    let corner = |l: usize, side: u32| {
+        let full = pyramid.level(l);
+        let c = full.channels();
+        let stride = full.width() as usize * c as usize;
+        let mut data = Vec::new();
+        for row in 0..side as usize {
+            data.extend_from_slice(&full.data()[row * stride..][..side as usize * c as usize]);
+        }
+        PyramidLevel {
+            image: ImageU8::new(side, side, c, data),
+            origin: [0, 0],
+            full_size: pyramid.level_full_size(l),
+        }
+    };
+    let level_one = pyramid.level(1);
+    let mut levels: Vec<Option<PyramidLevel>> = (0..pyramid.num_levels()).map(|_| None).collect();
+    levels[0] = Some(corner(0, 8));
+    levels[1] = Some(corner(1, level_one.width()));
+    TiledPhotograph::from_pyramid(Arc::new(
+        ImageU8Pyramid::from_regions(levels).expect("a valid region pyramid"),
+    ))
+}
+
+/// A reference and a member of one cluster whose member gate and template
+/// read level 1, and whose cascade, from a seed just above the level boundary
+/// toward a truth just below it, evaluates maps on level 0. `member` is the
+/// member's photograph; the reference's is whole.
+fn cascade_across_levels(
+    member: impl FnOnce(&ImageU8Pyramid) -> TiledPhotograph,
+) -> Result<ClusterRefineResult, PhotographReadError> {
+    let params = ClusterRefineParams::default();
+    let boundary = level_one_scale(&params);
+    let (s_ref, s_true, s_seed) = (1.1 * boundary, 0.94 * boundary, 1.02 * boundary);
+    let reference = make_image(128, 128, texture);
+    let zoom = s_ref / s_true;
+    let member_image = make_image(128, 128, move |x, y| {
+        texture(64.0 + (x - 64.0) * zoom, 64.0 + (y - 64.0) * zoom)
+    });
+    let feats = [
+        ImageFeatures::new(&[([64.0, 64.0], [[s_ref, 0.0], [0.0, s_ref]])]),
+        ImageFeatures::new(&[([64.0, 64.0], [[s_seed, 0.0], [0.0, s_seed]])]),
+    ];
+    let sources = [photograph(&reference), member(&pyramid(&member_image))];
+    refine_cluster_patches(
+        &sources,
+        &RegionPool::for_kernel_call(),
+        &geometry(&feats),
+        &[0, 2],
+        &[0, 1],
+        &[0, 0],
+        &params,
+        None,
+    )
+}
+
+/// A read of a `LevelTile` that fails in the cascade, after the member gate,
+/// the template and the cascade's first evaluations have read, is the
+/// kernel's error rather than a worst score the simplex retreats from.
+#[test]
+fn a_tile_read_that_fails_in_the_cascade_fails_the_call() {
+    // With the whole photograph the member is refined to a shape whose map
+    // reads level 0, so the cascade's evaluations reach it.
+    let boundary = level_one_scale(&ClusterRefineParams::default());
+    let whole = cascade_across_levels(|p| {
+        TiledPhotograph::from_pyramid(Arc::new(ImageU8Pyramid::build(p.level(0), 6)))
+    });
+    let whole = whole.expect("photographs in memory read");
+    assert_eq!(whole.reference_members[0], 0);
+    assert_eq!(whole.member_status[1], MemberStatus::Kept);
+    let s = whole.member_affine_shapes.index_axis(ndarray::Axis(0), 1);
+    let (_, s_min) = singular_values(s[[0, 0]], s[[0, 1]], s[[1, 0]], s[[1, 1]]);
+    assert!(s_min < boundary, "the refined shape {s:?} reads level 0");
+
+    let lacking = cascade_across_levels(level_one_only);
+    let error = lacking.err().expect("level 0 of the member cannot be read");
+    assert!(
+        matches!(error, PhotographReadError::OutOfRange { .. }),
+        "{error}"
+    );
 }

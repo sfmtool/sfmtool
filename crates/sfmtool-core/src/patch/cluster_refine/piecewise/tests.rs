@@ -21,9 +21,9 @@ use super::super::{
     FeatureGeometry, Mat2, MemberGeo, MemberOutcome, MemberStatus, MAX_PATCH_ELONGATION,
 };
 use super::*;
-use crate::camera::image::{ImageU8, ImageU8Pyramid};
+use crate::camera::image::{ImageU8, ImageU8Pyramid, PyramidLevel};
 use crate::camera::sampler::RegionPool;
-use crate::camera::TiledPhotograph;
+use crate::camera::{PhotographReadError, TiledPhotograph};
 use crate::patch::cell_registration::{
     cell_zncc_at, fit_update, read_cell, CellReading, CellTemplate, Correspondence,
     MEDIAN_LENGTH_TO_SIGMA,
@@ -1698,4 +1698,74 @@ fn a_dedupe_winner_whose_moved_shape_fails_the_refined_shape_gate_is_reverted() 
     let cells = out.cells[1].expect("the kept member has cells");
     assert_eq!(cells.status, [[CellStatus::NotAttempted; 3]; 3]);
     assert!(cells.iterations >= 1);
+}
+
+/// A whole-member score that reads a photograph and can fail.
+type ScoreRead<'a> = dyn FnMut(&Mat2, [f64; 2]) -> Result<Option<f64>, PhotographReadError> + 'a;
+
+/// A read the loop makes that fails, whether `score`'s or a render's, is the
+/// stage's error, rather than a failed iteration that leaves the member at
+/// its cascade shape.
+#[test]
+fn a_read_that_fails_in_the_loop_fails_the_stage() {
+    let fx = fixture();
+    let (s0, p0) = perturbed_start();
+    let refused = || PhotographReadError::OutOfRange {
+        path: None,
+        why: "a read the test refuses".to_string(),
+    };
+    let run = |source: &TiledPhotograph, score: &mut ScoreRead<'_>| {
+        refine_member_cells(
+            &mut ViewRegions::new(source, &fx.pool),
+            &fx.tmpl.src_channels,
+            &fx.templates,
+            &fx.layout,
+            s0,
+            p0,
+            fx.step,
+            fx.off,
+            &fx.pp(),
+            score,
+        )
+    };
+
+    // The score read at the first update fails; the start's and the render
+    // succeed.
+    let member = photograph(&member_image(a_true(), [0.0, 0.0], None));
+    let mut reads = 0;
+    let error = run(&member, &mut |_: &Mat2, _: [f64; 2]| {
+        reads += 1;
+        if reads == 1 {
+            Ok(Some(0.5))
+        } else {
+            Err(refused())
+        }
+    })
+    .err()
+    .expect("the second score fails");
+    assert_eq!(error, refused());
+    assert_eq!(
+        reads, 2,
+        "the start's score and the first update's were read"
+    );
+
+    // The render fails: the photograph holds an 8 px corner of level 0 and
+    // nothing else.
+    let corner = PyramidLevel {
+        image: ImageU8::new(8, 8, 1, vec![128; 64]),
+        origin: [0, 0],
+        full_size: [128, 128],
+    };
+    let mut levels: Vec<Option<PyramidLevel>> = (0..6).map(|_| None).collect();
+    levels[0] = Some(corner);
+    let lacking = TiledPhotograph::from_pyramid(std::sync::Arc::new(
+        ImageU8Pyramid::from_regions(levels).expect("a valid region pyramid"),
+    ));
+    let error = run(&lacking, &mut |_: &Mat2, _: [f64; 2]| Ok(Some(0.5)))
+        .err()
+        .expect("the render fails");
+    assert!(
+        matches!(error, PhotographReadError::OutOfRange { .. }),
+        "{error}"
+    );
 }
