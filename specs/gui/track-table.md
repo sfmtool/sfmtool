@@ -1068,7 +1068,9 @@ camera and one at infinity:
 - a crop and its hover view drawn by whole frames, through the panel's region
   pool and through a pool that holds nothing so every read takes the
   photograph's tiles, equal the crop and hover view the whole pyramid gives,
-  byte for byte, and the pool holds nothing once they are drawn;
+  byte for byte, and the pool holds nothing once they are drawn, for the
+  point's patch as it is, read one texel per pixel, and grown 40 times, read
+  at a step of a fraction of a pixel;
 - a point a bitmap writer left at `-1` with a zero bitmap row says *no
   reference* at once and queues no pick, whether the bitmaps were rendered for
   display or stored, as Convert to Embedded Patches stores them; after an

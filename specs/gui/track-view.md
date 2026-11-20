@@ -1891,7 +1891,14 @@ pixels are the whole pyramid's either way, so the pictures are those the whole
 pyramids gave. A read that fails is cached as a picture that could not be
 drawn, with why (`TrackBody::read_failures`): the tile or crop cell says
 *unreadable* in place of its picture (`table::READ_FAILURE_CELL`), and its
-hover, and the hover of a hover view that failed, says why.
+hover, and the hover of a hover view that failed, says why. Each picture
+is read once and kept, so its `ViewRegions` keeps nothing past the read: a
+view is not read again until the track moves, which moves its regions. A
+tile read so costs little more than one from the whole pyramid: on a
+6000 x 4000 photograph 0.30 to 0.44 ms against 0.22 to 0.31 ms, and a
+192 x 192 hover view 0.8 to 1.3 ms against 0.5 to 0.7 ms
+([view-region-pyramids.md](../core/camera/view-region-pyramids.md) §
+"What a read costs").
 
 **Hovering a tile shows it in context.** The tooltip draws the same picture
 over three times the patch's width (`patch_pictures::marks::CONTEXT_FACTOR`), 288 points across,
@@ -2503,9 +2510,14 @@ texels, so their geometry is checked without reading pixels off the screen.
     pixels from both edges along the longer side, its texels the photograph's
     own pixels, and its caption's two axes matching the projected edge
     midpoints at the track stage and the shape's columns at the cluster stage.
-  - The reads through regions (`tests/region_reads.rs`): at the track stage and
-    at the cluster stage, over photographs of hashed pixels, every row's tile,
-    crop and their hover views as whole frames upload them, through the
+  - The reads through regions (`tests/region_reads.rs`): at the track stage,
+    for the patch as it is, grown twelve times so that every row reads coarser
+    levels, and grown and turned towards edge-on so that rows are drawn with
+    the anisotropic sampler, and at the cluster stage, for the sightings'
+    own shapes and for shapes grown and stretched so that their grids read
+    coarser levels, each case first shown to differ from what level 0 alone
+    or the bilinear sampler gives: over photographs of hashed pixels, every
+    row's tile, crop and their hover views as whole frames upload them, through the
     panel's region pool and through a pool that holds nothing so that every
     read takes the photograph's tiles, equal the pictures `render_tile`,
     `sample_member_grid` and `sample_bilinear_u8` give from the whole
