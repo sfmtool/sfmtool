@@ -199,6 +199,12 @@ The two stored halves of an `SfmrReconstruction`'s data, in Rust and in prose
 |------|-------|-----|-----|
 | **image set** / **point set** | the two stored halves of a reconstruction's data. The **image set** holds the cameras, the posed images, the rig frames and the per-image columns, all addressed by image index: `ImageSet`, the field `SfmrReconstruction::image_set`. The **point set** holds the points, their tracks and the per-point and per-observation columns: `PointSet`, the field `SfmrReconstruction::point_set` | `ImageTable`, `image_table`, "the image table" for the reconstruction's half | *table* is kept for a derived view a person sorts and filters, such as the track table, and a stored half named like one reads as derived. *Set* pairs the image half with the point half under one word. The image table of a `.kdf` or `.matches` file (`KdfImageTable`, the `image_table()` accessor of a `.kdf` reader) is a part of that file's format and keeps its name |
 
+## File format versions
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **oldest version read** / **last release that reads** | the oldest format version a format crate's readers accept, and the last sfmtool release whose readers accept the versions below it, which the refusal of such a file names so the user can upgrade with that release ([formats/format-versions.md](formats/format-versions.md#dropping-a-version)). Constants `<FMT>_OLDEST_READ_VERSION` and `<FMT>_LAST_RELEASE_READING_OLDER_VERSIONS` beside `<FMT>_FORMAT_VERSION` (`SIFT_OLDEST_READ_VERSION`, `SIFT_LAST_RELEASE_READING_OLDER_VERSIONS`), and the error variant `VersionNoLongerRead { path, version }`; for the workspace file, `WORKSPACE_LAST_RELEASE_READING_VERSION_1` | `minimum version`, `min_supported`, `legacy`, `deprecated` | *read* is what the reader does or stops doing, and the refusal is about reading. *Minimum* and *supported* leave open whether a writer is meant; *legacy* and *deprecated* say a version is discouraged, not that it is refused. *No longer read* says the version was read once, which a version newer than the current one, refused as unsupported, never was |
+
 ## Image names
 
 How the formats, the bindings and the specs name the images a file covers.

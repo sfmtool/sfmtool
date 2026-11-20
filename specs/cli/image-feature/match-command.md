@@ -7,7 +7,7 @@ with previously extracted SIFT features. Uses COLMAP to perform the matching, ex
 track-cluster matcher and the experimental "flow" mode, which has some promise for videos.
 An image whose `.sift` file is missing or older than the image is extracted first, with the
 workspace's options, as `sfm sift --extract` extracts it. A version 1 workspace is refused
-before any work, naming the workspace file and pointing at `sfm ws upgrade`
+before any work, naming the workspace file and sfmtool 0.4.1, the last release that upgrades it
 ([workspace.md § A command that uses a workspace requires version 2](../../workspace/workspace.md#a-command-that-uses-a-workspace-requires-version-2)).
 
 The command is implemented in

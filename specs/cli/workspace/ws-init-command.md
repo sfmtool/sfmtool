@@ -7,9 +7,10 @@ target directory. The workspace config stores feature extraction settings used b
 commands. The file is version 2
 ([workspace.md § Versions](../../workspace/workspace.md#versions)): its
 `feature_options` carry the tool's `image_to_gray` object, and its
-`feature_prefix_dir` is a new folder named from them. A version 1 workspace is
-moved to version 2, keeping hand-edited options, by
-[`sfm ws upgrade`](ws-upgrade-command.md).
+`feature_prefix_dir` is a new folder named from them. On a version 1
+workspace, `sfm ws init --force` writes a fresh version 2 file; sfmtool 0.4.1's
+`sfm ws upgrade` is the one that converts a version 1 workspace keeping its
+hand-edited options.
 
 ## Command Syntax
 

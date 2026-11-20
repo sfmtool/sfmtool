@@ -692,9 +692,6 @@ pub fn pick_images<'py>(
             PickImagesError::ReadSift { ref source, .. } => {
                 fault_to_py(source.fault(), e.to_string(), Direction::Read)
             }
-            PickImagesError::ListFolder { ref source, .. } => {
-                PyErr::from(std::io::Error::new(source.kind(), e.to_string()))
-            }
             PickImagesError::Source(FrameSourceError::Missing { .. }) => {
                 PyFileNotFoundError::new_err(e.to_string())
             }

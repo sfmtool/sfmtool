@@ -133,11 +133,8 @@ pub fn pick_images(
 pub enum PickImagesError {
     Options { name: String, reason: String },
     Sequence { reason: String },
-    Version1Files(Version1SiftFiles),
-    ListFolder { folder: PathBuf, source: std::io::Error },
     Source(FrameSourceError),
     ReadSift { path: PathBuf, source: SiftError },
-    Version1Sift { path: PathBuf },
     Pair { a: FrameId, b: FrameId, images: Box<[PathBuf; 2]>, error: FramePairError },
     Cancelled,
 }
@@ -184,8 +181,7 @@ the checks `FrameFeatures::new` and `match_frame_pair` make). `Sequence` covers
 no sequences, a sequence with no frames, a frame with no images or with another
 number of images than its sequence's first frame, a pattern count that differs
 from the sensor count, frame numbers not in increasing order, and two images
-with one `.sift` path. `Version1Files` and `ListFolder` come from the check of
-the folders ([Version 1 files](#version-1-files)). `Source` is a frame the
+with one `.sift` path. `Source` is a frame the
 walk waited for that the source could not make exist, naming the frame: a
 missing file for the read-only source, and for the extracting source an image
 that cannot be read or a file that cannot be written (`Extract`, with the
@@ -356,7 +352,7 @@ the thread it is measured on, and only figures of one thread are added up.
 pub struct PickImagesTimes {
     pub total_seconds: f64,                 // the call, from its start to its return
     // The walk's thread, the thread that called pick_images:
-    pub checking_input_seconds: f64,        // the options, the sequences, the version 1 folder check
+    pub checking_input_seconds: f64,        // the options and the sequences
     pub waiting_for_frames_seconds: f64,    // blocked in FrameSource::wait
     pub reading_sift_metadata_seconds: f64, // each frame's metadata and readings
     pub reading_sift_features_seconds: f64, // positions and descriptors, for pairs and the pilot vote
@@ -852,8 +848,7 @@ writes, at `BuildSiftFilesOptions::sift_path_for_image`, with the same
 content, skipped when it is at least as new as its image, and kept on disk
 ([features/sift.md § Building `.sift` files](../features/sift.md#building-sift-files)).
 `ExtractingSource::new` refuses options that describe no extraction and
-version 1 settings, as `build_sift_files` does, and `pick_images` has checked
-the folders for version 1 files before the first frame. An image whose
+version 1 settings, as `build_sift_files` does. An image whose
 `sift_path` is not where the extraction writes it is `SiftPath`, since the
 walk would otherwise read a file other than the one written.
 
@@ -944,18 +939,10 @@ frames chosen and every decision in the report are the same with
 ## Version 1 files
 
 Every reading comes from a version 2 `.sift` file, which records the sharpness
-and gradient structure tensor a version 1 file lacks
-([workspace.md § Versions never mix](../../workspace/workspace.md#versions-never-mix)).
-Before it reads anything, `pick_images` lists every folder the capture's
-`.sift` files go in with `version_1_sift_files`
-([features/sift/files.rs](../../../crates/sfmtool-core/src/features/sift/files.rs)),
-the check `build_sift_files` and, through its binding, the Python extraction
-make before they write into a folder, so the three agree on what counts. A
-folder that holds version 1 files is `Version1Files`, whose message names the
-folder and the files and says to remove them and run again, which then
-extracts version 2 files in their place. A folder that is there but cannot be
-listed is `ListFolder`. A `.sift` file read that is still version 1, one put
-in its folder after the check, is `Version1Sift`, with the same advice.
+and gradient structure tensor a version 1 file lacks. A `.sift` file read that
+is version 1 is `ReadSift`, carrying the reader's refusal, which names the
+file and sfmtool 0.4.1 as the last release that reads it
+([sift-file-format.md § Format versions](../../formats/sift-file-format.md#format-versions)).
 
 ## Implementation notes
 

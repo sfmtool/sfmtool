@@ -305,8 +305,8 @@ fn sift_metadata(feature_count: u32) -> SiftMetadata {
         image_width: WIDTH,
         image_height: HEIGHT,
         feature_count,
-        sharpness: Some(1.0),
-        gradient_structure_tensor_xx_yy_xy: Some([1.0, 1.0, 0.0]),
+        sharpness: 1.0,
+        gradient_structure_tensor_xx_yy_xy: [1.0, 1.0, 0.0],
     }
 }
 

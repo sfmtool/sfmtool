@@ -19,7 +19,7 @@ use sfmtool_core::workspace::{
     NAMED_IMAGE_LISTS_FILE_NAME, WORKSPACE_VERSION,
 };
 
-use crate::helpers::{py_to_serde, serde_to_py};
+use crate::helpers::py_to_serde;
 use crate::sift::image_readings::PyImageToGray;
 use crate::{ProgressCounter, PyRangeExpr};
 
@@ -403,10 +403,11 @@ fn tool_image_to_gray_py(feature_tool: &str) -> Option<PyImageToGray> {
     sfmtool_core::workspace::tool_image_to_gray(feature_tool).map(|inner| PyImageToGray { inner })
 }
 
-/// The grey conversion a record of either version states.
+/// The grey conversion a record states.
 ///
 /// The top-level ``image_to_gray`` object of ``feature_options`` when there
-/// is one; otherwise a ``gray_formula`` string with no rounding; otherwise the
+/// is one; otherwise a version 1 record's ``gray_formula`` string with no
+/// rounding; otherwise the
 /// tool's conversion (``tool_image_to_gray``). An ``sfmtool-undistort``
 /// record without its own object states its source's, read from
 /// ``source_feature_tool`` and ``source_feature_options``.
@@ -427,40 +428,12 @@ fn recorded_image_to_gray_py(
         .map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
-/// Version 1 ``feature_options`` of ``feature_tool`` made into version 2
-/// ones, every other option kept as it is: the conversion ``sfm ws upgrade``
-/// makes.
-///
-/// For ``sfmtool``, a ``gray_formula`` becomes
-/// ``image_to_gray: {"formula": <gray_formula>}``, and options without one
-/// gain the tool's default. For ``colmap`` and ``opencv``, the options gain
-/// the tool's conversion.
-///
-/// Raises:
-///     ValueError: for options that already carry ``image_to_gray``, an
-///         ``sfmtool-undistort`` record (whose ``.sift`` files cannot be
-///         extracted again), any other tool than the three, a
-///         ``gray_formula`` that does not parse, or options that are not a
-///         dict. The message says which.
-#[pyfunction(name = "upgrade_feature_options")]
-fn upgrade_feature_options_py(
-    py: Python<'_>,
-    feature_tool: &str,
-    feature_options: &Bound<'_, PyAny>,
-) -> PyResult<Py<PyAny>> {
-    let options = py_to_serde(py, feature_options)?;
-    let upgraded = sfmtool_core::workspace::upgrade_feature_options(feature_tool, &options)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    serde_to_py(py, &upgraded)
-}
-
 /// The ``feature_type`` a workspace records for ``feature_tool`` with
 /// ``feature_options``: ``sift-opencv``, ``sift-sfmtool``, and for
 /// ``colmap`` ``sift-colmap`` followed by ``-dsp`` when
 /// ``domain_size_pooling`` is set and ``-max<N>`` when ``max_num_features``
 /// is given and not 8192; any other tool gives ``sift-<tool>``. The tool name
-/// is matched in lower case. It is the name ``sfm ws init`` records, and the
-/// one the workspace upgrade names a converted folder with.
+/// is matched in lower case. It is the name ``sfm ws init`` records.
 ///
 /// Raises:
 ///     ValueError: for options that a JSON record cannot hold.
@@ -513,69 +486,37 @@ fn feature_prefix_dir_py(
 }
 
 /// Bring the tree of workspaces at `path` to the current file versions, and
-/// return a report of every file and folder and what became of it.
+/// return a report of every file and what became of it.
 ///
-/// The tree is the outermost workspace at or above `path` and every
-/// workspace nested in it; one run upgrades it all, since a file of one
-/// workspace can name the features of another, and a path in a nested
-/// workspace is refused, naming the outermost one. The version 1 ``.sift``
-/// files are converted to version 2 in new features folders without
-/// extracting them again; every ``.sfmr`` and ``.matches`` file that names an
-/// old folder is rewritten at its own path to name the new one and the new
-/// files' content hashes, as is any older than the current version; a version
-/// 1 ``.camrig`` is rewritten as version 2; a ``.kdf`` index built from an old
-/// folder is deleted; and when no file failed, each version 1 workspace file
-/// is written as version 2, keeping every other key, and the old folders are
-/// deleted, except those a file the current reader refuses, a file of a
-/// workspace outside the tree or a file with an image name that leaves the
-/// tree through ``..`` names, and any outside the tree. When a file failed,
-/// the workspace files are left at version 1, so the next run converts the
-/// failed files into the same new folders as the rest. Each old
-/// folder maps to one new folder, named from the converted record of the
-/// workspace file that names it or else from its own ``.sift`` files, and
-/// every file that names it is pointed there with that record. The walk does
-/// not enter a symbolic link or junction to a directory, and a tree that
-/// holds one has no old folder deleted. A stopped run can be run again to
-/// finish. See ``specs/cli/workspace/ws-upgrade-command.md``.
+/// The tree is the workspace at or above `path` and every workspace nested in
+/// it. A version 1 workspace file is refused before anything else is read,
+/// naming sfmtool 0.4.1 as the last release that upgrades it. Each
+/// ``.sfmr``, ``.matches`` and ``.camrig`` file below the current version that
+/// the current reader reads is rewritten at its own path as the current
+/// version; a file the reader refuses is left as it is. The walk does not
+/// enter a symbolic link or junction to a directory. A stopped run can be run
+/// again to finish. See ``specs/cli/workspace/ws-upgrade-command.md``.
 ///
 /// Args:
-///     path: a directory or file in the outermost workspace of the tree.
-///     dry_run: find the files and plan the conversion, and write nothing;
-///         the report then gives what the run would do.
+///     path: a directory or file in the tree's root workspace.
+///     dry_run: find the files and decide what to do with each, and write
+///         nothing; the report then gives what the run would do.
 ///     progress: a ``ProgressCounter`` set to the count of the phase that is
-///         running: the folders walked, the ``.sift`` files converted, the
-///         files rewritten, then the folders deleted.
+///         running: the folders walked, then the files rewritten.
 ///
 /// Returns:
 ///     A dict: ``workspace_dir``, the tree's root; ``workspaces``, the root
 ///     then each nested workspace; ``dry_run``; ``files``, a list of dicts
-///     with ``path``, ``kind`` (``workspace_file``, ``sfmr``, ``matches``,
-///     ``camrig`` or ``kdf``), ``outcome`` (``converted``,
-///     ``already_current``, ``not_converted``, ``failed`` or ``deleted``)
-///     and, for ``not_converted`` and ``failed``, ``reason``, each workspace
-///     file first; ``folders``, a list of dicts with ``old_folder``,
-///     ``new_folder`` (None when it is not converted: an orphan folder that
-///     no file names, deleted without converting, or one named only by files
-///     the run leaves), ``sift_file_count``, ``kept_because`` (None when it
-///     is deleted), ``deleted`` and ``kept_files``;
-///     ``converted_sift_file_count``; ``linked_directories``;
-///     ``old_folders_deleted``; ``notes``, lines for the user; and
-///     ``nothing_to_do``, true when every workspace file is current, no
-///     file is converted or deleted, and every old folder found is neither
-///     converted nor deleted, for a reason a rerun would find again.
+///     with ``path``, ``kind`` (``sfmr``, ``matches`` or ``camrig``),
+///     ``outcome`` (``converted``, ``already_current``, ``not_converted`` or
+///     ``failed``) and, for ``not_converted`` and ``failed``, ``reason``;
+///     ``linked_directories``; ``notes``, lines for the user; and
+///     ``nothing_to_do``, true when no file is converted or failed.
 ///
 /// Raises:
-///     ValueError: when ``path`` is in a nested workspace, a workspace file
-///         cannot be upgraded, a ``.sift`` file in a folder the run examines
-///         cannot be read (locked, or a placeholder that cannot be fetched;
-///         each is named), a version 1 record cannot be converted (an
-///         ``sfmtool-undistort`` one is told to run ``sfm undistort`` again)
-///         or its ``feature_prefix_dir`` would leave the image directory, a
-///         folder's ``.sift`` files record different options, a file names
-///         folders that map to different new folders, two old folders hold
-///         different files for one new file, or version 1
-///         ``.sift`` files cannot be converted (every one is named); nothing
-///         but new ``.sift`` files is written in each case.
+///     ValueError: when a workspace file of the tree is version 1, cannot be
+///         read or is of a version this build does not know; nothing is
+///         written in each case.
 ///     FileNotFoundError: when no workspace is found at or above ``path``.
 ///     OSError: when a directory of the tree cannot be listed.
 ///     The exception a signal handler raised while the run went
@@ -719,7 +660,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(split_named_image_list_value_py, m)?)?;
     m.add_function(wrap_pyfunction!(tool_image_to_gray_py, m)?)?;
     m.add_function(wrap_pyfunction!(recorded_image_to_gray_py, m)?)?;
-    m.add_function(wrap_pyfunction!(upgrade_feature_options_py, m)?)?;
     m.add_function(wrap_pyfunction!(upgrade_workspace_py, m)?)?;
     m.add("NAMED_IMAGE_LISTS_FILE_NAME", NAMED_IMAGE_LISTS_FILE_NAME)?;
     m.add("WORKSPACE_VERSION", WORKSPACE_VERSION)?;

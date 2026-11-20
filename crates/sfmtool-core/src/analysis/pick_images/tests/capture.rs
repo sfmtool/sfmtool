@@ -19,7 +19,7 @@ use rand::{RngExt, SeedableRng};
 use rand_distr::StandardNormal;
 use sfmtool_sift_format::{
     write_sift, FeatureToolMetadata, SiftContentHash, SiftData, SiftMetadata, DESCRIPTOR_DIM,
-    THUMBNAIL_SIZE,
+    SIFT_FORMAT_VERSION, THUMBNAIL_SIZE,
 };
 
 use super::super::source::{Job, Threads, WorkerPool};
@@ -311,8 +311,8 @@ impl Synth {
         (positions, descriptors, WIDTH, HEIGHT)
     }
 
-    /// Write sensor `k`'s `.sift` file of frame `t` at `path`, of `version`.
-    pub(super) fn write(&self, t: usize, k: usize, path: &Path, version: u32) {
+    /// Write sensor `k`'s `.sift` file of frame `t` at `path`.
+    pub(super) fn write(&self, t: usize, k: usize, path: &Path) {
         let (positions, descriptors, width, height) = self.features(t, k);
         write_sift_file(
             path,
@@ -321,7 +321,6 @@ impl Synth {
             width,
             height,
             self.shots[t].readings[k],
-            version,
         );
     }
 }
@@ -334,23 +333,16 @@ pub(super) fn write_sift_file(
     width: u32,
     height: u32,
     (sharpness, tensor): (f32, [f32; 3]),
-    version: u32,
 ) {
     let n = positions.len();
-    let v2 = version >= 2;
-    let feature_options = if v2 {
-        serde_json::json!({"image_to_gray": {"formula": "G"}})
-    } else {
-        serde_json::json!({})
-    };
     let data = SiftData {
         feature_tool_metadata: FeatureToolMetadata {
             feature_tool: "sfmtool".into(),
             feature_type: "sift".into(),
-            feature_options,
+            feature_options: serde_json::json!({"image_to_gray": {"formula": "G"}}),
         },
         metadata: SiftMetadata {
-            version,
+            version: SIFT_FORMAT_VERSION,
             image_name: path
                 .file_stem()
                 .unwrap_or_default()
@@ -361,8 +353,8 @@ pub(super) fn write_sift_file(
             image_width: width,
             image_height: height,
             feature_count: n as u32,
-            sharpness: v2.then_some(f64::from(sharpness)),
-            gradient_structure_tensor_xx_yy_xy: v2.then(|| tensor.map(f64::from)),
+            sharpness: f64::from(sharpness),
+            gradient_structure_tensor_xx_yy_xy: tensor.map(f64::from),
         },
         content_hash: SiftContentHash::default(),
         positions_xy: Array2::from_shape_vec((n, 2), positions.iter().flatten().copied().collect())
@@ -383,8 +375,6 @@ pub(super) enum Fault {
     FailFrame(usize),
     /// Write nothing.
     WriteNothing,
-    /// Write version 1 files.
-    WriteVersion1,
     /// Write this frame of the first sequence at another image size.
     Resize(usize),
     /// Set the cancel flag on the wait with this index, from 0, before
@@ -470,7 +460,6 @@ fn write_frame(
     if fault == Fault::WriteNothing {
         return Ok(());
     }
-    let version = if fault == Fault::WriteVersion1 { 1 } else { 2 };
     let synth = &synths[id.sequence];
     for (k, image) in images.iter().enumerate() {
         if let Some(parent) = image.sift_path.parent() {
@@ -485,10 +474,9 @@ fn write_frame(
                 320,
                 240,
                 readings,
-                2,
             );
         } else {
-            synth.write(id.frame, k, &image.sift_path, version);
+            synth.write(id.frame, k, &image.sift_path);
         }
         *wrote = true;
     }

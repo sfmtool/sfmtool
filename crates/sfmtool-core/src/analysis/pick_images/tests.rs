@@ -1209,56 +1209,6 @@ fn a_malformed_sequence_is_refused() {
 }
 
 #[test]
-fn version_1_files_in_a_folder_are_refused_before_anything_is_extracted() {
-    let synth = Synth::steady(19, 40, ONE_PERCENT);
-    let dir = tempfile::tempdir().unwrap();
-    let sequences = vec![synth.sequence(&dir.path().join("seq0"))];
-    std::fs::create_dir_all(dir.path().join("seq0")).unwrap();
-    // A version 1 file of an image of the capture, already in its folder.
-    let path = &sequences[0].frames[7].images[0].sift_path;
-    synth.write(7, 0, path, 1);
-    let mut source = SynthSource::new(&[&synth], THREADS, Fault::None);
-    let err = pick_images(&sequences, &mut source, &options(), &Progress::none()).unwrap_err();
-    match &err {
-        PickImagesError::Version1Files(found) => {
-            assert_eq!(found.files, vec![path.clone()]);
-            assert!(err.to_string().contains("remove those files"));
-        }
-        other => panic!("{other:?}"),
-    }
-    let asked = source.into_asked();
-    assert!(asked.waits.is_empty() && asked.prefetched.is_empty());
-}
-
-#[test]
-fn a_version_1_file_read_is_refused() {
-    let synth = Synth::steady(20, 40, ONE_PERCENT);
-    let run = run_with(&[&synth], &options(), Fault::WriteVersion1, None);
-    match error(&run) {
-        PickImagesError::Version1Sift { path } => {
-            assert_eq!(path, &run.sequences[0].frames[0].images[0].sift_path);
-        }
-        other => panic!("{other:?}"),
-    }
-}
-
-#[test]
-fn a_folder_that_cannot_be_listed_is_refused() {
-    let synth = Synth::steady(21, 10, ONE_PERCENT);
-    let dir = tempfile::tempdir().unwrap();
-    let blocker = dir.path().join("not_a_folder");
-    std::fs::write(&blocker, b"a file").unwrap();
-    let sequences = vec![synth.sequence(&blocker)];
-    let mut source = SynthSource::new(&[&synth], THREADS, Fault::None);
-    match pick_images(&sequences, &mut source, &options(), &Progress::none()) {
-        Err(PickImagesError::ListFolder { folder, .. }) => assert_eq!(folder, blocker),
-        other => panic!("{other:?}"),
-    }
-    let asked = source.into_asked();
-    assert!(asked.waits.is_empty() && asked.prefetched.is_empty());
-}
-
-#[test]
 fn a_worker_s_failure_on_a_frame_read_is_the_error_naming_the_frame() {
     let synth = Synth::steady(22, 150, ONE_PERCENT);
     let clean = run(&[&synth]);

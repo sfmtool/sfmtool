@@ -29,13 +29,11 @@
 //! [`SiftParams::from_feature_options`] reads the `feature_options` object a
 //! workspace records for the `sfmtool` feature tool, and [`build_sift_files`]
 //! writes the `.sift` files of a set of images with it, as
-//! `sfm sift --extract` does. [`Version2SiftFolder`] converts a version 1
-//! `.sift` file to version 2 without extracting it again.
+//! `sfm sift --extract` does.
 //!
 //! [`image_readings_from_rgb`] takes an image's sharpness and gradient
 //! structure tensor through an [`ImageToGray`] conversion.
 
-mod convert;
 mod descriptor;
 mod detect;
 mod feature_options;
@@ -46,7 +44,6 @@ mod orientation;
 mod scale_space;
 mod simd;
 
-pub use convert::{ConvertSiftFileError, ConvertedSiftFile, Version2SiftFolder};
 pub use feature_options::FeatureOptionsError;
 pub(crate) use files::{
     build_sift_file, concurrent_images_in_memory, default_concurrent_images, sift_file_up_to_date,
@@ -56,10 +53,9 @@ pub(crate) use files::{
 #[cfg(test)]
 pub(crate) use files::concurrent_images_for;
 pub use files::{
-    build_sift_files, default_concurrent_images_for_dimensions, scan_sift_folder,
-    version_1_sift_files, BuildSiftFilesError, BuildSiftFilesOptions, BuildSiftFilesReport,
-    ScannedSiftFile, SiftFolderScan, Version1SiftFiles, CONCURRENT_IMAGES_ENV_VAR,
-    SFMTOOL_FEATURE_TOOL, SFMTOOL_FEATURE_TYPE, SIFT_ZSTD_LEVEL, WORKSPACE_CONFIG_FILE,
+    build_sift_files, default_concurrent_images_for_dimensions, BuildSiftFilesError,
+    BuildSiftFilesOptions, BuildSiftFilesReport, CONCURRENT_IMAGES_ENV_VAR, SFMTOOL_FEATURE_TOOL,
+    SFMTOOL_FEATURE_TYPE, SIFT_ZSTD_LEVEL, WORKSPACE_CONFIG_FILE,
 };
 pub use gray::{
     gray_from_rgb, parse_gray_formula, GrayFormula, ImageToGray, ImageToGrayError,

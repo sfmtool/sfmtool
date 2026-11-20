@@ -16,12 +16,15 @@ class SiftExtractionError(Exception):
 # The feature tools whose grey conversion is the tool's own, not a setting.
 _FIXED_CONVERSION_TOOLS = ("colmap", "opencv")
 
-# The refusal of feature options with no `image_to_gray`, which only a caller
-# of this module's functions can pass: every workspace a command uses is
-# version 2, and `sfm to-colmap-db` converts a version 1 `.sfmr` record first.
+# The refusal of feature options with no `image_to_gray`: every workspace a
+# command uses is version 2, so they come from a `.sfmr` record made in a
+# version 1 workspace that sfmtool 0.4.1's `sfm ws upgrade` did not rewrite, or
+# from a caller of this module's functions.
 _NO_IMAGE_TO_GRAY = (
     "The feature options carry no 'image_to_gray', so they are version 1 "
-    "settings, and no .sift file is written from version 1 settings."
+    "settings, and no .sift file is written from version 1 settings. sfmtool "
+    "0.4.1 is the last release that converts them: install it and run "
+    "`sfm ws upgrade` on the workspace."
 )
 
 
@@ -58,22 +61,14 @@ def _image_readings_fields(image_path, rgb, feature_options: dict) -> dict:
     }
 
 
-def _check_versions_never_mix(
-    feature_tool: str,
-    feature_options: dict,
-    sift_dirs,
-) -> None:
-    """Refuse to write version 2 ``.sift`` files where versions would mix.
+def _check_extraction_settings(feature_tool: str, feature_options: dict) -> None:
+    """Refuse settings no ``.sift`` file is extracted from.
 
     Called only when at least one file is to be written. Refuses an
     ``sfmtool-undistort`` tool, whose files only ``sfm undistort`` makes;
-    options with no top-level ``image_to_gray`` (version 1 settings); a
-    ``colmap`` or ``opencv`` conversion other than the one the tool makes; and
-    a folder in ``sift_dirs`` that already holds a version 1 ``.sift`` file,
-    as ``version_1_sift_files`` finds them, whose message says to remove the
-    version 1 files and run again.
+    options with no top-level ``image_to_gray`` (version 1 settings); and a
+    ``colmap`` or ``opencv`` conversion other than the one the tool makes.
     """
-    from sfmtool.sift import version_1_sift_files
     from sfmtool.workspace import tool_image_to_gray
 
     if feature_tool == "sfmtool-undistort":
@@ -92,10 +87,6 @@ def _check_versions_never_mix(
                 f"image_to_gray {row}, and the feature options record "
                 f"{feature_options['image_to_gray']}."
             )
-    for sift_dir in sorted(set(sift_dirs)):
-        found = version_1_sift_files(sift_dir)
-        if found is not None:
-            raise SiftExtractionError(str(found))
 
 
 # The `write_sift` dict keys of the six values each extraction backend returns
@@ -132,9 +123,8 @@ def image_files_to_sift_files(
 
     When at least one file is to be written, it refuses the
     ``sfmtool-undistort`` tool, whose files only ``sfm undistort`` makes,
-    version 1 settings (``feature_options`` with no ``image_to_gray``), a
-    ``colmap`` or ``opencv`` ``image_to_gray`` other than the tool's, and a
-    target folder that already holds a version 1 ``.sift`` file.
+    version 1 settings (``feature_options`` with no ``image_to_gray``), and a
+    ``colmap`` or ``opencv`` ``image_to_gray`` other than the tool's.
     When every file is up to date it writes nothing and refuses nothing.
 
     Args:
@@ -233,7 +223,7 @@ def image_files_to_sift_files(
 
     if image_filename_filtered_list:
         sift_dirs = {p.parent for p in sift_filename_filtered_list}
-        _check_versions_never_mix(feature_tool, feature_options, sift_dirs)
+        _check_extraction_settings(feature_tool, feature_options)
         for d in sift_dirs:
             d.mkdir(parents=True, exist_ok=True)
         chunk_size = 500

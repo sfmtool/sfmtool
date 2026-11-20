@@ -11,10 +11,11 @@ use crate::types::*;
 
 /// Verify integrity of a `.sift` file using content hashes.
 ///
-/// Also reports as an error metadata the readers reject (a version of 0 or
-/// newer than [`SIFT_FORMAT_VERSION`], or readings that do not match the
-/// version) and the version rules [`crate::validate_sift_data`] applies to
-/// `feature_options.image_to_gray` and the readings' values.
+/// A `metadata.version` the readers refuse (below [`SIFT_OLDEST_READ_VERSION`],
+/// 0 or newer than [`SIFT_FORMAT_VERSION`]) is reported as the one error, with
+/// the readers' message, and nothing else is checked. Also reports the rules
+/// [`crate::validate_sift_data`] applies to `feature_options.image_to_gray`
+/// and the readings' values.
 ///
 /// Returns `Ok((true, []))` if all hashes match, `Ok((false, errors))` with
 /// details if verification fails. Returns `Err` only for I/O errors.
@@ -33,23 +34,20 @@ pub fn verify_sift(path: &Path) -> Result<(bool, Vec<String>), SiftError> {
 
     // Read metadata for feature_count
     let metadata_raw = read_zst_entry(&mut archive, "metadata.json.zst")?;
-    let metadata: SiftMetadata = serde_json::from_slice(&metadata_raw)?;
-    let feature_count = metadata.feature_count as usize;
-    let metadata_readable = match crate::read::check_metadata(&metadata) {
-        Ok(()) => true,
-        Err(e) => {
-            errors.push(e.to_string());
-            false
+    let metadata = match crate::read::parse_metadata(serde_json::from_slice(&metadata_raw)?, path) {
+        Ok(metadata) => metadata,
+        Err(e @ (SiftError::VersionNoLongerRead { .. } | SiftError::InvalidFormat(_))) => {
+            return Ok((false, vec![e.to_string()]));
         }
+        Err(e) => return Err(e),
     };
+    let feature_count = metadata.feature_count as usize;
 
     // Read feature tool metadata (raw bytes for hashing)
     let feature_tool_raw = read_zst_entry(&mut archive, "feature_tool_metadata.json.zst")?;
     let feature_tool: FeatureToolMetadata = serde_json::from_slice(&feature_tool_raw)?;
-    if metadata_readable {
-        if let Err(e) = crate::write::check_version_content(&feature_tool, &metadata) {
-            errors.push(e.to_string());
-        }
+    if let Err(e) = crate::write::check_content(&feature_tool, &metadata) {
+        errors.push(e.to_string());
     }
 
     // Verify metadata_xxh128

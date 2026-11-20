@@ -18,20 +18,24 @@ Each format crate has one constant for the version its writer writes:
 |--------|----------|-----------------|---------------------|
 | `.sfmr` | [`SFMR_FORMAT_VERSION`](../../crates/sfmtool-sfmr-format/src/types.rs) | 16 | 1 |
 | `.matches` | [`MATCHES_FORMAT_VERSION`](../../crates/sfmtool-matches-format/src/types.rs) | 10 | 1 (6 for a cluster-backbone file) |
-| `.sift` | [`SIFT_FORMAT_VERSION`](../../crates/sfmtool-sift-format/src/types.rs) | 2 | 1 |
+| `.sift` | [`SIFT_FORMAT_VERSION`](../../crates/sfmtool-sift-format/src/types.rs) | 2 | 2 |
 | `.camrig` | [`CAMRIG_FORMAT_VERSION`](../../crates/sfmtool-camrig-format/src/types.rs) | 2 | 1 |
 | `.kdf` | [`KDF_FORMAT_VERSION`](../../crates/sfmtool-kdf-format/src/types.rs) | 3 | 3 |
 
 A version at which something changed that a reader gates on, such as
-`SFMR_CANONICAL_CONVENTION_VERSION` or `SIFT_READINGS_VERSION`, is a constant
-of its own in the format crate, so a later version change does not move the
-gate.
+`SFMR_CANONICAL_CONVENTION_VERSION` or `REFINED_SHAPE_GATES_VERSION`, is a
+constant of its own in the format crate, so a later version change does not
+move the gate. A format whose readers have stopped reading a version some
+release wrote holds, beside its version constant, the oldest version read and
+the last release that reads the older ones, which its refusal names
+([Dropping a version](#dropping-a-version)): `SIFT_OLDEST_READ_VERSION` and
+`SIFT_LAST_RELEASE_READING_OLDER_VERSIONS` for `.sift`.
 
-The readers still read the `.sfmr`, `.matches`, `.sift` and `.camrig`
-versions older than those sfmtool 0.4 writes. sfmtool 0.4.1's release notes
-announced that the next release stops reading the `.sfmr`, `.matches` and
-`.sift` ones; `.camrig` version 1 is one no release wrote. sfmtool 0.5 stops
-reading all of them, as
+The `.sift` readers stop at version 2. The `.sfmr`, `.matches` and `.camrig`
+readers still read the versions older than those sfmtool 0.4 writes. sfmtool
+0.4.1's release notes announced that the next release stops reading the
+`.sfmr`, `.matches` and `.sift` ones; `.camrig` version 1 is one no release
+wrote. sfmtool 0.5 stops reading all of them, as
 [../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md)
 specifies. Of the format specs, the `.sift` one has its Format versions section
 near the top; that draft moves the `.sfmr`, `.matches`, `.camrig` and `.kdf`
@@ -104,12 +108,11 @@ One change, landed together:
    one ([../cli/workspace/ws-upgrade-command.md](../cli/workspace/ws-upgrade-command.md)).
    For `.sfmr`, `.matches` and `.camrig`, which it rewrites by loading and
    saving, this follows from the reader and the writer. A `.sift` change needs
-   a lossless conversion of its own, as `Version2SiftFolder` converts
-   version 1, because extracting the features again does not reproduce them
-   and every file that records their indexes and hashes would break. Every
-   `.kdf` file a release has written is at the current version, so the upgrade
-   rewrites none today (it deletes an index built from a version 1 workspace
-   record, which would read as stale); the change that next moves the `.kdf`
+   a lossless conversion of its own, as sfmtool 0.4.1's upgrade converted
+   version 1 to version 2, because extracting the features again does not
+   reproduce them and every file that records their indexes and hashes would
+   break. Every `.kdf` file a release has written is at the current version,
+   so the upgrade reads none today; the change that next moves the `.kdf`
    version makes the upgrade rewrite a version 3 index as the current version,
    as it rewrites the other formats.
 5. **Tests** read a file of each accepted older version and check what it

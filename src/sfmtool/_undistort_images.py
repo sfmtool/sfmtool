@@ -12,7 +12,7 @@ For each image in a reconstruction, this module:
 5. Writes a version 2 workspace config (.sfm-workspace.json)
 
 The workspace and the ``.sift`` files it writes are version 2. Their
-``image_to_gray`` is the source's conversion, as ``sfm ws upgrade`` reads one
+``image_to_gray`` is the source's conversion, as its record states it
 (``sfmtool.workspace.recorded_image_to_gray``), and each ``.sift`` file's
 readings are computed from the undistorted image file written for it, so they
 describe that image and not its source.

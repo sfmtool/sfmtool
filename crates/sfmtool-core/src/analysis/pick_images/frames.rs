@@ -20,7 +20,6 @@ use std::time::{Duration, Instant};
 
 use sfmtool_sift_format::{
     read_sift_metadata, read_sift_positions_descriptors, SiftError, SiftMetadata, DESCRIPTOR_DIM,
-    SIFT_READINGS_VERSION,
 };
 
 use super::capture::{CaptureFrame, CaptureSequence, FrameId, PickImagesError, PickImagesOptions};
@@ -417,25 +416,16 @@ impl<'a> Frames<'a> {
     }
 }
 
-/// The metadata of a `.sift` file and its readings, refusing a version 1 file
-/// and readings that break the format's rules.
+/// The metadata of a `.sift` file and its readings, refusing readings that
+/// break the format's rules.
 fn read_readings(path: &std::path::Path) -> Result<(SiftMetadata, ImageReadings), PickImagesError> {
     let read_error = |source| PickImagesError::ReadSift {
         path: path.to_path_buf(),
         source,
     };
     let (_, metadata, _) = read_sift_metadata(path).map_err(read_error)?;
-    if metadata.version < SIFT_READINGS_VERSION {
-        return Err(PickImagesError::Version1Sift {
-            path: path.to_path_buf(),
-        });
-    }
-    // A version 2 file that reads has both readings: the reader refuses one
-    // that lacks either.
-    let sharpness = metadata.sharpness.unwrap_or(f64::NAN);
-    let [xx, yy, xy] = metadata
-        .gradient_structure_tensor_xx_yy_xy
-        .unwrap_or([f64::NAN; 3]);
+    let sharpness = metadata.sharpness;
+    let [xx, yy, xy] = metadata.gradient_structure_tensor_xx_yy_xy;
     // The readings are compared within a capture to about three digits, and
     // `ImageReadings` holds them in `f32` for that reason.
     let readings = ImageReadings::new(sharpness as f32, [xx as f32, yy as f32, xy as f32])

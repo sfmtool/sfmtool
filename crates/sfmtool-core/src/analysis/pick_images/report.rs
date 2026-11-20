@@ -55,8 +55,7 @@ pub struct PickImagesReport {
 pub struct PickImagesTimes {
     /// The call's wall time, from its start to its return.
     pub total_seconds: f64,
-    /// Checking the options, the sequences and the folders the `.sift` files
-    /// go in for version 1 files.
+    /// Checking the options and the sequences.
     pub checking_input_seconds: f64,
     /// Blocked in [`super::FrameSource::wait`], for the extracting source the
     /// wait for workers to extract the frames the walk is about to read.

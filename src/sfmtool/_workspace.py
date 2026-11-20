@@ -9,17 +9,26 @@ from pathlib import Path
 WORKSPACE_CONFIG_FILE = ".sfm-workspace.json"
 
 
+# The last sfmtool release that upgrades a version 1 workspace, which the
+# refusal of one names; `WORKSPACE_LAST_RELEASE_READING_VERSION_1` in
+# `sfmtool_core::workspace`, which `sfm ws upgrade`'s refusal names.
+_LAST_RELEASE_READING_VERSION_1 = "0.4.1"
+
+
 class Version1WorkspaceError(RuntimeError):
     """A command that uses a workspace was given a version 1 workspace, which
-    only ``sfm ws upgrade`` and ``sfm ws init --force`` act on."""
+    only sfmtool 0.4.1's ``sfm ws upgrade`` and ``sfm ws init --force`` act
+    on."""
 
 
 def _version_1_workspace_error(config_file: Path) -> Version1WorkspaceError:
     """The one refusal of a version 1 workspace, naming its file."""
     return Version1WorkspaceError(
         f"The workspace file {config_file} is version 1, and sfmtool works only "
-        "in a version 2 workspace. Run 'sfm ws upgrade', which moves the "
-        "workspace to version 2 and a new features folder."
+        f"in a version 2 workspace. sfmtool {_LAST_RELEASE_READING_VERSION_1} is "
+        "the last release that upgrades a version 1 workspace: install it, run "
+        "`sfm ws upgrade` on the workspace, then use the workspace with this "
+        "release."
     )
 
 
@@ -198,7 +207,7 @@ def load_workspace_config(workspace_dir: Path) -> dict:
     This is the one reader of the file for every command that uses a
     workspace, and it requires version 2, so such a command stops before any
     work: a version 1 file raises ``Version1WorkspaceError``, whose message
-    names the file and says to run ``sfm ws upgrade``. A version 2 file's
+    names the file and says to upgrade it with sfmtool 0.4.1. A version 2 file's
     ``feature_options`` must carry a valid ``image_to_gray`` object at their
     top level and no ``gray_formula``; these rules apply to the top level of
     ``feature_options`` only. The recorded ``feature_prefix_dir`` is returned

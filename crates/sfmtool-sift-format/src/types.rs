@@ -88,6 +88,25 @@ pub enum SiftError {
     /// `feature_options` that is not a JSON object.
     #[error("Invalid metadata: {0}")]
     InvalidMetadata(String),
+
+    /// A file of a version some release wrote and this build no longer reads,
+    /// below [`SIFT_OLDEST_READ_VERSION`]. The message names the last release
+    /// that reads it, [`SIFT_LAST_RELEASE_READING_OLDER_VERSIONS`], so the
+    /// user can upgrade the workspace with that release.
+    #[error(
+        "{} is a version {version} .sift file, and this sfmtool reads .sift files of \
+         version {SIFT_OLDEST_READ_VERSION} or later. sfmtool \
+         {SIFT_LAST_RELEASE_READING_OLDER_VERSIONS} is the last release that reads version \
+         {version}: install it, run `sfm ws upgrade` on the workspace, then use the file with \
+         this release.",
+        path.display()
+    )]
+    VersionNoLongerRead {
+        /// The file.
+        path: std::path::PathBuf,
+        /// Its `metadata.version`.
+        version: u32,
+    },
 }
 
 sfmtool_archive_io::impl_from_archive_io_error!(SiftError);
@@ -109,13 +128,18 @@ pub struct FeatureToolMetadata {
 }
 
 /// Newest `.sift` format version this build understands, and the version a
-/// conforming writer writes. A reader accepts every version from 1 to this one.
+/// conforming writer writes. A reader accepts every version from
+/// [`SIFT_OLDEST_READ_VERSION`] to this one.
 pub const SIFT_FORMAT_VERSION: u32 = 2;
 
-/// The first `.sift` format version that records `feature_options.image_to_gray`
-/// and the two image readings, [`SiftMetadata::sharpness`] and
-/// [`SiftMetadata::gradient_structure_tensor_xx_yy_xy`].
-pub const SIFT_READINGS_VERSION: u32 = 2;
+/// The oldest `.sift` format version a reader accepts. A file of an older
+/// version that a release wrote is refused with
+/// [`SiftError::VersionNoLongerRead`].
+pub const SIFT_OLDEST_READ_VERSION: u32 = 2;
+
+/// The last sfmtool release whose readers accept the `.sift` versions below
+/// [`SIFT_OLDEST_READ_VERSION`], which a refusal of such a file names.
+pub const SIFT_LAST_RELEASE_READING_OLDER_VERSIONS: &str = "0.4.1";
 
 /// The most bits `feature_options.image_to_gray.quantize_bits` may round to.
 pub const MAX_QUANTIZE_BITS: u64 = 16;
@@ -145,14 +169,11 @@ pub struct SiftMetadata {
     /// Number of SIFT features.
     pub feature_count: u32,
     /// The variance of the Laplacian of the image's reading image, in grey
-    /// units squared. Required from version 2, absent (`None`) in version 1.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sharpness: Option<f64>,
+    /// units squared.
+    pub sharpness: f64,
     /// `[Exx, Eyy, Exy]`, the means of `Gx²`, `Gy²` and `Gx·Gy` over the
-    /// reading image's interior. Required from version 2, absent (`None`) in
-    /// version 1.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gradient_structure_tensor_xx_yy_xy: Option<[f64; 3]>,
+    /// reading image's interior.
+    pub gradient_structure_tensor_xx_yy_xy: [f64; 3],
 }
 
 impl FeatureToolMetadata {

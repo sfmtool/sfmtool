@@ -3,7 +3,7 @@
 A `.sift` file holds the local image features extracted from one image — the
 keypoints, their descriptors, and enough metadata to say which image they came
 from and exactly which tool and settings produced them — plus a small thumbnail
-of the source image and, from version 2, two readings of how sharp the image is.
+of the source image and two readings of how sharp the image is.
 One file per image, written once and never modified, so a pipeline can extract
 features once and every later stage can find them, check that the image behind
 them has not changed, and read only the columns it needs.
@@ -38,65 +38,27 @@ and bit/byte shuffling could be applied [like in blosc](https://www.blosc.org/po
 
 ## Format versions
 
-How the version changes, and which older versions a reader keeps reading, is
-in [format-versions.md](format-versions.md). sfmtool 0.5 stops reading version 1, as
-[../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md) specifies.
+`metadata.version` records the format version. The current version, which a
+conforming writer writes, is `2`, and it is also the oldest version a reader
+reads. A reader refuses a file of any other version:
 
-`metadata.version` records the format version. There are two versions, `1` and
-`2`, and a conforming writer writes `2`. A reader reads both. It rejects a file
-whose version is `0`, which no version of the format has used, or is newer than
-the newest version it reads, because it cannot know that layout.
+- **Version 1**, which sfmtool 0.3 and earlier wrote, with a message that
+  names the file, its version, the oldest version read and the last release
+  that reads it, so the user can upgrade the workspace with that release:
 
-| Aspect | version 1 | version 2 |
-|--------|-----------|-----------|
-| `metadata.version` | `1` | `2` |
-| `feature_options.image_to_gray` | absent; the conversion is the tool's own, and files whose `feature_tool` is `"sfmtool"` record it as a `gray_formula` string | **required** for every feature tool: the formula and an optional `quantize_bits` ([below](#feature_optionsimage_to_gray)) |
-| `metadata.sharpness` | absent | **required**, a number ([Sharpness](#sharpness)) |
-| `metadata.gradient_structure_tensor_xx_yy_xy` | absent | **required**, an array of three numbers ([Gradient structure tensor](#gradient-structure-tensor)) |
-| Entries, entry names, content-hash order | as listed below | unchanged |
+  ```
+  <path> is a version 1 .sift file, and this sfmtool reads .sift files of
+  version 2 or later. sfmtool 0.4.1 is the last release that reads version 1:
+  install it, run `sfm ws upgrade` on the workspace, then use the file with
+  this release.
+  ```
 
-A reader of a version 1 file finds no `image_to_gray`, sharpness or tensor in
-it. A version 1 file's conversion reads as `{"formula": <gray_formula>}` when
-it records a `gray_formula`, and otherwise as the one its feature tool makes
-([What each feature tool records](#what-each-feature-tool-records)). A
-version 1 file that carries `image_to_gray` or either reading, or a version 2
-file without them, is invalid.
+- **Version 0**, which no version of the format has used, and a version newer
+  than the current one, whose layout it cannot know, as an unsupported
+  version.
 
-Files of the two versions never share a directory: a writer does not write a
-version 2 file into a directory that holds version 1 files, so a directory of
-`.sift` files is all of one version (see
-[workspace.md § Versions never mix](../workspace/workspace.md#versions-never-mix)).
-
-### Converting a version 1 file
-
-A version 1 file converts to version 2 losslessly, without extracting its
-features again, which would not give the same features: the `sfmtool` tool's
-grey conversion has changed since version 1, and a `colmap` extraction depends
-on the pycolmap build and the GPU. It writes a new file into a version 2
-directory, in which:
-
-- the positions, affine shapes, descriptors and thumbnail are copied byte for
-  byte, and `feature_tool`, `feature_type` and every `metadata` field but the
-  version are kept;
-- `feature_options` becomes `upgrade_feature_options(feature_tool,
-  feature_options)` of `sfmtool_core::workspace`: an `sfmtool` file's
-  `gray_formula` becomes `image_to_gray: {"formula": <gray_formula>}`, or the
-  tool's default when it has none, and a `colmap` or `opencv` file gains its
-  tool's conversion ([What each feature tool records](#what-each-feature-tool-records))
-  and loses any `gray_formula`, which neither tool reads;
-- `metadata.version` becomes `2`, and `metadata` gains the `sharpness` and
-  `gradient_structure_tensor_xx_yy_xy` of the image file, decoded as the
-  extractors decode it and read through the new `image_to_gray`. The image is
-  first checked against `image_file_xxh128`, and its decoded size against
-  `image_width` and `image_height`; an image that is missing, cannot be
-  decoded or does not match is not converted.
-
-All three hashes in `content_hash.json` change: `feature_tool_xxh128` because
-`feature_options` changes, `metadata_xxh128` because `metadata.json` does, and
-`content_xxh128` because it covers both. A file whose `feature_tool` is
-`sfmtool-undistort` is not converted; running `sfm undistort` again writes its
-version 2 files. The conversion is `Version2SiftFolder` in `sfmtool-core`
-([sift.md § Converting a version 1 `.sift` file](../core/features/sift.md#converting-a-version-1-sift-file)).
+How the version changes, which older versions a reader keeps reading, and how
+one stops being read are in [format-versions.md](format-versions.md).
 
 A version 3 built on version 2 is proposed in
 [`../drafts/sift-incremental-extraction-amendment.md`](../drafts/sift-incremental-extraction-amendment.md):
@@ -150,11 +112,8 @@ JSON. It contains the following fields (ignore additional fields for future back
   entry's bytes, these values determine it
   (see [Feature tool hash computation](#feature-tool-hash-computation)).
 
-  In version 2, `feature_options` carries the image-to-gray conversion as the
-  `image_to_gray` object, described next. In version 1 the format does not
-  prescribe how the conversion is spelled; files whose `feature_tool` is
-  `"sfmtool"` record it as a `gray_formula` string in the formula grammar
-  below, with no rounding.
+  `feature_options` carries the image-to-gray conversion as the
+  `image_to_gray` object, described next.
 
 #### `feature_options.image_to_gray`
 
@@ -162,7 +121,7 @@ SIFT and the readings below operate on a single-channel image, and several of
 SIFT's parameters, most importantly the contrast threshold, are defined in that
 image's value domain. The mapping from the stored image to the grey samples
 therefore changes the features, the meaning of the thresholds and the readings,
-so a version 2 file records it, for every feature tool, as
+so a file records it, for every feature tool, as
 `feature_options.image_to_gray`. Being inside `feature_options`, it is part of
 `feature_tool_xxh128`.
 
@@ -271,7 +230,7 @@ taken from a tool's grey image, so they can be reproduced from the file.
 
 JSON. It should contain the following fields (ignore additional fields for future backwards-compatible extension):
 
-* `version`: (integer) The format version number, `1` or `2` (see
+* `version`: (integer) The format version number, `2` (see
   [Format versions](#format-versions)).
 * `image_name`: (string) The image filename without the directory.
 * `image_file_xxh128`: (string) The XXH128 sum of the bytes of the image file.
@@ -279,11 +238,10 @@ JSON. It should contain the following fields (ignore additional fields for futur
 * `image_width`: (integer) The width of the image, in pixels.
 * `image_height`: (integer) The height of the image, in pixels.
 * `feature_count`: (integer) The number of features (keypoints).
-* `sharpness`: (number, version 2, required) The variance of the Laplacian of
+* `sharpness`: (number, required) The variance of the Laplacian of
   the reading image, defined in [The reading image](#the-reading-image) and
   [Sharpness](#sharpness). Finite and not negative.
-* `gradient_structure_tensor_xx_yy_xy`: (array of three numbers, version 2,
-  required) `[Exx, Eyy, Exy]`, the means of `Gx²`, `Gy²` and `Gx·Gy` over the
+* `gradient_structure_tensor_xx_yy_xy`: (array of three numbers, required) `[Exx, Eyy, Exy]`, the means of `Gx²`, `Gy²` and `Gx·Gy` over the
   reading image, defined in [Gradient structure tensor](#gradient-structure-tensor).
   Finite; `Exx` and `Eyy` are not negative.
 
@@ -551,8 +509,8 @@ from then on; for an image outside a workspace it is
 computed from the extraction options at extraction time. It is never computed from a `.sift`
 file; see
 [Feature Prefix Directory](../workspace/workspace.md#feature-prefix-directory). The two hashes
-do not in general agree, and a reader must not compare one with the other, although in
-version 2 both are taken over inputs that hold the same `image_to_gray` object.
+do not in general agree, and a reader must not compare one with the other, although both
+are taken over inputs that hold the same `image_to_gray` object.
 
 ## Implementations
 
@@ -566,21 +524,21 @@ The code that reads, writes and verifies `.sift` files is:
   descriptors, for descriptor matching) and `read_sift_thumbnail`. Each
   reader decompresses only the entries it needs, so a damaged entry it does
   not read raises no error from it. No reader checks the content hashes
-  against the bytes; `verify_sift` does. Every reader rejects an
-  unsupported `metadata.version`; `write_sift` refuses to write one; and
-  `verify_sift`, which returns `(is_valid, error_messages)`, reports it as an
-  error. Every reader also rejects a version 2 file without the two readings
-  and a version 1 file with either. None of them checks the feature order. The
+  against the bytes; `verify_sift` does. Every reader refuses a
+  `metadata.version` other than the current one, as
+  [Format versions](#format-versions) says, before it reads anything else of
+  `metadata.json`, a version 1 file with `SiftError::VersionNoLongerRead`;
+  `verify_sift`, which returns `(is_valid, error_messages)`, reports the
+  refusal as the one error and checks nothing else. Every reader also rejects
+  a file without the two readings. None of them checks the feature order. The
   readers ignore a metadata key the format does not define, as the entries
-  above ask. `SiftMetadata` holds the readings as `Option`s, `None` in a
-  version 1 file, whose `metadata.json` is written without the keys. A writer is
-  stricter: `validate_sift_data`, which `write_sift` calls first and
-  `verify_sift` applies too, refuses an unsupported version, `feature_options`
-  that is not an object, a version 2 file whose `feature_options` carry no
-  `image_to_gray` of the right shape (a string `formula`, an optional
-  `quantize_bits` from 1 to 16, no other key) or a reading that is not finite
-  or is negative where it must not be, a version 1 file with `image_to_gray`,
-  and an array whose shape disagrees with `feature_count` or the thumbnail
+  above ask. A writer is stricter: `validate_sift_data`, which `write_sift`
+  calls first and `verify_sift` applies too, refuses a version other than the
+  current one (`write_sift` writes only the current version),
+  `feature_options` that is not an object or carry no `image_to_gray` of the
+  right shape (a string `formula`, an optional `quantize_bits` from 1 to 16,
+  no other key), a reading that is not finite or is negative where it must not
+  be, and an array whose shape disagrees with `feature_count` or the thumbnail
   edge, and
   `SiftMetadata::from_json_for_write` and
   `FeatureToolMetadata::from_json_for_write` parse metadata given as JSON,
@@ -589,8 +547,7 @@ The code that reads, writes and verifies `.sift` files is:
 - Python: in `sfmtool.fileio` ([bindings](../../crates/sfmtool-py/src/fileio/sift.rs)),
   `read_sift`, `read_sift_metadata`, `read_sift_partial`, `write_sift` and
   `verify_sift`, which take and return a dict of NumPy arrays and metadata,
-  the readings present in a version 2 file's `metadata` dict and absent from a
-  version 1 file's;
+  the readings in its `metadata` dict;
   `SiftFile`, an open file that reads the metadata when it is opened and the
   columns and thumbnail on request, the whole file or its first `count`
   features, and is what most of the Python package reads through; and
@@ -611,15 +568,13 @@ The code that reads, writes and verifies `.sift` files is:
   There is no Python wrapper over these bindings; the helpers in
   [`sfmtool.sift.file`](../../src/sfmtool/sift/file.py) find an image's
   `.sift` path and compute the feature-cache hash and affine-shape sizes.
-- The conversion of a version 1 file to version 2
-  ([above](#converting-a-version-1-file)): `Version2SiftFolder` in
-  [`sfmtool-core`](../../crates/sfmtool-core/src/features/sift/convert.rs),
-  bound for Python as `sfmtool.sift.Version2SiftFolder`. It reads and writes
-  through the Rust functions above.
 
 `SIFT_FORMAT_VERSION` in
 [`types.rs`](../../crates/sfmtool-sift-format/src/types.rs) is the newest
-version the crate reads and writes, `2`. The format crate checks the shape of
+version the crate reads and writes, `2`; beside it, `SIFT_OLDEST_READ_VERSION`
+is the oldest version it reads, also `2`, and
+`SIFT_LAST_RELEASE_READING_OLDER_VERSIONS` the release the refusal of an older
+file names, `"0.4.1"`. The format crate checks the shape of
 `image_to_gray` and not its grammar; the formula is parsed, with the token
 limit, by `ImageToGray` in
 [`sfmtool-core`](../../crates/sfmtool-core/src/features/sift/gray.rs), and the
@@ -736,8 +691,9 @@ $ od -Ax --endian=little -tf4 -w8 features/positions_xy.*.2.float32 | head -5
   `gradient_structure_tensor_xx_yy_xy` to `metadata.json`. The entries, their
   names and the content-hash order are unchanged.
 - **Version 1**: the first version. It has no `image_to_gray` object and no
-  readings. Version 1 files stay valid and readable, and convert to version 2
-  losslessly ([Converting a version 1 file](#converting-a-version-1-file)).
+  readings; the `sfmtool` feature tool records its grey conversion as a
+  `gray_formula` string. sfmtool 0.4.1 is the last release that reads it, and
+  its `sfm ws upgrade` converts it to version 2 losslessly.
 
 A proposed version 3, with incremental chunked descriptors and the identity
 hashes that go with them, is drafted in

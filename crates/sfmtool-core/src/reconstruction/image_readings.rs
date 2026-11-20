@@ -12,7 +12,7 @@
 //!
 //! 1. the reconstruction itself, when the image already holds a row under the
 //!    conversion the save records ([`SfmrImage::readings`]);
-//! 2. the image's version 2 `.sift` file, when it verifiably belongs to the
+//! 2. the image's `.sift` file, when it verifiably belongs to the
 //!    image and records the same conversion: its two readings are copied, the
 //!    way [`verified_sift_thumbnail`](super::thumbnail::verified_sift_thumbnail)
 //!    copies its thumbnail;
@@ -34,7 +34,6 @@ use std::sync::Mutex;
 
 use rayon::prelude::*;
 use sfmtool_archive_io::parse_hash_bytes;
-use sfmtool_sift_format::SIFT_READINGS_VERSION;
 
 use crate::camera::image::{image_dimensions, ImageU8};
 use crate::features::sift::{image_readings_from_rgb, ImageReadings, ImageToGray};
@@ -47,7 +46,7 @@ use crate::SfmrReconstruction;
 pub enum ImageReadingSource {
     /// The reconstruction already held it under the conversion recorded.
     Reconstruction,
-    /// Copied from the image's verified version 2 `.sift` file.
+    /// Copied from the image's verified `.sift` file.
     Sift,
     /// Computed from the verified photograph.
     Photograph,
@@ -162,9 +161,9 @@ impl SfmrReconstruction {
     /// The value's own [`ImageSet::image_to_gray`](crate::ImageSet::image_to_gray)
     /// when it records one; otherwise the workspace record's
     /// `feature_options.image_to_gray` (`metadata.workspace.contents`);
-    /// otherwise the one the first image whose `.sift` file is version 2
-    /// records; otherwise the conversion a version 1 record states for its
-    /// feature tool ([`recorded_image_to_gray`]); and otherwise the default,
+    /// otherwise the one the first image whose `.sift` file reads records;
+    /// otherwise the conversion the workspace record states for its feature
+    /// tool ([`recorded_image_to_gray`]); and otherwise the default,
     /// BT.709 luma unrounded ([`ImageToGray::default`]).
     pub fn image_to_gray_for_save(&self) -> ImageToGray {
         if let Some(conversion) = &self.image_set.image_to_gray {
@@ -182,14 +181,10 @@ impl SfmrReconstruction {
                 if !path.is_file() {
                     continue;
                 }
-                let Ok((feature_tool, metadata, _)) =
-                    sfmtool_sift_format::read_sift_metadata(&path)
+                let Ok((feature_tool, _, _)) = sfmtool_sift_format::read_sift_metadata(&path)
                 else {
                     continue;
                 };
-                if metadata.version < SIFT_READINGS_VERSION {
-                    continue;
-                }
                 if let Some(conversion) = feature_tool
                     .feature_options
                     .get("image_to_gray")
@@ -205,7 +200,7 @@ impl SfmrReconstruction {
 
     /// Every image's sharpness and gradient structure tensor under
     /// [`Self::image_to_gray_for_save`], from the first source that has it: the
-    /// value itself, the image's verified version 2 `.sift` file recorded
+    /// value itself, the image's verified `.sift` file recorded
     /// under the same conversion, or the verified photograph (see the module
     /// docs).
     ///
@@ -477,12 +472,6 @@ impl SfmrReconstruction {
             }
             *image_hash = recorded_image_hash;
         }
-        if metadata.version < SIFT_READINGS_VERSION {
-            return Err(format!(
-                "it is a version {} file, which records no readings",
-                metadata.version
-            ));
-        }
         let recorded = feature_tool.feature_options.get("image_to_gray");
         let same = recorded
             .and_then(|v| ImageToGray::from_json(v).ok())
@@ -494,18 +483,13 @@ impl SfmrReconstruction {
                 image_to_gray.to_json()
             ));
         }
-        match (
-            metadata.sharpness,
-            metadata.gradient_structure_tensor_xx_yy_xy,
-        ) {
-            // A `.sift` stores each reading as a double that holds the `f32`
-            // exactly, so the conversion back is exact.
-            (Some(sharpness), Some([xx, yy, xy])) => Ok(ImageReadings {
-                sharpness: sharpness as f32,
-                gradient_structure_tensor_xx_yy_xy: [xx as f32, yy as f32, xy as f32],
-            }),
-            _ => Err("it records no readings".into()),
-        }
+        // A `.sift` stores each reading as a double that holds the `f32`
+        // exactly, so the conversion back is exact.
+        let [xx, yy, xy] = metadata.gradient_structure_tensor_xx_yy_xy;
+        Ok(ImageReadings {
+            sharpness: metadata.sharpness as f32,
+            gradient_structure_tensor_xx_yy_xy: [xx as f32, yy as f32, xy as f32],
+        })
     }
 }
 

@@ -250,7 +250,8 @@ whichever format it came from. That covers the `fileio` functions, the
 `bench.NearbyTrackSources`. Each format crate's error enum has the same
 shared variants, and
 [`format_errors.rs`](../crates/sfmtool-py/src/format_errors.rs) maps them, with
-the variants one format adds, such as `.sift`'s `InvalidMetadata`; the
+the variants one format adds, such as `.sift`'s `InvalidMetadata` and
+`VersionNoLongerRead`; the
 `.kdf` bindings map the variants only `.kdf` has in
 [`spatial/kdf.rs`](../crates/sfmtool-py/src/spatial/kdf.rs) and hand the
 shared ones to the same table. The split is by who is at fault:
@@ -259,7 +260,7 @@ shared ones to the same table. The split is by who is at fault:
 |-------|---------------------|------------|
 | A filesystem call failed (`Io`, `IoPath`) | `OSError`, as the subclass for its kind: `FileNotFoundError` for a missing file, `PermissionError`, `FileExistsError`, `NotADirectoryError`, … | the same |
 | The ZIP container or a JSON entry could not be parsed or written (`Zip`, `Json`) | `OSError` | `OSError` |
-| The data breaks a rule of the format (`InvalidFormat`, `ShapeMismatch`, `.sift`'s `InvalidMetadata`, `.kdf`'s `Integrity`) | `OSError`: the file is damaged | `ValueError`: the caller's data cannot be stored |
+| The data breaks a rule of the format (`InvalidFormat`, `ShapeMismatch`, `.sift`'s `InvalidMetadata` and `VersionNoLongerRead`, `.kdf`'s `Integrity`) | `OSError`: the file is damaged | `ValueError`: the caller's data cannot be stored |
 | The call asks for something the data cannot give (`.sfmr`'s `Unsupported`, `.kdf`'s `InvalidQuery` and `ScalarType`) | `ValueError` | `ValueError` |
 
 A write here also covers building an in-memory value from the caller's data,
@@ -326,9 +327,8 @@ Paths in the *Source* column are relative to
 
 | Source | Exposes | Spec |
 |--------|---------|------|
-| [sift/convert.rs](../crates/sfmtool-py/src/sift/convert.rs) | `Version2SiftFolder` | [sift.md](core/features/sift.md) § "Converting a version 1 `.sift` file" |
 | [sift/extract.rs](../crates/sfmtool-py/src/sift/extract.rs) | `extract_sift`, `detect_sift_keypoints`, `describe_keypoints`, `affine_shapes_from_similarity` | [sift.md](core/features/sift.md) |
-| [sift/files.rs](../crates/sfmtool-py/src/sift/files.rs) | `build_sift_files`, `default_concurrent_images`, `version_1_sift_files`, `Version1SiftFiles` | [sift.md](core/features/sift.md) § "Building `.sift` files" |
+| [sift/files.rs](../crates/sfmtool-py/src/sift/files.rs) | `build_sift_files`, `default_concurrent_images` | [sift.md](core/features/sift.md) § "Building `.sift` files" |
 | [sift/image_readings.rs](../crates/sfmtool-py/src/sift/image_readings.rs) | `ImageToGray`, `ImageReadings`, `image_readings_from_rgb` | [sift.md](core/features/sift.md) § "Image-to-gray conversion", [sift-file-format.md](formats/sift-file-format.md) |
 
 ### `reconstruction`
@@ -448,7 +448,7 @@ Paths in the *Source* column are relative to
 
 | Source | Exposes | Spec |
 |--------|---------|------|
-| [workspace.rs](../crates/sfmtool-py/src/workspace.rs) | `NamedImageLists`, `NamedImageListMember`, `NamedImageListSlice`, `is_named_image_list_name`, `split_named_image_list_value`, `NAMED_IMAGE_LISTS_FILE_NAME`; `tool_image_to_gray`, `recorded_image_to_gray`, `upgrade_feature_options`, `WORKSPACE_VERSION`: each feature tool's grey conversion and the version 1 to version 2 conversion of `sfm ws upgrade`; `feature_prefix_dir`: the features folder named from a record's options, the one implementation every Python writer calls; `feature_type_for_tool`: the `feature_type` a workspace records for a tool, the one implementation every Python writer calls; `find_workspace_for_path`: the upward search for a path's workspace; `upgrade_workspace`: the upgrade of a workspace's files to the current versions, which `sfm ws upgrade` calls | [named-image-lists.md](workspace/named-image-lists.md), [workspace.md](workspace/workspace.md), [ws-upgrade-command.md](cli/workspace/ws-upgrade-command.md#interface) |
+| [workspace.rs](../crates/sfmtool-py/src/workspace.rs) | `NamedImageLists`, `NamedImageListMember`, `NamedImageListSlice`, `is_named_image_list_name`, `split_named_image_list_value`, `NAMED_IMAGE_LISTS_FILE_NAME`; `tool_image_to_gray`, `recorded_image_to_gray`, `WORKSPACE_VERSION`: each feature tool's grey conversion and the one a record states; `feature_prefix_dir`: the features folder named from a record's options, the one implementation every Python writer calls; `feature_type_for_tool`: the `feature_type` a workspace records for a tool, the one implementation every Python writer calls; `find_workspace_for_path`: the upward search for a path's workspace; `upgrade_workspace`: the upgrade of a workspace's files to the current versions, which `sfm ws upgrade` calls | [named-image-lists.md](workspace/named-image-lists.md), [workspace.md](workspace/workspace.md), [ws-upgrade-command.md](cli/workspace/ws-upgrade-command.md#interface) |
 
 ## Keeping the index current
 

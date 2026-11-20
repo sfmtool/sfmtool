@@ -21,7 +21,7 @@ from sfmtool.sift.extract import (
     image_files_to_sift_files,
     image_files_to_sift_files_opencv,
 )
-from sfmtool.fileio import SiftFile, read_sift, verify_sift, write_sift
+from sfmtool.fileio import SiftFile, verify_sift, write_sift
 from sfmtool.sift.draw import draw_sift_features
 from sfmtool.sift.extract_colmap import get_colmap_feature_options
 from sfmtool.sift.extract_opencv import (
@@ -196,15 +196,8 @@ def _two_tensor_values(data):
     data["metadata"]["gradient_structure_tensor_xx_yy_xy"] = [0.1, 0.2]
 
 
-def _version_1_with_readings(data):
+def _version_1(data):
     data["metadata"]["version"] = 1
-    del data["feature_tool_metadata"]["feature_options"]["image_to_gray"]
-
-
-def _version_1_with_image_to_gray(data):
-    data["metadata"]["version"] = 1
-    del data["metadata"]["sharpness"]
-    del data["metadata"]["gradient_structure_tensor_xx_yy_xy"]
 
 
 def _feature_options_list(data):
@@ -234,16 +227,12 @@ def _count_above_rows(data):
         (_feature_count_as_str, "metadata: invalid type: string"),
         (_negative_image_width, "metadata: invalid value: integer `-1`"),
         (_unsupported_version, "unsupported .sift format version 3"),
-        (_drop_sharpness, "version 2 .sift metadata has no 'sharpness'"),
-        (_drop_image_to_gray, "version 2 feature_options must carry 'image_to_gray'"),
+        (_drop_sharpness, "metadata: missing field `sharpness`"),
+        (_drop_image_to_gray, "feature_options must carry 'image_to_gray'"),
         (_bad_quantize_bits, "'quantize_bits' must be an integer from 1 to 16"),
         (_negative_sharpness, "sharpness must be finite and not negative"),
         (_two_tensor_values, "expected an array of length 3"),
-        (_version_1_with_readings, "has 'sharpness', which belongs to version 2"),
-        (
-            _version_1_with_image_to_gray,
-            "carry 'image_to_gray', which belongs to version 2",
-        ),
+        (_version_1, "unsupported .sift format version 1"),
         (_feature_options_list, "feature_options must be a JSON object"),
         (_fewer_positions, r"positions_xy shape \[10, 2\] != \[100, 2\]"),
         (_one_column_positions, r"positions_xy shape \[100, 1\] != \[100, 2\]"),
@@ -812,23 +801,4 @@ def test_version_2_readings_round_trip_exactly(sample_sift_data, tmp_path):
             "formula": "G",
             "quantize_bits": 8,
         }
-    assert verify_sift(path) == (True, [])
-
-
-def test_version_1_files_still_read_with_no_readings(sample_sift_data, tmp_path):
-    """A version 1 file, as version 1 writers wrote it, reads with the readings
-    absent from its metadata dict."""
-    data = _sift_data_dict(sample_sift_data)
-    data["metadata"]["version"] = 1
-    del data["metadata"]["sharpness"]
-    del data["metadata"]["gradient_structure_tensor_xx_yy_xy"]
-    data["feature_tool_metadata"]["feature_options"] = {"gray_formula": "G"}
-    path = tmp_path / "v1.sift"
-    write_sift(path, data)
-    with SiftFile(path) as reader:
-        assert reader.metadata["version"] == 1
-        assert "sharpness" not in reader.metadata
-        assert "gradient_structure_tensor_xx_yy_xy" not in reader.metadata
-        assert reader.read_positions().shape == (100, 2)
-    assert read_sift(path)["metadata"] == data["metadata"]
     assert verify_sift(path) == (True, [])

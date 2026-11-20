@@ -121,21 +121,16 @@ def upgrade(path, dry_run):
     """Bring a workspace and every file in it to the current file versions.
 
     Back up the workspace first: the command rewrites .sfmr, .matches and
-    .camrig files in place and deletes the old features folders, so it cannot
-    be undone.
+    .camrig files in place, so it cannot be undone.
 
     The workspace is found from PATH (or the current directory) by the upward
-    search for .sfm-workspace.json, and the run upgrades the whole tree of
-    workspaces it belongs to, so PATH must be in the outermost one. Version 1
-    .sift files are converted to version 2 in new features folders, without
-    extracting them again; each .sfmr and .matches file that names an old
-    folder, or is older than the current version, is rewritten at its own
-    path; a version 1 .camrig file is rewritten as version 2; a .kdf index
-    built from an old folder is deleted; each version 1 workspace file is
-    rewritten as version 2, keeping every option; and the old features
-    folders are deleted. A file the current reader refuses is left as it is,
-    and so are the folders it names. A run that stops part way, by Ctrl+C or
-    a failed file, can be run again to finish.
+    search for .sfm-workspace.json, and the run upgrades it and every
+    workspace nested in it. Each .sfmr, .matches and .camrig file older than
+    the current version is rewritten at its own path as the current version.
+    A file the current reader refuses is left as it is. A version 1 workspace
+    is refused: upgrade it with sfmtool 0.4.1 first, the last release that
+    reads the file versions it holds. A run that stops part way, by Ctrl+C,
+    can be run again to finish.
 
     Example usage:
 
@@ -146,8 +141,7 @@ def upgrade(path, dry_run):
     if not dry_run:
         click.echo(
             "Back up the workspace before upgrading it: this rewrites .sfmr, "
-            ".matches and .camrig files in place and deletes the old features "
-            "folders, which cannot be undone."
+            ".matches and .camrig files in place, which cannot be undone."
         )
     try:
         with _echo_progress() as counter:
@@ -198,15 +192,14 @@ def _echo_progress(interval: float = 10.0):
 
 
 # How the report names each outcome, in the order it counts them, and each
-# kind of file other than the workspace file.
+# kind of file.
 _OUTCOMES = {
     "converted": "converted",
     "already_current": "already current",
     "not_converted": "not converted",
     "failed": "failed",
-    "deleted": "deleted",
 }
-_KINDS = {"sfmr": ".sfmr", "matches": ".matches", "camrig": ".camrig", "kdf": ".kdf"}
+_KINDS = {"sfmr": ".sfmr", "matches": ".matches", "camrig": ".camrig"}
 
 
 def report_lines(report: dict) -> list[str]:
@@ -234,19 +227,15 @@ def report_lines(report: dict) -> list[str]:
             "upgrade would do."
         )
     lines.append(f"Workspace tree: {root}")
-    lines.append("Workspace files:")
-    for f in report["files"]:
-        if f["kind"] == "workspace_file":
-            outcome = _OUTCOMES[f["outcome"]]
-            if f["outcome"] == "converted":
-                outcome = "converted to version 2"
-            lines.append(f"  {rel(f['path'])}: {outcome}")
+    nested = report["workspaces"][1:]
+    if nested:
+        lines.append("Nested workspaces:")
+        lines.extend(f"  {rel(w)}" for w in nested)
 
-    others = [f for f in report["files"] if f["kind"] != "workspace_file"]
-    if others:
+    if report["files"]:
         lines.append("Files:")
         for kind, name in _KINDS.items():
-            counts = Counter(f["outcome"] for f in others if f["kind"] == kind)
+            counts = Counter(f["outcome"] for f in report["files"] if f["kind"] == kind)
             if counts:
                 counted = ", ".join(
                     f"{counts[o]} {label}"
@@ -269,24 +258,6 @@ def report_lines(report: dict) -> list[str]:
                 lines.append(f"  {len(paths)} files: {reason}")
                 lines.extend(f"    {p}" for p in paths)
 
-    if report["folders"]:
-        lines.append("Old features folders:")
-    for folder in report["folders"]:
-        count = f"{folder['sift_file_count']} .sift files"
-        old = rel(folder["old_folder"])
-        if folder["new_folder"] is not None:
-            line = f"  {old} -> {rel(folder['new_folder'])} ({count})"
-        else:
-            line = f"  {old} ({count}, not converted)"
-        if folder["kept_because"] is not None:
-            line += f"; kept: {plain(folder['kept_because'])}"
-        elif folder["deleted"]:
-            line += "; deleted"
-        lines.append(line)
-        lines.extend(f"    left in it: {rel(kept)}" for kept in folder["kept_files"])
-    if report["converted_sift_file_count"]:
-        lines.append(f"Converted .sift files: {report['converted_sift_file_count']}")
-
     if report["linked_directories"]:
         lines.append("Linked directories, not entered:")
         lines.extend(f"  {rel(d)}" for d in report["linked_directories"])
@@ -294,7 +265,5 @@ def report_lines(report: dict) -> list[str]:
         lines.append("Notes:")
         lines.extend(f"  {plain(note)}" for note in report["notes"])
     if report["nothing_to_do"]:
-        lines.append(
-            "Nothing to do: no file is left to convert and no old features folder to delete."
-        )
+        lines.append("Nothing to do: no file is left to convert.")
     return lines
