@@ -23,6 +23,8 @@ use sfmtool_sfmr_format::{
     NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED,
 };
 
+use crate::camera::sampler::RegionPool;
+use crate::camera::PhotographReadError;
 use crate::numeric::median_in_place;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Progress};
@@ -38,6 +40,7 @@ use crate::{progress_info, progress_note};
 use super::classify::TrackClassification;
 use super::commit::{point_record, CommitError};
 use super::fit::{fit_preconditions, fit_track, stated_or_measured_noise, FitError, FitOptions};
+use super::read_failure::ReadFailure;
 use super::steps::track_of_point;
 use super::track::{Stage, BENCH_MAX_SHIFT_PX};
 
@@ -299,6 +302,8 @@ pub enum RefitPointsError {
     /// value's reprojection noise could not be measured, or the one given is
     /// not a finite positive number. The sentence says why.
     NoNoiseLevel(String),
+    /// A photograph could not be read, so nothing was written.
+    Photograph(PhotographReadError),
     /// The caller asked the run to stop, so nothing was written.
     Cancelled,
 }
@@ -335,6 +340,10 @@ impl std::fmt::Display for RefitPointsError {
                 f,
                 "the points cannot be classified as points or bearings: {why}"
             ),
+            RefitPointsError::Photograph(e) => write!(
+                f,
+                "a photograph could not be read, so nothing was written: {e}"
+            ),
             RefitPointsError::Cancelled => write!(
                 f,
                 "the refit was asked to stop before it had an answer, so nothing was written"
@@ -348,6 +357,16 @@ impl std::error::Error for RefitPointsError {}
 impl From<Cancelled> for RefitPointsError {
     fn from(_: Cancelled) -> Self {
         RefitPointsError::Cancelled
+    }
+}
+
+/// A cancelled read is the run's own [`RefitPointsError::Cancelled`].
+impl From<PhotographReadError> for RefitPointsError {
+    fn from(e: PhotographReadError) -> Self {
+        match e {
+            PhotographReadError::Cancelled => RefitPointsError::Cancelled,
+            e => RefitPointsError::Photograph(e),
+        }
     }
 }
 
@@ -411,8 +430,13 @@ impl From<Cancelled> for RefitPointsError {
 /// #     recon: &sfmtool_core::SfmrReconstruction,
 /// #     views: &[sfmtool_core::patch::normal_refine::ProjectedImage<'_>],
 /// # ) -> Result<(), Box<dyn std::error::Error>> {
-/// let (next, report) =
-///     refit_points(recon, views, &RefitPointsOptions::default(), &Progress::none())?;
+/// let (next, report) = refit_points(
+///     recon,
+///     views,
+///     &sfmtool_core::camera::sampler::RegionPool::for_kernel_call(),
+///     &RefitPointsOptions::default(),
+///     &Progress::none(),
+/// )?;
 /// println!(
 ///     "{} of {} points refit, {} left as they were",
 ///     report.refit(),
@@ -431,6 +455,7 @@ impl From<Cancelled> for RefitPointsError {
 pub fn refit_points(
     recon: &SfmrReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &RefitPointsOptions,
     progress: &Progress<'_>,
 ) -> Result<(SfmrReconstruction, RefitPointsReport), RefitPointsError> {
@@ -460,6 +485,7 @@ pub fn refit_points(
     let edited = EditedReconstruction::new(Arc::new(recon.clone_for_edit()));
     let ranges = point_ranges(&edited.base);
     let total = recon.point_count();
+    let failure = ReadFailure::default();
     let fitted: Option<Vec<(RefitPoint, Option<PointRecord>)>> = {
         let mut phase = p_fit.phase("fit points");
         let step = (total / 100).max(1);
@@ -473,11 +499,13 @@ pub fn refit_points(
                 let answer = refit_one(
                     &edited,
                     images,
+                    pool,
+                    &failure,
                     p as u32,
                     ranges.get(p).copied().unwrap_or(PointRange::Free),
                     &fit_options,
                     options.max_shift_px,
-                );
+                )?;
                 let n = done.fetch_add(1, Ordering::Relaxed) + 1;
                 if n.is_multiple_of(step) || n == total {
                     phase.count(n as u64, Some(total as u64), "points");
@@ -488,6 +516,9 @@ pub fn refit_points(
         progress_note!(phase, "{total} points");
         fitted
     };
+    // A point whose reads failed stops the run as a cancel does, and the
+    // failure is the run's answer.
+    failure.check()?;
     let fitted = fitted.ok_or(RefitPointsError::Cancelled)?;
     progress.check_cancel()?;
 
@@ -615,17 +646,20 @@ fn point_ranges(recon: &SfmrReconstruction) -> Vec<PointRange> {
 }
 
 /// One point's refit: its status, and the record to write where it changed.
+#[allow(clippy::too_many_arguments)]
 fn refit_one(
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
+    failure: &ReadFailure,
     index: u32,
     range: PointRange,
     options: &FitOptions,
     max_shift_px: f64,
-) -> (RefitPoint, Option<PointRecord>) {
+) -> Option<(RefitPoint, Option<PointRecord>)> {
     let status = |outcome| RefitPoint { index, outcome };
     let (entry, applied) = match range {
-        PointRange::Held => return (status(RefitOutcome::Held), None),
+        PointRange::Held => return Some((status(RefitOutcome::Held), None)),
         PointRange::Free => (None, RefitRange::Free),
         PointRange::Applied(entry) => (Some(entry), RefitRange::Applied),
         PointRange::Unresolved => (None, RefitRange::Unresolved { released: false }),
@@ -642,7 +676,7 @@ fn refit_one(
 
     // ---- The fit, as `fit` runs it at the track stage ----
     if let Err(e) = fit_preconditions(&track) {
-        return (status(RefitOutcome::NotFitted(e)), None);
+        return Some((status(RefitOutcome::NotFitted(e)), None));
     }
     let patch_frame = match &track.stage {
         Stage::Track(payload) => payload.patch_frame.clone(),
@@ -653,19 +687,24 @@ fn refit_one(
         &track,
         edited,
         images,
+        pool,
         &patch_frame,
         options,
         entry,
         &Progress::none(),
     ) {
         Ok(answer) => answer,
-        Err(e) => return (status(RefitOutcome::NotFitted(e)), None),
+        Err(FitError::Photograph(e)) => {
+            failure.keep(e);
+            return None;
+        }
+        Err(e) => return Some((status(RefitOutcome::NotFitted(e)), None)),
     };
 
     // ---- The record a commit would write ----
     let mut record = match point_record(edited, &fitted) {
         Ok(record) => record,
-        Err(CommitError::NoBitmap) => return (status(RefitOutcome::NoBitmap), None),
+        Err(CommitError::NoBitmap) => return Some((status(RefitOutcome::NoBitmap), None)),
         // The run refused a `sift_files` value, and a fitted track is at the
         // track stage with a position, a patch frame, two or more `in` rows and a
         // keypoint on every one of them, each in an image of the value, since
@@ -694,7 +733,7 @@ fn refit_one(
     let shift = (!was_at_infinity && !at_infinity)
         .then(|| (record.point.position - stored.point.position).norm());
     let unchanged = stored.agrees_with(&record) && !stored.display_only_reference;
-    (
+    Some((
         status(RefitOutcome::Refit {
             placed: report.placed,
             kept_at_seed: report.kept_at_seed,
@@ -705,7 +744,7 @@ fn refit_one(
             unchanged,
         }),
         (!unchanged).then_some(record),
-    )
+    ))
 }
 
 /// Write each `(row, record)` into `out` at the point's own row.

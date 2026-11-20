@@ -106,7 +106,10 @@ every image some live point observes. Nothing is read there. On the worker it:
    `RowMap`; where the overlay is empty it reads the base and folds nothing;
 3. calls [`bench::refit_points`](../../core/bench/refit-points.md) on that value
    with `RefitPointsOptions::default()`, whose stages (`measure noise`, `fit
-   points`, `write back`) nest under the operation's.
+   points`, `write back`) nest under the operation's, with a region pool it
+   makes for the call; a `read regions` phase after it notes how the run's
+   reads reached their pixels ([../bench.md](../bench.md) § "The two steps
+   that read photographs").
 
 The bar splits 1 : 9 between the decode and the rest (the fold and the core
 refit), so the fraction follows the points the fit counts rather than standing

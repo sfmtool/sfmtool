@@ -181,8 +181,14 @@ fn refine_normals_stores_the_render_of_the_frame_it_stores() {
     let (mut unrounded, mut unrounded_bytes) = (0, 0);
     for by in [15.0, 25.0, 35.0] {
         let recon = tilted_grid_value(&scene, by);
-        let (out, report) = refine_normals(&recon, &scene.views(), &options, &Progress::none())
-            .expect("the run refines");
+        let (out, report) = refine_normals(
+            &recon,
+            &scene.views(),
+            &RegionPool::for_kernel_call(),
+            &options,
+            &Progress::none(),
+        )
+        .expect("the run refines");
         assert!(report.turned() > grid().len() / 2, "{by}: {report:?}");
         let (b, n) = bytes_off_a_render_of_the_stored_value(&scene, &out);
         bytes += b;
@@ -223,6 +229,7 @@ fn refit_points_stores_the_render_of_the_frame_it_stores() {
     let (out, report) = refit_points(
         &recon,
         &scene.views(),
+        &RegionPool::for_kernel_call(),
         &RefitPointsOptions {
             fit: test_fit_options(),
             ..RefitPointsOptions::default()
@@ -255,6 +262,7 @@ fn committed_after(
             &stepped,
             &edited,
             &views,
+            &RegionPool::for_kernel_call(),
             &EvaluateOptions::default(),
             &FitOptions::default(),
             &Progress::none(),

@@ -18,10 +18,11 @@
 
 use nalgebra::Vector3;
 
-use crate::bench::evaluate::{evaluate_rendering_bitmap, EvaluateOptions};
-use crate::bench::fit::{fit, FitOptions};
+use crate::bench::evaluate::{evaluate_rendering_bitmap, EvaluateError, EvaluateOptions};
+use crate::bench::fit::{fit, FitError, FitOptions};
 use crate::bench::geometry_search::{search_geometry, GeometrySearchOptions};
-use crate::bench::stage::set_stage;
+use crate::bench::read_failure::ReadFailure;
+use crate::bench::stage::{set_stage, StageError};
 use crate::bench::steps::{
     add_observation, apply_thresholds, create_cluster, resize_patch, set_verdict, tilt_patch,
     translate_patch_to_pixel, ClusterSeed, ObservationSeed, Viewpoint,
@@ -30,6 +31,7 @@ use crate::bench::track::{
     EditableTrack, Provenance, StageKind, Thresholds, TrackMeasurement, Verdict,
 };
 use crate::bench::Bench;
+use crate::camera::sampler::RegionPool;
 use crate::numeric::median_in_place;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::Progress;
@@ -159,12 +161,18 @@ pub(super) fn read(ctx: &Ctx<'_>, track: &EditableTrack) -> Result<EditableTrack
         track,
         ctx.edited,
         ctx.views,
+        ctx.pool,
         &EvaluateOptions::default(),
         &FitOptions::default(),
         &Progress::none(),
     )
     .map(|(t, _)| t)
-    .map_err(|e| e.to_string())
+    .map_err(|e| {
+        if let EvaluateError::Photograph(read) = &e {
+            ctx.failure.keep(read.clone());
+        }
+        e.to_string()
+    })
 }
 
 /// Fit `track` with the default fit.
@@ -173,11 +181,17 @@ pub(super) fn fit_track(ctx: &Ctx<'_>, track: &EditableTrack) -> Result<Editable
         track,
         ctx.edited,
         ctx.views,
+        ctx.pool,
         &FitOptions::default(),
         &Progress::none(),
     )
     .map(|(t, _)| t)
-    .map_err(|e| e.to_string())
+    .map_err(|e| {
+        if let FitError::Photograph(read) = &e {
+            ctx.failure.keep(read.clone());
+        }
+        e.to_string()
+    })
 }
 
 /// The thresholds' verdicts painted onto the unpinned observations.
@@ -242,7 +256,14 @@ pub(super) fn track_from_sightings(
     sightings: &[(u32, [f64; 2])],
 ) -> Result<EditableTrack, String> {
     let track = seed_cluster(ctx, image, pixel, radius_px)?;
-    upgrade_sightings(ctx.edited, ctx.views, track, sightings)
+    upgrade_sightings(
+        ctx.edited,
+        ctx.views,
+        ctx.pool,
+        &ctx.failure,
+        track,
+        sightings,
+    )
 }
 
 /// `track` with each `(image, pixel)` sighting added and set `in` by hand, then
@@ -252,6 +273,8 @@ pub(super) fn track_from_sightings(
 pub(crate) fn upgrade_sightings(
     edited: &EditedReconstruction,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
+    failure: &ReadFailure,
     mut track: EditableTrack,
     sightings: &[(u32, [f64; 2])],
 ) -> Result<EditableTrack, String> {
@@ -271,12 +294,18 @@ pub(crate) fn upgrade_sightings(
         &track,
         edited,
         views,
+        pool,
         StageKind::Track,
         &FitOptions::default(),
         &Progress::none(),
     )
     .map(|(t, _)| t)
-    .map_err(|e| e.to_string())
+    .map_err(|e| {
+        if let StageError::Fit(FitError::Photograph(read)) = &e {
+            failure.keep(read.clone());
+        }
+        e.to_string()
+    })
 }
 
 /// A one-sighting cluster at `pixel` in `image`, `radius_px` from the pixel to

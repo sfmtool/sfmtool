@@ -120,7 +120,7 @@ pub fn render_view_tile(
     let patch_frame = patch.seen_at_keypoint(view.camera, view.cam_from_world, keypoint);
     let jacobian = patch_grid_jacobian(&patch_frame, view.camera, view.cam_from_world, resolution);
     let sampler = sampler.for_jacobian(jacobian);
-    let channels = view.pyramid.level(0).channels() as usize;
+    let channels = view.source.channels() as usize;
     let mut map = WarpMap::from_patch(
         &patch_frame,
         view.camera,
@@ -132,7 +132,7 @@ pub fn render_view_tile(
     let outline = tile_outline(&map);
     let tile = {
         let _phase = render_phase(progress, sampler, 1);
-        render_tile(view.pyramid, &mut map, sampler)
+        render_tile(view.source.held_pyramid(), &mut map, sampler)
     };
     let src_channels = tile.channels();
     // The second of two channels is alpha, as the fourth of four is.
@@ -155,7 +155,7 @@ pub fn render_view_tile(
     ViewTile {
         samples,
         valid,
-        clipped_share: clipped_share(view.pyramid, &outline),
+        clipped_share: clipped_share(view.source.held_pyramid(), &outline),
         viewing_angle: viewing_angle(&patch_frame, view.cam_from_world),
         patch_frame,
         jacobian,

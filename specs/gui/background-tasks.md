@@ -961,8 +961,10 @@ bar equally. Both poll for cancellation, which the job turns into
 
 `Refit all points` reports `decode images`, then `materialise` where the node
 has pending point edits, then the core refit's `measure noise`, `fit points`
-(which counts the points and sets its fraction) and `write back`
-([edits/refit-all-points.md](edits/refit-all-points.md)). It polls the flag
+(which counts the points and sets its fraction), `write back` and `read
+regions`, whose note counts how the run's reads reached their pixels
+([bench.md](bench.md) § "The two steps that read photographs",
+[edits/refit-all-points.md](edits/refit-all-points.md)). It polls the flag
 on either side of the decode, between the photographs, and, inside
 `sfmtool_core::bench::refit_points`, in front of each stage and of each point's
 fit, and turns `RefitPointsError::Cancelled` into `Finished::Cancelled`. A
@@ -970,7 +972,7 @@ photograph that cannot be read fails it in its `decode images` phase.
 
 `Refine all normals` reports the same `decode images` and `materialise`, then
 the core refinement's `refine normals` (which counts the points and sets its
-fraction) and `write back`
+fraction), `write back` and the same `read regions`
 ([edits/refine-all-normals.md](edits/refine-all-normals.md)). It polls the
 flag in the same places, the core polling inside
 `sfmtool_core::bench::refine_normals` in front of each stage and of each
@@ -990,14 +992,14 @@ cancelled search cannot leave a candidate prefix on the bench.
 the keypoints and the cluster patches, and the cascade polls in front of each
 member and hands back `TrackAtPixelError::Cancelled`; a member once entered
 runs to its end. Its phases are `decode images`, `read keypoints`, `read
-cluster patches`, and one per member tried. A cancelled run puts
-nothing on the bench and commits nothing. `Find nearby tracks` polls in the
-same places, around the decode and its reads of the `.sift` files and the
+cluster patches`, one per member tried, and `read regions`. A cancelled run
+puts nothing on the bench and commits nothing. `Find nearby tracks` polls in
+the same places, around the decode and its reads of the `.sift` files and the
 cluster patches, and core's search polls in front of each source, in the
 far-field sweep and in front of building the tracks, and hands back
 `NearbyTracksError::Cancelled`. Its phases are `decode images`, `read .sift
-files`, `read cluster patches`, and one per source run. It too puts nothing
-on the bench when cancelled.
+files`, `read cluster patches`, one per source run, and `read regions`. It too
+puts nothing on the bench when cancelled.
 
 Every `decode images` phase reads through the viewer's photograph cache
 ([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)),

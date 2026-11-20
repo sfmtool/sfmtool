@@ -14,7 +14,7 @@ use nalgebra::{Point3, Quaternion, UnitQuaternion, Vector3};
 use ndarray::{Array2, Array4};
 
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
-use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_subpixel::KeypointSubpixelParams;
@@ -35,6 +35,11 @@ const HALF_EXTENT: f64 = 0.12;
 /// third is the one an observation is added in.
 pub(in crate::bench) const CENTERS: [[f64; 3]; 3] =
     [[-0.5, -0.3, 0.0], [0.45, 0.25, 0.0], [0.1, -0.55, 0.0]];
+
+/// `pyramid` as the tiled photograph a kernel reads.
+fn in_memory(pyramid: ImageU8Pyramid) -> TiledPhotograph {
+    TiledPhotograph::from_pyramid(Arc::new(pyramid))
+}
 
 fn pinhole() -> CameraIntrinsics {
     CameraIntrinsics {
@@ -118,7 +123,7 @@ pub(in crate::bench) struct Scene {
     centers: Vec<[f64; 3]>,
     cameras: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
-    pyramids: Vec<ImageU8Pyramid>,
+    sources: Vec<TiledPhotograph>,
 }
 
 impl Scene {
@@ -139,9 +144,9 @@ impl Scene {
             centers: centers.to_vec(),
             cameras: centers.iter().map(|_| pinhole()).collect(),
             poses: centers.iter().map(|&c| pose(c)).collect(),
-            pyramids: centers
+            sources: centers
                 .iter()
-                .map(|&c| ImageU8Pyramid::build(&render_plane_view(c, depth), 4))
+                .map(|&c| in_memory(ImageU8Pyramid::build(&render_plane_view(c, depth), 4)))
                 .collect(),
         }
     }
@@ -174,9 +179,9 @@ impl Scene {
             centers: centers.to_vec(),
             cameras: centers.iter().map(|_| pinhole()).collect(),
             poses: centers.iter().map(|&c| pose(c)).collect(),
-            pyramids: centers
+            sources: centers
                 .iter()
-                .map(|&c| ImageU8Pyramid::build(&render(c), 4))
+                .map(|&c| in_memory(ImageU8Pyramid::build(&render(c), 4)))
                 .collect(),
         }
     }
@@ -195,7 +200,7 @@ impl Scene {
         surface: impl Fn([f64; 3], [f64; 3]) -> f64,
     ) -> Self {
         let poses: Vec<RigidTransform> = centers.iter().map(|&c| look_at(c, target)).collect();
-        let pyramids = centers
+        let sources = centers
             .iter()
             .zip(&poses)
             .map(|(&c, pose)| {
@@ -210,14 +215,14 @@ impl Scene {
                     }
                 }
                 let image = ImageU8::new(camera.width, camera.height, 1, data);
-                ImageU8Pyramid::build(&image, 4)
+                in_memory(ImageU8Pyramid::build(&image, 4))
             })
             .collect();
         Self {
             centers: centers.to_vec(),
             cameras: centers.iter().map(|_| camera.clone()).collect(),
             poses,
-            pyramids,
+            sources,
         }
     }
 
@@ -239,15 +244,27 @@ impl Scene {
         };
     }
 
+    /// The same scene with its photographs cut into tiles of `tile_size` px,
+    /// so that a render crosses many of them and one through a small region
+    /// pool reads through them.
+    pub(in crate::bench) fn with_tile_size(mut self, tile_size: u32) -> Self {
+        self.sources = self
+            .sources
+            .into_iter()
+            .map(|source| source.with_tile_size(tile_size))
+            .collect();
+        self
+    }
+
     pub(in crate::bench) fn views(&self) -> Vec<ProjectedImage<'_>> {
         self.cameras
             .iter()
             .zip(&self.poses)
-            .zip(&self.pyramids)
-            .map(|((camera, cam_from_world), pyramid)| ProjectedImage {
+            .zip(&self.sources)
+            .map(|((camera, cam_from_world), source)| ProjectedImage {
                 camera,
                 cam_from_world,
-                pyramid,
+                source,
             })
             .collect()
     }

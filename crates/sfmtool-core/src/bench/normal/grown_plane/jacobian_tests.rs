@@ -10,13 +10,16 @@
 use nalgebra::{DMatrix, Vector3};
 
 use super::combine::sigmas_deg;
-use super::render::{Block, GradientRead, Gradients, Grid, Samples, ViewImage, ViewRender};
+use super::render::{
+    Block, GradientRead, Gradients, Grid, Samples, StepReads, ViewImage, ViewRender,
+};
 use super::solve::{
     cell_znccs, forward_difference, live_cells, normal_matrix, schur_tilt, tilt_information,
     Objective, PairFit, Reading, ViewFit,
 };
 use crate::bench::tests::scene::{texture, Scene, PLANE_Z, WORLD};
 use crate::camera::image::ImageU8;
+use crate::camera::sampler::RegionPool;
 use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::patch::cloud::OrientedPatch;
 
@@ -170,6 +173,8 @@ fn compare<O: Objective>(objective: &O, p: &[f64], tilt_free: bool) -> (f64, f64
 /// wrong sign or a missing term would differ by 100% or more.
 #[test]
 fn the_analytic_jacobian_follows_a_difference_of_renders() {
+    let pool = RegionPool::for_kernel_call();
+    let reads = StepReads::new(&pool);
     for model in ["pinhole", "simple_radial", "simple_radial_fisheye"] {
         let scene = scene(model);
         let views = scene.views();
@@ -178,7 +183,15 @@ fn the_analytic_jacobian_follows_a_difference_of_renders() {
         let grid = Grid::new(&patch_frame, &views[0], None, side);
         let images: Vec<ViewImage<'_>> = views
             .iter()
-            .map(|v| ViewImage::new(v, &grid.anchored_patch_frame, side, Vector3::zeros()))
+            .map(|v| {
+                ViewImage::new(
+                    v,
+                    &reads,
+                    &grid.anchored_patch_frame,
+                    side,
+                    Vector3::zeros(),
+                )
+            })
             .collect();
         let renders: Vec<ViewRender<'_, '_>> =
             images.iter().map(|i| ViewRender::new(&grid, i)).collect();
@@ -246,6 +259,8 @@ fn the_analytic_jacobian_follows_a_difference_of_renders() {
 /// and the weakest `σ` larger than the bilinear derivative would give.
 #[test]
 fn the_information_is_read_through_the_sobel_gradient() {
+    let pool = RegionPool::for_kernel_call();
+    let reads = StepReads::new(&pool);
     let scene = scene("pinhole");
     let views = scene.views();
     let patch_frame = patch_frame();
@@ -253,7 +268,15 @@ fn the_information_is_read_through_the_sobel_gradient() {
     let grid = Grid::new(&patch_frame, &views[0], None, side);
     let images: Vec<ViewImage<'_>> = views
         .iter()
-        .map(|v| ViewImage::new(v, &grid.anchored_patch_frame, side, Vector3::zeros()))
+        .map(|v| {
+            ViewImage::new(
+                v,
+                &reads,
+                &grid.anchored_patch_frame,
+                side,
+                Vector3::zeros(),
+            )
+        })
         .collect();
     let renders: Vec<ViewRender<'_, '_>> =
         images.iter().map(|i| ViewRender::new(&grid, i)).collect();
@@ -299,6 +322,8 @@ fn the_information_is_read_through_the_sobel_gradient() {
 /// on the photograph.
 #[test]
 fn a_grid_partly_off_the_photograph_differences_like_its_residual() {
+    let pool = RegionPool::for_kernel_call();
+    let reads = StepReads::new(&pool);
     let scene = scene("pinhole");
     let views = scene.views();
     let patch_frame = patch_frame();
@@ -306,7 +331,15 @@ fn a_grid_partly_off_the_photograph_differences_like_its_residual() {
     let grid = Grid::new(&patch_frame, &views[0], None, side);
     let images: Vec<ViewImage<'_>> = views
         .iter()
-        .map(|v| ViewImage::new(v, &grid.anchored_patch_frame, side, Vector3::zeros()))
+        .map(|v| {
+            ViewImage::new(
+                v,
+                &reads,
+                &grid.anchored_patch_frame,
+                side,
+                Vector3::zeros(),
+            )
+        })
         .collect();
     let renders: Vec<ViewRender<'_, '_>> =
         images.iter().map(|i| ViewRender::new(&grid, i)).collect();
@@ -357,6 +390,8 @@ fn a_grid_partly_off_the_photograph_differences_like_its_residual() {
 /// its gradient per full-resolution px.
 #[test]
 fn the_sampler_gradient_is_the_derivative_of_its_value_at_the_edge() {
+    let pool = RegionPool::for_kernel_call();
+    let reads = StepReads::new(&pool);
     let (w, h) = (16u32, 12u32);
     let data: Vec<u8> = (0..w * h)
         .flat_map(|k| {
@@ -368,16 +403,18 @@ fn the_sampler_gradient_is_the_derivative_of_its_value_at_the_edge() {
         })
         .collect();
     let image = ImageU8::new(w, h, 2, data);
-    let pyramid = crate::camera::image::ImageU8Pyramid::build(&image, 2);
+    let source = crate::camera::TiledPhotograph::from_pyramid(std::sync::Arc::new(
+        crate::camera::image::ImageU8Pyramid::build(&image, 2),
+    ));
     let camera = camera("pinhole");
     let pose = crate::geometry::RigidTransform::identity();
     let view = crate::patch::normal_refine::ProjectedImage {
         camera: &camera,
         cam_from_world: &pose,
-        pyramid: &pyramid,
+        source: &source,
     };
     for level in [0usize, 1] {
-        let read = ViewImage::at_level(&view, level);
+        let read = ViewImage::at_level(&view, &reads, level);
         let scale = (1u64 << level) as f64;
         let height = f64::from(h >> level);
         // Inside; left of the first pixel centre in x; below the last in y;
@@ -443,6 +480,8 @@ fn the_sampler_gradient_is_the_derivative_of_its_value_at_the_edge() {
 /// read's slope jumps, at a pixel centre.
 #[test]
 fn the_sobel_read_is_a_bilinear_read_of_the_sobel_images() {
+    let pool = RegionPool::for_kernel_call();
+    let reads = StepReads::new(&pool);
     let (w, h) = (16u32, 12u32);
     let data: Vec<u8> = (0..w * h)
         .flat_map(|k| {
@@ -503,15 +542,17 @@ fn the_sobel_read_is_a_bilinear_read_of_the_sobel_images() {
         }
     }
     // The ramp, channel 1: 3 per px in x and 7 in y.
-    let pyramid = crate::camera::image::ImageU8Pyramid::build(&image, 1);
+    let source = crate::camera::TiledPhotograph::from_pyramid(std::sync::Arc::new(
+        crate::camera::image::ImageU8Pyramid::build(&image, 1),
+    ));
     let camera = camera("pinhole");
     let pose = crate::geometry::RigidTransform::identity();
     let view = crate::patch::normal_refine::ProjectedImage {
         camera: &camera,
         cam_from_world: &pose,
-        pyramid: &pyramid,
+        source: &source,
     };
-    let read = ViewImage::at_level(&view, 0);
+    let read = ViewImage::at_level(&view, &reads, 0);
     let pixels: Vec<Option<[f64; 2]>> =
         vec![Some([5.3, 4.6]), Some([8.5, 6.5]), Some([8.5001, 6.4999])];
     let rows: Vec<usize> = (0..pixels.len()).collect();
@@ -652,6 +693,8 @@ fn a_blocks_derivative_goes_through_its_normalisation() {
 /// to 10⁻⁶ of its size, through a pinhole, a radial lens and a fisheye.
 #[test]
 fn the_pixels_tilt_derivative_follows_the_projection() {
+    let pool = RegionPool::for_kernel_call();
+    let reads = StepReads::new(&pool);
     for model in ["pinhole", "simple_radial", "simple_radial_fisheye"] {
         let scene = scene(model);
         let views = scene.views();
@@ -660,7 +703,13 @@ fn the_pixels_tilt_derivative_follows_the_projection() {
         let grid = Grid::new(&patch_frame, &views[0], None, side);
         let rows = grid.all();
         for view in &views[1..] {
-            let image = ViewImage::new(view, &grid.anchored_patch_frame, side, Vector3::zeros());
+            let image = ViewImage::new(
+                view,
+                &reads,
+                &grid.anchored_patch_frame,
+                side,
+                Vector3::zeros(),
+            );
             let tilt = [0.06, -0.04];
             let analytic = grid.pixel_tilt_derivatives(&image, tilt, &rows);
             let h = 1e-6;
@@ -692,6 +741,8 @@ fn the_pixels_tilt_derivative_follows_the_projection() {
 /// so its render is that patch's tile, whatever the reference's keypoint.
 #[test]
 fn a_view_reads_the_patch_slid_onto_its_own_keypoint() {
+    let pool = RegionPool::for_kernel_call();
+    let reads = StepReads::new(&pool);
     for model in ["pinhole", "simple_radial_fisheye"] {
         let scene = scene(model);
         let views = scene.views();
@@ -709,7 +760,7 @@ fn a_view_reads_the_patch_slid_onto_its_own_keypoint() {
             (seen.center - patch_frame.center).norm() > 1e-6,
             "{model}: slid"
         );
-        let image = ViewImage::new(view, &seen, side, seen.center.coords - grid.anchor);
+        let image = ViewImage::new(view, &reads, &seen, side, seen.center.coords - grid.anchor);
         let at = grid.anchor_pixel(&image).expect("the slid centre projects");
         assert!(
             (at[0] - keypoint[0]).abs() < 1e-6 && (at[1] - keypoint[1]).abs() < 1e-6,

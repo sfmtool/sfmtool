@@ -5,7 +5,7 @@ use nalgebra::{Point3, Vector3};
 
 use super::*;
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
-use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::geometry::RigidTransform;
 
 // The synthetic scene of the sibling patch kernels' tests: pinhole cameras
@@ -18,6 +18,11 @@ use crate::geometry::RigidTransform;
 // placed candidate is photometrically consistent across views and its true 3D
 // position is exactly its requested centre — which is what the assertions below
 // check against.
+
+/// `pyramid` as the tiled photograph a kernel reads.
+fn in_memory(pyramid: ImageU8Pyramid) -> TiledPhotograph {
+    TiledPhotograph::from_pyramid(std::sync::Arc::new(pyramid))
+}
 
 const PLANE_Z: f64 = 4.0;
 const IMG_W: u32 = 320;
@@ -74,7 +79,7 @@ fn render_plane_view(center: [f64; 3]) -> ImageU8 {
 struct Scene {
     cams: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
-    pyrs: Vec<ImageU8Pyramid>,
+    sources: Vec<TiledPhotograph>,
 }
 
 impl Scene {
@@ -87,9 +92,9 @@ impl Scene {
                     RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-c[0], c[1], c[2]])
                 })
                 .collect(),
-            pyrs: centers
+            sources: centers
                 .iter()
-                .map(|c| ImageU8Pyramid::build(&render_plane_view(*c), 5))
+                .map(|c| in_memory(ImageU8Pyramid::build(&render_plane_view(*c), 5)))
                 .collect(),
         }
     }
@@ -98,11 +103,11 @@ impl Scene {
         self.cams
             .iter()
             .zip(&self.poses)
-            .zip(&self.pyrs)
-            .map(|((camera, cam_from_world), pyramid)| ProjectedImage {
+            .zip(&self.sources)
+            .map(|((camera, cam_from_world), source)| ProjectedImage {
                 camera,
                 cam_from_world,
-                pyramid,
+                source,
             })
             .collect()
     }

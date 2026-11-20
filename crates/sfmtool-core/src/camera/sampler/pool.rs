@@ -49,6 +49,18 @@ pub struct RegionPoolStats {
     pub tiled_reads: u64,
 }
 
+/// The counts as a step's phase note gives them: `"12 region pyramids
+/// assembled, 30 reused, 0 reads on tiles"`.
+impl std::fmt::Display for RegionPoolStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} region pyramids assembled, {} reused, {} reads on tiles",
+            self.copied_reads, self.reused_reads, self.tiled_reads
+        )
+    }
+}
+
 impl RegionPool {
     /// A pool of [`REGION_POOL_BYTES_PER_THREAD`] for each thread of the
     /// current rayon pool.

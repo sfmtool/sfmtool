@@ -5,7 +5,7 @@ use nalgebra::{Point3, Vector3};
 
 use super::*;
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
-use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::geometry::RigidTransform;
 
 // A synthetic scene mirroring the view_selection tests: pinhole cameras (identity
@@ -18,6 +18,11 @@ use crate::geometry::RigidTransform;
 // each to the reference's render. With view 0 as the reference at `o_0 = 0`, the
 // shift the kernel must recover for view k is `o_k / wpp` patch-grid px
 // (`wpp = 2·half_extent / R`).
+
+/// `pyramid` as the tiled photograph a kernel reads.
+fn in_memory(pyramid: ImageU8Pyramid) -> TiledPhotograph {
+    TiledPhotograph::from_pyramid(std::sync::Arc::new(pyramid))
+}
 
 const PLANE_Z: f64 = 4.0;
 const IMG_W: u32 = 320;
@@ -81,7 +86,7 @@ fn render_plane_view(center: [f64; 3], off: [f64; 2], tex: fn(f64, f64) -> f64) 
 struct Scene {
     cams: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
-    pyrs: Vec<ImageU8Pyramid>,
+    sources: Vec<TiledPhotograph>,
 }
 
 impl Scene {
@@ -95,13 +100,19 @@ impl Scene {
                 RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-c[0], c[1], c[2]])
             })
             .collect();
-        let pyrs = centers
+        let sources = centers
             .iter()
             .zip(offsets)
             .zip(texs)
-            .map(|((c, o), tex)| ImageU8Pyramid::build(&render_plane_view(*c, *o, *tex), 5))
+            .map(|((c, o), tex)| {
+                in_memory(ImageU8Pyramid::build(&render_plane_view(*c, *o, *tex), 5))
+            })
             .collect();
-        Self { cams, poses, pyrs }
+        Self {
+            cams,
+            poses,
+            sources,
+        }
     }
 
     /// Cameras at `centers` (looking down world +z), each viewing the **same**
@@ -116,22 +127,26 @@ impl Scene {
                 RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-c[0], c[1], c[2]])
             })
             .collect();
-        let pyrs = offsets
+        let sources = offsets
             .iter()
-            .map(|o| ImageU8Pyramid::build(&render_infinity_view(*o), 5))
+            .map(|o| in_memory(ImageU8Pyramid::build(&render_infinity_view(*o), 5)))
             .collect();
-        Self { cams, poses, pyrs }
+        Self {
+            cams,
+            poses,
+            sources,
+        }
     }
 
     fn views(&self) -> Vec<ProjectedImage<'_>> {
         self.cams
             .iter()
             .zip(&self.poses)
-            .zip(&self.pyrs)
-            .map(|((camera, cam_from_world), pyramid)| ProjectedImage {
+            .zip(&self.sources)
+            .map(|((camera, cam_from_world), source)| ProjectedImage {
                 camera,
                 cam_from_world,
-                pyramid,
+                source,
             })
             .collect()
     }
@@ -693,7 +708,7 @@ fn facing_axes_face_the_camera_from_a_few_nanoradians_off_and_from_behind() {
     use super::seed::facing_axes;
 
     let camera = pinhole();
-    let pyramid = ImageU8Pyramid::build(&ImageU8::new(1, 1, 1, vec![0]), 1);
+    let source = in_memory(ImageU8Pyramid::build(&ImageU8::new(1, 1, 1, vec![0]), 1));
     // A normal off the world's axes, so the cross products rounding makes are
     // not exact.
     let patch = OrientedPatch::from_center_normal(
@@ -710,7 +725,7 @@ fn facing_axes_face_the_camera_from_a_few_nanoradians_off_and_from_behind() {
         let view = ProjectedImage {
             camera: &camera,
             cam_from_world: &pose,
-            pyramid: &pyramid,
+            source: &source,
         };
         let to_camera = (pose.inverse_translation_origin() - patch.center).normalize();
         (facing_axes(&patch, &view), to_camera)
@@ -2109,16 +2124,20 @@ fn ring_scene_mixed_channels(channels: &[u32]) -> (Scene, Vec<u32>) {
         .iter()
         .map(|c| RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-c[0], c[1], c[2]]))
         .collect();
-    let pyrs = centers
+    let sources = centers
         .iter()
         .zip(channels)
         .map(|(c, &ch)| {
             let gray = render_plane_view(*c, [0.0, 0.0], texture);
             let img = if ch == 1 { gray } else { widen(&gray, ch) };
-            ImageU8Pyramid::build(&img, 5)
+            in_memory(ImageU8Pyramid::build(&img, 5))
         })
         .collect();
-    let scene = Scene { cams, poses, pyrs };
+    let scene = Scene {
+        cams,
+        poses,
+        sources,
+    };
     (scene, (0..n as u32).collect())
 }
 
@@ -2241,16 +2260,19 @@ fn project_unclipped_reaches_past_ninety_degrees_on_a_ray_path_model() {
         "test setup: theta = {theta}"
     );
 
-    let pyr = ImageU8Pyramid::build(&render_plane_view([0.0, 0.0, 0.0], [0.0, 0.0], texture), 3);
+    let source = in_memory(ImageU8Pyramid::build(
+        &render_plane_view([0.0, 0.0, 0.0], [0.0, 0.0], texture),
+        3,
+    ));
     let equi_view = ProjectedImage {
         camera: &equi,
         cam_from_world: &pose,
-        pyramid: &pyr,
+        source: &source,
     };
     let pin_view = ProjectedImage {
         camera: &pin,
         cam_from_world: &pose,
-        pyramid: &pyr,
+        source: &source,
     };
 
     let got = project_unclipped(&equi_view, &p, 1.0).expect("equidistant sees past 90 deg");
@@ -2293,11 +2315,14 @@ fn seed_offset_refuses_a_bearing_past_a_right_angle_on_a_ray_path_model() {
         Vector3::y(),
         [HALF_EXTENT, HALF_EXTENT],
     );
-    let pyr = ImageU8Pyramid::build(&render_plane_view([0.0, 0.0, 0.0], [0.0, 0.0], texture), 3);
+    let source = in_memory(ImageU8Pyramid::build(
+        &render_plane_view([0.0, 0.0, 0.0], [0.0, 0.0], texture),
+        3,
+    ));
     let view = ProjectedImage {
         camera: &equi,
         cam_from_world: &pose,
-        pyramid: &pyr,
+        source: &source,
     };
     // A pixel near the principal point is a bearing along world −z, which meets
     // the plane at s < 0.

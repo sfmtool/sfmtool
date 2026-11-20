@@ -1,6 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::Arc;
+
 use nalgebra::{Point3, Vector3};
 
 use super::*;
@@ -8,13 +10,18 @@ use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use crate::camera::remap::{remap_aniso_with_pyramid, sample_bilinear_u8_all};
 use crate::camera::sampler::MAX_ANISOTROPY;
 use crate::camera::WarpMap;
-use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::geometry::RigidTransform;
 
 // A small synthetic scene mirroring the normal_refine tests: pinhole cameras
 // (rotated 180° about X so the canonical −Z-forward camera looks down world +z) viewing a textured world plane at
 // z = PLANE_Z. The patch sits on that plane with a normal pointing back toward
 // the cameras (-z), so a camera in front (z < PLANE_Z) is front-facing.
+
+/// `pyramid` as the tiled photograph a kernel reads.
+fn in_memory(pyramid: ImageU8Pyramid) -> TiledPhotograph {
+    TiledPhotograph::from_pyramid(std::sync::Arc::new(pyramid))
+}
 
 const PLANE_Z: f64 = 4.0;
 const IMG_W: u32 = 320;
@@ -92,7 +99,7 @@ fn render_infinity_view(tex: fn(f64, f64) -> f64) -> ImageU8 {
 struct Scene {
     cams: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
-    pyrs: Vec<ImageU8Pyramid>,
+    sources: Vec<TiledPhotograph>,
 }
 
 impl Scene {
@@ -104,12 +111,16 @@ impl Scene {
                 RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-c[0], c[1], c[2]])
             })
             .collect();
-        let pyrs = centers
+        let sources = centers
             .iter()
             .zip(texs)
-            .map(|(c, tex)| ImageU8Pyramid::build(&render_plane_view(*c, *tex), 5))
+            .map(|(c, tex)| in_memory(ImageU8Pyramid::build(&render_plane_view(*c, *tex), 5)))
             .collect();
-        Self { cams, poses, pyrs }
+        Self {
+            cams,
+            poses,
+            sources,
+        }
     }
 
     /// Identity-rotation cameras at `centers`, each viewing a direction-only
@@ -123,22 +134,26 @@ impl Scene {
                 RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-c[0], c[1], c[2]])
             })
             .collect();
-        let pyrs = texs
+        let sources = texs
             .iter()
-            .map(|&tex| ImageU8Pyramid::build(&render_infinity_view(tex), 5))
+            .map(|&tex| in_memory(ImageU8Pyramid::build(&render_infinity_view(tex), 5)))
             .collect();
-        Self { cams, poses, pyrs }
+        Self {
+            cams,
+            poses,
+            sources,
+        }
     }
 
     fn views(&self) -> Vec<ProjectedImage<'_>> {
         self.cams
             .iter()
             .zip(&self.poses)
-            .zip(&self.pyrs)
-            .map(|((camera, cam_from_world), pyramid)| ProjectedImage {
+            .zip(&self.sources)
+            .map(|((camera, cam_from_world), source)| ProjectedImage {
                 camera,
                 cam_from_world,
-                pyramid,
+                source,
             })
             .collect()
     }
@@ -229,7 +244,7 @@ fn render_plane_view_rgb(center: [f64; 3], texs: [ChannelTex; 3]) -> ImageU8 {
 struct RgbScene {
     cams: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
-    pyrs: Vec<ImageU8Pyramid>,
+    sources: Vec<TiledPhotograph>,
 }
 
 impl RgbScene {
@@ -241,23 +256,27 @@ impl RgbScene {
                 RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-c[0], c[1], c[2]])
             })
             .collect();
-        let pyrs = centers
+        let sources = centers
             .iter()
             .zip(texs)
-            .map(|(c, tex)| ImageU8Pyramid::build(&render_plane_view_rgb(*c, *tex), 5))
+            .map(|(c, tex)| in_memory(ImageU8Pyramid::build(&render_plane_view_rgb(*c, *tex), 5)))
             .collect();
-        Self { cams, poses, pyrs }
+        Self {
+            cams,
+            poses,
+            sources,
+        }
     }
 
     fn views(&self) -> Vec<ProjectedImage<'_>> {
         self.cams
             .iter()
             .zip(&self.poses)
-            .zip(&self.pyrs)
-            .map(|((camera, cam_from_world), pyramid)| ProjectedImage {
+            .zip(&self.sources)
+            .map(|((camera, cam_from_world), source)| ProjectedImage {
                 camera,
                 cam_from_world,
-                pyramid,
+                source,
             })
             .collect()
     }
@@ -650,7 +669,10 @@ fn behind_camera_candidate_rejected_by_cheirality() {
     // Identity rotation (canonical camera looking down world −z); centre at
     // world z = 1, so cam_from_world translation = -centre.
     let pose = RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [0.0, 0.0, -1.0]);
-    let extra_pyr = ImageU8Pyramid::build(&render_plane_view([0.0, 0.6, 0.0], texture), 5);
+    let extra_source = in_memory(ImageU8Pyramid::build(
+        &render_plane_view([0.0, 0.6, 0.0], texture),
+        5,
+    ));
 
     // Sanity: patch is front-facing to this pose, but the point is behind it.
     let patch = plane_patch();
@@ -669,7 +691,7 @@ fn behind_camera_candidate_rejected_by_cheirality() {
     views.push(ProjectedImage {
         camera: &cam,
         cam_from_world: &pose,
-        pyramid: &extra_pyr,
+        source: &extra_source,
     });
 
     let track = vec![0u32, 1];
@@ -772,12 +794,13 @@ fn affine_sampling_matches_exact_render_on_mild_distortion() {
     // of the affine position approximation.
     let cam = radial_cam(0.03);
     let img = render_plane_view([0.3, 0.1, 0.0], texture);
-    let pyr = ImageU8Pyramid::build(&img, 5);
+    let pyr = Arc::new(ImageU8Pyramid::build(&img, 5));
+    let source = TiledPhotograph::from_pyramid(pyr.clone());
     let pose = RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-0.3, 0.1, 0.0]);
     let view = ProjectedImage {
         camera: &cam,
         cam_from_world: &pose,
-        pyramid: &pyr,
+        source: &source,
     };
     let patch = plane_patch();
     let resolution = 16u32;
@@ -957,7 +980,7 @@ fn affine_mip_sampling_matches_exact_mip_render() {
     );
     let mut aff = vec![0f32; n];
     sample_support_affine(
-        views[0].pyramid.level(level),
+        views[0].source.held_pyramid().level(level),
         &map,
         &ctx.pixels,
         resolution as usize,
@@ -1068,12 +1091,12 @@ fn affine_declines_strong_distortion_and_border() {
     // fallback).
     let cam = radial_cam(0.8);
     let img = render_plane_view([0.9, 0.6, 0.0], texture);
-    let pyr = ImageU8Pyramid::build(&img, 5);
+    let source = in_memory(ImageU8Pyramid::build(&img, 5));
     let pose = RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-0.9, 0.6, 0.0]);
     let view = ProjectedImage {
         camera: &cam,
         cam_from_world: &pose,
-        pyramid: &pyr,
+        source: &source,
     };
     assert!(
         affine_core_map(&patch, &view, resolution, Sampler::Bilinear).is_none(),
@@ -1089,13 +1112,13 @@ fn affine_declines_strong_distortion_and_border() {
     // out-of-frame-support semantics).
     let cam = pinhole();
     let img = render_plane_view([0.0, 0.0, 0.0], texture);
-    let pyr = ImageU8Pyramid::build(&img, 5);
+    let source = in_memory(ImageU8Pyramid::build(&img, 5));
     // Camera far off to the side: the patch lands at the frame edge.
     let pose = RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [2.32, 0.0, 0.0]);
     let view = ProjectedImage {
         camera: &cam,
         cam_from_world: &pose,
-        pyramid: &pyr,
+        source: &source,
     };
     assert!(
         affine_core_map(&patch, &view, resolution, Sampler::Bilinear).is_none(),
@@ -1309,11 +1332,12 @@ fn affine_aniso_sampling_matches_exact_render_on_an_oblique_view() {
     // Looking down world +z from 192 units in front of the plane.
     let pose = RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [0.0, 0.0, -192.0]);
     let img = render_plane_view([0.2, -0.1, 0.0], texture);
-    let pyr = ImageU8Pyramid::build(&img, 6);
+    let pyr = Arc::new(ImageU8Pyramid::build(&img, 6));
+    let source = TiledPhotograph::from_pyramid(pyr.clone());
     let view = ProjectedImage {
         camera: &cam,
         cam_from_world: &pose,
-        pyramid: &pyr,
+        source: &source,
     };
     // Turned about an axis at 30° to the patch's own, so the patch is turned
     // relative to the image and the walk's direction in the image differs
@@ -1684,7 +1708,7 @@ fn the_cull_keeps_a_view_whose_footprint_does_not_fully_project() {
 }
 
 /// The cull changes which photographs a caller must supply, never the
-/// selection: replacing every culled view's pyramid with a one-pixel
+/// selection: replacing every culled view's photograph with a one-pixel
 /// placeholder gives the same admitted views and bit-identical scores.
 #[test]
 fn culled_views_as_placeholders_select_identically() {
@@ -1720,12 +1744,12 @@ fn culled_views_as_placeholders_select_identically() {
         "test setup: the views the cull drops"
     );
 
-    let placeholder = ImageU8Pyramid::build(&ImageU8::new(1, 1, 1, vec![0]), 5);
+    let placeholder = in_memory(ImageU8Pyramid::build(&ImageU8::new(1, 1, 1, vec![0]), 5));
     let culled: Vec<ProjectedImage<'_>> = views
         .iter()
         .zip(&kept)
         .map(|(v, &keep)| ProjectedImage {
-            pyramid: if keep { v.pyramid } else { &placeholder },
+            source: if keep { v.source } else { &placeholder },
             ..*v
         })
         .collect();

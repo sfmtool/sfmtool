@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use nalgebra::{Point3, Vector3};
 
+use crate::camera::sampler::RegionPool;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::observation_reading::stored_ellipse;
 use crate::patch::self_similarity::SelfSimilarityEllipseUnits;
@@ -3532,10 +3533,13 @@ pub fn split(
     second.origin = None;
     reseat_reference(&mut second);
     if second.stage_kind() == StageKind::Track {
+        // A move to the cluster stage reads no photograph, so it is given
+        // none and an empty pool.
         let (down, _) = set_stage(
             &second,
             edited,
             &[],
+            &RegionPool::with_capacity(0),
             StageKind::Cluster,
             &FitOptions::default(),
             &Progress::none(),

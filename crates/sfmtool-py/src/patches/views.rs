@@ -15,6 +15,7 @@ use rayon::prelude::*;
 
 use sfmtool_core::bench::GreyImages;
 use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::TiledPhotograph;
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::PatchCloud;
 use sfmtool_core::CameraIntrinsics;
@@ -75,12 +76,14 @@ pub(crate) fn build_pyramids_from_image_list(
 }
 
 /// Extract each numpy image and build its full pyramid, validating dimensions
-/// against the per-view cameras (one camera per image, parallel to `images`).
+/// against the per-view cameras (one camera per image, parallel to `images`),
+/// as the tiled photograph a kernel reads: the pixels
+/// [`TiledPhotograph::from_image`] builds, with the pyramid built GIL-free.
 pub(super) fn build_pyramids_from_cameras(
     py: Python<'_>,
     cameras: &[CameraIntrinsics],
     images: &[Bound<'_, PyAny>],
-) -> PyResult<Vec<ImageU8Pyramid>> {
+) -> PyResult<Vec<TiledPhotograph>> {
     if images.len() != cameras.len() {
         return Err(PyValueError::new_err(format!(
             "images must be parallel to the scene's {} views, got {}",
@@ -88,21 +91,25 @@ pub(super) fn build_pyramids_from_cameras(
             images.len()
         )));
     }
-    build_pyramids_from_image_list(py, images, |i, src| {
+    let pyramids = build_pyramids_from_image_list(py, images, |i, src| {
         check_image_matches_camera(&cameras[i], i, src.width(), src.height())
-    })
+    })?;
+    Ok(pyramids
+        .into_iter()
+        .map(|pyramid| TiledPhotograph::from_pyramid(Arc::new(pyramid)))
+        .collect())
 }
 
-/// The per-image pyramids a kernel call reads: either owned (built from a numpy
+/// The per-image photographs a kernel call reads: either owned (built from a numpy
 /// image list for this one call) or shared (an [`PyImagePyramidSet`] handle,
 /// built once and reused across calls).
 pub(crate) enum PyramidSet {
-    Owned(Vec<ImageU8Pyramid>),
-    Shared(Arc<Vec<ImageU8Pyramid>>),
+    Owned(Vec<TiledPhotograph>),
+    Shared(Arc<Vec<TiledPhotograph>>),
 }
 
 impl PyramidSet {
-    pub(crate) fn as_slice(&self) -> &[ImageU8Pyramid] {
+    pub(crate) fn as_slice(&self) -> &[TiledPhotograph] {
         match self {
             PyramidSet::Owned(v) => v,
             PyramidSet::Shared(a) => a,
@@ -260,8 +267,8 @@ pub(crate) fn resolve_pyramids(
             )));
         }
         for (i, pyr) in set.pyramids.iter().enumerate() {
-            let l0 = pyr.level(0);
-            check_image_matches_camera(&posed.cameras[i], i, l0.width(), l0.height())?;
+            let (width, height) = pyr.layout().level_size(0);
+            check_image_matches_camera(&posed.cameras[i], i, width, height)?;
         }
         Ok(PyramidSet::Shared(Arc::clone(&set.pyramids)))
     } else if let Ok(list) = images.extract::<Vec<Bound<'_, PyAny>>>() {
@@ -460,7 +467,7 @@ impl PyCameraViews {
 ///         ``views_or_recon`` (index = image index).
 #[pyclass(name = "ImagePyramidSet", module = "sfmtool.patches", frozen)]
 pub struct PyImagePyramidSet {
-    pub(crate) pyramids: Arc<Vec<ImageU8Pyramid>>,
+    pub(crate) pyramids: Arc<Vec<TiledPhotograph>>,
     /// The same photographs in grey and blurred, as the bench's patch reads
     /// along a ray sample them, each built the first time a read asks for it
     /// and kept with the set, so repeated queries convert each image once.

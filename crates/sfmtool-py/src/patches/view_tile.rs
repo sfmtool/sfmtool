@@ -9,14 +9,14 @@ use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use sfmtool_core::camera::image::ImageU8Pyramid;
+use sfmtool_core::camera::TiledPhotograph;
 use sfmtool_core::patch::normal_refine::ProjectedImage;
 use sfmtool_core::patch::reference_view::render_view_tile;
 use sfmtool_core::progress::Progress;
 
 use super::args::parse_sampler;
 use super::oriented_patch::PyOrientedPatch;
-use super::views::{check_image_matches_camera, pyramid_levels, PyImagePyramidSet};
+use super::views::{check_image_matches_camera, PyImagePyramidSet};
 use crate::flow::warp::extract_image_u8;
 use crate::geometry::rigid_transform::PyRigidTransform;
 use crate::PyCameraIntrinsics;
@@ -116,9 +116,9 @@ impl PyOrientedPatch {
             }
         }
         let choice = parse_sampler(sampler)?;
-        let built: ImageU8Pyramid;
+        let built: TiledPhotograph;
         let shared;
-        let pyramid: &ImageU8Pyramid = if let Ok(set) = image.cast::<PyImagePyramidSet>() {
+        let source: &TiledPhotograph = if let Ok(set) = image.cast::<PyImagePyramidSet>() {
             let index = image_index.ok_or_else(|| {
                 PyValueError::new_err("an ImagePyramidSet needs image_index to name the view")
             })?;
@@ -138,16 +138,16 @@ impl PyOrientedPatch {
                      single photograph; pass the set, or leave image_index out"
                 )));
             }
-            let source = extract_image_u8(image)?;
-            built = py.detach(|| ImageU8Pyramid::build(&source, pyramid_levels(&source)));
+            let image = extract_image_u8(image)?;
+            built = py.detach(|| TiledPhotograph::from_image(image));
             &built
         };
-        let level0 = pyramid.level(0);
-        check_image_matches_camera(&camera.inner, 0, level0.width(), level0.height())?;
+        let (width, height) = source.layout().level_size(0);
+        check_image_matches_camera(&camera.inner, 0, width, height)?;
         let view = ProjectedImage {
             camera: &camera.inner,
             cam_from_world: &cam_from_world.inner,
-            pyramid,
+            source,
         };
         let tile = py.detach(|| {
             render_view_tile(

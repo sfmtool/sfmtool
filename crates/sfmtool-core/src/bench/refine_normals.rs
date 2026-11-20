@@ -22,6 +22,8 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
+use crate::camera::sampler::RegionPool;
+use crate::camera::PhotographReadError;
 use crate::numeric::median_in_place;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Event, Progress};
@@ -34,6 +36,7 @@ use super::normal::{
     grown_plane_normal, pairwise_flow_normal, GrownPlaneNormalOptions, GrownPlaneOutcome,
     NormalError, NormalEstimate, NormalReport, PairwiseFlowNormalOptions, PairwiseFlowOutcome,
 };
+use super::read_failure::ReadFailure;
 use super::refit_points::{
     check_preconditions, stored_in_record_order, write_in_place, RefitPointsError,
 };
@@ -438,6 +441,8 @@ pub enum RefineNormalsError {
         /// How many points the value holds.
         point_count: usize,
     },
+    /// A photograph could not be read, so nothing was written.
+    Photograph(PhotographReadError),
     /// The caller asked the run to stop, so nothing was written.
     Cancelled,
 }
@@ -474,6 +479,10 @@ impl std::fmt::Display for RefineNormalsError {
                 f,
                 "point {point} was asked for, and the reconstruction has {point_count} points"
             ),
+            RefineNormalsError::Photograph(e) => write!(
+                f,
+                "a photograph could not be read, so nothing was written: {e}"
+            ),
             RefineNormalsError::Cancelled => write!(
                 f,
                 "the refinement was asked to stop before it had an answer, so nothing was \
@@ -488,6 +497,16 @@ impl std::error::Error for RefineNormalsError {}
 impl From<Cancelled> for RefineNormalsError {
     fn from(_: Cancelled) -> Self {
         RefineNormalsError::Cancelled
+    }
+}
+
+/// A cancelled read is the run's own [`RefineNormalsError::Cancelled`].
+impl From<PhotographReadError> for RefineNormalsError {
+    fn from(e: PhotographReadError) -> Self {
+        match e {
+            PhotographReadError::Cancelled => RefineNormalsError::Cancelled,
+            e => RefineNormalsError::Photograph(e),
+        }
     }
 }
 
@@ -511,6 +530,7 @@ impl From<RefitPointsError> for RefineNormalsError {
                 image,
                 image_count,
             },
+            RefitPointsError::Photograph(e) => RefineNormalsError::Photograph(e),
             RefitPointsError::Cancelled => RefineNormalsError::Cancelled,
             // The refit's check reads no noise level.
             RefitPointsError::NoNoiseLevel(why) => {
@@ -592,8 +612,13 @@ impl From<RefitPointsError> for RefineNormalsError {
 /// #     recon: &sfmtool_core::SfmrReconstruction,
 /// #     views: &[sfmtool_core::patch::normal_refine::ProjectedImage<'_>],
 /// # ) -> Result<(), Box<dyn std::error::Error>> {
-/// let (next, report) =
-///     refine_normals(recon, views, &RefineNormalsOptions::default(), &Progress::none())?;
+/// let (next, report) = refine_normals(
+///     recon,
+///     views,
+///     &sfmtool_core::camera::sampler::RegionPool::for_kernel_call(),
+///     &RefineNormalsOptions::default(),
+///     &Progress::none(),
+/// )?;
 /// println!(
 ///     "{} of {} finite points turned, {} at infinity skipped",
 ///     report.turned(),
@@ -612,6 +637,7 @@ impl From<RefitPointsError> for RefineNormalsError {
 pub fn refine_normals(
     recon: &SfmrReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &RefineNormalsOptions,
     progress: &Progress<'_>,
 ) -> Result<(SfmrReconstruction, RefineNormalsReport), RefineNormalsError> {
@@ -634,6 +660,7 @@ pub fn refine_normals(
     // dropped: per-point phases from a parallel loop are not reported.
     let silent = |_: Event<'_>| {};
     let step_progress = p_refine.tapped(&silent).detailed(false);
+    let failure = ReadFailure::default();
     let refined: Option<Vec<(RefinedNormal, Option<PointRecord>)>> = {
         let mut phase = p_refine.phase("refine normals");
         let step = (total / 100).max(1);
@@ -651,7 +678,15 @@ pub fn refine_normals(
                 if phase.is_cancelled() {
                     return None;
                 }
-                let answer = refine_one(&edited, images, p as u32, &options.step, &step_progress)?;
+                let answer = refine_one(
+                    &edited,
+                    images,
+                    pool,
+                    &failure,
+                    p as u32,
+                    &options.step,
+                    &step_progress,
+                )?;
                 let n = done.fetch_add(1, Ordering::Relaxed) + 1;
                 if n.is_multiple_of(step) || n == total {
                     phase.count(n as u64, Some(total as u64), "points");
@@ -662,6 +697,9 @@ pub fn refine_normals(
         progress_note!(phase, "{total} points");
         refined
     };
+    // A point whose reads failed stops the run as a cancel does, and the
+    // failure is the run's answer.
+    failure.check()?;
     let refined = refined.ok_or(RefineNormalsError::Cancelled)?;
     progress.check_cancel()?;
 
@@ -713,10 +751,13 @@ fn asked_points(
 }
 
 /// One point's refinement: its status, and the record to write where it
-/// changed; `None` where the run was cancelled during the point's step.
+/// changed; `None` where the run was cancelled during the point's step, or
+/// where the step could not read a photograph, which it keeps in `failure`.
 fn refine_one(
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
+    failure: &ReadFailure,
     index: u32,
     step: &RefineNormalsStep,
     progress: &Progress<'_>,
@@ -736,15 +777,19 @@ fn refine_one(
         track_of_point(edited, index, None).expect("every row of the value is a live point");
     let answer: Result<(_, NormalReport), NormalError> = match step {
         RefineNormalsStep::GrownPlane(options) => {
-            grown_plane_normal(&track, edited, images, options, progress)
+            grown_plane_normal(&track, edited, images, pool, options, progress)
         }
         RefineNormalsStep::PairwiseFlow(options) => {
-            pairwise_flow_normal(&track, edited, images, options, progress)
+            pairwise_flow_normal(&track, edited, images, pool, options, progress)
         }
     };
     let (turned, report) = match answer {
         Ok(answer) => answer,
         Err(NormalError::Cancelled) => return None,
+        Err(NormalError::Photograph(e)) => {
+            failure.keep(e);
+            return None;
+        }
         Err(e) => return Some((status(RefineNormalsOutcome::NotRefined(e)), None)),
     };
     let by = match &report.estimate {

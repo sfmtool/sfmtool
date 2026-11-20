@@ -652,7 +652,12 @@ there is no whole pyramid for any reader to fall back on.
    the pull request reports how often the bench's fits reassemble at
    `REGION_REUSE_MARGIN`. It also counts the renders that took the tile
    path, so the pull request reports how often renders take it on the test
-   data and on a real capture.
+   data and on a real capture. Split into three pull requests, as the main
+   draft's step 10 says; **the first, 10a, is built**: `ProjectedImage`
+   carries a tiled photograph, the bench's kernels take the pool and return
+   the error, and the bench's own reads (the normal kernels', the grown
+   plane's and the cluster stage's member grids) go through the render entry
+   points, each step writing a `read regions` note.
 5. **Bulk kernels**: the display patch bitmaps, the conversion to embedded
    patches, the web export, *Refine all normals*, *Refit all points* and the
    cluster-patches build fetch tiled photographs, each taking its points in

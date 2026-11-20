@@ -22,6 +22,7 @@ use sfmtool_sfmr_format::{
 use super::grown_plane_normal::{camera, degrees, textured_plane, truth, wide_centres, HALF};
 use super::scene::{fixture_points, with_columns, Scene, PLANE_Z, WORLD};
 use super::*;
+use crate::camera::sampler::RegionPool;
 use crate::progress::Event;
 use crate::reconstruction::data::PointConstraintColumns;
 
@@ -80,6 +81,7 @@ fn refine_over(
     refine_normals(
         recon,
         &scene.views(),
+        &RegionPool::for_kernel_call(),
         &RefineNormalsOptions::default(),
         &Progress::none(),
     )
@@ -173,6 +175,7 @@ fn every_finite_point_is_turned_onto_the_plane_as_the_bench_turns_and_commits_it
             track,
             &edited,
             &scene.views(),
+            &RegionPool::for_kernel_call(),
             &GrownPlaneNormalOptions::default(),
             &Progress::none(),
         )
@@ -380,6 +383,7 @@ fn the_run_reports_its_points_and_stops_when_cancelled() {
     refine_normals(
         &recon,
         &scene.views(),
+        &RegionPool::for_kernel_call(),
         &RefineNormalsOptions::default(),
         &Progress::to(&sink),
     )
@@ -392,6 +396,7 @@ fn the_run_reports_its_points_and_stops_when_cancelled() {
     let refused = refine_normals(
         &recon,
         &scene.views(),
+        &RegionPool::for_kernel_call(),
         &RefineNormalsOptions::default(),
         &Progress::none().cancelled_by(&stop),
     )
@@ -418,6 +423,7 @@ fn the_run_reports_its_points_and_stops_when_cancelled() {
             refine_normals(
                 &recon,
                 &scene.views(),
+                &RegionPool::for_kernel_call(),
                 &RefineNormalsOptions::default(),
                 &Progress::to(&sink).cancelled_by(&stop),
             )
@@ -457,9 +463,15 @@ fn the_run_refuses_a_value_it_cannot_refine() {
     let run = |recon: &SfmrReconstruction,
                views: &[crate::patch::normal_refine::ProjectedImage<'_>],
                options: &RefineNormalsOptions| {
-        refine_normals(recon, views, options, &Progress::none())
-            .err()
-            .expect("refused")
+        refine_normals(
+            recon,
+            views,
+            &RegionPool::for_kernel_call(),
+            options,
+            &Progress::none(),
+        )
+        .err()
+        .expect("refused")
     };
     let defaults = RefineNormalsOptions::default();
 
@@ -538,8 +550,14 @@ fn a_list_of_points_refines_those_and_leaves_the_others_bit_for_bit() {
         point_indexes: Some(vec![2, 1, 2]),
         ..RefineNormalsOptions::default()
     };
-    let (out, report) = refine_normals(&recon, &scene.views(), &options, &Progress::none())
-        .expect("the run refines");
+    let (out, report) = refine_normals(
+        &recon,
+        &scene.views(),
+        &RegionPool::for_kernel_call(),
+        &options,
+        &Progress::none(),
+    )
+    .expect("the run refines");
     assert_eq!(report.points.len(), 3, "{report:?}");
     assert_eq!(outcome_of(&report, 0), &RefineNormalsOutcome::NotAsked);
     assert_eq!(outcome_of(&report, 1), &RefineNormalsOutcome::AtInfinity);
@@ -599,8 +617,14 @@ fn an_empty_list_refines_nothing_and_returns_the_value_as_it_was() {
         point_indexes: Some(Vec::new()),
         ..RefineNormalsOptions::default()
     };
-    let (out, report) = refine_normals(&recon, &scene.views(), &options, &Progress::none())
-        .expect("the run refines");
+    let (out, report) = refine_normals(
+        &recon,
+        &scene.views(),
+        &RegionPool::for_kernel_call(),
+        &options,
+        &Progress::none(),
+    )
+    .expect("the run refines");
     assert_eq!(report.not_asked(), 3, "{report:?}");
     assert_eq!(report.read(), 0, "{report:?}");
     assert!(report.mean_agreement().is_nan());
@@ -657,7 +681,14 @@ fn refine_by_flow(
         step: RefineNormalsStep::PairwiseFlow(options.clone()),
         point_indexes: Some(list.to_vec()),
     };
-    refine_normals(recon, &scene.views(), &options, &Progress::none()).expect("the run refines")
+    refine_normals(
+        recon,
+        &scene.views(),
+        &RegionPool::for_kernel_call(),
+        &options,
+        &Progress::none(),
+    )
+    .expect("the run refines")
 }
 
 /// With the pairwise-flow normal as the step, a point whose patch starts 25
@@ -709,9 +740,15 @@ fn the_pairwise_flow_normal_as_the_step_turns_a_point_as_the_bench_does() {
     let (bench, created) = create_track(&Bench::new(), &edited, p, &CreateTrackOptions::default())
         .expect("a live point");
     let track = bench.track(&created.label).expect("just put on");
-    let (turned, _) =
-        pairwise_flow_normal(track, &edited, &scene.views(), &step, &Progress::none())
-            .expect("the step runs");
+    let (turned, _) = pairwise_flow_normal(
+        track,
+        &edited,
+        &scene.views(),
+        &RegionPool::for_kernel_call(),
+        &step,
+        &Progress::none(),
+    )
+    .expect("the step runs");
     let (committed, written) = commit(&edited, &turned).expect("the track commits");
     let bench_record = committed
         .point(written.point)
@@ -733,7 +770,14 @@ fn the_pairwise_flow_normal_as_the_step_turns_a_point_as_the_bench_does() {
         point_indexes: None,
     };
     assert_eq!(
-        refine_normals(&recon, &scene.views(), &options, &Progress::none()).err(),
+        refine_normals(
+            &recon,
+            &scene.views(),
+            &RegionPool::for_kernel_call(),
+            &options,
+            &Progress::none()
+        )
+        .err(),
         Some(RefineNormalsError::BadOption(
             NormalError::BadPairwiseFlowOption("rounds")
         ))

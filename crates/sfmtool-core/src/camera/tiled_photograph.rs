@@ -133,6 +133,15 @@ impl TiledPhotograph {
         self.channels
     }
 
+    /// The pyramid the photograph is read from, for the patch kernels that
+    /// do not read through the render entry points yet: steps 10b and 10c of
+    /// `specs/drafts/out-of-core-photograph-pyramid.md` move them, and step
+    /// 12 the grey reads of the nearby-track search, and the last of them
+    /// deletes this.
+    pub(crate) fn held_pyramid(&self) -> &ImageU8Pyramid {
+        &self.pyramid
+    }
+
     /// The tile `key`, with its border.
     pub(crate) fn tile(&self, key: TileKey) -> Result<Arc<PhotographTile>, PhotographReadError> {
         let level = key.level as usize;

@@ -135,8 +135,15 @@ fn run_with(
     track: &EditableTrack,
     options: &GridPlaneNormalOptions,
 ) -> (EditableTrack, NormalReport) {
-    grid_plane_normal(track, edited, &scene.views(), options, &Progress::none())
-        .expect("the step runs on a finite track with three views")
+    grid_plane_normal(
+        track,
+        edited,
+        &scene.views(),
+        &RegionPool::for_kernel_call(),
+        options,
+        &Progress::none(),
+    )
+    .expect("the step runs on a finite track with three views")
 }
 
 /// Whether `turned` holds exactly the patch frame `track` started with.
@@ -439,8 +446,9 @@ fn the_grid_plane_normal_refuses_a_bearing_and_a_missing_view_and_stops_when_can
             &bearing,
             &edited,
             &scene.views(),
+            &RegionPool::for_kernel_call(),
             &options,
-            &Progress::none()
+            &Progress::none(),
         )
         .err(),
         Some(NormalError::AtInfinity)
@@ -449,14 +457,30 @@ fn the_grid_plane_normal_refuses_a_bearing_and_a_missing_view_and_stops_when_can
     let mut stray = track.clone();
     stray.observations[1].image = 99;
     assert_eq!(
-        grid_plane_normal(&stray, &edited, &scene.views(), &options, &Progress::none()).err(),
+        grid_plane_normal(
+            &stray,
+            &edited,
+            &scene.views(),
+            &RegionPool::for_kernel_call(),
+            &options,
+            &Progress::none()
+        )
+        .err(),
         Some(NormalError::Evaluate(EvaluateError::NoView { image: 99 }))
     );
 
     let cancel = AtomicBool::new(true);
     let cancelled = Progress::none().cancelled_by(&cancel);
     assert_eq!(
-        grid_plane_normal(&track, &edited, &scene.views(), &options, &cancelled).err(),
+        grid_plane_normal(
+            &track,
+            &edited,
+            &scene.views(),
+            &RegionPool::for_kernel_call(),
+            &options,
+            &cancelled
+        )
+        .err(),
         Some(NormalError::Cancelled)
     );
     assert!(cancel.load(Ordering::Relaxed));
@@ -777,7 +801,15 @@ fn the_grid_plane_check_bounds_the_working_grid_and_the_fit_resolution() {
         ..Default::default()
     };
     assert_eq!(
-        grid_plane_normal(&track, &edited, &scene.views(), &bad, &Progress::none()).err(),
+        grid_plane_normal(
+            &track,
+            &edited,
+            &scene.views(),
+            &RegionPool::for_kernel_call(),
+            &bad,
+            &Progress::none()
+        )
+        .err(),
         Some(NormalError::BadGridPlaneOption("working_resolution"))
     );
 }

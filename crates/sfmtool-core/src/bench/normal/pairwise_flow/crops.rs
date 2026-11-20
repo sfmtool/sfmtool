@@ -18,11 +18,14 @@
 //! a few thousand samples. The geometry that sizes the grid is `f64`, as the
 //! camera models are.
 
+use std::sync::{Mutex, PoisonError};
+
 use nalgebra::{Point3, Vector3};
 use rayon::prelude::*;
 
-use crate::camera::sampler::{render_tile, SamplerChoice};
+use crate::camera::sampler::{render_source_tile, SamplerChoice, ViewRegions};
 use crate::camera::warp_map::{patch_grid_jacobian, singular_values_2x2};
+use crate::camera::PhotographReadError;
 use crate::camera::WarpMap;
 use crate::features::optical_flow::{matcher_gray_from_rgb, GrayImage, ImagePyramid};
 use crate::patch::cloud::OrientedPatch;
@@ -268,22 +271,28 @@ pub(crate) struct Crop {
 /// its camera model; `None` for the others. `sights` is the second half of
 /// [`CropGrid::new`]'s answer for the same `views`.
 ///
-/// The views are rendered in parallel; each crop depends on its own view
-/// alone, and they are returned in the views' order.
+/// The views are rendered in parallel, each through its own kept regions in
+/// `regions`, one per view; each crop depends on its own view alone, and they
+/// are returned in the views' order.
 pub(crate) fn render_crops(
     grid: &CropGrid,
     views: &[ProjectedImage<'_>],
+    regions: &[Mutex<ViewRegions<'_>>],
     sights: &[ViewSight],
-) -> Vec<Option<Crop>> {
+) -> Result<Vec<Option<Crop>>, PhotographReadError> {
     views
         .par_iter()
+        .zip(regions)
         .zip(sights)
-        .map(|(view, sight)| match *sight {
+        .map(|((view, regions), sight)| match *sight {
             ViewSight::Seen {
                 angle_deg,
                 pixel_size,
-            } => Some(render_crop(grid, view, angle_deg, pixel_size)),
-            _ => None,
+            } => {
+                let mut regions = regions.lock().unwrap_or_else(PoisonError::into_inner);
+                render_crop(grid, view, &mut regions, angle_deg, pixel_size).map(Some)
+            }
+            _ => Ok(None),
         })
         .collect()
 }
@@ -291,15 +300,16 @@ pub(crate) fn render_crops(
 fn render_crop(
     grid: &CropGrid,
     view: &ProjectedImage<'_>,
+    regions: &mut ViewRegions<'_>,
     angle_deg: f64,
     pixel_size: f64,
-) -> Crop {
+) -> Result<Crop, PhotographReadError> {
     let side = grid.side();
     let patch = grid.crop_patch();
     let sampler =
         SamplerChoice::per_view().for_patch_frame(&patch, view.camera, view.cam_from_world, side);
     let mut map = WarpMap::from_patch(&patch, view.camera, view.cam_from_world, side);
-    let tile = render_tile(view.pyramid, &mut map, sampler);
+    let tile = render_source_tile(regions, &mut map, sampler)?;
     let n = side as usize * side as usize;
     let channels = tile.channels() as usize;
     let data = tile.data();
@@ -351,14 +361,14 @@ fn render_crop(
             }
         }
     }
-    Crop {
+    Ok(Crop {
         image,
         valid,
         centre: view.cam_from_world.inverse_translation_origin().coords,
         angle_deg,
         samples_per_pixel: pixel_size / grid.plane.spacing,
         coverage: on as f64 / n as f64,
-    }
+    })
 }
 
 /// A crop's Gaussian pyramid, the flow's own [`ImagePyramid`] (a blur by its

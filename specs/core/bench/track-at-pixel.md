@@ -57,6 +57,7 @@ It is bound as `sfmtool.bench.build_track_at_pixel`.
 pub fn build_track_at_pixel(
     edited: &EditedReconstruction,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     sources: &TrackAtPixelSources<'_>,
     image: u32,
     pixel: [f64; 2],

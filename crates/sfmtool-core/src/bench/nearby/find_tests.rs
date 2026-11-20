@@ -17,6 +17,7 @@ use crate::bench::track::StageKind;
 use crate::bench::track_at_pixel::tests::matches_file;
 use crate::bench::track_at_pixel::{MatchesClusters, STATUS_KEPT, STATUS_REFERENCE};
 use crate::bench::BenchError;
+use crate::camera::sampler::RegionPool;
 use crate::progress::Progress;
 use crate::reconstruction::data::ObservationSource;
 use crate::reconstruction::edited::EditedReconstruction;
@@ -53,6 +54,7 @@ fn find(
     find_nearby_tracks(
         edited,
         &views,
+        &RegionPool::for_kernel_call(),
         &grey,
         sources,
         0,
@@ -503,6 +505,7 @@ fn a_query_that_names_no_place_or_a_far_field_source_is_refused() {
         find_nearby_tracks(
             &edited,
             &views,
+            &RegionPool::for_kernel_call(),
             &grey,
             &NearbyTrackSources::default(),
             image,

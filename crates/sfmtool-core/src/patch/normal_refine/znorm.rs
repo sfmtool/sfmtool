@@ -34,7 +34,7 @@ pub(in crate::patch) fn normalized_stack(
     let channels = ctx
         .kept
         .iter()
-        .map(|&i| views[i].pyramid.level(0).channels() as usize)
+        .map(|&i| views[i].source.channels() as usize)
         .min()?;
     if channels == 0 {
         return None;
@@ -74,7 +74,7 @@ pub(in crate::patch) fn normalized_stack(
         }
         maps.push(map);
         chosen.push(sampler);
-        pyramids.push(view.pyramid);
+        pyramids.push(view.source.held_pyramid());
     }
     let images = render_tiles(&pyramids, &mut maps, &chosen, progress);
 

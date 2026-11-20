@@ -143,8 +143,15 @@ fn run(
     track: &EditableTrack,
     options: &GrownPlaneNormalOptions,
 ) -> (EditableTrack, NormalReport) {
-    grown_plane_normal(track, edited, &scene.views(), options, &Progress::none())
-        .expect("the step runs on a finite track")
+    grown_plane_normal(
+        track,
+        edited,
+        &scene.views(),
+        &RegionPool::for_kernel_call(),
+        options,
+        &Progress::none(),
+    )
+    .expect("the step runs on a finite track")
 }
 
 fn sequence_of(report: &NormalReport) -> &GrownPlaneSequence {
@@ -637,8 +644,15 @@ fn a_view_whose_keypoint_is_off_past_the_growth_is_left_out() {
         }
     };
     let progress = Progress::to(&sink).detailed(true);
-    let (turned, report) = grown_plane_normal(&track, &edited, &scene.views(), &options, &progress)
-        .expect("the step runs");
+    let (turned, report) = grown_plane_normal(
+        &track,
+        &edited,
+        &scene.views(),
+        &RegionPool::for_kernel_call(),
+        &options,
+        &progress,
+    )
+    .expect("the step runs");
     let phases = seen.into_inner().unwrap();
     let sequence = sequence_of(&report);
 
@@ -801,8 +815,9 @@ fn the_grown_plane_normal_refuses_a_bearing_a_missing_view_bad_options_and_stops
             &bearing,
             &edited,
             &scene.views(),
+            &RegionPool::for_kernel_call(),
             &options,
-            &Progress::none()
+            &Progress::none(),
         )
         .err(),
         Some(NormalError::AtInfinity)
@@ -811,7 +826,15 @@ fn the_grown_plane_normal_refuses_a_bearing_a_missing_view_bad_options_and_stops
     let mut stray = track.clone();
     stray.observations[1].image = 99;
     assert_eq!(
-        grown_plane_normal(&stray, &edited, &scene.views(), &options, &Progress::none()).err(),
+        grown_plane_normal(
+            &stray,
+            &edited,
+            &scene.views(),
+            &RegionPool::for_kernel_call(),
+            &options,
+            &Progress::none()
+        )
+        .err(),
         Some(NormalError::Evaluate(EvaluateError::NoView { image: 99 }))
     );
 
@@ -820,7 +843,15 @@ fn the_grown_plane_normal_refuses_a_bearing_a_missing_view_bad_options_and_stops
         ..Default::default()
     };
     assert_eq!(
-        grown_plane_normal(&track, &edited, &scene.views(), &bad, &Progress::none()).err(),
+        grown_plane_normal(
+            &track,
+            &edited,
+            &scene.views(),
+            &RegionPool::for_kernel_call(),
+            &bad,
+            &Progress::none()
+        )
+        .err(),
         Some(NormalError::BadGrownPlaneOption("zncc_tolerance"))
     );
 
@@ -952,7 +983,15 @@ fn the_grown_plane_normal_refuses_a_bearing_a_missing_view_bad_options_and_stops
     let cancel = AtomicBool::new(true);
     let cancelled = Progress::none().cancelled_by(&cancel);
     assert_eq!(
-        grown_plane_normal(&track, &edited, &scene.views(), &options, &cancelled).err(),
+        grown_plane_normal(
+            &track,
+            &edited,
+            &scene.views(),
+            &RegionPool::for_kernel_call(),
+            &options,
+            &cancelled
+        )
+        .err(),
         Some(NormalError::Cancelled)
     );
     assert!(cancel.load(Ordering::Relaxed));
@@ -1014,8 +1053,15 @@ fn the_grown_plane_normals_detail_phases_change_nothing() {
             max_selected_views,
             ..every_view()
         };
-        let quiet = grown_plane_normal(&track, &edited, &views, &options, &Progress::none())
-            .expect("the step runs");
+        let quiet = grown_plane_normal(
+            &track,
+            &edited,
+            &views,
+            &RegionPool::for_kernel_call(),
+            &options,
+            &Progress::none(),
+        )
+        .expect("the step runs");
         let record = |detailed: bool| {
             let seen: Mutex<Vec<(&'static str, u8, Option<String>)>> = Mutex::new(Vec::new());
             let sink = |event: Event<'_>| {
@@ -1029,8 +1075,15 @@ fn the_grown_plane_normals_detail_phases_change_nothing() {
                 }
             };
             let progress = Progress::to(&sink).detailed(detailed);
-            let result = grown_plane_normal(&track, &edited, &views, &options, &progress)
-                .expect("the step runs");
+            let result = grown_plane_normal(
+                &track,
+                &edited,
+                &views,
+                &RegionPool::for_kernel_call(),
+                &options,
+                &progress,
+            )
+            .expect("the step runs");
             (result, seen.into_inner().unwrap())
         };
         let (overview, overview_phases) = record(false);
@@ -1759,6 +1812,7 @@ fn run_noting_growths(
         track,
         edited,
         &scene.views(),
+        &RegionPool::for_kernel_call(),
         options,
         &Progress::to(&sink).detailed(true),
     )

@@ -20,6 +20,7 @@ use sfmtool_core::bench::{
     refine_normals, NormalError, RefineNormalsError, RefineNormalsOptions, RefineNormalsOutcome,
     RefineNormalsReport, RefineNormalsStep,
 };
+use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::SfmrReconstruction;
 
 use super::refit_all_points::{counted, observed_images, whole_value_bench_refusal};
@@ -124,7 +125,11 @@ fn left_as_they_were(error: Option<&NormalError>) -> (usize, &'static str) {
             | NormalError::TooFewPieces { .. }
             | NormalError::TooFewGridPieces { .. },
         ) => (7, "refused by the step's settings"),
-        Some(NormalError::Cancelled) => (8, "whose step was cancelled"),
+        // Neither reaches a point: a photograph that cannot be read ends the
+        // run as a cancel does.
+        Some(NormalError::Cancelled | NormalError::Photograph(_)) => {
+            (8, "whose step was cancelled")
+        }
     }
 }
 
@@ -323,7 +328,10 @@ impl AppState {
                 step: step.core_step(),
                 ..Default::default()
             };
-            let (next, report) = match refine_normals(source, &views, &options, &p_refine) {
+            let pool = RegionPool::for_kernel_call();
+            let refined = refine_normals(source, &views, &pool, &options, &p_refine);
+            super::note_region_reads(&p_refine, &pool);
+            let (next, report) = match refined {
                 Ok(refined) => refined,
                 Err(RefineNormalsError::Cancelled) => return Finished::Cancelled,
                 Err(e) => return Finished::Failed(refuse(e.to_string())),

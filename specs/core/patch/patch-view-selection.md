@@ -333,11 +333,11 @@ that refinement, and the module keeps only the shared pieces.
 
 ```rust
 /// A posed photograph: everything a patch needs to be rendered from one view.
-/// The pyramid is built once and borrowed for every render.
+/// The tiled photograph is made once and borrowed for every render.
 pub struct ProjectedImage<'a> {
     pub camera: &'a CameraIntrinsics,
     pub cam_from_world: &'a RigidTransform,
-    pub pyramid: &'a ImageU8Pyramid,
+    pub source: &'a TiledPhotograph,
 }
 
 /// Per-pixel weight over the `R×R` patch when scoring (the NCC window);

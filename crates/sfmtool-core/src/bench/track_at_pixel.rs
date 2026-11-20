@@ -35,12 +35,15 @@ pub(in crate::bench) mod tests;
 
 use nalgebra::Vector3;
 
+use crate::camera::sampler::RegionPool;
+use crate::camera::PhotographReadError;
 use crate::features::kdforest::{ImageKeypoints, LazyKdForestU8};
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::Progress;
 use crate::reconstruction::edited::EditedReconstruction;
 
 use super::classify::ClassificationReason;
+use super::read_failure::ReadFailure;
 use super::track::{EditableTrack, Thresholds};
 
 pub use neighbourhood::{
@@ -715,6 +718,8 @@ pub enum TrackAtPixelError {
         /// Each member's refusal, in the order they were tried.
         refusals: Vec<MemberRefusal>,
     },
+    /// A photograph could not be read.
+    Photograph(PhotographReadError),
     /// The progress handle was cancelled.
     Cancelled,
 }
@@ -729,6 +734,7 @@ impl TrackAtPixelError {
                 "query"
             }
             Self::Refused { .. } => "cascade",
+            Self::Photograph(_) => "photograph",
             Self::Cancelled => "cancelled",
         }
     }
@@ -766,12 +772,23 @@ impl std::fmt::Display for TrackAtPixelError {
                 ),
                 None => write!(f, "no member was asked"),
             },
+            Self::Photograph(e) => write!(f, "a photograph could not be read: {e}"),
             Self::Cancelled => write!(f, "the track-at-pixel query was cancelled"),
         }
     }
 }
 
 impl std::error::Error for TrackAtPixelError {}
+
+/// A cancelled read is the query's own [`TrackAtPixelError::Cancelled`].
+impl From<PhotographReadError> for TrackAtPixelError {
+    fn from(e: PhotographReadError) -> Self {
+        match e {
+            PhotographReadError::Cancelled => Self::Cancelled,
+            e => Self::Photograph(e),
+        }
+    }
+}
 
 /// Build a track-stage track centred on `pixel` in `image`, or say why none
 /// could be built.
@@ -786,9 +803,11 @@ impl std::error::Error for TrackAtPixelError {}
 ///
 /// Nothing is committed. The reconstruction is read through `edited`, whose
 /// deleted points no query here sees.
+#[allow(clippy::too_many_arguments)]
 pub fn build_track_at_pixel(
     edited: &EditedReconstruction,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     sources: &TrackAtPixelSources<'_>,
     image: u32,
     pixel: [f64; 2],
@@ -832,6 +851,8 @@ pub fn build_track_at_pixel(
     let ctx = Ctx {
         edited,
         views,
+        pool,
+        failure: ReadFailure::default(),
         cameras: views.iter().map(ViewCamera::new).collect(),
         observations: ObservationIndex::new(edited),
         sources,
@@ -852,6 +873,9 @@ pub fn build_track_at_pixel(
                 members::constellation(&ctx, image, pixel, options, &mut stages)
             }
         };
+        // A member whose reads failed answers with what it read in their
+        // place, so the failure is the query's answer.
+        ctx.failure.check()?;
         match result {
             Ok(track) => {
                 // The member's readings render the bitmap where the patch
@@ -888,6 +912,9 @@ pub fn build_track_at_pixel(
                         Err(super::evaluate::EvaluateError::Cancelled) => {
                             return Err(TrackAtPixelError::Cancelled)
                         }
+                        Err(super::evaluate::EvaluateError::Photograph(e)) => {
+                            return Err(TrackAtPixelError::Photograph(e))
+                        }
                         // The member read every view already, so no other
                         // error arises; the track stands unscored rather than
                         // lost.
@@ -923,6 +950,10 @@ pub fn build_track_at_pixel(
 struct Ctx<'a> {
     edited: &'a EditedReconstruction,
     views: &'a [ProjectedImage<'a>],
+    /// The query's region pool, which every read of the cascade shares.
+    pool: &'a RegionPool,
+    /// The first read of a photograph that failed in any member.
+    failure: ReadFailure,
     cameras: Vec<ViewCamera<'a>>,
     observations: ObservationIndex<'a>,
     sources: &'a TrackAtPixelSources<'a>,

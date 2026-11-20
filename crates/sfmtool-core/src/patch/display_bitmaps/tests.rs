@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::camera::PhotographCache;
+use crate::camera::{PhotographCache, TiledPhotograph};
 use crate::progress::Progress;
 use crate::SfmrReconstruction;
 
@@ -134,9 +134,9 @@ fn a_missing_view_leaves_each_reference_naming_its_own_observation() {
     let (found, _) = cache
         .get_many(&refs, &Progress::none())
         .expect("not cancelled");
-    let pyramids: Vec<_> = found
+    let sources: Vec<_> = found
         .into_iter()
-        .map(|p| p.expect("every photograph is checked in"))
+        .map(|p| TiledPhotograph::from_pyramid(p.expect("every photograph is checked in")))
         .collect();
     let poses: Vec<RigidTransform> = images
         .iter()
@@ -152,7 +152,7 @@ fn a_missing_view_leaves_each_reference_naming_its_own_observation() {
             (!dropped.contains(&i)).then(|| ProjectedImage {
                 camera: &recon.image_set.cameras[images[i].camera_index as usize],
                 cam_from_world: &poses[i],
-                pyramid: &pyramids[i],
+                source: &sources[i],
             })
         })
         .collect();
@@ -379,9 +379,9 @@ fn stored_references_survive_missing_views_skipped_points_and_zero_frames() {
     let (found, _) = cache
         .get_many(&refs, &Progress::none())
         .expect("not cancelled");
-    let pyramids: Vec<_> = found
+    let sources: Vec<_> = found
         .into_iter()
-        .map(|p| p.expect("every photograph is checked in"))
+        .map(|p| TiledPhotograph::from_pyramid(p.expect("every photograph is checked in")))
         .collect();
     let poses: Vec<RigidTransform> = images
         .iter()
@@ -427,7 +427,7 @@ fn stored_references_survive_missing_views_skipped_points_and_zero_frames() {
             (!dropped.contains(&i)).then(|| ProjectedImage {
                 camera: &recon.image_set.cameras[images[i].camera_index as usize],
                 cam_from_world: &poses[i],
-                pyramid: &pyramids[i],
+                source: &sources[i],
             })
         })
         .collect();

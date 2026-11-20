@@ -35,8 +35,9 @@ use crate::action_log::{version_step_text, Actor, Kind};
 use crate::background::{Finished, Job, Operation};
 use crate::index_files::IndexFileState;
 use crate::scene::{ImageRef, ReconId};
-use crate::state::edits::DECODE_AND_STEP;
+use crate::state::edits::{note_region_reads, DECODE_AND_STEP};
 use crate::state::AppState;
+use sfmtool_core::camera::sampler::RegionPool;
 
 use super::Committed;
 
@@ -563,15 +564,18 @@ fn run(
         },
         clusters: clusters.as_ref(),
     };
+    let pool = RegionPool::for_kernel_call();
     let result = build_track_at_pixel(
         edited,
         views,
+        &pool,
         &sources,
         plan.image,
         plan.pixel,
         &TrackAtPixelOptions::default(),
         progress,
     );
+    note_region_reads(progress, &pool);
     let result = match result {
         Ok(built) => Ok(built),
         Err(TrackAtPixelError::Cancelled) => return Finished::Cancelled,

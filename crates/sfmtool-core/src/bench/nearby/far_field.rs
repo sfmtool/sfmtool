@@ -12,10 +12,13 @@
 
 use nalgebra::Vector3;
 
-use crate::bench::fit::{fit, FitOptions};
+use crate::bench::fit::{fit, FitError, FitOptions};
+use crate::bench::read_failure::ReadFailure;
 use crate::bench::steps::{set_verdict, ClusterSeed};
 use crate::bench::track::{EditableTrack, Thresholds, Verdict};
 use crate::bench::track_at_pixel::{seed_cluster_with, upgrade_sightings, ViewCamera};
+use crate::camera::sampler::RegionPool;
+use crate::camera::PhotographReadError;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::Progress;
 use crate::reconstruction::edited::EditedReconstruction;
@@ -315,6 +318,8 @@ pub enum FarFieldError {
         /// How many images the reconstruction holds.
         image_count: usize,
     },
+    /// A photograph could not be read.
+    Photograph(PhotographReadError),
     /// The progress handle was cancelled.
     Cancelled,
 }
@@ -343,12 +348,23 @@ impl std::fmt::Display for FarFieldError {
                 f,
                 "{input} has {got} entries, but the reconstruction has {image_count} images"
             ),
+            Self::Photograph(e) => write!(f, "a photograph could not be read: {e}"),
             Self::Cancelled => write!(f, "the far-field sweep was cancelled"),
         }
     }
 }
 
 impl std::error::Error for FarFieldError {}
+
+/// A cancelled read is the sweep's own [`FarFieldError::Cancelled`].
+impl From<PhotographReadError> for FarFieldError {
+    fn from(e: PhotographReadError) -> Self {
+        match e {
+            PhotographReadError::Cancelled => Self::Cancelled,
+            e => Self::Photograph(e),
+        }
+    }
+}
 
 /// Read `pixel`'s patch in `image` from infinity in, in every image it lands
 /// in, and return one reading per peak of that reading.
@@ -366,9 +382,11 @@ impl std::error::Error for FarFieldError {}
 ///
 /// `views` and `grey` hold one entry per image of `edited`, in its order;
 /// `edited` is read only by the refit's fit. Nothing is committed.
+#[allow(clippy::too_many_arguments)]
 pub fn far_field_sweep(
     edited: &EditedReconstruction,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     grey: &GreyImages,
     image: u32,
     pixel: [f64; 2],
@@ -406,6 +424,7 @@ pub fn far_field_sweep(
     let _phase = progress.phase("far-field sweep");
 
     let cameras: Vec<ViewCamera<'_>> = views.iter().map(ViewCamera::new).collect();
+    let failure = ReadFailure::default();
     let patch = RayPatch {
         image,
         pixel,
@@ -568,6 +587,8 @@ pub fn far_field_sweep(
         let refit = Refitter {
             edited,
             views,
+            pool,
+            failure: &failure,
             cameras: &cameras,
             image,
             pixel,
@@ -580,6 +601,9 @@ pub fn far_field_sweep(
             sweep.dropped.push(reading);
         }
     }
+    // A refit whose reads failed counts as a failed refit, so the failure is
+    // the sweep's answer.
+    failure.check()?;
     Ok(sweep)
 }
 
@@ -685,6 +709,10 @@ pub(super) fn average_linkage(similar: &[f64], n: usize, cut: f64) -> Vec<Vec<us
 struct Refitter<'s, 'a> {
     edited: &'s EditedReconstruction,
     views: &'s [ProjectedImage<'a>],
+    /// The sweep's region pool, which every refit's reads share.
+    pool: &'s RegionPool,
+    /// The first read of a photograph that failed in a refit.
+    failure: &'s ReadFailure,
     cameras: &'s [ViewCamera<'a>],
     image: u32,
     pixel: [f64; 2],
@@ -872,17 +900,30 @@ impl Refitter<'_, '_> {
             .map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned());
         let seed = ClusterSeed::from_pixel(self.image, stem, self.pixel, self.options.radius_px);
         let track = seed_cluster_with(&seed, &Thresholds::default())?;
-        let track = upgrade_sightings(self.edited, self.views, track, sight)?;
+        let track = upgrade_sightings(
+            self.edited,
+            self.views,
+            self.pool,
+            self.failure,
+            track,
+            sight,
+        )?;
         let (mut track, _) = set_verdict(&track, 0, Verdict::Out).map_err(|e| e.to_string())?;
         for _ in 0..2 {
             track = fit(
                 &track,
                 self.edited,
                 self.views,
+                self.pool,
                 &FitOptions::default(),
                 &Progress::none(),
             )
-            .map_err(|e| e.to_string())?
+            .map_err(|e| {
+                if let FitError::Photograph(read) = &e {
+                    self.failure.keep(read.clone());
+                }
+                e.to_string()
+            })?
             .0;
         }
         Ok(track)

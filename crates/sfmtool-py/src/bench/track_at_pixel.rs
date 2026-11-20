@@ -21,6 +21,7 @@ use sfmtool_core::bench::{
     CascadeMember, MatchesClusters, MemberRefusal, SiftIndexSource, StageRecord, TiltRecord,
     TrackAtPixelError as CoreError, TrackAtPixelOptions, TrackAtPixelSources,
 };
+use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::features::kdforest::ImageKeypoints;
 use sfmtool_core::progress::Progress;
 
@@ -259,6 +260,7 @@ pub(super) fn build_track_at_pixel(
         core_build_track_at_pixel(
             &edited.inner,
             &views,
+            &RegionPool::for_kernel_call(),
             &core_sources,
             image,
             pixel,

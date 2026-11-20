@@ -14,6 +14,7 @@
 use sfmtool_core::bench::{
     refit_points, FitError, RefitOutcome, RefitPointsError, RefitPointsOptions, RefitPointsReport,
 };
+use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::{EditedReconstruction, SfmrReconstruction};
 
 use crate::action_log::Kind;
@@ -101,10 +102,11 @@ fn left_as_they_were(error: Option<&FitError>) -> (usize, &'static str) {
         Some(FitError::ViewsMissing { .. }) | Some(FitError::NoView { .. }) => {
             (6, "with an image that has no view")
         }
-        // Neither reaches a point in a run that ends with a version: the run
-        // measures its noise level once, up front, and a cancel ends it.
+        // None of these reaches a point in a run that ends with a version: the
+        // run measures its noise level once, up front, and a cancel or a
+        // photograph that cannot be read ends it.
         Some(FitError::NoNoiseLevel(_)) => (7, "with no noise level"),
-        Some(FitError::Cancelled) => (8, "whose fit was cancelled"),
+        Some(FitError::Cancelled | FitError::Photograph(_)) => (8, "whose fit was cancelled"),
     }
 }
 
@@ -310,14 +312,22 @@ impl AppState {
             };
 
             let views = decoded.views();
-            let (next, report) =
-                match refit_points(source, &views, &RefitPointsOptions::default(), &p_refit) {
-                    Ok(refit) => refit,
-                    // The one error that is not a refusal: the run was asked to
-                    // stop and did, which the log words as a cancellation.
-                    Err(RefitPointsError::Cancelled) => return Finished::Cancelled,
-                    Err(e) => return Finished::Failed(refuse(e.to_string())),
-                };
+            let pool = RegionPool::for_kernel_call();
+            let refit = refit_points(
+                source,
+                &views,
+                &pool,
+                &RefitPointsOptions::default(),
+                &p_refit,
+            );
+            super::note_region_reads(&p_refit, &pool);
+            let (next, report) = match refit {
+                Ok(refit) => refit,
+                // The one error that is not a refusal: the run was asked to
+                // stop and did, which the log words as a cancellation.
+                Err(RefitPointsError::Cancelled) => return Finished::Cancelled,
+                Err(e) => return Finished::Failed(refuse(e.to_string())),
+            };
 
             // The refit moves no index: the identity, stated, after the fold.
             let mut steps = Vec::new();

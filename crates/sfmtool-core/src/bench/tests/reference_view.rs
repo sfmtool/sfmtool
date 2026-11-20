@@ -17,10 +17,10 @@ use crate::bench::{
     CreateTrackOptions, EditableTrack, EvaluateOptions, FitOptions, Provenance, StageKind,
     TrackEditError, Unmeasured, Verdict,
 };
-use crate::camera::image::ImageU8Pyramid;
 use crate::camera::sampler::render_tile;
+use crate::camera::sampler::RegionPool;
 use crate::camera::warp_map::patch_grid_jacobian;
-use crate::camera::{PhotographCache, WarpMap};
+use crate::camera::{PhotographCache, TiledPhotograph, WarpMap};
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocalizeParams};
@@ -46,7 +46,7 @@ const MIN_TRACK: usize = 8;
 /// The seoul_bull ground truth with its decoded photographs and poses.
 pub(super) struct GroundTruth {
     pub(super) recon: SfmrReconstruction,
-    pyramids: Vec<Arc<ImageU8Pyramid>>,
+    sources: Vec<TiledPhotograph>,
     poses: Vec<RigidTransform>,
 }
 
@@ -65,9 +65,9 @@ impl GroundTruth {
         let (pyramids, _) = PhotographCache::new(0)
             .get_many(&refs, &Progress::none())
             .expect("nothing cancels the decode");
-        let pyramids = pyramids
+        let sources = pyramids
             .into_iter()
-            .map(|p| p.expect("every photograph is checked in"))
+            .map(|p| TiledPhotograph::from_pyramid(p.expect("every photograph is checked in")))
             .collect();
         let poses = images
             .iter()
@@ -79,7 +79,7 @@ impl GroundTruth {
             .collect();
         Self {
             recon,
-            pyramids,
+            sources,
             poses,
         }
     }
@@ -90,11 +90,11 @@ impl GroundTruth {
             .images
             .iter()
             .zip(&self.poses)
-            .zip(&self.pyramids)
-            .map(|((image, cam_from_world), pyramid)| ProjectedImage {
+            .zip(&self.sources)
+            .map(|((image, cam_from_world), source)| ProjectedImage {
                 camera: &self.recon.image_set.cameras[image.camera_index as usize],
                 cam_from_world,
-                pyramid,
+                source,
             })
             .collect()
     }
@@ -123,8 +123,15 @@ impl GroundTruth {
         )
         .expect("the point is live");
         let track = bench.track(&report.label).expect("just put on");
-        let (read, _) = evaluate(track, &edited, &self.views(), options, &Progress::none())
-            .expect("the track reads");
+        let (read, _) = evaluate(
+            track,
+            &edited,
+            &self.views(),
+            &RegionPool::for_kernel_call(),
+            options,
+            &Progress::none(),
+        )
+        .expect("the track reads");
         (read, edited)
     }
 }
@@ -214,11 +221,11 @@ fn the_shared_tile_leaves_the_self_similarity_readings_as_a_direct_render_gives_
             view.cam_from_world,
             resolution as u32,
         );
-        let rendered = render_tile(view.pyramid, &mut map, sampler);
+        let rendered = render_tile(view.source.held_pyramid(), &mut map, sampler);
         let valid: Vec<bool> = (0..resolution * resolution)
             .map(|k| map.is_valid((k % resolution) as u32, (k / resolution) as u32))
             .collect();
-        let channels = view.pyramid.level(0).channels() as usize;
+        let channels = view.source.channels() as usize;
         let samples = Array3::from_shape_fn((resolution, resolution, channels), |(r, c, k)| {
             if k >= 3 || (channels == 2 && k == 1) {
                 u8::MAX
@@ -340,6 +347,7 @@ fn every_row_is_scored_against_the_stored_bitmap() {
         &rendered,
         &edited,
         &views,
+        &RegionPool::for_kernel_call(),
         &EvaluateOptions::default(),
         &Progress::none(),
     )
@@ -439,6 +447,7 @@ fn the_rendered_bitmap_is_the_picked_row_s_tile_and_the_commit_records_it() {
         &rendered,
         &edited,
         &views,
+        &RegionPool::for_kernel_call(),
         &EvaluateOptions::default(),
         &Progress::none(),
     )
@@ -739,7 +748,15 @@ fn rendering_then_scoring_matches_an_evaluation_of_the_rendered_track() {
     .expect("the point is live");
     let track = bench.track(&report.label).expect("just put on");
     let options = EvaluateOptions::default();
-    let (read, _) = evaluate(track, &edited, &views, &options, &Progress::none()).unwrap();
+    let (read, _) = evaluate(
+        track,
+        &edited,
+        &views,
+        &RegionPool::for_kernel_call(),
+        &options,
+        &Progress::none(),
+    )
+    .unwrap();
     let rendered = render_bitmap_in_place(&read, &edited, &views, &FitOptions::default()).unwrap();
     let payload = rendered.track().unwrap();
     assert!(payload.bitmap.is_some());
@@ -749,7 +766,15 @@ fn rendering_then_scoring_matches_an_evaluation_of_the_rendered_track() {
         "the render names the pick"
     );
     let scored = score_bitmap(&rendered, &edited, &views, &options, &Progress::none()).unwrap();
-    let (again, _) = evaluate(&rendered, &edited, &views, &options, &Progress::none()).unwrap();
+    let (again, _) = evaluate(
+        &rendered,
+        &edited,
+        &views,
+        &RegionPool::for_kernel_call(),
+        &options,
+        &Progress::none(),
+    )
+    .unwrap();
     for (i, (a, b)) in scored
         .observations
         .iter()
@@ -767,6 +792,7 @@ fn rendering_then_scoring_matches_an_evaluation_of_the_rendered_track() {
         track,
         &edited,
         &views,
+        &RegionPool::for_kernel_call(),
         &options,
         &FitOptions::default(),
         &Progress::none(),
@@ -790,10 +816,25 @@ fn rendering_from_the_evaluation_matches_the_three_calls() {
     let options = EvaluateOptions::default();
     let fit = FitOptions::default();
 
-    let (combined, _) =
-        evaluate_rendering_bitmap(&tilted, &edited, &views, &options, &fit, &Progress::none())
-            .unwrap();
-    let (measured, _) = evaluate(&tilted, &edited, &views, &options, &Progress::none()).unwrap();
+    let (combined, _) = evaluate_rendering_bitmap(
+        &tilted,
+        &edited,
+        &views,
+        &RegionPool::for_kernel_call(),
+        &options,
+        &fit,
+        &Progress::none(),
+    )
+    .unwrap();
+    let (measured, _) = evaluate(
+        &tilted,
+        &edited,
+        &views,
+        &RegionPool::for_kernel_call(),
+        &options,
+        &Progress::none(),
+    )
+    .unwrap();
     let rendered = render_bitmap_in_place(&measured, &edited, &views, &fit).unwrap();
     let scored = score_bitmap(&rendered, &edited, &views, &options, &Progress::none()).unwrap();
     assert!(scored.track().unwrap().reference.is_some(), "a picked row");
@@ -918,6 +959,7 @@ fn render_with(
         track,
         edited,
         views,
+        &RegionPool::for_kernel_call(),
         &EvaluateOptions::default(),
         &FitOptions::default(),
         &Progress::none(),
@@ -1052,6 +1094,7 @@ fn set_as_reference_pins_the_row_and_renders_from_it() {
         &rendered,
         &edited,
         &views,
+        &RegionPool::for_kernel_call(),
         StageKind::Cluster,
         &FitOptions::default(),
         &Progress::none(),
@@ -1083,6 +1126,7 @@ fn a_defined_reference_is_rendered_from_through_the_bench_s_steps() {
             t,
             &edited,
             &views,
+            &RegionPool::for_kernel_call(),
             &options,
             &fit_options,
             &Progress::none(),
@@ -1105,7 +1149,15 @@ fn a_defined_reference_is_rendered_from_through_the_bench_s_steps() {
     assert!(tilted.track().unwrap().bitmap.is_none());
     let after_tilt = render(&tilted);
     assert_rendered_from(&after_tilt, &views, &edited, other, "tilted");
-    let (measured, _) = evaluate(&tilted, &edited, &views, &options, &Progress::none()).unwrap();
+    let (measured, _) = evaluate(
+        &tilted,
+        &edited,
+        &views,
+        &RegionPool::for_kernel_call(),
+        &options,
+        &Progress::none(),
+    )
+    .unwrap();
     let rendered = render_bitmap_in_place(&measured, &edited, &views, &fit_options).unwrap();
     let scored = score_bitmap(&rendered, &edited, &views, &options, &Progress::none()).unwrap();
     assert_same_bitmap_and_scores(&after_tilt, &scored);
@@ -1132,7 +1184,15 @@ fn a_defined_reference_is_rendered_from_through_the_bench_s_steps() {
     assert_rendered_from(&moved, &views, &edited, other, "reference sighted");
 
     // A fit renders from it too.
-    let (fitted, _) = fit(&moved, &edited, &views, &fit_options, &Progress::none()).expect("fits");
+    let (fitted, _) = fit(
+        &moved,
+        &edited,
+        &views,
+        &RegionPool::for_kernel_call(),
+        &fit_options,
+        &Progress::none(),
+    )
+    .expect("fits");
     assert_rendered_from(&fitted, &views, &edited, other, "fitted");
 
     // A commit saves the reference the bench holds.
@@ -1157,6 +1217,7 @@ fn the_rule_sets_the_reference_again_after_its_row_goes() {
             t,
             &edited,
             &views,
+            &RegionPool::for_kernel_call(),
             &options,
             &fit_options,
             &Progress::none(),
@@ -1274,6 +1335,7 @@ fn unpinning_the_held_reference_waits_for_the_new_bitmap() {
         &unpinned,
         &edited,
         &views,
+        &RegionPool::for_kernel_call(),
         &EvaluateOptions::default(),
         &Progress::none(),
     )
@@ -1301,6 +1363,7 @@ fn unpinning_the_held_reference_waits_for_the_new_bitmap() {
         &held,
         &edited,
         &views,
+        &RegionPool::for_kernel_call(),
         &EvaluateOptions::default(),
         &Progress::none(),
     )
@@ -1421,6 +1484,7 @@ fn a_track_at_minus_one_is_rendered_from_the_rule_s_pick_at_its_first_evaluation
         &track,
         &edited,
         &views,
+        &RegionPool::for_kernel_call(),
         &EvaluateOptions::default(),
         &Progress::none(),
     )
@@ -1468,6 +1532,7 @@ fn a_track_at_minus_one_no_view_covers_whole_is_rendered_from_the_pick() {
         &track,
         &edited,
         &views,
+        &RegionPool::for_kernel_call(),
         &EvaluateOptions::default(),
         &Progress::none(),
     )
@@ -1535,6 +1600,7 @@ fn a_bitmap_naming_a_row_stands_where_no_in_row_is_eligible() {
         &turned,
         &edited,
         &views,
+        &RegionPool::for_kernel_call(),
         &EvaluateOptions::default(),
         &Progress::none(),
     )
@@ -1725,6 +1791,7 @@ fn a_repaint_that_moves_the_pick_rerenders_and_rejudges_in_the_same_evaluation()
         &tight,
         &edited,
         &views,
+        &RegionPool::for_kernel_call(),
         &EvaluateOptions::default(),
         &FitOptions::default(),
         &Progress::none(),
@@ -1907,6 +1974,7 @@ fn a_track_with_one_in_row_is_judged_against_the_same_bitmap_for_judging() {
         &a,
         &edited,
         &views,
+        &RegionPool::for_kernel_call(),
         &EvaluateOptions::default(),
         &Progress::none(),
     )
@@ -1983,6 +2051,7 @@ fn a_fit_renders_from_the_held_reference_rather_than_the_pick() {
         &first,
         &edited,
         &views,
+        &RegionPool::for_kernel_call(),
         &FitOptions::default(),
         &Progress::none(),
     )
@@ -2008,6 +2077,7 @@ fn fitted(
         track,
         edited,
         views,
+        &RegionPool::for_kernel_call(),
         &FitOptions::default(),
         &Progress::none(),
     )
@@ -2129,6 +2199,7 @@ fn dropping_the_out_rows_follows_the_reference_or_drops_it_with_the_bitmap() {
         &track,
         &edited,
         &views,
+        &RegionPool::for_kernel_call(),
         &EvaluateOptions::default(),
         &FitOptions::default(),
         &Progress::none(),
@@ -2193,7 +2264,15 @@ fn a_readings_localizer_renders_are_recorded_under_localize() {
     let log = PhaseLog::new();
     let sink = |event: Event<'_>| log.record(event);
     let progress = Progress::to(&sink).detailed(true);
-    evaluate(track, &edited, &views, &options, &progress).expect("the track reads");
+    evaluate(
+        track,
+        &edited,
+        &views,
+        &RegionPool::for_kernel_call(),
+        &options,
+        &progress,
+    )
+    .expect("the track reads");
     let phases = log.phases();
 
     let localize: Vec<_> = phases.iter().filter(|p| p.name == "localize").collect();
@@ -2240,8 +2319,15 @@ fn a_readings_walked_tile_renders_are_recorded_under_walked_tiles() {
     .expect("the point is live");
     let track = bench.track(&report.label).expect("just put on");
     let options = EvaluateOptions::default();
-    let (mut read, _) =
-        evaluate(track, &edited, &views, &options, &Progress::none()).expect("the track reads");
+    let (mut read, _) = evaluate(
+        track,
+        &edited,
+        &views,
+        &RegionPool::for_kernel_call(),
+        &options,
+        &Progress::none(),
+    )
+    .expect("the track reads");
     let measurement = read
         .observations
         .iter_mut()
@@ -2254,7 +2340,15 @@ fn a_readings_walked_tile_renders_are_recorded_under_walked_tiles() {
     let log = PhaseLog::new();
     let sink = |event: Event<'_>| log.record(event);
     let progress = Progress::to(&sink).detailed(true);
-    evaluate(&read, &edited, &views, &options, &progress).expect("the track reads");
+    evaluate(
+        &read,
+        &edited,
+        &views,
+        &RegionPool::for_kernel_call(),
+        &options,
+        &progress,
+    )
+    .expect("the track reads");
     let phases = log.phases();
 
     let position = |name: &str| {

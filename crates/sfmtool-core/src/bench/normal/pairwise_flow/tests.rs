@@ -7,6 +7,9 @@
 
 use nalgebra::Vector3;
 
+use std::sync::Mutex;
+
+use crate::camera::sampler::{RegionPool, ViewRegions};
 use crate::features::optical_flow::OpticalFlowError;
 
 use super::crops::{render_crops, Crop, CropGrid, CropPyramid, PairLevel};
@@ -189,7 +192,13 @@ impl Round {
             options,
         );
         let grid = grid.unwrap();
-        let crops = render_crops(&grid, &views, &sights)
+        let pool = RegionPool::for_kernel_call();
+        let regions: Vec<Mutex<ViewRegions<'_>>> = views
+            .iter()
+            .map(|v| Mutex::new(ViewRegions::new(v.source, &pool)))
+            .collect();
+        let crops = render_crops(&grid, &views, &regions, &sights)
+            .unwrap()
             .into_iter()
             .map(Option::unwrap)
             .collect();

@@ -2677,7 +2677,7 @@ fn a_step_refuses_on_an_unreadable_photograph() {
         .expect("not cancelled");
     assert_eq!(
         available
-            .pyramid_slots()
+            .source_slots()
             .iter()
             .filter(|s| s.is_some())
             .count(),

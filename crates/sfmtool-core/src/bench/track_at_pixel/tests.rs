@@ -18,6 +18,7 @@ use sfmtool_matches_format::{
 
 use crate::bench::tests::scene::{fixture_points, Scene, PLANE_Z};
 use crate::bench::track::Verdict;
+use crate::camera::sampler::RegionPool;
 use crate::progress::Progress;
 use crate::reconstruction::edited::EditedReconstruction;
 
@@ -310,6 +311,7 @@ fn a_query_that_names_no_place_is_refused_before_any_member_runs() {
         build_track_at_pixel(
             &edited,
             views,
+            &RegionPool::for_kernel_call(),
             &sources,
             image,
             pixel,
@@ -353,6 +355,7 @@ fn every_member_refusing_reports_each_refusal_in_order() {
     let err = build_track_at_pixel(
         &edited,
         &views,
+        &RegionPool::for_kernel_call(),
         &TrackAtPixelSources::default(),
         0,
         held_out_pixel(&scene),
@@ -411,6 +414,7 @@ fn with_no_clusters_the_cascade_falls_through_to_the_neighbours_transfer() {
     let (track, report) = build_track_at_pixel(
         &edited,
         &views,
+        &RegionPool::for_kernel_call(),
         &TrackAtPixelSources::default(),
         0,
         held_out_pixel(&scene),
@@ -435,6 +439,7 @@ fn the_median_gate_reads_the_blur_matched_score_against_the_bitmap() {
     let (track, report) = build_track_at_pixel(
         &edited,
         &views,
+        &RegionPool::for_kernel_call(),
         &TrackAtPixelSources::default(),
         0,
         held_out_pixel(&scene),
@@ -496,6 +501,7 @@ fn the_sweep_builds_the_track_from_the_neighbours_plane() {
     let (track, report) = build_track_at_pixel(
         &edited,
         &views,
+        &RegionPool::for_kernel_call(),
         &TrackAtPixelSources::default(),
         0,
         held_out_pixel(&scene),
@@ -545,6 +551,7 @@ fn a_cluster_near_the_pixel_carries_it_into_the_other_photographs() {
     let (track, report) = build_track_at_pixel(
         &edited,
         &views,
+        &RegionPool::for_kernel_call(),
         &sources,
         0,
         held_out_pixel(&scene),
@@ -572,6 +579,7 @@ fn the_returned_track_carries_a_bitmap_on_the_reconstructions_grid() {
     let (track, _) = build_track_at_pixel(
         &edited,
         &views,
+        &RegionPool::for_kernel_call(),
         &TrackAtPixelSources::default(),
         0,
         held_out_pixel(&scene),
@@ -657,9 +665,12 @@ fn a_reading_after_the_patch_moves_scores_the_rows_and_the_bars_judge_them() {
     assert_eq!(moved.observations[last].verdict, Verdict::Out);
 
     let sources = TrackAtPixelSources::default();
+    let pool = RegionPool::for_kernel_call();
     let ctx = Ctx {
         edited: &edited,
         views: &views,
+        pool: &pool,
+        failure: ReadFailure::default(),
         cameras: views.iter().map(ViewCamera::new).collect(),
         observations: ObservationIndex::new(&edited),
         sources: &sources,

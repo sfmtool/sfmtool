@@ -17,11 +17,20 @@ pixels, the reuse of kept regions across renders, and the entry points,
 [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md)
 and its companion [view-region-pyramid.md](../../drafts/view-region-pyramid.md)
 propose moving the kernels and panels onto them. Today the entry points read
-photographs made in memory, and the panels are their only callers: Track View
-and the Track Table read the photograph cache's whole pyramids through
-`TiledPhotograph::from_pyramid` and draw every tile, crop and hover view
-through the entry points ([gui/track-view.md](../../gui/track-view.md),
-[gui/track-table.md](../../gui/track-table.md)); no kernel calls them yet.
+photographs made in memory. Track View and the Track Table read the
+photograph cache's whole pyramids through `TiledPhotograph::from_pyramid` and
+draw every tile, crop and hover view through the entry points
+([gui/track-view.md](../../gui/track-view.md),
+[gui/track-table.md](../../gui/track-table.md)). Every patch kernel reads a
+`TiledPhotograph` through its `ProjectedImage`, and the bench's own reads go
+through the entry points: the cluster stage's member grids, the grid-plane
+normal's context renders, the pairwise-flow crops and the grown plane's value
+and Sobel reads, each bench step making the region pool for its kernel call
+([core/bench/editable-track.md](../bench/editable-track.md) § "Each step reads
+through the region pool its caller made"). The patch kernels beneath them --
+the reference view, the stored bitmap, the keypoint kernels, the cluster
+refinement and the view selection -- still read the whole pyramid a tiled
+photograph holds.
 
 ## Rust API
 
@@ -354,4 +363,6 @@ image's edges and at a shape that reads a coarser level, at the tile's radius
 and three times it, and that it refuses a degenerate shape and a non-finite
 position as `sample_member_grid` does. The panels' pictures through regions
 are checked against the whole pyramid's in their own tests
-([gui/track-view.md](../../gui/track-view.md) § "Testing").
+([gui/track-view.md](../../gui/track-view.md) § "Testing"), and the bench's
+steps through regions against their results over a pool every read fits in
+in [bench/tests/region_reads.rs](../../../crates/sfmtool-core/src/bench/tests/region_reads.rs).

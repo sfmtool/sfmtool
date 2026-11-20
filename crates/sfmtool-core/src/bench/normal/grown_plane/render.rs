@@ -35,13 +35,17 @@ use std::cell::{Cell, RefCell, RefMut};
 
 use nalgebra::{DMatrix, Matrix2, Vector3};
 
+use crate::bench::read_failure::ReadFailure;
+#[cfg(test)]
 use crate::camera::image::ImageU8;
-use crate::camera::remap::sample_bilinear_u8;
 #[cfg(test)]
 use crate::camera::remap::sample_bilinear_with_grad_u8;
-use crate::camera::sampler::bilinear_mip_level;
+use crate::camera::sampler::{
+    bilinear_mip_level, read_source_samples, RegionPool, SourceSamples, ViewRegions,
+};
 use crate::camera::warp_map::{patch_grid_jacobian, singular_values_2x2};
 use crate::camera::CameraIntrinsics;
+use crate::camera::PhotographReadError;
 use crate::geometry::RigidTransform;
 use crate::numeric::median_in_place;
 use crate::patch::cell_registration::CellLayout;
@@ -460,12 +464,43 @@ pub(super) fn anchored(
     patch_frame.seen_at_keypoint(view.camera, view.cam_from_world, keypoint)
 }
 
-/// One view's photograph as the step reads it: one pyramid level, chosen once.
+/// What every read of one grown-plane step shares: the step's region pool,
+/// and the first read of a photograph that failed.
+///
+/// The step's renders return plain samples, so a read that fails reads as
+/// zeros and is kept in a [`ReadFailure`], and the step returns it in place
+/// of its result before it turns the patch ([`Self::check`]).
+pub(super) struct StepReads<'a> {
+    pool: &'a RegionPool,
+    failure: ReadFailure,
+}
+
+impl<'a> StepReads<'a> {
+    pub(super) fn new(pool: &'a RegionPool) -> Self {
+        StepReads {
+            pool,
+            failure: ReadFailure::default(),
+        }
+    }
+
+    /// The first read that failed, as the step's error.
+    pub(super) fn check(&self) -> Result<(), PhotographReadError> {
+        self.failure.check()
+    }
+}
+
+/// One view's photograph as the step reads it: one pyramid level, chosen
+/// once, read through the view's kept regions.
 pub(super) struct ViewImage<'a> {
     pub(super) camera: &'a CameraIntrinsics,
     pub(super) cam_from_world: &'a RigidTransform,
+    /// The view's kept regions, which every render of it reads through.
+    regions: RefCell<ViewRegions<'a>>,
+    reads: &'a StepReads<'a>,
     /// The pyramid level every sample of this view is read from.
-    level: &'a ImageU8,
+    level: usize,
+    /// That level's width and height, px.
+    size: [f64; 2],
     /// `2^l` for level `l`: full-resolution px per level px.
     scale: f64,
     /// Channels scored: the photograph's, an alpha channel dropped.
@@ -486,6 +521,7 @@ impl<'a> ViewImage<'a> {
     /// where the centre does not project. `offset` is [`Self::offset`].
     pub(super) fn new(
         view: &ProjectedImage<'a>,
+        reads: &'a StepReads<'a>,
         patch_frame: &OrientedPatch,
         side: usize,
         offset: Vector3<f64>,
@@ -494,14 +530,36 @@ impl<'a> ViewImage<'a> {
         let level = jacobian
             .map(|j| bilinear_mip_level(singular_values_2x2(j)[0]) as usize)
             .unwrap_or(0)
-            .min(view.pyramid.num_levels().saturating_sub(1));
-        let image = view.pyramid.level(level);
+            .min(view.source.layout().levels().saturating_sub(1));
+        Self::at(view, reads, level, offset)
+    }
+
+    /// `view` read at pyramid level `level`, with no offset.
+    #[cfg(test)]
+    pub(super) fn at_level(
+        view: &ProjectedImage<'a>,
+        reads: &'a StepReads<'a>,
+        level: usize,
+    ) -> Self {
+        Self::at(view, reads, level, Vector3::zeros())
+    }
+
+    fn at(
+        view: &ProjectedImage<'a>,
+        reads: &'a StepReads<'a>,
+        level: usize,
+        offset: Vector3<f64>,
+    ) -> Self {
+        let (width, height) = view.source.layout().level_size(level);
         ViewImage {
             camera: view.camera,
             cam_from_world: view.cam_from_world,
-            level: image,
+            regions: RefCell::new(ViewRegions::new(view.source, reads.pool)),
+            reads,
+            level,
+            size: [f64::from(width), f64::from(height)],
             scale: (1u64 << level) as f64,
-            channels: (image.channels() as usize).clamp(1, 3),
+            channels: (view.source.channels() as usize).clamp(1, 3),
             offset,
             renders: Cell::new(0),
         }
@@ -512,18 +570,36 @@ impl<'a> ViewImage<'a> {
         self.renders.get()
     }
 
-    /// `view` read at pyramid level `level`, with no offset.
-    #[cfg(test)]
-    pub(super) fn at_level(view: &ProjectedImage<'a>, level: usize) -> Self {
-        let image = view.pyramid.level(level);
-        ViewImage {
-            camera: view.camera,
-            cam_from_world: view.cam_from_world,
-            level: image,
-            scale: (1u64 << level) as f64,
-            channels: (image.channels() as usize).clamp(1, 3),
-            offset: Vector3::zeros(),
-            renders: Cell::new(0),
+    /// The level positions of `pixels` moved by `shift`, cast to `f32` as
+    /// the bilinear read casts them, for the pixels that exist.
+    fn positions(&self, pixels: &[Option<[f64; 2]>], shift: [f64; 2]) -> Vec<[f32; 2]> {
+        pixels
+            .iter()
+            .flatten()
+            .map(|p| {
+                [
+                    ((p[0] + shift[0]) / self.scale) as f32,
+                    ((p[1] + shift[1]) / self.scale) as f32,
+                ]
+            })
+            .collect()
+    }
+
+    /// The pixels about each of `positions` on the view's level
+    /// ([`read_source_samples`] with `border`), or `None` where the read
+    /// failed, which is kept in the step's [`StepReads`].
+    fn read(&self, positions: &[[f32; 2]], border: u32) -> Option<SourceSamples> {
+        match read_source_samples(
+            &mut self.regions.borrow_mut(),
+            self.level,
+            positions,
+            border,
+        ) {
+            Ok(samples) => Some(samples),
+            Err(error) => {
+                self.reads.failure.keep(error);
+                None
+            }
         }
     }
 
@@ -531,6 +607,8 @@ impl<'a> ViewImage<'a> {
     /// `shift` into `out`. A sample is valid where its pixel exists and all
     /// four bilinear taps lie on the photograph; an invalid sample still
     /// carries the edge-clamped value, which only a frozen residual reads.
+    /// The values are `sample_bilinear_u8`'s, blended from the 2 x 2 pixels
+    /// that one read of the view's regions gives each sample.
     pub(super) fn sample(
         &self,
         pixels: &[Option<[f64; 2]>],
@@ -538,11 +616,10 @@ impl<'a> ViewImage<'a> {
         shift: [f64; 2],
         out: &mut Samples,
     ) {
-        let (w, h) = (
-            f64::from(self.level.width()),
-            f64::from(self.level.height()),
-        );
+        let [w, h] = self.size;
         let ch = out.channels;
+        let read = self.read(&self.positions(pixels, shift), 0);
+        let mut n = 0;
         for (&k, pixel) in rows.iter().zip(pixels) {
             let Some(p) = pixel else {
                 out.valid[k] = false;
@@ -552,10 +629,19 @@ impl<'a> ViewImage<'a> {
             let x = (p[0] + shift[0]) / self.scale;
             let y = (p[1] + shift[1]) / self.scale;
             out.valid[k] = (0.5..=w - 0.5).contains(&x) && (0.5..=h - 0.5).contains(&y);
-            for c in 0..ch {
-                out.values[k * ch + c] =
-                    sample_bilinear_u8(self.level, x as f32, y as f32, c as u32);
+            let values = &mut out.values[k * ch..(k + 1) * ch];
+            match &read {
+                Some(samples) => {
+                    let window = samples.window(n);
+                    let [fx, fy] = samples.fractions(n);
+                    let all = samples.channels();
+                    for (c, value) in values.iter_mut().enumerate() {
+                        *value = bilinear_from_window(|r, q| window[(r * 2 + q) * all + c], fx, fy);
+                    }
+                }
+                None => values.fill(0.0),
             }
+            n += 1;
         }
     }
 
@@ -573,25 +659,47 @@ impl<'a> ViewImage<'a> {
         out: &mut Gradients,
     ) {
         let ch = out.channels;
+        let positions = self.positions(pixels, shift);
+        let windows = match read {
+            #[cfg(test)]
+            GradientRead::Bilinear => None,
+            GradientRead::Sobel => self.read(&positions, 1),
+        };
         // The level gradient of each channel at one sample.
         let mut level = vec![(0.0f32, 0.0f32); ch];
+        let mut n = 0;
         for (&k, pixel) in rows.iter().zip(pixels) {
-            let Some(p) = pixel else {
+            if pixel.is_none() {
                 out.values[k * ch..(k + 1) * ch].fill([0.0; 2]);
                 continue;
-            };
-            let x = ((p[0] + shift[0]) / self.scale) as f32;
-            let y = ((p[1] + shift[1]) / self.scale) as f32;
+            }
             match read {
                 #[cfg(test)]
                 GradientRead::Bilinear => {
+                    let regions = self.regions.borrow();
+                    let [x, y] = positions[n];
+                    let image = regions.source().held_pyramid().level(self.level);
                     for (c, slot) in level.iter_mut().enumerate() {
-                        let (_, dx, dy) = sample_bilinear_with_grad_u8(self.level, x, y, c as u32);
+                        let (_, dx, dy) = sample_bilinear_with_grad_u8(image, x, y, c as u32);
                         *slot = (dx, dy);
                     }
                 }
-                GradientRead::Sobel => sobel_gradient(self.level, x, y, &mut level),
+                GradientRead::Sobel => match &windows {
+                    Some(samples) => {
+                        let window = samples.window(n);
+                        let [fx, fy] = samples.fractions(n);
+                        let all = samples.channels();
+                        sobel_from_window(
+                            |r, q, c| window[(r * 4 + q) * all + c],
+                            fx,
+                            fy,
+                            &mut level,
+                        );
+                    }
+                    None => level.fill((0.0, 0.0)),
+                },
             }
+            n += 1;
             for (value, &(dx, dy)) in out.values[k * ch..(k + 1) * ch].iter_mut().zip(&level) {
                 *value = [f64::from(dx) / self.scale, f64::from(dy) / self.scale];
             }
@@ -630,6 +738,7 @@ pub(super) enum GradientRead {
 /// gradient images in channels `0..out.len()`, grey levels per level px
 /// ([`GradientRead::Sobel`]): `out[c] = (∂I/∂x, ∂I/∂y)` in channel `c`. The
 /// 4×4 pixels' edge-clamped positions are found once for all the channels.
+#[cfg(test)]
 pub(super) fn sobel_gradient(img: &ImageU8, x: f32, y: f32, out: &mut [(f32, f32)]) {
     // The same half-pixel convention, floor and in-cell fractions as the
     // bilinear read of the value.
@@ -653,10 +762,23 @@ pub(super) fn sobel_gradient(img: &ImageU8, x: f32, y: f32, out: &mut [(f32, f32
     sobel_from_window(|r, q, channel| data[offsets[r][q] + channel], fx, fy, out);
 }
 
-/// [`sobel_gradient`]'s arithmetic on the 4×4 pixels about a read, given as
-/// `pixel(r, q, channel)` for the pixel at row `y0 − 1 + r` and column
-/// `x0 − 1 + q`, edge-clamped, and the read's in-cell fractions: the same
-/// products and sums whatever holds the pixels.
+/// `sample_bilinear_u8`'s blend of the 2 x 2 pixels of a bilinear read,
+/// given as `pixel(r, q)` for the pixel at row `y0 + r` and column `x0 + q`,
+/// edge-clamped, and the read's in-cell fractions: the same products and sums
+/// whatever holds the pixels.
+pub(super) fn bilinear_from_window(pixel: impl Fn(usize, usize) -> u8, fx: f32, fy: f32) -> f32 {
+    let v = |r: usize, q: usize| f32::from(pixel(r, q));
+    (1.0 - fx) * (1.0 - fy) * v(0, 0)
+        + fx * (1.0 - fy) * v(0, 1)
+        + (1.0 - fx) * fy * v(1, 0)
+        + fx * fy * v(1, 1)
+}
+
+/// The bilinear read of the Sobel gradient images (`GradientRead::Sobel`)
+/// from the 4×4 pixels about a read, given as `pixel(r, q, channel)` for the
+/// pixel at row `y0 − 1 + r` and column `x0 − 1 + q`, edge-clamped, and the
+/// read's in-cell fractions: the same products and sums whatever holds the
+/// pixels.
 pub(super) fn sobel_from_window(
     pixel: impl Fn(usize, usize, usize) -> u8,
     fx: f32,

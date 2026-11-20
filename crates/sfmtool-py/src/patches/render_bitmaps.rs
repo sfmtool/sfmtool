@@ -119,7 +119,7 @@ impl PyPatchCloud {
                 Some(ProjectedImage {
                     camera: &posed.cameras[i],
                     cam_from_world: &posed.poses[i],
-                    pyramid: &pyramids[i],
+                    source: &pyramids[i],
                 })
             })
             .collect();
@@ -208,7 +208,7 @@ impl PyPatchCloud {
                 Some(ProjectedImage {
                     camera: &posed.cameras[i],
                     cam_from_world: &posed.poses[i],
-                    pyramid: &pyramids[i],
+                    source: &pyramids[i],
                 })
             })
             .collect();

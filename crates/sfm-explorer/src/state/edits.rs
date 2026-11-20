@@ -30,7 +30,7 @@ use std::time::Instant;
 
 use sfmtool_core::bench::ImageDeletion;
 use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
-use sfmtool_core::camera::{CameraIntrinsics, PhotographCache};
+use sfmtool_core::camera::{CameraIntrinsics, PhotographCache, TiledPhotograph};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal, ViewReduce};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
@@ -627,7 +627,9 @@ fn retriangulate_summary(report: &RetriangulateReport) -> String {
     text
 }
 
-/// Decoded images for one edit, owning what a [`ProjectedImage`] borrows.
+/// Decoded images for one edit, owning what a [`ProjectedImage`] borrows: each
+/// photograph the cache handed back, read in place through
+/// [`TiledPhotograph::from_pyramid`] until the cache hands out tiles.
 ///
 /// One entry per image of the node, because the patch kernels index their view
 /// slice by image index; the entries the call does not read are one-pixel
@@ -635,8 +637,12 @@ fn retriangulate_summary(report: &RetriangulateReport) -> String {
 pub(crate) struct DecodedViews {
     cameras: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
-    pyramids: Vec<Arc<ImageU8Pyramid>>,
-    /// Per image, whether its pyramid is its photograph rather than the
+    sources: Vec<TiledPhotograph>,
+    /// The pyramids `sources` read, which the tests compare with the cache's
+    /// own to show a photograph was taken from it rather than read again.
+    #[cfg(test)]
+    pub(crate) pyramids: Vec<Arc<ImageU8Pyramid>>,
+    /// Per image, whether its source is its photograph rather than the
     /// placeholder an unused or unreadable image gets.
     present: Vec<bool>,
 }
@@ -678,6 +684,18 @@ type Fetched = Vec<Option<Option<Arc<ImageU8Pyramid>>>>;
 /// had begun. Even, because either half can be the longer: a decode the cache
 /// answers takes milliseconds, and one that reads every file takes seconds.
 pub(crate) const DECODE_AND_STEP: [f32; 2] = [1.0, 1.0];
+
+/// Write the `read regions` phase's note after a step's kernel call: how
+/// many region pyramids the call's reads assembled from the photographs'
+/// tiles, how many reused the regions a view kept, and how many read through
+/// the tiles instead ([`RegionPoolStats`](sfmtool_core::camera::sampler::RegionPoolStats)).
+pub(crate) fn note_region_reads(
+    progress: &sfmtool_core::progress::Progress<'_>,
+    pool: &sfmtool_core::camera::sampler::RegionPool,
+) {
+    let mut phase = progress.phase("read regions");
+    progress_note!(phase, "{}", pool.stats());
+}
 
 /// Bytes in a GiB, for the cache occupancy in the `decode images` note.
 const GIB: f64 = (1u64 << 30) as f64;
@@ -791,7 +809,7 @@ impl ViewSources {
             ImageU8::new(1, 1, 3, vec![0u8; 3]),
             1,
         ));
-        let (pyramids, present) = fetched
+        let (pyramids, present): (Vec<_>, Vec<_>) = fetched
             .into_iter()
             .map(|found| match found.flatten() {
                 Some(pyramid) => (pyramid, true),
@@ -801,6 +819,11 @@ impl ViewSources {
         DecodedViews {
             cameras: self.cameras,
             poses: self.poses,
+            sources: pyramids
+                .iter()
+                .map(|pyramid| TiledPhotograph::from_pyramid(Arc::clone(pyramid)))
+                .collect(),
+            #[cfg(test)]
             pyramids,
             present,
         }
@@ -808,14 +831,14 @@ impl ViewSources {
 }
 
 impl DecodedViews {
-    /// Per image, its photograph's pyramid, or `None` for an image the step
+    /// Per image, its photograph, or `None` for an image the step
     /// does not use or could not read: the form a step that tolerates missing
     /// photographs takes.
-    pub(crate) fn pyramid_slots(&self) -> Vec<Option<&ImageU8Pyramid>> {
-        self.pyramids
+    pub(crate) fn source_slots(&self) -> Vec<Option<&TiledPhotograph>> {
+        self.sources
             .iter()
             .zip(&self.present)
-            .map(|(pyramid, &present)| present.then_some(pyramid.as_ref()))
+            .map(|(source, &present)| present.then_some(source))
             .collect()
     }
 
@@ -824,11 +847,11 @@ impl DecodedViews {
         self.cameras
             .iter()
             .zip(&self.poses)
-            .zip(&self.pyramids)
-            .map(|((camera, cam_from_world), pyramid)| ProjectedImage {
+            .zip(&self.sources)
+            .map(|((camera, cam_from_world), source)| ProjectedImage {
                 camera,
                 cam_from_world,
-                pyramid: pyramid.as_ref(),
+                source,
             })
             .collect()
     }

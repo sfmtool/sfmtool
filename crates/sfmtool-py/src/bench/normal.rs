@@ -28,6 +28,7 @@ use sfmtool_core::bench::{
     GrownPlaneSequence, GrownPlaneTiltStart, GrownPlaneTryOutcome, GrownPlaneView, NormalEstimate,
     NormalReport, PieceLayout,
 };
+use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::patch::cell_plane_normals::{CellPlaneStatus, NormalDeterminacy};
 use sfmtool_core::patch::cluster_refine::{CellStatus, LoopStop};
 use sfmtool_core::progress::{Event, Progress};
@@ -804,6 +805,7 @@ fn finite_difference_normal(
         &track.inner,
         &edited.inner,
         &views,
+        &RegionPool::for_kernel_call(),
         &options,
         &Progress::none(),
     )
@@ -988,6 +990,7 @@ fn grid_plane_normal(
         &track.inner,
         &edited.inner,
         &views,
+        &RegionPool::for_kernel_call(),
         &options,
         &Progress::none(),
     )
@@ -1288,9 +1291,15 @@ fn grown_plane_normal(
     } else {
         Progress::none()
     };
-    let (next, report) =
-        core_grown_plane_normal(&track.inner, &edited.inner, &views, &options, &progress)
-            .map_err(refused)?;
+    let (next, report) = core_grown_plane_normal(
+        &track.inner,
+        &edited.inner,
+        &views,
+        &RegionPool::for_kernel_call(),
+        &options,
+        &progress,
+    )
+    .map_err(refused)?;
     let d = normal_report_dict(py, &report)?;
     if record_phases {
         d.set_item("phases", record.to_list(py)?)?;

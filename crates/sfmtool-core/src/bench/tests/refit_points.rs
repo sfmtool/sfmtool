@@ -17,6 +17,7 @@ use sfmtool_sfmr_format::{
 use super::reference_view::GroundTruth;
 use super::scene::fixture_points;
 use super::*;
+use crate::camera::sampler::RegionPool;
 use crate::progress::Event;
 use crate::reconstruction::data::{
     ObservationReading, ObservationReadingOptions, ObservationReadings, ObservationSource,
@@ -40,8 +41,14 @@ fn refit_over(
     scene: &Scene,
     recon: &SfmrReconstruction,
 ) -> (SfmrReconstruction, RefitPointsReport) {
-    refit_points(recon, &scene.views(), &refit_options(), &Progress::none())
-        .expect("the run refits")
+    refit_points(
+        recon,
+        &scene.views(),
+        &RegionPool::for_kernel_call(),
+        &refit_options(),
+        &Progress::none(),
+    )
+    .expect("the run refits")
 }
 
 /// Point `p` of `recon` as a whole record.
@@ -321,6 +328,7 @@ fn keypoints_nudged_off_their_content_come_back_on_the_ground_truth() {
     let (out, report) = refit_points(
         &nudged,
         &views,
+        &RegionPool::for_kernel_call(),
         &RefitPointsOptions::default(),
         &Progress::none(),
     )
@@ -784,6 +792,7 @@ fn a_cancelled_run_writes_nothing() {
     let refused = refit_points(
         &recon,
         &scene.views(),
+        &RegionPool::for_kernel_call(),
         &refit_options(),
         &Progress::none().cancelled_by(&stop),
     )
@@ -815,6 +824,7 @@ fn a_cancelled_run_writes_nothing() {
             refit_points(
                 &recon,
                 &scene.views(),
+                &RegionPool::for_kernel_call(),
                 &refit_options(),
                 &Progress::to(&sink).cancelled_by(&stop),
             )
@@ -861,9 +871,15 @@ fn the_run_refuses_a_value_it_cannot_refit() {
     let run = |recon: &SfmrReconstruction,
                views: &[crate::patch::normal_refine::ProjectedImage<'_>],
                options: &RefitPointsOptions| {
-        refit_points(recon, views, options, &Progress::none())
-            .err()
-            .expect("refused")
+        refit_points(
+            recon,
+            views,
+            &RegionPool::for_kernel_call(),
+            options,
+            &Progress::none(),
+        )
+        .err()
+        .expect("refused")
     };
 
     // A sift_files value.

@@ -51,6 +51,7 @@ use std::rc::Rc;
 
 use nalgebra::{Matrix2, Vector3};
 
+use crate::camera::sampler::RegionPool;
 use crate::patch::keypoint_localize::resolve_reference;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::patch::reference_view::ReferenceViewOptions;
@@ -75,7 +76,7 @@ mod selected;
 mod solve;
 
 use combine::{sigmas_deg_at, Estimate};
-use render::{anchored, Grid, Samples, ViewImage, ViewRender};
+use render::{anchored, Grid, Samples, StepReads, ViewImage, ViewRender};
 use solve::{
     angle_deg, carried_information, disc_of, live_cells, maximise, normal_matrix, schur_tilt,
     score_and_normal_matrix, shift_response, Iteration, Reading, Rounds, ViewFit,
@@ -870,6 +871,7 @@ impl std::fmt::Display for GrownPlaneSequence {
 ///     track,
 ///     edited,
 ///     images,
+///     &sfmtool_core::camera::sampler::RegionPool::for_kernel_call(),
 ///     &GrownPlaneNormalOptions::default(),
 ///     &Progress::none(),
 /// )?;
@@ -882,6 +884,7 @@ pub fn grown_plane_normal(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &GrownPlaneNormalOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, NormalReport), NormalError> {
@@ -945,6 +948,7 @@ pub fn grown_plane_normal(
             track,
             edited,
             images,
+            pool,
             patch_frame.normal(),
             NormalEstimate::GrownPlane(Box::new(sequence)),
             &options.fit,
@@ -970,7 +974,14 @@ pub fn grown_plane_normal(
         }
     } as usize;
     let grid = Grid::new(&patch_frame, ref_view, ref_keypoint, side);
-    let ref_image = ViewImage::new(ref_view, &grid.anchored_patch_frame, side, Vector3::zeros());
+    let reads = StepReads::new(pool);
+    let ref_image = ViewImage::new(
+        ref_view,
+        &reads,
+        &grid.anchored_patch_frame,
+        side,
+        Vector3::zeros(),
+    );
     let start = Rc::new(Laid::new(grid, &ref_image));
     let grid = &start.grid;
     let radii = window_radii(side, options);
@@ -991,7 +1002,7 @@ pub fn grown_plane_normal(
             // The patch this view sees: the starting patch slid onto its
             // keypoint, read through the same tilts about its own centre.
             let seen = anchored(&patch_frame, view, keypoint);
-            let image = ViewImage::new(view, &seen, side, seen.center.coords - grid.anchor);
+            let image = ViewImage::new(view, &reads, &seen, side, seen.center.coords - grid.anchor);
             let Some(kp_shift) = keypoint.and_then(|kp| {
                 grid.anchor_pixel(&image)
                     .map(|at| [kp[0] - at[0], kp[1] - at[1]])
@@ -1073,10 +1084,12 @@ pub fn grown_plane_normal(
         record_views(&mut sequence.views, reference, &candidates, &outcome.fates);
         let mut turn = progress.detail_phase("turn");
         progress_note!(turn, "no view joined, normal left unchanged");
+        reads.check()?;
         return turn_and_read(
             track,
             edited,
             images,
+            pool,
             patch_frame.normal(),
             NormalEstimate::GrownPlane(Box::new(sequence)),
             &options.fit,
@@ -1108,10 +1121,12 @@ pub fn grown_plane_normal(
             "large turn on weak evidence, {turn_deg:.1}\u{b0} at {:.1}\u{3c3}: normal left unchanged",
             turn_sigma_ratio(turn_deg, weak)
         );
+        reads.check()?;
         return turn_and_read(
             track,
             edited,
             images,
+            pool,
             patch_frame.normal(),
             NormalEstimate::GrownPlane(Box::new(sequence)),
             &options.fit,
@@ -1125,10 +1140,12 @@ pub fn grown_plane_normal(
     let finals = state.final_views(tilt, &outcome.fates);
     record_views(&mut sequence.views, reference, &candidates, &finals);
     progress_note!(turn, "turned {turn_deg:.2}\u{b0}, keypoints kept");
+    reads.check()?;
     turn_and_read(
         track,
         edited,
         images,
+        pool,
         normal,
         NormalEstimate::GrownPlane(Box::new(sequence)),
         &options.fit,

@@ -30,9 +30,11 @@
 //! - `report`: the report's public types.
 
 use std::collections::HashSet;
+use std::sync::Mutex;
 
 use nalgebra::Vector3;
 
+use crate::camera::sampler::{RegionPool, ViewRegions};
 use crate::features::optical_flow::DisFlowParams;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::Progress;
@@ -377,6 +379,7 @@ impl PairwiseFlowNormalOptions {
 ///     track,
 ///     edited,
 ///     images,
+///     &sfmtool_core::camera::sampler::RegionPool::for_kernel_call(),
 ///     &PairwiseFlowNormalOptions::default(),
 ///     &Progress::none(),
 /// )?;
@@ -389,6 +392,7 @@ pub fn pairwise_flow_normal(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &PairwiseFlowNormalOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, NormalReport), NormalError> {
@@ -430,6 +434,10 @@ pub fn pairwise_flow_normal(
         half_extent: patch.half_extent[0],
         observations: track.observations.len(),
         attempted,
+        regions: views
+            .iter()
+            .map(|view| Mutex::new(ViewRegions::new(view.source, pool)))
+            .collect(),
         views,
         mean_view,
         options,
@@ -478,6 +486,7 @@ pub fn pairwise_flow_normal(
         track,
         edited,
         images,
+        pool,
         answer.unwrap_or(given),
         NormalEstimate::PairwiseFlow(Box::new(report)),
         &options.fit,

@@ -210,7 +210,7 @@ impl PyPatchCloud {
             .map(|i| ProjectedImage {
                 camera: &posed.cameras[i],
                 cam_from_world: &posed.poses[i],
-                pyramid: &pyramids[i],
+                source: &pyramids[i],
             })
             .collect();
 

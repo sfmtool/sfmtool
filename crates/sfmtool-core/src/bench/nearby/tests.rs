@@ -5,12 +5,15 @@
 //! capture: pinhole cameras looking down world `+z` at a textured plane, put
 //! near, far, or so far that it reads as infinity.
 
+use std::sync::Arc;
+
 use nalgebra::{Point3, Vector3};
 
 use crate::bench::tests::scene::{edited, Scene};
 use crate::bench::track_at_pixel::ViewCamera;
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
-use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::camera::sampler::RegionPool;
+use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::geometry::RigidTransform;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::Progress;
@@ -34,8 +37,17 @@ fn sweep(scene: &Scene, depth: f64, options: &FarFieldOptions) -> FarFieldSweep 
     let edited = edited(scene, Point3::new(0.0, 0.0, depth));
     let views = scene.views();
     let grey = GreyImages::new(views.len());
-    far_field_sweep(&edited, &views, &grey, 0, PIXEL, options, &Progress::none())
-        .expect("the query is valid")
+    far_field_sweep(
+        &edited,
+        &views,
+        &RegionPool::for_kernel_call(),
+        &grey,
+        0,
+        PIXEL,
+        options,
+        &Progress::none(),
+    )
+    .expect("the query is valid")
 }
 
 /// The pixels per unit of inverse distance of the image that moves the query
@@ -205,12 +217,15 @@ fn a_patch_off_the_photograph_or_flat_is_not_read() {
         rolling_shutter: None,
     };
     let pose = RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
-    let pyramid = ImageU8Pyramid::build(&ImageU8::new(128, 128, 1, vec![90; 128 * 128]), 2);
+    let source = TiledPhotograph::from_pyramid(Arc::new(ImageU8Pyramid::build(
+        &ImageU8::new(128, 128, 1, vec![90; 128 * 128]),
+        2,
+    )));
     let flat = vec![
         ProjectedImage {
             camera: &camera,
             cam_from_world: &pose,
-            pyramid: &pyramid,
+            source: &source,
         };
         2
     ];
@@ -405,6 +420,7 @@ fn the_sweep_refuses_a_query_that_names_no_place() {
         far_field_sweep(
             &edited,
             &views,
+            &RegionPool::for_kernel_call(),
             grey,
             image,
             pixel,

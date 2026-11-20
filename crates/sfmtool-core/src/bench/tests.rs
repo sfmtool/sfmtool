@@ -20,6 +20,7 @@ mod pairwise_flow_normal;
 mod reference_view;
 mod refine_normals;
 mod refit_points;
+mod region_reads;
 pub(super) mod scene;
 mod stored_bitmap;
 
@@ -28,6 +29,7 @@ use std::sync::Arc;
 use nalgebra::{Point3, Vector3};
 use ndarray::Array3;
 
+use crate::camera::sampler::RegionPool;
 use crate::camera::warp_map::patch_grid_jacobian;
 use crate::camera::CameraIntrinsics;
 use crate::geometry::RigidTransform;
@@ -2803,6 +2805,7 @@ fn evaluate_over(
         track,
         edited,
         &scene.views(),
+        &RegionPool::for_kernel_call(),
         &EvaluateOptions::default(),
         &Progress::none(),
     )
@@ -2837,6 +2840,7 @@ fn fit_over(
         track,
         edited,
         &scene.views(),
+        &RegionPool::for_kernel_call(),
         &test_fit_options(),
         &Progress::none(),
     )
@@ -2885,6 +2889,7 @@ fn stage_over(
         track,
         edited,
         &scene.views(),
+        &RegionPool::for_kernel_call(),
         stage,
         &test_fit_options(),
         &Progress::none(),
@@ -3002,7 +3007,7 @@ fn a_track_from_a_point_fits_to_the_kernels_own_numbers() {
             resolution as u32,
         );
         map.compute_svd();
-        let rendered = crate::camera::remap::remap_bilinear_mip(view.pyramid, &map);
+        let rendered = crate::camera::remap::remap_bilinear_mip(view.source.held_pyramid(), &map);
         let colour = (rendered.channels() as usize).min(3);
         let mut planes = Vec::with_capacity(colour * resolution * resolution);
         for c in 0..colour {
@@ -3213,6 +3218,7 @@ fn three_rows_the_bars_decide(scene: &Scene) -> (EditableTrack, usize) {
         &track,
         &edited,
         &scene.views(),
+        &RegionPool::for_kernel_call(),
         &EvaluateOptions::default(),
         &FitOptions::default(),
         &Progress::none(),
@@ -3759,7 +3765,7 @@ fn a_pixel_cluster_spans_the_radius_it_was_asked_for() {
     let outermost = radius_px - half_cell;
     assert!(
         sample_member_grid(
-            scene.views()[0].pyramid,
+            scene.views()[0].source.held_pyramid(),
             measurement.seed_position,
             measurement.seed_shape,
             &params,
@@ -3863,7 +3869,7 @@ fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
         };
         let views = scene.views();
         let samples = sample_member_grid(
-            views[observation.image as usize].pyramid,
+            views[observation.image as usize].source.held_pyramid(),
             m.seed_position,
             m.seed_shape,
             &params,
@@ -3880,7 +3886,7 @@ fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
         assert_eq!(
             m.zncc_self_similarity_radius,
             crate::patch::cluster_refine::member_zncc_self_similarity_radius(
-                views[observation.image as usize].pyramid,
+                views[observation.image as usize].source.held_pyramid(),
                 m.seed_position,
                 m.seed_shape,
                 &params,
@@ -4006,6 +4012,7 @@ fn an_evaluation_with_fewer_views_than_images_is_refused() {
             &track,
             &edited,
             &views[..1],
+            &RegionPool::for_kernel_call(),
             &EvaluateOptions::default(),
             &Progress::none(),
         )
@@ -4197,8 +4204,15 @@ fn a_seed_far_from_the_projection_is_named_rather_than_searched_for() {
         max_seed_offset_px: offset_px * 2.0,
         ..EvaluateOptions::default()
     };
-    let (wider, report) = evaluate(&track, &edited, &scene.views(), &options, &Progress::none())
-        .expect("the round is small enough to run");
+    let (wider, report) = evaluate(
+        &track,
+        &edited,
+        &scene.views(),
+        &RegionPool::for_kernel_call(),
+        &options,
+        &Progress::none(),
+    )
+    .expect("the round is small enough to run");
     assert_eq!(report.measured + report.unmeasured, 3);
     assert_ne!(
         wider.observations[at].track.as_ref().expect("a row").reason,
@@ -4218,8 +4232,15 @@ fn a_round_past_the_cache_budget_is_refused_rather_than_attempted() {
         max_cache_bytes: 1024,
         ..EvaluateOptions::default()
     };
-    let refused = evaluate(&track, &edited, &scene.views(), &options, &Progress::none())
-        .expect_err("two 48 px tiles do not fit in a kilobyte");
+    let refused = evaluate(
+        &track,
+        &edited,
+        &scene.views(),
+        &RegionPool::for_kernel_call(),
+        &options,
+        &Progress::none(),
+    )
+    .expect_err("two 48 px tiles do not fit in a kilobyte");
     let EvaluateError::TooLarge { bytes, budget } = refused else {
         panic!("the refusal names the budget: {refused}");
     };
@@ -4281,8 +4302,15 @@ fn a_track_stage_reading_is_in_the_grid_of_the_stored_patch_bitmaps() {
         },
         ..EvaluateOptions::default()
     };
-    let (asked, _) = evaluate(&track, &bare, &scene.views(), &asked_16, &Progress::none())
-        .expect("two observations in");
+    let (asked, _) = evaluate(
+        &track,
+        &bare,
+        &scene.views(),
+        &RegionPool::for_kernel_call(),
+        &asked_16,
+        &Progress::none(),
+    )
+    .expect("two observations in");
     let (at_24, _) = evaluate_over(&scene, &bare, &track).expect("two observations in");
 
     let mut differs = false;
@@ -4312,8 +4340,15 @@ fn a_fit_runs_in_the_grid_of_the_stored_patch_bitmaps() {
     asked_16.localize.resolution = 16;
     asked_16.refine.resolution = 16;
     asked_16.evaluate.localize.resolution = 16;
-    let (asked, _) =
-        fit(&track, &bare, &scene.views(), &asked_16, &Progress::none()).expect("a fit");
+    let (asked, _) = fit(
+        &track,
+        &bare,
+        &scene.views(),
+        &RegionPool::for_kernel_call(),
+        &asked_16,
+        &Progress::none(),
+    )
+    .expect("a fit");
     for (i, observation) in stored.observations.iter().enumerate() {
         assert_eq!(observation.track, asked.observations[i].track, "row {i}");
     }
@@ -6754,6 +6789,7 @@ fn a_bearing_whose_rays_stay_parallel_stays_a_bearing_at_the_size_it_had() {
         &blank,
         &edited,
         &scene.views(),
+        &RegionPool::for_kernel_call(),
         &EvaluateOptions::default(),
         &test_fit_options(),
         &Progress::none(),
@@ -7888,6 +7924,7 @@ fn a_fit_classifies_at_the_reconstructions_measured_noise() {
         &track,
         &edited,
         &scene.views(),
+        &RegionPool::for_kernel_call(),
         &FitOptions::default(),
         &Progress::none(),
     )
@@ -7909,6 +7946,7 @@ fn a_fit_classifies_at_the_reconstructions_measured_noise() {
         &track_of(&bench, &label),
         &exact,
         &scene.views(),
+        &RegionPool::for_kernel_call(),
         &FitOptions::default(),
         &Progress::none(),
     )
@@ -7931,6 +7969,7 @@ fn a_fit_over_a_reconstruction_with_no_finite_point_needs_a_noise_level() {
         &track,
         &edited,
         &scene.views(),
+        &RegionPool::for_kernel_call(),
         &FitOptions::default(),
         &Progress::none(),
     )
@@ -7947,6 +7986,7 @@ fn a_fit_over_a_reconstruction_with_no_finite_point_needs_a_noise_level() {
         &track,
         &edited,
         &scene.views(),
+        &RegionPool::for_kernel_call(),
         &FitOptions {
             sigma_px: Some(0.0),
             ..FitOptions::default()

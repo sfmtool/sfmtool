@@ -14,6 +14,7 @@ use sfmtool_core::bench::{
     PairwiseFlowNormalOptions, PairwiseFlowOutcome, PairwiseFlowPair, PairwiseFlowRadius,
     PairwiseFlowRound, PairwiseFlowRounds,
 };
+use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::progress::{Event, Progress};
 
 use super::normal::{maybe_vector, normal_report_dict};
@@ -412,7 +413,14 @@ fn pairwise_flow_normal(
             } else {
                 Progress::none()
             };
-            core_pairwise_flow_normal(&track.inner, &edited.inner, &views, &options, &progress)
+            core_pairwise_flow_normal(
+                &track.inner,
+                &edited.inner,
+                &views,
+                &RegionPool::for_kernel_call(),
+                &options,
+                &progress,
+            )
         })
         .map_err(refused)?;
     let d = normal_report_dict(py, &report)?;

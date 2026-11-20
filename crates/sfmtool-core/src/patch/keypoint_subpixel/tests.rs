@@ -5,7 +5,7 @@ use nalgebra::{Point3, Vector3};
 
 use super::*;
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
-use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::geometry::RigidTransform;
 use crate::patch::normal_refine::Sampler;
 
@@ -23,6 +23,11 @@ use crate::patch::normal_refine::Sampler;
 // snapping), so a world offset of, e.g., 0.37·wpp shifts the content by 0.37
 // patch-grid px — the kind of fractional offset the continuous refiner exists to
 // resolve and a discrete grid cannot reach.
+
+/// `pyramid` as the tiled photograph a kernel reads.
+fn in_memory(pyramid: ImageU8Pyramid) -> TiledPhotograph {
+    TiledPhotograph::from_pyramid(std::sync::Arc::new(pyramid))
+}
 
 const PLANE_Z: f64 = 4.0;
 const IMG_W: u32 = 320;
@@ -87,7 +92,7 @@ fn render_plane_view(center: [f64; 3], off: [f64; 2], tex: fn(f64, f64) -> f64) 
 struct Scene {
     cams: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
-    pyrs: Vec<ImageU8Pyramid>,
+    sources: Vec<TiledPhotograph>,
 }
 
 impl Scene {
@@ -99,13 +104,19 @@ impl Scene {
                 RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-c[0], c[1], c[2]])
             })
             .collect();
-        let pyrs = centers
+        let sources = centers
             .iter()
             .zip(offsets)
             .zip(texs)
-            .map(|((c, o), tex)| ImageU8Pyramid::build(&render_plane_view(*c, *o, *tex), 5))
+            .map(|((c, o), tex)| {
+                in_memory(ImageU8Pyramid::build(&render_plane_view(*c, *o, *tex), 5))
+            })
             .collect();
-        Self { cams, poses, pyrs }
+        Self {
+            cams,
+            poses,
+            sources,
+        }
     }
 
     /// Cameras at `centers` (looking down world +z), each viewing the **same**
@@ -120,22 +131,26 @@ impl Scene {
                 RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-c[0], c[1], c[2]])
             })
             .collect();
-        let pyrs = offsets
+        let sources = offsets
             .iter()
-            .map(|o| ImageU8Pyramid::build(&render_infinity_view(*o), 5))
+            .map(|o| in_memory(ImageU8Pyramid::build(&render_infinity_view(*o), 5)))
             .collect();
-        Self { cams, poses, pyrs }
+        Self {
+            cams,
+            poses,
+            sources,
+        }
     }
 
     fn views(&self) -> Vec<ProjectedImage<'_>> {
         self.cams
             .iter()
             .zip(&self.poses)
-            .zip(&self.pyrs)
-            .map(|((camera, cam_from_world), pyramid)| ProjectedImage {
+            .zip(&self.sources)
+            .map(|((camera, cam_from_world), source)| ProjectedImage {
                 camera,
                 cam_from_world,
-                pyramid,
+                source,
             })
             .collect()
     }
@@ -216,7 +231,7 @@ fn consensus_sharpness(
     let r = p.resolution as usize;
     // Full-grid support (uniform), so the consensus image covers the whole R×R.
     let n = r * r;
-    let channels = views[patch_views[0] as usize].pyramid.level(0).channels() as usize;
+    let channels = views[patch_views[0] as usize].source.channels() as usize;
     // Robust weighted mean over views, per pixel/channel (raw intensities).
     let mut sum = vec![0f64; n * channels];
     let mut count = 0;
@@ -238,7 +253,7 @@ fn consensus_sharpness(
             views[i as usize].cam_from_world,
             p.resolution,
         );
-        let img = remap_bilinear(views[i as usize].pyramid.level(0), &map);
+        let img = remap_bilinear(views[i as usize].source.held_pyramid().level(0), &map);
         let mut all_valid = true;
         for row in 0..p.resolution {
             for col in 0..p.resolution {

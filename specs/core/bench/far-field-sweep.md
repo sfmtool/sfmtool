@@ -45,6 +45,7 @@ crate-internal, shared with the track-at-pixel members. The sweep is bound as
 pub fn far_field_sweep(
     edited: &EditedReconstruction,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     grey: &GreyImages,
     image: u32,
     pixel: [f64; 2],

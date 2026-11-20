@@ -609,6 +609,7 @@ pub fn evaluate(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &EvaluateOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, EvaluateReport), EvaluateError>;
@@ -618,6 +619,7 @@ pub fn fit(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &FitOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, FitReport), FitError>;
@@ -671,6 +673,7 @@ pub fn evaluate_rendering_bitmap(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &EvaluateOptions,
     fit: &FitOptions,
     progress: &Progress<'_>,
@@ -686,6 +689,7 @@ pub fn set_stage(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     stage: StageKind,
     options: &FitOptions,
     progress: &Progress<'_>,
@@ -697,6 +701,7 @@ pub fn finite_difference_normal(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &FiniteDifferenceOptions, // layout, pieces (2..=8), overlap (0..=0.9), the fit
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, NormalReport), NormalError>;
@@ -710,6 +715,7 @@ pub fn grid_plane_normal(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &GridPlaneNormalOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, NormalReport), NormalError>;
@@ -1091,11 +1097,36 @@ origin is decide whether a commit replaces a point or creates one.
 
 **The decoded views are a named input.** `evaluate`, `fit` and `set_stage` take one
 [`ProjectedImage`](../../../crates/sfmtool-core/src/patch/normal_refine/params.rs)
-per image of the reconstruction -- a camera, a pose and a pyramid -- indexed by
+per image of the reconstruction -- a camera, a pose and a tiled photograph
+([`TiledPhotograph`](../camera/view-region-pyramids.md)) -- indexed by
 image index, exactly as every other photometric kernel takes them. A
 reconstruction carries poses and lenses rather than photographs, so decoding and
 caching stay the caller's, and the same call serves a viewer with a warm cache
 and a script that just read the files.
+
+**Each step reads through the region pool its caller made.** The steps that
+read photographs -- `evaluate`, `evaluate_rendering_bitmap`, `fit`,
+`set_stage`, the normal steps, and the runs and searches built on them
+(`refine_normals`, `refit_points`, `build_track_at_pixel`, `far_field_sweep`,
+`find_nearby_tracks`) -- take a `&RegionPool` beside the views: the caller makes
+one with `RegionPool::for_kernel_call()` for the call, and a step that runs
+another passes its pool down
+([view-region-pyramids.md](../camera/view-region-pyramids.md) § "Rust API").
+Their own reads go through the render entry points with one `ViewRegions` per
+view of the patch in hand: the cluster stage's member grids (the template and
+the self-similarity tiles, `sample_source_member_grid`), the grid-plane
+normal's context renders and the pairwise-flow crops (`render_source_tile`), and
+the grown plane's value and Sobel reads (`read_source_samples`). The patch
+kernels they call below that -- the reference view, the stored bitmap, the
+keypoint kernels, the cluster refinement and the view selection -- read the
+whole pyramid each tiled photograph holds; `score_bitmap`,
+`render_bitmap_in_place` and `search_geometry` read only through those, so they
+take no pool. A read that fails is the step's
+`Photograph(PhotographReadError)` error (a cancelled read is its `Cancelled`),
+never a refused row: where an inner step turns failures into values -- the
+grown plane's renders, the track-at-pixel cascade's members, the far-field
+sweep's refits, `refine_normals`' and `refit_points`' points -- the first read
+that failed is kept and returned in place of the result.
 
 **The kernel parameters are not the track's thresholds.** `EvaluateOptions` and
 `FitOptions` carry what the kernels are allowed to do; the track's `Thresholds`

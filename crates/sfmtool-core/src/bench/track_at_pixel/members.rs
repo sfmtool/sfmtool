@@ -10,8 +10,9 @@
 
 use nalgebra::{DMatrix, Vector3};
 
+use crate::bench::fit::FitError;
 use crate::bench::search::{search_descriptors, Found, SearchOptions};
-use crate::bench::stage::set_stage;
+use crate::bench::stage::{set_stage, StageError};
 use crate::bench::steps::tilt_patch;
 use crate::bench::track::{EditableTrack, StageKind};
 use crate::features::kdforest::{radius_for_feature_count, ConstellationParams};
@@ -928,12 +929,18 @@ pub(super) fn constellation(
         &track,
         ctx.edited,
         ctx.views,
+        ctx.pool,
         StageKind::Track,
         &crate::bench::fit::FitOptions::default(),
         &Progress::none(),
     ) {
         Ok(done) => done,
-        Err(e) => return refuse(RefusalStage::Upgrade, e.to_string()),
+        Err(e) => {
+            if let StageError::Fit(FitError::Photograph(read)) = &e {
+                ctx.failure.keep(read.clone());
+            }
+            return refuse(RefusalStage::Upgrade, e.to_string());
+        }
     };
     track = upgraded;
     stages.push(StageRecord::Upgrade {

@@ -9,9 +9,14 @@ use super::support::{grid_bounds, square_cells, view_render_patch, windowed_zncc
 use super::znorm::{weighted_moments, weighted_moments_scalar, znorm_write, znorm_write_scalar};
 use super::*;
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
-use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::OrientedPatch;
+
+/// `pyramid` as the tiled photograph a kernel reads.
+fn in_memory(pyramid: ImageU8Pyramid) -> TiledPhotograph {
+    TiledPhotograph::from_pyramid(std::sync::Arc::new(pyramid))
+}
 
 /// Helper: build a simple pinhole camera.
 fn pinhole(width: u32, height: u32, focal: f64) -> CameraIntrinsics {
@@ -62,7 +67,7 @@ fn render_plane_view(center: [f64; 3], tex: fn(f64, f64) -> f64) -> ImageU8 {
 struct Scene {
     cams: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
-    pyrs: Vec<ImageU8Pyramid>,
+    sources: Vec<TiledPhotograph>,
 }
 
 impl Scene {
@@ -86,23 +91,27 @@ impl Scene {
                 RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-c[0], c[1], c[2]])
             })
             .collect();
-        let pyrs = centers
+        let sources = centers
             .iter()
             .zip(texs)
-            .map(|(c, tex)| ImageU8Pyramid::build(&render_plane_view(*c, *tex), 5))
+            .map(|(c, tex)| in_memory(ImageU8Pyramid::build(&render_plane_view(*c, *tex), 5)))
             .collect();
-        Self { cams, poses, pyrs }
+        Self {
+            cams,
+            poses,
+            sources,
+        }
     }
 
     fn views(&self) -> Vec<ProjectedImage<'_>> {
         self.cams
             .iter()
             .zip(&self.poses)
-            .zip(&self.pyrs)
-            .map(|((camera, cam_from_world), pyramid)| ProjectedImage {
+            .zip(&self.sources)
+            .map(|((camera, cam_from_world), source)| ProjectedImage {
                 camera,
                 cam_from_world,
-                pyramid,
+                source,
             })
             .collect()
     }

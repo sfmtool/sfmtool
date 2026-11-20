@@ -259,7 +259,7 @@ fn refine_patch_keypoints_impl(
 
     // Channel count is the first view's image channels; the warp renders at that
     // count, and all reconstruction images share it.
-    let channels = views[states[0].idx as usize].pyramid.level(0).channels() as usize;
+    let channels = views[states[0].idx as usize].source.channels() as usize;
     let mut raw = vec![0f32; channels * n];
     let mut znorm = vec![0f32; channels * n];
     let mut scratch = GnScratch::new(channels * n);
@@ -753,7 +753,7 @@ pub fn refine_view_against_reference(
     let support = build_support(params.window, resolution);
     let n = support.pixels.len();
     let target_view = &views[target as usize];
-    let channels = target_view.pyramid.level(0).channels() as usize;
+    let channels = target_view.source.channels() as usize;
 
     let mut raw = vec![0f32; channels * n];
     let mut tmpl = vec![0f32; channels * n];
@@ -767,7 +767,7 @@ pub fn refine_view_against_reference(
         }
         ReferenceTemplate::Observation { image, keypoint } => {
             let view = &views[image as usize];
-            if view.pyramid.level(0).channels() as usize != channels {
+            if view.source.channels() as usize != channels {
                 return None;
             }
             let (patch_frame, followed) = seed_frame(patch, view, Some(keypoint));

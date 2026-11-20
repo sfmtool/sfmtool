@@ -1208,7 +1208,21 @@ gesture can answer without doing the read. Beside those views the worker gets a
 clone of the value at the cursor and a clone of the track, so it holds no
 reference into the scene. The images it decodes are the ones the track's
 observations name; every other entry of the view slice is a one-pixel
-placeholder, which no kernel samples.
+placeholder, which no kernel samples. Each photograph reaches the kernel as a
+tiled photograph over the pyramid the cache handed back
+(`TiledPhotograph::from_pyramid`), and the step makes one region pool for its
+kernel call (`RegionPool::for_kernel_call`,
+[core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md)).
+After the kernel the step writes a `read regions` phase whose note counts how
+the call's reads reached their pixels: `12 region pyramids assembled, 30
+reused, 0 reads on tiles` -- the region pyramids its reads assembled from the
+photographs' tiles, the reads that reused the regions a view kept from an
+earlier read, and the reads that took the tile path because the pool could not
+hold their regions or they read no pixel. The evaluation, the fit, the stage
+change, the normal steps, *Create track at pixel* and *Find nearby tracks*
+write it; the geometry search and the descriptor search do not, since they
+read through no pool. A read that fails ends the step as a failure naming the
+photograph.
 
 **A report lands on the observations it measured.** No bench step renumbers
 the observations and a measurement is keyed by observation index, so a report

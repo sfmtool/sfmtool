@@ -55,7 +55,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_core(
         core_patch.w = patch.w;
         let mut map =
             WarpMap::from_patch(&core_patch, view.camera, view.cam_from_world, resolution);
-        let img = render_tile(view.pyramid, &mut map, sampler);
+        let img = render_tile(view.source.held_pyramid(), &mut map, sampler);
         let n = support.pixels.len();
         for (k, &p) in support.pixels.iter().enumerate() {
             let col = (p % resolution as usize) as u32;
@@ -120,7 +120,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_core_with_jg(
         let mut map =
             WarpMap::from_patch(&core_patch, view.camera, view.cam_from_world, resolution);
         // Also fills the map's per-pixel Jacobians, which the composition reads.
-        render_tile_with_grad_into(view.pyramid, &mut map, sampler, img_scratch);
+        render_tile_with_grad_into(view.source.held_pyramid(), &mut map, sampler, img_scratch);
         let n = support.pixels.len();
         let stride = img_scratch.width() as usize * channels;
         let value = img_scratch.value();
@@ -626,7 +626,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_refine_tile(
         tile_patch.w = patch.w;
         let mut map = WarpMap::from_patch(&tile_patch, view.camera, view.cam_from_world, tile_res);
         // Also fills the map's per-pixel Jacobians, which the composition reads.
-        render_tile_with_grad_into(view.pyramid, &mut map, sampler, img);
+        render_tile_with_grad_into(view.source.held_pyramid(), &mut map, sampler, img);
         let t = tile_res as usize;
         let ch = img.channels() as usize;
         let area = t * t;

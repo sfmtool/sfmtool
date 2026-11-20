@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use ndarray::Array4;
 
-use crate::camera::PhotographCache;
+use crate::camera::{PhotographCache, TiledPhotograph};
 use crate::geometry::RigidTransform;
 use crate::patch::keypoint_subpixel::KeypointSubpixelParams;
 use crate::patch::normal_refine::ProjectedImage;
@@ -89,7 +89,7 @@ pub fn render_patch_bitmap_column(
     // Each image is sampled through its intrinsics: its camera's with its
     // adjustment applied, which keeps the camera's size.
     let intrinsics = recon.image_set.all_image_intrinsics();
-    let pyramids = {
+    let sources = {
         let mut phase = decode.phase("decode photographs");
         let paths: Vec<PathBuf> = images
             .iter()
@@ -98,18 +98,22 @@ pub fn render_patch_bitmap_column(
         let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
         let (found, tally) = photographs.get_many(&refs, &phase)?;
         // A photograph that is not the size its camera says would be sampled
-        // at the wrong pixels, so it is left out like an unreadable one.
-        let pyramids: Vec<_> = found
+        // at the wrong pixels, so it is left out like an unreadable one. The
+        // rest are read through their whole pyramids until step 11 of
+        // `specs/drafts/out-of-core-photograph-pyramid.md` fetches tiles.
+        let sources: Vec<Option<TiledPhotograph>> = found
             .into_iter()
             .zip(&intrinsics)
             .map(|(pyramid, camera)| {
-                pyramid.filter(|pyramid| {
-                    let level = pyramid.level(0);
-                    level.width() == camera.width && level.height() == camera.height
-                })
+                pyramid
+                    .filter(|pyramid| {
+                        let level = pyramid.level(0);
+                        level.width() == camera.width && level.height() == camera.height
+                    })
+                    .map(TiledPhotograph::from_pyramid)
             })
             .collect();
-        let read = pyramids.iter().filter(|p| p.is_some()).count();
+        let read = sources.iter().filter(|p| p.is_some()).count();
         if tally.reused == 0 {
             progress_note!(phase, "{read} of {total} read");
         } else {
@@ -119,9 +123,9 @@ pub fn render_patch_bitmap_column(
                 tally.reused
             );
         }
-        pyramids
+        sources
     };
-    if pyramids.iter().all(Option::is_none) {
+    if sources.iter().all(Option::is_none) {
         return Ok(None);
     }
     let poses: Vec<RigidTransform> = images
@@ -141,12 +145,12 @@ pub fn render_patch_bitmap_column(
     let views: Vec<Option<ProjectedImage<'_>>> = intrinsics
         .iter()
         .zip(&poses)
-        .zip(&pyramids)
-        .map(|((camera, cam_from_world), pyramid)| {
-            pyramid.as_ref().map(|pyramid| ProjectedImage {
+        .zip(&sources)
+        .map(|((camera, cam_from_world), source)| {
+            source.as_ref().map(|source| ProjectedImage {
                 camera,
                 cam_from_world,
-                pyramid,
+                source,
             })
         })
         .collect();
