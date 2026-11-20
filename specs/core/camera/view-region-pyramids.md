@@ -219,8 +219,9 @@ right border; and the border pixel is what the whole level reads there,
 including at the image's edge, where both taps clamp to the edge pixel. So a
 cell is read from one tile, and a 4 x 4 window, which reaches one pixel
 further, reads each of its clamped pixels from the tile whose core holds it.
-A copied region is assembled from the cores of the tiles it covers, which
-partition the level, so it holds the level's own pixels.
+A copied region is the cores of the tiles it covers, which partition the
+level, so it holds the level's own pixels; a photograph in memory copies it
+straight from the level it holds, which is the same pixels.
 
 **What the reuse margin costs.** A kept region is its required region, `w` by
 `h` pixels, grown by `ceil(REGION_REUSE_MARGIN · w)` pixels on the left and on
@@ -288,14 +289,27 @@ instead of the result.
 
 **Photographs in memory.** `from_image` builds the image's pyramid of
 `ImageU8Pyramid::full_levels` depth; `from_pyramid` reads a whole pyramid in
-place. Both cut a tile, with its border, only when a read asks for it, and
-keep none; a rectangle is assembled from the tiles it covers, one at a time,
-each dropped before the next is cut. `from_pyramid` refuses with `OutOfRange`
+place. Both cut a tile, with its border, only when the tile path asks for
+it, copying the columns that need no clamping as one span a row, and keep
+none; a rectangle is copied row by row straight from the level, with no tile
+cut. `from_pyramid` refuses with `OutOfRange`
 a tile with pixels that a pyramid made by `from_regions` does not hold, rather
 than read the black of a level it does not hold, and so refuses a rectangle
 whose tiles it does not wholly hold. Their layout has the pyramid's own
 levels, each level 0's size halved, and no stored level. The tests cut tiles
 of 32 px.
+
+**What a read costs.** `required_regions` walks a map of more than 2048
+texels on the rayon pool, row by row, as the render does; the bounding boxes
+of the rows are joined in any order, which gives the same rectangles. A copied
+read of a photograph in memory then costs the walk, the copy of its grown
+regions and the render of the region pyramid. Measured in a release build on
+a 6000 x 4000 photograph, 50 renders each with a new `ViewRegions`, as the
+panels render: a 64 x 64 tile takes 0.30 to 0.44 ms through regions against
+0.22 to 0.31 ms from the whole pyramid, and a 192 x 192 one 0.78 to 0.90 ms
+against 0.63 to 0.67 ms under `BilinearMip`, and 1.33 ms against 0.49 ms
+under `Anisotropic`, whose walk takes up to 16 samples a texel on the scalar
+path where the render runs the AVX2 kernel.
 
 **Testing.** [source/tests.rs](../../../crates/sfmtool-core/src/camera/sampler/source/tests.rs)
 renders random warps over a synthetic photograph, including maps off every
