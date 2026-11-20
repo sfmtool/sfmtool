@@ -657,7 +657,13 @@ there is no whole pyramid for any reader to fall back on.
    carries a tiled photograph, the bench's kernels take the pool and return
    the error, and the bench's own reads (the normal kernels', the grown
    plane's and the cluster stage's member grids) go through the render entry
-   points, each step writing a `read regions` note.
+   points, each step writing a `read regions` note. **The second, 10b, is
+   built**: the cluster refinement reads its grids through
+   `sample_source_grid` and its `LevelTile`s through `read_source_rect`, and
+   the view selection its affine fast path through `render_source_affine` and
+   its exact renders through `render_source_tile`; both, and the geometry
+   search over the view selection, take the pool and return the error, with
+   results identical bit for bit.
 5. **Bulk kernels**: the display patch bitmaps, the conversion to embedded
    patches, the web export, *Refine all normals*, *Refit all points* and the
    cluster-patches build fetch tiled photographs, each taking its points in

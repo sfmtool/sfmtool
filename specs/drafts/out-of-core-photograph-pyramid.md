@@ -1811,18 +1811,44 @@ in core. Step 17 turns the tier on.
       photograph; the `RuntimeError` of § "Errors from reading pixels" comes
       in 10c, for the bindings over every kernel of the step at once, before
       step 16 gives a binding photographs that can fail to read.
-    - **10b, the cluster refinement and the view selection.**
+    - **10b, the cluster refinement and the view selection.** **Built.**
       `refine_cluster_patches` and `refine_cluster_patches_borrowed` take
-      tiled photographs and the pool, with the grid samplers through
-      `sample_source_grid` and `LevelTile` through `read_source_rect`;
-      `select_patch_views` and `select_patch_cloud_views` take the pool, with
-      the affine fast path through `render_source_affine` and the full render
-      through `render_source_tile`; `search_geometry` takes the pool; and
-      their other callers (the grid-plane normal's cell registration, the
-      viewer's cluster-patches build, which builds its decoded images with
-      `from_image`, `track_views` and the bindings) make it. It is a pull
-      request of its own because the cluster refinement's `LevelTile` copies
-      are the subtlest reads of the step.
+      tiled photographs and the pool and return
+      `Result<ClusterRefineResult, PhotographReadError>`: the grid samplers
+      (the member gate's grid, the template, the grid at the refined shape and
+      the piecewise stage's working patches) read through
+      `sample_source_grid` with one `ViewRegions` per member, dropped when its
+      cluster is done, and `LevelTile` through `read_source_rect`, the tile
+      keeping the `SourceRect` so its bytes stay reserved while it lives; the
+      tile's rectangle is worked out as before from the maps and the level's
+      size, now read from the layout, so its corner and mean are unchanged.
+      `select_patch_views` and `select_patch_cloud_views` take the pool and
+      return `PhotographReadError` in place of `Cancelled`, with the affine
+      fast path through `render_source_affine` and the full render through
+      `render_source_tile`, by `normalized_source_stack`, a source form of
+      `normalized_stack` added beside it, since member coherence shares
+      `normalized_stack` and moves in 10c; a track view's reference render
+      and its own score share one `ViewRegions`. `search_geometry` takes the
+      pool and gains `GeometrySearchError::Photograph`. Their callers make
+      the pool or pass theirs down: the bench's cluster-stage evaluation,
+      *Create track at pixel*'s geometry search, which keeps a failed read in
+      its `ReadFailure`, the viewer's geometry search, which writes a `read
+      regions` note ([gui/bench.md](../gui/bench.md)), the viewer's
+      cluster-patches build, which builds its decoded images with
+      `from_image` and makes a pool for each batch of clusters, and the
+      bindings, which raise a photograph error as `ValueError`. Specified in
+      [core/patch/cluster-patch-refinement.md](../core/patch/cluster-patch-refinement.md),
+      [core/patch/patch-view-selection.md](../core/patch/patch-view-selection.md)
+      and [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md),
+      with tests in
+      [patch/region_read_tests.rs](../../crates/sfmtool-core/src/patch/region_read_tests.rs)
+      and [bench/tests/region_reads.rs](../../crates/sfmtool-core/src/bench/tests/region_reads.rs).
+      The plan named two callers that are not: the grid-plane normal's cell
+      registration calls neither kernel, and its renders moved in 10a, and
+      `track_views` reads no pixel and only lists the track views a caller
+      hands the view selection. It is a pull request of its own because the
+      cluster refinement's `LevelTile` copies are the subtlest reads of the
+      step.
     - **10c, the reference view and everything that reads through it.**
       `render_view_tile` and `read_track` read through `render_source_tile`
       and `source_clipped_share`; `keypoint_localize`'s and
