@@ -51,8 +51,9 @@ since that directory's layout differs between versions.
 
 The format crate holds the current version as `KDF_FORMAT_VERSION`
 ([`types.rs`](../../crates/sfmtool-kdf-format/src/types.rs)). Because no
-release has read an older version, it holds no oldest version read and no
-last release reading older versions, as the other four format crates do. A
+release has read an older version, it holds no constant for the oldest
+version read or for the last release reading older versions, which the other
+four format crates hold. A
 writer always writes the current version. When `.kdf` next changes version,
 its reader reads version 3 too and converts it at the I/O boundary. How the
 version changes, which older versions a reader keeps reading, and how one

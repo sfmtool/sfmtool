@@ -151,10 +151,12 @@ in time to upgrade the files that release wrote. A version no release wrote
 has no such users, so any release may stop reading it with no announcement.
 Removing a version deletes its read path and conversion, its tests, and its
 subsection of the format spec's Format versions section, and raises the
-oldest version read. A reader refuses a file below the oldest version it
-reads with a message that names the file, its version, the oldest version it
-reads, and the last sfmtool release that reads the file's version, so the
-user can install that release and run `sfm ws upgrade` with it.
+oldest version read. A reader refuses a file of a dropped version that some
+release read with a message that names the file, its version, the oldest
+version it reads, and the last sfmtool release that reads the file's version,
+so the user can install that release and run `sfm ws upgrade` with it. A
+version no release read, such as version 0 or `.kdf` versions 1 and 2, has no
+release to name, and is refused as a version newer than the current one is.
 
 ## How a format spec presents its versions
 
