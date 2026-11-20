@@ -8,8 +8,8 @@
 //! a path on the command line and the MCP `open_reconstruction` tool all start
 //! the same [`Operation::OPEN`] task. For each file it runs, on the worker:
 //!
-//! - **the read**, `SfmrReconstruction::load`, whose `read`, `convert
-//!   convention` and `derive` stages nest under the file's `open` phase;
+//! - **the read**, `SfmrReconstruction::load`, whose `read`, `derive` and
+//!   `keypoints` stages nest under the file's `open` phase;
 //! - **`thumbnails`**, for a file that carries none: every row built at once
 //!   ([`DisplayThumbnails::build`]), from the image's verified `.sift` first
 //!   and its photograph second, held by the node and never by the value;

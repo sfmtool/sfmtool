@@ -109,7 +109,7 @@ pub struct PointSet {
     /// image set.
     pub observations: ObservationSource,
     /// Optional per-point oriented-patch frame (parallel to `points`), persisted
-    /// in `points3d/` (version 3+). `patch_u_halfvec_xyz` and
+    /// in `points3d/`. `patch_u_halfvec_xyz` and
     /// `patch_v_halfvec_xyz` are the in-plane half-extent vectors (both present
     /// or both `None`); a patch's center is its point's position and its normal
     /// is the point's `normal`. See [`crate::patch::PatchCloud`].
@@ -142,7 +142,7 @@ pub struct PointSet {
     /// and 2.
     pub has_normals: bool,
     /// Optional per-point confidence in each point's `normal` (parallel to
-    /// `points`), persisted as `points3d/normal_confidence` (version 5+): `0`
+    /// `points`), persisted as `points3d/normal_confidence`: `0`
     /// means the normal carries no data-derived support (a placeholder), `255`
     /// means fully data-derived, and intermediate values are a reserved graded
     /// scale. `None` means the reconstruction carries no confidence information
@@ -151,10 +151,9 @@ pub struct PointSet {
     pub normal_confidence: Option<Vec<u8>>,
     /// Optional per-point solve constraints (parallel to `points`), persisted as
     /// the `points3d/point_constraints`, `points3d/constraint_distances` and
-    /// `points3d/constraint_reference_images` triple
-    /// (version 7+). `None` is every point free, which is what a file below
-    /// version 7 carries and what the writer emits again when nothing is
-    /// constrained.
+    /// `points3d/constraint_reference_images` triple. `None` is every point
+    /// free, which is what a file without the triple carries and what the
+    /// writer emits again when nothing is constrained.
     ///
     /// Nothing in this crate reads it to decide anything: it states what a
     /// bundle adjustment is to own of each point, and the adjustment's caller
@@ -165,7 +164,7 @@ pub struct PointSet {
     pub point_constraints: Option<PointConstraintColumns>,
     /// Optional per-observation confidence in how well that observation agrees
     /// with its point's appearance (parallel to `tracks`), persisted as
-    /// `tracks/observation_confidence` (version 6+): its blur-matched ZNCC against the
+    /// `tracks/observation_confidence`: its blur-matched ZNCC against the
     /// point's stored patch bitmap, as `observation_confidence_byte` writes
     /// it. `0` means no data-derived support — nothing measured this
     /// observation — and `1..=255` is a measured score, `255` for the reference
@@ -198,10 +197,10 @@ pub struct PointSet {
     /// ([`render_patch_cloud_bitmaps`](crate::patch::stored_bitmap::render_patch_cloud_bitmaps)).
     /// [`NO_REFERENCE_OBSERVATION`] (`-1`) where the point has no reference
     /// observation in its track: a bitmap beside it is not the render of one
-    /// of its observations (a fused mean an older file stores, or the render of an observation an
+    /// of its observations (a fused mean, or the render of an observation an
     /// edit has since removed, which keeps the bitmap), and a later render
     /// runs the reference-view rule for the point. Persisted as
-    /// `tracks/reference_observations` (version 12+).
+    /// `tracks/reference_observations`.
     ///
     /// With a column rendered for display ([`Self::patch_bitmaps_for_display`]),
     /// a point the file stored at `-1` holds the observation the display render
@@ -211,8 +210,7 @@ pub struct PointSet {
     /// except for a point a bench commit has written, which holds the
     /// reference the bench held as its own.
     ///
-    /// `Some` exactly when the patch frame is: a file below version 12 with
-    /// patch frames loads with every row `-1`, and
+    /// `Some` exactly when the patch frame is:
     /// [`to_sfmr_data`](super::SfmrReconstruction::to_sfmr_data) writes `-1`
     /// rows for a value that has a frame and no column.
     ///

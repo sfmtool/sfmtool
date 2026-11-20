@@ -1,13 +1,13 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The per-image intrinsic adjustments of version 13: the two optional
+//! The per-image intrinsic adjustments: the two optional
 //! `images/` columns, the cameras' `per_image_adjustments` key, the rules a
 //! reader, a writer and a verifier hold them to.
 
 use super::{
     archive_names, images_digest, make_embedded_test_data, make_test_data, read_json_entry_of,
-    restamp_hashes, rewrite_entries,
+    rewrite_entries,
 };
 use crate::*;
 use ndarray::{Array1, Array2};
@@ -179,49 +179,6 @@ fn the_images_and_cameras_hashes_change_with_the_columns_and_the_key() {
     assert_ne!(focal_hash.images_xxh128, with_zero.images_xxh128);
 }
 
-#[test]
-fn a_version_12_file_reads_with_zero_adjustments_and_saves_as_the_current_version_without_them() {
-    let dir = temp_dir("sfmr_test_per_image_adjustments_v12");
-    let current = dir.join("current.sfmr");
-    let mut data = make_test_data();
-    data.image_readings = None;
-    crate::write::write_sfmr_without_readings_check(&current, &mut data).unwrap();
-    let old = dir.join("v12.sfmr");
-    rewrite_entries(&current, &old, |name, raw| {
-        (name == "metadata.json.zst").then(|| {
-            let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
-            json["version"] = serde_json::json!(12);
-            serde_json::to_vec(&json).unwrap()
-        })
-    });
-    restamp_hashes(&old, &dir);
-
-    let mut loaded = read_sfmr(&old).unwrap();
-    assert_eq!(loaded.metadata.version, 12);
-    assert!(loaded.focal_adjustments.is_none());
-    assert!(loaded.principal_point_adjustments_xy.is_none());
-    assert!(loaded.cameras[0].per_image_adjustments.is_empty());
-
-    let saved = dir.join("saved.sfmr");
-    loaded.image_readings = Some(super::test_image_readings(3));
-    write_sfmr(&saved, &mut loaded).unwrap();
-    assert_eq!(
-        read_sfmr_metadata(&saved).unwrap().version,
-        SFMR_FORMAT_VERSION
-    );
-    assert!(!archive_names(&saved)
-        .iter()
-        .any(|n| n.contains("adjustments")));
-    // Apart from the version, the cameras section is what the version 12 file
-    // stored; the images section gains the readings version 15 requires.
-    let old_hash = read_sfmr_content_hash(&old).unwrap();
-    let new_hash = read_sfmr_content_hash(&saved).unwrap();
-    assert_eq!(new_hash.cameras_xxh128, old_hash.cameras_xxh128);
-    assert_ne!(new_hash.images_xxh128, old_hash.images_xxh128);
-    assert!(verify_sfmr(&saved).unwrap().0);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 /// Write `data_with_adjustments`, rewrite it with `edit`,
 /// and return the reader's error and the verifier's errors.
 fn read_and_verify_edited(
@@ -391,20 +348,6 @@ fn a_malformed_camera_key_is_refused() {
         assert_named(&err, &errors, needle);
         let _ = std::fs::remove_dir_all(&dir);
     }
-}
-
-#[test]
-fn a_file_below_version_13_with_the_columns_or_the_key_is_refused() {
-    let dir = temp_dir("sfmr_test_per_image_adjustments_old_version");
-    let (err, errors) = read_and_verify_edited(&dir, |name, raw| {
-        (name == "metadata.json.zst").then(|| {
-            let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
-            json["version"] = serde_json::json!(12);
-            serde_json::to_vec(&json).unwrap()
-        })
-    });
-    assert_named(&err, &errors, "which version 13 introduced");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

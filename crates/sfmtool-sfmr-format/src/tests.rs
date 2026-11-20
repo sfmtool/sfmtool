@@ -76,7 +76,7 @@ fn make_test_data() -> SfmrData {
             feature_source: FEATURE_SOURCE_SIFT_FILES.to_string(),
         },
         content_hash: ContentHash {
-            derived_xxh128: None,
+            derived_xxh128: String::new(),
             metadata_xxh128: String::new(),
             cameras_xxh128: String::new(),
             rigs_xxh128: None,
@@ -801,126 +801,96 @@ fn test_content_hash_populated() {
     assert_eq!(loaded.content_hash.points3d_xxh128.len(), 32);
     assert_eq!(loaded.content_hash.tracks_xxh128.len(), 32);
     assert_eq!(loaded.content_hash.content_xxh128.len(), 32);
-    // Present from version 10, and hashed like any other section even though it
-    // stays out of `content_xxh128`.
-    assert_eq!(
-        loaded.content_hash.derived_xxh128.as_deref().map(str::len),
-        Some(32)
-    );
+    // Hashed like any other section even though it stays out of
+    // `content_xxh128`.
+    assert_eq!(loaded.content_hash.derived_xxh128.len(), 32);
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-#[test]
-fn test_unsupported_future_version_rejected() {
-    use std::io::{Read, Write};
+/// Copy the archive at `src` to `dst` with `metadata.json`'s version set to
+/// `version` and nothing else changed.
+fn relabel_version(src: &std::path::Path, dst: &std::path::Path, version: u64) {
+    rewrite_entries(src, dst, |name, raw| {
+        (name == "metadata.json.zst").then(|| {
+            let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
+            json["version"] = serde_json::json!(version);
+            serde_json::to_vec(&json).unwrap()
+        })
+    });
+}
 
-    let mut data = make_test_data();
-    let dir = std::env::temp_dir().join("sfmr_test_future_version");
-    std::fs::create_dir_all(&dir).unwrap();
-    let src = dir.join("current.sfmr");
-    write_sfmr(&src, &mut data).unwrap();
+/// Every reader of the crate, each giving the error it returns for `path`, or
+/// `None` where it read the file.
+fn every_reader_error(path: &std::path::Path) -> Vec<(&'static str, Option<SfmrError>)> {
+    vec![
+        ("read_sfmr", read_sfmr(path).err()),
+        ("read_sfmr_metadata", read_sfmr_metadata(path).err()),
+        ("read_sfmr_image_names", read_sfmr_image_names(path).err()),
+        ("read_sfmr_content_hash", read_sfmr_content_hash(path).err()),
+    ]
+}
 
-    // Copy the archive verbatim except for metadata.json.zst, whose version
-    // is bumped to a value this build does not understand.
-    let future_version = SFMR_FORMAT_VERSION + 1;
-    let dst = dir.join("future.sfmr");
-    let archive_file = std::fs::File::open(&src).unwrap();
-    let mut archive = zip::ZipArchive::new(archive_file).unwrap();
-    let names: Vec<String> = archive
-        .file_names()
-        .map(|s| s.unwrap().into_owned())
-        .collect();
-    let out = std::fs::File::create(&dst).unwrap();
-    let mut zip = zip::ZipWriter::new(out);
-    let stored =
-        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    for name in &names {
-        let mut compressed = Vec::new();
-        archive
-            .by_name(name)
-            .unwrap()
-            .read_to_end(&mut compressed)
-            .unwrap();
-        zip.start_file(name, stored).unwrap();
-        if name == "metadata.json.zst" {
-            let mut json: serde_json::Value =
-                serde_json::from_slice(&zstd::stream::decode_all(&compressed[..]).unwrap())
-                    .unwrap();
-            json.as_object_mut()
-                .unwrap()
-                .insert("version".into(), serde_json::json!(future_version));
-            let bytes = zstd::bulk::compress(&serde_json::to_vec(&json).unwrap(), 3).unwrap();
-            zip.write_all(&bytes).unwrap();
-        } else {
-            zip.write_all(&compressed).unwrap();
+/// Assert that every reader and `verify_sfmr` refuse `path` as a file of
+/// `version`, no longer read, with the one message that names the file, its
+/// version, the oldest version read and the last release that reads it.
+fn assert_refused_as_no_longer_read(path: &std::path::Path, version: u32) {
+    let expected = format!(
+        "{} is a version {version} .sfmr file, and this sfmtool reads .sfmr files of version \
+         16 or later. sfmtool 0.4.1 is the last release that reads version {version}: install \
+         it, run `sfm ws upgrade` on the workspace, then use the file with this release.",
+        path.display()
+    );
+    for (reader, error) in every_reader_error(path) {
+        match error {
+            Some(SfmrError::VersionNoLongerRead {
+                path: p,
+                version: v,
+            }) => {
+                assert_eq!((p.as_path(), v), (path, version), "{reader}");
+            }
+            other => panic!("{reader} gave {other:?}"),
         }
     }
-    zip.finish().unwrap();
+    assert_eq!(read_sfmr(path).err().unwrap().to_string(), expected);
+    assert_eq!(verify_sfmr(path).unwrap(), (false, vec![expected]));
+}
 
-    let expected = format!("unsupported .sfmr format version {future_version}");
-    let err = read_sfmr(&dst).err().unwrap();
-    assert!(format!("{err}").contains(&expected), "{err}");
-    let (valid, errors) = verify_sfmr(&dst).unwrap();
-    assert!(
-        !valid && errors.iter().any(|e| e.contains(&expected)),
-        "{errors:?}"
-    );
+/// A version 15 file, the version just below the oldest read, is refused by
+/// every reader for its version: the file is the version 15 layout of a value
+/// this build wrote (`float32` readings, the full normals column), whose
+/// other entries this build would read.
+#[test]
+fn a_version_15_file_is_refused_naming_the_last_release_that_reads_it() {
+    let dir = std::env::temp_dir().join("sfmr_test_version_15_refused");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let current = dir.join("current.sfmr");
+    let old = dir.join("v15.sfmr");
+    write_sfmr(&current, &mut data_with_every_optional_column()).unwrap();
+    rewrite_as_version_15(&current, &old, &dir);
+    assert_refused_as_no_longer_read(&old, 15);
+
+    // The version alone decides it: the current layout labelled 15 is refused
+    // the same way.
+    let relabelled = dir.join("relabelled.sfmr");
+    relabel_version(&current, &relabelled, 15);
+    assert_refused_as_no_longer_read(&relabelled, 15);
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// The `images/` section digest a pre-version-10 file would carry, taken from
-/// a current archive.
-///
-/// Spelled out here from the rule the format states -- XXH128 over the
-/// uncompressed bytes of the section's entries in lexicographic path order --
-/// rather than borrowed from the writer, so a legacy fixture is hashed by the
-/// specification and not by the code it is there to hold still. Before version
-/// 10 the two derived entries lived under `images/`, so they take part under
-/// the names they had then.
-fn pre_v10_images_digest(current: &std::path::Path) -> u128 {
-    use std::io::Read;
+/// Rewrite a current `.sfmr` file into the version 1 on-disk layout: Euclidean
+/// `positions_xyz` `(P, 3)`, the track point-index array named
+/// `points3d_indexes`, the normals named `estimated_normals_xyz`, the
+/// `points3d_count` metadata key, no `infinity_point_count` or
+/// `feature_source` key, the derived statistics under `images/`, the
+/// timestamp in `metadata.json` with no `written.json`, and no derived hash.
+fn rewrite_current_as_v1(current: &std::path::Path, v1_path: &std::path::Path) {
+    use std::io::{Read, Write};
 
     let file = std::fs::File::open(current).unwrap();
     let mut archive = zip::ZipArchive::new(file).unwrap();
-    let mut named: Vec<(String, String)> = archive
-        .file_names()
-        .map(Result::unwrap)
-        .filter_map(|name| {
-            let then = match name.strip_prefix("derived/") {
-                Some(rest) => format!("images/{rest}"),
-                None if name.starts_with("images/") => name.to_string(),
-                None => return None,
-            };
-            Some((then, name.to_string()))
-        })
-        .collect();
-    named.sort();
-
-    let mut hasher = xxhash_rust::xxh3::Xxh3::new();
-    for (_, now) in &named {
-        let mut compressed = Vec::new();
-        archive
-            .by_name(now)
-            .unwrap()
-            .read_to_end(&mut compressed)
-            .unwrap();
-        hasher.update(&zstd::stream::decode_all(&compressed[..]).unwrap());
-    }
-    hasher.digest128()
-}
-
-/// Rewrite a version-2 `.sfmr` file into the version-1 on-disk layout, so
-/// the version-1 compatibility path in `read_sfmr` can be exercised.
-/// Version 1 stored Euclidean `positions_xyz` `(P, 3)`, named the track
-/// point-index array `points3d_indexes`, and used the `points3d_count`
-/// metadata key.
-fn rewrite_v2_as_v1(v2_path: &std::path::Path, v1_path: &std::path::Path) {
-    use std::io::{Read, Write};
-
-    let v2 = std::fs::File::open(v2_path).unwrap();
-    let mut archive = zip::ZipArchive::new(v2).unwrap();
     let names: Vec<String> = archive
         .file_names()
         .map(|s| s.unwrap().into_owned())
@@ -930,19 +900,17 @@ fn rewrite_v2_as_v1(v2_path: &std::path::Path, v1_path: &std::path::Path) {
     let mut zip = zip::ZipWriter::new(out);
     let stored =
         zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-
-    let rename_json_key = |compressed: &[u8], set_version: bool| -> Vec<u8> {
+    let edit_json = |compressed: &[u8], edit: &dyn Fn(&mut serde_json::Map<_, _>)| -> Vec<u8> {
         let mut json: serde_json::Value =
             serde_json::from_slice(&zstd::stream::decode_all(compressed).unwrap()).unwrap();
-        let obj = json.as_object_mut().unwrap();
+        edit(json.as_object_mut().unwrap());
+        zstd::bulk::compress(&serde_json::to_vec(&json).unwrap(), 3).unwrap()
+    };
+    let to_v1_keys = |obj: &mut serde_json::Map<String, serde_json::Value>| {
         if let Some(pc) = obj.remove("point_count") {
             obj.insert("points3d_count".into(), pc);
         }
         obj.remove("infinity_point_count");
-        if set_version {
-            obj.insert("version".into(), serde_json::json!(1));
-        }
-        zstd::bulk::compress(&serde_json::to_vec(&json).unwrap(), 3).unwrap()
     };
 
     for name in &names {
@@ -952,16 +920,29 @@ fn rewrite_v2_as_v1(v2_path: &std::path::Path, v1_path: &std::path::Path) {
             .unwrap()
             .read_to_end(&mut compressed)
             .unwrap();
-
-        if name == "metadata.json.zst" {
-            zip.start_file(name, stored).unwrap();
-            zip.write_all(&rename_json_key(&compressed, true)).unwrap();
+        let (v1_name, bytes) = if name == "written.json.zst" {
+            continue;
+        } else if name == "metadata.json.zst" {
+            let bytes = edit_json(&compressed, &|obj| {
+                to_v1_keys(obj);
+                obj.remove("feature_source");
+                obj.insert("version".into(), serde_json::json!(1));
+                obj.insert(
+                    "timestamp".into(),
+                    serde_json::json!("2025-12-21T14:32:15.123456+00:00"),
+                );
+            });
+            (name.clone(), bytes)
+        } else if name == "content_hash.json.zst" {
+            let bytes = edit_json(&compressed, &|obj| {
+                obj.remove("derived_xxh128");
+            });
+            (name.clone(), bytes)
         } else if name == "points3d/metadata.json.zst" {
-            zip.start_file(name, stored).unwrap();
-            zip.write_all(&rename_json_key(&compressed, false)).unwrap();
+            (name.clone(), edit_json(&compressed, &|obj| to_v1_keys(obj)))
         } else if name.starts_with("points3d/positions_xyzw.") {
-            // Drop the homogeneous `w` column: keep the first 3 of every
-            // 4 little-endian f64 values (24 of every 32 bytes).
+            // Drop the homogeneous `w` column: keep the first 3 of every 4
+            // little-endian f64 values (24 of every 32 bytes).
             let xyzw = zstd::stream::decode_all(&compressed[..]).unwrap();
             let mut xyz = Vec::with_capacity(xyzw.len() / 4 * 3);
             for row in xyzw.as_chunks::<32>().0 {
@@ -970,75 +951,72 @@ fn rewrite_v2_as_v1(v2_path: &std::path::Path, v1_path: &std::path::Path) {
             let v1_name = name
                 .replace("positions_xyzw", "positions_xyz")
                 .replace(".4.float64", ".3.float64");
-            zip.start_file(&v1_name, stored).unwrap();
-            zip.write_all(&zstd::bulk::compress(&xyz, 3).unwrap())
-                .unwrap();
+            (v1_name, zstd::bulk::compress(&xyz, 3).unwrap())
         } else if name.starts_with("tracks/point_indexes.") {
-            // Identical bytes under the version-1 name.
-            let v1_name = name.replace("point_indexes", "points3d_indexes");
-            zip.start_file(&v1_name, stored).unwrap();
-            zip.write_all(&compressed).unwrap();
+            (
+                name.replace("point_indexes", "points3d_indexes"),
+                compressed,
+            )
         } else if let Some(rest) = name.strip_prefix("derived/") {
-            // Version 10 moved these two out of `images/`; a version-1 file
-            // has them where version 1 had them. The bytes are untouched,
-            // which is the whole of the relocation: no hash is over a name.
-            zip.start_file(format!("images/{rest}"), stored).unwrap();
-            zip.write_all(&compressed).unwrap();
+            (format!("images/{rest}"), compressed)
         } else if name.starts_with("points3d/normals_xyz.") {
-            // Identical bytes under the version-1/2 normals name.
-            let v1_name = name.replace("normals_xyz", "estimated_normals_xyz");
-            zip.start_file(&v1_name, stored).unwrap();
-            zip.write_all(&compressed).unwrap();
+            (
+                name.replace("normals_xyz", "estimated_normals_xyz"),
+                compressed,
+            )
         } else {
-            zip.start_file(name, stored).unwrap();
-            zip.write_all(&compressed).unwrap();
-        }
+            (name.clone(), compressed)
+        };
+        zip.start_file(&v1_name, stored).unwrap();
+        zip.write_all(&bytes).unwrap();
     }
     zip.finish().unwrap();
 }
 
+/// A version 1 file lacks keys and entries the readers would otherwise
+/// require, and is still refused for its version: the version is checked
+/// before anything that depends on it is parsed.
 #[test]
-fn test_read_version_1_layout() {
-    let mut data = make_test_data();
-    let dir = std::env::temp_dir().join("sfmr_test_v1_compat");
+fn a_version_1_file_is_refused_for_its_version_before_what_it_lacks() {
+    let dir = std::env::temp_dir().join("sfmr_test_version_1_refused");
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let v2_path = dir.join("v2.sfmr");
-    let v1_path = dir.join("v1.sfmr");
+    let current = dir.join("current.sfmr");
+    let v1 = dir.join("v1.sfmr");
+    write_sfmr(&current, &mut make_test_data()).unwrap();
+    rewrite_current_as_v1(&current, &v1);
+    assert_refused_as_no_longer_read(&v1, 1);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
 
-    // A version 1 file has no image readings.
-    data.image_readings = None;
-    crate::write::write_sfmr_without_readings_check(&v2_path, &mut data).unwrap();
-    rewrite_v2_as_v1(&v2_path, &v1_path);
+/// A version newer than this build's, and version 0, which no writer has
+/// produced, are refused as unsupported, by every reader and by
+/// `verify_sfmr`, without naming a release.
+#[test]
+fn a_version_above_the_current_one_or_zero_is_refused_as_unsupported() {
+    let dir = std::env::temp_dir().join("sfmr_test_future_version");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("current.sfmr");
+    write_sfmr(&src, &mut make_test_data()).unwrap();
 
-    // Metadata-only read must accept the version-1 `points3d_count` key.
-    let meta = read_sfmr_metadata(&v1_path).unwrap();
-    assert_eq!(meta.version, 1);
-    assert_eq!(meta.point_count, 5);
-
-    // Full read upgrades the arrays to the current structural layout while
-    // preserving the stored version number (the convention upgrade is gated
-    // on it by the consumer — see SFMR_FORMAT_VERSION).
-    let loaded = read_sfmr(&v1_path).unwrap();
-    assert_eq!(loaded.metadata.version, 1);
-    // A legacy file upgrades to the sift_files source with its .sift-link
-    // columns present and the embedded columns absent.
-    assert_eq!(loaded.metadata.feature_source, FEATURE_SOURCE_SIFT_FILES);
-    assert!(loaded.feature_indexes.is_some());
-    assert!(loaded.feature_tool_hashes.is_some());
-    assert!(loaded.keypoints_xy.is_none());
-    assert!(loaded.image_file_hashes.is_none());
-    assert_eq!(loaded.metadata.point_count, 5);
-    assert_eq!(loaded.metadata.infinity_point_count, 0);
-    assert_eq!(loaded.positions_xyzw.shape(), &[5, 4]);
-    // Every version-1 point is finite: the appended `w` column is 1.
-    for i in 0..5 {
-        assert_eq!(loaded.positions_xyzw[[i, 3]], 1.0);
+    for version in [SFMR_FORMAT_VERSION + 1, 0] {
+        let dst = dir.join(format!("v{version}.sfmr"));
+        relabel_version(&src, &dst, version.into());
+        let expected = format!(
+            "unsupported .sfmr format version {version} (this build reads versions 16 to 16)"
+        );
+        for (reader, error) in every_reader_error(&dst) {
+            match error {
+                Some(SfmrError::InvalidFormat(m)) => assert_eq!(m, expected, "{reader}"),
+                other => panic!("{reader} gave {other:?}"),
+            }
+        }
+        assert_eq!(
+            verify_sfmr(&dst).unwrap(),
+            (false, vec![format!("Invalid format: {expected}")])
+        );
     }
-    // Euclidean coordinates survive the round trip.
-    assert_eq!(loaded.positions_xyzw[[0, 0]], 0.0);
-    assert_eq!(loaded.positions_xyzw[[0, 2]], -5.0);
-    // The renamed track point-index array is read correctly.
-    assert_eq!(loaded.point_indexes, data.point_indexes);
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -1113,7 +1091,7 @@ fn test_empty_reconstruction() {
             feature_source: FEATURE_SOURCE_SIFT_FILES.to_string(),
         },
         content_hash: ContentHash {
-            derived_xxh128: None,
+            derived_xxh128: String::new(),
             metadata_xxh128: String::new(),
             cameras_xxh128: String::new(),
             rigs_xxh128: None,
@@ -1538,18 +1516,13 @@ fn float32_payload(values: &[f32]) -> Vec<u8> {
     values.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
 
-/// `current`, a file this build wrote, rewritten as the version 15 file of
+/// `current`, a file this build wrote, rewritten in the version 15 layout of
 /// the same values: every `.float16.` reading entry widened to `.float32.`
-/// (a score's `_zncc_deficit` entry `w` as its `_zncc` entry `1 − w`),
-/// the version 15, and the hashes restamped so it verifies. `edit` may then
-/// change any widened `float32` payload, as a version 15 writer with values
-/// that are not `float16` would have stored.
-fn rewrite_as_version_15(
-    current: &std::path::Path,
-    path: &std::path::Path,
-    dir: &std::path::Path,
-    edit: impl Fn(&str, &mut Vec<f32>),
-) {
+/// (a score's `_zncc_deficit` entry `w` as its `_zncc` entry `1 − w`), the
+/// full normals column in place of the underived normals, and the version 15.
+/// The hashes are not restamped, since no reader of this build gets past the
+/// version.
+fn rewrite_as_version_15(current: &std::path::Path, path: &std::path::Path, dir: &std::path::Path) {
     rewrite_renaming(current, path, |name, raw| {
         if name == "metadata.json.zst" {
             let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
@@ -1568,16 +1541,14 @@ fn rewrite_as_version_15(
         if deficit {
             values.iter_mut().for_each(|w| *w = 1.0 - *w);
         }
-        edit(&renamed, &mut values);
         Some((renamed, float32_payload(&values)))
     });
     let normals = read_sfmr(current).unwrap().normals_xyz;
     with_full_normals(path, dir, normals.as_ref());
-    restamp_hashes(path, dir);
 }
 
 /// Rewrite `path`, a file this build wrote and then edited, with its normals
-/// as a file below version 16 stores them: the full `points3d/normals_xyz`
+/// as a version 15 file stores them: the full `points3d/normals_xyz`
 /// column `normals`, the normals the value written held after the write, in
 /// place of any `points3d/underived_normals_xyz` entry. Nothing changes for a
 /// file without the patch frame or without normals. Hashes are not
@@ -2653,118 +2624,11 @@ fn test_reference_observations_out_of_range_refused_on_read_and_verify() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// A version 11 file with patch frames, written by this build and then
-/// stripped of the entry version 12 added and stamped as version 11.
-fn write_version_11_with_patch_frames(path: &std::path::Path, dir: &std::path::Path) {
-    use std::io::{Read, Write};
-
-    let current = dir.join("current.sfmr");
-    let mut data = make_framed_test_data(vec![1, 2, 0, -1, 0]);
-    data.image_readings = None;
-    crate::write::write_sfmr_without_readings_check(&current, &mut data).unwrap();
-    let file = std::fs::File::open(&current).unwrap();
-    let mut archive = zip::ZipArchive::new(file).unwrap();
-    let names: Vec<String> = archive
-        .file_names()
-        .map(|s| s.unwrap().into_owned())
-        .collect();
-    let out = std::fs::File::create(path).unwrap();
-    let mut zip = zip::ZipWriter::new(out);
-    let stored =
-        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    for name in &names {
-        if name.starts_with("tracks/reference_observations") {
-            continue;
-        }
-        let mut compressed = Vec::new();
-        archive
-            .by_name(name)
-            .unwrap()
-            .read_to_end(&mut compressed)
-            .unwrap();
-        if name == "metadata.json.zst" {
-            let raw = zstd::stream::decode_all(&compressed[..]).unwrap();
-            let mut json: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-            json["version"] = serde_json::json!(11);
-            compressed = zstd::bulk::compress(&serde_json::to_vec(&json).unwrap(), 3).unwrap();
-        }
-        zip.start_file(name, stored).unwrap();
-        zip.write_all(&compressed).unwrap();
-    }
-    zip.finish().unwrap();
-    with_full_normals(path, dir, data.normals_xyz.as_ref());
-    restamp_hashes(path, dir);
-}
-
-/// Store the hashes `verify_sfmr` computes for `path` in its
-/// `content_hash.json.zst`, so a file built by editing entries verifies.
-/// The section hashes are restamped first and the overall hash, which reads
-/// them, on the next pass.
-fn restamp_hashes(path: &std::path::Path, dir: &std::path::Path) {
-    for _ in 0..3 {
-        let (valid, errors) = verify_sfmr(path).unwrap();
-        if valid {
-            return;
-        }
-        let pairs: Vec<(String, String)> = errors
-            .iter()
-            .filter_map(|e| {
-                let (_, rest) = e.split_once("mismatch: computed ")?;
-                let (computed, stored) = rest.split_once(", stored ")?;
-                Some((stored.to_string(), computed.to_string()))
-            })
-            .collect();
-        assert_eq!(pairs.len(), errors.len(), "not only hashes: {errors:?}");
-        let staged = dir.join("restamp.sfmr");
-        rewrite_entries(path, &staged, |name, raw| {
-            (name == "content_hash.json.zst").then(|| {
-                let mut text = String::from_utf8(raw.to_vec()).unwrap();
-                for (stored, computed) in &pairs {
-                    text = text.replace(stored.as_str(), computed);
-                }
-                text.into_bytes()
-            })
-        });
-        std::fs::rename(&staged, path).unwrap();
-    }
-    let (valid, errors) = verify_sfmr(path).unwrap();
-    assert!(valid, "{errors:?}");
-}
-
 #[test]
-fn test_version_11_with_patch_frames_reads_every_reference_as_minus_one() {
-    let dir = std::env::temp_dir().join("sfmr_test_reference_observations_v11");
+fn a_file_without_the_patch_frame_reads_no_reference_observations() {
+    let dir = std::env::temp_dir().join("sfmr_test_reference_observations_absent");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let old = dir.join("v11.sfmr");
-    write_version_11_with_patch_frames(&old, &dir);
-
-    // The version 11 file verifies: the gate reads no reference column
-    // below version 12.
-    let (valid, errors) = verify_sfmr(&old).unwrap();
-    assert!(valid, "{errors:?}");
-    let mut loaded = read_sfmr(&old).unwrap();
-    assert_eq!(loaded.metadata.version, 11);
-    assert_eq!(
-        loaded.reference_observations.as_ref().unwrap().to_vec(),
-        vec![NO_REFERENCE_OBSERVATION; 5]
-    );
-
-    // Saving it writes the current version with the column, and it reads
-    // back. The save needs the image readings version 15 requires.
-    let saved = dir.join("v12.sfmr");
-    loaded.image_readings = Some(test_image_readings(loaded.image_names.len()));
-    write_sfmr(&saved, &mut loaded).unwrap();
-    let reloaded = read_sfmr(&saved).unwrap();
-    assert_eq!(reloaded.metadata.version, SFMR_FORMAT_VERSION);
-    assert_eq!(
-        reloaded.reference_observations.unwrap().to_vec(),
-        vec![NO_REFERENCE_OBSERVATION; 5]
-    );
-    let (valid, errors) = verify_sfmr(&saved).unwrap();
-    assert!(valid, "{errors:?}");
-
-    // A file without patch frames gets no column.
     let plain = dir.join("plain.sfmr");
     write_sfmr(&plain, &mut make_test_data()).unwrap();
     assert!(read_sfmr(&plain).unwrap().reference_observations.is_none());
@@ -3463,8 +3327,8 @@ fn json_maps_serialize_in_sorted_key_order() {
 /// one and this test would not notice.
 ///
 /// Renaming an on-disk entry is a format change. It should require deliberately
-/// editing this list, and bumping `SFMR_FORMAT_VERSION` with a compatibility
-/// path in `read`/`verify` the way `positions_xyz` and `points3d_indexes` did.
+/// editing this list, and changing the version as
+/// `specs/formats/format-versions.md` says.
 #[test]
 fn entry_names_are_pinned() {
     use crate::entries as e;
@@ -3480,14 +3344,7 @@ fn entry_names_are_pinned() {
     assert_eq!(e::frames_metadata(), "frames/metadata.json.zst");
     assert_eq!(e::images_metadata(), "images/metadata.json.zst");
     assert_eq!(e::images_names(), "images/names.json.zst");
-    assert_eq!(
-        e::depth_statistics(false),
-        "derived/depth_statistics.json.zst"
-    );
-    assert_eq!(
-        e::depth_statistics(true),
-        "images/depth_statistics.json.zst"
-    );
+    assert_eq!(e::depth_statistics(), "derived/depth_statistics.json.zst");
     assert_eq!(e::points3d_metadata(), "points3d/metadata.json.zst");
     assert_eq!(e::tracks_metadata(), "tracks/metadata.json.zst");
     assert_eq!(
@@ -3568,12 +3425,8 @@ fn entry_names_are_pinned() {
         "images/thumbnails_y_x_rgb.11.128.128.3.uint8.zst"
     );
     assert_eq!(
-        e::observed_depth_histogram_counts(false, 11, 29),
+        e::observed_depth_histogram_counts(11, 29),
         "derived/observed_depth_histogram_counts.11.29.uint32.zst"
-    );
-    assert_eq!(
-        e::observed_depth_histogram_counts(true, 11, 29),
-        "images/observed_depth_histogram_counts.11.29.uint32.zst"
     );
 
     // Points3D.  point_count = 13, patch edge r = 31.
@@ -3620,59 +3473,25 @@ fn entry_names_are_pinned() {
         e::tracks_observation_confidence(17),
         "tracks/observation_confidence.17.uint8.zst"
     );
-    // The reading columns: the sharpness and five observation-reading columns
-    // change dtype at version 16, the tensor, the scores and the flags do not.
-    assert_eq!(
-        e::images_sharpness(true, 11),
-        "images/sharpness.11.float16.zst"
-    );
-    assert_eq!(
-        e::images_sharpness(false, 11),
-        "images/sharpness.11.float32.zst"
-    );
+    // The reading columns: the sharpness and seven observation-reading
+    // columns are float16, the tensor float32 and the flags uint8.
+    assert_eq!(e::images_sharpness(11), "images/sharpness.11.float16.zst");
     assert_eq!(
         e::images_gradient_structure_tensors_xx_yy_xy(11),
         "images/gradient_structure_tensors_xx_yy_xy.11.3.float32.zst"
     );
-    let readings: Vec<(String, String)> = e::ReadingColumn::ALL
-        .iter()
-        .map(|c| (c.entry(true, 17), c.entry(false, 17)))
-        .collect();
+    let readings: Vec<String> = e::ReadingColumn::ALL.iter().map(|c| c.entry(17)).collect();
     let expected = [
-        (
-            "tracks/blur_matched_bitmap_zncc_deficit.17.float16.zst",
-            "tracks/blur_matched_bitmap_zncc.17.float32.zst",
-        ),
-        (
-            "tracks/plain_bitmap_zncc_deficit.17.float16.zst",
-            "tracks/plain_bitmap_zncc.17.float32.zst",
-        ),
-        (
-            "tracks/zncc_self_similarity_cos_view_angle.17.float16.zst",
-            "tracks/zncc_self_similarity_cos_view_angle.17.float32.zst",
-        ),
-        (
-            "tracks/zncc_self_similarity_ellipse_axes.17.2.float16.zst",
-            "tracks/zncc_self_similarity_ellipse_axes.17.2.float32.zst",
-        ),
-        (
-            "tracks/zncc_self_similarity_ellipse_axes_is_at_least.17.2.uint8.zst",
-            "tracks/zncc_self_similarity_ellipse_axes_is_at_least.17.2.uint8.zst",
-        ),
-        (
-            "tracks/zncc_self_similarity_ellipse_major_angle.17.float16.zst",
-            "tracks/zncc_self_similarity_ellipse_major_angle.17.float32.zst",
-        ),
-        (
-            "tracks/zncc_self_similarity_tilt_angle.17.float16.zst",
-            "tracks/zncc_self_similarity_tilt_angle.17.float32.zst",
-        ),
-        (
-            "tracks/zncc_self_similarity_zoom.17.2.float16.zst",
-            "tracks/zncc_self_similarity_zoom.17.2.float32.zst",
-        ),
+        "tracks/blur_matched_bitmap_zncc_deficit.17.float16.zst",
+        "tracks/plain_bitmap_zncc_deficit.17.float16.zst",
+        "tracks/zncc_self_similarity_cos_view_angle.17.float16.zst",
+        "tracks/zncc_self_similarity_ellipse_axes.17.2.float16.zst",
+        "tracks/zncc_self_similarity_ellipse_axes_is_at_least.17.2.uint8.zst",
+        "tracks/zncc_self_similarity_ellipse_major_angle.17.float16.zst",
+        "tracks/zncc_self_similarity_tilt_angle.17.float16.zst",
+        "tracks/zncc_self_similarity_zoom.17.2.float16.zst",
     ]
-    .map(|(a, b)| (a.to_string(), b.to_string()));
+    .map(str::to_string);
     assert_eq!(readings, expected);
     assert_eq!(
         e::tracks_observation_counts(13),
@@ -3691,30 +3510,16 @@ fn entry_names_are_pinned() {
         "points3d/constraint_reference_images.13.uint32.zst"
     );
 
-    // Version-dependent names: both spellings, since `read` and `verify` still
-    // have to open legacy archives.
     assert_eq!(
-        e::points3d_positions(true, 13),
-        "points3d/positions_xyz.13.3.float64.zst"
-    );
-    assert_eq!(
-        e::points3d_positions(false, 13),
+        e::points3d_positions(13),
         "points3d/positions_xyzw.13.4.float64.zst"
     );
     assert_eq!(
-        e::points3d_normals(true, 13),
-        "points3d/estimated_normals_xyz.13.3.float32.zst"
-    );
-    assert_eq!(
-        e::points3d_normals(false, 13),
+        e::points3d_normals(13),
         "points3d/normals_xyz.13.3.float32.zst"
     );
     assert_eq!(
-        e::tracks_point_indexes(true, 17),
-        "tracks/points3d_indexes.17.uint32.zst"
-    );
-    assert_eq!(
-        e::tracks_point_indexes(false, 17),
+        e::tracks_point_indexes(17),
         "tracks/point_indexes.17.uint32.zst"
     );
 }
@@ -3822,7 +3627,7 @@ fn data_with_every_optional_column() -> SfmrData {
 }
 
 /// Two values that differ only in their stored depth statistics are the same
-/// reconstruction, and from version 10 they hash the same.
+/// reconstruction, and they hash the same.
 ///
 /// This is the whole point of the derived section. The statistics are computed
 /// from poses, positions and tracks, every one of which is hashed, so they add
@@ -3935,7 +3740,7 @@ fn verification_reports_multiple_section_mismatches_in_order() {
     let wrong = "0".repeat(32);
     hashes.metadata_xxh128 = wrong.clone();
     hashes.cameras_xxh128 = wrong.clone();
-    hashes.derived_xxh128 = Some(wrong.clone());
+    hashes.derived_xxh128 = wrong.clone();
     hashes.images_xxh128 = wrong.clone();
     hashes.points3d_xxh128 = wrong.clone();
     hashes.tracks_xxh128 = wrong.clone();
@@ -3982,31 +3787,71 @@ fn verification_reports_multiple_section_mismatches_in_order() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A file of version 10 or later says what its derived section hashes to, and a reader of
-/// an older one finds the statistics where that version kept them.
+/// A file's `metadata.json` holds `feature_source` and
+/// `infinity_point_count`, which a value built in memory may leave out: a file
+/// without either is refused by every reader and by the verifier.
 #[test]
-fn a_version_10_or_later_file_carries_a_derived_hash() {
+fn a_file_without_a_required_metadata_key_is_refused() {
+    let dir = std::env::temp_dir().join("sfmr_test_required_metadata_keys");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let current = dir.join("current.sfmr");
+    write_sfmr(&current, &mut make_test_data()).unwrap();
+    for key in ["feature_source", "infinity_point_count"] {
+        let without = dir.join(format!("without_{key}.sfmr"));
+        rewrite_entries(&current, &without, |name, raw| {
+            (name == "metadata.json.zst").then(|| {
+                let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
+                json.as_object_mut().unwrap().remove(key);
+                serde_json::to_vec(&json).unwrap()
+            })
+        });
+        let expected = format!("metadata.json.zst has no {key}");
+        for (reader, error) in every_reader_error(&without) {
+            match error {
+                Some(SfmrError::InvalidFormat(m)) => assert_eq!(m, expected, "{reader}"),
+                other => panic!("{reader} gave {other:?}"),
+            }
+        }
+        assert_eq!(
+            verify_sfmr(&without).unwrap(),
+            (false, vec![format!("Invalid format: {expected}")])
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A file says what its derived section hashes to.
+#[test]
+fn a_file_carries_its_derived_hash() {
     let dir = std::env::temp_dir().join("sfmr_test_derived_present");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("v10.sfmr");
+    let path = dir.join("derived.sfmr");
 
     let mut data = data_with_every_optional_column();
     write_sfmr(&path, &mut data).unwrap();
-    assert_eq!(
-        read_sfmr_metadata(&path).unwrap().version,
-        SFMR_FORMAT_VERSION
-    );
 
     let stored = read_sfmr_content_hash(&path).unwrap();
-    assert!(
-        stored.derived_xxh128.is_some(),
-        "a version 10 or later file stores its derived section hash",
-    );
+    assert_eq!(stored.derived_xxh128.len(), 32);
     // And it is the hash the hash-only path reports for the same value.
     let computed = content_hash_of(&mut data, &WriteOptions::default()).unwrap();
     assert_eq!(stored.derived_xxh128, computed.derived_xxh128);
     assert_eq!(stored.content_xxh128, computed.content_xxh128);
+
+    // A file without the hash is refused.
+    let without = dir.join("without.sfmr");
+    rewrite_entries(&path, &without, |name, raw| {
+        (name == "content_hash.json.zst").then(|| {
+            let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
+            json.as_object_mut().unwrap().remove("derived_xxh128");
+            serde_json::to_vec(&json).unwrap()
+        })
+    });
+    let err = read_sfmr(&without).err().unwrap().to_string();
+    assert!(err.contains("derived_xxh128"), "{err}");
+    let err = verify_sfmr(&without).err().unwrap().to_string();
+    assert!(err.contains("derived_xxh128"), "{err}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -4067,116 +3912,12 @@ fn two_saves_a_moment_apart_differ_only_in_the_timestamp() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[test]
-fn a_file_written_before_the_split_keeps_its_timestamp_and_its_hashes() {
-    // Author a version-7 file: the timestamp back in metadata.json, no
-    // written.json, and the version field rolled back. Everything else is the
-    // archive a current write produces, so the stored hashes are the ones this
-    // reader must accept unchanged.
-    use sfmtool_archive_io::{write_json_entry, zstd_compress};
-
-    let dir = std::env::temp_dir().join("sfmr_test_pre_split");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let current = dir.join("current.sfmr");
-    let legacy = dir.join("legacy.sfmr");
-
-    let mut data = data_with_every_optional_column();
-    // Without the patch frame, so without the reference observations a
-    // version-7 file cannot carry and whose bytes the stored tracks digest
-    // would otherwise include.
-    data.patch_u_halfvec_xyz = None;
-    data.patch_v_halfvec_xyz = None;
-    data.patch_bitmaps_y_x_rgba = None;
-    // And without the per-image adjustments, which a version-7 file cannot
-    // carry either.
-    data.cameras[0].per_image_adjustments.clear();
-    data.focal_adjustments = None;
-    data.principal_point_adjustments_xy = None;
-    data.reference_observations = None;
-    // And without the image readings, which version 15 added.
-    data.image_readings = None;
-    crate::write::write_sfmr_without_readings_check(&current, &mut data).unwrap();
-
-    let stamp = "2025-12-21T14:32:15.123456+00:00";
-    let mut legacy_metadata = data.metadata.clone();
-    legacy_metadata.version = SFMR_WRITE_RECORD_VERSION - 1;
-    legacy_metadata.timestamp = stamp.into();
-    let metadata_bytes = serde_json::to_vec(&legacy_metadata).unwrap();
-    let legacy_metadata_hash = xxhash_rust::xxh3::xxh3_128(&metadata_bytes);
-
-    // Copy every entry across but the two the rewrite touches, then re-derive
-    // the content hash the way the writer does, over the section digests.
-    let source = std::fs::File::open(&current).unwrap();
-    let mut archive = zip::ZipArchive::new(source).unwrap();
-    let stored = read_sfmr_content_hash(&current).unwrap();
-    let out = std::fs::File::create(&legacy).unwrap();
-    let mut zip = zip::ZipWriter::new(out);
-    let options =
-        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).unwrap();
-        let name = entry.name().unwrap().into_owned();
-        if name == "metadata.json.zst"
-            || name == "written.json.zst"
-            || name == "content_hash.json.zst"
-        {
-            continue;
-        }
-        let mut bytes = Vec::new();
-        std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
-        // Version 7 predates the version-10 split, so the derived entries sit
-        // under `images/` and take part in that section's digest.
-        let then = match name.strip_prefix("derived/") {
-            Some(rest) => format!("images/{rest}"),
-            None => name.clone(),
-        };
-        zip.start_file(&then, options).unwrap();
-        std::io::Write::write_all(&mut zip, &bytes).unwrap();
-    }
-    zip.start_file("metadata.json.zst", options).unwrap();
-    std::io::Write::write_all(&mut zip, &zstd_compress(&metadata_bytes, 3).unwrap()).unwrap();
-
-    let legacy_images_hash = pre_v10_images_digest(&current);
-    let digests: Vec<u128> = [
-        legacy_metadata_hash,
-        u128::from_str_radix(&stored.cameras_xxh128, 16).unwrap(),
-        legacy_images_hash,
-        u128::from_str_radix(&stored.points3d_xxh128, 16).unwrap(),
-        u128::from_str_radix(&stored.tracks_xxh128, 16).unwrap(),
-    ]
-    .into();
-    let all: Vec<u8> = digests.iter().flat_map(|d| d.to_be_bytes()).collect();
-    let legacy_hash = ContentHash {
-        metadata_xxh128: format!("{legacy_metadata_hash:032x}"),
-        images_xxh128: format!("{legacy_images_hash:032x}"),
-        // A version-7 file has no derived section: the statistics are part of
-        // the images digest above.
-        derived_xxh128: None,
-        content_xxh128: format!("{:032x}", xxhash_rust::xxh3::xxh3_128(&all)),
-        ..stored
-    };
-    write_json_entry(&mut zip, "content_hash.json.zst", &legacy_hash, 3).unwrap();
-    zip.finish().unwrap();
-
-    // The reader takes the timestamp from metadata.json, leaves the version
-    // alone, and the stored hashes still verify: nothing was recomputed.
-    let read_back = read_sfmr_metadata(&legacy).unwrap();
-    assert_eq!(read_back.timestamp, stamp);
-    assert_eq!(read_back.version, SFMR_WRITE_RECORD_VERSION - 1);
-    assert_eq!(read_sfmr(&legacy).unwrap().metadata.timestamp, stamp);
-    let (ok, errors) = verify_sfmr(&legacy).unwrap();
-    assert!(ok, "a pre-split file verifies unchanged: {errors:?}");
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 // ── The retired `lineage` key ───────────────────────────────────────────
 
 #[test]
 fn a_file_carrying_the_retired_lineage_key_reads_verifies_and_drops_it_on_a_save() {
-    // Versions 9 to 11 defined an optional top-level `lineage` array, and files
-    // written then may carry one. Author such a file from a current write: the
+    // The format once defined an optional top-level `lineage` array, and a
+    // file may still carry one. Author such a file from a current write: the
     // same metadata with the key added, and the metadata and content hashes
     // re-derived the way the writer derives them, so the file is internally
     // consistent exactly as one of those files is.
@@ -4446,53 +4187,31 @@ fn a_value_with_thumbnails_round_trips_and_says_so() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A version 10 file carries no `has_thumbnails` key and always carries the
-/// entry, so it reads as having thumbnails.
+/// `images/metadata.json`'s `has_thumbnails` key is required: a file without
+/// it is refused by the reader and the verifier.
 #[test]
-fn a_version_10_file_without_the_flag_reads_as_having_thumbnails() {
-    let dir = std::env::temp_dir().join("sfmr_test_v10_thumbnails");
+fn a_file_without_the_thumbnails_flag_is_refused() {
+    let dir = std::env::temp_dir().join("sfmr_test_thumbnails_flag_missing");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let current = dir.join("v11.sfmr");
-    let legacy = dir.join("v10.sfmr");
+    let current = dir.join("current.sfmr");
+    let without = dir.join("without.sfmr");
 
-    let mut data = data_with_distinct_thumbnails();
-    let readings = data.image_readings.take();
-    crate::write::write_sfmr_without_readings_check(&current, &mut data).unwrap();
-    rewrite_entries(&current, &legacy, |name, raw| match name {
-        "images/metadata.json.zst" => {
+    write_sfmr(&current, &mut data_with_distinct_thumbnails()).unwrap();
+    rewrite_entries(&current, &without, |name, raw| {
+        (name == "images/metadata.json.zst").then(|| {
             let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
             json.as_object_mut().unwrap().remove("has_thumbnails");
-            Some(serde_json::to_vec(&json).unwrap())
-        }
-        "metadata.json.zst" => {
-            let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
-            json["version"] = serde_json::json!(10);
-            Some(serde_json::to_vec(&json).unwrap())
-        }
-        _ => None,
+            serde_json::to_vec(&json).unwrap()
+        })
     });
 
-    let loaded = read_sfmr(&legacy).unwrap();
-    assert_eq!(loaded.metadata.version, 10);
-    assert_eq!(loaded.thumbnails_y_x_rgb, data.thumbnails_y_x_rgb);
-
-    // Saving it again, with the image readings version 15 requires, writes
-    // the current version and the flag, keeping the column.
-    let resaved = dir.join("resaved.sfmr");
-    let mut value = loaded;
-    value.image_readings = readings;
-    write_sfmr(&resaved, &mut value).unwrap();
-    assert_eq!(
-        read_sfmr_metadata(&resaved).unwrap().version,
-        SFMR_FORMAT_VERSION
-    );
-    let images_meta = read_json_entry_of(&resaved, "images/metadata.json.zst");
-    assert_eq!(images_meta["has_thumbnails"], serde_json::json!(true));
-    assert_eq!(
-        read_sfmr(&resaved).unwrap().thumbnails_y_x_rgb,
-        data.thumbnails_y_x_rgb
-    );
+    let expected = "images/metadata.json.zst has no boolean has_thumbnails";
+    let err = read_sfmr(&without).err().unwrap().to_string();
+    assert!(err.contains(expected), "{err}");
+    let (valid, errors) = verify_sfmr(&without).unwrap();
+    assert!(!valid);
+    assert!(errors.iter().any(|e| e == expected), "{errors:?}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

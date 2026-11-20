@@ -293,19 +293,18 @@ impl PySfmrReconstruction {
     /// The write preserves the in-memory ``normals`` of every point that has one
     /// (recomputing only the missing/zero rows from geometry), except that a
     /// finite point with a patch takes its patch frame's ``normalize(u × v)``,
-    /// which a version 16 file derives rather than stores, and with the patch
+    /// which the file derives rather than stores, and with the patch
     /// frame a point at infinity's normal is zero. So normals set via
     /// ``clone_with_changes(normals=...)`` survive the round trip for points
     /// without a patch; for a point with one, turn its patch frame (as ``sfm
     /// xform --refine-normals`` does, through ``patches=``). A reconstruction with
     /// ``has_normals`` ``False`` writes no normals at all. Any attached patch
-    /// cloud is written as the per-point patch frame in ``points3d/`` (format
-    /// version 3+).
+    /// cloud is written as the per-point patch frame in ``points3d/``.
     ///
     /// The file stores every image's :attr:`sharpness` and
     /// :attr:`gradient_structure_tensors_xx_yy_xy`. A reconstruction that does
-    /// not hold them for every image, such as one loaded from a file below
-    /// version 15, has them gathered for the write: each image's own readings
+    /// not hold them for every image, such as one a solve or an import built,
+    /// has them gathered for the write: each image's own readings
     /// first, then its ``.sift`` file when that belongs to the image and
     /// records them through the same :attr:`image_to_gray`, then its
     /// photograph, checked against the reconstruction's record of its hash.
@@ -582,8 +581,8 @@ impl PySfmrReconstruction {
     /// of the Laplacian over the interior of its reading image, computed
     /// through :attr:`image_to_gray`. For comparing the images of this
     /// reconstruction with each other; it depends on scene content. `None`
-    /// unless every image holds its readings, as for a reconstruction read
-    /// from a file below `.sfmr` version 15 (:meth:`save` gathers them).
+    /// unless every image holds its readings, as for a reconstruction a solve
+    /// or an import built (:meth:`save` gathers them).
     ///
     /// Read-only, and the same array on each read.
     #[getter]
@@ -869,8 +868,7 @@ impl PySfmrReconstruction {
     /// an older file stores, or the render of an observation since removed
     /// from the point, which an
     /// image subset or filter keeps), and a later render runs the
-    /// reference-view rule for the point. A
-    /// file below version 12 with patch frames reads with every row ``-1``.
+    /// reference-view rule for the point.
     ///
     /// Set it with ``clone_with_changes(reference_observations=...)``. A call
     /// that does not pass it keeps the references, whether it keeps, replaces
@@ -955,7 +953,7 @@ impl PySfmrReconstruction {
     /// coordinates `(x, y, z)`; a point at infinity has `w == 0` with a
     /// unit-length direction `(x, y, z)`. This is the canonical form: it is
     /// what `clone_with_changes(positions=...)` accepts and what `.sfmr`
-    /// version 2 files store.
+    /// files store.
     ///
     /// Read-only, and the same array on each read.
     #[getter]

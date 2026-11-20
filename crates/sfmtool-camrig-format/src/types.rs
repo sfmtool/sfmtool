@@ -56,7 +56,7 @@ pub const CAMRIG_FORMAT_VERSION: u32 = 2;
 ///
 /// A file stored **below** this version holds COLMAP-convention sensor poses
 /// and is S-conjugated on load; a file at or above it is already canonical and
-/// is loaded untouched. Like `.sfmr`'s `SFMR_CANONICAL_CONVENTION_VERSION` this
+/// is loaded untouched. This
 /// is a fixed fact about the format's history and deliberately *not*
 /// [`CAMRIG_FORMAT_VERSION`] — gating the upgrade on the current version
 /// re-applies it to already-canonical files as soon as the version is bumped

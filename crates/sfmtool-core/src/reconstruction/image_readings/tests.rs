@@ -77,7 +77,7 @@ fn write_sift_for(
 }
 
 /// The demo reconstruction in `workspace` with no image readings at all, as
-/// one read from a file below version 15 is.
+/// one a solve or an import builds.
 fn without_readings(workspace: &Path) -> SfmrReconstruction {
     let mut recon = SfmrReconstruction::demo(12);
     recon.workspace_dir = workspace.to_path_buf();

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use sfmtool_sfmr_format::{
-    RigFrameData, SfmrData, SfmrError, FEATURE_SOURCE_EMBEDDED_PATCHES, FEATURE_SOURCE_SIFT_FILES,
+    RigFrameData, SfmrError, FEATURE_SOURCE_EMBEDDED_PATCHES, FEATURE_SOURCE_SIFT_FILES,
 };
 
 use crate::progress::{Event, Progress};
@@ -870,190 +870,7 @@ fn test_compute_observation_reprojection_errors_embedded() {
     assert!((error - 5.0).abs() < 1e-3, "error {error}");
 }
 
-// ── .sfmr v4 → v5 convention upgrade on load (plan D1) ─────────────────────
-
-/// Convert a canonical `SfmrData` to the COLMAP convention in place — the
-/// exact inverse of `convention::sfmr_data_colmap_to_canonical` — so tests
-/// can author version-4 (COLMAP-convention) content from a canonical fixture.
-fn sfmr_data_canonical_to_colmap(data: &mut SfmrData) {
-    use crate::geometry::convention::{pose_canonical_to_colmap, world_rotate_w_inverse};
-    use crate::geometry::RotQuaternion;
-
-    for i in 0..data.quaternions_wxyz.nrows() {
-        let q = RotQuaternion::from_wxyz_array([
-            data.quaternions_wxyz[[i, 0]],
-            data.quaternions_wxyz[[i, 1]],
-            data.quaternions_wxyz[[i, 2]],
-            data.quaternions_wxyz[[i, 3]],
-        ]);
-        let t = Vector3::new(
-            data.translations_xyz[[i, 0]],
-            data.translations_xyz[[i, 1]],
-            data.translations_xyz[[i, 2]],
-        );
-        let (q_new, t_new) = pose_canonical_to_colmap(&q, &t);
-        for (k, &v) in q_new.to_wxyz_array().iter().enumerate() {
-            data.quaternions_wxyz[[i, k]] = v;
-        }
-        for k in 0..3 {
-            data.translations_xyz[[i, k]] = t_new[k];
-        }
-    }
-    for i in 0..data.positions_xyzw.nrows() {
-        let v = world_rotate_w_inverse(&Vector3::new(
-            data.positions_xyzw[[i, 0]],
-            data.positions_xyzw[[i, 1]],
-            data.positions_xyzw[[i, 2]],
-        ));
-        for k in 0..3 {
-            data.positions_xyzw[[i, k]] = v[k];
-        }
-    }
-    let rotate_rows = |arr: &mut Array2<f32>| {
-        for i in 0..arr.nrows() {
-            let y = arr[[i, 1]];
-            let z = arr[[i, 2]];
-            arr[[i, 1]] = -z;
-            arr[[i, 2]] = y;
-        }
-    };
-    if let Some(n) = data.normals_xyz.as_mut() {
-        rotate_rows(n);
-    }
-    if let Some(u) = data.patch_u_halfvec_xyz.as_mut() {
-        rotate_rows(u);
-    }
-    if let Some(v) = data.patch_v_halfvec_xyz.as_mut() {
-        rotate_rows(v);
-    }
-}
-
-/// Give `loaded` the image readings `source` holds, image by image, for a
-/// test that loads a file below version 15, which has none, and saves it again
-/// with no photographs to gather them from.
-fn restore_image_readings(loaded: &mut SfmrReconstruction, source: &SfmrReconstruction) {
-    loaded.image_set.image_to_gray = source.image_set.image_to_gray.clone();
-    for (image, from) in loaded
-        .image_set
-        .images
-        .iter_mut()
-        .zip(&source.image_set.images)
-    {
-        image.readings = from.readings;
-    }
-}
-
-/// Copy a written `.sfmr` archive, rewriting only `metadata.json.zst` so its
-/// `version` field reads `version` — producing genuine bytes of that version on
-/// disk (every version from 4 on shares this structural layout).
-///
-/// Below version 15 the image readings are dropped, both columns and the
-/// `image_to_gray` key, since a file of those versions has none; a test that
-/// saves what it loads gives the value its readings back first
-/// ([`restore_image_readings`]). Below version 16 every `.float16.` reading
-/// entry is stored as its `.float32.` sibling, its values widened, as a
-/// writer of those versions stored the same values, and the normals the
-/// version 16 file derives from the patch frame are stored in `normals_xyz`,
-/// as a writer of those versions stored them.
-fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
-    use std::io::{Read, Write};
-
-    let archive_file = std::fs::File::open(src).unwrap();
-    let mut archive = zip::ZipArchive::new(archive_file).unwrap();
-    let names: Vec<String> = archive
-        .file_names()
-        .map(|s| s.unwrap().into_owned())
-        .collect();
-    let stored_normals = (version < sfmtool_sfmr_format::SFMR_DERIVED_PATCH_NORMALS_VERSION)
-        .then(|| sfmtool_sfmr_format::read_sfmr(src).unwrap().normals_xyz)
-        .flatten();
-    let out = std::fs::File::create(dst).unwrap();
-    let mut zip_out = zip::ZipWriter::new(out);
-    let stored =
-        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    for name in &names {
-        // Below version 16 the full column, appended after the loop, replaces
-        // whatever normals entry the file has.
-        if stored_normals.is_some()
-            && (name.starts_with("points3d/normals_xyz.")
-                || name.starts_with("points3d/underived_normals_xyz."))
-        {
-            continue;
-        }
-        let mut compressed = Vec::new();
-        archive
-            .by_name(name)
-            .unwrap()
-            .read_to_end(&mut compressed)
-            .unwrap();
-        // Before version 10 the derived depth statistics lived under `images/`,
-        // so a file stamped with an older version has to carry them where a
-        // reader of that version looks. The bytes are untouched: no hash is
-        // taken over an entry's name.
-        let placed = match name.strip_prefix("derived/") {
-            Some(rest) if version < 10 => format!("images/{rest}"),
-            _ => name.clone(),
-        };
-        let widen = version < sfmtool_sfmr_format::SFMR_FLOAT16_READINGS_VERSION
-            && placed.contains(".float16.");
-        let placed = if widen {
-            placed.replace(".float16.", ".float32.")
-        } else {
-            placed
-        };
-        let below_readings = version < sfmtool_sfmr_format::SFMR_IMAGE_READINGS_VERSION;
-        if below_readings
-            && (name.starts_with("images/sharpness.")
-                || name.starts_with("images/gradient_structure_tensors_xx_yy_xy."))
-        {
-            continue;
-        }
-        zip_out.start_file(&placed, stored).unwrap();
-        if below_readings && name == "images/metadata.json.zst" {
-            let mut json: serde_json::Value =
-                serde_json::from_slice(&zstd::stream::decode_all(&compressed[..]).unwrap())
-                    .unwrap();
-            json.as_object_mut().unwrap().remove("image_to_gray");
-            let bytes = zstd::bulk::compress(&serde_json::to_vec(&json).unwrap(), 3).unwrap();
-            zip_out.write_all(&bytes).unwrap();
-        } else if name == "metadata.json.zst" {
-            let mut json: serde_json::Value =
-                serde_json::from_slice(&zstd::stream::decode_all(&compressed[..]).unwrap())
-                    .unwrap();
-            json.as_object_mut()
-                .unwrap()
-                .insert("version".into(), serde_json::json!(version));
-            let bytes = zstd::bulk::compress(&serde_json::to_vec(&json).unwrap(), 3).unwrap();
-            zip_out.write_all(&bytes).unwrap();
-        } else if widen {
-            let raw = zstd::stream::decode_all(&compressed[..]).unwrap();
-            let widened: Vec<u8> = raw
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .flat_map(|b| half::f16::from_le_bytes(*b).to_f32().to_le_bytes())
-                .collect();
-            zip_out
-                .write_all(&zstd::bulk::compress(&widened, 3).unwrap())
-                .unwrap();
-        } else {
-            zip_out.write_all(&compressed).unwrap();
-        }
-    }
-    if let Some(normals) = &stored_normals {
-        zip_out
-            .start_file(
-                format!("points3d/normals_xyz.{}.3.float32.zst", normals.nrows()),
-                stored,
-            )
-            .unwrap();
-        let bytes: Vec<u8> = normals.iter().flat_map(|v| v.to_le_bytes()).collect();
-        zip_out
-            .write_all(&zstd::bulk::compress(&bytes, 3).unwrap())
-            .unwrap();
-    }
-    zip_out.finish().unwrap();
-}
+// ── Loading a current file ──────────────────────────────────────────────
 
 fn assert_rotations_close(a: &UnitQuaternion<f64>, b: &UnitQuaternion<f64>, ctx: &str) {
     let ra = a.to_rotation_matrix();
@@ -1068,267 +885,6 @@ fn assert_rotations_close(a: &UnitQuaternion<f64>, b: &UnitQuaternion<f64>, ctx:
             );
         }
     }
-}
-
-#[test]
-fn test_sfmr_data_colmap_to_canonical_converts_every_section() {
-    use crate::geometry::convention::{
-        pose_colmap_to_canonical, relative_pose_conjugate_s, sfmr_data_colmap_to_canonical,
-    };
-    use crate::geometry::RotQuaternion;
-    use ndarray::Array1;
-    use sfmtool_sfmr_format::{FramesMetadata, RigDefinition, RigsMetadata};
-
-    let mut recon = SfmrReconstruction::demo(6);
-    // Exercise the w = 0 branch: point 0 becomes an infinity direction.
-    recon.point_set.points[0].position = Point3::new(0.6, 0.0, 0.8);
-    recon.point_set.points[0].w = 0.0;
-    recon.point_set.infinity_point_count = 1;
-
-    let mut data = recon.to_sfmr_data();
-    let p = recon.point_set.points.len();
-
-    // Attach a patch frame so the u/v half-vector rotation is exercised.
-    let mut u = Array2::<f32>::zeros((p, 3));
-    let mut v = Array2::<f32>::zeros((p, 3));
-    for i in 0..p {
-        u[[i, 0]] = 1.0;
-        u[[i, 1]] = 0.25;
-        v[[i, 1]] = -0.25;
-        v[[i, 2]] = 1.0;
-    }
-    data.patch_u_halfvec_xyz = Some(u.clone());
-    data.patch_v_halfvec_xyz = Some(v.clone());
-
-    // Attach a two-sensor rig so the sensor_from_rig conjugation is exercised.
-    let sensor_q = Array2::from_shape_vec(
-        (2, 4),
-        vec![
-            1.0, 0.0, 0.0, 0.0, //
-            0.0, 0.0, 1.0, 0.0, // 180° about Y
-        ],
-    )
-    .unwrap();
-    let sensor_t = Array2::from_shape_vec((2, 3), vec![0.0, 0.0, 0.0, 0.1, 0.2, 0.3]).unwrap();
-    data.rig_frame_data = Some(RigFrameData {
-        rigs_metadata: RigsMetadata {
-            rig_count: 1,
-            sensor_count: 2,
-            rigs: vec![RigDefinition {
-                name: "rig".into(),
-                sensor_count: 2,
-                sensor_offset: 0,
-                ref_sensor_name: "s0".into(),
-                sensor_names: vec!["s0".into(), "s1".into()],
-            }],
-        },
-        sensor_camera_indexes: Array1::from_vec(vec![0, 0]),
-        sensor_quaternions_wxyz: sensor_q.clone(),
-        sensor_translations_xyz: sensor_t.clone(),
-        frames_metadata: FramesMetadata { frame_count: 0 },
-        rig_indexes: Array1::from_vec(vec![]),
-        image_sensor_indexes: Array1::from_vec(vec![0; recon.image_set.images.len()]),
-        image_frame_indexes: Array1::from_vec(vec![0; recon.image_set.images.len()]),
-    });
-
-    let orig_quats = data.quaternions_wxyz.clone();
-    let orig_trans = data.translations_xyz.clone();
-    let orig_positions = data.positions_xyzw.clone();
-    let orig_normals = data.normals_xyz.clone().unwrap();
-    let orig_depth_stats = serde_json::to_string(&data.depth_statistics).unwrap();
-
-    sfmr_data_colmap_to_canonical(&mut data);
-
-    // Camera poses: R' = S·R·Wᵀ, t' = S·t per row.
-    for i in 0..orig_quats.nrows() {
-        let q = RotQuaternion::from_wxyz_array([
-            orig_quats[[i, 0]],
-            orig_quats[[i, 1]],
-            orig_quats[[i, 2]],
-            orig_quats[[i, 3]],
-        ]);
-        let t = Vector3::new(orig_trans[[i, 0]], orig_trans[[i, 1]], orig_trans[[i, 2]]);
-        let (q_exp, t_exp) = pose_colmap_to_canonical(&q, &t);
-        let got = RotQuaternion::from_wxyz_array([
-            data.quaternions_wxyz[[i, 0]],
-            data.quaternions_wxyz[[i, 1]],
-            data.quaternions_wxyz[[i, 2]],
-            data.quaternions_wxyz[[i, 3]],
-        ]);
-        assert_rotations_close(got.as_nalgebra(), q_exp.as_nalgebra(), "camera pose");
-        for k in 0..3 {
-            assert!((data.translations_xyz[[i, k]] - t_exp[k]).abs() < 1e-12);
-        }
-    }
-
-    // Rig sensor poses: S-conjugation. Identity stays identity; the 180°-Y
-    // rotation is S-invariant while the translation flips its y/z signs.
-    let rig = data.rig_frame_data.as_ref().unwrap();
-    for i in 0..2 {
-        let q = RotQuaternion::from_wxyz_array([
-            sensor_q[[i, 0]],
-            sensor_q[[i, 1]],
-            sensor_q[[i, 2]],
-            sensor_q[[i, 3]],
-        ]);
-        let t = Vector3::new(sensor_t[[i, 0]], sensor_t[[i, 1]], sensor_t[[i, 2]]);
-        let (q_exp, t_exp) = relative_pose_conjugate_s(&q, &t);
-        let got = RotQuaternion::from_wxyz_array([
-            rig.sensor_quaternions_wxyz[[i, 0]],
-            rig.sensor_quaternions_wxyz[[i, 1]],
-            rig.sensor_quaternions_wxyz[[i, 2]],
-            rig.sensor_quaternions_wxyz[[i, 3]],
-        ]);
-        assert_rotations_close(got.as_nalgebra(), q_exp.as_nalgebra(), "sensor pose");
-        for k in 0..3 {
-            assert!((rig.sensor_translations_xyz[[i, k]] - t_exp[k]).abs() < 1e-12);
-        }
-    }
-    assert_eq!(rig.sensor_translations_xyz[[1, 0]], 0.1);
-    assert_eq!(rig.sensor_translations_xyz[[1, 1]], -0.2);
-    assert_eq!(rig.sensor_translations_xyz[[1, 2]], -0.3);
-
-    // World points: (x, y, z) → (x, z, −y), w carried through — including the
-    // w = 0 infinity direction in row 0.
-    for i in 0..p {
-        assert_eq!(data.positions_xyzw[[i, 0]], orig_positions[[i, 0]]);
-        assert_eq!(data.positions_xyzw[[i, 1]], orig_positions[[i, 2]]);
-        assert_eq!(data.positions_xyzw[[i, 2]], -orig_positions[[i, 1]]);
-        assert_eq!(data.positions_xyzw[[i, 3]], orig_positions[[i, 3]]);
-    }
-    assert_eq!(data.positions_xyzw[[0, 3]], 0.0, "row 0 stays at infinity");
-
-    // Normals and patch half-vectors rotate by W (exact on f32).
-    let normals = data.normals_xyz.as_ref().unwrap();
-    for i in 0..p {
-        assert_eq!(normals[[i, 0]], orig_normals[[i, 0]]);
-        assert_eq!(normals[[i, 1]], orig_normals[[i, 2]]);
-        assert_eq!(normals[[i, 2]], -orig_normals[[i, 1]]);
-    }
-    let u_new = data.patch_u_halfvec_xyz.as_ref().unwrap();
-    let v_new = data.patch_v_halfvec_xyz.as_ref().unwrap();
-    for i in 0..p {
-        assert_eq!(u_new[[i, 0]], u[[i, 0]]);
-        assert_eq!(u_new[[i, 1]], u[[i, 2]]);
-        assert_eq!(u_new[[i, 2]], -u[[i, 1]]);
-        assert_eq!(v_new[[i, 0]], v[[i, 0]]);
-        assert_eq!(v_new[[i, 1]], v[[i, 2]]);
-        assert_eq!(v_new[[i, 2]], -v[[i, 1]]);
-    }
-
-    // Depth statistics are invariant under the conversion and must not be
-    // touched (canonical depth −z' equals the stored COLMAP +z depth).
-    assert_eq!(
-        serde_json::to_string(&data.depth_statistics).unwrap(),
-        orig_depth_stats
-    );
-}
-
-#[test]
-fn test_v4_file_upgrades_to_canonical_on_load_and_saves_as_v5() {
-    let dir = std::env::temp_dir().join("sfmr_core_v4_upgrade");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    // A workspace marker so SfmrReconstruction::load can resolve the dir.
-    std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
-
-    // Canonical ground truth.
-    let recon = SfmrReconstruction::demo(16);
-
-    // Author genuine v4 bytes: canonical → COLMAP content, written with the
-    // current writer, then the archive's version field rewritten to 4.
-    let mut colmap_data = recon.to_sfmr_data();
-    sfmr_data_canonical_to_colmap(&mut colmap_data);
-    let staged = dir.join("staged.sfmr");
-    let options = sfmtool_sfmr_format::WriteOptions {
-        skip_recompute_depth_stats: true,
-        ..Default::default()
-    };
-    sfmtool_sfmr_format::write_sfmr_with_options(&staged, &mut colmap_data, &options).unwrap();
-    let v4_path = dir.join("legacy_v4.sfmr");
-    rewrite_sfmr_version(&staged, &v4_path, 4);
-    assert_eq!(
-        sfmtool_sfmr_format::read_sfmr_metadata(&v4_path)
-            .unwrap()
-            .version,
-        4
-    );
-
-    // Load applies the COLMAP→canonical upgrade: the result matches the
-    // canonical ground truth and reports the current version. The upgrade is
-    // one of the load's stages, and this is the file it runs for, so the
-    // recorded load is what says the guard is conditional rather than dead.
-    let (mut loaded, phases) = load_recording(&v4_path);
-    assert_eq!(
-        phase_names(&phases),
-        ["read", "convert convention", "derive", "keypoints"],
-        "{phases:?}"
-    );
-    assert_eq!(
-        phase_note(&phases, "convert convention").as_deref(),
-        Some("from version 4"),
-        "the upgrade did not say what it upgraded from"
-    );
-    assert_eq!(
-        loaded.metadata.version,
-        sfmtool_sfmr_format::SFMR_FORMAT_VERSION
-    );
-    assert_eq!(loaded.image_set.images.len(), recon.image_set.images.len());
-    for (li, ri) in loaded.image_set.images.iter().zip(&recon.image_set.images) {
-        assert_rotations_close(&li.quaternion_wxyz, &ri.quaternion_wxyz, &li.name);
-        for k in 0..3 {
-            assert!(
-                (li.translation_xyz[k] - ri.translation_xyz[k]).abs() < 1e-9,
-                "{}: translation[{k}]",
-                li.name
-            );
-        }
-    }
-    for (lp, rp) in loaded.point_set.points.iter().zip(&recon.point_set.points) {
-        for k in 0..3 {
-            assert!((lp.position[k] - rp.position[k]).abs() < 1e-9);
-            assert!((lp.normal[k] - rp.normal[k]).abs() < 1e-6);
-        }
-        assert_eq!(lp.w, rp.w);
-    }
-
-    // Saving writes a v5 file that reloads unchanged (no double conversion).
-    // A version 4 file has no image readings and this one no photographs, so
-    // the value gets the demo's back before it is saved.
-    let saved = dir.join("upgraded_v5.sfmr");
-    restore_image_readings(&mut loaded, &recon);
-    loaded.save(&saved, &Progress::none()).unwrap();
-    assert_eq!(
-        sfmtool_sfmr_format::read_sfmr_metadata(&saved)
-            .unwrap()
-            .version,
-        sfmtool_sfmr_format::SFMR_FORMAT_VERSION
-    );
-    let reloaded = SfmrReconstruction::load(&saved, &Progress::none()).unwrap();
-    for (li, ri) in reloaded
-        .image_set
-        .images
-        .iter()
-        .zip(&loaded.image_set.images)
-    {
-        assert_rotations_close(&li.quaternion_wxyz, &ri.quaternion_wxyz, &li.name);
-        for k in 0..3 {
-            assert!((li.translation_xyz[k] - ri.translation_xyz[k]).abs() < 1e-12);
-        }
-    }
-    for (lp, rp) in reloaded
-        .point_set
-        .points
-        .iter()
-        .zip(&loaded.point_set.points)
-    {
-        for k in 0..3 {
-            assert!((lp.position[k] - rp.position[k]).abs() < 1e-12);
-        }
-        assert_eq!(lp.w, rp.w);
-    }
-
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// An `embedded_patches` reconstruction whose inline keypoints are the *exact*
@@ -1401,21 +957,13 @@ fn assert_projects_onto_keypoints(recon: &SfmrReconstruction, tol: f64, ctx: &st
     }
 }
 
-/// A file stored at the canonical-convention version (5) — or at any later
-/// version — must load byte-for-byte as written, with **no** convention
-/// conversion.
-///
-/// Regression test for the version-6 bump: `load` gated the COLMAP→canonical
-/// upgrade on `version < SFMR_FORMAT_VERSION`, so raising the format version to
-/// 6 re-applied the conversion to every already-canonical version-5 file. The
-/// second application cancels the camera flip `S` and leaves the world rotated
-/// by `W` twice, which reads as a *pure gauge* rigid transform on the points
-/// and camera centres — invisible to any check that compares point clouds —
-/// while every camera ends up facing backwards. The stored geometry is fine;
-/// only the read is wrong, so the assertion is against the file's own content.
+/// A file loads exactly as written, with no convention conversion: a load
+/// that flipped the camera frame would leave the point cloud looking right
+/// while every camera faced backwards, so the assertion is against the file's
+/// own content and its reprojection onto its keypoints.
 #[test]
-fn test_canonical_version_file_loads_without_convention_upgrade() {
-    let dir = std::env::temp_dir().join("sfmr_core_v5_no_upgrade");
+fn test_current_file_loads_without_convention_conversion() {
+    let dir = std::env::temp_dir().join("sfmr_core_load_as_written");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
@@ -1431,23 +979,9 @@ fn test_canonical_version_file_loads_without_convention_upgrade() {
     let current = dir.join("current.sfmr");
     sfmtool_sfmr_format::write_sfmr_with_options(&current, &mut data, &options).unwrap();
 
-    // Every version from the canonical-convention version up is already
-    // canonical, so stamping the archive with any of them must not change what
-    // `load` produces.
-    for version in sfmtool_sfmr_format::SFMR_CANONICAL_CONVENTION_VERSION
-        ..=sfmtool_sfmr_format::SFMR_FORMAT_VERSION
     {
-        let path = dir.join(format!("stamped_v{version}.sfmr"));
-        rewrite_sfmr_version(&current, &path, version);
-        assert_eq!(
-            sfmtool_sfmr_format::read_sfmr_metadata(&path)
-                .unwrap()
-                .version,
-            version
-        );
-
-        let mut loaded = SfmrReconstruction::load(&path, &Progress::none()).unwrap();
-        let ctx = format!("v{version}");
+        let mut loaded = SfmrReconstruction::load(&current, &Progress::none()).unwrap();
+        let ctx = "current";
 
         // Poses and points come back exactly as stored — no conversion touched
         // them.
@@ -1497,7 +1031,7 @@ fn test_canonical_version_file_loads_without_convention_upgrade() {
 
         // The loaded geometry is self-consistent: every observation is in front
         // of its camera and lands on its keypoint...
-        assert_projects_onto_keypoints(&loaded, 1e-3, &ctx);
+        assert_projects_onto_keypoints(&loaded, 1e-3, ctx);
 
         // ...so recomputing the errors reproduces the stored ones rather than
         // collapsing to the "no observation in front of the camera" zero.
@@ -1524,12 +1058,12 @@ fn test_canonical_version_file_loads_without_convention_upgrade() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// A canonical-version file that is loaded and saved again round-trips to the
-/// same geometry, and the saved file loads the same way — the conversion is
-/// applied neither on the way in nor on the way out.
+/// A file that is loaded and saved again round-trips to the same geometry,
+/// and the saved file loads the same way — no conversion is applied on the
+/// way in or on the way out.
 #[test]
-fn test_canonical_version_file_round_trips_through_load_and_save() {
-    let dir = std::env::temp_dir().join("sfmr_core_v5_round_trip");
+fn test_current_file_round_trips_through_load_and_save() {
+    let dir = std::env::temp_dir().join("sfmr_core_round_trip");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
@@ -1542,20 +1076,13 @@ fn test_canonical_version_file_round_trips_through_load_and_save() {
     };
     let staged = dir.join("staged.sfmr");
     sfmtool_sfmr_format::write_sfmr_with_options(&staged, &mut data, &options).unwrap();
-    let v5_path = dir.join("legacy_v5.sfmr");
-    rewrite_sfmr_version(
-        &staged,
-        &v5_path,
-        sfmtool_sfmr_format::SFMR_CANONICAL_CONVENTION_VERSION,
-    );
 
-    let mut loaded = SfmrReconstruction::load(&v5_path, &Progress::none()).unwrap();
+    let loaded = SfmrReconstruction::load(&staged, &Progress::none()).unwrap();
     assert_eq!(
         loaded.metadata.version,
         sfmtool_sfmr_format::SFMR_FORMAT_VERSION
     );
     let resaved = dir.join("resaved.sfmr");
-    restore_image_readings(&mut loaded, &recon);
     loaded.save(&resaved, &Progress::none()).unwrap();
     assert_eq!(
         sfmtool_sfmr_format::read_sfmr_metadata(&resaved)
@@ -1676,10 +1203,8 @@ fn a_recorded_load_names_the_read_and_the_derive() {
     let path = saved_demo("load_phases", 32);
     let (recon, phases) = load_recording(&path);
 
-    // No `convert convention` row: the writer wrote a canonical file, so the
-    // convention upgrade did not run and its guard closed nothing. The demo is
-    // `sift_files` with no `.sift` files behind it, so `keypoints` runs and
-    // says why it left the column out.
+    // The demo is `sift_files` with no `.sift` files behind it, so `keypoints`
+    // runs and says why it left the column out.
     assert_eq!(
         phase_names(&phases),
         ["read", "derive", "keypoints"],

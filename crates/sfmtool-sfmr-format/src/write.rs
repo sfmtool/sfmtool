@@ -162,13 +162,6 @@ impl Default for WriteOptions {
 /// absent and filled from the recomputed mean-viewing normals.
 const MISSING_NORMAL_NORM_SQ: f32 = 1e-6;
 
-/// Whether the version this crate writes, [`SFMR_FORMAT_VERSION`], stores the
-/// reading columns that have a `float16` form as `float16`: the entry names
-/// the writer uses. `ObservationReadingColumns::bytes` and the sharpness
-/// bytes are `float16` to match, which the assertion below holds.
-const WRITES_FLOAT16: bool = crate::float16::stores_float16(SFMR_FORMAT_VERSION);
-const _: () = assert!(WRITES_FLOAT16);
-
 /// Whether a stored normal row counts as missing: its squared norm is at most
 /// `1e-6` (`MISSING_NORMAL_NORM_SQ`), so it is the zero vector or near it. A
 /// write fills such a row with the point's mean-viewing normal, and so does
@@ -231,8 +224,7 @@ fn merge_preserving_normals<'a>(
 /// per-observation and per-image columns written depend on
 /// `metadata.feature_source` (`sift_files` vs `embedded_patches`).
 ///
-/// The columns the current version stores as `float16`
-/// ([`SFMR_FLOAT16_READINGS_VERSION`]), the sharpness and five of the
+/// The columns a file stores as `float16`, the sharpness and seven of the
 /// observation readings, are rounded in `data` to the nearest `float16` before
 /// they are written and hashed, so after the write `data` holds what a reader
 /// of the file gets back.
@@ -291,25 +283,6 @@ pub fn write_sfmr_with_options(
     Ok(())
 }
 
-/// [`write_sfmr`] without the requirement that the value carry image readings,
-/// so the tests can make the files of versions below 15, which have none.
-#[cfg(test)]
-pub(crate) fn write_sfmr_without_readings_check(
-    path: &Path,
-    data: &mut SfmrData,
-) -> Result<(), SfmrError> {
-    let options = WriteOptions::default();
-    sfmtool_archive_io::write_atomically(path, |file| {
-        write_sfmr_into(data, &options, || {
-            Ok(ArchiveSink {
-                zip: ZipWriter::new(file),
-                zstd_level: options.zstd_level,
-            })
-        })
-    })?;
-    Ok(())
-}
-
 /// The [`ContentHash`] a [`write_sfmr_with_options`] of `data` would write,
 /// computed without touching the filesystem.
 ///
@@ -325,9 +298,9 @@ pub(crate) fn write_sfmr_without_readings_check(
 ///
 /// A value without image readings ([`SfmrData::image_readings`]) is hashed as
 /// it stands, with no reading columns and no `image_to_gray` key, although a
-/// write refuses it: a value loaded from a file older than version 15 still
-/// has a content hash. The hash a write stores once the readings are supplied
-/// is a different one.
+/// write refuses it: a value built in memory before its readings are gathered
+/// still has a content hash. The hash a write stores once the readings are
+/// supplied is a different one.
 ///
 /// The cost is one serialisation of the value plus one XXH128 pass over it,
 /// with no compression; the patch bitmaps dominate both. A caller that asks
@@ -365,7 +338,7 @@ fn write_sfmr_into<S: EntrySink>(
         validate_image_readings(readings, data.metadata.image_count as usize)
             .map_err(SfmrError::InvalidFormat)?;
     }
-    // The columns this version stores as `float16` are rounded here, in the
+    // The columns a file stores as `float16` are rounded here, in the
     // value itself, as the tracks are sorted below: the bytes written and
     // hashed are those values, and the value after the write is what a
     // reader of the file gets back.
@@ -377,8 +350,8 @@ fn write_sfmr_into<S: EntrySink>(
     if let Some(readings) = data.observation_readings.as_mut() {
         readings.round_to_stored_precision();
     }
-    // The normal of a finite point with a patch is derived from its frame
-    // from version 16: set in the value here, so it is what a reader of the
+    // The normal of a finite point with a patch is derived from its frame:
+    // set in the value here, so it is what a reader of the
     // file gets back and the depth-statistics pass below finds no such row
     // missing; `write_points3d` stores only the other finite points' normals.
     derive_patch_normals_in_place(data);
@@ -509,7 +482,7 @@ fn write_sfmr_into<S: EntrySink>(
     let mut sink = open_sink()?;
     let mut section_digests = sfmtool_archive_io::SectionDigests::new();
 
-    // === Written (version 8+, top level, outside every digest) ===
+    // === Written (top level, outside every digest) ===
     // Stamped here, at the moment of writing, and stored before the metadata so
     // it is impossible to read the code as if the timestamp were an input to
     // the hash below. The in-memory metadata gets the same stamp, so a caller
@@ -575,7 +548,7 @@ fn write_sfmr_into<S: EntrySink>(
         images_xxh128: format_hash(images_hash),
         points3d_xxh128: format_hash(points3d_hash),
         tracks_xxh128: format_hash(tracks_hash),
-        derived_xxh128: Some(format_hash(derived_hash)),
+        derived_xxh128: format_hash(derived_hash),
         content_xxh128: format_hash(content_hash_value),
     };
     sink.write_json(entries::content_hash(), &content_hash)?;
@@ -683,13 +656,13 @@ fn write_derived<S: EntrySink>(
     let mut derived_hasher = Xxh3::new();
 
     // derived/depth_statistics.json
-    let bytes = sink.write_json(entries::depth_statistics(false), depth_statistics)?;
+    let bytes = sink.write_json(entries::depth_statistics(), depth_statistics)?;
     derived_hasher.update(&bytes);
 
     // derived/observed_depth_histogram_counts
     binary_hashed(
         sink,
-        &entries::observed_depth_histogram_counts(false, image_count, num_buckets),
+        &entries::observed_depth_histogram_counts(image_count, num_buckets),
         &row_major_bytes(observed_depth_histogram_counts),
         &mut derived_hasher,
     )?;
@@ -714,7 +687,7 @@ fn write_images<S: EntrySink>(
         &mut images_hasher,
     )?;
 
-    // images/focal_adjustments (optional, version 13+). It sorts after
+    // images/focal_adjustments (optional). It sorts after
     // feature_tool_hashes and before image_file_hashes, so its slot is after
     // the hash column in a sift_files file and before it in an
     // embedded_patches one.
@@ -722,8 +695,8 @@ fn write_images<S: EntrySink>(
         .focal_adjustments
         .as_ref()
         .map(|a| a.iter().copied().collect());
-    // images/gradient_structure_tensors_xx_yy_xy (version 15+) sorts right
-    // after focal_adjustments, so the two are written together.
+    // images/gradient_structure_tensors_xx_yy_xy sorts right after
+    // focal_adjustments, so the two are written together.
     let tensors: Option<Vec<f32>> = data.image_readings.as_ref().map(|r| {
         r.gradient_structure_tensors_xx_yy_xy
             .iter()
@@ -802,8 +775,8 @@ fn write_images<S: EntrySink>(
     let bytes = sink.write_json(entries::images_names(), &data.image_names)?;
     images_hasher.update(&bytes);
 
-    // images/principal_point_adjustments_xy (optional, version 13+; after
-    // names.json, before quaternions_wxyz)
+    // images/principal_point_adjustments_xy (optional; after names.json,
+    // before quaternions_wxyz)
     if let Some(offsets) = &data.principal_point_adjustments_xy {
         let values: Vec<f64> = offsets.iter().copied().collect();
         binary_hashed(
@@ -823,8 +796,8 @@ fn write_images<S: EntrySink>(
     )?;
 
     // images/radial_bspline_adjustments and images/rolling_shutter_rates_xyz
-    // (optional, version 14+; after quaternions_wxyz, before
-    // sift_content_hashes, in that order)
+    // (optional; after quaternions_wxyz, before sift_content_hashes, in that
+    // order)
     for (column, name) in [
         (
             &data.radial_bspline_adjustments,
@@ -846,13 +819,12 @@ fn write_images<S: EntrySink>(
         }
     }
 
-    // images/sharpness (version 15+, float16 from version 16; after
-    // rolling_shutter_rates_xyz, before sift_content_hashes and
-    // thumbnails_y_x_rgb)
+    // images/sharpness (float16; after rolling_shutter_rates_xyz, before
+    // sift_content_hashes and thumbnails_y_x_rgb)
     if let Some(readings) = &data.image_readings {
         binary_hashed(
             sink,
-            &entries::images_sharpness(WRITES_FLOAT16, image_count),
+            &entries::images_sharpness(image_count),
             &crate::float16::float16_bytes(readings.sharpness.iter()),
             &mut images_hasher,
         )?;
@@ -897,7 +869,7 @@ fn write_images<S: EntrySink>(
 }
 
 /// The `w` column and the row-major `u` and `v` of a value with the patch
-/// frame, the arrays a version 16 writer derives the normals of finite
+/// frame, the arrays a writer derives the normals of finite
 /// patched points from, or `None` where it has no frame or a shape disagrees
 /// with `normals`, the normals being written (which the dimension checks
 /// report).
@@ -905,9 +877,6 @@ fn patch_frame_columns(
     data: &SfmrData,
     normals: &ndarray::Array2<f32>,
 ) -> Option<(Vec<f64>, Vec<f32>, Vec<f32>)> {
-    const _: () = assert!(crate::patch_normals::derives_patch_normals(
-        SFMR_FORMAT_VERSION
-    ));
     let (u, v) = (
         data.patch_u_halfvec_xyz.as_ref()?,
         data.patch_v_halfvec_xyz.as_ref()?,
@@ -927,7 +896,7 @@ fn patch_frame_columns(
 }
 
 /// `normals` with the normal of every finite point with a patch in `data` set
-/// to `normalize(u × v)`, the normal a version 16 file derives for it. A
+/// to `normalize(u × v)`, the normal a file derives for it. A
 /// point whose frame is degenerate keeps its normal, which the file stores.
 /// Borrowed when nothing changes.
 fn with_patch_normals<'a>(
@@ -991,8 +960,7 @@ fn write_points3d<S: EntrySink>(
     )?;
 
     // points3d/constraint_distances and points3d/constraint_reference_images
-    // (optional, version 7+; lexicographically after colors_rgb, before
-    // metadata.json). Two of the constraint triple; the third sorts much later.
+    // (optional; lexicographically after colors_rgb, before metadata.json). Two of the constraint triple; the third sorts much later.
     if let Some((_, constraint_distances, constraint_reference_images)) = &constraints {
         binary_hashed(
             sink,
@@ -1030,7 +998,7 @@ fn write_points3d<S: EntrySink>(
     let bytes = sink.write_json(entries::points3d_metadata(), &points3d_meta)?;
     points3d_hasher.update(&bytes);
 
-    // points3d/normal_confidence (optional, version 5+). Unlike the normals just
+    // points3d/normal_confidence (optional). Unlike the normals just
     // above — which are merged with the geometry recompute so missing rows get
     // filled — this array passes through *untouched*: the writer never invents
     // or adjusts a confidence value, not even for the normals it fills in. A
@@ -1044,9 +1012,8 @@ fn write_points3d<S: EntrySink>(
         )?;
     }
 
-    // points3d/normals_xyz (optional; named estimated_normals_xyz in versions
-    // 1-2), the full column of a file without the patch frame. With the frame
-    // (version 16+) the normals the frame gives are not stored, and the rest
+    // points3d/normals_xyz (optional), the full column of a file without the
+    // patch frame. With the frame the normals the frame gives are not stored, and the rest
     // go to points3d/underived_normals_xyz, written last below.
     let underived_normals: Option<Vec<f32>> = match (&normals_xyz, &data.patch_u_halfvec_xyz) {
         (Some(normals_xyz), Some(_)) => {
@@ -1070,7 +1037,7 @@ fn write_points3d<S: EntrySink>(
         (Some(normals_xyz), None) => {
             binary_hashed(
                 sink,
-                &entries::points3d_normals(false, point_count),
+                &entries::points3d_normals(point_count),
                 &row_major_bytes(normals_xyz),
                 &mut points3d_hasher,
             )?;
@@ -1106,7 +1073,7 @@ fn write_points3d<S: EntrySink>(
         )?;
     }
 
-    // points3d/point_constraints (optional, version 7+; lexicographically after
+    // points3d/point_constraints (optional; lexicographically after
     // the patch frame, before positions_xyzw). The third of the constraint
     // triple.
     if let Some((point_constraints, _, _)) = &constraints {
@@ -1121,7 +1088,7 @@ fn write_points3d<S: EntrySink>(
     // points3d/positions_xyzw
     binary_hashed(
         sink,
-        &entries::points3d_positions(false, point_count),
+        &entries::points3d_positions(point_count),
         &row_major_bytes(&data.positions_xyzw),
         &mut points3d_hasher,
     )?;
@@ -1134,8 +1101,8 @@ fn write_points3d<S: EntrySink>(
         &mut points3d_hasher,
     )?;
 
-    // points3d/underived_normals_xyz (version 16+, with the patch frame and
-    // normals; sorts last), absent when every normal is derived or at
+    // points3d/underived_normals_xyz (with the patch frame and normals; sorts
+    // last), absent when every normal is derived or at
     // infinity.
     if let Some(rows) = underived_normals.filter(|rows| !rows.is_empty()) {
         binary_hashed(
@@ -1167,7 +1134,7 @@ fn write_tracks<S: EntrySink>(
                 for &column in columns {
                     binary_hashed(
                         sink,
-                        &column.entry(WRITES_FLOAT16, observation_count),
+                        &column.entry(observation_count),
                         &readings.bytes(column),
                         hasher,
                     )?;
@@ -1176,7 +1143,7 @@ fn write_tracks<S: EntrySink>(
             Ok(())
         };
 
-    // tracks/blur_matched_bitmap_zncc (optional; sorts first)
+    // tracks/blur_matched_bitmap_zncc_deficit (optional; sorts first)
     write_readings(
         sink,
         &[ReadingColumn::BlurMatchedBitmapZncc],
@@ -1231,7 +1198,7 @@ fn write_tracks<S: EntrySink>(
     let bytes = sink.write_json(entries::tracks_metadata(), &tracks_meta)?;
     tracks_hasher.update(&bytes);
 
-    // tracks/observation_confidence (optional, version 6+; lexicographically
+    // tracks/observation_confidence (optional; lexicographically
     // after metadata.json, before observation_counts). Defined in both feature
     // sources, since it rates observations rather than any mode-specific
     // column. The array passes through *untouched*: the writer never invents or
@@ -1254,20 +1221,20 @@ fn write_tracks<S: EntrySink>(
         &mut tracks_hasher,
     )?;
 
-    // tracks/plain_bitmap_zncc (optional; after observation_counts, before
+    // tracks/plain_bitmap_zncc_deficit (optional; after observation_counts, before
     // point_indexes)
     write_readings(sink, &[ReadingColumn::PlainBitmapZncc], &mut tracks_hasher)?;
 
     // tracks/point_indexes
     binary_hashed(
         sink,
-        &entries::tracks_point_indexes(false, observation_count),
+        &entries::tracks_point_indexes(observation_count),
         &row_major_bytes(&data.point_indexes),
         &mut tracks_hasher,
     )?;
 
-    // tracks/reference_observations (version 12+, present exactly with the
-    // patch frame; lexicographically after point_indexes)
+    // tracks/reference_observations (present exactly with the patch frame;
+    // lexicographically after point_indexes)
     if let Some(reference_observations) = &data.reference_observations {
         binary_hashed(
             sink,
@@ -1297,8 +1264,8 @@ type PointConstraintSlices<'a> = (Cow<'a, [u8]>, Cow<'a, [f64]>, Cow<'a, [u32]>)
 /// hold the rest of the triple to.
 ///
 /// The triple is then dropped when every point is free, which is the same
-/// statement as its absence: a caller that never constrained a point writes the
-/// archive a pre-version-7 writer would have. The slices borrow `data` when its
+/// statement as its absence: a caller that never constrained a point writes an
+/// archive with no constraint columns. The slices borrow `data` when its
 /// arrays are in standard layout, so the caller writes them directly.
 fn point_constraints_to_write(
     data: &SfmrData,

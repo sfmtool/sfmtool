@@ -316,9 +316,8 @@ fn reconstruction() -> SfmrReconstruction {
 }
 
 /// The fixture: a version 2 workspace whose image folder holds version 2
-/// `.sift` files, with a current `.sfmr`, a version 15 `.sfmr`, a `.sfmr`
-/// labelled version 15 that holds version 16's columns (`refused`), a current
-/// pairwise `.matches`, a version 1 pairwise `.matches` without image sizes,
+/// `.sift` files, with a current `.sfmr`, a version 15 `.sfmr`, which the
+/// reader no longer reads, a current pairwise `.matches`, a version 1 pairwise `.matches` without image sizes,
 /// a version 5 cluster `.matches`, a version 1 `.camrig` and a current one.
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
@@ -330,7 +329,7 @@ fn fixture() -> Fixture {
         write_sift(&folder, i);
     }
 
-    for name in ["current", "old", "refused"] {
+    for name in ["current", "old"] {
         reconstruction()
             .save(
                 &fixture.path(&format!("sfmr/{name}.sfmr")),
@@ -339,7 +338,6 @@ fn fixture() -> Fixture {
             .unwrap();
     }
     rewrite_archive(&fixture.path("sfmr/old.sfmr"), as_version_15);
-    rewrite_archive(&fixture.path("sfmr/refused.sfmr"), relabel(15, |_| false));
 
     std::fs::create_dir_all(fixture.path("matches")).unwrap();
     for name in ["current", "old"] {
@@ -409,8 +407,7 @@ fn expected_outcomes(fixture: &Fixture) -> Vec<(PathBuf, UpgradeFileKind, &'stat
     use UpgradeFileKind::*;
     vec![
         (fixture.path("sfmr/current.sfmr"), Sfmr, "already_current"),
-        (fixture.path("sfmr/old.sfmr"), Sfmr, "converted"),
-        (fixture.path("sfmr/refused.sfmr"), Sfmr, "not_converted"),
+        (fixture.path("sfmr/old.sfmr"), Sfmr, "not_converted"),
         (
             fixture.path("matches/clusters.matches"),
             Matches,
@@ -465,29 +462,29 @@ fn files_below_the_current_version_are_rewritten_at_their_own_paths() {
     assert_eq!(report.workspace_dir, fixture.root);
     assert_eq!(report.workspaces, vec![fixture.root.clone()]);
     assert!(!report.nothing_to_do());
-    assert!(report.notes[0].contains("point ID"), "{:?}", report.notes);
+    // No `.sfmr` was rewritten, so no point ID changed.
+    assert!(report.notes.is_empty(), "{:?}", report.notes);
     assert!(
         reason_of(&report, &fixture.path("matches/clusters.matches"))
             .contains("regenerate it with 'sfm match --cluster'")
     );
-    assert!(reason_of(&report, &fixture.path("sfmr/refused.sfmr"))
-        .contains("the current reader refuses it"));
+    // A `.sfmr` below the oldest version read is left as it is, with the
+    // reader's message, which names the release that upgrades it.
+    let old_sfmr = reason_of(&report, &fixture.path("sfmr/old.sfmr"));
+    assert!(
+        old_sfmr.starts_with("the current reader refuses it, so it is left as it is: "),
+        "{old_sfmr}"
+    );
+    assert!(
+        old_sfmr.contains(
+            "is a version 15 .sfmr file, and this sfmtool reads .sfmr files of version 16 or \
+             later. sfmtool 0.4.1 is the last release that reads version 15: install it, run \
+             `sfm ws upgrade` on the workspace, then use the file with this release."
+        ),
+        "{old_sfmr}"
+    );
 
     // Each converted file is the current version, holding what it held.
-    let old = SfmrReconstruction::load(&fixture.path("sfmr/old.sfmr"), &Progress::none()).unwrap();
-    let current =
-        SfmrReconstruction::load(&fixture.path("sfmr/current.sfmr"), &Progress::none()).unwrap();
-    assert_eq!(
-        sfmtool_sfmr_format::read_sfmr_metadata(&fixture.path("sfmr/old.sfmr"))
-            .unwrap()
-            .version,
-        sfmtool_sfmr_format::SFMR_FORMAT_VERSION
-    );
-    assert_eq!(old.point_count(), current.point_count());
-    assert_eq!(
-        old.image_set.images[0].readings,
-        current.image_set.images[0].readings
-    );
     let matches =
         sfmtool_matches_format::read_matches(&fixture.path("matches/old.matches")).unwrap();
     assert_eq!(
@@ -507,7 +504,7 @@ fn files_below_the_current_version_are_rewritten_at_their_own_paths() {
     let after = snapshot(&fixture.root);
     for path in [
         "sfmr/current.sfmr",
-        "sfmr/refused.sfmr",
+        "sfmr/old.sfmr",
         "matches/clusters.matches",
         "matches/current.matches",
         "current.camrig",
@@ -532,9 +529,8 @@ fn a_dry_run_reports_what_a_run_would_do_and_writes_nothing() {
     let fixture = fixture();
     let before = snapshot(&fixture.root);
     let report = run(&fixture, true);
-    assert!(report.dry_run);
     assert_eq!(outcomes(&report), expected_outcomes(&fixture));
-    assert!(report.notes[0].contains("point ID"));
+    assert!(report.notes.is_empty(), "{:?}", report.notes);
     assert_eq!(snapshot(&fixture.root), before);
 }
 

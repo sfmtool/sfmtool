@@ -1,13 +1,10 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The eight optional observation-reading columns in `tracks/`, and the
-//! change of five of them from `float32` to `float16` in version 16.
+//! The eight optional observation-reading columns in `tracks/`, seven of
+//! them stored as `float16`.
 
-use super::{
-    float16_payload, float32_payload, make_test_data, rewrite_as_version_15, rewrite_entries,
-    rewrite_renaming, rewrite_without_meta_key,
-};
+use super::{float16_payload, make_test_data, rewrite_entries, rewrite_without_meta_key};
 use crate::*;
 
 const OPTIONS: ObservationReadingOptions = ObservationReadingOptions {
@@ -71,18 +68,6 @@ const ENTRIES: [&str; 8] = [
     "tracks/zncc_self_similarity_zoom.8.2.float16.zst",
 ];
 
-/// The entries a version 15 file stores the same columns in.
-const ENTRIES_V15: [&str; 8] = [
-    "tracks/blur_matched_bitmap_zncc.8.float32.zst",
-    "tracks/plain_bitmap_zncc.8.float32.zst",
-    "tracks/zncc_self_similarity_cos_view_angle.8.float32.zst",
-    "tracks/zncc_self_similarity_ellipse_axes.8.2.float32.zst",
-    "tracks/zncc_self_similarity_ellipse_axes_is_at_least.8.2.uint8.zst",
-    "tracks/zncc_self_similarity_ellipse_major_angle.8.float32.zst",
-    "tracks/zncc_self_similarity_tilt_angle.8.float32.zst",
-    "tracks/zncc_self_similarity_zoom.8.2.float32.zst",
-];
-
 fn archive_names(path: &std::path::Path) -> Vec<String> {
     super::archive_names(path)
 }
@@ -111,7 +96,7 @@ fn row_bits(row: &ObservationReading) -> Vec<u32> {
     .collect()
 }
 
-/// `row` with its seven float values rounded the way a version 16 writer
+/// `row` with its seven float values rounded the way a writer
 /// rounds them, computed here from `half` rather than by the crate: each
 /// score `z` to `1 − f16(1 − z)` in `f32`, every other value to its nearest
 /// `float16`.
@@ -182,9 +167,9 @@ fn absent_readings_write_no_entry_and_no_flag() {
 }
 
 #[test]
-fn a_file_from_before_the_columns_loads_without_them() {
-    // A file with readings, its flag removed: the shape of every older file,
-    // whose tracks metadata names no such key.
+fn a_file_without_the_flag_loads_without_them() {
+    // A file with readings, its flag removed: a tracks metadata that names no
+    // such key reads as a file without the columns.
     let mut data = make_test_data();
     data.observation_readings = Some(readings_for(&[tagged_row(1.0); 8]));
     let dir = temp_dir("sfmr_test_observation_readings_legacy");
@@ -506,177 +491,6 @@ fn the_writer_rounds_the_seven_float_columns_in_the_value_it_writes() {
     );
     let (valid, errors) = verify_sfmr(&resaved).unwrap();
     assert!(valid, "{errors:?}");
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn a_version_15_file_reads_its_float32_readings_and_saves_them_as_float16() {
-    let dir = temp_dir("sfmr_test_observation_readings_v15");
-    let current = dir.join("current.sfmr");
-    let rows = unrounded_rows();
-    let mut data = make_test_data();
-    data.observation_readings = Some(readings_for(&rows));
-    write_sfmr(&current, &mut data).unwrap();
-
-    // The version 15 file of the unrounded rows: its writer stored each
-    // float column as float32, at the values it was given.
-    let given = readings_for(&rows);
-    let old = dir.join("v15.sfmr");
-    rewrite_as_version_15(&current, &old, &dir, |name, values| {
-        let column = |a: &[f32]| a.to_vec();
-        let full = match name {
-            "tracks/zncc_self_similarity_cos_view_angle.8.float32.zst" => column(
-                given
-                    .zncc_self_similarity_cos_view_angle
-                    .as_slice()
-                    .unwrap(),
-            ),
-            "tracks/zncc_self_similarity_ellipse_axes.8.2.float32.zst" => {
-                column(given.zncc_self_similarity_ellipse_axes.as_slice().unwrap())
-            }
-            "tracks/zncc_self_similarity_ellipse_major_angle.8.float32.zst" => column(
-                given
-                    .zncc_self_similarity_ellipse_major_angle
-                    .as_slice()
-                    .unwrap(),
-            ),
-            "tracks/zncc_self_similarity_tilt_angle.8.float32.zst" => {
-                column(given.zncc_self_similarity_tilt_angle.as_slice().unwrap())
-            }
-            "tracks/zncc_self_similarity_zoom.8.2.float32.zst" => {
-                column(given.zncc_self_similarity_zoom.as_slice().unwrap())
-            }
-            "tracks/plain_bitmap_zncc.8.float32.zst" => {
-                column(given.plain_bitmap_zncc.as_slice().unwrap())
-            }
-            "tracks/blur_matched_bitmap_zncc.8.float32.zst" => {
-                column(given.blur_matched_bitmap_zncc.as_slice().unwrap())
-            }
-            _ => return,
-        };
-        *values = full;
-    });
-    let names = archive_names(&old);
-    for name in ENTRIES_V15 {
-        assert!(names.contains(&name.to_string()), "{name} missing");
-    }
-    let (valid, errors) = verify_sfmr(&old).unwrap();
-    assert!(valid, "{errors:?}");
-
-    let mut loaded = read_sfmr(&old).unwrap();
-    assert_eq!(loaded.metadata.version, 15);
-    let read_back = loaded.observation_readings.as_ref().unwrap().rows();
-    for (j, (got, given)) in read_back.iter().zip(&rows).enumerate() {
-        assert_eq!(row_bits(got), row_bits(given), "row {j}");
-    }
-
-    let saved = dir.join("saved.sfmr");
-    write_sfmr(&saved, &mut loaded).unwrap();
-    let names = archive_names(&saved);
-    for name in ENTRIES {
-        assert!(names.contains(&name.to_string()), "{name} missing");
-    }
-    let reloaded = read_sfmr(&saved).unwrap();
-    assert_eq!(reloaded.metadata.version, SFMR_FORMAT_VERSION);
-    for (j, (got, given)) in reloaded
-        .observation_readings
-        .unwrap()
-        .rows()
-        .iter()
-        .zip(&rows)
-        .enumerate()
-    {
-        assert_eq!(row_bits(got), row_bits(&rounded(*given)), "row {j}");
-    }
-    let old_hash = read_sfmr_content_hash(&old).unwrap();
-    let new_hash = read_sfmr_content_hash(&saved).unwrap();
-    assert_ne!(new_hash.tracks_xxh128, old_hash.tracks_xxh128);
-    assert_eq!(new_hash.points3d_xxh128, old_hash.points3d_xxh128);
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn a_reading_column_in_the_dtype_of_another_version_is_refused() {
-    let dir = temp_dir("sfmr_test_observation_readings_wrong_dtype");
-    let current = dir.join("current.sfmr");
-    let mut data = make_test_data();
-    data.observation_readings = Some(readings_for(&[tagged_row(1.0); 8]));
-    write_sfmr(&current, &mut data).unwrap();
-    let assert_refused = |bad: &std::path::Path, needle: &str| {
-        let err = read_sfmr(bad)
-            .err()
-            .expect("the reader refuses it")
-            .to_string();
-        assert!(err.contains(needle), "reader: {err}");
-        let (valid, errors) = verify_sfmr(bad).unwrap();
-        assert!(!valid);
-        assert!(
-            errors.iter().any(|e| e.contains(needle)),
-            "verifier: {errors:?}"
-        );
-    };
-
-    // A current file holding the tilt angle as float32.
-    let float16_name = "tracks/zncc_self_similarity_tilt_angle.8.float16.zst";
-    let float32_name = "tracks/zncc_self_similarity_tilt_angle.8.float32.zst";
-    let bad = dir.join("float32_in_current.sfmr");
-    rewrite_renaming(&current, &bad, |name, raw| {
-        (name == float16_name).then(|| {
-            (
-                float32_name.to_string(),
-                float32_payload(&float16_payload(raw)),
-            )
-        })
-    });
-    assert_refused(
-        &bad,
-        &format!(
-            "a version {SFMR_FORMAT_VERSION} file stores {float16_name}, and this one holds \
-             {float32_name} instead"
-        ),
-    );
-
-    // A version 15 file holding the zoom as float16.
-    let old = dir.join("v15.sfmr");
-    rewrite_as_version_15(&current, &old, &dir, |_, _| {});
-    let float16_name = "tracks/zncc_self_similarity_zoom.8.2.float16.zst";
-    let float32_name = "tracks/zncc_self_similarity_zoom.8.2.float32.zst";
-    let bad = dir.join("float16_in_v15.sfmr");
-    rewrite_renaming(&old, &bad, |name, raw| {
-        (name == float32_name).then(|| {
-            let bits: Vec<u8> = raw
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .flat_map(|b| half::f16::from_f32(f32::from_le_bytes(*b)).to_le_bytes())
-                .collect();
-            (float16_name.to_string(), bits)
-        })
-    });
-    assert_refused(
-        &bad,
-        &format!(
-            "a version 15 file stores {float32_name}, and this one holds {float16_name} instead"
-        ),
-    );
-
-    // A current file holding a score under its version 15 name.
-    let deficit_name = "tracks/plain_bitmap_zncc_deficit.8.float16.zst";
-    let score_name = "tracks/plain_bitmap_zncc.8.float32.zst";
-    let bad = dir.join("score_in_current.sfmr");
-    rewrite_renaming(&current, &bad, |name, raw| {
-        (name == deficit_name).then(|| {
-            let scores: Vec<f32> = float16_payload(raw).iter().map(|w| 1.0 - w).collect();
-            (score_name.to_string(), float32_payload(&scores))
-        })
-    });
-    assert_refused(
-        &bad,
-        &format!(
-            "a version {SFMR_FORMAT_VERSION} file stores {deficit_name}, and this one holds \
-             {score_name} instead"
-        ),
-    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

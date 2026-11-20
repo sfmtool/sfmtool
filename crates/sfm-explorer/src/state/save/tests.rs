@@ -174,7 +174,8 @@ fn a_save_with_no_overlay_writes_the_value_and_mints_nothing() {
     assert!(!node.is_dirty());
 }
 
-/// A node opened from a file below `.sfmr` version 15 holds no image readings,
+/// A node whose value holds no image readings, as one a solve or an import
+/// builds,
 /// and a save gathers them, here from each image's `.sift` file. The save folds
 /// them into a version of its own before it writes, so the version the session
 /// holds is the content of the file on disk and its hash is the file's.
@@ -235,7 +236,7 @@ fn a_save_of_a_value_without_readings_records_the_hash_of_the_file_written() {
         .expect("the readings are in the .sift files");
 
     let written = sfmtool_sfmr_format::read_sfmr(&path).expect("a readable file");
-    let readings = written.image_readings.expect("a version 15 file");
+    let readings = written.image_readings.expect("a file holds its readings");
     assert_eq!(readings.sharpness[3], 1.0);
     let node = &state.scene[0];
     assert_eq!(node.history.versions().len(), versions_before + 1);

@@ -32,8 +32,6 @@
 
 use nalgebra::{Matrix3, Vector3};
 
-use sfmtool_sfmr_format::SfmrData;
-
 use crate::geometry::RotQuaternion;
 
 /// The camera-frame flip `S = diag(1, −1, −1)`: a 180° rotation about the
@@ -134,111 +132,6 @@ pub fn world_rotate_w(v: &Vector3<f64>) -> Vector3<f64> {
 /// The canonical → COLMAP (export) counterpart of [`world_rotate_w`].
 pub fn world_rotate_w_inverse(v: &Vector3<f64>) -> Vector3<f64> {
     Vector3::new(v.x, -v.z, v.y)
-}
-
-/// Upgrade a whole loaded [`SfmrData`] from the COLMAP convention (`.sfmr`
-/// version ≤ 4) to the canonical convention, in place (design decision D1).
-///
-/// Applies exactly the plan-§1 import conversion:
-///
-/// - camera poses (`quaternions_wxyz` / `translations_xyz`):
-///   [`pose_colmap_to_canonical`] (`R' = S·R·Wᵀ`, `t' = S·t`);
-/// - rig sensor poses (`sensor_from_rig`), when `rig_frame_data` is present:
-///   [`relative_pose_conjugate_s`] (`R' = S·R·S`, `t' = S·t` — `W` cancels
-///   for rig-relative poses);
-/// - world points (`positions_xyzw`): `xyz → W·xyz` with the homogeneous `w`
-///   carried through unchanged, so `w = 0` infinity directions rotate by `W`
-///   too;
-/// - per-point normals and patch `u`/`v` half-vectors: `W` rotation (exact on
-///   `f32` — `W` only permutes and negates components).
-///
-/// Depth statistics are left untouched: the stored per-image depth was
-/// COLMAP camera-space `+z`, and the canonical depth is `−z'` with
-/// `z' = −z`, so every depth value (and histogram) is invariant under the
-/// conversion.
-///
-/// Content hashes describe the **stored** bytes, so integrity verification
-/// ([`sfmtool_sfmr_format::verify_sfmr`], which re-reads the file) is unaffected by
-/// this in-memory conversion; a converted reconstruction saved back to disk
-/// is a new version-5 file with freshly computed hashes.
-pub fn sfmr_data_colmap_to_canonical(data: &mut SfmrData) {
-    // Camera poses.
-    for i in 0..data.quaternions_wxyz.nrows() {
-        let q = RotQuaternion::from_wxyz_array([
-            data.quaternions_wxyz[[i, 0]],
-            data.quaternions_wxyz[[i, 1]],
-            data.quaternions_wxyz[[i, 2]],
-            data.quaternions_wxyz[[i, 3]],
-        ]);
-        let t = Vector3::new(
-            data.translations_xyz[[i, 0]],
-            data.translations_xyz[[i, 1]],
-            data.translations_xyz[[i, 2]],
-        );
-        let (q_new, t_new) = pose_colmap_to_canonical(&q, &t);
-        for (k, &v) in q_new.to_wxyz_array().iter().enumerate() {
-            data.quaternions_wxyz[[i, k]] = v;
-        }
-        for k in 0..3 {
-            data.translations_xyz[[i, k]] = t_new[k];
-        }
-    }
-
-    // Rig sensor poses (rig-relative: S-conjugation only).
-    if let Some(rig) = data.rig_frame_data.as_mut() {
-        for i in 0..rig.sensor_quaternions_wxyz.nrows() {
-            let q = RotQuaternion::from_wxyz_array([
-                rig.sensor_quaternions_wxyz[[i, 0]],
-                rig.sensor_quaternions_wxyz[[i, 1]],
-                rig.sensor_quaternions_wxyz[[i, 2]],
-                rig.sensor_quaternions_wxyz[[i, 3]],
-            ]);
-            let t = Vector3::new(
-                rig.sensor_translations_xyz[[i, 0]],
-                rig.sensor_translations_xyz[[i, 1]],
-                rig.sensor_translations_xyz[[i, 2]],
-            );
-            let (q_new, t_new) = relative_pose_conjugate_s(&q, &t);
-            for (k, &v) in q_new.to_wxyz_array().iter().enumerate() {
-                rig.sensor_quaternions_wxyz[[i, k]] = v;
-            }
-            for k in 0..3 {
-                rig.sensor_translations_xyz[[i, k]] = t_new[k];
-            }
-        }
-    }
-
-    // World points: W on xyz, w carried through (also rotates w = 0 infinity
-    // directions).
-    for i in 0..data.positions_xyzw.nrows() {
-        let y = data.positions_xyzw[[i, 1]];
-        let z = data.positions_xyzw[[i, 2]];
-        data.positions_xyzw[[i, 1]] = z;
-        data.positions_xyzw[[i, 2]] = -y;
-    }
-
-    // World-space direction arrays: W rotation, exact on f32.
-    let rotate_w_f32_rows = |arr: &mut ndarray::Array2<f32>| {
-        for i in 0..arr.nrows() {
-            let y = arr[[i, 1]];
-            let z = arr[[i, 2]];
-            arr[[i, 1]] = z;
-            arr[[i, 2]] = -y;
-        }
-    };
-    if let Some(normals) = data.normals_xyz.as_mut() {
-        rotate_w_f32_rows(normals);
-    }
-    if let Some(u) = data.patch_u_halfvec_xyz.as_mut() {
-        rotate_w_f32_rows(u);
-    }
-    if let Some(v) = data.patch_v_halfvec_xyz.as_mut() {
-        rotate_w_f32_rows(v);
-    }
-    // `normal_confidence` is deliberately untouched: it is a scalar per point,
-    // frame-independent, so no convention change affects it. So is the
-    // constraint triple: a constraint is a code, a distance is a length, and a
-    // reference is an image index, none of which the handedness reaches.
 }
 
 #[cfg(test)]

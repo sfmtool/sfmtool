@@ -54,6 +54,25 @@ pub enum SfmrError {
     #[error("Shape mismatch: {0}")]
     ShapeMismatch(String),
 
+    /// A file of a version some release wrote and this build no longer reads,
+    /// below [`SFMR_OLDEST_READ_VERSION`]. The message names the last release
+    /// that reads it, [`SFMR_LAST_RELEASE_READING_OLDER_VERSIONS`], so the
+    /// user can upgrade the workspace with that release.
+    #[error(
+        "{} is a version {version} .sfmr file, and this sfmtool reads .sfmr files of \
+         version {SFMR_OLDEST_READ_VERSION} or later. sfmtool \
+         {SFMR_LAST_RELEASE_READING_OLDER_VERSIONS} is the last release that reads version \
+         {version}: install it, run `sfm ws upgrade` on the workspace, then use the file with \
+         this release.",
+        path.display()
+    )]
+    VersionNoLongerRead {
+        /// The file.
+        path: PathBuf,
+        /// Its `metadata.version`.
+        version: u32,
+    },
+
     /// The data holds something the format allows but a reader of it cannot
     /// apply: `SfmrReconstruction::from_sfmr_data` in `sfmtool-core` returns
     /// it for an image whose adjustment its camera cannot take, such as
@@ -75,27 +94,24 @@ pub struct SfmrCamera {
     pub width: u32,
     pub height: u32,
     pub parameters: BTreeMap<String, f64>,
-    /// The parameters that vary per image for this camera (version 13+), each
+    /// The parameters that vary per image for this camera, each
     /// a name from [`PER_IMAGE_ADJUSTMENT_NAMES`], in that order: `"focal"`
     /// when its images' rows of `images/focal_adjustments` are in use, and
     /// `"principal_point"` when their rows of
     /// `images/principal_point_adjustments_xy` are.
     ///
     /// Empty for a camera whose images are all read through it exactly, and
-    /// then left out of the JSON, so the cameras entry of a file without
-    /// adjustments is byte for byte what version 12 writes. The key is what
-    /// tells a zero adjustment that was solved for from one never enabled.
+    /// then left out of the JSON. The key is what tells a zero adjustment that was solved for from one never enabled.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub per_image_adjustments: Vec<String>,
     /// Whether this camera's sensor reads its image one row at a time or one
-    /// column at a time (version 14+): the axis the readout position of its
+    /// column at a time: the axis the readout position of its
     /// images' rolling-shutter rates is measured along.
     ///
     /// Required on a camera that lists `"rolling_shutter"` in
     /// [`Self::per_image_adjustments`] and allowed on any other, so that a
     /// known setting can be recorded before any rates are solved. `None` is
-    /// left out of the JSON, so the cameras entry of a file without it is byte
-    /// for byte what version 13 writes. An absent setting means the scanlines
+    /// left out of the JSON. An absent setting means the scanlines
     /// are not known, not [`RollingShutterScanlines::Rows`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rolling_shutter_scanlines: Option<RollingShutterScanlines>,
@@ -195,26 +211,22 @@ pub struct SfmrMetadata {
     /// When the file was written, ISO 8601 with a timezone offset.
     ///
     /// In memory it belongs to the metadata like anything else, and every
-    /// caller reads it here. On disk it is **not** part of `metadata.json`:
-    /// from version 8 it lives in `written.json`, outside the content digest,
-    /// because a value's hash cannot depend on the moment someone chose to save
-    /// it. So the writer clears this field on the copy it serialises (the
-    /// `skip_serializing_if` then drops the key entirely) and stores the
-    /// timestamp in the separate entry; the reader puts it back here from
-    /// whichever of the two a file carries, which is `written.json` at version
-    /// 8 and `metadata.json` below it.
+    /// caller reads it here. On disk it is **not** part of `metadata.json`: it
+    /// lives in `written.json`, outside the content digest, because a value's
+    /// hash cannot depend on the moment someone chose to save it. So the writer
+    /// clears this field on the copy it serialises (the `skip_serializing_if`
+    /// then drops the key entirely) and stores the timestamp in the separate
+    /// entry, and the reader puts it back here from `written.json`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub timestamp: String,
     pub image_count: u32,
     /// Number of points (finite and at infinity combined).
-    ///
-    /// The `points3d_count` alias accepts the version 1 field name on read.
-    #[serde(alias = "points3d_count")]
     pub point_count: u32,
     /// Number of points at infinity (rows of `positions_xyzw` with `w = 0`).
     ///
-    /// Absent in version 1 files (which have no infinity points); `serde(default)`
-    /// supplies `0` in that case.
+    /// Required in a file's `metadata.json`, which the reader checks before it
+    /// deserialises; a value built in memory may leave it out, and a write
+    /// computes it from the `w` column.
     #[serde(default)]
     pub infinity_point_count: u32,
     pub observation_count: u32,
@@ -234,13 +246,16 @@ pub struct SfmrMetadata {
     /// an SfM solve.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub world_space_unit: Option<String>,
-    /// Observation source (format version 4+):
+    /// Observation source:
     /// [`FEATURE_SOURCE_SIFT_FILES`] — observations reference external `.sift`
     /// files via `feature_indexes`, optionally alongside an inline copy of the
     /// coordinate in `tracks/keypoints_xy`; or [`FEATURE_SOURCE_EMBEDDED_PATCHES`]
     /// — per-observation keypoints are stored inline in `tracks/keypoints_xy`
     /// and there is no `.sift` link at all.
-    /// Legacy version 1–3 files have no key and read as `sift_files`.
+    ///
+    /// Required in a file's `metadata.json`, which the reader checks before it
+    /// deserialises; a value built in memory may leave it out, and is then a
+    /// `sift_files` value.
     #[serde(default = "default_feature_source")]
     pub feature_source: String,
 }
@@ -829,192 +844,24 @@ impl OptionalPresence {
 }
 
 /// Current `.sfmr` format version. [`crate::write_sfmr`] always writes this
-/// version; [`crate::read_sfmr`] accepts any version up to it.
-///
-/// Version 16 stores six reading columns as `float16` where version 15 stored
-/// them as `float32`: `images/sharpness` and the five observation-reading
-/// columns `tracks/zncc_self_similarity_ellipse_axes`, `_ellipse_major_angle`,
-/// `_cos_view_angle`, `_tilt_angle` and `_zoom` (see
-/// [`SFMR_FLOAT16_READINGS_VERSION`]). The values in memory stay `f32`: a
-/// writer rounds each to the nearest `float16`, and a reader widens it again
-/// exactly. A version 15 file reads as it did, and saves as version 16 with
-/// those columns rounded, which changes its content hash. The two bitmap
-/// scores are stored as their ZNCC deficits `1 − z` in `float16`, under the
-/// names `tracks/plain_bitmap_zncc_deficit` and
-/// `tracks/blur_matched_bitmap_zncc_deficit`. And the normal of a finite
-/// point with a patch is no longer stored but derived from its frame as
-/// `normalize(u × v)`, the other finite points' normals stored in
-/// `points3d/underived_normals_xyz` (see
-/// [`SFMR_DERIVED_PATCH_NORMALS_VERSION`]), so a
-/// version 15 file whose normals disagree with its frames saves with the
-/// derived ones.
-///
-/// Version 15 added each image's sharpness and gradient structure tensor, the
-/// required columns `images/sharpness` and
-/// `images/gradient_structure_tensors_xx_yy_xy`, and the required
-/// `image_to_gray` key of `images/metadata.json` that says which grey
-/// conversion both were computed through (see [`SfmrData::image_readings`]).
-/// A file below version 15 has none of them and reads with
-/// `image_readings` `None`; the writer refuses a value without them, so
-/// saving an older file needs its readings supplied first.
-///
-/// Version 14 added two more per-image corrections and a per-camera setting:
-/// the optional columns `images/radial_bspline_adjustments` and
-/// `images/rolling_shutter_rates_xyz` (see
-/// [`SfmrData::radial_bspline_adjustments`] and
-/// [`SfmrData::rolling_shutter_rates_xyz`]), the names `"radial_bspline"` and
-/// `"rolling_shutter"` in a camera's `per_image_adjustments`, and each
-/// camera's optional `rolling_shutter_scanlines` key (see
-/// [`SfmrCamera::rolling_shutter_scanlines`]). A file below version 14 has
-/// none of them and reads with every radial correction and every rate zero and
-/// no scanlines setting; a version 14 file with none of them differs from
-/// version 13 only in its version number.
-///
-/// Version 13 added the per-image intrinsic adjustments: the optional columns
-/// `images/focal_adjustments` and `images/principal_point_adjustments_xy` (see
-/// [`SfmrData::focal_adjustments`]) and each camera's optional
-/// `per_image_adjustments` key (see [`SfmrCamera::per_image_adjustments`]),
-/// which says whether a column is present. A file below version 13 has
-/// neither and reads with every adjustment zero.
-///
-/// Version 12 added `tracks/reference_observations`, per point the index of the
-/// observation the point's patch bitmap is, or is to be, rendered from, among
-/// the point's own observations, `-1` for no reference chosen (see
-/// [`SfmrData::reference_observations`]). It
-/// is required in a file whose `points3d/metadata.json` has `has_uv_frames`
-/// set, and absent otherwise, so it has no flag of its own. A file below
-/// version 12 with patch frames reads with the column filled with `-1`.
-///
-/// Version 11 made the thumbnail column `images/thumbnails_y_x_rgb` optional,
-/// flagged by `images/metadata.json`'s `has_thumbnails` (see
-/// [`SfmrData::thumbnails_y_x_rgb`]). The flag defaults the other way from the
-/// `points3d` flags: a file of version 10 or earlier carries no key and always
-/// carries the entry, so a missing key reads as present. A file without
-/// thumbnails writes `thumbnail_size: null` and leaves the entry out of
-/// `images_xxh128`.
-///
-/// Version 9 added an optional `lineage` key to `metadata.json`, a record of
-/// which earlier contents the file's point rows came from. The format has since
-/// retired it without a version change: the key was always optional, so a file
-/// written without it is a valid file of any version from 9 on. A file that
-/// carries it still reads, since [`SfmrMetadata`] skips a key it does not
-/// define, and still verifies, since `metadata_xxh128` is over the stored bytes;
-/// a write of what was read leaves the key out, which changes the metadata and
-/// content hashes as any rewrite of older content does.
-///
-/// Version 8 moved the write timestamp out of `metadata.json` into a top-level
-/// `written.json` (see [`WriteRecord`]), which -- like `content_hash.json` --
-/// is outside every section digest. The content hashes then describe the
-/// reconstruction and nothing about the act of saving it, so two saves of one
-/// value a moment apart write the same `content_xxh128`, and a value's hash can
-/// be computed before it is written. A file below version 8 carries its
-/// timestamp in `metadata.json` and no `written.json`; the reader takes it from
-/// whichever is there, and never rewrites an older file's stored hashes.
-///
-/// Version 7 added the optional per-point constraint triple
-/// `points3d/point_constraints`, `points3d/constraint_distances` and
-/// `points3d/constraint_reference_images`, flagged together by
-/// `points3d/metadata.json`'s `has_point_constraints` and read through that same
-/// entry's `point_constraint_names` legend (see [`SfmrData::point_constraints`]
-/// and [`PointConstraint`]). Older files carry neither the flag nor the arrays
-/// and read as `None`, which is every point free.
-///
-/// Version 6 added the optional per-observation array
-/// `tracks/observation_confidence`, flagged by `tracks/metadata.json`'s
-/// `has_observation_confidence` (see [`SfmrData::observation_confidence`]).
-/// Older files carry neither the flag nor the array and read as `None`.
-///
-/// Version 5 made the canonical coordinate convention normative (right-handed
-/// Z-up world, cameras looking down −Z with +Y up — see
-/// `specs/formats/sfmr-file-format.md` § "Coordinate System Conventions").
-/// The bump is purely semantic: no array was added, removed, or renamed.
-/// Version ≤ 4 files hold COLMAP-convention poses and world data; this crate
-/// reads them structurally and **preserves the stored version number** so the
-/// consumer can apply the COLMAP→canonical conversion — that conversion lives
-/// in `sfmtool-core` (`SfmrReconstruction::load`), which owns the `S`/`W`
-/// convention math (`geometry::convention`) that this lower-level crate
-/// cannot depend on.
+/// version; [`crate::read_sfmr`] accepts every version from
+/// [`SFMR_OLDEST_READ_VERSION`] to this one. See
+/// `specs/formats/sfmr-file-format.md` § "Format versions".
 pub const SFMR_FORMAT_VERSION: u32 = 16;
 
-/// The first `.sfmr` version that stores `images/sharpness` and the five
-/// observation-reading columns `tracks/zncc_self_similarity_ellipse_axes`,
-/// `_ellipse_major_angle`, `_cos_view_angle`, `_tilt_angle` and `_zoom` as
-/// `float16`, and the two bitmap scores as their ZNCC deficits `1 − z` in
-/// `float16` (`tracks/plain_bitmap_zncc_deficit` and
-/// `tracks/blur_matched_bitmap_zncc_deficit`).
-///
-/// A file below it stores them as `float32`, the scores as the scores
-/// themselves (`tracks/plain_bitmap_zncc`, `tracks/blur_matched_bitmap_zncc`).
-/// Each version has one entry per column, and the reader refuses a file
-/// holding the other one. The gradient structure tensor is `float32` in every
-/// version. See `specs/formats/sfmr-file-format.md` § "Version 15 → Version
-/// 16".
-pub const SFMR_FLOAT16_READINGS_VERSION: u32 = 16;
+/// The oldest `.sfmr` format version a reader accepts. A file of an older
+/// version that a release wrote is refused with
+/// [`SfmrError::VersionNoLongerRead`].
+pub const SFMR_OLDEST_READ_VERSION: u32 = 16;
 
-/// The first `.sfmr` version that derives the normal of a finite point with a
-/// patch from its frame rather than storing it.
-///
-/// In a file of this version or later with both normals and the patch frame,
-/// the normal of every finite point (`w ≠ 0`) whose frame gives one
-/// ([`crate::patch_normal`]) is not stored, and the reader computes it as
-/// `normalize(u × v)` in `f32`. Only the normals of the other finite points
-/// (no patch, or a degenerate frame) are stored, in point order, in
-/// `points3d/underived_normals_xyz.{K}.3.float32.zst`, absent when `K` is 0;
-/// a point at infinity's normal is `(0, 0, 0)` and not stored. A file
-/// without the patch frame stores the full `normals_xyz` column. A writer
-/// sets the derived normals and the zero normals of points at infinity in
-/// the value it writes. A file below it reads its normals as stored. See
-/// `specs/formats/sfmr-file-format.md` § "Version 15 → Version 16".
-pub const SFMR_DERIVED_PATCH_NORMALS_VERSION: u32 = 16;
-
-/// The first `.sfmr` version that stores the per-image radial B-spline
-/// correction and rolling-shutter rates: `images/radial_bspline_adjustments`,
-/// `images/rolling_shutter_rates_xyz`, the names `"radial_bspline"` and
-/// `"rolling_shutter"` in the cameras' `per_image_adjustments` key, and the
-/// cameras' `rolling_shutter_scanlines` key.
-///
-/// A file below it carries none of them; the reader refuses one that does.
-pub const SFMR_PER_IMAGE_LENS_CORRECTIONS_VERSION: u32 = 14;
-
-/// The first `.sfmr` version that stores per-image intrinsic adjustments:
-/// `images/focal_adjustments`, `images/principal_point_adjustments_xy` and the
-/// cameras' `per_image_adjustments` key.
-///
-/// A file below it carries none of them; the reader refuses one that does.
-pub const SFMR_PER_IMAGE_ADJUSTMENTS_VERSION: u32 = 13;
-
-/// The first `.sfmr` version that stores `tracks/reference_observations`.
-///
-/// Below it a file with patch frames carries no entry, and the reader fills
-/// the column with [`NO_REFERENCE_OBSERVATION`].
-pub const SFMR_REFERENCE_OBSERVATIONS_VERSION: u32 = 12;
+/// The last sfmtool release whose readers accept the `.sfmr` versions below
+/// [`SFMR_OLDEST_READ_VERSION`], which a refusal of such a file names.
+pub const SFMR_LAST_RELEASE_READING_OLDER_VERSIONS: &str = "0.4.1";
 
 /// The value of a [`SfmrData::reference_observations`] row for a point with no
 /// reference chosen: no observation its patch bitmap is, or is to be, rendered
 /// from.
 pub const NO_REFERENCE_OBSERVATION: i32 = -1;
-
-/// The first `.sfmr` version that stores its write timestamp in `written.json`
-/// rather than in `metadata.json`.
-///
-/// The reader takes the timestamp from `written.json` at or above this version
-/// and from `metadata.json` below it, so a file written before the split loads
-/// with the timestamp it stored and the hashes it stored.
-pub const SFMR_WRITE_RECORD_VERSION: u32 = 8;
-
-/// The first `.sfmr` version whose stored poses and world data are in the
-/// canonical convention (right-handed Z-up world, cameras looking down −Z).
-///
-/// A file stored **below** this version holds COLMAP-convention content and
-/// must be converted on load; a file at or above it is already canonical and
-/// must be loaded untouched. This is a fixed fact about the format's history,
-/// so it is a constant of its own and never [`SFMR_FORMAT_VERSION`]: gating the
-/// conversion on the *current* version re-applies it to every already-canonical
-/// file the moment the format version is bumped for an unrelated reason (it
-/// was, in version 6, and every version-5 file then loaded with its cameras
-/// flipped by `S` — see `SfmrReconstruction::load` in `sfmtool-core`, the one
-/// consumer of this constant).
-pub const SFMR_CANONICAL_CONVENTION_VERSION: u32 = 5;
 
 /// The units [`SfmrMetadata::world_space_unit`] may name, each with its length
 /// in metres.
@@ -1075,14 +922,13 @@ pub struct ContentHash {
     /// present.
     pub points3d_xxh128: String,
     pub tracks_xxh128: String,
-    /// Hash of the `derived/` section, present from version 10.
+    /// Hash of the `derived/` section.
     ///
     /// Verified like every other section hash, and deliberately **not** folded
     /// into `content_xxh128`: the section holds values computed from content
     /// hashed elsewhere in the file, so two reconstructions that differ only
     /// there are the same reconstruction. See the `.sfmr` spec, "Derived".
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub derived_xxh128: Option<String>,
+    pub derived_xxh128: String,
     pub content_xxh128: String,
 }
 
@@ -1215,7 +1061,7 @@ pub struct SfmrData {
     /// camera lists `"focal"` in [`SfmrCamera::per_image_adjustments`], which
     /// is every image read at its camera's focal.
     ///
-    /// On disk this is `images/focal_adjustments` (version 13+), present
+    /// On disk this is `images/focal_adjustments`, present
     /// exactly when some camera lists `"focal"`. A row whose image's camera
     /// does not list it is `0`; every row is finite and above `-1`.
     pub focal_adjustments: Option<Array1<f64>>,
@@ -1225,7 +1071,7 @@ pub struct SfmrData {
     /// in y. `None` when no camera lists `"principal_point"` in
     /// [`SfmrCamera::per_image_adjustments`].
     ///
-    /// On disk this is `images/principal_point_adjustments_xy` (version 13+),
+    /// On disk this is `images/principal_point_adjustments_xy`,
     /// present exactly when some camera lists `"principal_point"`. A row whose
     /// image's camera does not list it is `[0, 0]`; every value is finite.
     pub principal_point_adjustments_xy: Option<Array2<f64>>,
@@ -1237,7 +1083,7 @@ pub struct SfmrData {
     /// [`SfmrCamera::per_image_adjustments`], which only an `SFMTOOL_PINHOLE`
     /// camera may.
     ///
-    /// On disk this is `images/radial_bspline_adjustments` (version 14+),
+    /// On disk this is `images/radial_bspline_adjustments`,
     /// present exactly when some camera lists `"radial_bspline"`. A row whose
     /// image's camera does not list it is `[0, 0]`; every value is finite.
     pub radial_bspline_adjustments: Option<Array2<f64>>,
@@ -1248,16 +1094,17 @@ pub struct SfmrData {
     /// [`SfmrCamera::rolling_shutter_scanlines`] names. `None` when no camera
     /// lists `"rolling_shutter"` in [`SfmrCamera::per_image_adjustments`].
     ///
-    /// On disk this is `images/rolling_shutter_rates_xyz` (version 14+),
+    /// On disk this is `images/rolling_shutter_rates_xyz`,
     /// present exactly when some camera lists `"rolling_shutter"`. A row whose
     /// image's camera does not list it is `[0, 0, 0]`; every value is finite.
     pub rolling_shutter_rates_xyz: Option<Array2<f64>>,
     /// Every image's sharpness and gradient structure tensor, with the grey
-    /// conversion they were computed through, or `None` for a file below
-    /// version 15 ([`crate::SFMR_IMAGE_READINGS_VERSION`]), which has none.
+    /// conversion they were computed through. Always `Some` in a value
+    /// [`crate::read_sfmr`] returns, since every file holds them; `None` in a
+    /// value built in memory before they are gathered.
     ///
-    /// Required from version 15: [`crate::write_sfmr`] refuses a value
-    /// without them, and a read never computes them.
+    /// Required in a file: [`crate::write_sfmr`] refuses a value without
+    /// them, and a read never computes them.
     /// [`crate::content_hash_of`] hashes a value without them as it stands,
     /// so the hash it returns for one is not the hash a write stores once the
     /// readings are supplied.
@@ -1278,10 +1125,10 @@ pub struct SfmrData {
     /// estimate leaves `(0, 0, 0)` rows for `w == 0` points). `None` when the
     /// reconstruction carries no normals at all.
     ///
-    /// On disk this is `points3d/normals_xyz` in format version 3+ (present only
-    /// when `points3d/metadata.json`'s `has_normals` is `true`); version 1 and 2
-    /// files always store it under the legacy name `estimated_normals_xyz`,
-    /// which the reader accepts and maps onto this field.
+    /// On disk this is `points3d/normals_xyz` (present only when
+    /// `points3d/metadata.json`'s `has_normals` is `true`), or, with the patch
+    /// frame, the normals the frame does not give in
+    /// `points3d/underived_normals_xyz`, the rest derived from the frame.
     pub normals_xyz: Option<Array2<f32>>,
     /// Optional `(P,)` per-point confidence in the stored normal: `0` means the
     /// matching `normals_xyz` row carries no data-derived support (a
@@ -1291,15 +1138,15 @@ pub struct SfmrData {
     /// reconstruction carries no confidence information at all — which is *not*
     /// the same as "all confident".
     ///
-    /// On disk this is `points3d/normal_confidence` (version 5+, present only
+    /// On disk this is `points3d/normal_confidence` (present only
     /// when `points3d/metadata.json`'s `has_normal_confidence` is `true`). The
     /// writer passes it through untouched.
     pub normal_confidence: Option<Array1<u8>>,
 
-    // Per-point solve constraints (optional, version 7+): what an adjustment
-    // owns of each point, and what a caller-owned distance is measured from.
-    // The three columns are present together or absent together, and absent is
-    // "every point free", which is what every file below version 7 is. They
+    // Per-point solve constraints (optional): what an adjustment owns of each
+    // point, and what a caller-owned distance is measured from. The three
+    // columns are present together or absent together, and absent is "every
+    // point free". They
     // annotate `positions_xyzw` without changing its meaning: `w = 0` is still
     // a direction and `w != 0` still a finite point, whatever the constraint.
     /// `(P,)` constraint per point in the canonical numbering:
@@ -1307,7 +1154,7 @@ pub struct SfmrData {
     /// [`POINT_CONSTRAINT_HELD`]. `None` when the file carries no constraints,
     /// which is every point free.
     ///
-    /// On disk this is `points3d/point_constraints` (version 7+, present only
+    /// On disk this is `points3d/point_constraints` (present only
     /// when `points3d/metadata.json`'s `has_point_constraints` is `true`), where
     /// a code indexes that entry's `point_constraint_names` legend instead. The
     /// reader resolves every code through the legend the file carries and hands
@@ -1319,7 +1166,7 @@ pub struct SfmrData {
     /// reference). `NaN` on every free and held row. `None` together with
     /// [`Self::point_constraints`].
     ///
-    /// On disk this is `points3d/constraint_distances` (version 7+).
+    /// On disk this is `points3d/constraint_distances`.
     pub constraint_distances: Option<Array1<f64>>,
     /// `(P,)` image index a finite distance is measured from -- the distance
     /// runs from that image's camera centre at whatever pose the reader holds.
@@ -1331,10 +1178,10 @@ pub struct SfmrData {
     /// measure a distance from the mean of several camera centres, which is a
     /// call-time construct of the kernel rather than stored state.
     ///
-    /// On disk this is `points3d/constraint_reference_images` (version 7+).
+    /// On disk this is `points3d/constraint_reference_images`.
     pub constraint_reference_images: Option<Array1<u32>>,
 
-    // Per-point oriented-patch ("surfel") frame (optional, version 3+), stored
+    // Per-point oriented-patch ("surfel") frame (optional), stored
     // alongside the other `points3d/` arrays. A patch is centred on its 3D point
     // with outward normal `u × v`, so only the in-plane frame is stored: two
     // half-extent vectors `u` and `v` that span the patch corner
@@ -1382,7 +1229,7 @@ pub struct SfmrData {
     /// `None` means no information at all, which is *not* the same as "every
     /// observation is sharp".
     ///
-    /// On disk this is `tracks/observation_confidence` (version 6+, present
+    /// On disk this is `tracks/observation_confidence` (present
     /// only when `tracks/metadata.json`'s `has_observation_confidence` is
     /// `true`). It is defined for both `sift_files` and `embedded_patches`
     /// files and requires no other array to be present — it rates observations,
@@ -1396,8 +1243,8 @@ pub struct SfmrData {
     /// stored bitmap, with the options they were read with.
     ///
     /// On disk these are eight `tracks/` columns, present or absent together,
-    /// flagged by `tracks/metadata.json`'s `has_observation_readings` (a
-    /// version 12 addition, optional). Defined in both feature sources. Like
+    /// flagged by `tracks/metadata.json`'s `has_observation_readings`
+    /// (optional). Defined in both feature sources. Like
     /// `observation_confidence`, the writer passes the rows through untouched
     /// and only permutes them with the other per-observation arrays.
     pub observation_readings: Option<crate::ObservationReadingColumns>,
@@ -1413,9 +1260,7 @@ pub struct SfmrData {
     /// `embed-patches`, the viewer's display bitmaps) renders the point from
     /// this observation. [`NO_REFERENCE_OBSERVATION`] (`-1`) where the point
     /// has no reference observation in its track: a stored bitmap is then not
-    /// the render of one of the point's observations -- a fused mean (from
-    /// before version 12, or a file written before the stored bitmap stopped
-    /// being a mean), or the
+    /// the render of one of the point's observations -- a fused mean, or the
     /// render of an observation that has since been removed from the point --
     /// and a later render runs the reference-view rule for the point. A writer that
     /// drops the bitmaps keeps the column, since it is required with the patch
@@ -1427,10 +1272,9 @@ pub struct SfmrData {
     /// observations moves the index with the reference observation, and writes
     /// `-1` where it removes that observation.
     ///
-    /// On disk this is `tracks/reference_observations` (version 12+). It is
-    /// `Some` exactly when the patch frame is present: required in a file
-    /// with `has_uv_frames`, absent otherwise. A file below version 12 with
-    /// patch frames reads with every row `-1`.
+    /// On disk this is `tracks/reference_observations`. It is `Some` exactly
+    /// when the patch frame is present: required in a file with
+    /// `has_uv_frames`, absent otherwise.
     pub reference_observations: Option<Array1<i32>>,
 
     // Depth statistics

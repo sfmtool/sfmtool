@@ -1,15 +1,15 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The per-image radial B-spline correction and rolling-shutter rates of
-//! version 14: the two optional `images/` columns, the names
+//! The per-image radial B-spline correction and rolling-shutter rates:
+//! the two optional `images/` columns, the names
 //! `"radial_bspline"` and `"rolling_shutter"` in the cameras'
 //! `per_image_adjustments` key, the cameras' `rolling_shutter_scanlines` key,
 //! and the rules a reader, a writer and a verifier hold them to.
 
 use super::{
     archive_names, images_digest, make_embedded_test_data, make_test_data, read_json_entry_of,
-    restamp_hashes, rewrite_entries,
+    rewrite_entries,
 };
 use crate::*;
 use ndarray::Array2;
@@ -256,85 +256,6 @@ fn the_images_and_cameras_hashes_change_with_the_columns_and_the_keys() {
     rates_changed.rolling_shutter_rates_xyz.as_mut().unwrap()[[1, 2]] = 2.0e-3;
     let with_other_rates = content_hash_of(&mut rates_changed, &options).unwrap();
     assert_ne!(with_other_rates.images_xxh128, with_values.images_xxh128);
-}
-
-#[test]
-fn a_version_13_file_reads_with_no_corrections_and_saves_as_the_current_version() {
-    let dir = temp_dir("sfmr_test_lens_corrections_v13");
-    let current = dir.join("current.sfmr");
-    let mut data = make_test_data();
-    data.image_readings = None;
-    crate::write::write_sfmr_without_readings_check(&current, &mut data).unwrap();
-    let old = dir.join("v13.sfmr");
-    rewrite_entries(&current, &old, |name, raw| {
-        (name == "metadata.json.zst").then(|| {
-            let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
-            json["version"] = serde_json::json!(13);
-            serde_json::to_vec(&json).unwrap()
-        })
-    });
-    restamp_hashes(&old, &dir);
-
-    let mut loaded = read_sfmr(&old).unwrap();
-    assert_eq!(loaded.metadata.version, 13);
-    assert!(loaded.radial_bspline_adjustments.is_none());
-    assert!(loaded.rolling_shutter_rates_xyz.is_none());
-    assert_eq!(loaded.cameras[0].rolling_shutter_scanlines, None);
-    assert!(loaded.image_readings.is_none());
-
-    // Saving it needs the image readings version 15 requires; with them, the
-    // cameras section is what the version 13 file stored, and the images
-    // section gains the readings.
-    let saved = dir.join("saved.sfmr");
-    loaded.image_readings = Some(super::test_image_readings(3));
-    write_sfmr(&saved, &mut loaded).unwrap();
-    assert_eq!(
-        read_sfmr_metadata(&saved).unwrap().version,
-        SFMR_FORMAT_VERSION
-    );
-    let old_hash = read_sfmr_content_hash(&old).unwrap();
-    let new_hash = read_sfmr_content_hash(&saved).unwrap();
-    assert_eq!(new_hash.cameras_xxh128, old_hash.cameras_xxh128);
-    assert_ne!(new_hash.images_xxh128, old_hash.images_xxh128);
-    assert_ne!(new_hash.metadata_xxh128, old_hash.metadata_xxh128);
-    assert!(verify_sfmr(&saved).unwrap().0);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn a_file_below_version_14_with_a_new_column_or_key_is_refused() {
-    let to_version_13 = |name: &str, raw: &[u8]| {
-        (name == "metadata.json.zst").then(|| {
-            let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
-            json["version"] = serde_json::json!(13);
-            serde_json::to_vec(&json).unwrap()
-        })
-    };
-    let dir = temp_dir("sfmr_test_lens_corrections_old_version");
-    let (err, errors) = read_and_verify_edited(&dir, to_version_13);
-    assert_named(&err, &errors, "which version 14 introduced");
-
-    // The scanlines setting alone is refused below version 14 as well.
-    let good = dir.join("scanlines.sfmr");
-    let mut data = make_test_data();
-    data.cameras[0].rolling_shutter_scanlines = Some(RollingShutterScanlines::Rows);
-    write_sfmr(&good, &mut data).unwrap();
-    let bad = dir.join("scanlines_v13.sfmr");
-    rewrite_entries(&good, &bad, to_version_13);
-    let Err(err) = read_sfmr(&bad) else {
-        panic!("the reader accepted a version 13 file with a scanlines setting");
-    };
-    let err = err.to_string();
-    assert!(err.contains("which version 14 introduced"), "{err}");
-    let (valid, errors) = verify_sfmr(&bad).unwrap();
-    assert!(!valid);
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.contains("which version 14 introduced")),
-        "{errors:?}"
-    );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Write `data_with_corrections`, rewrite it with `edit`,

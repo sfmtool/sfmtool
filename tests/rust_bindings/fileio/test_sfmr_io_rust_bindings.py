@@ -812,7 +812,7 @@ class TestRetiredLineage:
 
 
 class TestOptionalThumbnails:
-    """From format version 11 a reconstruction may carry no thumbnails, and
+    """A reconstruction may carry no thumbnails, and
     every binding hands that absence through as ``None`` rather than filling
     it in."""
 
@@ -836,7 +836,7 @@ class TestOptionalThumbnails:
         recon.clone_with_changes(thumbnails_y_x_rgb=None).save(out)
         loaded = SfmrReconstruction.load(out)
         assert loaded.thumbnails_y_x_rgb is None
-        assert loaded.metadata()["version"] >= 11
+        assert loaded.metadata()["version"] == 16
         ok, errors = verify_sfmr(out)
         assert ok, errors
 
@@ -913,7 +913,7 @@ class TestMinimalSave:
 
 
 class TestPerImageIntrinsicAdjustments:
-    """Format version 13 stores per image an adjustment of its camera's focal
+    """A .sfmr file stores per image an adjustment of its camera's focal
     and principal point."""
 
     def test_a_file_without_them_reads_none_and_empty_lists(self, seoul_bull_sfmr_only):
@@ -1033,7 +1033,7 @@ class TestPerImageIntrinsicAdjustments:
 
 
 class TestPerImageLensCorrections:
-    """Format version 14 stores per image a radial B-spline correction and
+    """A .sfmr file stores per image a radial B-spline correction and
     rolling-shutter rates, and per camera a rolling-shutter scanlines setting.
 
     The dicts and a reconstruction read and write both corrections and the

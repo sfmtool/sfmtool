@@ -22,22 +22,6 @@
 //! intent — it would also accept a float or a signed value — so it documents
 //! less than a concrete type would.
 //!
-//! ## Version-dependent names
-//!
-//! Five entries were renamed or relocated across format versions, and both the
-//! reader and the verifier have to accept either spelling. Those functions take
-//! the version predicate rather than making each caller re-derive the mapping:
-//!
-//! | Function | `true` (legacy) | `false` (current) |
-//! |---|---|---|
-//! | [`points3d_positions`] | `positions_xyz` (v1, Euclidean) | `positions_xyzw` (v2+, homogeneous) |
-//! | [`points3d_normals`] | `estimated_normals_xyz` (pre-v3) | `normals_xyz` (v3+) |
-//! | [`tracks_point_indexes`] | `points3d_indexes` (v1) | `point_indexes` (v2+) |
-//! | [`depth_statistics`] | under `images/` (pre-v10) | under `derived/` (v10+) |
-//! | [`observed_depth_histogram_counts`] | under `images/` (pre-v10) | under `derived/` (v10+) |
-//!
-//! The writer only ever emits the current spelling, so it passes `false`.
-//!
 //! ## How the tests use this module
 //!
 //! `tests::entry_names_are_pinned` calls these functions and compares each
@@ -65,7 +49,7 @@ pub(crate) fn content_hash() -> &'static str {
     "content_hash.json.zst"
 }
 
-/// `written.json.zst` — when the file was written (version 8+).
+/// `written.json.zst` — when the file was written.
 ///
 /// Outside every section digest, like `content_hash.json.zst`, so nothing it
 /// holds reaches `content_xxh128`.
@@ -166,40 +150,36 @@ pub(crate) fn images_sift_content_hashes(image_count: impl std::fmt::Display) ->
     format!("images/sift_content_hashes.{image_count}.uint128.zst")
 }
 
-/// `images/focal_adjustments` — focal scale per image (v13+, optional).
+/// `images/focal_adjustments` — focal scale per image (optional).
 pub(crate) fn images_focal_adjustments(image_count: impl std::fmt::Display) -> String {
     format!("images/focal_adjustments.{image_count}.float64.zst")
 }
 
 /// `images/principal_point_adjustments_xy` — principal-point offset per
-/// image, in the short-side unit (v13+, optional).
+/// image, in the short-side unit (optional).
 pub(crate) fn images_principal_point_adjustments_xy(image_count: impl std::fmt::Display) -> String {
     format!("images/principal_point_adjustments_xy.{image_count}.2.float64.zst")
 }
 
 /// `images/radial_bspline_adjustments` — radial B-spline correction per
-/// image, two coefficients in units of `ρ` (v14+, optional).
+/// image, two coefficients in units of `ρ` (optional).
 pub(crate) fn images_radial_bspline_adjustments(image_count: impl std::fmt::Display) -> String {
     format!("images/radial_bspline_adjustments.{image_count}.2.float64.zst")
 }
 
 /// `images/rolling_shutter_rates_xyz` — rolling-shutter rates per image, in
-/// radians per short side of readout (v14+, optional).
+/// radians per short side of readout (optional).
 pub(crate) fn images_rolling_shutter_rates_xyz(image_count: impl std::fmt::Display) -> String {
     format!("images/rolling_shutter_rates_xyz.{image_count}.3.float64.zst")
 }
 
-/// `images/sharpness` — sharpness per image (v15+, required): `float32` in a
-/// version 15 file and `float16` from
-/// [`SFMR_FLOAT16_READINGS_VERSION`](crate::SFMR_FLOAT16_READINGS_VERSION)
-/// on, as `float16` says.
-pub(crate) fn images_sharpness(float16: bool, image_count: impl std::fmt::Display) -> String {
-    let dtype = if float16 { "float16" } else { "float32" };
-    format!("images/sharpness.{image_count}.{dtype}.zst")
+/// `images/sharpness` — sharpness per image (required), `float16`.
+pub(crate) fn images_sharpness(image_count: impl std::fmt::Display) -> String {
+    format!("images/sharpness.{image_count}.float16.zst")
 }
 
 /// `images/gradient_structure_tensors_xx_yy_xy` — `[Exx, Eyy, Exy]` per
-/// image (v15+, required).
+/// image (required).
 pub(crate) fn images_gradient_structure_tensors_xx_yy_xy(
     image_count: impl std::fmt::Display,
 ) -> String {
@@ -215,27 +195,21 @@ pub(crate) fn images_thumbnails_y_x_rgb(image_count: impl std::fmt::Display) -> 
 
 /// `derived/depth_statistics.json.zst` — per-image observed-depth summary.
 ///
-/// Under `images/` before version 10, and its own section from version 10 on:
-/// it is computed from the poses, the positions and the tracks, so it is not
-/// content the file's identity is over. See [`crate::write`].
-pub(crate) fn depth_statistics(pre_v10: bool) -> &'static str {
-    if pre_v10 {
-        "images/depth_statistics.json.zst"
-    } else {
-        "derived/depth_statistics.json.zst"
-    }
+/// In its own section because it is computed from the poses, the positions
+/// and the tracks, so it is not content the file's identity is over. See
+/// [`crate::write`].
+pub(crate) fn depth_statistics() -> &'static str {
+    "derived/depth_statistics.json.zst"
 }
 
 /// `derived/observed_depth_histogram_counts` — per-image depth histogram.
 ///
-/// Moved with [`depth_statistics`] in version 10, and derived the same way.
+/// Derived the same way as [`depth_statistics`].
 pub(crate) fn observed_depth_histogram_counts(
-    pre_v10: bool,
     image_count: impl std::fmt::Display,
     num_buckets: impl std::fmt::Display,
 ) -> String {
-    let section = if pre_v10 { "images" } else { "derived" };
-    format!("{section}/observed_depth_histogram_counts.{image_count}.{num_buckets}.uint32.zst")
+    format!("derived/observed_depth_histogram_counts.{image_count}.{num_buckets}.uint32.zst")
 }
 
 /// `points3d/metadata.json.zst` — point-section metadata.
@@ -258,8 +232,7 @@ pub(crate) fn points3d_normal_confidence(point_count: impl std::fmt::Display) ->
     format!("points3d/normal_confidence.{point_count}.uint8.zst")
 }
 
-/// `points3d/point_constraints` — the constraint code per point (v7+,
-/// optional).
+/// `points3d/point_constraints` — the constraint code per point (optional).
 ///
 /// Each of the three constraint entries is named for the [`SfmrData`] field
 /// that carries it, the way every other column in this format is.
@@ -270,13 +243,13 @@ pub(crate) fn points3d_point_constraints(point_count: impl std::fmt::Display) ->
 }
 
 /// `points3d/constraint_distances` — a ranged point's distance from its
-/// reference (v7+, optional).
+/// reference (optional).
 pub(crate) fn points3d_constraint_distances(point_count: impl std::fmt::Display) -> String {
     format!("points3d/constraint_distances.{point_count}.float64.zst")
 }
 
 /// `points3d/constraint_reference_images` — the image a finite distance is
-/// measured from (v7+, optional).
+/// measured from (optional).
 pub(crate) fn points3d_constraint_reference_images(point_count: impl std::fmt::Display) -> String {
     format!("points3d/constraint_reference_images.{point_count}.uint32.zst")
 }
@@ -302,33 +275,19 @@ pub(crate) fn points3d_patch_bitmaps_y_x_rgba(
     format!("points3d/patch_bitmaps_y_x_rgba.{point_count}.{r}.{r}.4.uint8.zst")
 }
 
-/// `points3d/positions_xyz` (v1) or `points3d/positions_xyzw` (v2+).
-///
-/// Version 1 stored Euclidean 3-vectors; version 2 switched to homogeneous
-/// 4-vectors so points at infinity are representable. The dtype and the
-/// component count both change with the spelling, which is why this is one
-/// function rather than two names sharing a suffix.
-pub(crate) fn points3d_positions(is_v1: bool, point_count: impl std::fmt::Display) -> String {
-    if is_v1 {
-        format!("points3d/positions_xyz.{point_count}.3.float64.zst")
-    } else {
-        format!("points3d/positions_xyzw.{point_count}.4.float64.zst")
-    }
+/// `points3d/positions_xyzw` — homogeneous position per point, so points at
+/// infinity are representable.
+pub(crate) fn points3d_positions(point_count: impl std::fmt::Display) -> String {
+    format!("points3d/positions_xyzw.{point_count}.4.float64.zst")
 }
 
-/// `points3d/estimated_normals_xyz` (pre-v3) or `points3d/normals_xyz` (v3+).
-///
-/// A pure rename — the shape and dtype are unchanged.
-pub(crate) fn points3d_normals(is_pre_v3: bool, point_count: impl std::fmt::Display) -> String {
-    if is_pre_v3 {
-        format!("points3d/estimated_normals_xyz.{point_count}.3.float32.zst")
-    } else {
-        format!("points3d/normals_xyz.{point_count}.3.float32.zst")
-    }
+/// `points3d/normals_xyz` — normal per point (optional).
+pub(crate) fn points3d_normals(point_count: impl std::fmt::Display) -> String {
+    format!("points3d/normals_xyz.{point_count}.3.float32.zst")
 }
 
 /// `points3d/underived_normals_xyz` — the normals of the finite points whose
-/// patch frame gives none (v16+, in a file with normals and the patch frame,
+/// patch frame gives none (in a file with normals and the patch frame,
 /// present only when there are any), `(K, 3)` in point order.
 pub(crate) fn points3d_underived_normals(underived_count: impl std::fmt::Display) -> String {
     format!("points3d/underived_normals_xyz.{underived_count}.3.float32.zst")
@@ -355,7 +314,7 @@ pub(crate) fn tracks_keypoints_xy(observation_count: impl std::fmt::Display) -> 
     format!("tracks/keypoints_xy.{observation_count}.2.float32.zst")
 }
 
-/// `tracks/observation_confidence` — per-observation confidence (v6+, optional).
+/// `tracks/observation_confidence` — per-observation confidence (optional).
 pub(crate) fn tracks_observation_confidence(observation_count: impl std::fmt::Display) -> String {
     format!("tracks/observation_confidence.{observation_count}.uint8.zst")
 }
@@ -413,20 +372,8 @@ impl ReadingColumn {
         }
     }
 
-    /// Whether the column is one of the seven value columns that a file of
-    /// version
-    /// [`SFMR_FLOAT16_READINGS_VERSION`](crate::SFMR_FLOAT16_READINGS_VERSION)
-    /// or later stores as `float16`: the axes, the two angles, `cos θ`, the
-    /// zoom and the two scores (as their deficits, [`Self::stores_deficit`]).
-    /// The flags stay `uint8`.
-    pub(crate) fn has_float16_form(self) -> bool {
-        self != ReadingColumn::EllipseAxesIsAtLeast
-    }
-
-    /// Whether the column is one of the two scores, which a file of version
-    /// [`SFMR_FLOAT16_READINGS_VERSION`](crate::SFMR_FLOAT16_READINGS_VERSION)
-    /// or later stores as their ZNCC deficit `1 − ZNCC`, under a name ending
-    /// `_zncc_deficit`.
+    /// Whether the column is one of the two scores, which the file stores as
+    /// their ZNCC deficit `1 − ZNCC`, under a name ending `_zncc_deficit`.
     pub(crate) fn stores_deficit(self) -> bool {
         matches!(
             self,
@@ -434,42 +381,39 @@ impl ReadingColumn {
         )
     }
 
-    /// The column's name under `tracks/` in a file whose float columns are
-    /// `float16` where `float16` says so: [`Self::stem`], with `_deficit`
+    /// The column's name under `tracks/`: [`Self::stem`], with `_deficit`
     /// after a score's.
-    pub(crate) fn stored_stem(self, float16: bool) -> String {
-        if float16 && self.stores_deficit() {
+    pub(crate) fn stored_stem(self) -> String {
+        if self.stores_deficit() {
             format!("{}_deficit", self.stem())
         } else {
             self.stem().to_string()
         }
     }
 
-    /// Bytes per stored value: `1` for the flags, `2` for a column with a
-    /// `float16` form where `float16` says the file stores that form (version
-    /// 16 on), `4` otherwise.
-    pub(crate) fn element_size(self, float16: bool) -> usize {
+    /// Bytes per stored value: `1` for the flags, which are `uint8`, and `2`
+    /// for the seven value columns, which are `float16`: the axes, the two
+    /// angles, `cos θ`, the zoom and the two scores (as their deficits,
+    /// [`Self::stores_deficit`]).
+    pub(crate) fn element_size(self) -> usize {
         if self == ReadingColumn::EllipseAxesIsAtLeast {
             1
-        } else if float16 && self.has_float16_form() {
-            2
         } else {
-            4
+            2
         }
     }
 
     /// The entry name for `observation_count` rows, its dtype as
     /// [`Self::element_size`] gives it.
-    pub(crate) fn entry(self, float16: bool, observation_count: impl std::fmt::Display) -> String {
+    pub(crate) fn entry(self, observation_count: impl std::fmt::Display) -> String {
         let shape = if self.width() == 2 { ".2" } else { "" };
-        let dtype = match self.element_size(float16) {
+        let dtype = match self.element_size() {
             1 => "uint8",
-            2 => "float16",
-            _ => "float32",
+            _ => "float16",
         };
         format!(
             "tracks/{}.{observation_count}{shape}.{dtype}.zst",
-            self.stored_stem(float16)
+            self.stored_stem()
         )
     }
 }
@@ -483,24 +427,15 @@ pub(crate) fn tracks_observation_counts(point_count: impl std::fmt::Display) -> 
 }
 
 /// `tracks/reference_observations` — per point, the index of its reference
-/// observation within its own track, `-1` for none (v12+, present exactly
-/// with the patch frame).
+/// observation within its own track, `-1` for none (present exactly with the
+/// patch frame).
 ///
 /// Sized by `point_count`, like `observation_counts`.
 pub(crate) fn tracks_reference_observations(point_count: impl std::fmt::Display) -> String {
     format!("tracks/reference_observations.{point_count}.int32.zst")
 }
 
-/// `tracks/points3d_indexes` (v1) or `tracks/point_indexes` (v2+).
-///
-/// A pure rename, tracking the `points3d` → `point` vocabulary change.
-pub(crate) fn tracks_point_indexes(
-    is_v1: bool,
-    observation_count: impl std::fmt::Display,
-) -> String {
-    if is_v1 {
-        format!("tracks/points3d_indexes.{observation_count}.uint32.zst")
-    } else {
-        format!("tracks/point_indexes.{observation_count}.uint32.zst")
-    }
+/// `tracks/point_indexes` — the point each observation belongs to.
+pub(crate) fn tracks_point_indexes(observation_count: impl std::fmt::Display) -> String {
+    format!("tracks/point_indexes.{observation_count}.uint32.zst")
 }

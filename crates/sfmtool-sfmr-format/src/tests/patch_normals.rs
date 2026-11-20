@@ -1,10 +1,10 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The normals of version 16: a finite point with a patch has the normal of
+//! The derived normals: a finite point with a patch has the normal of
 //! its frame, `normalize(u × v)`, which the file derives rather than stores.
 
-use super::{archive_names, make_test_data, restamp_hashes, rewrite_renaming};
+use super::{archive_names, make_test_data, rewrite_renaming};
 use crate::*;
 use ndarray::{Array1, Array2};
 
@@ -329,7 +329,7 @@ fn an_entry_of_the_wrong_count_is_refused() {
 }
 
 #[test]
-fn a_full_normals_column_in_a_version_16_file_with_the_frame_is_refused() {
+fn a_full_normals_column_in_a_file_with_the_frame_is_refused() {
     let dir = temp_dir("sfmr_test_patch_normals_full_column");
     let good = dir.join("good.sfmr");
     let mut data = data_with_every_kind_of_point();
@@ -372,48 +372,6 @@ fn a_patch_frame_without_normals_stays_without_them() {
     write_sfmr(&path, &mut data).unwrap();
     assert!(read_sfmr(&path).unwrap().normals_xyz.is_none());
     assert!(data.normals_xyz.is_none());
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn a_version_15_file_reads_its_normals_as_stored_and_saves_them_from_the_frame() {
-    let dir = temp_dir("sfmr_test_patch_normals_v15");
-    let current = dir.join("current.sfmr");
-    let given = data_with_every_kind_of_point();
-    let given_normals = given.normals_xyz.clone().unwrap();
-    let mut data = given;
-    write_sfmr(&current, &mut data).unwrap();
-
-    // The version 15 file of the given value: its normals stored as given,
-    // disagreeing with the frames of points 0 and 1.
-    let old = dir.join("v15.sfmr");
-    super::rewrite_as_version_15(&current, &old, &dir, |_, _| {});
-    let staged = dir.join("staged.sfmr");
-    rewrite_renaming(&old, &staged, |name, _| {
-        (name == FULL_ENTRY).then(|| {
-            (
-                FULL_ENTRY.to_string(),
-                floats_payload(given_normals.as_slice().unwrap()),
-            )
-        })
-    });
-    std::fs::rename(&staged, &old).unwrap();
-    restamp_hashes(&old, &dir);
-
-    let mut loaded = read_sfmr(&old).unwrap();
-    assert_eq!(loaded.metadata.version, 15);
-    assert_eq!(loaded.normals_xyz.as_ref(), Some(&given_normals));
-
-    // Saved as version 16, points 0 and 1 take their frames' normals.
-    let saved = dir.join("saved.sfmr");
-    write_sfmr(&saved, &mut loaded).unwrap();
-    let reloaded = read_sfmr(&saved).unwrap();
-    let normals = reloaded.normals_xyz.unwrap();
-    assert_eq!(row(&normals, 0), vec![0.0, 0.0, 1.0]);
-    assert_ne!(row(&normals, 1), row(&given_normals, 1));
-    for i in 2..5 {
-        assert_eq!(row(&normals, i), row(&given_normals, i), "point {i}");
-    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -474,7 +432,7 @@ fn with_extra_entry(src: &std::path::Path, dst: &std::path::Path, name: &str, ra
 const STRAY_ENTRY: &str = "points3d/underived_normals_xyz.2.3.float32.zst";
 
 #[test]
-fn an_underived_entry_in_a_version_16_file_without_the_frame_is_refused() {
+fn an_underived_entry_in_a_file_without_the_frame_is_refused() {
     let dir = temp_dir("sfmr_test_patch_normals_stray_no_frame");
     let good = dir.join("good.sfmr");
     // Normals and no patch frame: the full column, and nothing derived.
@@ -490,31 +448,8 @@ fn an_underived_entry_in_a_version_16_file_without_the_frame_is_refused() {
     assert_refused(
         &bad,
         &format!(
-            "{STRAY_ENTRY} is stored only by a file of version 16 or later with both normals \
-             and the patch frame, and this version 16 file is not one"
-        ),
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn an_underived_entry_in_a_version_15_file_is_refused() {
-    let dir = temp_dir("sfmr_test_patch_normals_stray_v15");
-    let current = dir.join("current.sfmr");
-    write_sfmr(&current, &mut data_with_every_kind_of_point()).unwrap();
-    // The version 15 file of the same value, with the full column it
-    // stores, and the version 16 entry beside it.
-    let old = dir.join("v15.sfmr");
-    super::rewrite_as_version_15(&current, &old, &dir, |_, _| {});
-    assert!(archive_names(&old).contains(&FULL_ENTRY.to_string()));
-    assert!(read_sfmr(&old).is_ok());
-    let bad = dir.join("stray.sfmr");
-    with_extra_entry(&old, &bad, STRAY_ENTRY, &floats_payload(&[0.0; 6]));
-    assert_refused(
-        &bad,
-        &format!(
-            "{STRAY_ENTRY} is stored only by a file of version 16 or later with both normals \
-             and the patch frame, and this version 15 file is not one"
+            "{STRAY_ENTRY} is stored only by a file with both normals and the patch frame, \
+             and this file is not one"
         ),
     );
     let _ = std::fs::remove_dir_all(&dir);
