@@ -1643,17 +1643,34 @@ in core. Step 17 turns the tier on.
    of the original, against the 2.3 to 6 ms and 2.6 to 3.5 ms measured
    before.
 7. **View-region pyramids** ([view-region-pyramid.md](view-region-pyramid.md)
-   steps 1 and 2): regions in `ImageU8Pyramid` and every sampler, the
-   tile-addressed sampling path for renders the kernel call's region pool
-   cannot hold, the render entry points (`render_source_tile` and its
-   gradient form, `render_source_affine`, `sample_source_grid`,
-   `read_source_samples`, `read_source_rect` and `clipped_share` over
-   tiles) with `required_regions` and `LevelRegions::for_samples` behind
-   them, `TiledPhotograph` with `from_image`, `from_pyramid`, `layout` and
-   `channels`, `PhotographReadError`, the grey reads by region, and the
-   assembly from tiles, exercised on photographs cut into
-   tiles in memory. No reader changes yet. Tests: the companion draft's
-   equality tests.
+   steps 1 and 2), split in two pull requests:
+   - **7a, the companion's step 1. Built:** regions in `ImageU8Pyramid`
+     (`PyramidLevel`, `from_regions`, `level_origin`) and every sampler, the
+     tile-addressed path with its window of pinned tiles, the kernel call's
+     region pool, the render entry points (`render_source_tile` and its
+     gradient form, `render_source_affine`, `sample_source_grid`,
+     `read_source_samples`, `read_source_rect`) with `required_regions` and
+     `LevelRegions::for_samples` behind them, `TiledPhotograph` with
+     `from_image`, `from_pyramid`, `layout` and `channels`, and
+     `PhotographReadError`, exercised on photographs cut into tiles in memory;
+     specified in
+     [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md)
+     with its tests. No reader changes. Three parts took another shape than
+     the interface above: `PhotographReadError` has only the variants a
+     photograph in memory can meet, `Cancelled` and `OutOfRange`, whose
+     `path` is `None` for such a photograph, and gains the others, with the
+     conversions from `TileError` and `GetError`, when the cache hands out
+     tiled photographs (step 13); `TileKey` and `PhotographTile` live in
+     `camera::tiled_photograph` beside `TiledPhotograph`; and a sampler
+     subtracts a region's origin from its integer tap addresses after the
+     `floor`, not from the coordinate, so the fractions are the whole level's
+     for every coordinate.
+   - **7b, the companion's step 2, next:** the assembly of view-region
+     pyramids from a `TiledPhotograph`'s tiles with the reuse margin and the
+     reuse across renders, `clipped_share` as an entry point over tiles,
+     exercised on photographs cut into tiles in
+     memory. No reader changes yet. Tests: the companion draft's equality
+     tests for its step 2.
 8. **The cluster members' elongation limit** (the companion's § "The
    members' elongation limit"), amending
    [core/patch/cluster-patch-refinement.md](../core/patch/cluster-patch-refinement.md)

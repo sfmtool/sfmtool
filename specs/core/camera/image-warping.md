@@ -506,17 +506,27 @@ For performance, bilinear interpolation on `u8` data should:
   half-pixel offset, `floor`/`clamp` edge handling, and stride index depend only
   on `(sx, sy)`, so for a 3-channel (RGB) source they are identical across
   channels. A per-channel sampler re-derives them 3× per pixel; a channel-batched
-  gather (`bilinear_corners` → the four corner base indices + blend weights, then
+  gather (`bilinear_all`: the four corner base indices and blend weights, then
   `data[idx[k] + ch]` per channel) does the address math once and only varies the
   fetch. The batched gather keeps the per-channel path's multiply/add order, so
   its output is **bit-identical** to it (tests
   `sample_bilinear_u8_all_matches_per_channel` and
-  `sample_bilinear_with_grad_u8_all_matches_per_channel`). The single geometry
-  helper (`bilinear_geometry`) also backs the value+gradient sampler used
-  by keypoint-subpixel refinement (`remap_bilinear_with_grad`), so both the value
-  and gradient batched gathers stay in lockstep with the per-channel path.
-  Opt-in sampler counters live in `camera::remap::prof` (gated on
-  [`SFMTOOL_PROFILE`](../README.md#phase-timing-with-sfmtool_profile)).
+  `sample_bilinear_with_grad_u8_all_matches_per_channel`). The single cell
+  helper (`bilinear_cell`, the `x − 0.5` convention, the `floor` and the
+  fractions) and the level's tap read (`LevelTexels::with_cell`, the clamp and
+  the stride) also back the value+gradient sampler used by keypoint-subpixel
+  refinement (`remap_bilinear_with_grad`), so both the value and gradient
+  batched gathers stay in lockstep with the per-channel path.
+- **Read any pyramid at full-level coordinates.** A pyramid may hold only a
+  rectangle of a level (`ImageU8Pyramid::from_regions`), with its origin in the
+  full level; every sampler, the AVX2 anisotropic kernel included, subtracts
+  the origin from its integer tap addresses after the `floor` and reads the
+  held rectangle, so where the rectangle holds every tap the values are the
+  whole level's, bit for bit. The same per-pixel code also reads a
+  photograph's tiles. See [view-region-pyramids.md](view-region-pyramids.md).
+
+Opt-in sampler counters live in `camera::remap::prof` (gated on
+[`SFMTOOL_PROFILE`](../README.md#phase-timing-with-sfmtool_profile)).
 
 ### Anisotropic Filtering
 
@@ -1008,7 +1018,10 @@ crates/sfmtool-core/src/camera/
 ├── image.rs             # ImageU8, ImageU8Pyramid, ImageF32WithGrad
 ├── remap.rs             # remap_bilinear(), remap_aniso() and variants
 ├── remap/aniso_avx2.rs  # the AVX2 kernel of remap_aniso_with_pyramid()
+├── remap/texels.rs      # how a sampler reads a level: whole, a held rectangle, or tiles
 ├── sampler.rs           # Sampler, SamplerChoice, the sampler rule, render_tile()
+├── sampler/             # regions, the region pool, the tile path, the render entry points
+├── tiled_photograph.rs  # TiledPhotograph, PhotographTile, PhotographReadError
 ```
 
 In `sfmtool-py`:

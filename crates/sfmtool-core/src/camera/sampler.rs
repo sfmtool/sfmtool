@@ -49,8 +49,8 @@ use std::f64::consts::SQRT_2;
 
 use crate::camera::image::{ImageF32WithGrad, ImageU8, ImageU8Pyramid};
 use crate::camera::remap::{
-    remap_aniso_with_grad_into, remap_aniso_with_pyramid, remap_bilinear, remap_bilinear_mip,
-    remap_bilinear_mip_with_grad_into, remap_bilinear_with_grad_into,
+    remap_aniso_with_grad_into, remap_aniso_with_pyramid, remap_bilinear_held, remap_bilinear_mip,
+    remap_bilinear_mip_with_grad_into, remap_bilinear_with_grad_held_into, HeldLevel,
 };
 use crate::camera::warp_map::{patch_grid_jacobian, singular_values_2x2};
 use crate::camera::{CameraIntrinsics, WarpMap};
@@ -359,10 +359,19 @@ pub fn render_tile(pyramid: &ImageU8Pyramid, map: &mut WarpMap, sampler: Sampler
     if sampler.needs_svd() && !map.has_svd() {
         map.compute_svd();
     }
+    render_prepared(pyramid, map, sampler)
+}
+
+/// [`render_tile`] of a map whose SVD the sampler needs is computed.
+pub(crate) fn render_prepared(
+    pyramid: &ImageU8Pyramid,
+    map: &WarpMap,
+    sampler: Sampler,
+) -> ImageU8 {
     match sampler {
         Sampler::Anisotropic => remap_aniso_with_pyramid(pyramid, map, MAX_ANISOTROPY),
         Sampler::BilinearMip => remap_bilinear_mip(pyramid, map),
-        Sampler::Bilinear => remap_bilinear(pyramid.level(0), map),
+        Sampler::Bilinear => remap_bilinear_held(&HeldLevel::of(pyramid, 0), map),
     }
 }
 
@@ -376,24 +385,40 @@ pub fn render_tile_with_grad_into(
     sampler: Sampler,
     out: &mut ImageF32WithGrad,
 ) {
+    prepare_for_grad(map, sampler);
+    render_with_grad_prepared(pyramid, map, sampler, out);
+}
+
+/// Compute what [`render_tile_with_grad_into`] reads of `map` with
+/// `sampler`: the SVD for `Anisotropic` and `BilinearMip`, the Jacobians for
+/// `Bilinear`.
+pub(crate) fn prepare_for_grad(map: &mut WarpMap, sampler: Sampler) {
     match sampler {
-        Sampler::Anisotropic => {
+        Sampler::Anisotropic | Sampler::BilinearMip => {
             if !map.has_svd() {
                 map.compute_svd();
             }
-            remap_aniso_with_grad_into(pyramid, map, MAX_ANISOTROPY, out);
-        }
-        Sampler::BilinearMip => {
-            if !map.has_svd() {
-                map.compute_svd();
-            }
-            remap_bilinear_mip_with_grad_into(pyramid, map, out);
         }
         Sampler::Bilinear => {
             if !map.has_jacobians() {
                 map.compute_jacobians();
             }
-            remap_bilinear_with_grad_into(pyramid.level(0), map, out);
+        }
+    }
+}
+
+/// [`render_tile_with_grad_into`] of a map [`prepare_for_grad`] prepared.
+pub(crate) fn render_with_grad_prepared(
+    pyramid: &ImageU8Pyramid,
+    map: &WarpMap,
+    sampler: Sampler,
+    out: &mut ImageF32WithGrad,
+) {
+    match sampler {
+        Sampler::Anisotropic => remap_aniso_with_grad_into(pyramid, map, MAX_ANISOTROPY, out),
+        Sampler::BilinearMip => remap_bilinear_mip_with_grad_into(pyramid, map, out),
+        Sampler::Bilinear => {
+            remap_bilinear_with_grad_held_into(&HeldLevel::of(pyramid, 0), map, out)
         }
     }
 }
@@ -452,6 +477,26 @@ pub fn render_phase<'a>(progress: &Progress<'a>, sampler: Sampler, views: usize)
     }
     phase
 }
+
+mod grid;
+mod pool;
+mod regions;
+mod source;
+#[cfg(test)]
+mod test_support;
+mod tile_window;
+
+pub(crate) use grid::{
+    grid_cells, sample_grid, sample_support_affine, sample_support_affine_aniso,
+};
+pub use grid::{GridEdge, GridPoints};
+pub use pool::{RegionPool, RegionPoolStats, REGION_POOL_BYTES_PER_THREAD};
+pub use regions::{required_regions, LevelRect, LevelRegions, REGION_REUSE_MARGIN};
+pub use source::{
+    read_source_rect, read_source_samples, render_source_affine, render_source_tile,
+    render_source_tile_with_grad_into, sample_source_grid, SourceRect, SourceSamples,
+};
+pub use tile_window::TILE_WINDOW_TILES;
 
 #[cfg(test)]
 mod tests;

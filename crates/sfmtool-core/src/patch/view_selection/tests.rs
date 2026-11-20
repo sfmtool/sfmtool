@@ -6,6 +6,7 @@ use nalgebra::{Point3, Vector3};
 use super::*;
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use crate::camera::remap::{remap_aniso_with_pyramid, sample_bilinear_u8_all};
+use crate::camera::sampler::MAX_ANISOTROPY;
 use crate::camera::WarpMap;
 use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::geometry::RigidTransform;

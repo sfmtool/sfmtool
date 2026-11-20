@@ -22,6 +22,7 @@ pub mod refit_intrinsics;
 pub mod remap;
 pub mod report;
 pub mod sampler;
+pub mod tiled_photograph;
 pub mod viewport;
 pub mod warp_map;
 
@@ -34,9 +35,11 @@ pub use mipmap::{
     build_mipmaps, check_mipmap, photograph_layout, region_layout, BuiltMipmap, ExpectedMipLevel,
     MipLevelFile, MipLevelRecord, MipmapError, MipmapLocation, MipmapOptions, MipmapSource,
     NotRegionReadable, PyramidLayout, RegionLayout, MAX_JPEG_SIDE, MIPMAP_DIR_NAME,
+    PHOTOGRAPH_TILE_SIZE,
 };
 pub use photograph_cache::{
     GetError, GetManyTally, PeekedPhotograph, PhotographCache, PhotographCacheStats,
 };
+pub use tiled_photograph::{PhotographReadError, PhotographTile, TileKey, TiledPhotograph};
 pub use viewport::Camera;
 pub use warp_map::WarpMap;

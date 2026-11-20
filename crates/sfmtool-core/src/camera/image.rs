@@ -12,6 +12,9 @@
 
 pub mod area_resize;
 pub mod hdr_to_srgb;
+mod regions;
+
+pub use regions::{PyramidLevel, PyramidRegionsError};
 
 /// The JPEG quality a caller of [`ImageU8::write`] passes when it has no
 /// reason to choose another. It is 95, the default of OpenCV's
@@ -730,8 +733,20 @@ pub(crate) fn jpeg_error(e: jpeg_decoder::Error) -> ::image::ImageError {
 }
 
 /// Gaussian pyramid of [`ImageU8`] images for anisotropic resampling.
+///
+/// A pyramid holds every level whole, or, made by
+/// [`from_regions`](Self::from_regions), a rectangle of each level a render
+/// reads: a view-region pyramid. Each level keeps its held rectangle's
+/// top-left pixel in the full level ([`level_origin`](Self::level_origin))
+/// and the full level's size ([`level_full_size`](Self::level_full_size)); a
+/// whole level has the origin `[0, 0]`. The samplers read every pyramid at
+/// full-level coordinates.
 pub struct ImageU8Pyramid {
     levels: Vec<ImageU8>,
+    /// Each level's held rectangle's top-left pixel in the full level.
+    origins: Vec<[u32; 2]>,
+    /// Each full level's size.
+    full_sizes: Vec<[u32; 2]>,
 }
 
 impl ImageU8Pyramid {
@@ -785,12 +800,39 @@ impl ImageU8Pyramid {
             levels.push(prev.downsample_2x());
         }
 
-        Self { levels }
+        Self::whole(levels)
+    }
+
+    /// A pyramid of whole levels.
+    fn whole(levels: Vec<ImageU8>) -> Self {
+        let full_sizes = levels.iter().map(|l| [l.width, l.height]).collect();
+        Self {
+            origins: vec![[0, 0]; levels.len()],
+            full_sizes,
+            levels,
+        }
     }
 
     /// Access a specific pyramid level. Level 0 is full resolution.
+    ///
+    /// The pixels the pyramid holds of it: the whole level, or the rectangle
+    /// from [`level_origin`](Self::level_origin) of a pyramid made by
+    /// [`from_regions`](Self::from_regions), where a level it does not hold
+    /// is a 1 x 1 black image.
     pub fn level(&self, i: usize) -> &ImageU8 {
         &self.levels[i]
+    }
+
+    /// The top-left pixel, in the full level, of the rectangle of level `i`
+    /// the pyramid holds; `[0, 0]` for a whole level.
+    pub fn level_origin(&self, i: usize) -> [u32; 2] {
+        self.origins[i]
+    }
+
+    /// The size of the full level `i`; `[0, 0]` for a level a pyramid made by
+    /// [`from_regions`](Self::from_regions) does not hold.
+    pub fn level_full_size(&self, i: usize) -> [u32; 2] {
+        self.full_sizes[i]
     }
 
     /// Number of levels actually built (may be less than requested if the

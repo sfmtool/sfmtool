@@ -119,7 +119,14 @@ fn sample_bilinear_with_grad_u8_all_matches_per_channel() {
                 let mut val = vec![0f32; c];
                 let mut gx = vec![0f32; c];
                 let mut gy = vec![0f32; c];
-                sample_bilinear_with_grad_u8_all(&img, x, y, &mut val, &mut gx, &mut gy);
+                sample_bilinear_with_grad_u8_all(
+                    &HeldLevel::whole(&img),
+                    x,
+                    y,
+                    &mut val,
+                    &mut gx,
+                    &mut gy,
+                );
                 for ch in 0..channels {
                     let (wv, wgx, wgy) = sample_bilinear_with_grad_u8(&img, x, y, ch);
                     let k = ch as usize;

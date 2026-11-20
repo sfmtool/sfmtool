@@ -650,10 +650,24 @@ pub(super) fn sobel_gradient(img: &ImageU8, x: f32, y: f32, out: &mut [(f32, f32
             *offset = yy * stride + xx * c;
         }
     }
+    sobel_from_window(|r, q, channel| data[offsets[r][q] + channel], fx, fy, out);
+}
+
+/// [`sobel_gradient`]'s arithmetic on the 4×4 pixels about a read, given as
+/// `pixel(r, q, channel)` for the pixel at row `y0 − 1 + r` and column
+/// `x0 − 1 + q`, edge-clamped, and the read's in-cell fractions: the same
+/// products and sums whatever holds the pixels.
+pub(super) fn sobel_from_window(
+    pixel: impl Fn(usize, usize, usize) -> u8,
+    fx: f32,
+    fy: f32,
+    out: &mut [(f32, f32)],
+) {
     const SMOOTH: [f32; 3] = [0.25, 0.5, 0.25];
     for (channel, slot) in out.iter_mut().enumerate() {
-        // p[r][q]: the pixel at offsets[r][q], in this channel.
-        let p = offsets.map(|row| row.map(|offset| f32::from(data[offset + channel])));
+        // p[r][q]: the pixel at row r, column q of the window, in this channel.
+        let p: [[f32; 4]; 4] =
+            std::array::from_fn(|r| std::array::from_fn(|q| f32::from(pixel(r, q, channel))));
         // The Sobel gradient at the tap at row y0 + i, column x0 + j.
         let tap = |i: usize, j: usize| {
             let (mut dx, mut dy) = (0.0, 0.0);
