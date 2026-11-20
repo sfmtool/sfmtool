@@ -1772,29 +1772,44 @@ in core. Step 17 turns the tier on.
     holds, as it read the `ProjectedImage`'s pyramid before, so every result
     is identical after each of the three.
 
-    - **10a, the plumbing and the bench's own reads.** `ProjectedImage`
-      carries a `&TiledPhotograph` in place of its pyramid, and every caller
-      that builds one wraps the whole pyramids it holds with `from_pyramid`
-      (`ViewSources`, *Refine all normals*, *Refit all points*, the bulk
-      callers of step 11) or, in the bindings, cuts the pyramids it builds
-      from its arrays the same way, which are the pixels `from_image` builds.
-      The bench kernels that read photographs (`evaluate`,
-      `evaluate_rendering_bitmap`, `score_bitmap`, `fit`,
-      `render_bitmap_in_place`, `set_stage`, `build_track_at_pixel`, the four
-      normal kernels, `refine_normals`, `refit_points`), and the kernels of
-      step 12 that run `fit` or `build_track_at_pixel` (`far_field_sweep`,
+    - **10a, the plumbing and the bench's own reads.** **Built.**
+      `ProjectedImage` carries a `&TiledPhotograph` in place of its pyramid,
+      and every caller that builds one wraps the whole pyramids it holds with
+      `from_pyramid` (`ViewSources`, the display bitmaps, the Track Table's
+      reference picks, *Add image to tracks*, whose kernel takes tiled
+      photographs) or, in the bindings, cuts the pyramids it builds from its
+      arrays the same way, which are the pixels `from_image` builds. The bench
+      kernels whose reads reach a moved read (`evaluate`,
+      `evaluate_rendering_bitmap`, `fit`, `set_stage`, `build_track_at_pixel`,
+      the four normal kernels, `refine_normals`, `refit_points`), and the
+      kernels of step 12 that run `fit` or `set_stage` (`far_field_sweep`,
       `find_nearby_tracks`), take the caller's `&RegionPool` and gain a
-      `Photograph(PhotographReadError)` error. Each bench step, each binding
-      and each bulk caller makes the pool for its call, and each bench step's
-      phase note counts the region pyramids its reads assembled and reused and
-      the reads that took the tile path. The reads that move are the bench's
-      own: the grid-plane normal's context renders and the pairwise-flow
-      crops through `render_source_tile`, the grown plane's value and Sobel
-      reads through `read_source_samples`, and the cluster stage's member
-      grids (the template and the self-similarity tiles) through
-      `sample_source_member_grid`. `classify` reads no pixel (`TrackRays`
-      reads only cameras), so its signature stays; `search_geometry` reads
-      only through the view selection, so it moves in 10b.
+      `Photograph(PhotographReadError)` error (`set_stage`'s arrives inside
+      `StageError::Fit`). Where an inner step turns its failures into values
+      (the grown plane's renders, the track-at-pixel cascade's members, the
+      far-field sweep's refits, the points of `refine_normals` and
+      `refit_points`), the first read that failed is kept in a `ReadFailure`
+      and the kernel returns it in place of its result. Each bench step, *Refine
+      all normals*, *Refit all points* and each binding make the pool for
+      their call, and each of the viewer's steps writes a `read regions` phase
+      whose note counts the region pyramids its reads assembled and reused and
+      the reads that took the tile path ([gui/bench.md](../gui/bench.md)). The
+      reads that moved are the bench's own: the grid-plane normal's context
+      renders and the pairwise-flow crops through `render_source_tile`, the
+      grown plane's value and Sobel reads through `read_source_samples`, and
+      the cluster stage's member grids (the template and the self-similarity
+      tiles) through `sample_source_member_grid`, specified in
+      [core/bench/editable-track.md](../core/bench/editable-track.md) §
+      "Each step reads through the region pool its caller made" and
+      [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md).
+      `classify` reads no pixel (`TrackRays` reads only cameras), so its
+      signature stays. `score_bitmap` and `render_bitmap_in_place` read only
+      through the reference view and the stored bitmap, so they move in 10c,
+      and `search_geometry` only through the view selection, so it moves in
+      10b. The bindings raise a photograph error as the `ValueError` they
+      raise for every refusal of these kernels, its sentence naming the
+      photograph; the `RuntimeError` of § "Errors from reading pixels" comes
+      with the first binding whose photographs can fail to read, step 16.
     - **10b, the cluster refinement and the view selection.**
       `refine_cluster_patches` and `refine_cluster_patches_borrowed` take
       tiled photographs and the pool, with the grid samplers through
@@ -1813,12 +1828,15 @@ in core. Step 17 turns the tier on.
       `keypoint_subpixel`'s renders, `member_coherence`,
       `read_cloud_observations`, `spawn_candidate_tracks`,
       `stored_bitmap::render_reference`, `render_patch_bitmap`,
+      `score_bitmap`, `render_bitmap_in_place`,
       `render_patch_cloud_bitmaps` and the display bitmaps' kernels, which
       keep returning `Cancelled` until step 11, take the pool and return the
       error; the Track Table's reference picks make one pool for each
       `render_reference` call; and the read of a tiled photograph's whole
       pyramid that kernels not yet moved use is deleted, except for the grey
-      reads of *Find Nearby Tracks*, which step 12 moves.
+      reads of *Find Nearby Tracks*, which step 12 moves; and the bindings
+      over every kernel moved in 10a to 10c raise a photograph error as a
+      `RuntimeError` naming the photograph.
 11. **Bulk kernels**: the display patch bitmaps, the conversion to embedded
     patches, the web export, *Refine all normals*, *Refit all points* and the
     cluster-patches build (companion step 5) fetch tiled photographs, with

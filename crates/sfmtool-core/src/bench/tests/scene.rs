@@ -244,6 +244,18 @@ impl Scene {
         };
     }
 
+    /// The same scene with its photographs cut into tiles of `tile_size` px,
+    /// so that a render crosses many of them and one through a small region
+    /// pool reads through them.
+    pub(in crate::bench) fn with_tile_size(mut self, tile_size: u32) -> Self {
+        self.sources = self
+            .sources
+            .into_iter()
+            .map(|source| source.with_tile_size(tile_size))
+            .collect();
+        self
+    }
+
     pub(in crate::bench) fn views(&self) -> Vec<ProjectedImage<'_>> {
         self.cameras
             .iter()

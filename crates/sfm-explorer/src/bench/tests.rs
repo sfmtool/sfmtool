@@ -2055,3 +2055,44 @@ fn a_rebench_drops_a_bitmap_its_kept_reference_row_no_longer_matches() {
     measurement.keypoint = Some([x + 7.0, y - 3.0]);
     assert_eq!(outcome(&sighted), (false, Some(r)));
 }
+
+/// A bench step makes the region pool for its kernel call, and its `read
+/// regions` note counts how the call's reads reached their pixels. The grown
+/// plane reads every view of the fixture's track through copied regions, which
+/// the pool of `RegionPool::for_kernel_call` holds, so the note counts region
+/// pyramids and no read on tiles.
+#[test]
+fn a_bench_step_notes_how_its_reads_reached_their_pixels() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    let job = state
+        .bench_normal_job(id, &label, super::NormalStep::GrownPlane)
+        .expect("the fixture's track is readable");
+    let collector = crate::progress::Collector::new(false);
+    let finished = job(&collector.progress());
+    assert!(
+        matches!(finished, Finished::BenchTrack { .. }),
+        "the step turned the track"
+    );
+    let note = crate::test_support::phase_note(&collector.take(), "read regions")
+        .expect("a read regions note");
+    let counts: Vec<u64> = note
+        .split(", ")
+        .map(|part| {
+            part.split(' ')
+                .next()
+                .and_then(|n| n.parse().ok())
+                .expect("each part opens with its count")
+        })
+        .collect();
+    let [assembled, reused, tiled] = counts[..] else {
+        panic!("three counts in {note:?}");
+    };
+    assert_eq!(
+        note,
+        format!("{assembled} region pyramids assembled, {reused} reused, {tiled} reads on tiles")
+    );
+    assert!(assembled > 0, "{note}");
+    assert!(assembled + reused > 1, "{note}");
+    assert_eq!(tiled, 0, "{note}");
+}

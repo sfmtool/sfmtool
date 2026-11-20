@@ -20,6 +20,7 @@ mod pairwise_flow_normal;
 mod reference_view;
 mod refine_normals;
 mod refit_points;
+mod region_reads;
 pub(super) mod scene;
 mod stored_bitmap;
 
