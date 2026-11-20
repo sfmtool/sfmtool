@@ -129,7 +129,10 @@ naming every image some live point observes; on the worker it
    default options, `RefineNormalsStep::GrownPlane` or
    `RefineNormalsStep::PairwiseFlow`, the options Track View's *Grown Plane
    Normal* and *Pairwise Flow Normal* run, and whose stages (`refine normals`,
-   `write back`) nest under the operation's.
+   `write back`) nest under the operation's, with a region pool it makes for
+   the call; a `read regions` phase after it notes how the run's reads
+   reached their pixels ([../bench.md](../bench.md) § "The two steps that
+   read photographs").
 
 The bar splits 1 : 9 between the decode and the rest. It answers with
 `Finished::Produced`, whose `map` is the fold's `PointMap::Rows` (where there

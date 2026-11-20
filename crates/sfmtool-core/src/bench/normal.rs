@@ -186,9 +186,9 @@ pub enum NormalError {
     /// observation naming an image the views do not hold), or the reading the
     /// step ends with failed.
     Evaluate(EvaluateError),
-    /// The caller asked the step to stop.
     /// A photograph could not be read.
     Photograph(PhotographReadError),
+    /// The caller asked the step to stop.
     Cancelled,
 }
 

@@ -1809,7 +1809,8 @@ in core. Step 17 turns the tier on.
       10b. The bindings raise a photograph error as the `ValueError` they
       raise for every refusal of these kernels, its sentence naming the
       photograph; the `RuntimeError` of § "Errors from reading pixels" comes
-      with the first binding whose photographs can fail to read, step 16.
+      in 10c, for the bindings over every kernel of the step at once, before
+      step 16 gives a binding photographs that can fail to read.
     - **10b, the cluster refinement and the view selection.**
       `refine_cluster_patches` and `refine_cluster_patches_borrowed` take
       tiled photographs and the pool, with the grid samplers through

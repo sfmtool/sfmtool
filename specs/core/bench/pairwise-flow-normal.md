@@ -435,7 +435,7 @@ with `Sampler::BilinearMip` at the level `bilinear_mip_level` gives,
 grid's Jacobian into the photograph in photograph px per sample, or with the
 anisotropic sampler where the compression is much stronger along one axis, as
 it is for a view oblique to the plane. The levels are those of the
-`ImageU8Pyramid` each `ProjectedImage` carries, built by 2× box-filter
+`TiledPhotograph` each `ProjectedImage` carries, built by 2× box-filter
 downsampling ([camera/image.rs](../../../crates/sfmtool-core/src/camera/image.rs)).
 Because the level is rounded, two views on either side of a level boundary are
 filtered up to √2 apart in scale. The crops are then converted to the flow's

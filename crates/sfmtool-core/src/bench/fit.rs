@@ -216,9 +216,9 @@ pub enum FitError {
     /// No noise level to weight the rays by: no `sigma_px` was given and the
     /// reconstruction's could not be measured. The sentence says why.
     NoNoiseLevel(String),
-    /// The caller asked the fit to stop.
     /// A photograph could not be read.
     Photograph(PhotographReadError),
+    /// The caller asked the fit to stop.
     Cancelled,
 }
 

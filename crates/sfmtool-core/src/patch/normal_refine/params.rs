@@ -10,11 +10,12 @@ use crate::geometry::RigidTransform;
 
 /// A source image together with the projection that maps world points into it:
 /// the camera intrinsics, its world-to-camera pose, and the tiled photograph a
-/// kernel reads its colour from through the render entry points of
-/// [`sampler`](crate::camera::sampler). Everything a patch needs to be
-/// rendered from one view. The photograph is made once and borrowed for every
-/// render, so a kernel that renders a view many times reads only the regions
-/// each render needs.
+/// kernel reads its colour from. Everything a patch needs to be rendered from
+/// one view. The photograph is made once and borrowed for every render, so a
+/// kernel that renders a view many times allocates no photograph per render,
+/// and one that reads through the render entry points of
+/// [`sampler`](crate::camera::sampler) reads only the regions each render
+/// needs.
 #[derive(Clone, Copy)]
 pub struct ProjectedImage<'a> {
     pub camera: &'a CameraIntrinsics,

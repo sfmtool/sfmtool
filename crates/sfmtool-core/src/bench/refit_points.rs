@@ -302,9 +302,9 @@ pub enum RefitPointsError {
     /// value's reprojection noise could not be measured, or the one given is
     /// not a finite positive number. The sentence says why.
     NoNoiseLevel(String),
-    /// The caller asked the run to stop, so nothing was written.
     /// A photograph could not be read, so nothing was written.
     Photograph(PhotographReadError),
+    /// The caller asked the run to stop, so nothing was written.
     Cancelled,
 }
 

@@ -318,9 +318,9 @@ pub enum FarFieldError {
         /// How many images the reconstruction holds.
         image_count: usize,
     },
-    /// The progress handle was cancelled.
     /// A photograph could not be read.
     Photograph(PhotographReadError),
+    /// The progress handle was cancelled.
     Cancelled,
 }
 

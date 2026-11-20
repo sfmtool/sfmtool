@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use super::render::{sobel_from_window, sobel_gradient};
+use super::render::{bilinear_from_window, sobel_from_window, sobel_gradient};
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use crate::camera::remap::sample_bilinear_u8;
 use crate::camera::sampler::{read_source_samples, RegionPool, ViewRegions};
@@ -57,13 +57,9 @@ fn sobel_and_value_reads_through_a_source_equal_the_whole_level() {
                 let bits = |g: [(f32, f32); 3]| g.map(|(a, b)| (a.to_bits(), b.to_bits()));
                 assert_eq!(bits(through), bits(whole), "level {level}, ({x}, {y})");
                 for c in 0..3 {
-                    // The value from the window's middle 2 x 2, as
-                    // `sample_bilinear_u8` blends it.
-                    let v = |r: usize, q: usize| f32::from(pixel(r + 1, q + 1, c));
-                    let value = (1.0 - fx) * (1.0 - fy) * v(0, 0)
-                        + fx * (1.0 - fy) * v(0, 1)
-                        + (1.0 - fx) * fy * v(1, 0)
-                        + fx * fy * v(1, 1);
+                    // The value from the window's middle 2 x 2, as the
+                    // grown plane blends it.
+                    let value = bilinear_from_window(|r, q| pixel(r + 1, q + 1, c), fx, fy);
                     assert_eq!(
                         value.to_bits(),
                         sample_bilinear_u8(img, x, y, c as u32).to_bits()

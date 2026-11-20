@@ -1218,10 +1218,11 @@ the call's reads reached their pixels: `12 region pyramids assembled, 30
 reused, 0 reads on tiles` -- the region pyramids its reads assembled from the
 photographs' tiles, the reads that reused the regions a view kept from an
 earlier read, and the reads that took the tile path because the pool could not
-hold their regions. The evaluation, the fit, the stage change, the normal
-steps, *Create track at pixel* and *Find nearby tracks* write it; the geometry
-search and the descriptor search do not, since they read through no pool. A
-read that fails ends the step as a failure naming the photograph.
+hold their regions or they read no pixel. The evaluation, the fit, the stage
+change, the normal steps, *Create track at pixel* and *Find nearby tracks*
+write it; the geometry search and the descriptor search do not, since they
+read through no pool. A read that fails ends the step as a failure naming the
+photograph.
 
 **A report lands on the observations it measured.** No bench step renumbers
 the observations and a measurement is keyed by observation index, so a report

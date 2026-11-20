@@ -992,14 +992,14 @@ cancelled search cannot leave a candidate prefix on the bench.
 the keypoints and the cluster patches, and the cascade polls in front of each
 member and hands back `TrackAtPixelError::Cancelled`; a member once entered
 runs to its end. Its phases are `decode images`, `read keypoints`, `read
-cluster patches`, one per member tried, and `read regions`. A cancelled run puts
-nothing on the bench and commits nothing. `Find nearby tracks` polls in the
-same places, around the decode and its reads of the `.sift` files and the
+cluster patches`, one per member tried, and `read regions`. A cancelled run
+puts nothing on the bench and commits nothing. `Find nearby tracks` polls in
+the same places, around the decode and its reads of the `.sift` files and the
 cluster patches, and core's search polls in front of each source, in the
 far-field sweep and in front of building the tracks, and hands back
 `NearbyTracksError::Cancelled`. Its phases are `decode images`, `read .sift
-files`, `read cluster patches`, one per source run, and `read regions`. It too puts nothing
-on the bench when cancelled.
+files`, `read cluster patches`, one per source run, and `read regions`. It too
+puts nothing on the bench when cancelled.
 
 Every `decode images` phase reads through the viewer's photograph cache
 ([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)),

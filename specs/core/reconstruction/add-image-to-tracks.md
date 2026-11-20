@@ -41,7 +41,7 @@ The viewer's image menu entry is
 pub fn add_image_to_tracks(
     recon: &SfmrReconstruction,
     image: usize,
-    pyramids: &[Option<&ImageU8Pyramid>],
+    photographs: &[Option<&TiledPhotograph>],
     options: &AddImageToTracksOptions,
     progress: &Progress<'_>,
 ) -> Result<(SfmrReconstruction, AddImageToTracksReport), AddImageToTracksError>;
@@ -121,7 +121,7 @@ added, and a harness can re-judge without re-running. The refusals are
 `below_bar`, `too_far` and `shared_keypoint`.
 
 The call itself is refused (`AddImageToTracksError`) for an image index out of
-range, an unposed image, fewer pyramids than images, a target whose own
+range, an unposed image, fewer photographs than images, a target whose own
 photograph is missing, a `sift_files` value (an added observation has no feature
 index to name) and a value without patch frames.
 
@@ -131,7 +131,7 @@ use sfmtool_core::reconstruction::add_image_to_tracks::{
     add_image_to_tracks, AddImageToTracksOptions,
 };
 let (next, report) = add_image_to_tracks(
-    &recon, image, &pyramids, &AddImageToTracksOptions::default(), &Progress::none(),
+    &recon, image, &photographs, &AddImageToTracksOptions::default(), &Progress::none(),
 )?;
 println!("{} of {} candidates added", report.accepted, report.candidates.len());
 ```
