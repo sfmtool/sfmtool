@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use sfmtool_core::bench::{EditableTrack, Stage, StageKind};
 use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
-use sfmtool_core::camera::sampler::render_tile;
+use sfmtool_core::camera::sampler::{render_tile, Sampler};
 use sfmtool_core::camera::WarpMap;
 use sfmtool_core::patch::cluster_refine::{sample_member_grid, ClusterRefineParams};
 
@@ -77,23 +77,47 @@ fn picture(uploaded: &Uploaded, texture: egui::TextureId) -> &egui::ColorImage {
         .unwrap_or_else(|| panic!("{texture:?} was not uploaded"))
 }
 
+/// How a reference picture is read.
+#[derive(Clone, Copy, PartialEq)]
+enum Reading {
+    /// As the panel reads it.
+    Whole,
+    /// From the pyramid cut to its level 0, so every sample reads level 0:
+    /// what a wrong level would draw.
+    LevelZero,
+    /// At the track stage with `Sampler::Bilinear`: what a wrong sampler
+    /// would draw.
+    Bilinear,
+}
+
 /// The tile and the tile's hover view of `observation` as the whole pyramid
-/// renders them: `render_tile` of the patch frame re-anchored on the
-/// observation, and of it widened [`CONTEXT_FACTOR`] times, at the track
-/// stage; `sample_member_grid` at the cluster's radius, and at that many
-/// times it, at the cluster stage.
+/// gives them, read as `reading` says: `render_tile` of the patch frame
+/// re-anchored on the observation, and of it widened [`CONTEXT_FACTOR`]
+/// times, at the track stage; `sample_member_grid` at the cluster's radius,
+/// and at that many times it, at the cluster stage.
 fn whole_pyramid_tiles(
     state: &AppState,
     id: ReconId,
     track: &EditableTrack,
     observation: usize,
+    reading: Reading,
 ) -> (egui::ColorImage, egui::ColorImage) {
     let recon = state.node(id).expect("loaded").recon();
     let row = &track.observations[observation];
     let image = row.image as usize;
-    let src = state
+    let mut src = state
         .cached_photograph(id, image)
         .expect("a cached photograph");
+    if reading == Reading::LevelZero {
+        let level = src.level(0);
+        let copy = ImageU8::new(
+            level.width(),
+            level.height(),
+            level.channels(),
+            level.data().to_vec(),
+        );
+        src = std::sync::Arc::new(ImageU8Pyramid::from_image(copy, 1));
+    }
     let site = crate::bench::observation_site(row).expect("a site");
     let k = CONTEXT_FACTOR;
     match &track.stage {
@@ -101,7 +125,10 @@ fn whole_pyramid_tiles(
             let patch_frame = payload.patch_frame.as_ref().expect("a patch frame");
             let camera = crate::scene::image_intrinsics(&recon.image_set, image).expect("a camera");
             let pose = crate::scene::cam_from_world(&recon.image_set.images[image]);
-            let sampler = tile_sampler(recon, track, observation);
+            let sampler = match reading {
+                Reading::Bilinear => Sampler::Bilinear,
+                _ => tile_sampler(recon, track, observation),
+            };
             let render = |rendered_frame: &sfmtool_core::patch::cloud::OrientedPatch, side: u32| {
                 let mut map = WarpMap::from_patch(rendered_frame, &camera, &pose, side);
                 opaque(&render_tile(&src, &mut map, sampler))
@@ -182,7 +209,8 @@ fn drawn_pictures_equal_the_whole_pyramids(state: &AppState, id: ReconId, label:
         frame(&mut panel, &ctx, state, Vec::new(), &mut uploaded);
         for (observation, &y) in ys.iter().enumerate() {
             let what = format!("row {observation}, panel pool {panel_pool}");
-            let (tile, context) = whole_pyramid_tiles(state, id, &track, observation);
+            let (tile, context) =
+                whole_pyramid_tiles(state, id, &track, observation, Reading::Whole);
             let drawn = panel.tiles[&observation].as_ref().expect("a tile").id();
             assert!(*picture(&uploaded, drawn) == tile, "the tile of {what}");
 
@@ -352,4 +380,171 @@ fn cache_hashed_photographs(state: &AppState, id: ReconId) {
             .collect();
         state.insert_photograph(id, image, ImageU8::new(w, h, 3, data));
     }
+}
+
+/// The rows whose tile and tile hover view differ from the pictures level 0
+/// alone gives: rows that read coarser levels, where a wrong level or sampler
+/// would fail the comparison with the whole pyramid.
+fn rows_reading_coarser_levels(state: &AppState, id: ReconId, label: &str) -> usize {
+    let track = state.bench_track(id, label).expect("on the bench").clone();
+    (0..track.observations.len())
+        .filter(|&observation| {
+            let read = whole_pyramid_tiles(state, id, &track, observation, Reading::Whole);
+            let at_level_zero =
+                whole_pyramid_tiles(state, id, &track, observation, Reading::LevelZero);
+            read.0 != at_level_zero.0 && read.1 != at_level_zero.1
+        })
+        .count()
+}
+
+/// The track's patch made `factor` times as large, so each texel of a tile
+/// spans many photograph pixels.
+fn grow_patch(state: &mut AppState, id: ReconId, label: &str, factor: f64) {
+    let track = state.bench_track(id, label).expect("on the bench").clone();
+    let Stage::Track(payload) = &track.stage else {
+        panic!("a track-stage track");
+    };
+    let half = payload
+        .patch_frame
+        .as_ref()
+        .expect("a patch frame")
+        .half_extent[0];
+    state
+        .edit_bench_patch(
+            id,
+            label,
+            &crate::bench::PatchEdit::Resize {
+                half_length: half * factor,
+                moved_edge: None,
+            },
+        )
+        .expect("a resize");
+    state.finish_background_tasks();
+}
+
+/// A track-stage patch seen shrunk, its tiles read from coarser levels: the
+/// pictures drawn through regions are the whole pyramid's.
+#[test]
+fn shrunk_track_stage_pictures_drawn_through_regions_equal_the_whole_pyramid() {
+    let (mut state, id, label, _, _) = on_the_bench();
+    cache_hashed_photographs(&state, id);
+    grow_patch(&mut state, id, &label, 12.0);
+    let rows = state
+        .bench_track(id, &label)
+        .expect("on the bench")
+        .observations
+        .len();
+    assert_eq!(rows_reading_coarser_levels(&state, id, &label), rows);
+    drawn_pictures_equal_the_whole_pyramids(&state, id, &label);
+}
+
+/// A track-stage patch turned towards edge-on and grown, so its views are
+/// stretched and drawn with the anisotropic sampler: the pictures drawn
+/// through regions are the whole pyramid's.
+#[test]
+fn stretched_track_stage_pictures_drawn_through_regions_equal_the_whole_pyramid() {
+    let (mut state, id, label, _, _) = on_the_bench();
+    cache_hashed_photographs(&state, id);
+    grow_patch(&mut state, id, &label, 24.0);
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let Stage::Track(payload) = &track.stage else {
+        panic!("a track-stage track");
+    };
+    let patch_frame = payload.patch_frame.as_ref().expect("a patch frame");
+    let (sin, cos) = 75f64.to_radians().sin_cos();
+    let normal = patch_frame.normal() * cos + patch_frame.u_axis * sin;
+    state
+        .edit_bench_patch(
+            id,
+            &label,
+            &crate::bench::PatchEdit::Tilt {
+                normal: normal.into(),
+            },
+        )
+        .expect("a tilt");
+    state.finish_background_tasks();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let recon = state.node(id).expect("loaded").recon();
+    let anisotropic = (0..track.observations.len())
+        .filter(|&o| tile_sampler(recon, &track, o) == Sampler::Anisotropic)
+        .count();
+    // Each such row's pictures differ from the bilinear ones, so a wrong
+    // sampler fails the comparison with the whole pyramid.
+    for observation in 0..track.observations.len() {
+        if tile_sampler(recon, &track, observation) != Sampler::Anisotropic {
+            continue;
+        }
+        let read = whole_pyramid_tiles(&state, id, &track, observation, Reading::Whole);
+        let bilinear = whole_pyramid_tiles(&state, id, &track, observation, Reading::Bilinear);
+        assert!(
+            read.0 != bilinear.0 && read.1 != bilinear.1,
+            "row {observation}"
+        );
+    }
+    assert!(
+        anisotropic > 0,
+        "no row is drawn with the anisotropic sampler"
+    );
+    drawn_pictures_equal_the_whole_pyramids(&state, id, &label);
+}
+
+/// The track moved to the cluster stage and every sighting given the shape
+/// `shape` makes of its own.
+fn cluster_with_shapes(
+    shape: impl Fn([[f64; 2]; 2]) -> [[f64; 2]; 2],
+) -> (AppState, ReconId, String) {
+    let (mut state, id, label, _, _) = on_the_bench();
+    cache_hashed_photographs(&state, id);
+    state
+        .start_bench_stage(id, &label, StageKind::Cluster)
+        .expect("a track with a patch frame downgrades");
+    state.finish_background_tasks();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    for (observation, row) in track.observations.iter().enumerate() {
+        let own = crate::bench::observation_site(row)
+            .and_then(|site| site.shape)
+            .expect("a shape");
+        state
+            .edit_bench_patch(
+                id,
+                &label,
+                &crate::bench::PatchEdit::Shape {
+                    observation,
+                    shape: shape(own),
+                },
+            )
+            .expect("a shape");
+    }
+    state.finish_background_tasks();
+    (state, id, label)
+}
+
+/// Cluster-stage sightings whose shapes are twelve times as large, so their
+/// grids read coarser levels: the pictures drawn through regions are the
+/// whole pyramid's.
+#[test]
+fn shrunk_cluster_stage_pictures_drawn_through_regions_equal_the_whole_pyramid() {
+    let (state, id, label) = cluster_with_shapes(|s| s.map(|row| row.map(|v| 12.0 * v)));
+    let rows = state
+        .bench_track(id, &label)
+        .expect("on the bench")
+        .observations
+        .len();
+    assert_eq!(rows_reading_coarser_levels(&state, id, &label), rows);
+    drawn_pictures_equal_the_whole_pyramids(&state, id, &label);
+}
+
+/// Cluster-stage sightings stretched 24 times along one axis and 6 times
+/// along the other: the pictures drawn through regions are the whole
+/// pyramid's.
+#[test]
+fn stretched_cluster_stage_pictures_drawn_through_regions_equal_the_whole_pyramid() {
+    let (state, id, label) = cluster_with_shapes(|s| {
+        [
+            [24.0 * s[0][0], 6.0 * s[0][1]],
+            [24.0 * s[1][0], 6.0 * s[1][1]],
+        ]
+    });
+    assert!(rows_reading_coarser_levels(&state, id, &label) > 0);
+    drawn_pictures_equal_the_whole_pyramids(&state, id, &label);
 }
