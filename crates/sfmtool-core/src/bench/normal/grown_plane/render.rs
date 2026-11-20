@@ -762,10 +762,6 @@ pub(super) fn sobel_gradient(img: &ImageU8, x: f32, y: f32, out: &mut [(f32, f32
     sobel_from_window(|r, q, channel| data[offsets[r][q] + channel], fx, fy, out);
 }
 
-/// [`sobel_gradient`]'s arithmetic on the 4×4 pixels about a read, given as
-/// `pixel(r, q, channel)` for the pixel at row `y0 − 1 + r` and column
-/// `x0 − 1 + q`, edge-clamped, and the read's in-cell fractions: the same
-/// products and sums whatever holds the pixels.
 /// `sample_bilinear_u8`'s blend of the 2 x 2 pixels of a bilinear read,
 /// given as `pixel(r, q)` for the pixel at row `y0 + r` and column `x0 + q`,
 /// edge-clamped, and the read's in-cell fractions: the same products and sums
@@ -778,6 +774,11 @@ pub(super) fn bilinear_from_window(pixel: impl Fn(usize, usize) -> u8, fx: f32, 
         + fx * fy * v(1, 1)
 }
 
+/// The bilinear read of the Sobel gradient images (`GradientRead::Sobel`)
+/// from the 4×4 pixels about a read, given as `pixel(r, q, channel)` for the
+/// pixel at row `y0 − 1 + r` and column `x0 − 1 + q`, edge-clamped, and the
+/// read's in-cell fractions: the same products and sums whatever holds the
+/// pixels.
 pub(super) fn sobel_from_window(
     pixel: impl Fn(usize, usize, usize) -> u8,
     fx: f32,
