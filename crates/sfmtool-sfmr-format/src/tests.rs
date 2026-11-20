@@ -3821,6 +3821,57 @@ fn a_file_without_a_required_metadata_key_is_refused() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A file holds `written.json` and `content_hash.json`'s `derived_xxh128`: a
+/// file without `written.json` is refused by every reader that reads the
+/// metadata and reported by the verifier, and one without `derived_xxh128` is
+/// refused by every reader that reads the hashes.
+#[test]
+fn a_file_without_its_write_record_or_derived_hash_is_refused() {
+    let dir = std::env::temp_dir().join("sfmr_test_write_record_and_derived_hash");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let current = dir.join("current.sfmr");
+    write_sfmr(&current, &mut make_test_data()).unwrap();
+
+    let without_written = dir.join("without_written.sfmr");
+    {
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(&current).unwrap()).unwrap();
+        let mut out = zip::ZipWriter::new(std::fs::File::create(&without_written).unwrap());
+        for i in 0..archive.len() {
+            let entry = archive.by_index_raw(i).unwrap();
+            if entry.name().unwrap() != "written.json.zst" {
+                out.raw_copy_file(entry).unwrap();
+            }
+        }
+        out.finish().unwrap();
+    }
+    assert!(read_sfmr(&without_written).is_err());
+    assert!(read_sfmr_metadata(&without_written).is_err());
+    assert!(read_sfmr_image_names(&without_written).is_err());
+    assert_eq!(
+        verify_sfmr(&without_written).unwrap(),
+        (false, vec!["written.json.zst is missing".to_string()])
+    );
+
+    let without_derived = dir.join("without_derived.sfmr");
+    rewrite_entries(&current, &without_derived, |name, raw| {
+        (name == "content_hash.json.zst").then(|| {
+            let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
+            json.as_object_mut().unwrap().remove("derived_xxh128");
+            serde_json::to_vec(&json).unwrap()
+        })
+    });
+    assert!(read_sfmr(&without_derived).is_err());
+    assert!(read_sfmr_content_hash(&without_derived).is_err());
+    assert!(verify_sfmr(&without_derived).is_err());
+
+    // The file both were taken from reads and verifies.
+    assert!(read_sfmr(&current).is_ok());
+    assert_eq!(verify_sfmr(&current).unwrap(), (true, vec![]));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A file says what its derived section hashes to.
 #[test]
 fn a_file_carries_its_derived_hash() {

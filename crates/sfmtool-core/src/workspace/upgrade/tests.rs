@@ -317,8 +317,9 @@ fn reconstruction() -> SfmrReconstruction {
 
 /// The fixture: a version 2 workspace whose image folder holds version 2
 /// `.sift` files, with a current `.sfmr`, a version 15 `.sfmr`, which the
-/// reader no longer reads, a current pairwise `.matches`, a version 1 pairwise `.matches` without image sizes,
-/// a version 5 cluster `.matches`, a version 1 `.camrig` and a current one.
+/// reader no longer reads, a current pairwise `.matches`, a version 1 pairwise
+/// `.matches` without image sizes, a version 5 cluster `.matches`, a version 1
+/// `.camrig` and a current one.
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("ws");
@@ -529,6 +530,7 @@ fn a_dry_run_reports_what_a_run_would_do_and_writes_nothing() {
     let fixture = fixture();
     let before = snapshot(&fixture.root);
     let report = run(&fixture, true);
+    assert!(report.dry_run);
     assert_eq!(outcomes(&report), expected_outcomes(&fixture));
     assert!(report.notes.is_empty(), "{:?}", report.notes);
     assert_eq!(snapshot(&fixture.root), before);

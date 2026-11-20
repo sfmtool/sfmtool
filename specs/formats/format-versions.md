@@ -24,8 +24,9 @@ Each format crate has one constant for the version its writer writes:
 
 A version at which something changed that a reader gates on, such as
 `REFINED_SHAPE_GATES_VERSION`, is a constant of its own in the format crate,
-so a later version change does not move the gate. A format whose readers have stopped reading a version some
-release wrote holds, beside its version constant, the oldest version read and
+so a later version change does not move the gate. A format whose readers have
+stopped reading a version some release wrote holds, beside its version
+constant, the oldest version read and
 the last release that reads the older ones, which its refusal names
 ([Dropping a version](#dropping-a-version)): `SFMR_OLDEST_READ_VERSION` and
 `SFMR_LAST_RELEASE_READING_OLDER_VERSIONS` for `.sfmr`, and

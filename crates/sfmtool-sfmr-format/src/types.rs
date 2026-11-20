@@ -101,7 +101,8 @@ pub struct SfmrCamera {
     /// `images/principal_point_adjustments_xy` are.
     ///
     /// Empty for a camera whose images are all read through it exactly, and
-    /// then left out of the JSON. The key is what tells a zero adjustment that was solved for from one never enabled.
+    /// then left out of the JSON. The key is what tells a zero adjustment that
+    /// was solved for from one never enabled.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub per_image_adjustments: Vec<String>,
     /// Whether this camera's sensor reads its image one row at a time or one
@@ -1146,9 +1147,9 @@ pub struct SfmrData {
     // Per-point solve constraints (optional): what an adjustment owns of each
     // point, and what a caller-owned distance is measured from. The three
     // columns are present together or absent together, and absent is "every
-    // point free". They
-    // annotate `positions_xyzw` without changing its meaning: `w = 0` is still
-    // a direction and `w != 0` still a finite point, whatever the constraint.
+    // point free". They annotate `positions_xyzw` without changing its
+    // meaning: `w = 0` is still a direction and `w != 0` still a finite point,
+    // whatever the constraint.
     /// `(P,)` constraint per point in the canonical numbering:
     /// [`POINT_CONSTRAINT_FREE`], [`POINT_CONSTRAINT_RANGED`] or
     /// [`POINT_CONSTRAINT_HELD`]. `None` when the file carries no constraints,

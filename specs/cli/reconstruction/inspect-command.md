@@ -346,11 +346,12 @@ The default output is a compact label/value block. The fields per type:
 
 The readings are the per-image sharpness and gradient structure tensor of
 [sift-file-format.md](../../formats/sift-file-format.md#sharpness), which a
-version 2 `.sift` file records and a `.sfmr` file copies for each
-image. A `.sfmr` file below version 16 is refused with the reader's message,
-which names sfmtool 0.4.1 as the last release that reads it
-([sfmr-file-format.md § Format versions](../../formats/sfmr-file-format.md#format-versions)). A conversion prints as its formula, followed by `, rounded to N bits`
-when it has a `quantize_bits`.
+version 2 `.sift` file records and a `.sfmr` file copies for each image. A
+`.sfmr` file below version 16 is refused with the reader's message, which
+names sfmtool 0.4.1 as the last release that reads it
+([sfmr-file-format.md § Format versions](../../formats/sfmr-file-format.md#format-versions)).
+A conversion prints as its formula, followed by `, rounded to N bits` when it
+has a `quantize_bits`.
 
 For one image, a `.sift` file or an image file, the lines are, for the first
 image of `seoul_bull_sculpture`:

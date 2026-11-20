@@ -102,9 +102,11 @@ where
 /// `{"formula": …, "quantize_bits": …}` conversion both were computed
 /// through. Every file holds all three.
 ///
-/// The file stores the sharpness and seven of the observation-reading
-/// columns as `float16`; they read as float32 arrays, widened exactly, and a
-/// write rounds them to the nearest `float16`.
+/// The file stores the sharpness and five of the observation-reading columns
+/// as `float16`, and the two bitmap scores as their `float16` ZNCC deficits
+/// `1 − z`; they read as float32 arrays, the five and the sharpness widened
+/// exactly and each score as `1 − w`, and a write rounds them to the nearest
+/// `float16`.
 ///
 /// `positions_xyzw` is the homogeneous `(P, 4)` point array. Every optional
 /// column is emitted as `None` when the file does not carry it: the normals and
@@ -720,9 +722,10 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// `sharpness` and `gradient_structure_tensors_xx_yy_xy`) are required: this
 /// low-level writer computes nothing, so a dict without them is refused with
 /// `ValueError`, where `SfmrReconstruction.save` gathers them from the `.sift`
-/// files or the photographs. The sharpness and seven of the
-/// observation-reading columns are written rounded to the nearest `float16`; the dict's arrays are not
-/// changed.
+/// files or the photographs. The sharpness and five of the
+/// observation-reading columns are written rounded to the nearest `float16`,
+/// and the two bitmap scores as their deficits rounded so; the dict's arrays
+/// are not changed.
 ///
 /// `skip_recompute_depth_stats` decides only where the depth statistics come
 /// from: by default they are recomputed from the geometry, and with `True`

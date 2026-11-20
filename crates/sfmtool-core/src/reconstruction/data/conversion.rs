@@ -238,7 +238,8 @@ impl SfmrReconstruction {
     ///
     /// The depth statistics are **not** recomputed, which is what keeps this
     /// affordable: they cost a pass over every observation, and they are a
-    /// derived section that `content_xxh128` is not taken over. Skipping them cannot change the answer. The one thing a write
+    /// derived section that `content_xxh128` is not taken over. Skipping them
+    /// cannot change the answer. The one thing a write
     /// still does here is fill in missing normals, which are hashed, and the
     /// writer pays for that pass only when a normal is actually absent.
     pub fn content_xxh128(&self) -> Result<sfmtool_sfmr_format::ContentHash, SfmrError> {

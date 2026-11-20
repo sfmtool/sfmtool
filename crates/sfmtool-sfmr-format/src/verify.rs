@@ -63,6 +63,10 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     if let Err(e) = validate_world_space_unit(metadata.world_space_unit.as_deref()) {
         errors.push(e);
     }
+    // `written.json` is outside every digest, but the readers require it.
+    if archive.index_for_name(entries::written()).is_none() {
+        errors.push(format!("{} is missing", entries::written()));
+    }
 
     // The content identity folds only these sections, in canonical order.
     // The derived bytes are verified before images but excluded here.

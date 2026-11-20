@@ -29,7 +29,7 @@ conforming writer writes, is `16`, and it is also the oldest version a reader
 reads: every entry and key below is that of version 16. A reader refuses a
 file of any other version:
 
-- **Versions 1 to 15**, which sfmtool 0.4 and earlier releases wrote, with a
+- **Versions 1 to 15**, which releases before sfmtool 0.4 wrote, with a
   message that names the file, its version, the oldest version read and the
   last release that reads it, so the user can upgrade the workspace with that
   release:
@@ -198,7 +198,7 @@ The `.sfmr` file is a ZIP archive (using STORE method) with the following struct
 reconstruction.sfmr (ZIP archive)
 ├── metadata.json.zst                          # Top-level reconstruction metadata
 ├── content_hash.json.zst                      # Integrity verification hashes
-├── written.json.zst                           # When the file was written (v8+)
+├── written.json.zst                           # When the file was written
 ├── cameras/
 │   └── metadata.json.zst                      # Camera intrinsics and parameters
 ├── rigs/                                      # (Optional) Camera rig definitions
@@ -1490,7 +1490,8 @@ under the file's one `image_to_gray`. It takes them, image by image,
 from the first of these that applies:
 
 1. **The reconstruction it is writing**, when that already holds the image's
-   row under the same `image_to_gray`, as a value read from a file does. A subset, a transform or a merge moves rows with their images.
+   row under the same `image_to_gray`, as a value read from a file does. A
+   subset, a transform or a merge moves rows with their images.
 2. **The image's version 2 `.sift` file**, when its
    `feature_options.image_to_gray` equals the file's and it is verifiably that
    image's: in a `sift_files` file, the `.sift` whose content hash
@@ -1990,8 +1991,8 @@ re-estimates the reconstruction is free to change. They annotate
 flagged by `has_point_constraints`, and that same flag promises the
 `point_constraint_names` legend beside them. A set in which every point is free
 says exactly what carrying no set says, so a writer emits nothing in that case
-and a reader of an absent set treats every point as free. Beyond the per-column formats above, a valid set
-satisfies:
+and a reader of an absent set treats every point as free. Beyond the
+per-column formats above, a valid set satisfies:
 
 - the legend is present, is a list of names, and names at least one constraint
   (it need not name all three);
@@ -2215,8 +2216,8 @@ is valid — normals without a frame, a frame without normals, constraints witho
 either, or none of them. A writer refuses to write a combination that breaks one
 of these rules, and a reader and a verifier refuse a file whose
 `points3d/metadata.json` flags state one: `has_patch_bitmaps` without
-`has_uv_frames`, or `has_normal_confidence` without `has_normals`. The flags decide what a reader and a verifier look
-at: an optional entry whose flag is `false` or absent is not read, so these
+`has_uv_frames`, or `has_normal_confidence` without `has_normals`. The flags
+decide what a reader and a verifier look at: an optional entry whose flag is `false` or absent is not read, so these
 rules are checked on the flags alone.
 
 ##### `points3d/patch_u_halfvec_xyz.{N}.3.float32.zst` and `points3d/patch_v_halfvec_xyz.{N}.3.float32.zst`
@@ -2248,8 +2249,8 @@ rules are checked on the flags alone.
   bitmap is not the render of one of its observations. It is a fused
   mean of its views, alpha their agreement and coverage, which a file
   converted from one written before the stored bitmap stopped being a mean can
-  hold, and which a reader treats as any bitmap beside `-1`; or the render of an observation that a later edit removed from
-  the point, which keeps the bitmap (§ 9, "Keeping it true"); or a zero row.
+  hold, and which a reader treats as any bitmap beside `-1`; or the render of
+  an observation that a later edit removed from the point, which keeps the bitmap (§ 9, "Keeping it true"); or a zero row.
   A writer that renders a point the reference-view rule finds no eligible
   view for writes a zero row and `-1`
   ([../core/patch/reference-view.md](../core/patch/reference-view.md) § "The
@@ -2499,13 +2500,12 @@ Which observation each point's patch bitmap is, or is to be, rendered from:
   that aligns keypoints and renders bitmaps, a stored one that writer could no
   longer render usefully and no pick to replace it (see "Keeping it true"). A
   stored bitmap is then not the render of one of its observations -- a fused
-  mean, or the render of an observation that has since been removed from the point -- and
-  a later render runs the reference-view rule for the point and records its
+  mean, or the render of an observation that has since been removed from the
+  point -- and a later render runs the reference-view rule for the point and records its
   pick.
-- **Presence**: required in a file whose
-  `points3d/metadata.json` has `has_uv_frames: true`, and absent otherwise,
-  so it needs no flag of its own. It is present with the patch frame, not with the
-  bitmaps: a file without bitmaps keeps the column and its references. A
+- **Presence**: required in a file whose `points3d/metadata.json` has
+  `has_uv_frames: true`, and absent otherwise, so it needs no flag of its own.
+  It is present with the patch frame, not with the bitmaps: a file without bitmaps keeps the column and its references. A
   reader and a verifier refuse a value that is neither `-1` nor within its point's run; a
   writer refuses the column missing beside a patch frame, present without one,
   or out of range. All three accept a reference other than `-1` in a file
@@ -2960,7 +2960,8 @@ For the structure, a file fails verification when:
   [Per-image intrinsic adjustments](#per-image-intrinsic-adjustments-optional)
   (a non-zero adjustment is valid), or `cameras/metadata.json` does not
   parse;
-- `images/metadata.json` has no boolean `has_thumbnails`;
+- `images/metadata.json` has no boolean `has_thumbnails`, or the archive has
+  no `written.json.zst`;
 - the `has_*` flags in `points3d/metadata.json` break a presence rule between
   the optional per-point columns and `feature_source`;
 - `positions_xyzw` is not `point_count` rows of 32 bytes,
@@ -2990,8 +2991,8 @@ For the structure, a file fails verification when:
   `observation_count` rows of its shape, or
   `zncc_self_similarity_ellipse_axes_is_at_least` holds a value other than `0`
   or `1`;
-- either image-reading column or the `image_to_gray` key is missing, a column is not `N` rows of its shape, a reading is not
-  finite, a sharpness, `Exx` or `Eyy` is negative, or `image_to_gray` is not an
+- either image-reading column or the `image_to_gray` key is missing, a
+  column is not `N` rows of its shape, a reading is not finite, a sharpness, `Exx` or `Eyy` is negative, or `image_to_gray` is not an
   object with a non-empty string `formula`, an optional integer
   `quantize_bits` from 1 to 16 and no other key. Whether `formula` follows the
   [grammar](#image_to_gray) is checked by the reader that parses
