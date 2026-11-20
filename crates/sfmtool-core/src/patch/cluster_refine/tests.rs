@@ -150,6 +150,33 @@ fn run_recovery_case_with(
     shift_px: [f64; 2],
     max_rmse: f64,
 ) -> ClusterRefineResult {
+    run_recovery_case_limited(
+        params,
+        MAX_PATCH_ELONGATION,
+        scale,
+        rot_deg,
+        shear,
+        dlog_s,
+        drot_deg,
+        shift_px,
+        max_rmse,
+    )
+}
+
+/// [`run_recovery_case_with`] with the members' elongation limit at
+/// `max_elongation`.
+#[allow(clippy::too_many_arguments)]
+fn run_recovery_case_limited(
+    params: &ClusterRefineParams,
+    max_elongation: f64,
+    scale: f64,
+    rot_deg: f64,
+    shear: f64,
+    dlog_s: f64,
+    drot_deg: f64,
+    shift_px: [f64; 2],
+    max_rmse: f64,
+) -> ClusterRefineResult {
     let params = params.clone();
     let a_true = mul2(
         &mul2(&[[scale, 0.0], [0.0, scale]], &rot2(rot_deg)),
@@ -184,13 +211,14 @@ fn run_recovery_case_with(
         ImageFeatures::new(&[(pos_mem, a_mem)]),
     ];
     let pyramids = [pyramid(&img1), pyramid(&img2)];
-    let result = refine_cluster_patches(
-        &pyramids,
+    let result = refine_cluster_patches_with_elongation_limit(
+        &[&pyramids[0], &pyramids[1]],
         &geometry(&feats),
         &[0, 2],
         &[0, 1],
         &[0, 0],
         &params,
+        max_elongation,
         None,
     );
 
@@ -1274,6 +1302,16 @@ fn the_whole_grid_gate_reads_the_member_at_its_refined_shape() {
 /// its support-grid RMSE against the truth in px. Both members have the same
 /// scale, so the first is the reference.
 fn run_turned_member(rot_deg: f64, rotation_starts: u32) -> (ClusterRefineResult, f64, f64) {
+    run_turned_member_limited(rot_deg, rotation_starts, MAX_PATCH_ELONGATION)
+}
+
+/// [`run_turned_member`] with the members' elongation limit at
+/// `max_elongation`.
+fn run_turned_member_limited(
+    rot_deg: f64,
+    rotation_starts: u32,
+    max_elongation: f64,
+) -> (ClusterRefineResult, f64, f64) {
     let params = ClusterRefineParams {
         rotation_starts,
         ..ClusterRefineParams::default()
@@ -1292,13 +1330,14 @@ fn run_turned_member(rot_deg: f64, rotation_starts: u32) -> (ClusterRefineResult
         ImageFeatures::new(&[(centre, a_ref)]),
     ];
     let pyramids = [pyramid(&img1), pyramid(&img2)];
-    let result = refine_cluster_patches(
-        &pyramids,
+    let result = refine_cluster_patches_with_elongation_limit(
+        &[&pyramids[0], &pyramids[1]],
         &geometry(&feats),
         &[0, 2],
         &[0, 1],
         &[0, 0],
         &params,
+        max_elongation,
         None,
     );
     assert_eq!(result.reference_members[0], 0);
@@ -1539,9 +1578,10 @@ fn full_fingerprint(r: &ClusterRefineResult) -> u64 {
 
 /// The cases of [`synthetic_recovery_across_warp_range`] at the default
 /// settings and with the piecewise stage on, and a member turned 60° from
-/// its seed, with their results: clusters whose every member and every
-/// evaluation stays well within [`MAX_PATCH_ELONGATION`].
-fn within_limit_results() -> Vec<ClusterRefineResult> {
+/// its seed, refined with the members' elongation limit at `max_elongation`:
+/// clusters whose every member and every evaluation stays well within
+/// [`MAX_PATCH_ELONGATION`].
+fn within_limit_results(max_elongation: f64) -> Vec<ClusterRefineResult> {
     let default = ClusterRefineParams::default();
     let piecewise = ClusterRefineParams {
         piecewise: Some(PiecewiseParams::default()),
@@ -1557,50 +1597,38 @@ fn within_limit_results() -> Vec<ClusterRefineResult> {
     let mut results = Vec::new();
     for params in [&default, &piecewise] {
         for (s, r, sh, ds, dr, t, max) in cases {
-            results.push(run_recovery_case_with(params, s, r, sh, ds, dr, t, max));
+            results.push(run_recovery_case_limited(
+                params,
+                max_elongation,
+                s,
+                r,
+                sh,
+                ds,
+                dr,
+                t,
+                max,
+            ));
         }
     }
-    results.push(run_turned_member(60.0, DEFAULT_ROTATION_STARTS).0);
+    results.push(run_turned_member_limited(60.0, DEFAULT_ROTATION_STARTS, max_elongation).0);
     results
 }
 
-/// What the refinement returned for [`within_limit_results`]' cases before it
-/// had the members' elongation limit, recorded from that build on x86-64 with
-/// AVX2.
-const BEFORE_ELONGATION_LIMIT_FINGERPRINTS: [u64; 11] = [
-    0x4cb8_0a1b_a351_6df2,
-    0xeca6_d219_c013_1559,
-    0xfc75_1129_e2f8_667f,
-    0x32e0_11f8_411e_5ba4,
-    0xf422_f161_6238_fa79,
-    0x5967_b83c_9b75_1ecb,
-    0xbed7_cda2_5280_b618,
-    0x1bbb_f125_2ad4_8437,
-    0xeaf1_fc4d_3dd5_f1e0,
-    0x5f97_481a_0fca_ce8b,
-    0x68e3_ad33_8544_1ee4,
-];
-
 /// On clusters whose members and evaluations all stay within the elongation
-/// limit, the limit turns nothing away and every output is, bit for bit, what
-/// the refinement returned before it had the limit. The fingerprints were
-/// recorded on x86-64 with AVX2, and the scalar kernel rounds differently, so
-/// the comparison runs only there.
+/// limit, the limit turns nothing away, and every output is, bit for bit,
+/// what the refinement returns for the same clusters with the limit switched
+/// off.
 #[test]
-fn a_cluster_within_the_elongation_limit_is_refined_as_before_the_limit() {
-    let results = within_limit_results();
-    for r in &results {
+fn a_cluster_within_the_elongation_limit_is_refined_as_without_the_limit() {
+    let limited = within_limit_results(MAX_PATCH_ELONGATION);
+    let unlimited = within_limit_results(f64::INFINITY);
+    for r in &limited {
         assert_eq!(r.elongated_members, 0);
         assert_eq!(r.elongated_evaluations, 0);
     }
-    #[cfg(target_arch = "x86_64")]
-    {
-        if !std::arch::is_x86_feature_detected!("avx2") {
-            return;
-        }
-        let got: Vec<u64> = results.iter().map(full_fingerprint).collect();
-        assert_eq!(got, BEFORE_ELONGATION_LIMIT_FINGERPRINTS, "{got:#018x?}");
-    }
+    let limited: Vec<u64> = limited.iter().map(full_fingerprint).collect();
+    let unlimited: Vec<u64> = unlimited.iter().map(full_fingerprint).collect();
+    assert_eq!(limited, unlimited);
 }
 
 /// Texture units per keypoint-frame unit in [`shaped_image`].
@@ -1685,11 +1713,9 @@ fn the_elongation_limit_is_the_anisotropic_sampler_s() {
     let turned = mul2(&rot2(30.0), &[[2.0, 0.0], [0.0, 10.0]]);
     let e = elongation(turned[0][0], turned[0][1], turned[1][0], turned[1][1]);
     assert!((e - 5.0).abs() < 1e-12, "{e}");
-    assert!(!shape_within_elongation_limit(&[[1.0, 2.0], [2.0, 4.0]]));
-    assert!(!shape_within_elongation_limit(&[
-        [f64::NAN, 0.0],
-        [0.0, 1.0]
-    ]));
+    let limit = ElongationLimit::new(MAX_PATCH_ELONGATION);
+    assert!(!limit.admits_shape(&[[1.0, 2.0], [2.0, 4.0]]));
+    assert!(!limit.admits_shape(&[[f64::NAN, 0.0], [0.0, 1.0]]));
 }
 
 /// A member whose detected shape's elongation is exactly the limit is
@@ -1703,9 +1729,10 @@ fn a_member_at_the_elongation_limit_is_refined_and_one_past_it_is_not() {
         [2.0, 0.0],
         [0.0, f32::from_bits(32f32.to_bits() + 1) as f64],
     ];
-    assert!(shape_within_elongation_limit(&at_limit));
+    let limit = ElongationLimit::new(MAX_PATCH_ELONGATION);
+    assert!(limit.admits_shape(&at_limit));
     assert_eq!(elongation(2.0, 0.0, 0.0, 32.0), MAX_PATCH_ELONGATION);
-    assert!(!shape_within_elongation_limit(&past));
+    assert!(!limit.admits_shape(&past));
 
     let r = run_elongated_members(&[(at_limit, at_limit), (at_limit, past)]);
     assert_eq!(r.reference_members, [0]);

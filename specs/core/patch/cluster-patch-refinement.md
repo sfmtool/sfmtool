@@ -1402,6 +1402,18 @@ where the seed scores best, twelve starts give the one-start result bit for
 bit; and with one start the recovery cases and the 60° member reproduce
 fingerprints of every output recorded from the single-start build (checked on
 x86-64 with AVX2, where they were recorded).
+**The elongation limit**: `MAX_PATCH_ELONGATION` is the anisotropic
+sampler's `MAX_ANISOTROPY`; a member whose detected shape's elongation is
+exactly the limit is refined, and one just past it is `NotEvaluated` and
+counted in `elongated_members`; a member whose surface is stretched 20 times,
+seeded 15 times, drives the cascade towards maps past the limit, which are
+counted in `elongated_evaluations`, and the shape returned is within the
+limit; and on the recovery cases and the 60° member, whose members and
+evaluations all stay within the limit, the limit turns nothing away and every
+output is bit-identical to the refinement's on the same clusters with the
+limit switched off. The comparison runs the same build twice, so it holds on
+every platform, where a fingerprint recorded on one would depend on how its
+math library rounds.
 
 `cluster_refine/piecewise/tests.rs` covers the piecewise stage, including the
 cell registration kernel as the stage runs it. **The

@@ -1720,7 +1720,8 @@ in core. Step 17 turns the tier on.
    `not_evaluated` and counted as elongated; a cascade driven towards a map
    past the limit retreats and returns a shape within it; on a cluster whose
    members and evaluations all stay within the limit, every result is
-   bit-identical to the result before the step. Measurement, in the pull request: on copies of
+   bit-identical to the result on the same clusters with the limit switched
+   off. Measurement, in the pull request: on copies of
    the checked-in reconstructions (`seoul_bull_sculpture`, `dino_dog_toy`,
    `kerry_park`) and on the 200-megapixel capture of § "The problem,
    measured" if it is at hand, `sfm cluster-patches` before and after: the

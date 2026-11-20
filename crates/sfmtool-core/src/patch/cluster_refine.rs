@@ -217,30 +217,54 @@ fn elongation(m00: f64, m01: f64, m10: f64, m11: f64) -> f64 {
     s_max / s_min
 }
 
-/// Whether an elongation is within the members' limit: at most
-/// [`MAX_PATCH_ELONGATION`]. A `NaN` or infinite elongation is not.
-fn within_elongation_limit(elongation: f64) -> bool {
-    elongation <= MAX_PATCH_ELONGATION
+/// The members' elongation limit as one cluster's refinement applies it, with
+/// the count of the evaluations it turned away.
+struct ElongationLimit {
+    /// The largest elongation admitted: [`MAX_PATCH_ELONGATION`] in every
+    /// refinement but the test that runs the same clusters without the limit,
+    /// which passes infinity.
+    max: f64,
+    /// Evaluations turned away for their map's elongation
+    /// ([`ClusterRefineResult::elongated_evaluations`]).
+    elongated_evaluations: Cell<u64>,
 }
 
-/// Whether a member's affine shape `a` is within the members' elongation
-/// limit, the test validation applies to a detected shape.
-fn shape_within_elongation_limit(a: &Mat2) -> bool {
-    within_elongation_limit(elongation(a[0][0], a[0][1], a[1][0], a[1][1]))
-}
-
-/// Whether an evaluation may read `map`: `false`, after counting the
-/// evaluation in `elongated`, when the map's linear part is elongated past
-/// [`MAX_PATCH_ELONGATION`]. Such an evaluation scores as a support out of
-/// frame does, and is turned away before it asks for any tile. The map is a
-/// shape scaled by the grid's step, so it has the shape's elongation.
-fn map_within_elongation_limit(map: &AffineCoreMap, elongated: &Cell<u64>) -> bool {
-    let a = &map.a;
-    let within = within_elongation_limit(elongation(a[0], a[1], a[3], a[4]));
-    if !within {
-        elongated.set(elongated.get() + 1);
+impl ElongationLimit {
+    fn new(max: f64) -> Self {
+        Self {
+            max,
+            elongated_evaluations: Cell::new(0),
+        }
     }
-    within
+
+    /// Whether an elongation is within the limit: at most [`Self::max`]. A
+    /// `NaN` elongation is not, and an infinite one is not unless the limit
+    /// is infinite.
+    fn admits(&self, elongation: f64) -> bool {
+        elongation <= self.max
+    }
+
+    /// Whether a member's affine shape `a` is within the limit, the test
+    /// validation applies to a detected shape.
+    fn admits_shape(&self, a: &Mat2) -> bool {
+        self.admits(elongation(a[0][0], a[0][1], a[1][0], a[1][1]))
+    }
+
+    /// Whether an evaluation may read `map`: `false`, after counting the
+    /// evaluation in [`Self::elongated_evaluations`], when the map's linear
+    /// part is elongated past the limit. Such an evaluation scores as a
+    /// support out of frame does, and is turned away before it asks for any
+    /// tile. The map is a shape scaled by the grid's step, so it has the
+    /// shape's elongation.
+    fn admits_map(&self, map: &AffineCoreMap) -> bool {
+        let a = &map.a;
+        let within = self.admits(elongation(a[0], a[1], a[3], a[4]));
+        if !within {
+            let n = &self.elongated_evaluations;
+            n.set(n.get() + 1);
+        }
+        within
+    }
 }
 
 /// Level `ℓ = clamp(⌊log₂ s_min⌋, 0, L−1)` from the smaller singular value of
@@ -689,7 +713,7 @@ fn rotation_start_warps(m0: &Mat2, starts: u32) -> Vec<Mat2> {
 ///
 /// An evaluation whose map is elongated past [`MAX_PATCH_ELONGATION`] scores
 /// as one whose support is out of frame, before it reads a pixel, and is
-/// counted in `elongated`.
+/// counted in `limit`.
 #[allow(clippy::too_many_arguments)]
 fn refine_member(
     pyramid: &ImageU8Pyramid,
@@ -701,7 +725,7 @@ fn refine_member(
     step: f64,
     off: f64,
     params: &ClusterRefineParams,
-    elongated: &Cell<u64>,
+    limit: &ElongationLimit,
 ) -> Option<(f64, PartZncc, f64, [[f64; 3]; 2])> {
     let a_ref_inv = inv2(&ref_geo.a);
     let num_levels = pyramid.num_levels();
@@ -710,7 +734,7 @@ fn refine_member(
         let id = [[1.0 + d[0][0], d[0][1]], [d[1][0], 1.0 + d[1][1]]];
         let b = mul2(&mul2(&id, m0), &ref_geo.a);
         let map = warp_map(mem_geo.pos, t, &b, step, off);
-        if !map_within_elongation_limit(&map, elongated) {
+        if !limit.admits_map(&map) {
             return None;
         }
         let level = level_for_map(&map, num_levels);
@@ -816,7 +840,7 @@ fn refine_member(
         let id = [[1.0 + d[0][0], d[0][1]], [d[1][0], 1.0 + d[1][1]]];
         let b = mul2(&mul2(&id, &m0), &ref_geo.a);
         let map = warp_map(mem_geo.pos, t, &b, step, off);
-        if map_within_elongation_limit(&map, elongated) {
+        if limit.admits_map(&map) {
             let level = level_for_map(&map, num_levels);
             let lmap = map_at_level(&map, level);
             let bbox = grid_bbox(&lmap, resolution);
@@ -867,6 +891,7 @@ fn refine_cluster(
     support: &Support,
     tables: &SupportTables,
     resolution: u32,
+    max_elongation: f64,
 ) -> ClusterOutcome {
     let size = k1 - k0;
     let mut members = vec![MemberOutcome::default(); size];
@@ -882,7 +907,7 @@ fn refine_cluster(
     // fails stays NotEvaluated.
     let mut geo: Vec<Option<MemberGeo>> = vec![None; size];
     let mut elongated_members = 0;
-    let elongated = Cell::new(0u64);
+    let limit = ElongationLimit::new(max_elongation);
     for (j, slot) in geo.iter_mut().enumerate() {
         let k = k0 + j;
         let img = member_images[k] as usize;
@@ -908,7 +933,7 @@ fn refine_cluster(
         if det.abs() < MIN_ABS_DET || !det.is_finite() {
             continue;
         }
-        if !shape_within_elongation_limit(&a) {
+        if !limit.admits_shape(&a) {
             elongated_members += 1;
             continue;
         }
@@ -1038,7 +1063,7 @@ fn refine_cluster(
                 step,
                 off,
                 params,
-                &elongated,
+                &limit,
             )
         }) {
             let status = if zncc < params.min_zncc {
@@ -1124,7 +1149,7 @@ fn refine_cluster(
                         off,
                         params,
                         pp,
-                        &elongated,
+                        &limit,
                     )
                 });
             }
@@ -1135,7 +1160,7 @@ fn refine_cluster(
         reference: ref_geo.k_global,
         members,
         elongated_members,
-        elongated_evaluations: elongated.get(),
+        elongated_evaluations: limit.elongated_evaluations.get(),
     }
 }
 
@@ -1158,7 +1183,7 @@ fn refine_cluster(
 /// refined shape included, and every cell is stored as
 /// [`CellStatus::NotAttempted`] with the loop's iteration count. A shape
 /// elongated past [`MAX_PATCH_ELONGATION`] cannot be read either, and is
-/// counted in `elongated`.
+/// counted in `limit`.
 ///
 /// The stage never changes a member's status. The member passed every gate
 /// at its cascade shape, and the per-image dedupe has already run, so a
@@ -1178,7 +1203,7 @@ fn refine_kept_member_cells(
     off: f64,
     params: &ClusterRefineParams,
     pp: &PiecewiseParams,
-    elongated: &Cell<u64>,
+    limit: &ElongationLimit,
 ) {
     let s = [
         [member.affine[0][0], member.affine[0][1]],
@@ -1188,7 +1213,7 @@ fn refine_kept_member_cells(
     // The cascade's own objective, which an update must not lower.
     let score = |shape: &Mat2, position: [f64; 2]| {
         member_zncc_at(
-            pyramid, position, shape, tmpl, tables, resolution, step, off, elongated,
+            pyramid, position, shape, tmpl, tables, resolution, step, off, limit,
         )
     };
     let out = piecewise::refine_member_cells(
@@ -1213,12 +1238,12 @@ fn refine_kept_member_cells(
     // its own reading of the starting shape, which can differ from the
     // cascade's stored value in the last bits, so the stored value is the bar.
     let cascade_zncc = member.zncc;
-    let reread = read_member_at(
-        pyramid, ps, &sh, tmpl, tables, resolution, step, off, elongated,
-    )
-    .filter(|&(zncc, _)| {
-        zncc >= params.min_zncc && zncc as f32 >= cascade_zncc && params.admits_shift(shift, &sh)
-    });
+    let reread = read_member_at(pyramid, ps, &sh, tmpl, tables, resolution, step, off, limit)
+        .filter(|&(zncc, _)| {
+            zncc >= params.min_zncc
+                && zncc as f32 >= cascade_zncc
+                && params.admits_shift(shift, &sh)
+        });
     let Some((zncc, parts)) = reread else {
         member.cells = Some(CellRefinement::not_attempted(out.cells.iterations));
         return;
@@ -1242,7 +1267,7 @@ fn refine_kept_member_cells(
 /// The whole-patch windowed ZNCC and its part readings of a member at
 /// absolute position `p` and shape `s`; `None` when the support leaves the
 /// frame, or when the shape is elongated past [`MAX_PATCH_ELONGATION`],
-/// which is counted in `elongated`.
+/// which is counted in `limit`.
 #[allow(clippy::too_many_arguments)]
 fn read_member_at(
     pyramid: &ImageU8Pyramid,
@@ -1253,10 +1278,10 @@ fn read_member_at(
     resolution: u32,
     step: f64,
     off: f64,
-    elongated: &Cell<u64>,
+    limit: &ElongationLimit,
 ) -> Option<(f64, PartZncc)> {
     let map = warp_map(p, [0.0, 0.0], s, step, off);
-    if !map_within_elongation_limit(&map, elongated) {
+    if !limit.admits_map(&map) {
         return None;
     }
     let level = level_for_map(&map, pyramid.num_levels());
@@ -1271,7 +1296,7 @@ fn read_member_at(
 /// The whole-patch windowed ZNCC of a member at absolute position `p` and
 /// shape `s`, the objective the cascade maximises; `None` when the support
 /// leaves the frame, or when the shape is elongated past
-/// [`MAX_PATCH_ELONGATION`], which is counted in `elongated`.
+/// [`MAX_PATCH_ELONGATION`], which is counted in `limit`.
 #[allow(clippy::too_many_arguments)]
 fn member_zncc_at(
     pyramid: &ImageU8Pyramid,
@@ -1282,10 +1307,10 @@ fn member_zncc_at(
     resolution: u32,
     step: f64,
     off: f64,
-    elongated: &Cell<u64>,
+    limit: &ElongationLimit,
 ) -> Option<f64> {
     let map = warp_map(p, [0.0, 0.0], s, step, off);
-    if !map_within_elongation_limit(&map, elongated) {
+    if !limit.admits_map(&map) {
         return None;
     }
     let level = level_for_map(&map, pyramid.num_levels());
@@ -1364,6 +1389,34 @@ pub fn refine_cluster_patches_borrowed(
     params: &ClusterRefineParams,
     progress: Option<&AtomicUsize>,
 ) -> ClusterRefineResult {
+    refine_cluster_patches_with_elongation_limit(
+        pyramids,
+        features,
+        cluster_starts,
+        member_images,
+        member_features,
+        params,
+        MAX_PATCH_ELONGATION,
+        progress,
+    )
+}
+
+/// [`refine_cluster_patches_borrowed`] with the members' elongation limit
+/// given: `max_elongation` in place of [`MAX_PATCH_ELONGATION`]. Every
+/// refinement passes [`MAX_PATCH_ELONGATION`] but the test that runs the same
+/// clusters with the limit switched off (`f64::INFINITY`) and checks that the
+/// limit changes nothing where it turns nothing away.
+#[allow(clippy::too_many_arguments)]
+fn refine_cluster_patches_with_elongation_limit(
+    pyramids: &[&ImageU8Pyramid],
+    features: &[FeatureGeometry<'_>],
+    cluster_starts: &[u32],
+    member_images: &[u32],
+    member_features: &[u32],
+    params: &ClusterRefineParams,
+    max_elongation: f64,
+    progress: Option<&AtomicUsize>,
+) -> ClusterRefineResult {
     assert_eq!(
         features.len(),
         pyramids.len(),
@@ -1413,6 +1466,7 @@ pub fn refine_cluster_patches_borrowed(
                     &support,
                     &tables,
                     resolution,
+                    max_elongation,
                 )
             });
             if let Some(p) = progress {
