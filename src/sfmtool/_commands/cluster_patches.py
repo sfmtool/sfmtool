@@ -137,7 +137,7 @@ from .._cli_utils import timed_command
         "After the affine fit, register each of the reference's nine cells "
         "separately against each kept member's image, starting at the "
         "member's fitted shape, and store each cell's displacement, ZNCC and "
-        "status in the output (format version 8 per-cell columns). An affine "
+        "status in the output (the per-cell columns of cluster_patches/). An affine "
         "map fitted to the cells' shifts updates the member's shape and "
         "position wherever the whole-patch ZNCC does not fall. See "
         "specs/core/patch/cluster-patch-refinement.md."

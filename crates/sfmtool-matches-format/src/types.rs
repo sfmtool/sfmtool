@@ -383,8 +383,8 @@ pub const CLUSTER_REFERENCE_UNREFINABLE: u32 = u32::MAX;
 /// Per-member status in the `cluster_patches/` section — the meaning behind a
 /// `cluster_patches/member_status` code.
 ///
-/// The stored code is an index into the `member_status_names` legend in `cluster_patches/metadata.json`, not a
-/// number the format fixes. [`crate::read_matches`] resolves every code
+/// The stored code is an index into the `member_status_names` legend in
+/// `cluster_patches/metadata.json`, not a number the format fixes. [`crate::read_matches`] resolves every code
 /// through the file's legend and hands back the **canonical** numbering this
 /// enum's discriminants define, and [`crate::write_matches`] states that same
 /// canonical legend ([`Self::NAMES`]). So in memory there is one numbering,

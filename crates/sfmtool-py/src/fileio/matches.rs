@@ -88,7 +88,8 @@ pub fn matches_data_to_py(py: Python<'_>, data: MatchesData) -> PyResult<Py<PyAn
             "member_consistency_residual",
             cp.member_consistency_residual.into_pyarray(py),
         )?;
-        // The piecewise refinement's per-cell columns, present together when the file carries them, absent otherwise.
+        // The piecewise refinement's per-cell columns, present together when
+        // the file carries them, absent otherwise.
         if let Some(cells) = cp.member_cells {
             dict.set_item("member_cell_shift_px", cells.shift_px.into_pyarray(py))?;
             dict.set_item("member_cell_zncc", cells.zncc.into_pyarray(py))?;

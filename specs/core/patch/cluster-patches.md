@@ -188,7 +188,7 @@ regardless). Top-level metadata gains `"has_cluster_patches": true`.
 A member carries one shape for its whole patch. A file written with
 `--piecewise` also holds, for each kept member, a displacement, a ZNCC and a
 status for each of the nine cells of its patch, the displacement measured from
-where the member's stored shape places the cell (format version 8's per-cell
+where the member's stored shape places the cell (the per-cell
 entries, [matches-file-format.md](../../formats/matches-file-format.md#per-cell-entries-optional)).
 In such a file the kept members' shapes and positions are also the
 piecewise refinement's: an affine map fitted to the cells' shifts moves a

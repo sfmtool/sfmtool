@@ -213,7 +213,7 @@ fn make_cluster_test_data() -> MatchesData {
 }
 
 /// The reference feature's detector affine shape in the cluster-patch
-/// fixture — the reference row's leading 2×2 under format version 5.
+/// fixture, as `clusters/member_affine_shapes` stores it.
 /// Non-singular (det 2.875) and deliberately far from the identity.
 const CP_S_REF: [[f64; 2]; 2] = [[2.0, 0.5], [0.25, 1.5]];
 

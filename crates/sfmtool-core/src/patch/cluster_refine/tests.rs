@@ -160,7 +160,7 @@ fn matvec(a: &Mat2, x: [f64; 2]) -> [f64; 2] {
 /// Apply a member's reference-relative warp row (`W` | absolute position
 /// `p`) to `x`, given the cluster's reference keypoint:
 /// `x_member = W·(x − x_ref) + p`. `W` is recovered from the stored absolute
-/// shape as `S·S_ref⁻¹` (format version 5).
+/// shape as `S·S_ref⁻¹`.
 fn apply_member_row(m: &[[f64; 3]; 2], x_ref: [f64; 2], x: [f64; 2]) -> [f64; 2] {
     let dx = [x[0] - x_ref[0], x[1] - x_ref[1]];
     [

@@ -23,8 +23,8 @@
 //! intent — it would also accept a float or a signed value — so it documents
 //! less than a concrete type would.
 //!
-//! Unlike `.sfmr`, no `.matches` entry has been renamed across format versions,
-//! so every function here has a single spelling.
+//! No `.matches` entry has been renamed across format versions, so every
+//! function here has a single spelling.
 //!
 //! ## How the tests use this module
 //!
