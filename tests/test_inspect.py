@@ -129,7 +129,7 @@ def test_inspect_sfmr_verbose_with_points_at_infinity(
 
 
 def test_inspect_sfmr_image_readings(seoul_bull_workspace):
-    """A version 15 .sfmr shows the sharpness spread and conversion by
+    """A .sfmr shows the sharpness spread and conversion by
     default, and verbose adds a sharpness histogram and the least sharp
     images, least sharp first."""
     recon = SfmrReconstruction.load(str(seoul_bull_workspace))
@@ -165,8 +165,8 @@ def test_inspect_sfmr_image_readings(seoul_bull_workspace):
 def test_the_verbose_summary_of_a_reconstruction_without_readings_says_none(
     seoul_bull_ground_truth_sfmr, capsys
 ):
-    """A reconstruction that holds no image readings, as one read from a file
-    below version 15 does, gets the one line saying so and no histogram."""
+    """A reconstruction that holds no image readings, as one a solve or an
+    import builds, gets the one line saying so and no histogram."""
     from sfmtool.analyze.summary import print_reconstruction_summary
     from sfmtool.fileio import read_sfmr
 

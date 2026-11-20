@@ -914,7 +914,7 @@ pose, `rotation_wxyz` for a transform" gives the convention in full.
 **An image's own intrinsics.** An image may carry an intrinsic adjustment of
 its camera's focal and principal point, and on an `SFMTOOL_PINHOLE` camera a
 radial correction and rolling-shutter rates
-([../formats/sfmr-file-format.md](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)).
+([../formats/sfmr-file-format.md](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional)).
 `get_camera_image` reports it as `intrinsic_adjustment`, as the file stores it:
 `focal` the focal scale as a fraction (the image's focal is the camera's times
 `1 + focal`), `principal_point` the offset in fractions of the image's short

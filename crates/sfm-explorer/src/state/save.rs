@@ -18,8 +18,8 @@
 //!   one a caller states or the one measured from where the file lands,
 //!   materialises for the same reason, whether or not there is an overlay: the
 //!   path is metadata, and the hash covers the metadata. So does a save of a value
-//!   that lacks some image's readings, such as one opened from a file below
-//!   `.sfmr` version 15: the readings are gathered, through the save's
+//!   that lacks some image's readings, such as one a solve or an import
+//!   built: the readings are gathered, through the save's
 //!   progress, into the materialised value before it becomes a version, so
 //!   the version's content hash is the hash of the file written.
 //! - **Provenance is stamped before the hash is taken.** The metadata is inside
@@ -421,8 +421,8 @@ impl AppState {
         let node = &self.scene[index];
         let edited = node.history.current();
         let (deleted, added) = (edited.deleted_points.len(), edited.added.points.len());
-        // A base without every image's readings (one opened from a file below
-        // version 15) is not what the save writes, since the save gathers
+        // A base without every image's readings (one a solve or an import
+        // built) is not what the save writes, since the save gathers
         // them; it is folded like an edit, so the version pushed holds them
         // and its content hash is the written file's.
         let has_readings = edited.base.image_set.has_image_readings();

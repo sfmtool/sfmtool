@@ -1884,7 +1884,7 @@ as the sections above describe. The Rust interface is
 the Python binding takes the same three constraints as flat per-point arrays
 (see [Bindings](#bindings)), and a reconstruction carries them in the `.sfmr`
 constraint triple (see
-[Per-point constraints](../../formats/sfmr-file-format.md#per-point-constraints-optional-version-7)).
+[Per-point constraints](../../formats/sfmr-file-format.md#per-point-constraints-optional)).
 
 ### Free points: inverse depth and the storage decision
 

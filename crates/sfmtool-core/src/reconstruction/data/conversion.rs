@@ -70,31 +70,18 @@ impl SfmrReconstruction {
     /// 2. Fall back to `workspace.absolute_path`
     /// 3. Fall back to searching upward from the `.sfmr` file for `.sfm-workspace.json`
     ///
-    /// Files stored below [`sfmtool_sfmr_format::SFMR_CANONICAL_CONVENTION_VERSION`]
-    /// (version ≤ 4) hold COLMAP-convention data and are upgraded to the
-    /// canonical convention here (`.sfmr` version 5, design decision D1):
-    /// `S` on camera and rig sensor poses, `W` on world points (including
-    /// `w = 0` infinity directions), normals, and patch half-vectors — see
-    /// [`crate::geometry::convention::sfmr_data_colmap_to_canonical`]. The
-    /// conversion lives in this crate rather than `sfmtool-sfmr-format` because the
-    /// convention math is `sfmtool-core`'s `geometry::convention`, which the
-    /// lower-level format crate cannot depend on. Content hashes cover the
-    /// stored bytes ([`sfmtool_sfmr_format::verify_sfmr`] re-reads the file), so
-    /// integrity checks are unaffected; a subsequent [`save`](Self::save)
-    /// writes a new current-version file with new hashes. A file at or above
-    /// the canonical-convention version is already canonical and is loaded
-    /// untouched.
+    /// A file of a version the reader no longer reads is refused with
+    /// [`SfmrError::VersionNoLongerRead`], whose message names the release to
+    /// upgrade it with.
     ///
-    /// `progress` is where this call names the three stages an open divides
-    /// into: `read`, the archive entries and the decompression
-    /// [`sfmtool_sfmr_format::read_sfmr`] does; `convert convention`, the upgrade
-    /// above; and `derive`, the columns becoming the in-memory value and its
-    /// derived indexes. The `read` says how much it read and the `derive` how
-    /// many observations came out, both of which the code already knows. The
-    /// upgrade's guard is **cancelled** for a file that is already canonical,
-    /// since a stage that did not run should leave no row rather than an empty
-    /// one under every open. Pass `&Progress::none()` to report nothing, which
-    /// is one branch per report and no behaviour change at all.
+    /// `progress` is where this call names the stages an open divides into:
+    /// `read`, the archive entries and the decompression
+    /// [`sfmtool_sfmr_format::read_sfmr`] does; `derive`, the columns becoming
+    /// the in-memory value and its derived indexes; and `keypoints`, below.
+    /// The `read` says how much it read and the `derive` how many observations
+    /// came out, both of which the code already knows. Pass
+    /// `&Progress::none()` to report nothing, which is one branch per report
+    /// and no behaviour change at all.
     ///
     /// # Example
     ///
@@ -108,7 +95,7 @@ impl SfmrReconstruction {
     /// # }
     /// ```
     pub fn load(path: &Path, progress: &Progress<'_>) -> Result<Self, SfmrError> {
-        let mut data = {
+        let data = {
             let mut phase = progress.phase("read");
             let data = sfmtool_sfmr_format::read_sfmr(path)?;
             progress_note!(
@@ -124,22 +111,6 @@ impl SfmrReconstruction {
             Some(ref dir) => dir.clone(),
             None => resolve_workspace_dir(path, &data.metadata)?,
         };
-        // Gate on the version the canonical convention became normative in, NOT
-        // on the current format version: every later version is canonical too,
-        // so `< SFMR_FORMAT_VERSION` would re-apply the conversion to files that
-        // are already canonical each time the format version moves.
-        let mut convert = progress.phase("convert convention");
-        if data.metadata.version < sfmtool_sfmr_format::SFMR_CANONICAL_CONVENTION_VERSION {
-            progress_note!(convert, "from version {}", data.metadata.version);
-            crate::geometry::convention::sfmr_data_colmap_to_canonical(&mut data);
-            drop(convert);
-        } else {
-            convert.cancel();
-        }
-        // The in-memory arrays are the current structural layout in the current
-        // convention whatever the file said, so the reconstruction reports the
-        // current version (and a subsequent `save` writes it).
-        data.metadata.version = sfmtool_sfmr_format::SFMR_FORMAT_VERSION;
         let mut recon = {
             let mut phase = progress.phase("derive");
             let recon = Self::from_sfmr_data(data)?;
@@ -175,15 +146,14 @@ impl SfmrReconstruction {
     /// record, so there is no second place that spells the clock. The value
     /// itself is untouched: the timestamp is about the act of writing, not the
     /// content, so a shared base can be saved without cloning it. The same
-    /// goes for the readings the file stores as `float16`
-    /// ([`sfmtool_sfmr_format::SFMR_FLOAT16_READINGS_VERSION`]): the writer
+    /// goes for the readings the file stores as `float16`: the writer
     /// rounds them in the copy it writes, and this value keeps its `f32`
     /// values, which [`Self::content_xxh128`] hashes through the same
     /// rounding.
     ///
     /// The file stores every image's sharpness and gradient structure tensor.
-    /// A value that does not hold them for every image, such as one read from
-    /// a file below version 15, has them gathered for the write by
+    /// A value that does not hold them for every image, such as one a solve
+    /// or an import built, has them gathered for the write by
     /// [`Self::gather_image_readings`] (its own rows first, then each image's
     /// `.sift`, then its photograph), in a phase `image readings` of
     /// `progress` that counts the images; the value is not changed. When an
@@ -248,8 +218,8 @@ impl SfmrReconstruction {
     /// statistics and missing normals recomputed). Those normalisations happen
     /// on the temporary [`SfmrData`] copy, so `self` is unchanged.
     ///
-    /// A value that lacks the image readings of some image, as one read from a
-    /// file below version 15 does, is hashed without the reading columns,
+    /// A value that lacks the image readings of some image, as one a solve or
+    /// an import built does, is hashed without the reading columns,
     /// while a save gathers them first
     /// ([`Self::gather_image_readings`]), so the hash it stores is another
     /// one; call [`Self::fill_image_readings`] first for the two to agree, as
@@ -267,9 +237,9 @@ impl SfmrReconstruction {
     /// rather than deflating it.
     ///
     /// The depth statistics are **not** recomputed, which is what keeps this
-    /// affordable: they cost a pass over every observation, and from format
-    /// version 10 they are a derived section that `content_xxh128` is not taken
-    /// over. Skipping them cannot change the answer. The one thing a write
+    /// affordable: they cost a pass over every observation, and they are a
+    /// derived section that `content_xxh128` is not taken over. Skipping them
+    /// cannot change the answer. The one thing a write
     /// still does here is fill in missing normals, which are hashed, and the
     /// writer pays for that pass only when a normal is actually absent.
     pub fn content_xxh128(&self) -> Result<sfmtool_sfmr_format::ContentHash, SfmrError> {
@@ -330,8 +300,7 @@ impl SfmrReconstruction {
                 (Some(image_to_gray), Some(readings))
             }
         };
-        // Empty when no camera varies anything or has a scanlines setting,
-        // which is every file below version 13.
+        // Empty when no camera varies anything or has a scanlines setting.
         let per_image_adjustments = if per_image_adjustments.iter().any(|p| p.is_set()) {
             per_image_adjustments
         } else {

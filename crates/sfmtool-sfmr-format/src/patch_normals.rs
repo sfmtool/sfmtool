@@ -1,10 +1,9 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The normals a version 16 file derives from the patch frame.
+//! The normals a `.sfmr` file derives from the patch frame.
 //!
-//! From [`SFMR_DERIVED_PATCH_NORMALS_VERSION`](crate::SFMR_DERIVED_PATCH_NORMALS_VERSION),
-//! in a file with both normals and the patch frame, the normal of a finite
+//! In a file with both normals and the patch frame, the normal of a finite
 //! point (`w ≠ 0`) whose frame gives one is not stored: a reader computes it
 //! as `normalize(u × v)` in `f32` by [`patch_normal`]. The file stores only
 //! the normals of the other finite points, the underived normals, in point
@@ -15,29 +14,21 @@
 //! gets back. A point whose frame is degenerate (`u × v` zero or not finite)
 //! stores its normal; the format does not otherwise constrain a frame, so a
 //! degenerate one is kept rather than refused. See
-//! `specs/formats/sfmr-file-format.md` § "Derived normals (version 16+)".
-
-/// Whether a file of `version` derives the normals of its finite patched
-/// points from the frame.
-pub(crate) const fn derives_patch_normals(version: u32) -> bool {
-    version >= crate::SFMR_DERIVED_PATCH_NORMALS_VERSION
-}
+//! `specs/formats/sfmr-file-format.md` § "Derived normals".
 
 /// The prefix of the `points3d/underived_normals_xyz` entry, whatever its K.
 pub(crate) const UNDERIVED_NORMALS_PREFIX: &str = "points3d/underived_normals_xyz.";
 
 /// Why the normals entries of a file are refused, or `None` where they are
-/// the ones its version and flags call for.
+/// the ones its flags call for.
 ///
 /// `names` is every entry name in the archive. `underived_count` is `Some(K)`
-/// for a file of version 16 or later with both `has_normals` and
-/// `has_uv_frames`, `K` its finite points whose normal the frame does not
+/// for a file with both `has_normals` and `has_uv_frames`, `K` its finite points whose normal the frame does not
 /// give, and `None` for any other file. Such a file stores
 /// `points3d/underived_normals_xyz.{K}.3.float32.zst` exactly when `K > 0`
 /// and no full `points3d/normals_xyz` column; any other file stores no
 /// underived entry. The reader and the verifier both ask this.
 pub(crate) fn normals_entries_error<'a>(
-    version: u32,
     point_count: usize,
     underived_count: Option<usize>,
     names: impl IntoIterator<Item = &'a str>,
@@ -51,16 +42,15 @@ pub(crate) fn normals_entries_error<'a>(
     let Some(k) = underived_count else {
         return underived.first().map(|found| {
             format!(
-                "{found} is stored only by a file of version {} or later with both normals \
-                 and the patch frame, and this version {version} file is not one",
-                crate::SFMR_DERIVED_PATCH_NORMALS_VERSION
+                "{found} is stored only by a file with both normals and the patch frame, \
+                 and this file is not one"
             )
         });
     };
-    let full = crate::entries::points3d_normals(false, point_count);
+    let full = crate::entries::points3d_normals(point_count);
     if names.contains(&full.as_str()) {
         return Some(format!(
-            "a version {version} file with the patch frame stores the normals its frame does \
+            "a file with the patch frame stores the normals its frame does \
              not give in points3d/underived_normals_xyz, and this one holds the full column \
              {full}"
         ));
@@ -91,7 +81,7 @@ pub(crate) fn normals_entries_error<'a>(
 /// and the format marks a row present by a nonzero `u` alone, so a point whose
 /// `v` is zero and `u` is not has a patch with a degenerate frame.
 ///
-/// The one definition of that rule: the normals a version 16 file derives,
+/// The one definition of that rule: the normals a file derives,
 /// the patch cloud a reconstruction stores, the surfels SfM Explorer draws and
 /// the patches `sfm web-export` writes all read it. See
 /// `specs/formats/sfmr-file-format.md` § "Per-point patch frame".
@@ -107,7 +97,7 @@ pub fn patch_frame_is_stored(u: [f32; 3]) -> bool {
 /// divided by the length: one fixed sequence of `f32` operations, so every
 /// reader and writer gets the same bits.
 ///
-/// A version 16 file derives the normal of a finite point with a patch by
+/// A file derives the normal of a finite point with a patch by
 /// this function, and a caller that fills a missing normal in memory as a
 /// write would calls it too, so the two agree to the bit.
 pub fn patch_normal(u: [f32; 3], v: [f32; 3]) -> Option<[f32; 3]> {
@@ -146,7 +136,7 @@ impl PatchFrameRows<'_> {
             .flatten()
     }
 
-    /// Set the rows of `normals`, `(P, 3)` row-major, that a version 16 file
+    /// Set the rows of `normals`, `(P, 3)` row-major, that a file
     /// does not store to what a reader gives back for them: each derived row
     /// to its derived normal, and each point at infinity's row to `(0, 0, 0)`.
     /// What a writer does to the value it is handed. Every other row is left
@@ -161,7 +151,7 @@ impl PatchFrameRows<'_> {
         }
     }
 
-    /// The points whose normals a version 16 file stores, in point order:
+    /// The points whose normals a file stores, in point order:
     /// the finite points whose normal is not derived, because they have no
     /// patch (`u` zero) or a frame that gives no normal.
     pub(crate) fn underived(&self) -> Vec<usize> {
@@ -170,7 +160,7 @@ impl PatchFrameRows<'_> {
             .collect()
     }
 
-    /// The rows of `normals`, `(P, 3)` row-major, that a version 16 file
+    /// The rows of `normals`, `(P, 3)` row-major, that a file
     /// stores: those of [`Self::underived`], in point order, `(K, 3)`.
     pub(crate) fn underived_rows(&self, normals: &[f32]) -> Vec<f32> {
         self.underived()

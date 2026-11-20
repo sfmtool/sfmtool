@@ -1,11 +1,16 @@
 # `sfm ws upgrade` Command
 
 `sfm ws upgrade` brings the files of a version 2 workspace to the current file
-versions. It rewrites each `.sfmr`, `.matches` and `.camrig` file below the
-current version, that the current reader still reads, at its own path as the
-current version, so that a later release that stops reading those versions
-reads every file in the workspace. It rewrites files in place, so it cannot be
-undone: **back up the workspace first** ([Backing up](#backing-up)).
+versions. It rewrites each `.matches` and `.camrig` file below the current
+version, that the current reader still reads, at its own path as the current
+version, so that a later release that stops reading those versions reads every
+file in the workspace. The `.sfmr` reader reads only the current version, 16,
+so no `.sfmr` file is rewritten until that format next changes version; a
+`.sfmr` file below version 16 is one the reader refuses, and the run lists it
+with the reader's message, which names sfmtool 0.4.1 as the release to upgrade
+it with ([What is not converted](#what-is-not-converted)). It rewrites files in
+place, so it cannot be undone: **back up the workspace first**
+([Backing up](#backing-up)).
 
 A workspace sfmtool 0.3 or a development build made holds a version 1
 `.sfm-workspace.json` and `.sift`, `.sfmr`, `.matches` and `.camrig` files of
@@ -73,9 +78,8 @@ The command then runs these phases in order.
    converted](#what-is-not-converted)).
 3. **Rewrite the files**, each atomically at its own path (a temporary file
    beside the target, renamed over it):
-   - a `.sfmr` file is loaded and saved as the current version, which fills
-     the image readings of a file below version 15 from the reconstruction's
-     own rows, then each image's `.sift` file, then its photograph;
+   - a `.sfmr` file is loaded and saved as the current version (none today,
+     since the reader reads only the current version);
    - a `.matches` file is read and written as the current version; a file of
      version 3 or older takes each image's width and height from its `.sift`
      file, in the folder its record names, and a pairwise file of version 1 is
@@ -91,6 +95,12 @@ version of them that a version 2 workspace holds.
 
 These files are listed in the report with the reason, and left unchanged:
 
+- a `.sfmr` file below version 16, which the reader refuses; the reason is
+  `the current reader refuses it, so it is left as it is: ` followed by the
+  reader's message, which names the file, its version and sfmtool 0.4.1 as
+  the last release that reads it, to install and run `sfm ws upgrade` with
+  ([sfmr-file-format.md § Format versions](../../formats/sfmr-file-format.md#format-versions)).
+  The run does not fail for it;
 - a cluster `.matches` file below version 6, which the reader refuses; the
   report says to regenerate it with `sfm match --cluster`;
 - any other `.sfmr`, `.matches` or `.camrig` file the current reader refuses,
@@ -229,7 +239,6 @@ listed, the exception a signal handler raised while it ran
 otherwise, and `ValueError` for a workspace file it refuses. The
 `ProgressCounter` holds the count of the phase that is running.
 
-The `.sfmr` rewrite is in Rust, `SfmrReconstruction::load` then `save`:
-Python's dict route, `read_sfmr` then `write_sfmr`, applies no version 4 to
-version 5 convention upgrade and refuses a file below version 15 until its
-readings are supplied.
+The `.sfmr` rewrite is in Rust, `SfmrReconstruction::load` then `save`, which
+checks what the format reader leaves to it and gathers any image readings the
+value lacks.

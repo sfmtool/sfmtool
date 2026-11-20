@@ -400,8 +400,8 @@ the sections that use them:
   projects to its **right**. Positive elevation is up on screen with no negation
   anywhere — which is why the overlay can label its axes with signed angles and
   have them read correctly.
-- Stored poses are world-to-camera in the same canonical convention (`.sfmr`
-  version ≥ 5; older files are converted on load). Camera centre is `C = −Rᵀt`;
+- Stored poses are world-to-camera in the same canonical convention, as every
+  `.sfmr` file stores them. Camera centre is `C = −Rᵀt`;
   the world-space axis triple is `right = Rᵀe₀`, `up = Rᵀe₁`,
   `forward = −Rᵀe₂`.
 - `CameraIntrinsics::intrinsic_matrix()` returns `K` in the **optical** frame
@@ -664,7 +664,7 @@ photograph.
 **Through the image's own intrinsics.** The layer reads the image's
 intrinsics, `ImageSet::image_intrinsics(i)`: its camera's with the image's
 intrinsic adjustment applied
-([../formats/sfmr-file-format.md](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)),
+([../formats/sfmr-file-format.md](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional)),
 since that is the lens the photograph was taken through. On an
 `SFMTOOL_PINHOLE` camera that includes the image's radial correction and its
 rolling shutter, read on the camera's scanlines setting
@@ -1170,7 +1170,7 @@ them, these two rows included, and not the `per image` rows below; `Parameters
 
 **Per-image statistics.** A camera can vary its focal, its principal point and,
 on `SFMTOOL_PINHOLE`, its radial correction and rolling-shutter rates per image
-([../formats/sfmr-file-format.md](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)).
+([../formats/sfmr-file-format.md](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional)).
 For each component of each parameter the camera varies, the table carries a
 `per image` row beside the shared parameter it adjusts, holding the statistics
 of the images' values: the mean, the standard deviation, the smallest and

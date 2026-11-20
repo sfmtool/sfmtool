@@ -15,7 +15,7 @@ removing it.
 The per-image parameters themselves, their units and how an image's
 intrinsics are built from them are in
 [sfmr-file-format.md § Per-image intrinsic
-adjustments](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)
+adjustments](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional)
 and [sfmtool-pinhole-kernels.md § Per-image
 corrections](../camera/sfmtool-pinhole-kernels.md#per-image-corrections). Only
 the bundle adjustment turns a per-image parameter on, since it is what solves

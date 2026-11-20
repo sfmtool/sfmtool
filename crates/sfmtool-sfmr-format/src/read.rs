@@ -10,7 +10,7 @@ use ndarray::{Array1, Array2, Array4};
 use sfmtool_archive_io::{read_binary_array, read_json_entry, read_uint128_array};
 
 use crate::entries::{self, ReadingColumn};
-use crate::float16::{scores_from_deficits, stores_float16, widen_float16, wrong_dtype_error};
+use crate::float16::{scores_from_deficits, widen_float16};
 use crate::image_readings::image_readings_presence_error;
 use crate::observation_readings::{
     observation_reading_options, observation_readings_flagged, ReadingColumnsBuilder,
@@ -18,17 +18,83 @@ use crate::observation_readings::{
 use crate::types::*;
 use crate::{validate_image_readings, ImageReadingColumns, ObservationReadingColumns};
 
-/// Read only the top-level metadata from a `.sfmr` file (fast, no binary data).
-pub fn read_sfmr_metadata(path: &Path) -> Result<SfmrMetadata, SfmrError> {
+fn open_archive(path: &Path) -> Result<zip::ZipArchive<std::fs::File>, SfmrError> {
     let file = std::fs::File::open(path).map_err(|e| SfmrError::IoPath {
         operation: "Failed to open file",
         path: path.to_path_buf(),
         source: e,
     })?;
-    let mut archive = zip::ZipArchive::new(file)?;
-    let mut metadata: SfmrMetadata = read_json_entry(&mut archive, entries::metadata())?;
-    restore_write_timestamp(&mut archive, &mut metadata)?;
+    Ok(zip::ZipArchive::new(file)?)
+}
+
+/// Refuse a `metadata.version` this build does not read: one below
+/// [`SFMR_OLDEST_READ_VERSION`] that a release wrote, with
+/// [`SfmrError::VersionNoLongerRead`], which names `path` and the last
+/// release that reads it; and one of 0, which no writer has ever produced, or
+/// newer than [`SFMR_FORMAT_VERSION`], whose layout is unknown so reading it
+/// with current-version assumptions would misparse silently.
+pub(crate) fn check_version(version: u32, path: &Path) -> Result<(), SfmrError> {
+    if (1..SFMR_OLDEST_READ_VERSION).contains(&version) {
+        return Err(SfmrError::VersionNoLongerRead {
+            path: path.to_path_buf(),
+            version,
+        });
+    }
+    if !(SFMR_OLDEST_READ_VERSION..=SFMR_FORMAT_VERSION).contains(&version) {
+        return Err(SfmrError::InvalidFormat(format!(
+            "unsupported .sfmr format version {version} (this build reads versions \
+             {SFMR_OLDEST_READ_VERSION} to {SFMR_FORMAT_VERSION})"
+        )));
+    }
+    Ok(())
+}
+
+/// The keys a file's `metadata.json` holds that [`SfmrMetadata`] fills in
+/// when a value built in memory leaves them out.
+const REQUIRED_DEFAULTED_KEYS: [&str; 2] = ["feature_source", "infinity_point_count"];
+
+/// Parse `metadata.json` from its JSON value, checking its version with
+/// [`check_version`] first, so that a file of a version this build does not
+/// read is refused for its version rather than for a key that version lacks,
+/// and then that it holds every key a file requires.
+pub(crate) fn parse_metadata(
+    value: serde_json::Value,
+    path: &Path,
+) -> Result<SfmrMetadata, SfmrError> {
+    if let Some(version) = value.get("version").and_then(serde_json::Value::as_u64) {
+        check_version(u32::try_from(version).unwrap_or(u32::MAX), path)?;
+    }
+    if let Some(key) = REQUIRED_DEFAULTED_KEYS
+        .iter()
+        .find(|key| value.get(**key).is_none())
+    {
+        return Err(SfmrError::InvalidFormat(format!(
+            "metadata.json.zst has no {key}"
+        )));
+    }
+    Ok(serde_json::from_value(value)?)
+}
+
+/// Read the top-level metadata of the archive at `path`: `metadata.json`
+/// ([`parse_metadata`]), with the write timestamp put back from
+/// `written.json`, which a file keeps outside the content digest.
+fn read_metadata<R: std::io::Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    path: &Path,
+) -> Result<SfmrMetadata, SfmrError> {
+    let value: serde_json::Value = read_json_entry(archive, entries::metadata())?;
+    let mut metadata = parse_metadata(value, path)?;
+    let record: WriteRecord = read_json_entry(archive, entries::written())?;
+    metadata.timestamp = record.timestamp;
     Ok(metadata)
+}
+
+/// Read only the top-level metadata from a `.sfmr` file (fast, no binary data).
+///
+/// A file of a version this build does not read is refused, as [`read_sfmr`]
+/// refuses it.
+pub fn read_sfmr_metadata(path: &Path) -> Result<SfmrMetadata, SfmrError> {
+    read_metadata(&mut open_archive(path)?, path)
 }
 
 /// Read the top-level metadata and the image names of a `.sfmr` file, and no
@@ -36,17 +102,11 @@ pub fn read_sfmr_metadata(path: &Path) -> Result<SfmrMetadata, SfmrError> {
 ///
 /// For a caller that needs only which images a file records, and in which
 /// workspace, without decompressing its points and tracks: two JSON entries
-/// rather than the whole archive. The names are checked against the
-/// metadata's `image_count`, as [`read_sfmr`] checks them.
+/// rather than the whole archive. The version is checked, and the names
+/// against the metadata's `image_count`, as [`read_sfmr`] checks them.
 pub fn read_sfmr_image_names(path: &Path) -> Result<(SfmrMetadata, Vec<String>), SfmrError> {
-    let file = std::fs::File::open(path).map_err(|e| SfmrError::IoPath {
-        operation: "Failed to open file",
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-    let mut archive = zip::ZipArchive::new(file)?;
-    let mut metadata: SfmrMetadata = read_json_entry(&mut archive, entries::metadata())?;
-    restore_write_timestamp(&mut archive, &mut metadata)?;
+    let mut archive = open_archive(path)?;
+    let metadata = read_metadata(&mut archive, path)?;
     let names: Vec<String> = read_json_entry(&mut archive, entries::images_names())?;
     if names.len() != metadata.image_count as usize {
         return Err(SfmrError::ShapeMismatch(format!(
@@ -58,55 +118,17 @@ pub fn read_sfmr_image_names(path: &Path) -> Result<(SfmrMetadata, Vec<String>),
     Ok((metadata, names))
 }
 
-/// Read the image names entry of a `.sfmr` file as it is, with no image-name
-/// rule and no count check, and nothing else.
-///
-/// For finding which folders a file names when its names break the
-/// image-name rule, so that the readers refuse the file: the workspace
-/// upgrade keeps those folders for it. Never use what it returns to convert or
-/// write a file; [`read_sfmr_image_names`] is the reader for that.
-pub fn read_sfmr_image_names_unchecked(path: &Path) -> Result<Vec<String>, SfmrError> {
-    let file = std::fs::File::open(path).map_err(|e| SfmrError::IoPath {
-        operation: "Failed to open file",
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-    let mut archive = zip::ZipArchive::new(file)?;
-    Ok(read_json_entry(&mut archive, entries::images_names())?)
-}
-
-/// Put the write timestamp back on the in-memory metadata, wherever this file
-/// keeps it.
-///
-/// From version 8 it is in `written.json`, outside the content digest; below
-/// that it is a field of `metadata.json` and has already been deserialised into
-/// place. Reading whichever is there, rather than the version number, is what
-/// lets an older file load with exactly the timestamp and the hashes it stores:
-/// nothing is recomputed and nothing is rewritten.
-fn restore_write_timestamp<R: std::io::Read + std::io::Seek>(
-    archive: &mut zip::ZipArchive<R>,
-    metadata: &mut SfmrMetadata,
-) -> Result<(), SfmrError> {
-    if archive.index_for_name(entries::written()).is_none() {
-        return Ok(());
-    }
-    let record: WriteRecord = read_json_entry(archive, entries::written())?;
-    metadata.timestamp = record.timestamp;
-    Ok(())
-}
-
 /// Read only the content-integrity hashes from a `.sfmr` file.
 ///
 /// Decompresses just `content_hash.json.zst`, so it is cheap enough to scan a
 /// directory of `.sfmr` files (e.g. to resolve a `pt3d_<hash>_<index>` Point ID
-/// by its `content_xxh128` prefix) without loading any reconstruction data.
+/// by its `content_xxh128` prefix) without loading any reconstruction data,
+/// and `metadata.json.zst` for the version, so that a file of a version this
+/// build does not read is refused, as [`read_sfmr`] refuses it.
 pub fn read_sfmr_content_hash(path: &Path) -> Result<ContentHash, SfmrError> {
-    let file = std::fs::File::open(path).map_err(|e| SfmrError::IoPath {
-        operation: "Failed to open file",
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-    let mut archive = zip::ZipArchive::new(file)?;
+    let mut archive = open_archive(path)?;
+    let value: serde_json::Value = read_json_entry(&mut archive, entries::metadata())?;
+    parse_metadata(value, path)?;
     Ok(read_json_entry(&mut archive, entries::content_hash())?)
 }
 
@@ -117,14 +139,9 @@ pub fn read_sfmr_content_hash(path: &Path) -> Result<ContentHash, SfmrError> {
 /// corrections and the rolling-shutter rates) and the cameras'
 /// `rolling_shutter_scanlines` settings are read as stored.
 pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
-    let file = std::fs::File::open(path).map_err(|e| SfmrError::IoPath {
-        operation: "Failed to open file",
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-    let mut archive = zip::ZipArchive::new(file)?;
+    let mut archive = open_archive(path)?;
 
-    let (mut metadata, content_hash) = read_top_level(&mut archive)?;
+    let (mut metadata, content_hash) = read_top_level(&mut archive, path)?;
     let image_count = metadata.image_count as usize;
     let point_count = metadata.point_count as usize;
     let cameras = read_cameras(&mut archive, &metadata)?;
@@ -141,14 +158,8 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     )?;
     let rig_frame_data = read_rig_frames(&mut archive, image_count)?;
 
-    // The arrays above are upgraded to the current structural layout, but
-    // `metadata.version` deliberately keeps the **stored** version: version ≤ 4
-    // files hold COLMAP-convention poses/points, and the consumer that can see
-    // the convention math (`SfmrReconstruction::load` in `sfmtool-core`) gates
-    // the COLMAP→canonical upgrade on this value (see [`SFMR_FORMAT_VERSION`]).
-    // Recompute `infinity_point_count` from the `w` column so it is correct
-    // regardless of the source version (version 1 has none). `feature_source`
-    // already defaulted to `sift_files` for pre-v4 files on deserialization.
+    // `infinity_point_count` is recomputed from the `w` column, so the value
+    // describes the points it was read with.
     metadata.infinity_point_count = (0..point_count)
         .filter(|&i| points.positions_xyzw[[i, 3]] == 0.0)
         .count() as u32;
@@ -172,7 +183,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         principal_point_adjustments_xy: images.principal_point_adjustments_xy,
         radial_bspline_adjustments: images.radial_bspline_adjustments,
         rolling_shutter_rates_xyz: images.rolling_shutter_rates_xyz,
-        image_readings: images.image_readings,
+        image_readings: Some(images.image_readings),
         depth_statistics: images.depth_statistics,
         observed_depth_histogram_counts: images.observed_depth_histogram_counts,
         positions_xyzw: points.positions_xyzw,
@@ -200,21 +211,11 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
 // This call precedes all section reads, including their count checks.
 fn read_top_level(
     archive: &mut zip::ZipArchive<std::fs::File>,
+    path: &Path,
 ) -> Result<(SfmrMetadata, ContentHash), SfmrError> {
-    // Top-level metadata
-    let mut metadata: SfmrMetadata = read_json_entry(archive, entries::metadata())?;
-    restore_write_timestamp(archive, &mut metadata)?;
+    // The version is checked first, before any entry whose layout depends on it.
+    let metadata = read_metadata(archive, path)?;
     let content_hash: ContentHash = read_json_entry(archive, entries::content_hash())?;
-
-    // Reject versions newer than this build understands; their layout is unknown
-    // so reading with current-version assumptions would misparse silently.
-    if metadata.version > SFMR_FORMAT_VERSION {
-        return Err(SfmrError::InvalidFormat(format!(
-            "unsupported .sfmr format version {} (this build supports up to \
-             {SFMR_FORMAT_VERSION})",
-            metadata.version
-        )));
-    }
     validate_world_space_unit(metadata.world_space_unit.as_deref())
         .map_err(SfmrError::InvalidFormat)?;
 
@@ -253,12 +254,7 @@ fn read_section_metadata(
     }
 
     let points3d_meta: serde_json::Value = read_json_entry(archive, entries::points3d_metadata())?;
-    // Accept either the version 2 key (`point_count`) or the version 1 key
-    // (`points3d_count`).
-    let section_point_count = points3d_meta
-        .get("point_count")
-        .or_else(|| points3d_meta.get("points3d_count"))
-        .and_then(|v| v.as_u64());
+    let section_point_count = points3d_meta.get("point_count").and_then(|v| v.as_u64());
     if section_point_count != Some(point_count as u64) {
         return Err(SfmrError::InvalidFormat(
             "points3d/metadata.json.zst point count doesn't match top-level metadata".into(),
@@ -292,7 +288,7 @@ struct ImagesSection {
     principal_point_adjustments_xy: Option<Array2<f64>>,
     radial_bspline_adjustments: Option<Array2<f64>>,
     rolling_shutter_rates_xyz: Option<Array2<f64>>,
-    image_readings: Option<ImageReadingColumns>,
+    image_readings: ImageReadingColumns,
     depth_statistics: DepthStatistics,
     observed_depth_histogram_counts: Array2<u32>,
 }
@@ -304,8 +300,6 @@ fn read_images_section(
     cameras: &[SfmrCamera],
 ) -> Result<ImagesSection, SfmrError> {
     let image_count = metadata.image_count as usize;
-    // Version 10 moved depth statistics from images to derived.
-    let is_pre_v10 = metadata.version < 10;
     // Images
     let image_names: Vec<String> = read_json_entry(archive, entries::images_names())?;
     if image_names.len() != image_count {
@@ -339,9 +333,8 @@ fn read_images_section(
     let translations_xyz = Array2::from_shape_vec((image_count, 3), translations_vec)
         .map_err(|e| SfmrError::ShapeMismatch(format!("translations reshape: {e}")))?;
 
-    // Observation source (version 4+). Legacy v1–v3 files have no key and
-    // `serde(default)` reads them as `sift_files`. Reject any unrecognized value
-    // rather than silently treating it as `sift_files`.
+    // Observation source. Reject any unrecognized value rather than silently
+    // treating it as `sift_files`.
     match metadata.feature_source.as_str() {
         FEATURE_SOURCE_SIFT_FILES | FEATURE_SOURCE_EMBEDDED_PATCHES => {}
         other => {
@@ -384,23 +377,24 @@ fn read_images_section(
         (Some(feature_tool_hashes), Some(sift_content_hashes), None)
     };
 
-    // Thumbnails, optional from version 11 behind `has_thumbnails`.
-    let thumbnails_y_x_rgb = if images_meta_has_thumbnails(images_meta) {
-        let thumbnails_vec: Vec<u8> = read_binary_array(
-            archive,
-            &entries::images_thumbnails_y_x_rgb(image_count),
-            image_count * THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3,
-        )?;
-        Some(
-            Array4::from_shape_vec(
-                (image_count, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3),
-                thumbnails_vec,
+    // Thumbnails, optional behind `has_thumbnails`.
+    let thumbnails_y_x_rgb =
+        if images_meta_has_thumbnails(images_meta).map_err(SfmrError::InvalidFormat)? {
+            let thumbnails_vec: Vec<u8> = read_binary_array(
+                archive,
+                &entries::images_thumbnails_y_x_rgb(image_count),
+                image_count * THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3,
+            )?;
+            Some(
+                Array4::from_shape_vec(
+                    (image_count, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3),
+                    thumbnails_vec,
+                )
+                .map_err(|e| SfmrError::ShapeMismatch(format!("thumbnails reshape: {e}")))?,
             )
-            .map_err(|e| SfmrError::ShapeMismatch(format!("thumbnails reshape: {e}")))?,
-        )
-    } else {
-        None
-    };
+        } else {
+            None
+        };
 
     let AdjustmentColumns {
         focal_adjustments,
@@ -410,15 +404,12 @@ fn read_images_section(
     } = read_per_image_adjustments(archive, metadata, cameras, &camera_indexes)?;
     let image_readings = read_image_readings(archive, metadata, images_meta)?;
 
-    // Depth statistics, under `images/` before version 10 and `derived/` from
-    // version 10 on.
-    let depth_statistics: DepthStatistics =
-        read_json_entry(archive, entries::depth_statistics(is_pre_v10))?;
+    let depth_statistics: DepthStatistics = read_json_entry(archive, entries::depth_statistics())?;
     let num_buckets = depth_statistics.num_histogram_buckets as usize;
 
     let histogram_vec: Vec<u32> = read_binary_array(
         archive,
-        &entries::observed_depth_histogram_counts(is_pre_v10, image_count, num_buckets),
+        &entries::observed_depth_histogram_counts(image_count, num_buckets),
         image_count * num_buckets,
     )?;
     let observed_depth_histogram_counts =
@@ -444,61 +435,42 @@ fn read_images_section(
     })
 }
 
-/// The image readings (version 15+): both columns and the `image_to_gray` key
-/// of `images/metadata.json`, required from version 15 and refused below it,
-/// checked by [`validate_image_readings`]. The sharpness is `float32` in a
-/// version 15 file and `float16` from version 16, widened to `f32` exactly; a
-/// file holding it in the other version's dtype is refused.
+/// The image readings: both columns and the `image_to_gray` key of
+/// `images/metadata.json`, all three required, checked by
+/// [`validate_image_readings`]. The sharpness is stored as `float16` and
+/// widened to `f32` exactly.
 fn read_image_readings(
     archive: &mut zip::ZipArchive<std::fs::File>,
     metadata: &SfmrMetadata,
     images_meta: &serde_json::Value,
-) -> Result<Option<ImageReadingColumns>, SfmrError> {
+) -> Result<ImageReadingColumns, SfmrError> {
     let image_count = metadata.image_count as usize;
-    let float16 = stores_float16(metadata.version);
-    let sharpness_name = entries::images_sharpness(float16, image_count);
-    let other_sharpness_name = entries::images_sharpness(!float16, image_count);
-    let other_sharpness = archive.index_for_name(&other_sharpness_name).is_some();
+    let sharpness_name = entries::images_sharpness(image_count);
     let tensors_name = entries::images_gradient_structure_tensors_xx_yy_xy(image_count);
     let image_to_gray = images_meta.get("image_to_gray");
-    // A sharpness in either dtype counts as carried, so a file below version
-    // 15 is refused for carrying it at all before its dtype is asked about.
     let stored = [
-        archive.index_for_name(&sharpness_name).is_some() || other_sharpness,
+        archive.index_for_name(&sharpness_name).is_some(),
         archive.index_for_name(&tensors_name).is_some(),
         image_to_gray.is_some(),
     ];
-    if let Some(e) = image_readings_presence_error(metadata.version, stored) {
+    if let Some(e) = image_readings_presence_error(stored) {
         return Err(SfmrError::InvalidFormat(e));
     }
-    if other_sharpness {
-        return Err(SfmrError::InvalidFormat(wrong_dtype_error(
-            metadata.version,
-            &other_sharpness_name,
-            &sharpness_name,
-        )));
-    }
-    let Some(image_to_gray) = image_to_gray else {
-        return Ok(None);
-    };
-    let sharpness: Vec<f32> = if float16 {
-        widen_float16(&read_binary_array::<_, u16>(
-            archive,
-            &sharpness_name,
-            image_count,
-        )?)
-    } else {
-        read_binary_array(archive, &sharpness_name, image_count)?
-    };
+    let sharpness = widen_float16(&read_binary_array::<_, u16>(
+        archive,
+        &sharpness_name,
+        image_count,
+    )?);
     let tensors: Vec<f32> = read_binary_array(archive, &tensors_name, image_count * 3)?;
     let readings = ImageReadingColumns {
-        image_to_gray: image_to_gray.clone(),
+        // Present, as the presence check above found.
+        image_to_gray: image_to_gray.cloned().unwrap_or_default(),
         sharpness: Array1::from_vec(sharpness),
         gradient_structure_tensors_xx_yy_xy: Array2::from_shape_vec((image_count, 3), tensors)
             .map_err(|e| SfmrError::ShapeMismatch(format!("{tensors_name} reshape: {e}")))?,
     };
     validate_image_readings(&readings, image_count).map_err(SfmrError::InvalidFormat)?;
-    Ok(Some(readings))
+    Ok(readings)
 }
 
 /// The four per-image adjustment columns, each `None` where absent.
@@ -509,59 +481,11 @@ struct AdjustmentColumns {
     rolling_shutter_rates_xyz: Option<Array2<f64>>,
 }
 
-/// Why a file below the version that introduced the per-image adjustments it
-/// carries is refused, or `None` when it carries none it should not.
-///
-/// `stored` says which of the four columns the archive holds, in the order of
-/// [`PER_IMAGE_ADJUSTMENT_NAMES`]. The reader and the verifier both ask this,
-/// so they refuse the same files.
-pub(crate) fn per_image_adjustments_too_new(
-    version: u32,
-    cameras: &[SfmrCamera],
-    stored: [bool; 4],
-) -> Option<String> {
-    let lists = |names: &[&str]| {
-        cameras.iter().any(|c| {
-            c.per_image_adjustments
-                .iter()
-                .any(|n| names.contains(&n.as_str()))
-        })
-    };
-    if version < SFMR_PER_IMAGE_ADJUSTMENTS_VERSION
-        && (cameras.iter().any(|c| !c.per_image_adjustments.is_empty())
-            || stored.iter().any(|&s| s))
-    {
-        return Some(format!(
-            "a version {version} file carries per-image intrinsic adjustments, which version \
-             {SFMR_PER_IMAGE_ADJUSTMENTS_VERSION} introduced"
-        ));
-    }
-    if version < SFMR_PER_IMAGE_LENS_CORRECTIONS_VERSION
-        && (lists(&["radial_bspline", "rolling_shutter"])
-            || stored[2]
-            || stored[3]
-            || cameras
-                .iter()
-                .any(|c| c.rolling_shutter_scanlines.is_some()))
-    {
-        return Some(format!(
-            "a version {version} file carries a per-image radial B-spline correction, \
-             rolling-shutter rates or a rolling_shutter_scanlines setting, which version \
-             {SFMR_PER_IMAGE_LENS_CORRECTIONS_VERSION} introduced"
-        ));
-    }
-    None
-}
-
-/// The per-image adjustment columns (version 13+ for the focal and the
-/// principal point, 14+ for the radial B-spline correction and the
-/// rolling-shutter rates), each present exactly when some camera lists its
-/// parameter in `per_image_adjustments`, checked against the format's rules.
-///
-/// A file below the version that introduced a column or a key carries
-/// neither, and is refused when it does; it reads with no column, which is
-/// every adjustment zero. An entry that no camera's key accounts for is
-/// refused as well, so a column is never silently ignored.
+/// The per-image adjustment columns (the focal, the principal point, the
+/// radial B-spline correction and the rolling-shutter rates), each present
+/// exactly when some camera lists its parameter in `per_image_adjustments`,
+/// checked against the format's rules. An entry that no camera's key accounts
+/// for is refused, so a column is never silently ignored.
 fn read_per_image_adjustments(
     archive: &mut zip::ZipArchive<std::fs::File>,
     metadata: &SfmrMetadata,
@@ -578,9 +502,6 @@ fn read_per_image_adjustments(
     let stored = names
         .each_ref()
         .map(|name| archive.index_for_name(name).is_some());
-    if let Some(e) = per_image_adjustments_too_new(metadata.version, cameras, stored) {
-        return Err(SfmrError::InvalidFormat(e));
-    }
     let mut listed = [false; 4];
     for (c, camera) in cameras.iter().enumerate() {
         let flags = parse_per_image_adjustment_names(&camera.per_image_adjustments)
@@ -647,36 +568,13 @@ fn read_points_section(
 ) -> Result<PointsSection, SfmrError> {
     let image_count = metadata.image_count as usize;
     let point_count = metadata.point_count as usize;
-    // Version 1 stored Euclidean positions; version 2 uses homogeneous ones.
-    let is_v1 = metadata.version < 2;
-    // Version 3 renamed normals and added optional patch frames.
-    let is_pre_v3 = metadata.version < 3;
-    // Points3D positions: version 1 stored Euclidean `(P, 3)`; version 2 stores
-    // homogeneous `(P, 4)`. A version 1 file is upgraded by appending a `w = 1`
-    // column, since every version 1 point is finite.
-    let positions_xyzw = if is_v1 {
-        let positions_vec: Vec<f64> = read_binary_array(
-            archive,
-            &entries::points3d_positions(true, point_count),
-            point_count * 3,
-        )?;
-        let mut xyzw = Array2::<f64>::zeros((point_count, 4));
-        for i in 0..point_count {
-            xyzw[[i, 0]] = positions_vec[i * 3];
-            xyzw[[i, 1]] = positions_vec[i * 3 + 1];
-            xyzw[[i, 2]] = positions_vec[i * 3 + 2];
-            xyzw[[i, 3]] = 1.0;
-        }
-        xyzw
-    } else {
-        let positions_vec: Vec<f64> = read_binary_array(
-            archive,
-            &entries::points3d_positions(false, point_count),
-            point_count * 4,
-        )?;
-        Array2::from_shape_vec((point_count, 4), positions_vec)
-            .map_err(|e| SfmrError::ShapeMismatch(format!("positions reshape: {e}")))?
-    };
+    let positions_vec: Vec<f64> = read_binary_array(
+        archive,
+        &entries::points3d_positions(point_count),
+        point_count * 4,
+    )?;
+    let positions_xyzw = Array2::from_shape_vec((point_count, 4), positions_vec)
+        .map_err(|e| SfmrError::ShapeMismatch(format!("positions reshape: {e}")))?;
 
     let colors_vec: Vec<u8> = read_binary_array(
         archive,
@@ -693,22 +591,15 @@ fn read_points_section(
     )?;
     let reprojection_errors = Array1::from_vec(reprojection_vec);
 
-    // Normals are optional in version 3 (flagged by `has_normals`, which
-    // defaults to `false` when absent — like the patch flags). Versions 1 and 2
-    // always carry them and have no flag.
-    let has_normals = is_pre_v3
-        || points3d_meta
-            .get("has_normals")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-    // Normal confidence (version 5+) and the patch frame and bitmaps (version
-    // 3+) are flagged the same way, `false` when the key is absent.
+    // The normals, their confidence, and the patch frame and bitmaps are each
+    // flagged in the section metadata, `false` when the key is absent.
     let flag = |key: &str| {
         points3d_meta
             .get(key)
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
     };
+    let has_normals = flag("has_normals");
     let has_normal_confidence = flag("has_normal_confidence");
     let has_uv_frames = flag("has_uv_frames");
     let has_patch_bitmaps = flag("has_patch_bitmaps");
@@ -723,13 +614,11 @@ fn read_points_section(
     }
     .check()
     .map_err(SfmrError::InvalidFormat)?;
-    // A version 16 file with the patch frame stores only the normals the frame
-    // does not give, read below once the frame is.
-    let derives_normals = crate::patch_normals::derives_patch_normals(metadata.version)
-        && has_normals
-        && has_uv_frames;
+    // A file with the patch frame stores only the normals the frame does not
+    // give, read below once the frame is.
+    let derives_normals = has_normals && has_uv_frames;
     let normals_xyz = if has_normals && !derives_normals {
-        let normals_name = entries::points3d_normals(is_pre_v3, point_count);
+        let normals_name = entries::points3d_normals(point_count);
         let normals_vec: Vec<f32> = read_binary_array(archive, &normals_name, point_count * 3)?;
         Some(
             Array2::from_shape_vec((point_count, 3), normals_vec)
@@ -739,9 +628,8 @@ fn read_points_section(
         None
     };
 
-    // Optional per-point normal confidence (version 5+). Absent means "no
-    // confidence information", so an older file — which never carries the flag
-    // nor the array — simply reads as `None`.
+    // Optional per-point normal confidence. Absent means "no confidence
+    // information", and reads as `None`.
     let normal_confidence = if has_normal_confidence {
         let confidence_vec: Vec<u8> = read_binary_array(
             archive,
@@ -753,10 +641,9 @@ fn read_points_section(
         None
     };
 
-    // Optional per-point constraint triple (version 7+), flagged as one set and
-    // read through the same metadata entry's `point_constraint_names` legend.
-    // Absent means every point is free, so an older file — which carries
-    // neither the flag nor the arrays — simply reads as `None`.
+    // Optional per-point constraint triple, flagged as one set and read through
+    // the same metadata entry's `point_constraint_names` legend. Absent means
+    // every point is free, and reads as `None`.
     let (point_constraints, constraint_distances, constraint_reference_images) = if points3d_meta
         .get("has_point_constraints")
         .and_then(|v| v.as_bool())
@@ -805,7 +692,7 @@ fn read_points_section(
         (None, None, None)
     };
 
-    // Optional per-point patch frame (version 3+), stored beside the normals.
+    // Optional per-point patch frame, stored beside the normals.
     // Takes the entry name rather than a field stem, so the name comes from
     // `entries` like every other read. The stem for the error message is
     // recovered from the name instead of being passed a second time.
@@ -859,9 +746,8 @@ fn read_points_section(
         None
     };
 
-    // From version 16, with the patch frame, the normal of a finite point
-    // whose frame gives one is derived, and only the others are stored; an
-    // older file reads its full column as stored.
+    // With the patch frame, the normal of a finite point whose frame gives one
+    // is derived, and only the others are stored.
     let mut normals_xyz = normals_xyz;
     let w = positions_xyzw.column(3).to_vec();
     let frame = match (&patch_u_halfvec_xyz, &patch_v_halfvec_xyz) {
@@ -881,7 +767,6 @@ fn read_points_section(
         .map(|n| n.map(|n| n.into_owned()))
         .collect::<Result<_, _>>()?;
     if let Some(e) = crate::patch_normals::normals_entries_error(
-        metadata.version,
         point_count,
         underived,
         names.iter().map(String::as_str),
@@ -940,8 +825,6 @@ fn read_tracks_section(
 ) -> Result<TracksSection, SfmrError> {
     let observation_count = metadata.observation_count as usize;
     let point_count = metadata.point_count as usize;
-    // Version 1 named point indexes `points3d_indexes`.
-    let is_v1 = metadata.version < 2;
     let is_embedded = metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES;
     // Tracks
     let image_indexes_vec: Vec<u32> = read_binary_array(
@@ -993,9 +876,8 @@ fn read_tracks_section(
         None
     };
 
-    // Optional per-observation confidence (version 6+). Absent means "no
-    // information at all", so an older file — which never carries the flag nor
-    // the array — simply reads as `None`. Independent of `feature_source`.
+    // Optional per-observation confidence. Absent means "no information at
+    // all", and reads as `None`. Independent of `feature_source`.
     let observation_confidence = if tracks_meta
         .get("has_observation_confidence")
         .and_then(|v| v.as_bool())
@@ -1011,12 +893,9 @@ fn read_tracks_section(
         None
     };
 
-    let observation_readings =
-        read_observation_readings(archive, metadata.version, tracks_meta, observation_count)?;
+    let observation_readings = read_observation_readings(archive, tracks_meta, observation_count)?;
 
-    // Version 1 named this array `points3d_indexes`; version 2 renames it to
-    // `point_indexes`.
-    let point_indexes_name = entries::tracks_point_indexes(is_v1, observation_count);
+    let point_indexes_name = entries::tracks_point_indexes(observation_count);
     let point_indexes_vec: Vec<u32> =
         read_binary_array(archive, &point_indexes_name, observation_count)?;
     let point_indexes = Array1::from_vec(point_indexes_vec);
@@ -1028,14 +907,9 @@ fn read_tracks_section(
     )?;
     let observation_counts = Array1::from_vec(observation_counts_vec);
 
-    // The reference observations (version 12+), present exactly with the patch
-    // frame. An older file with patch frames has none on disk, and reads with
-    // every row `-1`: no reference has been chosen, and its bitmaps, if any,
-    // are fused means, no one observation's render.
+    // The reference observations, present exactly with the patch frame.
     let reference_observations = if !has_patch_frame {
         None
-    } else if metadata.version < SFMR_REFERENCE_OBSERVATIONS_VERSION {
-        Some(Array1::from_elem(point_count, NO_REFERENCE_OBSERVATION))
     } else {
         let values: Vec<i32> = read_binary_array(
             archive,
@@ -1061,16 +935,13 @@ fn read_tracks_section(
 
 /// The eight observation-reading columns, where `tracks/metadata.json` flags
 /// them (`has_observation_readings`), with the options recorded beside them.
-/// Absent in a file without the flag, as every file before the columns was.
+/// Absent in a file without the flag.
 ///
-/// From version 16 ([`SFMR_FLOAT16_READINGS_VERSION`]) the five
-/// self-similarity value columns are `float16`, widened to `f32` exactly, and
-/// the two scores are read from their stored `float16` ZNCC deficits `w` as
-/// `1 − w` in `f32`; before it all seven are `float32`. A file holding one in
-/// the other version's entry is refused.
+/// The five self-similarity value columns are `float16`, widened to `f32`
+/// exactly, and the two scores are read from their stored `float16` ZNCC
+/// deficits `w` as `1 − w` in `f32`.
 fn read_observation_readings(
     archive: &mut zip::ZipArchive<std::fs::File>,
-    version: u32,
     tracks_meta: &serde_json::Value,
     observation_count: usize,
 ) -> Result<Option<ObservationReadingColumns>, SfmrError> {
@@ -1078,29 +949,20 @@ fn read_observation_readings(
         return Ok(None);
     }
     let options = observation_reading_options(tracks_meta).map_err(SfmrError::InvalidFormat)?;
-    let float16 = stores_float16(version);
     let mut builder = ReadingColumnsBuilder::default();
     for column in ReadingColumn::ALL {
         let len = observation_count * column.width();
-        let name = column.entry(float16, observation_count);
-        let other = column.entry(!float16, observation_count);
-        if other != name && archive.index_for_name(&other).is_some() {
-            return Err(SfmrError::InvalidFormat(wrong_dtype_error(
-                version, &other, &name,
-            )));
-        }
-        match column.element_size(float16) {
-            1 => builder.push_flags(read_binary_array(archive, &name, len)?),
-            2 => {
-                let bits = read_binary_array::<_, u16>(archive, &name, len)?;
-                let values = if column.stores_deficit() {
-                    scores_from_deficits(&bits)
-                } else {
-                    widen_float16(&bits)
-                };
-                builder.push_f32(column, values);
-            }
-            _ => builder.push_f32(column, read_binary_array(archive, &name, len)?),
+        let name = column.entry(observation_count);
+        if column.element_size() == 1 {
+            builder.push_flags(read_binary_array(archive, &name, len)?);
+        } else {
+            let bits = read_binary_array::<_, u16>(archive, &name, len)?;
+            let values = if column.stores_deficit() {
+                scores_from_deficits(&bits)
+            } else {
+                widen_float16(&bits)
+            };
+            builder.push_f32(column, values);
         }
     }
     builder
@@ -1214,16 +1076,14 @@ pub(crate) fn has_frames_entry<R: std::io::Read + std::io::Seek>(
     Ok(false)
 }
 
-/// Whether `images/metadata.json` says the thumbnail entry is present.
-///
-/// A missing `has_thumbnails` key reads as `true`: every file of version 10
-/// or earlier carries no key and always carries the entry, and a version 11
-/// writer always writes the key.
-pub(crate) fn images_meta_has_thumbnails(images_meta: &serde_json::Value) -> bool {
+/// Whether `images/metadata.json` says the thumbnail entry is present: its
+/// `has_thumbnails` key, which is required, or a message when the key is
+/// missing or not a boolean.
+pub(crate) fn images_meta_has_thumbnails(images_meta: &serde_json::Value) -> Result<bool, String> {
     images_meta
         .get("has_thumbnails")
         .and_then(|v| v.as_bool())
-        .unwrap_or(true)
+        .ok_or_else(|| "images/metadata.json.zst has no boolean has_thumbnails".to_string())
 }
 
 /// Resolve the workspace directory for a `.sfmr` file.

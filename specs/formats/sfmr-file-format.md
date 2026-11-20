@@ -22,6 +22,47 @@ system: `.sfmr` data is stored in the canonical right-handed, Z-up world /
 −Z-forward camera convention described below, **not** in COLMAP's
 +Z-forward, Y-down convention.
 
+## Format versions
+
+`metadata.version` records the format version. The current version, which a
+conforming writer writes, is `16`, and it is also the oldest version a reader
+reads: every entry and key below is that of version 16. A reader refuses a
+file of any other version:
+
+- **Versions 1 to 15**, which releases before sfmtool 0.4 wrote, with a
+  message that names the file, its version, the oldest version read and the
+  last release that reads it, so the user can upgrade the workspace with that
+  release:
+
+  ```
+  <path> is a version 12 .sfmr file, and this sfmtool reads .sfmr files of
+  version 16 or later. sfmtool 0.4.1 is the last release that reads version 12:
+  install it, run `sfm ws upgrade` on the workspace, then use the file with
+  this release.
+  ```
+
+  `read_sfmr`, `read_sfmr_metadata`, `read_sfmr_image_names` and
+  `read_sfmr_content_hash` return it as `SfmrError::VersionNoLongerRead`,
+  which the Python bindings raise as `OSError`, and `verify_sfmr` reports it as
+  the file's one error. The version is checked before any entry whose layout
+  depends on it is parsed, so a file of an older version is refused for its
+  version rather than for a key or entry it lacks.
+- **Version 0**, which no version of the format has used, and a version newer
+  than the current one, whose layout it cannot know, as an unsupported
+  version: `unsupported .sfmr format version V (this build reads versions 16
+  to 16)`.
+
+The format crate holds the current version as `SFMR_FORMAT_VERSION`, the
+oldest version read as `SFMR_OLDEST_READ_VERSION` and the release the refusal
+names as `SFMR_LAST_RELEASE_READING_OLDER_VERSIONS`
+([`types.rs`](../../crates/sfmtool-sfmr-format/src/types.rs)). A writer
+always writes the current version, whatever optional columns a file carries.
+How the version changes, which older versions a reader keeps reading, and how
+one stops being read are in [format-versions.md](format-versions.md)
+([Dropping a version](format-versions.md#dropping-a-version)).
+[Version History](#version-history) at the end of this spec lists what each
+version changed.
+
 ## Coordinate System Conventions
 
 All geometric data in a `.sfmr` file — camera poses, 3D point positions,
@@ -109,10 +150,9 @@ particular, COLMAP interop (binary models, databases, pycolmap objects) must
 convert on import and on export; a COLMAP pose or point must never be copied
 verbatim into a `.sfmr`.
 
-A reader of a version 5 or later file therefore loads its geometry without
-converting it, and a writer stores geometry without converting it: data held in
-memory is already in the canonical convention. A file below version 5 is
-converted once, on load (see [Version 4 → Version 5](#version-4--version-5)).
+A reader therefore loads a file's geometry without converting it, and a
+writer stores geometry without converting it: data held in memory is already
+in the canonical convention.
 
 For COLMAP (+Z-forward, Y-down cameras; arbitrary world orientation), with the
 camera-frame flip `S = diag(1, −1, −1)` and the fixed world rotation
@@ -150,10 +190,6 @@ that *derives* `E`/`F` from stored poses plus `K` must first map the poses
 back to the OpenCV optical frame — equivalently, conjugate by `S`, since
 `E' = S · E · S` (`S` is a rotation, so `[S·t]× = S·[t]×·S`).
 
-> **Migration note.** This convention was formalized after the format was
-> already in use; files of format versions ≤ 4 hold COLMAP-convention data. See
-> [Versioning and Migration](#versioning-and-migration).
-
 ## File Structure
 
 The `.sfmr` file is a ZIP archive (using STORE method) with the following structure:
@@ -162,7 +198,7 @@ The `.sfmr` file is a ZIP archive (using STORE method) with the following struct
 reconstruction.sfmr (ZIP archive)
 ├── metadata.json.zst                          # Top-level reconstruction metadata
 ├── content_hash.json.zst                      # Integrity verification hashes
-├── written.json.zst                           # When the file was written (v8+)
+├── written.json.zst                           # When the file was written
 ├── cameras/
 │   └── metadata.json.zst                      # Camera intrinsics and parameters
 ├── rigs/                                      # (Optional) Camera rig definitions
@@ -182,61 +218,61 @@ reconstruction.sfmr (ZIP archive)
 │   ├── translations_xyz.{N}.3.float64.zst     # Camera translations (XYZ format)
 │   ├── feature_tool_hashes.{N}.uint128.zst    # (sift_files only) feature extraction tool identification
 │   ├── sift_content_hashes.{N}.uint128.zst    # (sift_files only) feature file content verification
-│   ├── image_file_hashes.{N}.uint128.zst      # (embedded_patches only) source image identity (version 4+)
-│   ├── thumbnails_y_x_rgb.{N}.128.128.3.uint8.zst # (Optional, v11+) 128x128 image thumbnails (RGB)
-│   ├── focal_adjustments.{N}.float64.zst      # (Optional, v13+) per-image focal scale
-│   ├── principal_point_adjustments_xy.{N}.2.float64.zst # (Optional, v13+) per-image principal-point offset, short-side unit
-│   ├── radial_bspline_adjustments.{N}.2.float64.zst # (Optional, v14+) per-image radial B-spline correction, units of ρ
-│   ├── rolling_shutter_rates_xyz.{N}.3.float64.zst  # (Optional, v14+) per-image rolling-shutter rates, rad per short side of readout
-│   ├── sharpness.{N}.float16.zst              # (v15+; float32 in v15) per-image sharpness
-│   ├── gradient_structure_tensors_xx_yy_xy.{N}.3.float32.zst # (v15+) per-image gradient structure tensor
-│   └── metadata.json.zst                      # Image metadata, with the readings' image_to_gray (v15+)
-├── derived/                                   # Recomputable from the sections above (v10+)
+│   ├── image_file_hashes.{N}.uint128.zst      # (embedded_patches only) source image identity
+│   ├── thumbnails_y_x_rgb.{N}.128.128.3.uint8.zst # (Optional) 128x128 image thumbnails (RGB)
+│   ├── focal_adjustments.{N}.float64.zst      # (Optional) per-image focal scale
+│   ├── principal_point_adjustments_xy.{N}.2.float64.zst # (Optional) per-image principal-point offset, short-side unit
+│   ├── radial_bspline_adjustments.{N}.2.float64.zst # (Optional) per-image radial B-spline correction, units of ρ
+│   ├── rolling_shutter_rates_xyz.{N}.3.float64.zst  # (Optional) per-image rolling-shutter rates, rad per short side of readout
+│   ├── sharpness.{N}.float16.zst              # per-image sharpness
+│   ├── gradient_structure_tensors_xx_yy_xy.{N}.3.float32.zst # per-image gradient structure tensor
+│   └── metadata.json.zst                      # Image metadata, with the readings' image_to_gray
+├── derived/                                   # Recomputable from the sections above
 │   ├── depth_statistics.json.zst              # Per-image depth stats
 │   └── observed_depth_histogram_counts.{N}.128.uint32.zst  # Observed depth histograms
 ├── points3d/
 │   ├── positions_xyzw.{N}.4.float64.zst       # Homogeneous 3D point coordinates (w=0 = point at infinity)
 │   ├── colors_rgb.{N}.3.uint8.zst             # RGB colors (0-255)
 │   ├── reprojection_errors.{N}.float32.zst    # Reprojection errors
-│   ├── underived_normals_xyz.{K}.3.float32.zst # (Optional, v16+ with normals and the patch frame) normals of the K finite points the frame gives none
+│   ├── underived_normals_xyz.{K}.3.float32.zst # (Optional, with normals and the patch frame) normals of the K finite points the frame gives none
 │   ├── metadata.json.zst                      # Points metadata
-│   ├── normals_xyz.{N}.3.float32.zst          # (Optional) per-point surface normals; from v16 only in a file without the patch frame
+│   ├── normals_xyz.{N}.3.float32.zst          # (Optional) per-point surface normals, in a file without the patch frame
 │   ├── normal_confidence.{N}.uint8.zst        # (Optional) per-point normal confidence
-│   ├── point_constraints.{N}.uint8.zst        # (Optional) per-point solve constraint (version 7+)
-│   ├── constraint_distances.{N}.float64.zst   # (Optional) a ranged point's distance (version 7+)
-│   ├── constraint_reference_images.{N}.uint32.zst # (Optional) the image a finite distance is measured from (version 7+)
-│   ├── patch_u_halfvec_xyz.{N}.3.float32.zst          # (Optional) in-plane half-extent vector u (version 3+)
-│   ├── patch_v_halfvec_xyz.{N}.3.float32.zst          # (Optional) in-plane half-extent vector v (version 3+)
-│   └── patch_bitmaps_y_x_rgba.{N}.{R}.{R}.4.uint8.zst # (Optional) R×R RGBA patch textures, alpha = confidence (version 3+)
+│   ├── point_constraints.{N}.uint8.zst        # (Optional) per-point solve constraint
+│   ├── constraint_distances.{N}.float64.zst   # (Optional) a ranged point's distance
+│   ├── constraint_reference_images.{N}.uint32.zst # (Optional) the image a finite distance is measured from
+│   ├── patch_u_halfvec_xyz.{N}.3.float32.zst          # (Optional) in-plane half-extent vector u
+│   ├── patch_v_halfvec_xyz.{N}.3.float32.zst          # (Optional) in-plane half-extent vector v
+│   └── patch_bitmaps_y_x_rgba.{N}.{R}.{R}.4.uint8.zst # (Optional) R×R RGBA patch textures, alpha = confidence
 └── tracks/
-    ├── blur_matched_bitmap_zncc_deficit.{M}.float16.zst  # (Optional, readings) 1 − the blur-matched ZNCC against the stored bitmap (version 16+; blur_matched_bitmap_zncc.{M}.float32.zst, the score, in 12 to 15)
+    ├── blur_matched_bitmap_zncc_deficit.{M}.float16.zst  # (Optional, readings) 1 − the blur-matched ZNCC against the stored bitmap
     ├── image_indexes.{M}.uint32.zst           # Image index per observation
     ├── feature_indexes.{M}.uint32.zst         # (sift_files only) feature index per observation
-    ├── keypoints_xy.{M}.2.float32.zst         # inline 2D keypoint (embedded_patches; optional in sift_files) (version 4+)
-    ├── observation_confidence.{M}.uint8.zst   # (Optional) per-observation blur-matched ZNCC against the patch bitmap (version 6+; other scores before 13)
-    ├── plain_bitmap_zncc_deficit.{M}.float16.zst      # (Optional, readings) 1 − the plain ZNCC against the stored bitmap (version 16+; plain_bitmap_zncc.{M}.float32.zst, the score, in 12 to 15)
+    ├── keypoints_xy.{M}.2.float32.zst         # inline 2D keypoint (embedded_patches; optional in sift_files)
+    ├── observation_confidence.{M}.uint8.zst   # (Optional) per-observation blur-matched ZNCC against the patch bitmap
+    ├── plain_bitmap_zncc_deficit.{M}.float16.zst      # (Optional, readings) 1 − the plain ZNCC against the stored bitmap
     ├── point_indexes.{M}.uint32.zst           # Point index per observation
     ├── observation_counts.{N}.uint32.zst      # Observations per point
-    ├── reference_observations.{N}.int32.zst   # (with the patch frame) observation the bitmap is, or is to be, rendered from (version 12+)
-    ├── zncc_self_similarity_cos_view_angle.{M}.float16.zst          # (Optional, readings) cos θ of the render (version 12+; float32 before 16)
-    ├── zncc_self_similarity_ellipse_axes.{M}.2.float16.zst          # (Optional, readings) self-similarity semi-axes, grid px (version 12+; float32 before 16)
-    ├── zncc_self_similarity_ellipse_axes_is_at_least.{M}.2.uint8.zst # (Optional, readings) 1 where an axis may be longer (version 12+)
-    ├── zncc_self_similarity_ellipse_major_angle.{M}.float16.zst     # (Optional, readings) major axis angle, radians (version 12+; float32 before 16)
-    ├── zncc_self_similarity_tilt_angle.{M}.float16.zst              # (Optional, readings) tilt direction of the render, radians (version 12+; float32 before 16)
-    ├── zncc_self_similarity_zoom.{M}.2.float16.zst                  # (Optional, readings) [least, most] zoom of the render (version 12+; float32 before 16)
+    ├── reference_observations.{N}.int32.zst   # (with the patch frame) observation the bitmap is, or is to be, rendered from
+    ├── zncc_self_similarity_cos_view_angle.{M}.float16.zst          # (Optional, readings) cos θ of the render
+    ├── zncc_self_similarity_ellipse_axes.{M}.2.float16.zst          # (Optional, readings) self-similarity semi-axes, grid px
+    ├── zncc_self_similarity_ellipse_axes_is_at_least.{M}.2.uint8.zst # (Optional, readings) 1 where an axis may be longer
+    ├── zncc_self_similarity_ellipse_major_angle.{M}.float16.zst     # (Optional, readings) major axis angle, radians
+    ├── zncc_self_similarity_tilt_angle.{M}.float16.zst              # (Optional, readings) tilt direction of the render, radians
+    ├── zncc_self_similarity_zoom.{M}.2.float16.zst                  # (Optional, readings) [least, most] zoom of the render
     └── metadata.json.zst                      # Tracks metadata
 ```
 
-**Observation source (version 4+).** A file declares, at the top level, a
+**Observation source.** A file declares, at the top level, a
 `feature_source ∈ {"sift_files", "embedded_patches"}` selecting how each
 observation's 2D coordinate is carried; there is **no mixing** within a file. The
 two modes differ only in the per-observation and per-image columns above (marked
 *sift_files only* / *embedded_patches only*). A `sift_files` file is the classic
-model (and what versions 1–3 always were); an `embedded_patches` file stores the
+model; an `embedded_patches` file stores the
 2D coordinate inline, based on patches. A `sift_files` file MAY additionally
 carry `tracks/keypoints_xy`, stating its observation coordinates inline rather
 than only by reference. See
-[Observation source](#observation-source-version-4) below.
+[Observation source](#observation-source) below.
 
 Where:
 - `{N}` = number of items (images, points, etc.)
@@ -289,15 +325,13 @@ JSON structure describing the reconstruction:
 ```
 
 **Field descriptions:**
-- `version`: Format version number. The valid versions, the current one, and
-  how each earlier version maps to the current model are given under
-  [Versioning and Migration](#versioning-and-migration).
-- `feature_source`: (version 4+) How each observation's 2D coordinate is carried
-  — `"sift_files"` (a reference into a per-image `.sift` file, the model of
-  versions 1–3) or `"embedded_patches"` (an inline patch-derived keypoint). A
-  file is wholly one mode, though a `sift_files` file may carry an inline copy of
-  its coordinates alongside the reference. Absent in versions 1–3, which are read
-  as `"sift_files"`. See [Observation source](#observation-source-version-4).
+- `version`: Format version number, `16` (see [Format versions](#format-versions)).
+- `feature_source`: (required) How each observation's 2D coordinate is carried
+  — `"sift_files"` (a reference into a per-image `.sift` file) or
+  `"embedded_patches"` (an inline patch-derived keypoint). A file is wholly one
+  mode, though a `sift_files` file may carry an inline copy of its coordinates
+  alongside the reference. Any other value is refused. See
+  [Observation source](#observation-source).
 - `operation`: Type of operation that created this reconstruction
   - `"sfm_solve"`: Structure-from-Motion reconstruction
   - `"transform"`: Geometric transformation of an existing reconstruction
@@ -321,13 +355,12 @@ JSON structure describing the reconstruction:
     - `feature_type`: Feature type (e.g. `"sift"`)
     - `feature_options`: Feature extraction options (see `.sift` format spec for details)
     - `feature_prefix_dir`: Relative path from each image's parent directory to the features subdirectory (e.g., `"features/sift-colmap-d1245b460906df27ee4730273e0aba41"`). Used to locate `.sift` files.
-- `timestamp`: (version 1 to 7 only) ISO 8601 format with timezone. From
-  version 8 the write timestamp lives in
-  [`written.json.zst`](#3-write-record-writtenjsonzst) instead, and this key
-  is absent. A reader takes it from whichever entry the file carries.
+- There is no `timestamp` key: the write timestamp lives in
+  [`written.json.zst`](#3-write-record-writtenjsonzst), outside the content
+  digest.
 - `image_count`: Number of registered images in reconstruction
 - `point_count`: Number of points (finite points and points at infinity combined)
-- `infinity_point_count`: (version 2+; read as `0` when absent) Number of
+- `infinity_point_count`: (required) Number of
   points at infinity (rows of `positions_xyzw` with `w = 0`). Derivable from
   the points array, but stored here so a consumer can read the finite/infinity
   split without decompressing that array. Must be
@@ -338,9 +371,27 @@ JSON structure describing the reconstruction:
 - `sensor_count`: (Optional) Total sensors across all rigs. Present only when rig data exists.
 - `frame_count`: (Optional) Number of frames (temporal instants). Present only when rig data exists.
 
-A file of version 9 or later may also carry a top-level `lineage` key, which
-the format no longer defines. A reader skips it and a writer does not write it;
-see [Version 8 → Version 9](#version-8--version-9).
+#### The retired `lineage` key
+
+A file may also carry a top-level `lineage` key, an array that version 9 of the
+format defined as a record of which earlier contents the file's point rows
+came from, and that the format no longer defines. No writer writes it. A file
+that carries one is still a valid file:
+
+- **It reads.** A reader skips the key, as it skips any top-level key the
+  format does not define, and applies none of its maps. A Point ID whose hash
+  only the key named resolves to nothing in that file.
+- **It verifies.** `metadata_xxh128` is the digest of the stored
+  `metadata.json` bytes, not of metadata parsed and serialised again, so the
+  key is inside the stored digest and the file verifies exactly as written.
+- **Saving it drops the key.** A writer writes only the keys the format
+  defines, so a save of what was read has no `lineage`. Its `metadata_xxh128`
+  and `content_xxh128` differ from the original's, and equal those of the same
+  reconstruction written with no key.
+
+Retiring the key needed no version change: it was optional from the version
+that introduced it, and a current reader treats it the same in every file, by
+skipping it ([format-versions.md](format-versions.md#when-a-formats-version-changes)).
 
 **Important**: All paths in the `.sfmr` file (image paths in `images/names.json.zst`, etc.) are **relative to the workspace directory**, not relative to the `.sfmr` file itself. This ensures consistent path resolution regardless of where the `.sfmr` file is located.
 
@@ -424,23 +475,23 @@ order in which the section hashes combine into `content_xxh128` is stated once,
 in the `content_xxh128` entry below.
 
 - `metadata_xxh128`: Hash of the uncompressed JSON content of `metadata.json.zst`
-- `cameras_xxh128`: Hash of the uncompressed JSON content of `cameras/metadata.json.zst`, so it covers each camera's `per_image_adjustments` key (version 13+) and `rolling_shutter_scanlines` key (version 14+)
+- `cameras_xxh128`: Hash of the uncompressed JSON content of `cameras/metadata.json.zst`, so it covers each camera's `per_image_adjustments` and `rolling_shutter_scanlines` keys
 - `rigs_xxh128`: (Optional) The `rigs/` section hash. Present only when the `rigs/` section exists.
 - `frames_xxh128`: (Optional) The `frames/` section hash. Present only when the `frames/` section exists.
-- `images_xxh128`: The `images/` section hash. Before version 10 it also covered the depth statistics and histogram files, which are now the `derived/` section. The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file. The optional `thumbnails_y_x_rgb` participates only when present, in its lexicographic slot (after `sift_content_hashes`, before `translations_xyz`). The optional per-image intrinsic adjustment columns (version 13+) participate only when present, each in its lexicographic slot: `focal_adjustments` after `feature_tool_hashes` (in an `embedded_patches` file, after `camera_indexes`) and before `image_file_hashes` and `metadata.json`; `principal_point_adjustments_xy` after `names.json` and before `quaternions_wxyz`. The optional per-image radial B-spline correction and rolling-shutter rates (version 14+) participate the same way, `radial_bspline_adjustments` then `rolling_shutter_rates_xyz`, after `quaternions_wxyz` and before `sift_content_hashes` (in an `embedded_patches` file, before `thumbnails_y_x_rgb` and `translations_xyz`). The two image-reading columns (version 15+, required) take their lexicographic slots: `gradient_structure_tensors_xx_yy_xy` after `focal_adjustments` (after `feature_tool_hashes` in a file without focal adjustments, after `camera_indexes` in an `embedded_patches` file without them) and before `image_file_hashes` and `metadata.json`; `sharpness` after `rolling_shutter_rates_xyz` (after `radial_bspline_adjustments` or `quaternions_wxyz` when those are absent) and before `sift_content_hashes` (in an `embedded_patches` file, before `thumbnails_y_x_rgb` and `translations_xyz`). The `images/metadata.json` bytes, which carry the `has_thumbnails` flag and, from version 15, the readings' `image_to_gray`, are always included, so two files that differ only in whether they carry thumbnails hash differently.
-- `points3d_xxh128`: The `points3d/` section hash. Includes the optional per-point arrays — `normals_xyz`, or from version 16 in a file with the patch frame `underived_normals_xyz` (in its lexicographic slot, after `reprojection_errors`, the last), `normal_confidence`, the constraint triple `point_constraints` / `constraint_distances` / `constraint_reference_images` (in their lexicographic slots: `constraint_distances` and `constraint_reference_images` after `colors_rgb` and before `metadata.json`, `point_constraints` after the patch-frame files and before `positions_xyzw`), and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
-- `tracks_xxh128`: The `tracks/` section hash. `feature_indexes` is present for a `sift_files` file and absent for an `embedded_patches` one. `keypoints_xy` participates whenever it is present — always in an `embedded_patches` file, and in a `sift_files` file when it carries the optional inline copy — in its lexicographic slot (after `image_indexes`, before `metadata.json`). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`). `reference_observations` participates when present (version 12+, exactly when `points3d/metadata.json` has `has_uv_frames`), in its lexicographic slot, after `point_indexes`. The eight observation-reading columns participate when `has_observation_readings` is set, each in its lexicographic slot: `blur_matched_bitmap_zncc` first, before `feature_indexes`; `plain_bitmap_zncc` after `observation_counts`, before `point_indexes`; and the six `zncc_self_similarity_*` columns last, after `reference_observations`, in the order `cos_view_angle`, `ellipse_axes`, `ellipse_axes_is_at_least`, `ellipse_major_angle`, `tilt_angle`, `zoom`.
-- `derived_xxh128`: (Version 10+, required) The `derived/` section hash, over `depth_statistics.json.zst` then `observed_depth_histogram_counts`. Verified like every other section hash, and **not** part of `content_xxh128`. A version 10+ file without it fails verification; a file below version 10 has no such field, because its depth statistics are part of `images_xxh128`.
-- `content_xxh128`: The whole-file digest over the section hashes that say what the reconstruction *is*, in the order metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks. The `derived/` section is excluded (see "Derived data is verified but not identifying"). Before version 10 the depth statistics reached this digest through `images_xxh128`.
+- `images_xxh128`: The `images/` section hash. It does not cover the depth statistics and histogram files, which are the `derived/` section. The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file. The optional `thumbnails_y_x_rgb` participates only when present, in its lexicographic slot (after `sift_content_hashes`, before `translations_xyz`). The optional per-image intrinsic adjustment columns participate only when present, each in its lexicographic slot: `focal_adjustments` after `feature_tool_hashes` (in an `embedded_patches` file, after `camera_indexes`) and before `image_file_hashes` and `metadata.json`; `principal_point_adjustments_xy` after `names.json` and before `quaternions_wxyz`. The optional per-image radial B-spline correction and rolling-shutter rates participate the same way, `radial_bspline_adjustments` then `rolling_shutter_rates_xyz`, after `quaternions_wxyz` and before `sift_content_hashes` (in an `embedded_patches` file, before `thumbnails_y_x_rgb` and `translations_xyz`). The two image-reading columns (required) take their lexicographic slots: `gradient_structure_tensors_xx_yy_xy` after `focal_adjustments` (after `feature_tool_hashes` in a file without focal adjustments, after `camera_indexes` in an `embedded_patches` file without them) and before `image_file_hashes` and `metadata.json`; `sharpness` after `rolling_shutter_rates_xyz` (after `radial_bspline_adjustments` or `quaternions_wxyz` when those are absent) and before `sift_content_hashes` (in an `embedded_patches` file, before `thumbnails_y_x_rgb` and `translations_xyz`). The `images/metadata.json` bytes, which carry the `has_thumbnails` flag and the readings' `image_to_gray`, are always included, so two files that differ only in whether they carry thumbnails hash differently.
+- `points3d_xxh128`: The `points3d/` section hash. Includes the optional per-point arrays — `normals_xyz`, or in a file with the patch frame `underived_normals_xyz` (in its lexicographic slot, after `reprojection_errors`, the last), `normal_confidence`, the constraint triple `point_constraints` / `constraint_distances` / `constraint_reference_images` (in their lexicographic slots: `constraint_distances` and `constraint_reference_images` after `colors_rgb` and before `metadata.json`, `point_constraints` after the patch-frame files and before `positions_xyzw`), and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
+- `tracks_xxh128`: The `tracks/` section hash. `feature_indexes` is present for a `sift_files` file and absent for an `embedded_patches` one. `keypoints_xy` participates whenever it is present — always in an `embedded_patches` file, and in a `sift_files` file when it carries the optional inline copy — in its lexicographic slot (after `image_indexes`, before `metadata.json`). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`). `reference_observations` participates when present (exactly when `points3d/metadata.json` has `has_uv_frames`), in its lexicographic slot, after `point_indexes`. The eight observation-reading columns participate when `has_observation_readings` is set, each in its lexicographic slot: `blur_matched_bitmap_zncc_deficit` first, before `feature_indexes`; `plain_bitmap_zncc_deficit` after `observation_counts`, before `point_indexes`; and the six `zncc_self_similarity_*` columns last, after `reference_observations`, in the order `cos_view_angle`, `ellipse_axes`, `ellipse_axes_is_at_least`, `ellipse_major_angle`, `tilt_angle`, `zoom`.
+- `derived_xxh128`: (required) The `derived/` section hash, over `depth_statistics.json.zst` then `observed_depth_histogram_counts`. Verified like every other section hash, and **not** part of `content_xxh128`. A file without it is refused.
+- `content_xxh128`: The whole-file digest over the section hashes that say what the reconstruction *is*, in the order metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks. The `derived/` section is excluded (see "Derived data is verified but not identifying").
 
-**Note**: The two top-level entries `content_hash.json.zst` and, from
-version 8, `written.json.zst` are outside every section hash and so outside
+**Note**: The two top-level entries `content_hash.json.zst` and
+`written.json.zst` are outside every section hash and so outside
 `content_xxh128`. One of them is the digest itself and the other records the
 act of writing; neither is content the digest describes.
 
 #### Derived data is verified but not identifying
 
-From version 10 the `derived/` section is hashed into `derived_xxh128` and left
+The `derived/` section is hashed into `derived_xxh128` and left
 out of `content_xxh128`. The two are different questions and the format answers
 both:
 
@@ -468,7 +519,7 @@ no longer requires redoing the derivation: see
 
 ### 3. Write Record (`written.json.zst`)
 
-(Version 8+.) What is true of the act of writing the file, as against what the
+(Required.) What is true of the act of writing the file, as against what the
 file says about the reconstruction:
 
 ```json
@@ -488,12 +539,6 @@ the hash its file will have before anyone decides to write it. Only facts about
 the writing belong here; anything the reconstruction asserts about itself,
 including `operation`, `tool` and the workspace configuration, stays in
 `metadata.json.zst` and stays hashed.
-
-A file below version 8 has no `written.json.zst` and carries `timestamp` in
-`metadata.json.zst`, where it was part of `metadata_xxh128`. A reader takes the
-timestamp from `written.json.zst` when the entry is present and from
-`metadata.json.zst` when it is not, and never recomputes or rewrites an older
-file's stored hashes.
 
 ### 4. Cameras (`cameras/metadata.json.zst`)
 
@@ -531,29 +576,28 @@ Array of camera intrinsic parameters:
 ]
 ```
 
-**`per_image_adjustments`** (version 13+, optional) lists the parts of the
+**`per_image_adjustments`** (optional) lists the parts of the
 camera's intrinsics that vary per image: `"focal"` when each of its images has
 its own focal scale in
-[`images/focal_adjustments`](#imagesfocal_adjustmentsnfloat64zst-optional-version-13),
+[`images/focal_adjustments`](#imagesfocal_adjustmentsnfloat64zst-optional),
 `"principal_point"` when each has its own principal-point offset in
-[`images/principal_point_adjustments_xy`](#imagesprincipal_point_adjustments_xyn2float64zst-optional-version-13),
-and, from version 14, `"radial_bspline"` when each has its own radial
+[`images/principal_point_adjustments_xy`](#imagesprincipal_point_adjustments_xyn2float64zst-optional),
+`"radial_bspline"` when each has its own radial
 B-spline correction in
-[`images/radial_bspline_adjustments`](#imagesradial_bspline_adjustmentsn2float64zst-optional-version-14)
+[`images/radial_bspline_adjustments`](#imagesradial_bspline_adjustmentsn2float64zst-optional)
 (only on an `SFMTOOL_PINHOLE` camera) and `"rolling_shutter"` when each has its
 own rolling-shutter rates in
-[`images/rolling_shutter_rates_xyz`](#imagesrolling_shutter_rates_xyzn3float64zst-optional-version-14).
+[`images/rolling_shutter_rates_xyz`](#imagesrolling_shutter_rates_xyzn3float64zst-optional).
 It names only those four, each at most once, in that order. A camera that
-varies none has no key, so the cameras entry of a file without adjustments is
-byte for byte what version 12 writes. The key is what tells a zero adjustment
+varies none has no key. The key is what tells a zero adjustment
 that was solved for apart from one that was never enabled; every other
 parameter stays the camera's for all its images.
 
-**`rolling_shutter_scanlines`** (version 14+, optional) is `"ROWS"` or
+**`rolling_shutter_scanlines`** (optional) is `"ROWS"` or
 `"COLUMNS"`: whether the camera's sensor reads its image one row at a time,
 the rows one after another down the image, or one column at a time across it.
 It is the axis the readout position of the
-[rolling-shutter rates](#imagesrolling_shutter_rates_xyzn3float64zst-optional-version-14)
+[rolling-shutter rates](#imagesrolling_shutter_rates_xyzn3float64zst-optional)
 is measured along. It is required on a camera that lists `"rolling_shutter"`
 and allowed on any other, so that a known setting can be recorded before any
 rates are solved. An absent key means the scanlines are not known; it does not
@@ -632,11 +676,8 @@ The `rigs/` and `frames/` sections must both be present or both be absent. A
 reader and a verifier refuse a file that has a `frames/` section and no `rigs/`
 section.
 
-Both sections have been part of the format since version 1, so a file of any
-version may carry them. Their entry names, shapes and data types are the same in
-every version. Like every other pose in the file, the sensor poses of a version 4
-or earlier file are in the COLMAP convention and are converted on load (see
-[Versioning and Migration](#versioning-and-migration)).
+Like every other pose in the file, the sensor poses are in the canonical
+convention ([Coordinate System Conventions](#coordinate-system-conventions)).
 
 #### `rigs/metadata.json.zst`
 
@@ -790,20 +831,15 @@ must be consistent (i.e., `camera_indexes[j]` = `sensor_camera_indexes[image_sen
 
 - `image_count`: The number of images, which must equal the top-level
   `image_count`.
-- `has_thumbnails`: (version 11+) Whether
-  `images/thumbnails_y_x_rgb.{N}.128.128.3.uint8.zst` is present. A version 11
-  writer always writes the key, `true` or `false`. A file of version 10 or
-  earlier carries no key and always carries the entry, so a missing key reads as
-  `true`. A missing key means the same thing in every version. This is the
-  opposite default to the flags in `points3d/metadata.json`, where a missing
-  flag means absent, and for the same reason: a missing key reads as what every
-  file written before the key existed actually holds.
+- `has_thumbnails`: (required) Whether
+  `images/thumbnails_y_x_rgb.{N}.128.128.3.uint8.zst` is present, `true` or
+  `false`. A reader and a verifier refuse a file without the key, unlike the
+  flags in `points3d/metadata.json`, where a missing flag means absent.
 - `thumbnail_size`: `128` when `has_thumbnails` is `true`, and `null` when it is
   `false`. It restates the edge fixed by the entry name rather than
   parameterising it (see below).
-- `image_to_gray`: (version 15+, required) The grey conversion the image
-  readings were computed through, defined in
-  [`image_to_gray`](#image_to_gray-version-15). Absent below version 15.
+- `image_to_gray`: (required) The grey conversion the image readings were
+  computed through, defined in [`image_to_gray`](#image_to_gray).
 
 #### `images/names.json.zst`
 
@@ -849,10 +885,6 @@ handling drops the trailing dots and spaces of a component, so `a./x.jpg` and
 `.. ` or `...` into a parent reference, so such names are not refused either.
 The rule checks a name and does not change it; a writer that builds names from
 platform paths writes them with `/` itself.
-`read_sfmr_image_names_unchecked` returns this entry as it is stored, with no
-rule applied and no other entry read. The workspace upgrade calls it when the
-reader refuses a file's names, to find the folders those names point into and
-keep them; nothing converts or writes a file from what it returns.
 
 The rule is
 [`sfmtool_archive_io::validate_image_name`](../../crates/sfmtool-archive-io/src/image_name.rs),
@@ -871,10 +903,10 @@ Binary array mapping each image to its camera:
 
 An image is read through its camera's intrinsics, with the image's
 **intrinsic adjustment** applied where its camera lists a parameter in
-`per_image_adjustments` (version 13+): the columns below. An image whose
+`per_image_adjustments`: the columns below. An image whose
 camera lists nothing is read through the camera exactly.
 
-#### Per-image intrinsic adjustments (Optional, version 13+)
+#### Per-image intrinsic adjustments (Optional)
 
 An image `i` taken through camera `c` (width `w`, height `h`, focal `f`, or `fx`
 and `fy` on a two-focal model, principal point `(cx, cy)`) is read through the
@@ -944,7 +976,7 @@ and the part that needs observations from many images to reach the edge of the
 field. The adjustment keeps it shared and lets only the parameters that do
 vary move per image.
 
-**The radial B-spline correction and the rolling shutter (version 14+).** An
+**The radial B-spline correction and the rolling shutter.** An
 `SFMTOOL_PINHOLE` camera's images can also each have their own change to the
 radial distortion, for distortion that changes with the focus distance, and
 each image of any camera its own rolling-shutter rates, for the image
@@ -1050,12 +1082,7 @@ a reader refuses a file that breaks any of these rules:
   `"radial_bspline"` and `"rolling_shutter"`, each at most once, in that order;
 - only an `SFMTOOL_PINHOLE` camera lists `"radial_bspline"`, and a camera that
   lists `"rolling_shutter"` has a `rolling_shutter_scanlines` setting, which is
-  `"ROWS"` or `"COLUMNS"`;
-- a file below version 13 has none of the columns and no
-  `per_image_adjustments` key, and a file below version 14 has neither
-  `radial_bspline_adjustments` nor `rolling_shutter_rates_xyz`, no camera
-  listing `"radial_bspline"` or `"rolling_shutter"`, and no
-  `rolling_shutter_scanlines` key.
+  `"ROWS"` or `"COLUMNS"`.
 
 Among the reconstruction edits, the bundle adjustment sets a camera's flag,
 since it solves the parameter
@@ -1090,7 +1117,7 @@ and the choice of a camera's scanlines in
 [../core/reconstruction/bundle-adjust.md § The rolling-shutter
 scanlines](../core/reconstruction/bundle-adjust.md#the-rolling-shutter-scanlines).
 
-##### `images/focal_adjustments.{N}.float64.zst` (Optional, version 13+)
+##### `images/focal_adjustments.{N}.float64.zst` (Optional)
 
 - **Shape**: `(N,)` where N = image_count
 - **Data type**: `float64` (little-endian), the type of the poses, so a solved
@@ -1098,7 +1125,7 @@ scanlines](../core/reconstruction/bundle-adjust.md#the-rolling-shutter-scanlines
 - **Format**: `s_i`, the image's focal scale: its focal is its camera's times
   `1 + s_i`. Above `−1`.
 
-##### `images/principal_point_adjustments_xy.{N}.2.float64.zst` (Optional, version 13+)
+##### `images/principal_point_adjustments_xy.{N}.2.float64.zst` (Optional)
 
 - **Shape**: `(N, 2)` where N = image_count
 - **Data type**: `float64` (little-endian)
@@ -1106,7 +1133,7 @@ scanlines](../core/reconstruction/bundle-adjust.md#the-rolling-shutter-scanlines
   point is its camera's plus `a_x,i·m` in x and `a_y,i·m` in y, where
   `m = min(width, height)` of the image's camera
 
-##### `images/radial_bspline_adjustments.{N}.2.float64.zst` (Optional, version 14+)
+##### `images/radial_bspline_adjustments.{N}.2.float64.zst` (Optional)
 
 - **Shape**: `(N, 2)` where N = image_count
 - **Data type**: `float64` (little-endian)
@@ -1115,7 +1142,7 @@ scanlines](../core/reconstruction/bundle-adjust.md#the-rolling-shutter-scanlines
   camera's spline for that image. Only an `SFMTOOL_PINHOLE` camera lists
   `"radial_bspline"`.
 
-##### `images/rolling_shutter_rates_xyz.{N}.3.float64.zst` (Optional, version 14+)
+##### `images/rolling_shutter_rates_xyz.{N}.3.float64.zst` (Optional)
 
 - **Shape**: `(N, 3)` where N = image_count
 - **Data type**: `float64` (little-endian)
@@ -1156,7 +1183,7 @@ XXH128 hashes identifying feature extraction tool:
 - **Format**: Hash of feature tool metadata (tool name + options)
 - **Purpose**: Links to specific .sift file version
 - **Presence**: present in `sift_files` files; **absent** in `embedded_patches`
-  files (there is no `.sift` to link to). Always present in versions 1–3.
+  files (there is no `.sift` to link to).
 
 #### `images/sift_content_hashes.{N}.uint128.zst` (sift_files only)
 
@@ -1167,9 +1194,9 @@ XXH128 hashes of feature file contents:
 - **Format**: Hash of .sift file content
 - **Purpose**: Verifies feature data integrity
 - **Presence**: present in `sift_files` files; **absent** in `embedded_patches`
-  files. Always present in versions 1–3.
+  files.
 
-#### `images/image_file_hashes.{N}.uint128.zst` (embedded_patches only, version 4+)
+#### `images/image_file_hashes.{N}.uint128.zst` (embedded_patches only)
 
 XXH128 hashes of the source image file bytes — the direct image-identity hash
 that substitutes for the `.sift`-mediated link when there is no `.sift`:
@@ -1188,7 +1215,7 @@ that substitutes for the `.sift`-mediated link when there is no `.sift`:
   the hash remains reachable through `sift_content_hashes` → `.sift` →
   `image_file_xxh128`, so it is absent there.
 
-#### `images/thumbnails_y_x_rgb.{N}.128.128.3.uint8.zst` (Optional from version 11)
+#### `images/thumbnails_y_x_rgb.{N}.128.128.3.uint8.zst` (Optional)
 
 Downscaled preview thumbnails for each image, embedded directly in the file.
 Present exactly when `images/metadata.json`'s `has_thumbnails` is `true`:
@@ -1240,10 +1267,10 @@ the entry name is authoritative.
 A producer that copies thumbnails from `.sift` files relies on the `.sift`
 thumbnail edge being the same 128; the two formats fix the same value.
 
-#### Image readings (version 15+)
+#### Image readings
 
 Some frames of a hand-held capture are blurred, by focus or by the camera
-moving during the exposure. From version 15 a file records two readings of
+moving during the exposure. A file records two readings of
 every image that let a reader rank its images by blur without the images: a
 **sharpness**, the variance of the Laplacian of a grey copy of the image
 reduced to a long side of 480 pixels, and a **gradient structure tensor**, the
@@ -1258,17 +1285,16 @@ between reconstructions of different scenes, and the format gives no threshold
 for either. A `.sfmr` file records no choice of images made by these readings
 and no named image list.
 
-##### `images/sharpness.{N}.float16.zst` (version 15+)
+##### `images/sharpness.{N}.float16.zst`
 
 - **Shape**: `(N,)` where N = image_count
-- **Data type**: `float16` (little-endian) from version 16; `float32`
-  (little-endian), as `images/sharpness.{N}.float32.zst`, in version 15
+- **Data type**: `float16` (little-endian)
 - **Format**: image `i`'s sharpness, the population variance of the Laplacian
   over the interior of its [reading image](#the-reading-image), in grey units
   squared ([Sharpness](#sharpness)). Finite and not negative.
-- **Required** from version 15, in both feature sources.
+- **Required**, in both feature sources.
 
-##### `images/gradient_structure_tensors_xx_yy_xy.{N}.3.float32.zst` (version 15+)
+##### `images/gradient_structure_tensors_xx_yy_xy.{N}.3.float32.zst`
 
 - **Shape**: `(N, 3)` where N = image_count
 - **Data type**: `float32` (little-endian)
@@ -1277,14 +1303,14 @@ and no named image list.
   Sobel derivatives divided by 8, `x` to the right and `y` down
   ([Gradient structure tensor](#gradient-structure-tensor)). Not normalised.
   Finite; `Exx` and `Eyy` not negative.
-- **Required** from version 15, in both feature sources.
+- **Required**, in both feature sources.
 
 Each value is computed in single precision, as the sections below define. A
 writer stores the tensor as it is, a `float32`, and stores the sharpness
 rounded to the nearest `float16`, ties to even; it refuses a sharpness above
 65,504, the largest `float16`, which the definition's bound of 16 rules out.
 
-##### `image_to_gray` (version 15+)
+##### `image_to_gray`
 
 `images/metadata.json`'s `image_to_gray` key holds the conversion from an
 image's colour samples to the grey samples both columns were computed from:
@@ -1464,8 +1490,8 @@ under the file's one `image_to_gray`. It takes them, image by image,
 from the first of these that applies:
 
 1. **The reconstruction it is writing**, when that already holds the image's
-   row under the same `image_to_gray`, as a value read from a version 15 or
-   later file does. A subset, a transform or a merge moves rows with their images.
+   row under the same `image_to_gray`, as a value read from a file does. A
+   subset, a transform or a merge moves rows with their images.
 2. **The image's version 2 `.sift` file**, when its
    `feature_options.image_to_gray` equals the file's and it is verifiably that
    image's: in a `sift_files` file, the `.sift` whose content hash
@@ -1482,7 +1508,7 @@ from the first of these that applies:
    file), with the readings computed by the definitions above through the
    file's `image_to_gray`. This is the path for a version 1 `.sift`, an
    `embedded_patches` file with no `.sift`, a `.sift` recorded under a
-   different conversion, and a `.sfmr` below version 15 being saved. In a
+   different conversion, and a reconstruction a solve or an import built. In a
    `sift_files` file the image's record is in its `.sift`, so an image whose
    `.sift` is missing or is another extraction cannot be verified and takes no
    row from its image file.
@@ -1504,23 +1530,6 @@ feature tool (its `gray_formula` string, unrounded, for `sfmtool`, or BT.709
 luma unrounded without one; BT.709 luma rounded to 8 bits for `colmap`; BT.601
 luma rounded to 8 bits for `opencv`); and otherwise BT.709 luma unrounded,
 `{"formula": "0.2126*R + 0.7152*G + 0.0722*B"}`.
-
-##### Reading older files
-
-A file of version 14 or earlier has neither column nor the `image_to_gray`
-key. A reader reports the readings as absent; it does not compute them. Saving
-such a file as the current version fills them by the rules above, so an older file whose
-`.sift` files and images are no longer available cannot be saved again until
-they are. A file below version 15 that carries either column or the key is
-invalid.
-
-A version 15 file stores the sharpness as `float32`
-(`images/sharpness.{N}.float32.zst`). A reader reads those `float32` values
-as they are, and saving the file as the current version rounds them to
-`float16` ([Version 15 → Version 16](#version-15--version-16)).
-Each version has one dtype for the column: a file of version 16 or later
-holding `images/sharpness.{N}.float32.zst`, or a version 15 file holding
-`images/sharpness.{N}.float16.zst`, is invalid.
 
 ##### Why the readings are stored this way
 
@@ -1546,8 +1555,8 @@ holding `images/sharpness.{N}.float32.zst`, or a version 15 file holding
   within about `3 · 10^-8`. Its largest value, 16, is far below 65,504, the
   largest `float16`. On a reconstruction of `kerry_park`'s 48 images
   the sharpness lies between 0.017 and 0.030 and the largest relative rounding
-  error is `3.5 · 10^-4`. Version 15 stored it as `float32`; from version 16
-  it is `float16`, half the bytes, like the observation readings whose use
+  error is `3.5 · 10^-4`. It is stored as `float16`, half the bytes of a
+  `float32`, like the observation readings whose use
   needs no more digits.
 - **A `float32` tensor.** The tensor terms are smaller than the sharpness:
   on that reconstruction `Exx` and `Eyy` lie between `8 · 10^-4` and
@@ -1590,7 +1599,7 @@ positive for points in front of the camera.
 
 #### `derived/depth_statistics.json.zst`
 
-Under `images/` before version 10. Per-image depth statistics and histogram
+Per-image depth statistics and histogram
 parameters for observed points only, computed from the poses, the positions and
 the tracks:
 
@@ -1621,7 +1630,7 @@ the tracks:
   - `histogram_max_z`: Maximum Z depth for histogram bucket edges (`null` if no observed points)
   - `observed`: Statistics for points with actual track observations in this image
     - `count`: Number of observed finite points with positive depth (0 if none)
-    - `infinity_count`: Number of observed points at infinity (`w == 0`). Omitted in version 1 files; treat a missing value as 0. Points at infinity have no finite depth, so they are excluded from `count`, the depth range, and the histogram.
+    - `infinity_count`: Number of observed points at infinity (`w == 0`). Points at infinity have no finite depth, so they are excluded from `count`, the depth range, and the histogram.
     - `min_z`, `max_z`: Depth range of observed finite points (`null` if count is 0)
     - `median_z`, `mean_z`: Central tendency statistics (`null` if count is 0)
 
@@ -1720,45 +1729,40 @@ the flag:
 
 **Field descriptions:**
 - `point_count`: Number of 3D points.
-- `has_normals`: (version 3+) Whether the file has normals. Without the patch
+- `has_normals`: Whether the file has normals. Without the patch
   frame they are the `normals_xyz` array. See
-  [Normals](#points3dnormals_xyzn3float32zst-optional). From version 16, with
+  [Normals](#points3dnormals_xyzn3float32zst-optional). With
   `has_uv_frames` also `true`, the normals of finite points whose frame gives
   one are derived from it and the rest are in `underived_normals_xyz`, which
   is absent when there are none, so this flag, not an entry, says that the
-  file has normals ([Derived normals](#derived-normals-version-16)); with
+  file has normals ([Derived normals](#derived-normals)); with
   `has_uv_frames` alone the file has no normals.
-- `has_normal_confidence`: (version 5+) Whether the optional
+- `has_normal_confidence`: Whether the optional
   `normal_confidence` array is present. See
   [Normal confidence](#points3dnormal_confidencenuint8zst-optional).
-- `has_point_constraints`: (version 7+) Whether the optional per-point
+- `has_point_constraints`: Whether the optional per-point
   constraint triple (`point_constraints`, `constraint_distances`,
   `constraint_reference_images`) is present -- one flag for
   all three, which appear together. See
-  [Per-point constraints](#per-point-constraints-optional-version-7).
-- `point_constraint_names`: (version 7+) The legend `point_constraints` indexes,
+  [Per-point constraints](#per-point-constraints-optional).
+- `point_constraint_names`: The legend `point_constraints` indexes,
   one name per code in code order. Present exactly when `has_point_constraints`
   is `true`. A writer always states the whole list in the canonical order
   `["free", "ranged", "held"]`; a reader accepts any legend and normalises the
   column onto that order. See
-  [Per-point constraints](#per-point-constraints-optional-version-7).
-- `has_uv_frames`: (version 3+) Whether the optional per-point patch
+  [Per-point constraints](#per-point-constraints-optional).
+- `has_uv_frames`: Whether the optional per-point patch
   frame (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`) is present. See
-  [Per-point patch frame](#per-point-patch-frame-optional-version-3).
-- `has_patch_bitmaps`: (version 3+) Whether `patch_bitmaps_y_x_rgba` is present.
-- `patch_bitmap_resolution`: (version 3+) The `R` dimension of the square patch
+  [Per-point patch frame](#per-point-patch-frame-optional).
+- `has_patch_bitmaps`: Whether `patch_bitmaps_y_x_rgba` is present.
+- `patch_bitmap_resolution`: The `R` dimension of the square patch
   bitmaps, or `null` when `has_patch_bitmaps` is `false`. A file holds every
   point's bitmap at this one `R`; a coarse and a fine resolution over the same
   patch extent are proposed in [two-tier-patch-density.md](../drafts/two-tier-patch-density.md).
 
-A version-3 file includes all four original flags (`false` / `null` when the
-data is absent), a version-5 file may additionally include
-`has_normal_confidence`, and a version-7 file `has_point_constraints` with the
-`point_constraint_names` that flag promises whenever it is `true`. A
-missing flag defaults to `false` (a missing `has_normals` means no
-normals) — but since versions 1 and 2 carry none of these keys yet always
-include normals, an upgraded version 1 or 2 file is read with `has_normals` as
-`true`.
+A writer writes every flag (`false` / `null` when the data is absent), and
+`point_constraint_names` whenever `has_point_constraints` is `true`. A reader
+takes a missing flag as `false` (a missing `has_normals` means no normals).
 
 #### `points3d/positions_xyzw.{N}.4.float64.zst`
 
@@ -1837,36 +1841,13 @@ does which:
 An observation the camera cannot image, such as a point behind it, is left
 out of its point's RMS, and a point with no observation left stores `0.0`.
 
-What the writers stored follows the file's version:
-
-- **Version 11 or earlier**, which covers every released sfmtool: most writers
-  stored the mean of the per-observation errors, not the RMS. A solve or a
-  COLMAP import stored the mean of sfmtool's own per-observation errors, not
-  COLMAP's value, and so did `classify_points_at_infinity`,
-  `find_points_at_infinity`, the bench's commit and Switch Camera Model for
-  the points they scored. `sfm xform --bundle-adjust` through pycolmap stored
-  COLMAP's per-point error, which is also the mean. sfmtool's own bundle
-  adjustment, for the points it solved, and Move Camera, for the tracks it
-  moved, stored the RMS. Other writers stored a value measured on other
-  keypoints or tracks: `sfm embed-patches`, `--localize-keypoints` and
-  `--refine-keypoints` copied the input's errors after moving the keypoints,
-  `sfm merge` stored the average of the merged points' errors, and Resect
-  Image, Retriangulate, Add Image to Tracks, Prune Covered Observations, an
-  image subset, `materialize_points_at_infinity` and Move Camera, for the
-  tracks it kept in place, kept the errors the points had.
-- **Version 12**: only development builds wrote it, and its writers changed
-  while it was current, first to store the RMS where the version 11 writers
-  stored the mean, then to score the points they touch as the lists above
-  say. A version 12 file can hold any of the values the version 11 entry
-  describes, or the RMS.
-- **Version 13 or later**: every writer that scores a point stores the RMS,
-  and the writers score the points the lists above say.
-
-The version is that of the writer that last saved the file, and a writer
-keeps the stored value of every point it does not score. A file of version 13
-or later saved from an older file therefore still holds the older file's value
-for each point no writer has scored since, so a reader cannot rule out a mean
-on such a point. A reader does not recompute the errors on open.
+Every writer that scores a point stores the RMS, and a writer keeps the
+stored value of every point it does not score. A file saved from a file of an
+older version can therefore still hold, for a point no writer has scored
+since, what an older writer stored, which for most writers before version 13
+was the mean of the per-observation errors rather than the RMS; a reader cannot
+rule out a mean on such a point. A reader does not recompute the errors on
+open.
 
 The names this column goes by outside the file. The entry's name, and the
 keys that copy it field for field, stay `reprojection_errors`, because the
@@ -1902,20 +1883,16 @@ Per-point surface normals.
   "no normal", never as a direction. A writer may replace a zero row of a
   finite point with a normal it derives from the geometry, and keeps every
   unit-vector row as it was given.
-- **Optional** (version 3+): present only when `points3d/metadata.json`'s
+- **Optional**: present only when `points3d/metadata.json`'s
   `has_normals` is `true`. A reconstruction may carry no normals, in which case
-  this array is absent. Versions 1 and 2 always include it.
-- **From version 16** this full column is stored only by a file without the
-  patch frame (`has_uv_frames` `false`), where no normal can be derived and
-  every row is stored, as before. A file with the patch frame stores its
-  normals as [derived normals](#derived-normals-version-16) and the
-  `underived_normals_xyz` entry instead, and a version 16 file with
-  `has_uv_frames` that holds `normals_xyz` is invalid. A finite point whose
-  frame gives a normal has no "no normal" state from version 16: its normal
-  is its frame's.
-- **Naming**: Versions 1 and 2 stored this array under the name
-  `points3d/estimated_normals_xyz.{N}.3.float32.zst`; version 3 renamed it to
-  `points3d/normals_xyz`.
+  this array is absent.
+- This full column is stored only by a file without the patch frame
+  (`has_uv_frames` `false`), where no normal can be derived and every row is
+  stored. A file with the patch frame stores its normals as
+  [derived normals](#derived-normals) and the `underived_normals_xyz` entry
+  instead, and a file with `has_uv_frames` that holds `normals_xyz` is
+  invalid. A finite point whose frame gives a normal has no "no normal" state:
+  its normal is its frame's.
 
 **Use cases**:
 - Visibility testing (front-facing check)
@@ -1936,13 +1913,13 @@ Per-point confidence in the stored normal.
   current writers emit only `{0, 255}`. Consumers must treat the value
   monotonically (higher = more trustworthy), never switch on exact codes.
 - Rows for `w = 0` points are `0` (their `normals_xyz` rows are zero).
-- A row for a point whose normal is derived from its frame (version 16+) is
-  kept as stored. The normal is always the frame's there, and the confidence
+- A row for a point whose normal is derived from its frame is kept as
+  stored. The normal is always the frame's there, and the confidence
   still says whether that orientation has data-derived support: `0` still
   marks a placeholder, a frame turned to a fallback direction.
-- **Optional** (version 5+): present only when `points3d/metadata.json`'s
+- **Optional**: present only when `points3d/metadata.json`'s
   `has_normal_confidence` is `true`. An absent array means **no confidence
-  information** — not "all confident". Files of versions 1–4 never carry it.
+  information** — not "all confident".
 - **Writer responsibility**: a writer that synthesizes or replaces normals
   and also writes this array is responsible for keeping the two coherent.
 
@@ -1950,7 +1927,7 @@ Per-point confidence in the stored normal.
 one in `normals_xyz`. Downstream passes that re-fit, filter, or render normals
 need to know which rows are claims and which are placeholders.
 
-#### Per-point constraints (Optional, version 7+)
+#### Per-point constraints (Optional)
 
 Three parallel columns stating, for each point, which part of its coordinate
 is a fixed statement by whoever wrote the file and which part a consumer that
@@ -2014,9 +1991,8 @@ re-estimates the reconstruction is free to change. They annotate
 flagged by `has_point_constraints`, and that same flag promises the
 `point_constraint_names` legend beside them. A set in which every point is free
 says exactly what carrying no set says, so a writer emits nothing in that case
-and a reader of an absent set treats every point as free, which is what every
-file below version 7 is. Beyond the per-column formats above, a valid set
-satisfies:
+and a reader of an absent set treats every point as free. Beyond the
+per-column formats above, a valid set satisfies:
 
 - the legend is present, is a list of names, and names at least one constraint
   (it need not name all three);
@@ -2095,7 +2071,7 @@ coordinate is a direction; a constraint states which part of it is fixed. A
 free point can be either representation and a consumer may change it between
 them, and a held point can be either and stays as it is.
 
-#### Per-point patch frame (Optional, version 3+)
+#### Per-point patch frame (Optional)
 
 A **patch** is an oriented surface element (surfel) centred on a 3D point. Only
 its in-plane frame is stored here — two **half-extent vectors** `u` and `v` —
@@ -2118,9 +2094,8 @@ and infinity points alike:
 - **Finite point** (`w = 1`): a planar surfel at the Euclidean position
   `center`. Its outward normal `normalize(u × v)` is the point's normal (a
   unit vector; `u × v` itself is only parallel to it, scaled by the
-  half-extents). From version 16 a file with normals stores none for such a
-  point, and a reader derives it ([Derived normals](#derived-normals-version-16));
-  an older file stores it in `normals_xyz`.
+  half-extents). A file with normals stores none for such a point, and a
+  reader derives it ([Derived normals](#derived-normals)).
 - **Point at infinity** (`w = 0`, direction `d`): the corner `d + s·u + t·v` is
   again a direction, so the patch is a small oriented region of the sphere of
   directions around `d`. Its outward normal is **not** free: every viewing ray to
@@ -2128,8 +2103,7 @@ and infinity points alike:
   the observers and the normal is fixed at `normalize(-d)`. Accordingly `u` and
   `v` are tangent to the unit sphere (`⊥ d`) — carrying only the in-plane rotation
   and the angular half-sizes — and `u × v` points along `-d`. The point's
-  normal is `(0, 0, 0)` here (a `normals_xyz` row before version 16, no stored
-  row from version 16), so unlike a finite point the patch's
+  normal is `(0, 0, 0)` here (and not stored), so unlike a finite point the patch's
   `normalize(u × v)` is implied by the direction rather than read as a
   normal.
 
@@ -2143,24 +2117,22 @@ patch and its bitmap row); promotion and materialisation multiply the angular
 half-vectors by the new point's distance from the same centroid, yielding a
 fronto-parallel world surfel.
 
-These arrays are **optional** (present only in format version 3+, when
+These arrays are **optional** (present only when
 `points3d/metadata.json`'s `has_uv_frames` is `true`) and **per 3D point**,
 parallel to the other `points3d/` arrays. A point with **no patch** stores
 **all-zero rows** (a row is present iff its `u` is non-zero). Presence is
 independent of finiteness: a finite point may lack a patch, and a point at
 infinity may carry one.
 
-These are **producer conventions, not format-enforced invariants**, with one
-exception from version 16: the format constrains only array shapes — not
-handedness, or that unpatched rows are exactly zero — and, before version 16,
-not that `normalize(u × v)` matches `normals_xyz`. A consumer relying on these
-must not assume an arbitrary file honours them. From version 16 the normal of
-a finite point with a patch is its frame's by construction, since the file
-does not store it.
+These are **producer conventions, not format-enforced invariants**: the
+format constrains only array shapes — not handedness, or that unpatched rows
+are exactly zero. A consumer relying on these must not assume an arbitrary
+file honours them. The normal of a finite point with a patch is its frame's by
+construction, since the file does not store it.
 
-##### Derived normals (version 16+)
+##### Derived normals
 
-In a file of version 16 or later whose `points3d/metadata.json` has both
+In a file whose `points3d/metadata.json` has both
 `has_normals` and `has_uv_frames`, the normal of a point is **derived** when
 the point is finite (`w ≠ 0`), its `u` is non-zero, and `u × v` gives a
 normal: it is `normalize(u × v)` computed in `f32`, the cross product
@@ -2174,7 +2146,7 @@ The **underived** points are the other finite points: those without a patch
 giving no normal). Their normals, `K` of them, are stored in point order, the
 `k`-th row the normal of the `k`-th underived point, in
 
-##### `points3d/underived_normals_xyz.{K}.3.float32.zst` (Optional, version 16+)
+##### `points3d/underived_normals_xyz.{K}.3.float32.zst` (Optional)
 
 - **Shape**: `(K, 3)`, K = the number of underived points
 - **Data type**: `float32` (little-endian)
@@ -2201,25 +2173,21 @@ the normals stay `(N, 3)`.
   the value is saved. A degenerate frame is kept rather than refused, since
   the format does not otherwise constrain a frame; its point's normal is
   stored.
-- **Refused.** A reader and a verifier refuse a version 16 file with both
-  flags that holds the full `normals_xyz` column, an `underived_normals_xyz`
-  entry whose `K` is not the file's number of underived points (or whose
-  bytes do not hold `K` rows), or no such entry where `K > 0`; and a file of
-  any version that holds `underived_normals_xyz` without both flags, or below
-  version 16.
+- **Refused.** A reader and a verifier refuse a file with both flags that
+  holds the full `normals_xyz` column, an `underived_normals_xyz` entry whose
+  `K` is not the file's number of underived points (or whose bytes do not hold
+  `K` rows), or no such entry where `K > 0`; and a file that holds
+  `underived_normals_xyz` without both flags.
 - **Only with both flags.** A file with the patch frame and no normals stays
   without normals; nothing is derived for it. A file with normals and no
   patch frame stores the full `normals_xyz` column.
-- **Older files** read their full column as stored, including normals that
-  disagree with their frames. Saving one as version 16 replaces those normals
-  by their frames' ([Version 15 → Version 16](#version-15--version-16)).
 - **Normal confidence** is stored and read as it is, for every point.
 - **Why.** The frame already states the normal, so storing it twice let the
   two disagree, and a reader could not tell which to trust. A shorter column
   under the old name would read as a malformed `normals_xyz`, so the stored
   rows take their own name, which says whose normals they are. In the five
   ground-truth files every finite point has a patch whose frame gives its
-  normal, so a version 16 save of each stores no normals entry at all: with
+  normal, so a save of each stores no normals entry at all: with
   zstd at level 3, `normals_xyz` took 3,841 bytes in
   `kerry_park_ground_truth_v02` (387 points) and 13,769 in
   `dino_dog_toy_ground_truth_v01` (1,243 points), and both files store none.
@@ -2227,17 +2195,18 @@ the normals stay `(N, 3)`.
 Optional per-point data has five independent pieces, each flagged in
 `points3d/metadata.json`:
 
-- **Normals** (`has_normals`, version 3+) — the `normals_xyz` array.
-- **Normal confidence** (`has_normal_confidence`, version 5+) — the
+- **Normals** (`has_normals`) — the normals, in `normals_xyz` or, with the
+  patch frame, derived and in `underived_normals_xyz`.
+- **Normal confidence** (`has_normal_confidence`) — the
   `normal_confidence` array.
-- **Constraints** (`has_point_constraints`, version 7+) — `point_constraints`,
+- **Constraints** (`has_point_constraints`) — `point_constraints`,
   `constraint_distances` and `constraint_reference_images` (all three appear
   together; one alone is half a statement), plus the `point_constraint_names`
   legend the first of them indexes.
-- **Patch frame** (`has_uv_frames`, version 3+) — `patch_u_halfvec_xyz` and
+- **Patch frame** (`has_uv_frames`) — `patch_u_halfvec_xyz` and
   `patch_v_halfvec_xyz` (the two always appear together; one without the other
   is not a frame).
-- **Patch bitmaps** (`has_patch_bitmaps`, version 3+) — `patch_bitmaps_y_x_rgba`.
+- **Patch bitmaps** (`has_patch_bitmaps`) — `patch_bitmaps_y_x_rgba`.
 
 The **only** presence rules between them are: **patch bitmaps require the patch
 frame** (a texture is meaningless without the `u`/`v` it is parameterised over),
@@ -2247,10 +2216,9 @@ is valid — normals without a frame, a frame without normals, constraints witho
 either, or none of them. A writer refuses to write a combination that breaks one
 of these rules, and a reader and a verifier refuse a file whose
 `points3d/metadata.json` flags state one: `has_patch_bitmaps` without
-`has_uv_frames`, or `has_normal_confidence` without `has_normals` (a version 1 or
-2 file always has normals). The flags decide what a reader and a verifier look
-at: an optional entry whose flag is `false` or absent is not read, so these
-rules are checked on the flags alone.
+`has_uv_frames`, or `has_normal_confidence` without `has_normals`. The flags
+decide what a reader and a verifier look at: an optional entry whose flag is
+`false` or absent is not read, so these rules are checked on the flags alone.
 
 ##### `points3d/patch_u_halfvec_xyz.{N}.3.float32.zst` and `points3d/patch_v_halfvec_xyz.{N}.3.float32.zst`
 
@@ -2276,16 +2244,15 @@ rules are checked on the flags alone.
   zero. Present only when `has_patch_bitmaps` is `true`.
 - **What it holds**: a point's bitmap is the render of its reference
   observation, which `tracks/reference_observations` names: its colour as
-  rendered, alpha `255` on the samples on the photograph and `0` on the rest.
-  A point whose reference is `-1` has no reference observation in use, so its
-  bitmap is not the render of one of its observations. It is a fused
-  mean of its views, alpha their agreement and coverage, which every bitmap
-  written before version 12 is and a file written before the stored bitmap
-  stopped being a mean can hold, and which a reader treats as any bitmap
-  beside `-1`; or the render of an observation that a later edit removed from
-  the point, which keeps the bitmap (§ 9, "Keeping it true"); or a zero row.
-  A writer that renders a point the reference-view rule finds no eligible
-  view for writes a zero row and `-1`
+  rendered, alpha `255` on the samples on the photograph and `0` on the rest. A
+  point whose reference is `-1` has no reference observation in use, so its
+  bitmap is not the render of one of its observations. It is a fused mean of its
+  views, alpha their agreement and coverage, which a file converted from one
+  written before the stored bitmap stopped being a mean can hold, and which a
+  reader treats as any bitmap beside `-1`; or the render of an observation that
+  a later edit removed from the point, which keeps the bitmap (§ 9, "Keeping it
+  true"); or a zero row. A writer that renders a point the reference-view rule
+  finds no eligible view for writes a zero row and `-1`
   ([../core/patch/reference-view.md](../core/patch/reference-view.md) § "The
   stored bitmap").
 
@@ -2296,7 +2263,7 @@ Tracks link 2D feature observations to 3D points. Each observation has three com
 The tracks section can also store each observation's **readings** on its own
 `R×R` render: its ZNCC self-similarity ellipse, the angle, tilt and zoom of that
 render, and its plain and blur-matched scores against the point's stored bitmap
-([Observation readings](#observation-readings-optional-version-12)). `points3d/`
+([Observation readings](#observation-readings-optional)). `points3d/`
 stores no blur assessment of a point's bitmap: it is a function of the bitmap
 alone, which the file holds.
 
@@ -2324,27 +2291,24 @@ alone, which the file holds.
 ```
 
 - `observation_count`: number of observations `M`.
-- `has_feature_indexes`: (version 4+) `true` in a `sift_files` file, `false` in
+- `has_feature_indexes`: `true` in a `sift_files` file, `false` in
   an `embedded_patches` one. Redundant with the top-level `feature_source` but
   kept local to the section so a reader that loads `tracks/metadata.json` alone
   knows which column to expect (mirroring the `points3d/metadata.json` `has_*`
-  flags). A missing flag is `false`; a version 1–3 file (no flags) is read as
-  `has_feature_indexes = true`.
-- `has_keypoints_xy`: (version 4+) whether the `keypoints_xy` column below is
+  flags). The top-level `feature_source` decides what a reader reads, and a
+  verifier checks the two agree.
+- `has_keypoints_xy`: whether the `keypoints_xy` column below is
   present. It is a presence flag, not a mode flag: `true` in every
   `embedded_patches` file, where the column is the observation coordinate, and
   `true` in a `sift_files` file exactly when that file carries the optional
-  inline copy. A missing flag is `false`, so a version 1–3 file reads as carrying
-  no inline keypoints.
-- `has_observation_confidence`: (version 6+) whether the optional
+  inline copy. A missing flag is `false` in a `sift_files` file.
+- `has_observation_confidence`: whether the optional
   `observation_confidence` column below is present. Independent of the two flags
   above — it rates observations, which exist in either mode. A missing flag is
-  `false`, so a version 1–5 file reads as having no `observation_confidence`
-  column.
-- `has_observation_readings`: (version 12, optional) whether the eight
-  observation-reading columns are present. Written only when they are, so a
-  file without them has the bytes, and the content hash, it had before the
-  columns existed. A missing flag is `false`.
+  `false`.
+- `has_observation_readings`: (optional) whether the eight
+  observation-reading columns are present. Written only when they are. A
+  missing flag is `false`.
 - `observation_reading_options`: present exactly with `has_observation_readings`
   and required with it, every key required: what the readings were taken
   with, so a reader can tell whether the stored readings are comparable with
@@ -2387,9 +2351,9 @@ Feature index for each observation:
 - **Constraint**: MUST be sorted lexicographically by `(point_indexes[i], image_indexes[i])`
 - **Presence**: present in `sift_files` files (`has_feature_indexes = true`);
   **absent** in `embedded_patches` files, where `keypoints_xy` carries the
-  coordinate directly. Always present in versions 1–3.
+  coordinate directly.
 
-#### `tracks/keypoints_xy.{M}.2.float32.zst` (version 4+)
+#### `tracks/keypoints_xy.{M}.2.float32.zst`
 
 The inline 2D keypoint for each observation:
 
@@ -2404,7 +2368,7 @@ The inline 2D keypoint for each observation:
   the other `tracks/*` arrays.
 - **Meaning**: the observation's 2D coordinate. In an `embedded_patches` file it
   additionally anchors that observation's patch — see
-  [Observation source](#observation-source-version-4). In a `sift_files` file it
+  [Observation source](#observation-source). In a `sift_files` file it
   is the file's own statement of where observation `j` sits, so a consumer that
   has the `.sfmr` alone still reads every observation's coordinate. A consumer
   resolving that coordinate reads this column in preference to
@@ -2427,7 +2391,7 @@ file that carries any of the `.sift`-link columns: no file states both ways of
 identifying an observation. `keypoints_xy` is outside that exclusivity — it
 identifies nothing on its own, so it may accompany `feature_indexes`.
 
-#### `tracks/observation_confidence.{M}.uint8.zst` (Optional, version 6+)
+#### `tracks/observation_confidence.{M}.uint8.zst` (Optional)
 
 Per-observation confidence in how well the observation agrees with its point's
 appearance: the observation's **blur-matched ZNCC against the point's stored
@@ -2440,33 +2404,13 @@ the observation by. The reference observation itself scores `1.0`. It holds
 this score until the per-observation keypoint covariance replaces it as the
 confidence bundle adjustment weighs observations by.
 
-What the writers stored follows the file's version:
-
-- **Versions 6 to 11**, which covers every released sfmtool that writes the
-  column: the bench's commit stored each observation's leave-one-out ZNCC, its score against the
-  mean of the track's other views, and stored a measured score that rounds to
-  `0` as `0`. Add Image to Tracks stored each observation it added as its ZNCC
-  against the template it searched with, a robust consensus of the track's
-  views or the point's stored bitmap (then a fused mean of the views), with a
-  score that rounds to `0` raised to `1`. In versions 9 and 10, SfM
-  Explorer's Add Observation stored the leave-one-out ZNCC of the observation
-  it added, as the bench's commit did, and Create Point stored `255` for the
-  one observation of a point it created. Every other writer stored `0` for an
-  observation it added.
-- **Version 12**: only development builds wrote it, and the bench's commit and
-  Add Image to Tracks changed while it was current, first to the plain ZNCC
-  against the stored bitmap or the reference observation's render, before
-  blur matching, then to the blur-matched ZNCC described here. A version 12
-  file can hold these scores and the ones the version 11 entry describes, and
-  nothing in it tells them apart. Where the bitmap is not blurred for an
-  observation, about nine in ten, the plain and blur-matched scores are the
-  same.
-- **Version 13 or later**: the blur-matched ZNCC described here.
-
-The version is that of the writer that last saved the file, and the column
-passes through every writer but the two that measure it. A file of version 13
-or later saved from an older file therefore still holds the older file's
-values in every row neither of those writers has written since.
+The column passes through every writer but the two that measure it. A file
+saved from a file of an older version can therefore still hold, in a row
+neither of those writers has written since, a score an older writer stored:
+before version 13 the bench's commit and Add Image to Tracks stored other
+scores (a leave-one-out ZNCC against the mean of the track's other views, or a
+ZNCC against the template a search used), and nothing in the file tells them
+apart.
 
 - **Shape**: `(M,)` where M = observation_count
 - **Data type**: `uint8` (little-endian)
@@ -2493,10 +2437,9 @@ values in every row neither of those writers has written since.
 - **Writers**: the bench's commit and Add Image to Tracks fill it for the
   observations they write, where the file has the column.
 - **Beside the readings**: the blur-matched score of the
-  [observation readings](#observation-readings-optional-version-12)
-  (`tracks/blur_matched_bitmap_zncc_deficit`, `1 −` the score in `float16`,
-  from version 16; the `float32` score `tracks/blur_matched_bitmap_zncc`
-  before) holds the same score, except on rows Add Image to Tracks wrote while
+  [observation readings](#observation-readings-optional)
+  (`tracks/blur_matched_bitmap_zncc_deficit`, `1 −` the score in `float16`)
+  holds the same score, except on rows Add Image to Tracks wrote while
   searching against the render of the point's reference observation rather
   than the stored bitmap: there this column holds the score against that render and
   the reading the score against the stored bitmap. A reader that has
@@ -2533,7 +2476,7 @@ Observations per point:
   - Sum must equal observation_count
   - Every value must be >= 1 (every 3D point must have at least one observation)
 
-#### `tracks/reference_observations.{N}.int32.zst` (with the patch frame, version 12+)
+#### `tracks/reference_observations.{N}.int32.zst` (with the patch frame)
 
 Which observation each point's patch bitmap is, or is to be, rendered from:
 
@@ -2552,25 +2495,21 @@ Which observation each point's patch bitmap is, or is to be, rendered from:
   stored bitmap"). Where the file stores no bitmaps, a later render (`sfm
   xform --add-patch-bitmaps`, SfM Explorer's display bitmaps, `sfm
   web-export`) renders the point from this observation, so dropping the
-  bitmaps and adding them again gives the same bitmaps. `-1` where the point
-  has no reference observation in use: none in its track, or, after a writer
-  that aligns keypoints and renders bitmaps, a stored one that writer could no
-  longer render usefully and no pick to replace it (see "Keeping it true"). A
-  stored bitmap is then not the render of one of its observations -- a fused
-  mean (from before version 12, or a file written before the stored bitmap
-  stopped being a mean), or the
-  render of an observation that has since been removed from the point -- and
+  bitmaps and adding them again gives the same bitmaps. `-1` where the point has
+  no reference observation in use: none in its track, or, after a writer that
+  aligns keypoints and renders bitmaps, a stored one that writer could no longer
+  render usefully and no pick to replace it (see "Keeping it true"). A stored
+  bitmap is then not the render of one of its observations -- a fused mean, or
+  the render of an observation that has since been removed from the point -- and
   a later render runs the reference-view rule for the point and records its
   pick.
-- **Presence**: required in a file of version 12 or later whose
-  `points3d/metadata.json` has `has_uv_frames: true`, and absent otherwise
-  (an older file with the patch frame reads with every row `-1`), so it needs
-  no flag of its own. It is present with the patch frame, not with the
-  bitmaps: a file without bitmaps keeps the column and its references. A
-  reader and a verifier refuse a value that is neither `-1` nor within its point's run; a
-  writer refuses the column missing beside a patch frame, present without one,
-  or out of range. All three accept a reference other than `-1` in a file
-  without bitmaps.
+- **Presence**: required in a file whose `points3d/metadata.json` has
+  `has_uv_frames: true`, and absent otherwise, so it needs no flag of its own.
+  It is present with the patch frame, not with the bitmaps: a file without
+  bitmaps keeps the column and its references. A reader and a verifier refuse a
+  value that is neither `-1` nor within its point's run; a writer refuses the
+  column missing beside a patch frame, present without one, or out of range. All
+  three accept a reference other than `-1` in a file without bitmaps.
 - **Keeping it true**: where a stored bitmap and a reference `≥ 0` are both
   present, the bitmap is that observation's render as of the last render. A
   writer that removes a point removes its row, so a point filter leaves every
@@ -2631,12 +2570,7 @@ Which observation each point's patch bitmap is, or is to be, rendered from:
   and is refused unless it passes the column, where the input names any
   reference. A call that changes the point count and keeps the input's patch
   frames is refused for the frames first.
-- **Older files**: a reader that reads a file below version 12 with patch
-  frames creates the column with every row `-1`, so every reconstruction with
-  patch frames has one in memory and every later save writes it. A file below
-  version 12 without patch frames gets no column.
-
-#### Observation readings (Optional, version 12+)
+#### Observation readings (Optional)
 
 Each observation's readings on its own `R×R` render: the render through the
 point's patch re-anchored on the observation's keypoint, at the point's patch
@@ -2652,11 +2586,7 @@ and Track View before a committed track's first evaluation.
 Eight columns, parallel to the other `tracks/*` arrays (sorted by
 `(point_indexes, image_indexes)` and permuted in lockstep by a writer that
 sorts), present or absent together, flagged by `has_observation_readings`.
-The table gives the entries of version 16. A file of version 12 to 15 stores
-the five self-similarity value columns as `float32`, named `.float32.` in
-place of `.float16.`, and stores the scores themselves as `float32`, in
-`tracks/plain_bitmap_zncc.{M}.float32.zst` and
-`tracks/blur_matched_bitmap_zncc.{M}.float32.zst`:
+The entries:
 
 | Column | Shape, type | Meaning |
 |---|---|---|
@@ -2692,13 +2622,11 @@ place of `.float16.`, and stores the scores themselves as `float32`, in
   bitmap's own readings and blur assessment, which are read from the bitmap.
 - **Units.** The grid px are those of the point's `R`, so the axes convert to
   scene units through the point's patch half-extents.
-- **Size.** 20 bytes an observation before compression, 38 before version 16.
-  The float columns compress little, the flags column to almost nothing. On
-  the dino_dog_toy `sfm embed-patches` output (262,430 observations) the eight
-  entries took 8.1 MB of a 44.3 MB version 15 file, about 31 bytes an
-  observation after zstd. With zstd at level 3, the seven float columns of
-  that reconstruction of `kerry_park` (3,602 observations) take 111,776 bytes as
-  `float32` and 54,268 bytes as version 16 stores them; those of
+- **Size.** 20 bytes an observation before compression, against 38 with
+  `float32` columns. The float columns compress little, the flags column to
+  almost nothing. With zstd at level 3, the seven float columns of a
+  reconstruction of `kerry_park` (3,602 observations) take 111,776 bytes as
+  `float32` and 54,268 bytes as the file stores them; those of
   `dino_dog_toy_ground_truth_v01` (23,432 observations) 728,861 and 344,563.
   The two scores alone take 22,754 and 12,063 bytes on Kerry, 151,187 and
   77,893 on dino.
@@ -2741,10 +2669,9 @@ place of `.float16.`, and stores the scores themselves as `float32`, in
   score of exactly 1 stores 0, and a score not read stays `NaN`. The smallest
   non-zero deficit in the ground-truth files is `4.75 · 10^-3`
   (`kerry_park`), a normal `float16`, and the largest relative rounding error
-  of a deficit there and in the dino file is `4.86 · 10^-4`. Before version
-  16 the scores were stored as `float32` under the names of the scores; the
-  deficit columns take `_deficit` after those names, so no column named for
-  the score holds anything else. Both scores are stored because each needs
+  of a deficit there and in the dino file is `4.86 · 10^-4`. The deficit
+  columns take `_deficit` after the names of the scores, so no column named
+  for the score holds anything else. Both scores are stored because each needs
   the photograph to read again.
 - **Rounded by the writer.** The rows are computed and held in memory as `f32`,
   the scores as the scores. A writer rounds each value of the five
@@ -2826,22 +2753,16 @@ place of `.float16.`, and stores the scores themselves as `float32`, in
     it renders with another sampler than the readings were taken with;
   - `sfm undistort`, the one writer that replaces the photographs, writes a
     new reconstruction with no readings.
-- **Older files.** A file without the flag reads with no readings, as every
-  file before the columns did. A file of version 12 to 15 reads its `float32`
-  columns as they are, and saving it as the current version rounds the five
-  to `float16` ([Version 15 → Version 16](#version-15--version-16)). Each
-  version has one dtype per column: a file of version 16 or later holding one
-  of the five as `.float32.`, or a file below version 16 holding one as
-  `.float16.`, is invalid.
+- **Absent.** A file without the flag reads with no readings.
 
-### Observation source (version 4+)
+### Observation source
 
-A version-4 file declares at the top level which kind of observation it carries —
+A file declares at the top level which kind of observation it carries —
 `feature_source ∈ {"sift_files", "embedded_patches"}` — and there is **no
 mixing** within a file. The two modes differ only in the `tracks/` and `images/`
 columns:
 
-| | `sift_files` (versions 1–3 model) | `embedded_patches` (version 4+) |
+| | `sift_files` | `embedded_patches` |
 |---|---|---|
 | `tracks/feature_indexes` | **present** (index into `.sift`) | **absent** |
 | `tracks/keypoints_xy` | **optional** (an inline copy of the coordinate) | **present** (the coordinate) |
@@ -2850,9 +2771,6 @@ columns:
 | `images/image_file_hashes` | **absent** (image hash reachable via the `.sift`) | **present** (direct image identity) |
 | 2D coordinate source | `keypoints_xy[j]` when the inline copy is present, else `.sift[feature_indexes[j]]` | `keypoints_xy[j]` directly |
 
-A `sift_files` v4 file that carries no inline keypoints is byte-equivalent to a
-v3 file except for the `version` and `feature_source` metadata keys and the
-`tracks/metadata.json` `has_*` keys.
 An `embedded_patches` file is self-contained — it needs no `.sift` companion, and
 its workspace `feature_prefix_dir` is optional.
 
@@ -2871,8 +2789,8 @@ through `feature_indexes`: the coordinate a consumer triangulates and
 bundle-adjusts against. How a producer arrives at it — a patch-registration
 pipeline today, a learned detector later — does not change its meaning.
 
-Because the observed point also carries an oriented patch (the version-3 `(u, v)`
-frame, [Per-point patch frame](#per-point-patch-frame-optional-version-3)), the
+Because the observed point also carries an oriented patch (the `(u, v)`
+frame, [Per-point patch frame](#per-point-patch-frame-optional)), the
 keypoint additionally fixes that observation's patch geometrically: the patch is
 the point's surfel moved across the line of sight from this view's camera so that
 its centre projects to the keypoint in this view. An `embedded_patches` file therefore requires the
@@ -3025,69 +2943,65 @@ For the hashes:
 
 1. Decompress each file and hash the raw uncompressed bytes (do NOT re-serialize JSON)
 2. Recompute section and overall hashes as described above
-3. Compare with stored values in `content_hash.json.zst`. A version 10+ file
-   must store `derived_xxh128`.
+3. Compare with stored values in `content_hash.json.zst`, which must store
+   `derived_xxh128`.
 4. If any hash mismatches, file is corrupted
 
 For the structure, a file fails verification when:
 
-- its `version` is newer than the verifier knows (it reports that and checks
-  nothing more), `feature_source` is not one of its two values, or
-  `world_space_unit` is not one of the five units;
+- its `version` is one the readers refuse, below 16, 0 or newer than the
+  verifier knows (it reports the readers' message as the one error and checks
+  nothing more; see [Format versions](#format-versions)), `feature_source` is
+  not one of its two values, or `world_space_unit` is not one of the five
+  units;
 - a `frames/` section is present without a `rigs/` section;
 - a camera's `per_image_adjustments` or an image's intrinsic adjustment breaks
   a rule of
-  [Per-image intrinsic adjustments](#per-image-intrinsic-adjustments-optional-version-13),
-  including a file below version 13 that carries either and a file below
-  version 14 that carries a radial B-spline correction, rolling-shutter rates
-  or a `rolling_shutter_scanlines` setting (a non-zero adjustment is valid), or
-  `cameras/metadata.json` does not parse;
+  [Per-image intrinsic adjustments](#per-image-intrinsic-adjustments-optional)
+  (a non-zero adjustment is valid), or `cameras/metadata.json` does not
+  parse;
+- `images/metadata.json` has no boolean `has_thumbnails`, or the archive has
+  no `written.json.zst`;
 - the `has_*` flags in `points3d/metadata.json` break a presence rule between
   the optional per-point columns and `feature_source`;
-- in a version 2+ file, `positions_xyzw` is not `point_count` rows of 32 bytes,
+- `positions_xyzw` is not `point_count` rows of 32 bytes,
   a row holds a NaN or infinite value, a `w = 0` row has a zero direction, or
   the number of `w = 0` rows differs from `infinity_point_count`;
 - `has_point_constraints` is set without a readable `point_constraint_names`
   legend, or the constraint triple has a column that is not `point_count` rows
   long or breaks a rule of
-  [Per-point constraints](#per-point-constraints-optional-version-7);
+  [Per-point constraints](#per-point-constraints-optional);
 - the tracks are not sorted by `(point_indexes, image_indexes)`, an
   `observation_counts` entry is below `1`, or the counts do not sum to
   `observation_count`;
-- in a version 12+ file with `has_uv_frames` set, `reference_observations` is
+- with `has_uv_frames` set, `reference_observations` is
   not `point_count` rows of 4 bytes, or a row is neither `-1` nor an index from
   `0` to `observation_counts[i] − 1` into its point's observations, the
   constraint
-  [`tracks/reference_observations`](#tracksreference_observationsnint32zst-with-the-patch-frame-version-12)
+  [`tracks/reference_observations`](#tracksreference_observationsnint32zst-with-the-patch-frame)
   states;
 - `has_feature_indexes` in `tracks/metadata.json` disagrees with
   `feature_source`, or an `embedded_patches` file sets `has_keypoints_xy` to
   `false`;
 - `keypoints_xy` is not `observation_count` rows of 8 bytes, or a row is not
   finite or lies outside `[0, width) × [0, height)` of its image's camera, the
-  constraint [`tracks/keypoints_xy`](#trackskeypoints_xym2float32zst-version-4) states;
+  constraint [`tracks/keypoints_xy`](#trackskeypoints_xym2float32zst) states;
 - `has_observation_readings` is set without a readable
   `observation_reading_options`, an observation-reading column is not
   `observation_count` rows of its shape, or
   `zncc_self_similarity_ellipse_axes_is_at_least` holds a value other than `0`
   or `1`;
-- in a version 15+ file, either image-reading column or the `image_to_gray`
-  key is missing, a column is not `N` rows of its shape, a reading is not
-  finite, a sharpness, `Exx` or `Eyy` is negative, or `image_to_gray` is not an
-  object with a non-empty string `formula`, an optional integer
-  `quantize_bits` from 1 to 16 and no other key; or a file below version 15
-  carries either column or the key. Whether `formula` follows the
-  [grammar](#image_to_gray-version-15) is checked by the reader that parses
-  it, not by the verifier;
-- a reading column (the sharpness, or an observation-reading column) is
-  stored under the entry another version gives it, such as a `.float32.`
-  sharpness in a version 16 file or a `_deficit` column in a version 15 file
-  ([Version 15 → Version 16](#version-15--version-16));
-- in a version 16+ file with both `has_normals` and `has_uv_frames`, the
+- either image-reading column or the `image_to_gray` key is missing, a column is
+  not `N` rows of its shape, a reading is not finite, a sharpness, `Exx` or
+  `Eyy` is negative, or `image_to_gray` is not an object with a non-empty string
+  `formula`, an optional integer `quantize_bits` from 1 to 16 and no other key.
+  Whether `formula` follows the [grammar](#image_to_gray) is checked by the
+  reader that parses it, not by the verifier;
+- with both `has_normals` and `has_uv_frames`, the
   full `normals_xyz` column is present, or `underived_normals_xyz` is missing,
   extra or holds another number of rows than the file has underived points,
   or the entry appears in a file that may not hold it
-  ([Derived normals](#derived-normals-version-16)).
+  ([Derived normals](#derived-normals)).
 
 A verifier reports every failure it finds rather than stopping at the first; a
 file whose entries it cannot read at all is an error, not a list of failures.
@@ -3200,7 +3114,8 @@ describes. Other parts of this spec are implemented by:
   beside them, `sfm undistort` passes the readings of the images it writes,
   and `sfm merge` passes its inputs' rows. The `read_sfmr` / `write_sfmr`
   dicts carry them as `image_to_gray`, `sharpness` and
-  `gradient_structure_tensors_xx_yy_xy`, each `None` below version 15, and the
+  `gradient_structure_tensors_xx_yy_xy` (present in every dict read from a
+  file, and required in one written), and the
   Python `SfmrReconstruction` has read-only getters of the same names and
   accepts them in `clone_with_changes` and `from_data`.
 - The per-image intrinsic adjustments: in memory each image carries its own
@@ -3232,7 +3147,7 @@ describes. Other parts of this spec are implemented by:
   every point at infinity at a finite point along its direction, at a distance
   it computes from the cameras so the point's parallax stays under one pixel;
   both carry patch frames as
-  [Per-point patch frame](#per-point-patch-frame-optional-version-3) describes ([source](../../crates/sfmtool-core/src/analysis/infinity/convert.rs)).
+  [Per-point patch frame](#per-point-patch-frame-optional) describes ([source](../../crates/sfmtool-core/src/analysis/infinity/convert.rs)).
 - The keypoint affine shape of an `embedded_patches` observation:
   `SfmrReconstruction::observation_affine_shape`
   ([source](../../crates/sfmtool-core/src/reconstruction/data/affine_shape.rs)).
@@ -3262,7 +3177,7 @@ describes. Other parts of this spec are implemented by:
   `clone_with_changes(observation_readings=...)`.
 - Normals and their confidence: `write_sfmr` sets the normal of each finite
   point with a patch whose frame gives one to `normalize(u × v)`
-  ([Derived normals](#derived-normals-version-16)), and, in a file with the
+  ([Derived normals](#derived-normals)), and, in a file with the
   patch frame, each point at infinity's to zero, fills each other zero row of the normals from
   mean-viewing normals it recomputes from the geometry,
   and passes `normal_confidence` through untouched. It never invents or adjusts a
@@ -3304,7 +3219,7 @@ describes. Other parts of this spec are implemented by:
   whose squared length is at most `1e-6` with the unit vector from the point
   toward the mean of its observing camera centres, leaving the row zero when
   the point lies at that mean or is at infinity. A derived normal
-  ([Derived normals](#derived-normals-version-16)) is set first, so the fill-in
+  ([Derived normals](#derived-normals)) is set first, so the fill-in
   reaches only points without a patch, or with a degenerate frame. The tolerance treats a
   near-zero row as the zero row, which a conforming file does not hold.
 
@@ -3393,11 +3308,11 @@ its own rows, so a reader of the file cannot resolve them, and an index past
 
 The `content_xxh128` is the reconstruction's identity hash, computed from the
 section hashes that describe the reconstruction (listed under
-[Content Hash](#2-content-hash-content_hashjsonzst)). From version 10 it leaves
+[Content Hash](#2-content-hash-content_hashjsonzst)). It leaves
 out the `derived/` section, as described under
 [Derived data is verified but not identifying](#derived-data-is-verified-but-not-identifying).
-It identifies the reconstruction a file holds: from version 8 two saves of one
-unchanged value write the same `content_xxh128`.
+It identifies the reconstruction a file holds: two saves of one unchanged
+value write the same `content_xxh128`.
 
 Each SfM solve, filter, or transform produces a new reconstruction with its own
 content hash. A Point ID therefore identifies both the reconstruction and the
@@ -3460,8 +3375,7 @@ the physical unit of 3D coordinates (point positions and camera translations) in
 |-------|----------|------|-------------|
 | `world_space_unit` | No | string | Physical unit of 3D world-space coordinates. One of: `"mm"`, `"cm"`, `"m"`, `"in"`, `"ft"`. |
 
-The field is defined in every version (1+), so a file of any version may carry
-it. These five strings are the only values the field takes. A writer refuses any
+These five strings are the only values the field takes. A writer refuses any
 other value, and a reader and a verifier refuse a file that carries one.
 
 When absent, the reconstruction is in arbitrary (unscaled) units — the default state after an SfM
@@ -3495,384 +3409,61 @@ both scales it and sets the field.
 **Display:** The GUI and CLI inspection tools can use this field to display coordinates with
 appropriate units (e.g., "xyz: (1234.0, -567.0, 2891.0) mm" instead of bare numbers).
 
-## Versioning and Migration
-
-How the version changes, and which older versions a reader keeps reading, is
-in [format-versions.md](format-versions.md). sfmtool 0.5 stops reading the versions below 16, as
-[../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md) specifies.
-
-The format spans sixteen versions (`1` to `16`), all valid; each extends the
-previous, and how an older file maps to the current model is given below.
-Version 16 is the current format version: a reader accepts any version up to
-it. This section is the one place the versions and their changes are
-described; [Version History](#version-history) is an index into it.
-
-A conforming writer always writes the current version. It does not choose its
-version by which optional columns a file carries: every optional column (normals
-in 3, normal confidence in 5, observation confidence in 6, constraints in 7, thumbnails in 11, observation readings in 12, per-image intrinsic adjustments in 13, the
-radial B-spline correction, the rolling-shutter rates and the scanlines setting
-in 14) was introduced this way, and a writer that picked its version by
-content would make "which version is this file" a question about its columns.
-Version 15's image readings are required instead, so a writer of version 15
-or later needs them for every image (see
-[Where a writer gets the values](#where-a-writer-gets-the-values)).
-
-### Version 15 → Version 16
-
-| Change | Detail |
-|---|---|
-| `images/sharpness.{N}.float32.zst` → `images/sharpness.{N}.float16.zst` | The sharpness is stored as `float16`, each value rounded to the nearest, ties to even ([Why the readings are stored this way](#why-the-readings-are-stored-this-way)). Same slot in `images_xxh128`. |
-| `tracks/zncc_self_similarity_ellipse_axes.{M}.2.float32.zst` → `.float16.zst`, and likewise `tracks/zncc_self_similarity_ellipse_major_angle`, `tracks/zncc_self_similarity_cos_view_angle`, `tracks/zncc_self_similarity_tilt_angle` and `tracks/zncc_self_similarity_zoom` | The five self-similarity value columns of the [observation readings](#observation-readings-optional-version-12) are stored as `float16`, rounded the same way. Same slots in `tracks_xxh128`. |
-| `tracks/plain_bitmap_zncc.{M}.float32.zst` → `tracks/plain_bitmap_zncc_deficit.{M}.float16.zst`, and `tracks/blur_matched_bitmap_zncc.{M}.float32.zst` → `tracks/blur_matched_bitmap_zncc_deficit.{M}.float16.zst` | The two scores are stored as their ZNCC deficits `1 − z` in `float16` ([Why the scores are stored as their deficits](#observation-readings-optional-version-12)). Same slots in `tracks_xxh128`. |
-| `points3d/normals_xyz.{N}.3.float32.zst` → `points3d/underived_normals_xyz.{K}.3.float32.zst` in a file with the patch frame | In a file with both the normals and the patch frame, the normal of a finite point whose frame gives one is not stored and reads as `normalize(u × v)`; only the K other finite points' normals are stored, in point order, and the entry is absent when K is 0 ([Derived normals](#derived-normals-version-16)). In its lexicographic slot in `points3d_xxh128`, after `reprojection_errors`. A file without the patch frame keeps the full `normals_xyz` column. |
-
-`images/gradient_structure_tensors_xx_yy_xy` stays `float32`, and the flags
-stay `uint8`.
-
-Migration is mechanical, apart from one change of content. A version 15 file
-reads with its values and its normals as they are stored: a reader derives the
-normals only for a file of version 16 or later. Saving it as version 16 rounds
-the sharpness and the five self-similarity columns to `float16` and stores
-the scores as `float16` deficits,
-which changes `images_xxh128` (and `tracks_xxh128` where the file has
-observation readings) and so `content_xxh128`, even for a file whose values
-were all `float16` values already, since the stored bytes are half as long.
-The save also replaces the normal of each finite point with a patch by its
-frame's `normalize(u × v)`, which changes `points3d_xxh128`. That is a change
-of content where a file's normals disagree with its frames, and older files
-whose normals disagree are not preserved: the version 11
-`seoul_bull_sculpture_ground_truth_v01` stored normals up to 49° from their
-frames' and `kerry_park_ground_truth_v01` up to 1.7°, which their rewrite at
-version 16 replaced, while the later ground truths' stored normals agreed with
-their frames within 0.0001°. A version 16 file
-maps back to version 15 by widening each `float16` column to `float32`, which
-is exact, writing each score as `1 − w`, renaming the entries, and storing the
-full `normals_xyz` column of the normals it reads, the derived ones among
-them. A file holding one of these columns under the other
-version's entry is invalid.
-
-### Version 14 → Version 15
-
-| Change | Detail |
-|---|---|
-| `images/sharpness.{N}.float32.zst` | New **required** column: each image's [sharpness](#sharpness). Folded into `images_xxh128` after `rolling_shutter_rates_xyz` and before `sift_content_hashes` (`thumbnails_y_x_rgb` in an `embedded_patches` file). |
-| `images/gradient_structure_tensors_xx_yy_xy.{N}.3.float32.zst` | New **required** column: each image's `[Exx, Eyy, Exy]` ([Gradient structure tensor](#gradient-structure-tensor)). Folded into `images_xxh128` after `focal_adjustments` (or `feature_tool_hashes`, or `camera_indexes`) and before `image_file_hashes` and `metadata.json`. |
-| `images/metadata.json` `image_to_gray` | New required key: the conversion both columns were computed through ([`image_to_gray`](#image_to_gray-version-15)). |
-
-Migration is not mechanical. A version 14 file reads with no readings; saving
-it as version 15 computes them from `.sift` files or image files
-([Where a writer gets the values](#where-a-writer-gets-the-values)), which
-changes `images_xxh128` and `content_xxh128`, and fails when an image is
-unavailable. A version 15 file maps back to version 14 by dropping both
-columns and the `image_to_gray` key.
-
-### Version 13 → Version 14
-
-| Change | Detail |
-|---|---|
-| `images/radial_bspline_adjustments.{N}.2.float64.zst` | New **optional** column: per image, `[e_0, e_1]`, its radial correction's coefficients in the camera's two-coefficient B-spline basis, in units of `ρ` ([Per-image intrinsic adjustments](#per-image-intrinsic-adjustments-optional-version-13)). Present exactly when some camera lists `"radial_bspline"`. Folded into `images_xxh128` in its lexicographic slot, after `quaternions_wxyz`. |
-| `images/rolling_shutter_rates_xyz.{N}.3.float64.zst` | New **optional** column: per image, `[ωx, ωy, ωz]`, the camera's angular velocity in the `.sfmr` camera frame times the time to read one short side of scanlines, in radians of rotation per short side of readout. Present exactly when some camera lists `"rolling_shutter"`. Folded into `images_xxh128` after `radial_bspline_adjustments` and before `sift_content_hashes`. |
-| `cameras/metadata.json` `per_image_adjustments` | May also name `"radial_bspline"` (only on an `SFMTOOL_PINHOLE` camera) and `"rolling_shutter"`, in the order `"focal"`, `"principal_point"`, `"radial_bspline"`, `"rolling_shutter"`. |
-| `cameras/metadata.json` `rolling_shutter_scanlines` | New optional key on each camera, `"ROWS"` or `"COLUMNS"`. Required on a camera that lists `"rolling_shutter"`, allowed on any other. Part of `cameras_xxh128`. |
-
-Migration is mechanical. A version 13 file reads with every radial correction
-and every rate zero and no camera carrying `rolling_shutter_scanlines`, which
-is every image read through its camera exactly as before, and saves as version
-14 with none of the new entries, so its cameras and images sections are
-unchanged and only the version in `metadata.json` differs. A version 14 file
-with none of the new entries maps back to version 13 by its version number
-alone.
-
-### Version 12 → Version 13
-
-| Change | Detail |
-|---|---|
-| `images/focal_adjustments.{N}.float64.zst` | New **optional** column: per image, its focal scale `s`, so that its focal is its camera's times `1 + s` ([Per-image intrinsic adjustments](#per-image-intrinsic-adjustments-optional-version-13)). Present exactly when some camera lists `"focal"`. Folded into `images_xxh128` in its lexicographic slot, after `feature_tool_hashes` (after `camera_indexes` in an `embedded_patches` file) and before `image_file_hashes` and `metadata.json`. |
-| `images/principal_point_adjustments_xy.{N}.2.float64.zst` | New **optional** column: per image, its principal-point offset in the short-side unit, `min(width, height)` of its camera, on both axes. Present exactly when some camera lists `"principal_point"`. Folded into `images_xxh128` after `names.json` and before `quaternions_wxyz`. |
-| `cameras/metadata.json` `per_image_adjustments` | New optional key on each camera, naming the parameters that vary per image, `"focal"` and `"principal_point"` in that order; absent on a camera that varies neither. Part of `cameras_xxh128`. |
-
-Migration is mechanical. A version 12 file reads with every adjustment zero and
-no camera listing any parameter, and saves as version 13 with neither columns
-nor key, so its cameras and images sections are unchanged and only the version
-in `metadata.json` differs. A version 13 file with no column maps back to
-version 12 unchanged apart from the version number; one with columns maps back
-by dropping them and the keys, which reads every image through its camera
-exactly.
-
-Two columns changed what their writers store while version 12 was current,
-with no change to their layout:
-[`points3d/reprojection_errors`](#points3dreprojection_errorsnfloat32zst)
-went from the mean of the observation errors to their RMS, and
-[`tracks/observation_confidence`](#tracksobservation_confidencemuint8zst-optional-version-6)
-from a leave-one-out ZNCC to the blur-matched ZNCC. Each section says what a
-file of each version holds.
-
-### Version 11 → Version 12
-
-| Change | Detail |
-|---|---|
-| `tracks/reference_observations.{N}.int32.zst` | New column, **required with the patch frame** (`points3d/metadata.json` `has_uv_frames: true`) and absent otherwise: per point, the index within its own track of the observation its patch bitmap is, or is to be, rendered from, `-1` where the point has no reference observation in its track (its bitmap, if any, is then a fused mean an older file stores or the render of an observation since removed). Folded into `tracks_xxh128` in its lexicographic slot, after `point_indexes`. No metadata key is added, since `has_uv_frames` says whether it is present. |
-| `points3d/patch_bitmaps_y_x_rgba` | Writers store a point's reference view's render, with alpha `255` on the samples on the photograph and `0` elsewhere, in place of a fused mean of the views ([../core/patch/reference-view.md](../core/patch/reference-view.md) § "The stored bitmap"). The entry's layout is unchanged. |
-| `tracks/` observation readings | Eight new **optional** columns, present together: each observation's self-similarity ellipse (`zncc_self_similarity_ellipse_axes`, `_axes_is_at_least`, `_major_angle`), the `cos_view_angle`, `tilt_angle` and `zoom` of its render, and its `plain_bitmap_zncc` and `blur_matched_bitmap_zncc` against the stored bitmap ([Observation readings](#observation-readings-optional-version-12)). Each folded into `tracks_xxh128` in its lexicographic slot when present. |
-| `tracks/metadata.json` `has_observation_readings`, `observation_reading_options` | New keys, written only with the readings: the flag, and the reading's options and the sampler threshold the renders were made under. |
-
-Migration is mechanical. A version 11 file with patch frames reads with every
-point's reference observation `-1`, which says its bitmap (a fused mean) is not
-known to be one observation's render; it saves as version 12 with that column, and the
-tracks section's hash changes by its bytes. A version 11 file without patch
-frames reads and saves with no column, and its tracks section is unchanged. A
-version 11 file reads with no observation readings, and a version 12 file
-without them writes no key for them. A version 12 file maps back to version 11
-by dropping the readings, which loses each observation's record of its render,
-and the reference column, which loses
-each point's reference observation, in a file that stores no bitmaps as much
-as in one that does: the observation a bitmap was, or a later render would be,
-rendered from.
-
-### Version 10 → Version 11
-
-| Change | Detail |
-|---|---|
-| `images/metadata.json` `has_thumbnails` | New key, always written: whether `images/thumbnails_y_x_rgb` is present. Rides inside `images/metadata.json`, which is already hashed, so no hash slot changes. |
-| `images/metadata.json` `thumbnail_size` | `null` when `has_thumbnails` is `false`. |
-| `images/thumbnails_y_x_rgb` | **Optional.** Absent when `has_thumbnails` is `false`, and then not part of `images_xxh128`. |
-
-Migration is mechanical and lossless in both directions. A version 10 file
-reads as `has_thumbnails: true`; a version 11 file that carries thumbnails is
-byte-identical in the images section to the version 10 file it came from apart
-from the added `true` flag. A version 11 file without thumbnails has no version
-10 equivalent until thumbnails are added back.
-
-### Version 9 → Version 10
-
-| Change | Detail |
-|---|---|
-| `derived/` section | `depth_statistics.json.zst` and `observed_depth_histogram_counts` move out of `images/` into a section of their own. |
-| `derived_xxh128` | New content-hash field, **required** from version 10: the `derived/` section's digest, verified like every other one. A version 9 file has no such field. |
-| `content_xxh128` | No longer covers those two entries. `images_xxh128` no longer covers them either; the derived digest replaces their contribution and is excluded from the whole-file digest. See [Derived data is verified but not identifying](#derived-data-is-verified-but-not-identifying). |
-
-No byte of any array changes and nothing is recomputed: the same statistics are
-stored, under a different path, hashed into a different digest. A reader gates on
-the version to know where to look, as it already does for `positions_xyz` and
-`points3d_indexes`.
-
-Migration is mechanical, and lossless in both directions on the data. It is
-**not** hash-preserving, and deliberately so: a version 9 file and the version 10
-file holding the same reconstruction have different `content_xxh128` values,
-because the version 9 digest included statistics the version 10 one does not.
-That is a one-time renaming, the same as any version bump, and it is the last
-time a change to how a statistic is computed can rename anything.
-
-### Version 8 → Version 9
-
-| Change | Detail |
-|---|---|
-| top-level `lineage` | New **optional** metadata array: the contents this reconstruction descended from, each with a content hash and a map from that content's point rows onto this file's rows. It rode inside `metadata.json`, which is already hashed, so no hash slot changed. **Since retired**, below. |
-
-Migration is mechanical and lossless in both directions. A version 8 file carries
-no such key; a version 9 file without it is byte-identical in the metadata
-section to the version 8 file it came from apart from the version number.
-Nothing else moves, and no existing array changes meaning.
-
-**The `lineage` key is retired.** The format no longer defines it and no writer
-writes it. A file that carries one is still a valid file of its version:
-
-- **It reads.** A reader skips the key, as it skips any top-level key the
-  format does not define, and applies none of its maps. A Point ID whose hash
-  only the key named resolves to nothing in that file.
-- **It verifies.** `metadata_xxh128` is the digest of the stored
-  `metadata.json` bytes, not of metadata parsed and serialised again, so the
-  key is inside the stored digest and the file verifies exactly as written.
-- **Saving it drops the key.** A writer writes only the keys the format
-  defines, so a save of what was read has no `lineage`. Its `metadata_xxh128`
-  and `content_xxh128` differ from the original's, as for any rewrite of older
-  content, and equal those of the same reconstruction written with no key.
-
-Retiring the key needed **no version bump**. A version number is what a reader
-gates on to know where data is and what it means; it is not chosen by which
-optional data a file carries ([Versioning and Migration](#versioning-and-migration)).
-The key was optional from the version that introduced it, and a file without it
-has always been a valid file of version 9 or later, so a file written without
-it is one that a reader of its version already reads correctly. A file that
-carries the key needs no gate either, because a current reader treats it the
-same at every version: it skips the key.
-
-### Version 7 → Version 8
-
-| Change | Detail |
-|---|---|
-| top-level `written.json.zst` | New entry holding `timestamp`, the time the file was written. It is outside every section hash. See [Write Record](#3-write-record-writtenjsonzst). |
-| `metadata.json` `timestamp` | No longer written. Below version 8 it is a field of `metadata.json` and part of `metadata_xxh128`. |
-| `content_xxh128` | No longer covers the write time, so two saves of one unchanged value write the same digest. |
-
-Migration is mechanical and lossless on the data. A reader takes the timestamp
-from `written.json.zst` when that entry is present and from `metadata.json`
-otherwise. It does not recompute or rewrite a version 7 file's stored hashes, so
-a version 7 file keeps the digest it was written with. Saving it again writes
-the current version, with a different `content_xxh128`.
-
-### Version 6 → Version 7
-
-| Change | Detail |
-|---|---|
-| `points3d/point_constraints`, `points3d/constraint_distances`, `points3d/constraint_reference_images` | New **optional** per-point triple, flagged together by `has_point_constraints` in `points3d/metadata.json` and folded into `points3d_xxh128`. See [Per-point constraints](#per-point-constraints-optional-version-7). |
-| `points3d/metadata.json` `point_constraint_names` | New key, present exactly when `has_point_constraints` is `true`: the legend `points3d/point_constraints` indexes. It rides inside `metadata.json`, which is already hashed, so no hash slot changes. |
-
-Migration is mechanical and lossless in both directions. A version 6 file carries
-neither the flag nor the arrays, and reads as every point free; a version 7 file
-whose points are all free writes no arrays, no legend, and is byte-identical in
-the points3d section to the version 6 file it came from apart from the added
-`false` flag.
-Nothing else moves, and no existing array changes meaning: `positions_xyzw` in
-particular keeps `w = 0` as "the estimate is a direction" and nothing more.
-
-### Version 5 → Version 6
-
-| Change | Detail |
-|---|---|
-| `tracks/observation_confidence` | New **optional** per-observation `uint8` column, flagged by `has_observation_confidence` in `tracks/metadata.json` and folded into `tracks_xxh128`. |
-
-Migration is mechanical and lossless in both directions. A version 5 file carries
-neither the flag nor the array, and reads as "no confidence information"; a version
-6 file that does not write the array is byte-identical in the tracks section to the
-version 5 file it came from apart from the added `false` flag. Nothing else moves,
-and no existing array changes meaning.
-
-### Version 4 → Version 5
-
-Version 5 makes the
-[Coordinate System Conventions](#coordinate-system-conventions) normative, and
-admits one optional array:
-
-| Version ≤ 4 | Version 5 |
-|-------------|-----------|
-| Poses and world data in COLMAP convention (cameras look down +Z with Y down; world orientation as produced by the solver) | Canonical convention: right-handed Z-up world; cameras look down −Z with +Y up |
-| (no normal confidence) | New **optional** per-point `uint8` column [`points3d/normal_confidence`](#points3dnormal_confidencenuint8zst-optional), flagged by `has_normal_confidence` in `points3d/metadata.json` and folded into `points3d_xxh128`. |
-
-The column was added while version 5 was already current, so a version 5 file
-written before it carries neither the flag nor the array, and reads, like a
-version 1–4 file, as having no confidence information. No other array is
-added, removed, or renamed.
-
-**Migration is mechanical and lossless.** A version ≤ 4 file upgrades on load
-by applying the fixed COLMAP→canonical conversion (`S` and `W` from
-[Conversions happen at the I/O boundary](#conversions-happen-at-the-io-boundary))
-to poses, point positions, infinity directions, normals, and patch `u`/`v`
-half-vectors; saving always writes the current version.
-
-The upgrade is gated on the stored version being **below 5** — the version the
-canonical convention became normative in — and never on the *current* format
-version. Every version from 5 on stores canonical content and must be loaded
-untouched, so a later version bump for an unrelated reason must not re-apply the
-conversion to files that are already canonical. Applying it a second time is
-silently plausible-looking: the second `W` leaves the points and camera centres
-in a pure gauge rotation of the world (a rigid transform, scale 1, so any check
-that compares point clouds sees nothing wrong) while the second `S` cancels the
-camera flip and leaves every camera facing backwards, putting every point behind
-its camera.
-
-### Version 3 → Version 4
-
-Version 4 adds the `feature_source` discriminator and the `embedded_patches`
-observation mode (see [Observation source](#observation-source-version-4)). The
-differences:
-
-| Version 3 | Version 4 |
-|-----------|-----------|
-| (implicitly SIFT-referenced) | top-level `feature_source` ∈ {`"sift_files"`, `"embedded_patches"`} |
-| `tracks/feature_indexes` (always present) | present in `sift_files`; replaced by `tracks/keypoints_xy` in `embedded_patches` |
-| `images/feature_tool_hashes`, `images/sift_content_hashes` (always present) | present in `sift_files`; replaced by `images/image_file_hashes` in `embedded_patches` |
-| `tracks/metadata.json` `{observation_count}` | adds `has_feature_indexes`, `has_keypoints_xy` |
-
-**Migration is mechanical and lossless.** A version 1–3 file *is* a `sift_files`
-reconstruction: read it with `feature_source = "sift_files"`,
-`has_feature_indexes = true`, `has_keypoints_xy = false`. A `sift_files` v4 file
-is byte-equivalent to a v3 file apart from the `version` / `feature_source`
-metadata keys and the new `tracks/metadata.json` `has_*` keys.
-`embedded_patches` is a new mode with no v3 equivalent.
-
-### Version 2 → Version 3
-
-Version 3 renames the per-point normals array, makes it optional, and adds the
-optional per-point patch frame (all stored in `points3d/`). The differences:
-
-| Version 2 | Version 3 |
-|-----------|-----------|
-| `points3d/estimated_normals_xyz.{N}.3.float32.zst` (always present) | `points3d/normals_xyz.{N}.3.float32.zst` (optional, flagged by `has_normals`) |
-| (no patch data) | optional [per-point patch frame](#per-point-patch-frame-optional-version-3) (`points3d/patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba`) |
-
-The `points3d/` archive directory and the `points3d_xxh128` content-hash field
-keep their original names across all versions; the patch-frame files, when
-present, are part of the points3d section and its hash.
-
-**Migration is mechanical and lossless.** A version 2 file upgrades to the
-version 3 model by reading `estimated_normals_xyz` as `normals_xyz` (the bytes
-are identical; versions 1 and 2 always carry normals, so `has_normals` is
-effectively `true`); it carries no patch data, so the patch-frame files are
-absent.
-
-### Version 1 → Version 2 (history)
-
-Version 2 replaced the version 1 point representation with the unified
-homogeneous model described in [Points3D](#8-points3d). The differences:
-
-| Version 1 | Version 2 |
-|-----------|-----------|
-| `points3d/positions_xyz.{N}.3.float64.zst` — Euclidean `(x, y, z)` | `points3d/positions_xyzw.{N}.4.float64.zst` — homogeneous `(x, y, z, w)` |
-| `tracks/points3d_indexes.{M}.uint32.zst` | `tracks/point_indexes.{M}.uint32.zst` |
-| metadata `points3d_count` | metadata `point_count` |
-| (no infinity points) | metadata `infinity_point_count` |
-| `points3d/metadata.json.zst` key `points3d_count` | `points3d/metadata.json.zst` key `point_count` |
-
-**Migration is mechanical and lossless.** Every version 1 point is finite, so a
-reader upgrades a version 1 file by appending `w = 1` to each `positions_xyz`
-row, reads `tracks/points3d_indexes` as `tracks/point_indexes` and both
-`points3d_count` keys as `point_count`, and takes `infinity_point_count` as `0`.
-
 ## Version History
 
-One line per version, newest first. Each version's changes are described in
-the migration section it links to.
+One line per version, newest first. sfmtool 0.4.1 is the last release that
+reads versions 1 to 15; this build reads version 16 only
+([Format versions](#format-versions)).
 
-- **Version 16**: the sharpness and the observation readings are stored as
-  `float16`, the two scores as their deficits `1 − z`, and the normal of a
-  finite point with a patch is derived from its frame rather than stored. See
-  [Version 15 → Version 16](#version-15--version-16).
+- **Version 16**: the current version. The sharpness and five of the
+  observation-reading columns are stored as `float16`, and the two bitmap
+  scores as their ZNCC deficits `1 − z` in `float16` under names ending
+  `_zncc_deficit`. In a file with both normals and the patch frame, the
+  normal of a finite point whose frame gives one is derived from the frame,
+  and only the other finite points' normals are stored, in
+  `points3d/underived_normals_xyz`.
 - **Version 15**: each image's sharpness and gradient structure tensor, the
-  required `images/sharpness` and `images/gradient_structure_tensors_xx_yy_xy`
-  columns and the required `image_to_gray` key of `images/metadata.json`. See
-  [Version 14 → Version 15](#version-14--version-15).
+  required `images/sharpness` (then `float32`) and
+  `images/gradient_structure_tensors_xx_yy_xy` columns, and the required
+  `image_to_gray` key of `images/metadata.json`.
 - **Version 14**: the optional per-image radial B-spline correction and
   rolling-shutter rates, the `images/radial_bspline_adjustments` and
   `images/rolling_shutter_rates_xyz` columns and their names in
   `per_image_adjustments`, and the cameras' `rolling_shutter_scanlines` key.
-  See [Version 13 → Version 14](#version-13--version-14).
 - **Version 13**: optional per-image intrinsic adjustments, the
   `images/focal_adjustments` and `images/principal_point_adjustments_xy`
-  columns and the cameras' `per_image_adjustments` key. See
-  [Version 12 → Version 13](#version-12--version-13).
+  columns and the cameras' `per_image_adjustments` key. While version 12 was
+  current, `points3d/reprojection_errors` changed from the mean of the
+  observation errors to their RMS and `tracks/observation_confidence` from a
+  leave-one-out ZNCC to the blur-matched ZNCC, with no change of layout.
 - **Version 12**: `tracks/reference_observations`, required with the patch
-  frame, and the optional per-observation readings. See
-  [Version 11 → Version 12](#version-11--version-12).
-- **Version 11**: `images/thumbnails_y_x_rgb` becomes optional. See
-  [Version 10 → Version 11](#version-10--version-11).
-- **Version 10**: the depth statistics move into a `derived/` section that is
-  left out of `content_xxh128`. See [Version 9 → Version 10](#version-9--version-10).
-- **Version 9**: optional top-level `lineage`, since retired. See
-  [Version 8 → Version 9](#version-8--version-9).
-- **Version 8**: the write timestamp moves into `written.json`. See
-  [Version 7 → Version 8](#version-7--version-8).
-- **Version 7**: optional per-point constraints. See
-  [Version 6 → Version 7](#version-6--version-7).
-- **Version 6**: optional per-observation `tracks/observation_confidence`. See
-  [Version 5 → Version 6](#version-5--version-6).
-- **Version 5**: the canonical coordinate convention becomes normative, and the
-  optional per-point `points3d/normal_confidence` column is added. See
-  [Version 4 → Version 5](#version-4--version-5).
-- **Version 4**: `feature_source` and the `embedded_patches` observation mode.
-  See [Version 3 → Version 4](#version-3--version-4).
-- **Version 3**: optional normals and the optional per-point patch frame. See
-  [Version 2 → Version 3](#version-2--version-3).
-- **Version 2**: the homogeneous point model, with points at infinity. See
-  [Version 1 → Version 2 (history)](#version-1--version-2-history).
+  frame; stored patch bitmaps become the reference observation's render
+  rather than a fused mean; and the optional per-observation readings (then
+  `float32`, the scores under the names `tracks/plain_bitmap_zncc` and
+  `tracks/blur_matched_bitmap_zncc`).
+- **Version 11**: `images/thumbnails_y_x_rgb` becomes optional, flagged by
+  the `has_thumbnails` key of `images/metadata.json`.
+- **Version 10**: the depth statistics move from `images/` into a `derived/`
+  section, hashed into `derived_xxh128` and left out of `content_xxh128`.
+- **Version 9**: an optional top-level `lineage` key, since retired with no
+  version change ([The retired `lineage` key](#the-retired-lineage-key)).
+- **Version 8**: the write timestamp moves from `metadata.json` into
+  `written.json`, outside every section hash.
+- **Version 7**: the optional per-point constraint triple
+  `points3d/point_constraints`, `points3d/constraint_distances` and
+  `points3d/constraint_reference_images`, with the `point_constraint_names`
+  legend.
+- **Version 6**: the optional per-observation
+  `tracks/observation_confidence` column.
+- **Version 5**: the canonical coordinate convention becomes normative
+  (earlier versions stored COLMAP-convention poses and world data), and the
+  optional per-point `points3d/normal_confidence` column is added.
+- **Version 4**: the top-level `feature_source` key and the `embedded_patches`
+  observation mode, with `tracks/keypoints_xy` and `images/image_file_hashes`.
+- **Version 3**: the normals array renamed from `estimated_normals_xyz` to
+  `normals_xyz` and made optional, and the optional per-point patch frame.
+- **Version 2**: the homogeneous point model, with points at infinity:
+  `points3d/positions_xyzw` in place of `positions_xyz`,
+  `tracks/point_indexes` in place of `points3d_indexes`, and the
+  `infinity_point_count` metadata key.
 - **Version 1**: the first version.

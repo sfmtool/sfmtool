@@ -1,21 +1,18 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The image readings of version 15: the required columns
-//! `images/sharpness` and `images/gradient_structure_tensors_xx_yy_xy`, the
-//! required `image_to_gray` key of `images/metadata.json`, and the rules a
-//! reader, a writer and a verifier hold them to; and the sharpness's change
-//! from `float32` to `float16` in version 16.
+//! The image readings: the required columns `images/sharpness` (`float16`)
+//! and `images/gradient_structure_tensors_xx_yy_xy`, the required
+//! `image_to_gray` key of `images/metadata.json`, and the rules a reader, a
+//! writer and a verifier hold them to.
 
 use super::{
-    archive_names, float16_payload, float32_payload, images_digest, make_embedded_test_data,
-    make_test_data, read_json_entry_of, restamp_hashes, rewrite_as_version_15, rewrite_entries,
-    rewrite_renaming, test_image_readings,
+    archive_names, float16_payload, images_digest, make_embedded_test_data, make_test_data,
+    read_json_entry_of, rewrite_entries,
 };
 use crate::*;
 
 const SHARPNESS_ENTRY: &str = "images/sharpness.3.float16.zst";
-const SHARPNESS_ENTRY_V15: &str = "images/sharpness.3.float32.zst";
 const TENSORS_ENTRY: &str = "images/gradient_structure_tensors_xx_yy_xy.3.3.float32.zst";
 
 /// The little-endian `float16` bytes of `values`, each rounded to the nearest.
@@ -369,94 +366,6 @@ fn a_corrupted_reading_fails_the_images_hash() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `make_test_data` written as a version 14 file: no reading column and no
-/// `image_to_gray` key, hashes restamped so it verifies.
-fn write_version_14(path: &std::path::Path, dir: &std::path::Path) {
-    let current = dir.join("current.sfmr");
-    let mut data = make_test_data();
-    data.image_readings = None;
-    crate::write::write_sfmr_without_readings_check(&current, &mut data).unwrap();
-    rewrite_entries(&current, path, |name, raw| {
-        (name == "metadata.json.zst").then(|| {
-            let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
-            json["version"] = serde_json::json!(14);
-            serde_json::to_vec(&json).unwrap()
-        })
-    });
-    restamp_hashes(path, dir);
-}
-
-#[test]
-fn a_version_14_file_reads_with_no_readings_and_saves_with_them_as_the_current_version() {
-    let dir = temp_dir("sfmr_test_image_readings_v14");
-    let old = dir.join("v14.sfmr");
-    write_version_14(&old, &dir);
-    let (valid, errors) = verify_sfmr(&old).unwrap();
-    assert!(valid, "{errors:?}");
-
-    let mut loaded = read_sfmr(&old).unwrap();
-    assert_eq!(loaded.metadata.version, 14);
-    assert!(loaded.image_readings.is_none());
-
-    // The format crate computes nothing: the value cannot be saved until the
-    // readings are supplied.
-    let saved = dir.join("saved.sfmr");
-    assert!(write_sfmr(&saved, &mut loaded).is_err());
-    loaded.image_readings = Some(test_image_readings(3));
-    write_sfmr(&saved, &mut loaded).unwrap();
-    let reloaded = read_sfmr(&saved).unwrap();
-    assert_eq!(reloaded.metadata.version, SFMR_FORMAT_VERSION);
-    assert_eq!(reloaded.image_readings, Some(test_image_readings(3)));
-    assert!(verify_sfmr(&saved).unwrap().0);
-
-    // Dropping both columns and the key maps the saved file back to 14: the
-    // two files then differ only in the version.
-    let old_hash = read_sfmr_content_hash(&old).unwrap();
-    let new_hash = read_sfmr_content_hash(&saved).unwrap();
-    assert_eq!(new_hash.cameras_xxh128, old_hash.cameras_xxh128);
-    assert_eq!(new_hash.points3d_xxh128, old_hash.points3d_xxh128);
-    assert_eq!(new_hash.tracks_xxh128, old_hash.tracks_xxh128);
-    assert_ne!(new_hash.images_xxh128, old_hash.images_xxh128);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn a_file_below_version_15_with_a_column_or_the_key_is_refused() {
-    let dir = temp_dir("sfmr_test_image_readings_old_version");
-    let (err, errors) = read_and_verify_edited(&dir, |name, raw| {
-        (name == "metadata.json.zst").then(|| {
-            let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
-            json["version"] = serde_json::json!(14);
-            serde_json::to_vec(&json).unwrap()
-        })
-    });
-    assert_named(&err, &errors, "which version 15 introduced");
-    assert!(err.contains("images/sharpness"), "{err}");
-
-    // The key alone is refused as well.
-    let old = dir.join("v14.sfmr");
-    write_version_14(&old, &dir);
-    let bad = dir.join("v14_key.sfmr");
-    rewrite_entries(&old, &bad, |name, raw| {
-        (name == "images/metadata.json.zst").then(|| {
-            let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
-            json["image_to_gray"] = serde_json::json!({"formula": "G"});
-            serde_json::to_vec(&json).unwrap()
-        })
-    });
-    let err = read_sfmr(&bad)
-        .err()
-        .expect("the reader refuses it")
-        .to_string();
-    let (_, errors) = verify_sfmr(&bad).unwrap();
-    assert_named(
-        &err,
-        &errors,
-        "the image_to_gray key of images/metadata.json",
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 #[test]
 fn the_writer_rounds_the_sharpness_to_float16_in_the_value_it_writes() {
     let dir = temp_dir("sfmr_test_image_readings_float16_rounding");
@@ -543,126 +452,5 @@ fn a_sharpness_above_the_largest_float16_is_refused() {
     write_sfmr(&path, &mut data).unwrap();
     let loaded = read_sfmr(&path).unwrap();
     assert_eq!(loaded.image_readings.unwrap().sharpness[2], 65_504.0);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn a_version_15_file_reads_its_float32_sharpness_and_saves_it_as_float16() {
-    let dir = temp_dir("sfmr_test_image_readings_v15");
-    let current = dir.join("current.sfmr");
-    write_sfmr(&current, &mut make_test_data()).unwrap();
-    // A version 15 writer stored the sharpness as float32, at values no
-    // float16 holds.
-    let given = [0.01_f32, 0.02, 0.03];
-    let old = dir.join("v15.sfmr");
-    rewrite_as_version_15(&current, &old, &dir, |name, values| {
-        if name == SHARPNESS_ENTRY_V15 {
-            values.copy_from_slice(&given);
-        }
-    });
-    let names = archive_names(&old);
-    assert!(
-        names.contains(&SHARPNESS_ENTRY_V15.to_string()),
-        "{names:?}"
-    );
-    assert!(!names.contains(&SHARPNESS_ENTRY.to_string()), "{names:?}");
-    let (valid, errors) = verify_sfmr(&old).unwrap();
-    assert!(valid, "{errors:?}");
-
-    let mut loaded = read_sfmr(&old).unwrap();
-    assert_eq!(loaded.metadata.version, 15);
-    let readings = loaded.image_readings.as_ref().unwrap();
-    assert_eq!(bits(readings.sharpness.iter().copied()), bits(given));
-    assert_eq!(
-        readings.gradient_structure_tensors_xx_yy_xy,
-        test_image_readings(3).gradient_structure_tensors_xx_yy_xy
-    );
-
-    // Saved, it is the current version with the sharpness rounded, which
-    // changes the images and content hashes and no other section's.
-    let saved = dir.join("saved.sfmr");
-    write_sfmr(&saved, &mut loaded).unwrap();
-    let names = archive_names(&saved);
-    assert!(names.contains(&SHARPNESS_ENTRY.to_string()), "{names:?}");
-    assert!(
-        !names.contains(&SHARPNESS_ENTRY_V15.to_string()),
-        "{names:?}"
-    );
-    let reloaded = read_sfmr(&saved).unwrap();
-    assert_eq!(reloaded.metadata.version, SFMR_FORMAT_VERSION);
-    assert_eq!(
-        bits(reloaded.image_readings.unwrap().sharpness.iter().copied()),
-        bits(given.map(|g| half::f16::from_f32(g).to_f32()))
-    );
-    let old_hash = read_sfmr_content_hash(&old).unwrap();
-    let new_hash = read_sfmr_content_hash(&saved).unwrap();
-    assert_ne!(new_hash.images_xxh128, old_hash.images_xxh128);
-    assert_ne!(new_hash.content_xxh128, old_hash.content_xxh128);
-    assert_eq!(new_hash.cameras_xxh128, old_hash.cameras_xxh128);
-    assert_eq!(new_hash.points3d_xxh128, old_hash.points3d_xxh128);
-    assert_eq!(new_hash.tracks_xxh128, old_hash.tracks_xxh128);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn a_sharpness_in_the_dtype_of_another_version_is_refused() {
-    let dir = temp_dir("sfmr_test_image_readings_wrong_dtype");
-    let current = dir.join("current.sfmr");
-    write_sfmr(&current, &mut make_test_data()).unwrap();
-
-    // A current file holding the sharpness as float32.
-    let bad = dir.join("float32_in_current.sfmr");
-    rewrite_renaming(&current, &bad, |name, raw| {
-        (name == SHARPNESS_ENTRY).then(|| {
-            (
-                SHARPNESS_ENTRY_V15.to_string(),
-                float32_payload(&float16_payload(raw)),
-            )
-        })
-    });
-    let err = read_sfmr(&bad)
-        .err()
-        .expect("the reader refuses it")
-        .to_string();
-    let (valid, errors) = verify_sfmr(&bad).unwrap();
-    assert!(!valid);
-    assert_named(
-        &err,
-        &errors,
-        &format!(
-            "a version {SFMR_FORMAT_VERSION} file stores {SHARPNESS_ENTRY}, and this one holds \
-             {SHARPNESS_ENTRY_V15} instead"
-        ),
-    );
-
-    // A version 15 file holding it as float16.
-    let old = dir.join("v15.sfmr");
-    rewrite_as_version_15(&current, &old, &dir, |_, _| {});
-    let bad = dir.join("float16_in_v15.sfmr");
-    rewrite_renaming(&old, &bad, |name, raw| {
-        (name == SHARPNESS_ENTRY_V15).then(|| {
-            let values: Vec<f32> = raw
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|b| f32::from_le_bytes(*b))
-                .collect();
-            (SHARPNESS_ENTRY.to_string(), float16_bytes(&values))
-        })
-    });
-    let err = read_sfmr(&bad)
-        .err()
-        .expect("the reader refuses it")
-        .to_string();
-    let (valid, errors) = verify_sfmr(&bad).unwrap();
-    assert!(!valid);
-    assert_named(
-        &err,
-        &errors,
-        &format!(
-            "a version 15 file stores {SHARPNESS_ENTRY_V15}, and this one holds \
-             {SHARPNESS_ENTRY} instead"
-        ),
-    );
     let _ = std::fs::remove_dir_all(&dir);
 }

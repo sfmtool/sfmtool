@@ -16,30 +16,33 @@ Each format crate has one constant for the version its writer writes:
 
 | Format | Constant | Current version | Oldest version read |
 |--------|----------|-----------------|---------------------|
-| `.sfmr` | [`SFMR_FORMAT_VERSION`](../../crates/sfmtool-sfmr-format/src/types.rs) | 16 | 1 |
+| `.sfmr` | [`SFMR_FORMAT_VERSION`](../../crates/sfmtool-sfmr-format/src/types.rs) | 16 | 16 |
 | `.matches` | [`MATCHES_FORMAT_VERSION`](../../crates/sfmtool-matches-format/src/types.rs) | 10 | 1 (6 for a cluster-backbone file) |
 | `.sift` | [`SIFT_FORMAT_VERSION`](../../crates/sfmtool-sift-format/src/types.rs) | 2 | 2 |
 | `.camrig` | [`CAMRIG_FORMAT_VERSION`](../../crates/sfmtool-camrig-format/src/types.rs) | 2 | 1 |
 | `.kdf` | [`KDF_FORMAT_VERSION`](../../crates/sfmtool-kdf-format/src/types.rs) | 3 | 3 |
 
 A version at which something changed that a reader gates on, such as
-`SFMR_CANONICAL_CONVENTION_VERSION` or `REFINED_SHAPE_GATES_VERSION`, is a
-constant of its own in the format crate, so a later version change does not
-move the gate. A format whose readers have stopped reading a version some
-release wrote holds, beside its version constant, the oldest version read and
+`REFINED_SHAPE_GATES_VERSION`, is a constant of its own in the format crate,
+so a later version change does not move the gate. A format whose readers have
+stopped reading a version some release wrote holds, beside its version
+constant, the oldest version read and
 the last release that reads the older ones, which its refusal names
-([Dropping a version](#dropping-a-version)): `SIFT_OLDEST_READ_VERSION` and
-`SIFT_LAST_RELEASE_READING_OLDER_VERSIONS` for `.sift`.
+([Dropping a version](#dropping-a-version)): `SFMR_OLDEST_READ_VERSION` and
+`SFMR_LAST_RELEASE_READING_OLDER_VERSIONS` for `.sfmr`, and
+`SIFT_OLDEST_READ_VERSION` and `SIFT_LAST_RELEASE_READING_OLDER_VERSIONS` for
+`.sift`.
 
-The `.sift` readers stop at version 2. The `.sfmr`, `.matches` and `.camrig`
-readers still read the versions older than those sfmtool 0.4 writes. sfmtool
-0.4.1's release notes announced that the next release stops reading the
-`.sfmr`, `.matches` and `.sift` ones; `.camrig` version 1 is one no release
-wrote. sfmtool 0.5 stops reading all of them, as
+The `.sfmr` readers stop at version 16 and the `.sift` readers at version 2.
+The `.matches` and `.camrig` readers still read the versions older than those
+sfmtool 0.4 writes. sfmtool 0.4.1's release notes announced that the next
+release stops reading the older `.sfmr`, `.matches` and `.sift` versions;
+`.camrig` version 1 is one no release wrote. sfmtool 0.5 stops reading the
+`.matches` and `.camrig` ones too, as
 [../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md)
-specifies. Of the format specs, the `.sift` one has its Format versions section
-near the top; that draft moves the `.sfmr`, `.matches`, `.camrig` and `.kdf`
-ones there in 0.5.
+specifies. Of the format specs, the `.sfmr` and `.sift` ones have their Format
+versions section near the top; that draft moves the `.matches`, `.camrig` and
+`.kdf` ones there in 0.5.
 
 ## When a format's version changes
 
@@ -87,7 +90,7 @@ The version does not change for a change no reader of the previous version
 can observe: a writer that computes a value a better way under the same
 definition, or retiring an optional key that current readers skip at every
 version, as `.sfmr` retired the version 9 `lineage` key with no version change
-([sfmr-file-format.md § Version 8 → Version 9](sfmr-file-format.md#version-8--version-9)).
+([sfmr-file-format.md § The retired `lineage` key](sfmr-file-format.md#the-retired-lineage-key)).
 
 ## What a version change consists of
 
@@ -102,8 +105,8 @@ One change, landed together:
    caller branches on a file's version. Where the current form holds data an
    older file lacks and the file alone cannot supply it, the in-memory form
    says the data is absent, and the writer refuses to write the current
-   version until a caller supplies it, as a `.sfmr` file below version 15
-   lacks its image readings.
+   version until a caller supplies it, as the sfmtool 0.4 reader did for a
+   `.sfmr` file below version 15, which lacks image readings.
 4. **`sfm ws upgrade`** brings every version the reader accepts to the current
    one ([../cli/workspace/ws-upgrade-command.md](../cli/workspace/ws-upgrade-command.md)).
    For `.sfmr`, `.matches` and `.camrig`, which it rewrites by loading and

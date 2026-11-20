@@ -182,7 +182,7 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
 - **Observation readings.** Once the bitmaps and the references are final,
   every observation of the output is rendered again at its stored keypoint, as
   the bitmaps are, and read for the
-  [observation readings](../../formats/sfmr-file-format.md#observation-readings-optional-version-12)
+  [observation readings](../../formats/sfmr-file-format.md#observation-readings-optional)
   the file then stores: its ZNCC self-similarity ellipse, the viewing angle,
   tilt and zoom of its render, and its plain and blur-matched scores against the
   point's stored bitmap, `1` for the reference observation

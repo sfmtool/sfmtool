@@ -200,8 +200,7 @@ The default output is a compact label/value block. The fields per type:
   resolution) or `no`. Both are read off the archive's entry names, which pin
   them, so nothing is decompressed. An `Image readings` line gives the
   smallest, median and largest image sharpness and the conversion they were
-  measured through, or reads `none` for a file below version 15 (see
-  [Image readings](#image-readings)).
+  measured through (see [Image readings](#image-readings)).
 - **`.sift`** — format version, image name and dimensions, feature count,
   feature tool, the image readings, integrity. The readings are four lines,
   `Sharpness`, `Gradient structure tensor` (`Exx`, `Eyy`, `Exy`), `Axis
@@ -247,8 +246,9 @@ The default output is a compact label/value block. The fields per type:
   `.5`. After the rig
   configuration an `Image readings:` block gives the conversion, the
   sharpness's smallest, median and largest value, a 32-bucket histogram of the
-  sharpness and the five least sharp images by name, least sharp first; a file
-  below version 15 prints `Image readings: none` instead. An empty
+  sharpness and the five least sharp images by name, least sharp first; the
+  same summary of a reconstruction that holds no readings, such as one a solve
+  has built and not yet saved, prints `Image readings: none` instead. An empty
   absolute workspace path, which means none was recorded (as `sfm xform
   --minimal` writes), prints as `(none recorded)`.
 
@@ -346,9 +346,12 @@ The default output is a compact label/value block. The fields per type:
 
 The readings are the per-image sharpness and gradient structure tensor of
 [sift-file-format.md](../../formats/sift-file-format.md#sharpness), which a
-version 2 `.sift` file records and a `.sfmr` file of version 15 or later copies for each
-image. A conversion prints as its formula, followed by `, rounded to N bits`
-when it has a `quantize_bits`.
+version 2 `.sift` file records and a `.sfmr` file copies for each image. A
+`.sfmr` file below version 16 is refused with the reader's message, which
+names sfmtool 0.4.1 as the last release that reads it
+([sfmr-file-format.md § Format versions](../../formats/sfmr-file-format.md#format-versions)).
+A conversion prints as its formula, followed by `, rounded to N bits` when it
+has a `quantize_bits`.
 
 For one image, a `.sift` file or an image file, the lines are, for the first
 image of `seoul_bull_sculpture`:
@@ -360,8 +363,8 @@ Axis ratio:                0.297
 Coherence:                 0.149
 ```
 
-and a reconstruction's verbose block is, for a version 15 copy of that
-dataset's ground truth:
+and a reconstruction's verbose block is, for a copy of that dataset's ground
+truth:
 
 ```text
 Image readings:
@@ -429,7 +432,7 @@ sfm inspect --strips sfmr/solve_001.sfmr 0-9 pt3d_220747a8_96414 -o strips.png
 
 - [`tests/test_inspect.py`](../../../tests/test_inspect.py) — the default and
   verbose summaries of each file type, the image readings of a version 2
-  `.sift`, a version 15 and an older `.sfmr`, and an
+  `.sift`, a `.sfmr` and a reconstruction without readings, and an
   image inside and outside a workspace, the point-ID summary and its verbose
   triangulation analysis (on a `sift_files` and an `embedded_patches` file),
   the point-or-bearing counts, and the argument errors.

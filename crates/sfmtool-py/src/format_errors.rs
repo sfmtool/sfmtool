@@ -91,7 +91,11 @@ macro_rules! impl_format_error {
     };
 }
 
-impl_format_error!(sfmtool_sfmr_format::SfmrError, request: Unsupported);
+impl_format_error!(
+    sfmtool_sfmr_format::SfmrError,
+    content: VersionNoLongerRead,
+    request: Unsupported
+);
 impl_format_error!(
     sfmtool_sift_format::SiftError,
     content: InvalidMetadata,

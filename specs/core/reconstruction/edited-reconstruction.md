@@ -145,16 +145,16 @@ rolling_shutter, rolling_shutter_scanlines)` applies one to a camera.
 edit that adds or removes cameras keeps the two in step. An image's intrinsic
 adjustment travels on its `SfmrImage`, so every edit that reorders, filters or
 copies images carries it without a step of its own; see
-[sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13).
+[sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional).
 Its image readings travel the same way, as `SfmrImage::readings`, an
-`ImageReadings` or `None`, under the one `ImageSet::image_to_gray`; a value read
-from a file below format version 15 holds none, and
+`ImageReadings` or `None`, under the one `ImageSet::image_to_gray`; a value a
+solve or an import built may hold none, and
 `SfmrReconstruction::save(path, progress)` gathers the rows it lacks through its
 `progress` (`SfmrReconstruction::gather_image_readings`, or
 `fill_image_readings(progress)` to keep them in the value; see
 [sfmr-file-format.md § Where a writer gets the values](../../formats/sfmr-file-format.md#where-a-writer-gets-the-values)).
 An image of an `SFMTOOL_PINHOLE` camera may also carry a radial correction and
-rolling-shutter rates (format version 14), held on its `IntrinsicAdjustment` as
+rolling-shutter rates, held on its `IntrinsicAdjustment` as
 `radial_bspline` and `rolling_shutter`, and `image_intrinsics(i)` reads it
 through both
 ([../camera/sfmtool-pinhole-kernels.md § Per-image
@@ -167,7 +167,7 @@ refuses an image whose adjustment its camera cannot take (non-zero rates on a
 model other than `SFMTOOL_PINHOLE`, for example), and `to_sfmr_data` writes
 them. SfM Explorer and the Python package read both, and `load` and `save`
 read and write them as held
-([../../formats/sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)).
+([../../formats/sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional)).
 The binding's `SfmrReconstruction` exposes them as
 `radial_bspline_adjustments`, `rolling_shutter_rates_xyz` and
 `rolling_shutter_scanlines`, and `CameraIntrinsics.with_adjustment` takes
@@ -229,7 +229,7 @@ Nothing is ever written through either pointer: a producer that changes the
 bitmaps builds a new array and wraps it (see "The sharing rule" below).
 
 **Both heavy columns are optional, and a load never fills one in.** A file may
-carry no thumbnails (format version 11) and no patch bitmaps, and the value then
+carry no thumbnails and no patch bitmaps, and the value then
 holds `None`. Presence is a property of the value, carried from load to save
 unchanged unless an operation changes it deliberately: a reader that synthesised
 a column on load would have the next save write it, and a file dropped to a few
@@ -730,8 +730,8 @@ infinity count refreshed, depth statistics and missing normals recomputed).
 Nothing about the act of saving is in the hash. The write timestamp lives in the
 top-level `written.json` entry, which like `content_hash.json` sits outside every
 section digest
-([`../../formats/sfmr-file-format.md`](../../formats/sfmr-file-format.md),
-version 8), so two saves of one unchanged value write the same content hash and
+([`../../formats/sfmr-file-format.md`](../../formats/sfmr-file-format.md#3-write-record-writtenjsonzst)),
+so two saves of one unchanged value write the same content hash and
 a value hashed now still matches the file it becomes later. What a
 reconstruction asserts about itself, its operation, its tool, its workspace
 configuration, is inside the hash, so a caller that stamps a new operation onto

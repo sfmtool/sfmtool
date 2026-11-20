@@ -200,38 +200,32 @@ pub struct ObservationReadingOptions {
 /// arrays, with the options they were read with
 /// ([`crate::SfmrData::observation_readings`]).
 ///
-/// Every float column is `f32` in memory. From version 16
-/// ([`crate::SFMR_FLOAT16_READINGS_VERSION`]) the five self-similarity value
+/// Every float column is `f32` in memory. The five self-similarity value
 /// columns are stored as `float16`, and the two scores as their ZNCC deficits
 /// `1 − z` in `float16`. A write rounds them in place to the values it
 /// stores, so after a write this value equals what a reader gets back.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObservationReadingColumns {
-    /// `(M, 2)` `tracks/zncc_self_similarity_ellipse_axes`, `float16` on disk
-    /// from version 16.
+    /// `(M, 2)` `tracks/zncc_self_similarity_ellipse_axes`, `float16` on disk.
     pub zncc_self_similarity_ellipse_axes: Array2<f32>,
     /// `(M, 2)` `tracks/zncc_self_similarity_ellipse_axes_is_at_least`, `0`
     /// or `1`.
     pub zncc_self_similarity_ellipse_axes_is_at_least: Array2<u8>,
     /// `(M,)` `tracks/zncc_self_similarity_ellipse_major_angle`, `float16` on
-    /// disk from version 16.
+    /// disk.
     pub zncc_self_similarity_ellipse_major_angle: Array1<f32>,
-    /// `(M,)` `tracks/zncc_self_similarity_cos_view_angle`, `float16` on disk
-    /// from version 16.
+    /// `(M,)` `tracks/zncc_self_similarity_cos_view_angle`, `float16` on disk.
     pub zncc_self_similarity_cos_view_angle: Array1<f32>,
-    /// `(M,)` `tracks/zncc_self_similarity_tilt_angle`, `float16` on disk
-    /// from version 16.
+    /// `(M,)` `tracks/zncc_self_similarity_tilt_angle`, `float16` on disk.
     pub zncc_self_similarity_tilt_angle: Array1<f32>,
-    /// `(M, 2)` `tracks/zncc_self_similarity_zoom`, `float16` on disk from
-    /// version 16, where a zoom of 65,520 or more is stored as infinity.
+    /// `(M, 2)` `tracks/zncc_self_similarity_zoom`, `float16` on disk,
+    /// where a zoom of 65,520 or more is stored as infinity.
     pub zncc_self_similarity_zoom: Array2<f32>,
-    /// `(M,)` the plain score. On disk `tracks/plain_bitmap_zncc` as `float32`
-    /// before version 16, and from version 16 its ZNCC deficit `1 − z` as
-    /// `float16`, `tracks/plain_bitmap_zncc_deficit`.
+    /// `(M,)` the plain score. On disk its ZNCC deficit `1 − z` as `float16`,
+    /// `tracks/plain_bitmap_zncc_deficit`.
     pub plain_bitmap_zncc: Array1<f32>,
     /// `(M,)` the blur-matched score, stored as the plain one is
-    /// (`tracks/blur_matched_bitmap_zncc`, from version 16
-    /// `tracks/blur_matched_bitmap_zncc_deficit`).
+    /// (`tracks/blur_matched_bitmap_zncc_deficit`).
     pub blur_matched_bitmap_zncc: Array1<f32>,
     /// What the readings were taken with.
     pub options: ObservationReadingOptions,
@@ -367,8 +361,8 @@ impl ObservationReadingColumns {
         Self::from_rows(&picked, self.options)
     }
 
-    /// Round the seven float columns in place to the values a version 16
-    /// file stores for them: the axes, the major angle, `cos θ`, the tilt
+    /// Round the seven float columns in place to the values a file stores for
+    /// them: the axes, the major angle, `cos θ`, the tilt
     /// angle and the zoom to the nearest `float16` of each, ties to even, and
     /// each score `z` to `1 − w`, where `w` is its ZNCC deficit `1 − z`
     /// rounded the same way, all in `f32`.
@@ -389,7 +383,7 @@ impl ObservationReadingColumns {
         round_all_scores_by_deficit(self.blur_matched_bitmap_zncc.iter_mut());
     }
 
-    /// The bytes of `column` as the current version stores it, little-endian,
+    /// The bytes of `column` as a file stores it, little-endian,
     /// row-major, in the order of the column's logical rows whatever its
     /// layout (a reversed or sliced view a caller handed in): the flags as
     /// `uint8`, the two scores as their ZNCC deficits `1 − z` in `float16`,

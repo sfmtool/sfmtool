@@ -174,11 +174,9 @@ def _absolute_path_text(workspace_info: dict) -> str:
     return absolute if absolute else "(none recorded)"
 
 
-def _sfmr_readings_text(path: Path, meta: dict) -> str:
+def _sfmr_readings_text(path: Path) -> str:
     """The default summary's image readings row: the sharpness spread and the
-    conversion, or ``none`` below version 15."""
-    if meta["version"] < 15:
-        return "none"
+    conversion."""
     from .._sfmtool.fileio import read_sfmr
 
     data = read_sfmr(str(path))
@@ -218,7 +216,7 @@ def print_sfmr_summary(path: Path, verbose: bool = False) -> None:
         ("Observations", f"{meta['observation_count']:,}"),
     ]
     rows.extend(_heavy_column_rows(*_sfmr_heavy_columns(path)))
-    rows.append(("Image readings", _sfmr_readings_text(path, meta)))
+    rows.append(("Image readings", _sfmr_readings_text(path)))
     if meta.get("rig_count"):
         rows.append(
             (

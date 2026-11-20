@@ -292,7 +292,7 @@ observation's ZNCC against the reference render and its shift to prune and
 then discards them; it does not write the format's optional
 `observation_confidence` column. Once the bitmaps are final it reads every
 observation again on its render and stores the
-[observation readings](../../formats/sfmr-file-format.md#observation-readings-optional-version-12),
+[observation readings](../../formats/sfmr-file-format.md#observation-readings-optional),
 whose scores are against the bitmaps it stores.
 
 Every patch is sized at `patch_size` times its SIFT feature scale; the

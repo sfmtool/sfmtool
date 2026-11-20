@@ -56,18 +56,9 @@ where
 
 /// Read a complete .sfmr file, returning a dict with numpy arrays and metadata.
 ///
-/// KNOWN LIMITATION (convention upgrade not applied): unlike
-/// `SfmrReconstruction::load`, this low-level dict reader does **not** apply the
-/// version ≤ 4 → 5 COLMAP→canonical convention upgrade. A pre-v5 file is
-/// returned with its stored COLMAP-convention poses/points (Y-down/+Z-forward
-/// cameras, un-rotated world) and its stored `metadata["version"]`, while every
-/// other loader returns canonical data. Worse, `write_sfmr` (below) restamps the
-/// version to the current one unconditionally, so a read→write round trip of a
-/// pre-v5 file through this dict API permanently mislabels COLMAP-convention data
-/// as canonical v5 and the upgrade in `SfmrReconstruction::load` never fires
-/// again. Prefer `SfmrReconstruction` for pose/point data; use this dict API only
-/// for v5 files or when you handle the convention yourself. (Tracked as a known
-/// bug in the zup-completion review.)
+/// The data is returned as stored, in the canonical convention. A file of a
+/// version the reader no longer reads raises `OSError` naming the release
+/// that reads it.
 ///
 /// Returns a dict with keys:
 ///   metadata, content_hash, cameras, depth_statistics (dicts/lists),
@@ -88,9 +79,9 @@ where
 ///   `None`), per_image_adjustments (`list[list[str]]`, one per camera),
 ///   rolling_shutter_scanlines (`list[str | None]`, one per camera),
 ///   image_to_gray (a dict or `None`), sharpness and
-///   gradient_structure_tensors_xx_yy_xy (numpy arrays or `None`).
+///   gradient_structure_tensors_xx_yy_xy (numpy arrays).
 ///
-/// The per-image intrinsic adjustments (version 13+): `focal_adjustments` is
+/// The per-image intrinsic adjustments: `focal_adjustments` is
 /// the `(N,)` float64 focal scale `s` of each image (its focal is its camera's
 /// times `1 + s`), `principal_point_adjustments_xy` the `(N, 2)` float64
 /// principal-point offset of each image in its camera's short side,
@@ -99,21 +90,23 @@ where
 /// `"rolling_shutter"` vary per image. A column is `None` exactly when no
 /// camera names its parameter.
 ///
-/// Version 14 adds `radial_bspline_adjustments`, the `(N, 2)` float64
+/// `radial_bspline_adjustments` is the `(N, 2)` float64
 /// per-image radial B-spline correction in units of the normalised radius,
 /// `rolling_shutter_rates_xyz`, the `(N, 3)` float64 per-image rolling-shutter
 /// rates in radians per short side of readout, and `rolling_shutter_scanlines`,
 /// each camera's `"ROWS"`, `"COLUMNS"` or `None`. All three read as stored.
 ///
-/// Version 15 adds the image readings: `sharpness`, the `(N,)` float32
-/// sharpness of each image, `gradient_structure_tensors_xx_yy_xy`, the
-/// `(N, 3)` float32 `[Exx, Eyy, Exy]` of each image, and `image_to_gray`, the
+/// The image readings: `sharpness`, the `(N,)` float32 sharpness of each
+/// image, `gradient_structure_tensors_xx_yy_xy`, the `(N, 3)` float32
+/// `[Exx, Eyy, Exy]` of each image, and `image_to_gray`, the
 /// `{"formula": …, "quantize_bits": …}` conversion both were computed
-/// through. All three are `None` for a file below version 15.
+/// through. Every file holds all three.
 ///
-/// Version 16 stores the sharpness and five of the observation-reading
-/// columns as `float16`; they still read as float32 arrays, widened exactly,
-/// and a write rounds them to the nearest `float16`.
+/// The file stores the sharpness and five of the observation-reading columns
+/// as `float16`, and the two bitmap scores as their `float16` ZNCC deficits
+/// `1 − z`; they read as float32 arrays, the five and the sharpness widened
+/// exactly and each score as `1 − w`, and a write rounds them to the nearest
+/// `float16`.
 ///
 /// `positions_xyzw` is the homogeneous `(P, 4)` point array. Every optional
 /// column is emitted as `None` when the file does not carry it: the normals and
@@ -126,7 +119,7 @@ where
 /// `(P, R, R, 4)` uint8 `patch_bitmaps_y_x_rgba`), the mode-dependent
 /// observation columns, the `(M,)` uint8 `observation_confidence`, and the
 /// `(P,)` int32 `reference_observations`, which is present exactly with the
-/// patch frame (`-1` throughout for a file below version 12).
+/// patch frame.
 ///
 /// Everything `write_sfmr` stores is emitted here, so
 /// `write_sfmr(out, read_sfmr(path))` round-trips a file of either observation
@@ -276,8 +269,7 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
         "observation_counts",
         data.observation_counts.into_pyarray(py),
     )?;
-    // Present exactly with the patch frame; `-1` throughout for a file below
-    // version 12 that has one.
+    // Present exactly with the patch frame.
     match data.reference_observations {
         Some(r) => dict.set_item("reference_observations", r.into_pyarray(py))?,
         None => dict.set_item("reference_observations", py.None())?,
@@ -604,9 +596,8 @@ pub(crate) fn parse_sfmr_data_from_dict(
     }
 
     // The reference observations, present exactly with the patch frame. A dict
-    // with a frame and no column (one built before version 12) states that no
-    // point names one, so every row is `-1`; the range checks are the format
-    // writer's.
+    // with a frame and no column states that no point names one, so every row
+    // is `-1`; the range checks are the format writer's.
     let reference_observations =
         optional_array::<i32, ndarray::Ix1>(data, "reference_observations", "a 1D int32 array")?
             .or_else(|| {
@@ -638,7 +629,7 @@ pub(crate) fn parse_sfmr_data_from_dict(
         "a 2D float64 array",
     )?;
 
-    // The image readings (version 15+), given together or not at all.
+    // The image readings, given together or not at all.
     let image_readings = image_readings_from_dict(py, data)?;
 
     // Extract optional rig/frame data from the dict
@@ -655,7 +646,7 @@ pub(crate) fn parse_sfmr_data_from_dict(
             images_xxh128: String::new(),
             points3d_xxh128: String::new(),
             tracks_xxh128: String::new(),
-            derived_xxh128: None,
+            derived_xxh128: String::new(),
             content_xxh128: String::new(),
         },
         cameras,
@@ -729,12 +720,12 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// anything per image, and a missing `rolling_shutter_scanlines` that no
 /// camera has a scanlines setting. The image readings (`image_to_gray`,
 /// `sharpness` and `gradient_structure_tensors_xx_yy_xy`) are required: this
-/// low-level writer computes nothing, so a dict read from a file below version
-/// 15 is refused with `ValueError` until they are supplied, where
-/// `SfmrReconstruction.save` gathers them from the `.sift` files or the
-/// photographs. The sharpness and five of the observation-reading columns are
-/// written rounded to the nearest `float16`; the dict's arrays are not
-/// changed.
+/// low-level writer computes nothing, so a dict without them is refused with
+/// `ValueError`, where `SfmrReconstruction.save` gathers them from the `.sift`
+/// files or the photographs. The sharpness and five of the
+/// observation-reading columns are written rounded to the nearest `float16`,
+/// and the two bitmap scores as their deficits rounded so; the dict's arrays
+/// are not changed.
 ///
 /// `skip_recompute_depth_stats` decides only where the depth statistics come
 /// from: by default they are recomputed from the geometry, and with `True`
@@ -743,19 +734,16 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// `normals_xyz` array is written as given, except that each zero row is
 /// filled with the point's mean-viewing normal, and that with the patch frame
 /// present the row of a finite point with a patch is its frame's
-/// `normalize(u × v)` (version 16 derives it rather than storing it) and the
+/// `normalize(u × v)` (the file derives it rather than storing it) and the
 /// row of a point at infinity is zero; an explicit `None` writes no
 /// normals; and a missing key writes a mean-viewing normal for every finite
 /// point. A point at infinity has no mean-viewing normal, so its row stays
 /// zero. A caller that moves or rotates the points in the dict updates `normals_xyz`
 /// to match, or deletes the key to have them computed again.
 ///
-/// KNOWN LIMITATION: this always writes the current
-/// [`sfmtool_sfmr_format::SFMR_FORMAT_VERSION`] regardless of the `metadata["version"]`
-/// in the dict, and assumes the arrays
-/// are already in the canonical convention — it applies no conversion. Writing a
-/// dict read from a pre-v5 file via `read_sfmr` (which does not upgrade) therefore
-/// stamps COLMAP-convention data as canonical v5. See `read_sfmr` above.
+/// It always writes the current [`sfmtool_sfmr_format::SFMR_FORMAT_VERSION`],
+/// whatever `metadata["version"]` the dict holds, and takes the arrays as
+/// they are, in the canonical convention every file it reads is in.
 #[pyfunction]
 #[pyo3(signature = (path, data, zstd_level=3, skip_recompute_depth_stats=false))]
 pub fn write_sfmr(

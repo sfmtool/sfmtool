@@ -273,7 +273,7 @@ identity pose.
 
 A `.camrig` holds no per-image data, so a camera copied out of a `.sfmr` is
 the shared camera, without its images' intrinsic adjustments
-([sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)).
+([sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional)).
 When a copied camera has a non-zero adjustment on any of its images (a focal
 scale, a principal-point offset, a radial correction or rolling-shutter
 rates), `cp` prints a note naming the camera and saying that the adjustments

@@ -1156,9 +1156,9 @@ rounding. `sfm embed-patches` and `--refine-keypoints` do the second
   `dino_dog_toy` solve, and for none of the points of the eight other datasets
   of
   [§ "How the values were measured"](#how-the-values-were-measured).
-- **A fused mean already in a file** stays readable. A file older than
-  `.sfmr` version 12, or one written before the stored bitmap stopped being a
-  mean of the views, can hold a fused mean beside `-1`; readers treat it as
+- **A fused mean already in a file** stays readable. A file converted from
+  one written before the stored bitmap stopped being a mean of the views can
+  hold a fused mean beside `-1`; readers treat it as
   any bitmap beside `-1`, and the next render replaces it with the rule's
   pick (on the bench, at the first evaluation that picks a row).
 

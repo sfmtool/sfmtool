@@ -4,7 +4,7 @@
 //! The image readings a `.sfmr` save writes, gathered from where they already
 //! are.
 //!
-//! A version 15 `.sfmr` stores a sharpness and a gradient structure tensor for
+//! A `.sfmr` file stores a sharpness and a gradient structure tensor for
 //! every image, under one `image_to_gray` conversion (see
 //! `specs/formats/sfmr-file-format.md` § "Where a writer gets the values").
 //! [`SfmrReconstruction::gather_image_readings`] takes each image's row from

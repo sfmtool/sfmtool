@@ -129,8 +129,8 @@ pub struct ImageSet {
     pub thumbnails_y_x_rgb: Option<Arc<Array4<u8>>>,
     /// The grey conversion every image's [`SfmrImage::readings`] row was
     /// computed through, the `image_to_gray` a save records; `None` when no
-    /// image holds a row, as for a value read from a file below `.sfmr`
-    /// version 15. One conversion covers every row, because readings computed
+    /// image holds a row, as for a value a solve or an import built. One
+    /// conversion covers every row, because readings computed
     /// through different conversions do not compare, so an edit that brings in
     /// an image whose row was computed through another drops that row.
     pub image_to_gray: Option<ImageToGray>,

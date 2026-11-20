@@ -224,7 +224,7 @@ Accepted observations are written with their keypoint and, where the value has
 the column, their blur-matched score (`zncc`) in `observation_confidence` on
 the byte scale the bench commit uses (`round(255·clamp(z, 0, 1))`), raised to `1` because `0` means
 unmeasured. Each also carries its
-[observation readings](../../formats/sfmr-file-format.md#observation-readings-optional-version-12)
+[observation readings](../../formats/sfmr-file-format.md#observation-readings-optional)
 (`CandidateReport::reading`), read as `read_cloud_observations` reads a row,
 whichever template the search read: the target's tile rendered at its final
 keypoint on the stored bitmaps' grid where the value has a bitmap column (on the

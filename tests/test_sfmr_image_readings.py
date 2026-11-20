@@ -1,9 +1,9 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The image readings of ``.sfmr`` version 15: each image's sharpness and
-gradient structure tensor, where every writer gets them, and how a
-reconstruction without them is saved. From version 16 a file stores the sharpness as ``float16``. See
+"""The image readings of a ``.sfmr`` file: each image's sharpness, stored as
+``float16``, and gradient structure tensor, where every writer gets them, and
+how a reconstruction without them is saved. See
 ``specs/formats/sfmr-file-format.md`` § "Image readings"."""
 
 from pathlib import Path
@@ -136,7 +136,7 @@ class TestWriters:
 
 def _without_readings(path: Path) -> dict:
     """The ``read_sfmr`` dict of ``path`` with its image readings taken out, as
-    a value read from a file below version 15, or built by a solve or an
+    a value built by a solve or an
     import that has not gathered them, holds none."""
     data = read_sfmr(path)
     data.update(

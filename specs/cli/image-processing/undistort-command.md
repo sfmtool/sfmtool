@@ -140,7 +140,7 @@ not a perspective projection and cannot be converted to a pinhole"), and the
 command fails (see [Error behavior](#error-behavior)).
 
 An image with an intrinsic adjustment
-([sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13))
+([sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional))
 is read through its own intrinsics, its camera's with the adjustment applied,
 and written through its camera's pinhole, which has no adjustment. An
 adjustment describes how one photograph departs from its camera's lens, so

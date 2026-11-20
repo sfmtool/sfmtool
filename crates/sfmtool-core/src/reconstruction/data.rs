@@ -146,7 +146,7 @@ impl Point3D {
 /// What the solve owns of each point, and what a caller-owned distance is
 /// measured from -- the in-memory form of the `.sfmr` constraint triple
 /// (`points3d/point_constraints`, `points3d/constraint_distances`,
-/// `points3d/constraint_reference_images`, version 7+).
+/// `points3d/constraint_reference_images`).
 ///
 /// The three vectors are parallel to [`PointSet::points`] and travel
 /// as a set, because a constraint that named no distance and a distance that
@@ -271,13 +271,13 @@ pub struct SfmrImage {
     pub intrinsic_adjustment: IntrinsicAdjustment,
     /// The image's sharpness and gradient structure tensor, computed through
     /// [`ImageSet::image_to_gray`], or `None` where this value holds no row
-    /// for the image (a value read from a file below `.sfmr` version 15, or an
-    /// image added since). A row is meaningful only under that conversion, so
+    /// for the image (a value a solve or an import built, or an image added
+    /// since). A row is meaningful only under that conversion, so
     /// an image is `None` whenever `image_to_gray` is.
     ///
     /// It travels with the image like `intrinsic_adjustment`. A save fills
     /// every `None` from the image's `.sift` or its photograph
-    /// ([`SfmrReconstruction::fill_image_readings`]), since a version 15 file
+    /// ([`SfmrReconstruction::fill_image_readings`]), since a `.sfmr` file
     /// stores a row for every image.
     pub readings: Option<ImageReadings>,
 }

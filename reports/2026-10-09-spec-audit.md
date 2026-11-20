@@ -652,6 +652,8 @@ Each item was re-measured at `13c1578e`; line numbers are current.
 - **track-view module-doc third copies:** `crates/sfm-explorer/src/track_view/` carries 250 lines of `//!` (~220 last run): `body/tile.rs` 53, `body/table.rs` 44, `body/mod.rs` 37, `mod.rs` 28, `body/crop.rs` 24, `body/patch.rs` 21. Seven files do not name the spec: `body/{crop,patch,reference,surface_plot,table,tile}.rs`, `header_buttons.rs`.
 - **nearby-tracks binding docstring:** `crates/sfmtool-py/src/bench/nearby_tracks.rs:140-148` narrates the source order, the 20 px stop and the far-field trigger, and the file cites no spec.
 - **sfmr version-history doc:** `SFMR_FORMAT_VERSION` doc `crates/sfmtool-sfmr-format/src/types.rs:612-671`, 60 lines through version 12; `SFMR_CANONICAL_CONVENTION_VERSION` doc :693-704. Do what #779 did for matches.
+
+  > _Status (2026-11-19): **Done** — the `SFMR_FORMAT_VERSION` doc is three lines that point at the `.sfmr` spec's "Format versions" section, and `SFMR_CANONICAL_CONVENTION_VERSION` is gone with the readers of versions 1 to 15, branch `drop-sfmr-pre16`._
 - **sfmtool-progress cites no spec** and is the top duplicate pair (check 2): link `gui/operation-progress.md` from `lib.rs` and cut the shared blocks.
 - **kdf-constellation-query `image_feature_ids` cost** described but not measured (`kdf-constellation-query.md:458-468`).
 - **docs/index.md screenshot never re-checked:** `docs/index.md:26`; `docs/images/sfm-explorer-with-seoul-bull-tiny-images.jpg` last changed 2026-04-04.

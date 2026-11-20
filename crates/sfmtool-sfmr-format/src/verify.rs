@@ -5,7 +5,7 @@
 //!
 //! Each section helper checks its own digest and local constraints. The entry
 //! point controls diagnostic order and folds section digests in content-identity
-//! order. Version 10+ derived data is verified but excluded from that fold.
+//! order. The derived data is verified but excluded from that fold.
 
 use std::io::{Read, Seek};
 use std::path::Path;
@@ -14,7 +14,7 @@ use xxhash_rust::xxh3::Xxh3;
 use zip::ZipArchive;
 
 use crate::entries::{self, ReadingColumn};
-use crate::float16::{float16_values, stores_float16, wrong_dtype_error};
+use crate::float16::float16_values;
 use crate::image_readings::{f32_values, image_readings_presence_error};
 use crate::observation_readings::{observation_reading_options, observation_readings_flagged};
 use crate::types::*;
@@ -22,8 +22,15 @@ use sfmtool_archive_io::{format_hash, raw_to_u32, read_zst_entry};
 
 /// Verify integrity of a `.sfmr` file using content hashes.
 ///
+/// A `metadata.version` the readers refuse (below [`SFMR_OLDEST_READ_VERSION`],
+/// 0 or newer than [`SFMR_FORMAT_VERSION`]) is reported as the one error, with
+/// the readers' message, and nothing else is checked.
+///
 /// Returns `Ok((true, []))` if all hashes match, `Ok((false, errors))` with
-/// details if verification fails. Returns `Err` only for I/O errors.
+/// details if verification fails. Returns `Err` for an I/O error and for an
+/// entry it must read that is missing or does not decode, such as a
+/// `content_hash.json` without `derived_xxh128`; a `metadata.json` the
+/// readers refuse is reported in the list.
 pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     let file = std::fs::File::open(path).map_err(|e| SfmrError::IoPath {
         operation: "Failed to open file",
@@ -33,16 +40,21 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     let mut archive = zip::ZipArchive::new(file)?;
     let mut errors = Vec::new();
 
+    // Read metadata before anything else so a version the readers refuse stops
+    // without producing misleading diagnostics.
+    let metadata_raw = read_zst_entry(&mut archive, entries::metadata())?;
+    let metadata = match crate::read::parse_metadata(serde_json::from_slice(&metadata_raw)?, path) {
+        Ok(metadata) => metadata,
+        Err(e @ (SfmrError::VersionNoLongerRead { .. } | SfmrError::InvalidFormat(_))) => {
+            return Ok((false, vec![e.to_string()]));
+        }
+        Err(e) => return Err(e),
+    };
+
     // Read stored hashes
     let content_hash_bytes = read_zst_entry(&mut archive, entries::content_hash())?;
     let stored: ContentHash = serde_json::from_slice(&content_hash_bytes)?;
 
-    // Read metadata before any section so unknown versions stop without
-    // producing misleading section diagnostics.
-    let metadata_raw = read_zst_entry(&mut archive, entries::metadata())?;
-    let metadata: SfmrMetadata = serde_json::from_slice(&metadata_raw)?;
-    // Version 4 added `embedded_patches`: per-observation keypoints inline and a
-    // direct image-bytes hash, in place of the `.sift`-link arrays.
     match metadata.feature_source.as_str() {
         FEATURE_SOURCE_SIFT_FILES | FEATURE_SOURCE_EMBEDDED_PATCHES => {}
         other => errors.push(format!(
@@ -51,22 +63,16 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         )),
     }
 
-    // A version newer than this build understands has an unknown layout; report it
-    // and stop rather than emit confusing per-file hash mismatches.
-    if metadata.version > SFMR_FORMAT_VERSION {
-        errors.push(format!(
-            "unsupported .sfmr format version {} (this build supports up to \
-             {SFMR_FORMAT_VERSION})",
-            metadata.version
-        ));
-        return Ok((false, errors));
-    }
     if let Err(e) = validate_world_space_unit(metadata.world_space_unit.as_deref()) {
         errors.push(e);
     }
+    // `written.json` is outside every digest, but the readers require it.
+    if archive.index_for_name(entries::written()).is_none() {
+        errors.push(format!("{} is missing", entries::written()));
+    }
 
     // The content identity folds only these sections, in canonical order.
-    // Version 10+ derived bytes are verified before images but excluded here.
+    // The derived bytes are verified before images but excluded here.
     let mut section_digests = sfmtool_archive_io::SectionDigests::new();
     section_digests.push(verify_metadata_section(&metadata_raw, &stored, &mut errors));
     let (cameras_hash, cameras) = verify_cameras_section(&mut archive, &stored, &mut errors)?;
@@ -86,17 +92,9 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
                 .to_string(),
         );
     }
-    let (depth_stats_raw, histogram_raw) =
-        verify_derived_section(&mut archive, &metadata, &stored, &mut errors)?;
-    let (images_hash, camera_indexes_raw) = verify_images_section(
-        &mut archive,
-        &metadata,
-        &stored,
-        &depth_stats_raw,
-        &histogram_raw,
-        &cameras,
-        &mut errors,
-    )?;
+    verify_derived_section(&mut archive, &metadata, &stored, &mut errors)?;
+    let (images_hash, camera_indexes_raw) =
+        verify_images_section(&mut archive, &metadata, &stored, &cameras, &mut errors)?;
     section_digests.push(images_hash);
     let (points3d_hash, has_uv_frames) =
         verify_points3d_section(&mut archive, &metadata, &stored, &mut errors)?;
@@ -267,59 +265,49 @@ fn verify_derived_section<R: Read + Seek>(
     metadata: &SfmrMetadata,
     stored: &ContentHash,
     errors: &mut Vec<String>,
-) -> Result<(Vec<u8>, Vec<u8>), SfmrError> {
-    // === Derived hash (version 10+), or part of the images hash before that ===
+) -> Result<(), SfmrError> {
+    // === Derived hash ===
     //
-    // The bytes are checked either way; what the version decides is which
-    // section digest covers them, and whether that digest reaches
-    // `content_xxh128` (it does not, from version 10 -- see the writer).
+    // Checked like every other section digest, and not folded into
+    // `content_xxh128` (see the writer).
     let image_count = metadata.image_count as usize;
-    let is_pre_v10 = metadata.version < 10;
 
     // Read depth_statistics first to get num_buckets
-    let depth_stats_raw = read_zst_entry(archive, entries::depth_statistics(is_pre_v10))?;
+    let depth_stats_raw = read_zst_entry(archive, entries::depth_statistics())?;
     let depth_stats: DepthStatistics = serde_json::from_slice(&depth_stats_raw)?;
     let num_buckets = depth_stats.num_histogram_buckets;
     let histogram_raw = read_zst_entry(
         archive,
-        &entries::observed_depth_histogram_counts(is_pre_v10, image_count, num_buckets),
+        &entries::observed_depth_histogram_counts(image_count, num_buckets),
     )?;
 
-    if !is_pre_v10 {
-        let mut derived_hasher = Xxh3::new();
-        derived_hasher.update(&depth_stats_raw);
-        derived_hasher.update(&histogram_raw);
-        let derived_hash = format_hash(derived_hasher.digest128());
-        match &stored.derived_xxh128 {
-            Some(stored_derived) if *stored_derived == derived_hash => {}
-            Some(stored_derived) => errors.push(format!(
-                "Derived section hash mismatch: computed {derived_hash}, stored {stored_derived}"
-            )),
-            None => errors.push(
-                "Derived section hash missing: a version 10+ file stores derived_xxh128".into(),
-            ),
-        }
+    let mut derived_hasher = Xxh3::new();
+    derived_hasher.update(&depth_stats_raw);
+    derived_hasher.update(&histogram_raw);
+    let derived_hash = format_hash(derived_hasher.digest128());
+    if derived_hash != stored.derived_xxh128 {
+        errors.push(format!(
+            "Derived section hash mismatch: computed {derived_hash}, stored {}",
+            stored.derived_xxh128
+        ));
     }
 
-    Ok((depth_stats_raw, histogram_raw))
+    Ok(())
 }
 
 fn verify_images_section<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     metadata: &SfmrMetadata,
     stored: &ContentHash,
-    depth_stats_raw: &[u8],
-    histogram_raw: &[u8],
     cameras: &[SfmrCamera],
     errors: &mut Vec<String>,
 ) -> Result<(u128, Vec<u8>), SfmrError> {
     // === Images hash (lexicographic path order) ===
     let image_count = metadata.image_count as usize;
     let is_embedded = metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES;
-    let is_pre_v10 = metadata.version < 10;
     let mut images_hasher = Xxh3::new();
 
-    // The per-image adjustment columns (version 13+ and 14+) are hashed
+    // The per-image adjustment columns are hashed
     // wherever the archive holds them, so a column that no camera's key
     // accounts for still reaches the digest and the rules below name it.
     let focal_name = entries::images_focal_adjustments(image_count);
@@ -348,29 +336,18 @@ fn verify_images_section<R: Read + Seek>(
             Ok(None)
         }
     };
-    // The image readings (version 15+) are hashed wherever the archive holds
-    // them, and only there: the version rules below report one that is
-    // missing or that a file below version 15 carries.
-    // The sharpness is float32 in version 15 and float16 from version 16; an
-    // entry in the other version's dtype is reported below and not hashed.
-    let float16 = stores_float16(metadata.version);
-    let sharpness_name = entries::images_sharpness(float16, image_count);
-    let other_sharpness_name = entries::images_sharpness(!float16, image_count);
-    let other_sharpness = archive.index_for_name(&other_sharpness_name).is_some();
+    // The image readings are hashed wherever the archive holds them, and only
+    // there: the presence rule below reports one that is missing.
+    let sharpness_name = entries::images_sharpness(image_count);
     let tensors_name = entries::images_gradient_structure_tensors_xx_yy_xy(image_count);
 
     // images/camera_indexes (captured for the keypoint bounds check below)
     let camera_indexes_raw = read_zst_entry(archive, &entries::images_camera_indexes(image_count))?;
     images_hasher.update(&camera_indexes_raw);
-    // images/depth_statistics.json (pre-version-10 files only)
-    if is_pre_v10 {
-        images_hasher.update(depth_stats_raw);
-    }
     // images/feature_tool_hashes (sift_files) or image_file_hashes
     // (embedded_patches) — same lexicographic slot, mirrors the writer.
     // images/focal_adjustments sorts between the two.
-    // images/gradient_structure_tensors_xx_yy_xy (version 15+) sorts right
-    // after it.
+    // images/gradient_structure_tensors_xx_yy_xy sorts right after it.
     let focal_raw;
     let tensors_raw;
     if is_embedded {
@@ -404,7 +381,15 @@ fn verify_images_section<R: Read + Seek>(
     let images_meta_raw = read_zst_entry(archive, entries::images_metadata())?;
     images_hasher.update(&images_meta_raw);
     let images_meta: serde_json::Value = serde_json::from_slice(&images_meta_raw)?;
-    let has_thumbnails = crate::read::images_meta_has_thumbnails(&images_meta);
+    let thumbnails_name = entries::images_thumbnails_y_x_rgb(image_count);
+    let has_thumbnails = match crate::read::images_meta_has_thumbnails(&images_meta) {
+        Ok(has_thumbnails) => has_thumbnails,
+        Err(e) => {
+            // Hash whatever is there, so the missing key is the one error.
+            errors.push(e);
+            archive.index_for_name(&thumbnails_name).is_some()
+        }
+    };
     // images/names.json
     let names_raw = read_zst_entry(archive, entries::images_names())?;
     images_hasher.update(&names_raw);
@@ -412,15 +397,11 @@ fn verify_images_section<R: Read + Seek>(
     if let Err(error) = sfmtool_archive_io::validate_image_names(&image_names) {
         errors.push(error);
     }
-    // images/principal_point_adjustments_xy (version 13+; after names.json,
-    // before quaternions_wxyz)
+    // images/principal_point_adjustments_xy (after names.json, before
+    // quaternions_wxyz)
     let principal_point_raw = read_optional(archive, &principal_point_name, listed[1])?;
     if let Some(raw) = &principal_point_raw {
         images_hasher.update(raw);
-    }
-    // images/observed_depth_histogram_counts (pre-version-10 files only)
-    if is_pre_v10 {
-        images_hasher.update(histogram_raw);
     }
     // images/quaternions_wxyz
     images_hasher.update(&read_zst_entry(
@@ -428,7 +409,7 @@ fn verify_images_section<R: Read + Seek>(
         &entries::images_quaternions_wxyz(image_count),
     )?);
     // images/radial_bspline_adjustments and images/rolling_shutter_rates_xyz
-    // (version 14+; after quaternions_wxyz, before sift_content_hashes)
+    // (after quaternions_wxyz, before sift_content_hashes)
     let radial_bspline_raw = read_optional(archive, &radial_bspline_name, listed[2])?;
     if let Some(raw) = &radial_bspline_raw {
         images_hasher.update(raw);
@@ -437,7 +418,7 @@ fn verify_images_section<R: Read + Seek>(
     if let Some(raw) = &rolling_shutter_raw {
         images_hasher.update(raw);
     }
-    // images/sharpness (version 15+; after rolling_shutter_rates_xyz, before
+    // images/sharpness (after rolling_shutter_rates_xyz, before
     // sift_content_hashes)
     let sharpness_raw = read_optional(archive, &sharpness_name, false)?;
     if let Some(raw) = &sharpness_raw {
@@ -450,12 +431,9 @@ fn verify_images_section<R: Read + Seek>(
             &entries::images_sift_content_hashes(image_count),
         )?);
     }
-    // images/thumbnails_y_x_rgb (optional from version 11)
+    // images/thumbnails_y_x_rgb (optional)
     if has_thumbnails {
-        images_hasher.update(&read_zst_entry(
-            archive,
-            &entries::images_thumbnails_y_x_rgb(image_count),
-        )?);
+        images_hasher.update(&read_zst_entry(archive, &thumbnails_name)?);
     }
     // images/translations_xyz
     images_hasher.update(&read_zst_entry(
@@ -472,22 +450,9 @@ fn verify_images_section<R: Read + Seek>(
         ));
     }
 
-    // === Validate the per-image adjustments (version 13+ and 14+) ===
-    // Below the version that introduced a column or a key a file carries
-    // neither; from it on, the rules are the reader's and the writer's.
-    let raws = [
-        &focal_raw,
-        &principal_point_raw,
-        &radial_bspline_raw,
-        &rolling_shutter_raw,
-    ];
-    if let Some(e) = crate::read::per_image_adjustments_too_new(
-        metadata.version,
-        cameras,
-        raws.map(Option::is_some),
-    ) {
-        errors.push(e);
-    } else if names_ok {
+    // === Validate the per-image adjustments ===
+    // The rules are the reader's and the writer's.
+    if names_ok {
         // A malformed key has been reported above, once.
         let to_f64 = |raw: &[u8]| -> Vec<f64> {
             raw.as_chunks::<8>()
@@ -549,32 +514,19 @@ fn verify_images_section<R: Read + Seek>(
         }
     }
 
-    // === Validate the image readings (version 15+) ===
+    // === Validate the image readings ===
     let image_to_gray = images_meta.get("image_to_gray");
-    if let Some(e) = image_readings_presence_error(
-        metadata.version,
-        [
-            sharpness_raw.is_some() || other_sharpness,
-            tensors_raw.is_some(),
-            image_to_gray.is_some(),
-        ],
-    ) {
+    if let Some(e) = image_readings_presence_error([
+        sharpness_raw.is_some(),
+        tensors_raw.is_some(),
+        image_to_gray.is_some(),
+    ]) {
         errors.push(e);
-    } else if other_sharpness {
-        errors.push(wrong_dtype_error(
-            metadata.version,
-            &other_sharpness_name,
-            &sharpness_name,
-        ));
     } else if let (Some(image_to_gray), Some(sharpness_raw), Some(tensors_raw)) =
         (image_to_gray, &sharpness_raw, &tensors_raw)
     {
         let check = (|| -> Result<(), String> {
-            let sharpness = if float16 {
-                float16_values(sharpness_raw, &sharpness_name, image_count)?
-            } else {
-                f32_values(sharpness_raw, &sharpness_name, image_count)?
-            };
+            let sharpness = float16_values(sharpness_raw, &sharpness_name, image_count)?;
             let tensors = f32_values(tensors_raw, &tensors_name, image_count * 3)?;
             crate::validate_image_readings(
                 &crate::ImageReadingColumns {
@@ -609,20 +561,13 @@ fn verify_points3d_section<R: Read + Seek>(
     // The optional per-point patch frame (`patch_*`) lives in this section.
     let point_count = metadata.point_count as usize;
     let image_count = metadata.image_count as usize;
-    // Version 1 stores Euclidean positions; version 2 uses homogeneous rows.
-    let is_v1 = metadata.version < 2;
-    // Version 3 renamed the optional normals entry and added patch frames.
-    let is_pre_v3 = metadata.version < 3;
     let points3d_meta_raw = read_zst_entry(archive, entries::points3d_metadata())?;
     let points3d_meta: serde_json::Value = serde_json::from_slice(&points3d_meta_raw)?;
-    // Normals are optional in version 3 (default `false`); versions 1 and 2
-    // always carry them.
-    let has_normals = is_pre_v3
-        || points3d_meta
-            .get("has_normals")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-    // Normal confidence is optional from version 5 (default `false`).
+    // Each optional column is flagged, `false` when the key is absent.
+    let has_normals = points3d_meta
+        .get("has_normals")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let has_normal_confidence = points3d_meta
         .get("has_normal_confidence")
         .and_then(|v| v.as_bool())
@@ -650,8 +595,8 @@ fn verify_points3d_section<R: Read + Seek>(
         }
         .presence_violations(),
     );
-    // The per-point constraint triple is optional from version 7 (default
-    // `false`), and the three columns are flagged together. The flag also
+    // The per-point constraint triple is optional (default `false`), and the
+    // three columns are flagged together. The flag also
     // promises the `point_constraint_names` legend the codes index; a file that
     // sets the flag without a readable legend says nothing about its own column,
     // which is an error rather than a reason to guess a numbering.
@@ -679,7 +624,7 @@ fn verify_points3d_section<R: Read + Seek>(
         &entries::points3d_colors_rgb(point_count),
     )?);
     // points3d/constraint_distances and points3d/constraint_reference_images
-    // (optional, version 7+; sort after colors_rgb, before metadata.json)
+    // (optional; sort after colors_rgb, before metadata.json)
     let (distances_raw, reference_images_raw) = if has_point_constraints {
         let distances = read_zst_entry(
             archive,
@@ -697,21 +642,19 @@ fn verify_points3d_section<R: Read + Seek>(
     };
     // points3d/metadata.json
     points3d_hasher.update(&points3d_meta_raw);
-    // points3d/normal_confidence (optional, version 5+; sorts before normals_xyz)
+    // points3d/normal_confidence (optional; sorts before normals_xyz)
     if has_normal_confidence {
         points3d_hasher.update(&read_zst_entry(
             archive,
             &entries::points3d_normal_confidence(point_count),
         )?);
     }
-    // points3d/normals_xyz (optional; named estimated_normals_xyz in versions 1-2)
-    // From version 16, with the patch frame, only the normals the frame does
-    // not give are stored, in points3d/underived_normals_xyz (sorts last).
-    let derives_normals = crate::patch_normals::derives_patch_normals(metadata.version)
-        && has_normals
-        && has_uv_frames;
+    // points3d/normals_xyz (optional). With the patch frame, only the normals
+    // the frame does not give are stored, in points3d/underived_normals_xyz
+    // (sorts last).
+    let derives_normals = has_normals && has_uv_frames;
     if has_normals && !derives_normals {
-        let normals_name = entries::points3d_normals(is_pre_v3, point_count);
+        let normals_name = entries::points3d_normals(point_count);
         if archive.index_for_name(&normals_name).is_some() {
             points3d_hasher.update(&read_zst_entry(archive, &normals_name)?);
         } else {
@@ -736,8 +679,8 @@ fn verify_points3d_section<R: Read + Seek>(
     } else {
         None
     };
-    // points3d/point_constraints (optional, version 7+; sorts after the patch
-    // frame, before positions_xyzw)
+    // points3d/point_constraints (optional; sorts after the patch frame,
+    // before positions_xyzw)
     let constraints_raw = if has_point_constraints {
         let raw = read_zst_entry(archive, &entries::points3d_point_constraints(point_count))?;
         points3d_hasher.update(&raw);
@@ -745,8 +688,8 @@ fn verify_points3d_section<R: Read + Seek>(
     } else {
         None
     };
-    // points3d/positions_xyz (version 1) or positions_xyzw (version 2)
-    let positions_name = entries::points3d_positions(is_v1, point_count);
+    // points3d/positions_xyzw
+    let positions_name = entries::points3d_positions(point_count);
     let positions_raw = read_zst_entry(archive, &positions_name)?;
     points3d_hasher.update(&positions_raw);
     // points3d/reprojection_errors
@@ -754,8 +697,8 @@ fn verify_points3d_section<R: Read + Seek>(
         archive,
         &entries::points3d_reprojection_errors(point_count),
     )?);
-    // points3d/underived_normals_xyz (version 16+, with normals and the patch
-    // frame; sorts last), present exactly when some finite point's normal is
+    // points3d/underived_normals_xyz (with normals and the patch frame; sorts
+    // last), present exactly when some finite point's normal is
     // not given by its frame.
     let underived = match (&frame_raw, derives_normals) {
         (Some((u_raw, v_raw)), true) => {
@@ -803,7 +746,6 @@ fn verify_points3d_section<R: Read + Seek>(
     if derives_normals && underived.is_none() {
         // Reported above.
     } else if let Some(e) = crate::patch_normals::normals_entries_error(
-        metadata.version,
         point_count,
         underived,
         names.iter().map(String::as_str),
@@ -830,10 +772,10 @@ fn verify_points3d_section<R: Read + Seek>(
         ));
     }
 
-    // === Validate homogeneous positions (version 2 only) ===
+    // === Validate homogeneous positions ===
     // No coordinate may be NaN/infinite; a w=0 row must be a non-zero
     // direction; and the count of w=0 rows must match infinity_point_count.
-    if !is_v1 && point_count > 0 {
+    if point_count > 0 {
         if positions_raw.len() == point_count * 32 {
             let read_f64 = |off: usize| -> f64 {
                 f64::from_le_bytes(positions_raw[off..off + 8].try_into().unwrap())
@@ -872,7 +814,7 @@ fn verify_points3d_section<R: Read + Seek>(
         }
     }
 
-    // === Validate the per-point constraint triple (version 7+) ===
+    // === Validate the per-point constraint triple ===
     // The rules are the reader's and the writer's, stated once in
     // `validate_point_constraints`; here they are re-read straight off the
     // archive bytes, positions included, so a hand-edited file is caught.
@@ -939,8 +881,6 @@ fn verify_tracks_section<R: Read + Seek>(
     // === Tracks hash (lexicographic path order) ===
     let point_count = metadata.point_count as usize;
     let observation_count = metadata.observation_count as usize;
-    // Version 1 calls this column points3d_indexes; version 2 calls it point_indexes.
-    let is_v1 = metadata.version < 2;
     let is_embedded = metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES;
     let mut tracks_hasher = Xxh3::new();
 
@@ -958,7 +898,7 @@ fn verify_tracks_section<R: Read + Seek>(
             .get("has_keypoints_xy")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-    // Per-observation confidence is optional from version 6 (default `false`).
+    // Per-observation confidence is optional (default `false`).
     let has_observation_confidence = tracks_meta
         .get("has_observation_confidence")
         .and_then(|v| v.as_bool())
@@ -967,7 +907,6 @@ fn verify_tracks_section<R: Read + Seek>(
     // The observation-reading columns (optional, present together), hashed
     // each in its lexicographic slot; the flags column is checked for 0 or 1.
     let has_observation_readings = observation_readings_flagged(&tracks_meta);
-    let float16 = stores_float16(metadata.version);
     if has_observation_readings {
         if let Err(e) = observation_reading_options(&tracks_meta) {
             errors.push(e);
@@ -982,18 +921,13 @@ fn verify_tracks_section<R: Read + Seek>(
             return Ok(());
         }
         for &column in columns {
-            let name = column.entry(float16, observation_count);
-            let other = column.entry(!float16, observation_count);
-            if other != name && archive.index_for_name(&other).is_some() {
-                errors.push(wrong_dtype_error(metadata.version, &other, &name));
-                continue;
-            }
+            let name = column.entry(observation_count);
             let raw = read_zst_entry(archive, &name)?;
-            let element = column.element_size(float16);
+            let element = column.element_size();
             if raw.len() != observation_count * column.width() * element {
                 errors.push(format!(
                     "tracks/{} holds {} bytes, not {}",
-                    column.stored_stem(float16),
+                    column.stored_stem(),
                     raw.len(),
                     observation_count * column.width() * element
                 ));
@@ -1007,7 +941,7 @@ fn verify_tracks_section<R: Read + Seek>(
         }
         Ok(())
     };
-    // tracks/blur_matched_bitmap_zncc (sorts first)
+    // tracks/blur_matched_bitmap_zncc_deficit (sorts first)
     hash_readings(
         archive,
         &[ReadingColumn::BlurMatchedBitmapZncc],
@@ -1036,8 +970,8 @@ fn verify_tracks_section<R: Read + Seek>(
     };
     // tracks/metadata.json
     tracks_hasher.update(&tracks_meta_raw);
-    // tracks/observation_confidence (optional, version 6+; sorts after
-    // metadata.json, before observation_counts)
+    // tracks/observation_confidence (optional; sorts after metadata.json,
+    // before observation_counts)
     if has_observation_confidence {
         tracks_hasher.update(&read_zst_entry(
             archive,
@@ -1048,21 +982,21 @@ fn verify_tracks_section<R: Read + Seek>(
     let track_obs_counts_raw =
         read_zst_entry(archive, &entries::tracks_observation_counts(point_count))?;
     tracks_hasher.update(&track_obs_counts_raw);
-    // tracks/plain_bitmap_zncc (after observation_counts, before point_indexes)
+    // tracks/plain_bitmap_zncc_deficit (after observation_counts, before
+    // point_indexes)
     hash_readings(
         archive,
         &[ReadingColumn::PlainBitmapZncc],
         &mut tracks_hasher,
         errors,
     )?;
-    // tracks/points3d_indexes (version 1) or point_indexes (version 2)
-    let point_indexes_name = entries::tracks_point_indexes(is_v1, observation_count);
+    // tracks/point_indexes
+    let point_indexes_name = entries::tracks_point_indexes(observation_count);
     let track_point_indexes_raw = read_zst_entry(archive, &point_indexes_name)?;
     tracks_hasher.update(&track_point_indexes_raw);
-    // tracks/reference_observations (version 12+, present exactly with the
-    // patch frame; sorts after point_indexes)
-    let reference_raw = if has_uv_frames && metadata.version >= SFMR_REFERENCE_OBSERVATIONS_VERSION
-    {
+    // tracks/reference_observations (present exactly with the patch frame;
+    // sorts after point_indexes)
+    let reference_raw = if has_uv_frames {
         let raw = read_zst_entry(
             archive,
             &entries::tracks_reference_observations(point_count),
@@ -1137,13 +1071,12 @@ fn verify_tracks_section<R: Read + Seek>(
         }
     }
 
-    // === Validate feature_source vs tracks-metadata flags (v4) ===
+    // === Validate feature_source vs tracks-metadata flags ===
     // `has_feature_indexes` is true exactly for a `sift_files` file.
     // `has_keypoints_xy` is a presence flag rather than a mode flag: an
     // `embedded_patches` file must set it (the column is its coordinate), while a
     // `sift_files` file sets it only when it carries the optional inline copy.
-    // Only enforced when the flags are present (v4 writers always emit them; an
-    // upgraded pre-v4 file has none).
+    // Only enforced when the flags are present.
     if let Some(hfi) = tracks_meta
         .get("has_feature_indexes")
         .and_then(|v| v.as_bool())
