@@ -16,8 +16,12 @@ pixels, the reuse of kept regions across renders, and the entry points,
 `source_clipped_share` among them. The draft
 [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md)
 and its companion [view-region-pyramid.md](../../drafts/view-region-pyramid.md)
-propose moving the kernels and panels onto them; today the entry points read
-photographs made in memory, and no kernel calls them yet.
+propose moving the kernels and panels onto them. Today the entry points read
+photographs made in memory, and the panels are their only callers: Track View
+and the Track Table read the photograph cache's whole pyramids through
+`TiledPhotograph::from_pyramid` and draw every tile, crop and hover view
+through the entry points ([gui/track-view.md](../../gui/track-view.md),
+[gui/track-table.md](../../gui/track-table.md)); no kernel calls them yet.
 
 ## Rust API
 
@@ -31,8 +35,10 @@ the entry points, the kept regions, the pool and the tile path in
 [sampler/source.rs](../../../crates/sfmtool-core/src/camera/sampler/source.rs),
 [sampler/pool.rs](../../../crates/sfmtool-core/src/camera/sampler/pool.rs) and
 [sampler/tile_window.rs](../../../crates/sfmtool-core/src/camera/sampler/tile_window.rs),
-and `source_clipped_share` beside `clipped_share` in
-[reference_view/tile.rs](../../../crates/sfmtool-core/src/patch/reference_view/tile.rs).
+`source_clipped_share` beside `clipped_share` in
+[reference_view/tile.rs](../../../crates/sfmtool-core/src/patch/reference_view/tile.rs),
+and `sample_source_member_grid` beside `sample_member_grid` in
+[cluster_refine.rs](../../../crates/sfmtool-core/src/patch/cluster_refine.rs).
 
 ```rust
 /// One level of a pyramid that may hold only a rectangle of the full level.
@@ -99,6 +105,8 @@ pub fn read_source_rect<'p>(source: &TiledPhotograph, pool: &'p RegionPool, leve
     rect: LevelRect) -> Result<SourceRect<'p>, PhotographReadError>;
 pub fn source_clipped_share(source: &TiledPhotograph,
     outline: &[[f64; 2]]) -> Result<Option<f64>, PhotographReadError>;
+pub fn sample_source_member_grid(view, position: [f64; 2], affine_shape: [[f64; 2]; 2],
+    params: &ClusterRefineParams) -> Result<Option<Vec<f32>>, PhotographReadError>;
 ```
 
 | Entry point | Reads as | Returns |
@@ -109,6 +117,7 @@ pub fn source_clipped_share(source: &TiledPhotograph,
 | `read_source_samples` | for each position, the `(2 + 2 · border)²` pixels from `floor(x − 0.5) − border` and `floor(y − 0.5) − border`, each address clamped to the level, and the bilinear in-cell fractions | the windows, from which the grown plane's value and Sobel gradient blend as `sample_bilinear_u8` and `sobel_gradient` do |
 | `read_source_rect` | a rectangle the kernel's own arithmetic defines | its pixels, copied whether or not the reservation succeeds |
 | `source_clipped_share` | [`clipped_share`](../patch/reference-view.md): the share of level-0 pixel centres inside a tile's outline that are clipped | the same share as over the whole level 0, or `None` for an outline of fewer than three points |
+| `sample_source_member_grid` | `sample_member_grid`: a cluster member's `R x R` grid at its position and shape, its level and map by the cluster refinement's own rules, read through `sample_source_grid` with `GridEdge::Clamp` | the raw samples, interleaved, or `None` where `sample_member_grid` gives `None` |
 
 **Why it is shaped this way.** A kernel never computes a region or touches a
 tile: it hands the entry point what it would have handed the sampler, and the
@@ -139,7 +148,14 @@ regions are opaque to the kernel: it never asks whether a read reused them,
 and reuse changes no value. `read_source_rect` takes the pool itself, since
 its rectangle is the kernel's and the `SourceRect` it returns is what the
 kernel keeps; `source_clipped_share` takes no pool, since it holds one tile at
-a time and copies nothing.
+a time and copies nothing. The panels' reads on the GUI thread are not one
+kernel call but many small ones a frame, so each panel owns one pool of
+`REGION_POOL_BYTES_PER_THREAD` that all of them share, and makes a
+`ViewRegions` for each picture it cuts, dropped once the picture is cut: a
+panel keeps the picture, not the regions. `sample_source_member_grid` is the
+cluster member grid's read for a caller that is not the cluster refinement,
+which keeps its own level rule private; Track View's cluster-stage tiles call
+it.
 
 ```rust
 use sfmtool_core::camera::sampler::{render_source_tile, RegionPool, Sampler, ViewRegions};
@@ -312,4 +328,13 @@ The reference view's
 checks that `source_clipped_share` over tiles of 32 px equals `clipped_share`
 over the whole level 0 for outlines across tile edges, along a tile edge's
 pixel centres, off each of the image's edges, concave, self-crossing, inside
-one tile and smaller than a pixel at a tile corner.
+one tile and smaller than a pixel at a tile corner. The cluster refinement's
+[tests.rs](../../../crates/sfmtool-core/src/patch/cluster_refine/tests.rs)
+checks that `sample_source_member_grid` over tiles of 32 px equals
+`sample_member_grid` over the whole pyramid, bit for bit, through a pool and
+through tiles, at an interior position, across a tile corner, off three of the
+image's edges and at a shape that reads a coarser level, at the tile's radius
+and three times it, and that it refuses a degenerate shape and a non-finite
+position as `sample_member_grid` does. The panels' pictures through regions
+are checked against the whole pyramid's in their own tests
+([gui/track-view.md](../../gui/track-view.md) § "Testing").

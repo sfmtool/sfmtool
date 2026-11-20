@@ -1386,8 +1386,8 @@ each in the step that moves its readers:
 
 | Step | Signatures that change |
 |------|------------------------|
-| 9 | Track View's and the Track Table's renders, which draw a cell's error state instead of the tile |
-| 10 | `ViewSources::fetch` in [state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs), which returns `PhotographReadError` instead of `Cancelled` (`get_many` still returns `Cancelled`, which converts), and the bench kernels (`bench::evaluate`, `evaluate_rendering_bitmap`, `score_bitmap`, `fit`, `render_bitmap_in_place`, `search_geometry`, `set_stage`, `build_track_at_pixel`, `classify`) and the patch kernels they and the reference picks share (`view_selection::select_patch_views`, `select_patch_cloud_views`, `reference_view::render_view_tile`, `read_track`, `stored_bitmap::render_reference`, `keypoint_localize`'s and `keypoint_subpixel`'s entry points, `member_coherence`'s, `observation_reading::read_cloud_observations`, `spawn::spawn_candidate_tracks`), and every kernel that calls one of them or that the bench runs, since a kernel passes its caller's pool down and its errors up: the normal kernels the bench's normal steps run (`pairwise_flow_normal`, `grown_plane_normal`, `grid_plane_normal`, `finite_difference_normal`) and `refine_normals`, which runs them; the cluster refinement's entry points (`refine_cluster_patches`, `refine_cluster_patches_borrowed`), which the bench's evaluation of a cluster-stage track runs, and the source form of `sample_member_grid` beside its region-pyramid form; `stored_bitmap::render_patch_bitmap`, `render_patch_cloud_bitmaps` and `refit_points`. Their callers that step 11 moves keep their fetch: each wraps the whole pyramids it holds with `from_pyramid` (the cluster-patches build its decoded images with `from_image`), makes the region pool for its call, and reports the error as its step's failure |
+| 9 | Track View's and the Track Table's renders, which draw a cell's error state instead of the tile (built) |
+| 10 | `ViewSources::fetch` in [state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs), which returns `PhotographReadError` instead of `Cancelled` (`get_many` still returns `Cancelled`, which converts), and the bench kernels (`bench::evaluate`, `evaluate_rendering_bitmap`, `score_bitmap`, `fit`, `render_bitmap_in_place`, `search_geometry`, `set_stage`, `build_track_at_pixel`, `classify`) and the patch kernels they and the reference picks share (`view_selection::select_patch_views`, `select_patch_cloud_views`, `reference_view::render_view_tile`, `read_track`, `stored_bitmap::render_reference`, `keypoint_localize`'s and `keypoint_subpixel`'s entry points, `member_coherence`'s, `observation_reading::read_cloud_observations`, `spawn::spawn_candidate_tracks`), and every kernel that calls one of them or that the bench runs, since a kernel passes its caller's pool down and its errors up: the normal kernels the bench's normal steps run (`pairwise_flow_normal`, `grown_plane_normal`, `grid_plane_normal`, `finite_difference_normal`) and `refine_normals`, which runs them; the cluster refinement's entry points (`refine_cluster_patches`, `refine_cluster_patches_borrowed`), which the bench's evaluation of a cluster-stage track runs, and the bench's member-grid reads, which move to `sample_source_member_grid`, the source form of `sample_member_grid` step 9 added beside its region-pyramid form; `stored_bitmap::render_patch_bitmap`, `render_patch_cloud_bitmaps` and `refit_points`. Their callers that step 11 moves keep their fetch: each wraps the whole pyramids it holds with `from_pyramid` (the cluster-patches build its decoded images with `from_image`), makes the region pool for its call, and reports the error as its step's failure |
 | 11 | the public `render_patch_bitmap_column` / `render_display_patch_bitmaps` in [display_bitmaps.rs](../../crates/sfmtool-core/src/patch/display_bitmaps.rs), which return `PhotographReadError` instead of `Cancelled`; the viewer's bulk jobs (the conversion to embedded patches, *Refine all normals*, *Refit all points*, the cluster-patches build) and `sfm web-export` fetch tiled photographs instead of wrapping whole pyramids |
 | 12 | `find_nearby_tracks` and the reads under it (`GreyImages::get`, `read_patch_along_ray`, `far_field_sweep`, `depth_layers`, `guided_matches`, `nearby_cluster_tracks`, `constellation_seeds`, `nearby_points`, `distance_range`) |
 | 16 | `ImagePyramidSet.read`, the first binding whose photographs come from the cache. The bindings over the kernels above change with their kernels in steps 10 to 12, build their tiled photographs from arrays with `from_image`, and raise the error from then on, though tiles cut from arrays cannot fail |
@@ -1731,7 +1731,22 @@ in core. Step 17 turns the tier on.
 9. **Track View and the Track Table** on view-region pyramids (companion
    step 3), with the step-9 signature changes, peeking the cache's whole
    pyramids as today and reading them through `from_pyramid`; they peek
-   tiles from step 13.
+   tiles from step 13. **Built**, before step 8: each panel owns a region
+   pool of `REGION_POOL_BYTES_PER_THREAD`; Track View's track-stage tiles
+   and hover views render through `render_source_tile`, its cluster-stage
+   ones through `sample_source_member_grid`, and the crops of both panels
+   and their hover views read through `read_source_samples`, each with a
+   `ViewRegions` dropped once its picture is cut; a read that fails draws
+   the cell's error state, *unreadable* with why on hover in Track View and
+   the *Crop* cell's *unreadable* in the Track Table; specified in
+   [gui/track-view.md](../gui/track-view.md),
+   [gui/track-table.md](../gui/track-table.md) and
+   [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md)
+   with its tests. One part took another shape than the companion's step 3:
+   the cluster-stage tiles read through `sample_source_member_grid`, a source
+   form of `sample_member_grid` added beside it, since the member grid's
+   level rule is private to the cluster refinement and a panel cannot work
+   out the grid's region; `sample_member_grid` keeps its signature.
 10. **The bench's jobs and the reference picks** (companion step 4), with the
     step-10 signature changes, one region pool made by each bench step and each
     reference pick for its kernel call, and the bindings over these kernels

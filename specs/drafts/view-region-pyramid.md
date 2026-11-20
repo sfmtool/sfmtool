@@ -16,8 +16,13 @@ the samplers, the region pool, the tile-addressed path, the render entry
 points with `source_clipped_share` among them, and view-region pyramids
 assembled from tiles and kept for reuse across renders are specified in
 [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md),
-and this draft keeps only what is still proposed. The main draft's step 8, between them, limits the
-cluster members' elongation (§ "The members' elongation limit"), and is
+and this draft keeps only what is still proposed. Step 3 (the main draft's
+step 9) is built too: Track View and the Track Table read the cache's whole
+pyramids through `from_pyramid` and draw every tile, crop and hover view
+through the render entry points, as
+[gui/track-view.md](../gui/track-view.md) and
+[gui/track-table.md](../gui/track-table.md) say. The main draft's step 8,
+between steps 2 and 3, limits the cluster members' elongation (§ "The members' elongation limit"), and is
 built. The user
 has decided every open question (§ "Open questions"). It amends
 [core/camera/photograph-cache.md](../core/camera/photograph-cache.md) and the
@@ -162,14 +167,17 @@ a side at its level: about 27 px (2.2 KB) for a patch of 24 px and 67 px
 crop; a context is 79 px (19 KB), 199 px (120 KB) and at most 770 px
 (1.8 MB). Both are copied from the panel's pool (§ "Bounding a render's
 memory") and released when the picture is cut, since the cell and the hover
-keep the picture, not the region; a context of a large patch while the pool
-is busy takes the tile path, which reads each texel's tap pair as the other
-samplers do. `picture` reads `level(0)` only for the photograph's size and
-`num_levels()` for the clamp: layout reads. Step 3 [9]. Test: the crop and
+keep the picture, not the region; a region grown by the reuse margin past
+what the pool holds, a context of more than about 680 px a side at its
+level, or one read while the pool is busy, takes the tile path, which reads
+each texel's tap pair as the other samplers do. `picture` reads the
+photograph's size and levels from its layout. Built in step 3 [9], through
+`read_source_samples`. Test: the crop and
 the context of a synthetic photograph at steps of 1, 3 and 40 px per texel,
 over outlines that cross tile edges and the image's edges, equal the
 whole-pyramid pictures byte for byte, through a copied region and through
-tiles of 32 px.
+tiles; built with the cache's tiles of 512 px over a photograph three tiles
+a side, since only `sfmtool-core`'s own tests cut tiles of 32 px.
 
 **The cluster refinement's evaluation tiles.** The cascade's objective
 (`cluster_refine/kernels.rs` `eval_zncc`, `eval_zncc_parts`, through
@@ -599,7 +607,22 @@ there is no whole pyramid for any reader to fall back on.
    and their hover views of both panels cut their region as § "Readers that
    sample through their own code" says; each panel owns its pool. Tests: the
    drawn tiles and hover contexts of a synthetic track at both stages equal
-   the whole-pyramid ones, and the crop test of that section.
+   the whole-pyramid ones, and the crop test of that section. **Built**, as
+   the main draft's step 9, specified with its tests in
+   [gui/track-view.md](../gui/track-view.md),
+   [gui/track-table.md](../gui/track-table.md) and
+   [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md).
+   The panels assemble no region pyramid themselves: Track View's tiles and
+   track-stage hover views call `render_source_tile`, which assembles the
+   region pyramid and renders it as `render_tile` does; its cluster-stage
+   ones call `sample_source_member_grid`, a source form of
+   `sample_member_grid` added beside it, since the member grid's level rule
+   is private to the cluster refinement; and the crops call
+   `read_source_samples` with a border of 0, whose region is
+   `LevelRegions::for_samples` of the texel centres, grown by
+   `REGION_REUSE_MARGIN` as every copied read is, so a crop context larger
+   than about 680 px a side at its level takes the tile path. Each picture
+   reads through a `ViewRegions` of its own, dropped once it is cut.
 4. **The bench's jobs and the reference picks**: `ViewSources` hands the
    kernels a tiled source, and every read goes through the render entry
    points, which work out its regions, each kernel passing them one

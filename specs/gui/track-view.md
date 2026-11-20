@@ -1802,8 +1802,8 @@ picks for the row, at
 resolution, `patch::PATCH_RES`, and no reading is taken from the tile); at the
 cluster stage the
 grid the refinement kernel samples
-(`sfmtool_core::patch::cluster_refine::sample_member_grid`) at that place and
-shape, over the cluster's own radius
+(`sfmtool_core::patch::cluster_refine::sample_member_grid`, read through
+`sample_source_member_grid`) at that place and shape, over the cluster's own radius
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
 cluster stage's units"), on the template's resolution once one has been cut. A
 row with nothing to render draws an empty frame of the same size, so the columns
@@ -1871,6 +1871,27 @@ photograph is not decoded yet keeps no tile or crop, rather than a remembered
 empty one, so they appear on the frame after the decode's repaint. The cache is
 bounded by its byte budget, which drops the least recently used photographs
 first.
+
+**Each picture reads only the region of the photograph it samples.** The body
+reads the cache's whole pyramid through `TiledPhotograph::from_pyramid`
+([view-region-pyramids.md](../core/camera/view-region-pyramids.md)), and every
+tile, crop and hover view it draws reserves its region from one region pool
+the panel owns, `patch_pictures::PanelRegionPool`, of 3.1 MB
+(`REGION_POOL_BYTES_PER_THREAD`). A track-stage tile and its hover view render
+through `render_source_tile`, which assembles the view-region pyramid of the
+warp's taps and renders it as `render_tile` renders the whole pyramid; a
+cluster-stage tile and its hover view sample through
+`sample_source_member_grid`, the member grid over the region its grid's cells
+take; a crop and its hover view read the level they sample, and of it the
+bounding box of the bilinear tap pairs of the texel centres that fall on the
+photograph (`read_source_samples`). Each picture gives its region back to the
+pool once it is cut, since the body keeps the picture and not the region, and
+a region the pool cannot hold is read through the photograph's tiles. The
+pixels are the whole pyramid's either way, so the pictures are those the whole
+pyramids gave. A read that fails is cached as a picture that could not be
+drawn, with why (`TrackBody::read_failures`): the tile or crop cell says
+*unreadable* in place of its picture (`table::READ_FAILURE_CELL`), and its
+hover, and the hover of a hover view that failed, says why.
 
 **Hovering a tile shows it in context.** The tooltip draws the same picture
 over three times the patch's width (`patch_pictures::marks::CONTEXT_FACTOR`), 288 points across,
@@ -2482,6 +2503,20 @@ texels, so their geometry is checked without reading pixels off the screen.
     pixels from both edges along the longer side, its texels the photograph's
     own pixels, and its caption's two axes matching the projected edge
     midpoints at the track stage and the shape's columns at the cluster stage.
+  - The reads through regions (`tests/region_reads.rs`): at the track stage and
+    at the cluster stage, over photographs of hashed pixels, every row's tile,
+    crop and their hover views as whole frames upload them, through the
+    panel's region pool and through a pool that holds nothing so that every
+    read takes the photograph's tiles, equal the pictures `render_tile`,
+    `sample_member_grid` and `sample_bilinear_u8` give from the whole
+    pyramid, byte for byte, with four reads a row by the path the pool allows
+    and nothing left in the pool; and a row whose cached pyramid holds one
+    pixel of its photograph draws *unreadable* in its tile and crop cells, with
+    why on hover, while the other rows draw their pictures. The crops
+    themselves are held to the whole pyramid's in `patch_pictures/tests.rs`,
+    at 1, 3 and 40 photograph pixels per texel, over outlines across photograph
+    tile edges and the image's edges and corners, through the pool and through
+    tiles.
   - The zoom (§ "The *Zoom* column says how much the patch magnifies the
     photograph"): the centre Jacobian of a fronto-parallel patch is diagonal at
     its width over `R`, the fallback 24 and not the tile's 64 texels; a patch
