@@ -1549,6 +1549,76 @@ fn a_seed_that_scores_best_reproduces_the_single_start_result() {
     }
 }
 
+/// A member grid read through a tiled photograph equals the grid
+/// `sample_member_grid` reads from the whole pyramid, bit for bit, through a
+/// region copied from the pool and through 32 px tiles: at an interior
+/// position, across a tile corner, off each of the image's edges, at a shape
+/// that selects a coarser level, and for a degenerate shape and a non-finite
+/// position, which both refuse.
+#[test]
+fn a_member_grid_read_through_a_tiled_photograph_equals_the_whole_pyramid() {
+    use crate::camera::sampler::{RegionPool, ViewRegions};
+    use crate::camera::TiledPhotograph;
+    let img = make_image(150, 110, texture);
+    let pyr = std::sync::Arc::new(pyramid(&img));
+    let source = TiledPhotograph::from_pyramid(pyr.clone()).with_tile_size(32);
+    let params = ClusterRefineParams::default();
+    let wide = ClusterRefineParams {
+        radius: params.radius * 3.0,
+        resolution: params.resolution * 3,
+        ..params.clone()
+    };
+    let similarity = [[1.5, 0.3], [-0.2, 1.4]];
+    let coarse = [[5.0, 0.4], [-0.6, 4.5]];
+    let cases = [
+        ([75.0, 55.0], similarity),
+        ([64.2, 31.7], similarity),
+        ([-3.0, 50.0], similarity),
+        ([152.0, 108.0], similarity),
+        ([70.0, -2.5], similarity),
+        ([75.0, 55.0], coarse),
+        ([75.0, 55.0], [[1.0, 2.0], [0.5, 1.0]]),
+        ([f64::NAN, 55.0], similarity),
+    ];
+    let mut read = 0;
+    for (position, shape) in cases {
+        for params in [&params, &wide] {
+            let want = sample_member_grid(&pyr, position, shape, params);
+            for capacity in [u64::MAX, 0] {
+                let pool = RegionPool::with_capacity(capacity);
+                let got = sample_source_member_grid(
+                    &mut ViewRegions::new(&source, &pool),
+                    position,
+                    shape,
+                    params,
+                )
+                .expect("a photograph in memory reads");
+                let bits = |g: &Option<Vec<f32>>| {
+                    g.as_ref()
+                        .map(|g| g.iter().map(|v| v.to_bits()).collect::<Vec<_>>())
+                };
+                assert_eq!(
+                    bits(&got),
+                    bits(&want),
+                    "{position:?}, {shape:?}, radius {}, pool {capacity}",
+                    params.radius
+                );
+                if got.is_some() {
+                    read += 1;
+                    let stats = pool.stats();
+                    let path = if capacity == 0 {
+                        stats.tiled_reads
+                    } else {
+                        stats.copied_reads
+                    };
+                    assert_eq!(path, 1, "{stats:?}");
+                }
+            }
+        }
+    }
+    assert_eq!(read, 24, "a case meant to sample refused");
+}
+
 /// [`result_fingerprint`] extended over the readings at the refined shape and
 /// the piecewise stage's cells, so it covers every member-parallel output.
 fn full_fingerprint(r: &ClusterRefineResult) -> u64 {

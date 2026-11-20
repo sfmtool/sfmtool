@@ -76,8 +76,9 @@ impl From<Cancelled> for PhotographReadError {
 ///
 /// It is made in memory: from an image, whose pyramid it builds, or from a
 /// whole pyramid already built, read in place. A tile read copies the tile,
-/// with its border, from its level; a rectangle read assembles the rectangle
-/// from the tiles it covers; and the photograph keeps no tile.
+/// with its border, from its level; a rectangle read copies the rectangle
+/// straight from its level, refused where a read of the tiles it covers
+/// would be; and the photograph keeps no tile.
 pub struct TiledPhotograph {
     pyramid: Arc<ImageU8Pyramid>,
     layout: PyramidLayout,
@@ -159,43 +160,37 @@ impl TiledPhotograph {
         }))
     }
 
-    /// The pixels `x0..x1` by `y0..y1` of level `level`, assembled from the
-    /// photograph tiles whose cores the rectangle covers, one tile at a time:
-    /// each tile's part inside the rectangle is copied from its core, and the
-    /// tile is dropped before the next is read.
+    /// The pixels `x0..x1` by `y0..y1` of level `level`: the pixels of the
+    /// photograph tiles whose cores the rectangle covers, copied row by row
+    /// straight from the level the photograph holds, so no tile is cut. A
+    /// rectangle is refused where one of those tiles, with its border, would
+    /// be, so a region read and a tile read refuse the same pixels.
     pub(crate) fn region(
         &self,
         level: usize,
         rect: crate::camera::sampler::LevelRect,
     ) -> Result<ImageU8, PhotographReadError> {
         check_rect(&self.layout, level, rect)?;
-        let c = self.channels as usize;
-        let w = rect.width() as usize;
-        let mut data = vec![0u8; w * rect.height() as usize * c];
+        // The tiles the rectangle covers, with their borders.
         let ts = self.layout.tile_size();
-        for row in rect.y0 / ts..=(rect.y1 - 1) / ts {
-            for col in rect.x0 / ts..=(rect.x1 - 1) / ts {
-                let tile = self.tile(TileKey {
-                    level: level as u8,
-                    col,
-                    row,
-                })?;
-                // The part of the tile's core inside the rectangle.
-                let x0 = rect.x0.max(tile.origin[0]);
-                let x1 = rect.x1.min(tile.origin[0] + tile.size[0]);
-                let y0 = rect.y0.max(tile.origin[1]);
-                let y1 = rect.y1.min(tile.origin[1] + tile.size[1]);
-                let tile_stride = tile.pixels.width() as usize * c;
-                let span = (x1 - x0) as usize * c;
-                for y in y0..y1 {
-                    // The tile's pixels start one pixel above and left of its
-                    // core.
-                    let from = (y - tile.origin[1] + 1) as usize * tile_stride
-                        + (x0 - tile.origin[0] + 1) as usize * c;
-                    let to = ((y - rect.y0) as usize * w + (x0 - rect.x0) as usize) * c;
-                    data[to..to + span].copy_from_slice(&tile.pixels.data()[from..from + span]);
-                }
-            }
+        let (w, h) = self.layout.level_size(level);
+        let span = |lo: u32, hi: u32, full: u32| {
+            let first = lo / ts * ts;
+            let end = ((hi - 1) / ts * ts + ts).min(full);
+            (i64::from(first) - 1, end - first + 2)
+        };
+        let (sx, nx) = span(rect.x0, rect.x1, w);
+        let (sy, ny) = span(rect.y0, rect.y1, h);
+        let held = self.held(level, [sx, sy], [nx, ny])?;
+        let img = held.image();
+        let [ox, oy] = held.origin().map(|o| o as u32);
+        let c = self.channels as usize;
+        let stride = img.width() as usize * c;
+        let row_len = rect.width() as usize * c;
+        let mut data = Vec::with_capacity(row_len * rect.height() as usize);
+        for y in rect.y0..rect.y1 {
+            let from = (y - oy) as usize * stride + (rect.x0 - ox) as usize * c;
+            data.extend_from_slice(&img.data()[from..from + row_len]);
         }
         Ok(ImageU8::new(
             rect.width(),
@@ -205,16 +200,17 @@ impl TiledPhotograph {
         ))
     }
 
-    /// The `size` pixels from `start` of level `level`, each address clamped
+    /// Level `level` as the pyramid holds it, once it is known to hold every
+    /// pixel the `size` pixels from `start` reach with each address clamped
     /// to the level. Refuses pixels the pyramid does not hold, as for a
     /// pyramid made by [`ImageU8Pyramid::from_regions`] handed to
     /// [`from_pyramid`](Self::from_pyramid), rather than read other pixels.
-    fn copy(
+    fn held(
         &self,
         level: usize,
         start: [i64; 2],
         size: [u32; 2],
-    ) -> Result<ImageU8, PhotographReadError> {
+    ) -> Result<HeldLevel<'_>, PhotographReadError> {
         let held = HeldLevel::of(&self.pyramid, level);
         let img = held.image();
         let [ox, oy] = held.origin().map(i64::from);
@@ -235,6 +231,22 @@ impl TiledPhotograph {
                 "pixels of level {level} the pyramid does not hold"
             )));
         }
+        Ok(held)
+    }
+
+    /// The `size` pixels from `start` of level `level`, each address clamped
+    /// to the level, refused as [`Self::held`] refuses them. The columns that
+    /// need no clamping are copied as one span a row.
+    fn copy(
+        &self,
+        level: usize,
+        start: [i64; 2],
+        size: [u32; 2],
+    ) -> Result<ImageU8, PhotographReadError> {
+        let held = self.held(level, start, size)?;
+        let img = held.image();
+        let [ox, oy] = held.origin().map(i64::from);
+        let (w, h) = self.layout.level_size(level);
         let c = self.channels as usize;
         let stride = img.width() as usize * c;
         let clamp = |v: i64, origin: i64, full: u32, held: u32| {
@@ -243,11 +255,28 @@ impl TiledPhotograph {
         let cols: Vec<usize> = (0..i64::from(size[0]))
             .map(|i| clamp(start[0] + i, ox, w, img.width()) * c)
             .collect();
+        // The run of columns whose held addresses follow one another, copied
+        // with one slice copy a row; the clamped columns either side of it
+        // pixel by pixel.
+        let first = cols
+            .windows(2)
+            .position(|p| p[1] == p[0] + c)
+            .unwrap_or(cols.len());
+        let mut last = first;
+        while last + 1 < cols.len() && cols[last + 1] == cols[last] + c {
+            last += 1;
+        }
         let mut data = Vec::with_capacity(size[0] as usize * size[1] as usize * c);
         for j in 0..i64::from(size[1]) {
             let row = &img.data()[clamp(start[1] + j, oy, h, img.height()) * stride..][..stride];
-            for &col in &cols {
+            for &col in &cols[..first.min(cols.len())] {
                 data.extend_from_slice(&row[col..col + c]);
+            }
+            if first < cols.len() {
+                data.extend_from_slice(&row[cols[first]..cols[last] + c]);
+                for &col in &cols[last + 1..] {
+                    data.extend_from_slice(&row[col..col + c]);
+                }
             }
         }
         Ok(ImageU8::new(size[0], size[1], self.channels, data))

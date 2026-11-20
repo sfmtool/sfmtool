@@ -1803,6 +1803,7 @@ impl TrackBody {
             None => {
                 ui.painter()
                     .rect_filled(tile_rect, 2.0, ui.visuals().faint_bg_color);
+                self.paint_read_failure(ui, tile_rect, observation, "track_view_tile");
             }
         }
         // Hovering the tile shows it in context: the same picture over a wider
@@ -1820,7 +1821,10 @@ impl TrackBody {
                 match self.ensure_context(ui.ctx(), recon, track, observation, state) {
                     Some(drawn) => drawn.show(ui),
                     None => {
-                        ui.label("Nothing around this patch could be rendered.");
+                        ui.label(match self.read_failure(observation) {
+                            Some(why) => read_failure_text(why),
+                            None => "Nothing around this patch could be rendered.".to_string(),
+                        });
                     }
                 }
             });
@@ -1841,7 +1845,10 @@ impl TrackBody {
                 drawn.paint_cell(ui.painter(), crop_rect);
                 true
             }
-            None => false,
+            None => {
+                self.paint_read_failure(ui, crop_rect, observation, "track_view_crop");
+                false
+            }
         };
         // The pixel and the feature index, the last bullets under the hover
         // view's own.
@@ -1863,7 +1870,10 @@ impl TrackBody {
                 match self.ensure_crop_context(ui.ctx(), recon, track, observation, state) {
                     Some(drawn) => drawn.show(ui),
                     None => {
-                        ui.label("Nothing around this crop could be rendered.");
+                        ui.label(match self.read_failure(observation) {
+                            Some(why) => read_failure_text(why),
+                            None => "Nothing around this crop could be rendered.".to_string(),
+                        });
                     }
                 }
                 if let Some(caption) = &crop_caption {
@@ -2175,6 +2185,36 @@ pub(super) const SELF_SIMILARITY_ELLIPSE_CAPTION: &str = "Where a match could la
     photograph's pixels, from its x towards its y (down); along the patch, from u towards v. \
     A + is a lower bound, so the true length may be larger: the match ran off the search \
     square, met a shift with no reading, or reached the largest radius searched.";
+
+/// What a tile or crop cell says in its place when the read of its row's
+/// photograph failed.
+pub(super) const READ_FAILURE_CELL: &str = "unreadable";
+
+/// The hover text of a tile or crop cell whose photograph read failed: `why`.
+pub(super) fn read_failure_text(why: &str) -> String {
+    format!("The photograph could not be read: {why}")
+}
+
+impl TrackBody {
+    /// Over the empty tile or crop cell `rect` of `observation`'s row, the
+    /// cell's error state when the read of its photograph failed: the word
+    /// [`READ_FAILURE_CELL`] in the cell, and why on hover. Nothing when it
+    /// did not fail. `id` tells the hover from the other cell's.
+    fn paint_read_failure(&self, ui: &egui::Ui, rect: egui::Rect, observation: usize, id: &str) {
+        let Some(why) = self.read_failure(observation) else {
+            return;
+        };
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            READ_FAILURE_CELL,
+            egui::TextStyle::Small.resolve(ui.style()),
+            ui.visuals().weak_text_color(),
+        );
+        ui.interact(rect, ui.id().with((id, observation)), egui::Sense::hover())
+            .on_hover_text(read_failure_text(why));
+    }
+}
 
 /// The words under the hover view of a surface plot: the radius and the
 /// level the contour is drawn at.

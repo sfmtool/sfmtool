@@ -427,6 +427,19 @@ cuts a row's crop with,
   table builds no track per row. A point at infinity is cropped as any other:
   its patch frame carries `w = 0` and the outline and the projection are
   homogeneous.
+- **It reads only the pixels it draws.** The photograph cache hands out the
+  photograph's whole pyramid, and the cell reads it through
+  `TiledPhotograph::from_pyramid`
+  ([view-region-pyramids.md](../core/camera/view-region-pyramids.md)): the
+  crop reads one level, the one whose pixel is the largest not wider than its
+  texel step, and of it the bounding box of the bilinear tap pairs of the
+  texel centres that fall on the photograph (`read_source_samples`), and
+  blends each texel's four pixels as `sample_bilinear_u8` does, so it draws
+  the whole level's values. The panel owns one region pool of 3.1 MB
+  (`patch_pictures::PanelRegionPool`) that the crops and their hover views
+  copy their regions from and give them back to once the picture is cut; a
+  region the pool cannot hold is read through the photograph's tiles, with
+  the same pixels.
 - **It is offered only where the outline can be made**: where the points carry
   a patch frame and the observations a keypoint
   (`EditedReconstruction::has_patch_frames` and `has_keypoints`). A
@@ -445,7 +458,7 @@ cuts a row's crop with,
   - an empty frame while its photograph is decoding or its reference is being
     picked, or while the scroll has not yet stopped over it (below);
   - *unreadable*, when the photograph cannot be read
-    (`DisplayPhotograph::Unreadable`);
+    (`DisplayPhotograph::Unreadable`), or the crop's read of it fails;
   - *no reference*, when the point stores no reference observation and the
     reference-view rule picks none;
   - *off image*, when no sample of the outline projects into the photograph
@@ -465,7 +478,7 @@ cuts a row's crop with,
   patch's first and second), then the point's portable id. The wider picture is cut
   the first time the pointer rests on the cell and kept while it stays there
   (`PictureTextures::crop_context`). Over a cell with no crop the hover says
-  why, in a sentence.
+  why, in a sentence, and a hover view whose read fails says why it failed.
 
 ### The reference photograph
 
@@ -1050,7 +1063,14 @@ camera and one at infinity:
   Patch; its heading does not sort;
 - each cell state: a crop, a crop of the point at infinity, *no patch*, *off
   image*, an empty frame while its photograph decodes, then *unreadable* once
-  the decode of a missing file fails;
+  the decode of a missing file fails, and *unreadable* for a crop whose read
+  of its photograph fails, the cached pyramid holding one pixel of it;
+- a crop and its hover view drawn by whole frames, through the panel's region
+  pool and through a pool that holds nothing so every read takes the
+  photograph's tiles, equal the crop and hover view the whole pyramid gives,
+  byte for byte, and the pool holds nothing once they are drawn, for the
+  point's patch as it is, read one texel per pixel, and grown 40 times, read
+  at a step of a fraction of a pixel;
 - a point a bitmap writer left at `-1` with a zero bitmap row says *no
   reference* at once and queues no pick, whether the bitmaps were rendered for
   display or stored, as Convert to Embedded Patches stores them; after an

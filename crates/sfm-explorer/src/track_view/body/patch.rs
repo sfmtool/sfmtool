@@ -24,10 +24,11 @@
 //! draws it, the picture the Track Table's *Patch* column draws too.
 
 use sfmtool_core::bench::{EditableTrack, Stage};
-use sfmtool_core::camera::image::ImageU8Pyramid;
-use sfmtool_core::camera::sampler::{minor_axis_loss, render_tile, Sampler};
+use sfmtool_core::camera::sampler::{
+    minor_axis_loss, render_source_tile, RegionPool, Sampler, ViewRegions,
+};
 use sfmtool_core::camera::warp_map::singular_values_2x2;
-use sfmtool_core::camera::{CameraIntrinsics, WarpMap};
+use sfmtool_core::camera::{CameraIntrinsics, PhotographReadError, TiledPhotograph, WarpMap};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
 
@@ -52,11 +53,20 @@ pub(crate) fn patch_color_image(
     camera: &CameraIntrinsics,
     cam_from_world: &RigidTransform,
     keypoint: Option<[f64; 2]>,
-    src: &ImageU8Pyramid,
+    src: &TiledPhotograph,
+    pool: &RegionPool,
     sampler: Sampler,
-) -> egui::ColorImage {
+) -> Result<egui::ColorImage, PhotographReadError> {
     let anchored = render_patch_frame(patch_frame, camera, cam_from_world, keypoint);
-    patch_frame_color_image(&anchored, camera, cam_from_world, src, PATCH_RES, sampler)
+    patch_frame_color_image(
+        &anchored,
+        camera,
+        cam_from_world,
+        src,
+        pool,
+        PATCH_RES,
+        sampler,
+    )
 }
 
 /// `patch_frame` warped out of `src` at `resolution` texels a side, as an RGBA
@@ -78,23 +88,31 @@ pub(crate) fn patch_color_image(
 /// the level follows the smaller singular value and several samples are
 /// averaged along the more compressed direction, so the less compressed one
 /// keeps its detail.
+///
+/// The photograph is read through `pool` by `render_source_tile`, which
+/// assembles the view-region pyramid of the warp's taps and renders it as
+/// `render_tile` renders the whole pyramid, or reads the taps through the
+/// photograph's tiles when the pool cannot hold the regions; either way the
+/// tile is the whole pyramid's, bit for bit, and the regions go back to the
+/// pool when it is rendered.
 pub(crate) fn patch_frame_color_image(
     patch_frame: &OrientedPatch,
     camera: &CameraIntrinsics,
     cam_from_world: &RigidTransform,
-    src: &ImageU8Pyramid,
+    src: &TiledPhotograph,
+    pool: &RegionPool,
     resolution: u32,
     sampler: Sampler,
-) -> egui::ColorImage {
+) -> Result<egui::ColorImage, PhotographReadError> {
     let mut map = WarpMap::from_patch(patch_frame, camera, cam_from_world, resolution);
-    let tile = render_tile(src, &mut map, sampler);
+    let tile = render_source_tile(&mut ViewRegions::new(src, pool), &mut map, sampler)?;
     // Expand 3-channel RGB (same channel count as the cached source) to RGBA.
     let (w, h) = (tile.width() as usize, tile.height() as usize);
     let mut rgba = Vec::with_capacity(w * h * 4);
     for px in tile.data().as_chunks::<3>().0.iter() {
         rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
     }
-    egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba)
+    Ok(egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba))
 }
 
 /// The ratio of a patch Jacobian's smaller singular value to its larger at or

@@ -54,7 +54,10 @@ use rayon::prelude::*;
 
 use crate::camera::image::ImageU8Pyramid;
 use crate::camera::remap::HeldLevel;
-use crate::camera::sampler::{grid_cells, sample_grid, GridEdge, GridPoints};
+use crate::camera::sampler::{
+    grid_cells, sample_grid, sample_source_grid, GridEdge, GridPoints, ViewRegions,
+};
+use crate::camera::PhotographReadError;
 use crate::patch::cell_registration::{CellLayout, CellTemplates};
 use crate::patch::normal_refine::{
     build_support, weighted_moments_pub, znorm_write, PartZncc, Support, FLAT_NORM_SQ_EPS,
@@ -442,6 +445,41 @@ pub fn sample_member_grid(
     let step = 2.0 * params.radius / resolution as f64;
     let off = 0.5 * step - params.radius;
     sample_patch_grid(pyramid, position, &affine_shape, resolution, step, off)
+}
+
+/// [`sample_member_grid`] read through `view`, one view of a tiled
+/// photograph: the same grid, level and samples, bit for bit, read by
+/// [`sample_source_grid`] from the region the grid's cells take, copied from
+/// the view's region pool or read through the photograph's tiles.
+///
+/// Track View's cluster-stage tiles and their hover views call it.
+/// `Ok(None)` where [`sample_member_grid`] gives `None`.
+pub fn sample_source_member_grid(
+    view: &mut ViewRegions<'_>,
+    position: [f64; 2],
+    affine_shape: [[f64; 2]; 2],
+    params: &ClusterRefineParams,
+) -> Result<Option<Vec<f32>>, PhotographReadError> {
+    let det = det2(&affine_shape);
+    if !det.is_finite() || det.abs() < MIN_ABS_DET {
+        return Ok(None);
+    }
+    let resolution = params.resolution.max(2);
+    let step = 2.0 * params.radius / resolution as f64;
+    let off = 0.5 * step - params.radius;
+    let map = warp_map(position, [0.0, 0.0], &affine_shape, step, off);
+    let level = level_for_map(&map, view.source().layout().levels());
+    let lmap = map_at_level(&map, level);
+    sample_source_grid(
+        view,
+        &lmap.a,
+        level,
+        GridPoints::Window {
+            first: 0,
+            size: resolution as usize,
+        },
+        GridEdge::Clamp,
+    )
 }
 
 /// The ZNCC self-similarity radius of one member's own `R×R` grid

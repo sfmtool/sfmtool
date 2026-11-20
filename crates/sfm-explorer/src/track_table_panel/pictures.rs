@@ -18,6 +18,8 @@
 
 use std::collections::HashMap;
 
+use sfmtool_core::camera::sampler::RegionPool;
+use sfmtool_core::camera::TiledPhotograph;
 use sfmtool_core::EditedReconstruction;
 
 use crate::document::VersionSerial;
@@ -251,9 +253,9 @@ pub(super) struct PictureTextures {
     /// The frame now being drawn.
     frame: u64,
     /// The hover view of the crop the pointer last rested on, cut when it
-    /// first rested there: `None` inside for a crop whose hover view cut
-    /// nothing.
-    hover: Option<(PictureKey, Option<DrawnCrop>)>,
+    /// first rested there: `Ok(None)` inside for a crop whose hover view cut
+    /// nothing, and why for one whose photograph could not be read.
+    hover: Option<(PictureKey, Result<Option<DrawnCrop>, String>)>,
     /// The key of every picture made, in order, for the tests that hold which
     /// rows ask for one.
     #[cfg(test)]
@@ -361,9 +363,11 @@ impl PictureTextures {
     }
 
     /// The hover view of the crop held for `key`, cut around the same outline
-    /// from the photograph `pyramid` finds for its image, the first time it
-    /// is asked for, and kept while the pointer rests on that cell. `None`
-    /// when no crop is held for `key` or its photograph has left the cache.
+    /// from the photograph `pyramid` finds for its image, read through
+    /// `pool`, the first time it is asked for, and kept while the pointer
+    /// rests on that cell. `Ok(None)` when no crop is held for `key` or its
+    /// photograph has left the cache, and why when the read of the photograph
+    /// failed.
     pub(super) fn crop_context(
         &mut self,
         ctx: &egui::Context,
@@ -372,30 +376,65 @@ impl PictureTextures {
             usize,
         )
             -> Option<std::sync::Arc<sfmtool_core::camera::image::ImageU8Pyramid>>,
-    ) -> Option<&DrawnCrop> {
+        pool: &RegionPool,
+    ) -> Result<Option<&DrawnCrop>, &str> {
         if self.hover.as_ref().map(|(held, _)| *held) != Some(key) {
-            let (_, outline, image) = self.crop(&key)?;
-            let src = pyramid(image)?;
-            let drawn = crate::patch_pictures::crop::context(outline, &src).map(|picture| {
-                let caption = crate::patch_pictures::crop::point_context_caption(&picture);
-                DrawnCrop::new(
-                    ctx,
-                    picture,
-                    CELL_OUTLINE[1].color,
-                    format!("track_table_crop_context_{}", key.point),
-                    egui::TextureOptions::LINEAR,
-                )
-                .with_caption(caption)
-            });
+            let Some((_, outline, image)) = self.crop(&key) else {
+                return Ok(None);
+            };
+            let Some(src) = pyramid(image) else {
+                return Ok(None);
+            };
+            let source = TiledPhotograph::from_pyramid(src);
+            let drawn = crate::patch_pictures::crop::context(outline, &source, pool)
+                .map(|picture| {
+                    picture.map(|picture| {
+                        let caption = crate::patch_pictures::crop::point_context_caption(&picture);
+                        DrawnCrop::new(
+                            ctx,
+                            picture,
+                            CELL_OUTLINE[1].color,
+                            format!("track_table_crop_context_{}", key.point),
+                            egui::TextureOptions::LINEAR,
+                        )
+                        .with_caption(caption)
+                    })
+                })
+                .map_err(|why| why.to_string());
             self.hover = Some((key, drawn));
         }
-        self.hover.as_ref().and_then(|(_, drawn)| drawn.as_ref())
+        match self.hover.as_ref() {
+            Some((_, Ok(drawn))) => Ok(drawn.as_ref()),
+            Some((_, Err(why))) => Err(why),
+            None => Ok(None),
+        }
     }
 
     /// How many pictures are held.
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    /// The crop held for `point`'s *Crop* cell, with the outline it was cut
+    /// around and the image it was cut from, whichever version it was cut
+    /// for.
+    #[cfg(test)]
+    pub(super) fn crop_of(&self, point: u32) -> Option<(&DrawnCrop, &Outline, usize)> {
+        let key = self
+            .entries
+            .keys()
+            .find(|key| key.point == point && key.column == PictureColumn::Crop)?;
+        self.crop(key)
+    }
+
+    /// The hover view of the crop the pointer last rested on, if it cut one.
+    #[cfg(test)]
+    pub(super) fn hover_crop(&self) -> Option<&DrawnCrop> {
+        match self.hover.as_ref() {
+            Some((_, Ok(drawn))) => drawn.as_ref(),
+            _ => None,
+        }
     }
 
     /// Whether the cell `key`'s picture is held.

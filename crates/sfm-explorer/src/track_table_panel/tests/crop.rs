@@ -5,6 +5,7 @@
 //! each cell draws and why, the wait for the scroll to stop before anything is
 //! asked for, and the reference picks for the points that store none.
 
+use std::collections::HashMap;
 use std::sync::{mpsc, Arc};
 
 use ndarray::Array4;
@@ -944,4 +945,182 @@ fn rows_that_leave_the_view_leave_the_picks_list() {
     assert!(unreferenced
         .iter()
         .all(|&p| state.reference_pick(id, p, document).is_none()));
+}
+
+/// One frame with the input `raw`, adding every whole picture it uploaded to
+/// `uploaded`.
+fn uploading_frame(
+    ctx: &egui::Context,
+    panel: &mut TrackTablePanel,
+    state: &mut AppState,
+    raw: egui::RawInput,
+    uploaded: &mut HashMap<egui::TextureId, egui::ColorImage>,
+) {
+    let mut output = ctx.run_ui(raw, |ui| panel.show(ui, state));
+    for (id, deltas) in &output.textures_delta.set {
+        for delta in deltas {
+            if let (None, egui::ImageData::Color(image)) = (delta.pos, &delta.image) {
+                uploaded.insert(*id, (**image).clone());
+            }
+        }
+    }
+    output.textures_delta.clear();
+}
+
+/// A Crop cell and its hover view, drawn by whole frames through the panel's
+/// region pool and through a pool that holds nothing, so that every read
+/// takes the photograph's tiles, are the crop and hover view the whole
+/// pyramid gives, and the pool holds nothing once they are drawn: for the
+/// point's patch as it is, read one texel per photograph pixel, and for it
+/// grown 40 times, read at a step that is not a whole number of pixels, so
+/// each texel blends four pixels with weights other than 0 and 1.
+#[test]
+fn crop_cells_drawn_through_regions_equal_the_whole_pyramid_crops() {
+    use crate::patch_pictures::tests::whole_pyramid_pixels;
+    let point = 1;
+    for (grown, panel_pool) in [(1.0, true), (1.0, false), (40.0, true), (40.0, false)] {
+        let mut clock = Clock(0.0);
+        let mut recon = crop_recon();
+        for half in [
+            recon.point_set.patch_u_halfvec_xyz.as_mut(),
+            recon.point_set.patch_v_halfvec_xyz.as_mut(),
+        ] {
+            let half = half.expect("patch frames");
+            for c in 0..3 {
+                half[[point as usize, c]] *= grown;
+            }
+        }
+        recon.rebuild_derived_fields();
+        let (mut state, id) = state_with(recon, &[0, 1, 2]);
+        // Hashed pixels, so that a crop read from the wrong place, level or
+        // channel differs from the right one.
+        let camera = state.node(id).expect("loaded").recon().image_set.cameras[0].clone();
+        let (w, h) = (camera.width, camera.height);
+        let data = (0..w * h * 3)
+            .map(|i: u32| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+            .collect();
+        state.insert_photograph(id, 0, ImageU8::new(w, h, 3, data));
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| {
+            style.interaction.tooltip_delay = 0.0;
+            style.interaction.tooltip_grace_time = 0.0;
+        });
+        let mut panel = TrackTablePanel::new();
+        if !panel_pool {
+            panel.regions = crate::patch_pictures::PanelRegionPool::with_capacity(0);
+        }
+        let mut uploaded = HashMap::new();
+        let height = 4800.0;
+        uploading_frame(
+            &ctx,
+            &mut panel,
+            &mut state,
+            at(height, clock.tick()),
+            &mut uploaded,
+        );
+        state.settle_track_table_columns();
+        uploading_frame(
+            &ctx,
+            &mut panel,
+            &mut state,
+            at(height, clock.tick()),
+            &mut uploaded,
+        );
+
+        let Some(CellPicture::Texture(texture)) = cell(&panel, point, PictureColumn::Crop) else {
+            panic!("point {point} drew no crop");
+        };
+        let (_, outline, image) = panel.pictures.crop_of(point).expect("a crop held");
+        let crop = crate::patch_pictures::crop::region(outline).expect("a crop region");
+        let src = state
+            .cached_photograph(id, image)
+            .expect("a cached photograph");
+        let drawn = &uploaded[&texture];
+        let step = crop.size[0] as f64 / drawn.size[0] as f64;
+        assert_eq!(
+            step.fract() == 0.0,
+            grown == 1.0,
+            "a crop of {} px at {} texels",
+            crop.size[0],
+            drawn.size[0]
+        );
+        assert!(
+            *drawn == whole_pyramid_pixels(&src, crop, drawn.size, false),
+            "the crop, panel pool {panel_pool}"
+        );
+
+        let heading = painted_text_rects(&ctx, at(height, clock.tick()), |ui| {
+            panel.show(ui, &mut state)
+        })
+        .into_iter()
+        .find(|t| t.text == "Crop")
+        .expect("the Crop heading")
+        .rect
+        .center();
+        let &(_, row) = panel.drawn().iter().find(|(p, _)| *p == point).unwrap();
+        for _ in 0..3 {
+            let mut raw = at(height, clock.tick());
+            raw.events = vec![egui::Event::PointerMoved(egui::pos2(
+                heading.x,
+                row.center().y,
+            ))];
+            uploading_frame(&ctx, &mut panel, &mut state, raw, &mut uploaded);
+        }
+        let hover = panel.pictures.hover_crop().expect("a crop hover view");
+        let drawn = &uploaded[&hover.texture_id()];
+        assert!(
+            *drawn == whole_pyramid_pixels(&src, crop, drawn.size, true),
+            "the crop's hover view, panel pool {panel_pool}"
+        );
+
+        let pool = panel.regions.pool();
+        assert_eq!(pool.held_bytes(), 0, "a drawn crop kept its regions");
+        let stats = pool.stats();
+        if panel_pool {
+            assert!(
+                stats.copied_reads > 0 && stats.tiled_reads == 0,
+                "{stats:?}"
+            );
+        } else {
+            assert!(
+                stats.copied_reads == 0 && stats.tiled_reads > 0,
+                "{stats:?}"
+            );
+        }
+    }
+}
+
+/// A Crop cell whose photograph's read fails says *unreadable*, as for a
+/// photograph that cannot be decoded.
+#[test]
+fn a_crop_whose_read_fails_says_unreadable() {
+    use sfmtool_core::camera::image::{ImageU8Pyramid, PyramidLevel};
+    let mut clock = Clock(0.0);
+    let (mut state, id) = crop_state();
+    // Image 0's pyramid holds one pixel of it, so the crops of the points
+    // whose reference observation is in image 0 read past what it holds.
+    let recon = state.node(id).expect("loaded").recon();
+    let camera = &recon.image_set.cameras[0];
+    let one_pixel = ImageU8Pyramid::from_regions(vec![Some(PyramidLevel {
+        image: ImageU8::new(1, 1, 3, vec![0; 3]),
+        origin: [0, 0],
+        full_size: [camera.width, camera.height],
+    })])
+    .expect("a region pyramid");
+    let path = crate::state::photograph_path(recon, 0).expect("a path");
+    state.photographs.insert(&path, Arc::new(one_pixel));
+    let (_ctx, panel) = shown(&mut state, 4800.0, &mut clock);
+    assert_eq!(stored_reference(0), 0);
+    assert_eq!(
+        cell(&panel, 0, PictureColumn::Crop),
+        Some(CellPicture::Absent(Absent::Unreadable))
+    );
+    // A point whose reference observation is in image 1 still reads.
+    let in_image_1 = (FIRST_FAR..POINTS as u32)
+        .find(|&p| stored_reference(p as usize) == 1)
+        .unwrap();
+    assert!(matches!(
+        cell(&panel, in_image_1, PictureColumn::Crop),
+        Some(CellPicture::Texture(_))
+    ));
 }

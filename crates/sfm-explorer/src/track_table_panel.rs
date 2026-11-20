@@ -43,7 +43,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use sfmtool_core::camera::image::ImageU8Pyramid;
-use sfmtool_core::camera::PeekedPhotograph;
+use sfmtool_core::camera::{PeekedPhotograph, TiledPhotograph};
 use sfmtool_core::EditedReconstruction;
 
 use crate::document::VersionSerial;
@@ -801,6 +801,9 @@ pub(crate) struct TrackTablePanel {
     picture_size: PictureSize,
     /// The textures of the pictures drawn, kept between frames.
     pictures: PictureTextures,
+    /// The region pool the *Crop* cells and their hover views read their
+    /// photographs through.
+    regions: crate::patch_pictures::PanelRegionPool,
     /// The row height and the vertical scroll offset of the last frame's
     /// rows, so that a new row height (the *Size* dropdown, or a picture column
     /// shown or hidden) keeps the same rows at the top.
@@ -1187,6 +1190,7 @@ impl TrackTablePanel {
                 selected,
                 hovered,
                 stale,
+                regions: &self.regions,
                 wanted_picks: RefCell::new(Vec::new()),
                 requested: RefCell::new(Vec::new()),
             };
@@ -1751,6 +1755,9 @@ struct RowsView<'a> {
     /// deleted. Their pictures are the ones already drawn for that version,
     /// dimmed; none is made for them.
     stale: bool,
+    /// The panel's region pool, which the *Crop* cells and their hover views
+    /// read their photographs through.
+    regions: &'a crate::patch_pictures::PanelRegionPool,
     /// The points whose crops wait for a reference pick, gathered as the
     /// cells are drawn on a frame whose rows have stopped changing.
     wanted_picks: RefCell<Vec<u32>>,
@@ -1992,13 +1999,17 @@ impl RowsView<'_> {
             view.point().position,
             ProjectionOf::Point,
         );
-        match crop::image(&outline, &pyramid) {
-            Some(picture) => Made::Crop {
+        // The cache's whole pyramid, read through the panel's pool: the crop
+        // reads only the pixels its texels take.
+        let source = TiledPhotograph::from_pyramid(pyramid);
+        match crop::image(&outline, &source, self.regions.pool()) {
+            Ok(Some(picture)) => Made::Crop {
                 picture: Box::new(picture),
                 outline: Box::new(outline),
                 image,
             },
-            None => Made::Absent(Absent::OffImage),
+            Ok(None) => Made::Absent(Absent::OffImage),
+            Err(_) => Made::Absent(Absent::Unreadable),
         }
     }
 
@@ -2071,10 +2082,17 @@ impl RowsView<'_> {
                 {
                     ui.label(egui::RichText::new(name).strong());
                 }
-                match pictures.crop_context(ui.ctx(), key, &pyramid) {
-                    Some(drawn) => drawn.show(ui),
-                    None => {
+                match pictures.crop_context(ui.ctx(), key, &pyramid, self.regions.pool()) {
+                    Ok(Some(drawn)) => drawn.show(ui),
+                    Ok(None) => {
                         ui.label("The photograph is being read again.");
+                    }
+                    Err(why) => {
+                        ui.set_max_width(320.0);
+                        ui.label(format!(
+                            "The photograph of the point's reference observation could not be \
+                             read: {why}"
+                        ));
                     }
                 }
             }

@@ -12,7 +12,9 @@
 
 use crate::camera::mipmap::PyramidLayout;
 use crate::camera::remap::{aniso_footprint, aniso_tap, bilinear_cell, mip_level_for_sigma};
+use crate::camera::warp_map::{parallelize_rows, REMAP_PAR_MIN_PIXELS};
 use crate::camera::WarpMap;
+use rayon::prelude::*;
 
 use super::{Sampler, MAX_ANISOTROPY};
 
@@ -150,6 +152,18 @@ impl LevelRegions {
         grown
     }
 
+    /// The regions of `self` and `other` together: each level's bounding box
+    /// of both.
+    fn union(mut self, other: Self) -> Self {
+        for (slot, theirs) in self.regions.iter_mut().zip(other.regions) {
+            *slot = match (*slot, theirs) {
+                (Some(a), Some(b)) => Some(a.union(b)),
+                (a, b) => a.or(b),
+            };
+        }
+        self
+    }
+
     /// Replace the region of `level`, for the tests that shrink one.
     #[cfg(test)]
     pub(crate) fn set_region(&mut self, level: usize, rect: LevelRect) {
@@ -236,12 +250,13 @@ pub fn required_regions(
     if sampler.needs_svd() && !map.has_svd() {
         map.compute_svd();
     }
-    let mut regions = LevelRegions::new(layout);
-    if regions.levels() == 0 {
-        return regions;
+    let empty = LevelRegions::new(layout);
+    if empty.levels() == 0 {
+        return empty;
     }
-    let num_levels = regions.levels();
-    for row in 0..map.height() {
+    let num_levels = empty.levels();
+    let map = &*map;
+    let add_row = |regions: &mut LevelRegions, row: u32| {
         for col in 0..map.width() {
             let (sx, sy) = map.get(col, row);
             if sx.is_nan() || sy.is_nan() {
@@ -258,8 +273,29 @@ pub fn required_regions(
                 Sampler::Anisotropic => regions.add_aniso(sx, sy, map.get_svd(col, row)),
             }
         }
+    };
+    // The regions are bounding boxes, so taking the rows in any grouping and
+    // order gives the same rectangles; the rows of a large map are walked on
+    // the rayon pool, as its render's are.
+    let pixels = map.width() as usize * map.height() as usize;
+    if parallelize_rows(pixels, REMAP_PAR_MIN_PIXELS) {
+        (0..map.height())
+            .into_par_iter()
+            .fold(
+                || empty.clone(),
+                |mut regions, row| {
+                    add_row(&mut regions, row);
+                    regions
+                },
+            )
+            .reduce(|| empty.clone(), LevelRegions::union)
+    } else {
+        let mut regions = empty;
+        for row in 0..map.height() {
+            add_row(&mut regions, row);
+        }
+        regions
     }
-    regions
 }
 
 #[cfg(test)]
