@@ -970,14 +970,28 @@ fn uploading_frame(
 /// A Crop cell and its hover view, drawn by whole frames through the panel's
 /// region pool and through a pool that holds nothing, so that every read
 /// takes the photograph's tiles, are the crop and hover view the whole
-/// pyramid gives, and the pool holds nothing once they are drawn.
+/// pyramid gives, and the pool holds nothing once they are drawn: for the
+/// point's patch as it is, read one texel per photograph pixel, and for it
+/// grown 40 times, read at a step that is not a whole number of pixels, so
+/// each texel blends four pixels with weights other than 0 and 1.
 #[test]
 fn crop_cells_drawn_through_regions_equal_the_whole_pyramid_crops() {
     use crate::patch_pictures::tests::whole_pyramid_pixels;
     let point = 1;
-    for panel_pool in [true, false] {
+    for (grown, panel_pool) in [(1.0, true), (1.0, false), (40.0, true), (40.0, false)] {
         let mut clock = Clock(0.0);
-        let (mut state, id) = crop_state();
+        let mut recon = crop_recon();
+        for half in [
+            recon.point_set.patch_u_halfvec_xyz.as_mut(),
+            recon.point_set.patch_v_halfvec_xyz.as_mut(),
+        ] {
+            let half = half.expect("patch frames");
+            for c in 0..3 {
+                half[[point as usize, c]] *= grown;
+            }
+        }
+        recon.rebuild_derived_fields();
+        let (mut state, id) = state_with(recon, &[0, 1, 2]);
         // Hashed pixels, so that a crop read from the wrong place, level or
         // channel differs from the right one.
         let camera = state.node(id).expect("loaded").recon().image_set.cameras[0].clone();
@@ -1022,6 +1036,14 @@ fn crop_cells_drawn_through_regions_equal_the_whole_pyramid_crops() {
             .cached_photograph(id, image)
             .expect("a cached photograph");
         let drawn = &uploaded[&texture];
+        let step = crop.size[0] as f64 / drawn.size[0] as f64;
+        assert_eq!(
+            step.fract() == 0.0,
+            grown == 1.0,
+            "a crop of {} px at {} texels",
+            crop.size[0],
+            drawn.size[0]
+        );
         assert!(
             *drawn == whole_pyramid_pixels(&src, crop, drawn.size, false),
             "the crop, panel pool {panel_pool}"
