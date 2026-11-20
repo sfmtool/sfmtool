@@ -2407,6 +2407,7 @@ fn search_geometry(
         &track.inner,
         observation,
         &views,
+        &RegionPool::for_kernel_call(),
         &options,
         &Progress::none(),
     )

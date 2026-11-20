@@ -8,10 +8,12 @@ use nalgebra::{Point3, Vector3};
 use super::*;
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use crate::camera::remap::{remap_aniso_with_pyramid, sample_bilinear_u8_all};
+use crate::camera::sampler::RegionPool;
 use crate::camera::sampler::MAX_ANISOTROPY;
 use crate::camera::WarpMap;
 use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::geometry::RigidTransform;
+use crate::patch::normal_refine::normalized_stack;
 
 // A small synthetic scene mirroring the normal_refine tests: pinhole cameras
 // (rotated 180° about X so the canonical −Z-forward camera looks down world +z) viewing a textured world plane at
@@ -188,9 +190,10 @@ fn params() -> ViewSelectParams {
 }
 
 /// [`select_patch_views`] under a progress that reports nothing and never
-/// cancels, which is what every test in this module wants: what they are about
-/// is the selection, and a `Result` at each of them would be noise. The
-/// cancellation path has its own test.
+/// cancels, over photographs in memory, which always read, which is what every
+/// test in this module wants: what they are about is the selection, and a
+/// `Result` at each of them would be noise. The cancellation path has its own
+/// test.
 #[track_caller]
 fn select(
     patch: &OrientedPatch,
@@ -202,12 +205,40 @@ fn select(
     select_patch_views(
         patch,
         views,
+        &RegionPool::for_kernel_call(),
         track_views,
         track_keypoints,
         params,
         &Progress::none(),
     )
-    .expect("Progress::none never cancels")
+    .expect("Progress::none never cancels and photographs in memory read")
+}
+
+/// [`build_reference`] over `track`, each track view read through a view of
+/// its own.
+fn reference_of(
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],
+    track: &[u32],
+    w_full: &[f64],
+    params: &ViewSelectParams,
+) -> Option<(Reference, f64)> {
+    let pool = RegionPool::for_kernel_call();
+    let mut regions: Vec<ViewRegions<'_>> = track
+        .iter()
+        .map(|&i| ViewRegions::new(views[i as usize].source, &pool))
+        .collect();
+    build_reference(
+        patch,
+        views,
+        track,
+        &mut regions,
+        None,
+        w_full,
+        params,
+        &Progress::none(),
+    )
+    .expect("photographs in memory read")
 }
 
 // --- Multi-channel (RGB) scene, for the A1 channel-alignment regression. ---
@@ -455,6 +486,7 @@ fn batch_matches_per_patch() {
     let batch = select_patch_cloud_views(
         &cloud,
         &views,
+        &RegionPool::for_kernel_call(),
         &track_views,
         None,
         &params(),
@@ -893,16 +925,8 @@ fn affine_vs_exact_score(sampler: Sampler) -> usize {
         ..params()
     };
     let w_full = window_weights(p.window, p.resolution);
-    let (reference, _agree) = build_reference(
-        &patch,
-        &views,
-        &[0, 1, 2],
-        None,
-        &w_full,
-        &p,
-        &Progress::none(),
-    )
-    .expect("track builds a reference");
+    let (reference, _agree) =
+        reference_of(&patch, &views, &[0, 1, 2], &w_full, &p).expect("track builds a reference");
     let single_ctx = LevelContext {
         kept: vec![0],
         pixels: reference.ctx.pixels.clone(),
@@ -918,9 +942,11 @@ fn affine_vs_exact_score(sampler: Sampler) -> usize {
     let (_, level) = affine_core_map(&patch, &views[3], p.resolution, sampler)
         .expect("the pinhole map must fit the affine bound on this fixture");
     let mut scratch = Vec::new();
+    let pool = RegionPool::for_kernel_call();
     let affine_score = candidate_zncc(
         &patch,
         &views[3],
+        &mut ViewRegions::new(views[3].source, &pool),
         &reference,
         &single_ctx,
         &sqrt_weights,
@@ -935,6 +961,7 @@ fn affine_vs_exact_score(sampler: Sampler) -> usize {
         ),
         &Progress::none(),
     )
+    .expect("a photograph in memory reads")
     .expect("candidate scores");
 
     // Exact leg, forced.
@@ -1046,8 +1073,7 @@ fn affine_mip_selection_matches_exact_selection() {
     let p = params();
     let w_full = window_weights(p.window, p.resolution);
     let (reference, _agree) =
-        build_reference(&patch, &views, &track, None, &w_full, &p, &Progress::none())
-            .expect("track builds a reference");
+        reference_of(&patch, &views, &track, &w_full, &p).expect("track builds a reference");
     let single_ctx = LevelContext {
         kept: vec![0],
         pixels: reference.ctx.pixels.clone(),
@@ -1507,6 +1533,7 @@ fn batch_with_all_none_keypoints_matches_unanchored() {
     let anchored = select_patch_cloud_views(
         &cloud,
         &views,
+        &RegionPool::for_kernel_call(),
         &track_views,
         Some(&kps),
         &params(),
@@ -1517,6 +1544,7 @@ fn batch_with_all_none_keypoints_matches_unanchored() {
     let plain = select_patch_cloud_views(
         &cloud,
         &views,
+        &RegionPool::for_kernel_call(),
         &track_views,
         None,
         &params(),
@@ -1565,6 +1593,7 @@ fn the_selector_reports_its_phases_and_cancels_instead_of_returning_a_partial_se
     let reported = select_patch_views(
         &patch,
         &views,
+        &RegionPool::for_kernel_call(),
         &track,
         None,
         &params(),
@@ -1593,8 +1622,17 @@ fn the_selector_reports_its_phases_and_cancels_instead_of_returning_a_partial_se
 
     let cancel = AtomicBool::new(true);
     let cancelled = Progress::none().cancelled_by(&cancel);
-    select_patch_views(&patch, &views, &track, None, &params(), &cancelled)
-        .expect_err("the set flag stops it before any selection is returned");
+    let error = select_patch_views(
+        &patch,
+        &views,
+        &RegionPool::for_kernel_call(),
+        &track,
+        None,
+        &params(),
+        &cancelled,
+    )
+    .expect_err("the set flag stops it before any selection is returned");
+    assert_eq!(error, PhotographReadError::Cancelled);
     assert!(cancel.load(Ordering::Relaxed));
 }
 

@@ -33,10 +33,12 @@ them into a patch normal without rendering anything. The stage is off by
 default.
 
 This document specifies the kernel: `sfmtool-core`'s `patch::cluster_refine`,
-its PyO3 binding, and the numerics. The kernel is pure — no I/O, no `.sift`
-reads. The caller hands it decoded image pyramids, the SIFT geometry of every
-image, and the clusters in CSR form; it hands back member-parallel arrays that
-map 1:1 onto the `cluster_patches/` section. The motivation, the rejected
+its PyO3 binding, and the numerics. The kernel does no I/O and reads no
+`.sift` file. The caller hands it the photographs as tiled photographs
+([view-region-pyramids.md](../camera/view-region-pyramids.md)) with the region
+pool for the call, the SIFT geometry of every image, and the clusters in CSR
+form; it hands back member-parallel arrays that map 1:1 onto the
+`cluster_patches/` section. The motivation, the rejected
 alternatives and the measured calibration behind the defaults live in
 [cluster-patches.md](cluster-patches.md); the on-disk sections are specified
 normatively in
@@ -120,29 +122,33 @@ pub struct ClusterRefineResult {
 }
 
 pub fn refine_cluster_patches(
-    pyramids: &[ImageU8Pyramid],
-    features: &[FeatureGeometry<'_>],   // parallel to `pyramids`
+    sources: &[TiledPhotograph],
+    pool: &RegionPool,                  // the caller's, for this call
+    features: &[FeatureGeometry<'_>],   // parallel to `sources`
     cluster_starts: &[u32],             // (C+1,) CSR
     member_images: &[u32],              // (M,)
     member_features: &[u32],            // (M,)
     params: &ClusterRefineParams,
     progress: Option<&AtomicUsize>,     // one tick per finished cluster
-) -> ClusterRefineResult;
+) -> Result<ClusterRefineResult, PhotographReadError>;
 
-/// The same kernel over borrowed pyramids, for a caller that holds each
-/// image's pyramid behind a reference rather than in a table of its own.
+/// The same kernel over borrowed photographs, for a caller that holds each
+/// image's photograph behind a reference rather than in a table of its own.
 pub fn refine_cluster_patches_borrowed(
-    pyramids: &[&ImageU8Pyramid],
-    features: &[FeatureGeometry<'_>],   // parallel to `pyramids`
+    sources: &[&TiledPhotograph],
+    pool: &RegionPool,
+    features: &[FeatureGeometry<'_>],   // parallel to `sources`
     cluster_starts: &[u32],
     member_images: &[u32],
     member_features: &[u32],
     params: &ClusterRefineParams,
     progress: Option<&AtomicUsize>,
-) -> ClusterRefineResult;
+) -> Result<ClusterRefineResult, PhotographReadError>;
 
-/// One member's own `R×R` grid at a position and affine shape: what the
-/// member gate reads.
+/// One member's own `R×R` grid at a position and affine shape, from a whole
+/// pyramid: what the member gate reads. The kernel reads it through
+/// `sample_source_member_grid`
+/// ([view-region-pyramids.md](../camera/view-region-pyramids.md)).
 pub fn sample_member_grid(
     pyramid: &ImageU8Pyramid, position: [f64; 2], affine_shape: [[f64; 2]; 2],
     params: &ClusterRefineParams,
@@ -196,21 +202,27 @@ pub fn warp_consistency_residuals(
 ) -> Vec<f32>;
 ```
 
-**Why this shape.** Pyramids and borrowed feature views rather than file paths,
-because decoding and `.sift` reading belong to the orchestration layer that
-already holds both — the separation `ProjectedImage` gives the other patch
-kernels. Three flat CSR arrays in and member-parallel vectors out, rather than
-anything nested, because that is the shape the clusters have on disk, in the
-matcher's in-memory cluster set and in numpy; nesting would be repacked at every
-boundary. `refine_cluster_patches_borrowed` takes `&[&ImageU8Pyramid]` because
-cloning a pyramid copies every pixel of a decoded image: the bench's evaluation
-registers an in-memory cluster over the pyramids of the `ProjectedImage`s the
-patch kernels already read, and would otherwise have to copy them into a table
-it owns. `refine_cluster_patches` calls it, so the two return the same result
-and panic on the same inputs. Nothing returns a `Result` — a member that
-cannot be evaluated is *data* (`NotEvaluated`, `RejectedUnlocalizable`, …), and
-the failures that remain are caller bugs (non-parallel inputs, malformed CSR),
-which assert.
+**Why this shape.** Tiled photographs and borrowed feature views rather than
+file paths, because decoding and `.sift` reading belong to the orchestration
+layer that already holds both — the separation `ProjectedImage` gives the other
+patch kernels. Every read of a photograph goes through the render entry points
+with the region pool the caller made for the call
+([view-region-pyramids.md](../camera/view-region-pyramids.md) § "Rust API"), so
+the kernel holds the regions its reads need rather than whole pyramids, and its
+results are the same, bit for bit, whichever way a read reaches its pixels.
+Three flat CSR arrays in and member-parallel vectors out, rather than anything
+nested, because that is the shape the clusters have on disk, in the matcher's
+in-memory cluster set and in numpy; nesting would be repacked at every
+boundary. `refine_cluster_patches_borrowed` takes `&[&TiledPhotograph]`
+because the bench's evaluation registers an in-memory cluster over the
+photographs of the `ProjectedImage`s the patch kernels already read, and would
+otherwise have to build a table it owns. `refine_cluster_patches` calls it, so
+the two return the same result and panic on the same inputs. A member that
+cannot be evaluated is *data* (`NotEvaluated`, `RejectedUnlocalizable`, …), not
+an error; the one error is a read of a photograph that failed, the first one's
+`PhotographReadError`, returned in place of the result, which a photograph
+made in memory gives only for pixels it does not hold. The failures that
+remain are caller bugs (non-parallel inputs, malformed CSR), which assert.
 `warp_consistency_residuals` stands apart from the result because it is a fit
 over a whole refined cluster set, and a caller that only wants warps should not
 pay for it. The member-grid sampler and the radius are public so the bench
@@ -222,13 +234,15 @@ holding the stored readings can re-gate at another bar with the kernel's own
 rule; the readings are in the result whether or not they refused the member.
 
 ```rust
-use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::image::ImageU8;
+use sfmtool_core::camera::sampler::RegionPool;
+use sfmtool_core::camera::TiledPhotograph;
 use sfmtool_core::patch::cluster_refine::{
     refine_cluster_patches, ClusterRefineParams, FeatureGeometry, MemberStatus,
 };
 
-let pyramids: Vec<ImageU8Pyramid> =
-    images.iter().map(|im: &ImageU8| ImageU8Pyramid::build(im, 5)).collect();
+let photographs: Vec<TiledPhotograph> =
+    images.into_iter().map(|im: ImageU8| TiledPhotograph::from_image(im)).collect();
 // One entry per image, borrowing that image's (N, 2) and (N, 2, 2) f32 `.sift`
 // arrays.
 let features: Vec<FeatureGeometry<'_>> = sift
@@ -240,14 +254,15 @@ let features: Vec<FeatureGeometry<'_>> = sift
     .collect();
 
 let out = refine_cluster_patches(
-    &pyramids,
+    &photographs,
+    &RegionPool::for_kernel_call(),
     &features,
     &[0u32, 3, 5],           // two clusters: members 0..3 and 3..5
     &[0u32, 1, 2, 0, 3],     // member images
     &[17u32, 42, 8, 91, 5],  // member features
     &ClusterRefineParams::default(),
     None,
-);
+)?;
 
 // Member 1's image-space extent and refined position, if it survived vetting.
 if out.member_status[1] == MemberStatus::Kept {
@@ -342,7 +357,9 @@ let params = ClusterRefineParams {
     piecewise: Some(PiecewiseParams::default()), // the loop moves the shape
     ..ClusterRefineParams::default()
 };
-let out = refine_cluster_patches(&pyramids, &features, &starts, &images, &feats, &params, None);
+let pool = RegionPool::for_kernel_call();
+let out =
+    refine_cluster_patches(&photographs, &pool, &features, &starts, &images, &feats, &params, None)?;
 if let Some(cells) = &out.cells[1] {
     let middle = cells.shift_px[1][1];          // grid px from the stored shape
     let trusted = cells.status[1][1] == CellStatus::Fitted;
@@ -1068,12 +1085,36 @@ the format's validator, in one change. `CellStatus` and
 converts one to the other, and a test checks that the codes agree.
 
 **The tile bound is the frame test.** Each evaluation samples through a
-per-(member, level) tile: a planar f32 copy of the touched region of that pyramid
-level, built once when the level is first reached and grown lazily to cover each
-evaluation's bounding box. Because the tile is always a subset of the image and
-always covers the evaluation's *clipped* footprint, an out-of-tile tap is exactly
-an out-of-frame tap — the lane-bounds test doubles as the all-in-frame test and
-as the early-out, and the hot loop needs no separate image-bounds check.
+per-(member, level) tile (`LevelTile`): a planar f32 copy of the touched region of
+that pyramid level, built once when the level is first reached and grown lazily
+to cover each evaluation's bounding box. Because the tile is always a subset of
+the image and always covers the evaluation's *clipped* footprint, an out-of-tile
+tap is exactly an out-of-frame tap — the lane-bounds test doubles as the
+all-in-frame test and as the early-out, and the hot loop needs no separate
+image-bounds check.
+
+**The tile's rectangle is the algorithm's, and only its pixels are read
+through the pool.** The rectangle is the affine image of the grid's corners at
+the level `level_for_map` picks, floored and ceiled and widened by 2 px
+(`grid_bbox`), joined with the rectangle already held and widened by
+`TILE_MARGIN` (8 px) when that does not cover it, and clipped to the level, whose
+size comes from the photograph's layout. The scores depend on it, since the
+evaluation's coordinates are relative to its corner and its values to its mean,
+so it is worked out the same way whatever the photograph's tiling. Its pixels
+are read with `read_source_rect`, which reserves the rectangle's bytes from the
+call's pool and copies it, or reads it out of the photograph's tiles when the
+pool is full; either way the tile converts and centres the same pixels in the
+same order, and keeps the `SourceRect`, so the bytes stay reserved while the
+tile lives. A tile that grows is dropped before its replacement is read, which
+gives its bytes back first. The evaluation has no tile path of its own, since
+its AVX2 form agrees with the scalar one only to about `1e-4`. A member's other
+reads -- its gate grid, the template when it is a candidate reference, its grid
+at the refined shape and the piecewise stage's working patches -- go through
+`sample_source_grid` with one `ViewRegions` per member, which they share and
+which is dropped when the cluster is done. A read that fails stops its cluster:
+the cascade's objective and the piecewise loop's renders and scores keep the
+first failure, score worst after it without reading, and return it once the
+stage stops.
 
 **The elongation limit bounds each tile request.** The level comes from
 `s_min`, so at its level the map's singular values are under 2 and under
@@ -1309,8 +1350,11 @@ Argument names match the Rust ones. Parallel-list lengths, per-image array
 shapes, CSR self-consistency and the `member_images` range raise `ValueError`
 before the GIL is released; out-of-range `member_features` and degenerate shapes
 are data, not errors, and reach the caller as `not_evaluated`. Pyramids are built
-through `patches::views::build_pyramids_from_image_list`, and the kernel runs
-under `py.detach`.
+through `patches::views::build_pyramids_from_image_list` and each read in place
+as a tiled photograph, the pixels `TiledPhotograph::from_image` builds; the
+kernel runs under `py.detach` with a region pool made for the call, and a
+photograph read that fails, which arrays in memory never do, raises
+`ValueError` with the read's message.
 
 The returned dict is member-parallel: `reference_members` `(C,)` uint32
 (`0xFFFFFFFF` = unrefinable), `member_status` `(M,)` uint8,
@@ -1447,6 +1491,18 @@ working patch given as interleaved samples: a render shifted by a known
 sub-pixel offset registers every cell at that offset and fits an affine
 update through them, and the ZNCC bar, the search bound and a flat reference
 each refuse every cell.
+
+[patch/region_read_tests.rs](../../../crates/sfmtool-core/src/patch/region_read_tests.rs)
+runs the kernel, with the piecewise stage moving the shape, over the
+seoul_bull ground truth's first 40 points (one cluster per point, its members
+the track's observations at their keypoints, shaped by the projected patch
+frame) three ways on one thread: over the photographs as decoded through a
+pool every read fits in, over 32 px tiles through an empty pool, and through
+a pool of half the first run's peak, where some reads copy their regions and
+others take the tiles, and checks that the results are the same bit for bit,
+that no pool holds more than its capacity, and that every pool has its bytes
+back once the call returns; a photograph holding none of the pixels a read
+needs fails the call with its `OutOfRange` error, through either pool.
 
 `consistency/tests.rs` covers the residual fit (oracle cameras fit exactly,
 absolute shapes reproduce the relative-warp residuals, a contaminated member

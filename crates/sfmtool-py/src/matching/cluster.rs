@@ -6,6 +6,7 @@
 //! `specs/core/patch/cluster-patch-refinement.md`).
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use ndarray::{ArrayView2, ArrayView3};
 use numpy::{
@@ -15,6 +16,8 @@ use numpy::{
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use sfmtool_core::camera::sampler::RegionPool;
+use sfmtool_core::camera::TiledPhotograph;
 use sfmtool_core::features::cluster_match::{self, BackgroundFloorParams, Clusters};
 use sfmtool_core::patch::cluster_refine::{
     member_cell_data, refine_cluster_patches as core_refine_cluster_patches,
@@ -648,11 +651,16 @@ pub fn refine_cluster_patches<'py>(
     };
 
     // Decode images and build the pyramids (rayon, GIL-free); the cluster
-    // path has no reconstruction, so there is no camera-dimension check.
-    let pyramids = build_pyramids_from_image_list(py, &images, |_, _| Ok(()))?;
+    // path has no reconstruction, so there is no camera-dimension check. Each
+    // is read as a tiled photograph, the pixels `TiledPhotograph::from_image`
+    // builds.
+    let sources: Vec<TiledPhotograph> = build_pyramids_from_image_list(py, &images, |_, _| Ok(()))?
+        .into_iter()
+        .map(|pyramid| TiledPhotograph::from_pyramid(Arc::new(pyramid)))
+        .collect();
 
     let progress_handle = progress.as_ref().map(|p| p.handle());
-    let (result, consistency) = py.detach(|| {
+    let (result, consistency) = py.detach(|| -> PyResult<_> {
         let features: Vec<FeatureGeometry<'_>> = pos_data
             .iter()
             .zip(&aff_data)
@@ -664,14 +672,16 @@ pub fn refine_cluster_patches<'py>(
             })
             .collect();
         let result = core_refine_cluster_patches(
-            &pyramids,
+            &sources,
+            &RegionPool::for_kernel_call(),
             &features,
             &starts,
             &m_images,
             &m_features,
             &params,
             progress_handle.as_deref(),
-        );
+        )
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         let consistency = warp_consistency_residuals(
             &starts,
             &m_images,
@@ -680,8 +690,8 @@ pub fn refine_cluster_patches<'py>(
             result.member_affine_shapes.view(),
             n_images,
         );
-        (result, consistency)
-    });
+        Ok((result, consistency))
+    })?;
 
     let dict = PyDict::new(py);
     dict.set_item(

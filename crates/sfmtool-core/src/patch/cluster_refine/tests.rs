@@ -4,9 +4,11 @@
 //! Tests for cluster-patch refinement: synthetic warp recovery, the vetting
 //! gates, determinism, and AVX2-vs-scalar equivalence.
 
+use std::sync::Arc;
+
 use super::kernels::{eval_zncc_scalar, SupportTables, TileCache};
 use super::*;
-use crate::camera::image::{ImageU8, ImageU8Pyramid};
+use crate::camera::image::{ImageU8, ImageU8Pyramid, PyramidLevel};
 use ndarray::{Array2, Array3 as NdArray3};
 
 /// Band-limited analytic texture in `[2, 252]` (no u8 clipping).
@@ -50,6 +52,62 @@ fn make_image(w: u32, h: u32, f: impl Fn(f64, f64) -> f64) -> ImageU8 {
 
 fn pyramid(img: &ImageU8) -> ImageU8Pyramid {
     ImageU8Pyramid::build(img, 6)
+}
+
+/// [`pyramid`] of `img`, read in place as a tiled photograph.
+fn photograph(img: &ImageU8) -> TiledPhotograph {
+    TiledPhotograph::from_pyramid(Arc::new(pyramid(img)))
+}
+
+/// [`refine_cluster_patches`] over photographs in memory, which always read,
+/// through a pool for the call.
+fn refine_sources(
+    sources: &[TiledPhotograph],
+    features: &[FeatureGeometry<'_>],
+    cluster_starts: &[u32],
+    member_images: &[u32],
+    member_features: &[u32],
+    params: &ClusterRefineParams,
+    progress: Option<&AtomicUsize>,
+) -> ClusterRefineResult {
+    refine_cluster_patches(
+        sources,
+        &RegionPool::for_kernel_call(),
+        features,
+        cluster_starts,
+        member_images,
+        member_features,
+        params,
+        progress,
+    )
+    .expect("photographs in memory read")
+}
+
+/// [`refine_cluster_patches_with_elongation_limit`] over photographs in
+/// memory, which always read, through a pool for the call.
+#[allow(clippy::too_many_arguments)]
+fn refine_sources_with_elongation_limit(
+    sources: &[&TiledPhotograph],
+    features: &[FeatureGeometry<'_>],
+    cluster_starts: &[u32],
+    member_images: &[u32],
+    member_features: &[u32],
+    params: &ClusterRefineParams,
+    max_elongation: f64,
+    progress: Option<&AtomicUsize>,
+) -> ClusterRefineResult {
+    refine_cluster_patches_with_elongation_limit(
+        sources,
+        &RegionPool::for_kernel_call(),
+        features,
+        cluster_starts,
+        member_images,
+        member_features,
+        params,
+        max_elongation,
+        progress,
+    )
+    .expect("photographs in memory read")
 }
 
 /// Owned per-image feature arrays (so tests can build borrowed
@@ -210,8 +268,8 @@ fn run_recovery_case_limited(
         ImageFeatures::new(&[(pos_ref, a_ref)]),
         ImageFeatures::new(&[(pos_mem, a_mem)]),
     ];
-    let pyramids = [pyramid(&img1), pyramid(&img2)];
-    let result = refine_cluster_patches_with_elongation_limit(
+    let pyramids = [photograph(&img1), photograph(&img2)];
+    let result = refine_sources_with_elongation_limit(
         &[&pyramids[0], &pyramids[1]],
         &geometry(&feats),
         &[0, 2],
@@ -381,8 +439,8 @@ fn gate_low_zncc_rejects_flat_member() {
         ImageFeatures::new(&[([64.0, 64.0], a)]),
         ImageFeatures::new(&[([64.0, 64.0], a)]),
     ];
-    let pyramids = [pyramid(&img1), pyramid(&img2)];
-    let result = refine_cluster_patches(
+    let pyramids = [photograph(&img1), photograph(&img2)];
+    let result = refine_sources(
         &pyramids,
         &geometry(&feats),
         &[0, 2],
@@ -412,8 +470,8 @@ fn gate_unlocalizable_member_excluded() {
         ImageFeatures::new(&[([64.0, 64.0], a)]),
         ImageFeatures::new(&[([64.0, 64.0], a)]),
     ];
-    let pyramids = [pyramid(&img1), pyramid(&img2)];
-    let result = refine_cluster_patches(
+    let pyramids = [photograph(&img1), photograph(&img2)];
+    let result = refine_sources(
         &pyramids,
         &geometry(&feats),
         &[0, 2],
@@ -444,8 +502,8 @@ fn gate_unlocalizable_member_cannot_be_reference() {
         ImageFeatures::new(&[([64.0, 64.0], a)]),
         ImageFeatures::new(&[([64.0, 64.0], a)]),
     ];
-    let pyramids = [pyramid(&img_flat), pyramid(&img), pyramid(&img)];
-    let result = refine_cluster_patches(
+    let pyramids = [photograph(&img_flat), photograph(&img), photograph(&img)];
+    let result = refine_sources(
         &pyramids,
         &geometry(&feats),
         &[0, 3],
@@ -477,8 +535,8 @@ fn gate_scores_border_member_with_clamped_sampling() {
         ImageFeatures::new(&[([64.0, 64.0], a)]),
         ImageFeatures::new(&[([3.0, 64.0], a)]),
     ];
-    let pyramids = [pyramid(&img1), pyramid(&img2)];
-    let result = refine_cluster_patches(
+    let pyramids = [photograph(&img1), photograph(&img2)];
+    let result = refine_sources(
         &pyramids,
         &geometry(&feats),
         &[0, 2],
@@ -490,8 +548,8 @@ fn gate_scores_border_member_with_clamped_sampling() {
     assert_eq!(result.member_status[1], MemberStatus::RejectedUnlocalizable);
     // A textured border member passes the gate and proceeds to the seed
     // frame gate (NotEvaluated), exactly as before.
-    let pyramids = [pyramid(&img1), pyramid(&img1)];
-    let result = refine_cluster_patches(
+    let pyramids = [photograph(&img1), photograph(&img1)];
+    let result = refine_sources(
         &pyramids,
         &geometry(&feats),
         &[0, 2],
@@ -617,12 +675,12 @@ fn the_member_gate_refuses_flat_and_edge_members_at_the_default() {
             ImageFeatures::new(&[([64.0, 64.0], a)]),
         ];
         let pyramids = [
-            pyramid(&make_image(128, 128, texture)),
-            pyramid(&make_image(128, 128, texture)),
-            pyramid(&make_image(128, 128, edge)),
-            pyramid(&make_image(128, 128, |_, _| 127.0)),
+            photograph(&make_image(128, 128, texture)),
+            photograph(&make_image(128, 128, texture)),
+            photograph(&make_image(128, 128, edge)),
+            photograph(&make_image(128, 128, |_, _| 127.0)),
         ];
-        refine_cluster_patches(
+        refine_sources(
             &pyramids,
             &geometry(&feats),
             &[0, 4],
@@ -703,8 +761,8 @@ fn gate_shift_rejects_drifted_seed() {
         ImageFeatures::new(&[([64.0, 64.0], a)]),
         ImageFeatures::new(&[([65.5, 64.0], a)]),
     ];
-    let pyramids = [pyramid(&img), pyramid(&img)];
-    let result = refine_cluster_patches(
+    let pyramids = [photograph(&img), photograph(&img)];
+    let result = refine_sources(
         &pyramids,
         &geometry(&feats),
         &[0, 2],
@@ -748,8 +806,8 @@ fn shift_gate_reads_the_member_s_refined_scale() {
             ImageFeatures::new(&[([64.0, 64.0], a)]),
             ImageFeatures::new(&[([65.5, 64.0], a)]),
         ];
-        let pyramids = [pyramid(&img), pyramid(&img)];
-        let result = refine_cluster_patches(
+        let pyramids = [photograph(&img), photograph(&img)];
+        let result = refine_sources(
             &pyramids,
             &geometry(&feats),
             &[0, 2],
@@ -805,8 +863,8 @@ fn gate_out_of_frame_member_not_evaluated() {
         ImageFeatures::new(&[([64.0, 64.0], a)]),
         ImageFeatures::new(&[([3.0, 64.0], a)]),
     ];
-    let pyramids = [pyramid(&img), pyramid(&img)];
-    let result = refine_cluster_patches(
+    let pyramids = [photograph(&img), photograph(&img)];
+    let result = refine_sources(
         &pyramids,
         &geometry(&feats),
         &[0, 2],
@@ -829,8 +887,8 @@ fn gate_all_references_out_of_frame_is_unrefinable() {
         ImageFeatures::new(&[([3.0, 64.0], a)]),
         ImageFeatures::new(&[([64.0, 3.0], a)]),
     ];
-    let pyramids = [pyramid(&img), pyramid(&img)];
-    let result = refine_cluster_patches(
+    let pyramids = [photograph(&img), photograph(&img)];
+    let result = refine_sources(
         &pyramids,
         &geometry(&feats),
         &[0, 2],
@@ -853,8 +911,8 @@ fn gate_degenerate_cluster_not_evaluated() {
         ImageFeatures::new(&[([64.0, 64.0], [[2.5, 0.0], [0.0, 2.5]])]),
         ImageFeatures::new(&[([64.0, 64.0], [[0.0, 0.0], [0.0, 0.0]])]),
     ];
-    let pyramids = [pyramid(&img), pyramid(&img)];
-    let result = refine_cluster_patches(
+    let pyramids = [photograph(&img), photograph(&img)];
+    let result = refine_sources(
         &pyramids,
         &geometry(&feats),
         &[0, 2],
@@ -881,10 +939,10 @@ fn one_kept_member_per_image() {
         ImageFeatures::new(&[([64.0, 64.0], a), ([70.0, 70.0], a_small)]),
         ImageFeatures::new(&[([64.0, 64.0], a_small), ([64.5, 64.0], a_small)]),
     ];
-    let pyramids = [pyramid(&img), pyramid(&img)];
+    let pyramids = [photograph(&img), photograph(&img)];
     // Members: (img0, f0) = reference (largest scale), (img0, f1) shares the
     // reference's image, (img1, f0) and (img1, f1) compete for image 1.
-    let result = refine_cluster_patches(
+    let result = refine_sources(
         &pyramids,
         &geometry(&feats),
         &[0, 4],
@@ -946,7 +1004,8 @@ fn avx2_matches_scalar_scores() {
         let support = build_support(params.window, resolution);
         let tables = SupportTables::new(&support, resolution);
         let img = make_image(128, 128, texture);
-        let pyr = pyramid(&img);
+        let source = photograph(&img);
+        let pool = RegionPool::for_kernel_call();
         let geo = MemberGeo {
             k_global: 0,
             image: 0,
@@ -956,7 +1015,10 @@ fn avx2_matches_scalar_scores() {
         };
         let step = 2.0 * params.radius / resolution as f64;
         let off = 0.5 * step - params.radius;
-        let tmpl = build_template(&pyr, &geo, &support, &tables, resolution, step, off).unwrap();
+        let mut view = ViewRegions::new(&source, &pool);
+        let tmpl = build_template(&mut view, &geo, &support, &tables, resolution, step, off)
+            .unwrap()
+            .unwrap();
 
         // Score a spread of perturbed warps through both paths.
         let mut tiles = TileCache::default();
@@ -970,10 +1032,13 @@ fn avx2_matches_scalar_scores() {
             let id = [[1.0 + d[0][0], d[0][1]], [d[1][0], 1.0 + d[1][1]]];
             let b = mul2(&id, &geo.a);
             let map = warp_map(geo.pos, t, &b, step, off);
-            let level = level_for_map(&map, pyr.num_levels());
+            let level = level_for_map(&map, source.layout().levels());
             let lmap = map_at_level(&map, level);
             let bbox = super::kernels::grid_bbox(&lmap, resolution);
-            let tile = tiles.get_or_build(&pyr, level, bbox).unwrap();
+            let tile = tiles
+                .get_or_build(&source, &pool, level, bbox)
+                .unwrap()
+                .unwrap();
             let a32 = {
                 let a = &lmap.a;
                 [
@@ -1132,10 +1197,10 @@ fn run_pair(f: fn(f64, f64) -> f64, params: &ClusterRefineParams) -> ClusterRefi
         ImageFeatures::new(&[([64.0, 64.0], a)]),
     ];
     let pyramids = [
-        pyramid(&make_image(128, 128, f)),
-        pyramid(&make_image(128, 128, f)),
+        photograph(&make_image(128, 128, f)),
+        photograph(&make_image(128, 128, f)),
     ];
-    refine_cluster_patches(
+    refine_sources(
         &pyramids,
         &geometry(&feats),
         &[0, 2],
@@ -1219,16 +1284,16 @@ fn run_defocused_member(params: &ClusterRefineParams) -> (ClusterRefineResult, I
     let zoom = 1.4;
     let a_ref = [[2.5 * zoom, 0.0], [0.0, 2.5 * zoom]];
     let seed = [[2.5 * 1.35, 0.0], [0.0, 2.5 * 1.35]];
-    let reference = pyramid(&make_image(128, 128, move |x, y| {
+    let reference = photograph(&make_image(128, 128, move |x, y| {
         texture(64.0 + (x - 64.0) / zoom, 64.0 + (y - 64.0) / zoom)
     }));
-    let member = pyramid(&make_image(128, 128, defocused_texture));
+    let member = photograph(&make_image(128, 128, defocused_texture));
     let member_again = pyramid(&make_image(128, 128, defocused_texture));
     let feats = [
         ImageFeatures::new(&[([64.0, 64.0], a_ref)]),
         ImageFeatures::new(&[([64.0, 64.0], seed)]),
     ];
-    let result = refine_cluster_patches(
+    let result = refine_sources(
         &[reference, member],
         &geometry(&feats),
         &[0, 2],
@@ -1329,8 +1394,8 @@ fn run_turned_member_limited(
         ImageFeatures::new(&[(centre, a_ref)]),
         ImageFeatures::new(&[(centre, a_ref)]),
     ];
-    let pyramids = [pyramid(&img1), pyramid(&img2)];
-    let result = refine_cluster_patches_with_elongation_limit(
+    let pyramids = [photograph(&img1), photograph(&img2)];
+    let result = refine_sources_with_elongation_limit(
         &[&pyramids[0], &pyramids[1]],
         &geometry(&feats),
         &[0, 2],
@@ -1751,9 +1816,9 @@ fn run_elongated_members(members: &[(Mat2, Mat2)]) -> ClusterRefineResult {
         images.push(shaped_image(96, 640, mem_centre, truth));
         feats.push(ImageFeatures::new(&[(mem_centre, *seed)]));
     }
-    let pyramids: Vec<ImageU8Pyramid> = images.iter().map(pyramid).collect();
+    let pyramids: Vec<TiledPhotograph> = images.iter().map(photograph).collect();
     let n = members.len() as u32 + 1;
-    refine_cluster_patches(
+    refine_sources(
         &pyramids,
         &geometry(&feats),
         &[0, n],
@@ -1834,4 +1899,98 @@ fn a_cascade_driven_past_the_elongation_limit_retreats_within_it() {
     let e = stored_elongation(&r, 1);
     assert!(e <= MAX_PATCH_ELONGATION, "returned elongation {e}");
     assert!(e > 15.5, "the cascade did not move towards the limit: {e}");
+}
+
+// ── A read that fails inside the cascade ────────────────────────────────────
+
+/// The template grid's map at `shape` reads level 1 above this scale and
+/// level 0 below it: the map's singular values are the shape's times the
+/// grid step, and level 1 starts where they reach 2.
+fn level_one_scale(params: &ClusterRefineParams) -> f64 {
+    2.0 / (2.0 * params.radius / params.resolution.max(2) as f64)
+}
+
+/// `pyramid` holding its level 1 whole and, of every other level, only an 8
+/// px square in the corner of level 0: a read of level 1 succeeds and a read
+/// near the middle of level 0 asks for pixels it does not hold.
+fn level_one_only(pyramid: &ImageU8Pyramid) -> TiledPhotograph {
+    let corner = |l: usize, side: u32| {
+        let full = pyramid.level(l);
+        let c = full.channels();
+        let stride = full.width() as usize * c as usize;
+        let mut data = Vec::new();
+        for row in 0..side as usize {
+            data.extend_from_slice(&full.data()[row * stride..][..side as usize * c as usize]);
+        }
+        PyramidLevel {
+            image: ImageU8::new(side, side, c, data),
+            origin: [0, 0],
+            full_size: pyramid.level_full_size(l),
+        }
+    };
+    let level_one = pyramid.level(1);
+    let mut levels: Vec<Option<PyramidLevel>> = (0..pyramid.num_levels()).map(|_| None).collect();
+    levels[0] = Some(corner(0, 8));
+    levels[1] = Some(corner(1, level_one.width()));
+    TiledPhotograph::from_pyramid(Arc::new(
+        ImageU8Pyramid::from_regions(levels).expect("a valid region pyramid"),
+    ))
+}
+
+/// A reference and a member of one cluster whose member gate and template
+/// read level 1, and whose cascade, from a seed just above the level boundary
+/// toward a truth just below it, evaluates maps on level 0. `member` is the
+/// member's photograph; the reference's is whole.
+fn cascade_across_levels(
+    member: impl FnOnce(&ImageU8Pyramid) -> TiledPhotograph,
+) -> Result<ClusterRefineResult, PhotographReadError> {
+    let params = ClusterRefineParams::default();
+    let boundary = level_one_scale(&params);
+    let (s_ref, s_true, s_seed) = (1.1 * boundary, 0.94 * boundary, 1.02 * boundary);
+    let reference = make_image(128, 128, texture);
+    let zoom = s_ref / s_true;
+    let member_image = make_image(128, 128, move |x, y| {
+        texture(64.0 + (x - 64.0) * zoom, 64.0 + (y - 64.0) * zoom)
+    });
+    let feats = [
+        ImageFeatures::new(&[([64.0, 64.0], [[s_ref, 0.0], [0.0, s_ref]])]),
+        ImageFeatures::new(&[([64.0, 64.0], [[s_seed, 0.0], [0.0, s_seed]])]),
+    ];
+    let sources = [photograph(&reference), member(&pyramid(&member_image))];
+    refine_cluster_patches(
+        &sources,
+        &RegionPool::for_kernel_call(),
+        &geometry(&feats),
+        &[0, 2],
+        &[0, 1],
+        &[0, 0],
+        &params,
+        None,
+    )
+}
+
+/// A read of a `LevelTile` that fails in the cascade, after the member gate,
+/// the template and the cascade's first evaluations have read, is the
+/// kernel's error rather than a worst score the simplex retreats from.
+#[test]
+fn a_tile_read_that_fails_in_the_cascade_fails_the_call() {
+    // With the whole photograph the member is refined to a shape whose map
+    // reads level 0, so the cascade's evaluations reach it.
+    let boundary = level_one_scale(&ClusterRefineParams::default());
+    let whole = cascade_across_levels(|p| {
+        TiledPhotograph::from_pyramid(Arc::new(ImageU8Pyramid::build(p.level(0), 6)))
+    });
+    let whole = whole.expect("photographs in memory read");
+    assert_eq!(whole.reference_members[0], 0);
+    assert_eq!(whole.member_status[1], MemberStatus::Kept);
+    let s = whole.member_affine_shapes.index_axis(ndarray::Axis(0), 1);
+    let (_, s_min) = singular_values(s[[0, 0]], s[[0, 1]], s[[1, 0]], s[[1, 1]]);
+    assert!(s_min < boundary, "the refined shape {s:?} reads level 0");
+
+    let lacking = cascade_across_levels(level_one_only);
+    let error = lacking.err().expect("level 0 of the member cannot be read");
+    assert!(
+        matches!(error, PhotographReadError::OutOfRange { .. }),
+        "{error}"
+    );
 }

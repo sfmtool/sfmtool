@@ -2096,3 +2096,31 @@ fn a_bench_step_notes_how_its_reads_reached_their_pixels() {
     assert!(assembled + reused > 1, "{note}");
     assert_eq!(tiled, 0, "{note}");
 }
+
+/// The geometry search makes the region pool for its view selection and notes
+/// how the selection's reads reached their pixels: the fixture's track views
+/// and its candidate read through copied regions, which the pool of
+/// `RegionPool::for_kernel_call` holds.
+#[test]
+fn the_geometry_search_notes_how_its_reads_reached_their_pixels() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    let job = state
+        .bench_geometry_search_job(id, &label, 0)
+        .expect("the fixture has a framed track and decoded photographs");
+    let collector = crate::progress::Collector::new(false);
+    let finished = job(&collector.progress());
+    assert!(
+        matches!(finished, Finished::BenchTrack { .. }),
+        "the search ran"
+    );
+    let note = crate::test_support::phase_note(&collector.take(), "read regions")
+        .expect("a read regions note");
+    let assembled: u64 = note
+        .split(' ')
+        .next()
+        .and_then(|n| n.parse().ok())
+        .expect("the note opens with its count");
+    assert!(assembled > 0, "{note}");
+    assert!(note.ends_with(", 0 reads on tiles"), "{note}");
+}

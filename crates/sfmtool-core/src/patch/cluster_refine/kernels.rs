@@ -12,13 +12,15 @@
 //! the shape of `keypoint_localize::search_shift`'s three-map accumulation,
 //! transplanted from integer shifts to gathered affine samples. Sources are
 //! read from a [`LevelTile`]: a **centered** planar-f32 copy of the touched
-//! pyramid-level region, converted once per (member, level) rather than per
-//! evaluation (the `ContextTile` render-once convention; centering keeps the
-//! `f32` variance `S2 − S1²/W` cancellation-safe, and the windowed ZNCC is
-//! shift-invariant so nothing needs undoing).
+//! pyramid-level region, read through [`read_source_rect`] and converted once
+//! per (member, level) rather than per evaluation (the `ContextTile`
+//! render-once convention; centering keeps the `f32` variance `S2 − S1²/W`
+//! cancellation-safe, and the windowed ZNCC is shift-invariant so nothing
+//! needs undoing).
 
 use super::prof;
-use crate::camera::image::{ImageU8, ImageU8Pyramid};
+use crate::camera::sampler::{read_source_rect, LevelRect, RegionPool, SourceRect};
+use crate::camera::{PhotographReadError, TiledPhotograph};
 use crate::patch::normal_refine::{PartZncc, Parts, Support, FLAT_NORM_SQ_EPS};
 use crate::patch::view_selection::AffineCoreMap;
 
@@ -123,7 +125,11 @@ pub(super) fn grid_bbox(map: &AffineCoreMap, resolution: u32) -> Rect {
 /// tap, and (given the tile covers the evaluation's clipped
 /// [`grid_bbox`]) an out-of-tile tap is an out-of-frame tap — the tile-bounds
 /// lane test doubles as the all-in-frame test.
-pub(super) struct LevelTile {
+///
+/// The rectangle's pixels are read with [`read_source_rect`], and the tile
+/// keeps what it returned, so the rectangle's bytes stay reserved from the
+/// kernel call's pool while the tile lives.
+pub(super) struct LevelTile<'p> {
     pub(super) level: usize,
     pub(super) x0: i64,
     pub(super) y0: i64,
@@ -131,9 +137,10 @@ pub(super) struct LevelTile {
     pub(super) h: usize,
     pub(super) channels: usize,
     planes: Vec<f32>,
+    _pixels: SourceRect<'p>,
 }
 
-impl LevelTile {
+impl<'p> LevelTile<'p> {
     fn rect(&self) -> Rect {
         Rect {
             x0: self.x0,
@@ -147,29 +154,46 @@ impl LevelTile {
         &self.planes[c * self.w * self.h..][..self.w * self.h]
     }
 
-    /// Copy `rect` (already clipped and non-empty) of `img` into a centered
-    /// planar tile.
-    fn build(img: &ImageU8, level: usize, rect: Rect) -> LevelTile {
+    /// Read `rect` (already clipped to its level and non-empty) of level
+    /// `level` of `source` through `pool` into a centered planar tile.
+    fn build(
+        source: &TiledPhotograph,
+        pool: &'p RegionPool,
+        level: usize,
+        rect: Rect,
+    ) -> Result<LevelTile<'p>, PhotographReadError> {
         prof::count(&prof::N_TILE_BUILDS, 1);
         prof::count(
             &prof::N_TILE_PIXELS,
-            ((rect.x1 - rect.x0) * (rect.y1 - rect.y0)) as u64 * img.channels() as u64,
+            ((rect.x1 - rect.x0) * (rect.y1 - rect.y0)) as u64 * source.channels() as u64,
         );
         prof::count_max(
             &prof::N_TILE_MAX_PIXELS,
             ((rect.x1 - rect.x0) * (rect.y1 - rect.y0)) as u64,
         );
+        let pixels = read_source_rect(
+            source,
+            pool,
+            level,
+            LevelRect {
+                x0: rect.x0 as u32,
+                y0: rect.y0 as u32,
+                x1: rect.x1 as u32,
+                y1: rect.y1 as u32,
+            },
+        )?;
+        let img = pixels.image();
         let w = (rect.x1 - rect.x0) as usize;
         let h = (rect.y1 - rect.y0) as usize;
         let ch = img.channels() as usize;
-        let stride = img.width() as usize * ch;
+        let stride = w * ch;
         let data = img.data();
         let mut planes = vec![0f32; ch * w * h];
         for c in 0..ch {
             let plane = &mut planes[c * w * h..][..w * h];
             let mut sum = 0f64;
             for row in 0..h {
-                let src = &data[(rect.y0 as usize + row) * stride + rect.x0 as usize * ch..];
+                let src = &data[row * stride..];
                 let dst = &mut plane[row * w..][..w];
                 for (col, d) in dst.iter_mut().enumerate() {
                     let v = src[col * ch + c] as f32;
@@ -182,7 +206,7 @@ impl LevelTile {
                 *d -= mean;
             }
         }
-        LevelTile {
+        Ok(LevelTile {
             level,
             x0: rect.x0,
             y0: rect.y0,
@@ -190,7 +214,8 @@ impl LevelTile {
             h,
             channels: ch,
             planes,
-        }
+            _pixels: pixels,
+        })
     }
 }
 
@@ -201,26 +226,29 @@ const TILE_MARGIN: i64 = 8;
 /// Per-member cache of [`LevelTile`]s, one per touched pyramid level, grown
 /// lazily to cover each evaluation's clipped [`grid_bbox`].
 #[derive(Default)]
-pub(super) struct TileCache {
-    tiles: Vec<LevelTile>,
+pub(super) struct TileCache<'p> {
+    tiles: Vec<LevelTile<'p>>,
 }
 
-impl TileCache {
-    /// The tile for `level` covering `needed ∩ image`; `None` when that
-    /// intersection is empty (the whole footprint is out of frame). Rebuilds
-    /// (union of the old region and `needed`, plus [`TILE_MARGIN`]) when the
-    /// existing tile does not cover the request.
+impl<'p> TileCache<'p> {
+    /// The tile for `level` of `source` covering `needed ∩ level`, its pixels
+    /// read through `pool`; `Ok(None)` when that intersection is empty (the
+    /// whole footprint is out of frame). Rebuilds (union of the old region
+    /// and `needed`, plus [`TILE_MARGIN`]) when the existing tile does not
+    /// cover the request. The rectangle depends only on the requests and the
+    /// level's size, never on how its pixels are read.
     pub(super) fn get_or_build(
         &mut self,
-        pyramid: &ImageU8Pyramid,
+        source: &TiledPhotograph,
+        pool: &'p RegionPool,
         level: usize,
         needed: Rect,
-    ) -> Option<&LevelTile> {
-        let img = pyramid.level(level);
-        let (w, h) = (img.width() as i64, img.height() as i64);
+    ) -> Result<Option<&LevelTile<'p>>, PhotographReadError> {
+        let (w, h) = source.layout().level_size(level);
+        let (w, h) = (i64::from(w), i64::from(h));
         let clipped = needed.clip(w, h);
         if clipped.is_empty() {
-            return None;
+            return Ok(None);
         }
         let idx = self.tiles.iter().position(|t| t.level == level);
         if let Some(i) = idx {
@@ -230,14 +258,19 @@ impl TileCache {
                     .union(&clipped)
                     .expand(TILE_MARGIN)
                     .clip(w, h);
-                self.tiles[i] = prof::TILE.time(|| LevelTile::build(img, level, grown));
+                // The old tile goes first, so its bytes are back in the pool
+                // before its replacement reserves them.
+                self.tiles.swap_remove(i);
+                let tile = prof::TILE.time(|| LevelTile::build(source, pool, level, grown))?;
+                self.tiles.push(tile);
+                return Ok(self.tiles.last());
             }
-            return Some(&self.tiles[i]);
+            return Ok(Some(&self.tiles[i]));
         }
         let grown = clipped.expand(TILE_MARGIN).clip(w, h);
-        let tile = prof::TILE.time(|| LevelTile::build(img, level, grown));
+        let tile = prof::TILE.time(|| LevelTile::build(source, pool, level, grown))?;
         self.tiles.push(tile);
-        Some(self.tiles.last().unwrap())
+        Ok(self.tiles.last())
     }
 }
 
@@ -354,7 +387,7 @@ fn combine_channel(sums: ChannelSums, total_weight: f64, kern_sum: f64) -> f64 {
 /// is the reference, the non-x86 fallback, and the dual-path test's oracle.
 pub(super) fn eval_zncc(
     map: &AffineCoreMap,
-    tile: &LevelTile,
+    tile: &LevelTile<'_>,
     tables: &SupportTables,
     tmpl: &TemplateKernel,
 ) -> Option<f64> {
@@ -389,7 +422,7 @@ pub(super) fn eval_zncc(
 /// `weighted_moments_scalar` convention).
 pub(super) fn eval_zncc_scalar(
     a: [f32; 6],
-    tile: &LevelTile,
+    tile: &LevelTile<'_>,
     tables: &SupportTables,
     tmpl: &TemplateKernel,
 ) -> Option<f64> {
@@ -458,7 +491,7 @@ pub(super) fn eval_zncc_scalar(
 /// tile, and a single one is where the template is flat over its part.
 pub(super) fn eval_zncc_parts(
     map: &AffineCoreMap,
-    tile: &LevelTile,
+    tile: &LevelTile<'_>,
     tables: &SupportTables,
     tmpl: &TemplateKernel,
 ) -> PartZncc {
@@ -611,7 +644,7 @@ unsafe fn gather_pairs(
 #[target_feature(enable = "avx2,fma")]
 pub(super) unsafe fn eval_zncc_avx2(
     a: [f32; 6],
-    tile: &LevelTile,
+    tile: &LevelTile<'_>,
     tables: &SupportTables,
     tmpl: &TemplateKernel,
 ) -> Option<f64> {
@@ -661,7 +694,7 @@ pub(super) unsafe fn eval_zncc_avx2(
 #[target_feature(enable = "avx2,fma")]
 unsafe fn eval_zncc_avx2_ch<const CH: usize>(
     a: [f32; 6],
-    tile: &LevelTile,
+    tile: &LevelTile<'_>,
     tables: &SupportTables,
     planes: &[*const f32; MAX_AVX2_CHANNELS],
     kerns: &[*const f32; MAX_AVX2_CHANNELS],

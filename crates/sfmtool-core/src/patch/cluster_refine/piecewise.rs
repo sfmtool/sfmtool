@@ -42,14 +42,17 @@
 
 use sfmtool_matches_format::{ClusterCellStatus, MemberCellData};
 
-use crate::camera::image::ImageU8Pyramid;
+use std::cell::RefCell;
+
+use crate::camera::sampler::ViewRegions;
+use crate::camera::PhotographReadError;
 use crate::patch::cell_registration::{
     fit_pass, read_cells, CellGateOptions, CellLayout, CellStatus, CellTemplates, Pass, Update,
     UpdateModel, WorkingPatch,
 };
 
 use super::kernels::TemplateKernel;
-use super::{inv2, mul2, sample_grid_window, GridEdge, Mat2};
+use super::{inv2, mul2, sample_source_grid_window, GridEdge, Mat2};
 
 #[cfg(test)]
 mod tests;
@@ -272,20 +275,20 @@ impl CellTemplates {
 }
 
 impl WorkingPatch {
-    /// Render the member at position `p` and absolute shape `s`. `None` when
-    /// the map is degenerate or the selected pyramid level is too small to
-    /// sample.
+    /// Render the member at position `p` and absolute shape `s`, read
+    /// through `view`. `Ok(None)` when the map is degenerate or the selected
+    /// pyramid level is too small to sample.
     pub(super) fn render(
-        pyramid: &ImageU8Pyramid,
+        view: &mut ViewRegions<'_>,
         p: [f64; 2],
         s: &Mat2,
         layout: &CellLayout,
         step: f64,
         off: f64,
-    ) -> Option<WorkingPatch> {
+    ) -> Result<Option<WorkingPatch>, PhotographReadError> {
         let side = layout.patch_side();
-        let samples = sample_grid_window(
-            pyramid,
+        let samples = sample_source_grid_window(
+            view,
             p,
             s,
             step,
@@ -294,8 +297,10 @@ impl WorkingPatch {
             side,
             GridEdge::Missing,
         )?;
-        let channels = samples.len() / (side * side);
-        Some(WorkingPatch::new(side, channels, samples))
+        Ok(samples.map(|samples| {
+            let channels = samples.len() / (side * side);
+            WorkingPatch::new(side, channels, samples)
+        }))
     }
 }
 
@@ -370,9 +375,13 @@ fn compose(s: &Mat2, p: [f64; 2], update: &Update, step: f64) -> (Mat2, [f64; 2]
 /// survives, when the fitted update reflects or is not finite (see
 /// `fit_update`), or when the updated shape is not finite. The loop does not
 /// run when `score` cannot read the starting shape.
+///
+/// The working patch is read through `view`, the member's view. A read that
+/// fails, the renders' or `score`'s, stops the loop, and its error is
+/// returned in place of the outcome.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn refine_member_cells(
-    pyramid: &ImageU8Pyramid,
+    view: &mut ViewRegions<'_>,
     src_channels: &[usize],
     templates: &CellTemplates,
     layout: &CellLayout,
@@ -381,15 +390,43 @@ pub(super) fn refine_member_cells(
     step: f64,
     off: f64,
     params: &PiecewiseParams,
-    score: impl FnMut(&Mat2, [f64; 2]) -> Option<f64>,
-) -> MemberCells {
+    mut score: impl FnMut(&Mat2, [f64; 2]) -> Result<Option<f64>, PhotographReadError>,
+) -> Result<MemberCells, PhotographReadError> {
     let gates = params.cell_gates();
+    // The first read that failed; every pass and score after it fails
+    // without reading.
+    let failure: RefCell<Option<PhotographReadError>> = RefCell::new(None);
+    fn keep<T>(
+        failure: &RefCell<Option<PhotographReadError>>,
+        result: Result<Option<T>, PhotographReadError>,
+    ) -> Option<T> {
+        result.unwrap_or_else(|e| {
+            *failure.borrow_mut() = Some(e);
+            None
+        })
+    }
     let pass = |shape: &Mat2, position: [f64; 2]| {
-        let patch = WorkingPatch::render(pyramid, position, shape, layout, step, off)?;
+        if failure.borrow().is_some() {
+            return None;
+        }
+        let patch = keep(
+            &failure,
+            WorkingPatch::render(view, position, shape, layout, step, off),
+        )?;
         let readings = read_cells(templates, src_channels, &patch, layout, &gates);
         fit_pass(readings, layout)
     };
-    run_loop(s, p, step, layout, params, pass, score)
+    let score = |shape: &Mat2, position: [f64; 2]| {
+        if failure.borrow().is_some() {
+            return None;
+        }
+        keep(&failure, score(shape, position))
+    };
+    let out = run_loop(s, p, step, layout, params, pass, score);
+    match failure.into_inner() {
+        Some(e) => Err(e),
+        None => Ok(out),
+    }
 }
 
 /// The loop of [`refine_member_cells`], with the render, the readings and the

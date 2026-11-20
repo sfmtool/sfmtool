@@ -27,6 +27,8 @@ pub mod view_selection;
 #[cfg(test)]
 mod batch_cancel_tests;
 #[cfg(test)]
+mod region_read_tests;
+#[cfg(test)]
 mod sampler_rule_tests;
 
 pub use cloud::{HalfvecArraysError, PatchCloud, PatchCloudError};

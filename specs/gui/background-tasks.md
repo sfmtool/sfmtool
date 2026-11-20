@@ -986,8 +986,9 @@ cancelled one ends as a cancellation rather than a failure of the kernel --
 `GeometrySearchError::Cancelled` -- and the job turns each into
 `Finished::Cancelled`, so the row says the operation stopped and no version is
 pushed. Geometry search reports `decode images`, `build reference`, `score
-views`, and `add candidates`; its result is installed only after all four, so a
-cancelled search cannot leave a candidate prefix on the bench.
+views`, `add candidates` and `read regions`; its result is installed only after
+the search returns, so a cancelled search cannot leave a candidate prefix on
+the bench.
 `Create track at pixel` polls on either side of the decode and of its reads of
 the keypoints and the cluster patches, and the cascade polls in front of each
 member and hands back `TrackAtPixelError::Cancelled`; a member once entered

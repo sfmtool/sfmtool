@@ -21,7 +21,9 @@ use super::super::{
     FeatureGeometry, Mat2, MemberGeo, MemberOutcome, MemberStatus, MAX_PATCH_ELONGATION,
 };
 use super::*;
-use crate::camera::image::{ImageU8, ImageU8Pyramid};
+use crate::camera::image::{ImageU8, ImageU8Pyramid, PyramidLevel};
+use crate::camera::sampler::RegionPool;
+use crate::camera::{PhotographReadError, TiledPhotograph};
 use crate::patch::cell_registration::{
     cell_zncc_at, fit_update, read_cell, CellReading, CellTemplate, Correspondence,
     MEDIAN_LENGTH_TO_SIGMA,
@@ -97,6 +99,13 @@ struct Fixture {
     templates: CellTemplates,
     step: f64,
     off: f64,
+    /// The pool every read of the fixture's runs goes through.
+    pool: RegionPool,
+}
+
+/// A 6-level pyramid of `img`, read in place as a tiled photograph.
+fn photograph(img: &ImageU8) -> TiledPhotograph {
+    TiledPhotograph::from_pyramid(std::sync::Arc::new(ImageU8Pyramid::build(img, 6)))
 }
 
 /// The default piecewise settings, which run the shape-moving loop.
@@ -137,7 +146,7 @@ fn fixture_with(pp: PiecewiseParams) -> Fixture {
     let support = build_support(params.window, resolution);
     let tables = SupportTables::new(&support, resolution);
     let img = make_image(128, 128, texture);
-    let pyr = ImageU8Pyramid::build(&img, 6);
+    let pyr = photograph(&img);
     let geo = MemberGeo {
         k_global: 0,
         image: 0,
@@ -145,8 +154,18 @@ fn fixture_with(pp: PiecewiseParams) -> Fixture {
         a: A_REF,
         scale: 2.5,
     };
-    let tmpl = build_template(&pyr, &geo, &support, &tables, resolution, step, off)
-        .expect("textured template");
+    let pool = RegionPool::for_kernel_call();
+    let tmpl = build_template(
+        &mut ViewRegions::new(&pyr, &pool),
+        &geo,
+        &support,
+        &tables,
+        resolution,
+        step,
+        off,
+    )
+    .expect("a photograph in memory reads")
+    .expect("textured template");
     let pp = params.piecewise.clone().unwrap();
     let layout = CellLayout::new(resolution, pp.cell_shift_bound_px);
     let templates = CellTemplates::new(&tmpl, &layout);
@@ -158,6 +177,7 @@ fn fixture_with(pp: PiecewiseParams) -> Fixture {
         templates,
         step,
         off,
+        pool,
     }
 }
 
@@ -167,21 +187,21 @@ impl Fixture {
     }
 
     fn run(&self, member: &ImageU8, s: Mat2, p: [f64; 2]) -> MemberCells {
-        let pyr = ImageU8Pyramid::build(member, 6);
+        let pyr = photograph(member);
         self.run_scored(&pyr, s, p, self.score(&pyr))
     }
 
-    /// [`Self::run`] on a built pyramid, with `score` in place of the
+    /// [`Self::run`] on a built photograph, with `score` in place of the
     /// cascade's objective.
     fn run_scored(
         &self,
-        pyr: &ImageU8Pyramid,
+        pyr: &TiledPhotograph,
         s: Mat2,
         p: [f64; 2],
-        score: impl FnMut(&Mat2, [f64; 2]) -> Option<f64>,
+        mut score: impl FnMut(&Mat2, [f64; 2]) -> Option<f64>,
     ) -> MemberCells {
         refine_member_cells(
-            pyr,
+            &mut ViewRegions::new(pyr, &self.pool),
             &self.tmpl.src_channels,
             &self.templates,
             &self.layout,
@@ -190,19 +210,21 @@ impl Fixture {
             self.step,
             self.off,
             &self.pp(),
-            score,
+            |s: &Mat2, p: [f64; 2]| Ok(score(s, p)),
         )
+        .expect("a photograph in memory reads")
     }
 
     /// The cascade's objective on `pyr`: the whole-member windowed ZNCC at a
     /// shape and position.
     fn score<'a>(
         &'a self,
-        pyr: &'a ImageU8Pyramid,
+        pyr: &'a TiledPhotograph,
     ) -> impl FnMut(&Mat2, [f64; 2]) -> Option<f64> + 'a {
         move |s, p| {
             member_zncc_at(
                 pyr,
+                &self.pool,
                 p,
                 s,
                 &self.tmpl,
@@ -212,6 +234,7 @@ impl Fixture {
                 self.off,
                 &ElongationLimit::new(MAX_PATCH_ELONGATION),
             )
+            .expect("a photograph in memory reads")
         }
     }
 
@@ -593,15 +616,13 @@ fn run_clusters(params: &ClusterRefineParams, starts: &[(Mat2, [f64; 2])]) -> Cl
             affine_shapes: aff2.view(),
         },
     ];
-    let pyramids = [
-        ImageU8Pyramid::build(&img1, 6),
-        ImageU8Pyramid::build(&img2, 6),
-    ];
+    let pyramids = [photograph(&img1), photograph(&img2)];
     let cluster_starts: Vec<u32> = (0..=n as u32).map(|c| 2 * c).collect();
     let member_images: Vec<u32> = (0..n).flat_map(|_| [0, 1]).collect();
     let member_features: Vec<u32> = (0..n as u32).flat_map(|k| [0, k]).collect();
     refine_cluster_patches(
         &pyramids,
+        &RegionPool::for_kernel_call(),
         &features,
         &cluster_starts,
         &member_images,
@@ -609,6 +630,7 @@ fn run_clusters(params: &ClusterRefineParams, starts: &[(Mat2, [f64; 2])]) -> Cl
         params,
         None,
     )
+    .expect("photographs in memory read")
 }
 
 /// [`run_clusters`] with one cluster whose member starts at
@@ -864,11 +886,11 @@ impl Fixture {
         seed: [f64; 2],
         params: &ClusterRefineParams,
     ) -> MemberOutcome {
-        let pyr = ImageU8Pyramid::build(member, 6);
+        let pyr = photograph(member);
         let mut out = kept_member(s, p);
         refine_kept_member_cells(
             &mut out,
-            &pyr,
+            &mut ViewRegions::new(&pyr, &self.pool),
             seed,
             &self.tmpl,
             &self.templates,
@@ -880,7 +902,8 @@ impl Fixture {
             params,
             &self.pp(),
             &ElongationLimit::new(MAX_PATCH_ELONGATION),
-        );
+        )
+        .expect("a photograph in memory reads");
         out
     }
 }
@@ -941,9 +964,10 @@ fn an_update_whose_support_leaves_the_frame_is_not_applied() {
     // Start a little smaller than the truth and to its right, so the start's
     // support is in the frame.
     let s0 = mul2(&s_true, &[[0.97, 0.0], [0.0, 0.97]]);
-    let in_frame = |pyr: &ImageU8Pyramid, s: &Mat2, p: [f64; 2]| {
+    let in_frame = |pyr: &TiledPhotograph, s: &Mat2, p: [f64; 2]| {
         read_member_at(
             pyr,
+            &fx.pool,
             p,
             s,
             &fx.tmpl,
@@ -953,6 +977,7 @@ fn an_update_whose_support_leaves_the_frame_is_not_applied() {
             fx.off,
             &ElongationLimit::new(MAX_PATCH_ELONGATION),
         )
+        .expect("a photograph in memory reads")
         .is_some()
     };
     // Move the keypoint toward the left edge until the loop, scored by a
@@ -964,7 +989,7 @@ fn an_update_whose_support_leaves_the_frame_is_not_applied() {
         let centre = [x, C[1]];
         let p0 = [x + 1.0, C[1]];
         let member = member_image_at(a_true(), centre);
-        let pyr = ImageU8Pyramid::build(&member, 6);
+        let pyr = photograph(&member);
         if !in_frame(&pyr, &s0, p0) {
             continue;
         }
@@ -1183,7 +1208,7 @@ fn an_update_that_lowers_the_whole_member_zncc_is_rejected() {
     let fx = fixture();
     let member = member_image(a_true(), [0.0, 0.0], None);
     let (s0, p0) = perturbed_start();
-    let pyr = ImageU8Pyramid::build(&member, 6);
+    let pyr = photograph(&member);
     // A score that is lower at every shape but the start, so the first
     // update, which the cells fit toward the truth, lowers it.
     let score = |s: &Mat2, p: [f64; 2]| Some(if *s == s0 && p == p0 { 0.99 } else { 0.5 });
@@ -1390,7 +1415,7 @@ fn measuring_stores_the_raw_shifts_which_carry_the_start_affine() {
     let fx = measuring_fixture();
     let member = member_image(a_true(), [0.0, 0.0], None);
     let (s0, p0) = perturbed_start();
-    let pyr = ImageU8Pyramid::build(&member, 6);
+    let pyr = photograph(&member);
     // The whole-member ZNCC is not read when the shape cannot move.
     let out = fx.run_scored(&pyr, s0, p0, |_: &Mat2, _: [f64; 2]| -> Option<f64> {
         panic!("the score is read only by the shape-moving loop")
@@ -1603,12 +1628,10 @@ fn run_duplicate_pair(
             affine_shapes: aff2.view(),
         },
     ];
-    let pyramids = [
-        ImageU8Pyramid::build(&img1, 6),
-        ImageU8Pyramid::build(&img2, 6),
-    ];
+    let pyramids = [photograph(&img1), photograph(&img2)];
     refine_cluster_patches(
         &pyramids,
+        &RegionPool::for_kernel_call(),
         &features,
         &[0, 3],
         &[0, 1, 1],
@@ -1616,6 +1639,7 @@ fn run_duplicate_pair(
         params,
         None,
     )
+    .expect("photographs in memory read")
 }
 
 #[test]
@@ -1674,4 +1698,74 @@ fn a_dedupe_winner_whose_moved_shape_fails_the_refined_shape_gate_is_reverted() 
     let cells = out.cells[1].expect("the kept member has cells");
     assert_eq!(cells.status, [[CellStatus::NotAttempted; 3]; 3]);
     assert!(cells.iterations >= 1);
+}
+
+/// A whole-member score that reads a photograph and can fail.
+type ScoreRead<'a> = dyn FnMut(&Mat2, [f64; 2]) -> Result<Option<f64>, PhotographReadError> + 'a;
+
+/// A read the loop makes that fails, whether `score`'s or a render's, is the
+/// stage's error, rather than a failed iteration that leaves the member at
+/// its cascade shape.
+#[test]
+fn a_read_that_fails_in_the_loop_fails_the_stage() {
+    let fx = fixture();
+    let (s0, p0) = perturbed_start();
+    let refused = || PhotographReadError::OutOfRange {
+        path: None,
+        why: "a read the test refuses".to_string(),
+    };
+    let run = |source: &TiledPhotograph, score: &mut ScoreRead<'_>| {
+        refine_member_cells(
+            &mut ViewRegions::new(source, &fx.pool),
+            &fx.tmpl.src_channels,
+            &fx.templates,
+            &fx.layout,
+            s0,
+            p0,
+            fx.step,
+            fx.off,
+            &fx.pp(),
+            score,
+        )
+    };
+
+    // The score read at the first update fails; the start's and the render
+    // succeed.
+    let member = photograph(&member_image(a_true(), [0.0, 0.0], None));
+    let mut reads = 0;
+    let error = run(&member, &mut |_: &Mat2, _: [f64; 2]| {
+        reads += 1;
+        if reads == 1 {
+            Ok(Some(0.5))
+        } else {
+            Err(refused())
+        }
+    })
+    .err()
+    .expect("the second score fails");
+    assert_eq!(error, refused());
+    assert_eq!(
+        reads, 2,
+        "the start's score and the first update's were read"
+    );
+
+    // The render fails: the photograph holds an 8 px corner of level 0 and
+    // nothing else.
+    let corner = PyramidLevel {
+        image: ImageU8::new(8, 8, 1, vec![128; 64]),
+        origin: [0, 0],
+        full_size: [128, 128],
+    };
+    let mut levels: Vec<Option<PyramidLevel>> = (0..6).map(|_| None).collect();
+    levels[0] = Some(corner);
+    let lacking = TiledPhotograph::from_pyramid(std::sync::Arc::new(
+        ImageU8Pyramid::from_regions(levels).expect("a valid region pyramid"),
+    ));
+    let error = run(&lacking, &mut |_: &Mat2, _: [f64; 2]| Ok(Some(0.5)))
+        .err()
+        .expect("the render fails");
+    assert!(
+        matches!(error, PhotographReadError::OutOfRange { .. }),
+        "{error}"
+    );
 }

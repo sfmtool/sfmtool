@@ -4,7 +4,7 @@
 //! Cluster-patch refinement: turn SIFT feature clusters into patch clusters.
 //!
 //! See `specs/core/patch/cluster-patch-refinement.md` (implementation) and
-//! `specs/core/patch/cluster-patches.md` (design). Given per-image pyramids, SIFT
+//! `specs/core/patch/cluster-patches.md` (design). Given per-image photographs, SIFT
 //! feature geometry, and CSR clusters, [`refine_cluster_patches`] first
 //! gates each member on the ZNCC self-similarity radius of its own patch
 //! (`specs/core/patch/zncc-self-similarity-radius.md`; members above
@@ -45,7 +45,7 @@ pub mod prof;
 #[cfg(test)]
 mod tests;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -55,9 +55,9 @@ use rayon::prelude::*;
 use crate::camera::image::ImageU8Pyramid;
 use crate::camera::remap::HeldLevel;
 use crate::camera::sampler::{
-    grid_cells, sample_grid, sample_source_grid, GridEdge, GridPoints, ViewRegions,
+    grid_cells, sample_grid, sample_source_grid, GridEdge, GridPoints, RegionPool, ViewRegions,
 };
-use crate::camera::PhotographReadError;
+use crate::camera::{PhotographReadError, TiledPhotograph};
 use crate::patch::cell_registration::{CellLayout, CellTemplates};
 use crate::patch::normal_refine::{
     build_support, weighted_moments_pub, znorm_write, PartZncc, Support, FLAT_NORM_SQ_EPS,
@@ -371,13 +371,17 @@ impl MemberOutcome {
     /// the same grid ([`grid_self_similarity_parts`]).
     fn read_refined_shape(
         &mut self,
-        pyramid: &ImageU8Pyramid,
+        view: &mut ViewRegions<'_>,
         params: &ClusterRefineParams,
-    ) -> Option<MemberStatus> {
+    ) -> Result<Option<MemberStatus>, PhotographReadError> {
         let (shape, position) = self.shape_and_position();
-        let samples = sample_member_grid(pyramid, position, shape, params)?;
+        let Some(samples) = sample_source_member_grid(view, position, shape, params)? else {
+            return Ok(None);
+        };
         let resolution = params.resolution.max(2) as usize;
-        let parts = grid_self_similarity_parts(&samples, resolution)?;
+        let Some(parts) = grid_self_similarity_parts(&samples, resolution) else {
+            return Ok(None);
+        };
         let radius = grid_self_similarity_radius(&samples, resolution);
         prof::count(&prof::N_REFINED_GATED, 1);
         let cells = parts
@@ -386,7 +390,7 @@ impl MemberOutcome {
             .map(|row| row.each_ref().map(|c| c.radius));
         self.refined_radius = radius as f32;
         self.refined_radius_grid = cells.map(|row| row.map(|r| r as f32));
-        params.refined_shape_verdict(radius, &cells)
+        Ok(params.refined_shape_verdict(radius, &cells))
     }
 }
 
@@ -467,17 +471,14 @@ pub fn sample_source_member_grid(
     let resolution = params.resolution.max(2);
     let step = 2.0 * params.radius / resolution as f64;
     let off = 0.5 * step - params.radius;
-    let map = warp_map(position, [0.0, 0.0], &affine_shape, step, off);
-    let level = level_for_map(&map, view.source().layout().levels());
-    let lmap = map_at_level(&map, level);
-    sample_source_grid(
+    sample_source_grid_window(
         view,
-        &lmap.a,
-        level,
-        GridPoints::Window {
-            first: 0,
-            size: resolution as usize,
-        },
+        position,
+        &affine_shape,
+        step,
+        off,
+        0,
+        resolution as usize,
         GridEdge::Clamp,
     )
 }
@@ -607,41 +608,77 @@ fn sample_grid_window(
     size: usize,
     edge: GridEdge,
 ) -> Option<Vec<f32>> {
-    let map = warp_map(pos, [0.0, 0.0], a, step, off);
-    let level = level_for_map(&map, pyramid.num_levels());
-    let lmap = map_at_level(&map, level);
+    let (level, lmap) = grid_level_map(pos, a, step, off, pyramid.num_levels());
     let [w, h] = pyramid.level_full_size(level);
     let cells = grid_cells(&lmap.a, GridPoints::Window { first, size }, edge, (w, h))?;
     Some(sample_grid(&HeldLevel::of(pyramid, level), &cells))
 }
 
+/// [`sample_grid_window`] read through `view`, one view of a tiled
+/// photograph, by [`sample_source_grid`]: the same grid, level and samples,
+/// bit for bit. `Ok(None)` where [`sample_grid_window`] gives `None`.
+#[allow(clippy::too_many_arguments)]
+fn sample_source_grid_window(
+    view: &mut ViewRegions<'_>,
+    pos: [f64; 2],
+    a: &Mat2,
+    step: f64,
+    off: f64,
+    first: i64,
+    size: usize,
+    edge: GridEdge,
+) -> Result<Option<Vec<f32>>, PhotographReadError> {
+    let (level, lmap) = grid_level_map(pos, a, step, off, view.source().layout().levels());
+    sample_source_grid(
+        view,
+        &lmap.a,
+        level,
+        GridPoints::Window { first, size },
+        edge,
+    )
+}
+
+/// The level a template grid at position `pos` and shape `a` is read from,
+/// out of `levels`, by [`level_for_map`], and the grid's map in that level's
+/// pixels.
+fn grid_level_map(
+    pos: [f64; 2],
+    a: &Mat2,
+    step: f64,
+    off: f64,
+    levels: usize,
+) -> (usize, AffineCoreMap) {
+    let map = warp_map(pos, [0.0, 0.0], a, step, off);
+    let level = level_for_map(&map, levels);
+    (level, map_at_level(&map, level))
+}
+
 /// Build the reference's z-normalized template kernel: sample every image
 /// channel over the support grid at the mip-selected level (bit-exact
 /// `bilinear_cell` convention, all-in-frame required), z-normalize each
-/// channel with the sqrt-window fold, and drop flat channels. `None` when any
-/// support sample leaves the frame or every channel is flat — the candidate
-/// reference is unusable.
+/// channel with the sqrt-window fold, and drop flat channels. `Ok(None)` when
+/// any support sample leaves the frame or every channel is flat — the
+/// candidate reference is unusable. Both of its reads go through `view`, the
+/// candidate's view.
 fn build_template(
-    pyramid: &ImageU8Pyramid,
+    view: &mut ViewRegions<'_>,
     geo: &MemberGeo,
     support: &Support,
     tables: &SupportTables,
     resolution: u32,
     step: f64,
     off: f64,
-) -> Option<TemplateKernel> {
-    let map = warp_map(geo.pos, [0.0, 0.0], &geo.a, step, off);
-    let level = level_for_map(&map, pyramid.num_levels());
-    let lmap = map_at_level(&map, level);
+) -> Result<Option<TemplateKernel>, PhotographReadError> {
+    let (level, lmap) = grid_level_map(geo.pos, &geo.a, step, off, view.source().layout().levels());
     let n = support.pixels.len();
-    let ch = pyramid.level(0).channels() as usize;
-    let [w, h] = pyramid.level_full_size(level);
+    let ch = view.source().channels() as usize;
     let points = GridPoints::Pixels {
         pixels: &support.pixels,
         resolution: resolution as usize,
     };
-    let cells = grid_cells(&lmap.a, points, GridEdge::InFrame, (w, h))?;
-    let samples = sample_grid(&HeldLevel::of(pyramid, level), &cells);
+    let Some(samples) = sample_source_grid(view, &lmap.a, level, points, GridEdge::InFrame)? else {
+        return Ok(None);
+    };
 
     // Raw support samples, planar per channel `[c·n + k]` (the ContextTile
     // layout), values un-rounded f32.
@@ -690,7 +727,7 @@ fn build_template(
         samples.extend_from_slice(col_vals);
     }
     if src_channels.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     // The same channels over the whole square, for the ZNCC grid. A pixel off
@@ -700,22 +737,21 @@ fn build_template(
     let square = r * r;
     let mut square_samples = vec![f32::NAN; src_channels.len() * square];
     let window = GridPoints::Window { first: 0, size: r };
-    if let Some(cells) = grid_cells(&lmap.a, window, GridEdge::Missing, (w, h)) {
-        let all = sample_grid(&HeldLevel::of(pyramid, level), &cells);
+    if let Some(all) = sample_source_grid(view, &lmap.a, level, window, GridEdge::Missing)? {
         for (p, sample) in all.chunks_exact(ch).enumerate() {
             for (tc, &c) in src_channels.iter().enumerate() {
                 square_samples[tc * square + p] = sample[c];
             }
         }
     }
-    Some(TemplateKernel {
+    Ok(Some(TemplateKernel {
         channels: src_channels.len(),
         src_channels,
         kern,
         kern_sums,
         samples,
         square_samples,
-    })
+    }))
 }
 
 /// The seed warps the cascade may start from: `M₀` turned by each of the
@@ -737,6 +773,10 @@ fn rotation_start_warps(m0: &Mat2, starts: u32) -> Vec<Mat2> {
         .collect()
 }
 
+/// What [`refine_member`] returns for a member it measured: `(zncc, parts,
+/// shift_px, absolute 2×3 affine)`.
+type MemberFit = (f64, PartZncc, f64, [[f64; 3]; 2]);
+
 /// Refine one non-reference member: score the template against the member at
 /// each rotation start ([`rotation_start_warps`]) with no optimisation, then
 /// run the shift → similarity → affine
@@ -746,15 +786,17 @@ fn rotation_start_warps(m0: &Mat2, starts: u32) -> Vec<Mat2> {
 /// final map read over the middle of the grid and over each cell of the ZNCC
 /// grid ([`eval_zncc_parts`]) and the affine's leading 2×2 is the member's
 /// absolute affine shape `S = W·S_ref`, last column its refined absolute
-/// keypoint position; `None` when the support is out of frame at every
+/// keypoint position; `Ok(None)` when the support is out of frame at every
 /// rotation start (→ `NotEvaluated`).
 ///
 /// An evaluation whose map is elongated past [`MAX_PATCH_ELONGATION`] scores
 /// as one whose support is out of frame, before it reads a pixel, and is
-/// counted in `limit`.
+/// counted in `limit`. The member's tiles are read from `source` through
+/// `pool`; a read that fails stops the cascade, and its error is returned.
 #[allow(clippy::too_many_arguments)]
-fn refine_member(
-    pyramid: &ImageU8Pyramid,
+fn refine_member<'p>(
+    source: &TiledPhotograph,
+    pool: &'p RegionPool,
     ref_geo: &MemberGeo,
     mem_geo: &MemberGeo,
     tmpl: &TemplateKernel,
@@ -764,23 +806,29 @@ fn refine_member(
     off: f64,
     params: &ClusterRefineParams,
     limit: &ElongationLimit,
-) -> Option<(f64, PartZncc, f64, [[f64; 3]; 2])> {
+) -> Result<Option<MemberFit>, PhotographReadError> {
     let a_ref_inv = inv2(&ref_geo.a);
-    let num_levels = pyramid.num_levels();
+    let num_levels = source.layout().levels();
 
-    let eval_in = |tiles: &mut TileCache, m0: &Mat2, t: [f64; 2], d: Mat2| -> Option<f64> {
+    let eval_in = |tiles: &mut TileCache<'p>,
+                   m0: &Mat2,
+                   t: [f64; 2],
+                   d: Mat2|
+     -> Result<Option<f64>, PhotographReadError> {
         let id = [[1.0 + d[0][0], d[0][1]], [d[1][0], 1.0 + d[1][1]]];
         let b = mul2(&mul2(&id, m0), &ref_geo.a);
         let map = warp_map(mem_geo.pos, t, &b, step, off);
         if !limit.admits_map(&map) {
-            return None;
+            return Ok(None);
         }
         let level = level_for_map(&map, num_levels);
         let lmap = map_at_level(&map, level);
         let bbox = grid_bbox(&lmap, resolution);
-        let tile = tiles.get_or_build(pyramid, level, bbox)?;
+        let Some(tile) = tiles.get_or_build(source, pool, level, bbox)? else {
+            return Ok(None);
+        };
         prof::count(&prof::N_EVALS, 1);
-        prof::EVAL.time(|| eval_zncc(&lmap, tile, tables, tmpl))
+        Ok(prof::EVAL.time(|| eval_zncc(&lmap, tile, tables, tmpl)))
     };
 
     // The rotation starts: one score each at the seed's translation and
@@ -798,7 +846,7 @@ fn refine_member(
         let mut start_tiles = TileCache::default();
         let mut best_start: Option<(f64, Mat2)> = None;
         for m0 in rotation_start_warps(&seed_m0, params.rotation_starts) {
-            let Some(z) = eval_in(&mut start_tiles, &m0, [0.0, 0.0], [[0.0; 2]; 2]) else {
+            let Some(z) = eval_in(&mut start_tiles, &m0, [0.0, 0.0], [[0.0; 2]; 2])? else {
                 continue;
             };
             prof::count(&prof::N_EVALS_START, 1);
@@ -810,14 +858,23 @@ fn refine_member(
                 best_start = Some((z, m0));
             }
         }
-        best_start?.1
+        let Some((_, m0)) = best_start else {
+            return Ok(None);
+        };
+        m0
     };
     let mut tiles = TileCache::default();
     let mut eval_raw = |t: [f64; 2], d: Mat2| eval_in(&mut tiles, &m0, t, d);
 
     // Start support out of frame → the member is not evaluated.
-    eval_raw([0.0, 0.0], [[0.0; 2]; 2])?;
+    if eval_raw([0.0, 0.0], [[0.0; 2]; 2])?.is_none() {
+        return Ok(None);
+    }
     prof::count(&prof::N_EVALS_SHIFT, 1);
+
+    // The first read that failed in the cascade. Every evaluation after it
+    // scores worst without reading, and the cascade returns it.
+    let failure: RefCell<Option<PhotographReadError>> = RefCell::new(None);
 
     let mut theta = vec![0.0f64; 2];
     let mut prev = Stage::Shift;
@@ -841,13 +898,20 @@ fn refine_member(
                 if prof::enabled() {
                     stage_evals.set(stage_evals.get() + 1);
                 }
+                if failure.borrow().is_some() {
+                    return 1.0;
+                }
                 let (t, d) = unpack(x, stage);
                 match eval_raw(t, d) {
+                    Ok(Some(z)) => -z,
                     // Any support sample out of frame, or a map elongated
                     // past the limit, scores worst (+1.0) so the simplex
                     // retreats — the all-in-frame rule.
-                    Some(z) => -z,
-                    None => 1.0,
+                    Ok(None) => 1.0,
+                    Err(e) => {
+                        *failure.borrow_mut() = Some(e);
+                        1.0
+                    }
                 }
             },
             &th0,
@@ -865,6 +929,9 @@ fn refine_member(
             },
             stage_evals.get(),
         );
+        if let Some(e) = failure.take() {
+            return Err(e);
+        }
         theta = th;
         prev = stage;
         best_val = val;
@@ -883,7 +950,7 @@ fn refine_member(
             let lmap = map_at_level(&map, level);
             let bbox = grid_bbox(&lmap, resolution);
             tiles
-                .get_or_build(pyramid, level, bbox)
+                .get_or_build(source, pool, level, bbox)?
                 .map_or(PartZncc::NAN, |tile| {
                     eval_zncc_parts(&lmap, tile, tables, tmpl)
                 })
@@ -905,7 +972,7 @@ fn refine_member(
     let id = [[1.0 + d[0][0], d[0][1]], [d[1][0], 1.0 + d[1][1]]];
     let s_abs = mul2(&mul2(&id, &m0), &ref_geo.a);
     let p = [mem_geo.pos[0] + t[0], mem_geo.pos[1] + t[1]];
-    Some((
+    Ok(Some((
         zncc,
         parts,
         shift,
@@ -913,15 +980,22 @@ fn refine_member(
             [s_abs[0][0], s_abs[0][1], p[0]],
             [s_abs[1][0], s_abs[1][1], p[1]],
         ],
-    ))
+    )))
 }
 
 /// Refine one cluster (the per-cluster algorithm of the spec).
+///
+/// Each usable member reads its photograph through a [`ViewRegions`] of its
+/// own, which its gate grid, its template, its grid at the refined shape and
+/// its piecewise renders share, and the cascade's tiles through `pool`; all
+/// of them are dropped when the cluster is done. A read that fails stops the
+/// cluster, and its error is returned.
 #[allow(clippy::too_many_arguments)]
 fn refine_cluster(
     k0: usize,
     k1: usize,
-    pyramids: &[&ImageU8Pyramid],
+    sources: &[&TiledPhotograph],
+    pool: &RegionPool,
     features: &[FeatureGeometry<'_>],
     member_images: &[u32],
     member_features: &[u32],
@@ -930,7 +1004,7 @@ fn refine_cluster(
     tables: &SupportTables,
     resolution: u32,
     max_elongation: f64,
-) -> ClusterOutcome {
+) -> Result<ClusterOutcome, PhotographReadError> {
     let size = k1 - k0;
     let mut members = vec![MemberOutcome::default(); size];
     let unrefinable = |members, elongated_members| ClusterOutcome {
@@ -994,6 +1068,12 @@ fn refine_cluster(
     }
     let step = 2.0 * params.radius / resolution as f64;
     let off = 0.5 * step - params.radius;
+    // One view per usable member, for every read of its photograph but the
+    // cascade's tiles.
+    let mut views: Vec<Option<ViewRegions<'_>>> = geo
+        .iter()
+        .map(|g| g.as_ref().map(|g| ViewRegions::new(sources[g.image], pool)))
+        .collect();
 
     // 1b. Member self-similarity gate: read each usable member's own patch
     // and exclude members that match themselves further than the bar away —
@@ -1007,8 +1087,9 @@ fn refine_cluster(
             let Some(g) = slot.as_ref() else {
                 continue;
             };
-            let Some(grid) = prof::GATE_SAMPLE
-                .time(|| sample_member_grid(pyramids[g.image], g.pos, g.a, params))
+            let view = views[j].as_mut().expect("a usable member has a view");
+            let Some(grid) =
+                prof::GATE_SAMPLE.time(|| sample_source_member_grid(view, g.pos, g.a, params))?
             else {
                 continue;
             };
@@ -1025,7 +1106,7 @@ fn refine_cluster(
 
     let usable: Vec<usize> = (0..size).filter(|&j| geo[j].is_some()).collect();
     if usable.len() < 2 {
-        return unrefinable(members, elongated_members);
+        return Ok(unrefinable(members, elongated_members));
     }
 
     // 2–3. Reference selection (largest scale, ties to the lowest global
@@ -1041,15 +1122,16 @@ fn refine_cluster(
     let mut reference: Option<(usize, TemplateKernel)> = None;
     for &j in &cands {
         let g = geo[j].as_ref().unwrap();
+        let view = views[j].as_mut().expect("a usable member has a view");
         if let Some(t) = prof::TEMPLATE
-            .time(|| build_template(pyramids[g.image], g, support, tables, resolution, step, off))
+            .time(|| build_template(view, g, support, tables, resolution, step, off))?
         {
             reference = Some((j, t));
             break;
         }
     }
     let Some((ref_j, tmpl)) = reference else {
-        return unrefinable(members, elongated_members);
+        return Ok(unrefinable(members, elongated_members));
     };
     let ref_geo = geo[ref_j].clone().unwrap();
     // Reference row: `S_ref | x_ref` — the reference feature's own detector
@@ -1092,7 +1174,8 @@ fn refine_cluster(
         prof::count(&prof::N_REFINES, 1);
         if let Some((zncc, parts, shift, affine)) = prof::REFINE.time(|| {
             refine_member(
-                pyramids[g.image],
+                sources[g.image],
+                pool,
                 &ref_geo,
                 g,
                 &tmpl,
@@ -1103,7 +1186,7 @@ fn refine_cluster(
                 params,
                 &limit,
             )
-        }) {
+        })? {
             let status = if zncc < params.min_zncc {
                 MemberStatus::RejectedLowZncc
             } else if !params.admits_shift(
@@ -1127,8 +1210,9 @@ fn refine_cluster(
             // its image a member that would have passed.
             if status == MemberStatus::Kept && params.reads_refined_shape() {
                 let member = &mut members[j];
+                let view = views[j].as_mut().expect("a usable member has a view");
                 if let Some(refused) =
-                    prof::REFINED_GATE.time(|| member.read_refined_shape(pyramids[g.image], params))
+                    prof::REFINED_GATE.time(|| member.read_refined_shape(view, params))?
                 {
                     prof::count(&prof::N_REFINED_GATE_REJECTED, 1);
                     member.status = refused;
@@ -1173,10 +1257,11 @@ fn refine_cluster(
             for j in kept {
                 let g = geo[j].as_ref().unwrap();
                 prof::count(&prof::N_PIECEWISE, 1);
+                let view = views[j].as_mut().expect("a usable member has a view");
                 prof::PIECEWISE.time(|| {
                     refine_kept_member_cells(
                         &mut members[j],
-                        pyramids[g.image],
+                        view,
                         g.pos,
                         &tmpl,
                         &templates,
@@ -1189,17 +1274,17 @@ fn refine_cluster(
                         pp,
                         &limit,
                     )
-                });
+                })?;
             }
         }
     }
 
-    ClusterOutcome {
+    Ok(ClusterOutcome {
         reference: ref_geo.k_global,
         members,
         elongated_members,
         elongated_evaluations: limit.elongated_evaluations.get(),
-    }
+    })
 }
 
 /// Run the piecewise refinement on one kept member and store its outcome:
@@ -1227,10 +1312,14 @@ fn refine_cluster(
 /// at its cascade shape, and the per-image dedupe has already run, so a
 /// refusal here could leave its image with no member, where reverting keeps
 /// the member that passed.
+///
+/// The working patch and the grid at the moved shape are read through
+/// `view`, the member's view, and the scores' tiles through its pool. A read
+/// that fails stops the stage, and its error is returned.
 #[allow(clippy::too_many_arguments)]
 fn refine_kept_member_cells(
     member: &mut MemberOutcome,
-    pyramid: &ImageU8Pyramid,
+    view: &mut ViewRegions<'_>,
     seed_pos: [f64; 2],
     tmpl: &TemplateKernel,
     templates: &CellTemplates,
@@ -1242,20 +1331,21 @@ fn refine_kept_member_cells(
     params: &ClusterRefineParams,
     pp: &PiecewiseParams,
     limit: &ElongationLimit,
-) {
+) -> Result<(), PhotographReadError> {
     let s = [
         [member.affine[0][0], member.affine[0][1]],
         [member.affine[1][0], member.affine[1][1]],
     ];
     let p = [member.affine[0][2], member.affine[1][2]];
+    let (source, pool) = (view.source(), view.pool());
     // The cascade's own objective, which an update must not lower.
     let score = |shape: &Mat2, position: [f64; 2]| {
         member_zncc_at(
-            pyramid, position, shape, tmpl, tables, resolution, step, off, limit,
+            source, pool, position, shape, tmpl, tables, resolution, step, off, limit,
         )
     };
     let out = piecewise::refine_member_cells(
-        pyramid,
+        view,
         &tmpl.src_channels,
         templates,
         layout,
@@ -1265,10 +1355,10 @@ fn refine_kept_member_cells(
         off,
         pp,
         score,
-    );
+    )?;
     if !out.updated {
         member.cells = Some(out.cells);
-        return;
+        return Ok(());
     }
     let (sh, ps) = (out.shape, out.position);
     let shift = (ps[0] - seed_pos[0]).hypot(ps[1] - seed_pos[1]);
@@ -1276,39 +1366,41 @@ fn refine_kept_member_cells(
     // its own reading of the starting shape, which can differ from the
     // cascade's stored value in the last bits, so the stored value is the bar.
     let cascade_zncc = member.zncc;
-    let reread = read_member_at(pyramid, ps, &sh, tmpl, tables, resolution, step, off, limit)
-        .filter(|&(zncc, _)| {
-            zncc >= params.min_zncc
-                && zncc as f32 >= cascade_zncc
-                && params.admits_shift(shift, &sh)
-        });
+    let reread = read_member_at(
+        source, pool, ps, &sh, tmpl, tables, resolution, step, off, limit,
+    )?
+    .filter(|&(zncc, _)| {
+        zncc >= params.min_zncc && zncc as f32 >= cascade_zncc && params.admits_shift(shift, &sh)
+    });
     let Some((zncc, parts)) = reread else {
         member.cells = Some(CellRefinement::not_attempted(out.cells.iterations));
-        return;
+        return Ok(());
     };
     let cascade = member.clone();
     member.affine = [[sh[0][0], sh[0][1], ps[0]], [sh[1][0], sh[1][1], ps[1]]];
     member.zncc = zncc as f32;
     member.set_parts(parts);
     member.shift = shift as f32;
-    if params.reads_refined_shape() && member.read_refined_shape(pyramid, params).is_some() {
+    if params.reads_refined_shape() && member.read_refined_shape(view, params)?.is_some() {
         // The moved shape fails a gate the cascade shape passed: keep the
         // cascade shape and its readings.
         prof::count(&prof::N_REFINED_GATE_REVERTED, 1);
         *member = cascade;
         member.cells = Some(CellRefinement::not_attempted(out.cells.iterations));
-        return;
+        return Ok(());
     }
     member.cells = Some(out.cells);
+    Ok(())
 }
 
 /// The whole-patch windowed ZNCC and its part readings of a member at
-/// absolute position `p` and shape `s`; `None` when the support leaves the
-/// frame, or when the shape is elongated past [`MAX_PATCH_ELONGATION`],
-/// which is counted in `limit`.
+/// absolute position `p` and shape `s`, its tile read from `source` through
+/// `pool`; `Ok(None)` when the support leaves the frame, or when the shape is
+/// elongated past [`MAX_PATCH_ELONGATION`], which is counted in `limit`.
 #[allow(clippy::too_many_arguments)]
 fn read_member_at(
-    pyramid: &ImageU8Pyramid,
+    source: &TiledPhotograph,
+    pool: &RegionPool,
     p: [f64; 2],
     s: &Mat2,
     tmpl: &TemplateKernel,
@@ -1317,27 +1409,31 @@ fn read_member_at(
     step: f64,
     off: f64,
     limit: &ElongationLimit,
-) -> Option<(f64, PartZncc)> {
+) -> Result<Option<(f64, PartZncc)>, PhotographReadError> {
     let map = warp_map(p, [0.0, 0.0], s, step, off);
     if !limit.admits_map(&map) {
-        return None;
+        return Ok(None);
     }
-    let level = level_for_map(&map, pyramid.num_levels());
+    let level = level_for_map(&map, source.layout().levels());
     let lmap = map_at_level(&map, level);
     let bbox = grid_bbox(&lmap, resolution);
     let mut tiles = TileCache::default();
-    let tile = tiles.get_or_build(pyramid, level, bbox)?;
-    let zncc = eval_zncc(&lmap, tile, tables, tmpl)?;
-    Some((zncc, eval_zncc_parts(&lmap, tile, tables, tmpl)))
+    let Some(tile) = tiles.get_or_build(source, pool, level, bbox)? else {
+        return Ok(None);
+    };
+    Ok(eval_zncc(&lmap, tile, tables, tmpl)
+        .map(|zncc| (zncc, eval_zncc_parts(&lmap, tile, tables, tmpl))))
 }
 
 /// The whole-patch windowed ZNCC of a member at absolute position `p` and
-/// shape `s`, the objective the cascade maximises; `None` when the support
-/// leaves the frame, or when the shape is elongated past
-/// [`MAX_PATCH_ELONGATION`], which is counted in `limit`.
+/// shape `s`, the objective the cascade maximises, its tile read from
+/// `source` through `pool`; `Ok(None)` when the support leaves the frame, or
+/// when the shape is elongated past [`MAX_PATCH_ELONGATION`], which is
+/// counted in `limit`.
 #[allow(clippy::too_many_arguments)]
 fn member_zncc_at(
-    pyramid: &ImageU8Pyramid,
+    source: &TiledPhotograph,
+    pool: &RegionPool,
     p: [f64; 2],
     s: &Mat2,
     tmpl: &TemplateKernel,
@@ -1346,17 +1442,19 @@ fn member_zncc_at(
     step: f64,
     off: f64,
     limit: &ElongationLimit,
-) -> Option<f64> {
+) -> Result<Option<f64>, PhotographReadError> {
     let map = warp_map(p, [0.0, 0.0], s, step, off);
     if !limit.admits_map(&map) {
-        return None;
+        return Ok(None);
     }
-    let level = level_for_map(&map, pyramid.num_levels());
+    let level = level_for_map(&map, source.layout().levels());
     let lmap = map_at_level(&map, level);
     let bbox = grid_bbox(&lmap, resolution);
     let mut tiles = TileCache::default();
-    let tile = tiles.get_or_build(pyramid, level, bbox)?;
-    eval_zncc(&lmap, tile, tables, tmpl)
+    let Some(tile) = tiles.get_or_build(source, pool, level, bbox)? else {
+        return Ok(None);
+    };
+    Ok(eval_zncc(&lmap, tile, tables, tmpl))
 }
 
 /// Refine every cluster into a patch cluster: per cluster, a reference member
@@ -1371,33 +1469,44 @@ fn member_zncc_at(
 /// scatter preserves cluster order). `progress` is bumped once per finished
 /// cluster.
 ///
-/// The kernel is pure: no I/O, no `.sift` reads — the caller supplies decoded
-/// pyramids and feature geometry, one [`FeatureGeometry`] per pyramid. A
-/// colour pyramid is RGB, as [`ImageU8::read_rgb`](crate::camera::image::ImageU8::read_rgb)
+/// The kernel does no I/O and reads no `.sift` file -- the caller supplies the
+/// photographs and feature geometry, one [`FeatureGeometry`] per photograph. A
+/// colour photograph is RGB, as [`ImageU8::read_rgb`](crate::camera::image::ImageU8::read_rgb)
 /// decodes it. The score averages the channels, so their order changes only
-/// the order of that floating-point sum.
+/// the order of that floating-point sum. Every read of a photograph goes
+/// through the render entry points with the region pool the caller made for
+/// this call (`specs/core/camera/view-region-pyramids.md`), so the results are
+/// the same whichever way a read reaches its pixels.
+///
+/// # Errors
+///
+/// The [`PhotographReadError`] of the first read of a photograph that failed;
+/// a photograph made in memory fails only for pixels it does not hold.
 ///
 /// # Panics
 ///
-/// Panics when `features` is not parallel to `pyramids` or the CSR arrays are
+/// Panics when `features` is not parallel to `sources` or the CSR arrays are
 /// inconsistent (`cluster_starts` must start at 0, be non-decreasing, and end
 /// at the member count; the two member arrays must have equal length). A
-/// member whose image index is out of range for `pyramids`, whose feature
+/// member whose image index is out of range for `sources`, whose feature
 /// index is out of range for its image, or whose affine shape is degenerate
 /// or elongated past [`MAX_PATCH_ELONGATION`] is reported as
 /// [`MemberStatus::NotEvaluated`] rather than panicking.
+#[allow(clippy::too_many_arguments)]
 pub fn refine_cluster_patches(
-    pyramids: &[ImageU8Pyramid],
+    sources: &[TiledPhotograph],
+    pool: &RegionPool,
     features: &[FeatureGeometry<'_>],
     cluster_starts: &[u32],
     member_images: &[u32],
     member_features: &[u32],
     params: &ClusterRefineParams,
     progress: Option<&AtomicUsize>,
-) -> ClusterRefineResult {
-    let borrowed: Vec<&ImageU8Pyramid> = pyramids.iter().collect();
+) -> Result<ClusterRefineResult, PhotographReadError> {
+    let borrowed: Vec<&TiledPhotograph> = sources.iter().collect();
     refine_cluster_patches_borrowed(
         &borrowed,
+        pool,
         features,
         cluster_starts,
         member_images,
@@ -1407,28 +1516,30 @@ pub fn refine_cluster_patches(
     )
 }
 
-/// [`refine_cluster_patches`] over **borrowed** pyramids: the same kernel, for
-/// a caller that holds one pyramid per image behind a reference rather than a
-/// table of its own.
+/// [`refine_cluster_patches`] over **borrowed** photographs: the same kernel,
+/// for a caller that holds one photograph per image behind a reference rather
+/// than a table of its own.
 ///
-/// A pyramid is a decoded image and cloning one copies every pixel, so a caller
-/// whose views are
+/// A caller whose views are
 /// [`ProjectedImage`](crate::patch::normal_refine::ProjectedImage)s -- the
 /// bench's evaluation, which registers an in-memory cluster over the same views
 /// the patch kernels read -- reaches the kernel through this entry instead of
-/// building a table it would have to own. Everything else, the panics included,
-/// is [`refine_cluster_patches`].
+/// building a table it would have to own. Everything else, the errors and the
+/// panics included, is [`refine_cluster_patches`].
+#[allow(clippy::too_many_arguments)]
 pub fn refine_cluster_patches_borrowed(
-    pyramids: &[&ImageU8Pyramid],
+    sources: &[&TiledPhotograph],
+    pool: &RegionPool,
     features: &[FeatureGeometry<'_>],
     cluster_starts: &[u32],
     member_images: &[u32],
     member_features: &[u32],
     params: &ClusterRefineParams,
     progress: Option<&AtomicUsize>,
-) -> ClusterRefineResult {
+) -> Result<ClusterRefineResult, PhotographReadError> {
     refine_cluster_patches_with_elongation_limit(
-        pyramids,
+        sources,
+        pool,
         features,
         cluster_starts,
         member_images,
@@ -1446,7 +1557,8 @@ pub fn refine_cluster_patches_borrowed(
 /// limit changes nothing where it turns nothing away.
 #[allow(clippy::too_many_arguments)]
 fn refine_cluster_patches_with_elongation_limit(
-    pyramids: &[&ImageU8Pyramid],
+    sources: &[&TiledPhotograph],
+    pool: &RegionPool,
     features: &[FeatureGeometry<'_>],
     cluster_starts: &[u32],
     member_images: &[u32],
@@ -1454,11 +1566,11 @@ fn refine_cluster_patches_with_elongation_limit(
     params: &ClusterRefineParams,
     max_elongation: f64,
     progress: Option<&AtomicUsize>,
-) -> ClusterRefineResult {
+) -> Result<ClusterRefineResult, PhotographReadError> {
     assert_eq!(
         features.len(),
-        pyramids.len(),
-        "features must be parallel to pyramids"
+        sources.len(),
+        "features must be parallel to sources"
     );
     let m = member_images.len();
     assert_eq!(
@@ -1496,7 +1608,8 @@ fn refine_cluster_patches_with_elongation_limit(
                 refine_cluster(
                     cluster_starts[c] as usize,
                     cluster_starts[c + 1] as usize,
-                    pyramids,
+                    sources,
+                    pool,
                     features,
                     member_images,
                     member_features,
@@ -1506,13 +1619,13 @@ fn refine_cluster_patches_with_elongation_limit(
                     resolution,
                     max_elongation,
                 )
-            });
+            })?;
             if let Some(p) = progress {
                 p.fetch_add(1, Ordering::Relaxed);
             }
-            out
+            Ok(out)
         })
-        .collect();
+        .collect::<Result<_, PhotographReadError>>()?;
     if prof::enabled() {
         prof::report(c_count, wall_start.elapsed().as_secs_f64());
     }
@@ -1559,5 +1672,5 @@ fn refine_cluster_patches_with_elongation_limit(
             }
         }
     }
-    result
+    Ok(result)
 }

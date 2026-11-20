@@ -35,18 +35,25 @@
 //! owns the out-of-frame rejection semantics). See
 //! `specs/core/patch/patch-view-selection.md` for the accepted admission-flip
 //! loss and the measured numbers.
+//!
+//! Every pixel is read through the render entry points
+//! (`specs/core/camera/view-region-pyramids.md`), with the region pool the
+//! caller made for the call: the affine fast path through
+//! [`render_source_affine`] and the exact warp through
+//! [`render_source_tile`](crate::camera::sampler::render_source_tile), each
+//! view of a patch through one [`ViewRegions`].
 
-use crate::camera::remap::{mip_level_for_sigma, HeldLevel};
-use crate::camera::sampler::render_phase;
-use crate::camera::CameraIntrinsics;
+use crate::camera::remap::mip_level_for_sigma;
+use crate::camera::sampler::{render_phase, render_source_affine, RegionPool, ViewRegions};
+use crate::camera::{CameraIntrinsics, PhotographReadError};
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::normal_refine::{
-    build_level_context, irls_view_weights, normalized_stack, view_render_patch,
+    build_level_context, irls_view_weights, normalized_source_stack, view_render_patch,
     weighted_moments_pub, window_weights, znormalize_into_kept, ConsensusScratch, LevelContext,
     PatchWindow, ProjectedImage, Sampler, SamplerChoice, ViewSamplers, FLAT_NORM_SQ_EPS,
 };
 use crate::patch::PatchCounter;
-use crate::progress::{Cancelled, Progress};
+use crate::progress::Progress;
 use rayon::prelude::*;
 
 pub mod prof;
@@ -159,24 +166,27 @@ struct Reference {
 }
 
 /// Build the robust reference from the track views and report the track's
-/// self-agreement. `track_views` indexes into `views`. `None` when no reference
-/// could be built (fewer than `min_track_views` track views survive the validity
+/// self-agreement. `track_views` indexes into `views`, and `track_regions`,
+/// parallel to it, reads each track view. `Ok(None)` when no reference could
+/// be built (fewer than `min_track_views` track views survive the validity
 /// gates, or there is no common support / textured channel).
+#[allow(clippy::too_many_arguments)]
 fn build_reference(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
     track_views: &[u32],
+    track_regions: &mut [ViewRegions<'_>],
     track_keypoints: Option<&[Option<[f64; 2]>]>,
     w_full: &[f64],
     params: &ViewSelectParams,
     renders: &Progress<'_>,
-) -> Option<(Reference, f64)> {
+) -> Result<Option<(Reference, f64)>, PhotographReadError> {
     // Restrict to the track views, preserving order; build the frozen common
     // support of the patch over them.
     let track_proj: Vec<ProjectedImage<'_>> =
         track_views.iter().map(|&i| views[i as usize]).collect();
 
-    let ctx = prof::REF_SUPPORT.time(|| {
+    let Some(ctx) = prof::REF_SUPPORT.time(|| {
         build_level_context(
             patch,
             &track_proj,
@@ -185,30 +195,36 @@ fn build_reference(
             params.min_valid_fraction,
             track_keypoints,
         )
-    })?;
+    }) else {
+        return Ok(None);
+    };
     if ctx.kept.len() < params.min_track_views.max(2) as usize {
-        return None;
+        return Ok(None);
     }
 
     // Render + z-normalize the kept track views over the frozen support.
-    let (raw, channels) = prof::REF_RENDER.time(|| {
-        normalized_stack(
+    let Some((raw, channels)) = prof::REF_RENDER.time(|| {
+        normalized_source_stack(
             patch,
             &ctx,
             &track_proj,
+            track_regions,
             params.resolution,
             ViewSamplers::Each(params.sampler),
             track_keypoints,
             renders,
         )
-    })?;
+    })?
+    else {
+        return Ok(None);
+    };
     let n = ctx.pixels.len();
     let total_weight: f64 = ctx.weights.iter().sum();
     if total_weight <= 0.0 {
-        return None;
+        return Ok(None);
     }
     let sqrt_weights: Vec<f32> = ctx.weights.iter().map(|&w| w.sqrt() as f32).collect();
-    prof::REF_CONSENSUS.time(|| {
+    Ok(prof::REF_CONSENSUS.time(|| {
         let mut xs = Vec::new();
         let (kept, keep_mask) = znormalize_into_kept(
             &raw,
@@ -291,7 +307,7 @@ fn build_reference(
         let self_agreement = agree_sum / views_kept as f64;
 
         Some((reference, self_agreement))
-    })
+    }))
 }
 
 /// Maximum 4th-corner residual (source px) below which a candidate's
@@ -399,7 +415,8 @@ impl AffineCoreMap {
 ///
 /// Any other sampler resolves to level 0: [`Sampler::Bilinear`] reads it, and
 /// [`Sampler::Anisotropic`] takes its levels from the map's own footprint per
-/// sample ([`sample_support_affine_aniso`](crate::camera::sampler::sample_support_affine_aniso)), so its map stays in level-0 px.
+/// sample (the anisotropic read of [`render_source_affine`]), so its map
+/// stays in level-0 px.
 /// Its walk along the major axis can read up to `σ_major / 2` source px past
 /// the quad; those taps are clamped at the frame edge exactly as the per-pixel
 /// path clamps them, so the border gate needs no wider margin for it.
@@ -451,11 +468,11 @@ fn affine_core_map(
     // whole quad where the per-pixel path may straddle a boundary — inside the
     // accepted approximation, and level 0 (`scale = 1`) leaves the bilinear
     // path bit-identical to before.
+    let layout = view.source.layout();
     let level = match sampler {
-        Sampler::BilinearMip => mip_level_for_sigma(
-            affine_sigma_major(a[0], a[1], a[3], a[4]),
-            view.source.held_pyramid().num_levels(),
-        ),
+        Sampler::BilinearMip => {
+            mip_level_for_sigma(affine_sigma_major(a[0], a[1], a[3], a[4]), layout.levels())
+        }
         _ => 0,
     };
     let inv_scale = 1.0 / (1u64 << level) as f64;
@@ -464,8 +481,8 @@ fn affine_core_map(
     // square is the parallelogram {p00, p10, p01, p11_pred} (true p11 included
     // for the residual slack); its bounding box inside the margin keeps every
     // interior sample in-frame.
-    let img = view.source.held_pyramid().level(level);
-    let (w, h) = (img.width() as f64, img.height() as f64);
+    let (w, h) = layout.level_size(level);
+    let (w, h) = (f64::from(w), f64::from(h));
     let xs = [p00.0, p10.0, p01.0, p11.0, p11_pred.0];
     let ys = [p00.1, p10.1, p01.1, p11.1, p11_pred.1];
     let m = AFFINE_BORDER_MARGIN_PX;
@@ -631,9 +648,10 @@ pub fn view_could_see_patch(
 }
 
 /// Windowed ZNCC of `patch` rendered in `view` against the reference template,
-/// over the reference's frozen support. `None` when the render does not cover the
-/// reference support (a masked pixel falls out of frame) — the candidate is then
-/// not scoreable and is rejected.
+/// over the reference's frozen support, read through `regions`, the view's
+/// regions. `Ok(None)` when the render does not cover the reference support
+/// (a masked pixel falls out of frame) — the candidate is then not scoreable
+/// and is rejected.
 ///
 /// `single_ctx` is the reference's frozen support re-expressed as a one-view
 /// context (`kept = [0]`, the reference's `pixels` / `weights`); it is built once
@@ -652,6 +670,7 @@ pub fn view_could_see_patch(
 fn candidate_zncc(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
+    regions: &mut ViewRegions<'_>,
     reference: &Reference,
     single_ctx: &LevelContext,
     sqrt_weights: &[f32],
@@ -659,7 +678,7 @@ fn candidate_zncc(
     raw_scratch: &mut Vec<f32>,
     sampler: Sampler,
     renders: &Progress<'_>,
-) -> Option<f64> {
+) -> Result<Option<f64>, PhotographReadError> {
     // Affine fast path: project the four patch corners exactly, fit the
     // affine patch→image map, and sample the reference support through it —
     // skipping the per-pixel camera projection + distortion of the full warp
@@ -682,53 +701,60 @@ fn candidate_zncc(
         raw_scratch.clear();
         raw_scratch.resize(channels * n, 0.0);
         let resolution = params.resolution as usize;
+        if sampler == Sampler::Anisotropic {
+            prof::count(&prof::N_AFFINE_ANISO, 1);
+        }
+        // Under `Anisotropic` the map stays in level-0 pixels and `level` is
+        // 0, as the anisotropic affine read takes it.
         prof::AFFINE_SAMPLE.time(|| {
-            if sampler == Sampler::Anisotropic {
-                prof::count(&prof::N_AFFINE_ANISO, 1);
-                crate::camera::sampler::sample_support_affine_aniso(
-                    view.source.held_pyramid(),
-                    &map.a,
-                    &single_ctx.pixels,
-                    resolution,
-                    raw_scratch,
-                )
-            } else {
-                crate::camera::sampler::sample_support_affine(
-                    &HeldLevel::of(view.source.held_pyramid(), level),
-                    &map.a,
-                    &single_ctx.pixels,
-                    resolution,
-                    raw_scratch,
-                )
-            }
-        });
-        return score_raw_against_reference(
+            render_source_affine(
+                regions,
+                &map.a,
+                level,
+                &single_ctx.pixels,
+                resolution,
+                sampler,
+                raw_scratch,
+            )
+        })?;
+        return Ok(score_raw_against_reference(
             raw_scratch,
             channels,
             reference,
             single_ctx,
             sqrt_weights,
-        );
+        ));
     }
     prof::count(&prof::N_AFFINE_FALLBACK, 1);
 
     let single = [*view];
-    // Render over the reference's frozen support. `normalized_stack` returns the
-    // *raw* (un-compacted) per-original-channel pixel stack and rejects (returns
-    // `None`) if any support pixel is out of frame in this view. The first slot of
-    // its tuple is `[(0*channels + c)*n + pixel]` for the single view.
-    let (raw, channels) = prof::ZNCC_RENDER.time(|| {
-        normalized_stack(
+    // Render over the reference's frozen support. `normalized_source_stack`
+    // returns the *raw* (un-compacted) per-original-channel pixel stack and
+    // rejects (returns `None`) if any support pixel is out of frame in this
+    // view. The first slot of its tuple is `[(0*channels + c)*n + pixel]` for
+    // the single view.
+    let Some((raw, channels)) = prof::ZNCC_RENDER.time(|| {
+        normalized_source_stack(
             patch,
             single_ctx,
             &single,
+            std::slice::from_mut(regions),
             params.resolution,
             ViewSamplers::Frozen(&[sampler]),
             None,
             renders,
         )
-    })?;
-    score_raw_against_reference(&raw, channels, reference, single_ctx, sqrt_weights)
+    })?
+    else {
+        return Ok(None);
+    };
+    Ok(score_raw_against_reference(
+        &raw,
+        channels,
+        reference,
+        single_ctx,
+        sqrt_weights,
+    ))
 }
 
 /// Score a raw support stack (`[channel · n + pixel]`, the scored view's
@@ -789,7 +815,10 @@ fn score_raw_against_reference(
 /// `views` is one [`ProjectedImage`] per reconstruction image (indexed by image
 /// index); `track_views` lists the image indices that already observe the point
 /// (its track). Returns the admitted view indices and their ZNCC scores; see
-/// [`ViewSelection`] and `specs/core/patch/patch-view-selection.md`.
+/// [`ViewSelection`] and `specs/core/patch/patch-view-selection.md`. Every
+/// pixel is read through the render entry points with `pool`, the region pool
+/// the caller made for the call, each view through one [`ViewRegions`] that
+/// the track views keep from the reference's renders to their own scores.
 ///
 /// The candidate set is the track views plus every other image that
 /// geometrically sees the surfel: [`view_could_see_patch`] holds (front-facing
@@ -828,10 +857,16 @@ fn score_raw_against_reference(
 /// `progress` reports two phases, `build reference` and `score views`, counts
 /// the views scored, and is polled for cancellation before and after reference
 /// construction and between views — which is where a selection over a capture's
-/// worth of images spends its time. A cancelled call returns [`Cancelled`]
-/// rather than a partial list of views, so a caller never installs half a selection.
-/// A batch caller with no one watching passes [`Progress::none`], which reports
-/// nothing and never cancels.
+/// worth of images spends its time. A cancelled call returns
+/// [`PhotographReadError::Cancelled`] rather than a partial list of views, so
+/// a caller never installs half a selection. A batch caller with no one
+/// watching passes [`Progress::none`], which reports nothing and never
+/// cancels.
+///
+/// # Errors
+///
+/// [`PhotographReadError::Cancelled`] when `progress` was cancelled, and the
+/// error of the first read of a photograph that failed.
 ///
 /// # Panics
 ///
@@ -839,15 +874,17 @@ fn score_raw_against_reference(
 pub fn select_patch_views(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     track_views: &[u32],
     track_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &ViewSelectParams,
     progress: &Progress<'_>,
-) -> Result<ViewSelection, Cancelled> {
+) -> Result<ViewSelection, PhotographReadError> {
     prof::TOTAL.time(|| {
         select_patch_views_impl(
             patch,
             views,
+            pool,
             track_views,
             track_keypoints,
             params,
@@ -900,15 +937,17 @@ pub fn projected_patch_frame(
 /// sampler. A single selection passes one `Progress` as both, and the batch
 /// passes its own only as `renders`, since many patches counting views into
 /// one bar would overwrite each other.
+#[allow(clippy::too_many_arguments)]
 fn select_patch_views_impl(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     track_views: &[u32],
     track_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &ViewSelectParams,
     progress: &Progress<'_>,
     renders: &Progress<'_>,
-) -> Result<ViewSelection, Cancelled> {
+) -> Result<ViewSelection, PhotographReadError> {
     progress.check_cancel()?;
     let resolution = params.resolution.max(2);
     let params = ViewSelectParams {
@@ -938,6 +977,13 @@ fn select_patch_views_impl(
         track_keypoints.map(|kps| keep.iter().map(|&i| kps[i]).collect());
     let is_track = seen; // the dedup set doubles as the membership test
 
+    // One view's regions per track view, which its reference render and its
+    // own score share.
+    let mut track_regions: Vec<ViewRegions<'_>> = track_views
+        .iter()
+        .map(|&i| ViewRegions::new(views[i as usize].source, pool))
+        .collect();
+
     // Build the robust reference from the track views.
     let reference = {
         let _phase = progress.phase("build reference");
@@ -946,12 +992,13 @@ fn select_patch_views_impl(
                 patch,
                 views,
                 &track_views,
+                &mut track_regions,
                 track_kps.as_deref(),
                 &w_full,
                 &params,
                 renders,
             )
-        })
+        })?
     };
     progress.check_cancel()?;
 
@@ -997,7 +1044,7 @@ fn select_patch_views_impl(
         score_progress.check_cancel()?;
         admitted.push(ti);
         // Anchored at this track view's own keypoint where one was supplied: the
-        // recentred patch is what `normalized_stack` would render under
+        // recentred patch is what `normalized_source_stack` would render under
         // `view_keypoints`, and feeding it to `candidate_zncc` anchors the affine
         // fast path (which projects the patch's own corners) identically.
         let view = &views[ti as usize];
@@ -1012,12 +1059,14 @@ fn select_patch_views_impl(
             kp,
             params.resolution,
         );
+        let regions = &mut track_regions[t];
         scores.push(
             prof::TRACK_SCORE
                 .time(|| {
                     candidate_zncc(
                         &rpatch,
                         view,
+                        regions,
                         &reference,
                         &single_ctx,
                         &sqrt_weights,
@@ -1026,7 +1075,7 @@ fn select_patch_views_impl(
                         sampler,
                         renders,
                     )
-                })
+                })?
                 .unwrap_or(f64::NAN),
         );
         scored_views += 1;
@@ -1082,10 +1131,12 @@ fn select_patch_views_impl(
             None,
             params.resolution,
         );
+        let mut regions = ViewRegions::new(view.source, pool);
         let zncc = prof::CAND_SCORE.time(|| {
             candidate_zncc(
                 patch,
                 view,
+                &mut regions,
                 &reference,
                 &single_ctx,
                 &sqrt_weights,
@@ -1094,7 +1145,7 @@ fn select_patch_views_impl(
                 sampler,
                 renders,
             )
-        });
+        })?;
         scored_views += 1;
         score_progress.count(scored_views, Some(total_views), "view");
         let Some(zncc) = zncc else { continue };
@@ -1131,25 +1182,30 @@ fn select_patch_views_impl(
 /// from another thread. `progress` receives a `patches` count about every
 /// hundredth of the way through, is polled for cancellation before each patch,
 /// and, when detailed, times the renders of each sampler in its own detail
-/// phase.
+/// phase. Every patch reads through `pool`, the region pool the caller made
+/// for the call.
 ///
 /// # Errors
 ///
-/// [`Cancelled`] when `progress` was cancelled before every patch was scored.
+/// [`PhotographReadError::Cancelled`] when `progress` was cancelled before
+/// every patch was scored, and the error of a read of a photograph that
+/// failed.
 ///
 /// # Panics
 ///
 /// Panics if `track_views.len() != cloud.len()`, if `track_keypoints` is given
 /// and not parallel to `track_views`, or if an index is out of range.
+#[allow(clippy::too_many_arguments)]
 pub fn select_patch_cloud_views(
     cloud: &PatchCloud,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     track_views: &[Vec<u32>],
     track_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     params: &ViewSelectParams,
     done: Option<&std::sync::atomic::AtomicUsize>,
     progress: &Progress<'_>,
-) -> Result<Vec<ViewSelection>, Cancelled> {
+) -> Result<Vec<ViewSelection>, PhotographReadError> {
     assert_eq!(
         track_views.len(),
         cloud.len(),
@@ -1167,7 +1223,7 @@ pub fn select_patch_cloud_views(
     }
     let wall_start = std::time::Instant::now();
     let counter = PatchCounter::new(cloud.len(), done, progress);
-    let out: Vec<Option<ViewSelection>> = cloud
+    let out: Vec<Option<Result<ViewSelection, PhotographReadError>>> = cloud
         .patches
         .par_iter()
         .enumerate()
@@ -1181,19 +1237,18 @@ pub fn select_patch_cloud_views(
             // patch: the per-patch phases and view counts would be dozens of
             // threads writing over each other, so the selector reports them to
             // nothing and only its render detail phases reach `progress`.
-            let out = prof::TOTAL
-                .time(|| {
-                    select_patch_views_impl(
-                        patch,
-                        views,
-                        tv,
-                        kps,
-                        params,
-                        &Progress::none(),
-                        progress,
-                    )
-                })
-                .expect("Progress::none never cancels");
+            let out = prof::TOTAL.time(|| {
+                select_patch_views_impl(
+                    patch,
+                    views,
+                    pool,
+                    tv,
+                    kps,
+                    params,
+                    &Progress::none(),
+                    progress,
+                )
+            });
             counter.finished();
             Some(out)
         })
@@ -1202,10 +1257,11 @@ pub fn select_patch_cloud_views(
         prof::report(cloud.len(), wall_start.elapsed().as_secs_f64());
     }
     progress.check_cancel()?;
-    Ok(out
-        .into_iter()
+    // `Progress::none` never cancels, so a patch's error is a read that
+    // failed.
+    out.into_iter()
         .map(|o| o.expect("every patch ran when nothing was cancelled"))
-        .collect())
+        .collect()
 }
 
 #[cfg(test)]

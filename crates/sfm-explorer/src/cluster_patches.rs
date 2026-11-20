@@ -20,7 +20,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use ndarray::{Array1, Array2, Array3, ArrayView2, ArrayView3};
 use rayon::prelude::*;
-use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::image::ImageU8;
+use sfmtool_core::camera::sampler::RegionPool;
+use sfmtool_core::camera::{PhotographReadError, TiledPhotograph};
 use sfmtool_core::features::cluster_match::{
     background_floor_clusters_lazy, BackgroundFloorParams, Clusters, LazyClusterError,
 };
@@ -553,16 +555,16 @@ pub(crate) fn build(
     let clusters = cluster(forest, &image_starts, &clustering)?;
     let (detected_positions, detected_shapes) =
         member_detections(forest, &image_starts, &clusters, index_path)?;
-    let pyramids = read_photographs(&plan.photographs, &reading)?;
+    let photographs = read_photographs(&plan.photographs, &reading)?;
     let refined = refine(
-        &pyramids,
+        &photographs,
         &facts,
         &clusters,
         &detected_positions,
         &detected_shapes,
         &refining,
     )?;
-    drop(pyramids);
+    drop(photographs);
     let not_evaluated = refined
         .member_status
         .iter()
@@ -751,7 +753,8 @@ fn member_detections(
     Ok((positions, shapes))
 }
 
-/// Every photograph decoded into a full pyramid, in the node's order.
+/// Every photograph decoded into a tiled photograph with a full pyramid, in
+/// the node's order.
 ///
 /// Each is read with [`ImageU8::read_rgb`], the reader under
 /// `sfm cluster-patches`' `read_image_rgb`, so the two builds hand the
@@ -761,11 +764,11 @@ fn member_detections(
 fn read_photographs(
     photographs: &[PathBuf],
     progress: &Progress<'_>,
-) -> Result<Vec<ImageU8Pyramid>, Stopped> {
+) -> Result<Vec<TiledPhotograph>, Stopped> {
     let phase = progress.phase("read photographs");
     let done = AtomicU64::new(0);
     let total = photographs.len() as u64;
-    let read: Vec<Result<Option<ImageU8Pyramid>, String>> = photographs
+    let read: Vec<Result<Option<TiledPhotograph>, String>> = photographs
         .par_iter()
         .map(|path| {
             if phase.is_cancelled() {
@@ -773,26 +776,24 @@ fn read_photographs(
             }
             let image = ImageU8::read_rgb(path)
                 .map_err(|e| format!("Cannot read the photograph {}: {e}", path.display()))?;
-            let (width, height) = (image.width(), image.height());
-            let pyramid =
-                ImageU8Pyramid::from_image(image, ImageU8Pyramid::full_levels(width, height));
+            let photograph = TiledPhotograph::from_image(image);
             let finished = done.fetch_add(1, Ordering::Relaxed) + 1;
             phase.count(finished, Some(total), "image");
-            Ok(Some(pyramid))
+            Ok(Some(photograph))
         })
         .collect();
     if phase.is_cancelled() {
         return Err(Stopped::Cancelled);
     }
-    let mut pyramids = Vec::with_capacity(read.len());
+    let mut decoded = Vec::with_capacity(read.len());
     for outcome in read {
         match outcome {
-            Ok(Some(pyramid)) => pyramids.push(pyramid),
+            Ok(Some(photograph)) => decoded.push(photograph),
             Ok(None) => return Err(Stopped::Cancelled),
             Err(why) => return Err(Stopped::Failed(why)),
         }
     }
-    Ok(pyramids)
+    Ok(decoded)
 }
 
 /// The refinement's answer for every member, in the member order of the
@@ -815,9 +816,10 @@ struct Refined {
 /// The kernel reads only the feature rows its members name, so each image's
 /// arrays hold the members' detections at their own rows and zeros elsewhere,
 /// which is how `sfm cluster-patches` presents them: the same values at the
-/// same rows as a `.sift` read, without opening a `.sift` file.
+/// same rows as a `.sift` read, without opening a `.sift` file. Each batch is
+/// one kernel call, with a region pool of its own.
 fn refine(
-    pyramids: &[ImageU8Pyramid],
+    photographs: &[TiledPhotograph],
     facts: &[ImageFacts],
     clusters: &Clusters,
     detected_positions: &Array2<f32>,
@@ -883,14 +885,19 @@ fn refine(
         let (m0, m1) = (starts[first] as usize, starts[last] as usize);
         let local: Vec<u32> = starts[first..=last].iter().map(|s| s - m0 as u32).collect();
         let batch = refine_cluster_patches(
-            pyramids,
+            photographs,
+            &RegionPool::for_kernel_call(),
             &features,
             &local,
             &member_images[m0..m1],
             &member_features[m0..m1],
             &params,
             None,
-        );
+        )
+        .map_err(|e| match e {
+            PhotographReadError::Cancelled => Stopped::Cancelled,
+            e => Stopped::Failed(format!("Cannot refine the cluster patches: {e}")),
+        })?;
         for (c, reference) in batch.reference_members.into_iter().enumerate() {
             refined.reference_members[first + c] = match reference {
                 REFERENCE_UNREFINABLE => REFERENCE_UNREFINABLE,
@@ -918,7 +925,7 @@ fn refine(
         &refined.member_status,
         &refined.reference_members,
         refined.member_affine_shapes.view(),
-        pyramids.len(),
+        photographs.len(),
     );
     Ok(refined)
 }

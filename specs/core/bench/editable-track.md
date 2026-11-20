@@ -558,6 +558,7 @@ pub fn search_geometry(
     track: &EditableTrack,
     observation: usize,                  // the explicit reference appearance
     views: &[ProjectedImage<'_>],         // one per reconstruction image
+    pool: &RegionPool,                    // the caller's, for this call
     options: &GeometrySearchOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, GeometrySearchReport), GeometrySearchError>;
@@ -588,6 +589,7 @@ pub enum GeometrySearchError {
     NoPatchFrame,
     NoPlace { observation: usize },
     NoSuchImage { image: u32, view_count: usize },
+    Photograph(PhotographReadError),
     Cancelled,
 }
 
@@ -1106,22 +1108,25 @@ and a script that just read the files.
 
 **Each step reads through the region pool its caller made.** The steps that
 read photographs -- `evaluate`, `evaluate_rendering_bitmap`, `fit`,
-`set_stage`, the normal steps, and the runs and searches built on them
-(`refine_normals`, `refit_points`, `build_track_at_pixel`, `far_field_sweep`,
-`find_nearby_tracks`) -- take a `&RegionPool` beside the views: the caller makes
-one with `RegionPool::for_kernel_call()` for the call, and a step that runs
-another passes its pool down
+`set_stage`, the normal steps, `search_geometry`, and the runs and searches
+built on them (`refine_normals`, `refit_points`, `build_track_at_pixel`,
+`far_field_sweep`, `find_nearby_tracks`) -- take a `&RegionPool` beside the
+views: the caller makes one with `RegionPool::for_kernel_call()` for the call,
+and a step that runs another passes its pool down
 ([view-region-pyramids.md](../camera/view-region-pyramids.md) § "Rust API").
 Their own reads go through the render entry points with one `ViewRegions` per
 view of the patch in hand: the cluster stage's member grids (the template and
 the self-similarity tiles, `sample_source_member_grid`), the grid-plane
 normal's context renders and the pairwise-flow crops (`render_source_tile`), and
-the grown plane's value and Sobel reads (`read_source_samples`). The patch
-kernels they call below that -- the reference view, the stored bitmap, the
-keypoint kernels, the cluster refinement and the view selection -- read the
-whole pyramid each tiled photograph holds; `score_bitmap`,
-`render_bitmap_in_place` and `search_geometry` read only through those, so they
-take no pool. A read that fails is the step's
+the grown plane's value and Sobel reads (`read_source_samples`). So do the
+patch kernels below them that the cluster stage and the geometry search run,
+with the pool passed down: the cluster refinement
+([cluster-patch-refinement.md](../patch/cluster-patch-refinement.md)) and the
+view selection ([patch-view-selection.md](../patch/patch-view-selection.md)).
+The other patch kernels the steps call -- the reference view, the stored
+bitmap and the keypoint kernels -- read the whole pyramid each tiled
+photograph holds; `score_bitmap` and `render_bitmap_in_place` read only
+through those, so they take no pool. A read that fails is the step's
 `Photograph(PhotographReadError)` error (a cancelled read is its `Cancelled`),
 never a refused row: where an inner step turns failures into values -- the
 grown plane's renders, the track-at-pixel cascade's members, the far-field

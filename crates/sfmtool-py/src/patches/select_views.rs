@@ -8,6 +8,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::patch::normal_refine::ProjectedImage;
 use sfmtool_core::patch::view_selection::{select_patch_cloud_views, ViewSelectParams};
 use sfmtool_core::patch::{track_keypoints_from_reconstruction, track_views_from_reconstruction};
@@ -204,18 +205,22 @@ impl PyPatchCloud {
         }
 
         let progress_handle = progress.as_ref().map(|p| p.handle());
-        let results = py.detach(|| {
-            select_patch_cloud_views(
-                &self.inner,
-                &views,
-                &track_views,
-                keypoints.as_deref(),
-                &params,
-                progress_handle.as_deref(),
-                &Progress::none(),
-            )
-            .expect("Progress::none never cancels")
-        });
+        // `Progress::none` never cancels, so an error is a photograph that
+        // could not be read.
+        let results = py
+            .detach(|| {
+                select_patch_cloud_views(
+                    &self.inner,
+                    &views,
+                    &RegionPool::for_kernel_call(),
+                    &track_views,
+                    keypoints.as_deref(),
+                    &params,
+                    progress_handle.as_deref(),
+                    &Progress::none(),
+                )
+            })
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
         let mut out = Vec::new();
         for (res, &pid) in results.iter().zip(&self.inner.point_indexes) {

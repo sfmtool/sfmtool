@@ -2413,13 +2413,17 @@ impl AppState {
                 return Finished::Cancelled;
             }
             let views = decoded.views();
-            match bench::search_geometry(
+            let pool = RegionPool::for_kernel_call();
+            let searched = bench::search_geometry(
                 &track,
                 observation,
                 &views,
+                &pool,
                 &GeometrySearchOptions::default(),
                 &p_work,
-            ) {
+            );
+            note_region_reads(&p_work, &pool);
+            match searched {
                 Err(sfmtool_core::bench::GeometrySearchError::Cancelled) => Finished::Cancelled,
                 Err(e) => {
                     Finished::Failed(format!("Cannot find geometry matches for {label}: {e}"))
