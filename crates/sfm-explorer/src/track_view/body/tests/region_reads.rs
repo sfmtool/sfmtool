@@ -102,8 +102,8 @@ fn whole_pyramid_tiles(
             let camera = crate::scene::image_intrinsics(&recon.image_set, image).expect("a camera");
             let pose = crate::scene::cam_from_world(&recon.image_set.images[image]);
             let sampler = tile_sampler(recon, track, observation);
-            let render = |frame: &sfmtool_core::patch::cloud::OrientedPatch, side: u32| {
-                let mut map = WarpMap::from_patch(frame, &camera, &pose, side);
+            let render = |rendered_frame: &sfmtool_core::patch::cloud::OrientedPatch, side: u32| {
+                let mut map = WarpMap::from_patch(rendered_frame, &camera, &pose, side);
                 opaque(&render_tile(&src, &mut map, sampler))
             };
             let anchored = render_patch_frame(patch_frame, &camera, &pose, Some(site.pixel));
