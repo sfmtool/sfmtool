@@ -423,7 +423,12 @@ fn a_kernel_calls_renders_never_hold_more_than_its_pool() {
     assert!(results.iter().all(|&(_, _, equal)| equal));
     let stats = pool.stats();
     assert!(stats.peak_bytes <= pool.capacity(), "{stats:?}");
-    assert!(stats.copied_reads > 0 && stats.tiled_reads > 0, "{stats:?}");
+    // A render whose regions fit the pool alone, as the typical one's do,
+    // fails to reserve only while another read holds copied bytes, so some
+    // read copies. Whether any read takes the tile path depends on how
+    // many renders the scheduler overlaps; a full pool taking the tile path
+    // is checked in `kept_regions_are_counted_in_the_pool_and_released_when_dropped`.
+    assert!(stats.copied_reads > 0, "{stats:?}");
     assert_eq!(stats.copied_reads + stats.tiled_reads, results.len() as u64);
     assert_eq!(pool.held_bytes(), 0);
 }

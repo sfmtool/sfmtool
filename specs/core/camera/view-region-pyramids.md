@@ -299,7 +299,9 @@ that renders whose required regions lie inside the kept ones reuse them, with
 the whole pyramid's values and a fresh view's, and renders outside reassemble,
 as does a read with any one level outside;
 and that kept regions are counted in the pool, given back before a reassembly
-reserves, and released when their view is dropped.
+reserves, and released when their view is dropped, and that a view whose
+render finds the pool full of another view's kept regions takes the tile path
+and copies again once they are released.
 [regions/tests.rs](../../../crates/sfmtool-core/src/camera/sampler/regions/tests.rs)
 checks that a region pyramid of the required regions equals the whole
 pyramid, and that one a pixel smaller on any inner edge does not. The grown
