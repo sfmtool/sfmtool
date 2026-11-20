@@ -5,6 +5,7 @@
 //! each cell draws and why, the wait for the scroll to stop before anything is
 //! asked for, and the reference picks for the points that store none.
 
+use std::collections::HashMap;
 use std::sync::{mpsc, Arc};
 
 use ndarray::Array4;
@@ -944,4 +945,117 @@ fn rows_that_leave_the_view_leave_the_picks_list() {
     assert!(unreferenced
         .iter()
         .all(|&p| state.reference_pick(id, p, document).is_none()));
+}
+
+/// One frame with the input `raw`, adding every whole picture it uploaded to
+/// `uploaded`.
+fn uploading_frame(
+    ctx: &egui::Context,
+    panel: &mut TrackTablePanel,
+    state: &mut AppState,
+    raw: egui::RawInput,
+    uploaded: &mut HashMap<egui::TextureId, egui::ColorImage>,
+) {
+    let mut output = ctx.run_ui(raw, |ui| panel.show(ui, state));
+    for (id, deltas) in &output.textures_delta.set {
+        for delta in deltas {
+            if let (None, egui::ImageData::Color(image)) = (delta.pos, &delta.image) {
+                uploaded.insert(*id, (**image).clone());
+            }
+        }
+    }
+    output.textures_delta.clear();
+}
+
+/// A Crop cell and its hover view, drawn by whole frames through the panel's
+/// region pool and through a pool that holds nothing, so that every read
+/// takes the photograph's tiles, are the crop and hover view the whole
+/// pyramid gives, and the pool holds nothing once they are drawn.
+#[test]
+fn crop_cells_drawn_through_regions_equal_the_whole_pyramid_crops() {
+    use crate::patch_pictures::tests::whole_pyramid_pixels;
+    let point = 1;
+    for panel_pool in [true, false] {
+        let mut clock = Clock(0.0);
+        let (mut state, id) = crop_state();
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| {
+            style.interaction.tooltip_delay = 0.0;
+            style.interaction.tooltip_grace_time = 0.0;
+        });
+        let mut panel = TrackTablePanel::new();
+        if !panel_pool {
+            panel.regions = crate::patch_pictures::PanelRegionPool::with_capacity(0);
+        }
+        let mut uploaded = HashMap::new();
+        let height = 4800.0;
+        uploading_frame(
+            &ctx,
+            &mut panel,
+            &mut state,
+            at(height, clock.tick()),
+            &mut uploaded,
+        );
+        state.settle_track_table_columns();
+        uploading_frame(
+            &ctx,
+            &mut panel,
+            &mut state,
+            at(height, clock.tick()),
+            &mut uploaded,
+        );
+
+        let Some(CellPicture::Texture(texture)) = cell(&panel, point, PictureColumn::Crop) else {
+            panic!("point {point} drew no crop");
+        };
+        let (_, outline, image) = panel.pictures.crop_of(point).expect("a crop held");
+        let crop = crate::patch_pictures::crop::region(outline).expect("a crop region");
+        let src = state
+            .cached_photograph(id, image)
+            .expect("a cached photograph");
+        let drawn = &uploaded[&texture];
+        assert!(
+            *drawn == whole_pyramid_pixels(&src, crop, drawn.size, false),
+            "the crop, panel pool {panel_pool}"
+        );
+
+        let heading = painted_text_rects(&ctx, at(height, clock.tick()), |ui| {
+            panel.show(ui, &mut state)
+        })
+        .into_iter()
+        .find(|t| t.text == "Crop")
+        .expect("the Crop heading")
+        .rect
+        .center();
+        let &(_, row) = panel.drawn().iter().find(|(p, _)| *p == point).unwrap();
+        for _ in 0..3 {
+            let mut raw = at(height, clock.tick());
+            raw.events = vec![egui::Event::PointerMoved(egui::pos2(
+                heading.x,
+                row.center().y,
+            ))];
+            uploading_frame(&ctx, &mut panel, &mut state, raw, &mut uploaded);
+        }
+        let hover = panel.pictures.hover_crop().expect("a crop hover view");
+        let drawn = &uploaded[&hover.texture_id()];
+        assert!(
+            *drawn == whole_pyramid_pixels(&src, crop, drawn.size, true),
+            "the crop's hover view, panel pool {panel_pool}"
+        );
+
+        let pool = panel.regions.pool();
+        assert_eq!(pool.held_bytes(), 0, "a drawn crop kept its regions");
+        let stats = pool.stats();
+        if panel_pool {
+            assert!(
+                stats.copied_reads > 0 && stats.tiled_reads == 0,
+                "{stats:?}"
+            );
+        } else {
+            assert!(
+                stats.copied_reads == 0 && stats.tiled_reads > 0,
+                "{stats:?}"
+            );
+        }
+    }
 }

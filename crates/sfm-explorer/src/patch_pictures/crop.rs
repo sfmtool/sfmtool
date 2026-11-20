@@ -19,7 +19,9 @@
 //! of that outline widened by [`CROP_MARGIN_PX`] on every side and rounded out
 //! to whole pixels, so the whole outline is in it and a fisheye's curved edges
 //! show as curves, then widened on its shorter side until it is square, with
-//! the outline in the middle ([`region()`]).
+//! the outline in the middle ([`region()`]). The crop reads one level of the
+//! photograph, and of it only the pixels its texels' bilinear taps take,
+//! through the panel's region pool, with the whole level's values.
 //!
 //! Hovering the crop shows it in context ([`context()`]): the same crop
 //! centred in [`CONTEXT_FACTOR`] times its width and height of the
@@ -32,9 +34,8 @@
 
 use egui::{Color32, ColorImage, Pos2, Rect, Stroke};
 use nalgebra::Point3;
-use sfmtool_core::camera::image::ImageU8Pyramid;
-use sfmtool_core::camera::remap::sample_bilinear_u8;
-use sfmtool_core::camera::CameraIntrinsics;
+use sfmtool_core::camera::sampler::{read_source_samples, RegionPool, ViewRegions};
+use sfmtool_core::camera::{CameraIntrinsics, PhotographReadError, TiledPhotograph};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
 
@@ -225,19 +226,31 @@ fn texels(region: &Region) -> [usize; 2] {
         .map(|side| ((side as f64 / step).round() as usize).max(1))
 }
 
-/// The crop of `outline` from `src`, or `None` when no sample of it landed
-/// ([`region()`]).
-pub(crate) fn image(outline: &Outline, src: &ImageU8Pyramid) -> Option<CropPicture> {
-    let region = region(outline)?;
+/// The crop of `outline` from `src`, read through `pool`, or `None` when no
+/// sample of it landed ([`region()`]).
+pub(crate) fn image(
+    outline: &Outline,
+    src: &TiledPhotograph,
+    pool: &RegionPool,
+) -> Result<Option<CropPicture>, PhotographReadError> {
+    let Some(region) = region(outline) else {
+        return Ok(None);
+    };
     let texels = texels(&region);
-    Some(picture(src, outline, region, texels))
+    picture(src, pool, outline, region, texels).map(Some)
 }
 
 /// A crop in context: the same crop centred in [`CONTEXT_FACTOR`] times its
 /// width and height of the photograph, sampled at the crop's own step so that
 /// the crop is the middle third of it texel for texel.
-pub(crate) fn context(outline: &Outline, src: &ImageU8Pyramid) -> Option<CropPicture> {
-    let crop = region(outline)?;
+pub(crate) fn context(
+    outline: &Outline,
+    src: &TiledPhotograph,
+    pool: &RegionPool,
+) -> Result<Option<CropPicture>, PhotographReadError> {
+    let Some(crop) = region(outline) else {
+        return Ok(None);
+    };
     let texels = texels(&crop);
     let k = CONTEXT_FACTOR as usize;
     // Whole crops of photograph on each side of the crop: one at a factor of 3.
@@ -249,9 +262,9 @@ pub(crate) fn context(outline: &Outline, src: &ImageU8Pyramid) -> Option<CropPic
         ],
         size: crop.size.map(|side| side * k as i64),
     };
-    let mut picture = picture(src, outline, wide, texels.map(|t| t * k));
+    let mut picture = picture(src, pool, outline, wide, texels.map(|t| t * k))?;
     picture.crop = crop;
-    Some(picture)
+    Ok(Some(picture))
 }
 
 /// `region` of the photograph sampled at `texels`, with `outline` carried
@@ -263,38 +276,76 @@ pub(crate) fn context(outline: &Outline, src: &ImageU8Pyramid) -> Option<CropPic
 /// is the largest not wider than the step, so the picture averages what it
 /// skips instead of aliasing it. Texels whose centre falls off the photograph
 /// are transparent.
+///
+/// The picture reads one level, and of it only the pixels its texels' bilinear
+/// taps take: [`read_source_samples`] reads the bounding box of the tap pairs
+/// of the texel centres on the photograph, copied from `pool` or read through
+/// the photograph's tiles, and gives back its bytes when the picture is cut.
+/// Each texel blends its four pixels as `sample_bilinear_u8` does, so it is
+/// the value the whole level gives, bit for bit. The photograph's size and
+/// levels are read from its layout.
 fn picture(
-    src: &ImageU8Pyramid,
+    src: &TiledPhotograph,
+    pool: &RegionPool,
     outline: &Outline,
     region: Region,
     texels: [usize; 2],
-) -> CropPicture {
+) -> Result<CropPicture, PhotographReadError> {
     let step = [
         region.size[0] as f64 / texels[0] as f64,
         region.size[1] as f64 / texels[1] as f64,
     ];
+    let layout = src.layout();
     let level = (step[0].min(step[1]).log2().floor().max(0.0) as usize)
-        .min(src.num_levels().saturating_sub(1));
+        .min(layout.levels().saturating_sub(1));
     let scale = (1u64 << level) as f64;
-    let img = src.level(level);
-    let full = src.level(0);
-    let (width, height) = (f64::from(full.width()), f64::from(full.height()));
-    let channels = img.channels().max(1);
-    let mut rgba = Vec::with_capacity(texels[0] * texels[1] * 4);
+    let (width, height) = layout.level_size(0);
+    let (width, height) = (f64::from(width), f64::from(height));
+    // Where each texel's centre lands on the level, `None` off the photograph.
+    let mut centres = Vec::with_capacity(texels[0] * texels[1]);
     for j in 0..texels[1] {
         let y = region.min[1] as f64 + (j as f64 + 0.5) * step[1];
         for i in 0..texels[0] {
             let x = region.min[0] as f64 + (i as f64 + 0.5) * step[0];
-            if x < 0.0 || y < 0.0 || x >= width || y >= height {
-                rgba.extend_from_slice(&[0, 0, 0, 0]);
-                continue;
-            }
-            let (lx, ly) = ((x / scale) as f32, (y / scale) as f32);
-            let value = |c: u32| {
-                (sample_bilinear_u8(img, lx, ly, c.min(channels - 1)) + 0.5).clamp(0.0, 255.0) as u8
-            };
-            rgba.extend_from_slice(&[value(0), value(1), value(2), 255]);
+            centres.push(
+                (x >= 0.0 && y >= 0.0 && x < width && y < height)
+                    .then(|| [(x / scale) as f32, (y / scale) as f32]),
+            );
         }
+    }
+    let positions: Vec<[f32; 2]> = centres.iter().flatten().copied().collect();
+    let samples = if positions.is_empty() {
+        None
+    } else {
+        Some(read_source_samples(
+            &mut ViewRegions::new(src, pool),
+            level,
+            &positions,
+            0,
+        )?)
+    };
+    let channels = src.channels().max(1) as usize;
+    let mut rgba = Vec::with_capacity(texels[0] * texels[1] * 4);
+    let mut k = 0;
+    for centre in &centres {
+        let Some(samples) = samples.as_ref().filter(|_| centre.is_some()) else {
+            rgba.extend_from_slice(&[0, 0, 0, 0]);
+            continue;
+        };
+        let window = samples.window(k);
+        let [fx, fy] = samples.fractions(k);
+        k += 1;
+        let value = |c: usize| {
+            // The cell's four pixels, `(x0, y0)`, `(x0 + 1, y0)`, `(x0, y0 + 1)`
+            // and `(x0 + 1, y0 + 1)`, blended in `sample_bilinear_u8`'s order.
+            let v = |q: usize| f32::from(window[q * channels + c.min(channels - 1)]);
+            let sample = (1.0 - fx) * (1.0 - fy) * v(0)
+                + fx * (1.0 - fy) * v(1)
+                + (1.0 - fx) * fy * v(2)
+                + fx * fy * v(3);
+            (sample + 0.5).clamp(0.0, 255.0) as u8
+        };
+        rgba.extend_from_slice(&[value(0), value(1), value(2), 255]);
     }
     let to_texel = |p: [f64; 2]| {
         Pos2::new(
@@ -303,7 +354,7 @@ fn picture(
         )
     };
     let keypoint = outline.keypoint;
-    CropPicture {
+    Ok(CropPicture {
         image: ColorImage::from_rgba_unmultiplied(texels, &rgba),
         crop: region,
         outline: outline.samples.iter().map(|p| p.map(to_texel)).collect(),
@@ -315,7 +366,7 @@ fn picture(
             .map(|p| (p[0] - keypoint[0]).hypot(p[1] - keypoint[1]))
             .filter(|d| d.is_finite()),
         projection_of: outline.projection_of,
-    }
+    })
 }
 
 /// The summed length of the segments joining `points`.

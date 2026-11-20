@@ -313,6 +313,14 @@ pub(crate) struct TrackBody {
     /// The hover view of each row's crop, rendered the first time the pointer
     /// rests on that crop and dropped with [`TrackBody::crops`].
     crop_contexts: HashMap<usize, Option<crate::patch_pictures::crop::DrawnCrop>>,
+    /// Why a read of a row's photograph failed, by observation index, for the
+    /// tile and crop cells to say in place of the picture they could not
+    /// draw. Kept and dropped with [`TrackBody::tiles`], which caches the
+    /// failed picture as `None`.
+    read_failures: HashMap<usize, String>,
+    /// The region pool the tiles, the crops and their hover views read their
+    /// photographs through.
+    regions: crate::patch_pictures::PanelRegionPool,
     /// The stored bitmap as blurred for each row's blur-matched score, by
     /// observation index, uploaded the first time the pointer rests on that
     /// row's *ZNCC* cell and dropped with [`TrackBody::tiles`], since a step
@@ -419,6 +427,8 @@ impl TrackBody {
             contexts: HashMap::new(),
             crops: HashMap::new(),
             crop_contexts: HashMap::new(),
+            read_failures: HashMap::new(),
+            regions: crate::patch_pictures::PanelRegionPool::default(),
             blurred_bitmaps: HashMap::new(),
             hover_bitmap: None,
             track_patch: None,
@@ -496,6 +506,7 @@ impl TrackBody {
         self.contexts.clear();
         self.crops.clear();
         self.crop_contexts.clear();
+        self.read_failures.clear();
         self.blurred_bitmaps.clear();
         self.hover_bitmap = None;
         self.track_patch = None;
@@ -1101,7 +1112,8 @@ impl TrackBody {
     /// the warp every frame would be the cost the cache exists to avoid. A
     /// photograph the photograph cache has not decoded yet is not cached as a
     /// miss: its decode is running off the GUI thread and repaints when it
-    /// ends, and the next frame's look finds it.
+    /// ends, and the next frame's look finds it. A read of the photograph that
+    /// fails is cached as `None`, with why in [`TrackBody::read_failures`].
     fn ensure_tile(
         &mut self,
         ctx: &egui::Context,
@@ -1113,20 +1125,64 @@ impl TrackBody {
         if let Some(cached) = self.tiles.get(&observation) {
             return cached.as_ref().map(|texture| texture.id());
         }
-        let id = self.showing.as_ref().map(|showing| showing.node)?;
-        let image = ImageRef::new(id, track.observations.get(observation)?.image as usize);
-        let src = crate::state::peek_full_res_pyramid(&state.photographs, recon, image.index())?;
+        let (image, src) = self.photograph(recon, track, observation, state)?;
         let tile = tile::render(
             ctx,
             recon,
             track,
             observation,
             &src,
+            self.regions.pool(),
             format!("bench_tile_{}_{observation}", image.index()),
         );
+        let tile = self.unless_failed(observation, tile);
         let texture_id = tile.as_ref().map(|texture| texture.id());
         self.tiles.insert(observation, tile);
         texture_id
+    }
+
+    /// The photograph of one row's image as the photograph cache holds it,
+    /// read as a tiled photograph, or `None` while the cache has not decoded
+    /// it (or cannot) and when no node is showing.
+    ///
+    /// The cache still hands out whole pyramids; the tiles, the crops and
+    /// their hover views read them through `TiledPhotograph::from_pyramid`,
+    /// which reads only the pixels each picture asks for.
+    fn photograph(
+        &self,
+        recon: &SfmrReconstruction,
+        track: &EditableTrack,
+        observation: usize,
+        state: &AppState,
+    ) -> Option<(ImageRef, sfmtool_core::camera::TiledPhotograph)> {
+        let id = self.showing.as_ref().map(|showing| showing.node)?;
+        let image = ImageRef::new(id, track.observations.get(observation)?.image as usize);
+        let pyramid =
+            crate::state::peek_full_res_pyramid(&state.photographs, recon, image.index())?;
+        Some((
+            image,
+            sfmtool_core::camera::TiledPhotograph::from_pyramid(pyramid),
+        ))
+    }
+
+    /// `read`'s picture, or `None` when the read of the row's photograph
+    /// failed, remembering why in [`TrackBody::read_failures`] for the cell to
+    /// say.
+    fn unless_failed<T>(
+        &mut self,
+        observation: usize,
+        read: Result<Option<T>, sfmtool_core::camera::PhotographReadError>,
+    ) -> Option<T> {
+        read.unwrap_or_else(|why| {
+            self.read_failures.insert(observation, why.to_string());
+            None
+        })
+    }
+
+    /// Why a read of one row's photograph failed, or `None` when none has
+    /// since the track moved.
+    fn read_failure(&self, observation: usize) -> Option<&str> {
+        self.read_failures.get(&observation).map(String::as_str)
     }
 
     /// The Jacobian at the centre of one row's tile, computing it if this is
@@ -1161,11 +1217,9 @@ impl TrackBody {
         state: &AppState,
     ) -> Option<&tile::DrawnContext> {
         if !self.contexts.contains_key(&observation) {
-            let id = self.showing.as_ref().map(|showing| showing.node)?;
-            let image = ImageRef::new(id, track.observations.get(observation)?.image as usize);
-            let src =
-                crate::state::peek_full_res_pyramid(&state.photographs, recon, image.index())?;
-            let drawn = tile::context(recon, track, observation, &src).map(|context| {
+            let (image, src) = self.photograph(recon, track, observation, state)?;
+            let context = tile::context(recon, track, observation, &src, self.regions.pool());
+            let drawn = self.unless_failed(observation, context).map(|context| {
                 tile::DrawnContext::new(
                     ctx,
                     context,
@@ -1281,13 +1335,16 @@ impl TrackBody {
     }
 
     /// A row's crop, or with `in_context` its hover view, cut from the
-    /// photograph cache's pyramid and uploaded.
+    /// photograph cache's pyramid through the panel's region pool and
+    /// uploaded.
     ///
     /// The outer `None` is "not yet": no row, or a photograph the cache has
     /// not decoded, which the caller does not remember. The inner `None` is a
-    /// crop that cannot be cut from the photograph, which it does.
+    /// crop that cannot be cut from the photograph, which it does, and a read
+    /// of the photograph that failed, which [`TrackBody::read_failures`] says
+    /// why of.
     fn drawn_crop(
-        &self,
+        &mut self,
         ctx: &egui::Context,
         recon: &SfmrReconstruction,
         track: &EditableTrack,
@@ -1295,35 +1352,33 @@ impl TrackBody {
         state: &AppState,
         in_context: bool,
     ) -> Option<Option<crate::patch_pictures::crop::DrawnCrop>> {
-        let id = self.showing.as_ref().map(|showing| showing.node)?;
         let row = track.observations.get(observation)?;
-        let image = ImageRef::new(id, row.image as usize);
-        let src = crate::state::peek_full_res_pyramid(&state.photographs, recon, image.index())?;
-        let cut = || {
-            let (picture, name, options) = if in_context {
-                (
-                    crop::context(recon, track, observation, &src)?,
-                    format!("bench_crop_context_{}_{observation}", image.index()),
-                    egui::TextureOptions::LINEAR,
-                )
-            } else {
-                (
-                    crop::image(recon, track, observation, &src)?,
-                    format!("bench_crop_{}_{observation}", image.index()),
-                    // Each photograph pixel magnified to a block, as the tile
-                    // is, so the crop shows the photograph's own resolution.
-                    crate::patch_pictures::crop::CELL_TEXTURE_OPTIONS,
-                )
-            };
-            Some(crate::patch_pictures::crop::DrawnCrop::new(
+        let (image, src) = self.photograph(recon, track, observation, state)?;
+        let pool = self.regions.pool();
+        let (picture, name, options) = if in_context {
+            (
+                crop::context(recon, track, observation, &src, pool),
+                format!("bench_crop_context_{}_{observation}", image.index()),
+                egui::TextureOptions::LINEAR,
+            )
+        } else {
+            (
+                crop::image(recon, track, observation, &src, pool),
+                format!("bench_crop_{}_{observation}", image.index()),
+                // Each photograph pixel magnified to a block, as the tile is,
+                // so the crop shows the photograph's own resolution.
+                crate::patch_pictures::crop::CELL_TEXTURE_OPTIONS,
+            )
+        };
+        Some(self.unless_failed(observation, picture).map(|picture| {
+            crate::patch_pictures::crop::DrawnCrop::new(
                 ctx,
                 picture,
                 crate::bench::verdict_color(row.verdict),
                 name,
                 options,
-            ))
-        };
-        Some(cut())
+            )
+        }))
     }
 
     /// The self-similarity surface plot of `observation` for `surface` read
@@ -1371,6 +1426,7 @@ impl TrackBody {
         self.contexts.clear();
         self.crops.clear();
         self.crop_contexts.clear();
+        self.read_failures.clear();
         self.blurred_bitmaps.clear();
         self.hover_bitmap = None;
         self.track_patch = None;

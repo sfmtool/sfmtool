@@ -10,10 +10,54 @@
 //! so the same bitmap is drawn and described the same way in each. [`crop`]
 //! cuts a photograph around a patch's outline: Track View's crop beside each
 //! row's tile, and the Track Table's *Crop* cell. [`marks`] is what their
-//! hover views draw over the picture.
+//! hover views draw over the picture. Each panel reads its photographs
+//! through a [`PanelRegionPool`] of its own.
+
+use sfmtool_core::camera::sampler::{RegionPool, REGION_POOL_BYTES_PER_THREAD};
 
 pub(crate) mod crop;
 pub(crate) mod marks;
+
+/// The region pool one panel reads its photographs through: Track View's
+/// tiles, crops and their hover views share one, and the Track Table's
+/// *Crop* cells and their hover views another.
+///
+/// A panel's reads on the GUI thread are many small kernel calls a frame
+/// rather than one, so the panel owns the pool they all reserve their regions
+/// from: [`REGION_POOL_BYTES_PER_THREAD`], 3.1 MB, one rayon thread's share
+/// of a kernel call's pool. Each read gives its regions back once its picture
+/// is cut, since the panel keeps the picture, not the regions; a read the
+/// pool cannot hold reads through the photograph's tiles, with the same
+/// pixels.
+pub(crate) struct PanelRegionPool(RegionPool);
+
+impl PanelRegionPool {
+    /// The pool the panel's reads reserve from.
+    pub(crate) fn pool(&self) -> &RegionPool {
+        &self.0
+    }
+
+    /// A pool of `bytes`, for the tests that send every read through tiles.
+    #[cfg(test)]
+    pub(crate) fn with_capacity(bytes: u64) -> Self {
+        Self(RegionPool::with_capacity(bytes))
+    }
+}
+
+impl Default for PanelRegionPool {
+    fn default() -> Self {
+        Self(RegionPool::with_capacity(REGION_POOL_BYTES_PER_THREAD))
+    }
+}
+
+impl std::fmt::Debug for PanelRegionPool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PanelRegionPool")
+            .field("capacity", &self.0.capacity())
+            .field("held_bytes", &self.0.held_bytes())
+            .finish()
+    }
+}
 
 /// The hover text over a point's stored patch: Track View's header slot for a
 /// viewed point, and a Track Table *Patch* cell.
@@ -62,4 +106,4 @@ pub(crate) fn stored_patch_image(bitmap: ndarray::ArrayView3<'_, u8>) -> Option<
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

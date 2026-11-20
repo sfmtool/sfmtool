@@ -10,8 +10,12 @@
 //! is what the panel *decides* -- which rows it drew, what each says, what the
 //! boxes paint, and what it reports back to the dock -- rather than pixels.
 
+use std::sync::Arc;
+
 use sfmtool_core::bench::{StageKind, Thresholds, Verdict};
-use sfmtool_core::camera::image::ImageU8;
+use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::sampler::{RegionPool, REGION_POOL_BYTES_PER_THREAD};
+use sfmtool_core::camera::TiledPhotograph;
 
 use super::{TrackBody, TrackBodyResponse, LOCK_HELD_BY_SURFACE_TILING, LOCK_LABEL};
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
@@ -23,6 +27,17 @@ use crate::state::AppState;
 const POINT: u32 = 2;
 
 const VIEWPORT: egui::Vec2 = egui::vec2(1400.0, 900.0);
+
+/// A photograph as the panel reads it: the cache's whole pyramid read as a
+/// tiled photograph.
+fn tiled(src: &Arc<ImageU8Pyramid>) -> TiledPhotograph {
+    TiledPhotograph::from_pyramid(src.clone())
+}
+
+/// A region pool the size of a panel's.
+fn pool() -> RegionPool {
+    RegionPool::with_capacity(REGION_POOL_BYTES_PER_THREAD)
+}
 
 /// A state holding one `embedded_patches` node with a photograph cached for
 /// every image, as the bench's own tests build it.
@@ -1207,7 +1222,9 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
 
     let node = crate::scene::node_by_id(&state.scene, id).expect("loaded");
     let recon = node.recon();
-    let drawn = super::tile::image(recon, &track, candidate, &src).expect("a tile");
+    let drawn = super::tile::image(recon, &track, candidate, &tiled(&src), &pool())
+        .unwrap()
+        .expect("a tile");
 
     // The patch cut around where the observation sits, which is the same
     // picture the row draws once a reading has written that pixel as its
@@ -1226,9 +1243,11 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
         camera,
         &cam_from_world,
         Some(site),
-        &src,
+        &tiled(&src),
+        &pool(),
         sampler,
-    );
+    )
+    .unwrap();
     assert_eq!(drawn, at_the_seed, "the tile is not cut around the seed");
 
     // The seed's ray meets the plane behind a perspective camera.
@@ -1257,7 +1276,9 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
         (0..map.height()).all(|r| (0..map.width()).all(|c| map.is_valid(c, r))),
         "the slid patch has blank texels in this photograph"
     );
-    let context = super::tile::context(recon, &track, candidate, &src).expect("a hover view");
+    let context = super::tile::context(recon, &track, candidate, &tiled(&src), &pool())
+        .unwrap()
+        .expect("a hover view");
     assert!(
         context.keypoint.is_some(),
         "the seed names the middle of the slid patch"
@@ -3528,8 +3549,12 @@ fn tile_and_context(
         .cached_photograph(id, row.image as usize)
         .expect("a cached photograph");
     let recon = state.node(id).expect("loaded").recon();
-    let tile = super::tile::image(recon, &track, observation, &src).expect("a tile");
-    let context = super::tile::context(recon, &track, observation, &src).expect("a context");
+    let tile = super::tile::image(recon, &track, observation, &tiled(&src), &pool())
+        .unwrap()
+        .expect("a tile");
+    let context = super::tile::context(recon, &track, observation, &tiled(&src), &pool())
+        .unwrap()
+        .expect("a context");
     (tile, context)
 }
 
@@ -4386,8 +4411,12 @@ fn crop_and_context(
         .expect("a cached photograph");
     let recon = state.node(id).expect("loaded").recon();
     let outline = super::crop::outline(recon, &track, observation).expect("an outline");
-    let crop = super::crop::image(recon, &track, observation, &src).expect("a crop");
-    let context = super::crop::context(recon, &track, observation, &src).expect("a context");
+    let crop = super::crop::image(recon, &track, observation, &tiled(&src), &pool())
+        .unwrap()
+        .expect("a crop");
+    let context = super::crop::context(recon, &track, observation, &tiled(&src), &pool())
+        .unwrap()
+        .expect("a context");
     (outline, crop, context)
 }
 
@@ -4409,7 +4438,9 @@ fn a_crop_cut_from_a_point_s_values_is_track_view_s_crop() {
         let src = state
             .cached_photograph(id, row.image as usize)
             .expect("a cached photograph");
-        let from_track = super::crop::image(recon, &track, k, &src).expect("a crop");
+        let from_track = super::crop::image(recon, &track, k, &tiled(&src), &pool())
+            .unwrap()
+            .expect("a crop");
         let (camera, pose) =
             crate::bench::geometry::view_of(&recon.image_set, row.image as usize).expect("a view");
         let keypoint = view.keypoint_xy(k).expect("a keypoint");
@@ -4421,7 +4452,9 @@ fn a_crop_cut_from_a_point_s_values_is_track_view_s_crop() {
             view.point().position,
             crate::patch_pictures::marks::ProjectionOf::Point,
         );
-        let from_point = crate::patch_pictures::crop::image(&outline, &src).expect("a crop");
+        let from_point = crate::patch_pictures::crop::image(&outline, &tiled(&src), &pool())
+            .unwrap()
+            .expect("a crop");
         assert_eq!(from_point.crop, from_track.crop, "observation {k}");
         assert_eq!(
             from_point.image.size, from_track.image.size,
@@ -5430,7 +5463,7 @@ fn a_patch_turned_in_its_plane_has_off_diagonal_entries_of_the_turn() {
 /// A 640 by 480 photograph with detail down to a few pixels, as a full
 /// pyramid: what a mip level averages away differs from the full-resolution
 /// pixels.
-fn textured_pyramid() -> sfmtool_core::camera::image::ImageU8Pyramid {
+fn textured_pyramid() -> Arc<sfmtool_core::camera::image::ImageU8Pyramid> {
     use sfmtool_core::camera::image::ImageU8Pyramid;
     let (w, h) = (640u32, 480u32);
     let data: Vec<u8> = (0..w * h)
@@ -5441,7 +5474,10 @@ fn textured_pyramid() -> sfmtool_core::camera::image::ImageU8Pyramid {
         })
         .collect();
     let src = ImageU8::new(w, h, 3, data);
-    ImageU8Pyramid::build(&src, ImageU8Pyramid::full_levels(w, h))
+    Arc::new(ImageU8Pyramid::build(
+        &src,
+        ImageU8Pyramid::full_levels(w, h),
+    ))
 }
 
 /// `image`, three channels, as the opaque RGBA picture a tile is.
@@ -5500,7 +5536,9 @@ fn a_tile_reads_the_mip_level_its_warp_shrinks_the_photograph_to() {
         src.level(2),
         &WarpMap::new(w, h, at_level_2),
     ));
-    let tile = super::patch::patch_color_image(&near, &camera, &pose, None, &src, MIP);
+    let tile =
+        super::patch::patch_color_image(&near, &camera, &pose, None, &tiled(&src), &pool(), MIP)
+            .unwrap();
     assert_eq!(tile, want, "the shrinking tile is not level 2 throughout");
     assert_ne!(
         tile,
@@ -5512,7 +5550,9 @@ fn a_tile_reads_the_mip_level_its_warp_shrinks_the_photograph_to() {
     // pixel, so every texel reads level 0.
     let far = facing_patch([0.0, 0.0, -8.0]);
     let map = tile_map(&far, &camera, &pose);
-    let tile = super::patch::patch_color_image(&far, &camera, &pose, None, &src, MIP);
+    let tile =
+        super::patch::patch_color_image(&far, &camera, &pose, None, &tiled(&src), &pool(), MIP)
+            .unwrap();
     assert_eq!(
         tile,
         opaque(&remap_bilinear(src.level(0), &map)),
@@ -5581,9 +5621,19 @@ fn a_tilted_patch_is_drawn_with_the_anisotropic_sampler() {
     assert!(super::table::zoom_sampler_text(&jacobian).contains("anisotropic"));
 
     let src = textured_pyramid();
-    let aniso =
-        super::patch::patch_color_image(&tilted, &camera, &pose, None, &src, Sampler::Anisotropic);
-    let mip = super::patch::patch_color_image(&tilted, &camera, &pose, None, &src, MIP);
+    let aniso = super::patch::patch_color_image(
+        &tilted,
+        &camera,
+        &pose,
+        None,
+        &tiled(&src),
+        &pool(),
+        Sampler::Anisotropic,
+    )
+    .unwrap();
+    let mip =
+        super::patch::patch_color_image(&tilted, &camera, &pose, None, &tiled(&src), &pool(), MIP)
+            .unwrap();
     assert_ne!(aniso, mip, "the two samplers drew the same tile");
 }
 
@@ -5998,6 +6048,7 @@ fn the_hover_bitmap_is_none_at_the_cluster_stage() {
 
 // ── Viewed mode ─────────────────────────────────────────────────────────────
 
+mod region_reads;
 mod viewed;
 mod zncc_hover;
 
@@ -6549,8 +6600,12 @@ fn a_tile_is_warped_through_its_image_s_own_intrinsics() {
 
     let read = |recon: &sfmtool_core::SfmrReconstruction| {
         let jacobian = super::tile::patch_jacobian(recon, &track, 0).expect("a Jacobian");
-        let tile = super::tile::image(recon, &track, 0, &src).expect("a tile");
-        let context = super::tile::context(recon, &track, 0, &src).expect("a context");
+        let tile = super::tile::image(recon, &track, 0, &tiled(&src), &pool())
+            .unwrap()
+            .expect("a tile");
+        let context = super::tile::context(recon, &track, 0, &tiled(&src), &pool())
+            .unwrap()
+            .expect("a context");
         (jacobian, tile, context.projection_px)
     };
     let (shared, adjusted, own) = (read(&shared), read(&adjusted), read(&own));
@@ -6590,8 +6645,12 @@ fn a_tile_is_warped_through_its_image_s_lens_corrections() {
 
     let read = |recon: &sfmtool_core::SfmrReconstruction| {
         let jacobian = super::tile::patch_jacobian(recon, &track, 0).expect("a Jacobian");
-        let tile = super::tile::image(recon, &track, 0, &src).expect("a tile");
-        let context = super::tile::context(recon, &track, 0, &src).expect("a context");
+        let tile = super::tile::image(recon, &track, 0, &tiled(&src), &pool())
+            .unwrap()
+            .expect("a tile");
+        let context = super::tile::context(recon, &track, 0, &tiled(&src), &pool())
+            .unwrap()
+            .expect("a context");
         (jacobian, tile, context.projection_px)
     };
     let (shared, corrected, own) = (read(&shared), read(&corrected), read(&own));

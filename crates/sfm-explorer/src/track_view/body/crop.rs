@@ -14,7 +14,8 @@
 //! radius.
 
 use sfmtool_core::bench::{EditableTrack, Stage};
-use sfmtool_core::camera::image::ImageU8Pyramid;
+use sfmtool_core::camera::sampler::RegionPool;
+use sfmtool_core::camera::{PhotographReadError, TiledPhotograph};
 use sfmtool_core::SfmrReconstruction;
 
 use crate::bench::geometry;
@@ -59,15 +60,19 @@ pub(super) fn outline(
     }
 }
 
-/// The crop one row draws, or `None` when [`outline()`] has nothing to
-/// outline or no sample of it landed.
+/// The crop one row draws, read through `pool`, or `None` when [`outline()`]
+/// has nothing to outline or no sample of it landed.
 pub(super) fn image(
     recon: &SfmrReconstruction,
     track: &EditableTrack,
     observation: usize,
-    src: &ImageU8Pyramid,
-) -> Option<CropPicture> {
-    crop::image(&outline(recon, track, observation)?, src)
+    src: &TiledPhotograph,
+    pool: &RegionPool,
+) -> Result<Option<CropPicture>, PhotographReadError> {
+    match outline(recon, track, observation) {
+        Some(outline) => crop::image(&outline, src, pool),
+        None => Ok(None),
+    }
 }
 
 /// One row's crop in context, its hover view ([`crop::context`]), or `None`
@@ -76,7 +81,11 @@ pub(super) fn context(
     recon: &SfmrReconstruction,
     track: &EditableTrack,
     observation: usize,
-    src: &ImageU8Pyramid,
-) -> Option<CropPicture> {
-    crop::context(&outline(recon, track, observation)?, src)
+    src: &TiledPhotograph,
+    pool: &RegionPool,
+) -> Result<Option<CropPicture>, PhotographReadError> {
+    match outline(recon, track, observation) {
+        Some(outline) => crop::context(&outline, src, pool),
+        None => Ok(None),
+    }
 }

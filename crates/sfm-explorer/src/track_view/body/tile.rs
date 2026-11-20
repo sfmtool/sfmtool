@@ -18,9 +18,14 @@
 //! - At the **cluster stage** there is no surface, so it is the observation's
 //!   own grid: the `R x R` samples the refinement kernel reads at that place
 //!   and its shape, through the kernel's own sampler
-//!   (`sfmtool_core::patch::cluster_refine::sample_member_grid`), which is what
-//!   makes the picture the thing the ZNCC beside it was computed over rather
-//!   than a second opinion about it.
+//!   (`sfmtool_core::patch::cluster_refine::sample_member_grid`, read through
+//!   `sample_source_member_grid`), which is what makes the picture the thing
+//!   the ZNCC beside it was computed over rather than a second opinion about
+//!   it.
+//!
+//! Either picture reads only the region of the photograph its samples take,
+//! through the panel's region pool, and draws the pixels the whole pyramid
+//! gives.
 //!
 //! **Where the observation sits is [`crate::bench::observation_site`]'s**, at
 //! either stage: the keypoint a reading wrote, else the refined cluster
@@ -58,13 +63,12 @@
 use std::borrow::Cow;
 
 use sfmtool_core::bench::{EditableTrack, Stage};
-use sfmtool_core::camera::image::ImageU8Pyramid;
-use sfmtool_core::camera::sampler::Sampler;
+use sfmtool_core::camera::sampler::{RegionPool, Sampler, ViewRegions};
 use sfmtool_core::camera::warp_map::patch_grid_jacobian;
-use sfmtool_core::camera::CameraIntrinsics;
+use sfmtool_core::camera::{CameraIntrinsics, PhotographReadError, TiledPhotograph};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
-use sfmtool_core::patch::cluster_refine::{sample_member_grid, ClusterRefineParams};
+use sfmtool_core::patch::cluster_refine::{sample_source_member_grid, ClusterRefineParams};
 use sfmtool_core::SfmrReconstruction;
 
 use super::patch::PatchJacobian;
@@ -79,11 +83,12 @@ pub(super) fn render(
     recon: &SfmrReconstruction,
     track: &EditableTrack,
     observation: usize,
-    src: &ImageU8Pyramid,
+    src: &TiledPhotograph,
+    pool: &RegionPool,
     name: String,
-) -> Option<egui::TextureHandle> {
-    let tile = image(recon, track, observation, src)?;
-    Some(ctx.load_texture(name, tile, egui::TextureOptions::NEAREST))
+) -> Result<Option<egui::TextureHandle>, PhotographReadError> {
+    let tile = image(recon, track, observation, src, pool)?;
+    Ok(tile.map(|tile| ctx.load_texture(name, tile, egui::TextureOptions::NEAREST)))
 }
 
 /// The Jacobian at the centre of one observation's track-stage tile, in
@@ -162,30 +167,45 @@ fn track_tile_geometry<'a>(
 /// a degenerate shape at the cluster stage.
 ///
 /// Pure, so a headless test can ask what a row shows rather than only whether
-/// it showed something. `src` is the observation's own photograph as the viewer's
-/// photograph cache holds it: the pyramid built at the decode, whose level
-/// 0 is the photograph and whose lower levels are what the cluster sampler
-/// mip-selects over.
+/// it showed something. `src` is the observation's own photograph, the
+/// photograph cache's pyramid read as a tiled photograph, whose level 0 is the
+/// photograph and whose lower levels are what the cluster sampler
+/// mip-selects over. The tile reads only the regions its samples take,
+/// reserved from `pool` (the panel's) and given back once it is drawn, or
+/// through the photograph's tiles when the pool cannot hold them, with the
+/// whole pyramid's values either way. An error is a read of the photograph
+/// that failed.
 pub(super) fn image(
     recon: &SfmrReconstruction,
     track: &EditableTrack,
     observation: usize,
-    src: &ImageU8Pyramid,
-) -> Option<egui::ColorImage> {
-    let row = track.observations.get(observation)?;
-    let site = crate::bench::observation_site(row)?;
+    src: &TiledPhotograph,
+    pool: &RegionPool,
+) -> Result<Option<egui::ColorImage>, PhotographReadError> {
+    let Some(site) = track
+        .observations
+        .get(observation)
+        .and_then(crate::bench::observation_site)
+    else {
+        return Ok(None);
+    };
     match &track.stage {
         Stage::Track(_) => {
-            let (patch_frame, camera, pose, keypoint) =
-                track_tile_geometry(recon, track, observation)?;
-            Some(super::patch::patch_color_image(
+            let Some((patch_frame, camera, pose, keypoint)) =
+                track_tile_geometry(recon, track, observation)
+            else {
+                return Ok(None);
+            };
+            super::patch::patch_color_image(
                 patch_frame,
                 &camera,
                 &pose,
                 Some(keypoint),
                 src,
+                pool,
                 tile_sampler(recon, track, observation),
-            ))
+            )
+            .map(Some)
         }
         Stage::Cluster(payload) => {
             // The cluster's own radius, always: it is what every one of its
@@ -201,10 +221,20 @@ pub(super) fn image(
             if let Some(template) = payload.template.as_ref() {
                 params.resolution = template.samples.shape()[0] as u32;
             }
-            let grid = sample_member_grid(src, site.pixel, site.shape?, &params)?;
+            let Some(shape) = site.shape else {
+                return Ok(None);
+            };
+            let grid = sample_source_member_grid(
+                &mut ViewRegions::new(src, pool),
+                site.pixel,
+                shape,
+                &params,
+            )?;
             let resolution = params.resolution.max(2) as usize;
-            let channels = grid.len() / (resolution * resolution);
-            Some(color_image(&grid, resolution, channels))
+            Ok(grid.map(|grid| {
+                let channels = grid.len() / (resolution * resolution);
+                color_image(&grid, resolution, channels)
+            }))
         }
     }
 }
@@ -259,17 +289,26 @@ pub(super) fn context(
     recon: &SfmrReconstruction,
     track: &EditableTrack,
     observation: usize,
-    src: &ImageU8Pyramid,
-) -> Option<TileContext> {
-    let row = track.observations.get(observation)?;
-    let site = crate::bench::observation_site(row)?;
+    src: &TiledPhotograph,
+    pool: &RegionPool,
+) -> Result<Option<TileContext>, PhotographReadError> {
+    let Some(row) = track.observations.get(observation) else {
+        return Ok(None);
+    };
+    let Some(site) = crate::bench::observation_site(row) else {
+        return Ok(None);
+    };
     let img_idx = row.image as usize;
     let k = CONTEXT_FACTOR;
     match &track.stage {
         Stage::Track(payload) => {
-            let patch_frame = payload.patch_frame.as_ref()?;
-            let image = recon.image_set.images.get(img_idx)?;
-            let camera = crate::scene::image_intrinsics(&recon.image_set, img_idx)?;
+            let (Some(patch_frame), Some(image), Some(camera)) = (
+                payload.patch_frame.as_ref(),
+                recon.image_set.images.get(img_idx),
+                crate::scene::image_intrinsics(&recon.image_set, img_idx),
+            ) else {
+                return Ok(None);
+            };
             let camera: &CameraIntrinsics = &camera;
             let pose = crate::scene::cam_from_world(image);
             let anchored = patch_frame.anchored_at_keypoint(camera, &pose, site.pixel);
@@ -281,9 +320,10 @@ pub(super) fn context(
                 camera,
                 &pose,
                 src,
+                pool,
                 side,
                 tile_sampler(recon, track, observation),
-            );
+            )?;
             let side = side as f32;
             // The pixel of the photograph at `pixel`, as a place in the
             // picture: its ray met with the widened patch frame's plane, read on
@@ -305,7 +345,7 @@ pub(super) fn context(
             };
             let target = payload.position.unwrap_or(patch_frame.center);
             let projected = camera.project_homogeneous(&pose, target.coords, patch_frame.w);
-            Some(TileContext {
+            Ok(Some(TileContext {
                 image: picture,
                 patch_box: middle_box(side),
                 keypoint,
@@ -317,7 +357,7 @@ pub(super) fn context(
                     Some(_) => ProjectionOf::Point,
                     None => ProjectionOf::PatchCentre,
                 }),
-            })
+            }))
         }
         Stage::Cluster(payload) => {
             // The tile's own parameters with the radius and the resolution
@@ -332,18 +372,29 @@ pub(super) fn context(
             }
             params.resolution = params.resolution.max(2) * k;
             params.radius *= f64::from(k);
-            let grid = sample_member_grid(src, site.pixel, site.shape?, &params)?;
+            let Some(shape) = site.shape else {
+                return Ok(None);
+            };
+            let Some(grid) = sample_source_member_grid(
+                &mut ViewRegions::new(src, pool),
+                site.pixel,
+                shape,
+                &params,
+            )?
+            else {
+                return Ok(None);
+            };
             let resolution = params.resolution as usize;
             let channels = grid.len() / (resolution * resolution);
             let side = resolution as f32;
-            Some(TileContext {
+            Ok(Some(TileContext {
                 image: color_image(&grid, resolution, channels),
                 patch_box: middle_box(side),
                 keypoint: Some(egui::pos2(side / 2.0, side / 2.0)),
                 projection: None,
                 projection_px: None,
                 projection_of: None,
-            })
+            }))
         }
     }
 }
@@ -406,6 +457,12 @@ impl DrawnContext {
             projection: context.projection,
             caption,
         }
+    }
+
+    /// The uploaded picture's texture.
+    #[cfg(test)]
+    pub(super) fn texture_id(&self) -> egui::TextureId {
+        self.texture.id()
     }
 
     /// Draw the hover view: the picture at [`CONTEXT_HOVER_SIDE`], the patch's
