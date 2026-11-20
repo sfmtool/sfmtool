@@ -486,9 +486,9 @@ mod source;
 mod test_support;
 mod tile_window;
 
-pub(crate) use grid::{
-    grid_cells, sample_grid, sample_support_affine, sample_support_affine_aniso,
-};
+pub(crate) use grid::{grid_cells, sample_grid};
+#[cfg(test)]
+pub(crate) use grid::{sample_support_affine, sample_support_affine_aniso};
 pub use grid::{GridEdge, GridPoints};
 pub use pool::{RegionPool, RegionPoolStats, REGION_POOL_BYTES_PER_THREAD};
 pub use regions::{required_regions, LevelRect, LevelRegions, REGION_REUSE_MARGIN};

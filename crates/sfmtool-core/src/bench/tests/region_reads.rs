@@ -1,12 +1,13 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The bench kernels' own photograph reads give the same result whichever
-//! path a read takes: every read copying its regions into the pool, every
-//! read going through the photograph's tiles, and a pool too small for all of
-//! a call's regions, where the two paths mix within one call. Each pool holds
-//! no more than its capacity and has every byte back once the call returns. A
-//! photograph that lacks the pixels a read needs fails the step.
+//! The bench steps' photograph reads, their own and those of the patch
+//! kernels beneath them, give the same result whichever path a read takes:
+//! every read copying its regions into the pool, every read going through the
+//! photograph's tiles, and a pool too small for all of a call's regions,
+//! where the two paths mix within one call. Each pool holds no more than its
+//! capacity and has every byte back once the call returns. A photograph that
+//! lacks the pixels a read needs fails the step.
 
 use std::fmt::Debug;
 
@@ -261,6 +262,34 @@ fn a_cluster_evaluation_is_the_same_on_every_read_path() {
     });
 }
 
+/// The fixture's point put on the bench as a track-stage track; the third
+/// image shows the same plane patch, so a geometry search from its first
+/// observation scores and admits it.
+fn track_to_search() -> EditableTrack {
+    let edited = edited_fixture(&Scene::new(), WORLD);
+    let (bench, report) = create_track(&Bench::new(), &edited, 0, &CreateTrackOptions::default())
+        .expect("the point goes on the bench");
+    track_of(&bench, &report.label)
+}
+
+#[test]
+fn a_geometry_search_is_the_same_on_every_read_path() {
+    let track = track_to_search();
+    assert_the_same_on_every_path(Scene::new, |scene, pool| {
+        let (grown, report) = search_geometry(
+            &track,
+            0,
+            &scene.views(),
+            pool,
+            &GeometrySearchOptions::default(),
+            &Progress::none(),
+        )
+        .expect("the third image shows the same plane patch");
+        assert_eq!(report.added(), 1, "{report}");
+        (grown, report)
+    });
+}
+
 /// `scene`'s photograph `image` replaced by one that holds only an 8 px
 /// square in the corner of its finest level and none of its coarser levels,
 /// so that a read anywhere near the point asks for pixels it does not hold.
@@ -327,6 +356,31 @@ fn a_read_of_pixels_a_photograph_lacks_fails_the_step() {
             matches!(
                 error,
                 EvaluateError::Photograph(PhotographReadError::OutOfRange { .. })
+            ),
+            "pool of {capacity}: {error}"
+        );
+        assert_eq!(pool.held_bytes(), 0);
+    }
+    let scene = Scene::new();
+    let track = track_to_search();
+    let broken = without_pixels(&scene);
+    let mut views = scene.views();
+    views[1].source = &broken;
+    for capacity in [u64::MAX, 0] {
+        let pool = RegionPool::with_capacity(capacity);
+        let error = search_geometry(
+            &track,
+            0,
+            &views,
+            &pool,
+            &GeometrySearchOptions::default(),
+            &Progress::none(),
+        )
+        .expect_err("image 1 cannot be read");
+        assert!(
+            matches!(
+                error,
+                GeometrySearchError::Photograph(PhotographReadError::OutOfRange { .. })
             ),
             "pool of {capacity}: {error}"
         );

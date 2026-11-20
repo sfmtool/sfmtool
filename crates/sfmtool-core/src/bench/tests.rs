@@ -122,6 +122,7 @@ fn geometry_search_adds_projected_candidate_without_moving_existing_rows() {
         &track,
         0,
         &views,
+        &RegionPool::for_kernel_call(),
         &GeometrySearchOptions::default(),
         &Progress::none(),
     )
@@ -187,6 +188,7 @@ fn geometry_search_is_idempotent_and_keeps_an_existing_verdict() {
         track,
         0,
         &views,
+        &RegionPool::for_kernel_call(),
         &GeometrySearchOptions::default(),
         &Progress::none(),
     )
@@ -200,6 +202,7 @@ fn geometry_search_is_idempotent_and_keeps_an_existing_verdict() {
         &decided,
         0,
         &views,
+        &RegionPool::for_kernel_call(),
         &GeometrySearchOptions::default(),
         &Progress::none(),
     )
@@ -222,6 +225,7 @@ fn geometry_search_uses_the_selected_row_even_when_it_is_out() {
         &track,
         0,
         &scene.views(),
+        &RegionPool::for_kernel_call(),
         &GeometrySearchOptions::default(),
         &Progress::none(),
     )
@@ -245,6 +249,7 @@ fn geometry_search_refuses_the_cluster_stage() {
         &track,
         0,
         &Scene::new().views(),
+        &RegionPool::for_kernel_call(),
         &GeometrySearchOptions::default(),
         &Progress::none(),
     )
@@ -279,6 +284,7 @@ fn geometry_search_reports_phases_and_cancels_without_a_partial_track() {
         track,
         0,
         &scene.views(),
+        &RegionPool::for_kernel_call(),
         &GeometrySearchOptions::default(),
         &Progress::to(&sink),
     )
@@ -297,6 +303,7 @@ fn geometry_search_reports_phases_and_cancels_without_a_partial_track() {
         track,
         0,
         &scene.views(),
+        &RegionPool::for_kernel_call(),
         &GeometrySearchOptions::default(),
         &cancelled,
     )

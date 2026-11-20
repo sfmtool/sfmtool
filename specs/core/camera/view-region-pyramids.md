@@ -27,10 +27,16 @@ through the entry points: the cluster stage's member grids, the grid-plane
 normal's context renders, the pairwise-flow crops and the grown plane's value
 and Sobel reads, each bench step making the region pool for its kernel call
 ([core/bench/editable-track.md](../bench/editable-track.md) § "Each step reads
-through the region pool its caller made"). The patch kernels beneath them --
-the reference view, the stored bitmap, the keypoint kernels, the cluster
-refinement and the view selection -- still read the whole pyramid a tiled
-photograph holds.
+through the region pool its caller made"). So do two of the patch kernels
+beneath them, with the pool their caller passes down: the cluster refinement,
+its grids through `sample_source_grid` and its evaluation tiles through
+`read_source_rect`
+([patch/cluster-patch-refinement.md](../patch/cluster-patch-refinement.md)),
+and the view selection, its affine fast path through `render_source_affine`
+and its exact renders through `render_source_tile`
+([patch/patch-view-selection.md](../patch/patch-view-selection.md)). The
+other patch kernels -- the reference view, the stored bitmap and the keypoint
+kernels -- still read the whole pyramid a tiled photograph holds.
 
 ## Rust API
 
@@ -365,4 +371,7 @@ position as `sample_member_grid` does. The panels' pictures through regions
 are checked against the whole pyramid's in their own tests
 ([gui/track-view.md](../../gui/track-view.md) § "Testing"), and the bench's
 steps through regions against their results over a pool every read fits in
-in [bench/tests/region_reads.rs](../../../crates/sfmtool-core/src/bench/tests/region_reads.rs).
+in [bench/tests/region_reads.rs](../../../crates/sfmtool-core/src/bench/tests/region_reads.rs),
+the geometry search among them, and the cluster refinement and the view
+selection over the seoul_bull ground truth the same way in
+[patch/region_read_tests.rs](../../../crates/sfmtool-core/src/patch/region_read_tests.rs).

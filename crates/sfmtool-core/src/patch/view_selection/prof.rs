@@ -15,7 +15,7 @@
 //! the total are therefore meaningful; absolute values exceed wall time.
 //!
 //! Selection drives the shared support/render machinery of `normal_refine`
-//! (`build_level_context` / `normalized_stack`). The phases here are at
+//! (`build_level_context` / `normalized_source_stack`). The phases here are at
 //! selection's own altitude: the reference build, and the per-view ZNCC scoring
 //! split into its render and dot legs.
 
@@ -42,20 +42,21 @@ pub static CAND_SCORE: Phase = Phase::new("candidate_zncc");
 // the leaf partition).
 /// Sub-phase of [`REFERENCE`]: the frozen track support (`build_level_context`).
 pub static REF_SUPPORT: Phase = Phase::new("ref_support");
-/// Sub-phase of [`REFERENCE`]: the track renders (`normalized_stack`).
+/// Sub-phase of [`REFERENCE`]: the track renders (`normalized_source_stack`).
 pub static REF_RENDER: Phase = Phase::new("ref_render");
 /// Sub-phase of [`REFERENCE`]: z-normalize + IRLS weights + unit template +
 /// self-agreement.
 pub static REF_CONSENSUS: Phase = Phase::new("ref_consensus");
 /// Sub-phase of the two SCORE leaves: the scored view's **exact** support
-/// render (`normalized_stack` inside `candidate_zncc`) — the fallback when the
-/// affine fast path declines a view (see [`N_AFFINE_FALLBACK`]).
+/// render (`normalized_source_stack` inside `candidate_zncc`) — the
+/// fallback when the affine fast path declines a view (see
+/// [`N_AFFINE_FALLBACK`]).
 pub static ZNCC_RENDER: Phase = Phase::new("zncc_render");
 /// Sub-phase of the two SCORE leaves: the affine fast path's corner
 /// projection + fit + gates (`affine_core_map`).
 pub static AFFINE_MAP: Phase = Phase::new("affine_map");
 /// Sub-phase of the two SCORE leaves: the affine fast path's support sampling
-/// (`sample_support_affine` — bilinear gathers at the affine-mapped support
+/// (`render_source_affine` — bilinear gathers at the affine-mapped support
 /// positions, skipping the per-pixel projective warp).
 pub static AFFINE_SAMPLE: Phase = Phase::new("zncc_affine");
 /// Sub-phase of the two SCORE leaves: the z-normalize + template dot of a

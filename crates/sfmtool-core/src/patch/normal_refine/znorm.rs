@@ -2,12 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Render-and-z-normalize numerics: project each kept view's patch into the
-//! frozen support ([`normalized_stack`]), z-normalize the raw stack
+//! frozen support ([`normalized_stack`], or [`normalized_source_stack`]
+//! through the render entry points), z-normalize the raw stack
 //! ([`znormalize_into_kept`]), and the AVX2 moment / write kernels they
 //! dispatch to.
 
-use crate::camera::sampler::render_tiles;
-use crate::camera::WarpMap;
+use crate::camera::image::ImageU8;
+use crate::camera::sampler::{
+    render_phase, render_source_tile, render_tiles, Sampler, ViewRegions,
+};
+use crate::camera::{PhotographReadError, WarpMap};
 use crate::patch::cloud::OrientedPatch;
 use crate::progress::Progress;
 
@@ -21,6 +25,9 @@ use super::support::{view_render_patch, ViewSamplers};
 /// fewest any kept view has); z-normalize them with [`znormalize_into_kept`].
 /// `None` when a kept view has no channel, or when `patch` leaves the frame at
 /// any support pixel in any kept view.
+///
+/// Each kept view's whole pyramid is read; [`normalized_source_stack`] is the
+/// same stack read through the render entry points.
 pub(in crate::patch) fn normalized_stack(
     patch: &OrientedPatch,
     ctx: &LevelContext,
@@ -30,6 +37,82 @@ pub(in crate::patch) fn normalized_stack(
     view_keypoints: Option<&[Option<[f64; 2]>]>,
     progress: &Progress<'_>,
 ) -> Option<(Vec<f32>, usize)> {
+    let (mut maps, chosen, channels) =
+        stack_maps(patch, ctx, views, resolution, samplers, view_keypoints)?;
+    let pyramids: Vec<_> = ctx
+        .kept
+        .iter()
+        .map(|&vi| views[vi].source.held_pyramid())
+        .collect();
+    let images = render_tiles(&pyramids, &mut maps, &chosen, progress);
+    Some((gather_stack(&images, ctx, channels, resolution), channels))
+}
+
+/// [`normalized_stack`] with each kept view read through the render entry
+/// points: view `vi` of `views` through `regions[vi]`, by
+/// [`render_source_tile`], so the stack is the same, bit for bit. The renders
+/// are grouped by sampler and timed in the same detail phases.
+///
+/// # Panics
+///
+/// Panics if `regions` is not parallel to `views`.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::patch) fn normalized_source_stack(
+    patch: &OrientedPatch,
+    ctx: &LevelContext,
+    views: &[ProjectedImage<'_>],
+    regions: &mut [ViewRegions<'_>],
+    resolution: u32,
+    samplers: ViewSamplers<'_>,
+    view_keypoints: Option<&[Option<[f64; 2]>]>,
+    progress: &Progress<'_>,
+) -> Result<Option<(Vec<f32>, usize)>, PhotographReadError> {
+    assert_eq!(regions.len(), views.len(), "one view's regions per view");
+    let Some((mut maps, chosen, channels)) =
+        stack_maps(patch, ctx, views, resolution, samplers, view_keypoints)
+    else {
+        return Ok(None);
+    };
+    let mut images: Vec<Option<ImageU8>> = (0..maps.len()).map(|_| None).collect();
+    for sampler in [
+        Sampler::Bilinear,
+        Sampler::BilinearMip,
+        Sampler::Anisotropic,
+    ] {
+        let count = chosen.iter().filter(|&&s| s == sampler).count();
+        if count == 0 {
+            continue;
+        }
+        let _phase = render_phase(progress, sampler, count);
+        for (k, map) in maps.iter_mut().enumerate() {
+            if chosen[k] == sampler {
+                let view = &mut regions[ctx.kept[k]];
+                images[k] = Some(render_source_tile(view, map, sampler)?);
+            }
+        }
+    }
+    let images: Vec<ImageU8> = images
+        .into_iter()
+        .map(|image| image.expect("every map has a sampler"))
+        .collect();
+    Ok(Some((
+        gather_stack(&images, ctx, channels, resolution),
+        channels,
+    )))
+}
+
+/// Every kept view's warp map over the frozen support and its sampler, with
+/// the stack's channel count (the fewest any kept view has): `None` when a
+/// kept view has no channel, or when `patch` leaves the frame at any support
+/// pixel in any kept view, before anything is resampled.
+fn stack_maps(
+    patch: &OrientedPatch,
+    ctx: &LevelContext,
+    views: &[ProjectedImage<'_>],
+    resolution: u32,
+    samplers: ViewSamplers<'_>,
+    view_keypoints: Option<&[Option<[f64; 2]>]>,
+) -> Option<(Vec<WarpMap>, Vec<Sampler>, usize)> {
     let n_views = ctx.kept.len();
     let channels = ctx
         .kept
@@ -39,15 +122,14 @@ pub(in crate::patch) fn normalized_stack(
     if channels == 0 {
         return None;
     }
-    let n = ctx.pixels.len();
     let r = resolution as usize;
 
     // Every kept view's warp first, so a patch that leaves the frame is
-    // rejected before anything is resampled, then the renders, grouped by
-    // sampler so a detailed run times each sampler's renders in one phase.
+    // rejected before anything is resampled; the caller then renders them,
+    // grouped by sampler so a detailed run times each sampler's renders in
+    // one phase.
     let mut maps = Vec::with_capacity(n_views);
     let mut chosen = Vec::with_capacity(n_views);
-    let mut pyramids = Vec::with_capacity(n_views);
     for &vi in &ctx.kept {
         let view = &views[vi];
         let rpatch = view_render_patch(patch, view, view_keypoints.and_then(|k| k[vi]));
@@ -74,13 +156,21 @@ pub(in crate::patch) fn normalized_stack(
         }
         maps.push(map);
         chosen.push(sampler);
-        pyramids.push(view.source.held_pyramid());
     }
-    let images = render_tiles(&pyramids, &mut maps, &chosen, progress);
+    Some((maps, chosen, channels))
+}
 
-    // Raw masked pixel values, flat `[(view*channels + channel)*n + pixel]` in
-    // `ctx.pixels` order.
-    let mut raw = vec![0f32; n_views * channels * n];
+/// The raw masked pixel values of the kept views' renders `images`, flat
+/// `[(view*channels + channel)*n + pixel]` in `ctx.pixels` order.
+fn gather_stack(
+    images: &[ImageU8],
+    ctx: &LevelContext,
+    channels: usize,
+    resolution: u32,
+) -> Vec<f32> {
+    let n = ctx.pixels.len();
+    let r = resolution as usize;
+    let mut raw = vec![0f32; images.len() * channels * n];
     for (vk, img) in images.iter().enumerate() {
         for c in 0..channels {
             let base = (vk * channels + c) * n;
@@ -89,8 +179,7 @@ pub(in crate::patch) fn normalized_stack(
             }
         }
     }
-
-    Some((raw, channels))
+    raw
 }
 
 /// z-normalize the flat raw stack `raw[(view*channels + channel)*n + pixel]`

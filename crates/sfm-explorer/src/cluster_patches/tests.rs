@@ -15,6 +15,8 @@ use std::sync::Arc;
 
 use ndarray::{Array2, Array3, ArrayView2, ArrayView3};
 use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::sampler::RegionPool;
+use sfmtool_core::camera::TiledPhotograph;
 use sfmtool_core::features::cluster_match::{
     background_floor_clusters_from_neighbors, BackgroundFloorParams, NeighborTable,
 };
@@ -231,14 +233,15 @@ fn the_file_holds_what_the_two_cli_steps_make_from_the_same_index() {
 
     // `sfm cluster-patches`: the photographs as `read_image_rgb` decodes them,
     // the detections scattered to their rows, one refinement call.
-    let pyramids: Vec<ImageU8Pyramid> = recon
+    let photographs: Vec<TiledPhotograph> = recon
         .image_set
         .images
         .iter()
         .map(|image| {
             let src = ImageU8::read_rgb(&recon.workspace_dir.join(&image.name)).unwrap();
             let (w, h) = (src.width(), src.height());
-            ImageU8Pyramid::build(&src, ImageU8Pyramid::full_levels(w, h))
+            let pyramid = ImageU8Pyramid::build(&src, ImageU8Pyramid::full_levels(w, h));
+            TiledPhotograph::from_pyramid(Arc::new(pyramid))
         })
         .collect();
     let mut positions: Vec<Array2<f32>> = counts
@@ -281,14 +284,16 @@ fn the_file_holds_what_the_two_cli_steps_make_from_the_same_index() {
         ..ClusterRefineParams::default()
     };
     let result = refine_cluster_patches(
-        &pyramids,
+        &photographs,
+        &RegionPool::for_kernel_call(),
         &features,
         clusters.cluster_starts.as_slice().unwrap(),
         clusters.member_images.as_slice().unwrap(),
         clusters.member_features.as_slice().unwrap(),
         &refine_params,
         None,
-    );
+    )
+    .expect("photographs in memory read");
     let consistency = warp_consistency_residuals(
         clusters.cluster_starts.as_slice().unwrap(),
         clusters.member_images.as_slice().unwrap(),

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use nalgebra::{Point3, Vector3};
 
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
-use crate::camera::sampler::{Sampler, SamplerChoice};
+use crate::camera::sampler::{RegionPool, Sampler, SamplerChoice};
 use crate::camera::warp_map::patch_grid_jacobian;
 use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::geometry::RigidTransform;
@@ -357,12 +357,13 @@ fn the_kernels_choose_the_sampler_the_bench_reads() {
                 select_patch_views(
                     &patch,
                     &views,
+                    &RegionPool::for_kernel_call(),
                     &[0, 1],
                     Some(&some_kps[..2]),
                     &params,
                     &Progress::none()
                 )
-                .expect("Progress::none never cancels")
+                .expect("Progress::none never cancels and photographs in memory read")
             )
         };
         let kernels: [(&str, &dyn Fn(SamplerChoice) -> String); 4] = [

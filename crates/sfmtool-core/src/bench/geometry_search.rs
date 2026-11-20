@@ -12,6 +12,8 @@
 
 use std::collections::BTreeSet;
 
+use crate::camera::sampler::RegionPool;
+use crate::camera::PhotographReadError;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::patch::view_selection::{projected_patch_frame, select_patch_views, ViewSelectParams};
 use crate::progress::{Cancelled, Progress};
@@ -62,6 +64,8 @@ pub enum GeometrySearchError {
         /// How many views were supplied.
         view_count: usize,
     },
+    /// A photograph could not be read.
+    Photograph(PhotographReadError),
     /// The caller asked the search to stop.
     Cancelled,
 }
@@ -89,6 +93,7 @@ impl std::fmt::Display for GeometrySearchError {
                 f,
                 "image {image} is past the {view_count} decoded views supplied to the geometry search"
             ),
+            Self::Photograph(e) => write!(f, "a photograph could not be read: {e}"),
             Self::Cancelled => write!(f, "the geometry search was cancelled"),
         }
     }
@@ -99,6 +104,16 @@ impl std::error::Error for GeometrySearchError {}
 impl From<Cancelled> for GeometrySearchError {
     fn from(_: Cancelled) -> Self {
         Self::Cancelled
+    }
+}
+
+/// A cancelled read is the search's own [`GeometrySearchError::Cancelled`].
+impl From<PhotographReadError> for GeometrySearchError {
+    fn from(e: PhotographReadError) -> Self {
+        match e {
+            PhotographReadError::Cancelled => Self::Cancelled,
+            e => Self::Photograph(e),
+        }
     }
 }
 
@@ -184,11 +199,15 @@ impl std::fmt::Display for GeometrySearchReport {
 /// moved or overwritten.
 ///
 /// Progress reports `build reference`, `score views`, and `add candidates`,
-/// and cancellation returns no partially-grown track.
+/// and cancellation returns no partially-grown track. The view selection
+/// reads every photograph through `pool`, the region pool the caller made for
+/// the call, and a read that fails returns
+/// [`GeometrySearchError::Photograph`].
 pub fn search_geometry(
     track: &EditableTrack,
     observation: usize,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &GeometrySearchOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, GeometrySearchReport), GeometrySearchError> {
@@ -255,6 +274,7 @@ pub fn search_geometry(
     let selection = select_patch_views(
         patch,
         views,
+        pool,
         &reference_views,
         Some(&reference_pixels),
         &params,

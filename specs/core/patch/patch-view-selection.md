@@ -106,20 +106,62 @@ render + `is_front_facing` for candidacy and the IRLS consensus + windowed ZNCC
 for the reference and scoring — the same machinery as member coherence and
 keypoint localization (§ [The shared render and score helpers](#the-shared-render-and-score-helpers)).
 
-`select_patch_views` takes a `Progress` and answers
-`Result<ViewSelection, Cancelled>`. It reports `build reference` and `score
-views`, counts the views scored, and checks cancellation before and after
-reference construction and between views — where a selection over a capture's
-worth of images spends its time. A cancelled call returns `Cancelled` rather
-than a partial list of views, so an interactive caller never installs half a
-selection.
+```rust
+pub fn select_patch_views(
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],      // one per reconstruction image
+    pool: &RegionPool,                 // the caller's, for this call
+    track_views: &[u32],
+    track_keypoints: Option<&[Option<[f64; 2]>]>,
+    params: &ViewSelectParams,
+    progress: &Progress<'_>,
+) -> Result<ViewSelection, PhotographReadError>;
+
+pub fn select_patch_cloud_views(
+    cloud: &PatchCloud,
+    views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
+    track_views: &[Vec<u32>],
+    track_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
+    params: &ViewSelectParams,
+    done: Option<&AtomicUsize>,
+    progress: &Progress<'_>,
+) -> Result<Vec<ViewSelection>, PhotographReadError>;
+```
+
+`select_patch_views` takes a `Progress` and reports `build reference` and
+`score views`, counts the views scored, and checks cancellation before and
+after reference construction and between views — where a selection over a
+capture's worth of images spends its time. A cancelled call returns
+`PhotographReadError::Cancelled` rather than a partial list of views, so an
+interactive caller never installs half a selection.
+
+Every pixel the selection reads goes through the render entry points
+([view-region-pyramids.md](../camera/view-region-pyramids.md)) with the region
+pool the caller made for the call: the affine fast path through
+`render_source_affine` and the exact warp through `render_source_tile`, by
+`normalized_source_stack`, the stack of § "The shared render and score
+helpers" read that way. Each view of the patch is read through one
+`ViewRegions`: a track view's reference render and its own score share theirs,
+and a candidate's is dropped once it is scored. The selection is the same, bit
+for bit, whichever way a read reaches its pixels, and a read that fails is the
+call's error, its `PhotographReadError`, in place of the selection; the batch
+returns the first patch's that failed.
+[patch/region_read_tests.rs](../../../crates/sfmtool-core/src/patch/region_read_tests.rs)
+runs the batch over the seoul_bull ground truth's first 40 points, and one
+selection beside it, through a pool every read fits in, over 32 px tiles
+through an empty pool, and through a pool of half the first run's peak, and
+checks that the selections are the same bit for bit and that a photograph
+holding none of the pixels a read needs fails the batch with its `OutOfRange`
+error.
 
 There is one entry point rather than a reporting one beside a plain one,
 because two would be two places for the gates to drift apart. A caller with no
 one watching passes `Progress::none()`, which reports nothing and never
 cancels. `select_patch_cloud_views` takes a `Progress` of its own, beside the
 `done` counter a Python poller reads: it counts `patches`, polls for
-cancellation before each patch (a cancelled batch returns `Cancelled`), and
+cancellation before each patch (a cancelled batch returns
+`PhotographReadError::Cancelled`), and
 hands each patch's body that `Progress` only for the detail phases that time
 its renders under each sampler. Each patch's own phases and view counts go to
 nothing, since dozens of rayon threads writing them into one bar would
@@ -164,7 +206,7 @@ pub fn view_could_see_patch(
 `select_patch_views` calls it for every candidate before it reads any pixel of
 that view, so the selection and a caller that culls with it cannot drift apart.
 A caller that fetches photographs can call it first and fetch only the views
-that pass, putting a placeholder pyramid in every other slot: a view the
+that pass, putting a placeholder photograph in every other slot: a view the
 predicate rejects is never sampled. The viewer's geometry search does this, so
 it reads the photographs of the track's own images and of the images that pass,
 not of every image ([photograph-cache.md](../camera/photograph-cache.md) § "The
@@ -224,7 +266,8 @@ the samples along one major axis, the direction in the photograph the map
 compresses most (the Jacobian's left singular vector). Each support pixel then takes the per-pixel
 path's anisotropic sample (`remap::aniso_sample`, the body of the scalar
 remap) at its affine position, rounded to `f32` as a warp map stores it
-(`sample_support_affine_aniso`). On a map that is exactly affine the two paths
+(`sample_support_affine_aniso`, read through `render_source_affine`). On a
+map that is exactly affine the two paths
 give the same bytes wherever the per-pixel SVD, read from finite differences of
 the stored positions, lands on the same side of every level and sample-count
 boundary as the constant one (`affine_aniso_sampling_matches_the_per_pixel_path`
@@ -370,7 +413,10 @@ mask is built through the patch slid onto its keypoint's ray, the render the
 stack reads.
 
 **The z-normalized stack.** `normalized_stack` renders the kept views over the
-support, each with its sampler, and refuses the stack when a support pixel
+support, each with its sampler, from the whole pyramid each tiled photograph
+holds, as member coherence reads it; `normalized_source_stack`, which the view
+selection reads, renders the same stack through `render_source_tile`, one
+`ViewRegions` per view. Each refuses the stack when a support pixel
 leaves a view's photograph, since several views reading zeros at the same
 pixels would agree on nothing. `znormalize_into_kept` normalizes each colour
 channel of each view on its own: subtract the windowed mean, divide by the

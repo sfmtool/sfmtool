@@ -20,7 +20,7 @@ use nalgebra::Vector3;
 
 use crate::bench::evaluate::{evaluate_rendering_bitmap, EvaluateError, EvaluateOptions};
 use crate::bench::fit::{fit, FitError, FitOptions};
-use crate::bench::geometry_search::{search_geometry, GeometrySearchOptions};
+use crate::bench::geometry_search::{search_geometry, GeometrySearchError, GeometrySearchOptions};
 use crate::bench::read_failure::ReadFailure;
 use crate::bench::stage::{set_stage, StageError};
 use crate::bench::steps::{
@@ -488,10 +488,16 @@ pub(super) fn finish(
             &track,
             q,
             ctx.views,
+            ctx.pool,
             &GeometrySearchOptions::default(),
             &Progress::none(),
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| {
+            if let GeometrySearchError::Photograph(read) = &e {
+                ctx.failure.keep(read.clone());
+            }
+            e.to_string()
+        })
         .and_then(|(grown, report)| {
             let found = (report.added(), report.self_agreement);
             if report.added() == 0 {

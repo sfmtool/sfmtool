@@ -12,7 +12,8 @@ use std::sync::Arc;
 use nalgebra::{Point3, Vector3};
 
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
-use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
+use crate::camera::sampler::RegionPool;
+use crate::camera::{CameraIntrinsics, CameraModel, PhotographReadError, TiledPhotograph};
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::{localize_patch_cloud_keypoints, KeypointLocalizeParams};
@@ -143,16 +144,19 @@ fn a_batch_cancelled_before_it_starts_does_no_work() {
             resolution: R,
             ..ViewSelectParams::default()
         };
-        select_patch_cloud_views(
-            &cloud,
-            &views,
-            &patch_views,
-            None,
-            &params,
-            Some(done),
-            progress,
+        matches!(
+            select_patch_cloud_views(
+                &cloud,
+                &views,
+                &RegionPool::for_kernel_call(),
+                &patch_views,
+                None,
+                &params,
+                Some(done),
+                progress,
+            ),
+            Err(PhotographReadError::Cancelled)
         )
-        .is_err()
     });
     check("the localizer", &|progress, done| {
         let params = KeypointLocalizeParams {

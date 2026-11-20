@@ -33,9 +33,8 @@ use std::collections::HashMap;
 use nalgebra::{Point3, Vector3};
 use ndarray::{Array2, Array3};
 
-use crate::camera::image::ImageU8Pyramid;
 use crate::camera::sampler::{RegionPool, ViewRegions};
-use crate::camera::PhotographReadError;
+use crate::camera::{PhotographReadError, TiledPhotograph};
 
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{
@@ -1185,19 +1184,20 @@ pub(super) fn evaluate_cluster(
             affine_shapes: s.view(),
         })
         .collect();
-    let pyramids: Vec<&ImageU8Pyramid> = images.iter().map(|v| v.source.held_pyramid()).collect();
+    let sources: Vec<&TiledPhotograph> = images.iter().map(|v| v.source).collect();
 
     let result = {
         let mut phase = progress.phase("refine");
         let result = refine_cluster_patches_borrowed(
-            &pyramids,
+            &sources,
+            pool,
             &features,
             &[0, members.len() as u32],
             &member_images,
             &member_features,
             &params,
             None,
-        );
+        )?;
         progress_note!(phase, "{} observations", members.len());
         result
     };
