@@ -693,7 +693,7 @@ fn matches_of(obs: &Obs, dims: &[(u32, u32)]) -> MatchesData {
         feature_tool_hashes: vec![[0u8; 16]; dims.len()],
         sift_content_hashes: vec![[0u8; 16]; dims.len()],
         feature_counts: ndarray::Array1::zeros(dims.len()),
-        image_dims: Some(image_dims),
+        image_dims,
         image_pairs: None,
         clusters: Some(sfmtool_matches_format::ClustersData {
             cluster_starts: ndarray::Array1::from(obs.starts.clone()),
@@ -772,8 +772,7 @@ fn a_file_without_clusters_is_refused() {
         MatchesInputError::NoClusters
     );
 
-    // ...as is a cluster backbone with no member positions, and a file that
-    // never recorded its image dimensions.
+    // ...as is a cluster backbone with no member positions.
     let mut matches = matches_of(&obs, &vec![(W, H); n_img]);
     matches
         .clusters
@@ -783,12 +782,5 @@ fn a_file_without_clusters_is_refused() {
     assert_eq!(
         estimate_intrinsics_from_matches(&matches, &Default::default()).expect_err("no positions"),
         MatchesInputError::NoMemberPositions
-    );
-
-    let mut matches = matches_of(&obs, &vec![(W, H); n_img]);
-    matches.image_dims = None;
-    assert_eq!(
-        estimate_intrinsics_from_matches(&matches, &Default::default()).expect_err("no dims"),
-        MatchesInputError::NoImageDimensions
     );
 }

@@ -40,7 +40,7 @@ fn to_non_standard(data: &mut MatchesData) {
         *array = non_standard(array);
     }
     swap(&mut data.feature_counts);
-    swap(data.image_dims.as_mut().unwrap());
+    swap(&mut data.image_dims);
     if let Some(pairs) = data.image_pairs.as_mut() {
         swap(&mut pairs.image_index_pairs);
         swap(&mut pairs.match_counts);

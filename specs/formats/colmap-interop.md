@@ -42,7 +42,7 @@ database:
 | `write_colmap_db(path, &ColmapDbWriteData) -> Vec<i64>` | Creates a database with cameras, images, keypoints, descriptors, and optionally pose priors, two-view geometries, rigs and frames. Returns the database image ID of each input image. |
 | `write_colmap_db_features(path, &ColmapDbFeatureData) -> ImageIdMap` | The same without two-view geometries, returning the index-to-ID map that `write_colmap_db_matches` needs. |
 | `write_colmap_db_matches(path, &MatchesData, &ImageIdMap)` | Adds the `matches` and `two_view_geometries` tables to a database made by `write_colmap_db_features`. |
-| `read_colmap_db_matches(path, include_tvg) -> MatchesData` | Reads the `matches` table, and the `two_view_geometries` table when asked, into a `.matches` structure. |
+| `read_colmap_db_matches(path, include_tvg) -> MatchesData` | Reads the `matches` table, and the `two_view_geometries` table when asked, into a `.matches` structure, with each image's dimensions those of its camera in the `cameras` table; an image whose camera the table does not hold is an error. |
 | `PosePrior`, `TwoViewGeometry`, `TwoViewGeometryConfig`, `DbRig`, `DbRigSensor`, `DbSensor`, `DbSensorType`, `DbFrame`, `DbFrameDataId` | The rows these functions write. |
 | `ColmapDbError` | Every failure: SQLite, I/O, unknown camera model, invalid pair ID, inconsistent data (including a missing camera parameter). |
 

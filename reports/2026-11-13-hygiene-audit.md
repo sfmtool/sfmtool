@@ -205,6 +205,8 @@ All seven files (`write.rs`, `read.rs`, `types.rs`, `select.rs`, `cells.rs`, `en
 - Effort: low.
 - Risk: low.
 
+> _Status (2026-11-19): **Partially done** — the `MATCHES_FORMAT_VERSION` doc is cut to the current version and a pointer at the spec's "Format versions" section, and the legends' version constants are gone with the readers of versions 1 to 9; the legend code still sits in `types.rs` and the accessors in `select.rs`, branch `drop-matches-pre10`._
+
 **Derive `Default` for `MatchesContentHash`**
 - Location: `write.rs:116-124`, `select.rs:406-414`.
 - Problem: the same 9-line all-empty hash is built twice.

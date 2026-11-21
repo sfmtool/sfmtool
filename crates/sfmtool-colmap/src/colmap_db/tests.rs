@@ -755,7 +755,7 @@ fn make_matches_data() -> MatchesData {
         feature_tool_hashes: vec![[0u8; 16]; 3],
         sift_content_hashes: vec![[1u8; 16]; 3],
         feature_counts: Array1::from_vec(vec![4, 4, 4]),
-        image_dims: Some(Array2::from_shape_vec((3, 2), vec![64, 48, 64, 48, 64, 48]).unwrap()),
+        image_dims: Array2::from_shape_vec((3, 2), vec![64, 48, 64, 48, 64, 48]).unwrap(),
         image_pairs: Some(sfmtool_matches_format::PairsData {
             image_index_pairs: Array2::from_shape_vec((2, 2), vec![0, 1, 0, 2]).unwrap(),
             match_counts: Array1::from_vec(vec![3, 2]),
@@ -856,6 +856,11 @@ fn test_feature_then_matches_round_trip() {
     assert!(loaded.two_view_geometries.is_none());
     assert_eq!(loaded.image_names, image_names);
     assert_eq!(loaded.feature_counts, Array1::from_vec(vec![4, 4, 4]));
+    // Each image's dimensions are its camera's, from the cameras table.
+    assert_eq!(
+        loaded.image_dims,
+        Array2::from_shape_vec((3, 2), vec![640, 480, 640, 480, 640, 480]).unwrap()
+    );
     let loaded_pairs = loaded.image_pairs.as_ref().unwrap();
     let orig_pairs = matches_data.image_pairs.as_ref().unwrap();
     assert_eq!(loaded_pairs.image_index_pairs, orig_pairs.image_index_pairs);
@@ -1025,6 +1030,42 @@ fn test_empty_matches_from_db() {
     assert_eq!(loaded.metadata.image_pair_count, Some(0));
     assert_eq!(loaded.metadata.match_count, Some(0));
     assert!(loaded.two_view_geometries.is_none());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn an_image_whose_camera_is_missing_is_an_error() {
+    let dir = std::env::temp_dir().join("colmap_db_missing_camera");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let db_path = dir.join("test.db");
+    let (cameras, image_names, camera_indexes, keypoints, descriptors) = make_feature_data();
+    let feature_data = ColmapDbFeatureData {
+        cameras: &cameras,
+        image_names: &image_names,
+        camera_indexes: &camera_indexes,
+        keypoints_per_image: &keypoints,
+        descriptors_per_image: &descriptors,
+        descriptor_dim: 128,
+        pose_priors: None,
+        rigs: None,
+        frames: None,
+    };
+    write_colmap_db_features(&db_path, &feature_data).unwrap();
+    Connection::open(&db_path)
+        .unwrap()
+        .execute_batch("PRAGMA foreign_keys = OFF; DELETE FROM cameras;")
+        .unwrap();
+
+    let error = read_colmap_db_matches(&db_path, false).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        ColmapDbError::InvalidData(
+            "image \"frame_000.jpg\" names a camera the cameras table does not hold".into()
+        )
+        .to_string()
+    );
 
     std::fs::remove_dir_all(&dir).unwrap();
 }

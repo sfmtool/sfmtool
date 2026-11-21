@@ -149,14 +149,10 @@ impl PyMatchesFile {
         self.inner.image_names.clone()
     }
 
-    /// `(N, 2)` per-image (width, height) uint32 array, or None for a
-    /// version <= 3 file that never stored dimensions.
+    /// `(N, 2)` per-image (width, height) uint32 array.
     #[getter]
-    fn image_dims<'py>(&self, py: Python<'py>) -> Option<Py<PyAny>> {
-        self.inner
-            .image_dims
-            .as_ref()
-            .map(|d| d.to_pyarray(py).into_any().unbind())
+    fn image_dims<'py>(&self, py: Python<'py>) -> Py<PyAny> {
+        self.inner.image_dims.to_pyarray(py).into_any().unbind()
     }
 
     /// `(N,)` uint32 feature count per image as used during matching.
@@ -172,8 +168,7 @@ impl PyMatchesFile {
     }
 
     /// The pixel width every image of the file shares. Raises `ValueError`
-    /// when the file records no dimensions or its images differ in
-    /// resolution.
+    /// when the file names no images or its images differ in resolution.
     #[getter]
     fn image_width(&self) -> PyResult<u32> {
         Ok(self.shared_image_dims()?.0)
@@ -319,10 +314,9 @@ impl PyMatchesFile {
             .unbind())
     }
 
-    /// Whether the file carries the piecewise refinement's per-cell columns
-    /// (format version 8). False for a file without a cluster_patches/
-    /// section, for a file below version 8, and for one whose refinement did
-    /// not run the piecewise stage.
+    /// Whether the file carries the piecewise refinement's per-cell columns.
+    /// False for a file without a cluster_patches/ section, and for one whose
+    /// refinement did not run the piecewise stage.
     #[getter]
     fn has_member_cells(&self) -> bool {
         self.inner

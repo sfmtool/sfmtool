@@ -6,22 +6,16 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use ndarray::{Array1, Array2, Array3};
+use ndarray::{Array1, Array2};
 use sfmtool_archive_io::{WorkspaceContents, WorkspaceMetadata};
-use sfmtool_matches_format::{
-    ClustersData, MatchesContentHash, MatchesData, MatchesMetadata, PairsData,
-};
-use sfmtool_sift_format::{
-    FeatureToolMetadata, SiftContentHash, SiftData, SiftMetadata, SIFT_FORMAT_VERSION,
-    THUMBNAIL_SIZE,
-};
+use sfmtool_matches_format::{MatchesContentHash, MatchesData, MatchesMetadata, PairsData};
 
 use super::*;
 use crate::progress::Event;
 
-/// How many images the `.sift` files and the `.matches` files name.
+/// How many images the `.matches` files name.
 const IMAGES: usize = 3;
-/// The size every image's `.sift` file records.
+/// The size every image the `.matches` files name records.
 const IMAGE_DIMS: [u32; 2] = [270, 480];
 
 fn image_name(i: usize) -> String {
@@ -72,36 +66,6 @@ fn write_workspace_file(dir: &Path, version: u32) {
     .unwrap();
 }
 
-/// A version 2 `.sift` file of no features for image `i` in `folder`.
-fn write_sift(folder: &Path, i: usize) {
-    let data = SiftData {
-        feature_tool_metadata: FeatureToolMetadata {
-            feature_tool: "sfmtool".into(),
-            feature_type: "sift".into(),
-            feature_options: record().feature_options,
-        },
-        metadata: SiftMetadata {
-            version: SIFT_FORMAT_VERSION,
-            image_name: image_name(i),
-            image_file_xxh128: "0".repeat(32),
-            image_file_size: 1,
-            image_width: IMAGE_DIMS[0],
-            image_height: IMAGE_DIMS[1],
-            feature_count: 0,
-            sharpness: 0.0,
-            gradient_structure_tensor_xx_yy_xy: [0.0; 3],
-        },
-        content_hash: SiftContentHash::default(),
-        positions_xy: Array2::zeros((0, 2)),
-        affine_shapes: Array3::zeros((0, 2, 2)),
-        descriptors: Array2::zeros((0, 128)),
-        thumbnail_y_x_rgb: Array3::zeros((THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3)),
-    };
-    std::fs::create_dir_all(folder).unwrap();
-    sfmtool_sift_format::write_sift(&folder.join(format!("{}.sift", image_name(i))), &data, 1)
-        .unwrap();
-}
-
 /// A pairwise `.matches` file of the [`IMAGES`] images, recording the
 /// fixture's record and image sizes.
 fn pairwise_matches() -> MatchesData {
@@ -142,7 +106,7 @@ fn pairwise_matches() -> MatchesData {
         feature_tool_hashes: vec![[1; 16]; IMAGES],
         sift_content_hashes: vec![[2; 16]; IMAGES],
         feature_counts: Array1::from_elem(IMAGES, 8),
-        image_dims: Some(Array2::from_shape_fn((IMAGES, 2), |(_, j)| IMAGE_DIMS[j])),
+        image_dims: Array2::from_shape_fn((IMAGES, 2), |(_, j)| IMAGE_DIMS[j]),
         image_pairs: Some(PairsData {
             image_index_pairs: Array2::from_shape_vec((2, 2), vec![0, 1, 1, 2]).unwrap(),
             match_counts: Array1::from_vec(vec![2, 1]),
@@ -153,32 +117,6 @@ fn pairwise_matches() -> MatchesData {
         cluster_patches: None,
         two_view_geometries: None,
     }
-}
-
-/// [`pairwise_matches`] with one cluster of the images instead of the pairs.
-fn cluster_matches() -> MatchesData {
-    let mut data = pairwise_matches();
-    data.metadata.image_pair_count = None;
-    data.metadata.match_count = None;
-    data.metadata.cluster_count = Some(1);
-    data.metadata.cluster_member_count = Some(3);
-    data.metadata.has_clusters = true;
-    data.image_pairs = None;
-    data.clusters = Some(ClustersData {
-        cluster_starts: Array1::from_vec(vec![0, 3]),
-        member_images: Array1::from_vec(vec![0, 1, 2]),
-        member_features: Array1::from_vec(vec![0, 1, 2]),
-        member_positions: Some(Array2::from_elem((3, 2), 12.5)),
-        member_affine_shapes: Some(Array3::from_shape_fn((3, 2, 2), |(_, j, k)| {
-            if j == k {
-                2.0
-            } else {
-                0.0
-            }
-        })),
-        matcher_options: serde_json::json!({}),
-    });
-    data
 }
 
 /// Rewrite the archive at `path` in place: each entry through `edit`, which
@@ -228,17 +166,6 @@ fn relabel(
         }
         let mut json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         json["version"] = version.into();
-        if version <= 2 {
-            let map = json.as_object_mut().unwrap();
-            for key in [
-                "has_clusters",
-                "has_cluster_patches",
-                "cluster_count",
-                "cluster_member_count",
-            ] {
-                map.remove(key);
-            }
-        }
         Some((name.to_string(), serde_json::to_vec(&json).unwrap()))
     }
 }
@@ -315,20 +242,14 @@ fn reconstruction() -> SfmrReconstruction {
     recon
 }
 
-/// The fixture: a version 2 workspace whose image folder holds version 2
-/// `.sift` files, with a current `.sfmr`, a version 15 `.sfmr`, which the
-/// reader no longer reads, a current pairwise `.matches`, a version 1 pairwise
-/// `.matches` without image sizes, a version 5 cluster `.matches`, a version 1
-/// `.camrig` and a current one.
+/// The fixture: a version 2 workspace with a current `.sfmr`, a version 15
+/// `.sfmr` and a version 9 `.matches`, which the readers no longer read, a
+/// current `.matches`, a version 1 `.camrig` and a current one.
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("ws");
     let fixture = Fixture { dir, root };
     write_workspace_file(&fixture.root, 2);
-    let folder = fixture.path("images").join(record().feature_prefix_dir);
-    for i in 0..IMAGES {
-        write_sift(&folder, i);
-    }
 
     for name in ["current", "old"] {
         reconstruction()
@@ -345,19 +266,7 @@ fn fixture() -> Fixture {
         let path = fixture.path(&format!("matches/{name}.matches"));
         sfmtool_matches_format::write_matches(&path, &pairwise_matches(), 3).unwrap();
     }
-    rewrite_archive(
-        &fixture.path("matches/old.matches"),
-        relabel(1, |n| n.starts_with("images/image_dims.")),
-    );
-    let clusters = fixture.path("matches/clusters.matches");
-    sfmtool_matches_format::write_matches(&clusters, &cluster_matches(), 3).unwrap();
-    rewrite_archive(
-        &clusters,
-        relabel(5, |n| {
-            n.starts_with("clusters/member_positions.")
-                || n.starts_with("clusters/member_affine_shapes.")
-        }),
-    );
+    rewrite_archive(&fixture.path("matches/old.matches"), relabel(9, |_| false));
 
     write_rig(&fixture.path("old.camrig"));
     rewrite_archive(&fixture.path("old.camrig"), relabel(1, |_| false));
@@ -410,16 +319,15 @@ fn expected_outcomes(fixture: &Fixture) -> Vec<(PathBuf, UpgradeFileKind, &'stat
         (fixture.path("sfmr/current.sfmr"), Sfmr, "already_current"),
         (fixture.path("sfmr/old.sfmr"), Sfmr, "not_converted"),
         (
-            fixture.path("matches/clusters.matches"),
-            Matches,
-            "not_converted",
-        ),
-        (
             fixture.path("matches/current.matches"),
             Matches,
             "already_current",
         ),
-        (fixture.path("matches/old.matches"), Matches, "converted"),
+        (
+            fixture.path("matches/old.matches"),
+            Matches,
+            "not_converted",
+        ),
         (fixture.path("current.camrig"), Camrig, "already_current"),
         (fixture.path("old.camrig"), Camrig, "converted"),
     ]
@@ -465,12 +373,8 @@ fn files_below_the_current_version_are_rewritten_at_their_own_paths() {
     assert!(!report.nothing_to_do());
     // No `.sfmr` was rewritten, so no point ID changed.
     assert!(report.notes.is_empty(), "{:?}", report.notes);
-    assert!(
-        reason_of(&report, &fixture.path("matches/clusters.matches"))
-            .contains("regenerate it with 'sfm match --cluster'")
-    );
-    // A `.sfmr` below the oldest version read is left as it is, with the
-    // reader's message, which names the release that upgrades it.
+    // A `.sfmr` or `.matches` file below the oldest version read is left as it
+    // is, with the reader's message, which names the release that upgrades it.
     let old_sfmr = reason_of(&report, &fixture.path("sfmr/old.sfmr"));
     assert!(
         old_sfmr.starts_with("the current reader refuses it, so it is left as it is: "),
@@ -484,19 +388,19 @@ fn files_below_the_current_version_are_rewritten_at_their_own_paths() {
         ),
         "{old_sfmr}"
     );
+    let old_matches = reason_of(&report, &fixture.path("matches/old.matches"));
+    assert_eq!(
+        old_matches,
+        format!(
+            "the current reader refuses it, so it is left as it is: {} is a version 9 \
+             .matches file, and this sfmtool reads .matches files of version 10 or later. \
+             sfmtool 0.4.1 is the last release that reads version 9: install it, run \
+             `sfm ws upgrade` on the workspace, then use the file with this release.",
+            fixture.path("matches").join("old.matches").display()
+        )
+    );
 
-    // Each converted file is the current version, holding what it held.
-    let matches =
-        sfmtool_matches_format::read_matches(&fixture.path("matches/old.matches")).unwrap();
-    assert_eq!(
-        matches.metadata.version,
-        sfmtool_matches_format::MATCHES_FORMAT_VERSION
-    );
-    // A version 1 file stores no image sizes; they came from the `.sift` files.
-    assert_eq!(
-        matches.image_dims,
-        Some(Array2::from_shape_fn((IMAGES, 2), |(_, j)| IMAGE_DIMS[j]))
-    );
+    // The converted file is the current version.
     let (rig, _) =
         sfmtool_camrig_format::read_camrig_metadata(&fixture.path("old.camrig")).unwrap();
     assert_eq!(rig.version, sfmtool_camrig_format::CAMRIG_FORMAT_VERSION);
@@ -506,8 +410,8 @@ fn files_below_the_current_version_are_rewritten_at_their_own_paths() {
     for path in [
         "sfmr/current.sfmr",
         "sfmr/old.sfmr",
-        "matches/clusters.matches",
         "matches/current.matches",
+        "matches/old.matches",
         "current.camrig",
         ".sfm-workspace.json",
     ] {

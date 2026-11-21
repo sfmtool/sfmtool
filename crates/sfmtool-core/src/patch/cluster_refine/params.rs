@@ -243,8 +243,7 @@ pub struct ClusterRefineParams {
     /// cascade's. `None` skips the stage, leaving every output the cascade's.
     ///
     /// Off (`None`) by default. `sfm cluster-patches --piecewise` turns it on
-    /// and stores the cells as the `.matches` per-cell entries (format
-    /// version 8 and later, through
+    /// and stores the cells as the `.matches` per-cell entries (through
     /// [`member_cell_data`](super::member_cell_data)). Whether it becomes the
     /// default is decided once a consumer reads the cells. See
     /// `specs/core/patch/cluster-patch-refinement.md`.

@@ -60,8 +60,8 @@ pub enum ClusterRadiiError {
     /// The file stores the pairwise backbone, so it holds no clusters to
     /// measure.
     NoClusters,
-    /// The cluster backbone carries no member affine shapes -- a file written
-    /// before format version 6 made the member geometry mandatory.
+    /// The cluster backbone carries no member affine shapes, which only a value
+    /// built in memory can lack: a cluster file always stores them.
     NoAffineShapes,
     /// The file carries no `cluster_patches/` section, so there is no refine
     /// radius the stored shapes are expressed against.

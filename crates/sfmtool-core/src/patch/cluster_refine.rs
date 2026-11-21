@@ -23,7 +23,7 @@
 //! The refinement's working unknown is the relative warp `W`, but what the
 //! member arrays STORE is the absolute affine shape `S = W · A_ref` — the map
 //! from the detector's canonical unit frame onto that member's image pixels,
-//! `.matches` format version 5. Every member is then self-contained for
+//! as the `.matches` format stores it. Every member is then self-contained for
 //! extent (`S`'s column norms) as well as position, and `W = S · S_ref⁻¹`
 //! recovers the relative warp through the cluster's `S_ref | x_ref` reference
 //! row.

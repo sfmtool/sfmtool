@@ -29,8 +29,7 @@ mod write;
 
 pub use cells::{ClusterCellStatus, MemberCellData};
 pub use read::{
-    read_matches, read_matches_image_names, read_matches_image_names_unchecked,
-    read_matches_metadata, resolve_workspace_dir,
+    read_matches, read_matches_image_names, read_matches_metadata, resolve_workspace_dir,
 };
 pub use select::ClusterSelect;
 pub use types::*;

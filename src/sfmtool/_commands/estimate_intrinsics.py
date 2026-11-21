@@ -62,11 +62,6 @@ def _resolve_dimensions(image_dims, image_names: list[str]) -> tuple[int, int]:
     """
     import numpy as np
 
-    if image_dims is None:
-        raise click.UsageError(
-            "this .matches file stores no image dimensions (format version <= "
-            "3); re-run `sfm match` to produce a file the vote can read"
-        )
     dims = np.asarray(image_dims, dtype=np.int64)
     distinct, counts = np.unique(dims, axis=0, return_counts=True)
     if len(distinct) != 1:

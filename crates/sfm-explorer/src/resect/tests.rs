@@ -98,21 +98,19 @@ pub(crate) fn write_cluster_patches_like_tracks(recon: &SfmrReconstruction, path
         feature_tool_hashes: vec![[0u8; 16]; n],
         sift_content_hashes: vec![[0u8; 16]; n],
         feature_counts: per_image.iter().copied().collect(),
-        image_dims: Some(
-            ndarray::Array2::from_shape_vec(
-                (n, 2),
-                recon
-                    .image_set
-                    .images
-                    .iter()
-                    .flat_map(|image| {
-                        let camera = &recon.image_set.cameras[image.camera_index as usize];
-                        [camera.width, camera.height]
-                    })
-                    .collect(),
-            )
-            .expect("two per image"),
-        ),
+        image_dims: ndarray::Array2::from_shape_vec(
+            (n, 2),
+            recon
+                .image_set
+                .images
+                .iter()
+                .flat_map(|image| {
+                    let camera = &recon.image_set.cameras[image.camera_index as usize];
+                    [camera.width, camera.height]
+                })
+                .collect(),
+        )
+        .expect("two per image"),
         image_pairs: None,
         clusters: Some(ClustersData {
             cluster_starts: starts.iter().copied().collect(),

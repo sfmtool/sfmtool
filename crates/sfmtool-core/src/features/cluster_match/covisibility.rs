@@ -411,9 +411,8 @@ impl ClusterCovisibility {
     /// isolation-ordered thinning sweep answer on a matrix built this way,
     /// with `seed` driving the sampling pass exactly as in
     /// [`Self::from_clusters_with_positions`]. Every cluster file
-    /// `read_matches` opens carries positions (it refuses a cluster file below
-    /// format version 6); only a [`MatchesData`] built in memory without them
-    /// leaves those queries unavailable.
+    /// `read_matches` opens carries positions; only a [`MatchesData`] built in
+    /// memory without them leaves those queries unavailable.
     ///
     /// ```no_run
     /// use sfmtool_core::features::cluster_match::covisibility::ClusterCovisibility;

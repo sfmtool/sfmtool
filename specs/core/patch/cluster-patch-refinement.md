@@ -900,9 +900,8 @@ A consumer that wants only the second-order term fits an affine map to the
 displacements of the `fitted` cells and removes it. The file stores four
 member-parallel entries, `member_cell_shift_px`, `member_cell_zncc`,
 `member_cell_status` with its legend, and `member_cell_iterations`, specified in
-[matches-file-format.md](../../formats/matches-file-format.md#per-cell-entries-optional-version-8).
-They are optional entries of `.matches` version 8; version 9 adds
-`refused_outlier` to the statuses the legend may name. A member that is not kept
+[matches-file-format.md](../../formats/matches-file-format.md#per-cell-entries-optional).
+They are optional entries of the `cluster_patches/` section. A member that is not kept
 carries `NaN` / `NaN` / `not_attempted` / `0`. Why the loop stopped and whether
 its last update was applied are in the result and the binding only.
 

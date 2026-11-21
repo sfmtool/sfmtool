@@ -25,7 +25,7 @@ fn make_clusters_matches_data() -> ClustersMatchesData {
         feature_tool_hashes: data.feature_tool_hashes,
         sift_content_hashes: data.sift_content_hashes,
         feature_counts: data.feature_counts,
-        image_dims: data.image_dims.unwrap(),
+        image_dims: data.image_dims,
         clusters: data.clusters.unwrap(),
     }
 }
@@ -97,7 +97,7 @@ fn test_clusters_writer_round_trip() {
     assert_eq!(loaded.feature_tool_hashes, expected.feature_tool_hashes);
     assert_eq!(loaded.sift_content_hashes, expected.sift_content_hashes);
     assert_eq!(loaded.feature_counts, expected.feature_counts);
-    assert_eq!(loaded.image_dims.as_ref(), Some(&expected.image_dims));
+    assert_eq!(loaded.image_dims, expected.image_dims);
 
     // The backbone, its geometry bit for bit, and no other section.
     assert!(loaded.image_pairs.is_none());

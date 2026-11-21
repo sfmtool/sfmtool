@@ -131,7 +131,7 @@ fn file(starts: &[u32], shapes: &[f32], patch_size: f64, with_patches: bool) -> 
         feature_tool_hashes: vec![[0u8; 16]; 2],
         sift_content_hashes: vec![[1u8; 16]; 2],
         feature_counts: Array1::from_vec(vec![m as u32; 2]),
-        image_dims: Some(Array2::from_shape_vec((2, 2), vec![640, 480, 640, 480]).expect("(2, 2)")),
+        image_dims: Array2::from_shape_vec((2, 2), vec![640, 480, 640, 480]).expect("(2, 2)"),
         image_pairs: None,
         clusters: Some(ClustersData {
             cluster_starts: Array1::from_vec(starts.to_vec()),

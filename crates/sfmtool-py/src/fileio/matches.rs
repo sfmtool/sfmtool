@@ -36,11 +36,7 @@ pub fn matches_data_to_py(py: Python<'_>, data: MatchesData) -> PyResult<Py<PyAn
         u128_bytes_to_py(py, &data.sift_content_hashes)?,
     )?;
     dict.set_item("feature_counts", data.feature_counts.into_pyarray(py))?;
-    // Present for every version-4+ file (the writer requires it); absent
-    // only when loading a version <= 3 file, which never stored dims.
-    if let Some(image_dims) = data.image_dims {
-        dict.set_item("image_dims", image_dims.into_pyarray(py))?;
-    }
+    dict.set_item("image_dims", data.image_dims.into_pyarray(py))?;
 
     if let Some(pairs) = data.image_pairs {
         dict.set_item(
@@ -63,8 +59,8 @@ pub fn matches_data_to_py(py: Python<'_>, data: MatchesData) -> PyResult<Py<PyAn
         dict.set_item("cluster_starts", clusters.cluster_starts.into_pyarray(py))?;
         dict.set_item("member_images", clusters.member_images.into_pyarray(py))?;
         dict.set_item("member_features", clusters.member_features.into_pyarray(py))?;
-        // The backbone's stage geometry; present for every version-6+ file
-        // (the writer requires it), absent for a version <= 5 file.
+        // The backbone's stage geometry; present for every file read (the
+        // writer requires it), absent only from a value built in memory.
         if let Some(member_positions) = clusters.member_positions {
             dict.set_item("member_positions", member_positions.into_pyarray(py))?;
         }
@@ -92,8 +88,8 @@ pub fn matches_data_to_py(py: Python<'_>, data: MatchesData) -> PyResult<Py<PyAn
             "member_consistency_residual",
             cp.member_consistency_residual.into_pyarray(py),
         )?;
-        // The piecewise refinement's per-cell columns (format version 8),
-        // present together when the file carries them, absent otherwise.
+        // The piecewise refinement's per-cell columns, present together when
+        // the file carries them, absent otherwise.
         if let Some(cells) = cp.member_cells {
             dict.set_item("member_cell_shift_px", cells.shift_px.into_pyarray(py))?;
             dict.set_item("member_cell_zncc", cells.zncc.into_pyarray(py))?;
@@ -240,7 +236,7 @@ pub fn write_matches(
     let feature_tool_hashes = py_to_u128_bytes(&get_item(data, "feature_tool_hashes")?)?;
     let sift_content_hashes = py_to_u128_bytes(&get_item(data, "sift_content_hashes")?)?;
     let feature_counts: PyReadonlyArray1<u32> = get_item(data, "feature_counts")?.extract()?;
-    // Mandatory since format version 4: (N, 2) per-image width/height.
+    // (N, 2) per-image width/height.
     let image_dims: PyReadonlyArray2<u32> = get_item(data, "image_dims")?.extract()?;
 
     // Backbone: clusters when the has_clusters flag is set, pairs otherwise.
@@ -252,10 +248,9 @@ pub fn write_matches(
             get_item(data, "member_features")?.extract()?;
         let matcher_options: serde_json::Value =
             py_to_serde(py, &get_item(data, "matcher_options")?)?;
-        // The backbone's stage geometry, mandatory since format version 6.
-        // Extracted optionally so a dict read back from a version <= 5 file
-        // reaches `write_matches`' own message naming the regeneration, rather
-        // than a bare KeyError.
+        // The backbone's stage geometry, required in a cluster file.
+        // Extracted optionally so a dict without it reaches `write_matches`'
+        // own message naming the regeneration, rather than a bare KeyError.
         let member_positions = match get_optional_item(data, "member_positions")? {
             Some(v) => {
                 let arr: PyReadonlyArray2<f32> = v.extract()?;
@@ -405,7 +400,7 @@ pub fn write_matches(
         feature_tool_hashes,
         sift_content_hashes,
         feature_counts: feature_counts.as_array().as_standard_layout().into_owned(),
-        image_dims: Some(image_dims.as_array().as_standard_layout().into_owned()),
+        image_dims: image_dims.as_array().as_standard_layout().into_owned(),
         image_pairs,
         clusters,
         cluster_patches,

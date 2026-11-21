@@ -185,9 +185,9 @@ def _assert_groups_match(got, want, context=None):
 
 
 def _write_cluster_matches(path, with_patches):
-    """Write a minimal cluster-backbone .matches file (format version 4)."""
+    """Write a minimal cluster-backbone .matches file."""
     metadata = {
-        "version": 4,
+        "version": 10,
         "matching_method": "cluster",
         "matching_tool": "sfmtool",
         "matching_tool_version": "0.2",
@@ -221,7 +221,7 @@ def _write_cluster_matches(path, with_patches):
         "cluster_starts": FILE_STARTS,
         "member_images": FILE_IMAGES,
         "member_features": FILE_FEATURES,
-        # The backbone's member geometry (format version 6); the counts ignore
+        # The backbone's member geometry; the counts ignore
         # the positions, the displacement queries ride on them.
         "member_positions": FILE_POSITIONS.copy(),
         "member_affine_shapes": np.tile(
