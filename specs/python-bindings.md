@@ -187,8 +187,8 @@ depends on how `sfmtool-core` stores the column:
   views, since a kept view would hold a reference back to the object and the
   pair could then only be freed by the cycle collector.
 
-`observation_readings` returns a dict of arrays built on each read,
-`image_to_gray` a new dict on each read, and the list getters (`cameras`,
+`observation_readings` and `measurements` return a dict of arrays built on each
+read, `image_to_gray` a new dict on each read, and the list getters (`cameras`,
 `image_names`, the hash lists, …) build a new list on each read.
 
 A view is sound only while the block it points into stays where it is, so the
@@ -315,7 +315,7 @@ Paths in the *Source* column are relative to
 
 | Source | Exposes | Spec |
 |--------|---------|------|
-| [fileio/sfmr.rs](../crates/sfmtool-py/src/fileio/sfmr.rs) | `read_sfmr`, `read_sfmr_metadata`, `read_sfmr_content_hash`, `write_sfmr`, `verify_sfmr`, `POINT_CONSTRAINT_NAMES` | [sfmr-file-format.md](formats/sfmr-file-format.md); `POINT_CONSTRAINT_NAMES` in [bundle-adjustment.md](core/geometry/bundle-adjustment.md) |
+| [fileio/sfmr.rs](../crates/sfmtool-py/src/fileio/sfmr.rs) | `read_sfmr`, `read_sfmr_metadata`, `read_sfmr_content_hash`, `write_sfmr`, `verify_sfmr`, `POINT_CONSTRAINT_NAMES`, `LENGTH_UNIT_NAMES` | [sfmr-file-format.md](formats/sfmr-file-format.md); `POINT_CONSTRAINT_NAMES` in [bundle-adjustment.md](core/geometry/bundle-adjustment.md) |
 | [fileio/sift.rs](../crates/sfmtool-py/src/fileio/sift.rs) | `read_sift`, `read_sift_metadata`, `read_sift_partial`, `write_sift`, `verify_sift`, `SiftFile`, `SiftWriteQueue` | [sift-file-format.md](formats/sift-file-format.md); `SiftWriteQueue` in [sift-command.md](cli/image-feature/sift-command.md#extraction-orchestration-pipelining) |
 | [fileio/matches.rs](../crates/sfmtool-py/src/fileio/matches.rs), [matches_file.rs](../crates/sfmtool-py/src/fileio/matches_file.rs) | `read_matches`, `read_matches_metadata`, `write_matches`, `write_clusters_matches`, `verify_matches`, `MatchesFile` | [matches-file-format.md](formats/matches-file-format.md) |
 | [fileio/camrig.rs](../crates/sfmtool-py/src/fileio/camrig.rs) | `read_camrig`, `read_camrig_metadata`, `write_camrig`, `verify_camrig`, and the image-pattern helpers `validate_camrig_pattern`, `camrig_pattern_to_glob`, `camrig_pattern_matches`, `camrig_pattern_matches_any_padding`, `camrig_pattern_frame_index` | [camrig-file-format.md](formats/camrig-file-format.md) |

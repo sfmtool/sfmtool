@@ -33,8 +33,8 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 use ndarray::Array2;
 
 use sfmtool_sfmr_format::{
-    ContentHash, SfmrMetadata, NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD,
-    POINT_CONSTRAINT_RANGED,
+    ContentHash, MeasurementsData, SfmrMetadata, NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE,
+    POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED,
 };
 
 use crate::camera::intrinsics::IntrinsicAdjustment;
@@ -538,6 +538,17 @@ impl SfmrReconstruction {
     /// Number of camera models.
     pub fn camera_count(&self) -> usize {
         self.image_set.camera_count()
+    }
+
+    /// Number of physical distance measurements (`0` when absent). See
+    /// [`ImageSet::measurement_count`].
+    pub fn measurement_count(&self) -> usize {
+        self.image_set.measurement_count()
+    }
+
+    /// Physical distance measurements stored on this reconstruction, if any.
+    pub fn measurements(&self) -> Option<&MeasurementsData> {
+        self.image_set.measurements.as_ref()
     }
 
     /// The intrinsics image `image_index` was taken with. See

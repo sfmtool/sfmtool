@@ -471,12 +471,29 @@ impl SfmrReconstruction {
                 .map_err(|e| SfmrError::Unsupported(format!("image {i} ({}): {e}", image.name)))?;
         }
 
+        // Physical distance measurements, checked against the images and
+        // cameras before building the reconstruction: the format reader has
+        // done so for a file, and the raw PyO3 `from_data` builder reaches here
+        // unchecked.
+        if let Some(ref measurements) = data.measurements {
+            let image_camera_indexes: Vec<u32> = images.iter().map(|im| im.camera_index).collect();
+            sfmtool_sfmr_format::validate_measurements(
+                measurements,
+                &image_camera_indexes,
+                &data.cameras,
+            )
+            .map_err(SfmrError::InvalidFormat)?;
+        }
+
+        let mut metadata = data.metadata;
+        metadata.measurement_count = data.measurements.as_ref().map(|m| m.len() as u32);
+
         let infinity_point_count = count_points_at_infinity(&points);
         let has_patch_frame = data.patch_u_halfvec_xyz.is_some();
 
         let mut recon = SfmrReconstruction {
             workspace_dir: data.workspace_dir.unwrap_or_default(),
-            metadata: data.metadata,
+            metadata,
             content_hash: data.content_hash,
             image_set: ImageSet {
                 cameras,
@@ -487,6 +504,7 @@ impl SfmrReconstruction {
                 depth_statistics: data.depth_statistics,
                 depth_histogram_counts,
                 rig_frame_data: data.rig_frame_data,
+                measurements: data.measurements,
             },
             point_set: PointSet {
                 points,
@@ -580,7 +598,7 @@ impl SfmrReconstruction {
         metadata.point_count = point_count as u32;
         metadata.observation_count = observation_count as u32;
         metadata.infinity_point_count = self.point_set.infinity_point_count as u32;
-        metadata.measurement_count = None;
+        metadata.measurement_count = self.image_set.measurements.as_ref().map(|m| m.len() as u32);
 
         // Images
         let image_names: Vec<String> = self
@@ -830,7 +848,7 @@ impl SfmrReconstruction {
             }),
             depth_statistics: self.image_set.depth_statistics.clone(),
             observed_depth_histogram_counts,
-            measurements: None,
+            measurements: self.image_set.measurements.clone(),
         }
     }
 }

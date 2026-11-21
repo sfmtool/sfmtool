@@ -192,6 +192,10 @@ struct DeferredChanges {
     image_to_gray: Option<Option<serde_json::Value>>,
     sharpness: Option<Option<Vec<f32>>>,
     gradient_structure_tensors_xx_yy_xy: Option<Option<Vec<[f32; 3]>>>,
+    /// `measurements`, applied and validated once `cameras`, `image_names` and
+    /// `camera_indexes` are settled: the outer `Option` is "was the kwarg
+    /// passed", the inner one "with a dict, or with `None` to drop them".
+    measurements: Option<Option<sfmtool_core::MeasurementsData>>,
 }
 
 /// Apply one per-point keyword argument (positions, colors,
@@ -554,6 +558,9 @@ fn apply_image_field(
                 recon.image_set.rig_frame_data = extract_rig_frame_data(py, &tmp)?;
             }
         }
+        "measurements" => {
+            deferred.measurements = Some(crate::measurements::measurements_from_py(value)?);
+        }
         "world_space_unit" => {
             if value.is_none() {
                 recon.metadata.world_space_unit = None;
@@ -866,6 +873,7 @@ fn finalize(
         image_to_gray,
         sharpness,
         gradient_structure_tensors_xx_yy_xy,
+        measurements,
     } = deferred;
 
     apply_image_count_changes(&mut recon, image_names, camera_indexes)?;
@@ -892,6 +900,36 @@ fn finalize(
     recon.image_set.check_image_intrinsics().map_err(|e| {
         pyo3::exceptions::PyValueError::new_err(format!("clone_with_changes(): {e}"))
     })?;
+
+    // Apply `measurements` (if passed) and validate against the settled cameras
+    // and image camera assignments, whether replaced or kept from `inner`, so
+    // shrinking `image_names` or changing `cameras` / `camera_indexes` cannot
+    // leave invalid measurements behind.
+    if let Some(new_measurements) = measurements {
+        recon.image_set.measurements = new_measurements;
+    }
+    if let Some(ref m) = recon.image_set.measurements {
+        let img_cam_indexes: Vec<u32> = recon
+            .image_set
+            .images
+            .iter()
+            .map(|im| im.camera_index)
+            .collect();
+        let sfmr_cameras: Vec<sfmtool_sfmr_format::SfmrCamera> = recon
+            .image_set
+            .cameras
+            .iter()
+            .map(sfmtool_sfmr_format::SfmrCamera::from)
+            .collect();
+        sfmtool_sfmr_format::validate_measurements(m, &img_cam_indexes, &sfmr_cameras).map_err(
+            |e| pyo3::exceptions::PyValueError::new_err(format!("clone_with_changes(): {e}")),
+        )?;
+    }
+    recon.metadata.measurement_count = recon
+        .image_set
+        .measurements
+        .as_ref()
+        .map(|m| m.len() as u32);
 
     // Recombine the observation-source columns into the enum once the image
     // count is settled. Any column not supplied falls back to the current value.

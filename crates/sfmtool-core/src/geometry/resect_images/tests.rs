@@ -294,6 +294,7 @@ fn build_points(
             },
             depth_histogram_counts: Vec::new(),
             rig_frame_data: None,
+            measurements: None,
         },
         point_set: PointSet {
             points,

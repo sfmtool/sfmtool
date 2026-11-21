@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 
 from sfmtool.fileio import (
+    LENGTH_UNIT_NAMES,
     POINT_CONSTRAINT_NAMES,
     read_sfmr,
     read_sfmr_metadata,
@@ -1160,3 +1161,239 @@ class TestPerImageLensCorrections:
             )
         with pytest.raises(ValueError, match="must match image count"):
             recon.clone_with_changes(radial_bspline_adjustments=np.zeros((1, 2)))
+
+
+def _sample_measurements_dict() -> dict:
+    """Five valid measurements exercising all five length units, a same-image
+    pair, cross-image pairs, an empty label, and UTF-8 labels."""
+    return {
+        "distances": np.array([150.0, 42.5, 1.25, 12.0, 6.5], dtype=np.float32),
+        "units": np.array([0, 1, 2, 3, 4], dtype=np.uint8),
+        "image_indexes": np.array(
+            [[0, 0], [0, 1], [2, 5], [3, 4], [1, 6]], dtype=np.uint32
+        ),
+        "endpoints_xy": np.array(
+            [
+                [[10.5, 20.25], [100.0, 200.5]],
+                [[15.0, 30.0], [120.25, 250.75]],
+                [[50.0, 60.0], [70.0, 80.0]],
+                [[1.0, 2.0], [260.5, 470.25]],
+                [[135.0, 240.0], [200.0, 300.0]],
+            ],
+            dtype=np.float32,
+        ),
+        "labels": ["ruler — 150 mm", "", "αβγ", "bench width", "door height"],
+    }
+
+
+def _assert_measurements_identical(lhs: dict, rhs: dict) -> None:
+    assert set(lhs.keys()) == {
+        "distances",
+        "units",
+        "image_indexes",
+        "endpoints_xy",
+        "labels",
+    }
+    assert set(rhs.keys()) == set(lhs.keys())
+    for key in ("distances", "units", "image_indexes", "endpoints_xy"):
+        assert lhs[key].dtype == rhs[key].dtype, key
+        assert lhs[key].shape == rhs[key].shape, key
+        assert lhs[key].tobytes() == rhs[key].tobytes(), key
+    assert lhs["labels"] == rhs["labels"]
+
+
+class TestMeasurementsIo:
+    """`.sfmr` version 17 `measurements/` dict I/O and `LENGTH_UNIT_NAMES`."""
+
+    def test_length_unit_names(self):
+        assert isinstance(LENGTH_UNIT_NAMES, tuple)
+        assert LENGTH_UNIT_NAMES == ("mm", "cm", "m", "in", "ft")
+
+    def test_absent_measurements_read_as_none(
+        self, seoul_bull_ground_truth_sfmr, tmp_path
+    ):
+        data = read_sfmr(seoul_bull_ground_truth_sfmr)
+        assert data["measurements"] is None
+        assert "measurement_count" not in read_sfmr_metadata(
+            seoul_bull_ground_truth_sfmr
+        )
+
+        # Writing without the key or with None writes a valid file with None.
+        out_none = tmp_path / "none.sfmr"
+        write_sfmr(out_none, data)
+        assert read_sfmr(out_none)["measurements"] is None
+        assert "measurement_count" not in read_sfmr_metadata(out_none)
+        assert verify_sfmr(out_none) == (True, [])
+
+        del data["measurements"]
+        out_omitted = tmp_path / "omitted.sfmr"
+        write_sfmr(out_omitted, data)
+        assert read_sfmr(out_omitted)["measurements"] is None
+        assert verify_sfmr(out_omitted) == (True, [])
+
+    def test_round_trip_with_measurements(self, seoul_bull_ground_truth_sfmr, tmp_path):
+        data = read_sfmr(seoul_bull_ground_truth_sfmr)
+        plain = tmp_path / "plain.sfmr"
+        write_sfmr(plain, data)
+        plain_hash = read_sfmr(plain)["content_hash"]
+
+        m = _sample_measurements_dict()
+        data["measurements"] = m
+        out = tmp_path / "measured.sfmr"
+        write_sfmr(out, data)
+
+        ok, errors = verify_sfmr(out)
+        assert ok, errors
+
+        meta = read_sfmr_metadata(out)
+        assert meta["version"] == 17
+        assert meta["measurement_count"] == 5
+
+        reloaded = read_sfmr(out)
+        _assert_measurements_identical(reloaded["measurements"], m)
+        assert reloaded["content_hash"]["measurements_xxh128"] is not None
+        assert (
+            reloaded["content_hash"]["content_xxh128"] != plain_hash["content_xxh128"]
+        )
+
+        # Re-writing the dict read back produces the exact same content hash.
+        out2 = tmp_path / "measured2.sfmr"
+        write_sfmr(out2, reloaded)
+        assert read_sfmr(out2)["content_hash"] == reloaded["content_hash"]
+
+    def test_fortran_order_and_strided_arrays(
+        self, seoul_bull_ground_truth_sfmr, tmp_path
+    ):
+        data = read_sfmr(seoul_bull_ground_truth_sfmr)
+        c_m = _sample_measurements_dict()
+        f_m = {
+            "distances": c_m["distances"][::-1][::-1],
+            "units": np.repeat(c_m["units"], 2)[::2],
+            "image_indexes": np.asfortranarray(c_m["image_indexes"]),
+            "endpoints_xy": np.asfortranarray(c_m["endpoints_xy"]),
+            "labels": list(c_m["labels"]),
+        }
+        assert not f_m["image_indexes"].flags["C_CONTIGUOUS"]
+        assert not f_m["endpoints_xy"].flags["C_CONTIGUOUS"]
+        assert not f_m["units"].flags["C_CONTIGUOUS"]
+
+        out_c = tmp_path / "c.sfmr"
+        out_f = tmp_path / "f.sfmr"
+        data["measurements"] = c_m
+        write_sfmr(out_c, data)
+        data["measurements"] = f_m
+        write_sfmr(out_f, data)
+
+        reloaded_c = read_sfmr(out_c)
+        reloaded_f = read_sfmr(out_f)
+        _assert_measurements_identical(
+            reloaded_f["measurements"], reloaded_c["measurements"]
+        )
+        assert reloaded_f["content_hash"] == reloaded_c["content_hash"]
+
+    def test_type_and_key_errors(self, seoul_bull_ground_truth_sfmr, tmp_path):
+        base = read_sfmr(seoul_bull_ground_truth_sfmr)
+        out = tmp_path / "bad.sfmr"
+
+        # Non-dict measurements.
+        for bad in (123, [], "nope"):
+            d = dict(base, measurements=bad)
+            with pytest.raises(TypeError, match="measurements must be a dict"):
+                write_sfmr(out, d)
+
+        # Missing required key -> KeyError.
+        for key in ("distances", "units", "image_indexes", "endpoints_xy", "labels"):
+            m = _sample_measurements_dict()
+            del m[key]
+            with pytest.raises(KeyError, match=key):
+                write_sfmr(out, dict(base, measurements=m))
+
+        # Unexpected extra key -> ValueError.
+        m = _sample_measurements_dict()
+        m["extra"] = 1
+        with pytest.raises(ValueError, match="unexpected key"):
+            write_sfmr(out, dict(base, measurements=m))
+
+        # Wrong dtype or rank or non-array -> TypeError naming the key.
+        bad_columns = [
+            ("distances", np.array([1.0], dtype=np.float64)),
+            ("distances", np.array([[1.0]], dtype=np.float32)),
+            ("distances", [1.0]),
+            ("units", np.array([0], dtype=np.int32)),
+            ("units", np.array([[0]], dtype=np.uint8)),
+            ("image_indexes", np.array([[0, 1]], dtype=np.int32)),
+            ("image_indexes", np.array([0, 1], dtype=np.uint32)),
+            ("endpoints_xy", np.zeros((1, 2, 2), dtype=np.float64)),
+            ("endpoints_xy", np.zeros((1, 4), dtype=np.float32)),
+            ("labels", "abcde"),
+            ("labels", ("a", "b", "c", "d", "e")),
+            ("labels", ["ok", 42, "", "", ""]),
+        ]
+        for key, bad_val in bad_columns:
+            m = _sample_measurements_dict()
+            m[key] = bad_val
+            with pytest.raises(TypeError, match=key):
+                write_sfmr(out, dict(base, measurements=m))
+
+    def test_format_validation_errors(self, seoul_bull_ground_truth_sfmr, tmp_path):
+        base = read_sfmr(seoul_bull_ground_truth_sfmr)
+        out = tmp_path / "invalid.sfmr"
+        n_img = len(base["image_names"])
+        cam = base["cameras"][0]
+
+        # Empty measurements (must be None instead).
+        empty_m = {
+            "distances": np.zeros(0, dtype=np.float32),
+            "units": np.zeros(0, dtype=np.uint8),
+            "image_indexes": np.zeros((0, 2), dtype=np.uint32),
+            "endpoints_xy": np.zeros((0, 2, 2), dtype=np.float32),
+            "labels": [],
+        }
+        with pytest.raises(ValueError, match="at least one"):
+            write_sfmr(out, dict(base, measurements=empty_m))
+
+        # Non-positive or NaN distance.
+        for bad_dist in (0.0, -1.0, np.nan, np.inf):
+            m = _sample_measurements_dict()
+            m["distances"] = m["distances"].copy()
+            m["distances"][0] = bad_dist
+            with pytest.raises(ValueError, match="distances"):
+                write_sfmr(out, dict(base, measurements=m))
+
+        # Out-of-range unit code.
+        m = _sample_measurements_dict()
+        m["units"] = m["units"].copy()
+        m["units"][0] = len(LENGTH_UNIT_NAMES)
+        with pytest.raises(ValueError, match="units"):
+            write_sfmr(out, dict(base, measurements=m))
+
+        # Out-of-range image index.
+        m = _sample_measurements_dict()
+        m["image_indexes"] = m["image_indexes"].copy()
+        m["image_indexes"][0, 1] = n_img
+        with pytest.raises(ValueError, match="image_indexes"):
+            write_sfmr(out, dict(base, measurements=m))
+
+        # Out-of-bounds endpoint coordinate.
+        m = _sample_measurements_dict()
+        m["endpoints_xy"] = m["endpoints_xy"].copy()
+        m["endpoints_xy"][0, 0, 0] = float(cam.width)
+        with pytest.raises(ValueError, match="endpoints_xy"):
+            write_sfmr(out, dict(base, measurements=m))
+
+        # Mismatched labels length.
+        m = _sample_measurements_dict()
+        m["labels"] = m["labels"][:-1]
+        with pytest.raises(ValueError, match="labels"):
+            write_sfmr(out, dict(base, measurements=m))
+
+        # Metadata measurement_count mismatching measurements length or None.
+        bad_meta = dict(base["metadata"], measurement_count=3)
+        with pytest.raises(ValueError, match="measurement_count"):
+            write_sfmr(out, dict(base, metadata=bad_meta, measurements=None))
+        with pytest.raises(ValueError, match="measurement_count"):
+            write_sfmr(
+                out,
+                dict(base, metadata=bad_meta, measurements=_sample_measurements_dict()),
+            )
+        assert not out.exists()

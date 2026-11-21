@@ -427,6 +427,12 @@ impl PySfmrReconstruction {
         self.inner.camera_count()
     }
 
+    /// Number of physical distance measurements (`0` when absent).
+    #[getter]
+    fn measurement_count(&self) -> usize {
+        self.inner.measurement_count()
+    }
+
     /// Resolved workspace directory path as a string.
     #[getter]
     fn workspace_dir(&self) -> String {
@@ -2035,6 +2041,24 @@ impl PySfmrReconstruction {
         }
     }
 
+    /// Physical distance measurements as a Python dict, or None when absent.
+    ///
+    /// When present, returns a fresh dict built on each read with keys
+    /// ``distances`` (``(N,)`` float32), ``units`` (``(N,)`` uint8 canonical
+    /// codes indexing ``sfmtool.fileio.LENGTH_UNIT_NAMES``),
+    /// ``image_indexes`` (``(N, 2)`` uint32), ``endpoints_xy``
+    /// (``(N, 2, 2)`` float32) and ``labels`` (``list[str]`` of length ``N``).
+    /// Set or clear with ``clone_with_changes(measurements=...)``.
+    #[getter]
+    fn measurements<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+        self.inner
+            .image_set
+            .measurements
+            .as_ref()
+            .map(|m| crate::measurements::measurements_to_py(py, m))
+            .transpose()
+    }
+
     /// World space unit string, or None.
     #[getter]
     fn world_space_unit(&self) -> Option<String> {
@@ -2066,7 +2090,11 @@ impl PySfmrReconstruction {
     /// :attr:`reference_observations` for what happens when it is not passed),
     /// ``image_names``, ``camera_indexes``, ``cameras``,
     /// ``feature_tool_hashes``, ``sift_content_hashes``, ``thumbnails_y_x_rgb``,
-    /// ``rig_frame_data``, ``world_space_unit``, ``feature_source``,
+    /// ``rig_frame_data``, ``measurements`` (a dict with ``distances``,
+    /// ``units``, ``image_indexes``, ``endpoints_xy`` and ``labels``, or
+    /// ``None`` to drop them; validated against the final cameras and image
+    /// camera assignments whether replaced or kept), ``world_space_unit``,
+    /// ``feature_source``,
     /// ``keypoints_xy`` (a ``(K, 2)`` float32 array or ``None``),
     /// ``image_file_hashes`` (a ``list[bytes]`` or ``None``),
     /// ``focal_adjustments`` (an ``(N,)`` float64 array, or ``None`` for every

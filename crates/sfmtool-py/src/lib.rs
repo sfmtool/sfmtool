@@ -108,6 +108,8 @@ pub(crate) mod format_errors;
 
 pub(crate) mod csr_args;
 
+pub(crate) mod measurements;
+
 pub(crate) mod readings;
 
 // ── Geometric types ───────────────────────────────────────────────────────

@@ -1438,6 +1438,12 @@ impl EditedReconstruction {
         metadata.image_count = self.base.image_count() as u32;
         metadata.camera_count = self.base.camera_count() as u32;
         metadata.infinity_point_count = point_set.infinity_point_count as u32;
+        metadata.measurement_count = self
+            .base
+            .image_set
+            .measurements
+            .as_ref()
+            .map(|m| m.len() as u32);
 
         let recon = SfmrReconstruction {
             workspace_dir: self.base.workspace_dir.clone(),

@@ -84,6 +84,13 @@ pub use sfmtool_sfmr_format::THUMBNAIL_SIZE;
 /// consumer wanting to read — or build — a rig had to depend on `sfmtool-sfmr-format`
 /// itself to say what it was holding.
 pub use sfmtool_sfmr_format::{FramesMetadata, RigDefinition, RigFrameData, RigsMetadata};
+/// Re-exported alongside [`ImageSet::measurements`], whose entries carry these
+/// unit codes: a consumer reading or building physical distance measurements
+/// needs to name them without depending on `sfmtool-sfmr-format` itself.
+pub use sfmtool_sfmr_format::{
+    LengthUnit, MeasurementsData, LENGTH_UNIT_CM, LENGTH_UNIT_FT, LENGTH_UNIT_IN, LENGTH_UNIT_M,
+    LENGTH_UNIT_MM,
+};
 /// Re-exported alongside [`PointConstraintColumns`], whose entries are these
 /// codes: a consumer reading or building the constraint columns needs to name
 /// them without depending on `sfmtool-sfmr-format` itself.
