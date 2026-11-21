@@ -15,6 +15,7 @@ pub mod bundle_adjust;
 pub mod clone;
 pub mod drop_image_adjustments;
 pub mod edited;
+pub mod measurement_endpoint;
 pub mod range_expr;
 pub mod sfmr_reconstruction;
 pub mod switch_camera_model;

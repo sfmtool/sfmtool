@@ -94,7 +94,10 @@ pub struct ReferenceViewOptions {      // impl Default: the values below
     pub min_coverage: f64,              // the hard limit
     pub unread_radius: f64,             // r where no view has a radius
 }
-impl ReferenceViewOptions { pub fn angle_factor(&self, viewing_angle_deg: f64) -> f64; } // 1 + k·tan θ
+impl ReferenceViewOptions {
+    pub fn angle_factor(&self, viewing_angle_deg: f64) -> f64; // 1 + k·tan θ
+    pub fn agreement_penalty(&self, shortfall: f64) -> f64;    // the agreement hinge
+}
 pub enum ReferenceTerm { Sharpness, CappedRadius, Angle, Agreement, Cells, Coverage, Clipped }
 pub enum ReferenceExclusion { NoTile, Coverage, BackFacing }
 pub struct ReferenceCost {

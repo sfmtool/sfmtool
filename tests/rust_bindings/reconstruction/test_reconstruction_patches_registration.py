@@ -60,6 +60,14 @@ def test_image_adjustment_methods_are_on_the_reconstruction():
         assert not hasattr(reconstruction, name), name
 
 
+def test_measurement_endpoint_methods_are_on_the_reconstruction():
+    """Resolving measurement endpoints is a method of `SfmrReconstruction`,
+    not a function of the submodule."""
+    for name in ("resolve_measurement_endpoint", "resolve_measurements"):
+        assert callable(getattr(reconstruction.SfmrReconstruction, name, None)), name
+        assert not hasattr(reconstruction, name), name
+
+
 def test_patches_bindings_registered():
     """Every expected class and function is present on `_sfmtool.patches`."""
     missing = [n for n in _PATCHES_CLASSES if not hasattr(patches, n)]

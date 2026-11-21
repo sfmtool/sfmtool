@@ -2799,9 +2799,10 @@ measurement (`measurement_count >= 1`), and absent when there are none.
 **Why image observations rather than 3D point indexes.** Each endpoint is
 stored as an image index and pixel coordinate `(x, y)` rather than an index
 into `points3d/` because a measurement may reference 3D points that have no
-clear definition in the reconstruction yet. Once a patch in a patch-based
-`.sfmr` covers that coordinate in the image, the patch maps the coordinate to a
-3D point.
+clear definition in the reconstruction yet. Once the square of an observation
+in that image, in a patch-based `.sfmr`, covers the coordinate, the point's
+patch maps the coordinate to a 3D point
+([core/reconstruction/measurement-endpoint.md](../core/reconstruction/measurement-endpoint.md)).
 
 #### `measurements/metadata.json.zst`
 
