@@ -768,6 +768,14 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
         .unwrap()
         .to_string()
         .contains("no measurements/ section"));
+    assert!(read_sfmr_content_hash(&extra_count)
+        .err()
+        .unwrap()
+        .to_string()
+        .contains(
+            "metadata.json.zst measurement_count and content_hash.json.zst measurements_xxh128 \
+             must be present together or absent together"
+        ));
     let (valid, errors) = verify_sfmr(&extra_count).unwrap();
     assert!(
         !valid
@@ -789,6 +797,14 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
         .unwrap()
         .to_string()
         .contains("no measurements/ section"));
+    assert!(read_sfmr_content_hash(&extra_hash)
+        .err()
+        .unwrap()
+        .to_string()
+        .contains(
+            "metadata.json.zst measurement_count and content_hash.json.zst measurements_xxh128 \
+             must be present together or absent together"
+        ));
     let (valid, errors) = verify_sfmr(&extra_hash).unwrap();
     assert!(
         !valid
@@ -823,16 +839,20 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
                 .any(|e| e.contains("without measurements/metadata.json.zst"))
     );
 
-    // 4. measurements/metadata.json with measurement_count == 0.
+    // 4. measurements/metadata.json with measurement_count == 0, while
+    //    top-level measurement_count and measurements_xxh128 are present so
+    //    read_sfmr reaches the section_count == 0 guard.
     let zero_count = dir.join("zero_count.sfmr");
     {
-        let mut archive = zip::ZipArchive::new(std::fs::File::open(&plain).unwrap()).unwrap();
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(&good).unwrap()).unwrap();
         let mut out = zip::ZipWriter::new(std::fs::File::create(&zero_count).unwrap());
         let stored = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
         for i in 0..archive.len() {
             let entry = archive.by_index_raw(i).unwrap();
-            out.raw_copy_file(entry).unwrap();
+            if !entry.name().unwrap().starts_with("measurements/") {
+                out.raw_copy_file(entry).unwrap();
+            }
         }
         let add_entry = |zip: &mut zip::ZipWriter<std::fs::File>, name: &str, bytes: &[u8]| {
             zip.start_file(name, stored).unwrap();
@@ -851,14 +871,64 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
         add_entry(&mut out, "measurements/units.0.uint8.zst", &[]);
         out.finish().unwrap();
     }
-    assert!(read_sfmr(&zero_count).is_err());
+    let err = read_sfmr(&zero_count).err().unwrap().to_string();
+    assert!(
+        err.contains("measurements/metadata.json.zst measurement_count must be >= 1"),
+        "{err}"
+    );
     let (valid, errors) = verify_sfmr(&zero_count).unwrap();
     assert!(
         !valid
-            && errors
-                .iter()
-                .any(|e| e.contains("measurement_count must be >= 1")),
+            && errors.iter().any(
+                |e| e.contains("measurements/metadata.json.zst measurement_count must be >= 1")
+            ),
         "{errors:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn top_level_zero_measurement_count_is_refused_by_every_reader_and_verifier() {
+    let dir = temp_dir("sfmr_test_top_level_zero_measurement_count");
+    let plain = dir.join("plain.sfmr");
+    write_sfmr(&plain, &mut make_test_data()).unwrap();
+
+    let zero = dir.join("zero.sfmr");
+    rewrite_entries(&plain, &zero, |name, raw| {
+        (name == "metadata.json.zst").then(|| {
+            let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
+            json["measurement_count"] = serde_json::json!(0);
+            serde_json::to_vec(&json).unwrap()
+        })
+    });
+
+    let expected = "metadata.json.zst measurement_count must be >= 1 when present";
+    for (reader, error) in [
+        ("read_sfmr", read_sfmr(&zero).err()),
+        ("read_sfmr_metadata", read_sfmr_metadata(&zero).err()),
+        ("read_sfmr_image_names", read_sfmr_image_names(&zero).err()),
+        (
+            "read_sfmr_content_hash",
+            read_sfmr_content_hash(&zero).err(),
+        ),
+    ] {
+        let err = error
+            .unwrap_or_else(|| panic!("{reader}: accepted top-level measurement_count == 0"))
+            .to_string();
+        assert!(
+            err.contains(expected),
+            "{reader}: expected {expected:?} in {err:?}"
+        );
+    }
+    let (valid, errors) = verify_sfmr(&zero).unwrap();
+    assert!(
+        !valid,
+        "verify_sfmr accepted top-level measurement_count == 0"
+    );
+    assert!(
+        errors.iter().any(|e| e.contains(expected)),
+        "expected {expected:?} in {errors:?}"
     );
 
     let _ = std::fs::remove_dir_all(&dir);

@@ -2796,6 +2796,13 @@ human-readable label.
 The section is optional: present if and only if there is at least one
 measurement (`measurement_count >= 1`), and absent when there are none.
 
+**Why image observations rather than 3D point indexes.** Each endpoint is
+stored as an image index and pixel coordinate `(x, y)` rather than an index
+into `points3d/` because a measurement may reference 3D points that have no
+clear definition in the reconstruction yet. Once a patch in a patch-based
+`.sfmr` covers that coordinate in the image, the patch maps the coordinate to a
+3D point.
+
 #### `measurements/metadata.json.zst`
 
 ```json
