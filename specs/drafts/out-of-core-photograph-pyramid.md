@@ -1024,7 +1024,7 @@ tiled photographs only (step 13), so no step leaves a reader without pixels.
 | 11–13 | Display patch bitmaps at open, conversion to embedded patches, `sfm web-export` (`display_bitmaps.rs`, `state/edits.rs` `convert_to_embedded_patches_job`, `web_export.rs`) | `get_many`, full depth, every photograph held at once; web-export with budget 0 | `get_many` answers tiled photographs; regions; web-export makes missing mipmaps in the workspace | the stored levels |
 | 14–18 | The bench's steps and searches, live evaluation, *Find Nearby Tracks*, *Create Track Here*, *Add image to tracks*, *Refine all normals*, *Refit all points* (`bench.rs`, `state/edits.rs` `fetch`, `bench/nearby_tracks.rs`, `bench/track_at_pixel.rs`, `add_image_to_tracks.rs`, `state/edits/refine_all_normals.rs`, `refit_all_points.rs`) | `get_many`, levels per sample or per grid, `clipped_share` on level 0; the normal kernels' renders, the grown plane's own sampler and the cluster refinement's `LevelTile` copies | regions, `clipped_share` as in row 10; the grown plane's reads through `read_source_samples` and `LevelTile` through `read_source_rect` (the companion's § "Readers that sample through their own code") | the stored levels |
 | 16a | *Find Nearby Tracks*' grey reads (`GreyImages`, `bench/nearby/grey.rs`) | level 0 of each view, blurred grey `f32`, whole: 800 MB per 200-megapixel view | each read blurs the level-0 region it samples, plus the blur's 4 px | level 0 from `-mip0` for an original that is not region-readable |
-| 19 | The viewer's cluster-patches build (`cluster_patches.rs` `read_photographs`) | `read_rgb`, full depth, outside the cache, all at once | `get_many` through the cache; regions | the stored levels |
+| 19 | The viewer's cluster-patches build (`cluster_patches.rs` `read_photographs`) | `get_many` through the cache (built, 11b), full depth, every photograph held at once | `get_many` answers tiled photographs; regions | the stored levels |
 | 20 | Display thumbnails when none is stored (`display_thumbnails.rs` → `display_thumbnail_row`) | whole decode, resized to 128 | in core unchanged; out of core from the coarsest mip level file | display only |
 | 21 | `.sift` building (`features/sift/files.rs` `build_sift_file`) | whole decode | whole decode of the original, then the mipmap from it | no |
 | 22 | Image readings at save (`reconstruction/image_readings.rs` `gather_image_readings`) | whole decode of every photograph with no `.sift` row, with the number decoded at once bounded by memory as SIFT's is (built in step 4) | unchanged | no |
@@ -1387,8 +1387,8 @@ each in the step that moves its readers:
 | Step | Signatures that change |
 |------|------------------------|
 | 9 | Track View's and the Track Table's renders, which draw a cell's error state instead of the tile (built) |
-| 10 | `ViewSources::fetch` in [state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs), which returns `PhotographReadError` instead of `Cancelled` (`get_many` still returns `Cancelled`, which converts), and the bench kernels (`bench::evaluate`, `evaluate_rendering_bitmap`, `score_bitmap`, `fit`, `render_bitmap_in_place`, `search_geometry`, `set_stage`, `build_track_at_pixel`, `classify`) and the patch kernels they and the reference picks share (`view_selection::select_patch_views`, `select_patch_cloud_views`, `reference_view::render_view_tile`, `read_track`, `stored_bitmap::render_reference`, `keypoint_localize`'s and `keypoint_subpixel`'s entry points, `member_coherence`'s, `observation_reading::read_cloud_observations`, `spawn::spawn_candidate_tracks`), and every kernel that calls one of them or that the bench runs, since a kernel passes its caller's pool down and its errors up: the normal kernels the bench's normal steps run (`pairwise_flow_normal`, `grown_plane_normal`, `grid_plane_normal`, `finite_difference_normal`) and `refine_normals`, which runs them; the cluster refinement's entry points (`refine_cluster_patches`, `refine_cluster_patches_borrowed`), which the bench's evaluation of a cluster-stage track runs, and the bench's member-grid reads, which move to `sample_source_member_grid`, the source form of `sample_member_grid` that step 9 added beside it; `stored_bitmap::render_patch_bitmap`, `render_patch_cloud_bitmaps` and `refit_points`. Their callers that step 11 moves keep their fetch: each wraps the whole pyramids it holds with `from_pyramid` (the cluster-patches build its decoded images with `from_image`), makes the region pool for its call, and reports the error as its step's failure |
-| 11 | the public `render_patch_bitmap_column` / `render_display_patch_bitmaps` in [display_bitmaps.rs](../../crates/sfmtool-core/src/patch/display_bitmaps.rs), which return `PhotographReadError` instead of `Cancelled`, and `WebExportError`, which gains `Photograph` (built, 11a); the viewer's bulk jobs (the conversion to embedded patches, *Refine all normals*, *Refit all points*, the cluster-patches build) and `sfm web-export` take tiled photographs from `get_many` once step 13 makes it answer them, wrapping its whole pyramids with `from_pyramid` until then, and the cluster-patches build fetches through the cache from 11b |
+| 10 | `ViewSources::fetch` in [state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs), which returns `PhotographReadError` instead of `Cancelled` (`get_many` still returns `Cancelled`, which converts), and the bench kernels (`bench::evaluate`, `evaluate_rendering_bitmap`, `score_bitmap`, `fit`, `render_bitmap_in_place`, `search_geometry`, `set_stage`, `build_track_at_pixel`, `classify`) and the patch kernels they and the reference picks share (`view_selection::select_patch_views`, `select_patch_cloud_views`, `reference_view::render_view_tile`, `read_track`, `stored_bitmap::render_reference`, `keypoint_localize`'s and `keypoint_subpixel`'s entry points, `member_coherence`'s, `observation_reading::read_cloud_observations`, `spawn::spawn_candidate_tracks`), and every kernel that calls one of them or that the bench runs, since a kernel passes its caller's pool down and its errors up: the normal kernels the bench's normal steps run (`pairwise_flow_normal`, `grown_plane_normal`, `grid_plane_normal`, `finite_difference_normal`) and `refine_normals`, which runs them; the cluster refinement's entry points (`refine_cluster_patches`, `refine_cluster_patches_borrowed`), which the bench's evaluation of a cluster-stage track runs, and the bench's member-grid reads, which move to `sample_source_member_grid`, the source form of `sample_member_grid` that step 9 added beside it; `stored_bitmap::render_patch_bitmap`, `render_patch_cloud_bitmaps` and `refit_points`. Their callers that step 11 moves keep their fetch: each wraps the whole pyramids it holds with `from_pyramid` (the cluster-patches build, until 11b, its decoded images with `from_image`), makes the region pool for its call, and reports the error as its step's failure |
+| 11 | the public `render_patch_bitmap_column` / `render_display_patch_bitmaps` in [display_bitmaps.rs](../../crates/sfmtool-core/src/patch/display_bitmaps.rs), which return `PhotographReadError` instead of `Cancelled`, and `WebExportError`, which gains `Photograph` (built, 11a); the viewer's bulk jobs (the conversion to embedded patches, *Refine all normals*, *Refit all points*, the cluster-patches build) and `sfm web-export` take tiled photographs from `get_many` once step 13 makes it answer them, wrapping its whole pyramids with `from_pyramid` until then, and the cluster-patches build fetches through the cache from 11b (built) |
 | 12 | `find_nearby_tracks` and the reads under it (`GreyImages::get`, `read_patch_along_ray`, `far_field_sweep`, `depth_layers`, `guided_matches`, `nearby_cluster_tracks`, `constellation_seeds`, `nearby_points`, `distance_range`) |
 | 16 | `ImagePyramidSet.read`, the first binding whose photographs come from the cache. The bindings over the kernels above change with their kernels in steps 10 to 12, build their tiled photographs from arrays with `from_image`, and raise the error from then on, though tiles cut from arrays cannot fail |
 
@@ -1936,15 +1936,30 @@ in core. Step 17 turns the tier on.
       [display_bitmaps/tests.rs](../../crates/sfmtool-core/src/patch/display_bitmaps/tests.rs),
       [state/open/tests.rs](../../crates/sfm-explorer/src/state/open/tests.rs)
       and [state/edits/tests.rs](../../crates/sfm-explorer/src/state/edits/tests.rs).
-    - **11b, the cluster-patches build through the cache.** The viewer's
-      build reads its photographs with `get_many` through the viewer's cache
-      (row 19 of § "Every reader of photograph pixels"), wrapping each with
-      `from_pyramid`, in place of decoding them with `read_rgb` outside it.
-      The cache decodes
-      with the same `read_rgb` into a pyramid of the same depth, so the
-      refinement reads the same pixels; a photograph the cache refuses,
-      as too large or unreadable, fails the build as an unreadable one does
-      today.
+    - **11b, the cluster-patches build through the cache.** **Built.** The
+      viewer's build reads its photographs with `get_many` through the
+      viewer's cache (row 19 of § "Every reader of photograph pixels"),
+      wrapping each with `from_pyramid`, in place of decoding them with
+      `read_rgb` outside it. The cache decodes with the same `read_rgb` into a
+      pyramid of the same `full_levels` depth, so the refinement reads the
+      same pixels and the file is identical bit for bit; a photograph already
+      in the cache is not decoded again, and what the build decodes stays
+      there for the panels and the bench's steps. `get_many` asks for each
+      path once and the cache evicts no decode in flight, so the build
+      decodes no photograph twice; the pyramids the cache keeps are the ones
+      the build holds, so its peak is no higher than before, and afterwards
+      the cache keeps them within its budget. A photograph the cache refuses
+      fails the build naming it with the cache's reason, which `get` answers
+      from the remembered failure, since `get_many` drops it: a missing or
+      undecodable one as before, and now also one with a side over 65535 px,
+      refused from its header. The `read photographs` phase notes how many
+      were read from disk and reused from the cache, and the cache's
+      occupancy, as the bench's `decode images` does, and counts `images`
+      where it counted `image`. Specified in
+      [gui/index-files.md](../gui/index-files.md) and
+      [core/camera/photograph-cache.md](../core/camera/photograph-cache.md),
+      with tests in
+      [index_files/tests.rs](../../crates/sfm-explorer/src/index_files/tests.rs).
     - **11c, the point order.** The bulk kernels that loop over points
       (`render_patch_cloud_bitmaps` under the display bitmaps, the
       conversion and the web export; `refine_normals`; `refit_points`) take
