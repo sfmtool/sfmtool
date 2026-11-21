@@ -1850,20 +1850,53 @@ in core. Step 17 turns the tier on.
       cluster refinement's `LevelTile` copies are the subtlest reads of the
       step.
     - **10c, the reference view and everything that reads through it.**
-      `render_view_tile` and `read_track` read through `render_source_tile`
-      and `source_clipped_share`; `keypoint_localize`'s and
-      `keypoint_subpixel`'s renders, `member_coherence`,
-      `read_cloud_observations`, `spawn_candidate_tracks`,
-      `stored_bitmap::render_reference`, `render_patch_bitmap`,
-      `score_bitmap`, `render_bitmap_in_place`,
-      `render_patch_cloud_bitmaps` and the display bitmaps' kernels, which
-      keep returning `Cancelled` until step 11, take the pool and return the
-      error; the Track Table's reference picks make one pool for each
-      `render_reference` call; and the read of a tiled photograph's whole
-      pyramid that kernels not yet moved use is deleted, except for the grey
-      reads of *Find Nearby Tracks*, which step 12 moves; and the bindings
-      over every kernel moved in 10a to 10c raise a photograph error as a
-      `RuntimeError` naming the photograph.
+      **Built**, so step 10 is complete. `render_view_tile` renders through
+      `render_source_tile` and reads its clipped share through
+      `source_clipped_share`, through a `ViewRegions` its caller passes;
+      `read_track`, `render_reference` and member coherence's
+      `member_zncc_matrix_reporting` take one per view, so member
+      coherence's renders reuse what the tiles read, by
+      `normalized_source_stack`, and `normalized_stack` is deleted.
+      `member_zncc_matrix`, `validate_member_coherence`,
+      `validate_patch_cloud_member_coherence`, `render_patch_bitmap`,
+      `render_patch_cloud_bitmaps`, `read_cloud_observations`, the
+      localizer's and the sub-pixel refiner's entry points (their renders,
+      the reference-view rule they resolve their reference by, their
+      blur-matched scores and the stored bitmap), `spawn_candidate_tracks`,
+      `score_bitmap` and `render_bitmap_in_place` take the pool and return
+      the error (`LocalizeError`, `CloudRenderError` and `SpawnError` gain a
+      `Photograph` variant; the batches return `PhotographReadError` in place
+      of `Cancelled`), each making one `ViewRegions` per view of the patch in
+      hand. The display bitmaps' kernels take the pool and keep returning
+      `Cancelled` until step 11, since every photograph they read is a whole
+      pyramid. The Track Table's reference picks make one pool for each
+      `render_reference` call, and a read that fails gives no pick. The read
+      of a tiled photograph's whole pyramid (`held_pyramid`) is left only to
+      the grey reads of *Find Nearby Tracks*, which step 12 moves, and to the
+      tests that compare a read with the whole pyramid's. The bindings over
+      every kernel moved in 10a to 10c raise a photograph error as a
+      `RuntimeError` carrying the kernel's sentence, which names the
+      photograph, or says it is one in memory and carries the read's message,
+      in place of the interim `ValueError`. Specified in
+      [core/patch/reference-view.md](../core/patch/reference-view.md),
+      [core/patch/member-coherence-validation.md](../core/patch/member-coherence-validation.md),
+      [core/patch/patch-keypoint-localization.md](../core/patch/patch-keypoint-localization.md),
+      [core/patch/keypoint-subpixel-refinement.md](../core/patch/keypoint-subpixel-refinement.md),
+      [core/patch/candidate-track-spawning.md](../core/patch/candidate-track-spawning.md),
+      [core/reconstruction/add-image-to-tracks.md](../core/reconstruction/add-image-to-tracks.md),
+      [core/bench/editable-track.md](../core/bench/editable-track.md) and
+      [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md),
+      with tests in
+      [patch/region_read_tests.rs](../../crates/sfmtool-core/src/patch/region_read_tests.rs)
+      and [bench/tests/region_reads.rs](../../crates/sfmtool-core/src/bench/tests/region_reads.rs).
+      The plan left out three readers through the reference view that move
+      here with it: *Add image to tracks* (`add_image_to_tracks`, which takes
+      the pool and gains `AddImageToTracksError::Photograph`, and the
+      `TrackReferences` it measures each point with, whose `build`, `search`
+      and `score` take the views' regions and return a read that fails rather
+      than a refusal); `refine_view_against_reference`, its sub-pixel step;
+      and the grid-plane and grown-plane normals, whose reference-view rule
+      reads through regions made from their pool.
 11. **Bulk kernels**: the display patch bitmaps, the conversion to embedded
     patches, the web export, *Refine all normals*, *Refit all points* and the
     cluster-patches build (companion step 5) fetch tiled photographs, with

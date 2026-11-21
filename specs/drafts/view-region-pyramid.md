@@ -663,7 +663,16 @@ there is no whole pyramid for any reader to fall back on.
    the view selection its affine fast path through `render_source_affine` and
    its exact renders through `render_source_tile`; both, and the geometry
    search over the view selection, take the pool and return the error, with
-   results identical bit for bit.
+   results identical bit for bit. **The third, 10c, is built**, so the step
+   is complete: the reference view's tile through `render_source_tile` and
+   `source_clipped_share`, and every kernel that reads through it (member
+   coherence, the stored bitmap, the observation readings, the keypoint
+   localizer and sub-pixel refiner, the candidate spawn, *Add image to
+   tracks*, the bench's bitmap render and scores, and the reference picks)
+   with one `ViewRegions` per view, taking the pool and returning the error,
+   with results identical bit for bit; only the grey reads of step 6 still
+   read a whole pyramid, and the bindings raise a read that fails as
+   `RuntimeError`.
 5. **Bulk kernels**: the display patch bitmaps, the conversion to embedded
    patches, the web export, *Refine all normals*, *Refit all points* and the
    cluster-patches build fetch tiled photographs, each taking its points in
