@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Physical distance measurements (`measurements/`), their `unit_names` legend,
+//! Measurements (`measurements/`, the distance kind under `measurements/distance/`),
 //! version 16/17 compatibility, and read/write/verify validation.
 
 use std::io::{Read, Write};
@@ -26,7 +26,7 @@ fn temp_dir(name: &str) -> std::path::PathBuf {
 /// Build `n` valid physical distance measurements for `make_test_data`'s three
 /// `1920x1080` images, cycling through all five units, both same-image and
 /// cross-image endpoint pairs, and empty + non-empty UTF-8 labels.
-pub(super) fn sample_measurements(n: usize) -> MeasurementsData {
+pub(super) fn sample_measurements(n: usize) -> DistanceMeasurementsData {
     let distances = Array1::from_iter((0..n).map(|i| 0.25 + (i as f32) * 12.5));
     let units =
         Array1::from_iter((0..n).map(|i| LengthUnit::ALL[i % LengthUnit::ALL.len()].code()));
@@ -52,7 +52,7 @@ pub(super) fn sample_measurements(n: usize) -> MeasurementsData {
             _ => format!("span #{i}"),
         })
         .collect();
-    MeasurementsData {
+    DistanceMeasurementsData {
         distances,
         units,
         image_indexes,
@@ -161,20 +161,20 @@ fn round_trip_with_measurements_in_both_feature_sources() {
         ("sift.sfmr", make_test_data()),
         ("embedded.sfmr", make_embedded_test_data()),
     ] {
-        data.measurements = Some(expected.clone());
+        data.measurements.distance = Some(expected.clone());
         let path = dir.join(name);
         write_sfmr(&path, &mut data).unwrap();
         assert_eq!(data.metadata.version, SFMR_FORMAT_VERSION);
-        assert_eq!(data.metadata.measurement_count, Some(5));
+        assert_eq!(data.metadata.distance_measurement_count, Some(5));
 
         let loaded = read_sfmr(&path).unwrap();
         assert_eq!(loaded.metadata.version, SFMR_FORMAT_VERSION);
-        assert_eq!(loaded.metadata.measurement_count, Some(5));
-        assert_eq!(loaded.measurements.as_ref(), Some(&expected));
+        assert_eq!(loaded.metadata.distance_measurement_count, Some(5));
+        assert_eq!(loaded.measurements.distance.as_ref(), Some(&expected));
 
-        // Canonical legend and count in measurements/metadata.json.
-        let meta = read_json_entry_of(&path, "measurements/metadata.json.zst");
-        assert_eq!(meta["measurement_count"], serde_json::json!(5));
+        // Canonical legend and count in measurements/distance/metadata.json.
+        let meta = read_json_entry_of(&path, "measurements/distance/metadata.json.zst");
+        assert_eq!(meta["distance_measurement_count"], serde_json::json!(5));
         assert_eq!(
             meta["unit_names"],
             serde_json::json!(["mm", "cm", "m", "in", "ft"])
@@ -253,7 +253,7 @@ fn round_trip_without_measurements_omits_section_and_keys() {
     let dir = temp_dir("sfmr_test_without_measurements");
     let path = dir.join("plain.sfmr");
     let mut data = make_test_data();
-    assert!(data.measurements.is_none());
+    assert!(data.measurements.is_empty());
     write_sfmr(&path, &mut data).unwrap();
 
     assert!(
@@ -263,14 +263,14 @@ fn round_trip_without_measurements_omits_section_and_keys() {
         "no measurements/ entry should be written"
     );
     let top_meta = read_json_entry_of(&path, "metadata.json.zst");
-    assert!(top_meta.get("measurement_count").is_none());
+    assert!(top_meta.get("distance_measurement_count").is_none());
     let hash_json = read_json_entry_of(&path, "content_hash.json.zst");
     assert!(hash_json.get("measurements_xxh128").is_none());
 
     let loaded = read_sfmr(&path).unwrap();
-    assert!(loaded.metadata.measurement_count.is_none());
+    assert!(loaded.metadata.distance_measurement_count.is_none());
     assert!(loaded.content_hash.measurements_xxh128.is_none());
-    assert!(loaded.measurements.is_none());
+    assert!(loaded.measurements.is_empty());
     assert_eq!(verify_sfmr(&path).unwrap(), (true, vec![]));
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -282,11 +282,11 @@ fn every_measurement_field_reaches_the_section_and_content_hash() {
         skip_recompute_depth_stats: true,
         ..Default::default()
     };
-    let hash_of = |edit: fn(&mut MeasurementsData)| {
+    let hash_of = |edit: fn(&mut DistanceMeasurementsData)| {
         let mut data = make_test_data();
         let mut m = sample_measurements(3);
         edit(&mut m);
-        data.measurements = Some(m);
+        data.measurements.distance = Some(m);
         content_hash_of(&mut data, &options).unwrap()
     };
     let base = hash_of(|_| {});
@@ -296,7 +296,7 @@ fn every_measurement_field_reaches_the_section_and_content_hash() {
     assert!(base.measurements_xxh128.is_some());
     assert!(bare.measurements_xxh128.is_none());
 
-    type Edit = fn(&mut MeasurementsData);
+    type Edit = fn(&mut DistanceMeasurementsData);
     let edits: [(&str, Edit); 5] = [
         ("distances", |m| m.distances[0] += 0.5),
         ("units", |m| m.units[0] = LENGTH_UNIT_FT),
@@ -323,7 +323,7 @@ fn measurements_read_and_verify_through_permuted_and_subset_unit_legends() {
     let dir = temp_dir("sfmr_test_measurements_legends");
     let good = dir.join("good.sfmr");
     let mut data = make_test_data();
-    data.measurements = Some(sample_measurements(5));
+    data.measurements.distance = Some(sample_measurements(5));
     write_sfmr(&good, &mut data).unwrap();
 
     // 1. Permuted full legend: reversed canonical order.
@@ -337,11 +337,11 @@ fn measurements_read_and_verify_through_permuted_and_subset_unit_legends() {
     let permuted_raw = dir.join("permuted_raw.sfmr");
     let permuted_path = dir.join("permuted.sfmr");
     rewrite_entries(&good, &permuted_raw, |name, raw| {
-        if name == "measurements/metadata.json.zst" {
+        if name == "measurements/distance/metadata.json.zst" {
             let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
             json["unit_names"] = serde_json::json!(permuted.map(|u| u.name()));
             Some(serde_json::to_vec(&json).unwrap())
-        } else if name == "measurements/units.5.uint8.zst" {
+        } else if name == "measurements/distance/units.5.uint8.zst" {
             Some(
                 raw.iter()
                     .map(|&code| {
@@ -358,7 +358,13 @@ fn measurements_read_and_verify_through_permuted_and_subset_unit_legends() {
 
     let loaded = read_sfmr(&permuted_path).unwrap();
     assert_eq!(
-        loaded.measurements.as_ref().unwrap().units.to_vec(),
+        loaded
+            .measurements
+            .distance
+            .as_ref()
+            .unwrap()
+            .units
+            .to_vec(),
         vec![
             LENGTH_UNIT_MM,
             LENGTH_UNIT_CM,
@@ -384,7 +390,7 @@ fn measurements_read_and_verify_through_permuted_and_subset_unit_legends() {
     let mut sub_data = make_test_data();
     let mut m = sample_measurements(2);
     m.units = Array1::from_vec(vec![LENGTH_UNIT_IN, LENGTH_UNIT_CM]);
-    sub_data.measurements = Some(m);
+    sub_data.measurements.distance = Some(m);
     let sub_good = dir.join("sub_good.sfmr");
     write_sfmr(&sub_good, &mut sub_data).unwrap();
 
@@ -392,11 +398,11 @@ fn measurements_read_and_verify_through_permuted_and_subset_unit_legends() {
     let sub_raw = dir.join("sub_raw.sfmr");
     let sub_path = dir.join("sub.sfmr");
     rewrite_entries(&sub_good, &sub_raw, |name, raw| {
-        if name == "measurements/metadata.json.zst" {
+        if name == "measurements/distance/metadata.json.zst" {
             let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
             json["unit_names"] = serde_json::json!(subset.map(|u| u.name()));
             Some(serde_json::to_vec(&json).unwrap())
-        } else if name == "measurements/units.2.uint8.zst" {
+        } else if name == "measurements/distance/units.2.uint8.zst" {
             Some(vec![1u8, 0u8]) // 1 -> "in", 0 -> "cm"
         } else {
             None
@@ -406,7 +412,7 @@ fn measurements_read_and_verify_through_permuted_and_subset_unit_legends() {
 
     let loaded_sub = read_sfmr(&sub_path).unwrap();
     assert_eq!(
-        loaded_sub.measurements.unwrap().units.to_vec(),
+        loaded_sub.measurements.distance.unwrap().units.to_vec(),
         vec![LENGTH_UNIT_IN, LENGTH_UNIT_CM]
     );
     assert_eq!(verify_sfmr(&sub_path).unwrap(), (true, vec![]));
@@ -419,7 +425,7 @@ fn malformed_unit_legend_is_rejected_on_read_and_verify() {
     let dir = temp_dir("sfmr_test_bad_measurement_legend");
     let good = dir.join("good.sfmr");
     let mut data = make_test_data();
-    data.measurements = Some(sample_measurements(5));
+    data.measurements.distance = Some(sample_measurements(5));
     write_sfmr(&good, &mut data).unwrap();
 
     type Case = (&'static str, Option<serde_json::Value>, &'static str);
@@ -456,7 +462,7 @@ fn malformed_unit_legend_is_rejected_on_read_and_verify() {
         let path = dir.join("bad.sfmr");
         let _ = std::fs::remove_file(&path);
         rewrite_entries(&good, &path, |name, raw| {
-            (name == "measurements/metadata.json.zst").then(|| {
+            (name == "measurements/distance/metadata.json.zst").then(|| {
                 let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
                 let obj = json.as_object_mut().unwrap();
                 match &legend {
@@ -500,7 +506,7 @@ fn invalid_measurements_are_rejected_on_write() {
         (
             "empty measurements section",
             Box::new(|d| {
-                d.measurements = Some(MeasurementsData {
+                d.measurements.distance = Some(DistanceMeasurementsData {
                     distances: Array1::from_vec(vec![]),
                     units: Array1::from_vec(vec![]),
                     image_indexes: Array2::zeros((0, 2)),
@@ -512,100 +518,114 @@ fn invalid_measurements_are_rejected_on_write() {
         ),
         (
             "zero distance",
-            Box::new(|d| d.measurements.as_mut().unwrap().distances[0] = 0.0),
+            Box::new(|d| d.measurements.distance.as_mut().unwrap().distances[0] = 0.0),
             "finite and strictly positive",
         ),
         (
             "negative distance",
-            Box::new(|d| d.measurements.as_mut().unwrap().distances[1] = -2.5),
+            Box::new(|d| d.measurements.distance.as_mut().unwrap().distances[1] = -2.5),
             "finite and strictly positive",
         ),
         (
             "NaN distance",
-            Box::new(|d| d.measurements.as_mut().unwrap().distances[0] = f32::NAN),
+            Box::new(|d| d.measurements.distance.as_mut().unwrap().distances[0] = f32::NAN),
             "finite and strictly positive",
         ),
         (
             "infinite distance",
-            Box::new(|d| d.measurements.as_mut().unwrap().distances[0] = f32::INFINITY),
+            Box::new(|d| d.measurements.distance.as_mut().unwrap().distances[0] = f32::INFINITY),
             "finite and strictly positive",
         ),
         (
             "unit code out of range",
-            Box::new(|d| d.measurements.as_mut().unwrap().units[0] = 5),
+            Box::new(|d| d.measurements.distance.as_mut().unwrap().units[0] = 5),
             "past the 5 names",
         ),
         (
             "units length mismatch",
-            Box::new(|d| d.measurements.as_mut().unwrap().units = Array1::from_vec(vec![0])),
-            "measurements/units len 1 != measurement_count 3",
+            Box::new(|d| {
+                d.measurements.distance.as_mut().unwrap().units = Array1::from_vec(vec![0])
+            }),
+            "measurements/distance/units len 1 != distance_measurement_count 3",
         ),
         (
             "image index out of range",
-            Box::new(|d| d.measurements.as_mut().unwrap().image_indexes[[1, 1]] = 3),
+            Box::new(|d| d.measurements.distance.as_mut().unwrap().image_indexes[[1, 1]] = 3),
             "out of range for 3 images",
         ),
         (
             "image_indexes shape mismatch",
-            Box::new(|d| d.measurements.as_mut().unwrap().image_indexes = Array2::zeros((2, 2))),
-            "measurements/image_indexes shape",
+            Box::new(|d| {
+                d.measurements.distance.as_mut().unwrap().image_indexes = Array2::zeros((2, 2))
+            }),
+            "measurements/distance/image_indexes shape",
         ),
         (
             "NaN endpoint coordinate",
-            Box::new(|d| d.measurements.as_mut().unwrap().endpoints_xy[[0, 1, 0]] = f32::NAN),
+            Box::new(|d| {
+                d.measurements.distance.as_mut().unwrap().endpoints_xy[[0, 1, 0]] = f32::NAN
+            }),
             "not finite",
         ),
         (
             "infinite endpoint coordinate",
-            Box::new(|d| d.measurements.as_mut().unwrap().endpoints_xy[[0, 0, 1]] = f32::INFINITY),
+            Box::new(|d| {
+                d.measurements.distance.as_mut().unwrap().endpoints_xy[[0, 0, 1]] = f32::INFINITY
+            }),
             "not finite",
         ),
         (
             "negative endpoint x",
-            Box::new(|d| d.measurements.as_mut().unwrap().endpoints_xy[[0, 0, 0]] = -0.1),
+            Box::new(|d| d.measurements.distance.as_mut().unwrap().endpoints_xy[[0, 0, 0]] = -0.1),
             "outside image bounds",
         ),
         (
             "endpoint x at width",
-            Box::new(|d| d.measurements.as_mut().unwrap().endpoints_xy[[0, 0, 0]] = 1920.0),
+            Box::new(|d| {
+                d.measurements.distance.as_mut().unwrap().endpoints_xy[[0, 0, 0]] = 1920.0
+            }),
             "outside image bounds",
         ),
         (
             "endpoint y at height",
-            Box::new(|d| d.measurements.as_mut().unwrap().endpoints_xy[[0, 1, 1]] = 1080.0),
+            Box::new(|d| {
+                d.measurements.distance.as_mut().unwrap().endpoints_xy[[0, 1, 1]] = 1080.0
+            }),
             "outside image bounds",
         ),
         (
             "endpoints_xy shape mismatch",
-            Box::new(|d| d.measurements.as_mut().unwrap().endpoints_xy = Array3::zeros((2, 2, 2))),
-            "measurements/endpoints_xy shape",
+            Box::new(|d| {
+                d.measurements.distance.as_mut().unwrap().endpoints_xy = Array3::zeros((2, 2, 2))
+            }),
+            "measurements/distance/endpoints_xy shape",
         ),
         (
             "labels length mismatch",
             Box::new(|d| {
-                d.measurements.as_mut().unwrap().labels.pop();
+                d.measurements.distance.as_mut().unwrap().labels.pop();
             }),
-            "measurements/labels len 2 != measurement_count 3",
+            "measurements/distance/labels len 2 != distance_measurement_count 3",
         ),
         (
-            "metadata.measurement_count disagrees with measurements len",
-            Box::new(|d| d.metadata.measurement_count = Some(9)),
-            "metadata.measurement_count (9) != measurements len (3)",
+            "metadata.distance_measurement_count disagrees with measurements len",
+            Box::new(|d| d.metadata.distance_measurement_count = Some(9)),
+            "metadata.distance_measurement_count (9) != distance measurements len (3)",
         ),
         (
-            "metadata.measurement_count set while measurements is None",
+            "metadata.distance_measurement_count set while measurements.distance is None",
             Box::new(|d| {
-                d.measurements = None;
-                d.metadata.measurement_count = Some(1);
+                d.measurements.distance = None;
+                d.metadata.distance_measurement_count = Some(1);
             }),
-            "metadata.measurement_count is set, but measurements is None",
+            "metadata.distance_measurement_count is set, but measurements.distance is None",
         ),
     ];
 
     for (what, break_it, expected) in cases {
         let _ = std::fs::remove_file(&path);
         let mut data = make_test_data();
-        data.measurements = Some(sample_measurements(3));
+        data.measurements.distance = Some(sample_measurements(3));
         break_it(&mut data);
         let err = write_sfmr(&path, &mut data)
             .err()
@@ -626,18 +646,18 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
     let dir = temp_dir("sfmr_test_bad_measurements_archive");
     let good = dir.join("good.sfmr");
     let mut data = make_test_data();
-    data.measurements = Some(sample_measurements(2));
+    data.measurements.distance = Some(sample_measurements(2));
     write_sfmr(&good, &mut data).unwrap();
 
     // 1. Bad distance (<= 0), bad image_index, bad endpoint, bad labels length,
-    //    mismatched top-level measurement_count, missing top-level measurement_count,
+    //    mismatched top-level distance_measurement_count, missing top-level distance_measurement_count,
     //    missing measurements_xxh128.
     type EditFn = Box<dyn Fn(&str, &[u8]) -> Option<Vec<u8>>>;
     let cases: Vec<(&str, EditFn, &str)> = vec![
         (
             "non-positive distance",
             Box::new(|name, raw| {
-                (name == "measurements/distances.2.float32.zst").then(|| {
+                (name == "measurements/distance/distances.2.float32.zst").then(|| {
                     let mut out = raw.to_vec();
                     out[0..4].copy_from_slice(&0.0f32.to_le_bytes());
                     out
@@ -648,7 +668,7 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
         (
             "NaN distance",
             Box::new(|name, raw| {
-                (name == "measurements/distances.2.float32.zst").then(|| {
+                (name == "measurements/distance/distances.2.float32.zst").then(|| {
                     let mut out = raw.to_vec();
                     out[4..8].copy_from_slice(&f32::NAN.to_le_bytes());
                     out
@@ -659,7 +679,7 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
         (
             "image index out of range",
             Box::new(|name, raw| {
-                (name == "measurements/image_indexes.2.2.uint32.zst").then(|| {
+                (name == "measurements/distance/image_indexes.2.2.uint32.zst").then(|| {
                     let mut out = raw.to_vec();
                     out[0..4].copy_from_slice(&99u32.to_le_bytes());
                     out
@@ -670,7 +690,7 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
         (
             "endpoint out of bounds",
             Box::new(|name, raw| {
-                (name == "measurements/endpoints_xy.2.2.2.float32.zst").then(|| {
+                (name == "measurements/distance/endpoints_xy.2.2.2.float32.zst").then(|| {
                     let mut out = raw.to_vec();
                     out[0..4].copy_from_slice(&2000.0f32.to_le_bytes());
                     out
@@ -681,7 +701,7 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
         (
             "NaN endpoint",
             Box::new(|name, raw| {
-                (name == "measurements/endpoints_xy.2.2.2.float32.zst").then(|| {
+                (name == "measurements/distance/endpoints_xy.2.2.2.float32.zst").then(|| {
                     let mut out = raw.to_vec();
                     out[4..8].copy_from_slice(&f32::NAN.to_le_bytes());
                     out
@@ -692,32 +712,34 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
         (
             "labels length mismatch",
             Box::new(|name, _| {
-                (name == "measurements/labels.json.zst")
+                (name == "measurements/distance/labels.json.zst")
                     .then(|| serde_json::to_vec(&vec!["only one"]).unwrap())
             }),
-            "measurements/labels len 1 != measurement_count 2",
+            "measurements/distance/labels len 1 != distance_measurement_count 2",
         ),
         (
-            "top-level measurement_count disagrees with section",
+            "top-level distance_measurement_count disagrees with section",
             Box::new(|name, raw| {
                 (name == "metadata.json.zst").then(|| {
                     let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
-                    json["measurement_count"] = serde_json::json!(7);
+                    json["distance_measurement_count"] = serde_json::json!(7);
                     serde_json::to_vec(&json).unwrap()
                 })
             }),
-            "doesn't match top-level metadata measurement_count",
+            "doesn't match top-level metadata distance_measurement_count",
         ),
         (
-            "missing top-level measurement_count when section is present",
+            "missing top-level distance_measurement_count when section is present",
             Box::new(|name, raw| {
                 (name == "metadata.json.zst").then(|| {
                     let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
-                    json.as_object_mut().unwrap().remove("measurement_count");
+                    json.as_object_mut()
+                        .unwrap()
+                        .remove("distance_measurement_count");
                     serde_json::to_vec(&json).unwrap()
                 })
             }),
-            "has no measurement_count",
+            "has no distance_measurement_count",
         ),
         (
             "missing measurements_xxh128 when section is present",
@@ -751,7 +773,7 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
         );
     }
 
-    // 2. Plain file (no measurements/) with stray measurement_count or measurements_xxh128.
+    // 2. Plain file (no measurements/) with stray distance_measurement_count or measurements_xxh128.
     let plain = dir.join("plain.sfmr");
     write_sfmr(&plain, &mut make_test_data()).unwrap();
 
@@ -759,7 +781,7 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
     rewrite_entries(&plain, &extra_count, |name, raw| {
         (name == "metadata.json.zst").then(|| {
             let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
-            json["measurement_count"] = serde_json::json!(2);
+            json["distance_measurement_count"] = serde_json::json!(2);
             serde_json::to_vec(&json).unwrap()
         })
     });
@@ -767,21 +789,18 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
         .err()
         .unwrap()
         .to_string()
-        .contains("no measurements/ section"));
+        .contains("no measurements/distance/ entries"));
     assert!(read_sfmr_content_hash(&extra_count)
         .err()
         .unwrap()
         .to_string()
-        .contains(
-            "metadata.json.zst measurement_count and content_hash.json.zst measurements_xxh128 \
-             must be present together or absent together"
-        ));
+        .contains("this file has one without the other"));
     let (valid, errors) = verify_sfmr(&extra_count).unwrap();
     assert!(
         !valid
             && errors
                 .iter()
-                .any(|e| e.contains("no measurements/ section"))
+                .any(|e| e.contains("no measurements/distance/ entries"))
     );
 
     let extra_hash = dir.join("extra_hash.sfmr");
@@ -801,10 +820,7 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
         .err()
         .unwrap()
         .to_string()
-        .contains(
-            "metadata.json.zst measurement_count and content_hash.json.zst measurements_xxh128 \
-             must be present together or absent together"
-        ));
+        .contains("this file has one without the other"));
     let (valid, errors) = verify_sfmr(&extra_hash).unwrap();
     assert!(
         !valid
@@ -813,14 +829,14 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
                 .any(|e| e.contains("no measurements/ section"))
     );
 
-    // 3. Stray measurements/ entry without measurements/metadata.json.zst.
+    // 3. Stray measurements/ entry without measurements/distance/metadata.json.zst.
     let stray = dir.join("stray.sfmr");
     {
         let mut archive = zip::ZipArchive::new(std::fs::File::open(&good).unwrap()).unwrap();
         let mut out = zip::ZipWriter::new(std::fs::File::create(&stray).unwrap());
         for i in 0..archive.len() {
             let entry = archive.by_index_raw(i).unwrap();
-            if entry.name().unwrap() != "measurements/metadata.json.zst" {
+            if entry.name().unwrap() != "measurements/distance/metadata.json.zst" {
                 out.raw_copy_file(entry).unwrap();
             }
         }
@@ -830,17 +846,17 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
         .err()
         .unwrap()
         .to_string()
-        .contains("without measurements/metadata.json.zst"));
+        .contains("without measurements/distance/metadata.json.zst"));
     let (valid, errors) = verify_sfmr(&stray).unwrap();
     assert!(
         !valid
             && errors
                 .iter()
-                .any(|e| e.contains("without measurements/metadata.json.zst"))
+                .any(|e| e.contains("without measurements/distance/metadata.json.zst"))
     );
 
-    // 4. measurements/metadata.json with measurement_count == 0, while
-    //    top-level measurement_count and measurements_xxh128 are present so
+    // 4. measurements/distance/metadata.json with distance_measurement_count == 0, while
+    //    top-level distance_measurement_count and measurements_xxh128 are present so
     //    read_sfmr reaches the section_count == 0 guard.
     let zero_count = dir.join("zero_count.sfmr");
     {
@@ -861,27 +877,41 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
         };
         add_entry(
             &mut out,
-            "measurements/metadata.json.zst",
-            br#"{"measurement_count":0,"unit_names":["mm"]}"#,
+            "measurements/distance/metadata.json.zst",
+            br#"{"distance_measurement_count":0,"unit_names":["mm"]}"#,
         );
-        add_entry(&mut out, "measurements/distances.0.float32.zst", &[]);
-        add_entry(&mut out, "measurements/endpoints_xy.0.2.2.float32.zst", &[]);
-        add_entry(&mut out, "measurements/image_indexes.0.2.uint32.zst", &[]);
-        add_entry(&mut out, "measurements/labels.json.zst", b"[]");
-        add_entry(&mut out, "measurements/units.0.uint8.zst", &[]);
+        add_entry(
+            &mut out,
+            "measurements/distance/distances.0.float32.zst",
+            &[],
+        );
+        add_entry(
+            &mut out,
+            "measurements/distance/endpoints_xy.0.2.2.float32.zst",
+            &[],
+        );
+        add_entry(
+            &mut out,
+            "measurements/distance/image_indexes.0.2.uint32.zst",
+            &[],
+        );
+        add_entry(&mut out, "measurements/distance/labels.json.zst", b"[]");
+        add_entry(&mut out, "measurements/distance/units.0.uint8.zst", &[]);
         out.finish().unwrap();
     }
     let err = read_sfmr(&zero_count).err().unwrap().to_string();
     assert!(
-        err.contains("measurements/metadata.json.zst measurement_count must be >= 1"),
+        err.contains(
+            "measurements/distance/metadata.json.zst distance_measurement_count must be >= 1"
+        ),
         "{err}"
     );
     let (valid, errors) = verify_sfmr(&zero_count).unwrap();
     assert!(
         !valid
-            && errors.iter().any(
-                |e| e.contains("measurements/metadata.json.zst measurement_count must be >= 1")
-            ),
+            && errors.iter().any(|e| e.contains(
+                "measurements/distance/metadata.json.zst distance_measurement_count must be >= 1"
+            )),
         "{errors:?}"
     );
 
@@ -889,8 +919,8 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
 }
 
 #[test]
-fn top_level_zero_measurement_count_is_refused_by_every_reader_and_verifier() {
-    let dir = temp_dir("sfmr_test_top_level_zero_measurement_count");
+fn top_level_zero_distance_measurement_count_is_refused_by_every_reader_and_verifier() {
+    let dir = temp_dir("sfmr_test_top_level_zero_distance_measurement_count");
     let plain = dir.join("plain.sfmr");
     write_sfmr(&plain, &mut make_test_data()).unwrap();
 
@@ -898,12 +928,12 @@ fn top_level_zero_measurement_count_is_refused_by_every_reader_and_verifier() {
     rewrite_entries(&plain, &zero, |name, raw| {
         (name == "metadata.json.zst").then(|| {
             let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
-            json["measurement_count"] = serde_json::json!(0);
+            json["distance_measurement_count"] = serde_json::json!(0);
             serde_json::to_vec(&json).unwrap()
         })
     });
 
-    let expected = "metadata.json.zst measurement_count must be >= 1 when present";
+    let expected = "metadata.json.zst distance_measurement_count must be >= 1 when present";
     for (reader, error) in [
         ("read_sfmr", read_sfmr(&zero).err()),
         ("read_sfmr_metadata", read_sfmr_metadata(&zero).err()),
@@ -914,7 +944,9 @@ fn top_level_zero_measurement_count_is_refused_by_every_reader_and_verifier() {
         ),
     ] {
         let err = error
-            .unwrap_or_else(|| panic!("{reader}: accepted top-level measurement_count == 0"))
+            .unwrap_or_else(|| {
+                panic!("{reader}: accepted top-level distance_measurement_count == 0")
+            })
             .to_string();
         assert!(
             err.contains(expected),
@@ -924,7 +956,7 @@ fn top_level_zero_measurement_count_is_refused_by_every_reader_and_verifier() {
     let (valid, errors) = verify_sfmr(&zero).unwrap();
     assert!(
         !valid,
-        "verify_sfmr accepted top-level measurement_count == 0"
+        "verify_sfmr accepted top-level distance_measurement_count == 0"
     );
     assert!(
         errors.iter().any(|e| e.contains(expected)),
@@ -954,8 +986,8 @@ fn version_16_reads_and_verifies_without_measurements_and_refuses_measurements()
         .is_none());
     let mut loaded = read_sfmr(&v16_plain).unwrap();
     assert_eq!(loaded.metadata.version, 16);
-    assert!(loaded.metadata.measurement_count.is_none());
-    assert!(loaded.measurements.is_none());
+    assert!(loaded.metadata.distance_measurement_count.is_none());
+    assert!(loaded.measurements.is_empty());
     assert_eq!(verify_sfmr(&v16_plain).unwrap(), (true, vec![]));
 
     // Writing what was read produces version 17.
@@ -968,7 +1000,7 @@ fn version_16_reads_and_verifies_without_measurements_and_refuses_measurements()
     //    is refused by every reader and by verify_sfmr.
     let v17_meas = dir.join("v17_meas.sfmr");
     let mut with_meas = make_test_data();
-    with_meas.measurements = Some(sample_measurements(2));
+    with_meas.measurements.distance = Some(sample_measurements(2));
     write_sfmr(&v17_meas, &mut with_meas).unwrap();
 
     let v16_with_all = dir.join("v16_with_all.sfmr");
@@ -977,7 +1009,7 @@ fn version_16_reads_and_verifies_without_measurements_and_refuses_measurements()
         .err()
         .unwrap()
         .to_string()
-        .contains("must not carry measurement_count"));
+        .contains("must not carry distance_measurement_count"));
     assert!(read_sfmr_metadata(&v16_with_all).is_err());
     assert!(read_sfmr_image_names(&v16_with_all).is_err());
     assert!(read_sfmr_content_hash(&v16_with_all).is_err());
@@ -986,7 +1018,7 @@ fn version_16_reads_and_verifies_without_measurements_and_refuses_measurements()
         !valid
             && errors
                 .iter()
-                .any(|e| e.contains("must not carry measurement_count")),
+                .any(|e| e.contains("must not carry distance_measurement_count")),
         "{errors:?}"
     );
 
@@ -1014,7 +1046,7 @@ fn version_16_reads_and_verifies_without_measurements_and_refuses_measurements()
         "{errors:?}"
     );
 
-    // 3. A version 16 file carrying a measurements/ entry without measurement_count or
+    // 3. A version 16 file carrying a measurements/ entry without distance_measurement_count or
     //    measurements_xxh128 is refused by every reader and by verify_sfmr.
     let v16_with_entry = dir.join("v16_with_entry.sfmr");
     {
@@ -1026,10 +1058,11 @@ fn version_16_reads_and_verifies_without_measurements_and_refuses_measurements()
             let entry = archive.by_index_raw(i).unwrap();
             out.raw_copy_file(entry).unwrap();
         }
-        out.start_file("measurements/metadata.json.zst", stored)
+        out.start_file("measurements/distance/metadata.json.zst", stored)
             .unwrap();
         out.write_all(
-            &zstd::bulk::compress(br#"{"measurement_count":1,"unit_names":["m"]}"#, 3).unwrap(),
+            &zstd::bulk::compress(br#"{"distance_measurement_count":1,"unit_names":["m"]}"#, 3)
+                .unwrap(),
         )
         .unwrap();
         out.finish().unwrap();
@@ -1049,6 +1082,183 @@ fn version_16_reads_and_verifies_without_measurements_and_refuses_measurements()
                 .iter()
                 .any(|e| e.contains("must not carry measurements/ entries")),
         "{errors:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Copy `src` to `dst` with each entry passed through `edit`, which returns the
+/// entry's new name and decompressed bytes, or `None` to drop it; then add
+/// `extra` entries.
+fn rebuild_archive(
+    src: &Path,
+    dst: &Path,
+    edit: impl Fn(&str, Vec<u8>) -> Option<(String, Vec<u8>)>,
+    extra: &[(&str, &[u8])],
+) {
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(src).unwrap()).unwrap();
+    let names: Vec<String> = archive.file_names().map(|n| n.unwrap().into()).collect();
+    let mut out = zip::ZipWriter::new(std::fs::File::create(dst).unwrap());
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut add = |name: &str, bytes: &[u8]| {
+        out.start_file(name, stored).unwrap();
+        out.write_all(&zstd::bulk::compress(bytes, 3).unwrap())
+            .unwrap();
+    };
+    for name in &names {
+        let raw = read_zst_entry(&mut archive, name).unwrap();
+        if let Some((new_name, bytes)) = edit(name, raw) {
+            add(&new_name, &bytes);
+        }
+    }
+    for (name, bytes) in extra {
+        add(name, bytes);
+    }
+    out.finish().unwrap();
+}
+
+/// The distance kind lives under `measurements/distance/`. A file in the
+/// first version 17 layout, which kept the same entries directly under
+/// `measurements/` with a top-level `measurement_count`, holds no entry or key
+/// this layout defines, so a reader treats them as unknown and finds no kind
+/// of measurement; its `measurements_xxh128` then names a section the file
+/// does not have, and every reader that checks it and the verifier refuse it.
+#[test]
+fn the_flat_measurements_layout_is_not_read_as_distance_measurements() {
+    let dir = temp_dir("sfmr_test_flat_measurements_layout");
+    let good = dir.join("good.sfmr");
+    let mut data = make_test_data();
+    data.measurements.distance = Some(sample_measurements(3));
+    write_sfmr(&good, &mut data).unwrap();
+    let names = archive_names(&good);
+    let under_measurements: Vec<&str> = names
+        .iter()
+        .map(String::as_str)
+        .filter(|n| n.starts_with("measurements/"))
+        .collect();
+    assert_eq!(under_measurements.len(), 6, "{under_measurements:?}");
+    assert!(
+        under_measurements
+            .iter()
+            .all(|n| n.starts_with("measurements/distance/")),
+        "{under_measurements:?}"
+    );
+
+    // Move the six entries up a level and rename the counts, as the first
+    // layout spelled them, keeping every hash consistent with that layout.
+    let rename_count = |raw: Vec<u8>| {
+        let mut json: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        let map = json.as_object_mut().unwrap();
+        let count = map.remove("distance_measurement_count").unwrap();
+        map.insert("measurement_count".into(), count);
+        serde_json::to_vec(&json).unwrap()
+    };
+    let flat_raw = dir.join("flat_raw.sfmr");
+    rebuild_archive(
+        &good,
+        &flat_raw,
+        |name, raw| match name.strip_prefix("measurements/distance/") {
+            Some("metadata.json.zst") => {
+                Some(("measurements/metadata.json.zst".into(), rename_count(raw)))
+            }
+            Some(rest) => Some((format!("measurements/{rest}"), raw)),
+            None if name == "metadata.json.zst" => Some((name.into(), rename_count(raw))),
+            None => Some((name.into(), raw)),
+        },
+        &[],
+    );
+    let flat = dir.join("flat.sfmr");
+    restamp_metadata_and_measurements_hashes(&flat_raw, &flat);
+    assert!(archive_names(&flat)
+        .iter()
+        .all(|n| !n.starts_with("measurements/distance/")));
+    assert!(read_sfmr_content_hash(&flat)
+        .unwrap_err()
+        .to_string()
+        .contains("this file has one without the other"));
+
+    // The old top-level count is a key this layout does not define.
+    let metadata = read_sfmr_metadata(&flat).unwrap();
+    assert_eq!(metadata.distance_measurement_count, None);
+    let err = read_sfmr(&flat).err().unwrap().to_string();
+    assert!(
+        err.contains("sets measurements_xxh128, but the file has no measurements/ section"),
+        "{err}"
+    );
+    let (valid, errors) = verify_sfmr(&flat).unwrap();
+    assert!(!valid);
+    // The refusal, and the whole-file digest that no longer folds in the
+    // section; every section hash the old layout stated still matches.
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert!(
+        errors[0].contains("sets measurements_xxh128, but the file has no measurements/"),
+        "{errors:?}"
+    );
+    assert!(
+        errors[1].starts_with("Overall content hash mismatch"),
+        "{errors:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An entry under `measurements/` that no kind defines, such as a flat
+/// `measurements/metadata.json.zst` or one in a kind directory this version
+/// does not define, is an unknown entry: a version 17 reader reads the file as
+/// if it were absent, outside every hash, and a version 16 file carrying it is
+/// still refused.
+#[test]
+fn unknown_entries_under_measurements_are_ignored() {
+    let dir = temp_dir("sfmr_test_unknown_measurement_entries");
+    let good = dir.join("good.sfmr");
+    let mut data = make_test_data();
+    data.measurements.distance = Some(sample_measurements(3));
+    write_sfmr(&good, &mut data).unwrap();
+    let expected = read_sfmr(&good).unwrap();
+
+    let extra: [(&str, &[u8]); 2] = [
+        (
+            "measurements/metadata.json.zst",
+            br#"{"measurement_count":1,"unit_names":["m"]}"#,
+        ),
+        ("measurements/gps/metadata.json.zst", br#"{"gps_count":1}"#),
+    ];
+    let with_unknown = dir.join("with_unknown.sfmr");
+    rebuild_archive(&good, &with_unknown, |n, raw| Some((n.into(), raw)), &extra);
+    let loaded = read_sfmr(&with_unknown).unwrap();
+    assert_eq!(loaded.measurements, expected.measurements);
+    assert_eq!(
+        loaded.content_hash.content_xxh128,
+        expected.content_hash.content_xxh128
+    );
+    let (valid, errors) = verify_sfmr(&with_unknown).unwrap();
+    assert!(valid, "{errors:?}");
+
+    // Alone, without the distance kind, they make no measurements/ section.
+    let plain = dir.join("plain.sfmr");
+    write_sfmr(&plain, &mut make_test_data()).unwrap();
+    let plain_with_unknown = dir.join("plain_with_unknown.sfmr");
+    rebuild_archive(
+        &plain,
+        &plain_with_unknown,
+        |n, raw| Some((n.into(), raw)),
+        &extra,
+    );
+    assert!(read_sfmr(&plain_with_unknown)
+        .unwrap()
+        .measurements
+        .is_empty());
+    let (valid, errors) = verify_sfmr(&plain_with_unknown).unwrap();
+    assert!(valid, "{errors:?}");
+
+    // A version 16 file carrying any measurements/ entry is refused.
+    let v16 = dir.join("v16.sfmr");
+    relabel_version(&plain_with_unknown, &v16, 16);
+    let err = read_sfmr(&v16).err().unwrap().to_string();
+    assert!(
+        err.contains("must not carry measurements/ entries"),
+        "{err}"
     );
 
     let _ = std::fs::remove_dir_all(&dir);

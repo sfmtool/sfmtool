@@ -67,7 +67,7 @@ fn make_full_test_data() -> SfmrData {
         [300.5 + i as f32, 400.75 + i as f32][k]
     }));
     data.observation_confidence = Some(Array1::from_iter((0..m).map(|i| (i * 30) as u8)));
-    data.measurements = Some(measurements::sample_measurements(3));
+    data.measurements.distance = Some(measurements::sample_measurements(3));
     data
 }
 
@@ -109,7 +109,7 @@ fn to_non_standard(data: &mut SfmrData) {
     swap(&mut rf.rig_indexes);
     swap(&mut rf.image_sensor_indexes);
     swap(&mut rf.image_frame_indexes);
-    let meas = data.measurements.as_mut().unwrap();
+    let meas = data.measurements.distance.as_mut().unwrap();
     swap(&mut meas.distances);
     swap(&mut meas.units);
     swap(&mut meas.image_indexes);

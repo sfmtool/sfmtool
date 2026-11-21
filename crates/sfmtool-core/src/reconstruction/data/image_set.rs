@@ -144,10 +144,11 @@ pub struct ImageSet {
     pub depth_histogram_counts: Vec<Vec<u32>>,
     /// Rig definitions and frame groupings. `None` when no multi-camera rigs.
     pub rig_frame_data: Option<RigFrameData>,
-    /// Physical distance measurements between pairs of points observed in
-    /// `images`. `None` when the reconstruction carries no measurements; when
-    /// `Some`, there is at least one measurement.
-    pub measurements: Option<MeasurementsData>,
+    /// The measurements stored with the reconstruction, one field per kind:
+    /// [`MeasurementsData::distance`] holds the physical distance measurements
+    /// between pairs of points observed in `images`. Every kind `None` (the
+    /// default) when the reconstruction carries no measurements.
+    pub measurements: MeasurementsData,
 }
 
 impl ImageSet {
@@ -156,10 +157,10 @@ impl ImageSet {
         self.images.len()
     }
 
-    /// Number of physical distance measurements (`0` when [`Self::measurements`]
-    /// is `None`).
-    pub fn measurement_count(&self) -> usize {
-        self.measurements.as_ref().map_or(0, |m| m.len())
+    /// Number of physical distance measurements (`0` when
+    /// [`MeasurementsData::distance`] is `None`).
+    pub fn distance_measurement_count(&self) -> usize {
+        self.measurements.distance_measurement_count()
     }
 
     /// Whether every image holds a [`SfmrImage::readings`] row under

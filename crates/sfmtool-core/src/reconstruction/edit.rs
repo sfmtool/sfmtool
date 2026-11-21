@@ -15,7 +15,8 @@ use nalgebra::Point3;
 use ndarray::Array4;
 
 use sfmtool_sfmr_format::{
-    DepthStatistics, FramesMetadata, ImageDepthStats, MeasurementsData, RigFrameData,
+    DepthStatistics, DistanceMeasurementsData, FramesMetadata, ImageDepthStats, MeasurementsData,
+    RigFrameData,
 };
 
 use super::data::{compute_observation_offsets, count_points_at_infinity};
@@ -582,14 +583,17 @@ impl SfmrReconstruction {
 
         // Filter and remap physical distance measurements: keep only rows whose
         // both observing images survive, remapping both image indexes.
-        let new_measurements = self
-            .image_set
-            .measurements
-            .as_ref()
-            .and_then(|m| subset_measurements(m, &old_to_new));
+        let new_measurements = MeasurementsData {
+            distance: self
+                .image_set
+                .measurements
+                .distance
+                .as_ref()
+                .and_then(|m| subset_distance_measurements(m, &old_to_new)),
+        };
 
         let mut metadata = self.metadata.clone();
-        metadata.measurement_count = new_measurements.as_ref().map(|m| m.len() as u32);
+        new_measurements.set_metadata_counts(&mut metadata);
 
         let infinity_point_count = count_points_at_infinity(&new_points);
         let mut subset = SfmrReconstruction {
@@ -878,15 +882,15 @@ fn subset_rig_frame_data(rf: &RigFrameData, image_indices: &[u32]) -> RigFrameDa
     }
 }
 
-/// Filter and remap a `MeasurementsData` onto a subset of images.
+/// Filter and remap a `DistanceMeasurementsData` onto a subset of images.
 ///
 /// Keeps every measurement whose two endpoints both lie in surviving images
 /// (`old_to_new[img]` is `Some(new_idx)`), remaps both image indexes, and
 /// returns `None` when no measurement survives.
-fn subset_measurements(
-    m: &MeasurementsData,
+fn subset_distance_measurements(
+    m: &DistanceMeasurementsData,
     old_to_new: &[Option<u32>],
-) -> Option<MeasurementsData> {
+) -> Option<DistanceMeasurementsData> {
     let mut kept_rows: Vec<(usize, u32, u32)> = Vec::new();
     for i in 0..m.len() {
         let img0 = m.image_indexes[[i, 0]] as usize;
@@ -918,7 +922,7 @@ fn subset_measurements(
         }
         labels.push(m.labels[old_i].clone());
     }
-    Some(MeasurementsData {
+    Some(DistanceMeasurementsData {
         distances,
         units,
         image_indexes,

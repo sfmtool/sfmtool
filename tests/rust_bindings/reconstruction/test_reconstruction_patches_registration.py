@@ -63,7 +63,7 @@ def test_image_adjustment_methods_are_on_the_reconstruction():
 def test_measurement_endpoint_methods_are_on_the_reconstruction():
     """Resolving measurement endpoints is a method of `SfmrReconstruction`,
     not a function of the submodule."""
-    for name in ("resolve_measurement_endpoint", "resolve_measurements"):
+    for name in ("resolve_measurement_endpoint", "resolve_distance_measurements"):
         assert callable(getattr(reconstruction.SfmrReconstruction, name, None)), name
         assert not hasattr(reconstruction, name), name
 

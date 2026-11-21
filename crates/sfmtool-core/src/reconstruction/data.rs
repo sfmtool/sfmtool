@@ -541,14 +541,15 @@ impl SfmrReconstruction {
     }
 
     /// Number of physical distance measurements (`0` when absent). See
-    /// [`ImageSet::measurement_count`].
-    pub fn measurement_count(&self) -> usize {
-        self.image_set.measurement_count()
+    /// [`ImageSet::distance_measurement_count`].
+    pub fn distance_measurement_count(&self) -> usize {
+        self.image_set.distance_measurement_count()
     }
 
-    /// Physical distance measurements stored on this reconstruction, if any.
-    pub fn measurements(&self) -> Option<&MeasurementsData> {
-        self.image_set.measurements.as_ref()
+    /// The measurements stored on this reconstruction, one field per kind,
+    /// every kind `None` when there are none.
+    pub fn measurements(&self) -> &MeasurementsData {
+        &self.image_set.measurements
     }
 
     /// The intrinsics image `image_index` was taken with. See

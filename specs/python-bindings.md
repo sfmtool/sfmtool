@@ -187,9 +187,11 @@ depends on how `sfmtool-core` stores the column:
   views, since a kept view would hold a reference back to the object and the
   pair could then only be freed by the cycle collector.
 
-`observation_readings` and `measurements` return a dict of arrays built on each
-read, `image_to_gray` a new dict on each read, and the list getters (`cameras`,
-`image_names`, the hash lists, …) build a new list on each read.
+`observation_readings` returns a dict of arrays built on each read, and
+`measurements` a dict of kinds holding such dicts (`{"distance": {...}}`, or
+`None` when there are no measurements), `image_to_gray` a new dict on each
+read, and the list getters (`cameras`, `image_names`, the hash lists, …) build
+a new list on each read.
 
 A view is sound only while the block it points into stays where it is, so the
 binding keeps one invariant: **no method replaces, reallocates or writes a
@@ -347,7 +349,7 @@ Paths in the *Source* column are relative to
 | [reconstruction/bundle_adjust.rs](../crates/sfmtool-py/src/reconstruction/bundle_adjust.rs) | `focal_is_releasable`, `distortion_is_releasable` | [bundle-adjust.md](core/reconstruction/bundle-adjust.md) |
 | [reconstruction/add_image_to_tracks.rs](../crates/sfmtool-py/src/reconstruction/add_image_to_tracks.rs) | `EditedReconstruction.add_image_to_tracks` | [add-image-to-tracks.md](core/reconstruction/add-image-to-tracks.md) |
 | [reconstruction/switch_camera_model.rs](../crates/sfmtool-py/src/reconstruction/switch_camera_model.rs) | the `switch_camera_model` method of both reconstruction classes, `SfmrReconstruction.outermost_keypoints` | [switch-camera-model.md](core/reconstruction/switch-camera-model.md), [outermost-keypoint.md](core/reconstruction/outermost-keypoint.md) |
-| [reconstruction/measurement_endpoint.rs](../crates/sfmtool-py/src/reconstruction/measurement_endpoint.rs) | `SfmrReconstruction.resolve_measurement_endpoint`, `SfmrReconstruction.resolve_measurements` | [measurement-endpoint.md](core/reconstruction/measurement-endpoint.md) |
+| [reconstruction/measurement_endpoint.rs](../crates/sfmtool-py/src/reconstruction/measurement_endpoint.rs) | `SfmrReconstruction.resolve_measurement_endpoint`, `SfmrReconstruction.resolve_distance_measurements` | [measurement-endpoint.md](core/reconstruction/measurement-endpoint.md) |
 | [reconstruction/drop_image_adjustments.rs](../crates/sfmtool-py/src/reconstruction/drop_image_adjustments.rs) | `SfmrReconstruction.drop_image_adjustments`, `SfmrReconstruction.varied_image_adjustments` | [drop-image-adjustments.md](core/reconstruction/drop-image-adjustments.md); `varied_image_adjustments` in [switch-camera-model.md](core/reconstruction/switch-camera-model.md) |
 | [reconstruction/triangulate_points.rs](../crates/sfmtool-py/src/reconstruction/triangulate_points.rs) | `triangulate_points`, `VERDICT_CODES` | [triangulation-rules.md](core/reconstruction/triangulation-rules.md) |
 | [reconstruction/range_expr.rs](../crates/sfmtool-py/src/reconstruction/range_expr.rs) | `RangeExpr` | none (its grammar is used in [inspect-command.md](cli/reconstruction/inspect-command.md) and [to-colmap-bin-command.md](cli/colmap-interop/to-colmap-bin-command.md)) |

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `SfmrReconstruction.resolve_measurement_endpoint` and
-//! `SfmrReconstruction.resolve_measurements`: the 3D position of a
+//! `SfmrReconstruction.resolve_distance_measurements`: the 3D position of a
 //! measurement endpoint, a pixel in one image, read from the observations
 //! whose squares hold it (see
 //! ``specs/core/reconstruction/measurement-endpoint.md``).
@@ -14,9 +14,10 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use sfmtool_core::reconstruction::measurement_endpoint::{
-    resolve_measurement_endpoint as core_resolve, resolve_measurements as core_resolve_all,
-    CandidateStanding, EndpointCandidate, EndpointCost, EndpointPosition, EndpointRefusal,
-    EndpointResolution, MeasurementEndpointOptions,
+    resolve_distance_measurements as core_resolve_all,
+    resolve_measurement_endpoint as core_resolve, CandidateStanding, EndpointCandidate,
+    EndpointCost, EndpointPosition, EndpointRefusal, EndpointResolution,
+    MeasurementEndpointOptions,
 };
 use sfmtool_core::reconstruction::EditedReconstruction;
 
@@ -177,7 +178,8 @@ impl PySfmrReconstruction {
         resolution_to_py(py, &resolved)
     }
 
-    /// Resolve both endpoints of every measurement the reconstruction stores.
+    /// Resolve both endpoints of every distance measurement the reconstruction
+    /// stores (``measurements["distance"]``).
     ///
     /// Args:
     ///     layer_depth_factor, offset_weight, placeholder_normal_factor,
@@ -186,14 +188,14 @@ impl PySfmrReconstruction {
     ///         ``resolve_measurement_endpoint`` takes them.
     ///
     /// Returns:
-    ///     A list with one dict per measurement, in stored order:
+    ///     A list with one dict per distance measurement, in stored order:
     ///     ``endpoints``, two resolutions as ``resolve_measurement_endpoint``
     ///     returns them (``None`` for an endpoint that has no position);
     ///     ``refusals``, two sentences naming the remedy (``None`` for an
     ///     endpoint that resolved); and ``scene_distance``, the distance
     ///     between the two positions in scene units, ``None`` unless both
     ///     resolved to finite positions. Empty where the reconstruction stores
-    ///     no measurements.
+    ///     no distance measurements.
     // A Python docstring, not Rust prose; see `resolve_measurement_endpoint`.
     #[allow(rustdoc::invalid_rust_codeblocks)]
     #[allow(clippy::too_many_arguments)]
@@ -202,7 +204,7 @@ impl PySfmrReconstruction {
         angle_weight=None, capped_radius_factor=None, unread_radius=None,
         agreement_band=None, agreement_scale=None,
     ))]
-    fn resolve_measurements<'py>(
+    fn resolve_distance_measurements<'py>(
         &self,
         py: Python<'py>,
         layer_depth_factor: Option<f64>,

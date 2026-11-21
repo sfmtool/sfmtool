@@ -1,27 +1,29 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Physical distance measurements stored in the optional `measurements/`
-//! section of a `.sfmr` file.
+//! The measurements stored in the optional `measurements/` section of a
+//! `.sfmr` file, one subdirectory per kind of measurement.
 //!
-//! Each row records a known physical distance between two 3D points observed at
-//! pixel coordinates in a pair of images of the reconstruction. See
+//! The one kind is **distance**, under `measurements/distance/`: each row
+//! records a known physical distance between two 3D points observed at pixel
+//! coordinates in a pair of images of the reconstruction. See
 //! `specs/formats/sfmr-file-format.md` § "10. Measurements (Optional, version 17+)".
 
 use ndarray::{Array1, Array2, Array3};
 use serde::{Deserialize, Serialize};
 
-use crate::types::{SfmrCamera, WORLD_SPACE_UNITS};
+use crate::types::{SfmrCamera, SfmrMetadata, WORLD_SPACE_UNITS};
 
 /// Physical length unit for a measurement distance — the meaning behind a
-/// `measurements/units` code, drawn from [`WORLD_SPACE_UNITS`].
+/// `measurements/distance/units` code, drawn from [`WORLD_SPACE_UNITS`].
 ///
-/// On disk, `measurements/metadata.json` carries a `unit_names` legend and each
-/// `measurements/units` row is a `uint8` index into *that* legend. A reader
+/// On disk, `measurements/distance/metadata.json` carries a `unit_names` legend
+/// and each `measurements/distance/units` row is a `uint8` index into *that*
+/// legend. A reader
 /// resolves every code through the file's legend and hands back the canonical
 /// numbering this enum defines ([`LENGTH_UNIT_MM`] through [`LENGTH_UNIT_FT`]),
 /// and a writer always states [`Self::NAMES`]. So in memory there is one
-/// numbering, and a consumer of [`MeasurementsData::units`] reads it with this
+/// numbering, and a consumer of [`DistanceMeasurementsData::units`] reads it with this
 /// enum or those constants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -98,37 +100,37 @@ impl LengthUnit {
     }
 }
 
-/// In-memory [`MeasurementsData::units`] code for [`LengthUnit::Millimetre`].
+/// In-memory [`DistanceMeasurementsData::units`] code for [`LengthUnit::Millimetre`].
 pub const LENGTH_UNIT_MM: u8 = LengthUnit::Millimetre.code();
-/// In-memory [`MeasurementsData::units`] code for [`LengthUnit::Centimetre`].
+/// In-memory [`DistanceMeasurementsData::units`] code for [`LengthUnit::Centimetre`].
 pub const LENGTH_UNIT_CM: u8 = LengthUnit::Centimetre.code();
-/// In-memory [`MeasurementsData::units`] code for [`LengthUnit::Metre`].
+/// In-memory [`DistanceMeasurementsData::units`] code for [`LengthUnit::Metre`].
 pub const LENGTH_UNIT_M: u8 = LengthUnit::Metre.code();
-/// In-memory [`MeasurementsData::units`] code for [`LengthUnit::Inch`].
+/// In-memory [`DistanceMeasurementsData::units`] code for [`LengthUnit::Inch`].
 pub const LENGTH_UNIT_IN: u8 = LengthUnit::Inch.code();
-/// In-memory [`MeasurementsData::units`] code for [`LengthUnit::Foot`].
+/// In-memory [`DistanceMeasurementsData::units`] code for [`LengthUnit::Foot`].
 pub const LENGTH_UNIT_FT: u8 = LengthUnit::Foot.code();
 
-/// Metadata from `measurements/metadata.json.zst`.
+/// Metadata from `measurements/distance/metadata.json.zst`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MeasurementsMetadata {
-    /// Number of measurements (`>= 1`). Must match top-level
-    /// `SfmrMetadata::measurement_count`.
-    pub measurement_count: u32,
-    /// The legend `measurements/units` indexes, one unit name per code in code
+pub struct DistanceMeasurementsMetadata {
+    /// Number of distance measurements (`>= 1`). Must match top-level
+    /// `SfmrMetadata::distance_measurement_count`.
+    pub distance_measurement_count: u32,
+    /// The legend `measurements/distance/units` indexes, one unit name per code in code
     /// order. A writer always writes [`LengthUnit::NAMES`]; a reader accepts
     /// any non-empty list of unique defined unit names in any order and
     /// normalises the column onto the canonical order.
     pub unit_names: Vec<String>,
 }
 
-/// Optional physical distance measurements stored in the `.sfmr`
-/// `measurements/` section.
+/// Physical distance measurements, the distance kind of the `.sfmr`
+/// `measurements/` section, stored under `measurements/distance/`.
 ///
 /// Each row records a known physical distance between two points observed in
 /// images of the reconstruction. Absent (`None` on
-/// [`crate::SfmrData::measurements`]) when the reconstruction has no
-/// measurements; when present, there is at least one measurement (`len() >= 1`).
+/// [`MeasurementsData::distance`]) when the reconstruction has no distance
+/// measurements; when present, there is at least one (`len() >= 1`).
 ///
 /// Both distances and endpoint pixel coordinates are stored as `float32`.
 /// Physical distance measurements (tape measures, laser rangefinders,
@@ -140,18 +142,18 @@ pub struct MeasurementsMetadata {
 /// sub-pixel image coordinates up to tens of thousands of pixels need far fewer
 /// than seven digits.
 #[derive(Debug, Clone, PartialEq)]
-pub struct MeasurementsData {
+pub struct DistanceMeasurementsData {
     /// `(N,)` measured physical distance per measurement, strictly positive and
     /// finite, in the unit named by the matching row of [`Self::units`].
     ///
-    /// On disk `measurements/distances.{N}.float32.zst`.
+    /// On disk `measurements/distance/distances.{N}.float32.zst`.
     pub distances: Array1<f32>,
     /// `(N,)` physical length unit code per measurement in the canonical
     /// numbering of [`LengthUnit`] ([`LENGTH_UNIT_MM`] through
     /// [`LENGTH_UNIT_FT`]).
     ///
-    /// On disk `measurements/units.{N}.uint8.zst`, indexing the `unit_names`
-    /// legend in `measurements/metadata.json.zst`. The reader resolves every
+    /// On disk `measurements/distance/units.{N}.uint8.zst`, indexing the
+    /// `unit_names` legend in `measurements/distance/metadata.json.zst`. The reader resolves every
     /// code through the file's legend and normalises onto the canonical
     /// numbering at the I/O boundary; the writer always states
     /// [`LengthUnit::NAMES`].
@@ -160,37 +162,72 @@ pub struct MeasurementsData {
     /// `image_count`. Both endpoints may lie in the same image
     /// (`img_0 == img_1`).
     ///
-    /// On disk `measurements/image_indexes.{N}.2.uint32.zst`.
+    /// On disk `measurements/distance/image_indexes.{N}.2.uint32.zst`.
     pub image_indexes: Array2<u32>,
     /// `(N, 2, 2)` sub-pixel endpoint coordinates where `[i, k, 0..2]` is
     /// `(x, y)` in pixel coordinates of `images[image_indexes[[i, k]]]` for
     /// endpoint `k` in `{0, 1}` (top-left origin, half-pixel centres, finite
     /// and within `[0, width) × [0, height)` of that image's camera).
     ///
-    /// On disk `measurements/endpoints_xy.{N}.2.2.float32.zst`.
+    /// On disk `measurements/distance/endpoints_xy.{N}.2.2.float32.zst`.
     pub endpoints_xy: Array3<f32>,
     /// `N` human-readable labels or descriptions, one per measurement. An empty
     /// string `""` is allowed for an unlabelled measurement.
     ///
-    /// On disk `measurements/labels.json.zst`.
+    /// On disk `measurements/distance/labels.json.zst`.
     pub labels: Vec<String>,
 }
 
-impl MeasurementsData {
-    /// Number of measurements in this section.
+impl DistanceMeasurementsData {
+    /// Number of distance measurements.
     pub fn len(&self) -> usize {
         self.distances.len()
     }
 
     /// Whether this struct holds zero measurements (which is invalid on disk;
-    /// omit the section as `None` instead).
+    /// leave [`MeasurementsData::distance`] `None` instead).
     pub fn is_empty(&self) -> bool {
         self.distances.is_empty()
     }
 }
 
+/// The measurements a `.sfmr` file stores in its optional `measurements/`
+/// section, one field per kind of measurement, each stored in the
+/// subdirectory of that section named for the kind.
+///
+/// A kind is `None` when the reconstruction has none of it. The section is
+/// present in a file exactly when at least one kind is present; the default
+/// value, with every kind `None`, is a reconstruction with no measurements.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MeasurementsData {
+    /// Physical distance measurements, under `measurements/distance/`.
+    pub distance: Option<DistanceMeasurementsData>,
+}
+
+impl MeasurementsData {
+    /// Whether no kind of measurement is present, so a file stores no
+    /// `measurements/` section.
+    pub fn is_empty(&self) -> bool {
+        self.distance.is_none()
+    }
+
+    /// Number of distance measurements, `0` when there are none.
+    pub fn distance_measurement_count(&self) -> usize {
+        self.distance
+            .as_ref()
+            .map_or(0, DistanceMeasurementsData::len)
+    }
+
+    /// Set each kind's top-level count in `metadata` to what this holds:
+    /// `distance_measurement_count` to the number of distance measurements, or
+    /// `None` when there are none.
+    pub fn set_metadata_counts(&self, metadata: &mut SfmrMetadata) {
+        metadata.distance_measurement_count = self.distance.as_ref().map(|d| d.len() as u32);
+    }
+}
+
 /// The unit each legend name denotes, in the order given — the legend a stored
-/// `measurements/units` code indexes.
+/// `measurements/distance/units` code indexes.
 ///
 /// A legend must name at least one unit, name only units in
 /// [`LengthUnit::NAMES`], and name each at most once. Read and verify both
@@ -220,12 +257,13 @@ pub(crate) fn parse_unit_names<S: AsRef<str>>(names: &[S]) -> Result<Vec<LengthU
     Ok(legend)
 }
 
-/// Read and validate the `unit_names` legend from `measurements/metadata.json`.
+/// Read and validate the `unit_names` legend from
+/// `measurements/distance/metadata.json`.
 pub(crate) fn read_measurement_unit_legend(
     measurements_meta: &serde_json::Value,
 ) -> Result<Vec<LengthUnit>, String> {
     let value = measurements_meta.get("unit_names").ok_or_else(|| {
-        "measurements/metadata.json carries no unit_names to read the unit codes through"
+        "measurements/distance/metadata.json carries no unit_names to read the unit codes through"
             .to_string()
     })?;
     let names: Vec<String> = value
@@ -237,12 +275,14 @@ pub(crate) fn read_measurement_unit_legend(
                 .collect::<Option<Vec<String>>>()
         })
         .ok_or_else(|| {
-            format!("measurements/metadata.json's unit_names is {value}, not a list of names")
+            format!(
+                "measurements/distance/metadata.json's unit_names is {value}, not a list of names"
+            )
         })?;
     parse_unit_names(&names)
 }
 
-/// Resolve each `measurements/units` code through `legend`.
+/// Resolve each `measurements/distance/units` code through `legend`.
 ///
 /// A code past the legend's end is rejected rather than guessed at. Both the
 /// reader and the verifier pass the file's legend.
@@ -256,7 +296,7 @@ pub(crate) fn resolve_measurement_units(
         .map(|(i, &code)| {
             legend.get(code as usize).copied().ok_or_else(|| {
                 format!(
-                    "measurements/units row {i} is {code}, past the {} names its legend gives",
+                    "measurements/distance/units row {i} is {code}, past the {} names its legend gives",
                     legend.len()
                 )
             })
@@ -265,7 +305,21 @@ pub(crate) fn resolve_measurement_units(
 }
 
 /// Validate a [`MeasurementsData`] against the reconstruction's images and
-/// cameras.
+/// cameras: each kind that is present, by its own rules
+/// ([`validate_distance_measurements`] for the distance kind).
+pub fn validate_measurements(
+    measurements: &MeasurementsData,
+    camera_indexes: &[u32],
+    cameras: &[SfmrCamera],
+) -> Result<(), String> {
+    if let Some(distance) = &measurements.distance {
+        validate_distance_measurements(distance, camera_indexes, cameras)?;
+    }
+    Ok(())
+}
+
+/// Validate a [`DistanceMeasurementsData`] against the reconstruction's images
+/// and cameras.
 ///
 /// Checks that `measurements` has at least one row (`>= 1` and fits in `u32`),
 /// all five columns agree in shape, every distance is finite and strictly
@@ -276,45 +330,45 @@ pub(crate) fn resolve_measurement_units(
 ///
 /// Read, write and verify all route through this so the three enforce the same
 /// rules.
-pub fn validate_measurements(
-    measurements: &MeasurementsData,
+pub fn validate_distance_measurements(
+    measurements: &DistanceMeasurementsData,
     camera_indexes: &[u32],
     cameras: &[SfmrCamera],
 ) -> Result<(), String> {
     let n = measurements.distances.len();
     if n == 0 {
         return Err(
-            "measurements section must have at least one measurement (use None when there are none)"
+            "the distance kind must have at least one measurement (leave it None when there are none)"
                 .into(),
         );
     }
     if u32::try_from(n).is_err() {
         return Err(format!(
-            "measurements count {n} exceeds u32::MAX ({})",
+            "distance measurement count {n} exceeds u32::MAX ({})",
             u32::MAX
         ));
     }
     if measurements.units.len() != n {
         return Err(format!(
-            "measurements/units len {} != measurement_count {n}",
+            "measurements/distance/units len {} != distance_measurement_count {n}",
             measurements.units.len()
         ));
     }
     if measurements.image_indexes.shape() != [n, 2] {
         return Err(format!(
-            "measurements/image_indexes shape {:?} != [{n}, 2]",
+            "measurements/distance/image_indexes shape {:?} != [{n}, 2]",
             measurements.image_indexes.shape()
         ));
     }
     if measurements.endpoints_xy.shape() != [n, 2, 2] {
         return Err(format!(
-            "measurements/endpoints_xy shape {:?} != [{n}, 2, 2]",
+            "measurements/distance/endpoints_xy shape {:?} != [{n}, 2, 2]",
             measurements.endpoints_xy.shape()
         ));
     }
     if measurements.labels.len() != n {
         return Err(format!(
-            "measurements/labels len {} != measurement_count {n}",
+            "measurements/distance/labels len {} != distance_measurement_count {n}",
             measurements.labels.len()
         ));
     }
@@ -324,13 +378,13 @@ pub fn validate_measurements(
         let d = measurements.distances[i];
         if !d.is_finite() || d <= 0.0 {
             return Err(format!(
-                "measurements/distances row {i} is {d}, which must be finite and strictly positive"
+                "measurements/distance/distances row {i} is {d}, which must be finite and strictly positive"
             ));
         }
         let code = measurements.units[i];
         if LengthUnit::from_code(code).is_none() {
             return Err(format!(
-                "measurements/units row {i} is {code}, past the {} names its legend gives",
+                "measurements/distance/units row {i} is {code}, past the {} names its legend gives",
                 LengthUnit::ALL.len()
             ));
         }
@@ -338,25 +392,25 @@ pub fn validate_measurements(
             let img = measurements.image_indexes[[i, k]] as usize;
             let cam = *camera_indexes.get(img).ok_or_else(|| {
                 format!(
-                    "measurements/image_indexes[{i}, {k}] = {img} is out of range for \
+                    "measurements/distance/image_indexes[{i}, {k}] = {img} is out of range for \
                      {image_count} images"
                 )
             })? as usize;
             let c = cameras.get(cam).ok_or_else(|| {
                 format!(
-                    "measurements/image_indexes[{i}, {k}] = {img}: camera index {cam} out of range"
+                    "measurements/distance/image_indexes[{i}, {k}] = {img}: camera index {cam} out of range"
                 )
             })?;
             let x = measurements.endpoints_xy[[i, k, 0]];
             let y = measurements.endpoints_xy[[i, k, 1]];
             if !x.is_finite() || !y.is_finite() {
                 return Err(format!(
-                    "measurements/endpoints_xy[{i}, {k}] is not finite: ({x}, {y})"
+                    "measurements/distance/endpoints_xy[{i}, {k}] is not finite: ({x}, {y})"
                 ));
             }
             if !(x >= 0.0 && x < c.width as f32 && y >= 0.0 && y < c.height as f32) {
                 return Err(format!(
-                    "measurements/endpoints_xy[{i}, {k}] = ({x}, {y}) is outside image bounds \
+                    "measurements/distance/endpoints_xy[{i}, {k}] = ({x}, {y}) is outside image bounds \
                      [0, {}) x [0, {})",
                     c.width, c.height
                 ));

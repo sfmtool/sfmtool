@@ -1541,7 +1541,7 @@ fn one_image_set(camera: CameraIntrinsics, pose: &RigidTransform) -> ImageSet {
         },
         depth_histogram_counts: Vec::new(),
         rig_frame_data: None,
-        measurements: None,
+        measurements: Default::default(),
     }
 }
 

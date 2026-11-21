@@ -93,7 +93,7 @@ impl SfmrReconstruction {
         meta.point_count = self.point_set.points.len() as u32;
         meta.observation_count = self.point_set.tracks.len() as u32;
         meta.camera_count = self.image_set.cameras.len() as u32;
-        meta.measurement_count = self.image_set.measurements.as_ref().map(|m| m.len() as u32);
+        self.image_set.measurements.set_metadata_counts(meta);
 
         match stamp.workspace_path {
             Some(stated) => self.set_workspace_relative_path(stated),

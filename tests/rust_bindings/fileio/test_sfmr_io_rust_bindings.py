@@ -1164,8 +1164,9 @@ class TestPerImageLensCorrections:
 
 
 def _sample_measurements_dict() -> dict:
-    """Five valid measurements exercising all five length units, a same-image
-    pair, cross-image pairs, an empty label, and UTF-8 labels."""
+    """The columns of five valid distance measurements exercising all five
+    length units, a same-image pair, cross-image pairs, an empty label, and
+    UTF-8 labels: the value of `measurements["distance"]`."""
     return {
         "distances": np.array([150.0, 42.5, 1.25, 12.0, 6.5], dtype=np.float32),
         "units": np.array([0, 1, 2, 3, 4], dtype=np.uint8),
@@ -1186,7 +1187,11 @@ def _sample_measurements_dict() -> dict:
     }
 
 
-def _assert_measurements_identical(lhs: dict, rhs: dict) -> None:
+def _assert_measurements_identical(measurements: dict, rhs: dict) -> None:
+    """`measurements`, a dict of kinds, holds the distance columns `rhs` and
+    no other kind."""
+    assert set(measurements.keys()) == {"distance"}
+    lhs = measurements["distance"]
     assert set(lhs.keys()) == {
         "distances",
         "units",
@@ -1203,7 +1208,8 @@ def _assert_measurements_identical(lhs: dict, rhs: dict) -> None:
 
 
 class TestMeasurementsIo:
-    """`.sfmr` version 17 `measurements/` dict I/O and `LENGTH_UNIT_NAMES`."""
+    """`.sfmr` version 17 `measurements/` dict I/O, its one kind
+    `measurements/distance/`, and `LENGTH_UNIT_NAMES`."""
 
     def test_length_unit_names(self):
         assert isinstance(LENGTH_UNIT_NAMES, tuple)
@@ -1214,7 +1220,7 @@ class TestMeasurementsIo:
     ):
         data = read_sfmr(seoul_bull_ground_truth_sfmr)
         assert data["measurements"] is None
-        assert "measurement_count" not in read_sfmr_metadata(
+        assert "distance_measurement_count" not in read_sfmr_metadata(
             seoul_bull_ground_truth_sfmr
         )
 
@@ -1222,7 +1228,7 @@ class TestMeasurementsIo:
         out_none = tmp_path / "none.sfmr"
         write_sfmr(out_none, data)
         assert read_sfmr(out_none)["measurements"] is None
-        assert "measurement_count" not in read_sfmr_metadata(out_none)
+        assert "distance_measurement_count" not in read_sfmr_metadata(out_none)
         assert verify_sfmr(out_none) == (True, [])
 
         del data["measurements"]
@@ -1238,7 +1244,7 @@ class TestMeasurementsIo:
         plain_hash = read_sfmr(plain)["content_hash"]
 
         m = _sample_measurements_dict()
-        data["measurements"] = m
+        data["measurements"] = {"distance": m}
         out = tmp_path / "measured.sfmr"
         write_sfmr(out, data)
 
@@ -1247,7 +1253,7 @@ class TestMeasurementsIo:
 
         meta = read_sfmr_metadata(out)
         assert meta["version"] == 17
-        assert meta["measurement_count"] == 5
+        assert meta["distance_measurement_count"] == 5
 
         reloaded = read_sfmr(out)
         _assert_measurements_identical(reloaded["measurements"], m)
@@ -1280,15 +1286,15 @@ class TestMeasurementsIo:
 
         out_c = tmp_path / "c.sfmr"
         out_f = tmp_path / "f.sfmr"
-        data["measurements"] = c_m
+        data["measurements"] = {"distance": c_m}
         write_sfmr(out_c, data)
-        data["measurements"] = f_m
+        data["measurements"] = {"distance": f_m}
         write_sfmr(out_f, data)
 
         reloaded_c = read_sfmr(out_c)
         reloaded_f = read_sfmr(out_f)
         _assert_measurements_identical(
-            reloaded_f["measurements"], reloaded_c["measurements"]
+            reloaded_f["measurements"], reloaded_c["measurements"]["distance"]
         )
         assert reloaded_f["content_hash"] == reloaded_c["content_hash"]
 
@@ -1302,18 +1308,38 @@ class TestMeasurementsIo:
             with pytest.raises(TypeError, match="measurements must be a dict"):
                 write_sfmr(out, d)
 
+        # A non-dict distance kind; a kind that is absent has no key.
+        for bad in (None, 123, []):
+            d = dict(base, measurements={"distance": bad})
+            with pytest.raises(
+                TypeError, match=r"measurements\['distance'\] must be a dict"
+            ):
+                write_sfmr(out, d)
+
+        # An unknown kind, including the distance columns given without their
+        # kind, and a dict naming no kind -> ValueError.
+        for bad in (
+            {"gps": {}},
+            {"distance": _sample_measurements_dict(), "gps": {}},
+            _sample_measurements_dict(),
+        ):
+            with pytest.raises(ValueError, match="unexpected kind"):
+                write_sfmr(out, dict(base, measurements=bad))
+        with pytest.raises(ValueError, match="names no kind"):
+            write_sfmr(out, dict(base, measurements={}))
+
         # Missing required key -> KeyError.
         for key in ("distances", "units", "image_indexes", "endpoints_xy", "labels"):
             m = _sample_measurements_dict()
             del m[key]
             with pytest.raises(KeyError, match=key):
-                write_sfmr(out, dict(base, measurements=m))
+                write_sfmr(out, dict(base, measurements={"distance": m}))
 
         # Unexpected extra key -> ValueError.
         m = _sample_measurements_dict()
         m["extra"] = 1
         with pytest.raises(ValueError, match="unexpected key"):
-            write_sfmr(out, dict(base, measurements=m))
+            write_sfmr(out, dict(base, measurements={"distance": m}))
 
         # Wrong dtype or rank or non-array -> TypeError naming the key.
         bad_columns = [
@@ -1334,7 +1360,7 @@ class TestMeasurementsIo:
             m = _sample_measurements_dict()
             m[key] = bad_val
             with pytest.raises(TypeError, match=key):
-                write_sfmr(out, dict(base, measurements=m))
+                write_sfmr(out, dict(base, measurements={"distance": m}))
 
     def test_format_validation_errors(self, seoul_bull_ground_truth_sfmr, tmp_path):
         base = read_sfmr(seoul_bull_ground_truth_sfmr)
@@ -1351,7 +1377,7 @@ class TestMeasurementsIo:
             "labels": [],
         }
         with pytest.raises(ValueError, match="at least one"):
-            write_sfmr(out, dict(base, measurements=empty_m))
+            write_sfmr(out, dict(base, measurements={"distance": empty_m}))
 
         # Non-positive or NaN distance.
         for bad_dist in (0.0, -1.0, np.nan, np.inf):
@@ -1359,42 +1385,46 @@ class TestMeasurementsIo:
             m["distances"] = m["distances"].copy()
             m["distances"][0] = bad_dist
             with pytest.raises(ValueError, match="distances"):
-                write_sfmr(out, dict(base, measurements=m))
+                write_sfmr(out, dict(base, measurements={"distance": m}))
 
         # Out-of-range unit code.
         m = _sample_measurements_dict()
         m["units"] = m["units"].copy()
         m["units"][0] = len(LENGTH_UNIT_NAMES)
         with pytest.raises(ValueError, match="units"):
-            write_sfmr(out, dict(base, measurements=m))
+            write_sfmr(out, dict(base, measurements={"distance": m}))
 
         # Out-of-range image index.
         m = _sample_measurements_dict()
         m["image_indexes"] = m["image_indexes"].copy()
         m["image_indexes"][0, 1] = n_img
         with pytest.raises(ValueError, match="image_indexes"):
-            write_sfmr(out, dict(base, measurements=m))
+            write_sfmr(out, dict(base, measurements={"distance": m}))
 
         # Out-of-bounds endpoint coordinate.
         m = _sample_measurements_dict()
         m["endpoints_xy"] = m["endpoints_xy"].copy()
         m["endpoints_xy"][0, 0, 0] = float(cam.width)
         with pytest.raises(ValueError, match="endpoints_xy"):
-            write_sfmr(out, dict(base, measurements=m))
+            write_sfmr(out, dict(base, measurements={"distance": m}))
 
         # Mismatched labels length.
         m = _sample_measurements_dict()
         m["labels"] = m["labels"][:-1]
         with pytest.raises(ValueError, match="labels"):
-            write_sfmr(out, dict(base, measurements=m))
+            write_sfmr(out, dict(base, measurements={"distance": m}))
 
-        # Metadata measurement_count mismatching measurements length or None.
-        bad_meta = dict(base["metadata"], measurement_count=3)
-        with pytest.raises(ValueError, match="measurement_count"):
+        # Metadata distance_measurement_count mismatching the distance kind or None.
+        bad_meta = dict(base["metadata"], distance_measurement_count=3)
+        with pytest.raises(ValueError, match="distance_measurement_count"):
             write_sfmr(out, dict(base, metadata=bad_meta, measurements=None))
-        with pytest.raises(ValueError, match="measurement_count"):
+        with pytest.raises(ValueError, match="distance_measurement_count"):
             write_sfmr(
                 out,
-                dict(base, metadata=bad_meta, measurements=_sample_measurements_dict()),
+                dict(
+                    base,
+                    metadata=bad_meta,
+                    measurements={"distance": _sample_measurements_dict()},
+                ),
             )
         assert not out.exists()

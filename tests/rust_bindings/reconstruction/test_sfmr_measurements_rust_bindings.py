@@ -1,7 +1,7 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Python bindings for `.sfmr` physical distance measurements on
+"""Python bindings for `.sfmr` measurements, the distance kind, on
 `SfmrReconstruction` and `EditedReconstruction`."""
 
 from pathlib import Path
@@ -15,7 +15,8 @@ from sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
 
 
 def _sample_measurements() -> dict:
-    """Three valid measurements on the 17-image (270x480) seoul_bull dataset."""
+    """The columns of three valid distance measurements on the 17-image
+    (270x480) seoul_bull dataset: the value of `measurements["distance"]`."""
     return {
         "distances": np.array([0.42, 12.5, 3.0], dtype=np.float32),
         "units": np.array(
@@ -39,7 +40,11 @@ def _sample_measurements() -> dict:
     }
 
 
-def _assert_measurements_equal(lhs: dict, rhs: dict) -> None:
+def _assert_measurements_equal(measurements: dict, rhs: dict) -> None:
+    """`measurements`, a dict of kinds, holds the distance columns `rhs` and
+    no other kind."""
+    assert set(measurements.keys()) == {"distance"}
+    lhs = measurements["distance"]
     assert set(lhs.keys()) == {
         "distances",
         "units",
@@ -58,32 +63,33 @@ def _assert_measurements_equal(lhs: dict, rhs: dict) -> None:
 class TestSfmrReconstructionMeasurements:
     def test_load_save_and_getters(self, seoul_bull_ground_truth_sfmr, tmp_path):
         recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
-        assert recon.measurement_count == 0
+        assert recon.distance_measurement_count == 0
         assert recon.measurements is None
-        assert "measurement_count" not in recon.metadata()
+        assert "distance_measurement_count" not in recon.metadata()
 
         m = _sample_measurements()
-        with_m = recon.clone_with_changes(measurements=m)
-        assert with_m.measurement_count == 3
-        assert with_m.metadata()["measurement_count"] == 3
+        with_m = recon.clone_with_changes(measurements={"distance": m})
+        assert with_m.distance_measurement_count == 3
+        assert with_m.metadata()["distance_measurement_count"] == 3
         got = with_m.measurements
         assert got is not None
         _assert_measurements_equal(got, m)
 
         # Each read returns a fresh dict so mutating it does not touch the recon.
-        got["distances"][0] = 999.0
-        got["labels"][0] = "mutated"
-        got["extra"] = True
+        got["distance"]["distances"][0] = 999.0
+        got["distance"]["labels"][0] = "mutated"
+        got["distance"]["extra"] = True
+        got["gps"] = True
         _assert_measurements_equal(with_m.measurements, m)
 
         out = tmp_path / "saved.sfmr"
         with_m.save(out, operation="xform")
         assert verify_sfmr(out) == (True, [])
-        assert read_sfmr_metadata(out)["measurement_count"] == 3
+        assert read_sfmr_metadata(out)["distance_measurement_count"] == 3
 
         loaded = SfmrReconstruction.load(out)
-        assert loaded.measurement_count == 3
-        assert loaded.metadata()["measurement_count"] == 3
+        assert loaded.distance_measurement_count == 3
+        assert loaded.metadata()["distance_measurement_count"] == 3
         _assert_measurements_equal(loaded.measurements, m)
 
     def test_from_data_with_and_without_measurements(
@@ -93,34 +99,38 @@ class TestSfmrReconstructionMeasurements:
         data = read_sfmr(seoul_bull_ground_truth_sfmr)
         m = _sample_measurements()
 
-        recon = SfmrReconstruction.from_data(ws, dict(data, measurements=m))
-        assert recon.measurement_count == 3
-        assert recon.metadata()["measurement_count"] == 3
+        recon = SfmrReconstruction.from_data(
+            ws, dict(data, measurements={"distance": m})
+        )
+        assert recon.distance_measurement_count == 3
+        assert recon.metadata()["distance_measurement_count"] == 3
         _assert_measurements_equal(recon.measurements, m)
 
-        # Dropping measurements clears measurement_count in sync.
+        # Dropping measurements clears distance_measurement_count in sync.
         data_with_stale_count = dict(
             data,
-            metadata=dict(data["metadata"], measurement_count=3),
+            metadata=dict(data["metadata"], distance_measurement_count=3),
             measurements=None,
         )
         cleared = SfmrReconstruction.from_data(ws, data_with_stale_count)
-        assert cleared.measurement_count == 0
+        assert cleared.distance_measurement_count == 0
         assert cleared.measurements is None
-        assert "measurement_count" not in cleared.metadata()
+        assert "distance_measurement_count" not in cleared.metadata()
 
         # Invalid measurements refused by from_data with ValueError.
         bad = _sample_measurements()
         bad["image_indexes"] = bad["image_indexes"].copy()
         bad["image_indexes"][0, 1] = len(data["image_names"])
         with pytest.raises(ValueError, match="image_indexes"):
-            SfmrReconstruction.from_data(ws, dict(data, measurements=bad))
+            SfmrReconstruction.from_data(ws, dict(data, measurements={"distance": bad}))
 
         bad_oob = _sample_measurements()
         bad_oob["endpoints_xy"] = bad_oob["endpoints_xy"].copy()
         bad_oob["endpoints_xy"][0, 0, 1] = float(data["cameras"][0].height)
         with pytest.raises(ValueError, match="endpoints_xy"):
-            SfmrReconstruction.from_data(ws, dict(data, measurements=bad_oob))
+            SfmrReconstruction.from_data(
+                ws, dict(data, measurements={"distance": bad_oob})
+            )
 
         bad_empty = {
             "distances": np.zeros(0, dtype=np.float32),
@@ -130,7 +140,9 @@ class TestSfmrReconstructionMeasurements:
             "labels": [],
         }
         with pytest.raises(ValueError, match="at least one"):
-            SfmrReconstruction.from_data(ws, dict(data, measurements=bad_empty))
+            SfmrReconstruction.from_data(
+                ws, dict(data, measurements={"distance": bad_empty})
+            )
 
     def test_clone_with_changes_set_replace_clear_and_preserve(
         self, seoul_bull_ground_truth_sfmr
@@ -150,13 +162,13 @@ class TestSfmrReconstructionMeasurements:
         assert not m_fortran["units"].flags["C_CONTIGUOUS"]
         assert not m_fortran["image_indexes"].flags["C_CONTIGUOUS"]
         assert not m_fortran["endpoints_xy"].flags["C_CONTIGUOUS"]
-        with_m = recon.clone_with_changes(measurements=m_fortran)
-        assert with_m.measurement_count == 3
+        with_m = recon.clone_with_changes(measurements={"distance": m_fortran})
+        assert with_m.distance_measurement_count == 3
         _assert_measurements_equal(with_m.measurements, m)
 
         # Unrelated change preserves measurements.
         scaled_unit = with_m.clone_with_changes(world_space_unit="cm")
-        assert scaled_unit.measurement_count == 3
+        assert scaled_unit.distance_measurement_count == 3
         _assert_measurements_equal(scaled_unit.measurements, m)
 
         # Replace with a single measurement.
@@ -167,23 +179,23 @@ class TestSfmrReconstructionMeasurements:
             "endpoints_xy": np.array([[[5.0, 5.0], [10.0, 10.0]]], dtype=np.float32),
             "labels": ["single"],
         }
-        replaced = with_m.clone_with_changes(measurements=one)
-        assert replaced.measurement_count == 1
-        assert replaced.metadata()["measurement_count"] == 1
+        replaced = with_m.clone_with_changes(measurements={"distance": one})
+        assert replaced.distance_measurement_count == 1
+        assert replaced.metadata()["distance_measurement_count"] == 1
         _assert_measurements_equal(replaced.measurements, one)
 
         # Clear with None.
         cleared = replaced.clone_with_changes(measurements=None)
-        assert cleared.measurement_count == 0
+        assert cleared.distance_measurement_count == 0
         assert cleared.measurements is None
-        assert "measurement_count" not in cleared.metadata()
+        assert "distance_measurement_count" not in cleared.metadata()
 
     def test_clone_with_changes_refuses_invalid_measurements_and_invalidation(
         self, seoul_bull_ground_truth_sfmr
     ):
         recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
         m = _sample_measurements()
-        with_m = recon.clone_with_changes(measurements=m)
+        with_m = recon.clone_with_changes(measurements={"distance": m})
 
         # Direct invalid measurements input.
         with pytest.raises(TypeError, match="measurements must be a dict"):
@@ -191,10 +203,10 @@ class TestSfmrReconstructionMeasurements:
         bad_key = dict(m)
         del bad_key["labels"]
         with pytest.raises(KeyError, match="labels"):
-            recon.clone_with_changes(measurements=bad_key)
+            recon.clone_with_changes(measurements={"distance": bad_key})
         bad_unit = dict(m, units=np.array([9, 0, 0], dtype=np.uint8))
         with pytest.raises(ValueError, match="units"):
-            recon.clone_with_changes(measurements=bad_unit)
+            recon.clone_with_changes(measurements={"distance": bad_unit})
 
         # Replacing cameras with smaller dimensions invalidates existing
         # measurements whose endpoints exceed the new bounds (endpoint [1, 1]
@@ -216,9 +228,9 @@ class TestSfmrReconstructionMeasurements:
         shrunk_cleared = with_m.clone_with_changes(
             cameras=[tiny_cam] * with_m.camera_count, measurements=None
         )
-        assert shrunk_cleared.measurement_count == 0
+        assert shrunk_cleared.distance_measurement_count == 0
         assert shrunk_cleared.measurements is None
-        assert "measurement_count" not in shrunk_cleared.metadata()
+        assert "distance_measurement_count" not in shrunk_cleared.metadata()
 
         # Switching an image's camera_index to a smaller camera invalidates
         # existing measurements referencing that image.
@@ -233,7 +245,7 @@ class TestSfmrReconstructionMeasurements:
         # Shrinking image_names so an existing measurement's image_index (7)
         # is out of range is refused when measurements are kept.
         sub = with_m.subset_by_image_indices(np.arange(8, dtype=np.uint32))
-        assert sub.measurement_count == 3
+        assert sub.distance_measurement_count == 3
         with pytest.raises(ValueError, match="image_indexes"):
             sub.clone_with_changes(
                 image_names=sub.image_names[:4],
@@ -255,7 +267,7 @@ class TestSfmrReconstructionMeasurements:
     def test_apply_transform_preserves_measurements(self, seoul_bull_ground_truth_sfmr):
         recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
         m = _sample_measurements()
-        with_m = recon.clone_with_changes(measurements=m)
+        with_m = recon.clone_with_changes(measurements={"distance": m})
 
         xform = Se3Transform(
             RotQuaternion.from_axis_angle(np.array([0.0, 0.0, 1.0]), 0.5),
@@ -263,7 +275,7 @@ class TestSfmrReconstructionMeasurements:
             2.5,
         )
         moved = with_m.apply_transform(xform)
-        assert moved.measurement_count == 3
+        assert moved.distance_measurement_count == 3
         _assert_measurements_equal(moved.measurements, m)
 
     def test_subset_by_image_indices_filters_and_remaps_measurements(
@@ -271,15 +283,15 @@ class TestSfmrReconstructionMeasurements:
     ):
         recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
         m = _sample_measurements()
-        with_m = recon.clone_with_changes(measurements=m)
+        with_m = recon.clone_with_changes(measurements={"distance": m})
 
         # Keep images [3, 2, 0] (reordered):
         # row 0: [0, 3] -> [2, 0]; row 1: [2, 2] -> [1, 1]; row 2: [5, 7] dropped.
         subset = with_m.subset_by_image_indices(
             np.array([3, 2, 0], dtype=np.uint32), drop_orphaned_points=True
         )
-        assert subset.measurement_count == 2
-        assert subset.metadata()["measurement_count"] == 2
+        assert subset.distance_measurement_count == 2
+        assert subset.metadata()["distance_measurement_count"] == 2
         expected = {
             "distances": m["distances"][:2],
             "units": m["units"][:2],
@@ -298,9 +310,9 @@ class TestSfmrReconstructionMeasurements:
         no_m = with_m.subset_by_image_indices(
             np.array([1, 4], dtype=np.uint32), drop_orphaned_points=True
         )
-        assert no_m.measurement_count == 0
+        assert no_m.distance_measurement_count == 0
         assert no_m.measurements is None
-        assert "measurement_count" not in no_m.metadata()
+        assert "distance_measurement_count" not in no_m.metadata()
         out_empty = tmp_path / "subset_none.sfmr"
         no_m.save(out_empty, operation="subset")
         assert verify_sfmr(out_empty) == (True, [])
@@ -311,17 +323,17 @@ class TestSfmrReconstructionMeasurements:
     ):
         recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
         m = _sample_measurements()
-        with_m = recon.clone_with_changes(measurements=m)
+        with_m = recon.clone_with_changes(measurements={"distance": m})
 
         mask = np.ones(with_m.point_count, dtype=bool)
         mask[0] = False
         filtered = with_m.filter_points_by_mask(mask)
-        assert filtered.measurement_count == 3
+        assert filtered.distance_measurement_count == 3
         _assert_measurements_equal(filtered.measurements, m)
 
         edited = EditedReconstruction(with_m)
         edited.delete_point(0)
         materialized = edited.materialize()[0]
-        assert materialized.measurement_count == 3
-        assert materialized.metadata()["measurement_count"] == 3
+        assert materialized.distance_measurement_count == 3
+        assert materialized.metadata()["distance_measurement_count"] == 3
         _assert_measurements_equal(materialized.measurements, m)

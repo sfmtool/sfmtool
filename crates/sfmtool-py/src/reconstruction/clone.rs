@@ -194,8 +194,9 @@ struct DeferredChanges {
     gradient_structure_tensors_xx_yy_xy: Option<Option<Vec<[f32; 3]>>>,
     /// `measurements`, applied and validated once `cameras`, `image_names` and
     /// `camera_indexes` are settled: the outer `Option` is "was the kwarg
-    /// passed", the inner one "with a dict, or with `None` to drop them".
-    measurements: Option<Option<sfmtool_core::MeasurementsData>>,
+    /// passed" and the value what it was passed with, every kind `None` for
+    /// `None`, which drops them.
+    measurements: Option<sfmtool_core::MeasurementsData>,
 }
 
 /// Apply one per-point keyword argument (positions, colors,
@@ -908,7 +909,8 @@ fn finalize(
     if let Some(new_measurements) = measurements {
         recon.image_set.measurements = new_measurements;
     }
-    if let Some(ref m) = recon.image_set.measurements {
+    if !recon.image_set.measurements.is_empty() {
+        let m = &recon.image_set.measurements;
         let img_cam_indexes: Vec<u32> = recon
             .image_set
             .images
@@ -925,11 +927,10 @@ fn finalize(
             |e| pyo3::exceptions::PyValueError::new_err(format!("clone_with_changes(): {e}")),
         )?;
     }
-    recon.metadata.measurement_count = recon
+    recon
         .image_set
         .measurements
-        .as_ref()
-        .map(|m| m.len() as u32);
+        .set_metadata_counts(&mut recon.metadata);
 
     // Recombine the observation-source columns into the enum once the image
     // count is settled. Any column not supplied falls back to the current value.

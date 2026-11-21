@@ -440,42 +440,55 @@ pub(crate) fn tracks_point_indexes(observation_count: impl std::fmt::Display) ->
     format!("tracks/point_indexes.{observation_count}.uint32.zst")
 }
 
-/// `measurements/` — the directory every measurement-section entry sits under.
+/// `measurements/` — the directory every measurement-section entry sits under,
+/// in the subdirectory of its kind.
 ///
 /// The reader and verifier look for any entry with this prefix to refuse
-/// partial `measurements/` sections or version 16 files carrying one.
+/// version 16 files carrying one.
 pub(crate) fn measurements_section_prefix() -> &'static str {
     "measurements/"
 }
 
-/// `measurements/metadata.json.zst` — measurement-section metadata (optional
-/// section).
-pub(crate) fn measurements_metadata() -> &'static str {
-    "measurements/metadata.json.zst"
+/// `measurements/distance/` — the directory of the distance kind's entries.
+///
+/// The reader and verifier look for any entry with this prefix to refuse a
+/// partial distance kind, one without its `metadata.json`.
+pub(crate) fn distance_measurements_prefix() -> &'static str {
+    "measurements/distance/"
 }
 
-/// `measurements/distances` — measured physical distance per measurement.
-pub(crate) fn measurements_distances(measurement_count: impl std::fmt::Display) -> String {
-    format!("measurements/distances.{measurement_count}.float32.zst")
+/// `measurements/distance/metadata.json.zst` — the distance kind's metadata,
+/// whose presence makes the kind present.
+pub(crate) fn distance_measurements_metadata() -> &'static str {
+    "measurements/distance/metadata.json.zst"
 }
 
-/// `measurements/endpoints_xy` — sub-pixel `(x, y)` coordinates of the two
-/// endpoints of each measurement.
-pub(crate) fn measurements_endpoints_xy(measurement_count: impl std::fmt::Display) -> String {
-    format!("measurements/endpoints_xy.{measurement_count}.2.2.float32.zst")
+/// `measurements/distance/distances` — measured physical distance per
+/// measurement.
+pub(crate) fn distance_measurements_distances(count: impl std::fmt::Display) -> String {
+    format!("measurements/distance/distances.{count}.float32.zst")
 }
 
-/// `measurements/image_indexes` — observing image index pair per measurement.
-pub(crate) fn measurements_image_indexes(measurement_count: impl std::fmt::Display) -> String {
-    format!("measurements/image_indexes.{measurement_count}.2.uint32.zst")
+/// `measurements/distance/endpoints_xy` — sub-pixel `(x, y)` coordinates of the
+/// two endpoints of each measurement.
+pub(crate) fn distance_measurements_endpoints_xy(count: impl std::fmt::Display) -> String {
+    format!("measurements/distance/endpoints_xy.{count}.2.2.float32.zst")
 }
 
-/// `measurements/labels.json.zst` — per-measurement human-readable labels.
-pub(crate) fn measurements_labels() -> &'static str {
-    "measurements/labels.json.zst"
+/// `measurements/distance/image_indexes` — observing image index pair per
+/// measurement.
+pub(crate) fn distance_measurements_image_indexes(count: impl std::fmt::Display) -> String {
+    format!("measurements/distance/image_indexes.{count}.2.uint32.zst")
 }
 
-/// `measurements/units` — legend-indexed length unit code per measurement.
-pub(crate) fn measurements_units(measurement_count: impl std::fmt::Display) -> String {
-    format!("measurements/units.{measurement_count}.uint8.zst")
+/// `measurements/distance/labels.json.zst` — per-measurement human-readable
+/// labels.
+pub(crate) fn distance_measurements_labels() -> &'static str {
+    "measurements/distance/labels.json.zst"
+}
+
+/// `measurements/distance/units` — legend-indexed length unit code per
+/// measurement.
+pub(crate) fn distance_measurements_units(count: impl std::fmt::Display) -> String {
+    format!("measurements/distance/units.{count}.uint8.zst")
 }

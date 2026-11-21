@@ -201,11 +201,14 @@ The two stored halves of an `SfmrReconstruction`'s data, in Rust and in prose
 
 ## Measurements
 
-The words for a stored measurement's ends and how a 3D position is read for them
-([core/reconstruction/measurement-endpoint.md](core/reconstruction/measurement-endpoint.md)).
+The words for a reconstruction's stored measurements, their kinds, a
+measurement's ends and how a 3D position is read for them
+([formats/sfmr-file-format.md](formats/sfmr-file-format.md#10-measurements-optional-version-17),
+[core/reconstruction/measurement-endpoint.md](core/reconstruction/measurement-endpoint.md)).
 
 | Word | Means | Not | Why |
 |------|-------|-----|-----|
+| **measurements** / **kind** / **distance measurement** | the **measurements** are everything a `.sfmr` file's `measurements/` section holds, in one subdirectory per **kind**; the one kind is **distance**, a measured physical length between two endpoints, under `measurements/distance/`. In the format crate and core, `MeasurementsData` is the section, one `Option` field per kind (`distance`), every kind `None` by default for none; `DistanceMeasurementsData` and `DistanceMeasurementsMetadata` are the distance kind's columns and metadata, `validate_distance_measurements` its rules. A kind's count is `<kind>_measurement_count`, both at the top level of `metadata.json` and in the kind's own `metadata.json` (`distance_measurement_count`; `ImageSet::distance_measurement_count`, `SfmrReconstruction.distance_measurement_count` in Python). Whatever reads only one kind names it: `resolve_distance_measurements` and `ResolvedDistanceMeasurement`. In Python the section is `{"distance": {...}}`, a kind that is absent having no key, or `None` | `MeasurementsData` for one kind's columns, a bare `measurement_count`, `measurement_type`, `DistanceData` | the section was first written with distance as its only content, and a later kind such as GPS fixes would have had to share names that meant one kind. Naming the section *measurements* and each kind by what it measures keeps the section's names for the section; *kind* matches the subdirectory a reader looks for. A count per kind rather than one total, since a total of distances and GPS fixes counts nothing, and the same key in both places as `rig_count` and `frame_count` are, so a reader compares like with like. `*Data` follows the format crate's `SfmrData` and `RigFrameData` |
 | **endpoint** / **resolve** (a measurement's) | an **endpoint** is one end of a stored measurement: a pixel in one image, not a point. To **resolve** it is to find the observation in that image whose square holds the pixel and read the pixel as a texel `(s, t)` of the point's patch and the 3D position `X_p + s·u + t·v` that texel stands for (`resolve_measurement_endpoint`, [core/reconstruction/measurement-endpoint.md](core/reconstruction/measurement-endpoint.md)) | `endpoint point`, `locate`, `triangulate` the endpoint | the stored value is a pixel because it can name a place no point stands for yet; *resolve* says the answer depends on the reconstruction it is read against and is read again after every edit, where *triangulate* would claim new rays are intersected |
 
 ## File format versions

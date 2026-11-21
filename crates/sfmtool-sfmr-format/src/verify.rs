@@ -17,8 +17,8 @@ use crate::entries::{self, ReadingColumn};
 use crate::float16::float16_values;
 use crate::image_readings::{f32_values, image_readings_presence_error};
 use crate::measurements::{
-    read_measurement_unit_legend, resolve_measurement_units, validate_measurements,
-    MeasurementsData,
+    read_measurement_unit_legend, resolve_measurement_units, validate_distance_measurements,
+    DistanceMeasurementsData,
 };
 use crate::observation_readings::{observation_reading_options, observation_readings_flagged};
 use crate::types::*;
@@ -127,36 +127,41 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
                 metadata.version
             ));
         }
-    } else if archive
-        .index_for_name(entries::measurements_metadata())
-        .is_some()
-    {
-        section_digests.push(verify_measurements_section(
+    } else {
+        // One hash over every kind's entries in lexicographic path order, so
+        // the kinds are verified in the order of their directory names.
+        let mut measurements_hasher = Xxh3::new();
+        let distance_present = verify_distance_measurements(
             &mut archive,
             &metadata,
-            &stored,
             &camera_indexes_raw,
             &cameras,
+            &mut measurements_hasher,
             &mut errors,
-        )?);
-    } else {
-        if crate::read::has_measurements_entry(&archive)? {
-            errors.push(
-                "measurements/ entries are present without measurements/metadata.json.zst"
-                    .to_string(),
-            );
-        }
-        if metadata.measurement_count.is_some() {
-            errors.push(
-                "metadata.json.zst sets measurement_count, but the file has no measurements/ \
-                 section"
-                    .to_string(),
-            );
-        }
-        if stored.measurements_xxh128.is_some() {
+        )?;
+        if distance_present {
+            let measurements_hash = measurements_hasher.digest128();
+            match &stored.measurements_xxh128 {
+                Some(stored_meas) => {
+                    if &format_hash(measurements_hash) != stored_meas {
+                        errors.push(format!(
+                            "Measurements hash mismatch: computed {}, stored {}",
+                            format_hash(measurements_hash),
+                            stored_meas
+                        ));
+                    }
+                }
+                None => errors.push(
+                    "content_hash.json.zst has no measurements_xxh128, but the measurements/ \
+                     section is present"
+                        .to_string(),
+                ),
+            }
+            section_digests.push(measurements_hash);
+        } else if stored.measurements_xxh128.is_some() {
             errors.push(
                 "content_hash.json.zst sets measurements_xxh128, but the file has no \
-                 measurements/ section"
+                 measurements/ section (no kind of measurement)"
                     .to_string(),
             );
         }
@@ -1184,36 +1189,67 @@ fn verify_tracks_section<R: Read + Seek>(
     Ok(tracks_hash)
 }
 
-fn verify_measurements_section<R: Read + Seek>(
+/// Verify the distance kind of the `measurements/` section, feeding its
+/// entries to `measurements_hasher` in lexicographic path order. Returns
+/// whether the kind is present (its `metadata.json` is).
+fn verify_distance_measurements<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     metadata: &SfmrMetadata,
-    stored: &ContentHash,
     camera_indexes_raw: &[u8],
     cameras: &[SfmrCamera],
+    measurements_hasher: &mut Xxh3,
     errors: &mut Vec<String>,
-) -> Result<u128, SfmrError> {
-    // === Measurements hash (optional, lexicographic path order) ===
-    let meas_meta_raw = read_zst_entry(archive, entries::measurements_metadata())?;
+) -> Result<bool, SfmrError> {
+    if archive
+        .index_for_name(entries::distance_measurements_metadata())
+        .is_none()
+    {
+        if crate::read::has_entry_under(archive, entries::distance_measurements_prefix())? {
+            errors.push(
+                "measurements/distance/ entries are present without \
+                 measurements/distance/metadata.json.zst"
+                    .to_string(),
+            );
+        }
+        if metadata.distance_measurement_count.is_some() {
+            errors.push(
+                "metadata.json.zst sets distance_measurement_count, but the file has no \
+                 measurements/distance/ entries"
+                    .to_string(),
+            );
+        }
+        return Ok(false);
+    }
+
+    let meas_meta_raw = read_zst_entry(archive, entries::distance_measurements_metadata())?;
     let meas_meta: serde_json::Value = serde_json::from_slice(&meas_meta_raw)?;
     let Some(section_count) = meas_meta
-        .get("measurement_count")
+        .get("distance_measurement_count")
         .and_then(|v| v.as_u64())
         .and_then(|v| u32::try_from(v).ok())
     else {
-        errors.push("measurements/metadata.json.zst has no u32 measurement_count".to_string());
-        return Ok(0);
+        errors.push(
+            "measurements/distance/metadata.json.zst has no u32 distance_measurement_count"
+                .to_string(),
+        );
+        return Ok(true);
     };
     if section_count == 0 {
-        errors.push("measurements/metadata.json.zst measurement_count must be >= 1".to_string());
+        errors.push(
+            "measurements/distance/metadata.json.zst distance_measurement_count must be >= 1"
+                .to_string(),
+        );
     }
-    match metadata.measurement_count {
+    match metadata.distance_measurement_count {
         Some(top_count) if top_count == section_count => {}
         Some(top_count) => errors.push(format!(
-            "measurements/metadata.json.zst measurement_count ({section_count}) doesn't match \
-             top-level metadata measurement_count ({top_count})"
+            "measurements/distance/metadata.json.zst distance_measurement_count \
+             ({section_count}) doesn't match top-level metadata distance_measurement_count \
+             ({top_count})"
         )),
         None => errors.push(
-            "the measurements/ section is present, but metadata.json.zst has no measurement_count"
+            "measurements/distance/ is present, but metadata.json.zst has no \
+             distance_measurement_count"
                 .to_string(),
         ),
     }
@@ -1227,15 +1263,14 @@ fn verify_measurements_section<R: Read + Seek>(
     };
 
     let n = section_count as usize;
-    let distances_name = entries::measurements_distances(n);
-    let endpoints_name = entries::measurements_endpoints_xy(n);
-    let image_indexes_name = entries::measurements_image_indexes(n);
-    let labels_name = entries::measurements_labels();
-    let units_name = entries::measurements_units(n);
+    let distances_name = entries::distance_measurements_distances(n);
+    let endpoints_name = entries::distance_measurements_endpoints_xy(n);
+    let image_indexes_name = entries::distance_measurements_image_indexes(n);
+    let labels_name = entries::distance_measurements_labels();
+    let units_name = entries::distance_measurements_units(n);
 
     // Hash all six entries in lexicographic path order:
     // distances, endpoints_xy, image_indexes, labels.json, metadata.json, units.
-    let mut measurements_hasher = Xxh3::new();
     let distances_raw = read_zst_entry(archive, &distances_name)?;
     measurements_hasher.update(&distances_raw);
     let endpoints_raw = read_zst_entry(archive, &endpoints_name)?;
@@ -1248,30 +1283,12 @@ fn verify_measurements_section<R: Read + Seek>(
     let units_raw = read_zst_entry(archive, &units_name)?;
     measurements_hasher.update(&units_raw);
 
-    let measurements_hash = measurements_hasher.digest128();
-    match &stored.measurements_xxh128 {
-        Some(stored_meas) => {
-            if &format_hash(measurements_hash) != stored_meas {
-                errors.push(format!(
-                    "Measurements hash mismatch: computed {}, stored {}",
-                    format_hash(measurements_hash),
-                    stored_meas
-                ));
-            }
-        }
-        None => errors.push(
-            "content_hash.json.zst has no measurements_xxh128, but the measurements/ section is \
-             present"
-                .to_string(),
-        ),
-    }
-
     // === Validate measurement columns ===
     let labels: Option<Vec<String>> = match serde_json::from_slice(&labels_raw) {
         Ok(labels) => Some(labels),
         Err(e) => {
             errors.push(format!(
-                "measurements/labels.json.zst does not parse as a list of strings: {e}"
+                "measurements/distance/labels.json.zst does not parse as a list of strings: {e}"
             ));
             None
         }
@@ -1304,7 +1321,7 @@ fn verify_measurements_section<R: Read + Seek>(
                     ));
                 }
                 let resolved_units = resolve_measurement_units(&units_raw, legend)?;
-                let measurements = MeasurementsData {
+                let measurements = DistanceMeasurementsData {
                     distances: ndarray::Array1::from_vec(distances),
                     units: ndarray::Array1::from_vec(
                         resolved_units.iter().map(|u| u.code()).collect(),
@@ -1318,7 +1335,7 @@ fn verify_measurements_section<R: Read + Seek>(
                         .expect("f32_values checked the length"),
                     labels,
                 };
-                validate_measurements(
+                validate_distance_measurements(
                     &measurements,
                     raw_to_u32(camera_indexes_raw).as_ref(),
                     cameras,
@@ -1330,5 +1347,5 @@ fn verify_measurements_section<R: Read + Seek>(
         }
     }
 
-    Ok(measurements_hash)
+    Ok(true)
 }
