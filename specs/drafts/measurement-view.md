@@ -29,11 +29,14 @@ Decided by the maintainer:
 - The 3D view draws each endpoint and a line between the two. Image Detail
   draws the same where both endpoints are in the image it shows, and the one
   endpoint that is in it otherwise.
+- Only the selected measurement is drawn by default. A display option, off by
+  default, draws every measurement. A selected measurement that is off screen
+  gets an indicator at the edge of the view pointing to it.
 - The checked-in reconstructions have no measurements, so the panel is built
   and tested on copies that are given artificial measurements
   (§ "Artificial measurements"). Real measurements are not checked in yet.
 
-Open: the questions in § "Open questions".
+Nothing in this draft is still open.
 
 A measurement in an `.sfmr` file is a real-world quantity tied to places in the
 photographs. A distance measurement is a length, such as one taken with a
@@ -334,26 +337,48 @@ later draft's.
 
 ## Drawing measurements
 
-**In the 3D view**, each measurement of a visible reconstruction draws a mark
-at each endpoint that resolves to a finite position, and a line between the
-two where both do. They are drawn in the node's world space, through its
-display transform, as its points are, in the node's tint, and over the cloud
-rather than hidden by it, since a measurement is something a person looks for.
-The selected measurement's marks and line are drawn wider and brighter. An
-endpoint at infinity or refused draws nothing, and the other endpoint still
-draws its mark.
+**Which measurements are drawn.** The selected measurement, when its
+reconstruction is visible. A **Show all measurements** option, off by default,
+draws every measurement of every visible reconstruction as well. A
+reconstruction with many measurements stays readable by default, and the
+person who wants to see them all together asks for it. The option is in the
+3D view's HUD and in Image Detail's display controls, one for each view, as
+their other display options are. With it on, the selected measurement is
+drawn wider and brighter than the others.
 
-**In Image Detail**, each measurement with an endpoint in the image shown draws
-a mark at that endpoint's pixel. Where both endpoints are in that image, it
-also draws a line between them. The pixel is drawn whether or not the endpoint
-resolves, since the pixel is the stored measurement; a refused endpoint's mark
-is drawn in the warning colour. The selected measurement is drawn wider and
-brighter, as in the 3D view.
+**In the 3D view**, a drawn measurement puts a mark at each endpoint that
+resolves to a finite position, and a line between the two where both do. They
+are drawn in the node's world space, through its display transform, as its
+points are, in the node's tint, and over the cloud rather than hidden by it,
+since a measurement is something a person looks for. An endpoint at infinity
+or refused draws nothing, and the other endpoint still draws its mark.
+
+**In Image Detail**, a drawn measurement with an endpoint in the image shown
+puts a mark at that endpoint's pixel. Where both endpoints are in that image,
+it also draws a line between them. The pixel is drawn whether or not the
+endpoint resolves, since the pixel is the stored measurement; a refused
+endpoint's mark is drawn in the warning colour.
 
 Hovering a mark or a line in either view shows the measurement's row text, and
-a click selects the measurement. A **Measurements** checkbox in the 3D view's
-HUD and in Image Detail's display controls turns the drawing off; it is on by
-default.
+a click selects the measurement.
+
+**A selected measurement off screen.** When no part of the selected
+measurement's marks and line is inside the view, the view draws an indicator
+at its edge: an arrow on the border pointing towards the measurement, with
+its kind and index (`Distance #2`) beside it.
+
+- In the 3D view the arrow points towards the projection of the midpoint of
+  the two endpoints, or of the one finite endpoint. For a point behind the
+  camera, the direction is the projection's reflected through the view's
+  centre, so the arrow points the way to turn. A click on the arrow frames
+  the measurement: the view keeps its orientation and moves so that both
+  endpoints are inside it, as `Z` frames the whole scene.
+- In Image Detail, when an endpoint is in the image shown but outside the part
+  the panel shows, the arrow points to that pixel, and a click centres the
+  panel on it at the current zoom.
+
+The indicator follows the selection only. With *Show all measurements* on,
+the others are clipped as any scene geometry is.
 
 ## MCP
 
@@ -439,10 +464,11 @@ Each step is one PR through `implement-change`, with its MCP tools, its
    and `set_measurement_endpoint` taking any pixel.
 4. **The other edits.** Rename, set the stated distance, delete, and their
    tools.
-5. **Drawing.** The marks and lines in the 3D view and Image Detail, their
-   hover and click, and the two checkboxes, with `get_viewer_3d_display`,
-   `set_viewer_3d_display` and the Image Detail display tools carrying the
-   checkbox.
+5. **Drawing.** The selected measurement's marks and line in the 3D view and
+   Image Detail, their hover and click, the off-screen indicator and its
+   click, and the *Show all measurements* option in each view, with
+   `get_viewer_3d_display`, `set_viewer_3d_display` and the Image Detail
+   display tools carrying it as `show_all_measurements`.
 
 ## Testing
 
@@ -463,14 +489,12 @@ Each step is one PR through `implement-change`, with its MCP tools, its
   holds the offered pixel; the edit's version shares the base's point columns
   (pointer equality).
 - Each edit's label, undo, and refusal.
+- Drawing: with the option off only the selected measurement is drawn, and
+  none with nothing selected; with it on, every measurement of a visible
+  reconstruction; a hidden reconstruction draws none either way.
+- The off-screen indicator: absent while any part of the measurement is in
+  view; pointing the right way for a midpoint to each side of the view and
+  behind the camera; a click framing the measurement so both endpoints project
+  inside the view.
 - `ui_basic`: the panel opens from the Panels menu and from a double-click on a
   row, on an artificial-measurements copy.
-
-## Open questions
-
-1. **Which measurements are drawn.** Every measurement of a visible
-   reconstruction, with the selected one emphasised, as drafted, or only the
-   selected one, which keeps a reconstruction with many measurements readable.
-2. **A selected measurement off screen.** A line or an endpoint outside the 3D
-   view is clipped as any scene geometry is. Whether a selected measurement
-   off screen needs an indicator pointing to it is left to judge on real data.
