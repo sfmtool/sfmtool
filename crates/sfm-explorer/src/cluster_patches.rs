@@ -17,12 +17,12 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use ndarray::{Array1, Array2, Array3, ArrayView2, ArrayView3};
 use rayon::prelude::*;
-use sfmtool_core::camera::image::ImageU8;
 use sfmtool_core::camera::sampler::RegionPool;
-use sfmtool_core::camera::{PhotographReadError, TiledPhotograph};
+use sfmtool_core::camera::{PhotographCache, PhotographReadError, TiledPhotograph};
 use sfmtool_core::features::cluster_match::{
     background_floor_clusters_lazy, BackgroundFloorParams, Clusters, LazyClusterError,
 };
@@ -42,6 +42,7 @@ use crate::action_log::{Actor, Kind};
 use crate::index_files::{unsaved_refusal, IndexFileState, Stopped};
 use crate::scene::{ReconId, SceneNode};
 use crate::sift_index::{image_fingerprint, SiftIndex};
+use crate::state::edits::GIB;
 use crate::state::AppState;
 
 #[cfg(test)]
@@ -466,6 +467,9 @@ pub(crate) struct ClusterPlan {
     sift_files: Vec<Option<PathBuf>>,
     /// Each image's photograph.
     photographs: Vec<PathBuf>,
+    /// The viewer's photograph cache, which the photographs are read
+    /// through.
+    cache: Arc<PhotographCache>,
     /// Each image's camera size, which stands for its dimensions when it has
     /// no `.sift` file to read them from.
     camera_dims: Vec<[u32; 2]>,
@@ -475,8 +479,9 @@ pub(crate) struct ClusterPlan {
 }
 
 impl ClusterPlan {
-    /// The plan for `node`'s cluster-patches file.
-    pub(crate) fn of(node: &SceneNode) -> Result<Self, String> {
+    /// The plan for `node`'s cluster-patches file, reading its photographs
+    /// through `cache`.
+    pub(crate) fn of(node: &SceneNode, cache: &Arc<PhotographCache>) -> Result<Self, String> {
         let path = cluster_patches_path(node).ok_or_else(|| unsaved_refusal(node))?;
         let recon = node.recon();
         let images = &recon.image_set.images;
@@ -495,6 +500,7 @@ impl ClusterPlan {
                 .iter()
                 .map(|image| recon.workspace_dir.join(&image.name))
                 .collect(),
+            cache: Arc::clone(cache),
             camera_dims: images
                 .iter()
                 .map(|image| {
@@ -555,7 +561,7 @@ pub(crate) fn build(
     let clusters = cluster(forest, &image_starts, &clustering)?;
     let (detected_positions, detected_shapes) =
         member_detections(forest, &image_starts, &clusters, index_path)?;
-    let photographs = read_photographs(&plan.photographs, &reading)?;
+    let photographs = read_photographs(&plan.photographs, &plan.cache, &reading)?;
     let refined = refine(
         &photographs,
         &facts,
@@ -753,47 +759,56 @@ fn member_detections(
     Ok((positions, shapes))
 }
 
-/// Every photograph decoded into a tiled photograph with a full pyramid, in
-/// the node's order.
+/// Every photograph as a tiled photograph with a full pyramid, in the node's
+/// order, read through the viewer's photograph cache.
 ///
-/// Each is read with [`ImageU8::read_rgb`], the reader under
-/// `sfm cluster-patches`' `read_image_rgb`, so the two builds hand the
-/// refinement the same RGB pixels. The refinement averages a score over the
-/// channels, so the channel order is the order of a floating-point sum, and
-/// reading the same order keeps the two builds' arithmetic the same.
+/// The cache decodes a photograph it does not hold with [`ImageU8::read_rgb`],
+/// the reader under `sfm cluster-patches`' `read_image_rgb`, into a pyramid of
+/// `full_levels` depth, so the two builds hand the refinement the same RGB
+/// pixels. The refinement averages a score over the channels, so the channel
+/// order is the order of a floating-point sum, and reading the same order
+/// keeps the two builds' arithmetic the same. What it decodes stays in the
+/// cache for the panels and the bench's steps.
+///
+/// A photograph the cache cannot hand back fails the build naming it: the
+/// first in the node's order, with the error the cache remembered for it.
+///
+/// [`ImageU8::read_rgb`]: sfmtool_core::camera::image::ImageU8::read_rgb
 fn read_photographs(
     photographs: &[PathBuf],
+    cache: &PhotographCache,
     progress: &Progress<'_>,
 ) -> Result<Vec<TiledPhotograph>, Stopped> {
-    let phase = progress.phase("read photographs");
-    let done = AtomicU64::new(0);
-    let total = photographs.len() as u64;
-    let read: Vec<Result<Option<TiledPhotograph>, String>> = photographs
-        .par_iter()
-        .map(|path| {
-            if phase.is_cancelled() {
-                return Ok(None);
-            }
-            let image = ImageU8::read_rgb(path)
-                .map_err(|e| format!("Cannot read the photograph {}: {e}", path.display()))?;
-            let photograph = TiledPhotograph::from_image(image);
-            let finished = done.fetch_add(1, Ordering::Relaxed) + 1;
-            phase.count(finished, Some(total), "image");
-            Ok(Some(photograph))
+    let mut phase = progress.phase("read photographs");
+    let paths: Vec<&Path> = photographs.iter().map(PathBuf::as_path).collect();
+    let (found, tally) = cache
+        .get_many(&paths, &phase)
+        .map_err(|_| Stopped::Cancelled)?;
+    let stats = cache.stats();
+    progress_note!(
+        phase,
+        "{} read from disk, {} reused from the cache, cache {:.1} of {:.1} GiB",
+        tally.read,
+        tally.reused,
+        stats.bytes as f64 / GIB,
+        stats.budget_bytes as f64 / GIB
+    );
+    found
+        .into_iter()
+        .zip(paths)
+        .map(|(pyramid, path)| {
+            let pyramid = match pyramid {
+                Some(pyramid) => pyramid,
+                // `get_many` drops the reason; `get` answers it from the
+                // failure the cache remembered, and decodes again only when
+                // the file changed since or the cache keeps nothing.
+                None => cache
+                    .get(path)
+                    .map_err(|e| Stopped::Failed(format!("Cannot read a photograph: {e}")))?,
+            };
+            Ok(TiledPhotograph::from_pyramid(pyramid))
         })
-        .collect();
-    if phase.is_cancelled() {
-        return Err(Stopped::Cancelled);
-    }
-    let mut decoded = Vec::with_capacity(read.len());
-    for outcome in read {
-        match outcome {
-            Ok(Some(photograph)) => decoded.push(photograph),
-            Ok(None) => return Err(Stopped::Cancelled),
-            Err(why) => return Err(Stopped::Failed(why)),
-        }
-    }
-    Ok(decoded)
+        .collect()
 }
 
 /// The refinement's answer for every member, in the member order of the

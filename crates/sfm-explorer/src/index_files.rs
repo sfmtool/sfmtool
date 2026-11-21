@@ -183,7 +183,7 @@ impl AppState {
         let plan = IndexFilesPlan {
             label: node.label.clone(),
             index,
-            cluster: ClusterPlan::of(node)?,
+            cluster: ClusterPlan::of(node, &self.photographs)?,
         };
         Ok(Box::new(move |progress| build(plan, progress)))
     }

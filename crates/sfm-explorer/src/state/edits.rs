@@ -699,8 +699,9 @@ pub(crate) fn note_region_reads(
     progress_note!(phase, "{}", pool.stats());
 }
 
-/// Bytes in a GiB, for the cache occupancy in the `decode images` note.
-const GIB: f64 = (1u64 << 30) as f64;
+/// Bytes in a GiB, for the cache occupancy in the `decode images` note and
+/// the cluster-patches build's `read photographs` note.
+pub(crate) const GIB: f64 = (1u64 << 30) as f64;
 
 impl ViewSources {
     /// The images whose photographs this reads, in index order: every image

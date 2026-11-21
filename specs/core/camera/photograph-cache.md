@@ -132,14 +132,15 @@ Why it is shaped this way:
   patch kernels index their view slice by image index, and the caller builds
   that slice from the entries; a `None` entry is an unreadable file. The
   caller names the phase (`decode images` in the viewer's bench steps, `decode
-  photographs` in the bitmap render) and writes its note from the tally, since
+  photographs` in the bitmap render, `read photographs` in the
+  cluster-patches build) and writes its note from the tally, since
   what the note should say depends on the caller.
 - **Each pyramid's depth set by its photograph's size.** Every entry has
   `ImageU8Pyramid::full_levels(width, height)` levels, down to one or two
   pixels on the short side: 14 for 16320×12240, 12 for 3840×2160, 9 for
   270×480. That is the depth every other builder of a photograph pyramid for
-  the patch kernels uses (the cluster-patches build, in `sfm cluster-patches`
-  and in the viewer, and the Python patch bindings), so a kernel reads the same
+  the patch kernels uses (`sfm cluster-patches` and the Python patch
+  bindings), so a kernel reads the same
   levels from a photograph whichever caller handed it over, and a footprint of
   any size finds a level: a kernel clamps its level at the pyramid's top only
   where a view shrinks the photograph to about one pixel. Depth is not a
@@ -259,6 +260,13 @@ reconstruction's photographs goes through it except the ones under
   `ImageU8Pyramid::from_regions` and put in with `insert` can be, is read like
   any other, and a read of a pixel it lacks fails the render with
   `PhotographReadError::OutOfRange`.
+- **The cluster-patches build**, the second half of *Build Index Files*,
+  reads every photograph with `get_many` in its `read photographs` phase, on
+  a clone of the cache its job carries, and fails naming the first
+  photograph the cache could not hand back, the error that `get` then
+  answers from the remembered failure
+  ([cluster_patches.rs](../../../crates/sfm-explorer/src/cluster_patches.rs);
+  [index-files.md](../../gui/index-files.md)).
 - **The panels** (Image Detail, and Track View's patch tiles) never decode on
   the GUI thread. They call `display_photograph` in
   [photograph_requests.rs](../../../crates/sfm-explorer/src/state/photograph_requests.rs),
@@ -362,8 +370,6 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 
 ## Non-goals
 
-- **Cluster patches** keeps its own reads. It builds the same full-depth
-  pyramids, and it runs once per index build.
 - **Display thumbnails** keep their own decodes. They make small images once
   per open.
 - **No cache on disk.** Pyramids are rebuilt from the JPEGs in each session,

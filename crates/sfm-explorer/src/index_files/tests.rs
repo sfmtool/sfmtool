@@ -9,6 +9,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
+use sfmtool_core::camera::PhotographCache;
 use sfmtool_core::progress::{Event, Progress};
 
 use super::{IndexFileState, BUILD_INDEX_FILES, REBUILD_INDEX_FILES};
@@ -233,6 +234,172 @@ fn a_missing_photograph_fails_the_cluster_half_naming_it() {
         failed.text.contains(&missing.display().to_string()),
         "{}",
         failed.text
+    );
+}
+
+/// Run `state`'s build job to its end and hand back the `read photographs`
+/// phase's note and how the build ended.
+fn build_with_note(
+    state: &crate::state::AppState,
+    id: crate::scene::ReconId,
+) -> (String, Finished) {
+    let job = state.build_index_files_job(id).expect("it can build");
+    let note = Mutex::new(None);
+    let sink = |event: Event<'_>| {
+        if let Event::Leave {
+            phase: "read photographs",
+            note: Some(text),
+            ..
+        } = event
+        {
+            *note.lock().unwrap() = Some(text.to_string());
+        }
+    };
+    let finished = job(&Progress::to(&sink));
+    let note = note.into_inner().unwrap().expect("the phase wrote a note");
+    (note, finished)
+}
+
+/// The cluster half reads its photographs through the viewer's cache: the
+/// first build decodes each once and leaves it there, and a second build
+/// decodes none of them again, which its note and the cache's count of
+/// decodes both say.
+#[test]
+fn the_cluster_half_reads_its_photographs_through_the_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = unbuilt(dir.path());
+    // A budget of its own, so the test does not depend on the environment's.
+    state.photographs = std::sync::Arc::new(PhotographCache::new(1 << 30));
+    let paths: Vec<std::path::PathBuf> = {
+        let recon = state.node(id).expect("loaded").recon();
+        recon
+            .image_set
+            .images
+            .iter()
+            .map(|image| recon.workspace_dir.join(&image.name))
+            .collect()
+    };
+    let n = paths.len();
+
+    let (note, finished) = build_with_note(&state, id);
+    assert!(
+        matches!(
+            finished,
+            Finished::IndexFiles {
+                end: IndexFilesEnd::Built(_),
+                ..
+            }
+        ),
+        "the first build did not finish"
+    );
+    assert!(
+        note.starts_with(&format!(
+            "{n} read from disk, 0 reused from the cache, cache "
+        )),
+        "{note}"
+    );
+    for path in &paths {
+        assert!(
+            state.photographs.peek(path).is_some(),
+            "{} was not left in the cache",
+            path.display()
+        );
+    }
+    let decodes = state.photographs.stats().misses;
+    assert_eq!(decodes, n as u64, "each photograph is decoded once");
+
+    let (note, finished) = build_with_note(&state, id);
+    assert!(
+        matches!(
+            finished,
+            Finished::IndexFiles {
+                end: IndexFilesEnd::Built(_),
+                ..
+            }
+        ),
+        "the second build did not finish"
+    );
+    assert!(
+        note.starts_with(&format!(
+            "0 read from disk, {n} reused from the cache, cache "
+        )),
+        "{note}"
+    );
+    assert_eq!(
+        state.photographs.stats().misses,
+        decodes,
+        "the second build decoded a photograph again"
+    );
+}
+
+/// The sentence a build of `state`'s node fails its cluster half with.
+fn cluster_failure(state: &crate::state::AppState, id: crate::scene::ReconId) -> String {
+    let (_, finished) = build_with_note(state, id);
+    let Finished::IndexFiles {
+        end: IndexFilesEnd::Failed(why),
+        cluster_patches,
+        ..
+    } = finished
+    else {
+        panic!("the build did not fail");
+    };
+    assert!(cluster_patches.is_none());
+    why
+}
+
+/// A photograph the cache refuses from its header, for a side over 65535 px,
+/// fails the cluster half with the cache's sentence naming it.
+#[test]
+fn a_photograph_too_large_for_the_cache_fails_the_cluster_half() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = unbuilt(dir.path());
+    let large = {
+        let recon = state.node(id).expect("loaded").recon();
+        recon.workspace_dir.join(&recon.image_set.images[4].name)
+    };
+    // A PNG whatever the extension: the cache reads the format off the file.
+    image::save_buffer_with_format(
+        &large,
+        &vec![0u8; 65_536 * 3],
+        65_536,
+        1,
+        image::ExtendedColorType::Rgb8,
+        image::ImageFormat::Png,
+    )
+    .unwrap();
+    let why = cluster_failure(&state, id);
+    let expected = format!("Built the SIFT index {}", index_of(dir.path()).display());
+    assert!(why.starts_with(&expected), "{why}");
+    assert!(
+        why.ends_with(&format!(
+            "could not build the cluster patches: Cannot read a photograph: {} is 65536 x 1, \
+             and a photograph with a side over 65535 px cannot be read",
+            large.display()
+        )),
+        "{why}"
+    );
+}
+
+/// A photograph the cache cannot decode fails the cluster half naming it, with
+/// the decoder's reason the cache remembered.
+#[test]
+fn an_undecodable_photograph_fails_the_cluster_half_naming_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = unbuilt(dir.path());
+    let broken = {
+        let recon = state.node(id).expect("loaded").recon();
+        recon.workspace_dir.join(&recon.image_set.images[7].name)
+    };
+    std::fs::write(&broken, b"not a photograph").unwrap();
+    let why = cluster_failure(&state, id);
+    let prefix = format!(
+        "could not build the cluster patches: Cannot read a photograph: {}: ",
+        broken.display()
+    );
+    let at = why.find(&prefix).unwrap_or_else(|| panic!("{why}"));
+    assert!(
+        why.len() > at + prefix.len(),
+        "the decoder's reason is missing: {why}"
     );
 }
 

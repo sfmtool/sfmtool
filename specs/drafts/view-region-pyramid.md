@@ -639,10 +639,10 @@ there is no whole pyramid for any reader to fall back on.
    `render_source_affine`, and the
    stored bitmap's, `refit_points`' and the display bitmaps' kernels. A
    caller that step 5 moves keeps its fetch until then: it wraps the whole
-   pyramids it holds with `from_pyramid` (or the cluster-patches build its
-   decoded images with `from_image`), makes the region pool for its call,
-   and reports the error as a failure of its step, though sources built in
-   memory never return one.
+   pyramids it holds with `from_pyramid` (or the cluster-patches build,
+   until the main draft's 11b, its decoded images with `from_image`), makes
+   the region pool for its call, and reports the error as a failure of its
+   step, though sources built in memory never return one.
    Tests: each step's result is identical with the two sources on a
    small-threshold synthetic reconstruction; a reference pick over many views
    whose regions exceed a small pool holds no more than that one pool; the
@@ -698,8 +698,12 @@ there is no whole pyramid for any reader to fall back on.
    return the photograph error rather than leave out a photograph whose
    pyramid is not whole, the open, the conversion and `sfm web-export`
    report it as their failure, and the render notes its region reads, with
-   the bitmaps identical bit for bit. The cluster-patches build through the
-   cache (11b) and the point order (11c) follow.
+   the bitmaps identical bit for bit. **The second, 11b, is built**: the
+   cluster-patches build reads its photographs with `get_many` through the
+   viewer's cache and wraps them with `from_pyramid`, in place of decoding
+   them outside it, so a photograph already in the cache is not decoded
+   again, and the file is identical bit for bit. The point order (11c)
+   follows.
 6. **`GreyImages` by region.** Tests: the nearby-track search's results are
    identical.
 
