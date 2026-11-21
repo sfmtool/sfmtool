@@ -42,7 +42,7 @@ use crate::patch::normal_refine::ProjectedImage;
 use crate::patch::observation_reading::read_cloud_observations;
 use crate::patch::spawn::{spawn_candidate_tracks, SpawnError, SpawnParams};
 use crate::patch::stored_bitmap::{
-    render_patch_cloud_bitmaps, CloudRenderError, UnreferencedPoints,
+    render_patch_cloud_bitmaps, render_patch_cloud_bitmaps_in, CloudRenderError, UnreferencedPoints,
 };
 use crate::patch::view_selection::{
     projected_patch_frame, select_patch_cloud_views, select_patch_views, ViewSelectParams,
@@ -52,6 +52,8 @@ use crate::progress::Progress;
 use crate::reconstruction::add_image_to_tracks::{
     add_image_to_tracks, AddImageToTracksError, AddImageToTracksOptions,
 };
+use crate::reconstruction::bulk_point_order::tests::assert_the_point_order_changes_nothing;
+use crate::reconstruction::bulk_point_order::BulkPointOrder;
 use crate::reconstruction::SfmrReconstruction;
 
 /// The tile side the photographs are cut into for the reads through tiles:
@@ -520,6 +522,75 @@ fn the_stored_bitmaps_are_the_same_on_every_read_path() {
         }
         text
     });
+}
+
+/// The whole-cloud render in the bulk kernels' point order gives the bitmaps
+/// and references of a render over the patches by index, and reads through
+/// the one pool its caller made. The ground truth stores `-1` for these
+/// points, so each point is given a reference, a different observation of its
+/// track from point to point, except every third point, which keeps none, so
+/// the rule's picks are rendered too and those points sort last.
+#[test]
+fn the_stored_bitmaps_in_the_point_order_are_those_by_index() {
+    let truth = Truth::load();
+    let (cloud, _, _) = truth.patches();
+    let mut recon = truth.recon.clone();
+    let set = &mut recon.point_set;
+    let mut references = vec![-1i32; set.points.len()];
+    for &p in &cloud.point_indexes {
+        let p = p as usize;
+        if !p.is_multiple_of(3) {
+            references[p] = (p as u32 % set.observation_counts[p]) as i32;
+        }
+    }
+    set.reference_observations = Some(references);
+    let views = present(&truth.views(&truth.tiled));
+    let order = BulkPointOrder::of_points(&recon.point_set, &cloud.point_indexes);
+    assert_the_point_order_changes_nothing(&order, |order, pool| {
+        let column = render_patch_cloud_bitmaps_in(
+            &cloud,
+            &recon,
+            &views,
+            pool,
+            &KeypointSubpixelParams::default(),
+            UnreferencedPoints::Pick,
+            None,
+            order,
+            &Progress::none(),
+        )
+        .expect("photographs in memory read");
+        format!(
+            "{:?} {:?}",
+            flat(&column.bitmaps),
+            column.reference_observations
+        )
+    });
+    // A point with a reference renders that one view, and the read is the
+    // caller's pool's: rendering only those points counts one read each.
+    let pool = RegionPool::with_capacity(u64::MAX);
+    render_patch_cloud_bitmaps(
+        &cloud,
+        &recon,
+        &views,
+        &pool,
+        &KeypointSubpixelParams::default(),
+        UnreferencedPoints::Skip,
+        None,
+        &Progress::none(),
+    )
+    .expect("photographs in memory read");
+    let stats = pool.stats();
+    let referenced = cloud
+        .point_indexes
+        .iter()
+        .filter(|&&p| !p.is_multiple_of(3))
+        .count();
+    assert!(referenced > 0);
+    assert_eq!(
+        stats.copied_reads + stats.reused_reads + stats.tiled_reads,
+        referenced as u64,
+        "{stats:?}"
+    );
 }
 
 /// Member coherence's matrices and verdicts over the points' tracks.

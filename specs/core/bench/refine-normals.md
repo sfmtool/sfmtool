@@ -400,6 +400,9 @@ rule.
 ### Parallelism and determinism
 
 The points are refined in parallel over the rayon pool, one point per task,
+taken in the bulk kernels' point order, by reference image and then by the
+reference keypoint's row and column
+([camera/view-region-pyramids.md](../camera/view-region-pyramids.md#rust-api)),
 with the results collected by point index, for either step. The
 pairwise-flow normal's own parallel work, its crops over views and its pairs,
 runs on the same pool inside the point's task, and its answer does not depend

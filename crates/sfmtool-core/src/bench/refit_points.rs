@@ -28,6 +28,7 @@ use crate::camera::PhotographReadError;
 use crate::numeric::median_in_place;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Progress};
+use crate::reconstruction::bulk_point_order::BulkPointOrder;
 use crate::reconstruction::data::{
     ImageSet, ObservationReading, ObservationReadings, ObservationSource, PointSet,
     SfmrReconstruction,
@@ -411,8 +412,10 @@ impl From<PhotographReadError> for RefitPointsError {
 /// display render made, which the record writes as the point's own.
 ///
 /// **The answer is the same for any thread count.** Every point is fitted
-/// against the value the run was handed, in parallel over the rayon pool, and
-/// the records are written at the end, so no point's fit reads another's
+/// against the value the run was handed, in parallel over the rayon pool in
+/// the bulk kernels' point order (`BulkPointOrder`: by reference image, then
+/// by the reference keypoint's row and column), and the records are written
+/// at the end, at their points' indexes, so no point's fit reads another's
 /// answer. Each fit is called with `&Progress::none()`.
 ///
 /// `progress` names the stages (`measure noise` where no `sigma_px` is given,
@@ -459,6 +462,21 @@ pub fn refit_points(
     options: &RefitPointsOptions,
     progress: &Progress<'_>,
 ) -> Result<(SfmrReconstruction, RefitPointsReport), RefitPointsError> {
+    let order = BulkPointOrder::of_all_points(&recon.point_set);
+    refit_points_in(recon, images, pool, options, &order, progress)
+}
+
+/// [`refit_points`] taking the points in `order`, whose positions are point
+/// indexes; a test passes the order of the indexes, which is the order the
+/// run took before it took the bulk kernels'.
+pub(super) fn refit_points_in(
+    recon: &SfmrReconstruction,
+    images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
+    options: &RefitPointsOptions,
+    order: &BulkPointOrder,
+    progress: &Progress<'_>,
+) -> Result<(SfmrReconstruction, RefitPointsReport), RefitPointsError> {
     progress.check_cancel()?;
     check_preconditions(recon, images)?;
     // Each point's fit is where the time goes; the measure is one walk over
@@ -490,9 +508,10 @@ pub fn refit_points(
         let mut phase = p_fit.phase("fit points");
         let step = (total / 100).max(1);
         let done = AtomicUsize::new(0);
-        let fitted = (0..total)
-            .into_par_iter()
-            .map(|p| {
+        let fitted: Option<Vec<_>> = order
+            .positions()
+            .par_iter()
+            .map(|&p| {
                 if phase.is_cancelled() {
                     return None;
                 }
@@ -514,7 +533,7 @@ pub fn refit_points(
             })
             .collect();
         progress_note!(phase, "{total} points");
-        fitted
+        fitted.map(|in_order| order.restore(in_order))
     };
     // A point whose reads failed stops the run as a cancel does, and the
     // failure is the run's answer.

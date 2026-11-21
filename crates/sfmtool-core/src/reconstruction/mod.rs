@@ -5,6 +5,7 @@
 //! operations (triangulation, filtering, correspondence).
 
 pub mod add_image_to_tracks;
+pub(crate) mod bulk_point_order;
 pub mod bundle_adjust;
 pub(crate) mod data;
 pub mod drop_image_adjustments;

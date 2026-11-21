@@ -178,6 +178,28 @@ cluster member grid's read for a caller that is not the cluster refinement,
 which keeps its own level rule private; Track View's cluster-stage tiles call
 it.
 
+**A bulk kernel takes its points in one order.** The kernels that loop over
+a reconstruction's points in parallel, the stored bitmaps' whole-cloud render
+`render_patch_cloud_bitmaps`, `refine_normals` and `refit_points`, take them
+by the image of each point's reference observation, then by that
+observation's keypoint, its pixel row `floor(y)` and then its `x`, with ties
+broken by point index; the points with no reference observation (`-1`, none
+within the track, or no column) come last, by point index, and a point set
+with no keypoints orders one image's points by point index. The renders of
+one photograph then follow each other, and so do those of points near each
+other in it, so a read finds the photograph tiles the reads before it used.
+The order uses only the reconstruction, never how a photograph is cut into
+tiles. The parallel loop runs over the ordered list, which rayon splits into
+runs of consecutive entries, so the points in progress together are in
+about one reference image per worker; a worker that waits on a point's
+nested parallel work, such as the pairwise-flow normal's, may take up another
+point meanwhile. Each result is written at its point's
+index, so the order changes no answer, and the whole-cloud render's error is
+still the read of the first patch, in the cloud's order, that failed. It is
+`BulkPointOrder` in
+[reconstruction/bulk_point_order.rs](../../../crates/sfmtool-core/src/reconstruction/bulk_point_order.rs),
+crate-private, the one place all three kernels take it from.
+
 ```rust
 use sfmtool_core::camera::sampler::{render_source_tile, RegionPool, Sampler, ViewRegions};
 use sfmtool_core::camera::TiledPhotograph;

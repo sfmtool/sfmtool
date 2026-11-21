@@ -22,8 +22,11 @@ use sfmtool_sfmr_format::{
 use super::grown_plane_normal::{camera, degrees, textured_plane, truth, wide_centres, HALF};
 use super::scene::{fixture_points, with_columns, Scene, PLANE_Z, WORLD};
 use super::*;
+use crate::bench::refine_normals::refine_normals_in;
 use crate::camera::sampler::RegionPool;
 use crate::progress::Event;
+use crate::reconstruction::bulk_point_order::tests::assert_the_point_order_changes_nothing;
+use crate::reconstruction::bulk_point_order::BulkPointOrder;
 use crate::reconstruction::data::PointConstraintColumns;
 
 /// The bitmap side the value stores.
@@ -453,6 +456,34 @@ fn one_thread_and_the_default_pool_give_the_same_value() {
         many.content_xxh128().expect("hashes").content_xxh128
     );
     assert_eq!(format!("{one_report:?}"), format!("{many_report:?}"));
+}
+
+/// The run in the bulk kernels' point order gives the value and report of a
+/// run over the points by index, and reads through the one pool its caller
+/// made. Each point's reference is in another image.
+#[test]
+fn the_run_in_the_point_order_is_the_run_by_index() {
+    let scene = plane_scene();
+    let mut recon = tilted_value(&scene, &three_points(), 25.0);
+    recon.point_set.reference_observations = Some(vec![2, 0, 1]);
+    let order = BulkPointOrder::of_all_points(&recon.point_set);
+    assert_the_point_order_changes_nothing(&order, |order, pool| {
+        let views = scene.views();
+        let (value, report) = refine_normals_in(
+            &recon,
+            &views,
+            pool,
+            &RefineNormalsOptions::default(),
+            order,
+            &Progress::none(),
+        )
+        .expect("the run refines");
+        assert!(report.turned() > 0, "the run turns points: {report:?}");
+        format!(
+            "{:?} {report:?}",
+            value.content_xxh128().expect("hashes").content_xxh128
+        )
+    });
 }
 
 #[test]

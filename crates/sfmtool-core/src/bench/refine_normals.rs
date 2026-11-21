@@ -27,6 +27,7 @@ use crate::camera::PhotographReadError;
 use crate::numeric::median_in_place;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Event, Progress};
+use crate::reconstruction::bulk_point_order::BulkPointOrder;
 use crate::reconstruction::data::SfmrReconstruction;
 use crate::reconstruction::edited::{EditedReconstruction, PointRecord};
 use crate::{progress_info, progress_note};
@@ -593,8 +594,10 @@ impl From<RefitPointsError> for RefineNormalsError {
 /// is a pick only the display render made.
 ///
 /// **The answer is the same for any thread count.** Every point is refined
-/// against the value the run was handed, in parallel over the rayon pool, and
-/// the records are written at the end. Each step is called with a
+/// against the value the run was handed, in parallel over the rayon pool in
+/// the bulk kernels' point order (`BulkPointOrder`: by reference image, then
+/// by the reference keypoint's row and column), and the records are written
+/// at the end, at their points' indexes. Each step is called with a
 /// [`Progress`] that carries the run's cancel flag and reports nothing.
 ///
 /// `progress` names the stages (`refine normals`, which counts the points,
@@ -641,6 +644,21 @@ pub fn refine_normals(
     options: &RefineNormalsOptions,
     progress: &Progress<'_>,
 ) -> Result<(SfmrReconstruction, RefineNormalsReport), RefineNormalsError> {
+    let order = BulkPointOrder::of_all_points(&recon.point_set);
+    refine_normals_in(recon, images, pool, options, &order, progress)
+}
+
+/// [`refine_normals`] taking the points in `order`, whose positions are point
+/// indexes; a test passes the order of the indexes, which is the order the
+/// run took before it took the bulk kernels'.
+pub(super) fn refine_normals_in(
+    recon: &SfmrReconstruction,
+    images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
+    options: &RefineNormalsOptions,
+    order: &BulkPointOrder,
+    progress: &Progress<'_>,
+) -> Result<(SfmrReconstruction, RefineNormalsReport), RefineNormalsError> {
     progress.check_cancel()?;
     check_preconditions(recon, images)?;
     options
@@ -665,9 +683,10 @@ pub fn refine_normals(
         let mut phase = p_refine.phase("refine normals");
         let step = (total / 100).max(1);
         let done = AtomicUsize::new(0);
-        let refined = (0..point_count)
-            .into_par_iter()
-            .map(|p| {
+        let refined: Option<Vec<_>> = order
+            .positions()
+            .par_iter()
+            .map(|&p| {
                 if asked.as_ref().is_some_and(|a| !a[p]) {
                     let status = RefinedNormal {
                         index: p as u32,
@@ -695,7 +714,7 @@ pub fn refine_normals(
             })
             .collect();
         progress_note!(phase, "{total} points");
-        refined
+        refined.map(|in_order| order.restore(in_order))
     };
     // A point whose reads failed stops the run as a cancel does, and the
     // failure is the run's answer.

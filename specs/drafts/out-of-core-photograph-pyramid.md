@@ -1960,16 +1960,39 @@ in core. Step 17 turns the tier on.
       [core/camera/photograph-cache.md](../core/camera/photograph-cache.md),
       with tests in
       [index_files/tests.rs](../../crates/sfm-explorer/src/index_files/tests.rs).
-    - **11c, the point order.** The bulk kernels that loop over points
-      (`render_patch_cloud_bitmaps` under the display bitmaps, the
-      conversion and the web export; `refine_normals`; `refit_points`) take
-      them in the order of the companion's § "Memory", writing each result
-      at its point's index, so results stay identical. Tests: the order of a
-      synthetic reconstruction's points, with ties and points with no
-      reference; the results of each kernel identical to those of today's
-      order; and, with a small pool, the regions of all the points in
-      progress together never exceed the one pool the caller made. That the
-      order decodes fewer tiles is tested in step 13.
+    - **11c, the point order.** **Built**, so step 11 is complete. The
+      bulk kernels that loop over points (`render_patch_cloud_bitmaps` under
+      the display bitmaps, the conversion and the web export, and under
+      `PatchCloud.render_bitmaps`; `refine_normals`; `refit_points`) take
+      them in the order of the companion's § "Memory", `BulkPointOrder` in
+      [reconstruction/bulk_point_order.rs](../../crates/sfmtool-core/src/reconstruction/bulk_point_order.rs),
+      their parallel loop running over the ordered list, and write each
+      result at its point's index, so results stay identical bit for bit;
+      the whole-cloud render's error is still the first patch's that failed,
+      in the cloud's order. The order is the one stored reference
+      observation `PointSet::reference_observations` names, including the
+      viewer's display-only picks, since the kernels render from that one; a
+      reference that is not within its track counts as none. The
+      cluster-patches build is not one of these: it loops over clusters of
+      `.sift` features, which have no reconstruction point or stored
+      reference, so it keeps its cluster order. Specified in
+      [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md),
+      [core/patch/reference-view.md](../core/patch/reference-view.md),
+      [core/bench/refine-normals.md](../core/bench/refine-normals.md) and
+      [core/bench/refit-points.md](../core/bench/refit-points.md), with tests
+      in
+      [bulk_point_order/tests.rs](../../crates/sfmtool-core/src/reconstruction/bulk_point_order/tests.rs)
+      (the order of a synthetic point set, with ties, points with no
+      reference and a point set with no keypoints),
+      [patch/region_read_tests.rs](../../crates/sfmtool-core/src/patch/region_read_tests.rs),
+      [bench/tests/refine_normals.rs](../../crates/sfmtool-core/src/bench/tests/refine_normals.rs)
+      and [bench/tests/refit_points.rs](../../crates/sfmtool-core/src/bench/tests/refit_points.rs)
+      (each kernel's answer in the order equal to its answer over the
+      points by index on one thread, and, on four threads with a pool of
+      half what the run by index held at once, the pool never exceeded,
+      every read counted in it, and some reads copied and others taken
+      through the tiles). That the order decodes fewer tiles is tested in step
+      13.
 
     Each of 11a to 11c reports in its pull request, for the kernels it
     changes, the count of renders that took the tile path on the test data
