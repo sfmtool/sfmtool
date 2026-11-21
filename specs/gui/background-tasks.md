@@ -901,7 +901,8 @@ made for a point at `-1` into the value's references, marked
 `PointSet::display_only_references`, so Track View marks the row the display
 bitmap is the tile of.
 It runs over every photograph that decodes at its camera's
-size; one that does not is left out of every patch's views. The photographs are
+size with every level of its pyramid whole; one that does not is left out of
+every patch's views. The photographs are
 read through the viewer's photograph cache
 ([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)), so
 the panels and later steps find them decoded, and opening the same file again

@@ -136,8 +136,10 @@ impl TiledPhotograph {
     /// The pyramid the photograph is read from, for the one kernel that does
     /// not read through the render entry points yet: the grey images of the
     /// nearby-track search (`bench::nearby::grey`), which step 12 of
-    /// `specs/drafts/out-of-core-photograph-pyramid.md` moves, deleting this.
-    /// The tests also read it, to compare a read with the whole pyramid's.
+    /// `specs/drafts/out-of-core-photograph-pyramid.md` moves, deleting this,
+    /// and the display bitmaps' check that a photograph holds every level
+    /// whole, which step 11 replaces with tiles fetched from the cache. The
+    /// tests also read it, to compare a read with the whole pyramid's.
     pub(crate) fn held_pyramid(&self) -> &ImageU8Pyramid {
         &self.pyramid
     }

@@ -1009,10 +1009,14 @@ fn without_a_stored_reference_the_rule_picks_one() {
                 let render = render_reference(
                     &patch_at(*world),
                     &views,
-                    observing,
                     &mut (observing)
                         .iter()
-                        .map(|&v| crate::camera::sampler::test_regions((&views)[v as usize].source))
+                        .map(|&v| {
+                            (
+                                v,
+                                crate::camera::sampler::test_regions((&views)[v as usize].source),
+                            )
+                        })
                         .collect::<Vec<_>>(),
                     &kps,
                     options.localize.resolution,

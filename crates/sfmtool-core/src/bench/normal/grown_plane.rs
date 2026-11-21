@@ -912,14 +912,13 @@ pub fn grown_plane_normal(
         .iter()
         .map(|&i| seed_of(&track.observations[i]))
         .collect();
-    let mut reference_regions: Vec<ViewRegions<'_>> = patch_views
+    let mut reference_regions: Vec<(u32, ViewRegions<'_>)> = patch_views
         .iter()
-        .map(|&v| ViewRegions::new(images[v as usize].source, pool))
+        .map(|&v| (v, ViewRegions::new(images[v as usize].source, pool)))
         .collect();
     let reference = resolve_reference(
         &patch_frame,
         images,
-        &patch_views,
         &mut reference_regions,
         &seeds,
         track_reference(track, &rows),

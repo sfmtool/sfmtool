@@ -112,10 +112,10 @@ pub struct ReferenceRender {
 /// Render each view in `patch_views` of `patch` at its keypoint and run the
 /// reference-view rule over the tiles.
 ///
-/// `patch_views` indexes `views`, and `regions` and `keypoints` are parallel
-/// to it: each view is read through its regions (a [`ViewRegions`] or a
-/// mutable reference to one), at its keypoint in source-image px; a view with
-/// no keypoint is rendered through the patch itself rather than re-anchored.
+/// Each entry of `patch_views` is an image of `views` with what reads its
+/// photograph (a [`ViewRegions`] or a mutable reference to one), and
+/// `keypoints` is parallel to it, in source-image px; a view with no keypoint
+/// is rendered through the patch itself rather than re-anchored.
 /// The tiles are rendered at `resolution` with the sampler `sampler` picks for
 /// each view ([`render_view_tile`]), each tile's self-similarity read
 /// ([`tile_semi_axes`]), and the rule's readings taken across them
@@ -131,14 +131,13 @@ pub struct ReferenceRender {
 ///
 /// # Panics
 ///
-/// Panics if `regions` or `keypoints` is not parallel to `patch_views` or a
-/// view index is out of range.
+/// Panics if `keypoints` is not parallel to `patch_views` or a view index is
+/// out of range.
 #[allow(clippy::too_many_arguments)]
 pub fn render_reference<'r>(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    patch_views: &[u32],
-    regions: &mut [impl BorrowMut<ViewRegions<'r>>],
+    patch_views: &mut [(u32, impl BorrowMut<ViewRegions<'r>>)],
     keypoints: &[Option<[f64; 2]>],
     resolution: u32,
     sampler: SamplerChoice,
@@ -150,17 +149,12 @@ pub fn render_reference<'r>(
         patch_views.len(),
         "keypoints must be parallel to patch_views"
     );
-    assert_eq!(
-        regions.len(),
-        patch_views.len(),
-        "regions must be parallel to patch_views"
-    );
     let resolution = resolution.max(2) as usize;
     let mut tiles: Vec<ViewTile> = Vec::with_capacity(patch_views.len());
-    for ((&v, &kp), view_regions) in patch_views.iter().zip(keypoints).zip(regions.iter_mut()) {
+    for ((v, view_regions), &kp) in patch_views.iter_mut().zip(keypoints) {
         tiles.push(render_view_tile(
             patch,
-            &views[v as usize],
+            &views[*v as usize],
             view_regions.borrow_mut(),
             kp,
             resolution,
@@ -174,7 +168,6 @@ pub fn render_reference<'r>(
         patch,
         views,
         patch_views,
-        regions,
         keypoints,
         &refs,
         &semi_axes,
@@ -252,15 +245,14 @@ pub fn render_patch_bitmap(
         return Ok(None);
     }
     let anchors: Vec<Option<[f64; 2]>> = keypoints.iter().map(|&kp| Some(kp)).collect();
-    let mut regions: Vec<ViewRegions<'_>> = patch_views
+    let mut read_views: Vec<(u32, ViewRegions<'_>)> = patch_views
         .iter()
-        .map(|&v| ViewRegions::new(views[v as usize].source, pool))
+        .map(|&v| (v, ViewRegions::new(views[v as usize].source, pool)))
         .collect();
     let render = render_reference(
         patch,
         views,
-        patch_views,
-        &mut regions,
+        &mut read_views,
         &anchors,
         params.resolution,
         params.sampler,

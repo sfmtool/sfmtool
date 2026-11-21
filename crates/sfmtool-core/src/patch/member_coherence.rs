@@ -600,12 +600,17 @@ pub fn validate_patch_cloud_member_coherence(
                 return None;
             }
             let kps = patch_keypoints.map(|k| k[i].as_slice());
-            let mut regions: Vec<_> = pv
+            let mut members: Vec<_> = pv
                 .iter()
-                .map(|&m| crate::camera::sampler::ViewRegions::new(views[m as usize].source, pool))
+                .map(|&m| {
+                    (
+                        m,
+                        crate::camera::sampler::ViewRegions::new(views[m as usize].source, pool),
+                    )
+                })
                 .collect();
             let out =
-                member_zncc_matrix_reporting(patch, views, pv, &mut regions, kps, params, progress)
+                member_zncc_matrix_reporting(patch, views, &mut members, kps, params, progress)
                     .map(|matrix| {
                         let decision = decide_member_coherence(&matrix, params);
                         MemberCoherence { matrix, decision }

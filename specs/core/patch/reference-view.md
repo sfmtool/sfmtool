@@ -136,8 +136,8 @@ pub fn tile_semi_axes(tile: &ViewTile) -> Option<TileSemiAxes>;
 pub fn tile_max_radius() -> f64; // the cap of tile_semi_axes' reading and the bench's, 3
 pub fn readings_of(tile: &ViewTile, pair_zncc: Option<f64>, cell_deficit: Option<f64>,
     semi_axes: Option<[f64; 2]>) -> ReferenceReadings;
-pub fn read_track<'r>(patch: &OrientedPatch, views: &[ProjectedImage<'_>], members: &[u32],
-    regions: &mut [impl BorrowMut<ViewRegions<'r>>], // parallel to members
+pub fn read_track<'r>(patch: &OrientedPatch, views: &[ProjectedImage<'_>],
+    members: &mut [(u32, impl BorrowMut<ViewRegions<'r>>)], // each image with its regions
     keypoints: &[Option<[f64; 2]>], tiles: &[&ViewTile], semi_axes: &[Option<TileSemiAxes>],
     sampler: SamplerChoice, options: &ReferenceViewOptions,
     progress: &Progress<'_>) -> Result<TrackReading, PhotographReadError>;
@@ -148,8 +148,7 @@ pub fn bitmap_from_tile(tile: &ViewTile) -> Vec<u8>; // alpha 255 on the photogr
 pub struct ReferenceRender { pub tiles: Vec<ViewTile>, pub semi_axes: Vec<Option<TileSemiAxes>>,
     pub reading: TrackReading }
 pub fn render_reference<'r>(patch: &OrientedPatch, views: &[ProjectedImage<'_>],
-    patch_views: &[u32],
-    regions: &mut [impl BorrowMut<ViewRegions<'r>>], // parallel to patch_views
+    patch_views: &mut [(u32, impl BorrowMut<ViewRegions<'r>>)], // each image with its regions
     keypoints: &[Option<[f64; 2]>], resolution: u32, sampler: SamplerChoice,
     options: &ReferenceViewOptions,
     progress: &Progress<'_>) -> Result<ReferenceRender, PhotographReadError>;
@@ -233,9 +232,10 @@ renders the tile through `render_source_tile` and reads the clipped share
 through `source_clipped_share`
 ([view-region-pyramids.md](../camera/view-region-pyramids.md)), through the
 `ViewRegions` its caller passes for the view. `read_track` and
-`render_reference` take one per view, parallel to the views they read (a
+`render_reference` take each view's image index together with its regions (a
 `ViewRegions` or a mutable reference to one, so a caller that reads a subset of
-its views passes references to theirs), and pass each view's to its tile and to
+its views passes references to theirs), so a view cannot be given without
+them, and pass each view's to its tile and to
 member coherence's render of it, which covers the same pixels and so reuses the
 regions the tile read. The kernels that render a whole set of views for one
 call, `render_patch_bitmap` and `render_patch_cloud_bitmaps`, take the region

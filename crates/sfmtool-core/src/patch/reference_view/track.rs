@@ -119,9 +119,9 @@ pub fn tile_semi_axes(tile: &ViewTile) -> Option<TileSemiAxes> {
 /// Take the readings the reference-view rule needs across a track's views and
 /// run the rule ([`choose_reference_view`]).
 ///
-/// View `v` is image `members[v]` of `views`, read through `regions[v]` (a
-/// [`ViewRegions`] or a mutable reference to one), its keypoint
-/// `keypoints[v]`; `tiles[v]` is its `R×R` tile
+/// View `v` is `members[v]`: an image of `views` and what reads its
+/// photograph (a [`ViewRegions`] or a mutable reference to one). Its keypoint
+/// is `keypoints[v]`; `tiles[v]` is its `R×R` tile
 /// ([`render_view_tile`](super::render_view_tile) of `patch` at that
 /// keypoint), and `semi_axes[v]` its tile's self-similarity semi-axes
 /// ([`tile_semi_axes`]). A caller that rendered the tiles through the same
@@ -150,14 +150,13 @@ pub fn tile_semi_axes(tile: &ViewTile) -> Option<TileSemiAxes> {
 ///
 /// # Panics
 ///
-/// Panics if `members`, `regions`, `keypoints`, `tiles` and `semi_axes` are
-/// not parallel, or the tiles differ in resolution or channels.
+/// Panics if `members`, `keypoints`, `tiles` and `semi_axes` are not
+/// parallel, or the tiles differ in resolution or channels.
 #[allow(clippy::too_many_arguments)]
 pub fn read_track<'r>(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    members: &[u32],
-    regions: &mut [impl BorrowMut<ViewRegions<'r>>],
+    members: &mut [(u32, impl BorrowMut<ViewRegions<'r>>)],
     keypoints: &[Option<[f64; 2]>],
     tiles: &[&ViewTile],
     semi_axes: &[Option<TileSemiAxes>],
@@ -167,8 +166,8 @@ pub fn read_track<'r>(
 ) -> Result<TrackReading, PhotographReadError> {
     let k = members.len();
     assert!(
-        regions.len() == k && keypoints.len() == k && tiles.len() == k && semi_axes.len() == k,
-        "read_track: members, regions, keypoints, tiles and semi_axes must be parallel"
+        keypoints.len() == k && tiles.len() == k && semi_axes.len() == k,
+        "read_track: members, keypoints, tiles and semi_axes must be parallel"
     );
     let resolution = tiles.first().map_or(2, |t| t.resolution()) as u32;
     let params = MemberCoherenceParams {
@@ -176,18 +175,11 @@ pub fn read_track<'r>(
         sampler,
         ..MemberCoherenceParams::default()
     };
-    let matrix = member_zncc_matrix_reporting(
-        patch,
-        views,
-        members,
-        regions,
-        Some(keypoints),
-        &params,
-        progress,
-    )?;
+    let matrix =
+        member_zncc_matrix_reporting(patch, views, members, Some(keypoints), &params, progress)?;
     let pair_zncc: Vec<Option<f64>> = members
         .iter()
-        .map(|image| {
+        .map(|(image, _)| {
             let row = matrix.members.iter().position(|m| m == image)?;
             let others: Vec<f64> = (0..matrix.len())
                 .filter(|&j| j != row)

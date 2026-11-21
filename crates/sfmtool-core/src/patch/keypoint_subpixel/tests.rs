@@ -1442,10 +1442,14 @@ fn with_no_reference_given_the_rule_picks_one_and_it_is_not_moved() {
     let rule = crate::patch::stored_bitmap::render_reference(
         &patch,
         &views,
-        &set,
         &mut set
             .iter()
-            .map(|&v| crate::camera::sampler::test_regions(views[v as usize].source))
+            .map(|&v| {
+                (
+                    v,
+                    crate::camera::sampler::test_regions((&views)[v as usize].source),
+                )
+            })
             .collect::<Vec<_>>(),
         &seeds,
         p.resolution,
@@ -1531,10 +1535,7 @@ fn refining_one_view_against_the_reference_recovers_a_planted_offset() {
         let (kp, score) = refine_view_against_reference(
             &patch,
             &views,
-            &mut views
-                .iter()
-                .map(|v| crate::camera::sampler::test_regions(v.source))
-                .collect::<Vec<_>>(),
+            &mut crate::camera::sampler::test_regions((&views)[3_usize].source),
             template,
             3,
             [p3.0, p3.1],
@@ -1554,10 +1555,7 @@ fn refining_one_view_against_the_reference_recovers_a_planted_offset() {
     assert!(refine_view_against_reference(
         &patch,
         &views,
-        &mut views
-            .iter()
-            .map(|v| crate::camera::sampler::test_regions(v.source))
-            .collect::<Vec<_>>(),
+        &mut crate::camera::sampler::test_regions((&views)[3_usize].source),
         ReferenceTemplate::Bitmap(&bitmap[..bitmap.len() - 4]),
         3,
         [p3.0, p3.1],

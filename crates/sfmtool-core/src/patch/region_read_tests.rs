@@ -792,16 +792,15 @@ fn a_search_or_score_of_a_view_that_cannot_be_read_fails() {
         .map(|k| k.expect("a stored keypoint"))
         .collect();
     let pool = RegionPool::with_capacity(u64::MAX);
-    let mut regions: Vec<ViewRegions<'_>> = references
+    let mut references: Vec<(u32, ViewRegions<'_>)> = references
         .iter()
-        .map(|&v| ViewRegions::new(views[v as usize].source, &pool))
+        .map(|&v| (v, ViewRegions::new(views[v as usize].source, &pool)))
         .collect();
     let params = KeypointLocalizeParams::default();
     let built = TrackReferences::build(
         cloud.patch(0),
         &views,
-        references,
-        &mut regions,
+        &mut references,
         &reference_keypoints,
         None,
         None,

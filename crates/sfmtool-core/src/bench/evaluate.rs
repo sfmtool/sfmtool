@@ -2215,9 +2215,10 @@ fn read_reference_view(
         return Ok(());
     }
     let mut phase = progress.phase("reference view");
-    let members: Vec<u32> = tiles
+    let mut members: Vec<(u32, &mut ViewRegions<'_>)> = tiles
         .iter()
         .map(|(i, _)| next.observations[*i].image)
+        .zip(regions.iter_mut().map(|r| &mut **r))
         .collect();
     let keypoints: Vec<Option<[f64; 2]>> = tiles
         .iter()
@@ -2231,8 +2232,7 @@ fn read_reference_view(
     let reading = read_track(
         patch_frame,
         images,
-        &members,
-        regions,
+        &mut members,
         &keypoints,
         &refs,
         &semi_axes,

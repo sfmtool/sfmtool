@@ -159,10 +159,9 @@ pub struct ViewScore {
 impl TrackReferences {
     /// Render each of `references` at its keypoint and settle the template.
     ///
-    /// `views` is indexed by image index; `regions` and `keypoints` are
-    /// parallel to `references`: each reference is read through its regions
-    /// (a [`ViewRegions`] or a mutable reference to one), at its keypoint in
-    /// source px. `reference` is the position in `references`
+    /// `views` is indexed by image index. Each entry of `references` is an
+    /// image with what reads its photograph (a [`ViewRegions`] or a mutable
+    /// reference to one), and `keypoints` is parallel to it, in source px. `reference` is the position in `references`
     /// of the point's stored reference observation, `None` where it has none.
     /// `bitmap` is the point's stored `R×R` RGBA bitmap on the grid of
     /// `params.resolution`, row-major as a `.sfmr` stores it; where it is given
@@ -184,14 +183,12 @@ impl TrackReferences {
     ///
     /// # Panics
     ///
-    /// Panics if `regions` or `keypoints` is not parallel to `references`, or
-    /// a reference is out of range for `views`.
-    #[allow(clippy::too_many_arguments)]
+    /// Panics if `keypoints` is not parallel to `references`, or a reference
+    /// is out of range for `views`.
     pub fn build<'r>(
         patch: &OrientedPatch,
         views: &[ProjectedImage<'_>],
-        references: &[u32],
-        regions: &mut [impl BorrowMut<ViewRegions<'r>>],
+        references: &mut [(u32, impl BorrowMut<ViewRegions<'r>>)],
         keypoints: &[[f64; 2]],
         reference: Option<usize>,
         bitmap: Option<&[u8]>,
@@ -201,11 +198,6 @@ impl TrackReferences {
             references.len(),
             keypoints.len(),
             "keypoints must be parallel to references"
-        );
-        assert_eq!(
-            references.len(),
-            regions.len(),
-            "regions must be parallel to references"
         );
         let resolution = params.resolution.max(2);
         let r = resolution as usize;
@@ -222,7 +214,8 @@ impl TrackReferences {
         let mut kept_keypoints = Vec::with_capacity(references.len());
         let mut given = None;
         let mut raws: Vec<(usize, Vec<f32>)> = Vec::with_capacity(references.len());
-        for (k, (&image, &kp)) in references.iter().zip(keypoints).enumerate() {
+        for (k, ((image, regions), &kp)) in references.iter_mut().zip(keypoints).enumerate() {
+            let image = *image;
             let view = &views[image as usize];
             let (patch_frame, followed) = seed_frame(patch, view, Some(kp));
             if !followed {
@@ -231,7 +224,7 @@ impl TrackReferences {
             let tile = match render_context(
                 &patch_frame,
                 view,
-                regions[k].borrow_mut(),
+                regions.borrow_mut(),
                 0.0,
                 0.0,
                 wpp[0],
@@ -297,17 +290,16 @@ impl TrackReferences {
             None => {
                 let seeds: Vec<Option<[f64; 2]>> =
                     kept_keypoints.iter().copied().map(Some).collect();
-                let mut kept_regions: Vec<&mut ViewRegions<'r>> = regions
+                let mut kept: Vec<(u32, &mut ViewRegions<'r>)> = references
                     .iter_mut()
                     .enumerate()
                     .filter(|(k, _)| kept_slots.binary_search(k).is_ok())
-                    .map(|(_, r)| r.borrow_mut())
+                    .map(|(_, (v, r))| (*v, r.borrow_mut()))
                     .collect();
                 let Some(a) = resolve_reference(
                     patch,
                     views,
-                    &kept_refs,
-                    &mut kept_regions,
+                    &mut kept,
                     &seeds,
                     given,
                     params.min_grazing_cos,

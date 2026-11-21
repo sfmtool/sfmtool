@@ -1364,10 +1364,14 @@ fn a_reference_search_reports_the_view_s_own_self_similarity_radius() {
     let references = TrackReferences::build(
         &patch,
         &views,
-        &[0, 1],
         &mut [0, 1]
             .iter()
-            .map(|&v| crate::camera::sampler::test_regions((&views)[v as usize].source))
+            .map(|&v| {
+                (
+                    v,
+                    crate::camera::sampler::test_regions((&views)[v as usize].source),
+                )
+            })
             .collect::<Vec<_>>(),
         &[[cx, cy], [cx, cy]],
         None,
@@ -2971,10 +2975,14 @@ fn with_no_reference_given_the_rule_picks_one_and_it_is_not_moved() {
     let rule = crate::patch::stored_bitmap::render_reference(
         &patch,
         &views,
-        &set,
         &mut set
             .iter()
-            .map(|&v| crate::camera::sampler::test_regions(views[v as usize].source))
+            .map(|&v| {
+                (
+                    v,
+                    crate::camera::sampler::test_regions((&views)[v as usize].source),
+                )
+            })
             .collect::<Vec<_>>(),
         &seeds,
         p.resolution,
@@ -3692,10 +3700,14 @@ fn the_localizer_and_a_reference_search_read_a_shift_near_the_edge_alike() {
     let references = TrackReferences::build(
         &patch,
         &views,
-        &[0, 1],
         &mut [0, 1]
             .iter()
-            .map(|&v| crate::camera::sampler::test_regions((&views)[v as usize].source))
+            .map(|&v| {
+                (
+                    v,
+                    crate::camera::sampler::test_regions((&views)[v as usize].source),
+                )
+            })
             .collect::<Vec<_>>(),
         &[projection(&views, 0), projection(&views, 1)],
         Some(0),

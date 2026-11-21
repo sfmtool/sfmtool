@@ -55,8 +55,8 @@ pub(in crate::patch) fn faces_view(
 /// sub-pixel refiner both call this, so given the same views and keypoints they
 /// align to the same reference render.
 ///
-/// `patch_views`, `regions` and `seeds` are parallel, each view read through its regions (a
-/// [`ViewRegions`] or a mutable reference to one); `given` is the position in them of the
+/// Each entry of `patch_views` is an image with what reads its photograph (a [`ViewRegions`]
+/// or a mutable reference to one), and `seeds` is parallel to it; `given` is the position in them of the
 /// caller's reference, which is the reference. With none, only views that pass the grazing
 /// pre-filter ([`faces_view`] at `min_grazing_cos`) are candidates: the reference-view rule, run
 /// with `reference_view`, reads the facing views' renders at their starting keypoints (a view
@@ -68,8 +68,7 @@ pub(in crate::patch) fn faces_view(
 pub(crate) fn resolve_reference<'r>(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    patch_views: &[u32],
-    regions: &mut [impl BorrowMut<ViewRegions<'r>>],
+    patch_views: &mut [(u32, impl BorrowMut<ViewRegions<'r>>)],
     seeds: &[Option<[f64; 2]>],
     given: Option<usize>,
     min_grazing_cos: f64,
@@ -79,24 +78,22 @@ pub(crate) fn resolve_reference<'r>(
     progress: &Progress<'_>,
 ) -> Result<Option<usize>, PhotographReadError> {
     let facing: Vec<usize> = (0..patch_views.len())
-        .filter(|&k| faces_view(patch, &views[patch_views[k] as usize], min_grazing_cos))
+        .filter(|&k| faces_view(patch, &views[patch_views[k].0 as usize], min_grazing_cos))
         .collect();
     if given.is_some() || facing.len() < 2 {
         return Ok(given.or((facing.len() == 1).then(|| facing[0])));
     }
-    let patch_views: Vec<u32> = facing.iter().map(|&k| patch_views[k]).collect();
     let seeds: Vec<Option<[f64; 2]>> = facing.iter().map(|&k| seeds[k]).collect();
-    let mut facing_regions: Vec<&mut ViewRegions<'r>> = regions
+    let mut facing_views: Vec<(u32, &mut ViewRegions<'r>)> = patch_views
         .iter_mut()
         .enumerate()
         .filter(|(k, _)| facing.binary_search(k).is_ok())
-        .map(|(_, r)| r.borrow_mut())
+        .map(|(_, (v, r))| (*v, r.borrow_mut()))
         .collect();
     let render = render_reference(
         patch,
         views,
-        &patch_views,
-        &mut facing_regions,
+        &mut facing_views,
         &seeds,
         resolution,
         sampler,
@@ -261,15 +258,15 @@ pub(super) fn align_to_reference<'r>(
         .and_then(|k| patch_views.get(k))
         .and_then(|&img| states.iter().position(|st| st.idx == img));
     let anchor = prof::REFERENCE.time(|| {
-        let set: Vec<u32> = states.iter().map(|st| st.idx).collect();
         let seeds: Vec<Option<[f64; 2]>> = states.iter().map(|st| st.seed).collect();
-        let mut regions: Vec<&mut ViewRegions<'r>> =
-            states.iter_mut().map(|st| &mut st.regions).collect();
+        let mut set: Vec<(u32, &mut ViewRegions<'r>)> = states
+            .iter_mut()
+            .map(|st| (st.idx, &mut st.regions))
+            .collect();
         resolve_reference(
             patch,
             views,
-            &set,
-            &mut regions,
+            &mut set,
             &seeds,
             given,
             params.min_grazing_cos,

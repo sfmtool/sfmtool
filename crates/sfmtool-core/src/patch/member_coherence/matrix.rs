@@ -102,15 +102,14 @@ pub fn member_zncc_matrix(
     member_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &MemberCoherenceParams,
 ) -> Result<MemberMatrix, PhotographReadError> {
-    let mut regions: Vec<ViewRegions<'_>> = members
+    let mut members: Vec<(u32, ViewRegions<'_>)> = members
         .iter()
-        .map(|&m| ViewRegions::new(views[m as usize].source, pool))
+        .map(|&m| (m, ViewRegions::new(views[m as usize].source, pool)))
         .collect();
     member_zncc_matrix_reporting(
         patch,
         views,
-        members,
-        &mut regions,
+        &mut members,
         member_keypoints,
         params,
         &Progress::none(),
@@ -118,11 +117,12 @@ pub fn member_zncc_matrix(
 }
 
 /// [`member_zncc_matrix`] with the members' regions given and reporting to
-/// `progress`: `regions` is parallel to `members`, each reading its member's
-/// photograph (a [`ViewRegions`] or a mutable reference to one), and a
-/// detailed `progress` times the members' renders under each sampler in its
+/// `progress`: each entry of `members` is a member's image index with what
+/// reads its photograph (a [`ViewRegions`] or a mutable reference to one), and
+/// a detailed `progress` times the members' renders under each sampler in its
 /// own detail phase. A member listed twice is read through the regions of its
-/// first listing, as the matrix counts it once.
+/// first listing, as the matrix counts it once. `member_keypoints`, when
+/// given, is parallel to `members`.
 ///
 /// # Errors
 ///
@@ -130,12 +130,11 @@ pub fn member_zncc_matrix(
 ///
 /// # Panics
 ///
-/// As [`member_zncc_matrix`], and if `regions` is not parallel to `members`.
+/// As [`member_zncc_matrix`].
 pub fn member_zncc_matrix_reporting<'r>(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    members: &[u32],
-    regions: &mut [impl BorrowMut<ViewRegions<'r>>],
+    members: &mut [(u32, impl BorrowMut<ViewRegions<'r>>)],
     member_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &MemberCoherenceParams,
     progress: &Progress<'_>,
@@ -149,27 +148,21 @@ pub fn member_zncc_matrix_reporting<'r>(
             "member_keypoints must be parallel to members"
         );
     }
-    assert_eq!(
-        regions.len(),
-        members.len(),
-        "regions must be parallel to members"
-    );
 
     // Dedup first-seen-wins, carrying each survivor's keypoint and regions
     // with it.
     let mut seen = std::collections::HashSet::new();
     let keep: Vec<usize> = (0..members.len())
-        .filter(|&i| seen.insert(members[i]))
+        .filter(|&i| seen.insert(members[i].0))
         .collect();
-    let members: Vec<u32> = keep.iter().map(|&i| members[i]).collect();
     let member_kps: Option<Vec<Option<[f64; 2]>>> =
         member_keypoints.map(|kps| keep.iter().map(|&i| kps[i]).collect());
-    let mut member_regions: Vec<&mut ViewRegions<'r>> = regions
+    let (members, mut member_regions): (Vec<u32>, Vec<&mut ViewRegions<'r>>) = members
         .iter_mut()
         .enumerate()
         .filter(|(i, _)| keep.binary_search(i).is_ok())
-        .map(|(_, r)| r.borrow_mut())
-        .collect();
+        .map(|(_, (m, r))| (*m, r.borrow_mut()))
+        .unzip();
     let k = members.len();
 
     let mut zncc = vec![f64::NAN; k * k];

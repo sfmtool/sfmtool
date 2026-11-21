@@ -293,10 +293,14 @@ fn the_bitmap_is_the_picked_view_s_tile() {
     let render = render_reference(
         &patch,
         &views,
-        &[0, 1, 2],
         &mut [0, 1, 2]
             .iter()
-            .map(|&v| crate::camera::sampler::test_regions((&views)[v as usize].source))
+            .map(|&v| {
+                (
+                    v,
+                    crate::camera::sampler::test_regions((&views)[v as usize].source),
+                )
+            })
             .collect::<Vec<_>>(),
         &keypoints.iter().map(|&k| Some(k)).collect::<Vec<_>>(),
         24,
@@ -350,10 +354,14 @@ fn a_patch_seen_only_from_behind_has_no_bitmap() {
     let render = render_reference(
         &backwards,
         &views,
-        &[0, 1, 2],
         &mut [0, 1, 2]
             .iter()
-            .map(|&v| crate::camera::sampler::test_regions((&views)[v as usize].source))
+            .map(|&v| {
+                (
+                    v,
+                    crate::camera::sampler::test_regions((&views)[v as usize].source),
+                )
+            })
             .collect::<Vec<_>>(),
         &keypoints.iter().map(|&k| Some(k)).collect::<Vec<_>>(),
         24,
@@ -407,10 +415,14 @@ fn edge_render(scene: &Scene, x: f64) -> (OrientedPatch, Vec<[f64; 2]>, Referenc
     let render = render_reference(
         &edge,
         &views,
-        &[0, 1, 2],
         &mut [0, 1, 2]
             .iter()
-            .map(|&v| crate::camera::sampler::test_regions((&views)[v as usize].source))
+            .map(|&v| {
+                (
+                    v,
+                    crate::camera::sampler::test_regions((&views)[v as usize].source),
+                )
+            })
             .collect::<Vec<_>>(),
         &keypoints.iter().map(|&k| Some(k)).collect::<Vec<_>>(),
         24,
@@ -508,10 +520,14 @@ fn with_no_eligible_view_there_is_no_bitmap() {
     let render = render_reference(
         &diamond,
         &views,
-        &[0, 1, 2],
         &mut [0, 1, 2]
             .iter()
-            .map(|&v| crate::camera::sampler::test_regions((&views)[v as usize].source))
+            .map(|&v| {
+                (
+                    v,
+                    crate::camera::sampler::test_regions((&views)[v as usize].source),
+                )
+            })
             .collect::<Vec<_>>(),
         &keypoints.iter().map(|&k| Some(k)).collect::<Vec<_>>(),
         24,

@@ -949,11 +949,15 @@ impl Context<'_, '_> {
         // texture (a point the file stores no bitmap for) leaves the rendered
         // template in its place.
         let bitmap_row = self.bitmaps.map(|b| b.index_axis(ndarray::Axis(0), pi));
+        let mut reference_views: Vec<(u32, &mut ViewRegions<'_>)> = local_refs
+            .iter()
+            .copied()
+            .zip(regions[1..].iter_mut())
+            .collect();
         let references = match TrackReferences::build(
             &patch,
             &local,
-            &local_refs,
-            &mut regions[1..],
+            &mut reference_views,
             &ref_keypoints,
             reference,
             bitmap_row.as_ref().and_then(|r| r.as_slice()),
@@ -1016,7 +1020,7 @@ impl Context<'_, '_> {
             if let Some((refined, _)) = refine_view_against_reference(
                 &patch,
                 &local,
-                &mut regions,
+                &mut regions[0],
                 references.refine_template(),
                 0,
                 keypoint,

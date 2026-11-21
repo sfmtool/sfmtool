@@ -224,22 +224,21 @@ pub(super) fn pick_reference(
             source: &f.4,
         })
         .collect();
-    let patch_views: Vec<u32> = (0..views.len() as u32).collect();
     let keypoints: Vec<Option<[f64; 2]>> = found.iter().map(|f| Some(f.3)).collect();
     let params = KeypointSubpixelParams {
         resolution: crate::bench::patch_resolution(recon),
         ..KeypointSubpixelParams::default()
     };
     let pool = RegionPool::for_kernel_call();
-    let mut regions: Vec<ViewRegions<'_>> = views
+    let mut patch_views: Vec<(u32, ViewRegions<'_>)> = views
         .iter()
-        .map(|view| ViewRegions::new(view.source, &pool))
+        .enumerate()
+        .map(|(v, view)| (v as u32, ViewRegions::new(view.source, &pool)))
         .collect();
     let render = render_reference(
         &patch,
         &views,
-        &patch_views,
-        &mut regions,
+        &mut patch_views,
         &keypoints,
         params.resolution,
         params.sampler,

@@ -325,13 +325,16 @@ fn refine_patch_keypoints_impl(
         let given = reference
             .and_then(|k| patch_views.get(k))
             .and_then(|&img| states.iter().position(|st| st.idx == img));
-        let set: Vec<u32> = states.iter().map(|st| st.idx).collect();
         let seeds: Vec<Option<[f64; 2]>> = states.iter().map(|st| st.keypoint).collect();
+        let mut set: Vec<(u32, &mut ViewRegions<'_>)> = states
+            .iter()
+            .map(|st| st.idx)
+            .zip(regions.iter_mut())
+            .collect();
         resolve_reference(
             patch,
             views,
-            &set,
-            &mut regions,
+            &mut set,
             &seeds,
             given,
             params.min_grazing_cos,
@@ -780,9 +783,9 @@ pub enum ReferenceTemplate<'a> {
 /// target's, the target does not project into its frame, or the target's core
 /// is out of frame at its seed.
 ///
-/// `regions` is parallel to `views`, each reading its view's photograph (a
-/// [`ViewRegions`] or a mutable reference to one); only the target's and the
-/// reference observation's are read.
+/// `target_regions` reads the target's photograph, which every read of the
+/// target shares; the reference observation, where it is the template, is
+/// read once through regions of its own from the same region pool.
 ///
 /// # Errors
 ///
@@ -790,22 +793,16 @@ pub enum ReferenceTemplate<'a> {
 ///
 /// # Panics
 ///
-/// Panics if an image index is out of range for `views`, or `regions` is not
-/// parallel to `views`.
-pub fn refine_view_against_reference<'r>(
+/// Panics if an image index is out of range for `views`.
+pub fn refine_view_against_reference(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    regions: &mut [impl std::borrow::BorrowMut<ViewRegions<'r>>],
+    target_regions: &mut ViewRegions<'_>,
     template: ReferenceTemplate<'_>,
     target: u32,
     target_keypoint: [f64; 2],
     params: &KeypointSubpixelParams,
 ) -> Result<Option<([f64; 2], f64)>, PhotographReadError> {
-    assert_eq!(
-        regions.len(),
-        views.len(),
-        "regions must be parallel to views"
-    );
     let resolution = params.resolution.max(2);
     let wpp_u = 2.0 * patch.half_extent[0] / resolution as f64;
     let wpp_v = 2.0 * patch.half_extent[1] / resolution as f64;
@@ -843,7 +840,7 @@ pub fn refine_view_against_reference<'r>(
             if !core_value(
                 &patch_frame,
                 view,
-                regions[image as usize].borrow_mut(),
+                &mut ViewRegions::new(view.source, target_regions.pool()),
                 None,
                 0.0,
                 0.0,
@@ -868,7 +865,6 @@ pub fn refine_view_against_reference<'r>(
     if !followed {
         return Ok(None);
     }
-    let target_regions = regions[target as usize].borrow_mut();
     let mut state = ViewState {
         idx: target,
         seed_is_keypoint: true,

@@ -737,11 +737,14 @@ impl<'a, 'v> Cells<'a, 'v> {
                 .iter()
                 .map(|&v| regions[v as usize].borrow_mut())
                 .collect();
-            let mut refs: Vec<&mut ViewRegions<'a>> = held.iter_mut().map(|r| &mut **r).collect();
+            let mut refs: Vec<(u32, &mut ViewRegions<'a>)> = patch_views
+                .iter()
+                .copied()
+                .zip(held.iter_mut().map(|r| &mut **r))
+                .collect();
             resolve_reference(
                 &patch_frame,
                 images,
-                &patch_views,
                 &mut refs,
                 &seeds,
                 track_reference(track, &rows),

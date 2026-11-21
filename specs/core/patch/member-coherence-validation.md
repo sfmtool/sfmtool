@@ -639,12 +639,11 @@ pub fn member_zncc_matrix(
     patch, views, pool: &RegionPool, members: &[u32],
     member_keypoints: Option<&[Option<[f64; 2]>]>, params,
 ) -> Result<MemberMatrix, PhotographReadError>;
-// The same with the members' regions given, parallel to `members` (a
-// `ViewRegions` or a mutable reference to one; a member listed twice reads
-// through its first listing's), so the reference-view rule's renders reuse
-// what its tiles read.
+// The same with each member's regions given beside its image (a `ViewRegions`
+// or a mutable reference to one; a member listed twice reads through its first
+// listing's), so the reference-view rule's renders reuse what its tiles read.
 pub fn member_zncc_matrix_reporting<'r>(
-    patch, views, members: &[u32], regions: &mut [impl BorrowMut<ViewRegions<'r>>],
+    patch, views, members: &mut [(u32, impl BorrowMut<ViewRegions<'r>>)],
     member_keypoints: Option<&[Option<[f64; 2]>]>, params, progress: &Progress<'_>,
 ) -> Result<MemberMatrix, PhotographReadError>;
 pub fn decide_member_coherence(matrix: &MemberMatrix, params) -> MemberDecision;

@@ -54,10 +54,10 @@ pub enum ReferenceTemplate<'a> {
     Observation { image: u32, keypoint: [f64; 2] },
 }
 
-pub fn refine_view_against_reference<'r>(
+pub fn refine_view_against_reference(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    regions: &mut [impl BorrowMut<ViewRegions<'r>>], // parallel to views
+    target_regions: &mut ViewRegions<'_>,    // reads the target's photograph
     template: ReferenceTemplate<'_>,
     target: u32,
     target_keypoint: [f64; 2],
@@ -110,8 +110,10 @@ pub fn refine_view_against_reference<'r>(
   render the solve falls back to, its tile again about a reached keypoint, the
   reference-view rule's renders and the stored bitmap's share
   ([view-region-pyramids.md](../camera/view-region-pyramids.md));
-  `refine_view_against_reference` takes them from its caller, parallel to
-  `views`, and reads only the target's and the reference observation's. The
+  `refine_view_against_reference` takes the target's from its caller, so the
+  search that found its seed and this refinement share them, and reads the
+  reference observation, where it is the template, once through regions of
+  its own from the same pool. The
   keypoints are the same, bit for bit, whichever way a read reaches its pixels,
   and a read that fails is the call's `PhotographReadError` in place of its
   result, the batch's the first patch's that failed.

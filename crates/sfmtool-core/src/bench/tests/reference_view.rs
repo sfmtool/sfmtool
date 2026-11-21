@@ -675,10 +675,14 @@ fn a_point_no_view_covers_whole_stores_the_rule_s_pick() {
     let render = render_reference(
         &patch,
         &views,
-        &images,
         &mut images
             .iter()
-            .map(|&v| crate::camera::sampler::test_regions((&views)[v as usize].source))
+            .map(|&v| {
+                (
+                    v,
+                    crate::camera::sampler::test_regions((&views)[v as usize].source),
+                )
+            })
             .collect::<Vec<_>>(),
         &anchors(&keypoints),
         24,

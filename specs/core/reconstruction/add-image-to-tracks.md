@@ -132,9 +132,10 @@ Every read goes through the render entry points
 ([view-region-pyramids.md](../camera/view-region-pyramids.md)) with the region
 pool the caller made. Each candidate reads its point's views through one
 `ViewRegions` per view, the target first, which the references' renders
-(`TrackReferences::build`, which takes the references' regions parallel to
-them), the search and the score (`TrackReferences::search` and `score`, which
-take the target's), the sub-pixel step and the bitmap scores share, dropped
+(`TrackReferences::build`, which takes each reference's image with its
+regions), the search and the score (`TrackReferences::search` and `score`,
+which take the target's), the sub-pixel step (`refine_view_against_reference`,
+which takes the target's) and the bitmap scores share, dropped
 once the candidate is measured. A failed read is never a refusal: where a
 search or a score turns a buffer too large to allocate into `no_peak` or
 `unscorable`, a read that fails is the call's error, and

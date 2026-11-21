@@ -254,7 +254,10 @@ reconstruction's photographs goes through it except the ones under
   `render_display_patch_bitmaps`, which reads every photograph with `get_many`,
   so the panels and later steps find them decoded
   ([open.rs](../../../crates/sfm-explorer/src/state/open.rs)). `sfm web-export`
-  calls the same function with a cache of budget 0.
+  calls the same function with a cache of budget 0. A cached pyramid that does
+  not hold every level whole, as one a caller made with
+  `ImageU8Pyramid::from_regions` and put in with `insert` can be, is left out
+  of the render like a photograph that cannot be read.
 - **The panels** (Image Detail, and Track View's patch tiles) never decode on
   the GUI thread. They call `display_photograph` in
   [photograph_requests.rs](../../../crates/sfm-explorer/src/state/photograph_requests.rs),

@@ -522,3 +522,74 @@ fn stored_references_survive_missing_views_skipped_points_and_zero_frames() {
         "{missing} missing, {rendered} rendered"
     );
 }
+
+/// A photograph whose pyramid in the cache holds level 0 whole, so it is the
+/// size its camera says, but only an 8 px corner of each coarser level, as
+/// one a caller made with `ImageU8Pyramid::from_regions` and inserted, is left
+/// out like an unreadable one rather than failing the render: with every
+/// photograph so, there is nothing to draw.
+#[test]
+fn a_photograph_whose_coarser_levels_are_partial_is_left_out() {
+    use crate::camera::image::{ImageU8, ImageU8Pyramid, PyramidLevel};
+    use std::sync::Arc;
+
+    let recon = seoul_bull();
+    let paths: Vec<PathBuf> = recon
+        .image_set
+        .images
+        .iter()
+        .map(|image| recon.workspace_dir.join(&image.name))
+        .collect();
+    let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+    let (decoded, _) = PhotographCache::new(0)
+        .get_many(&refs, &Progress::none())
+        .expect("nothing cancels the decode");
+    let cache = PhotographCache::new(1 << 30);
+    for (path, pyramid) in paths.iter().zip(decoded) {
+        let pyramid = pyramid.expect("every photograph is checked in");
+        let layout = TiledPhotograph::from_pyramid(pyramid.clone())
+            .layout()
+            .clone();
+        let channels = pyramid.level(0).channels();
+        let levels: Vec<Option<PyramidLevel>> = (0..layout.levels())
+            .map(|l| {
+                let (w, h) = layout.level_size(l);
+                Some(if l == 0 {
+                    PyramidLevel {
+                        image: {
+                            let l0 = pyramid.level(0);
+                            ImageU8::new(l0.width(), l0.height(), l0.channels(), l0.data().to_vec())
+                        },
+                        origin: [0, 0],
+                        full_size: [w, h],
+                    }
+                } else {
+                    let (cw, ch) = (w.min(8), h.min(8));
+                    PyramidLevel {
+                        image: ImageU8::new(
+                            cw,
+                            ch,
+                            channels,
+                            vec![128; (cw * ch * channels) as usize],
+                        ),
+                        origin: [0, 0],
+                        full_size: [w, h],
+                    }
+                })
+            })
+            .collect();
+        let partial = ImageU8Pyramid::from_regions(levels).expect("a valid region pyramid");
+        cache.insert(path, Arc::new(partial));
+    }
+    let rendered = render_patch_bitmap_column(
+        &recon,
+        &cache,
+        crate::camera::sampler::test_pool(),
+        &Progress::none(),
+    )
+    .expect("not cancelled");
+    assert!(
+        rendered.is_none(),
+        "every photograph lacks pixels of a coarser level, so none is read"
+    );
+}
