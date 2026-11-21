@@ -362,9 +362,10 @@ fn reason_of(report: &UpgradeWorkspaceReport, path: &Path) -> String {
     }
 }
 
-/// Each file is reported with what the run did to it. The readers read only
-/// the current versions, so the run rewrites none: a file below the oldest
-/// version read is left as it is, with the reader's message.
+/// Each file is reported with what the run did to it. Every file in this
+/// fixture is either already at the current version or below the oldest version
+/// its reader accepts, so the run rewrites none: a refused file is left as it
+/// is, with the reader's message.
 #[test]
 fn each_file_is_reported_and_one_the_reader_refuses_is_left_as_it_is() {
     let fixture = fixture();
