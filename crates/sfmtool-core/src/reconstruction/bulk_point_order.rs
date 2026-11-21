@@ -13,8 +13,10 @@
 //! does not depend on how photographs are cut into tiles.
 //!
 //! A kernel runs its parallel loop over [`BulkPointOrder::positions`], which
-//! rayon splits into runs of consecutive entries, so the workers are in at
-//! most as many reference images at once as there are workers; and it writes
+//! rayon splits into runs of consecutive entries, so the points in progress
+//! together are in about one reference image per worker (a worker that waits
+//! on a point's nested parallel work may take up another point meanwhile);
+//! and it writes
 //! each result at its point's place with [`BulkPointOrder::restore`], so its
 //! answer is the one any other order gives.
 

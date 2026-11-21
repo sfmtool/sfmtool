@@ -190,8 +190,10 @@ one photograph then follow each other, and so do those of points near each
 other in it, so a read finds the photograph tiles the reads before it used.
 The order uses only the reconstruction, never how a photograph is cut into
 tiles. The parallel loop runs over the ordered list, which rayon splits into
-runs of consecutive entries, so the workers are in at most as many reference
-images at once as there are workers. Each result is written at its point's
+runs of consecutive entries, so the points in progress together are in
+about one reference image per worker; a worker that waits on a point's
+nested parallel work, such as the pairwise-flow normal's, may take up another
+point meanwhile. Each result is written at its point's
 index, so the order changes no answer, and the whole-cloud render's error is
 still the read of the first patch, in the cloud's order, that failed. It is
 `BulkPointOrder` in

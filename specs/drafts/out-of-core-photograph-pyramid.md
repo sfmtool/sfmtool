@@ -1988,9 +1988,10 @@ in core. Step 17 turns the tier on.
       [bench/tests/refine_normals.rs](../../crates/sfmtool-core/src/bench/tests/refine_normals.rs)
       and [bench/tests/refit_points.rs](../../crates/sfmtool-core/src/bench/tests/refit_points.rs)
       (each kernel's answer in the order equal to its answer over the
-      points by index, and, with a pool of half what the run by index held
-      at once on four threads, the pool never exceeded and every read
-      counted in it). That the order decodes fewer tiles is tested in step
+      points by index on one thread, and, on four threads with a pool of
+      half what the run by index held at once, the pool never exceeded,
+      every read counted in it, and some reads copied and others taken
+      through the tiles). That the order decodes fewer tiles is tested in step
       13.
 
     Each of 11a to 11c reports in its pull request, for the kernels it
