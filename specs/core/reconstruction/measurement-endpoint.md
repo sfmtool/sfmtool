@@ -5,18 +5,18 @@ A distance measurement in an `.sfmr` file is a real-world distance between two
 rather than a 3D point ([formats/sfmr-file-format.md](../../formats/sfmr-file-format.md#distance-measurements-measurementsdistance)
 § 10 "Measurements", the distance kind). Comparing the measurement with the
 reconstruction, which is how its scale is set and how its distortion is
-checked, needs each endpoint as a 3D position, and this operation gives it. An observation of a point in a
-patch-based reconstruction carries a **square**: the point's patch, slid across
-the line of sight so that its centre lies on the keypoint's ray, and projected
-into the photograph. When the endpoint's pixel lies inside the square of an
-observation in its image, the pixel is a known position `(s, t)` on that
-point's patch, a texel of every render of the patch, and the patch says where
-it is in 3D. The operation finds the observations whose squares hold the
-pixel, picks one, and returns the texel and the 3D point it stands for. When
-no observation's square holds the pixel, it refuses and gives the reason in a
-sentence a person can act on; in SfM Explorer the usual remedy is **Create
-Track Here** at the endpoint's pixel, which builds a track with an observation
-centred on it.
+checked, needs each endpoint as a 3D position, and this operation gives it. An
+observation of a point in a patch-based reconstruction carries a **square**:
+the point's patch, slid across the line of sight so that its centre lies on the
+keypoint's ray, and projected into the photograph. When the endpoint's pixel
+lies inside the square of an observation in its image, the pixel is a known
+position `(s, t)` on that point's patch, a texel of every render of the patch,
+and the patch says where it is in 3D. The operation finds the observations
+whose squares hold the pixel, picks one, and returns the texel and the 3D point
+it stands for. When no observation's square holds the pixel, it refuses and
+gives the reason in a sentence a person can act on; in SfM Explorer the usual
+remedy is **Create Track Here** at the endpoint's pixel, which builds a track
+with an observation centred on it.
 
 The candidates are only the observations in the endpoint's own image. Patches
 with no observation in the image are not candidates. Usually exactly one
