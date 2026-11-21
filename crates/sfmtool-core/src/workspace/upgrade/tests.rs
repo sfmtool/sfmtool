@@ -242,9 +242,9 @@ fn reconstruction() -> SfmrReconstruction {
     recon
 }
 
-/// The fixture: a version 2 workspace with a current `.sfmr`, a version 15
-/// `.sfmr` and a version 9 `.matches`, which the readers no longer read, a
-/// current `.matches`, a version 1 `.camrig` and a current one.
+/// The fixture: a version 2 workspace with a current `.sfmr`, `.matches` and
+/// `.camrig`, and a version 15 `.sfmr`, a version 9 `.matches` and a version 1
+/// `.camrig`, which the readers no longer read.
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("ws");
@@ -329,7 +329,7 @@ fn expected_outcomes(fixture: &Fixture) -> Vec<(PathBuf, UpgradeFileKind, &'stat
             "not_converted",
         ),
         (fixture.path("current.camrig"), Camrig, "already_current"),
-        (fixture.path("old.camrig"), Camrig, "converted"),
+        (fixture.path("old.camrig"), Camrig, "not_converted"),
     ]
 }
 
@@ -362,19 +362,23 @@ fn reason_of(report: &UpgradeWorkspaceReport, path: &Path) -> String {
     }
 }
 
+/// Each file is reported with what the run did to it. The readers read only
+/// the current versions, so the run rewrites none: a file below the oldest
+/// version read is left as it is, with the reader's message.
 #[test]
-fn files_below_the_current_version_are_rewritten_at_their_own_paths() {
+fn each_file_is_reported_and_one_the_reader_refuses_is_left_as_it_is() {
     let fixture = fixture();
     let before = snapshot(&fixture.root);
     let report = run(&fixture, false);
     assert_eq!(outcomes(&report), expected_outcomes(&fixture));
     assert_eq!(report.workspace_dir, fixture.root);
     assert_eq!(report.workspaces, vec![fixture.root.clone()]);
-    assert!(!report.nothing_to_do());
+    assert!(report.nothing_to_do());
     // No `.sfmr` was rewritten, so no point ID changed.
     assert!(report.notes.is_empty(), "{:?}", report.notes);
-    // A `.sfmr` or `.matches` file below the oldest version read is left as it
-    // is, with the reader's message, which names the release that upgrades it.
+    // A `.sfmr`, `.matches` or `.camrig` file below the oldest version read is
+    // left as it is, with the reader's message, which names the release that
+    // upgrades it.
     let old_sfmr = reason_of(&report, &fixture.path("sfmr/old.sfmr"));
     assert!(
         old_sfmr.starts_with("the current reader refuses it, so it is left as it is: "),
@@ -399,28 +403,21 @@ fn files_below_the_current_version_are_rewritten_at_their_own_paths() {
             fixture.path("matches").join("old.matches").display()
         )
     );
+    let old_camrig = reason_of(&report, &fixture.path("old.camrig"));
+    assert_eq!(
+        old_camrig,
+        format!(
+            "the current reader refuses it, so it is left as it is: {} is a version 1 \
+             .camrig file, and this sfmtool reads .camrig files of version 2 or later. \
+             sfmtool 0.4.1 is the last release that reads version 1: install it, run \
+             `sfm ws upgrade` on the workspace, then use the file with this release.",
+            fixture.path("old.camrig").display()
+        )
+    );
 
-    // The converted file is the current version.
-    let (rig, _) =
-        sfmtool_camrig_format::read_camrig_metadata(&fixture.path("old.camrig")).unwrap();
-    assert_eq!(rig.version, sfmtool_camrig_format::CAMRIG_FORMAT_VERSION);
-
-    // The files left as they were are byte for byte what they were.
+    // Every file is byte for byte what it was.
     let after = snapshot(&fixture.root);
-    for path in [
-        "sfmr/current.sfmr",
-        "sfmr/old.sfmr",
-        "matches/current.matches",
-        "matches/old.matches",
-        "current.camrig",
-        ".sfm-workspace.json",
-    ] {
-        assert_eq!(
-            after[&fixture.path(path)],
-            before[&fixture.path(path)],
-            "{path}"
-        );
-    }
+    assert_eq!(after, before);
 
     // A second run has nothing to do and changes nothing.
     let again = run(&fixture, false);
@@ -483,7 +480,7 @@ fn a_nested_version_1_workspace_is_refused_before_anything_is_written() {
 }
 
 #[test]
-fn a_nested_workspace_s_files_are_upgraded_with_the_root_s() {
+fn a_nested_workspace_s_files_are_read_with_the_root_s() {
     let fixture = fixture();
     let nested = fixture.path("nested");
     write_workspace_file(&nested, 2);
@@ -498,7 +495,12 @@ fn a_nested_workspace_s_files_are_upgraded_with_the_root_s() {
         .iter()
         .find(|f| f.path == nested.join("old.camrig"))
         .unwrap();
-    assert_eq!(row.outcome, UpgradeOutcome::Converted);
+    assert!(
+        matches!(&row.outcome, UpgradeOutcome::NotConverted(reason)
+            if reason.contains("is a version 1 .camrig file")),
+        "{:?}",
+        row.outcome
+    );
 
     // Run in the nested workspace, the tree is that workspace alone.
     let report = run_on(&nested, true).unwrap();
@@ -569,7 +571,6 @@ fn a_linked_directory_is_listed_and_not_entered() {
     let outside = fixture.dir.path().join("outside");
     std::fs::create_dir_all(&outside).unwrap();
     write_rig(&outside.join("rig.camrig"));
-    rewrite_archive(&outside.join("rig.camrig"), relabel(1, |_| false));
     let link = fixture.path("linked");
     link_directory(&outside, &link);
     let before = snapshot(&outside);
@@ -585,6 +586,7 @@ fn a_linked_directory_is_listed_and_not_entered() {
 #[test]
 fn a_run_stopped_part_way_finishes_when_run_again() {
     let fixture = fixture();
+    let before = snapshot(&fixture.root);
     let flag = AtomicBool::new(false);
     // Stop once the first file of the rewrite is counted.
     let sink = |event: Event<'_>| {
@@ -607,14 +609,9 @@ fn a_run_stopped_part_way_finishes_when_run_again() {
     )
     .unwrap_err();
     assert!(matches!(error, UpgradeWorkspaceError::Cancelled), "{error}");
-    // The rewrite stopped before the old `.camrig`, the last file.
-    let (rig, _) =
-        sfmtool_camrig_format::read_camrig_metadata(&fixture.path("old.camrig")).unwrap();
-    assert_eq!(rig.version, 1);
+    assert_eq!(snapshot(&fixture.root), before);
 
+    // Run again, it goes through every file.
     let report = run(&fixture, false);
-    let (rig, _) =
-        sfmtool_camrig_format::read_camrig_metadata(&fixture.path("old.camrig")).unwrap();
-    assert_eq!(rig.version, sfmtool_camrig_format::CAMRIG_FORMAT_VERSION);
-    assert!(run(&fixture, false).nothing_to_do(), "{report:?}");
+    assert_eq!(outcomes(&report), expected_outcomes(&fixture));
 }

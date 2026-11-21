@@ -623,18 +623,6 @@ fn read_rejects_zero_sensors() {
 }
 
 #[test]
-fn read_rejects_unsupported_version() {
-    let mut data = cubemap_rig(256);
-    data.metadata.version = CAMRIG_FORMAT_VERSION + 1;
-    let path = std::env::temp_dir().join("camrig_read_bad_ver.camrig");
-    crate::write::write_camrig_unchecked(&path, &data, 3).unwrap();
-
-    let err = read_camrig(&path).unwrap_err();
-    assert!(format!("{err}").contains("version"));
-    std::fs::remove_file(&path).ok();
-}
-
-#[test]
 fn writer_always_writes_current_version() {
     let mut data = cubemap_rig(256);
     data.metadata.version = 1; // stale caller-supplied version is overridden
@@ -646,109 +634,99 @@ fn writer_always_writes_current_version() {
     std::fs::remove_file(&path).ok();
 }
 
-#[test]
-fn version_1_sensor_poses_upgrade_on_load() {
-    // Author a genuine version-1 file: take the canonical insv2 rig,
-    // S-conjugate its poses back to the COLMAP convention (S is involutive),
-    // and write it verbatim with version = 1 via the unchecked writer.
-    let canonical = insv2_rig();
-    let mut v1 = canonical.clone();
-    v1.metadata.version = 1;
-    v1.s_conjugate_sensor_poses();
-    // The COLMAP-convention rig carries the rear lens at −Z.
-    assert_eq!(v1.translations_xyz[[1, 2]], -0.0307);
-
-    let path = std::env::temp_dir().join("camrig_v1_upgrade.camrig");
-    crate::write::write_camrig_unchecked(&path, &v1, 3).unwrap();
-    let (meta, _) = read_camrig_metadata(&path).unwrap();
-    assert_eq!(meta.version, 1);
-
-    // Hashes cover the stored bytes: the v1 file verifies as written,
-    // before any in-memory conversion.
-    let (valid, errors) = verify_camrig(&path).unwrap();
-    assert!(valid, "v1 fixture failed verification: {errors:?}");
-
-    // Loading upgrades to the canonical convention and the current version.
-    let loaded = read_camrig(&path).unwrap();
-    assert_eq!(loaded.metadata.version, CAMRIG_FORMAT_VERSION);
-    assert_eq!(loaded.quaternions_wxyz, canonical.quaternions_wxyz);
-    assert_eq!(loaded.translations_xyz, canonical.translations_xyz);
-
-    std::fs::remove_file(&path).ok();
+/// Write `data` to `path` labelled `version`, through the unchecked writer,
+/// which computes the hashes of what it writes, so the version is the only
+/// thing that differs from a valid current file.
+fn write_labelled(path: &std::path::Path, data: &CamRigData, version: u32) {
+    let mut data = data.clone();
+    data.metadata.version = version;
+    crate::write::write_camrig_unchecked(path, &data, 3).unwrap();
 }
 
-/// Two unit quaternions describe the same rotation iff they are equal or
-/// exact negatives (`q` and `−q`). Used to compare recovered sensor rotations
-/// without caring about the immaterial global sign.
-fn same_rotation(a: ndarray::ArrayView1<f64>, b: ndarray::ArrayView1<f64>) -> bool {
-    let equal = (0..4).all(|k| (a[k] - b[k]).abs() < 1e-12);
-    let negated = (0..4).all(|k| (a[k] + b[k]).abs() < 1e-12);
-    equal || negated
+/// Every reader of the crate, each giving the error it returns for `path`, or
+/// `None` where it read the file.
+fn every_reader_error(path: &std::path::Path) -> Vec<(&'static str, Option<CamRigError>)> {
+    vec![
+        ("read_camrig", read_camrig(path).err()),
+        ("read_camrig_metadata", read_camrig_metadata(path).err()),
+    ]
 }
 
+/// A version 1 file, which no release wrote and the version just below the
+/// oldest read, is refused by every reader and by `verify_camrig` with the one
+/// message that names the file, its version, the oldest version read and the
+/// last release that reads it, whether the rig is body-anchored or a
+/// `spherical_tiles` rig.
 #[test]
-fn version_1_spherical_tiles_upgrade_uses_world_anchored_flip() {
-    // A spherical_tiles rig is world-anchored: its rig frame *is* the
-    // reconstruction world, so the v1→v2 upgrade must left-S-multiply the
-    // sensor poses (R' = S·R), not S-conjugate them (R' = S·R·S) the way
-    // body-anchored rigs do. S-conjugating a tile rig would rotate every tile
-    // 180° about the world X axis (the wrong hemisphere) while still passing
-    // structural validation.
-    let canonical = spherical_tile_rig(8, 1.3);
-
-    // Author a genuine version-1 file: apply the involutive world-anchored flip
-    // to the canonical poses to land in the COLMAP convention, stamp version 1.
-    let mut v1 = canonical.clone();
-    v1.metadata.version = 1;
-    for i in 0..v1.quaternions_wxyz.nrows() {
-        let mut q = [
-            v1.quaternions_wxyz[[i, 0]],
-            v1.quaternions_wxyz[[i, 1]],
-            v1.quaternions_wxyz[[i, 2]],
-            v1.quaternions_wxyz[[i, 3]],
-        ];
-        let mut t = [0.0; 3];
-        s_premultiply_sensor_pose(&mut q, &mut t);
-        for (k, &val) in q.iter().enumerate() {
-            v1.quaternions_wxyz[[i, k]] = val;
+fn a_version_1_file_is_refused_naming_the_last_release_that_reads_it() {
+    let dir = std::env::temp_dir().join("camrig_v1_refused");
+    std::fs::create_dir_all(&dir).unwrap();
+    for (label, data) in [
+        ("insv2", insv2_rig()),
+        ("tiles", spherical_tile_rig(8, 1.3)),
+    ] {
+        let path = dir.join(format!("{label}_v1.camrig"));
+        write_labelled(&path, &data, 1);
+        let expected = format!(
+            "{} is a version 1 .camrig file, and this sfmtool reads .camrig files of version 2 \
+             or later. sfmtool 0.4.1 is the last release that reads version 1: install it, run \
+             `sfm ws upgrade` on the workspace, then use the file with this release.",
+            path.display()
+        );
+        for (reader, error) in every_reader_error(&path) {
+            match error {
+                Some(CamRigError::VersionNoLongerRead {
+                    path: p,
+                    version: v,
+                }) => assert_eq!((p.as_path(), v), (path.as_path(), 1), "{reader}"),
+                other => panic!("{reader} gave {other:?}"),
+            }
         }
+        assert_eq!(read_camrig(&path).err().unwrap().to_string(), expected);
+        assert_eq!(verify_camrig(&path).unwrap(), (false, vec![expected]));
     }
+    std::fs::remove_dir_all(&dir).ok();
+}
 
-    let path = std::env::temp_dir().join("camrig_v1_tiles_upgrade.camrig");
-    crate::write::write_camrig_unchecked(&path, &v1, 3).unwrap();
-    let (meta, _) = read_camrig_metadata(&path).unwrap();
-    assert_eq!(meta.version, 1);
-
-    // Loading upgrades via the world-anchored flip and recovers the canonical
-    // rotations (up to the immaterial global quaternion sign).
-    let loaded = read_camrig(&path).unwrap();
-    assert_eq!(loaded.metadata.version, CAMRIG_FORMAT_VERSION);
-    for i in 0..canonical.quaternions_wxyz.nrows() {
-        assert!(
-            same_rotation(
-                loaded.quaternions_wxyz.row(i),
-                canonical.quaternions_wxyz.row(i)
-            ),
-            "tile {i} did not upgrade to the canonical rotation"
+/// A version newer than this build's, and version 0, which no writer has
+/// produced, are refused as unsupported, by every reader and by
+/// `verify_camrig`, without naming a release.
+#[test]
+fn a_version_above_the_current_one_or_zero_is_refused_as_unsupported() {
+    let dir = std::env::temp_dir().join("camrig_unsupported_version");
+    std::fs::create_dir_all(&dir).unwrap();
+    for version in [CAMRIG_FORMAT_VERSION + 1, 0] {
+        let path = dir.join(format!("v{version}.camrig"));
+        write_labelled(&path, &cubemap_rig(16), version);
+        let expected = format!(
+            "unsupported .camrig format version {version} (this build reads versions 2 to 2)"
+        );
+        for (reader, error) in every_reader_error(&path) {
+            match error {
+                Some(CamRigError::InvalidFormat(m)) => assert_eq!(m, expected, "{reader}"),
+                other => panic!("{reader} gave {other:?}"),
+            }
+        }
+        assert_eq!(
+            verify_camrig(&path).unwrap(),
+            (false, vec![format!("Invalid format: {expected}")])
         );
     }
+    std::fs::remove_dir_all(&dir).ok();
+}
 
-    // The body-anchored conjugation the pre-fix code applied would leave at
-    // least one tile pointing at the wrong hemisphere — the dispatch matters.
-    let mut wrong = v1.clone();
-    wrong.s_conjugate_sensor_poses();
-    let any_wrong = (0..canonical.quaternions_wxyz.nrows()).any(|i| {
-        !same_rotation(
-            wrong.quaternions_wxyz.row(i),
-            canonical.quaternions_wxyz.row(i),
-        )
-    });
-    assert!(
-        any_wrong,
-        "S-conjugation unexpectedly matched the canonical rotations"
-    );
-
-    std::fs::remove_file(&path).ok();
+/// The same rig at the current version reads and verifies, so the refusals
+/// above are the version's alone.
+#[test]
+fn the_current_version_is_read() {
+    let dir = std::env::temp_dir().join("camrig_current_version");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("v2.camrig");
+    write_labelled(&path, &cubemap_rig(16), CAMRIG_FORMAT_VERSION);
+    assert_eq!(read_camrig_metadata(&path).unwrap().0.version, 2);
+    assert_eq!(read_camrig(&path).unwrap().metadata.version, 2);
+    assert_eq!(verify_camrig(&path).unwrap(), (true, vec![]));
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]

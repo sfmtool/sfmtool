@@ -19,31 +19,32 @@ Each format crate has one constant for the version its writer writes:
 | `.sfmr` | [`SFMR_FORMAT_VERSION`](../../crates/sfmtool-sfmr-format/src/types.rs) | 16 | 16 |
 | `.matches` | [`MATCHES_FORMAT_VERSION`](../../crates/sfmtool-matches-format/src/types.rs) | 10 | 10 |
 | `.sift` | [`SIFT_FORMAT_VERSION`](../../crates/sfmtool-sift-format/src/types.rs) | 2 | 2 |
-| `.camrig` | [`CAMRIG_FORMAT_VERSION`](../../crates/sfmtool-camrig-format/src/types.rs) | 2 | 1 |
+| `.camrig` | [`CAMRIG_FORMAT_VERSION`](../../crates/sfmtool-camrig-format/src/types.rs) | 2 | 2 |
 | `.kdf` | [`KDF_FORMAT_VERSION`](../../crates/sfmtool-kdf-format/src/types.rs) | 3 | 3 |
 
-A version at which something changed that a reader gates on, such as
-`CAMRIG_CANONICAL_CONVENTION_VERSION`, is a constant of its own in the format
-crate, so a later version change does not move the gate. A format whose
-readers have stopped reading a version some release wrote holds, beside its
-version constant, the oldest version read and
-the last release that reads the older ones, which its refusal names
-([Dropping a version](#dropping-a-version)): `SFMR_OLDEST_READ_VERSION` and
-`SFMR_LAST_RELEASE_READING_OLDER_VERSIONS` for `.sfmr`,
-`MATCHES_OLDEST_READ_VERSION` and `MATCHES_LAST_RELEASE_READING_OLDER_VERSIONS`
-for `.matches`, and `SIFT_OLDEST_READ_VERSION` and
-`SIFT_LAST_RELEASE_READING_OLDER_VERSIONS` for `.sift`.
+A version at which something changed that a reader gates on is a constant of
+its own in the format crate, so a later version change does not move the gate,
+as `REFINED_SHAPE_GATES_VERSION` was for `.matches`
+([worked example](#worked-example-matches-version-9--version-10)). A format
+whose readers have stopped reading an older version holds, beside its version
+constant, the oldest version read and the last release that reads the older
+ones, which its refusal names ([Dropping a version](#dropping-a-version)):
+`SFMR_OLDEST_READ_VERSION` and `SFMR_LAST_RELEASE_READING_OLDER_VERSIONS` for
+`.sfmr`, `MATCHES_OLDEST_READ_VERSION` and
+`MATCHES_LAST_RELEASE_READING_OLDER_VERSIONS` for `.matches`,
+`SIFT_OLDEST_READ_VERSION` and `SIFT_LAST_RELEASE_READING_OLDER_VERSIONS` for
+`.sift`, and `CAMRIG_OLDEST_READ_VERSION` and
+`CAMRIG_LAST_RELEASE_READING_OLDER_VERSIONS` for `.camrig`.
 
 The `.sfmr` readers stop at version 16, the `.matches` readers at version 10
-and the `.sift` readers at version 2. The `.camrig` readers still read
-version 1, older than the version sfmtool 0.4 writes. sfmtool 0.4.1's release
-notes announced that the next release stops reading the older `.sfmr`,
-`.matches` and `.sift` versions; `.camrig` version 1 is one no release wrote.
-sfmtool 0.5 stops reading it too, as
+and the `.sift` and `.camrig` readers at version 2, the versions sfmtool 0.4
+writes. sfmtool 0.4.1's release notes announced that the next release stops
+reading the older `.sfmr`, `.matches` and `.sift` versions; `.camrig` version
+1 is one no release wrote, so it was dropped with no announcement. Of the
+format specs, all but the `.kdf` one have their Format versions section near
+the top;
 [../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md)
-specifies. Of the format specs, the `.sfmr`, `.matches` and `.sift` ones have
-their Format versions section near the top; that draft moves the `.camrig` and
-`.kdf` ones there in 0.5.
+moves the `.kdf` one there in 0.5.
 
 ## When a format's version changes
 

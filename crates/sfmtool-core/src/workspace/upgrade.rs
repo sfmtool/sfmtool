@@ -3,10 +3,13 @@
 
 //! Bring a workspace's files to the current versions: [`upgrade_workspace`].
 //!
-//! A version 2 workspace can hold `.sfmr`, `.matches` and `.camrig` files of
-//! versions below the current ones that the readers still read. The upgrade
-//! rewrites each such file at its own path as the current version, by reading
-//! it and writing it back. A version 1 `.sfm-workspace.json` is refused:
+//! The upgrade rewrites each `.sfmr`, `.matches` and `.camrig` file of a
+//! version 2 workspace that is below the current version and that the reader
+//! reads, at its own path as the current version, by reading it and writing it
+//! back. The readers of all three read only the current version, so a run
+//! rewrites no file until one of the formats next changes version; a file
+//! below the current version is one the reader refuses, which the run leaves
+//! as it is. A version 1 `.sfm-workspace.json` is refused:
 //! sfmtool 0.4.1 is the last release that upgrades one, since it is the last
 //! that reads the older `.sift`, `.sfmr`, `.matches` and `.camrig` versions
 //! such a workspace holds. See `specs/cli/workspace/ws-upgrade-command.md`,

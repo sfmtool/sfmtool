@@ -16,7 +16,6 @@ import sys
 import pytest
 
 from sfmtool import ProgressCounter
-from sfmtool.fileio import read_camrig_metadata
 from sfmtool.workspace import upgrade_workspace
 
 from ...conftest import TEST_DATA_DIR, relabel_camrig
@@ -57,31 +56,37 @@ def test_dry_run_reports_each_file_of_the_tree_and_writes_nothing(tmp_path):
         str(tmp_path / "ws" / "nested"),
     ]
     assert report["files"] == [
-        {"path": str(rig), "kind": "camrig", "outcome": "converted"},
+        {
+            "path": str(rig),
+            "kind": "camrig",
+            "outcome": "not_converted",
+            "reason": "the current reader refuses it, so it is left as it is: "
+            f"{rig} is a version 1 .camrig file, and this sfmtool reads .camrig "
+            "files of version 2 or later. sfmtool 0.4.1 is the last release that "
+            "reads version 1: install it, run `sfm ws upgrade` on the workspace, "
+            "then use the file with this release.",
+        },
     ]
     assert report["linked_directories"] == []
     assert report["notes"] == []
-    assert report["nothing_to_do"] is False
+    assert report["nothing_to_do"] is True
 
 
-def test_run_rewrites_an_older_file_and_counts_its_progress(tmp_path):
+def test_run_reports_each_file_and_counts_its_progress(tmp_path):
     _write_workspace(tmp_path / "ws")
-    rig = tmp_path / "ws" / "old.camrig"
-    _write_old_rig(rig)
+    rig = tmp_path / "ws" / "rig.camrig"
+    shutil.copy(KERRY_PARK_RIG, rig)
+    before = rig.read_bytes()
     counter = ProgressCounter()
     report = upgrade_workspace(tmp_path / "ws", progress=counter)
     assert report["dry_run"] is False
     assert report["files"] == [
-        {"path": str(rig), "kind": "camrig", "outcome": "converted"}
-    ]
-    assert read_camrig_metadata(rig)["metadata"]["version"] == 2
-    # The rewrite counted the one file it went through.
-    assert counter.value == 1
-    again = upgrade_workspace(tmp_path / "ws")
-    assert again["files"] == [
         {"path": str(rig), "kind": "camrig", "outcome": "already_current"}
     ]
-    assert again["nothing_to_do"] is True
+    assert rig.read_bytes() == before
+    # The rewrite phase counted the one file it went through.
+    assert counter.value == 1
+    assert report["nothing_to_do"] is True
 
 
 def test_a_version_1_workspace_raises_value_error_naming_sfmtool_0_4_1(tmp_path):
