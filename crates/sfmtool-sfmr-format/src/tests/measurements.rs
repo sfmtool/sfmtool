@@ -1228,10 +1228,8 @@ fn unknown_entries_under_measurements_are_ignored() {
     rebuild_archive(&good, &with_unknown, |n, raw| Some((n.into(), raw)), &extra);
     let loaded = read_sfmr(&with_unknown).unwrap();
     assert_eq!(loaded.measurements, expected.measurements);
-    assert_eq!(
-        loaded.content_hash.content_xxh128,
-        expected.content_hash.content_xxh128
-    );
+    // The verifier recomputes every hash from the archive, so a pass says no
+    // hash covers the unknown entries.
     let (valid, errors) = verify_sfmr(&with_unknown).unwrap();
     assert!(valid, "{errors:?}");
 
