@@ -99,7 +99,8 @@ def test_a_version_above_the_current_one_is_refused_as_unsupported(tmp_path):
 
 
 def test_a_version_16_file_is_read(tmp_path):
-    """A version 16 file (no measurements) is accepted by every reader."""
+    """A version 16 file (no measurements) is accepted by every reader and
+    rewritten at version 17 on save."""
     shutil.copy(
         SEOUL_BULL_GROUND_TRUTH.parent / ".sfm-workspace.json",
         tmp_path / ".sfm-workspace.json",
@@ -110,11 +111,15 @@ def test_a_version_16_file_is_read(tmp_path):
     assert len(read_sfmr_content_hash(path)) == 32
     recon = SfmrReconstruction.load(path)
     assert recon.metadata()["version"] == 16
+    out = tmp_path / "v17.sfmr"
+    recon.save(out)
+    assert read_sfmr_metadata(out)["version"] == 17
+    assert verify_sfmr(out) == (True, [])
 
 
 def test_the_checked_in_file_is_read(tmp_path):
     """The same file at its own version reads, so the refusals above are the
     version's alone."""
-    path = shutil.copy(SEOUL_BULL_GROUND_TRUTH, tmp_path / "v17.sfmr")
-    assert read_sfmr_metadata(path)["version"] == 17
+    path = shutil.copy(SEOUL_BULL_GROUND_TRUTH, tmp_path / "v16.sfmr")
+    assert read_sfmr_metadata(path)["version"] == 16
     assert verify_sfmr(path) == (True, [])
