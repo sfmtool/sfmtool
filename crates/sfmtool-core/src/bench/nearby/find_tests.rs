@@ -50,12 +50,10 @@ fn find(
     options: &NearbyTrackOptions,
 ) -> NearbyTracks {
     let views = scene.views();
-    let grey = GreyImages::new(views.len());
     find_nearby_tracks(
         edited,
         &views,
         &RegionPool::for_kernel_call(),
-        &grey,
         sources,
         0,
         pixel,
@@ -500,13 +498,11 @@ fn a_query_that_names_no_place_or_a_far_field_source_is_refused() {
     let scene = Scene::new();
     let (edited, _) = held_out(&scene);
     let views = scene.views();
-    let grey = GreyImages::new(views.len());
     let run = |image: u32, pixel: [f64; 2], options: &NearbyTrackOptions| {
         find_nearby_tracks(
             &edited,
             &views,
             &RegionPool::for_kernel_call(),
-            &grey,
             &NearbyTrackSources::default(),
             image,
             pixel,

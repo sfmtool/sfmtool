@@ -24,7 +24,6 @@ use crate::progress::Progress;
 use crate::reconstruction::edited::EditedReconstruction;
 
 use super::candidate::{ray_angle, same_sightings};
-use super::grey::GreyImages;
 use super::patch_read::{read_checked, PatchRead, RayPatch};
 use super::range::camera_spread;
 
@@ -380,28 +379,25 @@ impl From<PhotographReadError> for FarFieldError {
 /// reading whose queried image stands alone is refitted on the largest other
 /// group: it keeps its place, moves to where the fit lands, or is dropped.
 ///
-/// `views` and `grey` hold one entry per image of `edited`, in its order;
-/// `edited` is read only by the refit's fit. Nothing is committed.
-#[allow(clippy::too_many_arguments)]
+/// `views` holds one entry per image of `edited`, in its order; `edited` is
+/// read only by the refit's fit. Every photograph is read through `pool`, the
+/// patch reads' and the fit's alike. Nothing is committed.
 pub fn far_field_sweep(
     edited: &EditedReconstruction,
     views: &[ProjectedImage<'_>],
     pool: &RegionPool,
-    grey: &GreyImages,
     image: u32,
     pixel: [f64; 2],
     options: &FarFieldOptions,
     progress: &Progress<'_>,
 ) -> Result<FarFieldSweep, FarFieldError> {
     let image_count = edited.image_count();
-    for (input, got) in [("views", views.len()), ("grey", grey.len())] {
-        if got != image_count {
-            return Err(FarFieldError::InputMismatch {
-                input,
-                got,
-                image_count,
-            });
-        }
+    if views.len() != image_count {
+        return Err(FarFieldError::InputMismatch {
+            input: "views",
+            got: views.len(),
+            image_count,
+        });
     }
     let Some(view) = views.get(image as usize) else {
         return Err(FarFieldError::NoSuchImage { image, image_count });
@@ -431,9 +427,9 @@ pub fn far_field_sweep(
         radius_px: options.radius_px,
     };
     let others: Vec<u32> = (0..image_count as u32).filter(|&i| i != image).collect();
-    // The views and the grey cache hold every image, `image` among them, as
-    // checked above, so the reads need no check of their own.
-    let Some(at_infinity) = read_checked(views, grey, &patch, &[f64::INFINITY], &others, false)
+    // The views hold every image, `image` among them, as checked above, so
+    // the reads need no check of their own.
+    let Some(at_infinity) = read_checked(views, pool, &patch, &[f64::INFINITY], &others, false)?
     else {
         return Ok(FarFieldSweep::default());
     };
@@ -472,7 +468,7 @@ pub fn far_field_sweep(
     let images: Vec<u32> = rates.iter().map(|&(j, _)| j).collect();
     let rate: Vec<f64> = rates.iter().map(|&(_, r)| r).collect();
     progress.check_cancel().map_err(cancelled)?;
-    let Some(read) = read_checked(views, grey, &patch, &distances, &images, true) else {
+    let Some(read) = read_checked(views, pool, &patch, &distances, &images, true)? else {
         return Ok(FarFieldSweep::default());
     };
 

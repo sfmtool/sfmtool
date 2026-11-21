@@ -89,12 +89,12 @@ pub use nearby::{
     ConstellationSeedOptions, DepthLayer, DepthLayerError, DepthLayerOptions, DepthLayers,
     DescriptorRowsError, DistanceRangeError, FarFieldError, FarFieldGrouping, FarFieldMetrics,
     FarFieldOptions, FarFieldReading, FarFieldRun, FarFieldSweep, FarFieldTrigger, FarFieldWhen,
-    GreyImage, GreyImageError, GreyImages, GuidedOptions, GuidedSource, ImageDescriptors,
-    KeypointRays, LayerCandidate, LayerEvidence, LayerRankBy, LayerRanking, NearbyCandidate,
-    NearbyFinding, NearbySource, NearbySourceError, NearbyTrack, NearbyTrackOptions,
-    NearbyTrackSources, NearbyTracks, NearbyTracksError, NearbyTracksReport, PatchRead,
-    PatchReadError, PatchSamples, PointsOptions, RangeClass, RangeOptions, RayMeeting, RayPatch,
-    Refit, SourceReport, StopRule, WideAmong, PATCH_GRID,
+    GreyImage, GreyImageError, GuidedOptions, GuidedSource, ImageDescriptors, KeypointRays,
+    LayerCandidate, LayerEvidence, LayerRankBy, LayerRanking, NearbyCandidate, NearbyFinding,
+    NearbySource, NearbySourceError, NearbyTrack, NearbyTrackOptions, NearbyTrackSources,
+    NearbyTracks, NearbyTracksError, NearbyTracksReport, PatchRead, PatchReadError, PatchSamples,
+    PointsOptions, RangeClass, RangeOptions, RayMeeting, RayPatch, Refit, SourceReport, StopRule,
+    WideAmong, PATCH_GRID,
 };
 pub use normal::{
     finite_difference_normal, grid_plane_normal, grown_plane_normal, normal_preconditions,

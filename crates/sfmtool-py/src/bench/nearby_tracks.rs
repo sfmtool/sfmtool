@@ -30,7 +30,7 @@ use super::nearby::{
 };
 use super::{views_of, PyEditableTrack};
 use crate::helpers::kernel_err;
-use crate::patches::views::{resolve_grey, resolve_pyramids, PosedViews};
+use crate::patches::views::{resolve_pyramids, PosedViews};
 use crate::reconstruction::edited::PyEditedReconstruction;
 
 /// The matching source `word` names: its name (`points`, `clusters`,
@@ -152,8 +152,7 @@ fn set_option(
 /// Args:
 ///     edited: The reconstruction, whose deleted points no query sees.
 ///     images: One decoded image per image of ``edited``, or a prebuilt
-///         :class:`ImagePyramidSet`, as :func:`far_field_sweep` takes them. A
-///         set also keeps the grey images between calls.
+///         :class:`ImagePyramidSet`, as :func:`far_field_sweep` takes them.
 ///     sources: A :class:`NearbyTrackSources` built for this capture.
 ///     image: The queried image's index.
 ///     pixel: ``(x, y)`` in that image.
@@ -224,7 +223,6 @@ pub(super) fn find_nearby_tracks(
     options.label = label;
     let posed = PosedViews::from_reconstruction(&edited.inner.base);
     let pyramids = resolve_pyramids(&posed, images)?;
-    let grey = resolve_grey(images, posed.cameras.len());
     let views = views_of(&posed, &pyramids);
     let sift = sources.sift_index(py);
     let core_sources = NearbyTrackSources {
@@ -241,7 +239,6 @@ pub(super) fn find_nearby_tracks(
                 &edited.inner,
                 &views,
                 &RegionPool::for_kernel_call(),
-                &grey,
                 &core_sources,
                 image,
                 pixel,

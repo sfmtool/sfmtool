@@ -48,11 +48,13 @@ macro_rules! photograph_variant {
 }
 
 photograph_variant!(
+    sfmtool_core::bench::DepthLayerError,
     sfmtool_core::bench::EvaluateError,
     sfmtool_core::bench::FitError,
     sfmtool_core::bench::geometry_search::GeometrySearchError,
     sfmtool_core::bench::FarFieldError,
     sfmtool_core::bench::NearbyTracksError,
+    sfmtool_core::bench::PatchReadError,
     sfmtool_core::bench::refine_normals::RefineNormalsError,
     sfmtool_core::bench::refit_points::RefitPointsError,
     sfmtool_core::bench::track_at_pixel::TrackAtPixelError,

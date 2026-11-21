@@ -31,7 +31,6 @@ use super::candidate::{
 use super::clusters::{nearby_cluster_tracks, ClusterTracksOptions};
 use super::constellation::{constellation_seeds, ConstellationSeedOptions};
 use super::far_field::{far_field_sweep, FarFieldError, FarFieldOptions, FarFieldReading};
-use super::grey::GreyImages;
 use super::guided::{guided_matches, GuidedOptions, GuidedSource};
 use super::layers::{
     depth_layers, DepthLayer, DepthLayerError, DepthLayerOptions, LayerCandidate, AT_PIXEL_PX,
@@ -614,11 +613,7 @@ impl From<DepthLayerError> for NearbyTracksError {
             DepthLayerError::NoSuchImage { image, image_count } => {
                 Self::NoSuchImage { image, image_count }
             }
-            DepthLayerError::GreyMismatch { grey, image_count } => Self::InputMismatch {
-                input: "grey",
-                got: grey,
-                image_count,
-            },
+            DepthLayerError::Photograph(e) => e.into(),
             DepthLayerError::BadDistance { .. } | DepthLayerError::NanRange { .. } => {
                 Self::Layers(e)
             }
@@ -688,16 +683,14 @@ fn image_stem(edited: &EditedReconstruction, image: u32) -> String {
 /// marked a duplicate ([`NearbyTrack::duplicate_of`]); every other usable
 /// track gets its order in the layer and its label.
 ///
-/// `views` and `grey` hold one entry per image of `edited`, in its order.
-/// Nothing is committed.
-// The arguments are `build_track_at_pixel`'s and the grey images the patch
-// reads sample, which the caller keeps across queries.
+/// `views` holds one entry per image of `edited`, in its order, and every
+/// photograph is read through `pool`. Nothing is committed.
+// The arguments are `build_track_at_pixel`'s.
 #[allow(clippy::too_many_arguments)]
 pub fn find_nearby_tracks(
     edited: &EditedReconstruction,
     views: &[ProjectedImage<'_>],
     pool: &RegionPool,
-    grey: &GreyImages,
     sources: &NearbyTrackSources<'_>,
     image: u32,
     pixel: [f64; 2],
@@ -710,7 +703,6 @@ pub fn find_nearby_tracks(
     let image_count = edited.image_count();
     for (input, got) in [
         ("views", Some(views.len())),
-        ("grey", Some(grey.len())),
         (
             "clusters",
             sources.clusters.map(MatchesClusters::image_count),
@@ -807,7 +799,7 @@ pub fn find_nearby_tracks(
         FarFieldWhen::Never => None,
         FarFieldWhen::Always => Some(FarFieldTrigger::Always),
         FarFieldWhen::Needed => {
-            let grouped = group_count(views, grey, image, pixel, &tracks)?;
+            let grouped = group_count(views, pool, image, pixel, &tracks)?;
             if grouped == 0 {
                 Some(FarFieldTrigger::NoLayer)
             } else if grouped > 1 {
@@ -829,7 +821,6 @@ pub fn find_nearby_tracks(
             edited,
             views,
             pool,
-            grey,
             image,
             pixel,
             &options.far_field,
@@ -877,7 +868,7 @@ pub fn find_nearby_tracks(
         let _phase = progress.phase("depth layers");
         let candidates: Vec<LayerCandidate<'_>> =
             tracks.iter().map(NearbyTrack::layer_candidate).collect();
-        depth_layers(views, grey, image, pixel, &candidates, &options.layers)?
+        depth_layers(views, pool, image, pixel, &candidates, &options.layers)?
     };
     report.layers_seconds = start.elapsed().as_secs_f64();
     for (t, support) in tracks.iter_mut().zip(found.support) {
@@ -1100,7 +1091,7 @@ fn run_source(
 /// alone, which reads no photograph.
 fn group_count(
     views: &[ProjectedImage<'_>],
-    grey: &GreyImages,
+    pool: &RegionPool,
     image: u32,
     pixel: [f64; 2],
     tracks: &[NearbyTrack],
@@ -1112,7 +1103,7 @@ fn group_count(
         ..DepthLayerOptions::default()
     };
     Ok(
-        depth_layers(views, grey, image, pixel, &candidates, &grouping)?
+        depth_layers(views, pool, image, pixel, &candidates, &grouping)?
             .layers
             .len(),
     )

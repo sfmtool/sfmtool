@@ -44,8 +44,7 @@ re-exported from `sfmtool_core::bench`, and bound as
 pub fn find_nearby_tracks(
     edited: &EditedReconstruction,
     views: &[ProjectedImage<'_>],      // one decoded, posed view per image
-    pool: &RegionPool,
-    grey: &GreyImages,                 // the blurred grey images, kept across queries
+    pool: &RegionPool,                 // every photograph read goes through it
     sources: &NearbyTrackSources<'_>,  // the optional inputs of the sources
     image: u32,
     pixel: [f64; 2],
@@ -54,7 +53,7 @@ pub fn find_nearby_tracks(
 ) -> Result<NearbyTracks, NearbyTracksError>;
 // Label (checked first) | NoSuchImage | PixelOffImage | InputMismatch
 // | RowMismatch | NotAMatchingSource | Layers (a candidate the depth layers
-// refuse, which no finder gives) | Cancelled
+// refuse, which no finder gives) | Photograph | Cancelled
 
 pub struct NearbyTrackSources<'a> {
     pub clusters: Option<&'a MatchesClusters>,      // the clusters source
@@ -128,9 +127,10 @@ pub fn nearby_track_label(group: &str, rank: usize, order: usize, point: Option<
 **Why it takes what `build_track_at_pixel` takes.** The two answer questions
 about the same pixel from the same inputs, and a caller that holds one query's
 inputs holds the other's: the version, the decoded views, the evidence files
-built once per capture, the pixel, the options and a progress handle. The grey
-images are the one addition, because the far-field sweep and the layers sample
-them and the caller keeps them across queries.
+built once per capture, the pixel, the options, a progress handle and the
+region pool every photograph read goes through, the grey reads of the
+far-field sweep and the layers among them, each of which makes grey only the
+rectangle it samples ([far-field-sweep.md](far-field-sweep.md) § "Rust API").
 
 **Why every input in `NearbyTrackSources` is optional.** A source whose input
 is missing is skipped and named in the report rather than refused: an
@@ -158,13 +158,14 @@ wire name the same tracks, and a label built in one place cannot drift between
 them.
 
 ```rust
-use sfmtool_core::bench::{find_nearby_tracks, GreyImages, NearbyTrackOptions, NearbyTrackSources};
+use sfmtool_core::bench::{find_nearby_tracks, NearbyTrackOptions, NearbyTrackSources};
+use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::progress::Progress;
 
-let grey = GreyImages::new(views.len());
+let pool = RegionPool::for_kernel_call();
 let sources = NearbyTrackSources { clusters: Some(&clusters), ..Default::default() };
 let found = find_nearby_tracks(
-    &edited, &views, &grey, &sources, image, pixel,
+    &edited, &views, &pool, &sources, image, pixel,
     &NearbyTrackOptions::default(), &Progress::none(),
 )?;
 for k in found.bench_order() {
@@ -359,7 +360,9 @@ observations is a duplicate of the point, as is a far-field reading on an
 existing point at infinity's; a plane far past
 the cameras' spread, with no sources, gets one far-field reading that keeps
 the sweep's range, a far layer and a built track, and nothing when the sweep
-is told never to run; the refusals; and the labels' letters and forms.
+is told never to run; the refusals; and the labels' letters and forms. The
+search's grey reads, and a read that fails, are tested with the far-field
+sweep's ([far-field-sweep.md](far-field-sweep.md) § "Testing").
 [`tests/rust_bindings/bench/test_nearby_tracks_rust_bindings.py`](../../../tests/rust_bindings/bench/test_nearby_tracks_rust_bindings.py)
 checks on the seoul_bull fixture that every source finds what its own binding
 finds, in order, with the range bindings' ranges and classes, the far-field

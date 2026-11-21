@@ -25,9 +25,9 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 use sfmtool_core::bench::{
-    self, find_nearby_tracks, BenchItem, CreateTrackOptions, GreyImages, GuidedSource,
-    ImageDescriptors, KeypointRays, MatchesClusters, NearbyTrackOptions, NearbyTrackSources,
-    NearbyTracks, NearbyTracksError, SiftIndexSource,
+    self, find_nearby_tracks, BenchItem, CreateTrackOptions, GuidedSource, ImageDescriptors,
+    KeypointRays, MatchesClusters, NearbyTrackOptions, NearbyTrackSources, NearbyTracks,
+    NearbyTracksError, SiftIndexSource,
 };
 use sfmtool_core::features::kdforest::{ImageKeypoints, LazyKdForestU8};
 use sfmtool_core::progress::Progress;
@@ -690,7 +690,6 @@ fn run(
         return Finished::Cancelled;
     }
     let rays = KeypointRays::new(views.len());
-    let grey = GreyImages::new(views.len());
     let sources = NearbyTrackSources {
         clusters: clusters.as_ref(),
         guided: sift.as_ref().map(|(keypoints, descriptors)| GuidedSource {
@@ -708,7 +707,6 @@ fn run(
         edited,
         views,
         &pool,
-        &grey,
         &sources,
         plan.image,
         plan.pixel,

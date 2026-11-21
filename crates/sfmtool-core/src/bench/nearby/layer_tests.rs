@@ -9,6 +9,7 @@ use nalgebra::Point3;
 
 use crate::bench::tests::scene::Scene;
 use crate::bench::track_at_pixel::ViewCamera;
+use crate::camera::sampler::RegionPool;
 
 use super::layers::{layer_distances, rank_layers};
 use super::*;
@@ -84,9 +85,9 @@ fn with_range(images: &[u32], range: [f64; 2], class: RangeClass) -> Owned {
 
 fn run(scene: &Scene, owned: &[Owned], options: &DepthLayerOptions) -> DepthLayers {
     let views = scene.views();
-    let grey = GreyImages::new(views.len());
+    let pool = RegionPool::for_kernel_call();
     let candidates: Vec<LayerCandidate<'_>> = owned.iter().map(Owned::candidate).collect();
-    depth_layers(&views, &grey, 0, PIXEL, &candidates, options).expect("valid")
+    depth_layers(&views, &pool, 0, PIXEL, &candidates, options).expect("valid")
 }
 
 const BOUNDED: RangeClass = RangeClass {
@@ -265,14 +266,14 @@ fn equal_near_ends_keep_the_order_given() {
 fn the_layers_refuse_a_candidate_no_finder_gives() {
     let scene = Scene::from_centers(&CENTERS, PLANE);
     let views = scene.views();
-    let grey = GreyImages::new(views.len());
+    let pool = RegionPool::for_kernel_call();
     let options = DepthLayerOptions {
         evidence: false,
         ..DepthLayerOptions::default()
     };
     let layers = |owned: &[Owned]| {
         let candidates: Vec<LayerCandidate<'_>> = owned.iter().map(Owned::candidate).collect();
-        depth_layers(&views, &grey, 0, PIXEL, &candidates, &options)
+        depth_layers(&views, &pool, 0, PIXEL, &candidates, &options)
     };
     let good = with_range(&[0, 1], [1.0, 1.5], BOUNDED);
     for distance_px in [f64::NAN, f64::INFINITY, -2.0] {
@@ -383,15 +384,11 @@ fn the_layers_refuse_an_image_that_is_not_there() {
     let scene = Scene::from_centers(&CENTERS, PLANE);
     let views = scene.views();
     let options = DepthLayerOptions::default();
-    let grey = GreyImages::new(views.len());
+    let pool = RegionPool::for_kernel_call();
     assert!(matches!(
-        depth_layers(&views, &grey, 9, PIXEL, &[], &options),
+        depth_layers(&views, &pool, 9, PIXEL, &[], &options),
         Err(DepthLayerError::NoSuchImage { image: 9, .. })
     ));
-    assert!(matches!(
-        depth_layers(&views, &GreyImages::new(2), 0, PIXEL, &[], &options),
-        Err(DepthLayerError::GreyMismatch { grey: 2, .. })
-    ));
-    let none = depth_layers(&views, &grey, 0, PIXEL, &[], &options).expect("valid");
+    let none = depth_layers(&views, &pool, 0, PIXEL, &[], &options).expect("valid");
     assert!(none.layers.is_empty() && none.support.is_empty());
 }
