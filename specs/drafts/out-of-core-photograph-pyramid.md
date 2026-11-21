@@ -1951,8 +1951,14 @@ in core. Step 17 turns the tier on.
       them in the order of the companion's § "Memory", writing each result
       at its point's index, so results stay identical. Tests: the order of a
       synthetic reconstruction's points, with ties and points with no
-      reference, and the results of each kernel identical to those of today's
-      order. That the order decodes fewer tiles is tested in step 13.
+      reference; the results of each kernel identical to those of today's
+      order; and, with a small pool, the regions of all the points in
+      progress together never exceed the one pool the caller made. That the
+      order decodes fewer tiles is tested in step 13.
+
+    Each of 11a to 11c reports in its pull request, for the kernels it
+    changes, the count of renders that took the tile path on the test data
+    and on a real capture, as the companion's step 5 asks.
 12. **The nearby-track grey reads by region** (companion step 6), with the
     step-12 signature changes and their bindings.
 13. **The tiled photograph cache.** The cache hands out `Arc<TiledPhotograph>`

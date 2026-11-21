@@ -324,8 +324,8 @@ fn load_for_display(
 /// the rule's pick where it is `-1`), reading the photographs through
 /// `photographs`. The open keeps the column for display only, marking the
 /// picks as display-only, and the conversion worker keeps it as a stored
-/// column with its references. `Ok(None)` when not one photograph could be read, since a column
-/// column of zero rows would draw nothing.
+/// column with its references. `Ok(None)` when not one photograph could be
+/// read, since a column of zero rows would draw nothing.
 ///
 /// The first read of a photograph that failed is the error, and
 /// [`PhotographReadError::Cancelled`] when `progress` was cancelled.
