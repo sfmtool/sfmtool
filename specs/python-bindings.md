@@ -187,7 +187,7 @@ depends on how `sfmtool-core` stores the column:
   views, since a kept view would hold a reference back to the object and the
   pair could then only be freed by the cycle collector.
 
-`observation_readings` returns a dict of arrays built on each read, and
+`observation_readings` returns a dict of arrays built on each read,
 `measurements` a dict of kinds holding such dicts (`{"distance": {...}}`, or
 `None` when there are no measurements), `image_to_gray` a new dict on each
 read, and the list getters (`cameras`, `image_names`, the hash lists, …) build

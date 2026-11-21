@@ -3,9 +3,9 @@
 A distance measurement in an `.sfmr` file is a real-world distance between two
 **endpoints**, and each endpoint is a pixel in one image of the reconstruction
 rather than a 3D point ([formats/sfmr-file-format.md](../../formats/sfmr-file-format.md#distance-measurements-measurementsdistance)
-§ 10 "Measurements", the distance kind). Comparing the measurement with the reconstruction, which
-is how its scale is set and how its distortion is checked, needs each endpoint
-as a 3D position, and this operation gives it. An observation of a point in a
+§ 10 "Measurements", the distance kind). Comparing the measurement with the
+reconstruction, which is how its scale is set and how its distortion is
+checked, needs each endpoint as a 3D position, and this operation gives it. An observation of a point in a
 patch-based reconstruction carries a **square**: the point's patch, slid across
 the line of sight so that its centre lies on the keypoint's ray, and projected
 into the photograph. When the endpoint's pixel lies inside the square of an
@@ -143,8 +143,8 @@ Here. The refusal's sentence names the remedy.
 
 **At infinity is a position, not a refusal.** A pixel on the sky can lie in the
 square of a point at infinity; that is a real answer, and it says the
-measurement cannot be compared with anything. `resolve_distance_measurements` gives such
-a measurement no `scene_distance` and does not refuse its endpoint.
+measurement cannot be compared with anything. `resolve_distance_measurements`
+gives such a measurement no `scene_distance` and does not refuse its endpoint.
 
 **One candidate is not ranked.** Most pixels on a surface lie in exactly one
 observation's square, since the squares of one image's observations rarely

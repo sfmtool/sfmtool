@@ -3412,8 +3412,8 @@ describes. Other parts of this spec are implemented by:
   metres are `sfmtool_sfmr_format::WORLD_SPACE_UNITS`, re-exported by
   `sfmtool-core`, with `world_space_unit_in_metres` to look one up.
 - Measurements: `MeasurementsData`, the section with one `Option` field per
-  kind (`distance: Option<DistanceMeasurementsData>`, every kind `None` by
-  default for no measurements), `DistanceMeasurementsData`,
+  kind (`distance: Option<DistanceMeasurementsData>`; the default, every kind
+  `None`, means no measurements), `DistanceMeasurementsData`,
   `DistanceMeasurementsMetadata`, `LengthUnit`, `validate_measurements` (each
   kind present) and `validate_distance_measurements` live in
   [`measurements.rs`](../../crates/sfmtool-sfmr-format/src/measurements.rs);
