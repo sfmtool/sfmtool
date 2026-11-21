@@ -56,11 +56,11 @@ pub(in crate::patch) fn faces_view(
 /// align to the same reference render.
 ///
 /// Each entry of `patch_views` is an image with what reads its photograph (a [`ViewRegions`]
-/// or a mutable reference to one), and `seeds` is parallel to it; `given` is the position in them of the
-/// caller's reference, which is the reference. With none, only views that pass the grazing
-/// pre-filter ([`faces_view`] at `min_grazing_cos`) are candidates: the reference-view rule, run
-/// with `reference_view`, reads the facing views' renders at their starting keypoints (a view
-/// with no seed rendered through the patch itself) and its pick is the reference, as
+/// or a mutable reference to one), and `seeds` is parallel to it; `given` is the position in
+/// them of the caller's reference, which is the reference. With none, only views that pass the
+/// grazing pre-filter ([`faces_view`] at `min_grazing_cos`) are candidates: the reference-view
+/// rule, run with `reference_view`, reads the facing views' renders at their starting keypoints
+/// (a view with no seed rendered through the patch itself) and its pick is the reference, as
 /// [`render_patch_bitmap`](crate::patch::stored_bitmap::render_patch_bitmap) stores it. Where the
 /// rule finds no eligible view there is no reference. A read of a photograph that fails is
 /// returned as its error.

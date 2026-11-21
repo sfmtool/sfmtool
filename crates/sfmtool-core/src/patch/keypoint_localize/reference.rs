@@ -161,8 +161,9 @@ impl TrackReferences {
     ///
     /// `views` is indexed by image index. Each entry of `references` is an
     /// image with what reads its photograph (a [`ViewRegions`] or a mutable
-    /// reference to one), and `keypoints` is parallel to it, in source px. `reference` is the position in `references`
-    /// of the point's stored reference observation, `None` where it has none.
+    /// reference to one), and `keypoints` is parallel to it, in source px.
+    /// `reference` is the position in `references` of the point's stored
+    /// reference observation, `None` where it has none.
     /// `bitmap` is the point's stored `R×R` RGBA bitmap on the grid of
     /// `params.resolution`, row-major as a `.sfmr` stores it; where it is given
     /// and textured it is the template. Otherwise the template is the bitmap
