@@ -40,11 +40,11 @@ The `.sfmr` readers stop at version 16, the `.matches` readers at version 10
 and the `.sift` and `.camrig` readers at version 2, the versions sfmtool 0.4
 writes. sfmtool 0.4.1's release notes announced that the next release stops
 reading the older `.sfmr`, `.matches` and `.sift` versions; `.camrig` version
-1 is one no release wrote, so it was dropped with no announcement. Of the
-format specs, all but the `.kdf` one have their Format versions section near
-the top;
-[../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md)
-moves the `.kdf` one there in 0.5.
+1 is one no release wrote, so it was dropped with no announcement. Every
+release that writes `.kdf` files has written version 3, and no release has
+read `.kdf` versions 1 and 2, so the `.kdf` crate holds no oldest version read
+and no last release reading older versions
+([kdf-file-format.md § Format versions](kdf-file-format.md#format-versions)).
 
 ## When a format's version changes
 
@@ -151,10 +151,12 @@ in time to upgrade the files that release wrote. A version no release wrote
 has no such users, so any release may stop reading it with no announcement.
 Removing a version deletes its read path and conversion, its tests, and its
 subsection of the format spec's Format versions section, and raises the
-oldest version read. A reader refuses a file below the oldest version it
-reads with a message that names the file, its version, the oldest version it
-reads, and the last sfmtool release that reads the file's version, so the
-user can install that release and run `sfm ws upgrade` with it.
+oldest version read. A reader refuses a file of a dropped version that some
+release read with a message that names the file, its version, the oldest
+version it reads, and the last sfmtool release that reads the file's version,
+so the user can install that release and run `sfm ws upgrade` with it. A
+version no release read, such as version 0 or `.kdf` versions 1 and 2, has no
+release to name, and is refused as a version newer than the current one is.
 
 ## How a format spec presents its versions
 

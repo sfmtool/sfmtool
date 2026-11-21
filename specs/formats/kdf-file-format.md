@@ -25,6 +25,42 @@ The format uses the [archive container](archive-container.md). The companion
 [lazy query design](../core/features/lazy-kdforest-query.md) defines the query
 API and packing policy; all stored values and validity rules are defined here.
 
+## Format versions
+
+`metadata.json`'s `version` records the format version. The current version,
+which a conforming writer writes, is `3`, and it is also the oldest version a
+reader reads. Every sfmtool release that writes `.kdf` files, 0.3 and later,
+has written version 3; versions 1 and 2 were written only by development
+builds before sfmtool 0.3, so no release reads them. A reader refuses a file
+of any other version, older or newer, with one message that names the version
+the file holds and the version the reader reads, and says to rebuild the
+index:
+
+```
+invalid KDF format: this is a version 2 index and this build reads version 3;
+rebuild the index
+```
+
+An index is derived from the `.sift` files it was built over, so rebuilding it
+from them is the whole remedy, and the message names no release.
+`KdfFile::open`, `read_kdf_workspace` and `verify_kdf` return it as
+`KdfError::InvalidFormat`, which the Python bindings raise as `OSError`
+(opening a `LazyKdForest` too). The version is checked as soon as
+`metadata.json.zst` is decoded, before the integrity directory is parsed,
+since that directory's layout differs between versions.
+
+The format crate holds the current version as `KDF_FORMAT_VERSION`
+([`types.rs`](../../crates/sfmtool-kdf-format/src/types.rs)). Because no
+release has read an older version, it holds no constant for the oldest
+version read or for the last release reading older versions, which the other
+four format crates hold. A
+writer always writes the current version. When `.kdf` next changes version,
+its reader reads version 3 too and converts it at the I/O boundary. How the
+version changes, which older versions a reader keeps reading, and how one
+stops being read are in [format-versions.md](format-versions.md).
+[Version History](#version-history) at the end of this spec lists what each
+version changed.
+
 ## Container and entry layout
 
 ZIP entries use STORE, no external dictionary, encryption, or multi-volume
@@ -373,31 +409,6 @@ directory by filename, so opening separately counts its raw file records and
 rejects a count greater than the unique-name index; otherwise a duplicate name
 would be collapsed before entry-set validation could see it.
 
-### Version
-
-How the version changes, and which older versions a reader keeps reading, is
-in [format-versions.md](format-versions.md). In sfmtool 0.5,
-[../drafts/drop-pre-0-4-format-versions.md](../drafts/drop-pre-0-4-format-versions.md)
-moves this section into a Format versions section near the top, in the shape
-format-versions.md gives.
-
-`metadata.json`'s `version` is 3. A reader accepts the current version and
-every version the previous release wrote. Every sfmtool release that writes
-`.kdf` files, 0.3 and later, has written version 3, so that is the only
-version a reader accepts today; versions 1 and 2 were written only by
-development builds before sfmtool 0.3. A file carrying
-another version is refused with a message naming the version it holds and the
-version the reader reads, and saying to rebuild the index from the `.sift`
-files it was built over. When `.kdf` next changes version, its reader reads
-version 3 too and converts it at the I/O boundary.
-
-Version 2 replaced version 1's two layouts (a shared descriptor corpus, or
-descriptors copied into each tree) with the single shared corpus, and added the
-SIFT-mode geometry corpus (`features/geometry` and its block offsets). Version 3
-keeps that layout and changes only the integrity directory:
-`content_hash.json.zst` holds one digest per section instead of one per descriptor
-block, geometry block, origin block and tree chunk.
-
 ## Where this format departs from the container conventions
 
 The [archive container](archive-container.md) sets conventions all the formats in
@@ -520,3 +531,21 @@ The measurements that chose this layout — the size of a 9.7M-descriptor file
 under the rejected tree-local layout and under the shared corpus, and why the
 corpus is compressed in blocks rather than stored as a flat array — are recorded
 in [KDF layout measurements](../core/features/kdf-layout-measurements.md).
+
+## Version History
+
+One line per version, newest first. Every release that writes `.kdf` files
+writes version 3, and this build reads version 3 only
+([Format versions](#format-versions)).
+
+- **Version 3**: the current version, written by sfmtool 0.3 and later. It
+  keeps version 2's layout and changes only the integrity directory:
+  `content_hash.json.zst` holds one digest per section instead of one per
+  descriptor block, geometry block, origin block and tree chunk.
+- **Version 2**: replaced version 1's two layouts with the single shared
+  descriptor corpus, and added the SIFT-mode geometry corpus
+  (`features/geometry` and its block offsets). Written only by development
+  builds before sfmtool 0.3.
+- **Version 1**: the first version, with two layouts: a shared descriptor
+  corpus, or descriptors copied into each tree. Written only by development
+  builds before sfmtool 0.3.
