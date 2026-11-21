@@ -2053,3 +2053,5 @@ fn an_image_is_posed_only_when_its_whole_pose_is_finite() {
     assert!(!image(f64::INFINITY, 2.0).is_posed());
     assert!(!image(1.0, f64::NEG_INFINITY).is_posed());
 }
+
+mod measurements;

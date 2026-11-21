@@ -50,7 +50,7 @@ pub struct SaveStamp<'a> {
 impl SfmrReconstruction {
     /// Stamp the metadata a save of this value to `path` by `stamp` records.
     ///
-    /// Sets `operation`, `tool` and `tool_version`, refreshes the four counts
+    /// Sets `operation`, `tool` and `tool_version`, refreshes the counts
     /// from the arrays, and recomputes both workspace paths: `relative_path`
     /// as [`Self::measured_workspace_path`] measures it from `path`, and
     /// `absolute_path` as the workspace directory itself. `relative_path` is
@@ -93,6 +93,7 @@ impl SfmrReconstruction {
         meta.point_count = self.point_set.points.len() as u32;
         meta.observation_count = self.point_set.tracks.len() as u32;
         meta.camera_count = self.image_set.cameras.len() as u32;
+        meta.measurement_count = self.image_set.measurements.as_ref().map(|m| m.len() as u32);
 
         match stamp.workspace_path {
             Some(stated) => self.set_workspace_relative_path(stated),

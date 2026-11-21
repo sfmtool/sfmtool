@@ -229,6 +229,7 @@ impl SfmrReconstruction {
                 depth_statistics,
                 depth_histogram_counts,
                 rig_frame_data: None,
+                measurements: None,
             },
             point_set: PointSet {
                 infinity_point_count,

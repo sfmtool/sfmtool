@@ -14,7 +14,9 @@ use std::sync::Arc;
 use nalgebra::Point3;
 use ndarray::Array4;
 
-use sfmtool_sfmr_format::{DepthStatistics, FramesMetadata, ImageDepthStats, RigFrameData};
+use sfmtool_sfmr_format::{
+    DepthStatistics, FramesMetadata, ImageDepthStats, MeasurementsData, RigFrameData,
+};
 
 use super::data::{compute_observation_offsets, count_points_at_infinity};
 use super::*;
@@ -211,6 +213,9 @@ impl SfmrReconstruction {
                 image_to_gray: self.image_set.image_to_gray.clone(),
                 depth_statistics,
                 depth_histogram_counts: self.image_set.depth_histogram_counts.clone(),
+                // Physical distances and pixel coordinates are invariant under
+                // a 3D similarity transform.
+                measurements: self.image_set.measurements.clone(),
             },
             point_set: PointSet {
                 infinity_point_count,
@@ -575,10 +580,21 @@ impl SfmrReconstruction {
             .as_ref()
             .map(|rf| subset_rig_frame_data(rf, image_indices));
 
+        // Filter and remap physical distance measurements: keep only rows whose
+        // both observing images survive, remapping both image indexes.
+        let new_measurements = self
+            .image_set
+            .measurements
+            .as_ref()
+            .and_then(|m| subset_measurements(m, &old_to_new));
+
+        let mut metadata = self.metadata.clone();
+        metadata.measurement_count = new_measurements.as_ref().map(|m| m.len() as u32);
+
         let infinity_point_count = count_points_at_infinity(&new_points);
         let mut subset = SfmrReconstruction {
             workspace_dir: self.workspace_dir.clone(),
-            metadata: self.metadata.clone(),
+            metadata,
             content_hash: self.content_hash.clone(),
             image_set: ImageSet {
                 cameras: self.image_set.cameras.clone(),
@@ -589,6 +605,7 @@ impl SfmrReconstruction {
                 depth_statistics: new_depth_statistics,
                 depth_histogram_counts: new_depth_histogram_counts,
                 rig_frame_data: new_rig_frame_data,
+                measurements: new_measurements,
             },
             point_set: PointSet {
                 infinity_point_count,
@@ -859,6 +876,55 @@ fn subset_rig_frame_data(rf: &RigFrameData, image_indices: &[u32]) -> RigFrameDa
         image_sensor_indexes: new_image_sensor_indexes,
         image_frame_indexes: new_image_frame_indexes,
     }
+}
+
+/// Filter and remap a `MeasurementsData` onto a subset of images.
+///
+/// Keeps every measurement whose two endpoints both lie in surviving images
+/// (`old_to_new[img]` is `Some(new_idx)`), remaps both image indexes, and
+/// returns `None` when no measurement survives.
+fn subset_measurements(
+    m: &MeasurementsData,
+    old_to_new: &[Option<u32>],
+) -> Option<MeasurementsData> {
+    let mut kept_rows: Vec<(usize, u32, u32)> = Vec::new();
+    for i in 0..m.len() {
+        let img0 = m.image_indexes[[i, 0]] as usize;
+        let img1 = m.image_indexes[[i, 1]] as usize;
+        if let (Some(new0), Some(new1)) = (
+            old_to_new.get(img0).copied().flatten(),
+            old_to_new.get(img1).copied().flatten(),
+        ) {
+            kept_rows.push((i, new0, new1));
+        }
+    }
+    if kept_rows.is_empty() {
+        return None;
+    }
+    let n = kept_rows.len();
+    let mut distances = ndarray::Array1::<f32>::zeros(n);
+    let mut units = ndarray::Array1::<u8>::zeros(n);
+    let mut image_indexes = ndarray::Array2::<u32>::zeros((n, 2));
+    let mut endpoints_xy = ndarray::Array3::<f32>::zeros((n, 2, 2));
+    let mut labels = Vec::with_capacity(n);
+    for (new_i, (old_i, new0, new1)) in kept_rows.into_iter().enumerate() {
+        distances[new_i] = m.distances[old_i];
+        units[new_i] = m.units[old_i];
+        image_indexes[[new_i, 0]] = new0;
+        image_indexes[[new_i, 1]] = new1;
+        for k in 0..2 {
+            endpoints_xy[[new_i, k, 0]] = m.endpoints_xy[[old_i, k, 0]];
+            endpoints_xy[[new_i, k, 1]] = m.endpoints_xy[[old_i, k, 1]];
+        }
+        labels.push(m.labels[old_i].clone());
+    }
+    Some(MeasurementsData {
+        distances,
+        units,
+        image_indexes,
+        endpoints_xy,
+        labels,
+    })
 }
 
 #[cfg(test)]

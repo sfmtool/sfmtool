@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use ndarray::Array4;
 use sfmtool_sfmr_format::{
-    parse_per_image_adjustment_names, DepthStatistics, RigFrameData, PER_IMAGE_ADJUSTMENT_NAMES,
+    parse_per_image_adjustment_names, DepthStatistics, MeasurementsData, RigFrameData,
+    PER_IMAGE_ADJUSTMENT_NAMES,
 };
 
 use crate::camera::{
@@ -100,7 +101,9 @@ impl PerImageAdjustments {
 /// drops or reorders images works on this set and an operation that only
 /// moves points leaves it alone. The columns are parallel to `images`, except
 /// `cameras` and `per_image_adjustments`, which `SfmrImage::camera_index`
-/// indexes into, and `rig_frame_data`, which groups images into rig frames.
+/// indexes into, `rig_frame_data`, which groups images into rig frames, and
+/// `measurements`, which records physical distances between pixel pairs in
+/// `images`.
 #[derive(Clone)]
 pub struct ImageSet {
     /// Camera intrinsic parameters, indexed by `SfmrImage::camera_index`.
@@ -141,12 +144,22 @@ pub struct ImageSet {
     pub depth_histogram_counts: Vec<Vec<u32>>,
     /// Rig definitions and frame groupings. `None` when no multi-camera rigs.
     pub rig_frame_data: Option<RigFrameData>,
+    /// Physical distance measurements between pairs of points observed in
+    /// `images`. `None` when the reconstruction carries no measurements; when
+    /// `Some`, there is at least one measurement.
+    pub measurements: Option<MeasurementsData>,
 }
 
 impl ImageSet {
     /// Number of registered images.
     pub fn image_count(&self) -> usize {
         self.images.len()
+    }
+
+    /// Number of physical distance measurements (`0` when [`Self::measurements`]
+    /// is `None`).
+    pub fn measurement_count(&self) -> usize {
+        self.measurements.as_ref().map_or(0, |m| m.len())
     }
 
     /// Whether every image holds a [`SfmrImage::readings`] row under

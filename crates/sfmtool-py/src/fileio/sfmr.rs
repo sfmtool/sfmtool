@@ -79,7 +79,10 @@ where
 ///   `None`), per_image_adjustments (`list[list[str]]`, one per camera),
 ///   rolling_shutter_scanlines (`list[str | None]`, one per camera),
 ///   image_to_gray (a dict or `None`), sharpness and
-///   gradient_structure_tensors_xx_yy_xy (numpy arrays).
+///   gradient_structure_tensors_xx_yy_xy (numpy arrays),
+///   rig_frame_data (a dict or `None`), and
+///   measurements (a dict of `distances`, `units`, `image_indexes`,
+///   `endpoints_xy`, `labels`, or `None`).
 ///
 /// The per-image intrinsic adjustments: `focal_adjustments` is
 /// the `(N,)` float64 focal scale `s` of each image (its focal is its camera's
@@ -305,6 +308,15 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
     match &data.rig_frame_data {
         Some(rf) => dict.set_item("rig_frame_data", rig_frame_data_to_py(py, rf)?)?,
         None => dict.set_item("rig_frame_data", py.None())?,
+    }
+
+    // Physical distance measurements (optional)
+    match &data.measurements {
+        Some(m) => dict.set_item(
+            "measurements",
+            crate::measurements::measurements_to_py(py, m)?,
+        )?,
+        None => dict.set_item("measurements", py.None())?,
     }
 
     Ok(dict.into())
@@ -635,6 +647,9 @@ pub(crate) fn parse_sfmr_data_from_dict(
     // Extract optional rig/frame data from the dict
     let rig_frame_data = extract_rig_frame_data(py, data)?;
 
+    // Extract optional physical distance measurements from the dict
+    let measurements = crate::measurements::extract_measurements(data)?;
+
     Ok(SfmrData {
         workspace_dir: None,
         metadata,
@@ -698,7 +713,7 @@ pub(crate) fn parse_sfmr_data_from_dict(
         reference_observations,
         depth_statistics,
         observed_depth_histogram_counts,
-        measurements: None,
+        measurements,
     })
 }
 
@@ -712,10 +727,13 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// normals and their `normal_confidence`, the per-observation
 /// `observation_confidence`, the constraint triple (`point_constraints`,
 /// `constraint_distances`, `constraint_reference_images` -- written only when some point is not
-/// free, since an all-free set is the same statement as none at all), and the
+/// free, since an all-free set is the same statement as none at all), the
 /// per-point patch frame
 /// (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz` and the optional
-/// `patch_bitmaps_y_x_rgba`). Apart from `normals_xyz` (see below), a missing
+/// `patch_bitmaps_y_x_rgba`), and optional physical distance `measurements`
+/// (a dict with `distances`, `units`, `image_indexes`, `endpoints_xy` and
+/// `labels`, where `units` holds canonical codes indexing `LENGTH_UNIT_NAMES`).
+/// Apart from `normals_xyz` (see below), a missing
 /// or `None` value means the column is absent — which is what a `sift_files` dict carries for the patch frame,
 /// while an `embedded_patches` dict must carry it, since the format requires
 /// the frame there. A missing `per_image_adjustments` means no camera varies
@@ -779,6 +797,13 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add(
         "POINT_CONSTRAINT_NAMES",
         pyo3::types::PyTuple::new(m.py(), sfmtool_sfmr_format::PointConstraint::NAMES)?,
+    )?;
+    // The name of each `measurements/units` code, in canonical code order
+    // (`("mm", "cm", "m", "in", "ft")`), so a consumer can label or build a
+    // `measurements["units"]` column without hard-coding the numbering.
+    m.add(
+        "LENGTH_UNIT_NAMES",
+        pyo3::types::PyTuple::new(m.py(), sfmtool_sfmr_format::LengthUnit::NAMES)?,
     )?;
     m.add_function(wrap_pyfunction!(read_sfmr, m)?)?;
     m.add_function(wrap_pyfunction!(read_sfmr_metadata, m)?)?;

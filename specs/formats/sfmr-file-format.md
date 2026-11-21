@@ -3384,7 +3384,16 @@ describes. Other parts of this spec are implemented by:
   [`measurements.rs`](../../crates/sfmtool-sfmr-format/src/measurements.rs);
   `LengthUnit` derives its names and metre factors directly from
   `WORLD_SPACE_UNITS`. Read, write and verify in `sfmtool-sfmr-format` all
-  route through `validate_measurements`.
+  route through `validate_measurements`. In memory, `ImageSet::measurements`
+  holds `Option<MeasurementsData>` (read through
+  `SfmrReconstruction::measurements` and `measurement_count`, preserved across
+  similarity transforms and point filters, and filtered and remapped across
+  `subset_by_image_indices`). Python sees the section as a dict of its five
+  columns (`distances`, `units`, `image_indexes`, `endpoints_xy`, `labels`) or
+  `None`, with `sfmtool.fileio.LENGTH_UNIT_NAMES` naming the canonical unit
+  codes: `read_sfmr` / `write_sfmr`, `SfmrReconstruction.from_data`,
+  `SfmrReconstruction.measurements`, `SfmrReconstruction.measurement_count` and
+  `clone_with_changes(measurements=...)`.
 - The presence rules between the optional per-point pieces and
   `feature_source`: `write_sfmr`, `read_sfmr` and `verify_sfmr` apply the one
   predicate in [`types.rs`](../../crates/sfmtool-sfmr-format/src/types.rs)
