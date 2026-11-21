@@ -74,8 +74,12 @@ pub struct MeasurementRef {
     pub index: u32, // row of that kind's section
 }
 
+pub enum EndpointSide { A, B } // endpoint 0 and 1 of the format
+
 // on AppState, beside selected_point
 pub selected_measurement: Option<MeasurementRef>,
+/// The selected endpoint of the selected measurement, when one is.
+pub selected_endpoint: Option<EndpointSide>,
 ```
 
 The reference carries the kind because each kind's rows are numbered within
@@ -84,8 +88,15 @@ same indexes.
 
 **Selecting a measurement selects nothing else.** It does not select either
 endpoint's image or point: a person reading a measurement usually wants the
-3D view and Image Detail to stay where they are. The panel offers that as an
-explicit gesture instead (§ "An endpoint").
+3D view and Image Detail to stay where they are. Selecting a measurement clears
+`selected_endpoint`.
+
+**Selecting an endpoint is selecting an observation.** An endpoint is a pixel
+in one photograph, as an observation is, so the gestures on it are Track
+View's gestures on an observation row, with the same effects in the other
+panels (§ "Endpoint gestures"). It selects the endpoint's image, which the 3D
+viewer, the Image Browser and Image Detail follow, and leaves the selected
+point alone, as a Track View row click leaves the track's point alone.
 
 **The selection follows an edit.** Measurements are never renumbered by a
 point edit. An edit to a measurement keeps its index. Deleting a measurement
@@ -121,9 +132,15 @@ Points group and before the Bench groups:
   scene units (`0.317 su`). An endpoint with no position puts a warning mark
   and the refusal's short form in place of the reading; an endpoint at
   infinity shows `∞`.
-- A click selects the measurement; a double-click selects it and raises
-  Measurement View. The selected row is highlighted as the selected point's
-  row is.
+- A click selects the measurement and does nothing else, as a click on a
+  Bench row does. A double-click selects it, raises Measurement View and
+  frames the measurement in the 3D view, as a double-click on a Bench row
+  raises Track View and moves the 3D view onto the item's point: the view keeps
+  its orientation and moves so both finite endpoints are inside it (the
+  framing the off-screen indicator's click makes, § "Drawing measurements").
+  A measurement with no finite endpoint leaves the view where it is. The
+  selected row is highlighted as the selected point's row is. A right-click
+  opens the row's menu (*Delete*) and selects nothing.
 - The rows sit directly under the group. A subgroup per kind is for when a
   second kind exists, and is that kind's draft's to add.
 
@@ -201,11 +218,41 @@ Each block shows:
   - At infinity: the point's ID and its direction, and "This endpoint lies on a
     point at infinity, so no distance can be measured to it."
   - A refusal: its sentence, which names the remedy.
-- **Show in Image Detail.** A button that selects the endpoint's image, and the
-  chosen point where there is one, and centres Image Detail on the pixel.
 - **Switch image…**, the edit in § "Switching an endpoint's image".
 - **The image and pixel, editable**, the edit in § "Setting an endpoint by
   hand". The 3D position beside them is read-only.
+
+The selected endpoint's block is drawn as Track View draws its selected row,
+and its mark is drawn larger in the 3D view and Image Detail, as the 3D view
+draws the selected observation's circle larger.
+
+### Endpoint gestures
+
+These are Track View's row gestures ([track-view.md](../gui/track-view.md) §
+"Row gestures"), applied to an endpoint, and they follow rules G1, G2 (a
+pixel of an image), G3, G5 and G6 of the proposed interaction rules
+(`specs/drafts/gui-interaction-rules.md`). The block's own controls (the image
+drop-down, the pixel fields, the buttons) keep their clicks; everywhere else in
+the block, the name, the crop and the patch among it, is one target.
+
+- **Click**: select the endpoint and its image, and **reveal** the endpoint's
+  pixel: it rides along as `reveal_feature` does, and Image Detail pans, never
+  zooms, to centre it when its current view is not showing it
+  ([multi-panel-image-browser.md](../gui/multi-panel-image-browser.md) §
+  "Revealing a feature named by another panel"). The 3D view does not move.
+- **Double-click**: enter camera view for the endpoint's image, and turn the
+  view until the endpoint's pixel is inside the middle 1/2 of the viewport on
+  both axes (`Viewer3D::look_through_toward_feature`), in one animated
+  transition, as a double-click on a Track View row does.
+- **Hover**: set the cross-panel hover to the endpoint's image, which
+  brightens its frustum and outlines its thumbnail.
+- **Right-click**: a menu with *Switch Image…*, and selects nothing.
+
+**From outside the panel**, a click on an endpoint's mark in Image Detail or
+the 3D view selects the measurement and that endpoint, as a click on a bench
+mark selects that observation's row, and a double-click on it does what a
+double-click on its block does. The marks are drawn only for the measurements
+§ "Drawing measurements" draws.
 
 ### The result
 
@@ -359,8 +406,9 @@ it also draws a line between them. The pixel is drawn whether or not the
 endpoint resolves, since the pixel is the stored measurement; a refused
 endpoint's mark is drawn in the warning colour.
 
-Hovering a mark or a line in either view shows the measurement's row text, and
-a click selects the measurement.
+Hovering a mark or a line in either view shows the measurement's row text. A
+click on a line selects the measurement; a click on a mark selects the
+measurement and that endpoint (§ "Endpoint gestures").
 
 **A selected measurement off screen.** When no part of the selected
 measurement's marks and line is inside the view, the view draws an indicator
@@ -388,8 +436,9 @@ existing tools ([mcp-server.md](../gui/mcp-server.md)):
 - `get_scene` gives each reconstruction a `measurement_counts` block, by kind.
 - `list_measurements(recon)`: every measurement of every kind, each with the
   reading the Scene tree row shows.
-- `select_measurement(recon, kind, index)` and the selection block's
-  `selected_measurement`.
+- `select_measurement(recon, kind, index, endpoint?)` and the selection
+  block's `selected_measurement` and `selected_endpoint`. Naming an endpoint
+  does what a click on its block does, including the reveal.
 - `get_measurement(recon, kind, index)`: for a distance, both endpoints'
   images, pixels and resolutions (with every candidate), and the result block.
 - `get_measurement_endpoint_views(recon, index, endpoint)`: the offers of
@@ -451,8 +500,9 @@ Each step is one PR through `implement-change`, with its MCP tools, its
 `ui_basic` coverage and screenshots.
 
 1. **Read-only.** `MeasurementRef` and the selection, the per-version
-   resolution cache, the Scene tree group, Measurement View with the header and
-   the distance body, `get_scene`'s counts, `list_measurements`,
+   resolution cache, the Scene tree group with its row gestures, Measurement
+   View with the header, the distance body and the endpoint gestures,
+   `get_scene`'s counts, `list_measurements`,
    `select_measurement`, `get_measurement`, and the artificial-measurements
    script.
 2. **Switching an endpoint's image.** `endpoint_views` in core with its
@@ -496,5 +546,13 @@ Each step is one PR through `implement-change`, with its MCP tools, its
   view; pointing the right way for a midpoint to each side of the view and
   behind the camera; a click framing the measurement so both endpoints project
   inside the view.
+- Endpoint gestures: a click selects the endpoint and its image, leaves the
+  selected point and the 3D view alone, and pans Image Detail only when the
+  pixel is out of its view; a double-click enters camera view with the pixel
+  in the middle half; a right-click selects nothing; a click on a mark selects
+  the measurement and that endpoint; selecting a measurement clears the
+  endpoint.
+- The Scene tree row: a click selects and moves nothing; a double-click frames
+  the measurement's finite endpoints and leaves the view alone with none.
 - `ui_basic`: the panel opens from the Panels menu and from a double-click on a
   row, on an artificial-measurements copy.
