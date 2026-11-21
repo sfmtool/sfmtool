@@ -16,6 +16,10 @@ use zip::ZipArchive;
 use crate::entries::{self, ReadingColumn};
 use crate::float16::float16_values;
 use crate::image_readings::{f32_values, image_readings_presence_error};
+use crate::measurements::{
+    read_measurement_unit_legend, resolve_measurement_units, validate_measurements,
+    MeasurementsData,
+};
 use crate::observation_readings::{observation_reading_options, observation_readings_flagged};
 use crate::types::*;
 use sfmtool_archive_io::{format_hash, raw_to_u32, read_zst_entry};
@@ -108,6 +112,55 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         has_uv_frames,
         &mut errors,
     )?);
+    if metadata.version < MEASUREMENTS_FORMAT_VERSION {
+        if crate::read::has_measurements_entry(&archive)? {
+            errors.push(format!(
+                "version {} .sfmr file must not carry measurements/ entries (introduced in \
+                 version {MEASUREMENTS_FORMAT_VERSION})",
+                metadata.version
+            ));
+        }
+        if stored.measurements_xxh128.is_some() {
+            errors.push(format!(
+                "version {} .sfmr file must not carry measurements_xxh128 (introduced in \
+                 version {MEASUREMENTS_FORMAT_VERSION})",
+                metadata.version
+            ));
+        }
+    } else if archive
+        .index_for_name(entries::measurements_metadata())
+        .is_some()
+    {
+        section_digests.push(verify_measurements_section(
+            &mut archive,
+            &metadata,
+            &stored,
+            &camera_indexes_raw,
+            &cameras,
+            &mut errors,
+        )?);
+    } else {
+        if crate::read::has_measurements_entry(&archive)? {
+            errors.push(
+                "measurements/ entries are present without measurements/metadata.json.zst"
+                    .to_string(),
+            );
+        }
+        if metadata.measurement_count.is_some() {
+            errors.push(
+                "metadata.json.zst sets measurement_count, but the file has no measurements/ \
+                 section"
+                    .to_string(),
+            );
+        }
+        if stored.measurements_xxh128.is_some() {
+            errors.push(
+                "content_hash.json.zst sets measurements_xxh128, but the file has no \
+                 measurements/ section"
+                    .to_string(),
+            );
+        }
+    }
 
     // === Overall content hash ===
     let content_hash_value = section_digests.finish();
@@ -1129,4 +1182,153 @@ fn verify_tracks_section<R: Read + Seek>(
     }
 
     Ok(tracks_hash)
+}
+
+fn verify_measurements_section<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    metadata: &SfmrMetadata,
+    stored: &ContentHash,
+    camera_indexes_raw: &[u8],
+    cameras: &[SfmrCamera],
+    errors: &mut Vec<String>,
+) -> Result<u128, SfmrError> {
+    // === Measurements hash (optional, lexicographic path order) ===
+    let meas_meta_raw = read_zst_entry(archive, entries::measurements_metadata())?;
+    let meas_meta: serde_json::Value = serde_json::from_slice(&meas_meta_raw)?;
+    let Some(section_count) = meas_meta
+        .get("measurement_count")
+        .and_then(|v| v.as_u64())
+        .and_then(|v| u32::try_from(v).ok())
+    else {
+        errors.push("measurements/metadata.json.zst has no u32 measurement_count".to_string());
+        return Ok(0);
+    };
+    if section_count == 0 {
+        errors.push("measurements/metadata.json.zst measurement_count must be >= 1".to_string());
+    }
+    match metadata.measurement_count {
+        Some(top_count) if top_count == section_count => {}
+        Some(top_count) => errors.push(format!(
+            "measurements/metadata.json.zst measurement_count ({section_count}) doesn't match \
+             top-level metadata measurement_count ({top_count})"
+        )),
+        None => errors.push(
+            "the measurements/ section is present, but metadata.json.zst has no measurement_count"
+                .to_string(),
+        ),
+    }
+
+    let unit_legend = match read_measurement_unit_legend(&meas_meta) {
+        Ok(legend) => Some(legend),
+        Err(e) => {
+            errors.push(e);
+            None
+        }
+    };
+
+    let n = section_count as usize;
+    let distances_name = entries::measurements_distances(n);
+    let endpoints_name = entries::measurements_endpoints_xy(n);
+    let image_indexes_name = entries::measurements_image_indexes(n);
+    let labels_name = entries::measurements_labels();
+    let units_name = entries::measurements_units(n);
+
+    // Hash all six entries in lexicographic path order:
+    // distances, endpoints_xy, image_indexes, labels.json, metadata.json, units.
+    let mut measurements_hasher = Xxh3::new();
+    let distances_raw = read_zst_entry(archive, &distances_name)?;
+    measurements_hasher.update(&distances_raw);
+    let endpoints_raw = read_zst_entry(archive, &endpoints_name)?;
+    measurements_hasher.update(&endpoints_raw);
+    let meas_image_indexes_raw = read_zst_entry(archive, &image_indexes_name)?;
+    measurements_hasher.update(&meas_image_indexes_raw);
+    let labels_raw = read_zst_entry(archive, labels_name)?;
+    measurements_hasher.update(&labels_raw);
+    measurements_hasher.update(&meas_meta_raw);
+    let units_raw = read_zst_entry(archive, &units_name)?;
+    measurements_hasher.update(&units_raw);
+
+    let measurements_hash = measurements_hasher.digest128();
+    match &stored.measurements_xxh128 {
+        Some(stored_meas) => {
+            if &format_hash(measurements_hash) != stored_meas {
+                errors.push(format!(
+                    "Measurements hash mismatch: computed {}, stored {}",
+                    format_hash(measurements_hash),
+                    stored_meas
+                ));
+            }
+        }
+        None => errors.push(
+            "content_hash.json.zst has no measurements_xxh128, but the measurements/ section is \
+             present"
+                .to_string(),
+        ),
+    }
+
+    // === Validate measurement columns ===
+    let labels: Option<Vec<String>> = match serde_json::from_slice(&labels_raw) {
+        Ok(labels) => Some(labels),
+        Err(e) => {
+            errors.push(format!(
+                "measurements/labels.json.zst does not parse as a list of strings: {e}"
+            ));
+            None
+        }
+    };
+
+    if section_count >= 1 {
+        let image_count = metadata.image_count as usize;
+        if let (Some(legend), Some(labels)) = (&unit_legend, labels) {
+            let check = (|| -> Result<(), String> {
+                let distances = f32_values(&distances_raw, &distances_name, n)?;
+                let endpoints = f32_values(&endpoints_raw, &endpoints_name, n * 4)?;
+                if meas_image_indexes_raw.len() != n * 2 * 4 {
+                    return Err(format!(
+                        "{image_indexes_name} holds {} bytes, not {}",
+                        meas_image_indexes_raw.len(),
+                        n * 2 * 4
+                    ));
+                }
+                if units_raw.len() != n {
+                    return Err(format!(
+                        "{units_name} holds {} bytes, not {n}",
+                        units_raw.len()
+                    ));
+                }
+                if camera_indexes_raw.len() != image_count * 4 {
+                    return Err(format!(
+                        "images/camera_indexes holds {} bytes, not {}",
+                        camera_indexes_raw.len(),
+                        image_count * 4
+                    ));
+                }
+                let resolved_units = resolve_measurement_units(&units_raw, legend)?;
+                let measurements = MeasurementsData {
+                    distances: ndarray::Array1::from_vec(distances),
+                    units: ndarray::Array1::from_vec(
+                        resolved_units.iter().map(|u| u.code()).collect(),
+                    ),
+                    image_indexes: ndarray::Array2::from_shape_vec(
+                        (n, 2),
+                        raw_to_u32(&meas_image_indexes_raw).into_owned(),
+                    )
+                    .expect("byte length checked above"),
+                    endpoints_xy: ndarray::Array3::from_shape_vec((n, 2, 2), endpoints)
+                        .expect("f32_values checked the length"),
+                    labels,
+                };
+                validate_measurements(
+                    &measurements,
+                    raw_to_u32(camera_indexes_raw).as_ref(),
+                    cameras,
+                )
+            })();
+            if let Err(e) = check {
+                errors.push(e);
+            }
+        }
+    }
+
+    Ok(measurements_hash)
 }

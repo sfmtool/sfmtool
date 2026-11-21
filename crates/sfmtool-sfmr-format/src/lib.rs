@@ -18,6 +18,7 @@ mod depth_stats;
 mod entries;
 mod float16;
 mod image_readings;
+mod measurements;
 mod observation_readings;
 mod patch_normals;
 mod read;
@@ -27,6 +28,10 @@ mod write;
 
 pub use depth_stats::{compute_depth_statistics, DepthStatsResult};
 pub use image_readings::{validate_image_readings, ImageReadingColumns};
+pub use measurements::{
+    validate_measurements, LengthUnit, MeasurementsData, MeasurementsMetadata, LENGTH_UNIT_CM,
+    LENGTH_UNIT_FT, LENGTH_UNIT_IN, LENGTH_UNIT_M, LENGTH_UNIT_MM,
+};
 pub use observation_readings::{
     ObservationReading, ObservationReadingColumns, ObservationReadingOptions, ReadingSampler,
     ReadingWindow, HAS_OBSERVATION_READINGS, OBSERVATION_READING_OPTIONS,

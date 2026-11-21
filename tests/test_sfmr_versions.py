@@ -1,7 +1,7 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The `.sfmr` versions this build reads: version 16 only. A file of an older
+"""The `.sfmr` versions this build reads: versions 16 and 17. A file of an older
 version some release wrote is refused by every reader with one message,
 raised as `OSError`, naming sfmtool 0.4.1 as the last release that reads it,
 and a version above the current one is refused as unsupported. See
@@ -86,21 +86,35 @@ def test_a_version_15_file_is_refused_naming_the_last_release_that_reads_it(
 def test_a_version_above_the_current_one_is_refused_as_unsupported(tmp_path):
     """A version this build does not know yet is refused as unsupported,
     naming no release."""
-    path = _rewrite(SEOUL_BULL_GROUND_TRUTH, tmp_path / "v17.sfmr", 17, widen=False)
+    path = _rewrite(SEOUL_BULL_GROUND_TRUTH, tmp_path / "v18.sfmr", 18, widen=False)
     for read in _READERS:
-        with pytest.raises(OSError, match="unsupported .sfmr format version 17"):
+        with pytest.raises(OSError, match="unsupported .sfmr format version 18"):
             read(path)
     ok, errors = verify_sfmr(path)
     assert not ok
     assert errors == [
-        "Invalid format: unsupported .sfmr format version 17 (this build reads "
-        "versions 16 to 16)"
+        "Invalid format: unsupported .sfmr format version 18 (this build reads "
+        "versions 16 to 17)"
     ]
+
+
+def test_a_version_16_file_is_read(tmp_path):
+    """A version 16 file (no measurements) is accepted by every reader."""
+    shutil.copy(
+        SEOUL_BULL_GROUND_TRUTH.parent / ".sfm-workspace.json",
+        tmp_path / ".sfm-workspace.json",
+    )
+    path = _rewrite(SEOUL_BULL_GROUND_TRUTH, tmp_path / "v16.sfmr", 16, widen=False)
+    assert read_sfmr_metadata(path)["version"] == 16
+    assert read_sfmr(path)["metadata"]["version"] == 16
+    assert len(read_sfmr_content_hash(path)) == 32
+    recon = SfmrReconstruction.load(path)
+    assert recon.metadata()["version"] == 16
 
 
 def test_the_checked_in_file_is_read(tmp_path):
     """The same file at its own version reads, so the refusals above are the
     version's alone."""
-    path = shutil.copy(SEOUL_BULL_GROUND_TRUTH, tmp_path / "v16.sfmr")
-    assert read_sfmr_metadata(path)["version"] == 16
+    path = shutil.copy(SEOUL_BULL_GROUND_TRUTH, tmp_path / "v17.sfmr")
+    assert read_sfmr_metadata(path)["version"] == 17
     assert verify_sfmr(path) == (True, [])

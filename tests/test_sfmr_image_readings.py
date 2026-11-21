@@ -175,7 +175,7 @@ class TestWithoutReadings:
         assert recon.sharpness is None
 
         saved = SfmrReconstruction.load(out)
-        assert read_sfmr(out)["metadata"]["version"] == 16
+        assert read_sfmr(out)["metadata"]["version"] == 17
         sharpness, tensors = _image_readings(saved, saved.image_to_gray)
         _assert_bits_equal(saved.sharpness, sharpness)
         _assert_bits_equal(saved.gradient_structure_tensors_xx_yy_xy, tensors)

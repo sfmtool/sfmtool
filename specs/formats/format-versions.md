@@ -16,7 +16,7 @@ Each format crate has one constant for the version its writer writes:
 
 | Format | Constant | Current version | Oldest version read |
 |--------|----------|-----------------|---------------------|
-| `.sfmr` | [`SFMR_FORMAT_VERSION`](../../crates/sfmtool-sfmr-format/src/types.rs) | 16 | 16 |
+| `.sfmr` | [`SFMR_FORMAT_VERSION`](../../crates/sfmtool-sfmr-format/src/types.rs) | 17 | 16 |
 | `.matches` | [`MATCHES_FORMAT_VERSION`](../../crates/sfmtool-matches-format/src/types.rs) | 10 | 10 |
 | `.sift` | [`SIFT_FORMAT_VERSION`](../../crates/sfmtool-sift-format/src/types.rs) | 2 | 2 |
 | `.camrig` | [`CAMRIG_FORMAT_VERSION`](../../crates/sfmtool-camrig-format/src/types.rs) | 2 | 2 |

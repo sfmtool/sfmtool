@@ -4,10 +4,11 @@
 versions. It rewrites each `.sfmr`, `.matches` and `.camrig` file below the
 current version that the current reader reads, at its own path as the current
 version, so that a later release that stops reading that version reads every
-file in the workspace. Today the readers of all three formats read only the
-current version, `.sfmr` 16, `.matches` 10 and `.camrig` 2, so the command
-rewrites no file until one of them next changes version: it lists each file
-with what it found. A `.sfmr` file below version 16, a `.matches` file below
+file in the workspace. Today the `.sfmr` reader reads versions 16 and 17, so
+the command rewrites version 16 `.sfmr` files as version 17; the `.matches`
+and `.camrig` readers read only their current versions, 10 and 2, so no
+`.matches` or `.camrig` file is rewritten until one of those formats next
+changes version. A `.sfmr` file below version 16, a `.matches` file below
 version 10 or a `.camrig` file below version 2 is one the reader refuses, and
 the run lists it with the reader's message, which names sfmtool 0.4.1 as the
 release to upgrade it with ([What is not converted](#what-is-not-converted)).
@@ -80,12 +81,12 @@ The command then runs these phases in order.
    converted](#what-is-not-converted)).
 3. **Rewrite the files**, each atomically at its own path (a temporary file
    beside the target, renamed over it):
-   - a `.sfmr` file is loaded and saved as the current version (none today,
-     since the reader reads only the current version);
+   - a `.sfmr` file below version 17 (version 16) is loaded and saved as
+     version 17;
    - a `.matches` file is read and written as the current version (none
-     today, likewise);
+     today, since the reader reads only version 10);
    - a `.camrig` file is read and written as the current version (none
-     today, likewise).
+     today, since the reader reads only version 2).
 
 The workspace files, the `.sift` files, the `.kdf` indexes, the named image
 lists file and every other file are left as they are: the readers read every

@@ -196,6 +196,7 @@ impl SfmrReconstruction {
             rig_count: None,
             sensor_count: None,
             frame_count: None,
+            measurement_count: None,
             world_space_unit: None,
             feature_source: FEATURE_SOURCE_SIFT_FILES.to_string(),
         };

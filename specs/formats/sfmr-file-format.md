@@ -25,9 +25,10 @@ system: `.sfmr` data is stored in the canonical right-handed, Z-up world /
 ## Format versions
 
 `metadata.version` records the format version. The current version, which a
-conforming writer writes, is `16`, and it is also the oldest version a reader
-reads: every entry and key below is that of version 16. A reader refuses a
-file of any other version:
+conforming writer writes, is `17`, and the oldest version a reader reads is
+`16`: every entry and key below is that of version 17, with entries added in
+version 17 tagged `(Optional, version 17+)`. A reader refuses a file of any
+other version:
 
 - **Versions 1 to 15**, which releases before sfmtool 0.4 wrote, with a
   message that names the file, its version, the oldest version read and the
@@ -50,11 +51,12 @@ file of any other version:
 - **Version 0**, which no version of the format has used, and a version newer
   than the current one, whose layout it cannot know, as an unsupported
   version: `unsupported .sfmr format version V (this build reads versions 16
-  to 16)`.
+  to 17)`.
 
 The format crate holds the current version as `SFMR_FORMAT_VERSION`, the
-oldest version read as `SFMR_OLDEST_READ_VERSION` and the release the refusal
-names as `SFMR_LAST_RELEASE_READING_OLDER_VERSIONS`
+measurements gate as `MEASUREMENTS_FORMAT_VERSION` (`17`), the oldest version
+read as `SFMR_OLDEST_READ_VERSION` and the release the refusal names as
+`SFMR_LAST_RELEASE_READING_OLDER_VERSIONS`
 ([`types.rs`](../../crates/sfmtool-sfmr-format/src/types.rs)). A writer
 always writes the current version, whatever optional columns a file carries.
 How the version changes, which older versions a reader keeps reading, and how
@@ -62,6 +64,23 @@ one stops being read are in [format-versions.md](format-versions.md)
 ([Dropping a version](format-versions.md#dropping-a-version)).
 [Version History](#version-history) at the end of this spec lists what each
 version changed.
+
+### Version 16 → Version 17
+
+| Area | Version 16 | Version 17 |
+|------|------------|------------|
+| `measurements/` section | Not defined | Optional section storing physical distance measurements (`distances`, `endpoints_xy`, `image_indexes`, `labels.json`, `metadata.json`, `units`) |
+| `metadata.json.zst` | No `measurement_count` key | Optional `measurement_count` (`u32`, `>= 1`), present iff `measurements/` is present |
+| `content_hash.json.zst` | No `measurements_xxh128` key | Optional `measurements_xxh128`, present iff `measurements/` is present and folded into `content_xxh128` after `tracks_xxh128` |
+
+A version 16 file has no `measurements/` section and reads with no
+measurements (`measurements: None`). A reader and a verifier refuse a version
+16 file that carries any `measurements/` entry, a top-level `measurement_count`
+key or a `measurements_xxh128` hash, since no version 16 writer wrote them.
+The version changed because a version 16 reader does not know `measurements/`:
+without a new version it would silently ignore stored measurements and drop
+them on re-save, and its `content_xxh128` check would fail because
+`measurements_xxh128` participates in the whole-file digest.
 
 ## Coordinate System Conventions
 
@@ -244,23 +263,30 @@ reconstruction.sfmr (ZIP archive)
 │   ├── patch_u_halfvec_xyz.{N}.3.float32.zst          # (Optional) in-plane half-extent vector u
 │   ├── patch_v_halfvec_xyz.{N}.3.float32.zst          # (Optional) in-plane half-extent vector v
 │   └── patch_bitmaps_y_x_rgba.{N}.{R}.{R}.4.uint8.zst # (Optional) R×R RGBA patch textures, alpha = confidence
-└── tracks/
-    ├── blur_matched_bitmap_zncc_deficit.{M}.float16.zst  # (Optional, readings) 1 − the blur-matched ZNCC against the stored bitmap
-    ├── image_indexes.{M}.uint32.zst           # Image index per observation
-    ├── feature_indexes.{M}.uint32.zst         # (sift_files only) feature index per observation
-    ├── keypoints_xy.{M}.2.float32.zst         # inline 2D keypoint (embedded_patches; optional in sift_files)
-    ├── observation_confidence.{M}.uint8.zst   # (Optional) per-observation blur-matched ZNCC against the patch bitmap
-    ├── plain_bitmap_zncc_deficit.{M}.float16.zst      # (Optional, readings) 1 − the plain ZNCC against the stored bitmap
-    ├── point_indexes.{M}.uint32.zst           # Point index per observation
-    ├── observation_counts.{N}.uint32.zst      # Observations per point
-    ├── reference_observations.{N}.int32.zst   # (with the patch frame) observation the bitmap is, or is to be, rendered from
-    ├── zncc_self_similarity_cos_view_angle.{M}.float16.zst          # (Optional, readings) cos θ of the render
-    ├── zncc_self_similarity_ellipse_axes.{M}.2.float16.zst          # (Optional, readings) self-similarity semi-axes, grid px
-    ├── zncc_self_similarity_ellipse_axes_is_at_least.{M}.2.uint8.zst # (Optional, readings) 1 where an axis may be longer
-    ├── zncc_self_similarity_ellipse_major_angle.{M}.float16.zst     # (Optional, readings) major axis angle, radians
-    ├── zncc_self_similarity_tilt_angle.{M}.float16.zst              # (Optional, readings) tilt direction of the render, radians
-    ├── zncc_self_similarity_zoom.{M}.2.float16.zst                  # (Optional, readings) [least, most] zoom of the render
-    └── metadata.json.zst                      # Tracks metadata
+├── tracks/
+│   ├── blur_matched_bitmap_zncc_deficit.{M}.float16.zst  # (Optional, readings) 1 − the blur-matched ZNCC against the stored bitmap
+│   ├── image_indexes.{M}.uint32.zst           # Image index per observation
+│   ├── feature_indexes.{M}.uint32.zst         # (sift_files only) feature index per observation
+│   ├── keypoints_xy.{M}.2.float32.zst         # inline 2D keypoint (embedded_patches; optional in sift_files)
+│   ├── observation_confidence.{M}.uint8.zst   # (Optional) per-observation blur-matched ZNCC against the patch bitmap
+│   ├── plain_bitmap_zncc_deficit.{M}.float16.zst      # (Optional, readings) 1 − the plain ZNCC against the stored bitmap
+│   ├── point_indexes.{M}.uint32.zst           # Point index per observation
+│   ├── observation_counts.{N}.uint32.zst      # Observations per point
+│   ├── reference_observations.{N}.int32.zst   # (with the patch frame) observation the bitmap is, or is to be, rendered from
+│   ├── zncc_self_similarity_cos_view_angle.{M}.float16.zst          # (Optional, readings) cos θ of the render
+│   ├── zncc_self_similarity_ellipse_axes.{M}.2.float16.zst          # (Optional, readings) self-similarity semi-axes, grid px
+│   ├── zncc_self_similarity_ellipse_axes_is_at_least.{M}.2.uint8.zst # (Optional, readings) 1 where an axis may be longer
+│   ├── zncc_self_similarity_ellipse_major_angle.{M}.float16.zst     # (Optional, readings) major axis angle, radians
+│   ├── zncc_self_similarity_tilt_angle.{M}.float16.zst              # (Optional, readings) tilt direction of the render, radians
+│   ├── zncc_self_similarity_zoom.{M}.2.float16.zst                  # (Optional, readings) [least, most] zoom of the render
+│   └── metadata.json.zst                      # Tracks metadata
+└── measurements/                              # (Optional, version 17+) Physical distance measurements
+    ├── distances.{N}.float32.zst              # Measured physical distance per measurement
+    ├── endpoints_xy.{N}.2.2.float32.zst       # Sub-pixel (x, y) coordinates of the two endpoints
+    ├── image_indexes.{N}.2.uint32.zst         # Observing image index pair per measurement
+    ├── labels.json.zst                        # Human-readable label per measurement
+    ├── metadata.json.zst                      # Measurement count and unit_names legend
+    └── units.{N}.uint8.zst                    # Length unit code per measurement, indexing unit_names
 ```
 
 **Observation source.** A file declares, at the top level, a
@@ -275,7 +301,7 @@ than only by reference. See
 [Observation source](#observation-source) below.
 
 Where:
-- `{N}` = number of items (images, points, etc.)
+- `{N}` = number of items (images, points, measurements, etc.)
 - `{S}` = total number of sensors across all rigs
 - `{F}` = number of frames (temporal instants)
 - `{M}` = number of observations (track elements)
@@ -289,7 +315,7 @@ JSON structure describing the reconstruction:
 
 ```json
 {
-  "version": 16,
+  "version": 17,
   "feature_source": "sift_files",
   "operation": "sfm_solve",
   "tool": "colmap",
@@ -320,12 +346,13 @@ JSON structure describing the reconstruction:
   "camera_count": 1,
   "rig_count": 1,
   "sensor_count": 6,
-  "frame_count": 3
+  "frame_count": 3,
+  "measurement_count": 2
 }
 ```
 
 **Field descriptions:**
-- `version`: Format version number, `16` (see [Format versions](#format-versions)).
+- `version`: Format version number, `17` (see [Format versions](#format-versions)).
 - `feature_source`: (required) How each observation's 2D coordinate is carried
   — `"sift_files"` (a reference into a per-image `.sift` file) or
   `"embedded_patches"` (an inline patch-derived keypoint). A file is wholly one
@@ -370,6 +397,7 @@ JSON structure describing the reconstruction:
 - `rig_count`: (Optional) Number of rig definitions. Present only when rig data exists.
 - `sensor_count`: (Optional) Total sensors across all rigs. Present only when rig data exists.
 - `frame_count`: (Optional) Number of frames (temporal instants). Present only when rig data exists.
+- `measurement_count`: (Optional, version 17+) Number of physical distance measurements (`>= 1`). Present if and only if the `measurements/` section exists.
 
 #### The retired `lineage` key
 
@@ -462,6 +490,7 @@ XXH128 hashes for integrity verification:
   "images_xxh128": "...",
   "points3d_xxh128": "...",
   "tracks_xxh128": "...",
+  "measurements_xxh128": "...",
   "derived_xxh128": "...",
   "content_xxh128": "..."
 }
@@ -481,8 +510,9 @@ in the `content_xxh128` entry below.
 - `images_xxh128`: The `images/` section hash. It does not cover the depth statistics and histogram files, which are the `derived/` section. The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file. The optional `thumbnails_y_x_rgb` participates only when present, in its lexicographic slot (after `sift_content_hashes`, before `translations_xyz`). The optional per-image intrinsic adjustment columns participate only when present, each in its lexicographic slot: `focal_adjustments` after `feature_tool_hashes` (in an `embedded_patches` file, after `camera_indexes`) and before `image_file_hashes` and `metadata.json`; `principal_point_adjustments_xy` after `names.json` and before `quaternions_wxyz`. The optional per-image radial B-spline correction and rolling-shutter rates participate the same way, `radial_bspline_adjustments` then `rolling_shutter_rates_xyz`, after `quaternions_wxyz` and before `sift_content_hashes` (in an `embedded_patches` file, before `thumbnails_y_x_rgb` and `translations_xyz`). The two image-reading columns (required) take their lexicographic slots: `gradient_structure_tensors_xx_yy_xy` after `focal_adjustments` (after `feature_tool_hashes` in a file without focal adjustments, after `camera_indexes` in an `embedded_patches` file without them) and before `image_file_hashes` and `metadata.json`; `sharpness` after `rolling_shutter_rates_xyz` (after `radial_bspline_adjustments` or `quaternions_wxyz` when those are absent) and before `sift_content_hashes` (in an `embedded_patches` file, before `thumbnails_y_x_rgb` and `translations_xyz`). The `images/metadata.json` bytes, which carry the `has_thumbnails` flag and the readings' `image_to_gray`, are always included, so two files that differ only in whether they carry thumbnails hash differently.
 - `points3d_xxh128`: The `points3d/` section hash. Includes the optional per-point arrays — `normals_xyz`, or in a file with the patch frame `underived_normals_xyz` (in its lexicographic slot, after `reprojection_errors`, the last), `normal_confidence`, the constraint triple `point_constraints` / `constraint_distances` / `constraint_reference_images` (in their lexicographic slots: `constraint_distances` and `constraint_reference_images` after `colors_rgb` and before `metadata.json`, `point_constraints` after the patch-frame files and before `positions_xyzw`), and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
 - `tracks_xxh128`: The `tracks/` section hash. `feature_indexes` is present for a `sift_files` file and absent for an `embedded_patches` one. `keypoints_xy` participates whenever it is present — always in an `embedded_patches` file, and in a `sift_files` file when it carries the optional inline copy — in its lexicographic slot (after `image_indexes`, before `metadata.json`). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`). `reference_observations` participates when present (exactly when `points3d/metadata.json` has `has_uv_frames`), in its lexicographic slot, after `point_indexes`. The eight observation-reading columns participate when `has_observation_readings` is set, each in its lexicographic slot: `blur_matched_bitmap_zncc_deficit` first, before `feature_indexes`; `plain_bitmap_zncc_deficit` after `observation_counts`, before `point_indexes`; and the six `zncc_self_similarity_*` columns last, after `reference_observations`, in the order `cos_view_angle`, `ellipse_axes`, `ellipse_axes_is_at_least`, `ellipse_major_angle`, `tilt_angle`, `zoom`.
+- `measurements_xxh128`: (Optional, version 17+) The `measurements/` section hash, over `measurements/distances`, `measurements/endpoints_xy`, `measurements/image_indexes`, `measurements/labels.json`, `measurements/metadata.json` and `measurements/units` in that lexicographic path order. Present if and only if the `measurements/` section exists.
 - `derived_xxh128`: (required) The `derived/` section hash, over `depth_statistics.json.zst` then `observed_depth_histogram_counts`. Verified like every other section hash, and **not** part of `content_xxh128`. A file without it is refused.
-- `content_xxh128`: The whole-file digest over the section hashes that say what the reconstruction *is*, in the order metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks. The `derived/` section is excluded (see "Derived data is verified but not identifying").
+- `content_xxh128`: The whole-file digest over the section hashes that say what the reconstruction *is*, in the order metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks, measurements (if present). The `derived/` section is excluded (see "Derived data is verified but not identifying").
 
 **Note**: The two top-level entries `content_hash.json.zst` and
 `written.json.zst` are outside every section hash and so outside
@@ -2755,6 +2785,130 @@ The entries:
     new reconstruction with no readings.
 - **Absent.** A file without the flag reads with no readings.
 
+### 10. Measurements (Optional, version 17+)
+
+The `measurements/` section stores physical distance measurements between pairs
+of points observed in images of the reconstruction. Each row records a measured
+length, its physical unit, the pair of images in which the two endpoints were
+observed, the sub-pixel image coordinates of both endpoints, and a
+human-readable label.
+
+The section is optional: present if and only if there is at least one
+measurement (`measurement_count >= 1`), and absent when there are none.
+
+#### `measurements/metadata.json.zst`
+
+```json
+{
+  "measurement_count": 2,
+  "unit_names": ["mm", "cm", "m", "in", "ft"]
+}
+```
+
+**Field descriptions:**
+- `measurement_count`: Number of measurements (`>= 1`). Must match the top-level
+  optional `measurement_count` in `metadata.json.zst`.
+- `unit_names`: The legend `measurements/units` indexes, one unit name per code
+  in code order. The five defined unit names and their metre conversion factors
+  are those of [World-Space Unit](#world-space-unit): `"mm"`, `"cm"`, `"m"`,
+  `"in"` and `"ft"`. Following the format's legend-indexed enumeration rule
+  ([Per-point constraints](#per-point-constraints-optional)), a writer always
+  writes the full canonical legend `["mm", "cm", "m", "in", "ft"]` (codes
+  `0..=4`), and a reader accepts any non-empty legend of unique defined unit
+  names in any order, validates every code against it, and normalises the
+  column onto the canonical order at the I/O boundary.
+
+#### `measurements/distances.{N}.float32.zst`
+
+Measured physical distance for each measurement:
+
+- **Shape**: `(N,)` where `N = measurement_count`
+- **Data type**: `float32` (little-endian)
+- **Format**: Strictly positive, finite distance (`> 0.0` and finite), in the
+  unit named by the matching row of `measurements/units`.
+- **Precision**: Physical distance measurements (tape measures, laser
+  rangefinders, calibrated scale bars) carry at most four to five significant
+  digits. IEEE-754 `float32` has a 24-bit significand (relative rounding error
+  at most `2^-24 ≈ 6.0 · 10^-8`, roughly seven decimal digits) over positive
+  lengths from micrometres to kilometres, which exceeds the accuracy of
+  physical measurements by orders of magnitude at half the storage of
+  `float64`.
+
+#### `measurements/units.{N}.uint8.zst`
+
+Physical length unit per measurement:
+
+- **Shape**: `(N,)` where `N = measurement_count`
+- **Data type**: `uint8`
+- **Format**: An index into `measurements/metadata.json`'s `unit_names` legend.
+  A writer emits the canonical codes (`0` = `"mm"`, `1` = `"cm"`, `2` = `"m"`,
+  `3` = `"in"`, `4` = `"ft"`). A reader resolves every code through the file's
+  `unit_names` legend and hands back the canonical numbering, so a file's own
+  numbering stops at the I/O boundary.
+
+#### `measurements/image_indexes.{N}.2.uint32.zst`
+
+Observing image pair for each measurement:
+
+- **Shape**: `(N, 2)` where `N = measurement_count`
+- **Data type**: `uint32` (little-endian)
+- **Format**: Row `i` holds `[img_0, img_1]`, the indexes into `images/` of the
+  images in which endpoint `0` and endpoint `1` are observed. Each index must
+  be `< image_count`. Both endpoints may lie in the same image
+  (`img_0 == img_1`).
+
+#### `measurements/endpoints_xy.{N}.2.2.float32.zst`
+
+Sub-pixel image coordinates of the two endpoints of each measurement:
+
+- **Shape**: `(N, 2, 2)` where `N = measurement_count`
+- **Data type**: `float32` (little-endian)
+- **Format**: Element `[i, k, 0..2]` is `(x, y)` in pixel coordinates of
+  `images[image_indexes[i, k]]` for endpoint `k ∈ {0, 1}`, following the same
+  top-left origin, half-pixel-centre convention as
+  [`tracks/keypoints_xy`](#trackskeypoints_xym2float32zst). Every coordinate
+  must be finite and lie within `[0, width) × [0, height)` of that image's
+  camera intrinsics.
+- **Precision**: `float32` matches `tracks/keypoints_xy`: sub-pixel coordinates
+  on images up to tens of thousands of pixels wide need far fewer than seven
+  significant digits.
+
+#### `measurements/labels.json.zst`
+
+Human-readable label or description for each measurement:
+
+```json
+[
+  "ruler edge",
+  ""
+]
+```
+
+- **Format**: JSON array of `N` UTF-8 strings (`N = measurement_count`),
+  mirroring `images/names.json.zst`. An empty string `""` is valid for an
+  unlabelled measurement.
+
+#### Presence and validity
+
+A valid `measurements/` section satisfies all of the following; the writer,
+reader and verifier all enforce them:
+
+- the section is present if and only if top-level `metadata.measurement_count`
+  and `content_hash.measurements_xxh128` are present; a file with any
+  `measurements/` entry without `measurements/metadata.json.zst`, or with
+  either top-level key without the section, is refused;
+- `measurement_count` in `measurements/metadata.json.zst` is `>= 1` and equals
+  top-level `metadata.measurement_count`;
+- `unit_names` is a non-empty list of unique names from `["mm", "cm", "m",
+  "in", "ft"]`;
+- every `units` code is below `unit_names.len()`;
+- every `distances` value is finite and strictly positive (`> 0.0`);
+- every `image_indexes` value is `< image_count`;
+- every `endpoints_xy` coordinate `(x, y)` is finite and within
+  `[0, width) × [0, height)` of the camera assigned to
+  `images[image_indexes[i, k]]`;
+- `labels.json.zst` is a JSON array of exactly `measurement_count` strings.
+
 ### Observation source
 
 A file declares at the top level which kind of observation it carries —
@@ -2910,6 +3064,8 @@ frame is per point (not per observation), two views of the same point share
 - `image_indexes[j]` → index into `images` arrays
 - `feature_indexes[j]` (sift_files) → index into feature file for `images[image_indexes[j]]`; in `embedded_patches`, `keypoints_xy[j]` carries the 2D coordinate directly
 - `point_indexes[j]` → index into `points3d` arrays
+- `measurements/image_indexes[i, k]` → index into `images` arrays (for endpoint `k ∈ {0, 1}` of measurement `i`)
+- `measurements/units[i]` → index into `measurements/metadata.json`'s `unit_names` legend
 
 ## Compression Details
 
@@ -3001,7 +3157,16 @@ For the structure, a file fails verification when:
   full `normals_xyz` column is present, or `underived_normals_xyz` is missing,
   extra or holds another number of rows than the file has underived points,
   or the entry appears in a file that may not hold it
-  ([Derived normals](#derived-normals)).
+  ([Derived normals](#derived-normals));
+- a version 16 file carries `measurement_count`, `measurements_xxh128` or any
+  `measurements/` entry;
+- `measurements/` entries appear without `measurements/metadata.json.zst`,
+  either top-level `measurement_count` or `measurements_xxh128` disagrees with
+  the section's presence, `measurements/metadata.json.zst` has
+  `measurement_count < 1`, disagrees with top-level `measurement_count` or
+  lacks a valid `unit_names` legend, or any `measurements/` column has the
+  wrong byte length or breaks a rule of
+  [Measurements](#10-measurements-optional-version-17).
 
 A verifier reports every failure it finds rather than stopping at the first; a
 file whose entries it cannot read at all is an error, not a list of failures.
@@ -3207,6 +3372,12 @@ describes. Other parts of this spec are implemented by:
   reconstruction and sets the field. The five units and their lengths in
   metres are `sfmtool_sfmr_format::WORLD_SPACE_UNITS`, re-exported by
   `sfmtool-core`, with `world_space_unit_in_metres` to look one up.
+- Measurements: `LengthUnit`, `MeasurementsMetadata`, `MeasurementsData` and
+  `validate_measurements` live in
+  [`measurements.rs`](../../crates/sfmtool-sfmr-format/src/measurements.rs);
+  `LengthUnit` derives its names and metre factors directly from
+  `WORLD_SPACE_UNITS`. Read, write and verify in `sfmtool-sfmr-format` all
+  route through `validate_measurements`.
 - The presence rules between the optional per-point pieces and
   `feature_source`: `write_sfmr`, `read_sfmr` and `verify_sfmr` apply the one
   predicate in [`types.rs`](../../crates/sfmtool-sfmr-format/src/types.rs)
@@ -3381,7 +3552,8 @@ other value, and a reader and a verifier refuse a file that carries one.
 When absent, the reconstruction is in arbitrary (unscaled) units — the default state after an SfM
 solve.
 
-The length of one unit in metres:
+The length of one unit in metres (the authoritative unit table shared by
+`world_space_unit` and `measurements/units`):
 
 | `world_space_unit` | Metres |
 |--------------------|--------|
@@ -3412,10 +3584,16 @@ appropriate units (e.g., "xyz: (1234.0, -567.0, 2891.0) mm" instead of bare numb
 ## Version History
 
 One line per version, newest first. sfmtool 0.4.1 is the last release that
-reads versions 1 to 15; this build reads version 16 only
+reads versions 1 to 15; this build reads versions 16 and 17
 ([Format versions](#format-versions)).
 
-- **Version 16**: the current version. The sharpness and five of the
+- **Version 17**: the current version. Adds the optional `measurements/`
+  section for physical distance measurements between pairs of points observed
+  in images (`distances`, `endpoints_xy`, `image_indexes`, `labels.json`,
+  `metadata.json` with `unit_names` legend, `units`), top-level optional
+  `measurement_count`, and optional `measurements_xxh128` folded into
+  `content_xxh128` after `tracks_xxh128`.
+- **Version 16**: the sharpness and five of the
   observation-reading columns are stored as `float16`, and the two bitmap
   scores as their ZNCC deficits `1 − z` in `float16` under names ending
   `_zncc_deficit`. In a file with both normals and the patch frame, the

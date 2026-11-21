@@ -615,3 +615,50 @@ fn a_run_stopped_part_way_finishes_when_run_again() {
     let report = run(&fixture, false);
     assert_eq!(outcomes(&report), expected_outcomes(&fixture));
 }
+
+#[test]
+fn a_version_16_sfmr_is_upgraded_to_the_current_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("ws");
+    let fixture = Fixture { dir, root };
+    write_workspace_file(&fixture.root, 2);
+
+    let v16 = fixture.path("sfmr/v16.sfmr");
+    reconstruction().save(&v16, &Progress::none()).unwrap();
+    rewrite_archive(&v16, relabel(16, |_| false));
+    assert_eq!(
+        sfmtool_sfmr_format::read_sfmr_metadata(&v16)
+            .unwrap()
+            .version,
+        16
+    );
+
+    let before = snapshot(&fixture.root);
+    let dry = run(&fixture, true);
+    assert_eq!(
+        outcomes(&dry),
+        vec![(v16.clone(), UpgradeFileKind::Sfmr, "converted")]
+    );
+    assert!(dry.notes.iter().any(|n| n.contains("content_xxh128")));
+    assert_eq!(snapshot(&fixture.root), before);
+
+    let report = run(&fixture, false);
+    assert_eq!(
+        outcomes(&report),
+        vec![(v16.clone(), UpgradeFileKind::Sfmr, "converted")]
+    );
+    assert!(report.notes.iter().any(|n| n.contains("content_xxh128")));
+    assert_eq!(
+        sfmtool_sfmr_format::read_sfmr_metadata(&v16)
+            .unwrap()
+            .version,
+        sfmtool_sfmr_format::SFMR_FORMAT_VERSION
+    );
+    assert_eq!(
+        sfmtool_sfmr_format::verify_sfmr(&v16).unwrap(),
+        (true, vec![])
+    );
+
+    let again = run(&fixture, false);
+    assert!(again.nothing_to_do(), "{again:?}");
+}
