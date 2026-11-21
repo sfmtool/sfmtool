@@ -196,11 +196,14 @@ fn an_open_whose_photographs_lack_pixels_fails() {
     let path = saved_with_photographs(&dir);
     let recon = SfmrReconstruction::load(&path, &sfmtool_core::progress::Progress::none())
         .expect("the file reads");
+    // The paths the open reads: the read canonicalizes the workspace
+    // directory, which differs from `dir` where the temp directory is reached
+    // through a link or a short name (macOS `/var`, a Windows `RUNNER~1`).
     let photographs: Vec<PathBuf> = recon
         .image_set
         .images
         .iter()
-        .map(|image| dir.join(&image.name))
+        .map(|image| recon.workspace_dir.join(&image.name))
         .collect();
 
     let mut state = AppState::new();
