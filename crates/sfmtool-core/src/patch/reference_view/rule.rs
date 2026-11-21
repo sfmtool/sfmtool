@@ -111,6 +111,13 @@ impl ReferenceViewOptions {
     pub fn angle_factor(&self, viewing_angle_deg: f64) -> f64 {
         1.0 + self.angle_weight * viewing_angle_deg.max(0.0).to_radians().tan()
     }
+
+    /// The agreement penalty `1 + max(0, x − agreement_band) / agreement_scale`
+    /// of a ZNCC `shortfall` `x`: `1` inside the band, `2` at one scale past
+    /// it.
+    pub fn agreement_penalty(&self, shortfall: f64) -> f64 {
+        hinge(shortfall, self.agreement_band, self.agreement_scale)
+    }
 }
 
 /// One of the terms a view's cost is the product of
@@ -422,9 +429,9 @@ pub fn choose_reference_view(
             1.0
         };
         let angle_factor = angle(v).map_or(unread_angle, |a| options.angle_factor(a));
-        let agreement = shortfall(v).or(unread_shortfall).map_or(1.0, |s| {
-            hinge(s, options.agreement_band, options.agreement_scale)
-        });
+        let agreement = shortfall(v)
+            .or(unread_shortfall)
+            .map_or(1.0, |s| options.agreement_penalty(s));
         let cells = finite(v.cell_deficit).map_or(1.0, |d| {
             hinge(d, options.cell_deficit_band, options.cell_deficit_scale)
         });

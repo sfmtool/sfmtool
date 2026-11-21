@@ -199,6 +199,15 @@ The two stored halves of an `SfmrReconstruction`'s data, in Rust and in prose
 |------|-------|-----|-----|
 | **image set** / **point set** | the two stored halves of a reconstruction's data. The **image set** holds the cameras, the posed images, the rig frames and the per-image columns, all addressed by image index: `ImageSet`, the field `SfmrReconstruction::image_set`. The **point set** holds the points, their tracks and the per-point and per-observation columns: `PointSet`, the field `SfmrReconstruction::point_set` | `ImageTable`, `image_table`, "the image table" for the reconstruction's half | *table* is kept for a derived view a person sorts and filters, such as the track table, and a stored half named like one reads as derived. *Set* pairs the image half with the point half under one word. The image table of a `.kdf` or `.matches` file (`KdfImageTable`, the `image_table()` accessor of a `.kdf` reader) is a part of that file's format and keeps its name |
 
+## Measurements
+
+The words for a stored measurement's ends and how a 3D position is read for them
+([core/reconstruction/measurement-endpoint.md](core/reconstruction/measurement-endpoint.md)).
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **endpoint** / **resolve** (a measurement's) | an **endpoint** is one end of a stored measurement: a pixel in one image, not a point. To **resolve** it is to find the observation in that image whose square holds the pixel and read the pixel as a texel `(s, t)` of the point's patch and the 3D position `X_p + s·u + t·v` that texel stands for (`resolve_measurement_endpoint`, [core/reconstruction/measurement-endpoint.md](core/reconstruction/measurement-endpoint.md)) | `endpoint point`, `locate`, `triangulate` the endpoint | the stored value is a pixel because it can name a place no point stands for yet; *resolve* says the answer depends on the reconstruction it is read against and is read again after every edit, where *triangulate* would claim new rays are intersected |
+
 ## File format versions
 
 | Word | Means | Not | Why |

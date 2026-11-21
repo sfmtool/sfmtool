@@ -14,6 +14,7 @@ mod embed;
 pub mod image_adjustment_statistics;
 mod image_file_hashes;
 pub mod image_readings;
+pub mod measurement_endpoint;
 pub mod minimal;
 pub mod move_camera;
 pub mod outermost_keypoint;
