@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for `SfmrReconstruction.resolve_measurement_endpoint` and
-`SfmrReconstruction.resolve_measurements` on the seoul_bull ground truth."""
+`SfmrReconstruction.resolve_distance_measurements` on the seoul_bull ground truth."""
 
 import numpy as np
 import pytest
@@ -62,22 +62,24 @@ def test_a_refusal_raises_its_sentence(recon):
         recon.resolve_measurement_endpoint(0, (-1.0, 10.0))
 
 
-def test_measurements_resolve_with_their_scene_distance(recon):
-    assert recon.resolve_measurements() == []
+def test_distance_measurements_resolve_with_their_scene_distance(recon):
+    assert recon.resolve_distance_measurements() == []
     a, b = _finite_rows(recon, 2)
     images = recon.track_image_indexes
     kp = recon.keypoints_xy
     measured = recon.clone_with_changes(
         measurements={
-            "distances": np.array([1.0], dtype=np.float32),
-            "units": np.array([LENGTH_UNIT_NAMES.index("m")], dtype=np.uint8),
-            "image_indexes": np.array([[images[a], images[b]]], dtype=np.uint32),
-            "endpoints_xy": np.array([[kp[a], kp[b]]], dtype=np.float32),
-            "labels": [""],
+            "distance": {
+                "distances": np.array([1.0], dtype=np.float32),
+                "units": np.array([LENGTH_UNIT_NAMES.index("m")], dtype=np.uint8),
+                "image_indexes": np.array([[images[a], images[b]]], dtype=np.uint32),
+                "endpoints_xy": np.array([[kp[a], kp[b]]], dtype=np.float32),
+                "labels": [""],
+            }
         }
     )
 
-    (m,) = measured.resolve_measurements(layer_depth_factor=2.0)
+    (m,) = measured.resolve_distance_measurements(layer_depth_factor=2.0)
 
     assert m["refusals"] == [None, None]
     ends = [e["candidates"][e["chosen"]]["position"] for e in m["endpoints"]]

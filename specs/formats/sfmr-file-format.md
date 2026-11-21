@@ -69,14 +69,14 @@ version changed.
 
 | Area | Version 16 | Version 17 |
 |------|------------|------------|
-| `measurements/` section | Not defined | Optional section storing physical distance measurements (`distances`, `endpoints_xy`, `image_indexes`, `labels.json`, `metadata.json`, `units`) |
-| `metadata.json.zst` | No `measurement_count` key | Optional `measurement_count` (`u32`, `>= 1`), present iff `measurements/` is present |
+| `measurements/` section | Not defined | Optional section with one subdirectory per kind of measurement; the one kind is physical distance measurements, under `measurements/distance/` (`distances`, `endpoints_xy`, `image_indexes`, `labels.json`, `metadata.json`, `units`) |
+| `metadata.json.zst` | No `distance_measurement_count` key | Optional `distance_measurement_count` (`u32`, `>= 1`), present iff `measurements/distance/` is present |
 | `content_hash.json.zst` | No `measurements_xxh128` key | Optional `measurements_xxh128`, present iff `measurements/` is present and folded into `content_xxh128` after `tracks_xxh128` |
 
 A version 16 file has no `measurements/` section and reads with no
-measurements (`measurements: None`). A reader and a verifier refuse a version
-16 file that carries any `measurements/` entry, a top-level `measurement_count`
-key or a `measurements_xxh128` hash, since no version 16 writer wrote them.
+measurements. A reader and a verifier refuse a version 16 file that carries
+any `measurements/` entry, a top-level `distance_measurement_count` key or a
+`measurements_xxh128` hash, since no version 16 writer wrote them.
 The version changed because a version 16 reader does not know `measurements/`:
 without a new version it would silently ignore stored measurements and drop
 them on re-save, and its `content_xxh128` check would fail because
@@ -280,13 +280,14 @@ reconstruction.sfmr (ZIP archive)
 │   ├── zncc_self_similarity_tilt_angle.{M}.float16.zst              # (Optional, readings) tilt direction of the render, radians
 │   ├── zncc_self_similarity_zoom.{M}.2.float16.zst                  # (Optional, readings) [least, most] zoom of the render
 │   └── metadata.json.zst                      # Tracks metadata
-└── measurements/                              # (Optional, version 17+) Physical distance measurements
-    ├── distances.{N}.float32.zst              # Measured physical distance per measurement
-    ├── endpoints_xy.{N}.2.2.float32.zst       # Sub-pixel (x, y) coordinates of the two endpoints
-    ├── image_indexes.{N}.2.uint32.zst         # Observing image index pair per measurement
-    ├── labels.json.zst                        # Human-readable label per measurement
-    ├── metadata.json.zst                      # Measurement count and unit_names legend
-    └── units.{N}.uint8.zst                    # Length unit code per measurement, indexing unit_names
+└── measurements/                              # (Optional, version 17+) One subdirectory per kind of measurement
+    └── distance/                              # (Optional) Physical distance measurements
+        ├── distances.{N}.float32.zst          # Measured physical distance per measurement
+        ├── endpoints_xy.{N}.2.2.float32.zst   # Sub-pixel (x, y) coordinates of the two endpoints
+        ├── image_indexes.{N}.2.uint32.zst     # Observing image index pair per measurement
+        ├── labels.json.zst                    # Human-readable label per measurement
+        ├── metadata.json.zst                  # Measurement count and unit_names legend
+        └── units.{N}.uint8.zst                # Length unit code per measurement, indexing unit_names
 ```
 
 **Observation source.** A file declares, at the top level, a
@@ -347,7 +348,7 @@ JSON structure describing the reconstruction:
   "rig_count": 1,
   "sensor_count": 6,
   "frame_count": 3,
-  "measurement_count": 2
+  "distance_measurement_count": 2
 }
 ```
 
@@ -397,7 +398,7 @@ JSON structure describing the reconstruction:
 - `rig_count`: (Optional) Number of rig definitions. Present only when rig data exists.
 - `sensor_count`: (Optional) Total sensors across all rigs. Present only when rig data exists.
 - `frame_count`: (Optional) Number of frames (temporal instants). Present only when rig data exists.
-- `measurement_count`: (Optional, version 17+) Number of physical distance measurements (`>= 1`). Present if and only if the `measurements/` section exists.
+- `distance_measurement_count`: (Optional, version 17+) Number of physical distance measurements (`>= 1`). Present if and only if the `measurements/distance/` kind exists. Each kind of [measurement](#10-measurements-optional-version-17) has its own `<kind>_measurement_count` key, present if and only if the kind is.
 
 #### The retired `lineage` key
 
@@ -510,7 +511,7 @@ in the `content_xxh128` entry below.
 - `images_xxh128`: The `images/` section hash. It does not cover the depth statistics and histogram files, which are the `derived/` section. The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file. The optional `thumbnails_y_x_rgb` participates only when present, in its lexicographic slot (after `sift_content_hashes`, before `translations_xyz`). The optional per-image intrinsic adjustment columns participate only when present, each in its lexicographic slot: `focal_adjustments` after `feature_tool_hashes` (in an `embedded_patches` file, after `camera_indexes`) and before `image_file_hashes` and `metadata.json`; `principal_point_adjustments_xy` after `names.json` and before `quaternions_wxyz`. The optional per-image radial B-spline correction and rolling-shutter rates participate the same way, `radial_bspline_adjustments` then `rolling_shutter_rates_xyz`, after `quaternions_wxyz` and before `sift_content_hashes` (in an `embedded_patches` file, before `thumbnails_y_x_rgb` and `translations_xyz`). The two image-reading columns (required) take their lexicographic slots: `gradient_structure_tensors_xx_yy_xy` after `focal_adjustments` (after `feature_tool_hashes` in a file without focal adjustments, after `camera_indexes` in an `embedded_patches` file without them) and before `image_file_hashes` and `metadata.json`; `sharpness` after `rolling_shutter_rates_xyz` (after `radial_bspline_adjustments` or `quaternions_wxyz` when those are absent) and before `sift_content_hashes` (in an `embedded_patches` file, before `thumbnails_y_x_rgb` and `translations_xyz`). The `images/metadata.json` bytes, which carry the `has_thumbnails` flag and the readings' `image_to_gray`, are always included, so two files that differ only in whether they carry thumbnails hash differently.
 - `points3d_xxh128`: The `points3d/` section hash. Includes the optional per-point arrays — `normals_xyz`, or in a file with the patch frame `underived_normals_xyz` (in its lexicographic slot, after `reprojection_errors`, the last), `normal_confidence`, the constraint triple `point_constraints` / `constraint_distances` / `constraint_reference_images` (in their lexicographic slots: `constraint_distances` and `constraint_reference_images` after `colors_rgb` and before `metadata.json`, `point_constraints` after the patch-frame files and before `positions_xyzw`), and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
 - `tracks_xxh128`: The `tracks/` section hash. `feature_indexes` is present for a `sift_files` file and absent for an `embedded_patches` one. `keypoints_xy` participates whenever it is present — always in an `embedded_patches` file, and in a `sift_files` file when it carries the optional inline copy — in its lexicographic slot (after `image_indexes`, before `metadata.json`). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`). `reference_observations` participates when present (exactly when `points3d/metadata.json` has `has_uv_frames`), in its lexicographic slot, after `point_indexes`. The eight observation-reading columns participate when `has_observation_readings` is set, each in its lexicographic slot: `blur_matched_bitmap_zncc_deficit` first, before `feature_indexes`; `plain_bitmap_zncc_deficit` after `observation_counts`, before `point_indexes`; and the six `zncc_self_similarity_*` columns last, after `reference_observations`, in the order `cos_view_angle`, `ellipse_axes`, `ellipse_axes_is_at_least`, `ellipse_major_angle`, `tilt_angle`, `zoom`.
-- `measurements_xxh128`: (Optional, version 17+) The `measurements/` section hash, over `measurements/distances`, `measurements/endpoints_xy`, `measurements/image_indexes`, `measurements/labels.json`, `measurements/metadata.json` and `measurements/units` in that lexicographic path order. Present if and only if the `measurements/` section exists.
+- `measurements_xxh128`: (Optional, version 17+) The `measurements/` section hash, over the entries of every kind present in lexicographic path order: for the distance kind, `measurements/distance/distances`, `measurements/distance/endpoints_xy`, `measurements/distance/image_indexes`, `measurements/distance/labels.json`, `measurements/distance/metadata.json` and `measurements/distance/units`, in that order. Present if and only if the `measurements/` section exists, that is, if at least one kind is present.
 - `derived_xxh128`: (required) The `derived/` section hash, over `depth_statistics.json.zst` then `observed_depth_histogram_counts`. Verified like every other section hash, and **not** part of `content_xxh128`. A file without it is refused.
 - `content_xxh128`: The whole-file digest over the section hashes that say what the reconstruction *is*, in the order metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks, measurements (if present). The `derived/` section is excluded (see "Derived data is verified but not identifying").
 
@@ -2787,14 +2788,35 @@ The entries:
 
 ### 10. Measurements (Optional, version 17+)
 
-The `measurements/` section stores physical distance measurements between pairs
-of points observed in images of the reconstruction. Each row records a measured
+The `measurements/` section stores measurements of the scene made independently of the
+reconstruction, one subdirectory per **kind** of measurement, each with its own
+`metadata.json.zst` and columns. Version 17 defines one kind, physical
+distance measurements, under `measurements/distance/`.
+
+- A kind is present if and only if its `metadata.json.zst` is, and has at
+  least one measurement then. Its count is a top-level `metadata.json.zst` key
+  named for the kind, `<kind>_measurement_count` (`distance_measurement_count`),
+  present if and only if the kind is, in the flat style of `image_count` and
+  `point_count`.
+- The section is present if and only if at least one kind is, and absent when
+  there are no measurements.
+- One section hash, `measurements_xxh128`, covers the entries of every kind
+  present, in lexicographic path order, and is folded into `content_xxh128`
+  ([Content Hash](#2-content-hash-content_hashjsonzst)).
+- An entry under `measurements/` that is not an entry of a kind this version
+  defines, such as one in another subdirectory, is an unknown entry: a reader
+  reads the file as if the entry were absent, and no hash covers it, as for an unknown
+  entry anywhere in the file
+  ([format-versions.md](format-versions.md#when-a-formats-version-changes)).
+  A new kind is a new optional entry and so changes the version.
+
+#### Distance measurements (`measurements/distance/`)
+
+The distance kind stores physical distance measurements between pairs of
+points observed in images of the reconstruction. Each row records a measured
 length, its physical unit, the pair of images in which the two endpoints were
 observed, the sub-pixel image coordinates of both endpoints, and a
 human-readable label.
-
-The section is optional: present if and only if there is at least one
-measurement (`measurement_count >= 1`), and absent when there are none.
 
 **Why image observations rather than 3D point indexes.** Each endpoint is
 stored as an image index and pixel coordinate `(x, y)` rather than an index
@@ -2804,19 +2826,20 @@ in that image, in a patch-based `.sfmr`, covers the coordinate, the point's
 patch maps the coordinate to a 3D point
 ([core/reconstruction/measurement-endpoint.md](../core/reconstruction/measurement-endpoint.md)).
 
-#### `measurements/metadata.json.zst`
+##### `measurements/distance/metadata.json.zst`
 
 ```json
 {
-  "measurement_count": 2,
+  "distance_measurement_count": 2,
   "unit_names": ["mm", "cm", "m", "in", "ft"]
 }
 ```
 
 **Field descriptions:**
-- `measurement_count`: Number of measurements (`>= 1`). Must match the top-level
-  optional `measurement_count` in `metadata.json.zst`.
-- `unit_names`: The legend `measurements/units` indexes, one unit name per code
+- `distance_measurement_count`: Number of distance measurements (`>= 1`). Must
+  match the top-level `distance_measurement_count` in `metadata.json.zst`, and
+  has the same name, as `rigs/metadata.json.zst`'s `rig_count` does.
+- `unit_names`: The legend `measurements/distance/units` indexes, one unit name per code
   in code order. The five defined unit names and their metre conversion factors
   are those of [World-Space Unit](#world-space-unit): `"mm"`, `"cm"`, `"m"`,
   `"in"` and `"ft"`. Following the format's legend-indexed enumeration rule
@@ -2826,14 +2849,14 @@ patch maps the coordinate to a 3D point
   names in any order, validates every code against it, and normalises the
   column onto the canonical order at the I/O boundary.
 
-#### `measurements/distances.{N}.float32.zst`
+##### `measurements/distance/distances.{N}.float32.zst`
 
 Measured physical distance for each measurement:
 
-- **Shape**: `(N,)` where `N = measurement_count`
+- **Shape**: `(N,)` where `N = distance_measurement_count`
 - **Data type**: `float32` (little-endian)
 - **Format**: Strictly positive, finite distance (`> 0.0` and finite), in the
-  unit named by the matching row of `measurements/units`.
+  unit named by the matching row of `measurements/distance/units`.
 - **Precision**: Physical distance measurements (tape measures, laser
   rangefinders, calibrated scale bars) carry at most four to five significant
   digits. IEEE-754 `float32` has a 24-bit significand (relative rounding error
@@ -2842,34 +2865,34 @@ Measured physical distance for each measurement:
   physical measurements by orders of magnitude at half the storage of
   `float64`.
 
-#### `measurements/units.{N}.uint8.zst`
+##### `measurements/distance/units.{N}.uint8.zst`
 
 Physical length unit per measurement:
 
-- **Shape**: `(N,)` where `N = measurement_count`
+- **Shape**: `(N,)` where `N = distance_measurement_count`
 - **Data type**: `uint8`
-- **Format**: An index into `measurements/metadata.json`'s `unit_names` legend.
+- **Format**: An index into `measurements/distance/metadata.json`'s `unit_names` legend.
   A writer emits the canonical codes (`0` = `"mm"`, `1` = `"cm"`, `2` = `"m"`,
   `3` = `"in"`, `4` = `"ft"`). A reader resolves every code through the file's
   `unit_names` legend and hands back the canonical numbering, so a file's own
   numbering stops at the I/O boundary.
 
-#### `measurements/image_indexes.{N}.2.uint32.zst`
+##### `measurements/distance/image_indexes.{N}.2.uint32.zst`
 
 Observing image pair for each measurement:
 
-- **Shape**: `(N, 2)` where `N = measurement_count`
+- **Shape**: `(N, 2)` where `N = distance_measurement_count`
 - **Data type**: `uint32` (little-endian)
 - **Format**: Row `i` holds `[img_0, img_1]`, the indexes into `images/` of the
   images in which endpoint `0` and endpoint `1` are observed. Each index must
   be `< image_count`. Both endpoints may lie in the same image
   (`img_0 == img_1`).
 
-#### `measurements/endpoints_xy.{N}.2.2.float32.zst`
+##### `measurements/distance/endpoints_xy.{N}.2.2.float32.zst`
 
 Sub-pixel image coordinates of the two endpoints of each measurement:
 
-- **Shape**: `(N, 2, 2)` where `N = measurement_count`
+- **Shape**: `(N, 2, 2)` where `N = distance_measurement_count`
 - **Data type**: `float32` (little-endian)
 - **Format**: Element `[i, k, 0..2]` is `(x, y)` in pixel coordinates of
   `images[image_indexes[i, k]]` for endpoint `k ∈ {0, 1}`, following the same
@@ -2881,7 +2904,7 @@ Sub-pixel image coordinates of the two endpoints of each measurement:
   on images up to tens of thousands of pixels wide need far fewer than seven
   significant digits.
 
-#### `measurements/labels.json.zst`
+##### `measurements/distance/labels.json.zst`
 
 Human-readable label or description for each measurement:
 
@@ -2892,7 +2915,7 @@ Human-readable label or description for each measurement:
 ]
 ```
 
-- **Format**: JSON array of `N` UTF-8 strings (`N = measurement_count`),
+- **Format**: JSON array of `N` UTF-8 strings (`N = distance_measurement_count`),
   mirroring `images/names.json.zst`. An empty string `""` is valid for an
   unlabelled measurement.
 
@@ -2901,12 +2924,17 @@ Human-readable label or description for each measurement:
 A valid `measurements/` section satisfies all of the following; the writer,
 reader and verifier all enforce them:
 
-- the section is present if and only if top-level `metadata.measurement_count`
-  and `content_hash.measurements_xxh128` are present; a file with any
-  `measurements/` entry without `measurements/metadata.json.zst`, or with
-  either top-level key without the section, is refused;
-- `measurement_count` in `measurements/metadata.json.zst` is `>= 1` and equals
-  top-level `metadata.measurement_count`;
+- the section is present, and `content_hash.measurements_xxh128` with it, if
+  and only if at least one kind is present; a file with `measurements_xxh128`
+  and no kind, or a kind and no `measurements_xxh128`, is refused;
+- the distance kind is present if and only if
+  `measurements/distance/metadata.json.zst` and top-level
+  `metadata.distance_measurement_count` are; a file with any
+  `measurements/distance/` entry without
+  `measurements/distance/metadata.json.zst`, or with the top-level key without
+  the kind, is refused;
+- `distance_measurement_count` in `measurements/distance/metadata.json.zst` is
+  `>= 1` and equals top-level `metadata.distance_measurement_count`;
 - `unit_names` is a non-empty list of unique names from `["mm", "cm", "m",
   "in", "ft"]`;
 - every `units` code is below `unit_names.len()`;
@@ -2915,7 +2943,8 @@ reader and verifier all enforce them:
 - every `endpoints_xy` coordinate `(x, y)` is finite and within
   `[0, width) × [0, height)` of the camera assigned to
   `images[image_indexes[i, k]]`;
-- `labels.json.zst` is a JSON array of exactly `measurement_count` strings.
+- `labels.json.zst` is a JSON array of exactly `distance_measurement_count`
+  strings.
 
 ### Observation source
 
@@ -3072,8 +3101,8 @@ frame is per point (not per observation), two views of the same point share
 - `image_indexes[j]` → index into `images` arrays
 - `feature_indexes[j]` (sift_files) → index into feature file for `images[image_indexes[j]]`; in `embedded_patches`, `keypoints_xy[j]` carries the 2D coordinate directly
 - `point_indexes[j]` → index into `points3d` arrays
-- `measurements/image_indexes[i, k]` → index into `images` arrays (for endpoint `k ∈ {0, 1}` of measurement `i`)
-- `measurements/units[i]` → index into `measurements/metadata.json`'s `unit_names` legend
+- `measurements/distance/image_indexes[i, k]` → index into `images` arrays (for endpoint `k ∈ {0, 1}` of distance measurement `i`)
+- `measurements/distance/units[i]` → index into `measurements/distance/metadata.json`'s `unit_names` legend
 
 ## Compression Details
 
@@ -3166,15 +3195,17 @@ For the structure, a file fails verification when:
   extra or holds another number of rows than the file has underived points,
   or the entry appears in a file that may not hold it
   ([Derived normals](#derived-normals));
-- a version 16 file carries `measurement_count`, `measurements_xxh128` or any
-  `measurements/` entry;
-- `measurements/` entries appear without `measurements/metadata.json.zst`,
-  either top-level `measurement_count` or `measurements_xxh128` disagrees with
-  the section's presence, `measurements/metadata.json.zst` has
-  `measurement_count < 1`, disagrees with top-level `measurement_count` or
-  lacks a valid `unit_names` legend, or any `measurements/` column has the
-  wrong byte length or breaks a rule of
-  [Measurements](#10-measurements-optional-version-17).
+- a version 16 file carries `distance_measurement_count`,
+  `measurements_xxh128` or any `measurements/` entry;
+- `measurements_xxh128` disagrees with whether any kind of measurement is
+  present; `measurements/distance/` entries appear without
+  `measurements/distance/metadata.json.zst`, top-level
+  `distance_measurement_count` disagrees with the distance kind's presence,
+  `measurements/distance/metadata.json.zst` has
+  `distance_measurement_count < 1`, disagrees with top-level
+  `distance_measurement_count` or lacks a valid `unit_names` legend, or any
+  `measurements/distance/` column has the wrong byte length or breaks a rule
+  of [Measurements](#10-measurements-optional-version-17).
 
 A verifier reports every failure it finds rather than stopping at the first; a
 file whose entries it cannot read at all is an error, not a list of failures.
@@ -3380,20 +3411,29 @@ describes. Other parts of this spec are implemented by:
   reconstruction and sets the field. The five units and their lengths in
   metres are `sfmtool_sfmr_format::WORLD_SPACE_UNITS`, re-exported by
   `sfmtool-core`, with `world_space_unit_in_metres` to look one up.
-- Measurements: `LengthUnit`, `MeasurementsMetadata`, `MeasurementsData` and
-  `validate_measurements` live in
+- Measurements: `MeasurementsData`, the section with one `Option` field per
+  kind (`distance: Option<DistanceMeasurementsData>`; the default, every kind
+  `None`, means no measurements), `DistanceMeasurementsData`,
+  `DistanceMeasurementsMetadata`, `LengthUnit`, `validate_measurements` (each
+  kind present) and `validate_distance_measurements` live in
   [`measurements.rs`](../../crates/sfmtool-sfmr-format/src/measurements.rs);
   `LengthUnit` derives its names and metre factors directly from
   `WORLD_SPACE_UNITS`. Read, write and verify in `sfmtool-sfmr-format` all
-  route through `validate_measurements`. In memory, `ImageSet::measurements`
-  holds `Option<MeasurementsData>` (read through
-  `SfmrReconstruction::measurements` and `measurement_count`, preserved across
-  similarity transforms and point filters, and filtered and remapped across
-  `subset_by_image_indices`). Python sees the section as a dict of its five
-  columns (`distances`, `units`, `image_indexes`, `endpoints_xy`, `labels`) or
-  `None`, with `sfmtool.fileio.LENGTH_UNIT_NAMES` naming the canonical unit
-  codes: `read_sfmr` / `write_sfmr`, `SfmrReconstruction.from_data`,
-  `SfmrReconstruction.measurements`, `SfmrReconstruction.measurement_count` and
+  route through `validate_distance_measurements`, and every writer of the top-level
+  counts sets them from the data through
+  `MeasurementsData::set_metadata_counts`. In memory, `ImageSet::measurements`
+  holds a `MeasurementsData` (read through
+  `SfmrReconstruction::measurements` and `distance_measurement_count`,
+  preserved across similarity transforms and point filters, and filtered and
+  remapped across `subset_by_image_indices`). Python sees the section as a
+  dict with one key per kind present, `{"distance": {...}}` with the five
+  distance columns (`distances`, `units`, `image_indexes`, `endpoints_xy`,
+  `labels`), or `None` when there are no measurements; a kind that is absent
+  has no key, and a dict naming no kind or an unknown kind is refused.
+  `sfmtool.fileio.LENGTH_UNIT_NAMES` names the canonical unit codes. The form
+  is taken by `read_sfmr` / `write_sfmr`, `SfmrReconstruction.from_data`,
+  `SfmrReconstruction.measurements`,
+  `SfmrReconstruction.distance_measurement_count` and
   `clone_with_changes(measurements=...)`.
 - The presence rules between the optional per-point pieces and
   `feature_source`: `write_sfmr`, `read_sfmr` and `verify_sfmr` apply the one
@@ -3570,7 +3610,7 @@ When absent, the reconstruction is in arbitrary (unscaled) units — the default
 solve.
 
 The length of one unit in metres (the authoritative unit table shared by
-`world_space_unit` and `measurements/units`):
+`world_space_unit` and `measurements/distance/units`):
 
 | `world_space_unit` | Metres |
 |--------------------|--------|
@@ -3605,11 +3645,12 @@ reads versions 1 to 15; this build reads versions 16 and 17
 ([Format versions](#format-versions)).
 
 - **Version 17**: the current version. Adds the optional `measurements/`
-  section for physical distance measurements between pairs of points observed
-  in images (`distances`, `endpoints_xy`, `image_indexes`, `labels.json`,
-  `metadata.json` with `unit_names` legend, `units`), top-level optional
-  `measurement_count`, and optional `measurements_xxh128` folded into
-  `content_xxh128` after `tracks_xxh128`.
+  section, one subdirectory per kind of measurement, with its one kind,
+  physical distance measurements between pairs of points observed in images,
+  under `measurements/distance/` (`distances`, `endpoints_xy`,
+  `image_indexes`, `labels.json`, `metadata.json` with `unit_names` legend,
+  `units`), top-level optional `distance_measurement_count`, and optional
+  `measurements_xxh128` folded into `content_xxh128` after `tracks_xxh128`.
 - **Version 16**: the sharpness and five of the
   observation-reading columns are stored as `float16`, and the two bitmap
   scores as their ZNCC deficits `1 − z` in `float16` under names ending

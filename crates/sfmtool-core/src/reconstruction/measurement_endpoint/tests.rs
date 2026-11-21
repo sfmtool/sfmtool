@@ -22,7 +22,7 @@ use crate::reconstruction::data::{
     Point3D, SfmrImage, SfmrReconstruction, TrackObservation,
 };
 use crate::reconstruction::EditedReconstruction;
-use crate::{MeasurementsData, LENGTH_UNIT_M};
+use crate::{DistanceMeasurementsData, LENGTH_UNIT_M};
 
 use super::*;
 
@@ -546,7 +546,7 @@ fn an_endpoint_at_infinity_has_a_direction_and_no_distance() {
         assert_close(direction[c], expected[c], 1e-6, "direction");
     }
 
-    recon.image_set.measurements = Some(MeasurementsData {
+    recon.image_set.measurements.distance = Some(DistanceMeasurementsData {
         distances: array![1.0_f32, 1.0_f32],
         units: array![LENGTH_UNIT_M, LENGTH_UNIT_M],
         image_indexes: array![[0_u32, 0_u32], [0_u32, 1_u32]],
@@ -559,7 +559,8 @@ fn an_endpoint_at_infinity_has_a_direction_and_no_distance() {
         ],
         labels: vec!["to the sky".into(), "across".into()],
     });
-    let resolved = resolve_measurements(&edited(recon), &MeasurementEndpointOptions::default());
+    let resolved =
+        resolve_distance_measurements(&edited(recon), &MeasurementEndpointOptions::default());
     assert_eq!(resolved.len(), 2);
     assert!(resolved[0].endpoints[0].is_ok() && resolved[0].endpoints[1].is_ok());
     assert_eq!(resolved[0].scene_distance, None);
@@ -584,7 +585,7 @@ fn a_similarity_transform_keeps_texels_and_scales_lengths() {
     let mut recon = with_readings(recon, rows);
     let p = pixel_of_texel(&recon, 0, 0, 0.85, 0.1);
     let q = pixel_of_texel(&recon, 2, 1, -0.4, 0.3);
-    recon.image_set.measurements = Some(MeasurementsData {
+    recon.image_set.measurements.distance = Some(DistanceMeasurementsData {
         distances: array![1.0_f32],
         units: array![LENGTH_UNIT_M],
         image_indexes: array![[0_u32, 1_u32]],
@@ -599,8 +600,8 @@ fn a_similarity_transform_keeps_texels_and_scales_lengths() {
     );
     let moved = recon.apply_se3_transform(&xform);
     let opts = MeasurementEndpointOptions::default();
-    let before = resolve_measurements(&edited(recon), &opts);
-    let after = resolve_measurements(&edited(moved), &opts);
+    let before = resolve_distance_measurements(&edited(recon), &opts);
+    let after = resolve_distance_measurements(&edited(moved), &opts);
 
     assert_close(
         after[0].scene_distance.unwrap(),

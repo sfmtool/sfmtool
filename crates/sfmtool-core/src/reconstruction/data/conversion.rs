@@ -475,10 +475,10 @@ impl SfmrReconstruction {
         // cameras before building the reconstruction: the format reader has
         // done so for a file, and the raw PyO3 `from_data` builder reaches here
         // unchecked.
-        if let Some(ref measurements) = data.measurements {
+        if !data.measurements.is_empty() {
             let image_camera_indexes: Vec<u32> = images.iter().map(|im| im.camera_index).collect();
             sfmtool_sfmr_format::validate_measurements(
-                measurements,
+                &data.measurements,
                 &image_camera_indexes,
                 &data.cameras,
             )
@@ -486,7 +486,7 @@ impl SfmrReconstruction {
         }
 
         let mut metadata = data.metadata;
-        metadata.measurement_count = data.measurements.as_ref().map(|m| m.len() as u32);
+        data.measurements.set_metadata_counts(&mut metadata);
 
         let infinity_point_count = count_points_at_infinity(&points);
         let has_patch_frame = data.patch_u_halfvec_xyz.is_some();
@@ -598,7 +598,9 @@ impl SfmrReconstruction {
         metadata.point_count = point_count as u32;
         metadata.observation_count = observation_count as u32;
         metadata.infinity_point_count = self.point_set.infinity_point_count as u32;
-        metadata.measurement_count = self.image_set.measurements.as_ref().map(|m| m.len() as u32);
+        self.image_set
+            .measurements
+            .set_metadata_counts(&mut metadata);
 
         // Images
         let image_names: Vec<String> = self

@@ -242,9 +242,10 @@ pub struct SfmrMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frame_count: Option<u32>,
     /// Number of physical distance measurements (`>= 1`). Present only when
-    /// the optional `measurements/` section exists.
+    /// the optional `measurements/distance/` kind exists. Each kind of
+    /// measurement has its own `<kind>_measurement_count`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub measurement_count: Option<u32>,
+    pub distance_measurement_count: Option<u32>,
     /// Physical unit of 3D world-space coordinates (point positions and camera
     /// translations). One of `"mm"`, `"cm"`, `"m"`, `"in"`, `"ft"`. Absent when
     /// the reconstruction is in arbitrary (unscaled) units — the default after
@@ -855,7 +856,7 @@ impl OptionalPresence {
 pub const SFMR_FORMAT_VERSION: u32 = 17;
 
 /// First `.sfmr` format version that defines the optional `measurements/`
-/// section, top-level `measurement_count` and `measurements_xxh128`.
+/// section, top-level `distance_measurement_count` and `measurements_xxh128`.
 pub const MEASUREMENTS_FORMAT_VERSION: u32 = 17;
 
 /// The oldest `.sfmr` format version a reader accepts. A file of an older
@@ -931,8 +932,9 @@ pub struct ContentHash {
     /// present.
     pub points3d_xxh128: String,
     pub tracks_xxh128: String,
-    /// Hash of the optional `measurements/` section. Present only when the
-    /// `.sfmr` file carries physical distance measurements, and folded into
+    /// Hash of the optional `measurements/` section, over the entries of every
+    /// kind it holds in lexicographic path order. Present only when the
+    /// `.sfmr` file carries at least one kind of measurement, and folded into
     /// `content_xxh128` after `tracks_xxh128`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub measurements_xxh128: Option<String>,
@@ -1296,8 +1298,9 @@ pub struct SfmrData {
     /// `(N, 128)` depth histogram counts per image.
     pub observed_depth_histogram_counts: Array2<u32>,
 
-    // Physical distance measurements (optional)
-    /// Optional physical distance measurements stored in the `measurements/`
-    /// section. `None` when the file carries no measurements.
-    pub measurements: Option<crate::MeasurementsData>,
+    // Measurements (optional)
+    /// The measurements stored in the optional `measurements/` section, one
+    /// field per kind; every kind `None` (the default) when the file carries
+    /// no measurements.
+    pub measurements: crate::MeasurementsData,
 }

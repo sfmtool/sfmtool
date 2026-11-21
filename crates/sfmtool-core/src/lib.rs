@@ -79,18 +79,19 @@ pub use sfmtool_progress::{progress_info, progress_note, progress_status, progre
 /// size buffers from the same constant the format pins, without depending on
 /// `sfmtool-sfmr-format` directly.
 pub use sfmtool_sfmr_format::THUMBNAIL_SIZE;
+/// Re-exported alongside [`ImageSet::measurements`], whose kinds are these
+/// types and whose distance entries carry these unit codes: a consumer reading
+/// or building measurements needs to name them without depending on
+/// `sfmtool-sfmr-format` itself.
+pub use sfmtool_sfmr_format::{
+    DistanceMeasurementsData, LengthUnit, MeasurementsData, LENGTH_UNIT_CM, LENGTH_UNIT_FT,
+    LENGTH_UNIT_IN, LENGTH_UNIT_M, LENGTH_UNIT_MM,
+};
 /// Re-exported for the same reason, one level up: [`ImageSet::rig_frame_data`]
 /// is a public field whose type nothing downstream could otherwise name, so a
 /// consumer wanting to read — or build — a rig had to depend on `sfmtool-sfmr-format`
 /// itself to say what it was holding.
 pub use sfmtool_sfmr_format::{FramesMetadata, RigDefinition, RigFrameData, RigsMetadata};
-/// Re-exported alongside [`ImageSet::measurements`], whose entries carry these
-/// unit codes: a consumer reading or building physical distance measurements
-/// needs to name them without depending on `sfmtool-sfmr-format` itself.
-pub use sfmtool_sfmr_format::{
-    LengthUnit, MeasurementsData, LENGTH_UNIT_CM, LENGTH_UNIT_FT, LENGTH_UNIT_IN, LENGTH_UNIT_M,
-    LENGTH_UNIT_MM,
-};
 /// Re-exported alongside [`PointConstraintColumns`], whose entries are these
 /// codes: a consumer reading or building the constraint columns needs to name
 /// them without depending on `sfmtool-sfmr-format` itself.

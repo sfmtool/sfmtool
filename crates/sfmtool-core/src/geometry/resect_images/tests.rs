@@ -263,7 +263,7 @@ fn build_points(
         rig_count: None,
         sensor_count: None,
         frame_count: None,
-        measurement_count: None,
+        distance_measurement_count: None,
         world_space_unit: None,
         feature_source: FEATURE_SOURCE_EMBEDDED_PATCHES.to_string(),
     };
@@ -294,7 +294,7 @@ fn build_points(
             },
             depth_histogram_counts: Vec::new(),
             rig_frame_data: None,
-            measurements: None,
+            measurements: Default::default(),
         },
         point_set: PointSet {
             points,

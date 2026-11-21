@@ -342,9 +342,9 @@ impl Default for MeasurementEndpointOptions {
     }
 }
 
-/// Both endpoints of one stored measurement.
+/// Both endpoints of one stored distance measurement.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ResolvedMeasurement {
+pub struct ResolvedDistanceMeasurement {
     /// Each endpoint's resolution, or why it has none.
     pub endpoints: [Result<EndpointResolution, EndpointRefusal>; 2],
     /// The distance between the two picked positions, in scene units, where
@@ -698,21 +698,22 @@ fn cost_of(
     }
 }
 
-/// Resolve both endpoints of every measurement the reconstruction stores, in
+/// Resolve both endpoints of every distance measurement the reconstruction
+/// stores ([`MeasurementsData::distance`](crate::MeasurementsData::distance)), in
 /// stored order, with the distance between them in scene units where both
 /// are finite. Empty where it stores none.
 ///
 /// ```
 /// use std::sync::Arc;
 /// use sfmtool_core::reconstruction::measurement_endpoint::{
-///     resolve_measurements, MeasurementEndpointOptions,
+///     resolve_distance_measurements, MeasurementEndpointOptions,
 /// };
 /// use sfmtool_core::reconstruction::EditedReconstruction;
 /// use sfmtool_core::SfmrReconstruction;
 ///
 /// let edited = EditedReconstruction::new(Arc::new(SfmrReconstruction::demo(10)));
 /// let opts = MeasurementEndpointOptions::default();
-/// for (i, m) in resolve_measurements(&edited, &opts).iter().enumerate() {
+/// for (i, m) in resolve_distance_measurements(&edited, &opts).iter().enumerate() {
 ///     match (&m.endpoints[0], &m.endpoints[1], m.scene_distance) {
 ///         (Ok(_), Ok(_), Some(d)) => println!("measurement {i}: {d:.4} scene units"),
 ///         (Err(e), _, _) | (_, Err(e), _) => println!("measurement {i}: {e}"),
@@ -720,11 +721,11 @@ fn cost_of(
 ///     }
 /// }
 /// ```
-pub fn resolve_measurements(
+pub fn resolve_distance_measurements(
     edited: &EditedReconstruction,
     options: &MeasurementEndpointOptions,
-) -> Vec<ResolvedMeasurement> {
-    let Some(m) = edited.base.image_set.measurements.as_ref() else {
+) -> Vec<ResolvedDistanceMeasurement> {
+    let Some(m) = edited.base.image_set.measurements.distance.as_ref() else {
         return Vec::new();
     };
     (0..m.len())
@@ -749,7 +750,7 @@ pub fn resolve_measurements(
                 (Some(a), Some(b)) => Some((Vector3::from(a) - Vector3::from(b)).norm()),
                 _ => None,
             };
-            ResolvedMeasurement {
+            ResolvedDistanceMeasurement {
                 endpoints,
                 scene_distance,
             }

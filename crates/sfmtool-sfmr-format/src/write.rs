@@ -18,7 +18,8 @@ use sfmtool_archive_io::{
 use crate::depth_stats::{compute_depth_statistics, DepthStatsResult};
 use crate::entries::{self, ReadingColumn};
 use crate::measurements::{
-    validate_measurements, LengthUnit, MeasurementsData, MeasurementsMetadata,
+    validate_measurements, DistanceMeasurementsData, DistanceMeasurementsMetadata, LengthUnit,
+    MeasurementsData,
 };
 use crate::patch_normals::PatchFrameRows;
 use crate::types::*;
@@ -481,27 +482,28 @@ fn write_sfmr_into<S: EntrySink>(
         data.rolling_shutter_rates_xyz.as_ref(),
     )
     .map_err(SfmrError::InvalidFormat)?;
-    // Physical distance measurements (optional): validated before opening the
-    // sink so a rejected write leaves no file behind.
-    if let Some(measurements) = &data.measurements {
-        validate_measurements(
-            measurements,
-            &row_major_elements(&data.camera_indexes),
-            &data.cameras,
-        )
-        .map_err(SfmrError::InvalidFormat)?;
-        let n = measurements.len() as u32;
-        if let Some(declared) = data.metadata.measurement_count {
+    // Measurements (optional): validated before opening the sink so a
+    // rejected write leaves no file behind.
+    validate_measurements(
+        &data.measurements,
+        &row_major_elements(&data.camera_indexes),
+        &data.cameras,
+    )
+    .map_err(SfmrError::InvalidFormat)?;
+    if let Some(distance) = &data.measurements.distance {
+        let n = distance.len() as u32;
+        if let Some(declared) = data.metadata.distance_measurement_count {
             if declared != n {
                 return Err(SfmrError::ShapeMismatch(format!(
-                    "metadata.measurement_count ({declared}) != measurements len ({n})"
+                    "metadata.distance_measurement_count ({declared}) != distance measurements \
+                     len ({n})"
                 )));
             }
         }
-        data.metadata.measurement_count = Some(n);
-    } else if data.metadata.measurement_count.is_some() {
+        data.metadata.distance_measurement_count = Some(n);
+    } else if data.metadata.distance_measurement_count.is_some() {
         return Err(SfmrError::InvalidFormat(
-            "metadata.measurement_count is set, but measurements is None".into(),
+            "metadata.distance_measurement_count is set, but measurements.distance is None".into(),
         ));
     }
 
@@ -562,13 +564,10 @@ fn write_sfmr_into<S: EntrySink>(
     section_digests.push(points3d_hash);
     let tracks_hash = write_tracks(&mut sink, data, observation_count, point_count, is_embedded)?;
     section_digests.push(tracks_hash);
-    let measurements_hash = if let Some(measurements) = &data.measurements {
-        let hash = write_measurements(&mut sink, measurements)?;
+    let measurements_hash = write_measurements(&mut sink, &data.measurements)?;
+    if let Some(hash) = measurements_hash {
         section_digests.push(hash);
-        Some(hash)
-    } else {
-        None
-    };
+    }
 
     // === Content hash ===
     let content_hash_value = section_digests.finish();
@@ -1284,59 +1283,82 @@ fn write_tracks<S: EntrySink>(
     Ok(tracks_hasher.digest128())
 }
 
+/// Write the `measurements/` section, every kind present, and return its hash
+/// over all their entries in lexicographic path order; `None` when no kind is
+/// present, so the file has no section.
 fn write_measurements<S: EntrySink>(
     sink: &mut S,
     measurements: &MeasurementsData,
-) -> Result<u128, SfmrError> {
-    // === Measurements (optional, hashed in lexicographic path order) ===
-    let n = measurements.len();
+) -> Result<Option<u128>, SfmrError> {
+    if measurements.is_empty() {
+        return Ok(None);
+    }
+    // The kinds are written in the order of their directory names, so one
+    // hasher sees every entry in lexicographic path order.
     let mut measurements_hasher = Xxh3::new();
+    if let Some(distance) = &measurements.distance {
+        write_distance_measurements(sink, distance, &mut measurements_hasher)?;
+    }
+    Ok(Some(measurements_hasher.digest128()))
+}
 
-    // measurements/distances
+/// Write the distance kind's entries under `measurements/distance/`, in
+/// lexicographic path order, into `measurements_hasher`.
+fn write_distance_measurements<S: EntrySink>(
+    sink: &mut S,
+    measurements: &DistanceMeasurementsData,
+    measurements_hasher: &mut Xxh3,
+) -> Result<(), SfmrError> {
+    let n = measurements.len();
+
+    // measurements/distance/distances
     binary_hashed(
         sink,
-        &entries::measurements_distances(n),
+        &entries::distance_measurements_distances(n),
         &row_major_bytes(&measurements.distances),
-        &mut measurements_hasher,
+        measurements_hasher,
     )?;
 
-    // measurements/endpoints_xy
+    // measurements/distance/endpoints_xy
     binary_hashed(
         sink,
-        &entries::measurements_endpoints_xy(n),
+        &entries::distance_measurements_endpoints_xy(n),
         &row_major_bytes(&measurements.endpoints_xy),
-        &mut measurements_hasher,
+        measurements_hasher,
     )?;
 
-    // measurements/image_indexes
+    // measurements/distance/image_indexes
     binary_hashed(
         sink,
-        &entries::measurements_image_indexes(n),
+        &entries::distance_measurements_image_indexes(n),
         &row_major_bytes(&measurements.image_indexes),
-        &mut measurements_hasher,
+        measurements_hasher,
     )?;
 
-    // measurements/labels.json
-    let bytes = sink.write_json(entries::measurements_labels(), &measurements.labels)?;
+    // measurements/distance/labels.json
+    let bytes = sink.write_json(
+        entries::distance_measurements_labels(),
+        &measurements.labels,
+    )?;
     measurements_hasher.update(&bytes);
 
-    // measurements/metadata.json
-    let meta = MeasurementsMetadata {
-        measurement_count: n as u32,
+    // measurements/distance/metadata.json
+    let meta = DistanceMeasurementsMetadata {
+        distance_measurement_count: n as u32,
         unit_names: LengthUnit::NAMES.iter().map(|&s| s.to_string()).collect(),
     };
-    let bytes = sink.write_json(entries::measurements_metadata(), &meta)?;
+    let bytes = sink.write_json(entries::distance_measurements_metadata(), &meta)?;
     measurements_hasher.update(&bytes);
 
-    // measurements/units
+    // measurements/distance/units
     binary_hashed(
         sink,
-        &entries::measurements_units(n),
+        &entries::distance_measurements_units(n),
         &row_major_bytes(&measurements.units),
-        &mut measurements_hasher,
+        measurements_hasher,
     )?;
 
-    Ok(measurements_hasher.digest128())
+    Ok(())
 }
 
 /// The three constraint columns in row-major order: the constraint per point,

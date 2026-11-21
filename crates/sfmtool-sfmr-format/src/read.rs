@@ -13,8 +13,8 @@ use crate::entries::{self, ReadingColumn};
 use crate::float16::{scores_from_deficits, widen_float16};
 use crate::image_readings::image_readings_presence_error;
 use crate::measurements::{
-    read_measurement_unit_legend, resolve_measurement_units, validate_measurements,
-    MeasurementsData,
+    read_measurement_unit_legend, resolve_measurement_units, validate_distance_measurements,
+    DistanceMeasurementsData, MeasurementsData,
 };
 use crate::observation_readings::{
     observation_reading_options, observation_readings_flagged, ReadingColumnsBuilder,
@@ -77,16 +77,18 @@ pub(crate) fn parse_metadata(
         )));
     }
     let metadata: SfmrMetadata = serde_json::from_value(value)?;
-    if metadata.version < MEASUREMENTS_FORMAT_VERSION && metadata.measurement_count.is_some() {
+    if metadata.version < MEASUREMENTS_FORMAT_VERSION
+        && metadata.distance_measurement_count.is_some()
+    {
         return Err(SfmrError::InvalidFormat(format!(
-            "version {} .sfmr file must not carry measurement_count (introduced in version \
-             {MEASUREMENTS_FORMAT_VERSION})",
+            "version {} .sfmr file must not carry distance_measurement_count (introduced in \
+             version {MEASUREMENTS_FORMAT_VERSION})",
             metadata.version
         )));
     }
-    if metadata.measurement_count == Some(0) {
+    if metadata.distance_measurement_count == Some(0) {
         return Err(SfmrError::InvalidFormat(
-            "metadata.json.zst measurement_count must be >= 1 when present".into(),
+            "metadata.json.zst distance_measurement_count must be >= 1 when present".into(),
         ));
     }
     Ok(metadata)
@@ -169,10 +171,11 @@ pub fn read_sfmr_content_hash(path: &Path) -> Result<ContentHash, SfmrError> {
             metadata.version
         )));
     }
-    if metadata.measurement_count.is_some() != content_hash.measurements_xxh128.is_some() {
+    if declares_measurements(&metadata) != content_hash.measurements_xxh128.is_some() {
         return Err(SfmrError::InvalidFormat(
-            "metadata.json.zst measurement_count and content_hash.json.zst measurements_xxh128 \
-             must be present together or absent together"
+            "content_hash.json.zst carries measurements_xxh128 exactly when metadata.json.zst \
+             carries a measurement count (distance_measurement_count), and this file has one \
+             without the other"
                 .into(),
         ));
     }
@@ -1131,31 +1134,43 @@ pub(crate) fn has_frames_entry<R: std::io::Read + std::io::Seek>(
     Ok(false)
 }
 
-/// Whether any archive entry belongs to the `measurements/` section.
-pub(crate) fn has_measurements_entry<R: std::io::Read + std::io::Seek>(
+/// Whether any archive entry's path starts with `prefix`.
+pub(crate) fn has_entry_under<R: std::io::Read + std::io::Seek>(
     archive: &zip::ZipArchive<R>,
+    prefix: &str,
 ) -> Result<bool, zip::result::ZipError> {
     for name in archive.file_names() {
-        if name?.starts_with(entries::measurements_section_prefix()) {
+        if name?.starts_with(prefix) {
             return Ok(true);
         }
     }
     Ok(false)
 }
 
-/// Read and validate the optional `measurements/` section, normalizing unit
-/// codes through the file's `unit_names` legend onto the canonical
-/// [`LengthUnit`](crate::LengthUnit) order.
+/// Whether any archive entry belongs to the `measurements/` section.
+pub(crate) fn has_measurements_entry<R: std::io::Read + std::io::Seek>(
+    archive: &zip::ZipArchive<R>,
+) -> Result<bool, zip::result::ZipError> {
+    has_entry_under(archive, entries::measurements_section_prefix())
+}
+
+/// Whether the top-level metadata carries the count of any kind of
+/// measurement, and so says the `measurements/` section is present.
+pub(crate) fn declares_measurements(metadata: &SfmrMetadata) -> bool {
+    metadata.distance_measurement_count.is_some()
+}
+
+/// Read and validate the optional `measurements/` section: each kind it
+/// holds, then the section's presence against `measurements_xxh128`.
 fn read_measurements_section(
     archive: &mut zip::ZipArchive<std::fs::File>,
     metadata: &SfmrMetadata,
     content_hash: &ContentHash,
     camera_indexes: &Array1<u32>,
     cameras: &[SfmrCamera],
-) -> Result<Option<MeasurementsData>, SfmrError> {
-    let has_any = has_measurements_entry(archive)?;
+) -> Result<MeasurementsData, SfmrError> {
     if metadata.version < MEASUREMENTS_FORMAT_VERSION {
-        if has_any {
+        if has_measurements_entry(archive)? {
             return Err(SfmrError::InvalidFormat(format!(
                 "version {} .sfmr file must not carry measurements/ entries (introduced in \
                  version {MEASUREMENTS_FORMAT_VERSION})",
@@ -1169,68 +1184,92 @@ fn read_measurements_section(
                 metadata.version
             )));
         }
-        return Ok(None);
+        return Ok(MeasurementsData::default());
     }
 
-    if archive
-        .index_for_name(entries::measurements_metadata())
-        .is_none()
-    {
-        if has_any {
-            return Err(SfmrError::InvalidFormat(
-                "measurements/ entries are present without measurements/metadata.json.zst".into(),
-            ));
-        }
-        if metadata.measurement_count.is_some() {
-            return Err(SfmrError::InvalidFormat(
-                "metadata.json.zst sets measurement_count, but the file has no measurements/ \
-                 section"
-                    .into(),
-            ));
-        }
-        if content_hash.measurements_xxh128.is_some() {
-            return Err(SfmrError::InvalidFormat(
-                "content_hash.json.zst sets measurements_xxh128, but the file has no \
-                 measurements/ section"
-                    .into(),
-            ));
-        }
-        return Ok(None);
-    }
-
-    let Some(top_count) = metadata.measurement_count else {
-        return Err(SfmrError::InvalidFormat(
-            "the measurements/ section is present, but metadata.json.zst has no measurement_count"
-                .into(),
-        ));
+    let measurements = MeasurementsData {
+        distance: read_distance_measurements(archive, metadata, camera_indexes, cameras)?,
     };
-    if content_hash.measurements_xxh128.is_none() {
-        return Err(SfmrError::InvalidFormat(
+    match (
+        measurements.is_empty(),
+        content_hash.measurements_xxh128.is_some(),
+    ) {
+        (true, true) => Err(SfmrError::InvalidFormat(
+            "content_hash.json.zst sets measurements_xxh128, but the file has no measurements/ \
+             section (no kind of measurement)"
+                .into(),
+        )),
+        (false, false) => Err(SfmrError::InvalidFormat(
             "the measurements/ section is present, but content_hash.json.zst has no \
              measurements_xxh128"
                 .into(),
-        ));
+        )),
+        _ => Ok(measurements),
+    }
+}
+
+/// Read and validate the distance kind of the `measurements/` section, under
+/// `measurements/distance/`, normalizing unit codes through the file's
+/// `unit_names` legend onto the canonical [`LengthUnit`](crate::LengthUnit)
+/// order. `None` when the file has no distance measurements.
+fn read_distance_measurements(
+    archive: &mut zip::ZipArchive<std::fs::File>,
+    metadata: &SfmrMetadata,
+    camera_indexes: &Array1<u32>,
+    cameras: &[SfmrCamera],
+) -> Result<Option<DistanceMeasurementsData>, SfmrError> {
+    if archive
+        .index_for_name(entries::distance_measurements_metadata())
+        .is_none()
+    {
+        if has_entry_under(archive, entries::distance_measurements_prefix())? {
+            return Err(SfmrError::InvalidFormat(
+                "measurements/distance/ entries are present without \
+                 measurements/distance/metadata.json.zst"
+                    .into(),
+            ));
+        }
+        if metadata.distance_measurement_count.is_some() {
+            return Err(SfmrError::InvalidFormat(
+                "metadata.json.zst sets distance_measurement_count, but the file has no \
+                 measurements/distance/ entries"
+                    .into(),
+            ));
+        }
+        return Ok(None);
     }
 
-    let meas_meta: serde_json::Value = read_json_entry(archive, entries::measurements_metadata())?;
+    let Some(top_count) = metadata.distance_measurement_count else {
+        return Err(SfmrError::InvalidFormat(
+            "measurements/distance/ is present, but metadata.json.zst has no \
+             distance_measurement_count"
+                .into(),
+        ));
+    };
+
+    let meas_meta: serde_json::Value =
+        read_json_entry(archive, entries::distance_measurements_metadata())?;
     let section_count = meas_meta
-        .get("measurement_count")
+        .get("distance_measurement_count")
         .and_then(|v| v.as_u64())
         .and_then(|v| u32::try_from(v).ok())
         .ok_or_else(|| {
             SfmrError::InvalidFormat(
-                "measurements/metadata.json.zst has no u32 measurement_count".into(),
+                "measurements/distance/metadata.json.zst has no u32 distance_measurement_count"
+                    .into(),
             )
         })?;
     if section_count == 0 {
         return Err(SfmrError::InvalidFormat(
-            "measurements/metadata.json.zst measurement_count must be >= 1".into(),
+            "measurements/distance/metadata.json.zst distance_measurement_count must be >= 1"
+                .into(),
         ));
     }
     if section_count != top_count {
         return Err(SfmrError::InvalidFormat(format!(
-            "measurements/metadata.json.zst measurement_count ({section_count}) doesn't match \
-             top-level metadata measurement_count ({top_count})"
+            "measurements/distance/metadata.json.zst distance_measurement_count \
+             ({section_count}) doesn't match top-level metadata distance_measurement_count \
+             ({top_count})"
         )));
     }
 
@@ -1238,35 +1277,43 @@ fn read_measurements_section(
     let n = section_count as usize;
 
     let distances_vec: Vec<f32> =
-        read_binary_array(archive, &entries::measurements_distances(n), n)?;
+        read_binary_array(archive, &entries::distance_measurements_distances(n), n)?;
     let distances = Array1::from_vec(distances_vec);
 
-    let endpoints_vec: Vec<f32> =
-        read_binary_array(archive, &entries::measurements_endpoints_xy(n), n * 4)?;
-    let endpoints_xy = Array3::from_shape_vec((n, 2, 2), endpoints_vec)
-        .map_err(|e| SfmrError::ShapeMismatch(format!("endpoints_xy reshape: {e}")))?;
-
-    let image_indexes_vec: Vec<u32> =
-        read_binary_array(archive, &entries::measurements_image_indexes(n), n * 2)?;
-    let image_indexes = Array2::from_shape_vec((n, 2), image_indexes_vec).map_err(|e| {
-        SfmrError::ShapeMismatch(format!("measurements/image_indexes reshape: {e}"))
+    let endpoints_vec: Vec<f32> = read_binary_array(
+        archive,
+        &entries::distance_measurements_endpoints_xy(n),
+        n * 4,
+    )?;
+    let endpoints_xy = Array3::from_shape_vec((n, 2, 2), endpoints_vec).map_err(|e| {
+        SfmrError::ShapeMismatch(format!("measurements/distance/endpoints_xy reshape: {e}"))
     })?;
 
-    let labels: Vec<String> = read_json_entry(archive, entries::measurements_labels())?;
+    let image_indexes_vec: Vec<u32> = read_binary_array(
+        archive,
+        &entries::distance_measurements_image_indexes(n),
+        n * 2,
+    )?;
+    let image_indexes = Array2::from_shape_vec((n, 2), image_indexes_vec).map_err(|e| {
+        SfmrError::ShapeMismatch(format!("measurements/distance/image_indexes reshape: {e}"))
+    })?;
 
-    let units_raw: Vec<u8> = read_binary_array(archive, &entries::measurements_units(n), n)?;
+    let labels: Vec<String> = read_json_entry(archive, entries::distance_measurements_labels())?;
+
+    let units_raw: Vec<u8> =
+        read_binary_array(archive, &entries::distance_measurements_units(n), n)?;
     let resolved_units =
         resolve_measurement_units(&units_raw, &legend).map_err(SfmrError::InvalidFormat)?;
     let units = Array1::from_vec(resolved_units.iter().map(|u| u.code()).collect());
 
-    let measurements = MeasurementsData {
+    let measurements = DistanceMeasurementsData {
         distances,
         units,
         image_indexes,
         endpoints_xy,
         labels,
     };
-    validate_measurements(
+    validate_distance_measurements(
         &measurements,
         camera_indexes.as_slice().expect("read in standard layout"),
         cameras,

@@ -73,7 +73,7 @@ fn make_test_data() -> SfmrData {
             rig_count: None,
             sensor_count: None,
             frame_count: None,
-            measurement_count: None,
+            distance_measurement_count: None,
             world_space_unit: None,
             feature_source: FEATURE_SOURCE_SIFT_FILES.to_string(),
         },
@@ -227,7 +227,7 @@ fn make_test_data() -> SfmrData {
             ],
         },
         observed_depth_histogram_counts: Array2::zeros((image_count, num_buckets)),
-        measurements: None,
+        measurements: MeasurementsData::default(),
     }
 }
 
@@ -1094,7 +1094,7 @@ fn test_empty_reconstruction() {
             rig_count: None,
             sensor_count: None,
             frame_count: None,
-            measurement_count: None,
+            distance_measurement_count: None,
             world_space_unit: None,
             feature_source: FEATURE_SOURCE_SIFT_FILES.to_string(),
         },
@@ -1149,7 +1149,7 @@ fn test_empty_reconstruction() {
             images: vec![],
         },
         observed_depth_histogram_counts: Array2::zeros((0, num_buckets)),
-        measurements: None,
+        measurements: MeasurementsData::default(),
     };
 
     let dir = std::env::temp_dir().join("sfmr_test_empty");
@@ -3533,23 +3533,32 @@ fn entry_names_are_pinned() {
         "tracks/point_indexes.17.uint32.zst"
     );
 
-    // Measurements.  measurement_count = 37.
+    // Distance measurements.  distance_measurement_count = 37.
     assert_eq!(e::measurements_section_prefix(), "measurements/");
-    assert_eq!(e::measurements_metadata(), "measurements/metadata.json.zst");
-    assert_eq!(e::measurements_labels(), "measurements/labels.json.zst");
     assert_eq!(
-        e::measurements_distances(37),
-        "measurements/distances.37.float32.zst"
+        e::distance_measurements_metadata(),
+        "measurements/distance/metadata.json.zst"
     );
     assert_eq!(
-        e::measurements_endpoints_xy(37),
-        "measurements/endpoints_xy.37.2.2.float32.zst"
+        e::distance_measurements_labels(),
+        "measurements/distance/labels.json.zst"
     );
     assert_eq!(
-        e::measurements_image_indexes(37),
-        "measurements/image_indexes.37.2.uint32.zst"
+        e::distance_measurements_distances(37),
+        "measurements/distance/distances.37.float32.zst"
     );
-    assert_eq!(e::measurements_units(37), "measurements/units.37.uint8.zst");
+    assert_eq!(
+        e::distance_measurements_endpoints_xy(37),
+        "measurements/distance/endpoints_xy.37.2.2.float32.zst"
+    );
+    assert_eq!(
+        e::distance_measurements_image_indexes(37),
+        "measurements/distance/image_indexes.37.2.uint32.zst"
+    );
+    assert_eq!(
+        e::distance_measurements_units(37),
+        "measurements/distance/units.37.uint8.zst"
+    );
 }
 
 /// The archive a real write produces, pinned entry by entry.
@@ -3576,7 +3585,7 @@ fn archive_entry_names_pin_call_sites() {
     let mut data = make_test_data();
     data.observation_confidence = Some(Array1::from_vec(vec![255u8; 8]));
     with_point_constraints(&mut data);
-    data.measurements = Some(measurements::sample_measurements(7));
+    data.measurements.distance = Some(measurements::sample_measurements(7));
     write_sfmr(&path, &mut data).unwrap();
 
     let f = std::fs::File::open(&path).unwrap();
@@ -3601,12 +3610,12 @@ fn archive_entry_names_pin_call_sites() {
         "images/sift_content_hashes.3.uint128.zst",
         "images/thumbnails_y_x_rgb.3.128.128.3.uint8.zst",
         "images/translations_xyz.3.3.float64.zst",
-        "measurements/distances.7.float32.zst",
-        "measurements/endpoints_xy.7.2.2.float32.zst",
-        "measurements/image_indexes.7.2.uint32.zst",
-        "measurements/labels.json.zst",
-        "measurements/metadata.json.zst",
-        "measurements/units.7.uint8.zst",
+        "measurements/distance/distances.7.float32.zst",
+        "measurements/distance/endpoints_xy.7.2.2.float32.zst",
+        "measurements/distance/image_indexes.7.2.uint32.zst",
+        "measurements/distance/labels.json.zst",
+        "measurements/distance/metadata.json.zst",
+        "measurements/distance/units.7.uint8.zst",
         "metadata.json.zst",
         "points3d/colors_rgb.5.3.uint8.zst",
         "points3d/constraint_distances.5.float64.zst",
@@ -3658,7 +3667,7 @@ fn data_with_every_optional_column() -> SfmrData {
     data.cameras[0].per_image_adjustments = vec!["focal".into(), "principal_point".into()];
     data.focal_adjustments = Some(Array1::zeros(3));
     data.principal_point_adjustments_xy = Some(Array2::zeros((3, 2)));
-    data.measurements = Some(measurements::sample_measurements(2));
+    data.measurements.distance = Some(measurements::sample_measurements(2));
     data
 }
 

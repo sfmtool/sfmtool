@@ -1,9 +1,11 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The Python form of a reconstruction's physical distance measurements: a
-//! dict of the five `measurements/` columns, named as the `.sfmr` file names
-//! them. `read_sfmr`, `write_sfmr`, `SfmrReconstruction.from_data`,
+//! The Python form of a reconstruction's measurements: a dict with one key per
+//! kind present, each holding that kind's columns named as the `.sfmr` file
+//! names them, or `None` when there are none. The one kind is `"distance"`, a
+//! dict of the five `measurements/distance/` columns; a kind that is absent
+//! has no key. `read_sfmr`, `write_sfmr`, `SfmrReconstruction.from_data`,
 //! `SfmrReconstruction.measurements` and `clone_with_changes(measurements=...)`
 //! all take this one form.
 
@@ -12,12 +14,17 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use sfmtool_sfmr_format::MeasurementsData;
+use sfmtool_sfmr_format::{DistanceMeasurementsData, MeasurementsData};
 
 use crate::helpers::{dtype_name, get_item, get_optional_item};
 
-/// The keys of the five columns, as the `.sfmr` file names them.
-pub(crate) const COLUMN_KEYS: [&str; 5] = [
+/// The keys of the kinds of measurement, as the `.sfmr` file names their
+/// subdirectories of `measurements/`.
+pub(crate) const KIND_KEYS: [&str; 1] = ["distance"];
+
+/// The keys of the distance kind's five columns, as the `.sfmr` file names
+/// them.
+pub(crate) const DISTANCE_COLUMN_KEYS: [&str; 5] = [
     "distances",
     "units",
     "image_indexes",
@@ -25,8 +32,18 @@ pub(crate) const COLUMN_KEYS: [&str; 5] = [
     "labels",
 ];
 
-/// Extract one required numpy array from a measurements dict, copied into
-/// standard (C) layout so Fortran-ordered and strided inputs work unchanged.
+/// The qualified name of `value`'s type, for an error message.
+fn type_name(value: &Bound<'_, PyAny>) -> String {
+    value
+        .get_type()
+        .qualname()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
+/// Extract one required numpy array from a distance measurements dict, copied
+/// into standard (C) layout so Fortran-ordered and strided inputs work
+/// unchanged.
 fn extract_array<'py, T, D>(
     dict: &Bound<'py, PyDict>,
     key: &str,
@@ -40,24 +57,21 @@ where
     let array = value
         .extract::<numpy::PyReadonlyArray<'py, T, D>>()
         .map_err(|_| {
-            let actual_type = value
-                .get_type()
-                .qualname()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|_| "unknown".to_string());
+            let actual_type = type_name(&value);
             let actual_dtype = dtype_name(&value).unwrap_or_else(|_| "unknown".to_string());
             PyTypeError::new_err(format!(
-                "measurements['{key}'] must be {expected}, got {actual_type} with dtype {actual_dtype}"
+                "measurements['distance']['{key}'] must be {expected}, got {actual_type} with \
+                 dtype {actual_dtype}"
             ))
         })?;
     Ok(array.as_array().as_standard_layout().into_owned())
 }
 
-/// Convert `MeasurementsData` into a Python dict of fresh numpy arrays and
-/// `labels` (`list[str]`).
-pub(crate) fn measurements_to_py<'py>(
+/// Convert `DistanceMeasurementsData` into a Python dict of fresh numpy arrays
+/// and `labels` (`list[str]`).
+fn distance_measurements_to_py<'py>(
     py: Python<'py>,
-    measurements: &MeasurementsData,
+    measurements: &DistanceMeasurementsData,
 ) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("distances", measurements.distances.clone().into_pyarray(py))?;
@@ -74,21 +88,30 @@ pub(crate) fn measurements_to_py<'py>(
     Ok(d)
 }
 
-/// Convert a Python measurements dict (or `None`) into `Option<MeasurementsData>`.
-///
-/// Raises `TypeError` for non-dict input, wrong array dtype/rank, or non-list /
-/// non-str `labels`; `KeyError` for a missing required column; and `ValueError`
-/// for an unexpected extra key. Value and shape constraints (`N >= 1`,
-/// consistent column lengths, positive finite distances, valid unit codes,
-/// in-bounds image indexes and endpoint coordinates) are enforced by
-/// `sfmtool_sfmr_format::validate_measurements`.
-pub(crate) fn measurements_from_py(value: &Bound<'_, PyAny>) -> PyResult<Option<MeasurementsData>> {
-    if value.is_none() {
+/// Convert `MeasurementsData` into its Python form: `None` when no kind is
+/// present, else a dict with a key for each kind that is.
+pub(crate) fn measurements_to_py<'py>(
+    py: Python<'py>,
+    measurements: &MeasurementsData,
+) -> PyResult<Option<Bound<'py, PyDict>>> {
+    if measurements.is_empty() {
         return Ok(None);
     }
-    let d = value
-        .cast::<PyDict>()
-        .map_err(|_| PyTypeError::new_err("measurements must be a dict or None"))?;
+    let d = PyDict::new(py);
+    if let Some(distance) = &measurements.distance {
+        d.set_item("distance", distance_measurements_to_py(py, distance)?)?;
+    }
+    Ok(Some(d))
+}
+
+/// Convert the Python form of the distance kind into `DistanceMeasurementsData`.
+fn distance_measurements_from_py(value: &Bound<'_, PyAny>) -> PyResult<DistanceMeasurementsData> {
+    let d = value.cast::<PyDict>().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "measurements['distance'] must be a dict, got {}",
+            type_name(value)
+        ))
+    })?;
 
     let distances = extract_array::<f32, ndarray::Ix1>(d, "distances", "a 1D float32 array")?;
     let units = extract_array::<u8, ndarray::Ix1>(d, "units", "a 1D uint8 array")?;
@@ -98,25 +121,17 @@ pub(crate) fn measurements_from_py(value: &Bound<'_, PyAny>) -> PyResult<Option<
 
     let labels_obj = get_item(d, "labels")?;
     let labels_list = labels_obj.cast::<PyList>().map_err(|_| {
-        let actual_type = labels_obj
-            .get_type()
-            .qualname()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|_| "unknown".to_string());
         PyTypeError::new_err(format!(
-            "measurements['labels'] must be a list of str, got {actual_type}"
+            "measurements['distance']['labels'] must be a list of str, got {}",
+            type_name(&labels_obj)
         ))
     })?;
     let mut labels = Vec::with_capacity(labels_list.len());
     for (i, item) in labels_list.iter().enumerate() {
         let s: String = item.extract().map_err(|_| {
-            let actual_type = item
-                .get_type()
-                .qualname()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|_| "unknown".to_string());
             PyTypeError::new_err(format!(
-                "measurements['labels'][{i}] must be str, got {actual_type}"
+                "measurements['distance']['labels'][{i}] must be str, got {}",
+                type_name(&item)
             ))
         })?;
         labels.push(s);
@@ -126,29 +141,74 @@ pub(crate) fn measurements_from_py(value: &Bound<'_, PyAny>) -> PyResult<Option<
         let valid = key
             .extract::<String>()
             .ok()
-            .is_some_and(|k| COLUMN_KEYS.contains(&k.as_str()));
+            .is_some_and(|k| DISTANCE_COLUMN_KEYS.contains(&k.as_str()));
         if !valid {
             return Err(PyValueError::new_err(format!(
-                "measurements has unexpected key {key:?}; expected keys are {COLUMN_KEYS:?}"
+                "measurements['distance'] has unexpected key {key:?}; expected keys are \
+                 {DISTANCE_COLUMN_KEYS:?}"
             )));
         }
     }
 
-    Ok(Some(MeasurementsData {
+    Ok(DistanceMeasurementsData {
         distances,
         units,
         image_indexes,
         endpoints_xy,
         labels,
-    }))
+    })
+}
+
+/// Convert the Python form of a reconstruction's measurements (a dict of
+/// kinds, or `None`) into `MeasurementsData`.
+///
+/// Raises `TypeError` for a non-dict value or kind, a wrong array dtype/rank,
+/// or non-list / non-str `labels`; `KeyError` for a missing required column;
+/// and `ValueError` for an unknown kind or column key, or for a dict naming no
+/// kind (`None` is the form for no measurements). Value and shape constraints
+/// (`N >= 1`, consistent column lengths, positive finite distances, valid unit
+/// codes, in-bounds image indexes and endpoint coordinates) are enforced by
+/// `sfmtool_sfmr_format::validate_measurements`.
+pub(crate) fn measurements_from_py(value: &Bound<'_, PyAny>) -> PyResult<MeasurementsData> {
+    if value.is_none() {
+        return Ok(MeasurementsData::default());
+    }
+    let d = value.cast::<PyDict>().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "measurements must be a dict of kinds or None, got {}",
+            type_name(value)
+        ))
+    })?;
+    for key in d.keys() {
+        let valid = key
+            .extract::<String>()
+            .ok()
+            .is_some_and(|k| KIND_KEYS.contains(&k.as_str()));
+        if !valid {
+            return Err(PyValueError::new_err(format!(
+                "measurements has unexpected kind {key:?}; the kinds are {KIND_KEYS:?}"
+            )));
+        }
+    }
+    let distance = d
+        .get_item("distance")?
+        .map(|v| distance_measurements_from_py(&v))
+        .transpose()?;
+    let measurements = MeasurementsData { distance };
+    if measurements.is_empty() {
+        return Err(PyValueError::new_err(
+            "measurements names no kind; pass None when there are no measurements",
+        ));
+    }
+    Ok(measurements)
 }
 
 /// Extract optional `"measurements"` from an `.sfmr` data dict.
 ///
-/// Returns `Ok(None)` when `"measurements"` is absent or `None`.
-pub(crate) fn extract_measurements(data: &Bound<'_, PyDict>) -> PyResult<Option<MeasurementsData>> {
+/// Returns no measurements when `"measurements"` is absent or `None`.
+pub(crate) fn extract_measurements(data: &Bound<'_, PyDict>) -> PyResult<MeasurementsData> {
     match get_optional_item(data, "measurements")? {
         Some(value) => measurements_from_py(&value),
-        None => Ok(None),
+        None => Ok(MeasurementsData::default()),
     }
 }

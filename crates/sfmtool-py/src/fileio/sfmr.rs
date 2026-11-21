@@ -81,8 +81,9 @@ where
 ///   image_to_gray (a dict or `None`), sharpness and
 ///   gradient_structure_tensors_xx_yy_xy (numpy arrays),
 ///   rig_frame_data (a dict or `None`), and
-///   measurements (a dict of `distances`, `units`, `image_indexes`,
-///   `endpoints_xy`, `labels`, or `None`).
+///   measurements (a dict of kinds, `{"distance": {...}}` with the
+///   `distances`, `units`, `image_indexes`, `endpoints_xy` and `labels`
+///   columns, or `None`).
 ///
 /// The per-image intrinsic adjustments: `focal_adjustments` is
 /// the `(N,)` float64 focal scale `s` of each image (its focal is its camera's
@@ -310,14 +311,11 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
         None => dict.set_item("rig_frame_data", py.None())?,
     }
 
-    // Physical distance measurements (optional)
-    match &data.measurements {
-        Some(m) => dict.set_item(
-            "measurements",
-            crate::measurements::measurements_to_py(py, m)?,
-        )?,
-        None => dict.set_item("measurements", py.None())?,
-    }
+    // Measurements (optional): a dict of kinds, or None
+    dict.set_item(
+        "measurements",
+        crate::measurements::measurements_to_py(py, &data.measurements)?,
+    )?;
 
     Ok(dict.into())
 }
@@ -647,7 +645,7 @@ pub(crate) fn parse_sfmr_data_from_dict(
     // Extract optional rig/frame data from the dict
     let rig_frame_data = extract_rig_frame_data(py, data)?;
 
-    // Extract optional physical distance measurements from the dict
+    // Extract optional measurements from the dict
     let measurements = crate::measurements::extract_measurements(data)?;
 
     Ok(SfmrData {
@@ -730,9 +728,10 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// free, since an all-free set is the same statement as none at all), the
 /// per-point patch frame
 /// (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz` and the optional
-/// `patch_bitmaps_y_x_rgba`), and optional physical distance `measurements`
-/// (a dict with `distances`, `units`, `image_indexes`, `endpoints_xy` and
-/// `labels`, where `units` holds canonical codes indexing `LENGTH_UNIT_NAMES`).
+/// `patch_bitmaps_y_x_rgba`), and optional `measurements` (a dict with one
+/// key per kind present: `"distance"`, a dict with `distances`, `units`,
+/// `image_indexes`, `endpoints_xy` and `labels`, where `units` holds canonical
+/// codes indexing `LENGTH_UNIT_NAMES`).
 /// Apart from `normals_xyz` (see below), a missing
 /// or `None` value means the column is absent — which is what a `sift_files` dict carries for the patch frame,
 /// while an `embedded_patches` dict must carry it, since the format requires
@@ -798,9 +797,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "POINT_CONSTRAINT_NAMES",
         pyo3::types::PyTuple::new(m.py(), sfmtool_sfmr_format::PointConstraint::NAMES)?,
     )?;
-    // The name of each `measurements/units` code, in canonical code order
-    // (`("mm", "cm", "m", "in", "ft")`), so a consumer can label or build a
-    // `measurements["units"]` column without hard-coding the numbering.
+    // The name of each `measurements/distance/units` code, in canonical code
+    // order (`("mm", "cm", "m", "in", "ft")`), so a consumer can label or
+    // build a `measurements["distance"]["units"]` column without hard-coding
+    // the numbering.
     m.add(
         "LENGTH_UNIT_NAMES",
         pyo3::types::PyTuple::new(m.py(), sfmtool_sfmr_format::LengthUnit::NAMES)?,
