@@ -1267,12 +1267,13 @@ class TestMeasurementsIo:
         data = read_sfmr(seoul_bull_ground_truth_sfmr)
         c_m = _sample_measurements_dict()
         f_m = {
-            "distances": c_m["distances"][::-1][::-1],
+            "distances": c_m["distances"][::-1].copy()[::-1],
             "units": np.repeat(c_m["units"], 2)[::2],
             "image_indexes": np.asfortranarray(c_m["image_indexes"]),
             "endpoints_xy": np.asfortranarray(c_m["endpoints_xy"]),
             "labels": list(c_m["labels"]),
         }
+        assert not f_m["distances"].flags["C_CONTIGUOUS"]
         assert not f_m["image_indexes"].flags["C_CONTIGUOUS"]
         assert not f_m["endpoints_xy"].flags["C_CONTIGUOUS"]
         assert not f_m["units"].flags["C_CONTIGUOUS"]

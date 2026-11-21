@@ -138,14 +138,18 @@ class TestSfmrReconstructionMeasurements:
         recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
         m = _sample_measurements()
 
-        # Set with Fortran-ordered / strided arrays.
+        # Set with Fortran-ordered / strided (including negative-strided) arrays.
         m_fortran = {
-            "distances": m["distances"][::-1][::-1],
+            "distances": m["distances"][::-1].copy()[::-1],
             "units": np.repeat(m["units"], 2)[::2],
             "image_indexes": np.asfortranarray(m["image_indexes"]),
             "endpoints_xy": np.asfortranarray(m["endpoints_xy"]),
             "labels": list(m["labels"]),
         }
+        assert not m_fortran["distances"].flags["C_CONTIGUOUS"]
+        assert not m_fortran["units"].flags["C_CONTIGUOUS"]
+        assert not m_fortran["image_indexes"].flags["C_CONTIGUOUS"]
+        assert not m_fortran["endpoints_xy"].flags["C_CONTIGUOUS"]
         with_m = recon.clone_with_changes(measurements=m_fortran)
         assert with_m.measurement_count == 3
         _assert_measurements_equal(with_m.measurements, m)
@@ -207,6 +211,14 @@ class TestSfmrReconstructionMeasurements:
         )
         with pytest.raises(ValueError, match="endpoints_xy"):
             with_m.clone_with_changes(cameras=[tiny_cam] * with_m.camera_count)
+
+        # Dropping measurements in the same call lets the camera shrink succeed.
+        shrunk_cleared = with_m.clone_with_changes(
+            cameras=[tiny_cam] * with_m.camera_count, measurements=None
+        )
+        assert shrunk_cleared.measurement_count == 0
+        assert shrunk_cleared.measurements is None
+        assert "measurement_count" not in shrunk_cleared.metadata()
 
         # Switching an image's camera_index to a smaller camera invalidates
         # existing measurements referencing that image.
