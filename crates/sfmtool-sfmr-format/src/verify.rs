@@ -1019,7 +1019,8 @@ fn verify_tracks_section<R: Read + Seek>(
     let track_image_indexes_raw =
         read_zst_entry(archive, &entries::tracks_image_indexes(observation_count))?;
     tracks_hasher.update(&track_image_indexes_raw);
-    // tracks/keypoints_xy (optional; sorts after image_indexes)
+    // tracks/keypoints_xy (absent only from a version 16 sift_files file;
+    // sorts after image_indexes)
     let keypoints_raw = if has_keypoints_xy {
         let raw = read_zst_entry(archive, &entries::tracks_keypoints_xy(observation_count))?;
         tracks_hasher.update(&raw);
