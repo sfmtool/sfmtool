@@ -17,8 +17,11 @@ use sfmtool_sfmr_format::{
 use super::reference_view::GroundTruth;
 use super::scene::fixture_points;
 use super::*;
+use crate::bench::refit_points::refit_points_in;
 use crate::camera::sampler::RegionPool;
 use crate::progress::Event;
+use crate::reconstruction::bulk_point_order::tests::assert_the_point_order_changes_nothing;
+use crate::reconstruction::bulk_point_order::BulkPointOrder;
 use crate::reconstruction::data::{
     ObservationReading, ObservationReadingOptions, ObservationReadings, ObservationSource,
     PointConstraintColumns,
@@ -861,6 +864,48 @@ fn one_thread_and_the_default_pool_give_the_same_value() {
         many.content_xxh128().expect("hashes").content_xxh128
     );
     assert_eq!(format!("{one_report:?}"), format!("{many_report:?}"));
+}
+
+/// The run in the bulk kernels' point order gives the value and report of a
+/// run over the points by index, and reads through the one pool its caller
+/// made. Each point's reference is in another image, and one point has none.
+#[test]
+fn the_run_in_the_point_order_is_the_run_by_index() {
+    let scene = Scene::new();
+    let points: Vec<Point3<f64>> = (0..6)
+        .map(|i| Point3::new(-0.25 + 0.1 * i as f64, 0.05 * i as f64, PLANE_Z))
+        .collect();
+    let mut recon = with_columns(fixture_points(&scene, &points), BITMAP_R);
+    let n = scene.len() as i32;
+    recon.point_set.reference_observations = Some(
+        (0..points.len() as i32)
+            .map(|p| {
+                if p == 2 {
+                    -1
+                } else {
+                    (n - 1 - p).rem_euclid(n)
+                }
+            })
+            .collect(),
+    );
+    let order = BulkPointOrder::of_all_points(&recon.point_set);
+    assert_the_point_order_changes_nothing(&order, |order, pool| {
+        let views = scene.views();
+        let (value, report) = refit_points_in(
+            &recon,
+            &views,
+            pool,
+            &refit_options(),
+            order,
+            &Progress::none(),
+        )
+        .expect("the run refits");
+        assert!(report.refit() > 0, "the run refits points: {report:?}");
+        format!(
+            "{:?} {report:?}",
+            value.content_xxh128().expect("hashes").content_xxh128
+        )
+    });
 }
 
 #[test]

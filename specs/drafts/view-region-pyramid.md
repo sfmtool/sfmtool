@@ -675,9 +675,9 @@ there is no whole pyramid for any reader to fall back on.
    `RuntimeError`.
 5. **Bulk kernels**: the display patch bitmaps, the conversion to embedded
    patches, the web export, *Refine all normals*, *Refit all points* and the
-   cluster-patches build fetch tiled photographs, each taking its points in
-   the order § "Memory" gives (by reference image, then the keypoint's row
-   and column). Tests: identical results; a cache budget smaller than one
+   cluster-patches build fetch tiled photographs, each kernel that loops
+   over a reconstruction's points taking them in the order § "Memory" gives
+   (by reference image, then the keypoint's row and column). Tests: identical results; a cache budget smaller than one
    photograph's level 0 still completes; on a rayon pool of one thread, so
    that one reference image's points are in progress at a time, with a
    budget smaller than the reconstruction's tiles but holding the tiles of
@@ -702,8 +702,14 @@ there is no whole pyramid for any reader to fall back on.
    cluster-patches build reads its photographs with `get_many` through the
    viewer's cache and wraps them with `from_pyramid`, in place of decoding
    them outside it, so a photograph already in the cache is not decoded
-   again, and the file is identical bit for bit. The point order (11c)
-   follows.
+   again, and the file is identical bit for bit. **The third, 11c, is
+   built**, so the main draft's step 11 is complete: `render_patch_cloud_bitmaps`,
+   `refine_normals` and `refit_points` take their points in the order of
+   § "Memory" from one place, `BulkPointOrder`, and write each result at its
+   point's index, with every result identical bit for bit. The
+   cluster-patches build loops over clusters of `.sift` features, which have
+   no reconstruction point or reference observation, so the order does not
+   apply to it and it keeps its cluster order.
 6. **`GreyImages` by region.** Tests: the nearby-track search's results are
    identical.
 

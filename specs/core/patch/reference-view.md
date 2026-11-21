@@ -246,7 +246,11 @@ pool their caller made and make one `ViewRegions` per view of the patch they
 are working on. The tiles and readings are the same, bit for bit, whichever way
 a read reaches its pixels, and a read that fails is the call's
 `PhotographReadError` in place of its result: `CloudRenderError::Photograph`
-for the whole-cloud render, the first patch's that failed.
+for the whole-cloud render, the first patch's that failed. The whole-cloud
+render takes the patches in the bulk kernels' point order, by reference
+image and then by the reference keypoint's row and column
+([camera/view-region-pyramids.md](../camera/view-region-pyramids.md#rust-api)),
+and writes each row at its point's index, so the order changes no byte.
 
 ```rust
 use sfmtool_core::patch::reference_view::{

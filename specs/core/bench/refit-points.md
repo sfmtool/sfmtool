@@ -435,8 +435,11 @@ thread scheduling, is not an answer anybody asked for. This is
 
 ### Parallelism and determinism
 
-The points are fitted in parallel over the rayon pool, one point per task, with
-the results collected by point index; the fit's own kernels nest on the same
+The points are fitted in parallel over the rayon pool, one point per task,
+taken in the bulk kernels' point order, by reference image and then by the
+reference keypoint's row and column
+([camera/view-region-pyramids.md](../camera/view-region-pyramids.md#rust-api)),
+with the results collected by point index; the fit's own kernels nest on the same
 pool. Peak memory per point is bounded by `EvaluateOptions::max_cache_bytes` per
 round, so the run's peak is that bound times the number of worker threads, on
 top of the decoded photographs.

@@ -57,6 +57,7 @@ use crate::patch::reference_view::{
     ViewTile,
 };
 use crate::progress::{Cancelled, Progress};
+use crate::reconstruction::bulk_point_order::BulkPointOrder;
 
 #[cfg(test)]
 mod tests;
@@ -420,7 +421,10 @@ type RenderedRow = (Vec<u8>, i32);
 /// Render the bitmap of every patch of `cloud`, parallel across patches
 /// (rayon), each from its point's track in `recon` at the stored
 /// per-observation keypoints, from the reference observation `recon` stores
-/// for the point where it has one.
+/// for the point where it has one. The patches are taken in the bulk
+/// kernels' point order (`BulkPointOrder`: by reference image, then by the
+/// reference keypoint's row and column), and each row is written at its
+/// point's index, so the order changes no byte.
 ///
 /// A point whose stored reference observation
 /// ([`PointSet::reference_observations`](crate::PointSet::reference_observations))
@@ -469,6 +473,35 @@ pub fn render_patch_cloud_bitmaps(
     done: Option<&AtomicUsize>,
     progress: &Progress<'_>,
 ) -> Result<PatchBitmapColumn, CloudRenderError> {
+    let order = BulkPointOrder::of_points(&recon.point_set, &cloud.point_indexes);
+    render_patch_cloud_bitmaps_in(
+        cloud,
+        recon,
+        views,
+        pool,
+        params,
+        unreferenced,
+        done,
+        &order,
+        progress,
+    )
+}
+
+/// [`render_patch_cloud_bitmaps`] taking the patches in `order`, positions
+/// within `cloud`'s patches; a test passes the order of the patches' indexes,
+/// which is the order the render took before it took the bulk kernels'.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn render_patch_cloud_bitmaps_in(
+    cloud: &PatchCloud,
+    recon: &crate::SfmrReconstruction,
+    views: &[Option<ProjectedImage<'_>>],
+    pool: &RegionPool,
+    params: &KeypointSubpixelParams,
+    unreferenced: UnreferencedPoints,
+    done: Option<&AtomicUsize>,
+    order: &BulkPointOrder,
+    progress: &Progress<'_>,
+) -> Result<PatchBitmapColumn, CloudRenderError> {
     let keypoints_xy = check_cloud_render(cloud, recon, views.len())?;
     let resolution = params.resolution.max(2) as usize;
     let point_count = recon.point_count();
@@ -487,12 +520,12 @@ pub fn render_patch_cloud_bitmaps(
     let total = cloud.patches.len();
     let step = (total / 100).max(1);
     let rendered_so_far = AtomicUsize::new(0);
-    let rendered: Vec<Result<(usize, Option<RenderedRow>), PhotographReadError>> = cloud
-        .patches
+    let rendered: Vec<Result<(usize, Option<RenderedRow>), PhotographReadError>> = order
+        .positions()
         .par_iter()
-        .zip(cloud.point_indexes.par_iter())
-        .map(|(patch, &pid)| {
-            let p = pid as usize;
+        .map(|&i| {
+            let patch = cloud.patch(i);
+            let p = cloud.point_indexes[i] as usize;
             if progress.is_cancelled() {
                 return Ok((p, None));
             }
@@ -560,7 +593,10 @@ pub fn render_patch_cloud_bitmaps(
         })
         .collect();
     progress.check_cancel()?;
-    let rendered = rendered
+    // Back in the cloud's order, so the error is the first patch's that
+    // failed, as in a loop over the patches by index.
+    let rendered = order
+        .restore(rendered)
         .into_iter()
         .collect::<Result<Vec<_>, PhotographReadError>>()?;
     let mut bitmaps = ndarray::Array4::<u8>::zeros((point_count, resolution, resolution, 4));
