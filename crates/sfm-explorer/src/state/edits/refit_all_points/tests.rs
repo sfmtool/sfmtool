@@ -169,11 +169,13 @@ fn a_photograph_that_cannot_be_read_fails_the_run_and_names_the_image() {
 #[test]
 fn a_reconstruction_with_no_keypoints_is_refused_in_the_menu_s_own_words() {
     let mut state = AppState::new();
-    state.append_node(SceneNode::demo(SfmrReconstruction::demo(16)));
+    state.append_node(SceneNode::demo(SfmrReconstruction::demo_without_keypoints(
+        16,
+    )));
     let id = state.selected_recon.expect("a selected reconstruction");
     let why = state
         .refit_refusal(id)
-        .expect("the demo value carries no keypoints");
+        .expect("the value carries no keypoints");
     assert!(why.contains("Convert to Embedded Patches"), "{why}");
     let refused = state
         .start_refit_all_points(id)

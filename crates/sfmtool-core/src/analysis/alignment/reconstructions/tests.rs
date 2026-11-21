@@ -79,8 +79,7 @@ fn embedded(recon: &SfmrReconstruction) -> SfmrReconstruction {
     out
 }
 
-/// Give a `sift_files` reconstruction the optional inline copy of its
-/// keypoints.
+/// Give a `sift_files` reconstruction inline keypoints on a grid.
 fn with_inline_keypoints(recon: &SfmrReconstruction) -> SfmrReconstruction {
     let mut out = recon.clone();
     let xy = grid_keypoints(recon);
@@ -251,10 +250,10 @@ fn a_mixed_pair_aligns_by_keypoint_position_when_the_sift_files_side_has_inline_
 
 #[test]
 fn a_mixed_pair_whose_sift_files_side_has_no_keypoint_positions_says_what_is_missing() {
-    // The demo carries feature indexes but no inline keypoints, and its `.sift`
-    // files do not exist, so there is no position to match the embedded side's
-    // keypoints against.
-    let a = SfmrReconstruction::demo(64);
+    // Feature indexes but no inline keypoints, and the `.sift` files do not
+    // exist, so there is no position to match the embedded side's keypoints
+    // against.
+    let a = SfmrReconstruction::demo_without_keypoints(64);
     let b = embedded(&transformed(&a, &known_similarity()));
 
     let err = align(&b, &a, options(AlignSource::Points, true)).expect_err("no .sift");

@@ -1,21 +1,22 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Filling the inline keypoint column from `.sift` files, and the loader doing
-//! it for a file that lacks the column.
+//! Filling the inline keypoint column from `.sift` files, and the save doing
+//! it for a value that lacks the column.
 
 use ndarray::{Array2, Array3};
 use tempfile::TempDir;
 
 use super::*;
 
-/// The demo reconstruction with a `.sift` file per image under `dir`, and its
-/// `sift_content_hashes` set to the hashes of those files.
+/// The demo reconstruction without its inline keypoints, with a `.sift` file
+/// per image under `dir`, and its `sift_content_hashes` set to the hashes of
+/// those files.
 ///
 /// Feature `f` of image `i` sits at `(100 + f, 200 + i)`, so a filled row can
 /// be checked against the observation's image and feature index.
 fn fixture(dir: &TempDir) -> SfmrReconstruction {
-    let mut recon = SfmrReconstruction::demo(12);
+    let mut recon = SfmrReconstruction::demo_without_keypoints(12);
     recon.workspace_dir = dir.path().to_path_buf();
     recon.metadata.workspace.contents.feature_prefix_dir = "features".into();
 
@@ -148,36 +149,43 @@ fn an_embedded_patches_value_is_not_touched() {
     );
 }
 
-/// A `sift_files` file saved without the column loads with it, and a save of
-/// the loaded value writes it.
+/// A save of a value without the column writes it, read from the `.sift`
+/// files, and leaves the value as it was.
 #[test]
-fn load_fills_a_file_without_the_column() {
+fn save_writes_the_column_from_the_sift_files() {
     let dir = tempfile::tempdir().unwrap();
     let recon = fixture(&dir);
-    // The marker is how the load finds the workspace the `.sift` files are in.
-    std::fs::write(dir.path().join(".sfm-workspace.json"), "{}").unwrap();
-    let path = dir.path().join("no-keypoints.sfmr");
+    let path = dir.path().join("saved.sfmr");
     recon.save(&path, &Progress::none()).unwrap();
-    assert!(!sfmtool_sfmr_format::read_sfmr(&path)
-        .unwrap()
-        .keypoints_xy
-        .is_some());
+    assert!(recon.keypoints_xy().is_none());
 
-    let loaded = SfmrReconstruction::load(&path, &Progress::none()).unwrap();
-    assert_rows_match_features(&loaded);
-    // The value still names the file it was read from.
-    assert_eq!(
-        loaded.content_hash.content_xxh128,
-        sfmtool_sfmr_format::read_sfmr(&path)
-            .unwrap()
-            .content_hash
-            .content_xxh128
-    );
+    let mut written = recon.clone();
+    if let ObservationSource::SiftFiles { keypoints_xy, .. } = &mut written.point_set.observations {
+        *keypoints_xy = sfmtool_sfmr_format::read_sfmr(&path).unwrap().keypoints_xy;
+    }
+    assert_rows_match_features(&written);
+}
 
-    let resaved = dir.path().join("with-keypoints.sfmr");
-    loaded.save(&resaved, &Progress::none()).unwrap();
-    assert!(sfmtool_sfmr_format::read_sfmr(&resaved)
-        .unwrap()
-        .keypoints_xy
-        .is_some());
+/// When the `.sift` files cannot supply the column, a save writes nothing and
+/// says which file and what to do.
+#[test]
+fn save_refuses_a_value_whose_sift_files_cannot_supply_the_column() {
+    let dir = tempfile::tempdir().unwrap();
+    let recon = fixture(&dir);
+    let missing = recon.sift_path_for_image(2);
+    std::fs::remove_file(&missing).unwrap();
+    let path = dir.path().join("refused.sfmr");
+
+    match recon.save(&path, &Progress::none()) {
+        Err(sfmtool_sfmr_format::SfmrError::InvalidFormat(message)) => {
+            assert!(message.contains("tracks/keypoints_xy"), "{message}");
+            assert!(
+                message.contains(&format!("{}: no such file", missing.display())),
+                "{message}"
+            );
+            assert!(message.contains("Restore the .sift files"), "{message}");
+        }
+        other => panic!("expected InvalidFormat, got {other:?}"),
+    }
+    assert!(!path.exists());
 }

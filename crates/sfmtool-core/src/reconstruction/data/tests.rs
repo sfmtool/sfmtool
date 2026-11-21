@@ -449,7 +449,10 @@ fn test_to_sfmr_data_is_sift_files() {
     let data = SfmrReconstruction::demo(10).to_sfmr_data();
     assert_eq!(data.metadata.feature_source, FEATURE_SOURCE_SIFT_FILES);
     assert!(data.feature_indexes.is_some());
-    assert!(data.keypoints_xy.is_none());
+    assert_eq!(
+        data.keypoints_xy.as_ref().map(|k| k.nrows()),
+        Some(data.image_indexes.len())
+    );
     assert!(data.image_file_hashes.is_none());
 }
 
@@ -635,7 +638,7 @@ fn test_from_sfmr_data_builds_the_feature_maps_of_a_valid_value() {
     );
 }
 
-/// The `sift_files` `demo`, given the optional inline keypoint column. Row `i`
+/// The `sift_files` `demo`, given its own inline keypoint column. Row `i`
 /// holds `[2i, 2i+1]` -- the same values `demo_embedded` writes -- so the two
 /// fixtures state the same observation coordinates in the two different modes.
 fn demo_sift_files_inline(num_points: usize) -> SfmrReconstruction {
@@ -673,7 +676,9 @@ fn test_sift_files_inline_keypoints_round_trip_through_reconstruction() {
     assert!(out.image_file_hashes.is_none());
 
     // A sift_files reconstruction without the column still reports none.
-    assert!(SfmrReconstruction::demo(10).keypoints_xy().is_none());
+    assert!(SfmrReconstruction::demo_without_keypoints(10)
+        .keypoints_xy()
+        .is_none());
 }
 
 #[test]
@@ -746,7 +751,7 @@ fn test_recompute_point_errors_sift_files_prefers_inline_keypoints() {
     // recon cannot recompute at all -- and the one carrying the inline column
     // can, producing exactly what the embedded twin over the same coordinates
     // produces.
-    SfmrReconstruction::demo(10)
+    SfmrReconstruction::demo_without_keypoints(10)
         .recompute_point_errors()
         .expect_err("no .sift on disk");
 
@@ -780,7 +785,7 @@ fn test_recompute_point_errors_sift_files_prefers_inline_keypoints() {
 fn test_compute_observation_reprojection_errors_sift_files_prefers_inline() {
     let recon = demo_sift_files_inline(6);
     // Reading `.sift` is what the same call does without the column.
-    SfmrReconstruction::demo(6)
+    SfmrReconstruction::demo_without_keypoints(6)
         .compute_observation_reprojection_errors(0)
         .expect_err("no .sift on disk");
 
@@ -1203,15 +1208,9 @@ fn a_recorded_load_names_the_read_and_the_derive() {
     let path = saved_demo("load_phases", 32);
     let (recon, phases) = load_recording(&path);
 
-    // The demo is `sift_files` with no `.sift` files behind it, so `keypoints`
-    // runs and says why it left the column out.
-    assert_eq!(
-        phase_names(&phases),
-        ["read", "derive", "keypoints"],
-        "{phases:?}"
-    );
-    let keypoints = phase_note(&phases, "keypoints").expect("a keypoints note");
-    assert!(keypoints.starts_with("not filled: "), "{keypoints}");
+    // The demo carries its inline keypoints, so `keypoints` has nothing to
+    // fill and records nothing.
+    assert_eq!(phase_names(&phases), ["read", "derive"], "{phases:?}");
     assert!(
         phases.iter().all(|(_, depth, _)| *depth == 0),
         "a load's stages sit at the top of whatever it was called inside: {phases:?}"
@@ -1814,7 +1813,7 @@ fn test_recompute_point_errors_is_the_rms_of_the_observation_errors() {
 #[test]
 fn test_recompute_point_errors_from_sift_files_is_the_rms() {
     let dir = tempfile::tempdir().unwrap();
-    let mut recon = SfmrReconstruction::demo(10);
+    let mut recon = SfmrReconstruction::demo_without_keypoints(10);
     recon.workspace_dir = dir.path().to_path_buf();
     recon.metadata.workspace.contents.feature_prefix_dir = "features".into();
     let keypoints = keypoints_off_projection(&recon, one_and_three_px);

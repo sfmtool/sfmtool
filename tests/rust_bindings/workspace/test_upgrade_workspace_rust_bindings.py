@@ -18,7 +18,11 @@ import pytest
 from sfmtool import ProgressCounter
 from sfmtool.workspace import upgrade_workspace
 
-from ...conftest import TEST_DATA_DIR, relabel_camrig
+from ...conftest import (
+    TEST_DATA_DIR,
+    relabel_camrig,
+    rewrite_sfmr_as_version_16_without_keypoints,
+)
 
 KERRY_PARK_RIG = TEST_DATA_DIR / "images" / "kerry_park" / "kerry_park.camrig"
 
@@ -116,3 +120,40 @@ def test_a_folder_that_cannot_be_listed_raises_os_error(tmp_path):
             upgrade_workspace(tmp_path / "ws", dry_run=True)
     finally:
         hidden.chmod(0o755)
+
+
+def test_a_version_16_sift_files_file_gets_its_keypoints_from_the_sift_files(
+    seoul_bull_workspace,
+):
+    """A version 16 `sift_files` file without `tracks/keypoints_xy` is
+    rewritten with the column, read from its `.sift` files."""
+    from sfmtool.fileio import read_sfmr
+
+    old = rewrite_sfmr_as_version_16_without_keypoints(
+        seoul_bull_workspace, seoul_bull_workspace.with_name("v16.sfmr")
+    )
+    report = upgrade_workspace(seoul_bull_workspace.parent)
+    (entry,) = [f for f in report["files"] if f["path"] == str(old)]
+    assert entry["outcome"] == "converted", entry
+    rewritten = read_sfmr(old)
+    assert rewritten["metadata"]["version"] == 17
+    assert rewritten["keypoints_xy"] is not None
+    assert (
+        rewritten["keypoints_xy"] == read_sfmr(seoul_bull_workspace)["keypoints_xy"]
+    ).all()
+
+
+def test_a_version_16_sift_files_file_without_its_sift_files_fails(
+    seoul_bull_v16_without_keypoints,
+):
+    """Without the `.sift` files the column cannot be built, so the file fails
+    with a reason naming the missing file, and is left as it was."""
+    before = seoul_bull_v16_without_keypoints.read_bytes()
+    report = upgrade_workspace(seoul_bull_v16_without_keypoints.parent)
+    (entry,) = [
+        f for f in report["files"] if f["path"] == str(seoul_bull_v16_without_keypoints)
+    ]
+    assert entry["outcome"] == "failed", entry
+    assert ".sift: no such file" in entry["reason"]
+    assert "Restore the .sift files" in entry["reason"]
+    assert seoul_bull_v16_without_keypoints.read_bytes() == before

@@ -124,8 +124,9 @@ pub struct ReprojectionSample {
 /// - everything else **keeps its position**: a track whose triangulation
 ///   failed, a bearing more than one image sees, a finite point this image
 ///   alone sees, and any track whose observations carry no pixel. A
-///   `sift_files` value without the optional inline keypoint column states no
-///   ray, so its camera moves and its points stand.
+///   `sift_files` value without the inline keypoint column (one read from a
+///   version 16 file whose `.sift` files cannot be read) states no ray, so its
+///   camera moves and its points stand.
 ///
 /// Every track this image observes then stores the RMS of its reprojection
 /// errors at the new geometry, whether its point moved or stood, since its

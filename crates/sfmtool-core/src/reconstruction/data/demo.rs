@@ -32,8 +32,9 @@ impl SfmrReconstruction {
     /// Generates `num_points` 3D points evenly distributed on a unit sphere
     /// (offset to sit in front of the camera arc), observed by 8 cameras
     /// arranged in a circle around the origin. Every image carries invented
-    /// image readings under the default grey conversion, so the demo saves
-    /// as a `.sfmr` with no photographs behind it.
+    /// image readings under the default grey conversion, and every
+    /// observation its pixel, the point's projection, so the demo saves as a
+    /// `.sfmr` with no photographs or `.sift` files behind it.
     pub fn demo(num_points: usize) -> Self {
         use crate::camera::CameraModel;
         use crate::spherical::sphere_points::{evenly_distributed_sphere_points, RelaxConfig};
@@ -151,6 +152,17 @@ impl SfmrReconstruction {
             observation_counts.push(2);
         }
 
+        // Each observation's pixel is its point projected through its image's
+        // pose, as a solve would have detected it.
+        let keypoints_xy = ndarray::Array2::from_shape_fn((tracks.len(), 2), |(row, k)| {
+            let obs = &tracks[row];
+            let image = &images[obs.image_index as usize];
+            let p = image.quaternion_wxyz * points[obs.point_index as usize].position.coords
+                + image.translation_xyz;
+            let (u, v) = cameras[0].project(p.x / -p.z, p.y / -p.z);
+            [u as f32, v as f32][k]
+        });
+
         // Empty depth statistics
         let depth_statistics = DepthStatistics {
             num_histogram_buckets: num_buckets,
@@ -246,7 +258,7 @@ impl SfmrReconstruction {
                 display_only_references: None,
                 observations: ObservationSource::SiftFiles {
                     feature_indexes,
-                    keypoints_xy: None,
+                    keypoints_xy: Some(keypoints_xy),
                     feature_tool_hashes: vec![[0u8; 16]; num_images],
                     sift_content_hashes: vec![[0u8; 16]; num_images],
                 },
@@ -258,5 +270,20 @@ impl SfmrReconstruction {
                 max_track_feature_index,
             },
         }
+    }
+}
+
+impl SfmrReconstruction {
+    /// [`Self::demo`] without its inline keypoints: the value a load gives for
+    /// a version 16 `sift_files` file written without `tracks/keypoints_xy`
+    /// whose `.sift` files cannot be read, which a save refuses to write. For
+    /// testing what a consumer does with a value that states no pixels.
+    pub fn demo_without_keypoints(num_points: usize) -> Self {
+        let mut recon = Self::demo(num_points);
+        if let ObservationSource::SiftFiles { keypoints_xy, .. } = &mut recon.point_set.observations
+        {
+            *keypoints_xy = None;
+        }
+        recon
     }
 }

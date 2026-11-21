@@ -197,12 +197,13 @@ def _build_sfmr_data_dict(
     ``positions_xyzw`` is the homogeneous ``(P, 4)`` point array; use
     :func:`finite_positions_xyzw` to build it from Euclidean coordinates.
 
-    ``keypoints_xy`` is the optional ``(M, 2)`` inline copy of each
-    observation's pixel position, parallel to ``track_image_indexes``. The
-    reconstruction stays ``sift_files`` either way -- the observations are still
-    the features ``track_feature_indexes`` point at -- but with the copy present
-    a consumer reads where each observation sits without opening the ``.sift``
-    companions. Omit it and the file carries no such column.
+    ``keypoints_xy`` is the ``(M, 2)`` pixel position of each observation,
+    parallel to ``track_image_indexes``. The reconstruction stays
+    ``sift_files`` -- the observations are still the features
+    ``track_feature_indexes`` point at -- and a ``.sfmr`` file stores the
+    column, so a consumer reads where each observation sits without opening
+    the ``.sift`` companions. Omit it and ``from_data`` reads it from those
+    companions.
 
     ``image_readings`` holds the ``image_to_gray``, ``sharpness`` and
     ``gradient_structure_tensors_xx_yy_xy`` entries, from

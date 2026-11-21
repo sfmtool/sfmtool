@@ -71,6 +71,26 @@ pub(crate) fn shared_shoot(n: usize) -> AppState {
     state
 }
 
+/// [`shared_shoot`]`(1)` whose node states no pixel: a `sift_files` value
+/// without inline keypoints, as a load gives for a version 16 file whose
+/// `.sift` files cannot be read.
+fn keypointless_shoot() -> AppState {
+    let mut recon = recon_named(32, 8, "IMG");
+    if let sfmtool_core::ObservationSource::SiftFiles { keypoints_xy, .. } =
+        &mut recon.point_set.observations
+    {
+        *keypoints_xy = None;
+    }
+    let mut state = AppState::new();
+    state.append_node(SceneNode::from_path(
+        std::path::Path::new("/runs/run_0.sfmr"),
+        recon,
+    ));
+    let first = state.scene[0].id;
+    state.select_recon(first);
+    state
+}
+
 /// A node whose eight images resolve to **two** cameras: the first four
 /// through camera 0, the rest through camera 1.
 ///
@@ -3522,7 +3542,7 @@ fn the_bundle_adjust_entry_is_live_on_an_adjustable_node() {
 /// dead, on the edit's own gate: there is no pixel to reproject against.
 #[test]
 fn the_bundle_adjust_entry_is_greyed_without_inline_keypoints() {
-    let mut state = shared_shoot(1);
+    let mut state = keypointless_shoot();
     let (mut panel, ctx) = settled(&mut state);
     let id = state.scene[0].id;
     assert!(crate::bundle_adjust_prompt::refusal(state.scene[0].edited()).is_some());
@@ -3597,7 +3617,7 @@ fn the_retriangulate_entry_is_live_on_a_node_with_keypoints() {
 /// dead: there is no pixel to cast a ray through.
 #[test]
 fn the_retriangulate_entry_is_greyed_without_inline_keypoints() {
-    let mut state = shared_shoot(1);
+    let mut state = keypointless_shoot();
     let (mut panel, ctx) = settled(&mut state);
     let id = state.scene[0].id;
 
@@ -3721,7 +3741,7 @@ fn assert_refit_entry_dead(state: &mut AppState, id: crate::scene::ReconId, why:
 /// dead, and its sentence names the conversion.
 #[test]
 fn the_refit_entry_is_greyed_without_inline_keypoints() {
-    let mut state = shared_shoot(1);
+    let mut state = keypointless_shoot();
     let id = state.scene[0].id;
     assert_refit_entry_dead(&mut state, id, "Convert to Embedded Patches");
 }
@@ -3878,7 +3898,7 @@ fn assert_refine_entry_dead(state: &mut AppState, id: crate::scene::ReconId, why
 /// operation is running on the node, in the busy sentence.
 #[test]
 fn the_refine_entry_is_greyed_for_the_refit_s_reasons() {
-    let mut state = shared_shoot(1);
+    let mut state = keypointless_shoot();
     let id = state.scene[0].id;
     assert_refine_entry_dead(&mut state, id, "Convert to Embedded Patches");
 

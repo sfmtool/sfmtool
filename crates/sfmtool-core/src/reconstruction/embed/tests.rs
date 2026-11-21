@@ -22,14 +22,15 @@ use crate::progress::{Event, Progress};
 /// reporting and the stopping, not the arithmetic of the frames.
 const POINTS: usize = 12;
 
-/// The demo reconstruction with a `.sift` file per image under `dir`.
+/// The demo reconstruction without its inline keypoints, with a `.sift` file
+/// per image under `dir`.
 ///
 /// Each feature's affine column-0 norm is a positive `σ`, so every observation
 /// resolves a readable keypoint scale and `FeatureSize` can size every patch;
 /// each position is a distinct pixel, so the keypoints the conversion copies
 /// can be told apart from zeros.
 fn fixture(dir: &TempDir) -> SfmrReconstruction {
-    let mut recon = SfmrReconstruction::demo(POINTS);
+    let mut recon = SfmrReconstruction::demo_without_keypoints(POINTS);
     recon.workspace_dir = dir.path().to_path_buf();
     recon.metadata.workspace.contents.feature_prefix_dir = "features".into();
 

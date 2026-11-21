@@ -254,8 +254,8 @@ pub struct SfmrMetadata {
     pub world_space_unit: Option<String>,
     /// Observation source:
     /// [`FEATURE_SOURCE_SIFT_FILES`] — observations reference external `.sift`
-    /// files via `feature_indexes`, optionally alongside an inline copy of the
-    /// coordinate in `tracks/keypoints_xy`; or [`FEATURE_SOURCE_EMBEDDED_PATCHES`]
+    /// files via `feature_indexes`, alongside each observation's coordinate in
+    /// `tracks/keypoints_xy`; or [`FEATURE_SOURCE_EMBEDDED_PATCHES`]
     /// — per-observation keypoints are stored inline in `tracks/keypoints_xy`
     /// and there is no `.sift` link at all.
     ///
@@ -859,6 +859,10 @@ pub const SFMR_FORMAT_VERSION: u32 = 17;
 /// section, top-level `distance_measurement_count` and `measurements_xxh128`.
 pub const MEASUREMENTS_FORMAT_VERSION: u32 = 17;
 
+/// First `.sfmr` format version in which a `sift_files` file must carry
+/// `tracks/keypoints_xy`. A `sift_files` file of an older version may lack it.
+pub const SIFT_FILES_KEYPOINTS_FORMAT_VERSION: u32 = 17;
+
 /// The oldest `.sfmr` format version a reader accepts. A file of an older
 /// version that a release wrote is refused with
 /// [`SfmrError::VersionNoLongerRead`].
@@ -1226,10 +1230,12 @@ pub struct SfmrData {
     pub feature_indexes: Option<Array1<u32>>,
     /// `(M, 2)` sub-pixel `(u, v)` keypoint per observation, in image pixel
     /// coordinates. Always `Some` in an `embedded_patches` file, where it *is*
-    /// the observation coordinate. Optional in a `sift_files` file, where it is
-    /// an inline copy of the position the `feature_indexes` resolve to in the
-    /// `.sift` companions, so a consumer that has only the `.sfmr` still reads
-    /// where each observation sits.
+    /// the observation coordinate. In a `sift_files` file it is the file's own
+    /// statement of where each observation sits, so a consumer that has only
+    /// the `.sfmr` still reads it. Read from a file, it is `None` only for a
+    /// `sift_files` file older than [`SIFT_FILES_KEYPOINTS_FORMAT_VERSION`]
+    /// that was written without it. [`crate::write_sfmr`] refuses a value
+    /// without it, whatever its `feature_source`.
     pub keypoints_xy: Option<Array2<f32>>,
     /// Optional `(M,)` per-observation confidence in that observation's
     /// photometric sharpness *relative to its track's consensus*: how well this

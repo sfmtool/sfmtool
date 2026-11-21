@@ -246,9 +246,9 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
         None => dict.set_item("patch_bitmaps_y_x_rgba", py.None())?,
     }
     dict.set_item("image_indexes", data.image_indexes.into_pyarray(py))?;
-    // feature_indexes is the sift_files column and keypoints_xy the
-    // embedded_patches one, except that a sift_files file may also carry
-    // keypoints_xy inline: emit each present column, `None` for an absent one.
+    // feature_indexes is the sift_files column; keypoints_xy is in every file
+    // but a version 16 sift_files file written without it: emit each present
+    // column, `None` for an absent one.
     match data.feature_indexes {
         Some(f) => dict.set_item("feature_indexes", f.into_pyarray(py))?,
         None => dict.set_item("feature_indexes", py.None())?,
@@ -467,8 +467,8 @@ pub(crate) fn parse_sfmr_data_from_dict(
         get_item(data, "observation_counts")?.extract()?;
 
     // Mode-dependent columns: one of the per-image hash sets is present (the
-    // other None or absent), and so is feature_indexes or keypoints_xy — though
-    // a sift_files reconstruction may carry both, the second as its inline copy.
+    // other None or absent), and so is feature_indexes, the sift_files column.
+    // keypoints_xy is each observation's pixel in either mode.
     let feature_indexes = match get_optional_item(data, "feature_indexes")? {
         Some(v) => Some(
             v.extract::<PyReadonlyArray1<u32>>()?
@@ -741,7 +741,10 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// `sharpness` and `gradient_structure_tensors_xx_yy_xy`) are required: this
 /// low-level writer computes nothing, so a dict without them is refused with
 /// `ValueError`, where `SfmrReconstruction.save` gathers them from the `.sift`
-/// files or the photographs. The sharpness and five of the
+/// files or the photographs. So is `keypoints_xy` in either mode: a
+/// `sift_files` dict without it, as one `read_sfmr` gives for a version 16
+/// file written without it, is refused with `ValueError`, where
+/// `SfmrReconstruction.save` reads it from the `.sift` files. The sharpness and five of the
 /// observation-reading columns are written rounded to the nearest `float16`,
 /// and the two bitmap scores as their deficits rounded so; the dict's arrays
 /// are not changed.

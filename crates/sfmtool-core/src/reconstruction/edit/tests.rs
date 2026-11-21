@@ -609,7 +609,7 @@ fn an_image_subset_scores_again_each_point_that_loses_an_observation() {
 
 #[test]
 fn an_image_subset_without_inline_keypoints_keeps_the_stored_errors() {
-    let recon = SfmrReconstruction::demo(8);
+    let recon = SfmrReconstruction::demo_without_keypoints(8);
     let keep: Vec<u32> = (0..8u32).filter(|&i| i != 1).collect();
     let out = recon.subset_by_image_indices(&keep, true).unwrap();
     for (a, b) in out.point_set.points.iter().zip(&recon.point_set.points) {

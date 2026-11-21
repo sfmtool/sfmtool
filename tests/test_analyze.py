@@ -247,12 +247,10 @@ def test_analyze_depth_reliability_z_at_fitted_point(
         assert abs(z - stored_z[index]) < 0.1 * stored_z[index], (index, z)
 
 
-def test_analyze_depth_reliability_missing_sift(seoul_bull_sfmr_only):
+def test_analyze_depth_reliability_missing_sift(seoul_bull_v16_without_keypoints):
     """A sift_files reconstruction without its .sift files or inline keypoints
     names the file it could not read."""
-    recon = SfmrReconstruction.load(str(seoul_bull_sfmr_only))
-    path = seoul_bull_sfmr_only.parent / "no_keypoints.sfmr"
-    recon.clone_with_changes(keypoints_xy=None).save(str(path))
+    path = seoul_bull_v16_without_keypoints
     result = CliRunner().invoke(main, ["analyze", "--depth-reliability", str(path)])
     assert result.exit_code == 0, result.output
     line = next(

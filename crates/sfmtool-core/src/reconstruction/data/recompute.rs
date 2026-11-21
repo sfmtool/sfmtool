@@ -37,8 +37,8 @@ impl SfmrReconstruction {
     ///
     /// The observed pixel comes from the reconstruction's inline `keypoints_xy`
     /// when it carries one, and otherwise from the image's `.sift` file -- so a
-    /// `sift_files` reconstruction with the optional inline copy needs no
-    /// `.sift` companion on disk.
+    /// `sift_files` reconstruction with the inline column needs no `.sift`
+    /// companion on disk.
     ///
     /// Returns one `(id, reprojection_error_px)` pair per track observation
     /// for this image. Points behind the camera produce `f32::NAN`. What `id`

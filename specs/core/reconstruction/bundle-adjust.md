@@ -458,7 +458,8 @@ without solving anything:
   that takes a schedule from a person -- the viewer's dialog and its wire tool
   -- refuses the same schedules in the same words before starting anything.
 - Observations with no pixel behind them (`NoKeypoints`): a `sift_files` value
-  without the format's optional inline keypoint column states no coordinate for
+  without the inline keypoint column (one read from a version 16 file whose
+  `.sift` files cannot be read) states no coordinate for
   a sighting, and the residual has nothing to be measured against. The other
   observation mode always carries one.
 - No image with a finite pose (`NoPosedImages`).

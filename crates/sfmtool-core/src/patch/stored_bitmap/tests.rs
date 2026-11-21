@@ -617,7 +617,7 @@ fn a_cloud_render_refuses_input_that_disagrees_with_the_reconstruction() {
     assert_eq!(
         render(
             &cloud(vec![0, 1]),
-            &crate::SfmrReconstruction::demo(4),
+            &crate::SfmrReconstruction::demo_without_keypoints(4),
             images
         ),
         Err(CloudRenderError::NoInlineKeypoints)

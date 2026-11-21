@@ -31,6 +31,16 @@ fn state() -> AppState {
     state
 }
 
+/// [`state`] whose node states no pixel: the demo value without its inline
+/// keypoints.
+fn keypointless_state() -> AppState {
+    let mut state = AppState::new();
+    state.append_node(SceneNode::demo(SfmrReconstruction::demo_without_keypoints(
+        64,
+    )));
+    state
+}
+
 /// The id of the one node.
 fn node(state: &AppState) -> ReconId {
     state.selected_recon.expect("a selected reconstruction")
@@ -1397,7 +1407,7 @@ fn an_undo_puts_every_pose_back() {
 
 #[test]
 fn a_node_with_no_inline_keypoints_is_refused_before_anything_is_solved() {
-    let mut state = state();
+    let mut state = keypointless_state();
     let id = node(&state);
 
     let why = state
@@ -1794,12 +1804,13 @@ fn a_cursor_move_across_a_deleted_image_follows_the_photograph() {
 /// A `sift_files` node called `run_a` whose workspace is `dir`, with a real
 /// `.sift` file per image.
 ///
-/// The demo value is `sift_files` already; what this adds is the companions
-/// the conversion reads -- the affine shapes its default `FeatureSize` sizing
-/// needs, and the detections it copies as keypoints -- and the workspace
-/// metadata saying where they are.
+/// The demo value is `sift_files` already, and is taken without its inline
+/// keypoints, so every pixel is read from the companions; what this adds is
+/// the companions the conversion reads -- the affine shapes its default
+/// `FeatureSize` sizing needs, and the detections it copies as keypoints --
+/// and the workspace metadata saying where they are.
 pub(crate) fn convertible_state(dir: &std::path::Path) -> (AppState, ReconId) {
-    let mut recon = SfmrReconstruction::demo(24);
+    let mut recon = SfmrReconstruction::demo_without_keypoints(24);
     recon.workspace_dir = dir.to_path_buf();
     recon.metadata.workspace.absolute_path = dir.display().to_string();
     recon.metadata.workspace.relative_path = ".".into();
@@ -2409,10 +2420,10 @@ fn a_cancelled_whole_value_retriangulation_pushes_no_version() {
 
 #[test]
 fn a_reconstruction_with_no_pixels_is_refused_in_the_menu_s_own_words() {
-    // The demo value states no inline keypoint, so there is no pixel to cast a
+    // The value states no inline keypoint, so there is no pixel to cast a
     // ray through -- and the entry's greying and the call's refusal are the
     // same sentence.
-    let mut state = state();
+    let mut state = keypointless_state();
     let id = node(&state);
     let why = state
         .retriangulate_refusal(id)

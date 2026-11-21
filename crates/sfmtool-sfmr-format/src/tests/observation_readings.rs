@@ -346,7 +346,7 @@ fn the_tracks_hash_is_over_the_entries_in_sorted_name_order() {
         .map(String::from)
         .collect();
     names.sort();
-    assert_eq!(names.len(), 5 + 8, "{names:?}");
+    assert_eq!(names.len(), 6 + 8, "{names:?}");
     let mut hasher = xxhash_rust::xxh3::Xxh3::new();
     for name in &names {
         let mut compressed = Vec::new();

@@ -182,8 +182,8 @@ fn classify_rejects_an_invalid_sigma() {
 
 #[test]
 fn classify_without_its_pixels_is_an_error() {
-    // demo() has no inline keypoints and no .sift files behind it.
-    let recon = SfmrReconstruction::demo(10);
+    // No inline keypoints and no .sift files behind it.
+    let recon = SfmrReconstruction::demo_without_keypoints(10);
     assert!(matches!(
         recon.classify_points_at_infinity(None),
         Err(PointOrBearingError::Reconstruction(_))

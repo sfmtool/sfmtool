@@ -223,7 +223,7 @@ pub fn check_schedule(schedule: &[BaSchedule]) -> Result<(), BundleAdjustError> 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BundleAdjustError {
     /// The observations carry no pixel: a `sift_files` value without the
-    /// format's optional inline keypoint column.
+    /// inline keypoint column, one read from a version 16 file whose `.sift` files cannot be read.
     NoKeypoints,
     /// The release list's length is neither zero nor the camera count.
     ReleaseCount {
@@ -761,7 +761,7 @@ pub fn bundle_adjust(
 ) -> Result<(SfmrReconstruction, BundleAdjustReport), BundleAdjustError> {
     check_schedule(&options.schedule)?;
     // Every observation states a pixel, or there is nothing to reproject
-    // against. The optional inline column answers for `sift_files` too.
+    // against. The inline column answers for `sift_files` too.
     let keypoints = recon
         .point_set
         .keypoints_xy()

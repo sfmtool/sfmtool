@@ -948,9 +948,10 @@ fn verify_tracks_section<R: Read + Seek>(
     let tracks_meta_raw = read_zst_entry(archive, entries::tracks_metadata())?;
     let tracks_meta: serde_json::Value =
         serde_json::from_slice(&tracks_meta_raw).unwrap_or(serde_json::Value::Null);
-    // The inline keypoint column is the coordinate in an `embedded_patches` file
-    // and an optional copy of it in a `sift_files` one; `has_keypoints_xy` is what
-    // says whether the entry exists.
+    // The inline keypoint column is every observation's pixel, in either mode.
+    // Only a `sift_files` file older than `SIFT_FILES_KEYPOINTS_FORMAT_VERSION`
+    // may lack it, and `has_keypoints_xy` is what says whether the entry exists;
+    // a newer `sift_files` file that does not set it is reported below.
     let has_keypoints_xy = is_embedded
         || tracks_meta
             .get("has_keypoints_xy")
@@ -1132,9 +1133,11 @@ fn verify_tracks_section<R: Read + Seek>(
     // === Validate feature_source vs tracks-metadata flags ===
     // `has_feature_indexes` is true exactly for a `sift_files` file.
     // `has_keypoints_xy` is a presence flag rather than a mode flag: an
-    // `embedded_patches` file must set it (the column is its coordinate), while a
-    // `sift_files` file sets it only when it carries the optional inline copy.
-    // Only enforced when the flags are present.
+    // `embedded_patches` file must set it (the column is its coordinate), and so
+    // must a `sift_files` file of `SIFT_FILES_KEYPOINTS_FORMAT_VERSION` or later;
+    // an older `sift_files` file sets it only when it carries the column. Only
+    // enforced when the flags are present, except that a newer `sift_files`
+    // file without the flag is reported too.
     if let Some(hfi) = tracks_meta
         .get("has_feature_indexes")
         .and_then(|v| v.as_bool())
@@ -1158,6 +1161,14 @@ fn verify_tracks_section<R: Read + Seek>(
                     .to_string(),
             );
         }
+    }
+    if !is_embedded && !has_keypoints_xy && metadata.version >= SIFT_FILES_KEYPOINTS_FORMAT_VERSION
+    {
+        errors.push(format!(
+            "a version {} sift_files file must carry tracks/keypoints_xy, and \
+             tracks/metadata.json does not set has_keypoints_xy",
+            metadata.version
+        ));
     }
 
     // === Validate the inline keypoints (finite + within image bounds) ===

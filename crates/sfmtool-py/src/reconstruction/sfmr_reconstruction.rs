@@ -789,11 +789,13 @@ impl PySfmrReconstruction {
     /// Per-observation sub-pixel keypoints ``(K, 2)`` (image-space ``(u, v)``),
     /// parallel to the track arrays, or ``None`` when the reconstruction carries
     /// none inline. Always present when :attr:`feature_source` is
-    /// ``"embedded_patches"``. Under ``"sift_files"`` it is the inline copy of
-    /// the observation coordinates, which consumers read in preference to the
-    /// ``.sift`` features: :meth:`load` and :meth:`from_data` build it from the
-    /// ``.sift`` files when the data lacks it, so it is ``None`` only when
-    /// those files are missing or do not match the reconstruction.
+    /// ``"embedded_patches"``. Under ``"sift_files"`` it states where each
+    /// observation sits, which consumers read in preference to the ``.sift``
+    /// features, and a ``.sfmr`` file stores it. A version 16 file may lack
+    /// it: :meth:`load` and :meth:`from_data` build it from the ``.sift``
+    /// files when the data lacks it, so it is ``None`` only when those files
+    /// are missing or do not match the reconstruction, and :meth:`save` then
+    /// raises ``ValueError`` rather than write the file.
     ///
     /// A read-only view of the column this object holds: it copies nothing,
     /// and keeps the object alive while it is.
@@ -2137,13 +2139,14 @@ impl PySfmrReconstruction {
     /// ``track_image_indexes`` entry past the image set, or kept tracks that
     /// name an image a shorter ``image_names`` drops, raise ``ValueError``.
     ///
-    /// On a ``sift_files`` reconstruction, ``keypoints_xy=None`` drops the
-    /// inline keypoint column. When the track arrays are replaced and
+    /// ``keypoints_xy=None`` raises ``ValueError`` in either mode, since a
+    /// ``.sfmr`` file stores every observation's pixel. On a ``sift_files``
+    /// reconstruction, when the track arrays are replaced and
     /// ``keypoints_xy`` is not passed, the column is rebuilt for the new
     /// tracks: an observation this reconstruction also has (the same image
     /// name and feature index) keeps its pixel, and the rest are read from the
     /// ``.sift`` files. If those files cannot supply them, the result carries
-    /// no column.
+    /// no column, and :meth:`save` raises ``ValueError`` rather than write it.
     #[pyo3(signature = (**kwargs))]
     fn clone_with_changes(
         &self,

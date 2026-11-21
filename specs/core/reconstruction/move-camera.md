@@ -165,8 +165,8 @@ projection is repeated.
    - a **track whose triangulation fails** — near-parallel rays, or a solve
      behind one of the cameras — keeps its position, and is counted;
    - a **track whose observations carry no pixel** keeps its position. A
-     `sift_files` value without the format's optional inline keypoint column
-     states no ray at all, so its cameras move and its points stand.
+     `sift_files` value without the inline keypoint column (one read from a
+     version 16 file whose `.sift` files cannot be read) states no ray at all, so its cameras move and its points stand.
 
 3. **The derived indexes are rebuilt**, so the value that comes back is
    complete.

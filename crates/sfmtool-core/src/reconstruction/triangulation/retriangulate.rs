@@ -126,7 +126,7 @@ impl RetriangulateOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RetriangulateError {
     /// The observations carry no pixel: a `sift_files` value without the
-    /// format's optional inline keypoint column.
+    /// inline keypoint column, one read from a version 16 file whose `.sift` files cannot be read.
     NoKeypoints,
     /// No image of the reconstruction carries a usable pose.
     NoPosedImages,

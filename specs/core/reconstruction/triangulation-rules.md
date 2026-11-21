@@ -485,7 +485,8 @@ one point's status shows the same words.
 
 The preconditions are read before anything is gathered, and each is its own
 refusal: the observations have to carry a pixel (a `sift_files` value without
-the optional inline keypoint column carries none), and some image has to be
+the inline keypoint column, read from a version 16 file whose `.sift` files
+cannot be read, carries none), and some image has to be
 posed. How many cameras the posed images are taken through is not a
 precondition, as it is not for the reconstruction-level bundle adjustment
 ([bundle-adjust.md](bundle-adjust.md)), which also projects each observation
