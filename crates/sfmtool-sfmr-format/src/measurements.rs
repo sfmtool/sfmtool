@@ -244,9 +244,8 @@ pub(crate) fn read_measurement_unit_legend(
 
 /// Resolve each `measurements/units` code through `legend`.
 ///
-/// A code past the legend's end is rejected rather than guessed at. The reader
-/// and verifier pass the file's legend; the writer passes [`LengthUnit::ALL`]
-/// to refuse codes outside the canonical numbering it states.
+/// A code past the legend's end is rejected rather than guessed at. Both the
+/// reader and the verifier pass the file's legend.
 pub(crate) fn resolve_measurement_units(
     codes: &[u8],
     legend: &[LengthUnit],
