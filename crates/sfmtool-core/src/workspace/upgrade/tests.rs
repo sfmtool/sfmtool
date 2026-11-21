@@ -170,7 +170,7 @@ fn relabel(
     }
 }
 
-/// An entry edit that makes a version 16 `.sfmr` of the demo reconstruction,
+/// An entry edit that makes a current-version `.sfmr` of the demo reconstruction,
 /// which has no observation readings and no patch frames, the version 15
 /// file of the same values: the version 15, and its one `float16` column,
 /// the sharpness, widened to the `float32` column version 15 stores.

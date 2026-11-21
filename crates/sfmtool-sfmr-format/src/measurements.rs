@@ -6,7 +6,7 @@
 //!
 //! Each row records a known physical distance between two 3D points observed at
 //! pixel coordinates in a pair of images of the reconstruction. See
-//! `specs/formats/sfmr-file-format.md` § "Measurements (Optional)".
+//! `specs/formats/sfmr-file-format.md` § "10. Measurements (Optional, version 17+)".
 
 use ndarray::{Array1, Array2, Array3};
 use serde::{Deserialize, Serialize};
