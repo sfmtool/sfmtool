@@ -263,6 +263,7 @@ fn build_points(
         rig_count: None,
         sensor_count: None,
         frame_count: None,
+        measurement_count: None,
         world_space_unit: None,
         feature_source: FEATURE_SOURCE_EMBEDDED_PATCHES.to_string(),
     };
@@ -278,6 +279,7 @@ fn build_points(
             images_xxh128: String::new(),
             points3d_xxh128: String::new(),
             tracks_xxh128: String::new(),
+            measurements_xxh128: None,
             content_xxh128: String::new(),
         },
         image_set: ImageSet {

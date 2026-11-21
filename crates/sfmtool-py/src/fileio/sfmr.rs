@@ -646,6 +646,7 @@ pub(crate) fn parse_sfmr_data_from_dict(
             images_xxh128: String::new(),
             points3d_xxh128: String::new(),
             tracks_xxh128: String::new(),
+            measurements_xxh128: None,
             derived_xxh128: String::new(),
             content_xxh128: String::new(),
         },
@@ -697,6 +698,7 @@ pub(crate) fn parse_sfmr_data_from_dict(
         reference_observations,
         depth_statistics,
         observed_depth_histogram_counts,
+        measurements: None,
     })
 }
 

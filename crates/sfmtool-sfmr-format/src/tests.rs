@@ -9,6 +9,7 @@ mod image_names;
 mod image_readings;
 mod layout;
 mod lens_corrections;
+mod measurements;
 mod observation_readings;
 mod patch_normals;
 mod per_image_adjustments;
@@ -72,6 +73,7 @@ fn make_test_data() -> SfmrData {
             rig_count: None,
             sensor_count: None,
             frame_count: None,
+            measurement_count: None,
             world_space_unit: None,
             feature_source: FEATURE_SOURCE_SIFT_FILES.to_string(),
         },
@@ -84,6 +86,7 @@ fn make_test_data() -> SfmrData {
             images_xxh128: String::new(),
             points3d_xxh128: String::new(),
             tracks_xxh128: String::new(),
+            measurements_xxh128: None,
             content_xxh128: String::new(),
         },
         rig_frame_data: None,
@@ -224,6 +227,7 @@ fn make_test_data() -> SfmrData {
             ],
         },
         observed_depth_histogram_counts: Array2::zeros((image_count, num_buckets)),
+        measurements: None,
     }
 }
 
@@ -765,7 +769,10 @@ fn test_content_hash_populated() {
 
     write_sfmr(&path, &mut data).unwrap();
     let loaded = read_sfmr(&path).unwrap();
-    // Frozen at format version 16, which stores the fixture's sharpness as
+    // Frozen at format version 17, which stamps the new version into
+    // `metadata.json`, hashed; this fixture has no measurements, so its
+    // sections are what version 16 wrote. Before that it was frozen at format
+    // version 16, which stores the fixture's sharpness as
     // float16 and stamps the new version; the fixture's sharpness values
     // were also changed then, to float16 values. Before that it was frozen at
     // format version 15, which adds the fixture's image readings, two columns
@@ -791,7 +798,7 @@ fn test_content_hash_populated() {
     // that; otherwise the writer has regressed.
     assert_eq!(
         loaded.content_hash.content_xxh128,
-        "f58ded2490fd38f9e3117d8882bb703f"
+        "c54654a80076b524689373b2b605ac5a"
     );
 
     // All hashes should be non-empty 32-char hex strings
@@ -1004,7 +1011,7 @@ fn a_version_above_the_current_one_or_zero_is_refused_as_unsupported() {
         let dst = dir.join(format!("v{version}.sfmr"));
         relabel_version(&src, &dst, version.into());
         let expected = format!(
-            "unsupported .sfmr format version {version} (this build reads versions 16 to 16)"
+            "unsupported .sfmr format version {version} (this build reads versions 16 to 17)"
         );
         for (reader, error) in every_reader_error(&dst) {
             match error {
@@ -1087,6 +1094,7 @@ fn test_empty_reconstruction() {
             rig_count: None,
             sensor_count: None,
             frame_count: None,
+            measurement_count: None,
             world_space_unit: None,
             feature_source: FEATURE_SOURCE_SIFT_FILES.to_string(),
         },
@@ -1099,6 +1107,7 @@ fn test_empty_reconstruction() {
             images_xxh128: String::new(),
             points3d_xxh128: String::new(),
             tracks_xxh128: String::new(),
+            measurements_xxh128: None,
             content_xxh128: String::new(),
         },
         rig_frame_data: None,
@@ -1140,6 +1149,7 @@ fn test_empty_reconstruction() {
             images: vec![],
         },
         observed_depth_histogram_counts: Array2::zeros((0, num_buckets)),
+        measurements: None,
     };
 
     let dir = std::env::temp_dir().join("sfmr_test_empty");
@@ -3522,6 +3532,24 @@ fn entry_names_are_pinned() {
         e::tracks_point_indexes(17),
         "tracks/point_indexes.17.uint32.zst"
     );
+
+    // Measurements.  measurement_count = 37.
+    assert_eq!(e::measurements_section_prefix(), "measurements/");
+    assert_eq!(e::measurements_metadata(), "measurements/metadata.json.zst");
+    assert_eq!(e::measurements_labels(), "measurements/labels.json.zst");
+    assert_eq!(
+        e::measurements_distances(37),
+        "measurements/distances.37.float32.zst"
+    );
+    assert_eq!(
+        e::measurements_endpoints_xy(37),
+        "measurements/endpoints_xy.37.2.2.float32.zst"
+    );
+    assert_eq!(
+        e::measurements_image_indexes(37),
+        "measurements/image_indexes.37.2.uint32.zst"
+    );
+    assert_eq!(e::measurements_units(37), "measurements/units.37.uint8.zst");
 }
 
 /// The archive a real write produces, pinned entry by entry.
@@ -3548,6 +3576,7 @@ fn archive_entry_names_pin_call_sites() {
     let mut data = make_test_data();
     data.observation_confidence = Some(Array1::from_vec(vec![255u8; 8]));
     with_point_constraints(&mut data);
+    data.measurements = Some(measurements::sample_measurements(7));
     write_sfmr(&path, &mut data).unwrap();
 
     let f = std::fs::File::open(&path).unwrap();
@@ -3572,6 +3601,12 @@ fn archive_entry_names_pin_call_sites() {
         "images/sift_content_hashes.3.uint128.zst",
         "images/thumbnails_y_x_rgb.3.128.128.3.uint8.zst",
         "images/translations_xyz.3.3.float64.zst",
+        "measurements/distances.7.float32.zst",
+        "measurements/endpoints_xy.7.2.2.float32.zst",
+        "measurements/image_indexes.7.2.uint32.zst",
+        "measurements/labels.json.zst",
+        "measurements/metadata.json.zst",
+        "measurements/units.7.uint8.zst",
         "metadata.json.zst",
         "points3d/colors_rgb.5.3.uint8.zst",
         "points3d/constraint_distances.5.float64.zst",
@@ -3623,6 +3658,7 @@ fn data_with_every_optional_column() -> SfmrData {
     data.cameras[0].per_image_adjustments = vec!["focal".into(), "principal_point".into()];
     data.focal_adjustments = Some(Array1::zeros(3));
     data.principal_point_adjustments_xy = Some(Array2::zeros((3, 2)));
+    data.measurements = Some(measurements::sample_measurements(2));
     data
 }
 
@@ -3744,6 +3780,7 @@ fn verification_reports_multiple_section_mismatches_in_order() {
     hashes.images_xxh128 = wrong.clone();
     hashes.points3d_xxh128 = wrong.clone();
     hashes.tracks_xxh128 = wrong.clone();
+    hashes.measurements_xxh128 = Some(wrong.clone());
     hashes.content_xxh128 = wrong;
 
     let source = std::fs::File::open(&good).unwrap();
@@ -3781,6 +3818,7 @@ fn verification_reports_multiple_section_mismatches_in_order() {
             "Images hash mismatch",
             "Points3D hash mismatch",
             "Tracks hash mismatch",
+            "Measurements hash mismatch",
             "Overall content hash mismatch",
         ],
     );
@@ -3929,6 +3967,7 @@ fn content_hash_of_matches_what_a_write_stores() {
     assert_eq!(computed.images_xxh128, stored.images_xxh128);
     assert_eq!(computed.points3d_xxh128, stored.points3d_xxh128);
     assert_eq!(computed.tracks_xxh128, stored.tracks_xxh128);
+    assert_eq!(computed.measurements_xxh128, stored.measurements_xxh128);
     assert_eq!(computed.content_xxh128, stored.content_xxh128);
     // And the file verifies against the hashes it stored.
     assert!(verify_sfmr(&path).unwrap().0);

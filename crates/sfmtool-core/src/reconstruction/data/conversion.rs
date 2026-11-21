@@ -580,6 +580,7 @@ impl SfmrReconstruction {
         metadata.point_count = point_count as u32;
         metadata.observation_count = observation_count as u32;
         metadata.infinity_point_count = self.point_set.infinity_point_count as u32;
+        metadata.measurement_count = None;
 
         // Images
         let image_names: Vec<String> = self
@@ -829,6 +830,7 @@ impl SfmrReconstruction {
             }),
             depth_statistics: self.image_set.depth_statistics.clone(),
             observed_depth_histogram_counts,
+            measurements: None,
         }
     }
 }

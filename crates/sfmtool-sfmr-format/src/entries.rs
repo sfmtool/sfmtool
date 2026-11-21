@@ -439,3 +439,43 @@ pub(crate) fn tracks_reference_observations(point_count: impl std::fmt::Display)
 pub(crate) fn tracks_point_indexes(observation_count: impl std::fmt::Display) -> String {
     format!("tracks/point_indexes.{observation_count}.uint32.zst")
 }
+
+/// `measurements/` — the directory every measurement-section entry sits under.
+///
+/// The reader and verifier look for any entry with this prefix to refuse
+/// partial `measurements/` sections or version 16 files carrying one.
+pub(crate) fn measurements_section_prefix() -> &'static str {
+    "measurements/"
+}
+
+/// `measurements/metadata.json.zst` — measurement-section metadata (optional
+/// section).
+pub(crate) fn measurements_metadata() -> &'static str {
+    "measurements/metadata.json.zst"
+}
+
+/// `measurements/distances` — measured physical distance per measurement.
+pub(crate) fn measurements_distances(measurement_count: impl std::fmt::Display) -> String {
+    format!("measurements/distances.{measurement_count}.float32.zst")
+}
+
+/// `measurements/endpoints_xy` — sub-pixel `(x, y)` coordinates of the two
+/// endpoints of each measurement.
+pub(crate) fn measurements_endpoints_xy(measurement_count: impl std::fmt::Display) -> String {
+    format!("measurements/endpoints_xy.{measurement_count}.2.2.float32.zst")
+}
+
+/// `measurements/image_indexes` — observing image index pair per measurement.
+pub(crate) fn measurements_image_indexes(measurement_count: impl std::fmt::Display) -> String {
+    format!("measurements/image_indexes.{measurement_count}.2.uint32.zst")
+}
+
+/// `measurements/labels.json.zst` — per-measurement human-readable labels.
+pub(crate) fn measurements_labels() -> &'static str {
+    "measurements/labels.json.zst"
+}
+
+/// `measurements/units` — legend-indexed length unit code per measurement.
+pub(crate) fn measurements_units(measurement_count: impl std::fmt::Display) -> String {
+    format!("measurements/units.{measurement_count}.uint8.zst")
+}

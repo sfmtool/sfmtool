@@ -17,6 +17,9 @@ use sfmtool_archive_io::{
 
 use crate::depth_stats::{compute_depth_statistics, DepthStatsResult};
 use crate::entries::{self, ReadingColumn};
+use crate::measurements::{
+    validate_measurements, LengthUnit, MeasurementsData, MeasurementsMetadata,
+};
 use crate::patch_normals::PatchFrameRows;
 use crate::types::*;
 use crate::{validate_image_readings, HAS_OBSERVATION_READINGS, OBSERVATION_READING_OPTIONS};
@@ -478,6 +481,29 @@ fn write_sfmr_into<S: EntrySink>(
         data.rolling_shutter_rates_xyz.as_ref(),
     )
     .map_err(SfmrError::InvalidFormat)?;
+    // Physical distance measurements (optional): validated before opening the
+    // sink so a rejected write leaves no file behind.
+    if let Some(measurements) = &data.measurements {
+        validate_measurements(
+            measurements,
+            &row_major_elements(&data.camera_indexes),
+            &data.cameras,
+        )
+        .map_err(SfmrError::InvalidFormat)?;
+        let n = measurements.len() as u32;
+        if let Some(declared) = data.metadata.measurement_count {
+            if declared != n {
+                return Err(SfmrError::ShapeMismatch(format!(
+                    "metadata.measurement_count ({declared}) != measurements len ({n})"
+                )));
+            }
+        }
+        data.metadata.measurement_count = Some(n);
+    } else if data.metadata.measurement_count.is_some() {
+        return Err(SfmrError::InvalidFormat(
+            "metadata.measurement_count is set, but measurements is None".into(),
+        ));
+    }
 
     let mut sink = open_sink()?;
     let mut section_digests = sfmtool_archive_io::SectionDigests::new();
@@ -536,6 +562,13 @@ fn write_sfmr_into<S: EntrySink>(
     section_digests.push(points3d_hash);
     let tracks_hash = write_tracks(&mut sink, data, observation_count, point_count, is_embedded)?;
     section_digests.push(tracks_hash);
+    let measurements_hash = if let Some(measurements) = &data.measurements {
+        let hash = write_measurements(&mut sink, measurements)?;
+        section_digests.push(hash);
+        Some(hash)
+    } else {
+        None
+    };
 
     // === Content hash ===
     let content_hash_value = section_digests.finish();
@@ -548,6 +581,7 @@ fn write_sfmr_into<S: EntrySink>(
         images_xxh128: format_hash(images_hash),
         points3d_xxh128: format_hash(points3d_hash),
         tracks_xxh128: format_hash(tracks_hash),
+        measurements_xxh128: measurements_hash.map(format_hash),
         derived_xxh128: format_hash(derived_hash),
         content_xxh128: format_hash(content_hash_value),
     };
@@ -1248,6 +1282,61 @@ fn write_tracks<S: EntrySink>(
     write_readings(sink, &ReadingColumn::ALL[2..], &mut tracks_hasher)?;
 
     Ok(tracks_hasher.digest128())
+}
+
+fn write_measurements<S: EntrySink>(
+    sink: &mut S,
+    measurements: &MeasurementsData,
+) -> Result<u128, SfmrError> {
+    // === Measurements (optional, hashed in lexicographic path order) ===
+    let n = measurements.len();
+    let mut measurements_hasher = Xxh3::new();
+
+    // measurements/distances
+    binary_hashed(
+        sink,
+        &entries::measurements_distances(n),
+        &row_major_bytes(&measurements.distances),
+        &mut measurements_hasher,
+    )?;
+
+    // measurements/endpoints_xy
+    binary_hashed(
+        sink,
+        &entries::measurements_endpoints_xy(n),
+        &row_major_bytes(&measurements.endpoints_xy),
+        &mut measurements_hasher,
+    )?;
+
+    // measurements/image_indexes
+    binary_hashed(
+        sink,
+        &entries::measurements_image_indexes(n),
+        &row_major_bytes(&measurements.image_indexes),
+        &mut measurements_hasher,
+    )?;
+
+    // measurements/labels.json
+    let bytes = sink.write_json(entries::measurements_labels(), &measurements.labels)?;
+    measurements_hasher.update(&bytes);
+
+    // measurements/metadata.json
+    let meta = MeasurementsMetadata {
+        measurement_count: n as u32,
+        unit_names: LengthUnit::NAMES.iter().map(|&s| s.to_string()).collect(),
+    };
+    let bytes = sink.write_json(entries::measurements_metadata(), &meta)?;
+    measurements_hasher.update(&bytes);
+
+    // measurements/units
+    binary_hashed(
+        sink,
+        &entries::measurements_units(n),
+        &row_major_bytes(&measurements.units),
+        &mut measurements_hasher,
+    )?;
+
+    Ok(measurements_hasher.digest128())
 }
 
 /// The three constraint columns in row-major order: the constraint per point,
