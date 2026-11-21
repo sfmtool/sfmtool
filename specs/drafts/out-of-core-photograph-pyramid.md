@@ -1388,7 +1388,7 @@ each in the step that moves its readers:
 |------|------------------------|
 | 9 | Track View's and the Track Table's renders, which draw a cell's error state instead of the tile (built) |
 | 10 | `ViewSources::fetch` in [state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs), which returns `PhotographReadError` instead of `Cancelled` (`get_many` still returns `Cancelled`, which converts), and the bench kernels (`bench::evaluate`, `evaluate_rendering_bitmap`, `score_bitmap`, `fit`, `render_bitmap_in_place`, `search_geometry`, `set_stage`, `build_track_at_pixel`, `classify`) and the patch kernels they and the reference picks share (`view_selection::select_patch_views`, `select_patch_cloud_views`, `reference_view::render_view_tile`, `read_track`, `stored_bitmap::render_reference`, `keypoint_localize`'s and `keypoint_subpixel`'s entry points, `member_coherence`'s, `observation_reading::read_cloud_observations`, `spawn::spawn_candidate_tracks`), and every kernel that calls one of them or that the bench runs, since a kernel passes its caller's pool down and its errors up: the normal kernels the bench's normal steps run (`pairwise_flow_normal`, `grown_plane_normal`, `grid_plane_normal`, `finite_difference_normal`) and `refine_normals`, which runs them; the cluster refinement's entry points (`refine_cluster_patches`, `refine_cluster_patches_borrowed`), which the bench's evaluation of a cluster-stage track runs, and the bench's member-grid reads, which move to `sample_source_member_grid`, the source form of `sample_member_grid` that step 9 added beside it; `stored_bitmap::render_patch_bitmap`, `render_patch_cloud_bitmaps` and `refit_points`. Their callers that step 11 moves keep their fetch: each wraps the whole pyramids it holds with `from_pyramid` (the cluster-patches build its decoded images with `from_image`), makes the region pool for its call, and reports the error as its step's failure |
-| 11 | the public `render_patch_bitmap_column` / `render_display_patch_bitmaps` in [display_bitmaps.rs](../../crates/sfmtool-core/src/patch/display_bitmaps.rs), which return `PhotographReadError` instead of `Cancelled`; the viewer's bulk jobs (the conversion to embedded patches, *Refine all normals*, *Refit all points*, the cluster-patches build) and `sfm web-export` fetch tiled photographs instead of wrapping whole pyramids |
+| 11 | the public `render_patch_bitmap_column` / `render_display_patch_bitmaps` in [display_bitmaps.rs](../../crates/sfmtool-core/src/patch/display_bitmaps.rs), which return `PhotographReadError` instead of `Cancelled`, and `WebExportError`, which gains `Photograph` (built, 11a); the viewer's bulk jobs (the conversion to embedded patches, *Refine all normals*, *Refit all points*, the cluster-patches build) and `sfm web-export` take tiled photographs from `get_many` once step 13 makes it answer them, wrapping its whole pyramids with `from_pyramid` until then, and the cluster-patches build fetches through the cache from 11b |
 | 12 | `find_nearby_tracks` and the reads under it (`GreyImages::get`, `read_patch_along_ray`, `far_field_sweep`, `depth_layers`, `guided_matches`, `nearby_cluster_tracks`, `constellation_seeds`, `nearby_points`, `distance_range`) |
 | 16 | `ImagePyramidSet.read`, the first binding whose photographs come from the cache. The bindings over the kernels above change with their kernels in steps 10 to 12, build their tiled photographs from arrays with `from_image`, and raise the error from then on, though tiles cut from arrays cannot fail |
 
@@ -1901,6 +1901,64 @@ in core. Step 17 turns the tier on.
     patches, the web export, *Refine all normals*, *Refit all points* and the
     cluster-patches build (companion step 5) fetch tiled photographs, with
     the step-11 signature changes and their bindings.
+
+    Only the cache can hand out a tiled photograph, and it hands out whole
+    pyramids until step 13, so what these callers fetch changes there: until
+    then each wraps the whole pyramids `get_many` answers with
+    `from_pyramid`, as the bench's `ViewSources` does, and step 13's
+    `get_many` answers `Arc<TiledPhotograph>` to all of them at once. The
+    companion's step-5 tests that count decodes, and its test of a budget
+    smaller than one photograph's level 0, need the tiled cache, so they come
+    with step 13. Before it, the step is three pull requests, 11a to 11c:
+
+    - **11a, the display bitmaps' error.** **Built.**
+      `render_patch_bitmap_column` and `render_display_patch_bitmaps` return
+      `PhotographReadError` in place of `Cancelled`, and 10c's interim rule,
+      which left out a cached photograph whose pyramid was not whole, is gone:
+      a photograph that cannot be decoded, or is not the size its camera says
+      (now read from its layout), is still left out of every patch's views,
+      and the first read of a photograph handed to the render that fails is
+      the call's error. Their callers make it the step's failure: the open
+      fails the file (*Failed to render the patch bitmaps of …: a photograph
+      could not be read: …*), the conversion to embedded patches is refused
+      with the same clause, and `sfm web-export` returns
+      `WebExportError::Photograph`, which `write_web_export` raises as a
+      `RuntimeError`. After the render, a `read regions` stage notes the
+      pool's counts, as the bench's steps, *Refine all normals* and *Refit
+      all points* do, so the open and the conversion write it too. The reads
+      are those 10c moved, so the bitmaps are identical bit for bit; their
+      read paths are tested in
+      [patch/region_read_tests.rs](../../crates/sfmtool-core/src/patch/region_read_tests.rs).
+      Specified in [gui/background-tasks.md](../gui/background-tasks.md),
+      [core/camera/photograph-cache.md](../core/camera/photograph-cache.md)
+      and [cli/visualization/web-export-command.md](../cli/visualization/web-export-command.md),
+      with tests in
+      [display_bitmaps/tests.rs](../../crates/sfmtool-core/src/patch/display_bitmaps/tests.rs),
+      [state/open/tests.rs](../../crates/sfm-explorer/src/state/open/tests.rs)
+      and [state/edits/tests.rs](../../crates/sfm-explorer/src/state/edits/tests.rs).
+    - **11b, the cluster-patches build through the cache.** The viewer's
+      build reads its photographs with `get_many` through the viewer's cache
+      (row 19 of § "Every reader of photograph pixels"), wrapping each with
+      `from_pyramid`, in place of decoding them with `read_rgb` outside it.
+      The cache decodes
+      with the same `read_rgb` into a pyramid of the same depth, so the
+      refinement reads the same pixels; a photograph the cache refuses,
+      as too large or unreadable, fails the build as an unreadable one does
+      today.
+    - **11c, the point order.** The bulk kernels that loop over points
+      (`render_patch_cloud_bitmaps` under the display bitmaps, the
+      conversion and the web export; `refine_normals`; `refit_points`) take
+      them in the order of the companion's § "Memory", writing each result
+      at its point's index, so results stay identical. Tests: the order of a
+      synthetic reconstruction's points, with ties and points with no
+      reference; the results of each kernel identical to those of today's
+      order; and, with a small pool, the regions of all the points in
+      progress together never exceed the one pool the caller made. That the
+      order decodes fewer tiles is tested in step 13.
+
+    Each of 11a to 11c reports in its pull request, for the kernels it
+    changes, the count of renders that took the tile path on the test data
+    and on a real capture, as the companion's step 5 asks.
 12. **The nearby-track grey reads by region** (companion step 6), with the
     step-12 signature changes and their bindings.
 13. **The tiled photograph cache.** The cache hands out `Arc<TiledPhotograph>`
@@ -1944,7 +2002,16 @@ in core. Step 17 turns the tier on.
     back, a waiter on that slot then reserves and decodes, and a waiter that
     is cancelled stops waiting within 50 ms; no panel decodes on the GUI
     thread, with a budget of 0 too; a bulk kernel whose photographs' tiles do
-    not fit a small budget still completes, with its decodes counted.
+    not fit a small budget still completes, with its decodes counted, and so
+    does one with a budget smaller than one photograph's level 0. The bulk
+    callers (`ViewSources`, the display bitmaps, the cluster-patches build)
+    take the tiled photographs `get_many` answers in place of wrapping whole
+    pyramids, and the companion's step-5 test of the point order runs here:
+    on a rayon pool of one thread, with a budget smaller than the
+    reconstruction's tiles but holding the tiles of every photograph one
+    reference image's points are seen in, each in-core photograph is decoded
+    at most once in the read phase and once more for each reference image
+    whose points it sees, and the same points in shuffled order decode more.
 14. **The out-of-core tier, off.** Photographs of a workspace with
     `mipmap_options` read through their mip level files: tiles from the
     files, mipmaps made in the slot when missing or stale (the misses of a

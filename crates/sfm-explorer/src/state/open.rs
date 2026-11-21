@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use sfmtool_core::camera::sampler::RegionPool;
-use sfmtool_core::camera::PhotographCache;
+use sfmtool_core::camera::{PhotographCache, PhotographReadError};
 use sfmtool_core::patch::display_bitmaps::render_patch_bitmap_column;
 use sfmtool_core::patch::stored_bitmap::PatchBitmapColumn;
 use sfmtool_core::progress::{Cancelled, Progress};
@@ -285,7 +285,14 @@ fn load_for_display(
     }
     if wants_bitmaps {
         let phase = bitmaps.phase("patch bitmaps");
-        if let Some(column) = render_patch_bitmaps(&recon, photographs, &phase)? {
+        let rendered = render_patch_bitmaps(&recon, photographs, &phase).map_err(|e| match e {
+            PhotographReadError::Cancelled => Stop::Cancelled,
+            e => Stop::Failed(format!(
+                "Failed to render the patch bitmaps of {}: a photograph could not be read: {e}",
+                path.display()
+            )),
+        })?;
+        if let Some(column) = rendered {
             recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(column.bitmaps));
             recon.point_set.patch_bitmaps_for_display = true;
             // The render read the file's references, so a point with one
@@ -317,13 +324,16 @@ fn load_for_display(
 /// the rule's pick where it is `-1`), reading the photographs through
 /// `photographs`. The open keeps the column for display only, marking the
 /// picks as display-only, and the conversion worker keeps it as a stored
-/// column with its references. `Ok(None)` when not one photograph could be read, since a column
-/// of zero rows would draw nothing.
+/// column with its references. `Ok(None)` when not one photograph could be
+/// read, since a column of zero rows would draw nothing.
+///
+/// The first read of a photograph that failed is the error, and
+/// [`PhotographReadError::Cancelled`] when `progress` was cancelled.
 pub(super) fn render_patch_bitmaps(
     recon: &SfmrReconstruction,
     photographs: &PhotographCache,
     progress: &Progress<'_>,
-) -> Result<Option<PatchBitmapColumn>, Cancelled> {
+) -> Result<Option<PatchBitmapColumn>, PhotographReadError> {
     render_patch_bitmap_column(recon, photographs, &RegionPool::for_kernel_call(), progress)
 }
 

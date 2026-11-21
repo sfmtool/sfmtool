@@ -689,7 +689,17 @@ there is no whole pyramid for any reader to fall back on.
    regions of all the points in progress together never exceed the one pool
    the caller made. Each bulk kernel's phase note counts the renders that
    took the tile path, and the pull request reports that count for each
-   kernel on the test data and on a real capture.
+   kernel on the test data and on a real capture. The callers fetch tiled
+   photographs once the main draft's step 13 makes `get_many` answer them;
+   until then they wrap the whole pyramids it answers, so the tests that
+   count decodes and the one of a budget smaller than a level 0 come with
+   step 13. The rest is split into three pull requests, as the main draft's
+   step 11 says. **The first, 11a, is built**: the display bitmaps' kernels
+   return the photograph error rather than leave out a photograph whose
+   pyramid is not whole, the open, the conversion and `sfm web-export`
+   report it as their failure, and the render notes its region reads, with
+   the bitmaps identical bit for bit. The cluster-patches build through the
+   cache (11b) and the point order (11c) follow.
 6. **`GreyImages` by region.** Tests: the nearby-track search's results are
    identical.
 
