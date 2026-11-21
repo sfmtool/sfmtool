@@ -8,6 +8,7 @@ use numpy::{Element, PyArray, PyReadonlyArray1};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
+use sfmtool_core::camera::PhotographReadError;
 use sfmtool_sfmr_format::{FramesMetadata, RigFrameData, RigsMetadata, SfmrCamera};
 
 use crate::PyCameraIntrinsics;
@@ -16,6 +17,79 @@ use crate::PyCameraIntrinsics;
 /// a core error that is a property of the caller's input.
 pub(crate) fn value_err(e: impl std::fmt::Display) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(e.to_string())
+}
+
+/// An error a kernel that reads photographs returns, with the read that
+/// failed where that is why it stopped.
+pub(crate) trait PhotographFailure {
+    /// The read of a photograph that failed, where that is the error.
+    fn photograph(&self) -> Option<&PhotographReadError>;
+}
+
+impl PhotographFailure for PhotographReadError {
+    fn photograph(&self) -> Option<&PhotographReadError> {
+        (*self != PhotographReadError::Cancelled).then_some(self)
+    }
+}
+
+/// [`PhotographFailure`] for error enums whose `Photograph` variant holds the
+/// read that failed.
+macro_rules! photograph_variant {
+    ($($error:ty),* $(,)?) => {$(
+        impl PhotographFailure for $error {
+            fn photograph(&self) -> Option<&PhotographReadError> {
+                match self {
+                    Self::Photograph(e) => Some(e),
+                    _ => None,
+                }
+            }
+        }
+    )*};
+}
+
+photograph_variant!(
+    sfmtool_core::bench::EvaluateError,
+    sfmtool_core::bench::FitError,
+    sfmtool_core::bench::geometry_search::GeometrySearchError,
+    sfmtool_core::bench::FarFieldError,
+    sfmtool_core::bench::NearbyTracksError,
+    sfmtool_core::bench::refine_normals::RefineNormalsError,
+    sfmtool_core::bench::refit_points::RefitPointsError,
+    sfmtool_core::bench::track_at_pixel::TrackAtPixelError,
+    sfmtool_core::patch::keypoint_localize::LocalizeError,
+    sfmtool_core::patch::spawn::SpawnError,
+    sfmtool_core::patch::stored_bitmap::CloudRenderError,
+    sfmtool_core::reconstruction::add_image_to_tracks::AddImageToTracksError,
+);
+
+impl PhotographFailure for sfmtool_core::bench::normal::NormalError {
+    fn photograph(&self) -> Option<&PhotographReadError> {
+        match self {
+            Self::Photograph(e) => Some(e),
+            Self::Evaluate(e) => e.photograph(),
+            _ => None,
+        }
+    }
+}
+
+impl PhotographFailure for sfmtool_core::bench::StageError {
+    fn photograph(&self) -> Option<&PhotographReadError> {
+        match self {
+            Self::Fit(e) => e.photograph(),
+            _ => None,
+        }
+    }
+}
+
+/// A kernel's error as Python raises it: a photograph that could not be read
+/// is a `RuntimeError` carrying `e`'s message, which names the photograph, or
+/// says it is one in memory and carries the read's message; any other error
+/// is the caller's input, a `ValueError` carrying its message.
+pub(crate) fn kernel_err<E: std::fmt::Display + PhotographFailure>(e: E) -> PyErr {
+    match e.photograph() {
+        Some(_) => pyo3::exceptions::PyRuntimeError::new_err(e.to_string()),
+        None => value_err(e),
+    }
 }
 
 /// A Python `OSError` (`PyIOError`) carrying `e`'s message, for

@@ -24,6 +24,8 @@
 //! the template blur-matched, as the bench reads a row against the stored
 //! bitmap, and keeps only the pairwise ZNCCs from here for its pair rule.
 
+use std::borrow::BorrowMut;
+
 use super::align::{Template, REANCHOR_MARGIN, REANCHOR_MIN_SHIFT};
 use super::search::{
     search_shift, search_shift_plus_descent, window_reading, SearchScratch, ShiftResult,
@@ -32,6 +34,8 @@ use super::{
     extract_core, member_self_similarity_radius, project, render_context, resolve_reference,
     seed_frame, shifted_center, KeypointLocalizeParams, LocalizeError,
 };
+use crate::camera::sampler::ViewRegions;
+use crate::camera::PhotographReadError;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_subpixel::ReferenceTemplate;
 use crate::patch::normal_refine::{build_support, znormalize_into_kept, ProjectedImage, Support};
@@ -155,8 +159,10 @@ pub struct ViewScore {
 impl TrackReferences {
     /// Render each of `references` at its keypoint and settle the template.
     ///
-    /// `views` is indexed by image index; `keypoints` is parallel to
-    /// `references`, in source px. `reference` is the position in `references`
+    /// `views` is indexed by image index; `regions` and `keypoints` are
+    /// parallel to `references`: each reference is read through its regions
+    /// (a [`ViewRegions`] or a mutable reference to one), at its keypoint in
+    /// source px. `reference` is the position in `references`
     /// of the point's stored reference observation, `None` where it has none.
     /// `bitmap` is the point's stored `R×R` RGBA bitmap on the grid of
     /// `params.resolution`, row-major as a `.sfmr` stores it; where it is given
@@ -168,6 +174,8 @@ impl TrackReferences {
     ///
     /// # Errors
     ///
+    /// The [`PhotographReadError`] of a read of a reference's photograph that
+    /// failed. Otherwise `Ok` of the template's refusal where none was settled:
     /// [`NoTemplate::TooFewReferences`] when fewer than two references render
     /// in frame, no channel is textured in all of them, or the reference
     /// observation's render is flat; [`NoTemplate::NoReferenceView`] when there
@@ -176,21 +184,28 @@ impl TrackReferences {
     ///
     /// # Panics
     ///
-    /// Panics if `keypoints.len() != references.len()` or a reference is out of
-    /// range for `views`.
-    pub fn build(
+    /// Panics if `regions` or `keypoints` is not parallel to `references`, or
+    /// a reference is out of range for `views`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build<'r>(
         patch: &OrientedPatch,
         views: &[ProjectedImage<'_>],
         references: &[u32],
+        regions: &mut [impl BorrowMut<ViewRegions<'r>>],
         keypoints: &[[f64; 2]],
         reference: Option<usize>,
         bitmap: Option<&[u8]>,
         params: &KeypointLocalizeParams,
-    ) -> Result<Self, NoTemplate> {
+    ) -> Result<Result<Self, NoTemplate>, PhotographReadError> {
         assert_eq!(
             references.len(),
             keypoints.len(),
             "keypoints must be parallel to references"
+        );
+        assert_eq!(
+            references.len(),
+            regions.len(),
+            "regions must be parallel to references"
         );
         let resolution = params.resolution.max(2);
         let r = resolution as usize;
@@ -202,6 +217,8 @@ impl TrackReferences {
         let n = support.pixels.len();
 
         let mut kept_refs = Vec::with_capacity(references.len());
+        // The position in `references` of each kept reference.
+        let mut kept_slots = Vec::with_capacity(references.len());
         let mut kept_keypoints = Vec::with_capacity(references.len());
         let mut given = None;
         let mut raws: Vec<(usize, Vec<f32>)> = Vec::with_capacity(references.len());
@@ -211,9 +228,10 @@ impl TrackReferences {
             if !followed {
                 continue;
             }
-            let Ok(tile) = render_context(
+            let tile = match render_context(
                 &patch_frame,
                 view,
+                regions[k].borrow_mut(),
                 0.0,
                 0.0,
                 wpp[0],
@@ -228,8 +246,11 @@ impl TrackReferences {
                     resolution,
                 ),
                 &Progress::none(),
-            ) else {
-                continue;
+            ) {
+                Ok(tile) => tile,
+                Err(LocalizeError::Photograph(e)) => return Err(e),
+                // A tile too large to allocate leaves the reference out.
+                Err(_) => continue,
             };
             let mut raw = vec![0f32; tile.channels * n];
             if extract_core(&tile, &support, r, 0, 0, &mut raw) {
@@ -237,12 +258,13 @@ impl TrackReferences {
                     given = Some(kept_refs.len());
                 }
                 kept_refs.push(image);
+                kept_slots.push(k);
                 kept_keypoints.push(kp);
                 raws.push((tile.channels, raw));
             }
         }
         if raws.len() < 2 {
-            return Err(NoTemplate::TooFewReferences);
+            return Ok(Err(NoTemplate::TooFewReferences));
         }
         let channels = raws.iter().map(|(c, _)| *c).min().unwrap();
         let mut flat = vec![0f32; raws.len() * channels * n];
@@ -250,7 +272,7 @@ impl TrackReferences {
             flat[v * channels * n..][..channels * n].copy_from_slice(&raw[..channels * n]);
         }
         let mut xs = Vec::new();
-        let (kept, core_mask) = znormalize_into_kept(
+        let Some((kept, core_mask)) = znormalize_into_kept(
             &flat,
             raws.len(),
             channels,
@@ -259,8 +281,9 @@ impl TrackReferences {
             support.total_weight,
             &support.sqrt_weights,
             &mut xs,
-        )
-        .ok_or(NoTemplate::TooFewReferences)?;
+        ) else {
+            return Ok(Err(NoTemplate::TooFewReferences));
+        };
         let views_n = raws.len();
         let cn = kept * n;
         let cores: Vec<Vec<f32>> = (0..views_n).map(|v| xs[v * cn..][..cn].to_vec()).collect();
@@ -274,10 +297,17 @@ impl TrackReferences {
             None => {
                 let seeds: Vec<Option<[f64; 2]>> =
                     kept_keypoints.iter().copied().map(Some).collect();
-                let a = resolve_reference(
+                let mut kept_regions: Vec<&mut ViewRegions<'r>> = regions
+                    .iter_mut()
+                    .enumerate()
+                    .filter(|(k, _)| kept_slots.binary_search(k).is_ok())
+                    .map(|(_, r)| r.borrow_mut())
+                    .collect();
+                let Some(a) = resolve_reference(
                     patch,
                     views,
                     &kept_refs,
+                    &mut kept_regions,
                     &seeds,
                     given,
                     params.min_grazing_cos,
@@ -285,11 +315,14 @@ impl TrackReferences {
                     params.sampler,
                     &ReferenceViewOptions::default(),
                     &Progress::none(),
-                )
-                .ok_or(NoTemplate::NoReferenceView)?;
+                )?
+                else {
+                    return Ok(Err(NoTemplate::NoReferenceView));
+                };
                 let (ch, raw) = &raws[a];
-                let template =
-                    Template::from_raw(raw, *ch, &support).ok_or(NoTemplate::TooFewReferences)?;
+                let Some(template) = Template::from_raw(raw, *ch, &support) else {
+                    return Ok(Err(NoTemplate::TooFewReferences));
+                };
                 (template, TemplateKind::ReferenceObservation, Some(a), None)
             }
         };
@@ -319,7 +352,7 @@ impl TrackReferences {
         let anchor = reference
             .filter(|&a| rendered_from(a))
             .map(|a| (kept_refs[a], kept_keypoints[a]));
-        Ok(Self {
+        Ok(Ok(Self {
             references: kept_refs,
             template_kind,
             reference,
@@ -333,7 +366,7 @@ impl TrackReferences {
             template,
             bitmap,
             anchor,
-        })
+        }))
     }
 
     /// The template as the sub-pixel refiner
@@ -376,10 +409,14 @@ impl TrackReferences {
     /// it is the answer (and [`ViewSearch::ascended`] says so): a repeated
     /// texture can put a stronger correlation a pattern period away, and the
     /// start (the projection) is the evidence for which period is meant.
+    ///
+    /// `regions` reads `view`'s photograph; a read that fails is
+    /// [`LocalizeError::Photograph`].
     pub fn search(
         &self,
         patch: &OrientedPatch,
         view: &ProjectedImage<'_>,
+        regions: &mut ViewRegions<'_>,
         seed: Option<[f64; 2]>,
         ascend_on_edge: bool,
         params: &KeypointLocalizeParams,
@@ -402,6 +439,7 @@ impl TrackReferences {
         let tile = render_context(
             &patch_frame,
             view,
+            regions,
             0.0,
             0.0,
             self.wpp[0],
@@ -481,6 +519,7 @@ impl TrackReferences {
                 let tile = render_context(
                     &frame,
                     view,
+                    regions,
                     0.0,
                     0.0,
                     self.wpp[0],
@@ -527,24 +566,31 @@ impl TrackReferences {
     ///
     /// The same measurement [`Self::build`] took of each reference, so the
     /// numbers are comparable with [`Self::zncc`] and [`Self::pair_zncc`].
-    /// `None` when the slide refuses the keypoint (`seed_frame`) or the core
-    /// leaves the frame.
+    /// `Ok(None)` when the slide refuses the keypoint (`seed_frame`), the core
+    /// leaves the frame or its tile is too large to allocate.
+    ///
+    /// # Errors
+    ///
+    /// The [`PhotographReadError`] of a read of `view`'s photograph, through
+    /// `regions`, that failed.
     pub fn score(
         &self,
         patch: &OrientedPatch,
         view: &ProjectedImage<'_>,
+        regions: &mut ViewRegions<'_>,
         keypoint: [f64; 2],
         params: &KeypointLocalizeParams,
-    ) -> Option<ViewScore> {
+    ) -> Result<Option<ViewScore>, PhotographReadError> {
         let r = self.resolution as usize;
         let n = self.support.pixels.len();
         let (patch_frame, followed) = seed_frame(patch, view, Some(keypoint));
         if !followed {
-            return None;
+            return Ok(None);
         }
-        let tile = render_context(
+        let tile = match render_context(
             &patch_frame,
             view,
+            regions,
             0.0,
             0.0,
             self.wpp[0],
@@ -559,11 +605,14 @@ impl TrackReferences {
                 self.resolution,
             ),
             &Progress::none(),
-        )
-        .ok()?;
+        ) {
+            Ok(tile) => tile,
+            Err(LocalizeError::Photograph(e)) => return Err(e),
+            Err(_) => return Ok(None),
+        };
         let mut raw = vec![0f32; tile.channels * n];
         if !extract_core(&tile, &self.support, r, 0, 0, &mut raw) {
-            return None;
+            return Ok(None);
         }
         let against_template =
             znorm_masked(&raw, tile.channels, &self.template.mask, &self.support);
@@ -574,7 +623,7 @@ impl TrackReferences {
             .iter()
             .map(|core| masked_zncc(&against_cores, core, n))
             .collect();
-        Some(ViewScore { zncc, pair_zncc })
+        Ok(Some(ViewScore { zncc, pair_zncc }))
     }
 }
 

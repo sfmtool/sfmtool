@@ -33,26 +33,29 @@ and the keypoint-to-grid mapping in
 pub fn localize_patch_keypoints(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],          // one per reconstruction image
+    pool: &RegionPool,                     // the caller's, for this call
     patch_views: &[u32],                   // the views to localize
     patch_keypoints: Option<&[Option<[f64; 2]>]>, // parallel to patch_views
     reference: Option<usize>,              // position in patch_views of the reference
     params: &KeypointLocalizeParams,
-) -> KeypointLocalization;
+) -> Result<KeypointLocalization, PhotographReadError>;
 
 pub fn try_localize_patch_keypoints(
     /* the same arguments */, progress: &Progress<'_>,
 ) -> Result<KeypointLocalization, LocalizeError>;
+// LocalizeError: OutOfMemory { bytes }, Photograph(PhotographReadError), Cancelled
 
 pub fn localize_patch_cloud_keypoints(
     cloud: &PatchCloud,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     patch_views: &[Vec<u32>],
     patch_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     references: Option<&[Option<usize>]>,  // parallel to the cloud
     params: &KeypointLocalizeParams,
     done: Option<&AtomicUsize>,
     progress: &Progress<'_>,
-) -> Result<Vec<KeypointLocalization>, Cancelled>;
+) -> Result<Vec<KeypointLocalization>, PhotographReadError>;
 
 pub fn keypoint_grid_offset(
     patch: &OrientedPatch, view: &ProjectedImage<'_>,
@@ -84,6 +87,16 @@ pub fn view_cache_bytes(params: &KeypointLocalizeParams, channels: usize) -> usi
   reports `LocalizeError::OutOfMemory` and `LocalizeError::Cancelled` instead of
   aborting the process. `localize_patch_keypoints` is the same call for callers
   whose radius is a constant.
+- **Every read goes through the region pool the caller made.** Each view kept
+  past the pre-filter is read through one `ViewRegions`, which its renders for
+  the reference-view rule, the template, its search, its search again about a
+  found keypoint and its blur-matched score share
+  ([view-region-pyramids.md](../camera/view-region-pyramids.md)). The result is
+  the same, bit for bit, whichever way a read reaches its pixels. A read that
+  fails is `LocalizeError::Photograph` from `try_localize_patch_keypoints`, the
+  `PhotographReadError` itself from `localize_patch_keypoints`, and the first
+  patch's that failed from the batch, which returns
+  `PhotographReadError::Cancelled` for a cancelled batch.
 - **The batch form is parallel over points** (rayon) and takes a `done` counter
   for a Python poller and a `Progress` that counts `patches`, is polled for
   cancellation before each patch and between a patch's views, and, when
@@ -100,6 +113,7 @@ tile cannot be rendered at its keypoint:
 let localized = try_localize_patch_keypoints(
     patch,
     views,
+    &RegionPool::for_kernel_call(),
     patch_views,
     None,      // every view starts at the point's projection
     Some(0),   // patch_views[0] is the reference observation

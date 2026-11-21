@@ -18,6 +18,7 @@ use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::progress::Progress;
 
 use super::views_of;
+use crate::helpers::kernel_err;
 use crate::patches::views::{resolve_grey, resolve_pyramids, PosedViews};
 use crate::reconstruction::edited::PyEditedReconstruction;
 
@@ -130,7 +131,7 @@ pub(super) fn far_field_sweep(
                 &Progress::none(),
             )
         })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        .map_err(kernel_err)?;
     let out = PyList::empty(py);
     for reading in &sweep.readings {
         out.append(reading_dict(py, reading)?)?;

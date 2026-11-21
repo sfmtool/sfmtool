@@ -293,7 +293,9 @@ readings = bench.far_field_sweep(edited, images, image, (x, y),
 step takes them; a set also keeps its grey images between calls. `options`
 overrides `FarFieldOptions` fields by name (`wide_among` as `"matching"` or
 `"all"`); an unknown key is a `ValueError`, as is an image or pixel that names
-no place. The result is a list of the kept readings as dicts with the keys the
+no place. A read of a photograph that fails, which a photograph in memory never
+does, raises `RuntimeError` with the step's sentence, which names the
+photograph, or says it is one in memory and carries the read's message. The result is a list of the kept readings as dicts with the keys the
 harness's anchors carry: `source` (`"farfield"`), `id`, `position`, `w`,
 `views` (`[image, x, y]` rows), `query_pixel`, `distance_px`, `n_views`,
 `max_reproj_px`, `max_ray_angle_deg`, `depth`, `farfield` (the metrics, with

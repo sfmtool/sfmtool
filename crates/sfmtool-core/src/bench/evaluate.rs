@@ -332,6 +332,7 @@ impl From<LocalizeError> for EvaluateError {
     fn from(e: LocalizeError) -> Self {
         match e {
             LocalizeError::OutOfMemory { bytes } => EvaluateError::OutOfMemory { bytes },
+            LocalizeError::Photograph(e) => EvaluateError::Photograph(e),
             LocalizeError::Cancelled => EvaluateError::Cancelled,
         }
     }
@@ -588,7 +589,8 @@ fn read_keeping_tiles(
         }
         Stage::Track(payload) => {
             let options = options.at_resolution(options.patch_resolution(&edited.base));
-            let (read, report, kept) = evaluate_track(track, images, payload, &options, progress)?;
+            let (read, report, kept) =
+                evaluate_track(track, images, pool, payload, &options, progress)?;
             Ok((read, report, Some(kept)))
         }
     }
@@ -725,7 +727,9 @@ pub fn evaluate_rendering_bitmap(
         bitmap_target,
         |current, from| {
             progress.check_cancel()?;
-            render_and_score(current, from, &kept, edited, images, options, fit, progress)
+            render_and_score(
+                current, from, &kept, edited, images, pool, options, fit, progress,
+            )
         },
     )?;
     let mut current = settled.track;
@@ -906,6 +910,7 @@ fn render_and_score(
     kept: &KeptTiles,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &EvaluateOptions,
     fit: &super::fit::FitOptions,
     progress: &Progress<'_>,
@@ -926,13 +931,14 @@ fn render_and_score(
             payload.drop_bitmap();
         }
     }
-    let mut rendered = super::fit::render_bitmap_in_place_from(&cleared, edited, images, fit, from);
+    let mut rendered =
+        super::fit::render_bitmap_in_place_from(&cleared, edited, images, pool, fit, from)?;
     // No `in` row could hold the reference: the bars judge against a bitmap
     // rendered from every row with a keypoint, so a row can come back `in`.
     if rendered.track().is_some_and(|p| p.bitmap.is_none()) {
-        rendered = super::fit::render_bitmap_for_judging(&rendered, edited, images, fit);
+        rendered = super::fit::render_bitmap_for_judging(&rendered, edited, images, pool, fit)?;
     }
-    score_bitmap(&rendered, edited, images, options, progress)
+    score_bitmap(&rendered, edited, images, pool, options, progress)
 }
 
 /// `track` with row `row`'s tile from the reading `kept` installed as its
@@ -1619,9 +1625,15 @@ struct Reading {
 
 /// Read every observation of `track` against the patch it carries, and write
 /// what each one says about itself into its track-stage slot.
+///
+/// Each observation's tile, and the reference view's pair readings over the
+/// `in` ones, read through one [`ViewRegions`] per observation made from
+/// `pool`; the localizer's rounds and the tiles at walked pixels read through
+/// their own.
 fn evaluate_track(
     track: &EditableTrack,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     payload: &TrackPayload,
     options: &EvaluateOptions,
     progress: &Progress<'_>,
@@ -1652,6 +1664,7 @@ fn evaluate_track(
         read_round(
             track,
             images,
+            pool,
             &patch_frame,
             &plan.first,
             options,
@@ -1666,6 +1679,7 @@ fn evaluate_track(
             read_round(
                 track,
                 images,
+                pool,
                 &patch_frame,
                 &round,
                 options,
@@ -1688,8 +1702,14 @@ fn evaluate_track(
     let (mut measured, mut unmeasured) = (0, 0);
     // Every rendered observation's tile, kept for the reference view's
     // readings, which correlate the `in` ones in pairs, and for the scores
-    // against the stored bitmap, which every observation has.
+    // against the stored bitmap, which every observation has. One view's
+    // regions per observation, which its tile and its pair readings share.
     let mut kept_tiles: Vec<(usize, ViewTile)> = Vec::new();
+    let mut regions: Vec<ViewRegions<'_>> = track
+        .observations
+        .iter()
+        .map(|observation| ViewRegions::new(images[observation.image as usize].source, pool))
+        .collect();
     {
         let mut phase = progress.phase("self-similarity");
         for i in evaluated(track) {
@@ -1763,11 +1783,12 @@ fn evaluate_track(
                     let tile = render_view_tile(
                         &patch_frame,
                         view,
+                        &mut regions[i],
                         Some(pixel),
                         resolution,
                         options.localize.sampler,
                         &phase,
-                    );
+                    )?;
                     let similarity = view_tile_self_similarity(&tile);
                     measurement.zncc_self_similarity_radius = similarity.radius;
                     measurement.zncc_self_similarity_radius_middle = similarity.middle;
@@ -1804,20 +1825,29 @@ fn evaluate_track(
         progress_note!(phase, "{} observations", track.observations.len());
     }
     progress.check_cancel()?;
-    let walked = walked_tiles(track, images, &patch_frame, options, progress)?;
+    let walked = walked_tiles(track, images, pool, &patch_frame, options, progress)?;
     let in_tiles: Vec<(usize, &ViewTile)> = kept_tiles
         .iter()
         .filter(|(i, _)| next.observations[*i].verdict == Verdict::In)
         .map(|(i, tile)| (*i, tile))
+        .collect();
+    // The `in` tiles' regions, in the tiles' order: `kept_tiles` runs in
+    // observation order.
+    let mut in_regions: Vec<&mut ViewRegions<'_>> = regions
+        .iter_mut()
+        .enumerate()
+        .filter(|(i, _)| in_tiles.iter().any(|(t, _)| t == i))
+        .map(|(_, r)| r)
         .collect();
     read_reference_view(
         &mut next,
         images,
         &patch_frame,
         &in_tiles,
+        &mut in_regions,
         options,
         progress,
-    );
+    )?;
     score_against_bitmap(&mut next, &kept_tiles, &walked, progress);
     let kept = KeptTiles {
         tiles: kept_tiles,
@@ -1854,11 +1884,13 @@ fn evaluate_track(
 /// keypoints, its render at its own keypoint is the template, and the peak of
 /// each other observation's shift search against it is where the correlation
 /// says that observation would rather be. Nothing is written back to the track
-/// here -- the peak is reported as a distance, not taken.
+/// here -- the peak is reported as a distance, not taken. The localizer reads
+/// through `pool`.
 #[allow(clippy::too_many_arguments)]
 fn read_round(
     track: &EditableTrack,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     patch_frame: &OrientedPatch,
     round: &[usize],
     options: &EvaluateOptions,
@@ -1902,6 +1934,7 @@ fn read_round(
     let localized = try_localize_patch_keypoints(
         patch_frame,
         images,
+        pool,
         &patch_views,
         Some(&seeds),
         track_reference(track, round),
@@ -2167,17 +2200,19 @@ fn slot_semi_axes(measurement: Option<&super::track::TrackMeasurement>) -> Optio
 /// keypoint, and the cell readings are taken on the tiles already rendered.
 /// The rule ranks by the self-similarity ellipse each slot carries. Timed as
 /// the `reference view` phase of `progress`, whose detail phases time member
-/// coherence's renders.
+/// coherence's renders. `regions` is parallel to `tiles`, each reading its
+/// observation's photograph.
 fn read_reference_view(
     next: &mut EditableTrack,
     images: &[ProjectedImage<'_>],
     patch_frame: &OrientedPatch,
     tiles: &[(usize, &ViewTile)],
+    regions: &mut [&mut ViewRegions<'_>],
     options: &EvaluateOptions,
     progress: &Progress<'_>,
-) {
+) -> Result<(), EvaluateError> {
     if tiles.is_empty() {
-        return;
+        return Ok(());
     }
     let mut phase = progress.phase("reference view");
     let members: Vec<u32> = tiles
@@ -2197,13 +2232,14 @@ fn read_reference_view(
         patch_frame,
         images,
         &members,
+        regions,
         &keypoints,
         &refs,
         &semi_axes,
         options.localize.sampler,
         &options.reference_view,
         &phase,
-    );
+    )?;
     for (k, (i, _)) in tiles.iter().enumerate() {
         if let Some(measurement) = next.observations[*i].track.as_mut() {
             measurement.pair_zncc = reading.pair_zncc[k];
@@ -2221,6 +2257,7 @@ fn read_reference_view(
         ),
         None => progress_note!(phase, "{} views, none picked", tiles.len()),
     }
+    Ok(())
 }
 
 /// Score every observation whose tile is in `tiles` against the track's
@@ -2378,27 +2415,41 @@ fn settle_reason(measurement: &mut super::track::TrackMeasurement, missing: Opti
 /// ```no_run
 /// # use sfmtool_core::bench::{render_bitmap_in_place, score_bitmap, EditableTrack,
 /// #     EvaluateOptions, FitOptions};
+/// # use sfmtool_core::camera::sampler::RegionPool;
 /// # use sfmtool_core::EditedReconstruction;
 /// # use sfmtool_core::patch::normal_refine::ProjectedImage;
 /// # use sfmtool_core::progress::Progress;
 /// # fn run(track: &EditableTrack, edited: &EditedReconstruction, views: &[ProjectedImage<'_>])
 /// # -> Result<(), Box<dyn std::error::Error>> {
-/// let rendered = render_bitmap_in_place(track, edited, views, &FitOptions::default())?;
-/// let scored = score_bitmap(&rendered, edited, views, &EvaluateOptions::default(), &Progress::none())?;
+/// let pool = RegionPool::for_kernel_call();
+/// let rendered = render_bitmap_in_place(track, edited, views, &pool, &FitOptions::default())?;
+/// let scored = score_bitmap(
+///     &rendered,
+///     edited,
+///     views,
+///     &pool,
+///     &EvaluateOptions::default(),
+///     &Progress::none(),
+/// )?;
 /// # let _ = scored;
 /// # Ok(())
 /// # }
 /// ```
 ///
+/// The photographs are read through `pool`, the region pool the caller made
+/// for this call, with one [`ViewRegions`] for each tile.
+///
 /// # Errors
 ///
-/// [`EvaluateError::Cancelled`] when `progress` was cancelled, and
+/// [`EvaluateError::Cancelled`] when `progress` was cancelled,
 /// [`EvaluateError::NoView`] when an observation names an image `images`
-/// does not hold.
+/// does not hold, and [`EvaluateError::Photograph`] when a read of a
+/// photograph failed.
 pub fn score_bitmap(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &EvaluateOptions,
     progress: &Progress<'_>,
 ) -> Result<EditableTrack, EvaluateError> {
@@ -2434,15 +2485,16 @@ pub fn score_bitmap(
             let tile = render_view_tile(
                 patch_frame,
                 view,
+                &mut ViewRegions::new(view.source, pool),
                 Some(pixel),
                 resolution,
                 options.localize.sampler,
                 &phase,
-            );
+            )?;
             tiles.push((i, tile));
         }
     }
-    let walked = walked_tiles(track, images, patch_frame, &options, progress)?;
+    let walked = walked_tiles(track, images, pool, patch_frame, &options, progress)?;
     score_against_bitmap(&mut next, &tiles, &walked, progress);
     Ok(next)
 }
@@ -2452,10 +2504,12 @@ pub fn score_bitmap(
 /// on the grid and with the sampler a reading renders each row's own tile
 /// with, so the two are scored against the bitmap alike. Rows a fit did not
 /// refuse have none; the list is usually empty. The renders run inside a
-/// `walked tiles` detail phase of `progress`.
+/// `walked tiles` detail phase of `progress`, each reading through a
+/// [`ViewRegions`] of its own made from `pool`.
 fn walked_tiles(
     track: &EditableTrack,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     patch_frame: &OrientedPatch,
     options: &EvaluateOptions,
     progress: &Progress<'_>,
@@ -2473,11 +2527,12 @@ fn walked_tiles(
         let tile = render_view_tile(
             patch_frame,
             view,
+            &mut ViewRegions::new(view.source, pool),
             Some(to),
             resolution,
             options.localize.sampler,
             &phase,
-        );
+        )?;
         walked.push((i, tile));
     }
     progress_note!(phase, "{} observations", walked.len());

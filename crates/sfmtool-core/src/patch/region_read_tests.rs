@@ -1,8 +1,11 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The cluster refinement and the view selection give the same result
-//! whichever path a read takes: every read copying its regions into the pool,
+//! The cluster refinement, the view selection and the kernels that read
+//! through the reference view (the stored bitmaps, member coherence, the
+//! observation readings, the keypoint localizer and sub-pixel refiner, the
+//! candidate spawn and *Add image to tracks*) give the same result whichever
+//! path a read takes: every read copying its regions into the pool,
 //! every read going through the photographs' tiles, and a pool too small for
 //! all of a call's regions, where the two paths mix within one call. Each pool
 //! holds no more than its capacity and has every byte back once the call
@@ -20,7 +23,7 @@ use std::sync::Arc;
 use ndarray::{Array2, Array3};
 
 use crate::camera::image::{ImageU8, ImageU8Pyramid, PyramidLevel};
-use crate::camera::sampler::{RegionPool, RegionPoolStats};
+use crate::camera::sampler::{RegionPool, RegionPoolStats, SamplerChoice, ViewRegions};
 use crate::camera::{PhotographCache, PhotographReadError, TiledPhotograph};
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::PatchCloud;
@@ -28,12 +31,27 @@ use crate::patch::cluster_refine::{
     refine_cluster_patches, ClusterRefineParams, ClusterRefineResult, FeatureGeometry,
     PiecewiseParams,
 };
+use crate::patch::keypoint_localize::{
+    localize_patch_cloud_keypoints, KeypointLocalizeParams, LocalizeError, TrackReferences,
+};
+use crate::patch::keypoint_subpixel::{refine_patch_cloud_keypoints, KeypointSubpixelParams};
+use crate::patch::member_coherence::{
+    validate_patch_cloud_member_coherence, MemberCoherenceParams,
+};
 use crate::patch::normal_refine::ProjectedImage;
+use crate::patch::observation_reading::read_cloud_observations;
+use crate::patch::spawn::{spawn_candidate_tracks, SpawnError, SpawnParams};
+use crate::patch::stored_bitmap::{
+    render_patch_cloud_bitmaps, CloudRenderError, UnreferencedPoints,
+};
 use crate::patch::view_selection::{
     projected_patch_frame, select_patch_cloud_views, select_patch_views, ViewSelectParams,
 };
 use crate::patch::{track_keypoints_from_reconstruction, track_views_from_reconstruction};
 use crate::progress::Progress;
+use crate::reconstruction::add_image_to_tracks::{
+    add_image_to_tracks, AddImageToTracksError, AddImageToTracksOptions,
+};
 use crate::reconstruction::SfmrReconstruction;
 
 /// The tile side the photographs are cut into for the reads through tiles:
@@ -270,9 +288,12 @@ fn refined_text(r: &ClusterRefineResult) -> String {
 ///   the tiles.
 ///
 /// Each pool holds no more than its capacity and holds nothing once the call
-/// returns.
+/// returns. With `reuses`, (a) reuses regions a read kept, as a call that
+/// reads a view more than once does; a call that reads each view once
+/// passes `false`.
 fn assert_the_same_on_every_path(
     truth: &Truth,
+    reuses: bool,
     call: impl Fn(&[TiledPhotograph], &RegionPool) -> String + Sync,
 ) {
     let one_thread = rayon::ThreadPoolBuilder::new()
@@ -290,8 +311,10 @@ fn assert_the_same_on_every_path(
 
     let (a, a_stats) = run(&truth.whole, u64::MAX);
     assert!(
-        a_stats.copied_reads > 0 && a_stats.reused_reads > 0 && a_stats.tiled_reads == 0,
-        "the reads copy their regions and reuse them: {a_stats:?}"
+        a_stats.copied_reads > 0
+            && (a_stats.reused_reads > 0) == reuses
+            && a_stats.tiled_reads == 0,
+        "the reads copy their regions, reusing them as the call reads: {a_stats:?}"
     );
 
     let (b, b_stats) = run(&truth.tiled, 0);
@@ -333,7 +356,7 @@ fn the_cluster_refinement_is_the_same_on_every_read_path() {
     let truth = Truth::load();
     let params = cluster_params();
     let clusters = Clusters::of(&truth, &params);
-    assert_the_same_on_every_path(&truth, |sources, pool| {
+    assert_the_same_on_every_path(&truth, true, |sources, pool| {
         let result = clusters
             .refine(sources, pool, &params)
             .expect("photographs in memory read");
@@ -354,7 +377,7 @@ fn the_view_selection_is_the_same_on_every_read_path() {
     let truth = Truth::load();
     let (cloud, tracks, keypoints) = truth.patches();
     let params = ViewSelectParams::default();
-    assert_the_same_on_every_path(&truth, |sources, pool| {
+    assert_the_same_on_every_path(&truth, true, |sources, pool| {
         let views = truth.views(sources);
         let batch = select_patch_cloud_views(
             &cloud,
@@ -449,4 +472,377 @@ fn a_read_of_pixels_a_photograph_lacks_fails_the_call() {
         );
         assert_eq!(pool.held_bytes(), 0);
     }
+}
+
+/// The flat bytes of an array, whose `Debug` text elides a long one.
+fn flat<D: ndarray::Dimension>(
+    a: &ndarray::ArrayBase<impl ndarray::Data<Elem = u8>, D>,
+) -> Vec<u8> {
+    a.iter().copied().collect()
+}
+
+/// `views`, each as `Some`, for the whole-cloud renders.
+fn present<'a>(views: &[ProjectedImage<'a>]) -> Vec<Option<ProjectedImage<'a>>> {
+    views.iter().map(|v| Some(*v)).collect()
+}
+
+/// The stored bitmaps' render over the points: each point's reference
+/// observation's tile, or, with its references dropped, the reference-view
+/// rule's pick, whose tiles and pair readings share each view's regions.
+#[test]
+fn the_stored_bitmaps_are_the_same_on_every_read_path() {
+    let truth = Truth::load();
+    let (cloud, _, _) = truth.patches();
+    let mut unreferenced = truth.recon.clone();
+    unreferenced.point_set.reference_observations = None;
+    assert_the_same_on_every_path(&truth, true, |sources, pool| {
+        let views = present(&truth.views(sources));
+        let mut text = String::new();
+        for recon in [&truth.recon, &unreferenced] {
+            let column = render_patch_cloud_bitmaps(
+                &cloud,
+                recon,
+                &views,
+                pool,
+                &KeypointSubpixelParams::default(),
+                UnreferencedPoints::Pick,
+                None,
+                &Progress::none(),
+            )
+            .expect("photographs in memory read");
+            writeln!(
+                text,
+                "{:?} {:?}",
+                flat(&column.bitmaps),
+                column.reference_observations
+            )
+            .unwrap();
+        }
+        text
+    });
+}
+
+/// Member coherence's matrices and verdicts over the points' tracks.
+#[test]
+fn member_coherence_is_the_same_on_every_read_path() {
+    let truth = Truth::load();
+    let (cloud, tracks, keypoints) = truth.patches();
+    assert_the_same_on_every_path(&truth, false, |sources, pool| {
+        let coherence = validate_patch_cloud_member_coherence(
+            &cloud,
+            &truth.views(sources),
+            pool,
+            &tracks,
+            Some(&keypoints),
+            &MemberCoherenceParams::default(),
+            None,
+            &Progress::none(),
+        )
+        .expect("photographs in memory read");
+        assert!(
+            coherence.iter().any(|c| c.matrix.n_support > 0),
+            "a matrix has support, so the members are rendered"
+        );
+        format!("{coherence:?}")
+    });
+}
+
+/// Each observation's readings on its own tile, scored against its point's
+/// stored bitmap.
+#[test]
+fn the_observation_readings_are_the_same_on_every_read_path() {
+    let truth = Truth::load();
+    let (cloud, _, _) = truth.patches();
+    assert_the_same_on_every_path(&truth, false, |sources, pool| {
+        let readings = read_cloud_observations(
+            &cloud,
+            &truth.recon,
+            &present(&truth.views(sources)),
+            pool,
+            24,
+            SamplerChoice::default(),
+            None,
+            &Progress::none(),
+        )
+        .expect("photographs in memory read");
+        format!("{readings:?}")
+    });
+}
+
+/// The localizer and the sub-pixel refiner over the points' tracks, the
+/// refiner rendering each point's stored bitmap, and a spawn of candidate
+/// tracks beside the first points, which runs both.
+#[test]
+fn the_keypoint_kernels_are_the_same_on_every_read_path() {
+    let truth = Truth::load();
+    let (cloud, tracks, keypoints) = truth.patches();
+    let parents: Vec<u32> = (0..8).collect();
+    let offsets: Vec<[f64; 2]> = parents
+        .iter()
+        .map(|&p| if p % 2 == 0 { [0.6, 0.0] } else { [0.0, -0.6] })
+        .collect();
+    let spawn_views: Vec<Vec<u32>> = parents
+        .iter()
+        .map(|&p| tracks[p as usize].clone())
+        .collect();
+    assert_the_same_on_every_path(&truth, true, |sources, pool| {
+        let views = truth.views(sources);
+        let localized = localize_patch_cloud_keypoints(
+            &cloud,
+            &views,
+            pool,
+            &tracks,
+            Some(&keypoints),
+            None,
+            &KeypointLocalizeParams::default(),
+            None,
+            &Progress::none(),
+        )
+        .expect("photographs in memory read");
+        let refined = refine_patch_cloud_keypoints(
+            &cloud,
+            &views,
+            pool,
+            &tracks,
+            Some(&keypoints),
+            None,
+            &KeypointSubpixelParams {
+                render_bitmaps: true,
+                ..KeypointSubpixelParams::default()
+            },
+            &Progress::none(),
+        )
+        .expect("photographs in memory read");
+        assert!(refined.iter().any(|r| r.representative.is_some()));
+        let spawned = spawn_candidate_tracks(
+            &views,
+            pool,
+            &cloud,
+            &parents,
+            &offsets,
+            &spawn_views,
+            &SpawnParams::default(),
+        )
+        .expect("photographs in memory read");
+        format!("{localized:?}\n{refined:?}\n{spawned:?}")
+    });
+}
+
+/// *Add image to tracks* for one image: its references' renders, the search,
+/// the sub-pixel step and the scores of every candidate point.
+#[test]
+fn adding_an_image_to_tracks_is_the_same_on_every_read_path() {
+    let truth = Truth::load();
+    assert_the_same_on_every_path(&truth, true, |sources, pool| {
+        let photographs: Vec<Option<&TiledPhotograph>> = sources.iter().map(Some).collect();
+        let (next, report) = add_image_to_tracks(
+            &truth.recon,
+            5,
+            &photographs,
+            pool,
+            &AddImageToTracksOptions::default(),
+            &Progress::none(),
+        )
+        .expect("photographs in memory read");
+        assert!(
+            report.accepted > 0,
+            "a candidate is accepted, so every read is taken"
+        );
+        format!(
+            "{:?}\n{:?}\n{:?}",
+            next.point_set.tracks, next.point_set.observation_readings, report
+        )
+    });
+}
+
+/// A photograph that lacks the pixels a read needs fails each kernel of the
+/// reference view's family with the read's error, on either path: the reads
+/// of each patch of a batch, and of each candidate of *Add image to tracks*,
+/// turn a failure into that patch's value, and the batch returns the first.
+#[test]
+fn a_read_of_pixels_a_photograph_lacks_fails_each_reference_view_kernel() {
+    let truth = Truth::load();
+    let (cloud, tracks, keypoints) = truth.patches();
+    let image = tracks[0][0] as usize;
+    let mut sources = tiled(&truth.pyramids);
+    sources[image] = without_pixels(&truth.tiled[image]);
+    let is_out_of_range =
+        |e: &PhotographReadError| matches!(e, PhotographReadError::OutOfRange { .. });
+    for capacity in [u64::MAX, 0] {
+        let pool = RegionPool::with_capacity(capacity);
+        let views = truth.views(&sources);
+        let error = render_patch_cloud_bitmaps(
+            &cloud,
+            &truth.recon,
+            &present(&views),
+            &pool,
+            &KeypointSubpixelParams::default(),
+            UnreferencedPoints::Pick,
+            None,
+            &Progress::none(),
+        )
+        .expect_err("the image cannot be read");
+        assert!(
+            matches!(&error, CloudRenderError::Photograph(e) if is_out_of_range(e)),
+            "pool of {capacity}: {error}"
+        );
+        let error = read_cloud_observations(
+            &cloud,
+            &truth.recon,
+            &present(&views),
+            &pool,
+            24,
+            SamplerChoice::default(),
+            None,
+            &Progress::none(),
+        )
+        .expect_err("the image cannot be read");
+        assert!(
+            matches!(&error, CloudRenderError::Photograph(e) if is_out_of_range(e)),
+            "pool of {capacity}: {error}"
+        );
+        let error = validate_patch_cloud_member_coherence(
+            &cloud,
+            &views,
+            &pool,
+            &tracks,
+            Some(&keypoints),
+            &MemberCoherenceParams::default(),
+            None,
+            &Progress::none(),
+        )
+        .expect_err("the image cannot be read");
+        assert!(is_out_of_range(&error), "pool of {capacity}: {error}");
+        let error = localize_patch_cloud_keypoints(
+            &cloud,
+            &views,
+            &pool,
+            &tracks,
+            Some(&keypoints),
+            None,
+            &KeypointLocalizeParams::default(),
+            None,
+            &Progress::none(),
+        )
+        .expect_err("the image cannot be read");
+        assert!(is_out_of_range(&error), "pool of {capacity}: {error}");
+        let error = refine_patch_cloud_keypoints(
+            &cloud,
+            &views,
+            &pool,
+            &tracks,
+            Some(&keypoints),
+            None,
+            &KeypointSubpixelParams::default(),
+            &Progress::none(),
+        )
+        .expect_err("the image cannot be read");
+        assert!(is_out_of_range(&error), "pool of {capacity}: {error}");
+        let error = spawn_candidate_tracks(
+            &views,
+            &pool,
+            &cloud,
+            &[0],
+            &[[0.6, 0.0]],
+            &[tracks[0].clone()],
+            &SpawnParams::default(),
+        )
+        .expect_err("the image cannot be read");
+        assert!(
+            matches!(&error, SpawnError::Photograph(e) if is_out_of_range(e)),
+            "pool of {capacity}: {error}"
+        );
+        // The image as the target, whose search reads it first, and as a
+        // reference of the points another target sees, whose renders read it
+        // first; on the next image no candidate reaches a reference render of
+        // it, so the test takes the one after.
+        let photographs: Vec<Option<&TiledPhotograph>> = sources.iter().map(Some).collect();
+        let target = (image + 2) % sources.len();
+        for added in [image, target] {
+            let error = add_image_to_tracks(
+                &truth.recon,
+                added,
+                &photographs,
+                &pool,
+                &AddImageToTracksOptions::default(),
+                &Progress::none(),
+            )
+            .err()
+            .unwrap_or_else(|| panic!("image {added} cannot be read"));
+            assert!(
+                matches!(&error, AddImageToTracksError::Photograph(e) if is_out_of_range(e)),
+                "image {added}, pool of {capacity}: {error}"
+            );
+        }
+        assert_eq!(pool.held_bytes(), 0);
+    }
+}
+
+/// A point's references read from photographs that hold their pixels, and
+/// the search and score of a view whose photograph lacks them: each fails
+/// with the read's error rather than reading as no peak or no score.
+#[test]
+fn a_search_or_score_of_a_view_that_cannot_be_read_fails() {
+    let truth = Truth::load();
+    let (cloud, tracks, keypoints) = truth.patches();
+    let views = truth.views(&truth.whole);
+    let references = &tracks[0][1..];
+    let reference_keypoints: Vec<[f64; 2]> = keypoints[0][1..]
+        .iter()
+        .map(|k| k.expect("a stored keypoint"))
+        .collect();
+    let pool = RegionPool::with_capacity(u64::MAX);
+    let mut regions: Vec<ViewRegions<'_>> = references
+        .iter()
+        .map(|&v| ViewRegions::new(views[v as usize].source, &pool))
+        .collect();
+    let params = KeypointLocalizeParams::default();
+    let built = TrackReferences::build(
+        cloud.patch(0),
+        &views,
+        references,
+        &mut regions,
+        &reference_keypoints,
+        None,
+        None,
+        &params,
+    )
+    .expect("photographs in memory read")
+    .expect("the references settle a template");
+    let image = tracks[0][0] as usize;
+    let broken = without_pixels(&truth.tiled[image]);
+    let mut target = views[image];
+    target.source = &broken;
+    let mut target_regions = ViewRegions::new(&broken, &pool);
+    let error = built
+        .search(
+            cloud.patch(0),
+            &target,
+            &mut target_regions,
+            None,
+            false,
+            &params,
+        )
+        .expect_err("the target cannot be read");
+    assert!(
+        matches!(
+            error,
+            LocalizeError::Photograph(PhotographReadError::OutOfRange { .. })
+        ),
+        "{error}"
+    );
+    let keypoint = keypoints[0][0].expect("a stored keypoint");
+    let error = built
+        .score(
+            cloud.patch(0),
+            &target,
+            &mut target_regions,
+            keypoint,
+            &params,
+        )
+        .expect_err("the target cannot be read");
+    assert!(
+        matches!(error, PhotographReadError::OutOfRange { .. }),
+        "{error}"
+    );
 }

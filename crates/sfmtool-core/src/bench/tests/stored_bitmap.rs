@@ -107,6 +107,7 @@ fn bytes_off_a_render_through(
         &cloud,
         recon,
         &views,
+        crate::camera::sampler::test_pool(),
         &params,
         UnreferencedPoints::Skip,
         None,

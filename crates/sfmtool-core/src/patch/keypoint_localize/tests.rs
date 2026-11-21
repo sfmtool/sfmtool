@@ -237,7 +237,16 @@ fn aligned_views_keep_all_and_barely_shift() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
+    let res = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
 
     assert_eq!(res.views, vec![0, 1, 2, 3], "all aligned views kept");
     for &o in &res.offsets_px {
@@ -272,7 +281,16 @@ fn infinity_point_views_co_register_independent_of_translation() {
     let views = scene.views();
     let patch = infinity_patch();
 
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
+    let res = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
 
     assert_eq!(
         res.views,
@@ -334,11 +352,13 @@ fn infinity_point_seed_offsets_align_back() {
     let res = localize_patch_keypoints(
         &patch,
         &views,
+        crate::camera::sampler::test_pool(),
         &[0, 1, 2, 3],
         Some(&seeds),
         Some(0),
         &exhaustive,
-    );
+    )
+    .unwrap();
 
     let p3 = pos(&res, 3).expect("the seeded-off view aligns back and is kept");
     assert!(
@@ -371,7 +391,16 @@ fn aligns_misregistered_view_to_the_reference() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
+    let res = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
 
     let p3 = pos(&res, 3).expect("the misregistered view co-registers and is kept");
     // The texture is shifted in world-x; for this patch the in-plane v-axis is
@@ -424,7 +453,16 @@ fn drops_disagreeing_surface_view() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
+    let res = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
 
     assert!(
         pos(&res, 3).is_none(),
@@ -458,7 +496,16 @@ fn drops_view_shifted_beyond_max_shift_px() {
     // Sanity: 2 grid px maps above the 3px gate.
     assert!(2.0 * src_per_grid() > params().max_shift_px);
 
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
+    let res = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
 
     assert!(
         pos(&res, 3).is_none(),
@@ -494,7 +541,16 @@ fn grazing_views_are_prefiltered() {
         min_grazing_cos: 0.95,
         ..params()
     };
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &strict);
+    let res = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &strict,
+    )
+    .unwrap();
     assert!(
         pos(&res, 3).is_none(),
         "oblique view should be grazing-filtered: {:?}",
@@ -505,7 +561,16 @@ fn grazing_views_are_prefiltered() {
         min_grazing_cos: 0.1,
         ..params()
     };
-    let res2 = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &permissive);
+    let res2 = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &permissive,
+    )
+    .unwrap();
     assert!(
         pos(&res2, 3).is_some(),
         "with a permissive cutoff the oblique view is kept: {:?}",
@@ -526,7 +591,16 @@ fn fewer_than_two_views_returns_seed_projection() {
     let proj = project(&views[0], &patch.center, patch.w).unwrap();
 
     for reference in [Some(0), None] {
-        let res = localize_patch_keypoints(&patch, &views, &[0], None, reference, &params());
+        let res = localize_patch_keypoints(
+            &patch,
+            &views,
+            crate::camera::sampler::test_pool(),
+            &[0],
+            None,
+            reference,
+            &params(),
+        )
+        .unwrap();
         assert_eq!(res.views, vec![0]);
         assert_eq!(res.keypoints[0], [proj.0, proj.1]);
         assert_eq!(res.zncc, vec![1.0], "the reference scores 1 against itself");
@@ -544,7 +618,16 @@ fn duplicate_view_index_is_deduped() {
     let patch = plane_patch();
 
     // View 0 listed twice.
-    let res = localize_patch_keypoints(&patch, &views, &[0, 0, 1, 2], None, Some(0), &params());
+    let res = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 0, 1, 2],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
     assert_eq!(res.views.iter().filter(|&&v| v == 0).count(), 1);
     let mut uniq = res.views.clone();
     uniq.sort_unstable();
@@ -573,6 +656,7 @@ fn batch_matches_per_patch() {
     let batch = localize_patch_cloud_keypoints(
         &cloud,
         &views,
+        crate::camera::sampler::test_pool(),
         &patch_views,
         None,
         None,
@@ -586,11 +670,13 @@ fn batch_matches_per_patch() {
         let single = localize_patch_keypoints(
             &cloud.patches[i],
             &views,
+            crate::camera::sampler::test_pool(),
             &patch_views[i],
             None,
             None,
             &params(),
-        );
+        )
+        .unwrap();
         assert_eq!(res.views, single.views);
         assert_eq!(res.reference, single.reference);
         for (a, b) in res.keypoints.iter().zip(&single.keypoints) {
@@ -603,6 +689,7 @@ fn batch_matches_per_patch() {
     let batch = localize_patch_cloud_keypoints(
         &cloud,
         &views,
+        crate::camera::sampler::test_pool(),
         &patch_views,
         None,
         Some(&references),
@@ -615,11 +702,13 @@ fn batch_matches_per_patch() {
         let single = localize_patch_keypoints(
             &cloud.patches[i],
             &views,
+            crate::camera::sampler::test_pool(),
             &patch_views[i],
             None,
             references[i],
             &params(),
-        );
+        )
+        .unwrap();
         assert_eq!(res.views, single.views);
         assert_eq!(res.keypoints, single.keypoints);
         assert_eq!(res.reference, Some(patch_views[i][references[i].unwrap()]));
@@ -643,8 +732,16 @@ fn seed_keypoint_offset_round_trips() {
             Some([x, y])
         })
         .collect();
-    let res =
-        localize_patch_keypoints(&patch, &views, &[0, 1, 2], Some(&seeds), Some(0), &params());
+    let res = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2],
+        Some(&seeds),
+        Some(0),
+        &params(),
+    )
+    .unwrap();
     assert_eq!(res.views, vec![0, 1, 2]);
     for &o in &res.offsets_px {
         assert!(
@@ -798,16 +895,26 @@ fn all_none_seeds_match_the_unseeded_run() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let unseeded =
-        localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
+    let unseeded = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
     let all_none = localize_patch_keypoints(
         &patch,
         &views,
+        crate::camera::sampler::test_pool(),
         &[0, 1, 2, 3],
         Some(&[None; 4]),
         Some(0),
         &params(),
-    );
+    )
+    .unwrap();
 
     assert_eq!(all_none.views, unseeded.views);
     assert_eq!(all_none.keypoints, unseeded.keypoints);
@@ -862,19 +969,23 @@ fn mixed_seeds_apply_per_view() {
     let res = localize_patch_keypoints(
         &patch,
         &views,
+        crate::camera::sampler::test_pool(),
         &[0, 1, 2, 3],
         Some(&mixed),
         Some(0),
         &exhaustive,
-    );
+    )
+    .unwrap();
     let ref_res = localize_patch_keypoints(
         &patch,
         &views,
+        crate::camera::sampler::test_pool(),
         &[0, 1, 2, 3],
         Some(&all_some),
         Some(0),
         &exhaustive,
-    );
+    )
+    .unwrap();
 
     assert_eq!(res.views, vec![0, 1, 2, 3], "every view is kept");
     assert_eq!(res.views, ref_res.views);
@@ -927,6 +1038,7 @@ fn batch_mixed_seeds_match_the_single_patch_call() {
     let batch = localize_patch_cloud_keypoints(
         &cloud,
         &views,
+        crate::camera::sampler::test_pool(),
         &patch_views,
         Some(&seeds),
         None,
@@ -939,19 +1051,23 @@ fn batch_mixed_seeds_match_the_single_patch_call() {
     let single0 = localize_patch_keypoints(
         &cloud.patches[0],
         &views,
+        crate::camera::sampler::test_pool(),
         &patch_views[0],
         Some(&seeds[0]),
         None,
         &params(),
-    );
+    )
+    .unwrap();
     let single1 = localize_patch_keypoints(
         &cloud.patches[1],
         &views,
+        crate::camera::sampler::test_pool(),
         &patch_views[1],
         None,
         None,
         &params(),
-    );
+    )
+    .unwrap();
     assert_eq!(batch[0].views, single0.views);
     assert_eq!(batch[0].keypoints, single0.keypoints);
     assert_eq!(batch[1].views, single1.views);
@@ -981,7 +1097,16 @@ fn drops_low_relative_zncc_view_in_isolation() {
         min_absolute_zncc: 0.0,
         ..params()
     };
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &p);
+    let res = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &p,
+    )
+    .unwrap();
     assert!(
         pos(&res, 3).is_none(),
         "occluder must be dropped by the relative bar: {:?}",
@@ -1023,11 +1148,13 @@ fn two_view_flat_member_is_dropped_as_unlocalizable() {
     let res = localize_patch_keypoints(
         &patch,
         &views,
+        crate::camera::sampler::test_pool(),
         &[0, 1],
         None,
         Some(0),
         &self_similarity_bar(2.0),
-    );
+    )
+    .unwrap();
     assert!(
         pos(&res, 1).is_none(),
         "the flat member must be dropped as unlocalizable: {:?}",
@@ -1039,7 +1166,16 @@ fn two_view_flat_member_is_dropped_as_unlocalizable() {
         res.views
     );
 
-    let off_gates = localize_patch_keypoints(&patch, &views, &[0, 1], None, Some(0), &gates_off());
+    let off_gates = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1],
+        None,
+        Some(0),
+        &gates_off(),
+    )
+    .unwrap();
     assert_eq!(
         off_gates.views,
         vec![0, 1],
@@ -1074,7 +1210,16 @@ fn the_member_gate_judges_the_self_similarity_radius() {
         ..self_similarity_bar(bar)
     };
 
-    let gated = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &loose(2.0));
+    let gated = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &loose(2.0),
+    )
+    .unwrap();
     assert_eq!(
         gated.views,
         vec![0, 1],
@@ -1084,8 +1229,16 @@ fn the_member_gate_judges_the_self_similarity_radius() {
     // `0` turns the gate off, and a bar at the largest radius read turns
     // nothing out.
     for bar in [0.0, 3.0] {
-        let open =
-            localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &loose(bar));
+        let open = localize_patch_keypoints(
+            &patch,
+            &views,
+            crate::camera::sampler::test_pool(),
+            &[0, 1, 2, 3],
+            None,
+            Some(0),
+            &loose(bar),
+        )
+        .unwrap();
         assert_eq!(open.views, vec![0, 1, 2, 3], "bar {bar} keeps every member");
     }
 }
@@ -1108,7 +1261,16 @@ fn the_member_gate_reads_the_same_radius_at_any_search() {
             min_relative_zncc: 0.0,
             ..self_similarity_bar(2.0)
         };
-        let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2], None, Some(0), &p);
+        let res = localize_patch_keypoints(
+            &patch,
+            &views,
+            crate::camera::sampler::test_pool(),
+            &[0, 1, 2],
+            None,
+            Some(0),
+            &p,
+        )
+        .unwrap();
         assert_eq!(res.views, vec![0, 1], "search {search}");
     }
 }
@@ -1203,17 +1365,36 @@ fn a_reference_search_reports_the_view_s_own_self_similarity_radius() {
         &patch,
         &views,
         &[0, 1],
+        &mut [0, 1]
+            .iter()
+            .map(|&v| crate::camera::sampler::test_regions((&views)[v as usize].source))
+            .collect::<Vec<_>>(),
         &[[cx, cy], [cx, cy]],
         None,
         None,
         &p,
     )
+    .unwrap()
     .expect("two textured references");
     let textured = references
-        .search(&patch, &views[2], None, false, &p)
+        .search(
+            &patch,
+            &views[2],
+            &mut crate::camera::sampler::test_regions(views[2].source),
+            None,
+            false,
+            &p,
+        )
         .expect("a search");
     let edge = references
-        .search(&patch, &views[3], None, false, &p)
+        .search(
+            &patch,
+            &views[3],
+            &mut crate::camera::sampler::test_regions(views[3].source),
+            None,
+            false,
+            &p,
+        )
         .expect("a search");
     assert!(
         textured.zncc_self_similarity_radius < 1.0,
@@ -1247,6 +1428,7 @@ fn two_view_disagreeing_pair_is_dropped_by_the_absolute_floor() {
     let off_gates = localize_patch_keypoints(
         &patch,
         &views,
+        crate::camera::sampler::test_pool(),
         &[0, 1],
         None,
         Some(0),
@@ -1254,7 +1436,8 @@ fn two_view_disagreeing_pair_is_dropped_by_the_absolute_floor() {
             max_shift_px: 1e6,
             ..gates_off()
         },
-    );
+    )
+    .unwrap();
     assert_eq!(
         off_gates.views,
         vec![0, 1],
@@ -1266,7 +1449,16 @@ fn two_view_disagreeing_pair_is_dropped_by_the_absolute_floor() {
         off_gates.zncc
     );
 
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1], None, Some(0), &loose);
+    let res = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1],
+        None,
+        Some(0),
+        &loose,
+    )
+    .unwrap();
     assert_eq!(
         res.views,
         vec![0],
@@ -1292,9 +1484,26 @@ fn absolute_gates_at_zero_reproduce_the_ungated_run() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let gated = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
-    let ungated =
-        localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &gates_off());
+    let gated = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
+    let ungated = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &gates_off(),
+    )
+    .unwrap();
 
     assert_eq!(gated.views, ungated.views);
     assert_eq!(gated.keypoints, ungated.keypoints);
@@ -1314,7 +1523,16 @@ fn empty_patch_views_return_empty() {
     let patch = plane_patch();
 
     for reference in [None, Some(0)] {
-        let res = localize_patch_keypoints(&patch, &views, &[], None, reference, &params());
+        let res = localize_patch_keypoints(
+            &patch,
+            &views,
+            crate::camera::sampler::test_pool(),
+            &[],
+            None,
+            reference,
+            &params(),
+        )
+        .unwrap();
         assert!(res.views.is_empty());
         assert!(res.keypoints.is_empty());
         assert!(res.offsets_px.is_empty());
@@ -2065,8 +2283,26 @@ fn plus_descent_agrees_with_exhaustive_on_well_posed_scene() {
         ..params()
     };
 
-    let a = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &plus);
-    let b = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &exhaustive);
+    let a = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &plus,
+    )
+    .unwrap();
+    let b = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &exhaustive,
+    )
+    .unwrap();
 
     assert_eq!(
         a.views, b.views,
@@ -2153,7 +2389,16 @@ fn views_narrower_or_wider_than_the_reference_are_scored_not_panicked() {
     let patch = plane_patch();
     // A colour reference (view 1) and a grayscale one (view 0).
     for reference in [1usize, 0] {
-        let res = localize_patch_keypoints(&patch, &views, &set, None, Some(reference), &params());
+        let res = localize_patch_keypoints(
+            &patch,
+            &views,
+            crate::camera::sampler::test_pool(),
+            &set,
+            None,
+            Some(reference),
+            &params(),
+        )
+        .unwrap();
         assert_eq!(res.reference, Some(reference as u32));
         assert_eq!(res.keypoints.len(), res.views.len());
         assert_eq!(res.zncc.len(), res.views.len());
@@ -2207,7 +2452,16 @@ fn views_with_no_template_stay_at_their_starts_and_face_the_shift_gate() {
         ..params()
     };
 
-    let loose = localize_patch_keypoints(&patch, &views, &set, Some(&seeds), Some(0), &open(1e6));
+    let loose = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &set,
+        Some(&seeds),
+        Some(0),
+        &open(1e6),
+    )
+    .unwrap();
     assert_eq!(loose.views, set, "a loose shift gate keeps every view");
     assert_eq!(loose.reference, None, "there is nothing to anchor to");
     assert!(
@@ -2222,7 +2476,16 @@ fn views_with_no_template_stay_at_their_starts_and_face_the_shift_gate() {
         );
     }
 
-    let tight = localize_patch_keypoints(&patch, &views, &set, Some(&seeds), Some(0), &open(0.5));
+    let tight = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &set,
+        Some(&seeds),
+        Some(0),
+        &open(0.5),
+    )
+    .unwrap();
     assert!(
         tight.views.is_empty(),
         "every start sits 12 px from its projection: {:?} {:?}",
@@ -2451,11 +2714,13 @@ fn the_reference_is_not_moved_and_the_others_follow_it() {
             let res = localize_patch_keypoints(
                 &patch,
                 &views,
+                crate::camera::sampler::test_pool(),
                 &[0, 1, 2, 3],
                 Some(&seeds),
                 Some(0),
                 &with_strategy(strategy),
-            );
+            )
+            .unwrap();
             assert_eq!(res.views, vec![0, 1, 2, 3], "{strategy:?}");
             assert_eq!(res.reference, Some(0));
             assert_eq!(
@@ -2505,11 +2770,13 @@ fn planted_offsets_are_recovered_relative_to_the_reference() {
         let res = localize_patch_keypoints(
             &patch,
             &views,
+            crate::camera::sampler::test_pool(),
             &[0, 1, 2, 3],
             Some(&seeds),
             Some(0),
             &with_strategy(strategy),
-        );
+        )
+        .unwrap();
         assert_eq!(res.views, vec![0, 1, 2, 3], "{strategy:?}");
         for k in 1..4 {
             let err = dist(res.keypoints[k], truth[k]);
@@ -2618,11 +2885,13 @@ fn a_fractional_shift_on_one_axis_does_not_show_up_on_the_other() {
                     localize_patch_keypoints(
                         &patch,
                         &views,
+                        crate::camera::sampler::test_pool(),
                         &[0, 1, 2, 3],
                         Some(&seeds),
                         Some(0),
                         &with_strategy(strategy),
                     )
+                    .unwrap()
                 })
                 .collect();
             for (res, strategy) in runs.iter().zip(STRATEGIES) {
@@ -2671,11 +2940,13 @@ fn with_no_eligible_view_there_is_no_reference_and_nothing_moves() {
         let res = localize_patch_keypoints(
             &patch,
             &views,
+            crate::camera::sampler::test_pool(),
             &set,
             Some(&seeds),
             None,
             &with_strategy(strategy),
-        );
+        )
+        .unwrap();
         assert_eq!(res.reference, None, "{strategy:?}");
         assert_eq!(res.views, set.to_vec(), "{strategy:?}");
         assert!(res.zncc.iter().all(|z| z.is_nan()), "{:?}", res.zncc);
@@ -2701,12 +2972,17 @@ fn with_no_reference_given_the_rule_picks_one_and_it_is_not_moved() {
         &patch,
         &views,
         &set,
+        &mut set
+            .iter()
+            .map(|&v| crate::camera::sampler::test_regions(views[v as usize].source))
+            .collect::<Vec<_>>(),
         &seeds,
         p.resolution,
         p.sampler,
         &crate::patch::reference_view::ReferenceViewOptions::default(),
         &Progress::none(),
-    );
+    )
+    .unwrap();
     let pick = rule
         .reading
         .choice
@@ -2717,11 +2993,13 @@ fn with_no_reference_given_the_rule_picks_one_and_it_is_not_moved() {
         let res = localize_patch_keypoints(
             &patch,
             &views,
+            crate::camera::sampler::test_pool(),
             &set,
             Some(&seeds),
             None,
             &with_strategy(strategy),
-        );
+        )
+        .unwrap();
         assert_eq!(res.reference, Some(set[pick]), "{strategy:?}");
         let k = pos(&res, set[pick]).unwrap();
         assert_eq!(res.keypoints[k], seeds[pick].unwrap(), "{strategy:?}");
@@ -2730,11 +3008,13 @@ fn with_no_reference_given_the_rule_picks_one_and_it_is_not_moved() {
         let given = localize_patch_keypoints(
             &patch,
             &views,
+            crate::camera::sampler::test_pool(),
             &set,
             Some(&seeds),
             Some(pick),
             &with_strategy(strategy),
-        );
+        )
+        .unwrap();
         assert_eq!(res.views, given.views);
         assert_eq!(res.keypoints, given.keypoints);
         assert_eq!(res.zncc, given.zncc);
@@ -2767,13 +3047,31 @@ fn a_changed_reference_realigns_the_views_to_its_render() {
             max_shift_px: 1e6,
             ..with_strategy(strategy)
         };
-        let a = localize_patch_keypoints(&patch, &views, &set, Some(&truth), Some(0), &p);
+        let a = localize_patch_keypoints(
+            &patch,
+            &views,
+            crate::camera::sampler::test_pool(),
+            &set,
+            Some(&truth),
+            Some(0),
+            &p,
+        )
+        .unwrap();
         assert_eq!(a.views, set, "{strategy:?}");
         let mut seeds: Vec<Option<[f64; 2]>> = a.keypoints.iter().map(|&kp| Some(kp)).collect();
         let b_start = [a.keypoints[1][0] + e[0], a.keypoints[1][1] + e[1]];
         seeds[1] = Some(b_start);
 
-        let b = localize_patch_keypoints(&patch, &views, &set, Some(&seeds), Some(1), &p);
+        let b = localize_patch_keypoints(
+            &patch,
+            &views,
+            crate::camera::sampler::test_pool(),
+            &set,
+            Some(&seeds),
+            Some(1),
+            &p,
+        )
+        .unwrap();
         assert_eq!(b.views, set, "{strategy:?}");
         assert_eq!(b.reference, Some(1));
         assert_eq!(b.keypoints[1], b_start, "{strategy:?}: B is not moved");
@@ -2786,7 +3084,16 @@ fn a_changed_reference_realigns_the_views_to_its_render() {
             );
         }
 
-        let kept = localize_patch_keypoints(&patch, &views, &set, Some(&seeds), Some(0), &p);
+        let kept = localize_patch_keypoints(
+            &patch,
+            &views,
+            crate::camera::sampler::test_pool(),
+            &set,
+            Some(&seeds),
+            Some(0),
+            &p,
+        )
+        .unwrap();
         assert_eq!(kept.reference, Some(0));
         for k in 0..4 {
             let err = dist(kept.keypoints[k], a.keypoints[k]);
@@ -2829,11 +3136,13 @@ fn the_absolute_floor_drops_a_view_of_an_unrelated_texture() {
         localize_patch_keypoints(
             &patch,
             &views,
+            crate::camera::sampler::test_pool(),
             &set,
             None,
             Some(0),
             &only_zncc_gates(abs, 0.0),
         )
+        .unwrap()
     };
 
     let open = run(0.0);
@@ -2861,11 +3170,13 @@ fn the_gates_read_the_blur_matched_score_against_the_reference() {
         localize_patch_keypoints(
             &patch,
             &views,
+            crate::camera::sampler::test_pool(),
             &set,
             None,
             Some(0),
             &only_zncc_gates(abs, 0.0),
         )
+        .unwrap()
     };
     // A floor that drops nothing, so every view is scored.
     let open = run(1e-9);
@@ -2898,11 +3209,13 @@ fn with_the_gates_off_no_view_is_scored_blur_matched() {
     let res = localize_patch_keypoints(
         &plane_patch(),
         &views,
+        crate::camera::sampler::test_pool(),
         &[0, 1, 2, 3],
         None,
         Some(0),
         &only_zncc_gates(0.0, 0.0),
-    );
+    )
+    .unwrap();
     assert_eq!(res.blur_matched_zncc.len(), res.views.len());
     assert_eq!(res.blur_matched_zncc[0], 1.0);
     assert!(res.blur_matched_zncc[1..].iter().all(|z| z.is_nan()));
@@ -2924,11 +3237,13 @@ fn the_gates_drop_a_partial_match_at_its_blur_matched_score() {
         localize_patch_keypoints(
             &patch,
             &views,
+            crate::camera::sampler::test_pool(),
             &set,
             None,
             Some(0),
             &only_zncc_gates(abs, rel),
         )
+        .unwrap()
     };
     // A floor that drops nothing, so every view is scored blur-matched.
     let open = run(1e-9, 0.0);
@@ -2979,11 +3294,13 @@ fn the_reference_faces_no_gate() {
     let res = localize_patch_keypoints(
         &patch,
         &views,
+        crate::camera::sampler::test_pool(),
         &[0, 1, 2, 3],
         Some(&seeds),
         Some(3),
         &strict,
-    );
+    )
+    .unwrap();
     assert_eq!(res.views, vec![3]);
     assert_eq!(res.reference, Some(3));
     assert_eq!(res.keypoints[0], start);
@@ -3021,6 +3338,7 @@ fn a_search_past_the_machine_s_memory_is_refused() {
     let refused = try_localize_patch_keypoints(
         &plane_patch(),
         &views,
+        crate::camera::sampler::test_pool(),
         &[0, 1, 2, 3],
         None,
         Some(0),
@@ -3044,6 +3362,7 @@ fn a_cancelled_progress_stops_the_localization() {
         let stopped = try_localize_patch_keypoints(
             &plane_patch(),
             &views,
+            crate::camera::sampler::test_pool(),
             &[0, 1, 2, 3],
             None,
             reference,
@@ -3059,6 +3378,7 @@ fn a_cancelled_progress_stops_the_localization() {
     let stopped = localize_patch_cloud_keypoints(
         &cloud,
         &views,
+        crate::camera::sampler::test_pool(),
         &vec![vec![0u32, 1, 2, 3]; 3],
         None,
         None,
@@ -3092,11 +3412,13 @@ fn a_reference_out_of_frame_leaves_every_view_at_its_start() {
         let res = localize_patch_keypoints(
             &patch,
             &views,
+            crate::camera::sampler::test_pool(),
             &[0, 1, 2, 3],
             Some(&seeds),
             Some(0),
             &with_strategy(strategy),
-        );
+        )
+        .unwrap();
         assert_eq!(res.reference, None, "{strategy:?}");
         assert_eq!(res.views, vec![1, 2, 3], "{strategy:?}");
         assert!(res.zncc.iter().all(|z| z.is_nan()), "{:?}", res.zncc);
@@ -3128,7 +3450,16 @@ fn a_grazing_reference_is_turned_away_and_the_rule_picks() {
         min_grazing_cos: 0.95,
         ..params()
     };
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(3), &strict);
+    let res = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(3),
+        &strict,
+    )
+    .unwrap();
     assert!(pos(&res, 3).is_none(), "{:?}", res.views);
     let reference = res
         .reference
@@ -3144,7 +3475,16 @@ fn a_reference_given_at_a_repeated_image_is_kept() {
     let scene = four_view_scene([[0.0; 2]; 4], [texture; 4]);
     let views = scene.views();
     let patch = plane_patch();
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 1, 2], None, Some(2), &params());
+    let res = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 1, 2],
+        None,
+        Some(2),
+        &params(),
+    )
+    .unwrap();
     assert_eq!(res.views, vec![0, 1, 2]);
     assert_eq!(res.reference, Some(1));
     assert_eq!(res.zncc[1], 1.0);
@@ -3219,7 +3559,16 @@ fn a_flat_view_the_gates_keep_is_left_where_it_started() {
             search_strategy,
             ..params()
         };
-        let res = localize_patch_keypoints(&patch, &views, &[0, 1], None, Some(0), &open);
+        let res = localize_patch_keypoints(
+            &patch,
+            &views,
+            crate::camera::sampler::test_pool(),
+            &[0, 1],
+            None,
+            Some(0),
+            &open,
+        )
+        .unwrap();
         let k = pos(&res, 1).expect("the gates are off, so the flat view is kept");
         assert_eq!(res.offsets_px[k], 0.0, "{search_strategy:?}");
     }
@@ -3323,8 +3672,16 @@ fn the_localizer_and_a_reference_search_read_a_shift_near_the_edge_alike() {
         ..params()
     };
     let seeds: Vec<Option<[f64; 2]>> = (0..4).map(|k| Some(projection(&views, k))).collect();
-    let localized =
-        localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], Some(&seeds), Some(0), &p);
+    let localized = localize_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        Some(&seeds),
+        Some(0),
+        &p,
+    )
+    .unwrap();
     let k = localized
         .views
         .iter()
@@ -3336,14 +3693,26 @@ fn the_localizer_and_a_reference_search_read_a_shift_near_the_edge_alike() {
         &patch,
         &views,
         &[0, 1],
+        &mut [0, 1]
+            .iter()
+            .map(|&v| crate::camera::sampler::test_regions((&views)[v as usize].source))
+            .collect::<Vec<_>>(),
         &[projection(&views, 0), projection(&views, 1)],
         Some(0),
         None,
         &p,
     )
+    .unwrap()
     .expect("two textured references");
     let found = references
-        .search(&patch, &views[3], Some(projection(&views, 3)), false, &p)
+        .search(
+            &patch,
+            &views[3],
+            &mut crate::camera::sampler::test_regions(views[3].source),
+            Some(projection(&views, 3)),
+            false,
+            &p,
+        )
         .expect("a search");
     let by_reference = found.keypoint.expect("a keypoint");
 

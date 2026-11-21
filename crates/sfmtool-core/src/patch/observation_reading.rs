@@ -18,8 +18,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rayon::prelude::*;
 
-use crate::camera::sampler::SamplerChoice;
+use crate::camera::sampler::{RegionPool, SamplerChoice, ViewRegions};
 use crate::camera::warp_map::singular_values_2x2;
+use crate::camera::PhotographReadError;
 use crate::patch::cloud::PatchCloud;
 use crate::patch::member_coherence::MemberCoherenceParams;
 use crate::patch::normal_refine::ProjectedImage;
@@ -182,20 +183,25 @@ pub fn read_view_tile(
 /// through the patch re-anchored on the keypoint at `resolution` with the
 /// sampler `sampler` picks ([`render_view_tile`]), and scored by
 /// [`BitmapScorer`] over member coherence's window, as the bench scores a row.
+/// The photographs are read through `pool`, the region pool the caller made
+/// for this call, one [`ViewRegions`] for each tile.
 /// `patches_done`, when given, is bumped once per patch read, and `progress`
 /// receives a `patches` count about every hundredth of the way through.
 ///
 /// # Errors
 ///
 /// [`CloudRenderError::Cancelled`] when `progress` was cancelled before every
-/// patch was read. Before reading anything, the other [`CloudRenderError`]s
+/// patch was read, and [`CloudRenderError::Photograph`] when a read of a
+/// photograph failed. Before reading anything, the other [`CloudRenderError`]s
 /// when `recon` carries no inline keypoints, a patch of `cloud` has no point
 /// index or one out of range for `recon`, or `views` does not hold one entry
 /// per image of `recon`.
+#[allow(clippy::too_many_arguments)]
 pub fn read_cloud_observations(
     cloud: &PatchCloud,
     recon: &SfmrReconstruction,
     views: &[Option<ProjectedImage<'_>>],
+    pool: &RegionPool,
     resolution: usize,
     sampler: SamplerChoice,
     patches_done: Option<&AtomicUsize>,
@@ -210,7 +216,8 @@ pub fn read_cloud_observations(
     let total = cloud.patches.len();
     let step = (total / 100).max(1);
     let done = AtomicUsize::new(0);
-    let read: Vec<(usize, Vec<Option<ObservationReading>>)> = cloud
+    type Rows = Vec<Option<ObservationReading>>;
+    let read: Vec<Result<(usize, Rows), PhotographReadError>> = cloud
         .patches
         .par_iter()
         .zip(cloud.point_indexes.par_iter())
@@ -228,22 +235,27 @@ pub fn read_cloud_observations(
             let reference = references
                 .and_then(|r| r.get(p))
                 .and_then(|&r| usize::try_from(r).ok());
-            let rows = (offsets[p]..offsets[p + 1])
+            let rows: Result<Rows, PhotographReadError> = (offsets[p]..offsets[p + 1])
                 .enumerate()
                 .map(|(k, j)| {
                     let Some(view) = &views[set.tracks[j].image_index as usize] else {
-                        return None;
+                        return Ok(None);
                     };
                     let keypoint = [f64::from(keypoints[[j, 0]]), f64::from(keypoints[[j, 1]])];
                     let tile = render_view_tile(
                         patch,
                         view,
+                        &mut ViewRegions::new(view.source, pool),
                         Some(keypoint),
                         resolution,
                         sampler,
                         progress,
-                    );
-                    Some(read_view_tile(&tile, scorer.as_mut(), reference == Some(k)))
+                    )?;
+                    Ok(Some(read_view_tile(
+                        &tile,
+                        scorer.as_mut(),
+                        reference == Some(k),
+                    )))
                 })
                 .collect();
             if let Some(counter) = patches_done {
@@ -253,12 +265,13 @@ pub fn read_cloud_observations(
             if n.is_multiple_of(step) || n == total {
                 progress.count(n as u64, Some(total as u64), "patches");
             }
-            Some((p, rows))
+            Some(rows.map(|rows| (p, rows)))
         })
         .collect();
     progress.check_cancel()?;
     let mut out: Vec<Option<ObservationReading>> = vec![None; set.tracks.len()];
-    for (p, rows) in read {
+    for read in read {
+        let (p, rows) = read?;
         out[offsets[p]..offsets[p + 1]].copy_from_slice(&rows);
     }
     Ok(ObservationReadings::merge_read(

@@ -130,6 +130,7 @@ impl PyPatchCloud {
                     &self.inner,
                     recon,
                     &views,
+                    &sfmtool_core::camera::sampler::RegionPool::for_kernel_call(),
                     &params,
                     if referenced_only {
                         UnreferencedPoints::Skip
@@ -140,7 +141,7 @@ impl PyPatchCloud {
                     &Progress::none(),
                 )
             })
-            .map_err(value_err)?;
+            .map_err(crate::helpers::kernel_err)?;
         Ok((
             column.bitmaps.into_pyarray(py),
             PyArray1::from_vec(py, column.reference_observations),
@@ -219,13 +220,14 @@ impl PyPatchCloud {
                     &self.inner,
                     recon,
                     &views,
+                    &sfmtool_core::camera::sampler::RegionPool::for_kernel_call(),
                     resolution as usize,
                     sampler,
                     counter.as_deref(),
                     &Progress::none(),
                 )
             })
-            .map_err(value_err)?;
+            .map_err(crate::helpers::kernel_err)?;
         crate::readings::readings_to_py(py, &readings)
     }
 }

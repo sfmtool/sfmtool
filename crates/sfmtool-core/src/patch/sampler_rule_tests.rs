@@ -19,7 +19,9 @@ use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocalizeParams};
 use crate::patch::keypoint_subpixel::{refine_patch_keypoints, KeypointSubpixelParams};
 use crate::patch::member_coherence::{validate_member_coherence, MemberCoherenceParams};
-use crate::patch::normal_refine::{normalized_stack, LevelContext, ProjectedImage, ViewSamplers};
+use crate::patch::normal_refine::{
+    normalized_source_stack, LevelContext, ProjectedImage, ViewSamplers,
+};
 use crate::patch::stored_bitmap::render_patch_bitmap;
 use crate::patch::view_selection::{select_patch_views, ViewSelectParams};
 use crate::progress::Progress;
@@ -145,15 +147,20 @@ fn unmoved_views_render_the_same_tiles_and_moved_views_do_not() {
         weights: vec![1.0; (R * R) as usize],
     };
     let render = |samplers| {
-        normalized_stack(
+        normalized_source_stack(
             &patch,
             &ctx,
             &views,
+            &mut views
+                .iter()
+                .map(|v| crate::camera::sampler::test_regions(v.source))
+                .collect::<Vec<_>>(),
             R,
             samplers,
             Some(&some_kps),
             &Progress::none(),
         )
+        .unwrap()
         .expect("every view covers the tile")
     };
     let (by_rule, channels) = render(ViewSamplers::Each(rule));
@@ -200,9 +207,18 @@ fn the_stored_bitmap_changes_only_where_a_view_moves() {
             sampler,
             ..KeypointSubpixelParams::default()
         };
-        render_patch_bitmap(patch, &views, &[0, 1, 2], &kps, &params, &Progress::none())
-            .expect("a bitmap")
-            .rgba
+        render_patch_bitmap(
+            patch,
+            &views,
+            crate::camera::sampler::test_pool(),
+            &[0, 1, 2],
+            &kps,
+            &params,
+            &Progress::none(),
+        )
+        .unwrap()
+        .expect("a bitmap")
+        .rgba
     };
     let mip = SamplerChoice::Fixed(Sampler::BilinearMip);
     let facing = tilted(0.0);
@@ -317,11 +333,13 @@ fn the_kernels_choose_the_sampler_the_bench_reads() {
                 localize_patch_keypoints(
                     &patch,
                     &views,
+                    crate::camera::sampler::test_pool(),
                     &[0, 1, 2],
                     Some(&some_kps),
                     None,
                     &params
                 )
+                .unwrap()
             )
         };
         let refine = |sampler| {
@@ -332,7 +350,16 @@ fn the_kernels_choose_the_sampler_the_bench_reads() {
             };
             format!(
                 "{:?}",
-                refine_patch_keypoints(&patch, &views, &[0, 1, 2], Some(&some_kps), None, &params)
+                refine_patch_keypoints(
+                    &patch,
+                    &views,
+                    crate::camera::sampler::test_pool(),
+                    &[0, 1, 2],
+                    Some(&some_kps),
+                    None,
+                    &params
+                )
+                .unwrap()
             )
         };
         let members = |sampler| {
@@ -343,7 +370,15 @@ fn the_kernels_choose_the_sampler_the_bench_reads() {
             };
             format!(
                 "{:?}",
-                validate_member_coherence(&patch, &views, &[0, 1, 2], Some(&some_kps), &params)
+                validate_member_coherence(
+                    &patch,
+                    &views,
+                    crate::camera::sampler::test_pool(),
+                    &[0, 1, 2],
+                    Some(&some_kps),
+                    &params
+                )
+                .unwrap()
             )
         };
         let select = |sampler| {
@@ -436,9 +471,18 @@ fn every_kernel_reads_the_rule_from_the_stored_frame() {
             sampler,
             ..KeypointSubpixelParams::default()
         };
-        render_patch_bitmap(&sheared, &views, &[0, 1], &kps, &params, &Progress::none())
-            .expect("a bitmap")
-            .rgba
+        render_patch_bitmap(
+            &sheared,
+            &views,
+            crate::camera::sampler::test_pool(),
+            &[0, 1],
+            &kps,
+            &params,
+            &Progress::none(),
+        )
+        .unwrap()
+        .expect("a bitmap")
+        .rgba
     };
     assert_eq!(
         render(rule),

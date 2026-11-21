@@ -1949,6 +1949,7 @@ fn converting_renders_and_persists_patch_bitmaps_when_photographs_are_available(
     let rendered = sfmtool_core::patch::display_bitmaps::render_patch_bitmap_column(
         recon,
         &sfmtool_core::camera::PhotographCache::new(0),
+        &sfmtool_core::camera::sampler::RegionPool::for_kernel_call(),
         &sfmtool_core::progress::Progress::none(),
     )
     .expect("not cancelled")

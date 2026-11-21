@@ -28,7 +28,8 @@ use super::nearby::{
     candidate_dict, harness_name, set_clusters_option, set_constellation_option, set_guided_option,
     set_points_option, PyNearbyTrackSources,
 };
-use super::{refused, views_of, PyEditableTrack};
+use super::{views_of, PyEditableTrack};
+use crate::helpers::kernel_err;
 use crate::patches::views::{resolve_grey, resolve_pyramids, PosedViews};
 use crate::reconstruction::edited::PyEditedReconstruction;
 
@@ -248,7 +249,7 @@ pub(super) fn find_nearby_tracks(
                 &Progress::none(),
             )
         })
-        .map_err(refused)?;
+        .map_err(kernel_err)?;
 
     let out = result_dict(py, &found, options.layers.evidence)?;
     if !commit {

@@ -462,7 +462,9 @@ patch bitmaps, such as the values `sfm embed-patches` refines. A caller
 holding an `EditedReconstruction` folds it first with its `materialize`. A
 setting the step does not take is refused before the photographs are
 decoded. It runs with the GIL released and raises `ValueError` with the
-refusal's sentence.
+refusal's sentence. A read of a photograph that fails, which a photograph in memory never
+does, raises `RuntimeError` with the step's sentence, which names the
+photograph, or says it is one in memory and carries the read's message.
 
 The run goes on a thread of its own while the calling thread waits for it,
 taking the GIL every 50 ms to run Python's signal handlers, as

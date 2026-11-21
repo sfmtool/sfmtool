@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 
 use ndarray::Array4;
 
-use crate::camera::{PhotographCache, TiledPhotograph};
+use crate::camera::sampler::RegionPool;
+use crate::camera::{PhotographCache, PhotographReadError, TiledPhotograph};
 use crate::geometry::RigidTransform;
 use crate::patch::keypoint_subpixel::KeypointSubpixelParams;
 use crate::patch::normal_refine::ProjectedImage;
@@ -42,6 +43,9 @@ use crate::{progress_note, SfmrReconstruction};
 /// SfM Explorer passes its own cache, so the photographs this decodes stay
 /// for its panels and later operations; a caller with no cache to share, such
 /// as `sfm web-export`, passes `PhotographCache::new(0)`, which keeps nothing.
+/// The render reads the photographs through `pool`, the region pool the
+/// caller made for this call. Each photograph is read whole from the cache,
+/// so no read of its pixels fails.
 ///
 /// `Ok(None)` when `recon` has no patch frames it can read (none, or columns
 /// that are not one row per point, which
@@ -55,11 +59,15 @@ use crate::{progress_note, SfmrReconstruction};
 pub fn render_display_patch_bitmaps(
     recon: &SfmrReconstruction,
     photographs: &PhotographCache,
+    pool: &RegionPool,
     progress: &Progress<'_>,
 ) -> Result<Option<Array4<u8>>, Cancelled> {
     // A caller that only draws the column has no use for the references; the
     // ones it read from `recon` it already holds.
-    Ok(render_patch_bitmap_column(recon, photographs, progress)?.map(|column| column.bitmaps))
+    Ok(
+        render_patch_bitmap_column(recon, photographs, pool, progress)?
+            .map(|column| column.bitmaps),
+    )
 }
 
 /// [`render_display_patch_bitmaps`] with the reference observation each row's
@@ -75,6 +83,7 @@ pub fn render_display_patch_bitmaps(
 pub fn render_patch_bitmap_column(
     recon: &SfmrReconstruction,
     photographs: &PhotographCache,
+    pool: &RegionPool,
     progress: &Progress<'_>,
 ) -> Result<Option<PatchBitmapColumn>, Cancelled> {
     if recon.keypoints_xy().is_none() {
@@ -159,15 +168,18 @@ pub fn render_patch_bitmap_column(
         &cloud,
         recon,
         &views,
+        pool,
         &KeypointSubpixelParams::default(),
         UnreferencedPoints::Pick,
         None,
         &phase,
     )
     .map_err(|e| match e {
-        CloudRenderError::Cancelled => Cancelled,
+        CloudRenderError::Cancelled
+        | CloudRenderError::Photograph(PhotographReadError::Cancelled) => Cancelled,
         // The cloud, the keypoints checked above and one view per image all
-        // come from `recon`, so they agree with it.
+        // come from `recon`, so they agree with it, and every photograph is
+        // a whole pyramid, which holds every pixel a read asks for.
         e => unreachable!("a display render of a reconstruction's own frames: {e}"),
     })?;
     progress_note!(

@@ -220,7 +220,7 @@ impl PyPatchCloud {
                     &Progress::none(),
                 )
             })
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            .map_err(crate::helpers::kernel_err)?;
 
         let mut out = Vec::new();
         for (res, &pid) in results.iter().zip(&self.inner.point_indexes) {

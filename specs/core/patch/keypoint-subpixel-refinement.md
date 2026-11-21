@@ -28,38 +28,41 @@ It is bound as `PatchCloud.refine_keypoints` and run by the pipeline in
 pub fn refine_patch_keypoints(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],          // one per reconstruction image
+    pool: &RegionPool,                     // the caller's, for this call
     patch_views: &[u32],                   // the views to refine
     patch_keypoints: Option<&[Option<[f64; 2]>]>, // parallel to patch_views
     reference: Option<usize>,              // position in patch_views of the reference
     params: &KeypointSubpixelParams,
-) -> KeypointRefinement;
+) -> Result<KeypointRefinement, PhotographReadError>;
 
 pub fn refine_patch_keypoints_reporting(/* the same */, progress: &Progress<'_>)
-    -> KeypointRefinement;
+    -> Result<KeypointRefinement, PhotographReadError>;
 
 pub fn refine_patch_cloud_keypoints(
     cloud: &PatchCloud,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     patch_views: &[Vec<u32>],
     patch_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     references: Option<&[Option<usize>]>,  // parallel to the cloud
     params: &KeypointSubpixelParams,
     progress: &Progress<'_>,
-) -> Result<Vec<KeypointRefinement>, Cancelled>;
+) -> Result<Vec<KeypointRefinement>, PhotographReadError>;
 
 pub enum ReferenceTemplate<'a> {
     Bitmap(&'a [u8]),                          // an R×R RGBA bitmap, as a .sfmr stores it
     Observation { image: u32, keypoint: [f64; 2] },
 }
 
-pub fn refine_view_against_reference(
+pub fn refine_view_against_reference<'r>(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
+    regions: &mut [impl BorrowMut<ViewRegions<'r>>], // parallel to views
     template: ReferenceTemplate<'_>,
     target: u32,
     target_keypoint: [f64; 2],
     params: &KeypointSubpixelParams,
-) -> Option<([f64; 2], f64)>;              // the keypoint and its ECC score
+) -> Result<Option<([f64; 2], f64)>, PhotographReadError>; // the keypoint and its ECC score
 ```
 
 **Why it is shaped this way.**
@@ -98,10 +101,20 @@ pub fn refine_view_against_reference(
   channel count from the target, the target does not project into its frame,
   or the target's core is out of frame at its seed.
 - **The batch form is parallel over points** (rayon). Its `Progress` receives a
-  `patches` count, is polled for cancellation before each patch, and, when
-  detailed, times each sampler's renders in its own detail phase. The PyO3
-  binding inlines its own parallel loop so it can build each point's seed slice
-  lazily.
+  `patches` count, is polled for cancellation before each patch (a cancelled
+  batch returns `PhotographReadError::Cancelled`), and, when detailed, times
+  each sampler's renders in its own detail phase. The PyO3 binding inlines its
+  own parallel loop so it can build each point's seed slice lazily.
+- **Every read goes through the region pool the caller made.** Each view is
+  read through one `ViewRegions`, which its render-once tile, every direct
+  render the solve falls back to, its tile again about a reached keypoint, the
+  reference-view rule's renders and the stored bitmap's share
+  ([view-region-pyramids.md](../camera/view-region-pyramids.md));
+  `refine_view_against_reference` takes them from its caller, parallel to
+  `views`, and reads only the target's and the reference observation's. The
+  keypoints are the same, bit for bit, whichever way a read reaches its pixels,
+  and a read that fails is the call's `PhotographReadError` in place of its
+  result, the batch's the first patch's that failed.
 
 **Example.** Refine a point's views from the localizer's keypoints, with the
 first view as the reference, and render its stored bitmap:
@@ -109,11 +122,11 @@ first view as the reference, and render its stored bitmap:
 ```rust
 let params = KeypointSubpixelParams { render_bitmaps: true, ..Default::default() };
 let refined = refine_patch_keypoints(
-    patch, views, &localized.views,
+    patch, views, &RegionPool::for_kernel_call(), &localized.views,
     Some(&seeds),   // the localizer's keypoints, one Some per view
     Some(0),        // localized.views[0] is the reference observation
     &params,
-);
+)?;
 assert_eq!(refined.reference, Some(0));
 assert_eq!(refined.scores[0], 1.0);
 ```

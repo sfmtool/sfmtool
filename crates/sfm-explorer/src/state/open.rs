@@ -36,6 +36,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::camera::PhotographCache;
 use sfmtool_core::patch::display_bitmaps::render_patch_bitmap_column;
 use sfmtool_core::patch::stored_bitmap::PatchBitmapColumn;
@@ -323,7 +324,7 @@ pub(super) fn render_patch_bitmaps(
     photographs: &PhotographCache,
     progress: &Progress<'_>,
 ) -> Result<Option<PatchBitmapColumn>, Cancelled> {
-    render_patch_bitmap_column(recon, photographs, progress)
+    render_patch_bitmap_column(recon, photographs, &RegionPool::for_kernel_call(), progress)
 }
 
 #[cfg(test)]

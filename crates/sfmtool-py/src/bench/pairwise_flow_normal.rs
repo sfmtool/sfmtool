@@ -20,6 +20,7 @@ use sfmtool_core::progress::{Event, Progress};
 use super::normal::{maybe_vector, normal_report_dict};
 use super::{fit_options, refused, views_of, PyEditableTrack};
 use crate::flow::optical::FlowParamOverrides;
+use crate::helpers::kernel_err;
 use crate::patches::views::{resolve_pyramids, PosedViews};
 use crate::phase_record::PhaseRecord;
 use crate::reconstruction::edited::PyEditedReconstruction;
@@ -422,7 +423,7 @@ fn pairwise_flow_normal(
                 &progress,
             )
         })
-        .map_err(refused)?;
+        .map_err(kernel_err)?;
     let d = normal_report_dict(py, &report)?;
     if record_phases {
         d.set_item("phases", record.to_list(py)?)?;

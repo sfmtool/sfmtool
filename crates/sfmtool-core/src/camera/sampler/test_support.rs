@@ -4,10 +4,24 @@
 //! Synthetic photographs and warps for the tests of the regions and the
 //! render entry points.
 
-use crate::camera::image::ImageU8;
-use crate::camera::WarpMap;
+use std::sync::LazyLock;
 
-use super::Sampler;
+use crate::camera::image::ImageU8;
+use crate::camera::{TiledPhotograph, WarpMap};
+
+use super::{RegionPool, Sampler, ViewRegions};
+
+/// A region pool that holds every read, shared by the tests that read
+/// photographs in memory and look at no pool statistics.
+pub(crate) fn test_pool() -> &'static RegionPool {
+    static POOL: LazyLock<RegionPool> = LazyLock::new(|| RegionPool::with_capacity(u64::MAX));
+    &POOL
+}
+
+/// A view of `source` reading through [`test_pool`].
+pub(crate) fn test_regions(source: &TiledPhotograph) -> ViewRegions<'_> {
+    ViewRegions::new(source, test_pool())
+}
 
 pub(crate) const SAMPLERS: [Sampler; 3] = [
     Sampler::Bilinear,

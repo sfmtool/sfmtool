@@ -100,7 +100,8 @@ pub struct SpawnParams {
 }
 
 pub fn spawn_candidate_tracks(
-    views: &[ProjectedImage<'_>],     // camera + pose + pyramid per image
+    views: &[ProjectedImage<'_>],     // camera + pose + photograph per image
+    pool: &RegionPool,                // the caller's, for this call
     cloud: &PatchCloud,               // the parents
     parents: &[u32],                  // per candidate; may repeat
     offsets_uv: &[[f64; 2]],          // per candidate (du, dv)
@@ -131,7 +132,9 @@ for an `offsets_uv` or `patch_views` whose length differs from `parents`
 cloud (`ParentOutOfRange`), a parent at infinity (`ParentAtInfinity`), and a
 patch view out of range for `views` (`ViewOutOfRange`). `check_spawn_requests`
 runs the same checks alone, so the binding refuses a malformed batch before it
-builds the image pyramids.
+builds the image pyramids. The localization and the refinement read the
+photographs through `pool`, and a read that fails is
+`SpawnError::Photograph`, with nothing spawned.
 
 The Python binding (`views, images, cloud, parents, offsets_uv, patch_views`)
 takes the existing `CameraViews` / `ImagePyramidSet` / `PatchCloud` objects —
@@ -139,7 +142,10 @@ or, like its sibling patch kernels, a reconstruction and a list of images —
 plus numpy arrays (`patch_views` as a list of sequences), keyword params with the
 defaults above, and returns the result arrays as a dict keyed as above. It
 raises `ValueError` for an `offsets_uv` that is not `(n, 2)` and for each
-`SpawnError`, with the error's message.
+refusal of `SpawnError`, with the error's message, and `RuntimeError` for
+`SpawnError::Photograph`, which a photograph in memory never gives; its
+message names the photograph, or says it is one in memory and carries the
+read's message.
 
 ### Seeding localization with `patch_keypoints`
 

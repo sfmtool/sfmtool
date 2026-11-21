@@ -35,11 +35,13 @@
 //! ([`score_against_bitmap`]). Alignment never reads these scores' blur: it
 //! runs against the bitmap as rendered.
 
+use std::borrow::BorrowMut;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rayon::prelude::*;
 
-use crate::camera::sampler::SamplerChoice;
+use crate::camera::sampler::{RegionPool, SamplerChoice, ViewRegions};
+use crate::camera::PhotographReadError;
 use crate::patch::blur_matched::{
     assess_blur, blur_to_length_into, read_tile_ellipse, semi_axes, windowed_zncc, BlurAssessment,
     BlurScratch, TilePlanes,
@@ -110,62 +112,81 @@ pub struct ReferenceRender {
 /// Render each view in `patch_views` of `patch` at its keypoint and run the
 /// reference-view rule over the tiles.
 ///
-/// `patch_views` indexes `views`, and `keypoints` is parallel to it, in
-/// source-image px; a view with no keypoint is rendered through the patch
-/// itself rather than re-anchored. The tiles are rendered at `resolution` with
-/// the sampler `sampler` picks for each view ([`render_view_tile`]), each
-/// tile's self-similarity read ([`tile_semi_axes`]), and the rule's readings
-/// taken across them ([`read_track`]). Each render, both the tiles here and
-/// the ones member coherence makes for the rule's pair ZNCCs, is timed in the
-/// detail phase of `progress` named for its sampler (`render bilinear_mip`,
+/// `patch_views` indexes `views`, and `regions` and `keypoints` are parallel
+/// to it: each view is read through its regions (a [`ViewRegions`] or a
+/// mutable reference to one), at its keypoint in source-image px; a view with
+/// no keypoint is rendered through the patch itself rather than re-anchored.
+/// The tiles are rendered at `resolution` with the sampler `sampler` picks for
+/// each view ([`render_view_tile`]), each tile's self-similarity read
+/// ([`tile_semi_axes`]), and the rule's readings taken across them
+/// ([`read_track`]) through the same regions, so member coherence's renders
+/// for the rule's pair ZNCCs reuse what the tiles read. Each render, both the
+/// tiles here and the ones member coherence makes, is timed in the detail
+/// phase of `progress` named for its sampler (`render bilinear_mip`,
 /// `render anisotropic`, ...). The rule runs with `options`.
+///
+/// # Errors
+///
+/// The [`PhotographReadError`] of a read of a view's photograph that failed.
 ///
 /// # Panics
 ///
-/// Panics if `keypoints` is not parallel to `patch_views` or a view index is out
-/// of range.
+/// Panics if `regions` or `keypoints` is not parallel to `patch_views` or a
+/// view index is out of range.
 #[allow(clippy::too_many_arguments)]
-pub fn render_reference(
+pub fn render_reference<'r>(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
     patch_views: &[u32],
+    regions: &mut [impl BorrowMut<ViewRegions<'r>>],
     keypoints: &[Option<[f64; 2]>],
     resolution: u32,
     sampler: SamplerChoice,
     options: &ReferenceViewOptions,
     progress: &Progress<'_>,
-) -> ReferenceRender {
+) -> Result<ReferenceRender, PhotographReadError> {
     assert_eq!(
         keypoints.len(),
         patch_views.len(),
         "keypoints must be parallel to patch_views"
     );
+    assert_eq!(
+        regions.len(),
+        patch_views.len(),
+        "regions must be parallel to patch_views"
+    );
     let resolution = resolution.max(2) as usize;
-    let tiles: Vec<ViewTile> = patch_views
-        .iter()
-        .zip(keypoints)
-        .map(|(&v, &kp)| {
-            render_view_tile(patch, &views[v as usize], kp, resolution, sampler, progress)
-        })
-        .collect();
+    let mut tiles: Vec<ViewTile> = Vec::with_capacity(patch_views.len());
+    for ((&v, &kp), view_regions) in patch_views.iter().zip(keypoints).zip(regions.iter_mut()) {
+        tiles.push(render_view_tile(
+            patch,
+            &views[v as usize],
+            view_regions.borrow_mut(),
+            kp,
+            resolution,
+            sampler,
+            progress,
+        )?);
+    }
     let semi_axes: Vec<Option<TileSemiAxes>> = tiles.iter().map(tile_semi_axes).collect();
     let refs: Vec<&ViewTile> = tiles.iter().collect();
     let reading = read_track(
         patch,
         views,
         patch_views,
+        regions,
         keypoints,
         &refs,
         &semi_axes,
         sampler,
         options,
         progress,
-    );
-    ReferenceRender {
+    )?;
+    Ok(ReferenceRender {
         tiles,
         semi_axes,
         reading,
-    }
+    })
 }
 
 /// Render `patch`'s stored bitmap from the views in `patch_views` at `keypoints`: the
@@ -174,24 +195,40 @@ pub fn render_reference(
 /// picks none because no view is eligible.
 ///
 /// Of `params`, `resolution` and `sampler` shape the tiles and
-/// `reference_view` is the rule's options. Moves nothing.
+/// `reference_view` is the rule's options. The views' photographs are read
+/// through `pool`, the region pool the caller made for this call, with one
+/// [`ViewRegions`] per view. Moves nothing.
 ///
 /// ```no_run
+/// # use sfmtool_core::camera::sampler::RegionPool;
 /// # use sfmtool_core::patch::cloud::OrientedPatch;
 /// # use sfmtool_core::patch::keypoint_subpixel::KeypointSubpixelParams;
 /// # use sfmtool_core::patch::normal_refine::ProjectedImage;
 /// # use sfmtool_core::patch::stored_bitmap::render_patch_bitmap;
 /// # use sfmtool_core::progress::Progress;
-/// # fn run(patch: &OrientedPatch, views: &[ProjectedImage<'_>]) {
+/// # fn run(patch: &OrientedPatch, views: &[ProjectedImage<'_>])
+/// # -> Result<(), Box<dyn std::error::Error>> {
 /// let keypoints = [[812.4, 377.9], [640.2, 301.5], [702.0, 355.1]];
 /// let params = KeypointSubpixelParams { resolution: 24, ..Default::default() };
-/// if let Some(bitmap) =
-///     render_patch_bitmap(patch, views, &[0, 1, 2], &keypoints, &params, &Progress::none())
-/// {
+/// let pool = RegionPool::for_kernel_call();
+/// if let Some(bitmap) = render_patch_bitmap(
+///     patch,
+///     views,
+///     &pool,
+///     &[0, 1, 2],
+///     &keypoints,
+///     &params,
+///     &Progress::none(),
+/// )? {
 ///     println!("{} bytes, reference view {}", bitmap.rgba.len(), bitmap.reference);
 /// }
+/// # Ok(())
 /// # }
 /// ```
+///
+/// # Errors
+///
+/// The [`PhotographReadError`] of a read of a view's photograph that failed.
 ///
 /// # Panics
 ///
@@ -200,34 +237,40 @@ pub fn render_reference(
 pub fn render_patch_bitmap(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     patch_views: &[u32],
     keypoints: &[[f64; 2]],
     params: &KeypointSubpixelParams,
     progress: &Progress<'_>,
-) -> Option<PatchBitmap> {
+) -> Result<Option<PatchBitmap>, PhotographReadError> {
     assert_eq!(
         keypoints.len(),
         patch_views.len(),
         "keypoints must be parallel to patch_views"
     );
     if patch_views.len() < 2 {
-        return None;
+        return Ok(None);
     }
     let anchors: Vec<Option<[f64; 2]>> = keypoints.iter().map(|&kp| Some(kp)).collect();
+    let mut regions: Vec<ViewRegions<'_>> = patch_views
+        .iter()
+        .map(|&v| ViewRegions::new(views[v as usize].source, pool))
+        .collect();
     let render = render_reference(
         patch,
         views,
         patch_views,
+        &mut regions,
         &anchors,
         params.resolution,
         params.sampler,
         &params.reference_view,
         progress,
-    );
-    render.reading.choice.reference.map(|r| PatchBitmap {
+    )?;
+    Ok(render.reading.choice.reference.map(|r| PatchBitmap {
         rgba: bitmap_from_tile(&render.tiles[r]),
         reference: r,
-    })
+    }))
 }
 
 /// The stored bitmap column of a reconstruction's points and the reference
@@ -250,6 +293,8 @@ pub struct PatchBitmapColumn {
 pub enum CloudRenderError {
     /// The caller asked the render to stop, and it did.
     Cancelled,
+    /// A photograph could not be read.
+    Photograph(PhotographReadError),
     /// The reconstruction carries no inline keypoints (its observations are
     /// `.sift` feature indexes), so there is no keypoint to render at.
     NoInlineKeypoints,
@@ -273,6 +318,7 @@ impl std::fmt::Display for CloudRenderError {
             CloudRenderError::Cancelled => {
                 f.write_str("the render was asked to stop before it finished")
             }
+            CloudRenderError::Photograph(e) => write!(f, "a photograph could not be read: {e}"),
             CloudRenderError::NoInlineKeypoints => f.write_str(
                 "the reconstruction has no inline keypoints to render at: its observations \
                  are .sift feature indexes (an embedded_patches reconstruction stores the \
@@ -311,6 +357,16 @@ impl From<Cancelled> for CloudRenderError {
     }
 }
 
+/// A cancelled read is the render's own [`CloudRenderError::Cancelled`].
+impl From<PhotographReadError> for CloudRenderError {
+    fn from(e: PhotographReadError) -> Self {
+        match e {
+            PhotographReadError::Cancelled => CloudRenderError::Cancelled,
+            e => CloudRenderError::Photograph(e),
+        }
+    }
+}
+
 /// Check the inputs of a whole-cloud render of `views` images against
 /// `recon`, and return its inline keypoints. [`render_patch_cloud_bitmaps`]
 /// and
@@ -320,8 +376,8 @@ impl From<Cancelled> for CloudRenderError {
 ///
 /// # Errors
 ///
-/// Every [`CloudRenderError`] but [`CloudRenderError::Cancelled`], as those
-/// two renders return them.
+/// Every [`CloudRenderError`] but [`CloudRenderError::Cancelled`] and
+/// [`CloudRenderError::Photograph`], as those two renders return them.
 pub fn check_cloud_render<'r>(
     cloud: &PatchCloud,
     recon: &'r crate::SfmrReconstruction,
@@ -395,21 +451,27 @@ type RenderedRow = (Vec<u8>, i32);
 /// `cloud` (a zero patch frame) gets a zero row and keeps the reference `recon`
 /// stores for it, since the observation is still in its track; a point at `-1`
 /// left with no bitmap, because it has fewer than two views to hand or the rule
-/// finds no eligible view, gets a zero row and `-1`. `done`, when given, is bumped once per patch, and `progress` receives
+/// finds no eligible view, gets a zero row and `-1`. The photographs are read
+/// through `pool`, the region pool the caller made for this call, with one
+/// [`ViewRegions`] per view of the patch being rendered. `done`, when given,
+/// is bumped once per patch, and `progress` receives
 /// a `patches` count about every hundredth of the way through and is polled
 /// for cancellation before each patch.
 ///
 /// # Errors
 ///
 /// [`CloudRenderError::Cancelled`] when `progress` was cancelled before every
-/// patch was rendered. Before rendering anything, the other
+/// patch was rendered, and [`CloudRenderError::Photograph`] when a read of a
+/// photograph failed. Before rendering anything, the other
 /// [`CloudRenderError`]s when `recon` carries no inline keypoints, a patch of
 /// `cloud` has no point index or one out of range for `recon`, or `views` does
 /// not hold one entry per image of `recon`.
+#[allow(clippy::too_many_arguments)]
 pub fn render_patch_cloud_bitmaps(
     cloud: &PatchCloud,
     recon: &crate::SfmrReconstruction,
     views: &[Option<ProjectedImage<'_>>],
+    pool: &RegionPool,
     params: &KeypointSubpixelParams,
     unreferenced: UnreferencedPoints,
     done: Option<&AtomicUsize>,
@@ -433,14 +495,14 @@ pub fn render_patch_cloud_bitmaps(
     let total = cloud.patches.len();
     let step = (total / 100).max(1);
     let rendered_so_far = AtomicUsize::new(0);
-    let rendered: Vec<(usize, Option<RenderedRow>)> = cloud
+    let rendered: Vec<Result<(usize, Option<RenderedRow>), PhotographReadError>> = cloud
         .patches
         .par_iter()
         .zip(cloud.point_indexes.par_iter())
         .map(|(patch, &pid)| {
             let p = pid as usize;
             if progress.is_cancelled() {
-                return (p, None);
+                return Ok((p, None));
             }
             let mut patch_views: Vec<u32> = Vec::new();
             let mut keypoints: Vec<[f64; 2]> = Vec::new();
@@ -469,23 +531,31 @@ pub fn render_patch_cloud_bitmaps(
                 // bitmap (an empty row), and the reference stands.
                 Some(r) => Some(match within.iter().position(|&k| k == r) {
                     Some(i) => {
+                        let view = &present[patch_views[i] as usize];
                         let tile = render_view_tile(
                             patch,
-                            &present[patch_views[i] as usize],
+                            view,
+                            &mut ViewRegions::new(view.source, pool),
                             Some(keypoints[i]),
                             resolution,
                             params.sampler,
                             progress,
-                        );
+                        )?;
                         (bitmap_from_tile(&tile), r as i32)
                     }
                     None => (Vec::new(), r as i32),
                 }),
                 None if unreferenced == UnreferencedPoints::Skip => None,
-                None => {
-                    render_patch_bitmap(patch, &present, &patch_views, &keypoints, params, progress)
-                        .map(|b| (b.rgba, within[b.reference] as i32))
-                }
+                None => render_patch_bitmap(
+                    patch,
+                    &present,
+                    pool,
+                    &patch_views,
+                    &keypoints,
+                    params,
+                    progress,
+                )?
+                .map(|b| (b.rgba, within[b.reference] as i32)),
             };
             if let Some(counter) = done {
                 counter.fetch_add(1, Ordering::Relaxed);
@@ -494,10 +564,13 @@ pub fn render_patch_cloud_bitmaps(
             if n.is_multiple_of(step) || n == total {
                 progress.count(n as u64, Some(total as u64), "patches");
             }
-            (p, bitmap)
+            Ok((p, bitmap))
         })
         .collect();
     progress.check_cancel()?;
+    let rendered = rendered
+        .into_iter()
+        .collect::<Result<Vec<_>, PhotographReadError>>()?;
     let mut bitmaps = ndarray::Array4::<u8>::zeros((point_count, resolution, resolution, 4));
     // A point the cloud has no patch for keeps the reference it stores.
     let mut reference_observations = match stored_references {

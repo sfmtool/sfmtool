@@ -28,17 +28,27 @@ fn a_second_render_reads_its_photographs_from_the_cache() {
     let n = recon.image_count();
     let cache = PhotographCache::new(1 << 30);
 
-    let first = render_display_patch_bitmaps(&recon, &cache, &Progress::none())
-        .expect("not cancelled")
-        .expect("the photographs are readable");
+    let first = render_display_patch_bitmaps(
+        &recon,
+        &cache,
+        crate::camera::sampler::test_pool(),
+        &Progress::none(),
+    )
+    .expect("not cancelled")
+    .expect("the photographs are readable");
     assert_eq!(first.shape()[0], recon.point_count());
     let decoded = cache.stats();
     assert_eq!(decoded.entries, n, "every photograph stays decoded");
     assert_eq!(decoded.misses as usize, n);
 
-    let second = render_display_patch_bitmaps(&recon, &cache, &Progress::none())
-        .expect("not cancelled")
-        .expect("the photographs are readable");
+    let second = render_display_patch_bitmaps(
+        &recon,
+        &cache,
+        crate::camera::sampler::test_pool(),
+        &Progress::none(),
+    )
+    .expect("not cancelled")
+    .expect("the photographs are readable");
     assert_eq!(
         cache.stats().misses,
         decoded.misses,
@@ -47,9 +57,14 @@ fn a_second_render_reads_its_photographs_from_the_cache() {
     assert_eq!(first, second, "the same pixels, the same column");
 
     let uncached = PhotographCache::new(0);
-    let third = render_display_patch_bitmaps(&recon, &uncached, &Progress::none())
-        .expect("not cancelled")
-        .expect("the photographs are readable");
+    let third = render_display_patch_bitmaps(
+        &recon,
+        &uncached,
+        crate::camera::sampler::test_pool(),
+        &Progress::none(),
+    )
+    .expect("not cancelled")
+    .expect("the photographs are readable");
     assert_eq!(
         first, third,
         "a cache that keeps nothing draws the same column"
@@ -64,16 +79,26 @@ fn a_render_with_no_usable_photograph_draws_nothing() {
     let mut recon = seoul_bull();
     recon.workspace_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("no-such-workspace");
     let cache = PhotographCache::new(1 << 30);
-    let rendered =
-        render_display_patch_bitmaps(&recon, &cache, &Progress::none()).expect("not cancelled");
+    let rendered = render_display_patch_bitmaps(
+        &recon,
+        &cache,
+        crate::camera::sampler::test_pool(),
+        &Progress::none(),
+    )
+    .expect("not cancelled");
     assert!(rendered.is_none(), "no photograph was readable");
 
     let mut resized = seoul_bull();
     for camera in &mut resized.image_set.cameras {
         camera.width += 1;
     }
-    let rendered =
-        render_display_patch_bitmaps(&resized, &cache, &Progress::none()).expect("not cancelled");
+    let rendered = render_display_patch_bitmaps(
+        &resized,
+        &cache,
+        crate::camera::sampler::test_pool(),
+        &Progress::none(),
+    )
+    .expect("not cancelled");
     assert!(
         rendered.is_none(),
         "photographs of the wrong size were sampled"
@@ -87,12 +112,22 @@ fn a_render_with_no_usable_photograph_draws_nothing() {
 fn the_column_names_each_rows_reference_observation() {
     let recon = seoul_bull();
     let cache = PhotographCache::new(1 << 30);
-    let column = render_patch_bitmap_column(&recon, &cache, &Progress::none())
-        .expect("not cancelled")
-        .expect("the photographs are readable");
-    let display = render_display_patch_bitmaps(&recon, &cache, &Progress::none())
-        .expect("not cancelled")
-        .expect("the photographs are readable");
+    let column = render_patch_bitmap_column(
+        &recon,
+        &cache,
+        crate::camera::sampler::test_pool(),
+        &Progress::none(),
+    )
+    .expect("not cancelled")
+    .expect("the photographs are readable");
+    let display = render_display_patch_bitmaps(
+        &recon,
+        &cache,
+        crate::camera::sampler::test_pool(),
+        &Progress::none(),
+    )
+    .expect("not cancelled")
+    .expect("the photographs are readable");
     assert_eq!(column.bitmaps, display);
     assert_eq!(column.reference_observations.len(), recon.point_count());
     let counts = &recon.point_set.observation_counts;
@@ -174,6 +209,7 @@ fn a_missing_view_leaves_each_reference_naming_its_own_observation() {
         &cloud,
         &recon,
         &views,
+        crate::camera::sampler::test_pool(),
         &params,
         UnreferencedPoints::Pick,
         None,
@@ -215,11 +251,13 @@ fn a_missing_view_leaves_each_reference_naming_its_own_observation() {
         let rendered = render_patch_bitmap(
             patch,
             &present,
+            crate::camera::sampler::test_pool(),
             &patch_views,
             &keypoints,
             &params,
             &Progress::none(),
-        );
+        )
+        .unwrap();
         let want = rendered.map_or(-1, |b| (kept[b.reference] - offsets[p]) as i32);
         assert_eq!(column.reference_observations[p], want, "point {p}");
         if want >= 0 && kept[0] > offsets[p] {
@@ -245,9 +283,14 @@ fn a_stored_reference_is_rendered_from_and_kept() {
         Some(vec![sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION; count]);
     let cache = PhotographCache::new(1 << 30);
     let render = |recon: &SfmrReconstruction| {
-        render_patch_bitmap_column(recon, &cache, &Progress::none())
-            .expect("not cancelled")
-            .expect("the photographs are readable")
+        render_patch_bitmap_column(
+            recon,
+            &cache,
+            crate::camera::sampler::test_pool(),
+            &Progress::none(),
+        )
+        .expect("not cancelled")
+        .expect("the photographs are readable")
     };
     let picked = render(&recon);
 
@@ -310,9 +353,14 @@ fn a_point_with_no_eligible_view_gets_a_zero_row_and_no_reference() {
     recon.point_set.reference_observations = Some(vec![NO_REFERENCE; count]);
     let cache = PhotographCache::new(1 << 30);
     let render = |recon: &SfmrReconstruction| {
-        render_patch_bitmap_column(recon, &cache, &Progress::none())
-            .expect("not cancelled")
-            .expect("the photographs are readable")
+        render_patch_bitmap_column(
+            recon,
+            &cache,
+            crate::camera::sampler::test_pool(),
+            &Progress::none(),
+        )
+        .expect("not cancelled")
+        .expect("the photographs are readable")
     };
     let before = render(&recon);
     let p = before
@@ -435,6 +483,7 @@ fn stored_references_survive_missing_views_skipped_points_and_zero_frames() {
         &cloud,
         &recon,
         &views,
+        crate::camera::sampler::test_pool(),
         &KeypointSubpixelParams::default(),
         UnreferencedPoints::Skip,
         None,

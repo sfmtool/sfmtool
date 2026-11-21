@@ -459,6 +459,10 @@ decides which side; the harness found one such query in 1277.
   exists so the harness can measure other parameters without a rebuild.
 - A refusal raises `bench.TrackAtPixelError`, a `ValueError` with `stage`,
   `reason` and `diagnostics` (`{"refusals": [...]}` when every member refused).
+  A read of a photograph that fails (`TrackAtPixelError::Photograph`), which a
+  photograph in memory never gives, raises `RuntimeError` with its sentence,
+  which names the photograph, or says it is one in memory and carries the
+  read's message.
 
 ```python
 from sfmtool import bench

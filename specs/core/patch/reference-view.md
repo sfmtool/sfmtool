@@ -61,8 +61,9 @@ pub struct ViewTile {
     pub viewing_angle: Option<ViewingAngle>,
 }
 pub fn render_view_tile(patch: &OrientedPatch, view: &ProjectedImage<'_>,
+    regions: &mut ViewRegions<'_>, // reads view's photograph
     keypoint: Option<[f64; 2]>, resolution: usize, sampler: SamplerChoice,
-    progress: &Progress<'_>) -> ViewTile;
+    progress: &Progress<'_>) -> Result<ViewTile, PhotographReadError>;
 pub fn clipped_share(pyramid: &ImageU8Pyramid, outline: &[[f64; 2]]) -> Option<f64>;
 pub fn source_clipped_share(source: &TiledPhotograph, outline: &[[f64; 2]])
     -> Result<Option<f64>, PhotographReadError>; // the same share, a tile at a time
@@ -135,32 +136,40 @@ pub fn tile_semi_axes(tile: &ViewTile) -> Option<TileSemiAxes>;
 pub fn tile_max_radius() -> f64; // the cap of tile_semi_axes' reading and the bench's, 3
 pub fn readings_of(tile: &ViewTile, pair_zncc: Option<f64>, cell_deficit: Option<f64>,
     semi_axes: Option<[f64; 2]>) -> ReferenceReadings;
-pub fn read_track(patch: &OrientedPatch, views: &[ProjectedImage<'_>], members: &[u32],
+pub fn read_track<'r>(patch: &OrientedPatch, views: &[ProjectedImage<'_>], members: &[u32],
+    regions: &mut [impl BorrowMut<ViewRegions<'r>>], // parallel to members
     keypoints: &[Option<[f64; 2]>], tiles: &[&ViewTile], semi_axes: &[Option<TileSemiAxes>],
     sampler: SamplerChoice, options: &ReferenceViewOptions,
-    progress: &Progress<'_>) -> TrackReading;
+    progress: &Progress<'_>) -> Result<TrackReading, PhotographReadError>;
 
 // patch::stored_bitmap
 pub struct PatchBitmap { pub rgba: Vec<u8>, pub reference: usize } // the pick
 pub fn bitmap_from_tile(tile: &ViewTile) -> Vec<u8>; // alpha 255 on the photograph
 pub struct ReferenceRender { pub tiles: Vec<ViewTile>, pub semi_axes: Vec<Option<TileSemiAxes>>,
     pub reading: TrackReading }
-pub fn render_reference(patch: &OrientedPatch, views: &[ProjectedImage<'_>], patch_views: &[u32],
+pub fn render_reference<'r>(patch: &OrientedPatch, views: &[ProjectedImage<'_>],
+    patch_views: &[u32],
+    regions: &mut [impl BorrowMut<ViewRegions<'r>>], // parallel to patch_views
     keypoints: &[Option<[f64; 2]>], resolution: u32, sampler: SamplerChoice,
-    options: &ReferenceViewOptions, progress: &Progress<'_>) -> ReferenceRender;
+    options: &ReferenceViewOptions,
+    progress: &Progress<'_>) -> Result<ReferenceRender, PhotographReadError>;
 pub fn render_patch_bitmap(patch: &OrientedPatch, views: &[ProjectedImage<'_>],
-    patch_views: &[u32], keypoints: &[[f64; 2]], params: &KeypointSubpixelParams,
-    progress: &Progress<'_>) -> Option<PatchBitmap>; // None where no view is eligible
+    pool: &RegionPool, patch_views: &[u32], keypoints: &[[f64; 2]],
+    params: &KeypointSubpixelParams,
+    progress: &Progress<'_>) -> Result<Option<PatchBitmap>, PhotographReadError>;
+    // Ok(None) where no view is eligible
 pub struct PatchBitmapColumn { pub bitmaps: Array4<u8>, pub reference_observations: Vec<i32> }
 pub enum UnreferencedPoints { Pick, Skip } // what a point at -1 gets
 pub fn render_patch_cloud_bitmaps(cloud: &PatchCloud, recon: &SfmrReconstruction,
-    views: &[Option<ProjectedImage<'_>>], params: &KeypointSubpixelParams,
-    unreferenced: UnreferencedPoints, done: Option<&AtomicUsize>,
+    views: &[Option<ProjectedImage<'_>>], pool: &RegionPool,
+    params: &KeypointSubpixelParams, unreferenced: UnreferencedPoints,
+    done: Option<&AtomicUsize>,
     progress: &Progress<'_>) -> Result<PatchBitmapColumn, CloudRenderError>;
-// Cancelled, or, before rendering anything: no inline keypoints, a patch with
-// no point index or one out of range, or not one view per image
-pub enum CloudRenderError { Cancelled, NoInlineKeypoints, PointIndexes { .. },
-    PointOutOfRange { .. }, ViewCount { .. } }
+// Cancelled, a read that failed, or, before rendering anything: no inline
+// keypoints, a patch with no point index or one out of range, or not one view
+// per image
+pub enum CloudRenderError { Cancelled, Photograph(PhotographReadError),
+    NoInlineKeypoints, PointIndexes { .. }, PointOutOfRange { .. }, ViewCount { .. } }
 // the same checks, run alone, before building the pyramids the views need
 pub fn check_cloud_render<'r>(cloud: &PatchCloud, recon: &'r SfmrReconstruction,
     views: usize) -> Result<&'r Array2<f32>, CloudRenderError>;
@@ -218,6 +227,23 @@ is the warp map's border, and the angle is read at the anchored patch frame's
 centre. The bench, the stored bitmap and the Python binding all call it, so a
 tile rendered from Python is the tile the bench measured, and the stored bitmap
 is the tile the rule read.
+
+**Every read goes through the render entry points.** `render_view_tile`
+renders the tile through `render_source_tile` and reads the clipped share
+through `source_clipped_share`
+([view-region-pyramids.md](../camera/view-region-pyramids.md)), through the
+`ViewRegions` its caller passes for the view. `read_track` and
+`render_reference` take one per view, parallel to the views they read (a
+`ViewRegions` or a mutable reference to one, so a caller that reads a subset of
+its views passes references to theirs), and pass each view's to its tile and to
+member coherence's render of it, which covers the same pixels and so reuses the
+regions the tile read. The kernels that render a whole set of views for one
+call, `render_patch_bitmap` and `render_patch_cloud_bitmaps`, take the region
+pool their caller made and make one `ViewRegions` per view of the patch they
+are working on. The tiles and readings are the same, bit for bit, whichever way
+a read reaches its pixels, and a read that fails is the call's
+`PhotographReadError` in place of its result: `CloudRenderError::Photograph`
+for the whole-cloud render, the first patch's that failed.
 
 ```rust
 use sfmtool_core::patch::reference_view::{
@@ -1297,8 +1323,8 @@ so it counts the same pixels a test of every centre against every edge counts,
 which a test checks on concave, self-crossing and off-photograph outlines.
 `source_clipped_share` counts the same way through a photograph's tiles, one
 level-0 tile at a time, and gives the same share
-([view-region-pyramids.md](../camera/view-region-pyramids.md) § "Theory");
-`render_view_tile` still reads the whole pyramid.
+([view-region-pyramids.md](../camera/view-region-pyramids.md) § "Theory"); it
+is the one `render_view_tile` reads.
 
 **A keypoint the slide refuses.** A view's tile is cut through the patch slid
 onto its keypoint's ray, where that ray meets the plane through the patch's
@@ -1422,8 +1448,11 @@ uint8, `valid` `(R, R)` bool, `sampler`, `coverage`, `clipped_share`,
 `ValueError` for a `resolution` outside 2 to 1024, a keypoint that is not
 finite, an unknown `sampler`, an `ImagePyramidSet` without `image_index`, an
 `image_index` given with a plain array, which holds one photograph, or a
-photograph whose size differs from the camera's, and `IndexError` for an
-`image_index` past the set's images.
+photograph whose size differs from the camera's, `IndexError` for an
+`image_index` past the set's images, and `RuntimeError` for a read of the
+photograph that fails, which a photograph in memory never does; its message
+names the photograph, or says it is one in memory and carries the read's
+message.
 
 ```python
 tile = patch.render_view_tile(camera, pose, photo, keypoint=(812.4, 377.9))
@@ -1433,7 +1462,9 @@ print(tile["coverage"], tile["clipped_share"], tile["viewing_angle_deg"])
 `PatchCloud.render_bitmaps(recon, images, *, resolution=24, sampler="per_view", referenced_only=False, progress=None)`
 returns `(bitmaps, reference_observations)`: the `(P, R, R, 4)` bitmap column
 and the `(P,)` int32 reference observation of each point, which
-`clone_with_changes(patch_bitmaps=…, reference_observations=…)` takes.
+`clone_with_changes(patch_bitmaps=…, reference_observations=…)` takes. It
+reads the photographs through a region pool made for the call, and raises a
+read that fails as `RuntimeError`, as `render_view_tile` does.
 `refine_keypoints(render_bitmaps=True)` adds `reference_image` to each point's
 dict, and `refine_normals(render_bitmaps=True)` adds `reference_images`, `(P,)`
 with `-1` for none; `sfmtool._patch_compaction.reference_observations_from_images`
@@ -1520,6 +1551,15 @@ and that a commit saves that reference; and that turning the reference row
 that a render reads the stored references: storing the rule's picks and
 rendering again draws the same column, and storing other observations draws
 their tiles under those references.
+[patch/region_read_tests.rs](../../../crates/sfmtool-core/src/patch/region_read_tests.rs)
+renders the stored bitmaps of the seoul_bull ground truth's first 40 points,
+from their stored references and with the references dropped so the rule
+picks, through a pool every read fits in, over 32 px tiles through an empty
+pool, and through a pool of half the first run's peak, and checks that the
+columns are the same bit for bit and that a photograph holding none of the
+pixels a read needs fails the render with its `OutOfRange` error;
+[bench/tests/region_reads.rs](../../../crates/sfmtool-core/src/bench/tests/region_reads.rs)
+does the same for a bench track's reading, fit, bitmap render and scores.
 The Python tests are in
 [test_bench_rust_bindings.py](../../../tests/rust_bindings/bench/test_bench_rust_bindings.py)
 and

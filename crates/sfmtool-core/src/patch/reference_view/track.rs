@@ -4,10 +4,13 @@
 //! The reference-view rule over one track: the readings across its views'
 //! tiles, and the view the rule picks from them.
 
+use std::borrow::BorrowMut;
+
 use super::agreement::{cell_agreement, finite_middle, CellAgreement};
 use super::tile::ViewTile;
 use super::{choose_reference_view, ReferenceChoice, ReferenceReadings, ReferenceViewOptions};
-use crate::camera::sampler::SamplerChoice;
+use crate::camera::sampler::{SamplerChoice, ViewRegions};
+use crate::camera::PhotographReadError;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::member_coherence::{member_zncc_matrix_reporting, MemberCoherenceParams};
 use crate::patch::normal_refine::ProjectedImage;
@@ -116,10 +119,14 @@ pub fn tile_semi_axes(tile: &ViewTile) -> Option<TileSemiAxes> {
 /// Take the readings the reference-view rule needs across a track's views and
 /// run the rule ([`choose_reference_view`]).
 ///
-/// View `v` is image `members[v]` of `views`, its keypoint `keypoints[v]`;
-/// `tiles[v]` is its `R×R` tile ([`render_view_tile`](super::render_view_tile)
-/// of `patch` at that keypoint), and `semi_axes[v]` its tile's self-similarity
-/// semi-axes ([`tile_semi_axes`]).
+/// View `v` is image `members[v]` of `views`, read through `regions[v]` (a
+/// [`ViewRegions`] or a mutable reference to one), its keypoint
+/// `keypoints[v]`; `tiles[v]` is its `R×R` tile
+/// ([`render_view_tile`](super::render_view_tile) of `patch` at that
+/// keypoint), and `semi_axes[v]` its tile's self-similarity semi-axes
+/// ([`tile_semi_axes`]). A caller that rendered the tiles through the same
+/// regions has member coherence's renders, which cover the same pixels, reuse
+/// what the tiles read.
 ///
 /// The pair ZNCC is the median of the view's row of member coherence's matrix
 /// ([`member_zncc_matrix_reporting`]), rendered over the views' common support
@@ -137,26 +144,31 @@ pub fn tile_semi_axes(tile: &ViewTile) -> Option<TileSemiAxes> {
 ///
 /// The rule runs with `options`.
 ///
+/// # Errors
+///
+/// The [`PhotographReadError`] of a read of a view's photograph that failed.
+///
 /// # Panics
 ///
-/// Panics if `members`, `keypoints`, `tiles` and `semi_axes` are not parallel,
-/// or the tiles differ in resolution or channels.
+/// Panics if `members`, `regions`, `keypoints`, `tiles` and `semi_axes` are
+/// not parallel, or the tiles differ in resolution or channels.
 #[allow(clippy::too_many_arguments)]
-pub fn read_track(
+pub fn read_track<'r>(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
     members: &[u32],
+    regions: &mut [impl BorrowMut<ViewRegions<'r>>],
     keypoints: &[Option<[f64; 2]>],
     tiles: &[&ViewTile],
     semi_axes: &[Option<TileSemiAxes>],
     sampler: SamplerChoice,
     options: &ReferenceViewOptions,
     progress: &Progress<'_>,
-) -> TrackReading {
+) -> Result<TrackReading, PhotographReadError> {
     let k = members.len();
     assert!(
-        keypoints.len() == k && tiles.len() == k && semi_axes.len() == k,
-        "read_track: members, keypoints, tiles and semi_axes must be parallel"
+        regions.len() == k && keypoints.len() == k && tiles.len() == k && semi_axes.len() == k,
+        "read_track: members, regions, keypoints, tiles and semi_axes must be parallel"
     );
     let resolution = tiles.first().map_or(2, |t| t.resolution()) as u32;
     let params = MemberCoherenceParams {
@@ -164,8 +176,15 @@ pub fn read_track(
         sampler,
         ..MemberCoherenceParams::default()
     };
-    let matrix =
-        member_zncc_matrix_reporting(patch, views, members, Some(keypoints), &params, progress);
+    let matrix = member_zncc_matrix_reporting(
+        patch,
+        views,
+        members,
+        regions,
+        Some(keypoints),
+        &params,
+        progress,
+    )?;
     let pair_zncc: Vec<Option<f64>> = members
         .iter()
         .map(|image| {
@@ -191,10 +210,10 @@ pub fn read_track(
         })
         .collect();
     let choice = choose_reference_view(&readings, options);
-    TrackReading {
+    Ok(TrackReading {
         pair_zncc,
         cells,
         readings,
         choice,
-    }
+    })
 }

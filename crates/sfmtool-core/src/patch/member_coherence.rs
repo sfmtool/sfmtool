@@ -17,8 +17,8 @@
 //!
 //! The matrix is rendered through exactly the machinery
 //! [view selection](super::view_selection) builds its reference appearance with —
-//! `build_level_context` for the frozen common support, `normalized_stack` for
-//! the renders and `znormalize_into_kept` for the per-channel z-normalization —
+//! `build_level_context` for the frozen common support, `normalized_source_stack`
+//! for the renders and `znormalize_into_kept` for the per-channel z-normalization —
 //! so a member's pairwise agreement lives in the same photometric *space* as the
 //! member-vs-consensus score selection admits views on. It is not the same
 //! *estimator*: selection scores one view against the fused consensus, and does it
@@ -39,11 +39,13 @@
 
 use rayon::prelude::*;
 
+use crate::camera::sampler::RegionPool;
+use crate::camera::PhotographReadError;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::normal_refine::{PatchWindow, ProjectedImage, SamplerChoice, MIN_MASK_PIXELS};
 use crate::patch::pair_sharpness::PairMatching;
 use crate::patch::PatchCounter;
-use crate::progress::{Cancelled, Progress};
+use crate::progress::Progress;
 
 /// Tunables for [`validate_member_coherence`].
 ///
@@ -513,18 +515,24 @@ pub use decide::{core_coherence, core_deficit, decide_member_coherence};
 pub use matrix::{coarse_factors_for, member_zncc_matrix, member_zncc_matrix_reporting};
 
 /// Validate one point's track: build its pairwise member matrix and read the
-/// verdict off it. `member_keypoints` anchors the members' renders — see
-/// [`member_zncc_matrix`].
+/// verdict off it. `member_keypoints` anchors the members' renders, and the
+/// members' photographs are read through `pool`, the region pool the caller
+/// made for this call — see [`member_zncc_matrix`].
+///
+/// # Errors
+///
+/// The [`PhotographReadError`] of a read of a member's photograph that failed.
 pub fn validate_member_coherence(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     members: &[u32],
     member_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &MemberCoherenceParams,
-) -> MemberCoherence {
-    let matrix = member_zncc_matrix(patch, views, members, member_keypoints, params);
+) -> Result<MemberCoherence, PhotographReadError> {
+    let matrix = member_zncc_matrix(patch, views, pool, members, member_keypoints, params)?;
     let decision = decide_member_coherence(&matrix, params);
-    MemberCoherence { matrix, decision }
+    Ok(MemberCoherence { matrix, decision })
 }
 
 /// Batch [`validate_member_coherence`] over a [`PatchCloud`], parallel across
@@ -537,6 +545,11 @@ pub fn validate_member_coherence(
 /// Results are returned in cloud order — the kernel is per point, so nothing
 /// depends on thread scheduling.
 ///
+/// The members' photographs are read through `pool`, the region pool the
+/// caller made for this call, with one
+/// [`ViewRegions`](crate::camera::sampler::ViewRegions) per member of the
+/// patch being validated, dropped when the patch is done.
+///
 /// `done`, when given, is bumped once per patch, for a caller polling progress
 /// from another thread. `progress` receives a `patches` count about every
 /// hundredth of the way through, is polled for cancellation before each patch,
@@ -545,22 +558,25 @@ pub fn validate_member_coherence(
 ///
 /// # Errors
 ///
-/// [`Cancelled`] when `progress` was cancelled before every patch was
-/// validated.
+/// [`PhotographReadError::Cancelled`] when `progress` was cancelled before
+/// every patch was validated, and otherwise the error of a read of a member's
+/// photograph that failed.
 ///
 /// # Panics
 ///
 /// Panics if `patch_views.len() != cloud.len()`, if `patch_keypoints` is given
 /// and not parallel to `patch_views`, or if an index is out of range.
+#[allow(clippy::too_many_arguments)]
 pub fn validate_patch_cloud_member_coherence(
     cloud: &PatchCloud,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     patch_views: &[Vec<u32>],
     patch_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     params: &MemberCoherenceParams,
     done: Option<&std::sync::atomic::AtomicUsize>,
     progress: &Progress<'_>,
-) -> Result<Vec<MemberCoherence>, Cancelled> {
+) -> Result<Vec<MemberCoherence>, PhotographReadError> {
     assert_eq!(
         patch_views.len(),
         cloud.len(),
@@ -574,7 +590,7 @@ pub fn validate_patch_cloud_member_coherence(
         );
     }
     let counter = PatchCounter::new(cloud.len(), done, progress);
-    let out: Vec<Option<MemberCoherence>> = cloud
+    let out: Vec<Option<Result<MemberCoherence, PhotographReadError>>> = cloud
         .patches
         .par_iter()
         .enumerate()
@@ -584,17 +600,24 @@ pub fn validate_patch_cloud_member_coherence(
                 return None;
             }
             let kps = patch_keypoints.map(|k| k[i].as_slice());
-            let matrix = member_zncc_matrix_reporting(patch, views, pv, kps, params, progress);
-            let decision = decide_member_coherence(&matrix, params);
+            let mut regions: Vec<_> = pv
+                .iter()
+                .map(|&m| crate::camera::sampler::ViewRegions::new(views[m as usize].source, pool))
+                .collect();
+            let out =
+                member_zncc_matrix_reporting(patch, views, pv, &mut regions, kps, params, progress)
+                    .map(|matrix| {
+                        let decision = decide_member_coherence(&matrix, params);
+                        MemberCoherence { matrix, decision }
+                    });
             counter.finished();
-            Some(MemberCoherence { matrix, decision })
+            Some(out)
         })
         .collect();
     progress.check_cancel()?;
-    Ok(out
-        .into_iter()
+    out.into_iter()
         .map(|o| o.expect("every patch ran when nothing was cancelled"))
-        .collect())
+        .collect()
 }
 
 #[cfg(test)]

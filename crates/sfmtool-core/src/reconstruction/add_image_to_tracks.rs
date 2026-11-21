@@ -32,12 +32,14 @@ use rayon::prelude::*;
 
 use sfmtool_sfmr_format::ContentHash;
 
-use crate::camera::TiledPhotograph;
+use crate::camera::sampler::{RegionPool, ViewRegions};
+use crate::camera::{PhotographReadError, TiledPhotograph};
 use crate::geometry::RigidTransform;
 use crate::numeric::median_in_place;
 use crate::patch::cloud::{split_halfvec, OrientedPatch};
 use crate::patch::keypoint_localize::{
-    project_unclipped, KeypointLocalizeParams, NoTemplate, TemplateKind, TrackReferences,
+    project_unclipped, KeypointLocalizeParams, LocalizeError, NoTemplate, TemplateKind,
+    TrackReferences,
 };
 use crate::patch::keypoint_subpixel::{
     refine_view_against_reference, KeypointSubpixelParams, ReferenceTemplate,
@@ -498,6 +500,8 @@ pub enum AddImageToTracksError {
     NotEmbeddedPatches,
     /// The value carries no patch frames.
     NoPatchFrames,
+    /// A photograph could not be read.
+    Photograph(PhotographReadError),
     /// The caller asked the call to stop.
     Cancelled,
 }
@@ -527,6 +531,7 @@ impl std::fmt::Display for AddImageToTracksError {
                 "adding an image to tracks needs a patch frame per point, and this \
                  reconstruction carries none"
             ),
+            Self::Photograph(e) => write!(f, "a photograph could not be read: {e}"),
             Self::Cancelled => write!(f, "the call was cancelled before it had an answer"),
         }
     }
@@ -537,6 +542,16 @@ impl std::error::Error for AddImageToTracksError {}
 impl From<Cancelled> for AddImageToTracksError {
     fn from(_: Cancelled) -> Self {
         Self::Cancelled
+    }
+}
+
+/// A cancelled read is the call's own [`AddImageToTracksError::Cancelled`].
+impl From<PhotographReadError> for AddImageToTracksError {
+    fn from(e: PhotographReadError) -> Self {
+        match e {
+            PhotographReadError::Cancelled => Self::Cancelled,
+            e => Self::Photograph(e),
+        }
     }
 }
 
@@ -560,12 +575,18 @@ impl From<Cancelled> for AddImageToTracksError {
 /// its index, position, frame, bitmap, colour and constraint, and every
 /// existing observation is untouched.
 ///
+/// The photographs are read through `pool`, the region pool the caller made
+/// for this call, with one [`ViewRegions`] per view of the candidate being
+/// measured. A read that fails fails the call with
+/// [`AddImageToTracksError::Photograph`], the first in candidate order.
+///
 /// `progress` names the measuring and the write-back and is how the call is
 /// asked to stop; a stopped call returns [`AddImageToTracksError::Cancelled`].
 ///
 /// # Example
 ///
 /// ```no_run
+/// use sfmtool_core::camera::sampler::RegionPool;
 /// use sfmtool_core::progress::Progress;
 /// use sfmtool_core::reconstruction::add_image_to_tracks::{
 ///     add_image_to_tracks, AddImageToTracksOptions,
@@ -578,6 +599,7 @@ impl From<Cancelled> for AddImageToTracksError {
 ///     recon,
 ///     3,
 ///     photographs,
+///     &RegionPool::for_kernel_call(),
 ///     &AddImageToTracksOptions::default(),
 ///     &Progress::none(),
 /// )?;
@@ -595,6 +617,7 @@ pub fn add_image_to_tracks(
     recon: &SfmrReconstruction,
     image: usize,
     photographs: &[Option<&TiledPhotograph>],
+    pool: &RegionPool,
     options: &AddImageToTracksOptions,
     progress: &Progress<'_>,
 ) -> Result<(SfmrReconstruction, AddImageToTracksReport), AddImageToTracksError> {
@@ -700,16 +723,17 @@ pub fn add_image_to_tracks(
             v_col,
             bitmaps,
             views: &views,
+            pool,
             centers: &centers,
             localize: &localize,
             refine: &refine,
             options,
         };
-        let out: Vec<CandidateReport> = candidates
+        let out: Vec<Result<CandidateReport, PhotographReadError>> = candidates
             .par_iter()
             .map(|&p| {
                 if progress.is_cancelled() {
-                    return CandidateReport::new(p);
+                    return Ok(CandidateReport::new(p));
                 }
                 let report = ctx.measure(p);
                 let n = done.fetch_add(1, Ordering::Relaxed) + 1;
@@ -720,7 +744,9 @@ pub fn add_image_to_tracks(
             })
             .collect();
         progress.check_cancel()?;
-        out
+        // The first read that failed, in candidate order, fails the call.
+        out.into_iter()
+            .collect::<Result<Vec<CandidateReport>, PhotographReadError>>()?
     };
     let mut candidates = measured;
 
@@ -817,6 +843,8 @@ struct Context<'a, 'v> {
     v_col: &'a Array2<f32>,
     bitmaps: Option<&'a ndarray::Array4<u8>>,
     views: &'a [Option<ProjectedImage<'v>>],
+    /// The call's region pool, which every candidate's reads draw on.
+    pool: &'a RegionPool,
     centers: &'a [Point3<f64>],
     localize: &'a KeypointLocalizeParams,
     refine: &'a KeypointSubpixelParams,
@@ -826,7 +854,9 @@ struct Context<'a, 'v> {
 impl Context<'_, '_> {
     /// Everything up to the verdict for point `p`: the visibility gates, the
     /// references and their template, the search, the sub-pixel step and the score.
-    fn measure(&self, p: u32) -> CandidateReport {
+    /// Each of the point's views is read through one [`ViewRegions`], which
+    /// every read of it shares; a read that fails is returned as its error.
+    fn measure(&self, p: u32) -> Result<CandidateReport, PhotographReadError> {
         let mut out = CandidateReport::new(p);
         let pi = p as usize;
         let point = &self.recon.point_set.points[pi];
@@ -835,7 +865,7 @@ impl Context<'_, '_> {
         let (v, hv) = split_halfvec(row(self.v_col));
         if !(hu > 0.0 && hv > 0.0) {
             out.refusal = Some(Refusal::NoPatch);
-            return out;
+            return Ok(out);
         }
         let mut patch = OrientedPatch::new(point.position, u, v, [hu, hv]);
         patch.w = if point.is_at_infinity() { 0.0 } else { 1.0 };
@@ -851,7 +881,7 @@ impl Context<'_, '_> {
         let Some(proj) = project_unclipped(&target, &patch.center, patch.w).and_then(in_frame)
         else {
             out.refusal = Some(Refusal::NotInFrame);
-            return out;
+            return Ok(out);
         };
         out.projection = Some(proj);
 
@@ -868,7 +898,7 @@ impl Context<'_, '_> {
             };
             if cos < self.localize.min_grazing_cos {
                 out.refusal = Some(Refusal::Grazing);
-                return out;
+                return Ok(out);
             }
             if self.options.require_facing {
                 let side = |c: &Point3<f64>| (c - patch.center).dot(&normal).signum();
@@ -878,7 +908,7 @@ impl Context<'_, '_> {
                     .sum();
                 if vote != 0.0 && side(&c_t) != vote.signum() {
                     out.refusal = Some(Refusal::BackFacing);
-                    return out;
+                    return Ok(out);
                 }
             }
         }
@@ -910,6 +940,11 @@ impl Context<'_, '_> {
             }
         }
         let local_refs: Vec<u32> = (1..local.len() as u32).collect();
+        // One view's regions per local view, the target first.
+        let mut regions: Vec<ViewRegions<'_>> = local
+            .iter()
+            .map(|view| ViewRegions::new(view.source, self.pool))
+            .collect();
         // The stored bitmap's row, where it is the template. A row with no
         // texture (a point the file stores no bitmap for) leaves the rendered
         // template in its place.
@@ -918,19 +953,20 @@ impl Context<'_, '_> {
             &patch,
             &local,
             &local_refs,
+            &mut regions[1..],
             &ref_keypoints,
             reference,
             bitmap_row.as_ref().and_then(|r| r.as_slice()),
             self.localize,
-        ) {
+        )? {
             Ok(references) => references,
             Err(NoTemplate::TooFewReferences) => {
                 out.refusal = Some(Refusal::TooFewReferences);
-                return out;
+                return Ok(out);
             }
             Err(NoTemplate::NoReferenceView) => {
                 out.refusal = Some(Refusal::NoReferenceView);
-                return out;
+                return Ok(out);
             }
         };
         out.references = references
@@ -946,14 +982,16 @@ impl Context<'_, '_> {
         let search = match references.search(
             &patch,
             &target,
+            &mut regions[0],
             None,
             self.options.ascend_on_edge,
             self.localize,
         ) {
             Ok(s) => s,
+            Err(LocalizeError::Photograph(e)) => return Err(e),
             Err(_) => {
                 out.refusal = Some(Refusal::NoPeak);
-                return out;
+                return Ok(out);
             }
         };
         out.zncc_self_similarity_radius = search.zncc_self_similarity_radius;
@@ -964,41 +1002,51 @@ impl Context<'_, '_> {
             .admits_member_zncc_self_similarity_radius(search.zncc_self_similarity_radius)
         {
             out.refusal = Some(Refusal::Unlocalizable);
-            return out;
+            return Ok(out);
         }
         let Some(mut keypoint) = search.keypoint else {
             out.refusal = Some(Refusal::NoPeak);
-            return out;
+            return Ok(out);
         };
         if search.at_edge {
             out.refusal = Some(Refusal::PeakAtEdge);
-            return out;
+            return Ok(out);
         }
         if self.options.subpixel {
             if let Some((refined, _)) = refine_view_against_reference(
                 &patch,
                 &local,
+                &mut regions,
                 references.refine_template(),
                 0,
                 keypoint,
                 self.refine,
-            ) {
+            )? {
                 keypoint = refined;
             }
         }
         out.keypoint = Some(keypoint);
         out.offset_px = (keypoint[0] - proj[0]).hypot(keypoint[1] - proj[1]);
-        let Some(score) = references.score(&patch, &target, keypoint, self.localize) else {
+        let Some(score) =
+            references.score(&patch, &target, &mut regions[0], keypoint, self.localize)?
+        else {
             out.refusal = Some(Refusal::Unscorable);
-            return out;
+            return Ok(out);
         };
         out.pair_zncc = score.pair_zncc;
-        let (references_z, z, reading, reading_options) =
-            self.bitmap_scores(pi, &patch, &local, &references, &ref_keypoints, keypoint);
+        let (references_z, z, reading, reading_options) = self.bitmap_scores(
+            pi,
+            &patch,
+            &local,
+            &mut regions,
+            &references,
+            &ref_keypoints,
+            keypoint,
+        )?;
         settle_score(&mut out, references_z, z);
         out.reading = reading;
         out.reading_options = Some(reading_options);
-        out
+        Ok(out)
     }
 
     /// The references' and the new view's blur-matched scores against the
@@ -1016,20 +1064,25 @@ impl Context<'_, '_> {
     /// Also returns the new view's row of observation readings and the options
     /// it was read under. Its scores are against `point`'s stored bitmap,
     /// whichever template the search read, and `NaN` where the point has
-    /// none.
+    /// none. `regions` is parallel to `local`; a read that fails is returned
+    /// as its error.
+    #[allow(clippy::too_many_arguments)]
     fn bitmap_scores(
         &self,
         point: usize,
         patch: &OrientedPatch,
         local: &[ProjectedImage<'_>],
+        regions: &mut [ViewRegions<'_>],
         references: &TrackReferences,
         ref_keypoints: &[[f64; 2]],
         keypoint: [f64; 2],
-    ) -> (Vec<f64>, f64, ObservationReading, ObservationReadingOptions) {
-        let render = |l: usize, kp: [f64; 2], r: usize| {
+    ) -> Result<(Vec<f64>, f64, ObservationReading, ObservationReadingOptions), PhotographReadError>
+    {
+        let mut render = |l: usize, kp: [f64; 2], r: usize| {
             render_view_tile(
                 patch,
                 &local[l],
+                &mut regions[l],
                 Some(kp),
                 r,
                 self.localize.sampler,
@@ -1043,7 +1096,7 @@ impl Context<'_, '_> {
             ReferenceTemplate::Observation { image, keypoint } => {
                 let r = self.localize.resolution as usize;
                 (
-                    bitmap_from_tile(&render(image as usize, keypoint, r)),
+                    bitmap_from_tile(&render(image as usize, keypoint, r)?),
                     r,
                     false,
                 )
@@ -1051,29 +1104,21 @@ impl Context<'_, '_> {
         };
         let planes = bitmap_planes(&bitmap, r);
         let mut scorer = BitmapScorer::new(&planes, self.localize.window);
-        let mut read = |l: usize, kp: [f64; 2]| {
-            scorer
-                .score(&render(l, kp, r).planes(), None)
-                .blur_matched_zncc
-        };
         let rendered_from = |k: usize| {
             references.template_kind == TemplateKind::ReferenceObservation
                 && references.reference == Some(k)
         };
-        let references_z = references
-            .references
-            .iter()
-            .enumerate()
-            .map(|(k, &l)| {
-                if rendered_from(k) {
-                    1.0
-                } else {
-                    read(l as usize, ref_keypoints[l as usize - 1])
-                }
-            })
-            .collect();
+        let mut references_z = Vec::with_capacity(references.references.len());
+        for (k, &l) in references.references.iter().enumerate() {
+            references_z.push(if rendered_from(k) {
+                1.0
+            } else {
+                let tile = render(l as usize, ref_keypoints[l as usize - 1], r)?;
+                scorer.score(&tile.planes(), None).blur_matched_zncc
+            });
+        }
         // The new view's tile at the template's grid, read for its score.
-        let tile = render(0, keypoint, r);
+        let tile = render(0, keypoint, r)?;
         let ellipse = view_tile_ellipse(&tile);
         let score = scorer.score(&tile.planes(), finite_matrix(&ellipse));
         // Its stored row, read as a writer of the column reads one
@@ -1088,7 +1133,7 @@ impl Context<'_, '_> {
         let (reading_tile, reading_ellipse) = if reading_r == r {
             (&tile, ellipse)
         } else {
-            reread = render(0, keypoint, reading_r);
+            reread = render(0, keypoint, reading_r)?;
             let ellipse = view_tile_ellipse(&reread);
             (&reread, ellipse)
         };
@@ -1114,7 +1159,7 @@ impl Context<'_, '_> {
         );
         let options =
             observation_reading_options(self.localize.sampler, reading_r, self.localize.window);
-        (references_z, score.blur_matched_zncc, reading, options)
+        Ok((references_z, score.blur_matched_zncc, reading, options))
     }
 }
 

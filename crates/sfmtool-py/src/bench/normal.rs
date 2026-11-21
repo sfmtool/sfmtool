@@ -37,6 +37,7 @@ use sfmtool_matches_format::ClusterCellStatus;
 use super::{
     evaluate_report_dict, fit_options, refused, tilt_report_dict, views_of, PyEditableTrack,
 };
+use crate::helpers::kernel_err;
 use crate::patches::views::{resolve_pyramids, PosedViews};
 use crate::phase_record::PhaseRecord;
 use crate::reconstruction::edited::PyEditedReconstruction;
@@ -809,7 +810,7 @@ fn finite_difference_normal(
         &options,
         &Progress::none(),
     )
-    .map_err(refused)?;
+    .map_err(kernel_err)?;
     let d = normal_report_dict(py, &report)?;
     Ok((
         PyEditableTrack {
@@ -994,7 +995,7 @@ fn grid_plane_normal(
         &options,
         &Progress::none(),
     )
-    .map_err(refused)?;
+    .map_err(kernel_err)?;
     let d = normal_report_dict(py, &report)?;
     Ok((
         PyEditableTrack {
@@ -1299,7 +1300,7 @@ fn grown_plane_normal(
         &options,
         &progress,
     )
-    .map_err(refused)?;
+    .map_err(kernel_err)?;
     let d = normal_report_dict(py, &report)?;
     if record_phases {
         d.set_item("phases", record.to_list(py)?)?;

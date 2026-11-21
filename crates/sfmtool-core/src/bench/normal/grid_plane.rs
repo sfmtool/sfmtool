@@ -29,7 +29,7 @@ use nalgebra::Vector3;
 
 use crate::camera::sampler::{render_phase, render_source_tile, RegionPool, ViewRegions};
 use crate::camera::warp_map::{patch_grid_jacobian, singular_values_2x2};
-use crate::camera::WarpMap;
+use crate::camera::{PhotographReadError, WarpMap};
 use crate::patch::cell_plane_fit::{
     fit_cell_plane_recorded, normal_precision_deg, CellPlaneRecord, CellRay, PosedView,
 };
@@ -471,7 +471,7 @@ pub fn grid_plane_normal(
     let base = stored_patch_resolution(&edited.base)
         .unwrap_or(options.fit.refine.resolution)
         .max(MIN_WORKING_RESOLUTION);
-    let cells = Cells::new(track, images, pool, base, options, progress);
+    let cells = Cells::new(track, images, pool, base, options, progress)?;
     // One entry per render: `measure` opens it, `propose` fills in the turn,
     // and the loop's decisions mark the turns it took.
     let trace: RefCell<Vec<GridPlaneIteration>> = RefCell::new(Vec::new());
@@ -705,7 +705,7 @@ impl<'a, 'v> Cells<'a, 'v> {
         base: u32,
         options: &'a GridPlaneNormalOptions,
         progress: &'a Progress<'a>,
-    ) -> Self {
+    ) -> Result<Self, PhotographReadError> {
         let gates = CellGateOptions {
             min_cell_zncc: options.min_cell_zncc,
             min_cell_curvature: options.min_cell_curvature,
@@ -726,18 +726,32 @@ impl<'a, 'v> Cells<'a, 'v> {
         // The fit's reference: the one the track holds where its row is `in`
         // with a keypoint, and otherwise the reference-view rule's pick.
         let patch_frame = patch_frame_of(track);
-        let reference = resolve_reference(
-            &patch_frame,
-            images,
-            &patch_views,
-            &seeds,
-            track_reference(track, &rows),
-            options.fit.localize.min_grazing_cos,
-            base,
-            options.fit.localize.sampler,
-            &ReferenceViewOptions::default(),
-            progress,
-        )
+        // One view's kept regions per image, which the reference rule's
+        // renders here and every render of the loop share.
+        let regions: Vec<RefCell<ViewRegions<'a>>> = images
+            .iter()
+            .map(|view| RefCell::new(ViewRegions::new(view.source, pool)))
+            .collect();
+        let reference = {
+            let mut held: Vec<_> = patch_views
+                .iter()
+                .map(|&v| regions[v as usize].borrow_mut())
+                .collect();
+            let mut refs: Vec<&mut ViewRegions<'a>> = held.iter_mut().map(|r| &mut **r).collect();
+            resolve_reference(
+                &patch_frame,
+                images,
+                &patch_views,
+                &mut refs,
+                &seeds,
+                track_reference(track, &rows),
+                options.fit.localize.min_grazing_cos,
+                base,
+                options.fit.localize.sampler,
+                &ReferenceViewOptions::default(),
+                progress,
+            )?
+        }
         .map(|k| rows[k]);
         // The working grid, chosen once so that every render of the loop is
         // on one grid: the caller's, or the reference view's footprint of the
@@ -779,12 +793,9 @@ impl<'a, 'v> Cells<'a, 'v> {
                     .coords
             }),
         );
-        Self {
+        Ok(Self {
             images,
-            regions: images
-                .iter()
-                .map(|view| RefCell::new(ViewRegions::new(view.source, pool)))
-                .collect(),
+            regions,
             options,
             progress,
             layout,
@@ -794,7 +805,7 @@ impl<'a, 'v> Cells<'a, 'v> {
             reach,
             window: window_weights(ClusterRefineParams::default().window, resolution),
             baseline_deg,
-        }
+        })
     }
 
     /// The working grid and its cells as the detail record states them.

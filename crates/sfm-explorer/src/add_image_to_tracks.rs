@@ -12,6 +12,7 @@
 //! decodes the photographs and runs the operation on a worker, and the Action
 //! Log sentence. See `specs/gui/edits/add-image-to-tracks.md`.
 
+use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::reconstruction::add_image_to_tracks::{
     add_image_to_tracks, AddImageToTracksError, AddImageToTracksOptions, AddImageToTracksReport,
 };
@@ -187,6 +188,7 @@ impl AppState {
                 source,
                 index,
                 &slots,
+                &RegionPool::for_kernel_call(),
                 &AddImageToTracksOptions::default(),
                 &work,
             ) {

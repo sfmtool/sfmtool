@@ -1353,7 +1353,8 @@ through `patches::views::build_pyramids_from_image_list` and each read in place
 as a tiled photograph, the pixels `TiledPhotograph::from_image` builds; the
 kernel runs under `py.detach` with a region pool made for the call, and a
 photograph read that fails, which arrays in memory never do, raises
-`ValueError` with the read's message.
+`RuntimeError` saying it is a photograph in memory and carrying the read's
+message.
 
 The returned dict is member-parallel: `reference_members` `(C,)` uint32
 (`0xFFFFFFFF` = unrefinable), `member_status` `(M,)` uint8,

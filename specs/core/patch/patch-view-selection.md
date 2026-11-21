@@ -344,7 +344,10 @@ support pixel either way, from a smaller and better-cached level).
 ### Implementation details
 
 `PatchCloud.select_views(recon, images, *, min_relative_zncc=0.7, …,
-min_self_agreement=0.3, point_indexes=None)`. The reference appearance is the
+min_self_agreement=0.3, point_indexes=None)`, which reads the photographs
+through a region pool made for the call and raises a read that fails, which a
+photograph in memory never does, as `RuntimeError` naming the photograph, or
+saying it is one in memory and carrying the read's message. The reference appearance is the
 IRLS-weighted consensus of the track views' z-normalized patch renders over a
 frozen common support (re-normalized per channel so a dot product is a windowed
 ZNCC). A candidate is scored on the **reference's** surviving original channels
@@ -412,11 +415,10 @@ and their dot products would not be correlations. With keypoints, each view's
 mask is built through the patch slid onto its keypoint's ray, the render the
 stack reads.
 
-**The z-normalized stack.** `normalized_stack` renders the kept views over the
-support, each with its sampler, from the whole pyramid each tiled photograph
-holds, as member coherence reads it; `normalized_source_stack`, which the view
-selection reads, renders the same stack through `render_source_tile`, one
-`ViewRegions` per view. Each refuses the stack when a support pixel
+**The z-normalized stack.** `normalized_source_stack` renders the kept views
+over the support, each with its sampler, through `render_source_tile`, one
+`ViewRegions` per view, as the view selection and member coherence read it. It
+refuses the stack when a support pixel
 leaves a view's photograph, since several views reading zeros at the same
 pixels would agree on nothing. `znormalize_into_kept` normalizes each colour
 channel of each view on its own: subtract the windowed mean, divide by the

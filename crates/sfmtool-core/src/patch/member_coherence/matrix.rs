@@ -10,13 +10,17 @@
 //! Everything here is rendering and image plumbing; the verdict read off the
 //! matrix lives in [`super::decide`].
 
+use std::borrow::BorrowMut;
+
 use super::{
     scored_mask, MemberCoherenceParams, MemberMatrix, COARSE_FACTORS, MIN_COARSE_RESOLUTION,
 };
+use crate::camera::sampler::{RegionPool, ViewRegions};
+use crate::camera::PhotographReadError;
 use crate::patch::blur_matched::{assess_blur, blur_to_length_into, BlurScratch, TilePlanes};
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::normal_refine::{
-    build_level_context, normalized_stack, weighted_moments_pub, window_weights,
+    build_level_context, normalized_source_stack, weighted_moments_pub, window_weights,
     znormalize_into_kept, PatchWindow, ProjectedImage, ViewSamplers, FLAT_NORM_SQ_EPS,
 };
 use crate::patch::pair_sharpness::TrackBlurs;
@@ -75,40 +79,67 @@ use crate::progress_note;
 /// residual was deflating them, so a caller switching anchoring should re-check
 /// its threshold rather than assume it transfers.
 ///
+/// # Reading the photographs
+///
+/// Each member's photograph is read through the render entry points, with one
+/// [`ViewRegions`] per member made from `pool`, the region pool the caller
+/// made for this call. [`member_zncc_matrix_reporting`] takes the members'
+/// regions from its caller instead, so a caller that has already read the
+/// members, as the reference-view rule has their tiles, reuses what it read.
+///
+/// # Errors
+///
+/// The [`PhotographReadError`] of a read of a member's photograph that failed.
+///
 /// # Panics
 ///
 /// Panics if `member_keypoints` is given and is not parallel to `members`.
 pub fn member_zncc_matrix(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     members: &[u32],
     member_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &MemberCoherenceParams,
-) -> MemberMatrix {
+) -> Result<MemberMatrix, PhotographReadError> {
+    let mut regions: Vec<ViewRegions<'_>> = members
+        .iter()
+        .map(|&m| ViewRegions::new(views[m as usize].source, pool))
+        .collect();
     member_zncc_matrix_reporting(
         patch,
         views,
         members,
+        &mut regions,
         member_keypoints,
         params,
         &Progress::none(),
     )
 }
 
-/// [`member_zncc_matrix`] reporting to `progress`: a detailed `progress` times
-/// the members' renders under each sampler in its own detail phase.
+/// [`member_zncc_matrix`] with the members' regions given and reporting to
+/// `progress`: `regions` is parallel to `members`, each reading its member's
+/// photograph (a [`ViewRegions`] or a mutable reference to one), and a
+/// detailed `progress` times the members' renders under each sampler in its
+/// own detail phase. A member listed twice is read through the regions of its
+/// first listing, as the matrix counts it once.
+///
+/// # Errors
+///
+/// As [`member_zncc_matrix`].
 ///
 /// # Panics
 ///
-/// As [`member_zncc_matrix`].
-pub fn member_zncc_matrix_reporting(
+/// As [`member_zncc_matrix`], and if `regions` is not parallel to `members`.
+pub fn member_zncc_matrix_reporting<'r>(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
     members: &[u32],
+    regions: &mut [impl BorrowMut<ViewRegions<'r>>],
     member_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &MemberCoherenceParams,
     progress: &Progress<'_>,
-) -> MemberMatrix {
+) -> Result<MemberMatrix, PhotographReadError> {
     let resolution = params.resolution.max(2);
 
     if let Some(kps) = member_keypoints {
@@ -118,8 +149,14 @@ pub fn member_zncc_matrix_reporting(
             "member_keypoints must be parallel to members"
         );
     }
+    assert_eq!(
+        regions.len(),
+        members.len(),
+        "regions must be parallel to members"
+    );
 
-    // Dedup first-seen-wins, carrying each survivor's keypoint with it.
+    // Dedup first-seen-wins, carrying each survivor's keypoint and regions
+    // with it.
     let mut seen = std::collections::HashSet::new();
     let keep: Vec<usize> = (0..members.len())
         .filter(|&i| seen.insert(members[i]))
@@ -127,6 +164,12 @@ pub fn member_zncc_matrix_reporting(
     let members: Vec<u32> = keep.iter().map(|&i| members[i]).collect();
     let member_kps: Option<Vec<Option<[f64; 2]>>> =
         member_keypoints.map(|kps| keep.iter().map(|&i| kps[i]).collect());
+    let mut member_regions: Vec<&mut ViewRegions<'r>> = regions
+        .iter_mut()
+        .enumerate()
+        .filter(|(i, _)| keep.binary_search(i).is_ok())
+        .map(|(_, r)| r.borrow_mut())
+        .collect();
     let k = members.len();
 
     let mut zncc = vec![f64::NAN; k * k];
@@ -160,6 +203,7 @@ pub fn member_zncc_matrix_reporting(
             patch,
             views,
             &members,
+            &mut member_regions,
             member_kps.as_deref(),
             params,
             resolution,
@@ -168,14 +212,14 @@ pub fn member_zncc_matrix_reporting(
             &mut zncc_coarse,
             blur_matched.then_some((&mut blur_matched_zncc, &mut pairs_blurred)),
             progress,
-        )
+        )?
     } else {
         0
     };
     // Derived from the filled table, so "scored" means the same thing here as it
     // does in the decision rule.
     let scored = scored_mask(&zncc, k);
-    MemberMatrix {
+    Ok(MemberMatrix {
         members,
         zncc,
         zncc_coarse,
@@ -184,7 +228,7 @@ pub fn member_zncc_matrix_reporting(
         n_support,
         blur_matched_zncc,
         pairs_blurred,
-    }
+    })
 }
 
 /// The [`COARSE_FACTORS`] that divide `resolution` and leave a grid of at least
@@ -197,11 +241,12 @@ pub fn coarse_factors_for(resolution: u32) -> Vec<u32> {
         .collect()
 }
 
-/// Render the members over one frozen common support and fill the off-diagonal
-/// pairwise ZNCC, at full scale and at each coarse scale in `coarse_factors`.
-/// Returns the size of that common support (`0` when none could be built). Leaves
-/// every table untouched for members (or whole tracks) the support / validity /
-/// texture gates drop.
+/// Render the members over one frozen common support, member `m` read through
+/// `regions[m]`, and fill the off-diagonal pairwise ZNCC, at full scale and at
+/// each coarse scale in `coarse_factors`. Returns the size of that common
+/// support (`0` when none could be built), or the error of a read that failed.
+/// Leaves every table untouched for members (or whole tracks) the support /
+/// validity / texture gates drop.
 ///
 /// The coarse tables are built from the **same** rendered stack, box-averaged: no
 /// second render happens, and a member unscored at full scale is unscored at every
@@ -211,6 +256,7 @@ fn fill_member_zncc(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
     members: &[u32],
+    regions: &mut [&mut ViewRegions<'_>],
     member_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &MemberCoherenceParams,
     resolution: u32,
@@ -219,7 +265,7 @@ fn fill_member_zncc(
     zncc_coarse: &mut [Vec<f64>],
     blur_matched: Option<(&mut Vec<f64>, &mut u32)>,
     progress: &Progress<'_>,
-) -> u32 {
+) -> Result<u32, PhotographReadError> {
     let k = members.len();
     let w_full = window_weights(params.window, resolution);
     let member_proj: Vec<ProjectedImage<'_>> = members.iter().map(|&i| views[i as usize]).collect();
@@ -238,29 +284,31 @@ fn fill_member_zncc(
         params.min_valid_fraction,
         member_keypoints,
     ) else {
-        return 0;
+        return Ok(0);
     };
     let n = ctx.pixels.len();
     let n_support = n as u32;
     // Too little common support to correlate anything over: report the count and
     // leave the whole track unscored.
     if n_support < params.min_support_pixels {
-        return n_support;
+        return Ok(n_support);
     }
-    let Some((raw, channels)) = normalized_stack(
+    let Some((raw, channels)) = normalized_source_stack(
         patch,
         &ctx,
         &member_proj,
+        regions,
         resolution,
         ViewSamplers::Each(params.sampler),
         member_keypoints,
         progress,
-    ) else {
-        return n_support;
+    )?
+    else {
+        return Ok(n_support);
     };
     let total_weight: f64 = ctx.weights.iter().sum();
     if total_weight <= 0.0 {
-        return n_support;
+        return Ok(n_support);
     }
 
     // Drop members with no texture at all before z-normalizing. The shared
@@ -275,7 +323,7 @@ fn fill_member_zncc(
         .filter(|&v| member_has_texture(&raw, v, channels, n, &ctx.weights, total_weight))
         .collect();
     if alive.len() < 2 {
-        return n_support;
+        return Ok(n_support);
     }
     let compacted: Option<Vec<f32>> = (alive.len() < ctx.kept.len()).then(|| {
         let mut out = Vec::with_capacity(alive.len() * channels * n);
@@ -298,7 +346,7 @@ fn fill_member_zncc(
         k,
         zncc,
     ) else {
-        return n_support;
+        return Ok(n_support);
     };
 
     // Blur-matched, from the same renders, over the same support, with the
@@ -344,7 +392,7 @@ fn fill_member_zncc(
             &mut zncc_coarse[level],
         );
     }
-    n_support
+    Ok(n_support)
 }
 
 /// Z-normalize one scale's stack and write its pairwise ZNCC into `table`.

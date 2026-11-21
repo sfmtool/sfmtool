@@ -543,10 +543,12 @@ fn rendered_matrix_is_symmetric_and_separates_the_odd_member_out() {
     let m = member_zncc_matrix(
         &plane_patch(),
         &views,
+        crate::camera::sampler::test_pool(),
         &[0, 1, 2, 3],
         None,
         &render_params(),
-    );
+    )
+    .unwrap();
 
     assert_eq!(m.len(), 4);
     assert!(m.scored.iter().all(|&s| s), "every member should render");
@@ -584,7 +586,15 @@ fn one_surface_seen_by_every_member_is_kept_whole() {
         &[surface_a, surface_a, surface_a],
     );
     let views = scene.views();
-    let out = validate_member_coherence(&plane_patch(), &views, &[0, 1, 2], None, &render_params());
+    let out = validate_member_coherence(
+        &plane_patch(),
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2],
+        None,
+        &render_params(),
+    )
+    .unwrap();
     assert_eq!(out.decision.verdict, MemberVerdict::KeepAll);
     assert_eq!(out.decision.support, 3);
 }
@@ -604,10 +614,12 @@ fn balanced_two_surface_track_retires_end_to_end() {
     let out = validate_member_coherence(
         &plane_patch(),
         &views,
+        crate::camera::sampler::test_pool(),
         &[0, 1, 2, 3],
         None,
         &render_params(),
-    );
+    )
+    .unwrap();
     assert_eq!(out.decision.verdict, MemberVerdict::Retire);
     assert_eq!(out.decision.support, 2);
     assert!(out.decision.kept.iter().all(|&k| !k));
@@ -633,10 +645,12 @@ fn a_textureless_member_is_unscored_and_the_rest_still_score() {
     let out = validate_member_coherence(
         &plane_patch(),
         &views,
+        crate::camera::sampler::test_pool(),
         &[0, 1, 2, 3],
         None,
         &render_params(),
-    );
+    )
+    .unwrap();
 
     assert_eq!(out.matrix.scored, vec![true, true, true, false]);
     for (i, j) in [(0, 1), (0, 2), (1, 2)] {
@@ -663,7 +677,15 @@ fn the_common_support_is_reported_and_min_support_pixels_gates_on_it() {
     );
     let views = scene.views();
     let params = render_params();
-    let m = member_zncc_matrix(&plane_patch(), &views, &[0, 1, 2], None, &params);
+    let m = member_zncc_matrix(
+        &plane_patch(),
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2],
+        None,
+        &params,
+    )
+    .unwrap();
     let n = m.n_support;
     // A real support: past the shared floor, and short of the full grid (the
     // gaussian-disk window clips the corners).
@@ -677,7 +699,15 @@ fn the_common_support_is_reported_and_min_support_pixels_gates_on_it() {
         min_support_pixels: n + 1,
         ..params
     };
-    let gated = member_zncc_matrix(&plane_patch(), &views, &[0, 1, 2], None, &strict);
+    let gated = member_zncc_matrix(
+        &plane_patch(),
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2],
+        None,
+        &strict,
+    )
+    .unwrap();
     assert_eq!(gated.n_support, n);
     assert!(gated.scored.iter().all(|&s| !s));
     assert!(gated.get(0, 1).is_nan());
@@ -694,10 +724,12 @@ fn duplicate_members_are_deduplicated_before_the_matrix() {
     let m = member_zncc_matrix(
         &plane_patch(),
         &views,
+        crate::camera::sampler::test_pool(),
         &[1, 0, 1, 0],
         None,
         &render_params(),
-    );
+    )
+    .unwrap();
     assert_eq!(m.members, vec![1, 0]);
     assert_eq!(m.len(), 2);
 }
@@ -733,8 +765,24 @@ fn keypoints_at_the_projections_reproduce_the_unanchored_matrix() {
         .map(|&i| Some(project_center(&patch, &views[i as usize])))
         .collect();
 
-    let plain = member_zncc_matrix(&patch, &views, &members, None, &render_params());
-    let anchored = member_zncc_matrix(&patch, &views, &members, Some(&kps), &render_params());
+    let plain = member_zncc_matrix(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &members,
+        None,
+        &render_params(),
+    )
+    .unwrap();
+    let anchored = member_zncc_matrix(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &members,
+        Some(&kps),
+        &render_params(),
+    )
+    .unwrap();
     assert_eq!(anchored.n_support, plain.n_support);
     assert_eq!(anchored.scored, plain.scored);
     for i in 0..3 {
@@ -779,9 +827,25 @@ fn a_member_with_a_reprojection_residual_recovers_when_anchored_at_its_keypoint(
     );
 
     let members = [0u32, 1, 2];
-    let plain = member_zncc_matrix(&patch, &views, &members, None, &render_params());
+    let plain = member_zncc_matrix(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &members,
+        None,
+        &render_params(),
+    )
+    .unwrap();
     let kps = [None, None, Some(kp2)];
-    let anchored = member_zncc_matrix(&patch, &views, &members, Some(&kps), &render_params());
+    let anchored = member_zncc_matrix(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &members,
+        Some(&kps),
+        &render_params(),
+    )
+    .unwrap();
 
     // Members 0 and 1 are untouched by the anchoring (no keypoint given).
     assert!(plain.get(0, 1) > 0.9, "control pair: {}", plain.get(0, 1));
@@ -838,11 +902,21 @@ fn member_keypoints_are_deduplicated_alongside_their_members() {
     let dup = member_zncc_matrix(
         &patch,
         &views,
+        crate::camera::sampler::test_pool(),
         &[1, 0, 1, 0],
         Some(&[k1, k0, k1, k0]),
         &render_params(),
-    );
-    let plain = member_zncc_matrix(&patch, &views, &[1, 0], Some(&[k1, k0]), &render_params());
+    )
+    .unwrap();
+    let plain = member_zncc_matrix(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[1, 0],
+        Some(&[k1, k0]),
+        &render_params(),
+    )
+    .unwrap();
     assert_eq!(dup.members, vec![1, 0]);
     assert!((dup.get(0, 1) - plain.get(0, 1)).abs() < 1e-12);
 }
@@ -1430,7 +1504,15 @@ fn the_coarse_scales_are_rendered_from_the_same_stack_and_agree_with_the_full_on
         min_valid_fraction: 0.5,
         ..MemberCoherenceParams::default()
     };
-    let m = member_zncc_matrix(&plane_patch(), &scene.views(), &[0, 1, 2, 3], None, &params);
+    let m = member_zncc_matrix(
+        &plane_patch(),
+        &scene.views(),
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        &params,
+    )
+    .unwrap();
     assert_eq!(m.coarse_factors, coarse_factors_for(params.resolution));
     assert_eq!(m.zncc_coarse.len(), m.coarse_factors.len());
     assert_eq!(m.coarse_factors, vec![2, 4], "24 admits both halvings");
@@ -1540,7 +1622,15 @@ fn blur_matching_lifts_a_blurred_member_and_leaves_the_plain_tables_alone() {
     ));
     let views = scene.views();
     let members = [0, 1, 2, 3];
-    let plain = member_zncc_matrix(&plane_patch(), &views, &members, None, &render_params());
+    let plain = member_zncc_matrix(
+        &plane_patch(),
+        &views,
+        crate::camera::sampler::test_pool(),
+        &members,
+        None,
+        &render_params(),
+    )
+    .unwrap();
     assert!(plain.blur_matched_zncc.is_empty());
     assert_eq!(plain.pairs_blurred, 0);
 
@@ -1548,7 +1638,15 @@ fn blur_matching_lifts_a_blurred_member_and_leaves_the_plain_tables_alone() {
         matching: PairMatching::BlurMatched,
         ..render_params()
     };
-    let matched = member_zncc_matrix(&plane_patch(), &views, &members, None, &params);
+    let matched = member_zncc_matrix(
+        &plane_patch(),
+        &views,
+        crate::camera::sampler::test_pool(),
+        &members,
+        None,
+        &params,
+    )
+    .unwrap();
     assert_eq!(matched.zncc, plain.zncc, "the plain table is unchanged");
     assert_eq!(matched.zncc_coarse, plain.zncc_coarse);
     assert_eq!(matched.decision_zncc(), &matched.blur_matched_zncc[..]);
@@ -1588,7 +1686,15 @@ fn blur_matching_lifts_a_blurred_member_and_leaves_the_plain_tables_alone() {
         matching: PairMatching::BlurMatchedAboveRatio(1.5),
         ..render_params()
     };
-    let above = member_zncc_matrix(&plane_patch(), &views, &members, None, &params);
+    let above = member_zncc_matrix(
+        &plane_patch(),
+        &views,
+        crate::camera::sampler::test_pool(),
+        &members,
+        None,
+        &params,
+    )
+    .unwrap();
     for (i, j) in [(0, 1), (0, 2), (1, 2)] {
         assert_eq!(
             above.blur_matched_zncc[i * 4 + j],

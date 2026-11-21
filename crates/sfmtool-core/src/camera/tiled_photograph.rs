@@ -133,11 +133,11 @@ impl TiledPhotograph {
         self.channels
     }
 
-    /// The pyramid the photograph is read from, for the patch kernels that
-    /// do not read through the render entry points yet: steps 10b and 10c of
-    /// `specs/drafts/out-of-core-photograph-pyramid.md` move them, and step
-    /// 12 the grey reads of the nearby-track search, and the last of them
-    /// deletes this.
+    /// The pyramid the photograph is read from, for the one kernel that does
+    /// not read through the render entry points yet: the grey images of the
+    /// nearby-track search (`bench::nearby::grey`), which step 12 of
+    /// `specs/drafts/out-of-core-photograph-pyramid.md` moves, deleting this.
+    /// The tests also read it, to compare a read with the whole pyramid's.
     pub(crate) fn held_pyramid(&self) -> &ImageU8Pyramid {
         &self.pyramid
     }

@@ -40,6 +40,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 
+use sfmtool_core::camera::sampler::{RegionPool, ViewRegions};
 use sfmtool_core::camera::{PhotographCache, TiledPhotograph};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::keypoint_subpixel::KeypointSubpixelParams;
@@ -163,8 +164,10 @@ impl ReferencePicks {
 /// second share, over the views left, through
 /// `stored_bitmap::render_reference` at the reconstruction's patch resolution
 /// ([`crate::bench::patch_resolution`]): the pick an evaluation would make
-/// without localising the rows first. With fewer than two views there is no
-/// pick, as for the bitmap writers. The patch frame keeps the point's `w`, so a
+/// without localising the rows first, through one region pool made for the
+/// call. With fewer than two views there is no pick, as for the bitmap
+/// writers, and a read of a photograph that fails, which a whole pyramid read
+/// in place never does, gives no pick either. The patch frame keeps the point's `w`, so a
 /// point at infinity is picked for as any other.
 pub(super) fn pick_reference(
     edited: &EditedReconstruction,
@@ -227,10 +230,16 @@ pub(super) fn pick_reference(
         resolution: crate::bench::patch_resolution(recon),
         ..KeypointSubpixelParams::default()
     };
+    let pool = RegionPool::for_kernel_call();
+    let mut regions: Vec<ViewRegions<'_>> = views
+        .iter()
+        .map(|view| ViewRegions::new(view.source, &pool))
+        .collect();
     let render = render_reference(
         &patch,
         &views,
         &patch_views,
+        &mut regions,
         &keypoints,
         params.resolution,
         params.sampler,
@@ -240,6 +249,9 @@ pub(super) fn pick_reference(
     if rule.is_cancelled() {
         return None;
     }
+    let Ok(render) = render else {
+        return Some(None);
+    };
     Some(render.reading.choice.reference.map(|r| found[r].0 as u32))
 }
 

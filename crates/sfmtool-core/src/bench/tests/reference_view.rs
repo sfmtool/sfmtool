@@ -291,7 +291,15 @@ fn the_pair_zncc_is_the_median_of_member_coherence_s_row_called_directly() {
         sampler: options.localize.sampler,
         ..MemberCoherenceParams::default()
     };
-    let matrix = member_zncc_matrix(&patch_frame, &views, &members, Some(&keypoints), &params);
+    let matrix = member_zncc_matrix(
+        &patch_frame,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &members,
+        Some(&keypoints),
+        &params,
+    )
+    .unwrap();
     assert_eq!(matrix.members, members);
     for (k, &i) in rows.iter().enumerate() {
         let others: Vec<f64> = (0..matrix.len())
@@ -321,11 +329,15 @@ fn tile_of_row(
     render_view_tile(
         &patch_frame,
         &views[read.observations[i].image as usize],
+        &mut crate::camera::sampler::test_regions(
+            views[read.observations[i].image as usize].source,
+        ),
         Some(keypoint_of(read, i)),
         resolution,
         EvaluateOptions::default().localize.sampler,
         &Progress::none(),
     )
+    .unwrap()
 }
 
 /// A track whose bitmap names no reference observation (a fused mean an older
@@ -338,8 +350,14 @@ fn every_row_is_scored_against_the_stored_bitmap() {
     let (read, edited) = truth.evaluated_track();
     // The minimal ground truth stores no bitmaps; render one and forget which
     // row it came from.
-    let mut rendered =
-        render_bitmap_in_place(&read, &edited, &views, &FitOptions::default()).unwrap();
+    let mut rendered = render_bitmap_in_place(
+        &read,
+        &edited,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &FitOptions::default(),
+    )
+    .unwrap();
     if let crate::bench::Stage::Track(payload) = &mut rendered.stage {
         payload.reference = None;
     }
@@ -427,7 +445,14 @@ fn the_rendered_bitmap_is_the_picked_row_s_tile_and_the_commit_records_it() {
                 .is_some_and(|s| s.is_reference())
         })
         .expect("the rule picks one");
-    let rendered = render_bitmap_in_place(&read, &edited, &views, &FitOptions::default()).unwrap();
+    let rendered = render_bitmap_in_place(
+        &read,
+        &edited,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &FitOptions::default(),
+    )
+    .unwrap();
     let payload = rendered.track().unwrap();
     assert_eq!(payload.reference, Some(picked));
     let resolution = EvaluateOptions::default().patch_resolution(&edited.base) as usize;
@@ -651,12 +676,17 @@ fn a_point_no_view_covers_whole_stores_the_rule_s_pick() {
         &patch,
         &views,
         &images,
+        &mut images
+            .iter()
+            .map(|&v| crate::camera::sampler::test_regions((&views)[v as usize].source))
+            .collect::<Vec<_>>(),
         &anchors(&keypoints),
         24,
         params.sampler,
         &params.reference_view,
         &Progress::none(),
-    );
+    )
+    .unwrap();
     let choice = &render.reading.choice;
     let pick = choice.reference.expect("the rule picks");
     // Every view that has a cost pays a coverage or clipping penalty.
@@ -670,11 +700,13 @@ fn a_point_no_view_covers_whole_stores_the_rule_s_pick() {
     let stored = render_patch_bitmap(
         &patch,
         &views,
+        crate::camera::sampler::test_pool(),
         &images,
         &keypoints,
         &params,
         &Progress::none(),
     )
+    .unwrap()
     .expect("a bitmap");
     assert_eq!(stored.reference, pick);
     assert_eq!(stored.rgba, bitmap_from_tile(&render.tiles[pick]));
@@ -693,11 +725,13 @@ fn the_sub_pixel_refiner_names_a_reference_for_a_point_no_view_covers_whole() {
     let out = refine_patch_keypoints(
         &patch,
         &views,
+        crate::camera::sampler::test_pool(),
         &images,
         Some(&anchors(&keypoints)),
         None,
         &params,
-    );
+    )
+    .unwrap();
     let reference = out.reference.expect("a reference view");
     assert_eq!(out.scores[reference], 1.0);
     assert!(out.representative.is_some());
@@ -717,11 +751,13 @@ fn the_localizer_aligns_to_a_view_for_a_point_no_view_covers_whole() {
     let out = localize_patch_keypoints(
         &patch,
         &views,
+        crate::camera::sampler::test_pool(),
         &images,
         Some(&anchors(&keypoints)),
         None,
         &params,
-    );
+    )
+    .unwrap();
     let reference = out.reference.expect("a reference view");
     let k = out
         .views
@@ -757,7 +793,14 @@ fn rendering_then_scoring_matches_an_evaluation_of_the_rendered_track() {
         &Progress::none(),
     )
     .unwrap();
-    let rendered = render_bitmap_in_place(&read, &edited, &views, &FitOptions::default()).unwrap();
+    let rendered = render_bitmap_in_place(
+        &read,
+        &edited,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &FitOptions::default(),
+    )
+    .unwrap();
     let payload = rendered.track().unwrap();
     assert!(payload.bitmap.is_some());
     assert_eq!(
@@ -765,7 +808,15 @@ fn rendering_then_scoring_matches_an_evaluation_of_the_rendered_track() {
         rule_pick(&read),
         "the render names the pick"
     );
-    let scored = score_bitmap(&rendered, &edited, &views, &options, &Progress::none()).unwrap();
+    let scored = score_bitmap(
+        &rendered,
+        &edited,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &options,
+        &Progress::none(),
+    )
+    .unwrap();
     let (again, _) = evaluate(
         &rendered,
         &edited,
@@ -835,8 +886,23 @@ fn rendering_from_the_evaluation_matches_the_three_calls() {
         &Progress::none(),
     )
     .unwrap();
-    let rendered = render_bitmap_in_place(&measured, &edited, &views, &fit).unwrap();
-    let scored = score_bitmap(&rendered, &edited, &views, &options, &Progress::none()).unwrap();
+    let rendered = render_bitmap_in_place(
+        &measured,
+        &edited,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &fit,
+    )
+    .unwrap();
+    let scored = score_bitmap(
+        &rendered,
+        &edited,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &options,
+        &Progress::none(),
+    )
+    .unwrap();
     assert!(scored.track().unwrap().reference.is_some(), "a picked row");
     assert_same_bitmap_and_scores(&combined, &scored);
 }
@@ -1158,8 +1224,23 @@ fn a_defined_reference_is_rendered_from_through_the_bench_s_steps() {
         &Progress::none(),
     )
     .unwrap();
-    let rendered = render_bitmap_in_place(&measured, &edited, &views, &fit_options).unwrap();
-    let scored = score_bitmap(&rendered, &edited, &views, &options, &Progress::none()).unwrap();
+    let rendered = render_bitmap_in_place(
+        &measured,
+        &edited,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &fit_options,
+    )
+    .unwrap();
+    let scored = score_bitmap(
+        &rendered,
+        &edited,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &options,
+        &Progress::none(),
+    )
+    .unwrap();
     assert_same_bitmap_and_scores(&after_tilt, &scored);
 
     // Sighting another row keeps the bitmap and the reference.
@@ -1397,14 +1478,18 @@ fn mean_of_tiles(
         .iter()
         .zip(keypoints)
         .map(|(&i, &k)| {
-            bitmap_from_tile(&render_view_tile(
-                patch,
-                &views[i as usize],
-                Some(k),
-                r,
-                KeypointSubpixelParams::default().sampler,
-                &Progress::none(),
-            ))
+            bitmap_from_tile(
+                &render_view_tile(
+                    patch,
+                    &views[i as usize],
+                    &mut crate::camera::sampler::test_regions(views[i as usize].source),
+                    Some(k),
+                    r,
+                    KeypointSubpixelParams::default().sampler,
+                    &Progress::none(),
+                )
+                .unwrap(),
+            )
         })
         .collect();
     (0..r * r * 4)

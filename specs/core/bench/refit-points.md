@@ -492,7 +492,9 @@ takes an `sfmtool.reconstruction.SfmrReconstruction` and `images` as
 `ImagePyramidSet`), and the fit's keyword arguments. A caller holding an
 `EditedReconstruction` folds it first with its `materialize`. It runs with the
 GIL released and `Progress::none()`, and raises `ValueError` with the refusal's
-sentence. It returns the refit `SfmrReconstruction` and a report dict with the
+sentence. A read of a photograph that fails, which a photograph in memory never
+does, raises `RuntimeError` with the step's sentence, which names the
+photograph, or says it is one in memory and carries the read's message. It returns the refit `SfmrReconstruction` and a report dict with the
 counts `read`, `refit`, `unchanged`, `crossed`, `kept`, `held`, `ranged`,
 `released`, `kept_at_seed` and `median_shift`, and `points`, one dict per point
 in index order with its `index` and `outcome` (`"refit"`, `"held"`,
