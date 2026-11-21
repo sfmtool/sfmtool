@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use pyo3::exceptions::{PyIOError, PyValueError};
+use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
@@ -46,6 +46,8 @@ use crate::PySfmrReconstruction;
 ///     ValueError: An option does not fit ``recon`` (an unknown
 ///         ``start_image``, a quality out of range).
 ///     IOError: A file could not be written.
+///     RuntimeError: A read of a photograph the patch bitmaps are rendered
+///         from failed.
 // This is a Python docstring (rendered by `help()`), not Rust prose: its
 // indented continuation paragraphs read as Markdown code blocks.
 #[allow(rustdoc::invalid_rust_codeblocks)]
@@ -86,6 +88,7 @@ pub fn write_web_export<'py>(
         .detach(|| core_write(inner, &out_dir, &options, &Progress::none()))
         .map_err(|e| match e {
             WebExportError::Io(_) => PyIOError::new_err(e.to_string()),
+            WebExportError::Photograph(_) => PyRuntimeError::new_err(e.to_string()),
             _ => PyValueError::new_err(e.to_string()),
         })?;
     let dict = PyDict::new(py);

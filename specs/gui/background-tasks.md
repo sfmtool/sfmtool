@@ -885,6 +885,7 @@ of the bar. Each file's stages sit under a phase `open` of its own:
 | `thumbnails` | the file carries no thumbnail column | a count of `images`; note `{a} from .sift files, {b} from photographs, {c} placeholders` |
 | `patch bitmaps` > `decode photographs` | the file has patch frames and inline keypoints but no bitmaps | a count of `images`; note `{k} of {n} read`, with `, {r} reused from the cache` when the cache already held any |
 | `patch bitmaps` > `render` | the same | a count of `patches`; note `{P} patches at {R} px` |
+| `patch bitmaps` > `read regions` | the same | note `{a} region pyramids assembled, {u} reused, {t} reads on tiles`, the counts of the render's region pool |
 
 The file's share of the bar splits 1 : 9 between the read and the rest, and the
 rest 1 : 8 between thumbnails and bitmaps, a stage the file does not need taking
@@ -901,8 +902,11 @@ made for a point at `-1` into the value's references, marked
 `PointSet::display_only_references`, so Track View marks the row the display
 bitmap is the tile of.
 It runs over every photograph that decodes at its camera's
-size with every level of its pyramid whole; one that does not is left out of
-every patch's views. The photographs are
+size; one that does not is left out of every patch's views. A read of a
+photograph the render was handed that fails, such as one of a pyramid that a
+caller put in the cache holding only part of a level, fails the file's open
+with `Failed to render the patch bitmaps of {path}: a photograph could not be
+read: {why}`. The photographs are
 read through the viewer's photograph cache
 ([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)), so
 the panels and later steps find them decoded, and opening the same file again

@@ -43,7 +43,7 @@ use crate::analysis::scene_scale::{
     compute_auto_point_size, compute_camera_nn_scale, compute_scene_bounds, length_scale,
 };
 use crate::camera::frustum::compute_distorted_frustum_grid;
-use crate::camera::PhotographCache;
+use crate::camera::{PhotographCache, PhotographReadError};
 use crate::numeric::quantile_in_place;
 use crate::patch::display_bitmaps::render_display_patch_bitmaps;
 use crate::progress::{Cancelled, Progress};
@@ -204,6 +204,10 @@ pub enum WebExportError {
     Encode(image::ImageError),
     /// A file could not be written.
     Io(std::io::Error),
+    /// A read of a photograph the patch bitmaps are rendered from failed
+    /// ([`render_display_patch_bitmaps`]; a photograph that cannot be decoded
+    /// at all is left out instead).
+    Photograph(PhotographReadError),
     /// The progress was cancelled.
     Cancelled,
 }
@@ -223,6 +227,7 @@ impl std::fmt::Display for WebExportError {
             }
             Self::Encode(e) => write!(f, "could not encode an atlas page: {e}"),
             Self::Io(e) => write!(f, "could not write the export: {e}"),
+            Self::Photograph(e) => write!(f, "a photograph could not be read: {e}"),
             Self::Cancelled => f.write_str("cancelled"),
         }
     }
@@ -233,6 +238,15 @@ impl std::error::Error for WebExportError {}
 impl From<Cancelled> for WebExportError {
     fn from(_: Cancelled) -> Self {
         Self::Cancelled
+    }
+}
+
+impl From<PhotographReadError> for WebExportError {
+    fn from(e: PhotographReadError) -> Self {
+        match e {
+            PhotographReadError::Cancelled => Self::Cancelled,
+            e => Self::Photograph(e),
+        }
     }
 }
 
@@ -261,6 +275,8 @@ impl From<Cancelled> for WebExportError {
 /// whose adjustment its camera cannot take, or a thumbnail column without one
 /// row per image;
 /// [`WebExportError::Encode`] when a page cannot be encoded;
+/// [`WebExportError::Photograph`] when a read of a photograph the patch
+/// bitmaps are rendered from fails;
 /// [`WebExportError::Cancelled`] when `progress` is cancelled.
 pub fn build_web_export(
     recon: &SfmrReconstruction,

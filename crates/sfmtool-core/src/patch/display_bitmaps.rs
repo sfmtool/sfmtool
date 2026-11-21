@@ -22,7 +22,7 @@ use crate::patch::stored_bitmap::{
     render_patch_cloud_bitmaps, CloudRenderError, PatchBitmapColumn, UnreferencedPoints,
 };
 use crate::patch::PatchCloud;
-use crate::progress::{Cancelled, Progress};
+use crate::progress::Progress;
 use crate::{progress_note, SfmrReconstruction};
 
 /// Render `recon`'s patch bitmap column at its stored frames and keypoints,
@@ -35,20 +35,19 @@ use crate::{progress_note, SfmrReconstruction};
 /// bench commit and `--add-patch-bitmaps` use ([`render_patch_cloud_bitmaps`]):
 /// each point's tile from the reference observation `recon` stores for it, or,
 /// for a point at `-1`, from the observation the reference-view rule picks. A
-/// photograph that cannot be read, is not the size its camera says, or whose
-/// pyramid in the cache does not hold every level whole (one made with
-/// [`ImageU8Pyramid::from_regions`](crate::camera::image::ImageU8Pyramid::from_regions)
-/// and inserted by a caller), is left out of every patch's views rather than
-/// failing the operation; a point whose
+/// photograph that cannot be read, or is not the size its camera says, is left
+/// out of every patch's views rather than failing the operation; a point whose
 /// reference observation's photograph is left out, or a point at `-1` that two
-/// readable views do not see, gets a zero row.
+/// readable views do not see, gets a zero row. A read of a photograph that
+/// was handed back but lacks the pixels the read asks for fails the call.
 ///
 /// SfM Explorer passes its own cache, so the photographs this decodes stay
 /// for its panels and later operations; a caller with no cache to share, such
 /// as `sfm web-export`, passes `PhotographCache::new(0)`, which keeps nothing.
 /// The render reads the photographs through `pool`, the region pool the
-/// caller made for this call. Every photograph it reads holds each of its
-/// levels whole, so no read of its pixels fails.
+/// caller made for this call, and a third stage, `read regions`, notes the
+/// pool's counts: the region pyramids the reads assembled and reused, and the
+/// reads that took the tile path.
 ///
 /// `Ok(None)` when `recon` has no patch frames it can read (none, or columns
 /// that are not one row per point, which
@@ -58,13 +57,14 @@ use crate::{progress_note, SfmrReconstruction};
 ///
 /// # Errors
 ///
-/// [`Cancelled`] when `progress` was cancelled.
+/// [`PhotographReadError::Cancelled`] when `progress` was cancelled, and the
+/// first read of a photograph that failed.
 pub fn render_display_patch_bitmaps(
     recon: &SfmrReconstruction,
     photographs: &PhotographCache,
     pool: &RegionPool,
     progress: &Progress<'_>,
-) -> Result<Option<Array4<u8>>, Cancelled> {
+) -> Result<Option<Array4<u8>>, PhotographReadError> {
     // A caller that only draws the column has no use for the references; the
     // ones it read from `recon` it already holds.
     Ok(
@@ -82,13 +82,13 @@ pub fn render_display_patch_bitmaps(
 ///
 /// # Errors
 ///
-/// [`Cancelled`] when `progress` was cancelled.
+/// As [`render_display_patch_bitmaps`].
 pub fn render_patch_bitmap_column(
     recon: &SfmrReconstruction,
     photographs: &PhotographCache,
     pool: &RegionPool,
     progress: &Progress<'_>,
-) -> Result<Option<PatchBitmapColumn>, Cancelled> {
+) -> Result<Option<PatchBitmapColumn>, PhotographReadError> {
     if recon.keypoints_xy().is_none() {
         return Ok(None);
     }
@@ -110,22 +110,15 @@ pub fn render_patch_bitmap_column(
         let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
         let (found, tally) = photographs.get_many(&refs, &phase)?;
         // A photograph that is not the size its camera says would be sampled
-        // at the wrong pixels, so it is left out like an unreadable one, and
-        // so is one whose pyramid does not hold every level whole, which a
-        // read could ask for pixels it lacks. The rest are read through their
-        // whole pyramids until step 11 of
-        // `specs/drafts/out-of-core-photograph-pyramid.md` fetches tiles.
+        // at the wrong pixels, so it is left out like an unreadable one. The
+        // size is the layout's, which a read's pixels are checked against.
         let sources: Vec<Option<TiledPhotograph>> = found
             .into_iter()
             .zip(&intrinsics)
             .map(|(pyramid, camera)| {
                 pyramid
-                    .filter(|pyramid| {
-                        let level = pyramid.level(0);
-                        level.width() == camera.width && level.height() == camera.height
-                    })
                     .map(TiledPhotograph::from_pyramid)
-                    .filter(holds_every_level)
+                    .filter(|source| source.layout().level_size(0) == (camera.width, camera.height))
             })
             .collect();
         let read = sources.iter().filter(|p| p.is_some()).count();
@@ -170,7 +163,7 @@ pub fn render_patch_bitmap_column(
         })
         .collect();
     let mut phase = render.phase("render");
-    let column = render_patch_cloud_bitmaps(
+    let rendered = render_patch_cloud_bitmaps(
         &cloud,
         recon,
         &views,
@@ -181,32 +174,37 @@ pub fn render_patch_bitmap_column(
         &phase,
     )
     .map_err(|e| match e {
-        CloudRenderError::Cancelled
-        | CloudRenderError::Photograph(PhotographReadError::Cancelled) => Cancelled,
+        CloudRenderError::Cancelled => PhotographReadError::Cancelled,
+        CloudRenderError::Photograph(e) => e,
         // The cloud, the keypoints checked above and one view per image all
-        // come from `recon`, so they agree with it, and every photograph is
-        // a whole pyramid, which holds every pixel a read asks for.
+        // come from `recon`, so they agree with it.
         e => unreachable!("a display render of a reconstruction's own frames: {e}"),
-    })?;
+    });
+    let column = match rendered {
+        Ok(column) => column,
+        Err(e) => {
+            drop(phase);
+            note_region_reads(&render, pool);
+            return Err(e);
+        }
+    };
     progress_note!(
         phase,
         "{} patches at {} px",
         cloud.len(),
         column.bitmaps.shape()[1]
     );
+    drop(phase);
+    note_region_reads(&render, pool);
     Ok(Some(column))
 }
 
-/// Whether `source` holds each level of its layout whole, so that no read of
-/// its pixels can ask for one it lacks.
-fn holds_every_level(source: &TiledPhotograph) -> bool {
-    let pyramid = source.held_pyramid();
-    let layout = source.layout();
-    (0..layout.levels()).all(|l| {
-        let (w, h) = layout.level_size(l);
-        let image = pyramid.level(l);
-        pyramid.level_origin(l) == [0, 0] && image.width() == w && image.height() == h
-    })
+/// The `read regions` stage after the render: `pool`'s counts of the region
+/// pyramids the reads assembled and reused and of the reads that took the
+/// tile path.
+fn note_region_reads(progress: &Progress<'_>, pool: &RegionPool) {
+    let mut phase = progress.phase("read regions");
+    progress_note!(phase, "{}", pool.stats());
 }
 
 #[cfg(test)]

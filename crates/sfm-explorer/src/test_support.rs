@@ -465,3 +465,32 @@ pub(crate) fn image_on_own_camera(
     out.metadata.camera_count = image_set.cameras.len() as u32;
     out
 }
+
+/// Put in `photographs`, for each of `paths`, a pyramid of the photograph's
+/// size that holds only an 8 px corner of each level, as one a caller made
+/// with `ImageU8Pyramid::from_regions` and inserted can be, so a read of any
+/// other pixel of it fails. The size is each file's own, read from its
+/// header, so the photograph passes a size check.
+pub(crate) fn insert_corners_only(
+    photographs: &sfmtool_core::camera::PhotographCache,
+    paths: &[std::path::PathBuf],
+) {
+    use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid, PyramidLevel};
+    for path in paths {
+        let (width, height) = image::image_dimensions(path).expect("a photograph on disk");
+        let levels = ImageU8Pyramid::full_levels(width, height);
+        let (mut w, mut h) = (width, height);
+        let mut corners = Vec::with_capacity(levels);
+        for _ in 0..levels {
+            let (cw, ch) = (w.min(8), h.min(8));
+            corners.push(Some(PyramidLevel {
+                image: ImageU8::new(cw, ch, 3, vec![128; (cw * ch * 3) as usize]),
+                origin: [0, 0],
+                full_size: [w, h],
+            }));
+            (w, h) = (w / 2, h / 2);
+        }
+        let pyramid = ImageU8Pyramid::from_regions(corners).expect("a valid region pyramid");
+        photographs.insert(path, std::sync::Arc::new(pyramid));
+    }
+}

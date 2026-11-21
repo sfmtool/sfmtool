@@ -523,73 +523,52 @@ fn stored_references_survive_missing_views_skipped_points_and_zero_frames() {
     );
 }
 
-/// A photograph whose pyramid in the cache holds level 0 whole, so it is the
-/// size its camera says, but only an 8 px corner of each coarser level, as
-/// one a caller made with `ImageU8Pyramid::from_regions` and inserted, is left
-/// out like an unreadable one rather than failing the render: with every
-/// photograph so, there is nothing to draw.
+/// A photograph whose pyramid in the cache is the size its camera says but
+/// holds only an 8 px corner of each level, as one a caller made with
+/// `ImageU8Pyramid::from_regions` and inserted can be, is handed to the render
+/// rather than left out, and the first read of it that asks for other pixels
+/// fails the render with that read's error.
 #[test]
-fn a_photograph_whose_coarser_levels_are_partial_is_left_out() {
+fn a_photograph_that_lacks_pixels_a_render_reads_fails_the_render() {
     use crate::camera::image::{ImageU8, ImageU8Pyramid, PyramidLevel};
+    use crate::camera::PhotographReadError;
     use std::sync::Arc;
 
     let recon = seoul_bull();
-    let paths: Vec<PathBuf> = recon
-        .image_set
-        .images
-        .iter()
-        .map(|image| recon.workspace_dir.join(&image.name))
-        .collect();
-    let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-    let (decoded, _) = PhotographCache::new(0)
-        .get_many(&refs, &Progress::none())
-        .expect("nothing cancels the decode");
     let cache = PhotographCache::new(1 << 30);
-    for (path, pyramid) in paths.iter().zip(decoded) {
-        let pyramid = pyramid.expect("every photograph is checked in");
-        let layout = TiledPhotograph::from_pyramid(pyramid.clone())
-            .layout()
-            .clone();
-        let channels = pyramid.level(0).channels();
+    for image in &recon.image_set.images {
+        let path = recon.workspace_dir.join(&image.name);
+        let (width, height) = image::image_dimensions(&path).expect("checked in");
+        let layout = crate::camera::mipmap::PyramidLayout::in_memory(
+            width,
+            height,
+            ImageU8Pyramid::full_levels(width, height),
+            crate::camera::PHOTOGRAPH_TILE_SIZE,
+        );
         let levels: Vec<Option<PyramidLevel>> = (0..layout.levels())
             .map(|l| {
                 let (w, h) = layout.level_size(l);
-                Some(if l == 0 {
-                    PyramidLevel {
-                        image: {
-                            let l0 = pyramid.level(0);
-                            ImageU8::new(l0.width(), l0.height(), l0.channels(), l0.data().to_vec())
-                        },
-                        origin: [0, 0],
-                        full_size: [w, h],
-                    }
-                } else {
-                    let (cw, ch) = (w.min(8), h.min(8));
-                    PyramidLevel {
-                        image: ImageU8::new(
-                            cw,
-                            ch,
-                            channels,
-                            vec![128; (cw * ch * channels) as usize],
-                        ),
-                        origin: [0, 0],
-                        full_size: [w, h],
-                    }
+                let (cw, ch) = (w.min(8), h.min(8));
+                Some(PyramidLevel {
+                    image: ImageU8::new(cw, ch, 3, vec![128; (cw * ch * 3) as usize]),
+                    origin: [0, 0],
+                    full_size: [w, h],
                 })
             })
             .collect();
         let partial = ImageU8Pyramid::from_regions(levels).expect("a valid region pyramid");
-        cache.insert(path, Arc::new(partial));
+        cache.insert(&path, Arc::new(partial));
     }
-    let rendered = render_patch_bitmap_column(
+    let Err(error) = render_patch_bitmap_column(
         &recon,
         &cache,
         crate::camera::sampler::test_pool(),
         &Progress::none(),
-    )
-    .expect("not cancelled");
+    ) else {
+        panic!("a read of a pixel the photographs lack did not fail the render");
+    };
     assert!(
-        rendered.is_none(),
-        "every photograph lacks pixels of a coarser level, so none is read"
+        matches!(error, PhotographReadError::OutOfRange { path: None, .. }),
+        "{error}"
     );
 }

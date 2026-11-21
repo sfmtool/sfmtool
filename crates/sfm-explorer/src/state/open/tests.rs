@@ -171,6 +171,7 @@ fn opening_renders_the_patch_bitmaps_a_file_does_not_carry() {
         "patch bitmaps",
         "decode photographs",
         "render",
+        "read regions",
         "thumbnails",
     ] {
         assert!(
@@ -178,6 +179,38 @@ fn opening_renders_the_patch_bitmaps_a_file_does_not_carry() {
             "no {stage} stage in {rows:?}"
         );
     }
+    // The render's reads assembled region pyramids, which the note counts.
+    let regions = phase_note(&entry.detail, "read regions").expect("a read regions note");
+    assert!(
+        regions.ends_with("reads on tiles") && !regions.starts_with("0 region pyramids assembled"),
+        "{regions}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A photograph the cache hands back that lacks pixels a render reads fails
+/// the open, naming the read, rather than being left out of the render.
+#[test]
+fn an_open_whose_photographs_lack_pixels_fails() {
+    let dir = temp_dir("bitmaps_unreadable");
+    let path = saved_with_photographs(&dir);
+    let recon = SfmrReconstruction::load(&path, &sfmtool_core::progress::Progress::none())
+        .expect("the file reads");
+    let photographs: Vec<PathBuf> = recon
+        .image_set
+        .images
+        .iter()
+        .map(|image| dir.join(&image.name))
+        .collect();
+
+    let mut state = AppState::new();
+    crate::test_support::insert_corners_only(&state.photographs, &photographs);
+    let error = state.open_now(&path).expect_err("the open failed");
+    assert!(
+        error.starts_with("Failed to render the patch bitmaps of ")
+            && error.contains("a photograph could not be read: a photograph in memory: "),
+        "{error}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -53,7 +53,11 @@ bitmaps (each point's tile from the reference observation the file stores for
 it, or for a point at `-1` the reference view's tile, as
 [reference-view.md](../../core/patch/reference-view.md) § "The stored
 bitmap" describes);
-when no photograph can be read, the points are drawn as splats. A point with no
+when no photograph can be read, the points are drawn as splats. A photograph
+that cannot be decoded, or is not its camera's size, is left out of the
+render; a read of one the render was handed that fails ends the export with
+`WebExportError::Photograph`, which the binding raises as a `RuntimeError`.
+A point with no
 frame (an all-zero `u` row) or an all-zero bitmap row is drawn as a splat
 either way, by the rule SfM Explorer's surfels follow
 ([patch-rendering.md](../../gui/patch-rendering.md#data-source-already-present), the
