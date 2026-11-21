@@ -2,15 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Render-and-z-normalize numerics: project each kept view's patch into the
-//! frozen support ([`normalized_stack`], or [`normalized_source_stack`]
-//! through the render entry points), z-normalize the raw stack
+//! frozen support through the render entry points
+//! ([`normalized_source_stack`]), z-normalize the raw stack
 //! ([`znormalize_into_kept`]), and the AVX2 moment / write kernels they
 //! dispatch to.
 
+use std::borrow::BorrowMut;
+
 use crate::camera::image::ImageU8;
-use crate::camera::sampler::{
-    render_phase, render_source_tile, render_tiles, Sampler, ViewRegions,
-};
+use crate::camera::sampler::{render_phase, render_source_tile, Sampler, ViewRegions};
 use crate::camera::{PhotographReadError, WarpMap};
 use crate::patch::cloud::OrientedPatch;
 use crate::progress::Progress;
@@ -19,49 +19,33 @@ use super::level::LevelContext;
 use super::params::{ProjectedImage, FLAT_NORM_SQ_EPS};
 use super::support::{view_render_patch, ViewSamplers};
 
-/// Render the kept views of `patch` over the frozen support `ctx`. Returns the
-/// raw masked pixel values, flat `[(view*channels + channel)*n + pixel]` in
-/// `ctx.pixels` order (`n = ctx.pixels.len()`), and the channel count (the
+/// Render the kept views of `patch` over the frozen support `ctx`, view `vi`
+/// of `views` read through `regions[vi]` by [`render_source_tile`]. Returns
+/// the raw masked pixel values, flat `[(view*channels + channel)*n + pixel]`
+/// in `ctx.pixels` order (`n = ctx.pixels.len()`), and the channel count (the
 /// fewest any kept view has); z-normalize them with [`znormalize_into_kept`].
-/// `None` when a kept view has no channel, or when `patch` leaves the frame at
-/// any support pixel in any kept view.
+/// `Ok(None)` when a kept view has no channel, or when `patch` leaves the
+/// frame at any support pixel in any kept view, before anything is read. The
+/// renders are grouped by sampler, so a detailed `progress` times each
+/// sampler's renders in its own detail phase ([`render_phase`]).
 ///
-/// Each kept view's whole pyramid is read; [`normalized_source_stack`] is the
-/// same stack read through the render entry points.
-pub(in crate::patch) fn normalized_stack(
-    patch: &OrientedPatch,
-    ctx: &LevelContext,
-    views: &[ProjectedImage<'_>],
-    resolution: u32,
-    samplers: ViewSamplers<'_>,
-    view_keypoints: Option<&[Option<[f64; 2]>]>,
-    progress: &Progress<'_>,
-) -> Option<(Vec<f32>, usize)> {
-    let (mut maps, chosen, channels) =
-        stack_maps(patch, ctx, views, resolution, samplers, view_keypoints)?;
-    let pyramids: Vec<_> = ctx
-        .kept
-        .iter()
-        .map(|&vi| views[vi].source.held_pyramid())
-        .collect();
-    let images = render_tiles(&pyramids, &mut maps, &chosen, progress);
-    Some((gather_stack(&images, ctx, channels, resolution), channels))
-}
-
-/// [`normalized_stack`] with each kept view read through the render entry
-/// points: view `vi` of `views` through `regions[vi]`, by
-/// [`render_source_tile`], so the stack is the same, bit for bit. The renders
-/// are grouped by sampler and timed in the same detail phases.
+/// `regions` holds each view's [`ViewRegions`] or a mutable reference to it,
+/// so a caller that renders a subset of its views passes references to their
+/// regions.
+///
+/// # Errors
+///
+/// The [`PhotographReadError`] of a read that failed.
 ///
 /// # Panics
 ///
 /// Panics if `regions` is not parallel to `views`.
 #[allow(clippy::too_many_arguments)]
-pub(in crate::patch) fn normalized_source_stack(
+pub(in crate::patch) fn normalized_source_stack<'r>(
     patch: &OrientedPatch,
     ctx: &LevelContext,
     views: &[ProjectedImage<'_>],
-    regions: &mut [ViewRegions<'_>],
+    regions: &mut [impl BorrowMut<ViewRegions<'r>>],
     resolution: u32,
     samplers: ViewSamplers<'_>,
     view_keypoints: Option<&[Option<[f64; 2]>]>,
@@ -86,7 +70,7 @@ pub(in crate::patch) fn normalized_source_stack(
         let _phase = render_phase(progress, sampler, count);
         for (k, map) in maps.iter_mut().enumerate() {
             if chosen[k] == sampler {
-                let view = &mut regions[ctx.kept[k]];
+                let view = regions[ctx.kept[k]].borrow_mut();
                 images[k] = Some(render_source_tile(view, map, sampler)?);
             }
         }

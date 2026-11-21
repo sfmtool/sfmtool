@@ -27,16 +27,22 @@ through the entry points: the cluster stage's member grids, the grid-plane
 normal's context renders, the pairwise-flow crops and the grown plane's value
 and Sobel reads, each bench step making the region pool for its kernel call
 ([core/bench/editable-track.md](../bench/editable-track.md) § "Each step reads
-through the region pool its caller made"). So do two of the patch kernels
-beneath them, with the pool their caller passes down: the cluster refinement,
-its grids through `sample_source_grid` and its evaluation tiles through
+through the region pool its caller made"). So do the patch kernels beneath
+them, with the pool their caller passes down: the cluster refinement, its
+grids through `sample_source_grid` and its evaluation tiles through
 `read_source_rect`
-([patch/cluster-patch-refinement.md](../patch/cluster-patch-refinement.md)),
-and the view selection, its affine fast path through `render_source_affine`
-and its exact renders through `render_source_tile`
-([patch/patch-view-selection.md](../patch/patch-view-selection.md)). The
-other patch kernels -- the reference view, the stored bitmap and the keypoint
-kernels -- still read the whole pyramid a tiled photograph holds.
+([patch/cluster-patch-refinement.md](../patch/cluster-patch-refinement.md));
+the view selection, its affine fast path through `render_source_affine` and
+its exact renders through `render_source_tile`
+([patch/patch-view-selection.md](../patch/patch-view-selection.md)); and the
+reference view and every kernel that reads through it, the tile through
+`render_source_tile` and its clipped share through `source_clipped_share`
+([patch/reference-view.md](../patch/reference-view.md)): member coherence,
+the stored bitmap, the observation readings, the keypoint localizer and
+sub-pixel refiner, the candidate spawn and *Add image to tracks*. Only the
+grey images of the nearby-track search still read the whole pyramid a tiled
+photograph holds
+([bench/nearby-tracks.md](../bench/nearby-tracks.md)).
 
 ## Rust API
 
@@ -372,6 +378,7 @@ are checked against the whole pyramid's in their own tests
 ([gui/track-view.md](../../gui/track-view.md) § "Testing"), and the bench's
 steps through regions against their results over a pool every read fits in
 in [bench/tests/region_reads.rs](../../../crates/sfmtool-core/src/bench/tests/region_reads.rs),
-the geometry search among them, and the cluster refinement and the view
-selection over the seoul_bull ground truth the same way in
+the geometry search and the track stage's reading, fit and bitmap among them,
+and the cluster refinement, the view selection and the kernels that read
+through the reference view over the seoul_bull ground truth the same way in
 [patch/region_read_tests.rs](../../../crates/sfmtool-core/src/patch/region_read_tests.rs).

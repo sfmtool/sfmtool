@@ -639,6 +639,7 @@ pub fn render_bitmap_in_place(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &FitOptions,
 ) -> Result<EditableTrack, EvaluateError>;
 
@@ -649,6 +650,7 @@ pub fn score_bitmap(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &EvaluateOptions,
     progress: &Progress<'_>,
 ) -> Result<EditableTrack, EvaluateError>;
@@ -1108,7 +1110,8 @@ and a script that just read the files.
 
 **Each step reads through the region pool its caller made.** The steps that
 read photographs -- `evaluate`, `evaluate_rendering_bitmap`, `fit`,
-`set_stage`, the normal steps, `search_geometry`, and the runs and searches
+`set_stage`, `render_bitmap_in_place`, `score_bitmap`, the normal steps,
+`search_geometry`, and the runs and searches
 built on them (`refine_normals`, `refit_points`, `build_track_at_pixel`,
 `far_field_sweep`, `find_nearby_tracks`) -- take a `&RegionPool` beside the
 views: the caller makes one with `RegionPool::for_kernel_call()` for the call,
@@ -1119,14 +1122,16 @@ view of the patch in hand: the cluster stage's member grids (the template and
 the self-similarity tiles, `sample_source_member_grid`), the grid-plane
 normal's context renders and the pairwise-flow crops (`render_source_tile`), and
 the grown plane's value and Sobel reads (`read_source_samples`). So do the
-patch kernels below them that the cluster stage and the geometry search run,
-with the pool passed down: the cluster refinement
-([cluster-patch-refinement.md](../patch/cluster-patch-refinement.md)) and the
-view selection ([patch-view-selection.md](../patch/patch-view-selection.md)).
-The other patch kernels the steps call -- the reference view, the stored
-bitmap and the keypoint kernels -- read the whole pyramid each tiled
-photograph holds; `score_bitmap` and `render_bitmap_in_place` read only
-through those, so they take no pool. A read that fails is the step's
+patch kernels below them, with the pool passed down: the cluster refinement
+([cluster-patch-refinement.md](../patch/cluster-patch-refinement.md)), the
+view selection ([patch-view-selection.md](../patch/patch-view-selection.md)),
+and the reference view, the stored bitmap and the keypoint kernels
+([reference-view.md](../patch/reference-view.md),
+[patch-keypoint-localization.md](../patch/patch-keypoint-localization.md),
+[keypoint-subpixel-refinement.md](../patch/keypoint-subpixel-refinement.md)).
+A track-stage reading reads each row's tile and the reference view's pair
+readings through one `ViewRegions` per row, so member coherence's renders of
+the `in` rows reuse what their tiles read. A read that fails is the step's
 `Photograph(PhotographReadError)` error (a cancelled read is its `Cancelled`),
 never a refused row: where an inner step turns failures into values -- the
 grown plane's renders, the track-at-pixel cascade's members, the far-field
@@ -3820,6 +3825,10 @@ class whose observations cross as dicts, with each stage's measurements under
 it. Verdicts and provenance kinds are the lowercase words (`"in"`, `"out"`;
 `"origin"`, `"descriptor"`, `"search"`, `"sweep"`, `"pixel"`, `"point"`).
 `EditableTrack.verdict_counts` is `(in, out)`. Refusals are `ValueError` carrying the core sentence.
+A step's photograph read that fails (its `Photograph` error), which a
+photograph in memory never gives, is a `RuntimeError` carrying the step's
+sentence, which names the photograph, or says it is one in memory and carries
+the read's message.
 
 `create_track` takes `bench`, `edited` and `point` and, as keyword-only
 arguments, `version` and `label`, the two fields of `CreateTrackOptions`:

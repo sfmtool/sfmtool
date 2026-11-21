@@ -66,10 +66,12 @@
 //! path took five renders per GN step; the analytic path takes one.
 
 use crate::camera::image::ImageF32WithGrad;
+use crate::camera::sampler::{RegionPool, ViewRegions};
+use crate::camera::PhotographReadError;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::keypoint_localize::{project, resolve_reference, seed_frame, shifted_center};
 use crate::patch::normal_refine::{build_support, ProjectedImage, Support};
-use crate::progress::{Cancelled, Progress};
+use crate::progress::Progress;
 use rayon::prelude::*;
 
 pub mod prof;
@@ -153,17 +155,27 @@ struct ViewState {
 /// out of frame — is dropped, as the offset has nothing to be measured from);
 /// otherwise the set is preserved, and a guard-failed view keeps its seed. See
 /// `specs/core/patch/keypoint-subpixel-refinement.md`.
+///
+/// The views' photographs are read through `pool`, the region pool the caller
+/// made for this call, with one [`ViewRegions`] per view, which every read of
+/// that view shares.
+///
+/// # Errors
+///
+/// The [`PhotographReadError`] of a read of a view's photograph that failed.
 pub fn refine_patch_keypoints(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     patch_views: &[u32],
     patch_keypoints: Option<&[Option<[f64; 2]>]>,
     reference: Option<usize>,
     params: &KeypointSubpixelParams,
-) -> KeypointRefinement {
+) -> Result<KeypointRefinement, PhotographReadError> {
     refine_patch_keypoints_reporting(
         patch,
         views,
+        pool,
         patch_views,
         patch_keypoints,
         reference,
@@ -176,19 +188,26 @@ pub fn refine_patch_keypoints(
 /// times the renders of each sampler in its own detail phase
 /// ([`crate::camera::sampler::render_phase`]). Nothing here polls for
 /// cancellation; the batch callers do, between patches.
+///
+/// # Errors
+///
+/// As [`refine_patch_keypoints`].
+#[allow(clippy::too_many_arguments)]
 pub fn refine_patch_keypoints_reporting(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     patch_views: &[u32],
     patch_keypoints: Option<&[Option<[f64; 2]>]>,
     reference: Option<usize>,
     params: &KeypointSubpixelParams,
     progress: &Progress<'_>,
-) -> KeypointRefinement {
+) -> Result<KeypointRefinement, PhotographReadError> {
     prof::TOTAL.time(|| {
         refine_patch_keypoints_impl(
             patch,
             views,
+            pool,
             patch_views,
             patch_keypoints,
             reference,
@@ -201,15 +220,17 @@ pub fn refine_patch_keypoints_reporting(
 /// Untimed body of [`refine_patch_keypoints`] (split so the enclosing
 /// [`prof::TOTAL`] phase is a single wrap covering both batch entries — the
 /// Rust [`refine_patch_cloud_keypoints`] and the PyO3 binding's inlined loop).
+#[allow(clippy::too_many_arguments)]
 fn refine_patch_keypoints_impl(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     patch_views: &[u32],
     patch_keypoints: Option<&[Option<[f64; 2]>]>,
     reference: Option<usize>,
     params: &KeypointSubpixelParams,
     progress: &Progress<'_>,
-) -> KeypointRefinement {
+) -> Result<KeypointRefinement, PhotographReadError> {
     let resolution = params.resolution.max(2);
     let wpp_u = 2.0 * patch.half_extent[0] / resolution as f64;
     let wpp_v = 2.0 * patch.half_extent[1] / resolution as f64;
@@ -254,8 +275,13 @@ fn refine_patch_keypoints_impl(
 
     if states.len() < 2 {
         // No second view to align: keep every seed.
-        return finalize(patch, views, &states, None, wpp_u, wpp_v);
+        return Ok(finalize(patch, views, &states, None, wpp_u, wpp_v));
     }
+    // One view's regions per state, which every read of the view shares.
+    let mut regions: Vec<ViewRegions<'_>> = states
+        .iter()
+        .map(|st| ViewRegions::new(views[st.idx as usize].source, pool))
+        .collect();
 
     // Channel count is the first view's image channels; the warp renders at that
     // count, and all reconstruction images share it.
@@ -272,23 +298,22 @@ fn refine_patch_keypoints_impl(
     // an out-of-coverage offset (expected never, given the line-search bound)
     // falls back to a direct render.
     let pad = (params.max_offset_px.max(0.0).ceil() as u32).max(1) + 2;
-    let tiles: Vec<Option<RefineTile>> = states
-        .iter()
-        .map(|st| {
-            let _phase = render_phase(progress, st.sampler, 1);
-            try_render_refine_tile(
-                &st.patch_frame,
-                &views[st.idx as usize],
-                [0.0; 2],
-                wpp_u,
-                wpp_v,
-                resolution,
-                pad,
-                st.sampler,
-                &mut scratch.img,
-            )
-        })
-        .collect();
+    let mut tiles: Vec<Option<RefineTile>> = Vec::with_capacity(states.len());
+    for (st, view_regions) in states.iter().zip(regions.iter_mut()) {
+        let _phase = render_phase(progress, st.sampler, 1);
+        tiles.push(try_render_refine_tile(
+            &st.patch_frame,
+            &views[st.idx as usize],
+            view_regions,
+            [0.0; 2],
+            wpp_u,
+            wpp_v,
+            resolution,
+            pad,
+            st.sampler,
+            &mut scratch.img,
+        )?);
+    }
 
     // What the views are aligned to: the caller's reference, else the
     // reference-view rule's pick at the starting keypoints, resolved by the
@@ -300,12 +325,16 @@ fn refine_patch_keypoints_impl(
         let given = reference
             .and_then(|k| patch_views.get(k))
             .and_then(|&img| states.iter().position(|st| st.idx == img));
-        let set: Vec<u32> = states.iter().map(|st| st.idx).collect();
         let seeds: Vec<Option<[f64; 2]>> = states.iter().map(|st| st.keypoint).collect();
+        let mut set: Vec<(u32, &mut ViewRegions<'_>)> = states
+            .iter()
+            .map(|st| st.idx)
+            .zip(regions.iter_mut())
+            .collect();
         resolve_reference(
             patch,
             views,
-            &set,
+            &mut set,
             &seeds,
             given,
             params.min_grazing_cos,
@@ -314,7 +343,7 @@ fn refine_patch_keypoints_impl(
             &params.reference_view,
             progress,
         )
-    });
+    })?;
 
     // The template `T`: the reference's core at its own keypoint,
     // z-normalized with `√w` folded in. Never blurred. A reference whose
@@ -326,6 +355,7 @@ fn refine_patch_keypoints_impl(
             core_value(
                 &st.patch_frame,
                 &views[st.idx as usize],
+                &mut regions[a],
                 tiles[a].as_ref(),
                 st.off[0],
                 st.off[1],
@@ -336,7 +366,7 @@ fn refine_patch_keypoints_impl(
                 &support,
                 channels,
                 &mut raw,
-            )
+            )?
             .then(|| {
                 znorm_core(&raw, &support, channels, &mut znorm);
                 znorm.clone()
@@ -363,6 +393,7 @@ fn refine_patch_keypoints_impl(
             }
             refine_one_view(
                 &views[states[si].idx as usize],
+                &mut regions[si],
                 tiles[si].as_ref(),
                 &mut states[si],
                 &support,
@@ -373,10 +404,11 @@ fn refine_patch_keypoints_impl(
                 wpp_v,
                 params,
                 &mut scratch,
-            );
+            )?;
             reanchor(
                 patch,
                 &views[states[si].idx as usize],
+                &mut regions[si],
                 &mut states[si],
                 &support,
                 tmpl,
@@ -387,7 +419,7 @@ fn refine_patch_keypoints_impl(
                 pad,
                 params,
                 &mut scratch,
-            );
+            )?;
         }
     }
 
@@ -404,15 +436,16 @@ fn refine_patch_keypoints_impl(
             let tile = render_view_tile(
                 patch,
                 &views[st.idx as usize],
+                &mut regions[a],
                 Some(out.keypoints[a]),
                 resolution as usize,
                 params.sampler,
                 progress,
-            );
+            )?;
             out.representative = Some(bitmap_from_tile(&tile));
         }
     }
-    out
+    Ok(out)
 }
 
 /// The raw core of an `R×R` RGBA `bitmap` over `support`, `channels` channels
@@ -478,9 +511,13 @@ impl GnScratch {
 /// `g` — was at the accepted candidate. The tile GN path relies on this: its
 /// gradient read ([`RefineTile::read_jg`]) fills only the Jacobian planes and
 /// reuses `g` as the value core for the normal equations.
+///
+/// `regions` reads `view`'s photograph for every direct render; a read that
+/// fails is returned as its error.
 #[allow(clippy::too_many_arguments)]
 fn refine_one_view(
     view: &ProjectedImage<'_>,
+    regions: &mut ViewRegions<'_>,
     tile: Option<&RefineTile>,
     st: &mut ViewState,
     support: &Support,
@@ -491,7 +528,7 @@ fn refine_one_view(
     wpp_v: f64,
     params: &KeypointSubpixelParams,
     scratch: &mut GnScratch,
-) {
+) -> Result<(), PhotographReadError> {
     let GnScratch {
         g,
         jg_u,
@@ -505,22 +542,26 @@ fn refine_one_view(
     let patch = &st.patch_frame.clone();
 
     // Score at a candidate offset; `None` if the core left the frame.
-    let score_at = |off: [f64; 2], g: &mut [f32], zbuf: &mut [f32]| -> Option<f64> {
+    let score_at = |regions: &mut ViewRegions<'_>,
+                    off: [f64; 2],
+                    g: &mut [f32],
+                    zbuf: &mut [f32]|
+     -> Result<Option<f64>, PhotographReadError> {
         if !core_value(
-            patch, view, tile, off[0], off[1], wpp_u, wpp_v, resolution, sampler, support,
+            patch, view, regions, tile, off[0], off[1], wpp_u, wpp_v, resolution, sampler, support,
             channels, g,
-        ) {
-            return None;
+        )? {
+            return Ok(None);
         }
         znorm_core(g, support, channels, zbuf);
-        Some(ecc_score(zbuf, tmpl, channels, n))
+        Ok(Some(ecc_score(zbuf, tmpl, channels, n)))
     };
 
     // Seed score (the floor the guard never drops below).
-    let Some(mut best_score) = score_at(st.off, g, zbuf) else {
+    let Some(mut best_score) = score_at(regions, st.off, g, zbuf)? else {
         // Seed core out of frame: nothing to refine against; keep the seed.
         st.score = f64::NAN;
-        return;
+        return Ok(());
     };
     st.score = best_score;
     let mut cur = st.off;
@@ -533,9 +574,9 @@ fn refine_one_view(
         // the no-tile / out-of-coverage path. If any support pixel is out of
         // frame the local Jacobian is ill-defined here: stop.
         if !core_value_with_jg(
-            patch, view, tile, cur[0], cur[1], wpp_u, wpp_v, resolution, sampler, support,
+            patch, view, regions, tile, cur[0], cur[1], wpp_u, wpp_v, resolution, sampler, support,
             channels, g, jg_u, jg_v, img,
-        ) {
+        )? {
             break;
         }
 
@@ -555,7 +596,7 @@ fn refine_one_view(
             let (du, dv) = (cand[0], cand[1]);
             if (du * du + dv * dv).sqrt() <= params.max_offset_px {
                 prof::count(&prof::N_LINE_SEARCH, 1);
-                if let Some(s) = score_at(cand, g, zbuf) {
+                if let Some(s) = score_at(regions, cand, g, zbuf)? {
                     if s > best_score {
                         let mv = (alpha * step[0]).hypot(alpha * step[1]);
                         cur = cand;
@@ -578,6 +619,7 @@ fn refine_one_view(
 
     st.off = cur;
     st.score = best_score;
+    Ok(())
 }
 
 /// An offset, in grid px, past which the refiner renders the view again through
@@ -597,11 +639,13 @@ const REANCHOR_MIN_OFFSET: f64 = 0.5;
 /// again through the patch slid onto the keypoint it reached and solve again
 /// from there, within what is left of `max_offset_px` of its seed. The second
 /// solve's result is kept only where it scores at least what the first
-/// reached, so the refinement still never ends below its seed.
+/// reached, so the refinement still never ends below its seed. `regions`
+/// reads `view`'s photograph; a read that fails is returned as its error.
 #[allow(clippy::too_many_arguments)]
 fn reanchor(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
+    regions: &mut ViewRegions<'_>,
     st: &mut ViewState,
     support: &Support,
     tmpl: &[f32],
@@ -612,22 +656,23 @@ fn reanchor(
     pad: u32,
     params: &KeypointSubpixelParams,
     scratch: &mut GnScratch,
-) {
+) -> Result<(), PhotographReadError> {
     let moved = st.off[0].hypot(st.off[1]);
     if !(st.score.is_finite() && moved > REANCHOR_MIN_OFFSET) {
-        return;
+        return Ok(());
     }
     let centre = shifted_center(&st.patch_frame, st.off[0], st.off[1], wpp_u, wpp_v);
     let Some((x, y)) = project(view, &centre, patch.w) else {
-        return;
+        return Ok(());
     };
     let (frame, followed) = seed_frame(patch, view, Some([x, y]));
     if !followed {
-        return;
+        return Ok(());
     }
     let tile = try_render_refine_tile(
         &frame,
         view,
+        regions,
         [0.0; 2],
         wpp_u,
         wpp_v,
@@ -635,7 +680,7 @@ fn reanchor(
         pad,
         st.sampler,
         &mut scratch.img,
-    );
+    )?;
     let kept = (st.patch_frame.clone(), st.off, st.score, st.keypoint);
     // The frame slid onto the reached keypoint stands as the view's start: a
     // zero offset from it is that keypoint.
@@ -652,6 +697,7 @@ fn reanchor(
     };
     refine_one_view(
         view,
+        regions,
         tile.as_ref(),
         st,
         support,
@@ -662,12 +708,13 @@ fn reanchor(
         wpp_v,
         &left,
         scratch,
-    );
+    )?;
     // The never-worse guard across the two solves: where the second does not
     // score at least what the first reached, the first stands.
     if !(st.score.is_finite() && st.score >= kept.2) {
         (st.patch_frame, st.off, st.score, st.keypoint) = kept;
     }
+    Ok(())
 }
 
 /// Build the result from the final view states: the refined keypoint
@@ -731,10 +778,18 @@ pub enum ReferenceTemplate<'a> {
 /// sub-pixel step of adding an observation to an existing track
 /// (`specs/core/reconstruction/add-image-to-tracks.md`).
 ///
-/// `None` when the template is not on the refinement's grid or its reference
+/// `Ok(None)` when the template is not on the refinement's grid or its reference
 /// does not render in frame, the reference's channel count differs from the
 /// target's, the target does not project into its frame, or the target's core
 /// is out of frame at its seed.
+///
+/// `target_regions` reads the target's photograph, which every read of the
+/// target shares; the reference observation, where it is the template, is
+/// read once through regions of its own from the same region pool.
+///
+/// # Errors
+///
+/// The [`PhotographReadError`] of a read of a photograph that failed.
 ///
 /// # Panics
 ///
@@ -742,11 +797,12 @@ pub enum ReferenceTemplate<'a> {
 pub fn refine_view_against_reference(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
+    target_regions: &mut ViewRegions<'_>,
     template: ReferenceTemplate<'_>,
     target: u32,
     target_keypoint: [f64; 2],
     params: &KeypointSubpixelParams,
-) -> Option<([f64; 2], f64)> {
+) -> Result<Option<([f64; 2], f64)>, PhotographReadError> {
     let resolution = params.resolution.max(2);
     let wpp_u = 2.0 * patch.half_extent[0] / resolution as f64;
     let wpp_v = 2.0 * patch.half_extent[1] / resolution as f64;
@@ -761,18 +817,18 @@ pub fn refine_view_against_reference(
         ReferenceTemplate::Bitmap(bitmap) => {
             let r = resolution as usize;
             if bitmap.len() != r * r * 4 {
-                return None;
+                return Ok(None);
             }
             bitmap_core(bitmap, r, &support, channels, &mut raw);
         }
         ReferenceTemplate::Observation { image, keypoint } => {
             let view = &views[image as usize];
             if view.source.channels() as usize != channels {
-                return None;
+                return Ok(None);
             }
             let (patch_frame, followed) = seed_frame(patch, view, Some(keypoint));
             if !followed {
-                return None;
+                return Ok(None);
             }
             let sampler = params.sampler.for_observation(
                 patch,
@@ -784,6 +840,7 @@ pub fn refine_view_against_reference(
             if !core_value(
                 &patch_frame,
                 view,
+                &mut ViewRegions::new(view.source, target_regions.pool()),
                 None,
                 0.0,
                 0.0,
@@ -794,17 +851,19 @@ pub fn refine_view_against_reference(
                 &support,
                 channels,
                 &mut raw,
-            ) {
-                return None;
+            )? {
+                return Ok(None);
             }
         }
     }
     znorm_core(&raw, &support, channels, &mut tmpl);
 
-    let proj = project(target_view, &patch.center, patch.w)?;
+    let Some(proj) = project(target_view, &patch.center, patch.w) else {
+        return Ok(None);
+    };
     let (patch_frame, followed) = seed_frame(patch, target_view, Some(target_keypoint));
     if !followed {
-        return None;
+        return Ok(None);
     }
     let mut state = ViewState {
         idx: target,
@@ -827,6 +886,7 @@ pub fn refine_view_against_reference(
     let tile = try_render_refine_tile(
         &state.patch_frame,
         target_view,
+        target_regions,
         [0.0; 2],
         wpp_u,
         wpp_v,
@@ -834,9 +894,10 @@ pub fn refine_view_against_reference(
         pad,
         state.sampler,
         &mut scratch.img,
-    );
+    )?;
     refine_one_view(
         target_view,
+        target_regions,
         tile.as_ref(),
         &mut state,
         &support,
@@ -847,10 +908,11 @@ pub fn refine_view_against_reference(
         wpp_v,
         params,
         &mut scratch,
-    );
+    )?;
     reanchor(
         patch,
         target_view,
+        target_regions,
         &mut state,
         &support,
         &tmpl,
@@ -861,12 +923,12 @@ pub fn refine_view_against_reference(
         pad,
         params,
         &mut scratch,
-    );
+    )?;
     if !state.score.is_finite() {
-        return None;
+        return Ok(None);
     }
     let center = shifted_center(&state.patch_frame, state.off[0], state.off[1], wpp_u, wpp_v);
-    project(target_view, &center, patch.w).map(|(x, y)| ([x, y], state.score))
+    Ok(project(target_view, &center, patch.w).map(|(x, y)| ([x, y], state.score)))
 }
 
 /// Batch [`refine_patch_keypoints`] over a [`PatchCloud`], parallel across patches
@@ -885,27 +947,34 @@ pub fn refine_view_against_reference(
 /// allocation the binding can avoid. This entry stays as the cloud-level API
 /// for Rust callers that already have a parallel-to-cloud seed slice in hand.
 ///
-/// `progress` receives a `patches` count about every hundredth of the way
-/// through, is polled for cancellation before each patch, and, when detailed,
-/// times the renders of each sampler in its own detail phase.
+/// The photographs are read through `pool`, the region pool the caller made
+/// for this call, with one [`ViewRegions`] per view of the patch being
+/// refined, dropped when the patch is done. `progress` receives a `patches`
+/// count about every hundredth of the way through, is polled for cancellation
+/// before each patch, and, when detailed, times the renders of each sampler in
+/// its own detail phase.
 ///
 /// # Errors
 ///
-/// [`Cancelled`] when `progress` was cancelled before every patch was refined.
+/// [`PhotographReadError::Cancelled`] when `progress` was cancelled before
+/// every patch was refined, and otherwise the error of a read of a photograph
+/// that failed.
 ///
 /// # Panics
 ///
 /// Panics if `patch_views.len() != cloud.len()` (or `patch_keypoints` or
 /// `references` is given and not parallel), or an index is out of range.
+#[allow(clippy::too_many_arguments)]
 pub fn refine_patch_cloud_keypoints(
     cloud: &PatchCloud,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     patch_views: &[Vec<u32>],
     patch_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     references: Option<&[Option<usize>]>,
     params: &KeypointSubpixelParams,
     progress: &Progress<'_>,
-) -> Result<Vec<KeypointRefinement>, Cancelled> {
+) -> Result<Vec<KeypointRefinement>, PhotographReadError> {
     assert_eq!(
         patch_views.len(),
         cloud.len(),
@@ -928,7 +997,7 @@ pub fn refine_patch_cloud_keypoints(
     prof::reset();
     let wall_start = std::time::Instant::now();
     let counter = PatchCounter::new(cloud.len(), None, progress);
-    let out: Vec<Option<KeypointRefinement>> = cloud
+    let out: Vec<Option<Result<KeypointRefinement, PhotographReadError>>> = cloud
         .patches
         .par_iter()
         .enumerate()
@@ -940,6 +1009,7 @@ pub fn refine_patch_cloud_keypoints(
             let out = refine_patch_keypoints_reporting(
                 patch,
                 views,
+                pool,
                 &patch_views[i],
                 seeds,
                 references.and_then(|r| r[i]),
@@ -952,10 +1022,9 @@ pub fn refine_patch_cloud_keypoints(
         .collect();
     prof::report(cloud.len(), wall_start.elapsed().as_secs_f64());
     progress.check_cancel()?;
-    Ok(out
-        .into_iter()
+    out.into_iter()
         .map(|o| o.expect("every patch ran when nothing was cancelled"))
-        .collect())
+        .collect()
 }
 
 #[cfg(test)]

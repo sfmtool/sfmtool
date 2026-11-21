@@ -320,6 +320,8 @@ impl PyPatchCloud {
         sfmtool_core::patch::keypoint_subpixel::prof::reset();
         let subpixel_wall = std::time::Instant::now();
         let progress_handle = progress.as_ref().map(|p| p.handle());
+        // One region pool for the call, which every patch's reads draw on.
+        let pool = sfmtool_core::camera::sampler::RegionPool::for_kernel_call();
         let results = py.detach(|| {
             use sfmtool_core::patch::keypoint_subpixel::refine_patch_keypoints;
             self.inner
@@ -341,6 +343,7 @@ impl PyPatchCloud {
                     let out = refine_patch_keypoints(
                         patch,
                         &views,
+                        &pool,
                         set,
                         per_view_seeds.as_deref(),
                         references.as_ref().and_then(|r| r[i]),
@@ -352,8 +355,10 @@ impl PyPatchCloud {
                     }
                     out
                 })
-                .collect::<Vec<_>>()
+                .collect::<Result<Vec<_>, _>>()
         });
+        // The first read of a photograph that failed, in cloud order.
+        let results = results.map_err(crate::helpers::kernel_err)?;
         sfmtool_core::patch::keypoint_subpixel::prof::report(
             self.inner.patches.len(),
             subpixel_wall.elapsed().as_secs_f64(),

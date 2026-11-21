@@ -50,6 +50,7 @@ use sfmtool_core::patch::self_similarity::{
 use sfmtool_core::patch::view_selection::ViewSelectParams;
 use sfmtool_core::progress::Progress;
 
+use crate::helpers::kernel_err;
 use crate::patches::views::{resolve_pyramids, PosedViews};
 use crate::reconstruction::edited::{PyEditedReconstruction, PyPointMap};
 use crate::spatial::constellation_query::DEFAULTS as QUERY_DEFAULTS;
@@ -1886,7 +1887,7 @@ fn evaluate(
             &Progress::none(),
         )
     }
-    .map_err(refused)?;
+    .map_err(kernel_err)?;
     let d = evaluate_report_dict(py, &report)?;
     Ok((
         PyEditableTrack {
@@ -1971,7 +1972,7 @@ fn fit(
         ),
         &Progress::none(),
     )
-    .map_err(refused)?;
+    .map_err(kernel_err)?;
     let d = fit_report_dict(py, &report)?;
     Ok((
         PyEditableTrack {
@@ -2040,7 +2041,7 @@ fn set_stage(
         &fit_options(None, None, sigma_px, depth_likelihood_ratio_threshold),
         &Progress::none(),
     )
-    .map_err(refused)?;
+    .map_err(kernel_err)?;
     let d = PyDict::new(py);
     d.set_item("from", report.from.to_string())?;
     d.set_item("to", report.to.to_string())?;
@@ -2411,7 +2412,7 @@ fn search_geometry(
         &options,
         &Progress::none(),
     )
-    .map_err(refused)?;
+    .map_err(kernel_err)?;
     let d = geometry_report_dict(py, &report)?;
     Ok((
         PyEditableTrack {

@@ -13,7 +13,7 @@ use crate::camera::sampler::MAX_ANISOTROPY;
 use crate::camera::WarpMap;
 use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::geometry::RigidTransform;
-use crate::patch::normal_refine::normalized_stack;
+use crate::patch::normal_refine::normalized_source_stack;
 
 // A small synthetic scene mirroring the normal_refine tests: pinhole cameras
 // (rotated 180° about X so the canonical −Z-forward camera looks down world +z) viewing a textured world plane at
@@ -851,15 +851,20 @@ fn affine_sampling_matches_exact_render_on_mild_distortion() {
         &mut aff,
     );
 
-    let (exact, channels) = normalized_stack(
+    let (exact, channels) = normalized_source_stack(
         &patch,
         &ctx,
         &[view],
+        &mut [view]
+            .iter()
+            .map(|v| crate::camera::sampler::test_regions(v.source))
+            .collect::<Vec<_>>(),
         resolution,
         ViewSamplers::Frozen(&[Sampler::Bilinear]),
         None,
         &Progress::none(),
     )
+    .unwrap()
     .expect("patch renders in frame");
     assert_eq!(channels, 1);
 
@@ -965,15 +970,20 @@ fn affine_vs_exact_score(sampler: Sampler) -> usize {
     .expect("candidate scores");
 
     // Exact leg, forced.
-    let (raw, channels) = normalized_stack(
+    let (raw, channels) = normalized_source_stack(
         &patch,
         &single_ctx,
         &[views[3]],
+        &mut [views[3]]
+            .iter()
+            .map(|v| crate::camera::sampler::test_regions(v.source))
+            .collect::<Vec<_>>(),
         p.resolution,
         ViewSamplers::Each(p.sampler),
         None,
         &Progress::none(),
     )
+    .unwrap()
     .expect("candidate renders in frame");
     let exact_score =
         score_raw_against_reference(&raw, channels, &reference, &single_ctx, &sqrt_weights)
@@ -1014,15 +1024,20 @@ fn affine_mip_sampling_matches_exact_mip_render() {
         &mut aff,
     );
 
-    let (exact, channels) = normalized_stack(
+    let (exact, channels) = normalized_source_stack(
         &patch,
         &ctx,
         &[views[0]],
+        &mut [views[0]]
+            .iter()
+            .map(|v| crate::camera::sampler::test_regions(v.source))
+            .collect::<Vec<_>>(),
         resolution,
         ViewSamplers::Frozen(&[Sampler::BilinearMip]),
         None,
         &Progress::none(),
     )
+    .unwrap()
     .expect("patch renders in frame");
     assert_eq!(channels, 1);
 
@@ -1086,15 +1101,20 @@ fn affine_mip_selection_matches_exact_selection() {
         .collect();
 
     for (slot, &v) in fast.admitted.iter().enumerate() {
-        let (raw, channels) = normalized_stack(
+        let (raw, channels) = normalized_source_stack(
             &patch,
             &single_ctx,
             &[views[v as usize]],
+            &mut [views[v as usize]]
+                .iter()
+                .map(|v| crate::camera::sampler::test_regions(v.source))
+                .collect::<Vec<_>>(),
             p.resolution,
             ViewSamplers::Each(p.sampler),
             None,
             &Progress::none(),
         )
+        .unwrap()
         .expect("admitted view renders in frame");
         let exact =
             score_raw_against_reference(&raw, channels, &reference, &single_ctx, &sqrt_weights)
@@ -1394,15 +1414,20 @@ fn affine_aniso_sampling_matches_exact_render_on_an_oblique_view() {
     let n = ctx.pixels.len();
     let mut aff = vec![0f32; n];
     sample_support_affine_aniso(&pyr, &map, &ctx.pixels, resolution as usize, &mut aff);
-    let (exact, channels) = normalized_stack(
+    let (exact, channels) = normalized_source_stack(
         &patch,
         &ctx,
         &[view],
+        &mut [view]
+            .iter()
+            .map(|v| crate::camera::sampler::test_regions(v.source))
+            .collect::<Vec<_>>(),
         resolution,
         ViewSamplers::Frozen(&[Sampler::Anisotropic]),
         None,
         &Progress::none(),
     )
+    .unwrap()
     .expect("patch renders in frame");
     assert_eq!(channels, 1);
     let mut max_d = 0.0f32;

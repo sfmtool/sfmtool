@@ -60,7 +60,9 @@ polled before each decode, and keeps them for later steps
 ([../../core/camera/photograph-cache.md](../../core/camera/photograph-cache.md));
 one that cannot be read is left out of every point's references rather than
 refusing the step (`ViewSources::decode_available`). The overlay is folded in when there is one,
-and the core operation runs with its defaults.
+and the core operation runs with its defaults and a region pool made for the
+call; a read of a photograph that fails, which a whole pyramid read in place
+never does, fails the step with the core's sentence.
 
 A cancelled run pushes no version and logs `... cancelled`.
 

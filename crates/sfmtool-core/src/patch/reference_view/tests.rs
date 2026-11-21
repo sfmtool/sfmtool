@@ -286,11 +286,13 @@ fn a_tile_inside_the_photograph_is_fully_covered_and_one_over_its_edge_is_not() 
     let tile = render_view_tile(
         &patch,
         &view,
+        &mut crate::camera::sampler::test_regions(view.source),
         None,
         16,
         SamplerChoice::per_view(),
         &Progress::none(),
-    );
+    )
+    .unwrap();
     assert_eq!(tile.samples.shape(), &[16, 16, 1]);
     assert_eq!(tile.coverage, 1.0);
     assert!(tile.valid.iter().all(|&v| v));
@@ -304,11 +306,13 @@ fn a_tile_inside_the_photograph_is_fully_covered_and_one_over_its_edge_is_not() 
     let tile = render_view_tile(
         &edge,
         &view,
+        &mut crate::camera::sampler::test_regions(view.source),
         None,
         16,
         SamplerChoice::per_view(),
         &Progress::none(),
-    );
+    )
+    .unwrap();
     assert!(
         tile.coverage > 0.3 && tile.coverage < 0.7,
         "{}",
@@ -352,11 +356,13 @@ fn a_grey_and_alpha_photograph_renders_grey_and_opaque_alpha() {
         render_view_tile(
             &patch,
             &view,
+            &mut crate::camera::sampler::test_regions(view.source),
             None,
             16,
             SamplerChoice::per_view(),
             &Progress::none(),
         )
+        .unwrap()
     };
     let (grey_tile, tile) = (render(&one), render(&two));
     assert_eq!(tile.samples.shape(), &[16, 16, 2]);
@@ -449,11 +455,13 @@ fn the_clipped_share_of_a_fisheye_tile_is_read_inside_its_distorted_outline() {
     let tile = render_view_tile(
         &patch,
         &view,
+        &mut crate::camera::sampler::test_regions(view.source),
         None,
         r,
         SamplerChoice::per_view(),
         &Progress::none(),
-    );
+    )
+    .unwrap();
     assert_eq!(tile.coverage, 1.0);
     let share = tile.clipped_share.expect("the tile is on the photograph");
     let outline = projected_outline(&patch, &camera, &pose, r);
@@ -504,11 +512,13 @@ fn the_clipped_share_of_a_tile_cut_by_the_photograph_s_edge_is_read_inside_the_p
     let tile = render_view_tile(
         &patch,
         &view,
+        &mut crate::camera::sampler::test_regions(view.source),
         None,
         r,
         SamplerChoice::per_view(),
         &Progress::none(),
-    );
+    )
+    .unwrap();
     assert!(
         tile.coverage > 0.2 && tile.coverage < 0.8,
         "{}",

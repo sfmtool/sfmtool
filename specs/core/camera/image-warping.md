@@ -754,8 +754,9 @@ each level one render reads is proposed in
   (`select_patch_cloud_views`, `localize_patch_cloud_keypoints`,
   `refine_patch_cloud_keypoints`, `validate_patch_cloud_member_coherence` and
   `render_patch_cloud_bitmaps`) take a `&Progress`, count `patches`, poll for
-  cancellation before each patch and return `Cancelled` when it is set, rather
-  than the patches they finished. The bench's `evaluate` and `fit` work on one track; they take a
+  cancellation before each patch and return their cancelled error when it is
+  set (`PhotographReadError::Cancelled`, or `CloudRenderError::Cancelled` for
+  the bitmaps), rather than the patches they finished. The bench's `evaluate` and `fit` work on one track; they take a
   `&Progress` too, open the same detail phases and return
   `EvaluateError::Cancelled` / `FitError::Cancelled`.
 

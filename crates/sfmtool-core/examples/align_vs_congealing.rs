@@ -51,6 +51,9 @@ use std::time::Instant;
 use nalgebra::{Matrix3, Vector3};
 use serde_json::{json, Value};
 use sfmtool_core::camera::image::ImageU8Pyramid;
+use sfmtool_core::camera::sampler::RegionPool;
+#[cfg(not(congeal))]
+use sfmtool_core::camera::sampler::ViewRegions;
 use sfmtool_core::camera::{CameraIntrinsics, PhotographCache, TiledPhotograph};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
@@ -88,6 +91,7 @@ fn run_method(
     let loc = try_localize_patch_keypoints(
         patch,
         views,
+        &RegionPool::for_kernel_call(),
         patch_views,
         Some(seeds),
         base,
@@ -116,6 +120,7 @@ fn run_method(
     let loc = try_localize_patch_keypoints(
         patch,
         views,
+        &RegionPool::for_kernel_call(),
         patch_views,
         Some(seeds),
         reference,
@@ -139,15 +144,19 @@ fn bitmap_scores(
     base: &KeypointLocalizeParams,
 ) -> Vec<Option<(f64, f64)>> {
     let r = base.resolution as usize;
+    let pool = RegionPool::for_kernel_call();
     let tile = |k: usize| {
+        let view = &views[loc.views[k] as usize];
         render_view_tile(
             patch,
-            &views[loc.views[k] as usize],
+            view,
+            &mut ViewRegions::new(view.source, &pool),
             Some(loc.keypoints[k]),
             r,
             base.sampler,
             &Progress::none(),
         )
+        .expect("photographs in memory read")
     };
     let Some(reference) = loc
         .reference
@@ -180,6 +189,7 @@ fn rule_pick(
     let loc = try_localize_patch_keypoints(
         patch,
         views,
+        &RegionPool::for_kernel_call(),
         patch_views,
         Some(seeds),
         None,

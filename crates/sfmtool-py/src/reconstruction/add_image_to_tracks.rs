@@ -242,7 +242,9 @@ impl PyEditedReconstruction {
     ///     template was settled) and ``reference_observation`` (``int64``, the
     ///     position in ``references`` of the point's reference observation, whose
     ///     score no bar reads; ``-1`` for none). Raises ``ValueError`` with
-    ///     the reason when the call is refused.
+    ///     the reason when the call is refused, and ``RuntimeError`` when a
+    ///     read of a photograph fails, which a photograph in memory never
+    ///     does.
     #[allow(rustdoc::invalid_rust_codeblocks)]
     #[pyo3(signature = (
         image,
@@ -374,8 +376,17 @@ impl PyEditedReconstruction {
         let pyramids = resolve_pyramids(&posed, images)?;
         let slots: Vec<_> = pyramids.as_slice().iter().map(Some).collect();
         let (next, report) = py
-            .detach(|| core_add_image_to_tracks(&value, image, &slots, &options, &Progress::none()))
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            .detach(|| {
+                core_add_image_to_tracks(
+                    &value,
+                    image,
+                    &slots,
+                    &sfmtool_core::camera::sampler::RegionPool::for_kernel_call(),
+                    &options,
+                    &Progress::none(),
+                )
+            })
+            .map_err(crate::helpers::kernel_err)?;
         let d = report_to_py(py, &report)?;
         Ok((
             PyEditedReconstruction {

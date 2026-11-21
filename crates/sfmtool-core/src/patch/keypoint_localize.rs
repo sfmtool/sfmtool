@@ -41,8 +41,8 @@ mod reference;
 mod search;
 mod seed;
 
-use crate::camera::sampler::{render_phase, render_tile};
-use crate::camera::WarpMap;
+use crate::camera::sampler::{render_phase, render_source_tile, RegionPool, ViewRegions};
+use crate::camera::{PhotographReadError, WarpMap};
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 #[cfg(test)]
 use crate::patch::normal_refine::FLAT_NORM_SQ_EPS;
@@ -112,13 +112,15 @@ const PROBE_ABOVE_BYTES: usize = 16 << 20;
 /// unsaved in it; every buffer whose size the caller controls is therefore
 /// reserved fallibly, and what would have been an abort arrives here as a
 /// refusal a step can report.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalizeError {
     /// A buffer the search needs could not be allocated.
     OutOfMemory {
         /// What was asked for, in bytes.
         bytes: usize,
     },
+    /// A photograph could not be read.
+    Photograph(PhotographReadError),
     /// The caller asked the operation to stop.
     Cancelled,
 }
@@ -130,6 +132,7 @@ impl std::fmt::Display for LocalizeError {
                 f,
                 "the localizer could not allocate {bytes} bytes for its search buffers"
             ),
+            LocalizeError::Photograph(e) => write!(f, "a photograph could not be read: {e}"),
             LocalizeError::Cancelled => write!(f, "the operation was cancelled"),
         }
     }
@@ -140,6 +143,16 @@ impl std::error::Error for LocalizeError {}
 impl From<Cancelled> for LocalizeError {
     fn from(_: Cancelled) -> Self {
         LocalizeError::Cancelled
+    }
+}
+
+/// A cancelled read is the localizer's own [`LocalizeError::Cancelled`].
+impl From<PhotographReadError> for LocalizeError {
+    fn from(e: PhotographReadError) -> Self {
+        match e {
+            PhotographReadError::Cancelled => LocalizeError::Cancelled,
+            e => LocalizeError::Photograph(e),
+        }
     }
 }
 
@@ -342,10 +355,14 @@ pub(crate) fn shifted_center(
 /// -- is asked for at its own size and released first whenever the tile is big
 /// enough for the answer to be no, so a refusal comes back as
 /// [`LocalizeError::OutOfMemory`] before either is built.
+///
+/// `regions` reads `view`'s photograph ([`render_source_tile`]); a read that
+/// fails comes back as [`LocalizeError::Photograph`].
 #[allow(clippy::too_many_arguments)]
 fn render_context(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
+    regions: &mut ViewRegions<'_>,
     au: f64,
     av: f64,
     wpp_u: f64,
@@ -414,8 +431,8 @@ fn render_context(
     }
     let img = prof::RENDER_REMAP.time(|| {
         let _phase = render_phase(progress, sampler, 1);
-        render_tile(view.source.held_pyramid(), &mut map, sampler)
-    });
+        render_source_tile(regions, &mut map, sampler)
+    })?;
     debug_assert_eq!(channels, img.channels() as usize);
 
     // Per-channel sum → mean over the cache. We accumulate in `f64` to keep the
@@ -706,6 +723,15 @@ fn subpixel_peak(peak: f64, py: i64, px: i64, nb: impl Fn(i64, i64) -> Option<f6
 /// scores against the template; see [`KeypointLocalization`] and
 /// `specs/core/patch/patch-keypoint-localization.md`.
 ///
+/// The views' photographs are read through `pool`, the region pool the caller
+/// made for this call, with one
+/// [`ViewRegions`] per view, which every
+/// read of that view shares.
+///
+/// # Errors
+///
+/// The [`PhotographReadError`] of a read of a view's photograph that failed.
+///
 /// # Panics
 ///
 /// Panics if a search buffer cannot be allocated, which a `search` radius wide
@@ -715,25 +741,30 @@ fn subpixel_peak(peak: f64, py: i64, px: i64, nb: impl Fn(i64, i64) -> Option<f6
 pub fn localize_patch_keypoints(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     patch_views: &[u32],
     patch_keypoints: Option<&[Option<[f64; 2]>]>,
     reference: Option<usize>,
     params: &KeypointLocalizeParams,
-) -> KeypointLocalization {
-    try_localize_patch_keypoints(
+) -> Result<KeypointLocalization, PhotographReadError> {
+    match try_localize_patch_keypoints(
         patch,
         views,
+        pool,
         patch_views,
         patch_keypoints,
         reference,
         params,
         &Progress::none(),
-    )
-    .expect("the localizer's buffers fit and no cancellation is possible without a Progress")
+    ) {
+        Ok(localized) => Ok(localized),
+        Err(LocalizeError::Photograph(e)) => Err(e),
+        Err(e) => panic!("the localizer's buffers fit and nothing cancels it: {e}"),
+    }
 }
 
 /// [`localize_patch_keypoints`] as a fallible call: the same localization, with
-/// the two things that can stop it reported rather than raised.
+/// everything that can stop it reported rather than raised.
 ///
 /// The buffers the search reads from are sized by
 /// [`search`](KeypointLocalizeParams::search) and grow as its square, so a
@@ -742,11 +773,13 @@ pub fn localize_patch_keypoints(
 /// and this is the entry point that hands back
 /// [`LocalizeError::OutOfMemory`] instead. `progress` is polled between views,
 /// so a caller that can be cancelled gets [`LocalizeError::Cancelled`] rather
-/// than running the whole set out.
+/// than running the whole set out. A read of a photograph through `pool` that
+/// fails is [`LocalizeError::Photograph`].
 ///
 /// # Example
 ///
 /// ```no_run
+/// # use sfmtool_core::camera::sampler::RegionPool;
 /// # use sfmtool_core::patch::keypoint_localize::{
 /// #     try_localize_patch_keypoints, KeypointLocalizeParams,
 /// # };
@@ -764,6 +797,7 @@ pub fn localize_patch_keypoints(
 /// let localized = try_localize_patch_keypoints(
 ///     patch,
 ///     views,
+///     &RegionPool::for_kernel_call(),
 ///     patch_views,
 ///     None,
 ///     Some(0),
@@ -777,9 +811,11 @@ pub fn localize_patch_keypoints(
 /// # Ok(())
 /// # }
 /// ```
+#[allow(clippy::too_many_arguments)]
 pub fn try_localize_patch_keypoints(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     patch_views: &[u32],
     patch_keypoints: Option<&[Option<[f64; 2]>]>,
     reference: Option<usize>,
@@ -790,6 +826,7 @@ pub fn try_localize_patch_keypoints(
         align::align_to_reference(
             patch,
             views,
+            pool,
             patch_views,
             patch_keypoints,
             reference,
@@ -810,6 +847,11 @@ pub fn try_localize_patch_keypoints(
 /// in its patch views of its reference observation, or `None` to have the
 /// reference-view rule pick one. Results are returned in cloud order.
 ///
+/// The photographs are read through `pool`, the region pool the caller made
+/// for this call, with one
+/// [`ViewRegions`] per view of the patch
+/// being localized, dropped when the patch is done.
+///
 /// `done`, when given, is bumped once per patch, for a caller polling progress
 /// from another thread. `progress` receives a `patches` count about every
 /// hundredth of the way through, is polled for cancellation before each patch
@@ -818,8 +860,9 @@ pub fn try_localize_patch_keypoints(
 ///
 /// # Errors
 ///
-/// [`Cancelled`] when `progress` was cancelled before every patch was
-/// localized.
+/// [`PhotographReadError::Cancelled`] when `progress` was cancelled before
+/// every patch was localized, and otherwise the error of a read of a
+/// photograph that failed.
 ///
 /// # Panics
 ///
@@ -830,13 +873,14 @@ pub fn try_localize_patch_keypoints(
 pub fn localize_patch_cloud_keypoints(
     cloud: &PatchCloud,
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     patch_views: &[Vec<u32>],
     patch_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     references: Option<&[Option<usize>]>,
     params: &KeypointLocalizeParams,
     done: Option<&std::sync::atomic::AtomicUsize>,
     progress: &Progress<'_>,
-) -> Result<Vec<KeypointLocalization>, Cancelled> {
+) -> Result<Vec<KeypointLocalization>, PhotographReadError> {
     assert_eq!(
         patch_views.len(),
         cloud.len(),
@@ -861,7 +905,7 @@ pub fn localize_patch_cloud_keypoints(
     }
     let wall_start = std::time::Instant::now();
     let counter = PatchCounter::new(cloud.len(), done, progress);
-    let out: Vec<Option<KeypointLocalization>> = cloud
+    let out: Vec<Option<Result<KeypointLocalization, PhotographReadError>>> = cloud
         .patches
         .par_iter()
         .enumerate()
@@ -876,6 +920,7 @@ pub fn localize_patch_cloud_keypoints(
             let out = try_localize_patch_keypoints(
                 patch,
                 views,
+                pool,
                 &patch_views[i],
                 seeds,
                 reference,
@@ -883,9 +928,10 @@ pub fn localize_patch_cloud_keypoints(
                 progress,
             );
             let out = match out {
-                Ok(out) => out,
+                Ok(out) => Ok(out),
                 // A cancellation mid-patch: the check below returns it.
                 Err(LocalizeError::Cancelled) => return None,
+                Err(LocalizeError::Photograph(e)) => Err(e),
                 Err(e) => panic!("the localizer's buffers fit: {e}"),
             };
             counter.finished();
@@ -896,10 +942,9 @@ pub fn localize_patch_cloud_keypoints(
         prof::report(cloud.len(), wall_start.elapsed().as_secs_f64());
     }
     progress.check_cancel()?;
-    Ok(out
-        .into_iter()
+    out.into_iter()
         .map(|o| o.expect("every patch ran when nothing was cancelled"))
-        .collect())
+        .collect()
 }
 
 /// Reference (pre-optimization) translation search: score each candidate by

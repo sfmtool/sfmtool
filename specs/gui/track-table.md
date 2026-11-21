@@ -489,9 +489,11 @@ file with no `reference_observations` column, gets one from the reference-view
 rule, run at the point's stored keypoints: `stored_bitmap::render_reference`,
 which makes the pick without keeping the bitmap, over the photographs of the
 point's track that can be read and are the size their camera says, at the
-reconstruction's patch resolution. It is the pick an evaluation would make
+reconstruction's patch resolution, through one region pool made for the pick
+and one `ViewRegions` per view. It is the pick an evaluation would make
 without localising the rows first. With fewer than two such views there is no
-pick, as for the bitmap writers.
+pick, as for the bitmap writers, and a read of a photograph that fails, which
+a whole pyramid read in place never does, gives no pick either.
 
 A point at `-1` reaches the rule unless a bitmap writer has already run the rule
 for it and found no eligible view. That is read off the point's own row: every

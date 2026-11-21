@@ -273,6 +273,7 @@ fn run(
         &cap.recon,
         TARGET,
         &cap.photographs(),
+        crate::camera::sampler::test_pool(),
         options,
         &Progress::none(),
     )
@@ -601,19 +602,40 @@ fn the_calls_preconditions_are_refused_by_name() {
     let options = fixed();
     let photos = cap.photographs();
     assert!(matches!(
-        add_image_to_tracks(&cap.recon, 9, &photos, &options, &Progress::none()),
+        add_image_to_tracks(
+            &cap.recon,
+            9,
+            &photos,
+            crate::camera::sampler::test_pool(),
+            &options,
+            &Progress::none()
+        ),
         Err(AddImageToTracksError::NoSuchImage { .. })
     ));
     let mut missing = photos.clone();
     missing[TARGET] = None;
     assert!(matches!(
-        add_image_to_tracks(&cap.recon, TARGET, &missing, &options, &Progress::none()),
+        add_image_to_tracks(
+            &cap.recon,
+            TARGET,
+            &missing,
+            crate::camera::sampler::test_pool(),
+            &options,
+            &Progress::none()
+        ),
         Err(AddImageToTracksError::NoTargetImage(TARGET))
     ));
     let mut unposed = cap.recon.clone();
     unposed.image_set.images[TARGET].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
     assert!(matches!(
-        add_image_to_tracks(&unposed, TARGET, &photos, &options, &Progress::none()),
+        add_image_to_tracks(
+            &unposed,
+            TARGET,
+            &photos,
+            crate::camera::sampler::test_pool(),
+            &options,
+            &Progress::none()
+        ),
         Err(AddImageToTracksError::Unposed(TARGET))
     ));
 }
@@ -625,12 +647,26 @@ fn a_missing_reference_image_leaves_that_reference_out() {
     let mut photos = cap.photographs();
     photos[0] = None;
     photos[1] = None;
-    let (_, report) =
-        add_image_to_tracks(&cap.recon, TARGET, &photos, &fixed(), &Progress::none()).unwrap();
+    let (_, report) = add_image_to_tracks(
+        &cap.recon,
+        TARGET,
+        &photos,
+        crate::camera::sampler::test_pool(),
+        &fixed(),
+        &Progress::none(),
+    )
+    .unwrap();
     assert_eq!(report.candidates[0].references, vec![2, 3]);
     photos[2] = None;
-    let (_, report) =
-        add_image_to_tracks(&cap.recon, TARGET, &photos, &fixed(), &Progress::none()).unwrap();
+    let (_, report) = add_image_to_tracks(
+        &cap.recon,
+        TARGET,
+        &photos,
+        crate::camera::sampler::test_pool(),
+        &fixed(),
+        &Progress::none(),
+    )
+    .unwrap();
     assert_eq!(
         report.candidates[0].refusal,
         Some(Refusal::TooFewReferences)
@@ -699,11 +735,13 @@ fn stored_bitmaps(
         let bitmap = render_patch_bitmap(
             &patch_at(*world),
             &views,
+            crate::camera::sampler::test_pool(),
             observing,
             &kps,
             &params,
             &Progress::none(),
         )
+        .unwrap()
         .unwrap();
         column
             .index_axis_mut(ndarray::Axis(0), p)
@@ -854,11 +892,13 @@ fn rendered_template_rows_are_scored_against_the_stored_bitmap() {
             let tile = render_view_tile(
                 &patch_at(*world),
                 &target,
+                &mut crate::camera::sampler::test_regions(target.source),
                 c.keypoint,
                 bitmap_r,
                 options.localize.sampler,
                 &Progress::none(),
-            );
+            )
+            .unwrap();
             // The capture's patch is exact where the call's is read from the
             // `f32` half-vectors, so the two agree to a few `f32` ulps.
             let expected = read_view_tile(&tile, Some(&mut scorer), false);
@@ -969,13 +1009,22 @@ fn without_a_stored_reference_the_rule_picks_one() {
                 let render = render_reference(
                     &patch_at(*world),
                     &views,
-                    observing,
+                    &mut (observing)
+                        .iter()
+                        .map(|&v| {
+                            (
+                                v,
+                                crate::camera::sampler::test_regions((&views)[v as usize].source),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
                     &kps,
                     options.localize.resolution,
                     options.localize.sampler,
                     &ReferenceViewOptions::default(),
                     &Progress::none(),
-                );
+                )
+                .unwrap();
                 render.reading.choice.reference
             })
             .collect()
@@ -1096,14 +1145,18 @@ fn the_new_views_score_is_blur_matched_against_the_template() {
             }
             let patch = patch_at(*world);
             let bitmap = match template {
-                TemplateSource::Rendered => bitmap_from_tile(&render_view_tile(
-                    &patch,
-                    &view(2),
-                    Some(cap.project(2, *world)),
-                    r,
-                    sampler,
-                    &Progress::none(),
-                )),
+                TemplateSource::Rendered => bitmap_from_tile(
+                    &render_view_tile(
+                        &patch,
+                        &view(2),
+                        &mut crate::camera::sampler::test_regions(view(2).source),
+                        Some(cap.project(2, *world)),
+                        r,
+                        sampler,
+                        &Progress::none(),
+                    )
+                    .unwrap(),
+                ),
                 TemplateSource::StoredBitmap => {
                     assert_eq!(c.template, Some(TemplateKind::StoredBitmap));
                     column
@@ -1118,11 +1171,13 @@ fn the_new_views_score_is_blur_matched_against_the_template() {
             let tile = render_view_tile(
                 &patch,
                 &view(TARGET),
+                &mut crate::camera::sampler::test_regions(view(TARGET).source),
                 Some(kp),
                 r,
                 sampler,
                 &Progress::none(),
-            );
+            )
+            .unwrap();
             let score = scorer.score(&tile.planes(), None);
             assert_eq!(c.zncc, score.blur_matched_zncc, "{template:?} point {p}");
             scored += 1;

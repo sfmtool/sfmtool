@@ -14,7 +14,8 @@ use sfmtool_core::bench::{
 use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::progress::Progress;
 
-use super::{classification_dict, fit_options, refused, views_of};
+use super::{classification_dict, fit_options, views_of};
+use crate::helpers::kernel_err;
 use crate::patches::views::{resolve_pyramids, PosedViews};
 use crate::PySfmrReconstruction;
 
@@ -115,7 +116,7 @@ fn refit_points(
                 &Progress::none(),
             )
         })
-        .map_err(refused)?;
+        .map_err(kernel_err)?;
     let d = report_dict(py, &report)?;
     Ok((PySfmrReconstruction::new(next), d.unbind()))
 }

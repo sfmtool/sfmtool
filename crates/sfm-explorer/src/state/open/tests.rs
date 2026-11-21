@@ -138,6 +138,7 @@ fn opening_renders_the_patch_bitmaps_a_file_does_not_carry() {
     let picked = sfmtool_core::patch::display_bitmaps::render_patch_bitmap_column(
         &on_disk,
         &sfmtool_core::camera::PhotographCache::new(0),
+        &sfmtool_core::camera::sampler::RegionPool::for_kernel_call(),
         &sfmtool_core::progress::Progress::none(),
     )
     .expect("not cancelled")
@@ -196,6 +197,7 @@ fn opening_renders_display_bitmaps_from_the_file_s_references() {
         sfmtool_core::patch::display_bitmaps::render_patch_bitmap_column(
             recon,
             &photographs,
+            &sfmtool_core::camera::sampler::RegionPool::for_kernel_call(),
             &sfmtool_core::progress::Progress::none(),
         )
         .expect("not cancelled")

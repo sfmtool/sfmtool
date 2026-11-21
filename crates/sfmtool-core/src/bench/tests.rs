@@ -2780,14 +2780,17 @@ fn fit_directly(
     let localized = localize_patch_keypoints(
         patch_frame,
         &views,
+        crate::camera::sampler::test_pool(),
         patch_views,
         Some(seeds),
         None,
         &options.localize,
-    );
+    )
+    .unwrap();
     let refined = refine_patch_keypoints(
         patch_frame,
         &views,
+        crate::camera::sampler::test_pool(),
         &localized.views,
         Some(
             &localized
@@ -2798,7 +2801,8 @@ fn fit_directly(
         ),
         None,
         &options.refine,
-    );
+    )
+    .unwrap();
     (localized, refined)
 }
 
@@ -4132,7 +4136,14 @@ fn an_observation_naming_an_image_with_no_view_is_refused() {
         .as_ref()
         .is_some_and(|m| m.keypoint.is_some()));
     assert_eq!(
-        render_bitmap_in_place(&stray, &edited, &scene.views(), &test_fit_options()).err(),
+        render_bitmap_in_place(
+            &stray,
+            &edited,
+            &scene.views(),
+            crate::camera::sampler::test_pool(),
+            &test_fit_options()
+        )
+        .err(),
         Some(EvaluateError::NoView { image: 9 })
     );
 }
@@ -7272,11 +7283,15 @@ fn a_sighting_the_fit_would_walk_past_the_bar_keeps_its_seed_and_says_so() {
         let tile = render_view_tile(
             &patch_frame,
             &scene.views()[fitted.observations[0].image as usize],
+            &mut crate::camera::sampler::test_regions(
+                scene.views()[fitted.observations[0].image as usize].source,
+            ),
             Some(to),
             localize.resolution.max(2) as usize,
             localize.sampler,
             &Progress::none(),
-        );
+        )
+        .unwrap();
         let direct = BitmapScorer::new(&bitmap, MemberCoherenceParams::default().window)
             .score(&tile.planes(), None);
         assert_eq!(held.walked_plain_zncc, Some(direct.plain_zncc));

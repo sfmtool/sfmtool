@@ -465,11 +465,13 @@ pub(in crate::bench) fn fixture_with_columns(
         let Some(rendered) = render_patch_bitmap(
             &patch,
             &views,
+            crate::camera::sampler::test_pool(),
             &patch_views,
             &keypoints,
             &params,
             &Progress::none(),
-        ) else {
+        )
+        .unwrap() else {
             continue;
         };
         for (k, value) in rendered.rgba.iter().enumerate() {

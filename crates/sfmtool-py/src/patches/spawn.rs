@@ -143,6 +143,7 @@ pub fn spawn_candidate_tracks(
         .detach(|| {
             core_spawn(
                 &projected,
+                &sfmtool_core::camera::sampler::RegionPool::for_kernel_call(),
                 &cloud.inner,
                 &parent_data,
                 &offsets,
@@ -150,7 +151,7 @@ pub fn spawn_candidate_tracks(
                 &params,
             )
         })
-        .map_err(value_err)?;
+        .map_err(crate::helpers::kernel_err)?;
 
     // Flat + reshape so an empty batch still yields clean `(0, 3)` / `(0, 2)`.
     let n_obs = out.obs_view_indexes.len();

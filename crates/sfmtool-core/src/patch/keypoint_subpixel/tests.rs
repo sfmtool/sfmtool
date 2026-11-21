@@ -336,7 +336,16 @@ fn recovers_planted_subpixel_offset_fine_grid() {
         "fixture must exercise the tile path (grid→source scale {s:.2})"
     );
 
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
     assert_eq!(res.views, vec![0, 1, 2, 3], "patch views unchanged");
     let p3 = pos(&res, 3);
     let proj3 = project(&views[3], &patch.center, patch.w).unwrap();
@@ -373,7 +382,16 @@ fn recovers_planted_subpixel_offset_finite() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
     assert_eq!(res.views, vec![0, 1, 2, 3], "patch views unchanged");
 
     // The planted world-x shift maps to +image-x for this fronto camera; the
@@ -412,7 +430,16 @@ fn recovers_planted_subpixel_offset_two_views() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1], None, Some(0), &params());
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
     let proj0 = project(&views[0], &patch.center, patch.w).unwrap();
     let proj1 = project(&views[1], &patch.center, patch.w).unwrap();
     let p0 = pos(&res, 0);
@@ -446,7 +473,16 @@ fn recovers_planted_subpixel_offset_two_views() {
         sampler: Sampler::Bilinear.into(),
         ..params()
     };
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1], None, Some(0), &bl);
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1],
+        None,
+        Some(0),
+        &bl,
+    )
+    .unwrap();
     let p0 = pos(&res, 0);
     let p1 = pos(&res, 1);
     let relative = (res.keypoints[p1][0] - proj1.0) - (res.keypoints[p0][0] - proj0.0);
@@ -479,7 +515,16 @@ fn recovers_planted_subpixel_offset_infinity() {
         &[[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [ang, 0.0]],
     );
     let views = scene.views();
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
     assert_eq!(res.views, vec![0, 1, 2, 3]);
 
     // The angular shift dx maps to image-x via the focal length; +ang rad -> +ang·F px.
@@ -512,8 +557,26 @@ fn infinity_never_worse_than_seed() {
         max_gn_steps: 0,
         ..params()
     };
-    let seed = refine_patch_keypoints(&patch, &views, &[0, 1, 2], None, Some(0), &seed_only);
-    let refined = refine_patch_keypoints(&patch, &views, &[0, 1, 2], None, Some(0), &params());
+    let seed = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2],
+        None,
+        Some(0),
+        &seed_only,
+    )
+    .unwrap();
+    let refined = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
 
     assert_eq!(refined.views, vec![0, 1, 2]);
     for &o in &refined.offsets_px {
@@ -556,8 +619,26 @@ fn refined_score_never_below_seed() {
         max_gn_steps: 0,
         ..params()
     };
-    let seed = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &seed_only);
-    let refined = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
+    let seed = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &seed_only,
+    )
+    .unwrap();
+    let refined = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
 
     for i in 0..4u32 {
         let ps = pos(&seed, i);
@@ -614,7 +695,16 @@ fn consensus_sharpens_after_refinement() {
 
     // Refine, then render each view through the patch slid onto its refined
     // keypoint, the frame production renders a view's tile through.
-    let res = refine_patch_keypoints(&patch, &views, &patch_views, None, Some(0), &p);
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &patch_views,
+        None,
+        Some(0),
+        &p,
+    )
+    .unwrap();
     let after_keypoints: Vec<Option<[f64; 2]>> = res.keypoints.iter().map(|&k| Some(k)).collect();
     let after = consensus_sharpness(&patch, &views, &patch_views, &after_keypoints, &p);
 
@@ -642,7 +732,16 @@ fn flat_texture_keeps_seed() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2], None, Some(0), &params());
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
     assert_eq!(res.views, vec![0, 1, 2], "patch views preserved");
     for (k, &o) in res.offsets_px.iter().enumerate() {
         assert!(
@@ -669,7 +768,16 @@ fn aligned_views_do_not_move() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
     assert_eq!(res.views, vec![0, 1, 2, 3]);
     for &o in &res.offsets_px {
         assert!(o < 0.02, "aligned view should not move, got {o}");
@@ -695,7 +803,16 @@ fn out_of_frame_seed_keeps_seed() {
     // in-plane offset whose core is out of frame. It must keep that seed (no panic).
     let proj1 = project(&views[1], &patch.center, patch.w).unwrap();
     let seeds = [Some([proj1.0, proj1.1]), Some([proj1.0 + 5000.0, proj1.1])];
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1], Some(&seeds), Some(0), &params());
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1],
+        Some(&seeds),
+        Some(0),
+        &params(),
+    )
+    .unwrap();
     assert_eq!(
         res.views,
         vec![0, 1],
@@ -728,7 +845,16 @@ fn never_overshoots_beyond_max_offset() {
         max_offset_px: 0.1, // far below the planted 0.3 grid px
         ..params()
     };
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &tight);
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &tight,
+    )
+    .unwrap();
     // Every recovered grid offset must respect the bound (converted to grid px).
     for (k, &i) in res.views.iter().enumerate() {
         let proj = project(&views[i as usize], &patch.center, patch.w).unwrap();
@@ -765,7 +891,16 @@ fn a_second_solve_stays_within_max_offset_of_the_seed() {
         max_offset_px: 1.0,
         ..params()
     };
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &bounded);
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(0),
+        &bounded,
+    )
+    .unwrap();
     let k = res
         .views
         .iter()
@@ -794,7 +929,16 @@ fn duplicate_view_index_is_deduped() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let res = refine_patch_keypoints(&patch, &views, &[0, 0, 1, 2], None, Some(0), &params());
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 0, 1, 2],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
     assert_eq!(
         res.views,
         vec![0, 1, 2],
@@ -811,7 +955,16 @@ fn fewer_than_two_views_returns_seed_projection() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let res = refine_patch_keypoints(&patch, &views, &[0], None, Some(0), &params());
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
     assert_eq!(res.views, vec![0]);
     let proj = project(&views[0], &patch.center, patch.w).unwrap();
     assert!((res.keypoints[0][0] - proj.0).abs() < 1e-9);
@@ -828,7 +981,16 @@ fn empty_patch_views_return_empty() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let res = refine_patch_keypoints(&patch, &views, &[], None, Some(0), &params());
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
     assert!(res.views.is_empty());
     assert!(res.keypoints.is_empty());
     assert!(res.offsets_px.is_empty());
@@ -857,6 +1019,7 @@ fn batch_matches_per_patch() {
     let batch = refine_patch_cloud_keypoints(
         &cloud,
         &views,
+        crate::camera::sampler::test_pool(),
         &patch_views,
         None,
         None,
@@ -869,11 +1032,13 @@ fn batch_matches_per_patch() {
         let single = refine_patch_keypoints(
             &cloud.patches[i],
             &views,
+            crate::camera::sampler::test_pool(),
             &patch_views[i],
             None,
             None,
             &params(),
-        );
+        )
+        .unwrap();
         assert_eq!(res.views, single.views);
         for (a, b) in res.keypoints.iter().zip(&single.keypoints) {
             assert!((a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9);
@@ -885,6 +1050,7 @@ fn batch_matches_per_patch() {
     let batch = refine_patch_cloud_keypoints(
         &cloud,
         &views,
+        crate::camera::sampler::test_pool(),
         &patch_views,
         None,
         Some(&references),
@@ -896,11 +1062,13 @@ fn batch_matches_per_patch() {
         let single = refine_patch_keypoints(
             &cloud.patches[i],
             &views,
+            crate::camera::sampler::test_pool(),
             &patch_views[i],
             None,
             references[i],
             &params(),
-        );
+        )
+        .unwrap();
         assert_eq!(res.keypoints, single.keypoints);
         assert_eq!(res.scores[references[i].unwrap()], 1.0);
     }
@@ -948,7 +1116,16 @@ fn render_bitmaps_stores_the_pick_for_a_finite_point() {
         render_bitmaps: true,
         ..params()
     };
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, None, &p);
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        None,
+        &p,
+    )
+    .unwrap();
     let rep = res
         .representative
         .expect("a well-observed finite point stores a bitmap");
@@ -980,7 +1157,16 @@ fn render_bitmaps_stores_the_reference_for_an_infinity_point() {
         render_bitmaps: true,
         ..params()
     };
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2], None, Some(0), &p);
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2],
+        None,
+        Some(0),
+        &p,
+    )
+    .unwrap();
     let rep = res
         .representative
         .expect("a well-observed infinity point stores a bitmap");
@@ -1006,7 +1192,16 @@ fn render_bitmaps_lone_view_has_no_representative() {
         render_bitmaps: true,
         ..params()
     };
-    let res = refine_patch_keypoints(&patch, &views, &[0], None, Some(0), &p);
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0],
+        None,
+        Some(0),
+        &p,
+    )
+    .unwrap();
     assert!(res.representative.is_none(), "no consensus, no bitmap");
 }
 
@@ -1020,7 +1215,16 @@ fn render_bitmaps_off_by_default() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2], None, Some(0), &params());
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2],
+        None,
+        Some(0),
+        &params(),
+    )
+    .unwrap();
     assert!(res.representative.is_none());
     // The reference is reported all the same: it costs no render.
     assert_eq!(res.reference, Some(0));
@@ -1051,17 +1255,28 @@ fn render_bitmaps_stores_the_reference_tile() {
     let proj2 = project(&views[2], &patch.center, patch.w).unwrap();
     let start = [proj2.0 + 0.6, proj2.1 - 0.3];
     let seeds = [None, None, Some(start), None];
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], Some(&seeds), Some(2), &p);
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        Some(&seeds),
+        Some(2),
+        &p,
+    )
+    .unwrap();
     assert_eq!(res.reference, Some(2));
     assert_eq!(res.keypoints[2], start);
     let tile = render_view_tile(
         &patch,
         &views[2],
+        &mut crate::camera::sampler::test_regions(views[2].source),
         Some(start),
         RES as usize,
         p.sampler,
         &Progress::none(),
-    );
+    )
+    .unwrap();
     assert_eq!(
         res.representative.expect("the reference's tile renders"),
         bitmap_from_tile(&tile)
@@ -1091,7 +1306,16 @@ fn with_no_eligible_view_nothing_moves_and_nothing_is_scored() {
         render_bitmaps: true,
         ..params()
     };
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], Some(&seeds), None, &p);
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        Some(&seeds),
+        None,
+        &p,
+    )
+    .unwrap();
     assert_eq!(res.views, vec![0, 1, 2, 3]);
     assert_eq!(res.reference, None);
     assert!(res.scores.iter().all(|s| s.is_nan()), "{:?}", res.scores);
@@ -1149,7 +1373,16 @@ fn the_reference_is_not_moved_and_the_others_follow_it() {
         sampler: Sampler::Bilinear.into(),
         ..params()
     };
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], Some(&seeds), Some(1), &bl);
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        Some(&seeds),
+        Some(1),
+        &bl,
+    )
+    .unwrap();
     assert_eq!(res.views, vec![0, 1, 2, 3]);
     assert_eq!(
         res.keypoints[1].map(f64::to_bits),
@@ -1170,7 +1403,16 @@ fn the_reference_is_not_moved_and_the_others_follow_it() {
 
     // The same starts with view 0 as the reference: the views are aligned to
     // its render instead, and view 1 is pulled off its start onto its truth.
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], Some(&seeds), Some(0), &bl);
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        Some(&seeds),
+        Some(0),
+        &bl,
+    )
+    .unwrap();
     for (k, (&kp, &want)) in res.keypoints.iter().zip(&truth).enumerate().skip(1) {
         let err = dist(kp, want);
         assert!(
@@ -1200,24 +1442,51 @@ fn with_no_reference_given_the_rule_picks_one_and_it_is_not_moved() {
     let rule = crate::patch::stored_bitmap::render_reference(
         &patch,
         &views,
-        &set,
+        &mut set
+            .iter()
+            .map(|&v| {
+                (
+                    v,
+                    crate::camera::sampler::test_regions((&views)[v as usize].source),
+                )
+            })
+            .collect::<Vec<_>>(),
         &seeds,
         p.resolution,
         p.sampler,
         &crate::patch::reference_view::ReferenceViewOptions::default(),
         &Progress::none(),
-    );
+    )
+    .unwrap();
     let pick = rule
         .reading
         .choice
         .reference
         .expect("the rule picks a view on this scene");
 
-    let res = refine_patch_keypoints(&patch, &views, &set, Some(&seeds), None, &p);
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &set,
+        Some(&seeds),
+        None,
+        &p,
+    )
+    .unwrap();
     assert_eq!(res.reference, Some(pick));
     assert_eq!(res.keypoints[pick], seeds[pick].unwrap());
     assert_eq!(res.scores[pick], 1.0);
-    let given = refine_patch_keypoints(&patch, &views, &set, Some(&seeds), Some(pick), &p);
+    let given = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &set,
+        Some(&seeds),
+        Some(pick),
+        &p,
+    )
+    .unwrap();
     assert_eq!(res.keypoints, given.keypoints);
     assert_eq!(res.representative, given.representative);
 }
@@ -1242,11 +1511,13 @@ fn refining_one_view_against_the_reference_recovers_a_planted_offset() {
     let tile = render_view_tile(
         &patch,
         &views[0],
+        &mut crate::camera::sampler::test_regions(views[0].source),
         Some([p0.0, p0.1]),
         RES as usize,
         bl.sampler,
         &Progress::none(),
-    );
+    )
+    .unwrap();
     let bitmap = bitmap_from_tile(&tile);
     let templates = [
         (
@@ -1261,9 +1532,17 @@ fn refining_one_view_against_the_reference_recovers_a_planted_offset() {
         ("bitmap", ReferenceTemplate::Bitmap(&bitmap), 0.05),
     ];
     for (name, template, tolerance) in templates {
-        let (kp, score) =
-            refine_view_against_reference(&patch, &views, template, 3, [p3.0, p3.1], &bl)
-                .unwrap_or_else(|| panic!("{name}: the target refines"));
+        let (kp, score) = refine_view_against_reference(
+            &patch,
+            &views,
+            &mut crate::camera::sampler::test_regions((&views)[3_usize].source),
+            template,
+            3,
+            [p3.0, p3.1],
+            &bl,
+        )
+        .unwrap()
+        .unwrap_or_else(|| panic!("{name}: the target refines"));
         let err = dist(kp, truth);
         assert!(
             err < tolerance,
@@ -1276,11 +1555,13 @@ fn refining_one_view_against_the_reference_recovers_a_planted_offset() {
     assert!(refine_view_against_reference(
         &patch,
         &views,
+        &mut crate::camera::sampler::test_regions((&views)[3_usize].source),
         ReferenceTemplate::Bitmap(&bitmap[..bitmap.len() - 4]),
         3,
         [p3.0, p3.1],
-        &bl,
+        &bl
     )
+    .unwrap()
     .is_none());
 }
 
@@ -1326,14 +1607,16 @@ fn coarse_grid_gate_routes_around_the_tile() {
         try_render_refine_tile(
             &coarse,
             &views[0],
+            &mut crate::camera::sampler::test_regions(views[0].source),
             seed,
             cw_u,
             cw_v,
             p.resolution,
             4,
             Sampler::BilinearMip,
-            &mut img,
+            &mut img
         )
+        .unwrap()
         .is_none(),
         "coarse-grid view must skip the tile and keep the direct path"
     );
@@ -1356,14 +1639,16 @@ fn coarse_grid_gate_routes_around_the_tile() {
         try_render_refine_tile(
             &fine,
             &views[0],
+            &mut crate::camera::sampler::test_regions(views[0].source),
             seed,
             fw_u,
             fw_v,
             p.resolution,
             4,
             Sampler::BilinearMip,
-            &mut img,
+            &mut img
         )
+        .unwrap()
         .is_some(),
         "fine-grid view must get a tile"
     );
@@ -1384,6 +1669,7 @@ fn tile_read_matches_direct_render_at_integer_shifts() {
     let tile = render_refine_tile(
         &patch,
         &views[0],
+        &mut crate::camera::sampler::test_regions(views[0].source),
         seed,
         wpp_u,
         wpp_v,
@@ -1391,7 +1677,8 @@ fn tile_read_matches_direct_render_at_integer_shifts() {
         4,
         Sampler::BilinearMip,
         &mut img,
-    );
+    )
+    .unwrap();
     let mut got = vec![0f32; n];
     let mut want = vec![0f32; n];
     for (di, dj) in [(0i64, 0i64), (1, 0), (-2, 1), (2, -2), (0, 2)] {
@@ -1405,6 +1692,7 @@ fn tile_read_matches_direct_render_at_integer_shifts() {
         assert!(render_core(
             &patch,
             &views[0],
+            &mut crate::camera::sampler::test_regions(views[0].source),
             au,
             av,
             wpp_u,
@@ -1413,8 +1701,9 @@ fn tile_read_matches_direct_render_at_integer_shifts() {
             Sampler::BilinearMip,
             &support,
             1,
-            &mut want,
-        ));
+            &mut want
+        )
+        .unwrap());
         for (k, (a, b)) in got.iter().zip(&want).enumerate() {
             assert!(
                 (a - b).abs() <= 0.5 + 1e-2,
@@ -1442,6 +1731,7 @@ fn tile_gradient_matches_direct_render_at_integer_shifts() {
     let tile = render_refine_tile(
         &patch,
         &views[0],
+        &mut crate::camera::sampler::test_regions(views[0].source),
         seed,
         wpp_u,
         wpp_v,
@@ -1449,7 +1739,8 @@ fn tile_gradient_matches_direct_render_at_integer_shifts() {
         4,
         Sampler::BilinearMip,
         &mut img,
-    );
+    )
+    .unwrap();
     let (mut g_t, mut ju_t, mut jv_t) = (vec![0f32; n], vec![0f32; n], vec![0f32; n]);
     let (mut g_d, mut ju_d, mut jv_d) = (vec![0f32; n], vec![0f32; n], vec![0f32; n]);
     let mut scratch = ImageF32WithGrad::empty();
@@ -1474,6 +1765,7 @@ fn tile_gradient_matches_direct_render_at_integer_shifts() {
         assert!(render_core_with_jg(
             &patch,
             &views[0],
+            &mut crate::camera::sampler::test_regions(views[0].source),
             au,
             av,
             wpp_u,
@@ -1485,8 +1777,9 @@ fn tile_gradient_matches_direct_render_at_integer_shifts() {
             &mut g_d,
             &mut ju_d,
             &mut jv_d,
-            &mut scratch,
-        ));
+            &mut scratch
+        )
+        .unwrap());
         for k in 0..n {
             assert!(
                 (g_t[k] - g_d[k]).abs() <= 1e-2,
@@ -1551,6 +1844,7 @@ fn tile_gradient_matches_finite_differences() {
     let tile = render_refine_tile(
         &patch,
         &views[0],
+        &mut crate::camera::sampler::test_regions(views[0].source),
         seed,
         wpp_u,
         wpp_v,
@@ -1558,7 +1852,8 @@ fn tile_gradient_matches_finite_differences() {
         4,
         Sampler::BilinearMip,
         &mut img,
-    );
+    )
+    .unwrap();
     let (au, av) = (seed[0] + 0.43, seed[1] - 0.68);
     let h = 0.1;
     let read = |a: f64, b: f64, out: &mut [f32]| {
@@ -1663,6 +1958,7 @@ fn tile_read_out_of_coverage_falls_back_to_direct_render() {
     let tile = render_refine_tile(
         &patch,
         &views[0],
+        &mut crate::camera::sampler::test_regions(views[0].source),
         seed,
         wpp_u,
         wpp_v,
@@ -1670,7 +1966,8 @@ fn tile_read_out_of_coverage_falls_back_to_direct_render() {
         4,
         Sampler::BilinearMip,
         &mut img,
-    );
+    )
+    .unwrap();
     let (au, av) = (seed[0] + 10.0, seed[1]);
     let mut buf = vec![0f32; n];
     assert_eq!(
@@ -1683,6 +1980,7 @@ fn tile_read_out_of_coverage_falls_back_to_direct_render() {
     let ok_got = core_value(
         &patch,
         &views[0],
+        &mut crate::camera::sampler::test_regions(views[0].source),
         Some(&tile),
         au,
         av,
@@ -1693,10 +1991,12 @@ fn tile_read_out_of_coverage_falls_back_to_direct_render() {
         &support,
         1,
         &mut got,
-    );
+    )
+    .unwrap();
     let ok_want = render_core(
         &patch,
         &views[0],
+        &mut crate::camera::sampler::test_regions(views[0].source),
         au,
         av,
         wpp_u,
@@ -1706,7 +2006,8 @@ fn tile_read_out_of_coverage_falls_back_to_direct_render() {
         &support,
         1,
         &mut want,
-    );
+    )
+    .unwrap();
     assert_eq!(ok_got, ok_want, "fallback must mirror the direct render");
     if ok_got {
         assert_eq!(got, want, "fallback is the direct render bit-for-bit");
@@ -1738,15 +2039,41 @@ fn the_reference_is_reported_without_rendering_bitmaps() {
         ..params()
     };
     for reference in [None, Some(2)] {
-        let a = refine_patch_keypoints(&patch, &views, &set, Some(&seeds), reference, &bare);
-        let b =
-            refine_patch_keypoints(&patch, &views, &set, Some(&seeds), reference, &with_bitmaps);
+        let a = refine_patch_keypoints(
+            &patch,
+            &views,
+            crate::camera::sampler::test_pool(),
+            &set,
+            Some(&seeds),
+            reference,
+            &bare,
+        )
+        .unwrap();
+        let b = refine_patch_keypoints(
+            &patch,
+            &views,
+            crate::camera::sampler::test_pool(),
+            &set,
+            Some(&seeds),
+            reference,
+            &with_bitmaps,
+        )
+        .unwrap();
         assert!(a.reference.is_some(), "{reference:?}");
         assert_eq!(a.reference, b.reference, "{reference:?}");
         assert_eq!(a.keypoints, b.keypoints, "{reference:?}");
         assert!(a.representative.is_none());
     }
-    let given = refine_patch_keypoints(&patch, &views, &set, Some(&seeds), Some(2), &bare);
+    let given = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &set,
+        Some(&seeds),
+        Some(2),
+        &bare,
+    )
+    .unwrap();
     assert_eq!(given.reference, Some(2));
 }
 
@@ -1771,7 +2098,16 @@ fn a_reference_out_of_frame_is_no_reference() {
         render_bitmaps: true,
         ..params()
     };
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], Some(&seeds), Some(0), &p);
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        Some(&seeds),
+        Some(0),
+        &p,
+    )
+    .unwrap();
     assert_eq!(res.views, vec![0, 1, 2, 3]);
     assert_eq!(res.reference, None);
     assert!(res.scores.iter().all(|s| s.is_nan()), "{:?}", res.scores);
@@ -1807,7 +2143,16 @@ fn the_rule_never_picks_a_grazing_view_but_a_given_one_is_kept() {
         min_grazing_cos: 0.95,
         ..params()
     };
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, None, &strict);
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        None,
+        &strict,
+    )
+    .unwrap();
     assert_eq!(
         res.views,
         vec![0, 1, 2, 3],
@@ -1818,7 +2163,16 @@ fn the_rule_never_picks_a_grazing_view_but_a_given_one_is_kept() {
         .expect("the rule picks among the facing views");
     assert_ne!(res.views[reference], 3);
     assert!(res.scores[3].is_finite());
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(3), &strict);
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 2, 3],
+        None,
+        Some(3),
+        &strict,
+    )
+    .unwrap();
     assert_eq!(res.reference, Some(3));
     assert_eq!(res.scores[3], 1.0);
 }
@@ -1831,7 +2185,16 @@ fn a_reference_given_at_a_repeated_image_is_kept() {
     let scene = four_view_scene([[0.0; 2]; 4]);
     let views = scene.views();
     let patch = plane_patch();
-    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 1, 2], None, Some(2), &params());
+    let res = refine_patch_keypoints(
+        &patch,
+        &views,
+        crate::camera::sampler::test_pool(),
+        &[0, 1, 1, 2],
+        None,
+        Some(2),
+        &params(),
+    )
+    .unwrap();
     assert_eq!(res.views, vec![0, 1, 2]);
     assert_eq!(res.reference.map(|r| res.views[r]), Some(1));
     assert_eq!(res.scores[1], 1.0);

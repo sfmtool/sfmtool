@@ -864,6 +864,7 @@ fn each_turned_bitmap_is_the_render_of_the_frame_the_value_stores() {
         &cloud,
         &out,
         &wrapped,
+        crate::camera::sampler::test_pool(),
         &params,
         UnreferencedPoints::Pick,
         None,

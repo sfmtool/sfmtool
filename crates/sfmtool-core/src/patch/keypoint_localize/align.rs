@@ -16,7 +16,10 @@ use super::{
     render_context, seed_frame, shifted_center, ContextTile, KeypointLocalization,
     KeypointLocalizeParams, LocalizeError, SearchStrategy,
 };
-use crate::camera::sampler::Sampler;
+use std::borrow::BorrowMut;
+
+use crate::camera::sampler::{RegionPool, Sampler, ViewRegions};
+use crate::camera::PhotographReadError;
 use crate::numeric::median_in_place;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::normal_refine::{
@@ -52,18 +55,20 @@ pub(in crate::patch) fn faces_view(
 /// sub-pixel refiner both call this, so given the same views and keypoints they
 /// align to the same reference render.
 ///
-/// `patch_views` and `seeds` are parallel; `given` is the position in them of the caller's reference,
-/// which is the reference. With none, only views that pass the grazing pre-filter ([`faces_view`]
-/// at `min_grazing_cos`) are candidates: the reference-view rule, run with `reference_view`, reads
-/// the facing views' renders at their starting keypoints (a view with no seed rendered through the
-/// patch itself) and its pick is the reference, as
+/// Each entry of `patch_views` is an image with what reads its photograph (a [`ViewRegions`]
+/// or a mutable reference to one), and `seeds` is parallel to it; `given` is the position in
+/// them of the caller's reference, which is the reference. With none, only views that pass the
+/// grazing pre-filter ([`faces_view`] at `min_grazing_cos`) are candidates: the reference-view
+/// rule, run with `reference_view`, reads the facing views' renders at their starting keypoints
+/// (a view with no seed rendered through the patch itself) and its pick is the reference, as
 /// [`render_patch_bitmap`](crate::patch::stored_bitmap::render_patch_bitmap) stores it. Where the
-/// rule finds no eligible view there is no reference.
+/// rule finds no eligible view there is no reference. A read of a photograph that fails is
+/// returned as its error.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn resolve_reference(
+pub(crate) fn resolve_reference<'r>(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    patch_views: &[u32],
+    patch_views: &mut [(u32, impl BorrowMut<ViewRegions<'r>>)],
     seeds: &[Option<[f64; 2]>],
     given: Option<usize>,
     min_grazing_cos: f64,
@@ -71,32 +76,39 @@ pub(crate) fn resolve_reference(
     sampler: SamplerChoice,
     reference_view: &ReferenceViewOptions,
     progress: &Progress<'_>,
-) -> Option<usize> {
+) -> Result<Option<usize>, PhotographReadError> {
     let facing: Vec<usize> = (0..patch_views.len())
-        .filter(|&k| faces_view(patch, &views[patch_views[k] as usize], min_grazing_cos))
+        .filter(|&k| faces_view(patch, &views[patch_views[k].0 as usize], min_grazing_cos))
         .collect();
     if given.is_some() || facing.len() < 2 {
-        return given.or((facing.len() == 1).then(|| facing[0]));
+        return Ok(given.or((facing.len() == 1).then(|| facing[0])));
     }
-    let patch_views: Vec<u32> = facing.iter().map(|&k| patch_views[k]).collect();
     let seeds: Vec<Option<[f64; 2]>> = facing.iter().map(|&k| seeds[k]).collect();
+    let mut facing_views: Vec<(u32, &mut ViewRegions<'r>)> = patch_views
+        .iter_mut()
+        .enumerate()
+        .filter(|(k, _)| facing.binary_search(k).is_ok())
+        .map(|(_, (v, r))| (*v, r.borrow_mut()))
+        .collect();
     let render = render_reference(
         patch,
         views,
-        &patch_views,
+        &mut facing_views,
         &seeds,
         resolution,
         sampler,
         reference_view,
         progress,
-    );
-    render.reading.choice.reference.map(|anchor| facing[anchor])
+    )?;
+    Ok(render.reading.choice.reference.map(|anchor| facing[anchor]))
 }
 
 /// One view of the point that survived the pre-filter.
-struct AlignedView {
+struct AlignedView<'r> {
     /// Image index into the caller's `views`.
     idx: u32,
+    /// What every read of the view goes through.
+    regions: ViewRegions<'r>,
     /// The view's starting keypoint, as given (`None` starts at the projection).
     seed: Option<[f64; 2]>,
     /// The patch slid onto `seed` ([`seed_frame`]): the frame the view's tiles
@@ -179,9 +191,13 @@ impl Template {
 /// Align every view of `patch_views` to the point's reference render, once.
 ///
 /// See [`super::try_localize_patch_keypoints`], which this is the body of.
-pub(super) fn align_to_reference(
+/// Each view kept past the pre-filter is read through one [`ViewRegions`]
+/// made from `pool`, which every read of it shares.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn align_to_reference<'r>(
     patch: &OrientedPatch,
-    views: &[ProjectedImage<'_>],
+    views: &[ProjectedImage<'r>],
+    pool: &'r RegionPool,
     patch_views: &[u32],
     patch_keypoints: Option<&[Option<[f64; 2]>]>,
     reference: Option<usize>,
@@ -222,6 +238,7 @@ pub(super) fn align_to_reference(
         );
         states.push(AlignedView {
             idx: i,
+            regions: ViewRegions::new(view.source, pool),
             seed,
             patch_frame,
             start_is_seed,
@@ -241,12 +258,15 @@ pub(super) fn align_to_reference(
         .and_then(|k| patch_views.get(k))
         .and_then(|&img| states.iter().position(|st| st.idx == img));
     let anchor = prof::REFERENCE.time(|| {
-        let set: Vec<u32> = states.iter().map(|st| st.idx).collect();
         let seeds: Vec<Option<[f64; 2]>> = states.iter().map(|st| st.seed).collect();
+        let mut set: Vec<(u32, &mut ViewRegions<'r>)> = states
+            .iter_mut()
+            .map(|st| (st.idx, &mut st.regions))
+            .collect();
         resolve_reference(
             patch,
             views,
-            &set,
+            &mut set,
             &seeds,
             given,
             params.min_grazing_cos,
@@ -255,7 +275,7 @@ pub(super) fn align_to_reference(
             &ReferenceViewOptions::default(),
             progress,
         )
-    });
+    })?;
     progress.check_cancel()?;
 
     // The template, never blurred. The reference's tile is rendered at its
@@ -264,12 +284,13 @@ pub(super) fn align_to_reference(
     let template = match anchor {
         Some(a) if !states[a].start_is_seed => None,
         Some(a) => {
-            let st = &states[a];
+            let st = &mut states[a];
             prof::count(&prof::N_RENDER, 1);
             let tile = prof::RENDER.time(|| {
                 render_context(
                     &st.patch_frame,
                     &views[st.idx as usize],
+                    &mut st.regions,
                     0.0,
                     0.0,
                     wpp_u,
@@ -300,7 +321,7 @@ pub(super) fn align_to_reference(
         }
         return Ok(finish(
             patch, views, states, None, None, wpp_u, wpp_v, params,
-        ));
+        )?);
     };
     if let Some(a) = anchor {
         states[a].zncc = 1.0;
@@ -338,6 +359,7 @@ pub(super) fn align_to_reference(
             render_context(
                 &st.patch_frame,
                 view,
+                &mut st.regions,
                 0.0,
                 0.0,
                 wpp_u,
@@ -397,17 +419,22 @@ pub(super) fn align_to_reference(
     // placed view against blur-matched: the reference's render at its
     // keypoint, as a stored bitmap renders it. Only built where a gate is on.
     let gates_on = gate_is_on(params.min_absolute_zncc) || gate_is_on(params.min_relative_zncc);
-    let bitmap = anchor.filter(|_| gates_on).map(|a| {
-        let st = &states[a];
-        bitmap_from_tile(&render_view_tile(
-            patch,
-            &views[st.idx as usize],
-            Some(st.seed.unwrap_or(st.proj)),
-            r,
-            params.sampler,
-            progress,
-        ))
-    });
+    let bitmap = match anchor.filter(|_| gates_on) {
+        Some(a) => {
+            let st = &mut states[a];
+            let keypoint = st.seed.unwrap_or(st.proj);
+            Some(bitmap_from_tile(&render_view_tile(
+                patch,
+                &views[st.idx as usize],
+                &mut st.regions,
+                Some(keypoint),
+                r,
+                params.sampler,
+                progress,
+            )?))
+        }
+        None => None,
+    };
     states.retain(|st| st.localizable);
     let mut out = finish(
         patch,
@@ -418,7 +445,7 @@ pub(super) fn align_to_reference(
         wpp_u,
         wpp_v,
         params,
-    );
+    )?;
     out.reference = reference.filter(|idx| out.views.contains(idx));
     Ok(out)
 }
@@ -450,7 +477,7 @@ pub(super) const REANCHOR_MARGIN: i64 = 2;
 fn reanchor(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
-    st: &mut AlignedView,
+    st: &mut AlignedView<'_>,
     wpp_u: f64,
     wpp_v: f64,
     resolution: u32,
@@ -475,6 +502,7 @@ fn reanchor(
         render_context(
             &frame,
             view,
+            &mut st.regions,
             0.0,
             0.0,
             wpp_u,
@@ -566,20 +594,21 @@ fn gate_is_on(bar: f64) -> bool {
 /// the bitmap blurred to the tile's sharpness where blur matching selects it,
 /// as the bench reads a row against the stored bitmap. The alignment itself
 /// read the unblurred template. `bitmap` is `None` where neither gate is on,
-/// and then no view is scored this way.
+/// and then no view is scored this way. A read of a photograph that fails is
+/// returned as its error.
 #[allow(clippy::too_many_arguments)]
 fn finish(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    states: Vec<AlignedView>,
+    states: Vec<AlignedView<'_>>,
     anchor: Option<u32>,
     bitmap: Option<&[u8]>,
     wpp_u: f64,
     wpp_v: f64,
     params: &KeypointLocalizeParams,
-) -> KeypointLocalization {
+) -> Result<KeypointLocalization, PhotographReadError> {
     // Each view's keypoint, before any gate.
-    let placed: Vec<(AlignedView, Option<[f64; 2]>)> = states
+    let mut placed: Vec<(AlignedView<'_>, Option<[f64; 2]>)> = states
         .into_iter()
         .map(|st| {
             let view = &views[st.idx as usize];
@@ -606,31 +635,31 @@ fn finish(
         .filter(|b| b.len() == resolution * resolution * 4)
         .map(|b| bitmap_planes(b, resolution));
     let mut scorer = planes.as_ref().map(|p| BitmapScorer::new(p, params.window));
-    let blur_matched: Vec<f64> = placed
-        .iter()
-        .map(|(st, kp)| {
-            if Some(st.idx) == anchor {
-                return 1.0;
+    let mut blur_matched: Vec<f64> = Vec::with_capacity(placed.len());
+    for (st, kp) in &mut placed {
+        if Some(st.idx) == anchor {
+            blur_matched.push(1.0);
+            continue;
+        }
+        blur_matched.push(match (scorer.as_mut(), kp) {
+            (Some(scorer), Some(kp)) if st.zncc.is_finite() => {
+                prof::count(&prof::N_RENDER, 1);
+                let tile = prof::RENDER.time(|| {
+                    render_view_tile(
+                        patch,
+                        &views[st.idx as usize],
+                        &mut st.regions,
+                        Some(*kp),
+                        resolution,
+                        params.sampler,
+                        &Progress::none(),
+                    )
+                })?;
+                scorer.score(&tile.planes(), None).blur_matched_zncc
             }
-            match (scorer.as_mut(), kp) {
-                (Some(scorer), Some(kp)) if st.zncc.is_finite() => {
-                    prof::count(&prof::N_RENDER, 1);
-                    let tile = prof::RENDER.time(|| {
-                        render_view_tile(
-                            patch,
-                            &views[st.idx as usize],
-                            Some(*kp),
-                            resolution,
-                            params.sampler,
-                            &Progress::none(),
-                        )
-                    });
-                    scorer.score(&tile.planes(), None).blur_matched_zncc
-                }
-                _ => f64::NAN,
-            }
-        })
-        .collect();
+            _ => f64::NAN,
+        });
+    }
 
     let mut others: Vec<f64> = placed
         .iter()
@@ -673,5 +702,5 @@ fn finish(
         out.zncc.push(st.zncc);
         out.blur_matched_zncc.push(bz);
     }
-    out
+    Ok(out)
 }

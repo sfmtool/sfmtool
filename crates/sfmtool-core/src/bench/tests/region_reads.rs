@@ -387,3 +387,145 @@ fn a_read_of_pixels_a_photograph_lacks_fails_the_step() {
         assert_eq!(pool.held_bytes(), 0);
     }
 }
+
+/// The fixture's track-stage track and the version it is read against.
+fn track_stage() -> (EditedReconstruction, EditableTrack) {
+    let edited = edited_fixture(&Scene::new(), WORLD);
+    let (bench, report) = create_track(&Bench::new(), &edited, 0, &CreateTrackOptions::default())
+        .expect("the point goes on the bench");
+    let track = track_of(&bench, &report.label);
+    (edited, track)
+}
+
+/// A track-stage reading renders each row's tile, runs the localizer and the
+/// reference-view rule over them, renders the bitmap and scores every row
+/// against it: the reference view's reads and everything beneath them.
+#[test]
+fn a_track_stage_reading_is_the_same_on_every_read_path() {
+    let (edited, track) = track_stage();
+    assert_the_same_on_every_path(Scene::new, |scene, pool| {
+        let (read, report) = evaluate_rendering_bitmap(
+            &track,
+            &edited,
+            &scene.views(),
+            pool,
+            &EvaluateOptions::default(),
+            &FitOptions::default(),
+            &Progress::none(),
+        )
+        .expect("the track stage reads");
+        assert!(
+            read.track().is_some_and(|p| p.bitmap.is_some()),
+            "the reading renders a bitmap, so the stored bitmap's reads are taken"
+        );
+        (read, report)
+    });
+}
+
+/// A track-stage fit runs the localizer and the sub-pixel refiner over the
+/// rows and renders the bitmap at the fitted keypoints; rendering the bitmap
+/// in place and scoring the rows against it are their own calls.
+#[test]
+fn a_track_stage_fit_and_bitmap_are_the_same_on_every_read_path() {
+    let (edited, track) = track_stage();
+    assert_the_same_on_every_path(Scene::new, |scene, pool| {
+        let views = scene.views();
+        let (fitted, report) = fit(
+            &track,
+            &edited,
+            &views,
+            pool,
+            &FitOptions::default(),
+            &Progress::none(),
+        )
+        .expect("the track stage fits");
+        let rendered =
+            render_bitmap_in_place(&fitted, &edited, &views, pool, &FitOptions::default())
+                .expect("every row names a view");
+        let scored = score_bitmap(
+            &rendered,
+            &edited,
+            &views,
+            pool,
+            &EvaluateOptions::default(),
+            &Progress::none(),
+        )
+        .expect("every row names a view");
+        assert!(scored.track().is_some_and(|p| p.bitmap.is_some()));
+        (scored, report)
+    });
+}
+
+/// A photograph that lacks the pixels a read needs fails each track-stage
+/// step with the read's error, on either path: the reading, whose tiles,
+/// localizer and reference-view rule read it, the fit, and the bitmap's render
+/// and scores.
+#[test]
+fn a_read_of_pixels_a_photograph_lacks_fails_each_track_stage_step() {
+    let (edited, track) = track_stage();
+    let scene = Scene::new();
+    let broken = without_pixels(&scene);
+    let mut views = scene.views();
+    // The fit's bitmap, rendered from the readable views, for the steps that
+    // read a track that holds one.
+    let fitted = fit(
+        &track,
+        &edited,
+        &scene.views(),
+        &RegionPool::for_kernel_call(),
+        &FitOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the track stage fits")
+    .0;
+    views[1].source = &broken;
+    let is_read_error = |e: &EvaluateError| {
+        matches!(
+            e,
+            EvaluateError::Photograph(PhotographReadError::OutOfRange { .. })
+        )
+    };
+    for capacity in [u64::MAX, 0] {
+        let pool = RegionPool::with_capacity(capacity);
+        let error = evaluate(
+            &track,
+            &edited,
+            &views,
+            &pool,
+            &EvaluateOptions::default(),
+            &Progress::none(),
+        )
+        .expect_err("image 1 cannot be read");
+        assert!(is_read_error(&error), "pool of {capacity}: {error}");
+        let error = fit(
+            &track,
+            &edited,
+            &views,
+            &pool,
+            &FitOptions::default(),
+            &Progress::none(),
+        )
+        .expect_err("image 1 cannot be read");
+        assert!(
+            matches!(
+                error,
+                FitError::Photograph(PhotographReadError::OutOfRange { .. })
+            ),
+            "pool of {capacity}: {error}"
+        );
+        let error = render_bitmap_in_place(&fitted, &edited, &views, &pool, &FitOptions::default())
+            .expect_err("image 1 cannot be read");
+        assert!(is_read_error(&error), "pool of {capacity}: {error}");
+        let error = score_bitmap(
+            &fitted,
+            &edited,
+            &views,
+            &pool,
+            &EvaluateOptions::default(),
+            &Progress::none(),
+        )
+        .expect_err("image 1 cannot be read");
+        assert!(is_read_error(&error), "pool of {capacity}: {error}");
+        assert_eq!(pool.held_bytes(), 0);
+    }
+}

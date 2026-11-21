@@ -8,7 +8,9 @@
 use ndarray::Array3;
 
 use crate::camera::image::ImageU8Pyramid;
-use crate::camera::sampler::{check_source, render_phase, render_tile, Sampler, SamplerChoice};
+use crate::camera::sampler::{
+    check_source, render_phase, render_source_tile, Sampler, SamplerChoice, ViewRegions,
+};
 use crate::camera::tiled_photograph::{
     PhotographReadError, PhotographTile, TileKey, TiledPhotograph,
 };
@@ -90,32 +92,48 @@ impl ViewTile {
 /// leaves the photograph. The render is timed in its sampler's detail phase of
 /// `progress` ([`render_phase`]).
 ///
+/// `regions` reads `view`'s photograph: the tile through
+/// [`render_source_tile`], and the clipped share through
+/// [`source_clipped_share`]. A caller that reads the view again while it works
+/// on the same patch, as the reference-view rule does for its pair ZNCCs,
+/// passes the same `regions`, so the later read reuses the regions this one
+/// assembled.
+///
 /// ```no_run
-/// # use sfmtool_core::camera::sampler::SamplerChoice;
+/// # use sfmtool_core::camera::sampler::{RegionPool, SamplerChoice, ViewRegions};
 /// # use sfmtool_core::patch::cloud::OrientedPatch;
 /// # use sfmtool_core::patch::normal_refine::ProjectedImage;
 /// # use sfmtool_core::patch::reference_view::render_view_tile;
 /// # use sfmtool_core::progress::Progress;
-/// # fn run(patch: &OrientedPatch, view: &ProjectedImage<'_>) {
+/// # fn run(patch: &OrientedPatch, view: &ProjectedImage<'_>)
+/// # -> Result<(), Box<dyn std::error::Error>> {
+/// let pool = RegionPool::for_kernel_call();
 /// let tile = render_view_tile(
 ///     patch,
 ///     view,
+///     &mut ViewRegions::new(view.source, &pool),
 ///     Some([812.4, 377.9]),
 ///     24,
 ///     SamplerChoice::per_view(),
 ///     &Progress::none(),
-/// );
+/// )?;
 /// println!("coverage {:.2}, clipped {:?}", tile.coverage, tile.clipped_share);
+/// # Ok(())
 /// # }
 /// ```
+///
+/// # Errors
+///
+/// The [`PhotographReadError`] of a read of the photograph that failed.
 pub fn render_view_tile(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
+    regions: &mut ViewRegions<'_>,
     keypoint: Option<[f64; 2]>,
     resolution: usize,
     sampler: SamplerChoice,
     progress: &Progress<'_>,
-) -> ViewTile {
+) -> Result<ViewTile, PhotographReadError> {
     let resolution = resolution.max(2);
     let patch_frame = patch.seen_at_keypoint(view.camera, view.cam_from_world, keypoint);
     let jacobian = patch_grid_jacobian(&patch_frame, view.camera, view.cam_from_world, resolution);
@@ -132,7 +150,7 @@ pub fn render_view_tile(
     let outline = tile_outline(&map);
     let tile = {
         let _phase = render_phase(progress, sampler, 1);
-        render_tile(view.source.held_pyramid(), &mut map, sampler)
+        render_source_tile(regions, &mut map, sampler)?
     };
     let src_channels = tile.channels();
     // The second of two channels is alpha, as the fourth of four is.
@@ -152,16 +170,16 @@ pub fn render_view_tile(
         }
     }
     let coverage = valid.iter().filter(|&&v| v).count() as f64 / valid.len() as f64;
-    ViewTile {
+    Ok(ViewTile {
         samples,
         valid,
-        clipped_share: clipped_share(view.source.held_pyramid(), &outline),
+        clipped_share: source_clipped_share(regions.source(), &outline)?,
         viewing_angle: viewing_angle(&patch_frame, view.cam_from_world),
         patch_frame,
         jacobian,
         sampler,
         coverage,
-    }
+    })
 }
 
 /// The tile's outline in the photograph: the photograph positions of the

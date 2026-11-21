@@ -34,6 +34,8 @@ use super::keypoint_localize::{
 };
 use super::keypoint_subpixel::{refine_patch_cloud_keypoints, KeypointSubpixelParams};
 use super::normal_refine::ProjectedImage;
+use crate::camera::sampler::RegionPool;
+use crate::camera::PhotographReadError;
 use crate::progress::Progress;
 use crate::reconstruction::triangulation::triangulate_batch;
 
@@ -147,7 +149,8 @@ impl SpawnedTracks {
     }
 }
 
-/// Why [`spawn_candidate_tracks`] refused its requests, before spawning any.
+/// Why [`spawn_candidate_tracks`] refused its requests, or could not finish
+/// them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpawnError {
     /// `offsets_uv` has `offsets` rows where `parents` has `parents` entries.
@@ -164,6 +167,8 @@ pub enum SpawnError {
         view: u32,
         views: usize,
     },
+    /// A photograph could not be read.
+    Photograph(PhotographReadError),
 }
 
 impl std::fmt::Display for SpawnError {
@@ -199,6 +204,7 @@ impl std::fmt::Display for SpawnError {
                 "patch_views[{candidate}] contains image index {view} out of range for \
                  this scene's {views} views"
             ),
+            SpawnError::Photograph(e) => write!(f, "a photograph could not be read: {e}"),
         }
     }
 }
@@ -206,7 +212,7 @@ impl std::fmt::Display for SpawnError {
 impl std::error::Error for SpawnError {}
 
 /// Check a [`spawn_candidate_tracks`] batch of `views` images before any of
-/// it runs, returning the error that call would. [`spawn_candidate_tracks`]
+/// it runs, returning the refusal that call would. [`spawn_candidate_tracks`]
 /// runs this itself; a caller with costly work to do before that call, such as
 /// building the image pyramids, can run it first to refuse a malformed batch
 /// before that work.
@@ -279,13 +285,18 @@ pub fn check_spawn_requests(
 /// world units and the output is a triangulated 3D position, neither of which a
 /// point at infinity has, so a parent at infinity is refused.
 ///
+/// The photographs are read through `pool`, the region pool the caller made
+/// for this call, which the localization and the refinement share.
+///
 /// # Errors
 ///
 /// A [`SpawnError`], with nothing spawned, when `offsets_uv` or `patch_views`
 /// is not parallel to `parents`, a parent index is out of range for `cloud` or
-/// names a patch at infinity, or a patch view is out of range for `views`.
+/// names a patch at infinity, or a patch view is out of range for `views`; and
+/// [`SpawnError::Photograph`] when a read of a photograph failed.
 pub fn spawn_candidate_tracks(
     views: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     cloud: &PatchCloud,
     parents: &[u32],
     offsets_uv: &[[f64; 2]],
@@ -327,9 +338,11 @@ pub fn spawn_candidate_tracks(
         max_shift_px: params.max_shift_px,
         ..KeypointLocalizeParams::default()
     };
+    // `Progress::none` never cancels, so an error is a read that failed.
     let localized = localize_patch_cloud_keypoints(
         &candidates,
         views,
+        pool,
         patch_views,
         None,
         None,
@@ -337,7 +350,7 @@ pub fn spawn_candidate_tracks(
         None,
         &Progress::none(),
     )
-    .expect("Progress::none never cancels");
+    .map_err(SpawnError::Photograph)?;
 
     // The view floor decides what the later stages spend anything on: a candidate
     // below it gets an empty refinement/triangulation set and never renders again.
@@ -380,13 +393,14 @@ pub fn spawn_candidate_tracks(
         refine_patch_cloud_keypoints(
             &candidates,
             views,
+            pool,
             &refine_sets,
             Some(&seeds),
             Some(&references),
             &refine_params,
             &Progress::none(),
         )
-        .expect("Progress::none never cancels")
+        .map_err(SpawnError::Photograph)?
         .into_iter()
         .map(|r| (r.views, r.keypoints))
         .collect()

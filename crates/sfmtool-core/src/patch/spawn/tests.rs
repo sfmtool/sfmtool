@@ -152,8 +152,16 @@ fn spawn_valid(
     patch_views: &[Vec<u32>],
     params: &SpawnParams,
 ) -> SpawnedTracks {
-    spawn_candidate_tracks(views, cloud, parents, offsets_uv, patch_views, params)
-        .expect("the requests are valid")
+    spawn_candidate_tracks(
+        views,
+        crate::camera::sampler::test_pool(),
+        cloud,
+        parents,
+        offsets_uv,
+        patch_views,
+        params,
+    )
+    .expect("the requests are valid")
 }
 
 /// `n` copies of the patch views `[0, 1, 2, 3]`.
@@ -449,8 +457,16 @@ fn malformed_requests_are_refused() {
     cloud.patches.push(infinity);
     cloud.point_indexes.push(1);
     let refuse = |parents: &[u32], offsets: &[[f64; 2]], patch_views: &[Vec<u32>]| {
-        spawn_candidate_tracks(&views, &cloud, parents, offsets, patch_views, &params())
-            .expect_err("the batch is malformed")
+        spawn_candidate_tracks(
+            &views,
+            crate::camera::sampler::test_pool(),
+            &cloud,
+            parents,
+            offsets,
+            patch_views,
+            &params(),
+        )
+        .expect_err("the batch is malformed")
     };
     assert_eq!(
         refuse(&[0], &[[1.0, 0.0], [2.0, 0.0]], &all_views(1)),

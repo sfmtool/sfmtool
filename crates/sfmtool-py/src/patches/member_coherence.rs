@@ -304,18 +304,22 @@ impl PyPatchCloud {
         }
 
         let progress_handle = progress.as_ref().map(|p| p.handle());
-        let results = py.detach(|| {
-            validate_patch_cloud_member_coherence(
-                &self.inner,
-                &views,
-                &members,
-                keypoints.as_deref(),
-                &params,
-                progress_handle.as_deref(),
-                &Progress::none(),
-            )
-            .expect("Progress::none never cancels")
-        });
+        // `Progress::none` never cancels, so an error is a photograph that
+        // could not be read.
+        let results = py
+            .detach(|| {
+                validate_patch_cloud_member_coherence(
+                    &self.inner,
+                    &views,
+                    &sfmtool_core::camera::sampler::RegionPool::for_kernel_call(),
+                    &members,
+                    keypoints.as_deref(),
+                    &params,
+                    progress_handle.as_deref(),
+                    &Progress::none(),
+                )
+            })
+            .map_err(crate::helpers::kernel_err)?;
 
         let mut out = Vec::new();
         for (res, &pid) in results.iter().zip(&self.inner.point_indexes) {

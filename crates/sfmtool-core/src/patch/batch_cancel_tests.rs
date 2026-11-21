@@ -166,6 +166,7 @@ fn a_batch_cancelled_before_it_starts_does_no_work() {
         localize_patch_cloud_keypoints(
             &cloud,
             &views,
+            crate::camera::sampler::test_pool(),
             &patch_views,
             None,
             None,
@@ -180,8 +181,17 @@ fn a_batch_cancelled_before_it_starts_does_no_work() {
             resolution: R,
             ..KeypointSubpixelParams::default()
         };
-        refine_patch_cloud_keypoints(&cloud, &views, &patch_views, None, None, &params, progress)
-            .is_err()
+        refine_patch_cloud_keypoints(
+            &cloud,
+            &views,
+            crate::camera::sampler::test_pool(),
+            &patch_views,
+            None,
+            None,
+            &params,
+            progress,
+        )
+        .is_err()
     });
     check("member coherence", &|progress, done| {
         let params = MemberCoherenceParams {
@@ -191,6 +201,7 @@ fn a_batch_cancelled_before_it_starts_does_no_work() {
         validate_patch_cloud_member_coherence(
             &cloud,
             &views,
+            crate::camera::sampler::test_pool(),
             &patch_views,
             None,
             &params,
@@ -215,10 +226,11 @@ fn a_batch_cancelled_before_it_starts_does_no_work() {
                 &stored,
                 &recon,
                 &none,
+                crate::camera::sampler::test_pool(),
                 &KeypointSubpixelParams::default(),
                 UnreferencedPoints::Pick,
                 Some(done),
-                progress,
+                progress
             ),
             Err(CloudRenderError::Cancelled)
         )

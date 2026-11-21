@@ -893,18 +893,26 @@ pub fn build_track_at_pixel(
                     track
                 } else {
                     // The member read every view already, so no observation
-                    // names an image with no view.
-                    let rendered = super::fit::render_bitmap_in_place(
+                    // names an image with no view; a read that fails fails
+                    // the query.
+                    let rendered = match super::fit::render_bitmap_in_place(
                         &track,
                         edited,
                         views,
+                        pool,
                         &super::fit::FitOptions::default(),
-                    )
-                    .unwrap_or(track);
+                    ) {
+                        Ok(rendered) => rendered,
+                        Err(super::evaluate::EvaluateError::Photograph(e)) => {
+                            return Err(TrackAtPixelError::Photograph(e))
+                        }
+                        Err(_) => track,
+                    };
                     match super::evaluate::score_bitmap(
                         &rendered,
                         edited,
                         views,
+                        pool,
                         &super::evaluate::EvaluateOptions::default(),
                         progress,
                     ) {

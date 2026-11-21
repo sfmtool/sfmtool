@@ -32,7 +32,7 @@ sampled from its own source image through the point's own patch frame, **anchore
 at that member's stored keypoint** (below).
 
 Sampling is **identical to [view selection](patch-view-selection.md)'s** — the
-same `build_level_context` / `normalized_stack` / z-normalize path that builds the
+same `build_level_context` / `normalized_source_stack` / z-normalize path that builds the
 reference appearance a candidate view is admitted against:
 
 - The patch is placed at the point's own normal on an `R×R` grid.
@@ -633,24 +633,33 @@ pub fn coarse_factors_for(resolution: u32) -> Vec<u32>;
 // Matrix and decision are separate so a caller can inspect or supply either.
 // `member_keypoints` is parallel to the INPUT `members` slice (deduplicated
 // alongside it); `None` — for the slice or for one member — anchors at the
-// projection.
+// projection. Each member's photograph is read through one `ViewRegions` made
+// from `pool`, the caller's region pool for this call.
 pub fn member_zncc_matrix(
-    patch, views, members: &[u32],
+    patch, views, pool: &RegionPool, members: &[u32],
     member_keypoints: Option<&[Option<[f64; 2]>]>, params,
-) -> MemberMatrix;
+) -> Result<MemberMatrix, PhotographReadError>;
+// The same with each member's regions given beside its image (a `ViewRegions`
+// or a mutable reference to one; a member listed twice reads through its first
+// listing's), so the reference-view rule's renders reuse what its tiles read.
+pub fn member_zncc_matrix_reporting<'r>(
+    patch, views, members: &mut [(u32, impl BorrowMut<ViewRegions<'r>>)],
+    member_keypoints: Option<&[Option<[f64; 2]>]>, params, progress: &Progress<'_>,
+) -> Result<MemberMatrix, PhotographReadError>;
 pub fn decide_member_coherence(matrix: &MemberMatrix, params) -> MemberDecision;
 pub fn validate_member_coherence(
-    patch, views, members, member_keypoints, params,
-) -> MemberCoherence;
+    patch, views, pool: &RegionPool, members, member_keypoints, params,
+) -> Result<MemberCoherence, PhotographReadError>;
 
 // Batch over a cloud, rayon-parallel across points, results in cloud order.
-// `Err(Cancelled)` when `progress` was cancelled before every point was
-// validated, rather than the points it finished.
+// `Err(PhotographReadError::Cancelled)` when `progress` was cancelled before
+// every point was validated, rather than the points it finished, and
+// otherwise the first point's read that failed.
 pub fn validate_patch_cloud_member_coherence(
-    cloud: &PatchCloud, views: &[ProjectedImage<'_>], patch_views: &[Vec<u32>],
-    patch_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
+    cloud: &PatchCloud, views: &[ProjectedImage<'_>], pool: &RegionPool,
+    patch_views: &[Vec<u32>], patch_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     params: &MemberCoherenceParams, done: Option<&AtomicUsize>, progress: &Progress<'_>,
-) -> Result<Vec<MemberCoherence>, Cancelled>;
+) -> Result<Vec<MemberCoherence>, PhotographReadError>;
 
 // In `patch`, shared with the other batch drivers: each patch's track views
 // (its source point's observing images), and the stored keypoint of each, in
@@ -664,6 +673,12 @@ caller holding its own pairwise scores can use the decision rule on its own; it
 carries no coarse scale, which leaves exoneration and sharpness inactive.
 `from_zncc_scales` takes the coarse tables too, and `from_zncc_blur_matched` a
 blur-matched table beside the plain one.
+
+Every pixel the matrix reads goes through the render entry points
+([view-region-pyramids.md](../camera/view-region-pyramids.md)), by
+`render_source_tile` under `normalized_source_stack`, so the matrix is the same,
+bit for bit, whichever way a read reaches its pixels. A read that fails is the
+call's `PhotographReadError` in place of the matrix.
 
 A detailed `progress` times the members' ellipse readings in a `blur-matched
 ellipses` detail phase and the blurred pairs in a `blur-matched pairs` one,
@@ -707,9 +722,19 @@ relative term alone put outside the block, and the subset exoneration spared),
 `"blur_matched"` or `"blur_matched_above_ratio"` (with `min_ellipse_ratio`);
 under blur matching every dict also carries `pairs_blurred`, and
 `return_matrix=True` adds the `k×k` `blur_matched_zncc`. An unknown `matching`
-or a ratio under 1 raises `ValueError`.
+or a ratio under 1 raises `ValueError`. The call reads the photographs
+through a region pool made for it, and a read that fails, which a photograph
+in memory never does, raises `RuntimeError` naming the photograph, or saying it
+is one in memory and carrying the read's message.
 
 ## Testing
+
+[patch/region_read_tests.rs](../../../crates/sfmtool-core/src/patch/region_read_tests.rs)
+validates the seoul_bull ground truth's first 40 points through a pool every
+read fits in, over 32 px tiles through an empty pool, and through a pool of
+half the first run's peak, and checks that the matrices and verdicts are the
+same bit for bit and that a photograph holding none of the pixels a read
+needs fails the batch with its `OutOfRange` error.
 
 Sibling `tests.rs` under `patch/member_coherence/` covers the decision rule on
 synthetic matrices with known block structure — all-agree; a clean 3+2 split; a

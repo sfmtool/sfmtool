@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use nalgebra::Point3;
 use ndarray::Array3;
 
-use crate::camera::sampler::RegionPool;
+use crate::camera::sampler::{RegionPool, ViewRegions};
 use crate::camera::PhotographReadError;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::{
@@ -294,6 +294,16 @@ impl From<EvaluateError> for FitError {
     }
 }
 
+/// A cancelled read is the fit's own [`FitError::Cancelled`].
+impl From<PhotographReadError> for FitError {
+    fn from(e: PhotographReadError) -> Self {
+        match e {
+            PhotographReadError::Cancelled => FitError::Cancelled,
+            e => FitError::Photograph(e),
+        }
+    }
+}
+
 impl From<Cancelled> for FitError {
     fn from(_: Cancelled) -> Self {
         FitError::Cancelled
@@ -304,6 +314,7 @@ impl From<LocalizeError> for FitError {
     fn from(e: LocalizeError) -> Self {
         match e {
             LocalizeError::OutOfMemory { bytes } => FitError::OutOfMemory { bytes },
+            LocalizeError::Photograph(e) => FitError::Photograph(e),
             LocalizeError::Cancelled => FitError::Cancelled,
         }
     }
@@ -520,14 +531,19 @@ pub fn fit(
 /// bitmap is nothing a verdict depends on, so an evaluation whose answer is
 /// rendered here still hands on what its repaint did.
 ///
+/// The photographs are read through `pool`, the region pool the caller made
+/// for this call.
+///
 /// # Errors
 ///
 /// [`EvaluateError::NoView`] when an observation names an image `images`
-/// holds no view for.
+/// holds no view for, and [`EvaluateError::Photograph`] when a read of a
+/// photograph failed.
 pub fn render_bitmap_in_place(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &FitOptions,
 ) -> Result<EditableTrack, EvaluateError> {
     check_observation_views(track, images)?;
@@ -535,9 +551,10 @@ pub fn render_bitmap_in_place(
         track,
         edited,
         images,
+        pool,
         options,
         track.held_reference(),
-    ))
+    )?)
 }
 
 /// [`render_bitmap_in_place`], rendering the tile of row `from` where it is an
@@ -549,12 +566,13 @@ pub(super) fn render_bitmap_in_place_from(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &FitOptions,
     from: Option<usize>,
-) -> EditableTrack {
-    let mut next = rendered_in_place(track, edited, images, options, from);
+) -> Result<EditableTrack, PhotographReadError> {
+    let mut next = rendered_in_place(track, edited, images, pool, options, from)?;
     next.repaint = track.repaint.carried();
-    next
+    Ok(next)
 }
 
 /// [`render_bitmap_in_place_from`] before the mark is carried across.
@@ -562,32 +580,34 @@ fn rendered_in_place(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &FitOptions,
     from: Option<usize>,
-) -> EditableTrack {
+) -> Result<EditableTrack, PhotographReadError> {
     let Stage::Track(payload) = &track.stage else {
-        return track.clone();
+        return Ok(track.clone());
     };
     let Some(patch_frame) = &payload.patch_frame else {
-        return track.clone();
+        return Ok(track.clone());
     };
     let ins = track.in_observations();
     let (bitmap, reference, color) = render_bitmap(
         track,
         edited,
         images,
+        pool,
         patch_frame,
         &ins,
         options,
         from,
         &Progress::none(),
-    );
+    )?;
     let Some(bitmap) = bitmap else {
-        return track.clone();
+        return Ok(track.clone());
     };
     let mut next = track.clone();
     install_bitmap(&mut next, bitmap, reference, color);
-    next
+    Ok(next)
 }
 
 /// `track` with a bitmap for judging
@@ -596,32 +616,35 @@ fn rendered_in_place(
 /// keypoint, `in` or `out`. It names no reference and leaves the track's
 /// colour alone. The track comes back unchanged where it has no patch frame or
 /// the render gives no bitmap: fewer than two rows carry a keypoint, or the
-/// rule finds no eligible row.
+/// rule finds no eligible row. A read of a photograph through `pool` that
+/// fails is returned as its error.
 pub(super) fn render_bitmap_for_judging(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     options: &FitOptions,
-) -> EditableTrack {
+) -> Result<EditableTrack, PhotographReadError> {
     let Stage::Track(payload) = &track.stage else {
-        return track.clone();
+        return Ok(track.clone());
     };
     let Some(patch_frame) = &payload.patch_frame else {
-        return track.clone();
+        return Ok(track.clone());
     };
     let keyed: Vec<usize> = (0..track.observations.len()).collect();
     let (bitmap, _, _) = render_bitmap(
         track,
         edited,
         images,
+        pool,
         patch_frame,
         &keyed,
         options,
         None,
         &Progress::none(),
-    );
+    )?;
     let Some(bitmap) = bitmap else {
-        return track.clone();
+        return Ok(track.clone());
     };
     let mut next = track.clone();
     if let Stage::Track(payload) = &mut next.stage {
@@ -631,7 +654,7 @@ pub(super) fn render_bitmap_for_judging(
         payload.bitmap_pending = false;
     }
     next.repaint = track.repaint.carried();
-    next
+    Ok(next)
 }
 
 /// Write a rendered bitmap, the row it is the render of, and the colour at its
@@ -970,6 +993,7 @@ pub(super) fn fit_track(
     fit_round(
         track,
         images,
+        pool,
         patch_frame,
         &plan.first,
         options,
@@ -982,6 +1006,7 @@ pub(super) fn fit_track(
         fit_round(
             track,
             images,
+            pool,
             patch_frame,
             &round,
             options,
@@ -1075,12 +1100,13 @@ pub(super) fn fit_track(
             &next,
             edited,
             images,
+            pool,
             &placed,
             &ins,
             options,
             next.held_reference(),
             &phase,
-        );
+        )?;
         progress_note!(phase, "{} observations", ins.len());
         rendered
     };
@@ -1207,9 +1233,11 @@ struct Fit {
 /// The round holds one observation per image, so an image index names exactly
 /// one of its observations and the kernels' per-view answers scatter back
 /// without ambiguity.
+#[allow(clippy::too_many_arguments)]
 fn fit_round(
     track: &EditableTrack,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     patch_frame: &OrientedPatch,
     round: &[usize],
     options: &FitOptions,
@@ -1238,6 +1266,7 @@ fn fit_round(
         let localized = try_localize_patch_keypoints(
             patch_frame,
             images,
+            pool,
             &patch_views,
             Some(&seeds),
             super::evaluate::track_reference(track, round),
@@ -1252,6 +1281,7 @@ fn fit_round(
         let refined = refine_patch_keypoints_reporting(
             patch_frame,
             images,
+            pool,
             &localized.views,
             Some(
                 &localized
@@ -1268,7 +1298,7 @@ fn fit_round(
                 ..options.refine.clone()
             },
             &phase,
-        );
+        )?;
         progress_note!(phase, "{} views", refined.views.len());
         refined
     };
@@ -1427,18 +1457,20 @@ pub(super) fn triangulate_rays(
 /// keypoints are the ones the fit already settled. The grid is the
 /// reconstruction's own bitmap grid where it stores one, so what is rendered
 /// is a tile the column can hold. The second value is the row of the track
-/// whose tile the bitmap is.
+/// whose tile the bitmap is. The photographs are read through `pool`; a read
+/// that fails is returned as its error.
 #[allow(clippy::too_many_arguments)]
 fn render_bitmap(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
+    pool: &RegionPool,
     patch: &OrientedPatch,
     ins: &[usize],
     options: &FitOptions,
     from: Option<usize>,
     progress: &Progress<'_>,
-) -> (Option<Array3<u8>>, Option<usize>, Option<[u8; 3]>) {
+) -> Result<RenderedBitmap, PhotographReadError> {
     // Rendered through the frame as the reconstruction stores it, so the
     // bitmap is the one a render of the stored frame makes
     // (`specs/core/patch/reference-view.md` § "The stored bitmap").
@@ -1457,33 +1489,46 @@ fn render_bitmap(
         keypoints.push([f64::from(keypoint[0]), f64::from(keypoint[1])]);
     }
     if patch_views.len() < 2 {
-        return (None, None, None);
+        return Ok((None, None, None));
     }
     // The row the caller names is rendered from where it is one of the keyed
     // `in` rows; otherwise the rule picks, and its pick becomes the reference.
     let held = from.and_then(|r| rows.iter().position(|&i| i == r));
     if let Some(k) = held {
+        let view = &images[patch_views[k] as usize];
         let tile = render_view_tile(
             patch,
-            &images[patch_views[k] as usize],
+            view,
+            &mut ViewRegions::new(view.source, pool),
             Some(keypoints[k]),
             resolution,
             options.refine.sampler,
             progress,
-        );
+        )?;
         let (bitmap, color) = column_bitmap(&bitmap_from_tile(&tile), resolution, channels);
-        return (Some(bitmap), Some(rows[k]), Some(color));
+        return Ok((Some(bitmap), Some(rows[k]), Some(color)));
     }
     let params = KeypointSubpixelParams {
         resolution: resolution as u32,
         ..options.refine.clone()
     };
-    let Some(rendered) =
-        render_patch_bitmap(patch, images, &patch_views, &keypoints, &params, progress)
+    let Some(rendered) = render_patch_bitmap(
+        patch,
+        images,
+        pool,
+        &patch_views,
+        &keypoints,
+        &params,
+        progress,
+    )?
     else {
-        return (None, None, None);
+        return Ok((None, None, None));
     };
     // The kernel renders RGBA; the column takes as many channels as it carries.
     let (bitmap, color) = column_bitmap(&rendered.rgba, resolution, channels);
-    (Some(bitmap), Some(rows[rendered.reference]), Some(color))
+    Ok((Some(bitmap), Some(rows[rendered.reference]), Some(color)))
 }
+
+/// A rendered bitmap, the row it is the render of, and the colour at its
+/// centre ([`render_bitmap`]).
+type RenderedBitmap = (Option<Array3<u8>>, Option<usize>, Option<[u8; 3]>);

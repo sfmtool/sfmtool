@@ -76,6 +76,8 @@ impl PyOrientedPatch {
     ///         :class:`ImagePyramidSet` or given for a plain array, or the
     ///         photograph's size does not match the camera's.
     ///     IndexError: ``image_index`` is past the set's images.
+    ///     RuntimeError: a read of the photograph failed, which a photograph
+    ///         in memory never does.
     // This is a Python docstring (rendered by `help()`), not Rust prose: its
     // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
     // indented code blocks, which rustdoc then tries to parse as Rust.
@@ -149,16 +151,22 @@ impl PyOrientedPatch {
             cam_from_world: &cam_from_world.inner,
             source,
         };
-        let tile = py.detach(|| {
-            render_view_tile(
-                &self.inner,
-                &view,
-                keypoint,
-                resolution,
-                choice,
-                &Progress::none(),
-            )
-        });
+        let tile = py
+            .detach(|| {
+                let pool = sfmtool_core::camera::sampler::RegionPool::for_kernel_call();
+                let mut regions =
+                    sfmtool_core::camera::sampler::ViewRegions::new(view.source, &pool);
+                render_view_tile(
+                    &self.inner,
+                    &view,
+                    &mut regions,
+                    keypoint,
+                    resolution,
+                    choice,
+                    &Progress::none(),
+                )
+            })
+            .map_err(crate::helpers::kernel_err)?;
         let d = PyDict::new(py);
         let valid = numpy::ndarray::Array2::from_shape_vec((resolution, resolution), tile.valid)
             .expect("one flag per sample");

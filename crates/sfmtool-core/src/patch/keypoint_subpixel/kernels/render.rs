@@ -11,8 +11,8 @@
 
 use crate::camera::image::ImageF32WithGrad;
 
-use crate::camera::sampler::{render_tile, render_tile_with_grad_into};
-use crate::camera::WarpMap;
+use crate::camera::sampler::{render_source_tile, render_source_tile_with_grad_into, ViewRegions};
+use crate::camera::{PhotographReadError, WarpMap};
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::shifted_center;
 use crate::patch::normal_refine::{ProjectedImage, Sampler, Support};
@@ -23,6 +23,7 @@ use crate::patch::keypoint_subpixel::prof;
 /// `out` (flat `[channel * n + support_index]`), reading only the window-support
 /// pixels. Returns `false` (leaving `out` untouched) when any support pixel is out
 /// of frame — a δ whose core left the frame is invalid and can't be scored.
+/// `regions` reads `view`'s photograph; a read that fails is its error.
 ///
 /// Direct (full projective render) value path. In the solver this is only the
 /// **fallback** for an offset outside the [`RefineTile`]'s coverage — the hot
@@ -32,6 +33,7 @@ use crate::patch::keypoint_subpixel::prof;
 pub(in crate::patch::keypoint_subpixel) fn render_core(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
+    regions: &mut ViewRegions<'_>,
     au: f64,
     av: f64,
     wpp_u: f64,
@@ -41,7 +43,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_core(
     support: &Support,
     channels: usize,
     out: &mut [f32],
-) -> bool {
+) -> Result<bool, PhotographReadError> {
     prof::RENDER_VALUE.time(|| {
         let center = shifted_center(patch, au, av, wpp_u, wpp_v);
         let mut core_patch = OrientedPatch::from_center_normal(
@@ -55,19 +57,19 @@ pub(in crate::patch::keypoint_subpixel) fn render_core(
         core_patch.w = patch.w;
         let mut map =
             WarpMap::from_patch(&core_patch, view.camera, view.cam_from_world, resolution);
-        let img = render_tile(view.source.held_pyramid(), &mut map, sampler);
+        let img = render_source_tile(regions, &mut map, sampler)?;
         let n = support.pixels.len();
         for (k, &p) in support.pixels.iter().enumerate() {
             let col = (p % resolution as usize) as u32;
             let row = (p / resolution as usize) as u32;
             if !map.is_valid(col, row) {
-                return false;
+                return Ok(false);
             }
             for c in 0..channels {
                 out[c * n + k] = img.get_pixel(col, row, c as u32) as f32;
             }
         }
-        true
+        Ok(true)
     })
 }
 
@@ -95,6 +97,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_core(
 pub(in crate::patch::keypoint_subpixel) fn render_core_with_jg(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
+    regions: &mut ViewRegions<'_>,
     au: f64,
     av: f64,
     wpp_u: f64,
@@ -107,7 +110,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_core_with_jg(
     jg_u: &mut [f32],
     jg_v: &mut [f32],
     img_scratch: &mut ImageF32WithGrad,
-) -> bool {
+) -> Result<bool, PhotographReadError> {
     prof::RENDER_GRAD.time(|| {
         let center = shifted_center(patch, au, av, wpp_u, wpp_v);
         let mut core_patch = OrientedPatch::from_center_normal(
@@ -120,7 +123,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_core_with_jg(
         let mut map =
             WarpMap::from_patch(&core_patch, view.camera, view.cam_from_world, resolution);
         // Also fills the map's per-pixel Jacobians, which the composition reads.
-        render_tile_with_grad_into(view.source.held_pyramid(), &mut map, sampler, img_scratch);
+        render_source_tile_with_grad_into(regions, &mut map, sampler, img_scratch)?;
         let n = support.pixels.len();
         let stride = img_scratch.width() as usize * channels;
         let value = img_scratch.value();
@@ -130,7 +133,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_core_with_jg(
             let col = (p % resolution as usize) as u32;
             let row = (p / resolution as usize) as u32;
             if !map.is_valid(col, row) {
-                return false;
+                return Ok(false);
             }
             let j = map.get_jacobian(col, row);
             let row_off = row as usize * stride + col as usize * channels;
@@ -144,7 +147,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_core_with_jg(
                 jg_v[c * n + k] = j[0][1] * gx + j[1][1] * gy;
             }
         }
-        true
+        Ok(true)
     })
 }
 
@@ -573,6 +576,7 @@ pub(in crate::patch::keypoint_subpixel) fn grid_to_source_scale(
 pub(in crate::patch::keypoint_subpixel) fn try_render_refine_tile(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
+    regions: &mut ViewRegions<'_>,
     seed: [f64; 2],
     wpp_u: f64,
     wpp_v: f64,
@@ -580,14 +584,15 @@ pub(in crate::patch::keypoint_subpixel) fn try_render_refine_tile(
     pad: u32,
     sampler: Sampler,
     img: &mut ImageF32WithGrad,
-) -> Option<RefineTile> {
+) -> Result<Option<RefineTile>, PhotographReadError> {
     match grid_to_source_scale(patch, view, resolution) {
-        Some(s) if s <= TILE_MAX_GRID_TO_SOURCE => Some(render_refine_tile(
-            patch, view, seed, wpp_u, wpp_v, resolution, pad, sampler, img,
-        )),
+        Some(s) if s <= TILE_MAX_GRID_TO_SOURCE => render_refine_tile(
+            patch, view, regions, seed, wpp_u, wpp_v, resolution, pad, sampler, img,
+        )
+        .map(Some),
         _ => {
             prof::count(&prof::N_TILE_SKIPPED, 1);
-            None
+            Ok(None)
         }
     }
 }
@@ -596,13 +601,15 @@ pub(in crate::patch::keypoint_subpixel) fn try_render_refine_tile(
 /// centred at the view's `seed` offset, rendered with the value+gradient
 /// variant of `sampler`, composed with the warp Jacobian into the stored
 /// patch-grid gradient planes, and prefiltered into B-spline coefficients.
-/// `img` is a reused scratch for the value+gradient render. Production goes
+/// `img` is a reused scratch for the value+gradient render, and `regions`
+/// reads `view`'s photograph. Production goes
 /// through [`try_render_refine_tile`] (the coarse-grid gate); this
 /// unconditional entry is what the unit tests drive directly.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::patch::keypoint_subpixel) fn render_refine_tile(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
+    regions: &mut ViewRegions<'_>,
     seed: [f64; 2],
     wpp_u: f64,
     wpp_v: f64,
@@ -610,7 +617,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_refine_tile(
     pad: u32,
     sampler: Sampler,
     img: &mut ImageF32WithGrad,
-) -> RefineTile {
+) -> Result<RefineTile, PhotographReadError> {
     prof::TILE_PRERENDER.time(|| {
         let tile_res = resolution + 2 * pad;
         let center = shifted_center(patch, seed[0], seed[1], wpp_u, wpp_v);
@@ -626,7 +633,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_refine_tile(
         tile_patch.w = patch.w;
         let mut map = WarpMap::from_patch(&tile_patch, view.camera, view.cam_from_world, tile_res);
         // Also fills the map's per-pixel Jacobians, which the composition reads.
-        render_tile_with_grad_into(view.source.held_pyramid(), &mut map, sampler, img);
+        render_source_tile_with_grad_into(regions, &mut map, sampler, img)?;
         let t = tile_res as usize;
         let ch = img.channels() as usize;
         let area = t * t;
@@ -688,7 +695,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_refine_tile(
                 }
             }
         }
-        RefineTile {
+        Ok(RefineTile {
             res: t,
             pad: pad as usize,
             channels: ch,
@@ -698,7 +705,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_refine_tile(
             jg_v,
             valid,
             valid4,
-        }
+        })
     })
 }
 
@@ -706,11 +713,13 @@ pub(in crate::patch::keypoint_subpixel) fn render_refine_tile(
 /// has a tile and the offset is inside its coverage (the expected path), else
 /// the direct [`render_core`] fallback (a coarse-grid view has no tile — see
 /// [`try_render_refine_tile`]; an out-of-coverage read on a tiled view is
-/// counted in [`prof::N_TILE_FALLBACK`]).
+/// counted in [`prof::N_TILE_FALLBACK`]). `regions` reads `view`'s photograph
+/// for the fallback.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::patch::keypoint_subpixel) fn core_value(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
+    regions: &mut ViewRegions<'_>,
     tile: Option<&RefineTile>,
     au: f64,
     av: f64,
@@ -721,16 +730,16 @@ pub(in crate::patch::keypoint_subpixel) fn core_value(
     support: &Support,
     channels: usize,
     out: &mut [f32],
-) -> bool {
+) -> Result<bool, PhotographReadError> {
     if let Some(tile) = tile {
         debug_assert_eq!(tile.channels, channels);
         match prof::VALUE_READ.time(|| tile.read_core(au, av, resolution as usize, support, out)) {
-            Some(ok) => return ok,
+            Some(ok) => return Ok(ok),
             None => prof::count(&prof::N_TILE_FALLBACK, 1),
         }
     }
     render_core(
-        patch, view, au, av, wpp_u, wpp_v, resolution, sampler, support, channels, out,
+        patch, view, regions, au, av, wpp_u, wpp_v, resolution, sampler, support, channels, out,
     )
 }
 
@@ -741,11 +750,13 @@ pub(in crate::patch::keypoint_subpixel) fn core_value(
 /// `(au, av)` (the GN loop's invariant: the last successful score evaluation
 /// was at the current offset — see [`refine_one_view`](crate::patch::keypoint_subpixel::refine_one_view)).
 /// Direct fallback ([`render_core_with_jg`]) fills `g` too, keeping value and
-/// Jacobian mutually consistent per path.
+/// Jacobian mutually consistent per path; `regions` reads `view`'s photograph
+/// for it.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::patch::keypoint_subpixel) fn core_value_with_jg(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
+    regions: &mut ViewRegions<'_>,
     tile: Option<&RefineTile>,
     au: f64,
     av: f64,
@@ -759,19 +770,20 @@ pub(in crate::patch::keypoint_subpixel) fn core_value_with_jg(
     jg_u: &mut [f32],
     jg_v: &mut [f32],
     img_scratch: &mut ImageF32WithGrad,
-) -> bool {
+) -> Result<bool, PhotographReadError> {
     if let Some(tile) = tile {
         debug_assert_eq!(tile.channels, channels);
         match prof::GRAD_READ
             .time(|| tile.read_jg(au, av, resolution as usize, support, jg_u, jg_v))
         {
-            Some(ok) => return ok,
+            Some(ok) => return Ok(ok),
             None => prof::count(&prof::N_TILE_FALLBACK, 1),
         }
     }
     render_core_with_jg(
         patch,
         view,
+        regions,
         au,
         av,
         wpp_u,

@@ -42,6 +42,7 @@ pub fn add_image_to_tracks(
     recon: &SfmrReconstruction,
     image: usize,
     photographs: &[Option<&TiledPhotograph>],
+    pool: &RegionPool,               // the caller's, for this call
     options: &AddImageToTracksOptions,
     progress: &Progress<'_>,
 ) -> Result<(SfmrReconstruction, AddImageToTracksReport), AddImageToTracksError>;
@@ -123,15 +124,38 @@ added, and a harness can re-judge without re-running. The refusals are
 The call itself is refused (`AddImageToTracksError`) for an image index out of
 range, an unposed image, fewer photographs than images, a target whose own
 photograph is missing, a `sift_files` value (an added observation has no feature
-index to name) and a value without patch frames.
+index to name) and a value without patch frames. It fails with
+`AddImageToTracksError::Photograph` when a read of a photograph fails, the first
+candidate's in candidate order.
+
+Every read goes through the render entry points
+([view-region-pyramids.md](../camera/view-region-pyramids.md)) with the region
+pool the caller made. Each candidate reads its point's views through one
+`ViewRegions` per view, the target first, which the references' renders
+(`TrackReferences::build`, which takes each reference's image with its
+regions), the search and the score (`TrackReferences::search` and `score`,
+which take the target's), the sub-pixel step (`refine_view_against_reference`,
+which takes the target's) and the bitmap scores share, dropped
+once the candidate is measured. A failed read is never a refusal: where a
+search or a score turns a buffer too large to allocate into `no_peak` or
+`unscorable`, a read that fails is the call's error, and
+`TrackReferences::build` returns it as `Err` beside its `Ok(Err(NoTemplate))`
+refusals. The result is the same, bit for bit, whichever way a read reaches its
+pixels.
 
 ```rust
+use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::progress::Progress;
 use sfmtool_core::reconstruction::add_image_to_tracks::{
     add_image_to_tracks, AddImageToTracksOptions,
 };
 let (next, report) = add_image_to_tracks(
-    &recon, image, &photographs, &AddImageToTracksOptions::default(), &Progress::none(),
+    &recon,
+    image,
+    &photographs,
+    &RegionPool::for_kernel_call(),
+    &AddImageToTracksOptions::default(),
+    &Progress::none(),
 )?;
 println!("{} of {} candidates added", report.accepted, report.candidates.len());
 ```
@@ -390,7 +414,9 @@ arrays for the scalars and `(N, 2)` arrays for the keypoints, lists for the
 ragged fields (`reference_zncc`, `reference_pair_zncc`, `pair_zncc`).
 `template` is a list of `"stored_bitmap"`, `"reference_observation"` or
 `None`, and `reference_observation` an `int64` array with `-1`
-for none. A refused call raises `ValueError`.
+for none. A refused call raises `ValueError`, and a read of a photograph that
+fails, which a photograph in memory never does, `RuntimeError` naming the
+photograph, or saying it is one in memory and carrying the read's message.
 
 ```python
 from sfmtool.reconstruction import EditedReconstruction
@@ -399,6 +425,15 @@ print(report["accepted"], report["refusal_counts"])
 ```
 
 ## Testing
+
+[patch/region_read_tests.rs](../../../crates/sfmtool-core/src/patch/region_read_tests.rs)
+adds image 5 of the seoul_bull ground truth to its tracks through a pool every
+read fits in, over 32 px tiles through an empty pool, and through a pool of
+half the first run's peak, and checks that the tracks, readings and report are
+the same bit for bit; that a photograph holding none of the pixels a read
+needs fails the call with its `OutOfRange` error, as the target and as a
+reference; and that `TrackReferences::search` and `score` of a view that cannot
+be read return the read's error.
 
 Unit tests in
 [add_image_to_tracks/tests.rs](../../../crates/sfmtool-core/src/reconstruction/add_image_to_tracks/tests.rs)

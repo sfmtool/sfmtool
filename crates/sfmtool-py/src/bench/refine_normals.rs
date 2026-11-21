@@ -25,6 +25,7 @@ use sfmtool_core::progress::{Event, Progress};
 use super::normal::GrownPlaneKeywords;
 use super::pairwise_flow_normal::PairwiseFlowKeywords;
 use super::{refused, views_of};
+use crate::helpers::kernel_err;
 use crate::patches::views::{resolve_pyramids, PosedViews};
 use crate::signals::SignalWatch;
 use crate::{ProgressCounter, PySfmrReconstruction};
@@ -405,7 +406,7 @@ fn refine_normals(
     });
     let (next, report) = watch.finish(result)?.map_err(|e| match e {
         RefineNormalsError::Cancelled => PyInterruptedError::new_err(e.to_string()),
-        other => refused(other),
+        other => kernel_err(other),
     })?;
     let d = report_dict(py, &report)?;
     Ok((PySfmrReconstruction::new(next), d.unbind()))

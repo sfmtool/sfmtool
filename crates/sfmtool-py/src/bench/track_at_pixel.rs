@@ -27,6 +27,7 @@ use sfmtool_core::progress::Progress;
 
 use super::{read_keypoints, views_of, PyEditableTrack};
 use crate::fileio::matches_file::PyMatchesFile;
+use crate::helpers::PhotographFailure;
 use crate::patches::views::{resolve_pyramids, PosedViews};
 use crate::reconstruction::edited::PyEditedReconstruction;
 use crate::spatial::kdf::PyLazyKdForest;
@@ -288,6 +289,9 @@ pub(super) fn build_track_at_pixel(
 
 /// The Python exception for a core refusal, with its attributes set.
 fn to_py_error(py: Python<'_>, e: &CoreError) -> PyErr {
+    if e.photograph().is_some() {
+        return pyo3::exceptions::PyRuntimeError::new_err(e.to_string());
+    }
     let build = || -> PyResult<PyErr> {
         let reason = e.to_string();
         let err = TrackAtPixelError::new_err(format!("{}: {reason}", e.stage()));

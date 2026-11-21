@@ -39,8 +39,7 @@ pub(in crate::patch) use support::{
     Support, ViewSamplers,
 };
 pub(in crate::patch) use znorm::{
-    normalized_source_stack, normalized_stack, weighted_moments_pub, znorm_write,
-    znormalize_into_kept,
+    normalized_source_stack, weighted_moments_pub, znorm_write, znormalize_into_kept,
 };
 
 #[cfg(test)]

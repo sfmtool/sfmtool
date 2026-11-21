@@ -347,7 +347,12 @@ pub fn build_web_export(
         // Nothing else in the export reads a photograph, so a cache that
         // keeps nothing: each pyramid is dropped once the render is done.
         let photographs = PhotographCache::new(0);
-        rendered_bitmaps = render_display_patch_bitmaps(recon, &photographs, &phase)?;
+        rendered_bitmaps = render_display_patch_bitmaps(
+            recon,
+            &photographs,
+            &crate::camera::sampler::RegionPool::for_kernel_call(),
+            &phase,
+        )?;
         report.patch_bitmaps_rendered = rendered_bitmaps.is_some();
         if rendered_bitmaps.is_none() {
             progress_note!(phase, "no photographs to render them from; drawing splats");

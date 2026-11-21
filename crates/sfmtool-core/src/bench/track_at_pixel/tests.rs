@@ -613,6 +613,7 @@ fn the_returned_track_carries_a_bitmap_on_the_reconstructions_grid() {
         &track,
         &edited,
         &views,
+        crate::camera::sampler::test_pool(),
         &crate::bench::FitOptions::default(),
     )
     .unwrap();

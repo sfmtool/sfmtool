@@ -497,6 +497,8 @@ pub use source::{
     read_source_rect, read_source_samples, render_source_affine, render_source_tile,
     render_source_tile_with_grad_into, sample_source_grid, SourceRect, SourceSamples, ViewRegions,
 };
+#[cfg(test)]
+pub(crate) use test_support::{test_pool, test_regions};
 pub use tile_window::TILE_WINDOW_TILES;
 
 #[cfg(test)]

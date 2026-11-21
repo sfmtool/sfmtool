@@ -681,7 +681,7 @@ pub fn refine_cluster_patches<'py>(
             &params,
             progress_handle.as_deref(),
         )
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        .map_err(crate::helpers::kernel_err)?;
         let consistency = warp_consistency_residuals(
             &starts,
             &m_images,

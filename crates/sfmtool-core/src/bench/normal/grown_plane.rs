@@ -51,7 +51,7 @@ use std::rc::Rc;
 
 use nalgebra::{Matrix2, Vector3};
 
-use crate::camera::sampler::RegionPool;
+use crate::camera::sampler::{RegionPool, ViewRegions};
 use crate::patch::keypoint_localize::resolve_reference;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::patch::reference_view::ReferenceViewOptions;
@@ -912,10 +912,14 @@ pub fn grown_plane_normal(
         .iter()
         .map(|&i| seed_of(&track.observations[i]))
         .collect();
+    let mut reference_regions: Vec<(u32, ViewRegions<'_>)> = patch_views
+        .iter()
+        .map(|&v| (v, ViewRegions::new(images[v as usize].source, pool)))
+        .collect();
     let reference = resolve_reference(
         &patch_frame,
         images,
-        &patch_views,
+        &mut reference_regions,
         &seeds,
         track_reference(track, &rows),
         options.fit.localize.min_grazing_cos,
@@ -923,8 +927,9 @@ pub fn grown_plane_normal(
         options.fit.localize.sampler,
         &ReferenceViewOptions::default(),
         &setup,
-    )
+    )?
     .map(|k| rows[k]);
+    drop(reference_regions);
 
     let mut views = vec![GrownPlaneView::NotAttempted; track.observations.len()];
     let Some(reference) = reference else {

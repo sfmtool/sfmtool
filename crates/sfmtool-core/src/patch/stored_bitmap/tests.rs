@@ -293,13 +293,22 @@ fn the_bitmap_is_the_picked_view_s_tile() {
     let render = render_reference(
         &patch,
         &views,
-        &[0, 1, 2],
+        &mut [0, 1, 2]
+            .iter()
+            .map(|&v| {
+                (
+                    v,
+                    crate::camera::sampler::test_regions((&views)[v as usize].source),
+                )
+            })
+            .collect::<Vec<_>>(),
         &keypoints.iter().map(|&k| Some(k)).collect::<Vec<_>>(),
         24,
         params.sampler,
         &params.reference_view,
         &Progress::none(),
-    );
+    )
+    .unwrap();
     let picked = render.reading.choice.reference.expect("a view is picked");
     // The pick is the rule's on the readings taken.
     assert_eq!(
@@ -311,11 +320,13 @@ fn the_bitmap_is_the_picked_view_s_tile() {
     let bitmap = render_patch_bitmap(
         &patch,
         &views,
+        crate::camera::sampler::test_pool(),
         &[0, 1, 2],
         &keypoints,
         &params,
         &Progress::none(),
     )
+    .unwrap()
     .expect("a bitmap");
     assert_eq!(bitmap.reference, picked);
     assert_eq!(bitmap.rgba, bitmap_from_tile(&render.tiles[picked]));
@@ -343,13 +354,22 @@ fn a_patch_seen_only_from_behind_has_no_bitmap() {
     let render = render_reference(
         &backwards,
         &views,
-        &[0, 1, 2],
+        &mut [0, 1, 2]
+            .iter()
+            .map(|&v| {
+                (
+                    v,
+                    crate::camera::sampler::test_regions((&views)[v as usize].source),
+                )
+            })
+            .collect::<Vec<_>>(),
         &keypoints.iter().map(|&k| Some(k)).collect::<Vec<_>>(),
         24,
         params.sampler,
         &params.reference_view,
         &Progress::none(),
-    );
+    )
+    .unwrap();
     let choice = &render.reading.choice;
     assert_eq!(choice.reference, None, "{:?}", render.reading.readings);
     assert!(choice
@@ -359,21 +379,25 @@ fn a_patch_seen_only_from_behind_has_no_bitmap() {
     assert!(render_patch_bitmap(
         &backwards,
         &views,
+        crate::camera::sampler::test_pool(),
         &[0, 1, 2],
         &keypoints,
         &params,
-        &Progress::none(),
+        &Progress::none()
     )
+    .unwrap()
     .is_none());
     // Fewer than two views render no bitmap at all.
     assert!(render_patch_bitmap(
         &patch(-Vector3::z()),
         &views,
+        crate::camera::sampler::test_pool(),
         &[0],
         &keypoints[..1],
         &params,
         &Progress::none()
     )
+    .unwrap()
     .is_none());
 }
 
@@ -391,13 +415,22 @@ fn edge_render(scene: &Scene, x: f64) -> (OrientedPatch, Vec<[f64; 2]>, Referenc
     let render = render_reference(
         &edge,
         &views,
-        &[0, 1, 2],
+        &mut [0, 1, 2]
+            .iter()
+            .map(|&v| {
+                (
+                    v,
+                    crate::camera::sampler::test_regions((&views)[v as usize].source),
+                )
+            })
+            .collect::<Vec<_>>(),
         &keypoints.iter().map(|&k| Some(k)).collect::<Vec<_>>(),
         24,
         KeypointSubpixelParams::default().sampler,
         &ReferenceViewOptions::default(),
         &Progress::none(),
-    );
+    )
+    .unwrap();
     (edge, keypoints, render)
 }
 
@@ -422,11 +455,13 @@ fn a_view_between_the_coverage_floor_and_full_coverage_is_stored() {
     let bitmap = render_patch_bitmap(
         &edge,
         &views,
+        crate::camera::sampler::test_pool(),
         &[0, 1, 2],
         &keypoints,
         &params,
         &Progress::none(),
     )
+    .unwrap()
     .expect("the pick's tile");
     assert_eq!(bitmap.reference, picked);
     assert_eq!(bitmap.rgba, bitmap_from_tile(&render.tiles[picked]));
@@ -453,11 +488,13 @@ fn a_patch_no_view_covers_to_the_floor_has_no_pick() {
     assert!(render_patch_bitmap(
         &edge,
         &views,
+        crate::camera::sampler::test_pool(),
         &[0, 1, 2],
         &keypoints,
         &params,
-        &Progress::none(),
+        &Progress::none()
     )
+    .unwrap()
     .is_none());
 }
 
@@ -483,13 +520,22 @@ fn with_no_eligible_view_there_is_no_bitmap() {
     let render = render_reference(
         &diamond,
         &views,
-        &[0, 1, 2],
+        &mut [0, 1, 2]
+            .iter()
+            .map(|&v| {
+                (
+                    v,
+                    crate::camera::sampler::test_regions((&views)[v as usize].source),
+                )
+            })
+            .collect::<Vec<_>>(),
         &keypoints.iter().map(|&k| Some(k)).collect::<Vec<_>>(),
         24,
         params.sampler,
         &params.reference_view,
         &Progress::none(),
-    );
+    )
+    .unwrap();
     let choice = &render.reading.choice;
     assert_eq!(choice.reference, None, "{:?}", render.reading.readings);
     assert_eq!(choice.costs.len(), 3);
@@ -500,11 +546,13 @@ fn with_no_eligible_view_there_is_no_bitmap() {
     assert!(render_patch_bitmap(
         &diamond,
         &views,
+        crate::camera::sampler::test_pool(),
         &[0, 1, 2],
         &keypoints,
         &params,
-        &Progress::none(),
+        &Progress::none()
     )
+    .unwrap()
     .is_none());
 }
 
@@ -543,6 +591,7 @@ fn a_cloud_render_refuses_input_that_disagrees_with_the_reconstruction() {
             cloud,
             recon,
             &views,
+            crate::camera::sampler::test_pool(),
             &KeypointSubpixelParams::default(),
             UnreferencedPoints::Pick,
             None,
@@ -553,6 +602,7 @@ fn a_cloud_render_refuses_input_that_disagrees_with_the_reconstruction() {
             cloud,
             recon,
             &views,
+            crate::camera::sampler::test_pool(),
             24,
             SamplerChoice::default(),
             None,

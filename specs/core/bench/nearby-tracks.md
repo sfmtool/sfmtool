@@ -314,7 +314,9 @@ or `+`-joined, with `tracks` accepted for `points`; `stop`; `enough_count`;
 `clusters.`, `guided.`, `constellation.`, `range.`, `far_field.`, `layers.`
 and `tracks.`. An unknown key is a `ValueError`, as is a query that names no
 place and a `label` the core refuses (empty, all whitespace, or holding a
-control character).
+control character). A read of a photograph that fails, which a photograph in memory never
+does, raises `RuntimeError` with the step's sentence, which names the
+photograph, or says it is one in memory and carries the read's message.
 
 The result is a dict. `tracks` holds the labelled tracks in label order, each
 with `label`, `source`, `found` (its index into `found`), `layer`, `rank`,
