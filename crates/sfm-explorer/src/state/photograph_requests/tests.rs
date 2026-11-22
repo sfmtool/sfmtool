@@ -355,8 +355,8 @@ fn level_of(answer: DisplayLevel) -> Arc<ImageU8> {
 /// Every level of the photograph is read off the calling thread by one task
 /// however often it is asked for while the task runs, built from the tiles
 /// `try_decode_tiles` answers with a budget and with a cache that keeps
-/// nothing, and is the level of the pyramid the background drew before,
-/// which `display_photograph` handed it. The task makes one call to the
+/// nothing, and is the level of the whole pyramid the background drew
+/// before step 13c3. The task makes one call to the
 /// cache, `try_decode_tiles`: with a budget, a level read of a photograph the
 /// cache holds counts one hit, which a second read of the cache, such as a
 /// `get_level` that could wait on the slot, would make two.
