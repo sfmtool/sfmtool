@@ -331,6 +331,34 @@ fn the_layout_follows_the_photograph_held() {
     assert_eq!(width(&none), 40);
 }
 
+/// A held photograph's layout is answered as the same `Arc` on every ask
+/// while the held pyramid's size stays the same, so a panel asking every
+/// frame allocates nothing, and as a new one once a pyramid of another size
+/// is held at the path.
+#[test]
+fn a_held_photographs_layout_is_kept_and_answered_again() {
+    let path = std::path::PathBuf::from("/nowhere/held.png");
+    let cache = cache_of(GIB, 16);
+    let pyramid = |w: u32| {
+        let image = ImageU8::new(w, 10, 3, vec![9; (w * 10 * 3) as usize]);
+        Arc::new(ImageU8Pyramid::from_image(
+            image,
+            ImageU8Pyramid::full_levels(w, 10),
+        ))
+    };
+    let known = |cache: &PhotographCache| match cache.layout(&path) {
+        PeekedLayout::Known(layout) => layout,
+        other => panic!("{other:?}"),
+    };
+    cache.insert(&path, pyramid(20));
+    let first = known(&cache);
+    assert!(Arc::ptr_eq(&first, &known(&cache)), "the same layout again");
+    cache.insert(&path, pyramid(40));
+    let second = known(&cache);
+    assert_eq!(second.level_size(0), (40, 10));
+    assert!(Arc::ptr_eq(&second, &known(&cache)));
+}
+
 /// A panel's decode whose `try_reserve_build` is refused, the build budget
 /// used up by another caller's reservation, decodes nothing and reserves
 /// nothing; asked again once that reservation is given back, it decodes.

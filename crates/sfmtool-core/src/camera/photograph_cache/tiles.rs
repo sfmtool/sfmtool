@@ -211,17 +211,32 @@ impl PhotographCache {
     /// Like [`Self::peek_state`] it does not stat the file, so a layout or a
     /// failure is answered until the photograph is decoded again, the layout
     /// is asked for again, or the path is forgotten.
+    ///
+    /// The layout of a held photograph is kept as `request_layout` keeps
+    /// one, so a panel that asks every frame is answered the same `Arc`
+    /// while the held pyramid's size stays the same, with nothing allocated.
     pub fn layout(&self, path: &Path) -> PeekedLayout {
         if let Some((_, value)) = self.made_slot(path) {
             return match value {
                 Ok(pyramid) => {
                     let [width, height] = pyramid.level_full_size(0);
-                    PeekedLayout::Known(Arc::new(PyramidLayout::in_memory(
+                    let held = PyramidLayout::in_memory(
                         width,
                         height,
                         pyramid.num_levels(),
                         self.options.tile_size,
-                    )))
+                    );
+                    let mut inner = self.lock();
+                    if let Some(Ok(kept)) = inner.layouts.get(path) {
+                        if **kept == held {
+                            return PeekedLayout::Known(Arc::clone(kept));
+                        }
+                    }
+                    let held = Arc::new(held);
+                    inner
+                        .layouts
+                        .insert(path.to_path_buf(), Ok(Arc::clone(&held)));
+                    PeekedLayout::Known(held)
                 }
                 Err(e) => PeekedLayout::Unreadable(e.to_string()),
             };
