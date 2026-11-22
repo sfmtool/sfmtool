@@ -297,10 +297,10 @@ impl SfmrReconstruction {
         image_indices: &[u32],
         drop_orphaned_points: bool,
     ) -> Result<Self, String> {
-        // Works for both observation sources: the per-observation parallel
-        // column (SiftFiles `feature_indexes` / EmbeddedPatches `keypoints_xy`
-        // rows) is filtered in lockstep with the tracks below, and the per-image
-        // hashes follow the image subset.
+        // Works for both observation sources: the per-observation columns
+        // (`keypoints_xy` and SiftFiles `feature_indexes` rows) are filtered in
+        // lockstep with the tracks below, and the per-image hashes follow the
+        // image subset.
         let old_image_count = self.image_set.images.len();
         let new_image_count = image_indices.len();
 

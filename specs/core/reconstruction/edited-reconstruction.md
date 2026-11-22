@@ -809,8 +809,7 @@ to agree with this one, and a pair of enums that can disagree is a worse
 invariant than three per-image vectors held on the point side. A pass that drops
 or reindexes images therefore rewrites them in the point set
 (`subset_by_image_indices`), and `PointSet::validate_observation_columns` takes
-the image count as an argument to check their lengths. Whether they move is
-not decided here.
+the image count as an argument to check their lengths.
 
 **The Python side sees the sharing rule as read-only views.** Every array
 getter on the `SfmrReconstruction` binding returns an array with numpy's
