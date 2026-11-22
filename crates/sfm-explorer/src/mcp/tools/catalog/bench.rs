@@ -199,8 +199,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           Selection row in the Action Log, and a background task on the \
                           reconstruction does not refuse it. It selects the item's \
                           reconstruction and its origin point, or clears the point selection \
-                          when the item has none. The reply names the item, with changed: false \
-                          when it was focused already.",
+                          when the item has none; a measurement item selects its origin \
+                          measurement instead and leaves the point selection alone. The reply \
+                          names the item, with changed: false when it was focused already.",
             kind: Write,
             schema: object(
                 &[],
@@ -213,9 +214,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "unfocus_bench_item",
             description: "Stop editing: every item stays on its bench and none is focused, which \
-                          is Track View's Edit box cleared. It selects the item's origin point, \
-                          or clears the point selection when the item has none, so the panel \
-                          shows that point's committed track. It names no reconstruction, since there is \
+                          is Track View's or Measurement View's Edit box cleared. For a track it \
+                          selects the item's origin point, or clears the point selection when \
+                          the item has none, so the panel shows that point's committed track; a \
+                          measurement leaves the selection as it is. It names no reconstruction, since there is \
                           one focused item for the viewer. Not a step: it pushes no version and \
                           writes one Selection row. The reply names the item it unfocused; with \
                           nothing focused, both are null and changed is false. get_bench then \
