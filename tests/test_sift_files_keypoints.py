@@ -2,15 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 """A ``sift_files`` reconstruction carries its observations' pixels inline.
 
-Every writer stores the optional ``keypoints_xy`` column when the ``.sift``
-files can supply it: ``from_data`` and ``load`` build it from those files when
-the data lacks it, and ``clone_with_changes`` rebuilds it when the tracks are
-replaced.
+A version 17 ``.sfmr`` file stores the ``keypoints_xy`` column whatever its
+``feature_source``. ``from_data`` and ``load`` build it from the ``.sift``
+files when the data lacks it, as a version 16 file may, ``save`` reads it
+from them for a value that still lacks it, and ``clone_with_changes`` rebuilds
+it when the tracks are replaced.
 """
 
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from sfmtool.reconstruction import RangeExpr
 from sfmtool.fileio import read_sfmr, write_sfmr
@@ -18,6 +20,7 @@ from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.sift.file import get_sift_path_for_image
 from sfmtool.fileio import SiftFile
 from sfmtool.xform import IncludeRangeFilter, apply_transforms
+from tests.conftest import rewrite_sfmr_as_version_16_without_keypoints
 
 
 def _sift_pixels(recon) -> np.ndarray:
@@ -44,12 +47,13 @@ def test_a_written_file_carries_the_sift_pixels(seoul_bull_workspace):
     np.testing.assert_array_equal(data["keypoints_xy"], _sift_pixels(recon))
 
 
-def test_load_fills_a_file_written_without_the_column(seoul_bull_workspace, tmp_path):
-    data = read_sfmr(seoul_bull_workspace)
-    del data["keypoints_xy"]
-    bare = seoul_bull_workspace.parent / "bare.sfmr"
-    write_sfmr(bare, data)
-    assert read_sfmr(bare).get("keypoints_xy") is None
+def test_load_fills_a_version_16_file_written_without_the_column(
+    seoul_bull_workspace, tmp_path
+):
+    bare = rewrite_sfmr_as_version_16_without_keypoints(
+        seoul_bull_workspace, seoul_bull_workspace.parent / "bare.sfmr"
+    )
+    assert read_sfmr(bare)["keypoints_xy"] is None
 
     recon = SfmrReconstruction.load(bare)
     np.testing.assert_array_equal(np.asarray(recon.keypoints_xy), _sift_pixels(recon))
@@ -95,6 +99,36 @@ def test_a_track_replacement_keeps_pixels_the_source_stated(seoul_bull_workspace
     np.testing.assert_array_equal(np.asarray(out.keypoints_xy), refined[keep])
 
 
-def test_keypoints_none_drops_the_column(seoul_bull_workspace):
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-    assert recon.clone_with_changes(keypoints_xy=None).keypoints_xy is None
+def test_keypoints_none_is_refused(seoul_bull_sfmr_only):
+    recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    with pytest.raises(ValueError, match="keypoints_xy cannot be None"):
+        recon.clone_with_changes(keypoints_xy=None)
+
+
+def test_write_sfmr_refuses_a_sift_files_dict_without_the_column(
+    seoul_bull_sfmr_only, tmp_path
+):
+    data = read_sfmr(seoul_bull_sfmr_only)
+    data["keypoints_xy"] = None
+    out = tmp_path / "out.sfmr"
+    with pytest.raises(ValueError, match="tracks/keypoints_xy"):
+        write_sfmr(out, data)
+    assert not out.exists()
+
+
+def test_save_without_the_column_or_the_sift_files_is_refused(
+    seoul_bull_v16_without_keypoints, tmp_path
+):
+    """A version 16 file without the column, whose ``.sift`` files are gone,
+    loads without it, and a save names the missing file rather than write a
+    file without the column."""
+    recon = SfmrReconstruction.load(seoul_bull_v16_without_keypoints)
+    assert recon.keypoints_xy is None
+    out = tmp_path / "out.sfmr"
+    with pytest.raises(ValueError) as raised:
+        recon.save(out)
+    message = str(raised.value)
+    assert "tracks/keypoints_xy" in message
+    assert ".sift: no such file" in message
+    assert "Restore the .sift files" in message
+    assert not out.exists()

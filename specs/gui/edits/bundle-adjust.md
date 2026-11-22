@@ -494,8 +494,9 @@ Explorer (`sfm-explorer` lib tests, headless):
 
 The windowed `ui_basic` checks are that the entry is present on the
 reconstruction row's context menu after a real right-click (Windows only), and,
-over MCP on all three platforms, that it is there and greyed on the demo
-reconstruction. What it does is covered headlessly.
+over MCP on all three platforms, that it is there and enabled on the demo
+reconstruction, whose observations carry their inline keypoints. What it does
+is covered headlessly.
 
 ---
 

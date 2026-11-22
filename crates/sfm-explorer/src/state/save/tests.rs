@@ -251,6 +251,138 @@ fn a_save_of_a_value_without_readings_records_the_hash_of_the_file_written() {
     assert!(!node.is_dirty());
 }
 
+/// A `sift_files` node whose value holds no inline keypoints, as one read
+/// from a version 16 file whose `.sift` files were missing when it was opened,
+/// and a save reads them from the `.sift` files now there. The save folds them
+/// into a version of its own before it writes, so the version the session
+/// holds is the content of the file on disk and its hash is the file's.
+#[test]
+fn a_save_of_a_value_without_keypoints_records_the_hash_of_the_file_written() {
+    use sfmtool_sift_format::*;
+
+    let dir = temp_dir("keypoints");
+    let mut recon = SfmrReconstruction::demo(32);
+    recon.workspace_dir = dir.clone();
+    let keypoints = recon
+        .keypoints_xy()
+        .expect("the demo states its pixels")
+        .clone();
+    let features = recon.feature_indexes().unwrap().to_vec();
+    for i in 0..recon.image_set.images.len() {
+        let count = recon.point_set.max_track_feature_index[i] as usize + 1;
+        let mut positions = ndarray::Array2::<f32>::zeros((count, 2));
+        for (row, obs) in recon.point_set.tracks.iter().enumerate() {
+            if obs.image_index as usize == i {
+                positions[[features[row] as usize, 0]] = keypoints[[row, 0]];
+                positions[[features[row] as usize, 1]] = keypoints[[row, 1]];
+            }
+        }
+        let data = SiftData {
+            feature_tool_metadata: FeatureToolMetadata {
+                feature_tool: "sfmtool".into(),
+                feature_type: "sift".into(),
+                feature_options: serde_json::json!({ "image_to_gray": {"formula": "G"} }),
+            },
+            metadata: SiftMetadata {
+                version: 2,
+                image_name: recon.image_set.images[i].name.clone(),
+                image_file_xxh128: "00000000000000000000000000000000".into(),
+                image_file_size: 1,
+                image_width: 1920,
+                image_height: 1080,
+                feature_count: count as u32,
+                sharpness: 0.0,
+                gradient_structure_tensor_xx_yy_xy: [0.0; 3],
+            },
+            content_hash: SiftContentHash::default(),
+            positions_xy: positions,
+            affine_shapes: ndarray::Array3::zeros((count, 2, 2)),
+            descriptors: ndarray::Array2::zeros((count, 128)),
+            thumbnail_y_x_rgb: ndarray::Array3::zeros((THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3)),
+        };
+        let sift = recon.sift_path_for_image(i);
+        write_sift(&sift, &data, 3).expect("a writable temp dir");
+        let (_, _, hash) = read_sift_metadata(&sift).expect("just written");
+        if let sfmtool_core::ObservationSource::SiftFiles {
+            sift_content_hashes,
+            ..
+        } = &mut recon.point_set.observations
+        {
+            sift_content_hashes[i] =
+                sfmtool_archive_io::parse_hash_bytes(&hash.content_xxh128).unwrap();
+        }
+    }
+    let recon = crate::test_support::without_inline_keypoints(recon);
+    let path = dir.join("recon.sfmr");
+    let mut state = AppState::new();
+    let id = state.append_node(SceneNode::from_path(&path, recon));
+    let versions_before = state.scene[0].history.versions().len();
+
+    state
+        .save_node(id)
+        .expect("the keypoints are in the .sift files");
+
+    let written = sfmtool_sfmr_format::read_sfmr(&path).expect("a readable file");
+    assert_eq!(written.keypoints_xy.as_ref(), Some(&keypoints));
+    let node = &state.scene[0];
+    assert_eq!(node.history.versions().len(), versions_before + 1);
+    assert_eq!(node.edited().base.keypoints_xy(), Some(&keypoints));
+    assert_eq!(
+        node.edited()
+            .base_content_hash()
+            .expect("hashable")
+            .content_xxh128,
+        written.content_hash.content_xxh128
+    );
+    assert!(!node.is_dirty());
+    let entry = state
+        .action_log
+        .entries()
+        .next_back()
+        .expect("the save's entry");
+    assert!(
+        phase_rows(&entry.detail)
+            .iter()
+            .any(|(name, _, _)| *name == "keypoints"),
+        "{:?}",
+        entry.detail
+    );
+}
+
+/// A `sift_files` node whose value holds no inline keypoints, with no `.sift`
+/// files to read them from: the save is refused before anything is pushed or
+/// written, naming the `.sift` file it could not read and saying to restore
+/// the files, and the node keeps its unsaved edit.
+#[test]
+fn a_save_of_a_value_without_keypoints_or_sift_files_is_refused() {
+    let dir = temp_dir("keypoints_refused");
+    let mut recon = SfmrReconstruction::demo(32);
+    recon.workspace_dir = dir.clone();
+    let missing = recon.sift_path_for_image(0);
+    let recon = crate::test_support::without_inline_keypoints(recon);
+    let path = dir.join("recon.sfmr");
+    let mut state = AppState::new();
+    let id = state.append_node(SceneNode::from_path(&path, recon));
+    state
+        .delete_point(PointRef::new(id, 3))
+        .expect("a live point");
+    assert!(state.is_dirty(id));
+    let versions_before = state.scene[0].history.versions().len();
+
+    let why = state
+        .save_node(id)
+        .expect_err("no .sift file can supply the keypoints");
+
+    assert!(
+        why.contains(&format!("{}: no such file", missing.display())),
+        "{why}"
+    );
+    assert!(why.contains("Restore the .sift files"), "{why}");
+    assert_eq!(state.scene[0].history.versions().len(), versions_before);
+    assert!(!path.exists(), "a refused save wrote {}", path.display());
+    assert!(state.is_dirty(id));
+}
+
 #[test]
 fn save_as_writes_elsewhere_and_re_points_the_node() {
     let dir = temp_dir("save_as");

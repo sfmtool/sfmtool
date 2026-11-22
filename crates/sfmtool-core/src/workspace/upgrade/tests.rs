@@ -663,3 +663,35 @@ fn a_version_16_sfmr_is_upgraded_to_the_current_version() {
     let again = run(&fixture, false);
     assert!(again.nothing_to_do(), "{again:?}");
 }
+
+/// A version 16 `sift_files` file written without `tracks/keypoints_xy`, with
+/// no `.sift` files to build the column from, fails, and a dry run reports it
+/// failed with the reason the run gives, writing nothing either way.
+#[test]
+fn a_version_16_sfmr_without_keypoints_or_sift_files_fails_in_a_dry_run_as_in_a_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("ws");
+    let fixture = Fixture { dir, root };
+    write_workspace_file(&fixture.root, 2);
+
+    let v16 = fixture.path("sfmr/v16.sfmr");
+    reconstruction().save(&v16, &Progress::none()).unwrap();
+    crate::reconstruction::data::rewrite_as_version_16_without_keypoints(&v16);
+    let before = snapshot(&fixture.root);
+
+    let dry = run(&fixture, true);
+    let report = run(&fixture, false);
+    let failed = vec![(v16.clone(), UpgradeFileKind::Sfmr, "failed")];
+    assert_eq!(outcomes(&dry), failed);
+    assert_eq!(outcomes(&report), failed);
+    let reason = reason_of(&report, &v16);
+    assert!(
+        reason.starts_with("it could not be written: ")
+            && reason.contains("tracks/keypoints_xy")
+            && reason.contains(".sift: no such file")
+            && reason.contains("Restore the .sift files"),
+        "{reason}"
+    );
+    assert_eq!(reason_of(&dry, &v16), reason);
+    assert_eq!(snapshot(&fixture.root), before);
+}

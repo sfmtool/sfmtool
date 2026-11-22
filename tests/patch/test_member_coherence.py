@@ -286,13 +286,17 @@ def test_keypoint_anchoring_is_on_by_default_and_moves_the_matrix(embedded_scene
     assert moved > 0, "anchoring changed no point's matrix - the flag is inert"
 
 
-def test_keypoint_anchoring_is_a_no_op_without_inline_keypoints(scene):
-    """A ``sift_files`` reconstruction without its inline keypoint column
+def test_keypoint_anchoring_is_a_no_op_without_inline_keypoints(
+    scene, seoul_bull_v16_without_keypoints
+):
+    """A ``sift_files`` reconstruction without its inline keypoint column, as
+    one loaded from a version 16 file whose ``.sift`` files are missing,
     carries feature indexes only, so every member falls back to projection
     anchoring and the flag cannot bite."""
-    recon, cloud, images = scene
-    recon = recon.clone_with_changes(keypoints_xy=None)
+    _, cloud, images = scene
+    recon = SfmrReconstruction.load(seoul_bull_v16_without_keypoints)
     assert recon.feature_source == "sift_files"
+    assert recon.keypoints_xy is None
     sample = sample_point_ids(cloud, n=40)
     kw = dict(point_indexes=sample, resolution=12, return_matrix=True)
     anchored = cloud.validate_member_coherence(recon, images, **kw)

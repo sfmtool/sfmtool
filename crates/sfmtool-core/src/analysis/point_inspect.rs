@@ -85,7 +85,7 @@ impl SfmrReconstruction {
     ///
     /// Observation coordinates come from the reconstruction's inline
     /// `keypoints_xy` when it carries one (every `embedded_patches`
-    /// reconstruction, and a `sift_files` one with the optional copy);
+    /// reconstruction, and a `sift_files` one that carries it);
     /// otherwise they are read from the observing images' `.sift` files, which
     /// must then be present in the workspace. An observation whose pixel cannot
     /// be read (a feature index past the end of its file) is listed with a

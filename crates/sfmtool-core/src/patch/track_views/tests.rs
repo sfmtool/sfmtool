@@ -5,12 +5,13 @@ use super::*;
 use crate::patch::cloud::{PatchExtent, PatchNormal};
 use crate::progress::Progress;
 
-/// A `sift_files` reconstruction stores no inline keypoints, so the helper's
-/// documented behavior is an all-`None` table parallel to the track views —
-/// those members anchor at their projections.
+/// A `sift_files` reconstruction without inline keypoints (one read from a
+/// version 16 file whose `.sift` files cannot be read) gives, as the helper
+/// documents, an all-`None` table parallel to the track views — those members
+/// anchor at their projections.
 #[test]
 fn track_keypoints_from_reconstruction_is_all_none_without_inline_keypoints() {
-    let recon = crate::reconstruction::SfmrReconstruction::demo(6);
+    let recon = crate::reconstruction::SfmrReconstruction::demo_without_keypoints(6);
     let cloud = PatchCloud::from_reconstruction(
         &recon,
         PatchNormal::MeanViewing,

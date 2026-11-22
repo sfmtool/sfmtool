@@ -185,7 +185,7 @@ def test_refine_keypoints_rejects_out_of_range_view_index(
 
 
 def test_refine_keypoints_rejects_sift_files_recon_without_patch_keypoints(
-    seoul_bull_workspace: Path,
+    seoul_bull_v16_without_keypoints: Path,
 ):
     """The strict requirement: a local refiner needs starting keypoints. A
     sift-files recon without explicit `patch_keypoints` errors fast — before
@@ -193,14 +193,14 @@ def test_refine_keypoints_rejects_sift_files_recon_without_patch_keypoints(
     projection."""
     import pytest
 
-    # A load fills the inline column from the `.sift` files; drop it to get a
-    # sift-files recon with no keypoints of its own.
-    recon = SfmrReconstruction.load(seoul_bull_workspace).clone_with_changes(
-        keypoints_xy=None
-    )
+    # A version 16 file without the inline column, whose `.sift` files are
+    # missing, loads as a sift-files recon with no keypoints of its own.
+    recon = SfmrReconstruction.load(seoul_bull_v16_without_keypoints)
     assert recon.feature_source == "sift_files"
+    assert recon.keypoints_xy is None
+    # A fixed extent, since feature-size sizing would read the `.sift` files.
     cloud = PatchCloud.from_reconstruction(
-        recon, normal="mean_viewing", extent_value=5.0
+        recon, normal="mean_viewing", extent="fixed", extent_value=0.05
     )
     # Pass no images so the test verifies the require-check fires before any
     # pyramid decode (an empty list would otherwise produce a count mismatch).

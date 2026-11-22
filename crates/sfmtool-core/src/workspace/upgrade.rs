@@ -329,9 +329,7 @@ fn rewrite_sfmr(path: &Path, progress: &Progress<'_>) -> Result<UpgradeOutcome, 
         {
             Err(Cancelled)
         }
-        Err(e) => Ok(UpgradeOutcome::Failed(format!(
-            "it could not be written: {e}"
-        ))),
+        Err(e) => Ok(plan::write_failure(&e)),
     }
 }
 

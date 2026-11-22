@@ -98,6 +98,11 @@ pub(super) fn read_failure<E: std::error::Error + 'static>(error: E) -> UpgradeO
     }
 }
 
+/// The outcome of a `.sfmr` file the run's save refuses with `error`.
+pub(super) fn write_failure(error: &sfmtool_sfmr_format::SfmrError) -> UpgradeOutcome {
+    UpgradeOutcome::Failed(format!("it could not be written: {error}"))
+}
+
 /// Refuse a workspace file this build does not upgrade: one that cannot be
 /// read or parsed, a version 1 file, which only sfmtool 0.4.1 and earlier
 /// upgrade, and any version other than [`WORKSPACE_VERSION`].
@@ -192,6 +197,10 @@ fn walk(root: &Path, progress: &Progress<'_>) -> Result<Walk, UpgradeWorkspaceEr
 
 /// What the run does to the `.sfmr` file at `path`: rewrite it when it is
 /// below the current version and loads as the run will load it.
+///
+/// A version 16 `sift_files` file without `tracks/keypoints_xy` whose `.sift`
+/// files the load could not fill the column from fails here, with the reason
+/// the run's save gives, so a dry run reports what a run does.
 fn plan_sfmr(path: &Path) -> Action {
     match sfmtool_sfmr_format::read_sfmr_metadata(path) {
         Err(e) => Action::Leave(read_failure(e)),
@@ -199,7 +208,11 @@ fn plan_sfmr(path: &Path) -> Action {
             Action::Leave(UpgradeOutcome::AlreadyCurrent)
         }
         Ok(_) => match crate::SfmrReconstruction::load(path, &Progress::none()) {
-            Ok(_) => Action::Rewrite,
+            Ok(recon) if recon.keypoints_xy().is_some() => Action::Rewrite,
+            Ok(recon) => match recon.keypoints_for_save(&Progress::none()) {
+                Ok(_) => Action::Rewrite,
+                Err(e) => Action::Leave(write_failure(&e)),
+            },
             Err(e) => Action::Leave(read_failure(e)),
         },
     }

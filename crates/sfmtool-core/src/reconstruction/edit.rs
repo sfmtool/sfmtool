@@ -526,7 +526,7 @@ impl SfmrReconstruction {
                 sift_content_hashes,
             } => ObservationSource::SiftFiles {
                 feature_indexes: kept_obs.iter().map(|&i| feature_indexes[i]).collect(),
-                // The optional inline column is an observation row like the
+                // The inline column is an observation row like the
                 // feature index, so it selects by `kept_obs` too.
                 keypoints_xy: keypoints_xy
                     .as_ref()

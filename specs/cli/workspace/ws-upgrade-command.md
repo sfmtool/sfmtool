@@ -78,11 +78,18 @@ The command then runs these phases in order.
    one the current reader refuses. A file the file system will not give up
    (locked, or it cannot be opened or read) **fails**; one whose content the
    current reader refuses is left as it is ([What is not
-   converted](#what-is-not-converted)).
+   converted](#what-is-not-converted)). A version 16 `sift_files` `.sfmr`
+   file without `tracks/keypoints_xy` whose `.sift` files cannot supply the
+   column, as phase 3 describes, **fails** here with the reason phase 3's
+   save would give, so a dry run reports it as a run does.
 3. **Rewrite the files**, each atomically at its own path (a temporary file
    beside the target, renamed over it):
    - a `.sfmr` file below version 17 (version 16) is loaded and saved as
-     version 17;
+     version 17. A version 16 `sift_files` file without `tracks/keypoints_xy`
+     gets the column from its `.sift` files, which have to match the file's
+     `sift_content_hashes`; when one is missing or is another extraction the
+     file **fails**, with a reason that names that `.sift` file and says to
+     restore the `.sift` files the reconstruction was made with;
    - a `.matches` file is read and written as the current version (none
      today, since the reader reads only version 10);
    - a `.camrig` file is read and written as the current version (none
@@ -109,8 +116,9 @@ These files are listed in the report with the reason, and left unchanged:
   such as a `.sfmr` whose camera lacks a parameter its model gained later, one
   whose recorded workspace cannot be found, or a file that is not an archive.
 
-A file the file system will not give up is not one of these: it **fails**,
-and the command exits with status 1 after printing the report.
+A file the file system will not give up, or a version 16 `sift_files` file
+whose `.sift` files cannot supply its inline keypoints, is not one of these:
+it **fails**, and the command exits with status 1 after printing the report.
 
 ### A run that stops part way
 
@@ -242,5 +250,5 @@ otherwise, and `ValueError` for a workspace file it refuses. The
 `ProgressCounter` holds the count of the phase that is running.
 
 The `.sfmr` rewrite is in Rust, `SfmrReconstruction::load` then `save`, which
-checks what the format reader leaves to it and gathers any image readings the
-value lacks.
+checks what the format reader leaves to it and gathers any image readings and
+inline keypoints the value lacks.

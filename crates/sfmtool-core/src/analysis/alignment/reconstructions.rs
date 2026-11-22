@@ -32,7 +32,7 @@
 //!   [`find_point_correspondences_by_coordinate`] matches them by keypoint
 //!   position, with its default 2 px and 2 votes. The positions are the inline
 //!   `keypoints_xy` column (every `embedded_patches` reconstruction, and a
-//!   `sift_files` one that carries the optional copy), or else the `.sift`
+//!   `sift_files` one that carries the column), or else the `.sift`
 //!   positions the feature indexes name, read from the workspace for the
 //!   shared images only. [`AlignFit::point_matching`] says which was used.
 //!

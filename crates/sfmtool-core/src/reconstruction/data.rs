@@ -52,6 +52,8 @@ mod select_rows;
 mod sift_keypoints;
 
 pub use affine_shape::patch_affine_shape;
+#[cfg(test)]
+pub(crate) use demo::rewrite_as_version_16_without_keypoints;
 pub use image_set::{ImageSet, PerImageAdjustments};
 pub(crate) use point_set::observation_confidence_byte;
 pub use point_set::{patch_bitmap_is_stored, ObservationSource, PointSet};

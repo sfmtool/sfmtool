@@ -21,9 +21,10 @@ use crate::reconstruction::{
 mod observation_quality;
 
 /// The demo reconstruction of `n` points, each seen by two adjacent cameras
-/// of an arc of eight.
+/// of an arc of eight, without inline keypoints, which a test that reads them
+/// adds.
 fn demo(n: usize) -> SfmrReconstruction {
-    SfmrReconstruction::demo(n)
+    SfmrReconstruction::demo_without_keypoints(n)
 }
 
 fn edited(recon: SfmrReconstruction) -> EditedReconstruction {

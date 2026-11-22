@@ -67,6 +67,31 @@ def relabel_camrig(path: Path, version: int) -> None:
             out.writestr(name, raw)
 
 
+def rewrite_sfmr_as_version_16_without_keypoints(src: Path, dst: Path) -> Path:
+    """Copy the version 17 ``sift_files`` `.sfmr` at ``src`` to ``dst`` as a
+    version 16 file written without ``tracks/keypoints_xy``, which version 16
+    allowed: the entry left out, ``has_keypoints_xy`` false and
+    ``metadata.json`` at version 16. The readers do not check the content
+    hashes, so they are left as they are."""
+    import zipfile
+    from compression import zstd
+
+    with zipfile.ZipFile(src) as source:
+        entries = {name: source.read(name) for name in source.namelist()}
+    metadata = json.loads(zstd.decompress(entries["metadata.json.zst"]))
+    assert metadata["feature_source"] == "sift_files"
+    metadata["version"] = 16
+    entries["metadata.json.zst"] = zstd.compress(json.dumps(metadata).encode())
+    tracks = json.loads(zstd.decompress(entries["tracks/metadata.json.zst"]))
+    tracks["has_keypoints_xy"] = False
+    entries["tracks/metadata.json.zst"] = zstd.compress(json.dumps(tracks).encode())
+    with zipfile.ZipFile(dst, "w", zipfile.ZIP_STORED) as out:
+        for name, raw in entries.items():
+            if not name.startswith("tracks/keypoints_xy."):
+                out.writestr(name, raw)
+    return dst
+
+
 def rewrite_sift_as_version_1(path: Path) -> None:
     """Rewrite the version 2 `.sift` file at ``path`` as a version 1 writer
     wrote it: ``metadata.json`` at version 1 without the readings, and the
@@ -930,6 +955,17 @@ def seoul_bull_sfmr_only(seoul_bull_workspace_once: Path, tmp_path_factory) -> P
     if marker.exists():
         shutil.copy(marker, workspace_dir / marker.name)
     return workspace_dir / src.name
+
+
+@pytest.fixture
+def seoul_bull_v16_without_keypoints(seoul_bull_sfmr_only: Path) -> Path:
+    """:func:`seoul_bull_sfmr_only` rewritten as a version 16 file without
+    ``tracks/keypoints_xy``. Its workspace holds no ``.sift`` files, so a load
+    cannot build the column and gives a ``sift_files`` reconstruction that
+    carries none, which a save refuses to write."""
+    return rewrite_sfmr_as_version_16_without_keypoints(
+        seoul_bull_sfmr_only, seoul_bull_sfmr_only.with_name("v16_no_keypoints.sfmr")
+    )
 
 
 # The step of :func:`every_nth_point`'s subset for the tests that run a whole

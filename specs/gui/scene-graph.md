@@ -1717,9 +1717,11 @@ bundle from `retain_nodes` on the next frame.
   owned by the Scene row opened where the cursor was and holds a few of its
   entries (read over MCP). After a synthetic right-click over MCP on all three
   platforms, it checks every entry in order with its enabled state, `Tint` as
-  the one entry that opens a submenu, and `Align to` and `Bake Transform`
-  greyed on the demo. A submenu's contents exist only once it is opened, and
-  are covered headlessly. The window title is covered by lib tests only:
+  the one entry that opens a submenu, `Align to` and `Bake Transform`
+  greyed on the demo, and `Bundle Adjust...` and `Retriangulate All Points`
+  enabled on it, since its observations carry their inline keypoints. A
+  submenu's contents exist only once it is opened, and are covered
+  headlessly. The window title is covered by lib tests only:
   `window_title` decides the string on its own, and a windowed test of the
   multi-file case would need two `.sfmr` fixtures on disk.
 

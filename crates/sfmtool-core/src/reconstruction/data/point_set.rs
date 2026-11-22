@@ -289,8 +289,9 @@ impl PointSet {
     /// reconstruction carries none inline.
     ///
     /// Always present for `embedded_patches`, where the inline column *is* the
-    /// observation coordinate; present for `sift_files` only when the file
-    /// carries the optional inline copy.
+    /// observation coordinate; present for `sift_files` too, except in a value
+    /// read from a version 16 file written without it whose `.sift` files
+    /// could not supply it.
     pub fn keypoints_xy(&self) -> Option<&Array2<f32>> {
         match &self.observations {
             ObservationSource::EmbeddedPatches { keypoints_xy, .. } => Some(keypoints_xy),

@@ -32,8 +32,9 @@ impl SfmrReconstruction {
     /// Generates `num_points` 3D points evenly distributed on a unit sphere
     /// (offset to sit in front of the camera arc), observed by 8 cameras
     /// arranged in a circle around the origin. Every image carries invented
-    /// image readings under the default grey conversion, so the demo saves
-    /// as a `.sfmr` with no photographs behind it.
+    /// image readings under the default grey conversion, and every
+    /// observation its pixel, the point's projection, so the demo saves as a
+    /// `.sfmr` with no photographs or `.sift` files behind it.
     pub fn demo(num_points: usize) -> Self {
         use crate::camera::CameraModel;
         use crate::spherical::sphere_points::{evenly_distributed_sphere_points, RelaxConfig};
@@ -151,6 +152,17 @@ impl SfmrReconstruction {
             observation_counts.push(2);
         }
 
+        // Each observation's pixel is its point projected through its image's
+        // pose, as a solve would have detected it.
+        let keypoints_xy = ndarray::Array2::from_shape_fn((tracks.len(), 2), |(row, k)| {
+            let obs = &tracks[row];
+            let image = &images[obs.image_index as usize];
+            let p = image.quaternion_wxyz * points[obs.point_index as usize].position.coords
+                + image.translation_xyz;
+            let (u, v) = cameras[0].project(p.x / -p.z, p.y / -p.z);
+            [u as f32, v as f32][k]
+        });
+
         // Empty depth statistics
         let depth_statistics = DepthStatistics {
             num_histogram_buckets: num_buckets,
@@ -246,7 +258,7 @@ impl SfmrReconstruction {
                 display_only_references: None,
                 observations: ObservationSource::SiftFiles {
                     feature_indexes,
-                    keypoints_xy: None,
+                    keypoints_xy: Some(keypoints_xy),
                     feature_tool_hashes: vec![[0u8; 16]; num_images],
                     sift_content_hashes: vec![[0u8; 16]; num_images],
                 },
@@ -259,4 +271,62 @@ impl SfmrReconstruction {
             },
         }
     }
+}
+
+#[cfg(test)]
+impl SfmrReconstruction {
+    /// [`Self::demo`] without its inline keypoints: the value a load gives for
+    /// a version 16 `sift_files` file written without `tracks/keypoints_xy`
+    /// whose `.sift` files cannot be read, which a save refuses to write.
+    pub(crate) fn demo_without_keypoints(num_points: usize) -> Self {
+        let mut recon = Self::demo(num_points);
+        if let ObservationSource::SiftFiles { keypoints_xy, .. } = &mut recon.point_set.observations
+        {
+            *keypoints_xy = None;
+        }
+        recon
+    }
+}
+
+/// Rewrite the version 17 `sift_files` `.sfmr` at `path` in place as a version
+/// 16 file written without `tracks/keypoints_xy`, which version 16 allowed:
+/// the entry left out, `has_keypoints_xy` false and `metadata.json` at version
+/// 16. The readers do not check the content hashes, so they are left as they
+/// are.
+#[cfg(test)]
+pub(crate) fn rewrite_as_version_16_without_keypoints(path: &std::path::Path) {
+    use std::io::{Read, Write};
+
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+    let mut entries = Vec::new();
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).unwrap();
+        let name = entry.name().unwrap().to_string();
+        let mut compressed = Vec::new();
+        entry.read_to_end(&mut compressed).unwrap();
+        entries.push((name, compressed));
+    }
+    drop(archive);
+    let edit_json = |compressed: &[u8], key: &str, value: serde_json::Value| {
+        let raw = zstd::stream::decode_all(compressed).unwrap();
+        let mut json: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        json[key] = value;
+        zstd::bulk::compress(&serde_json::to_vec(&json).unwrap(), 3).unwrap()
+    };
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, compressed) in entries {
+        let bytes = match name.as_str() {
+            n if n.starts_with("tracks/keypoints_xy.") => continue,
+            "metadata.json.zst" => edit_json(&compressed, "version", serde_json::json!(16)),
+            "tracks/metadata.json.zst" => {
+                edit_json(&compressed, "has_keypoints_xy", serde_json::json!(false))
+            }
+            _ => compressed,
+        };
+        zip.start_file(&name, stored).unwrap();
+        zip.write_all(&bytes).unwrap();
+    }
+    zip.finish().unwrap();
 }

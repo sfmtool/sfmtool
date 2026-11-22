@@ -13,6 +13,7 @@ mod measurements;
 mod observation_readings;
 mod patch_normals;
 mod per_image_adjustments;
+mod sift_files_keypoints;
 
 /// Image readings for `image_count` images: image `i` has sharpness
 /// `(i + 1) / 64` and tensor `[0.002 · (i + 1), 0.001 · (i + 1), -0.0005]`,
@@ -179,7 +180,10 @@ fn make_test_data() -> SfmrData {
         patch_bitmaps_y_x_rgba: None,
         image_indexes,
         feature_indexes: Some(feature_indexes),
-        keypoints_xy: None,
+        // Sub-pixel keypoints inside the 1920x1080 camera, one per observation.
+        keypoints_xy: Some(Array2::from_shape_fn((observation_count, 2), |(i, k)| {
+            [300.5 + i as f32, 400.75 + i as f32][k]
+        })),
         observation_confidence: None,
         observation_readings: None,
         point_indexes,
@@ -367,22 +371,9 @@ fn test_embedded_patches_round_trip() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// Give the SIFT-referenced fixture the optional inline keypoint column: the
-/// same sub-pixel positions the `.sift` companions hold, copied into the file.
-fn make_sift_files_data_with_keypoints() -> SfmrData {
-    let mut data = make_test_data();
-    let m = data.metadata.observation_count as usize;
-    // Sub-pixel keypoints inside the 1920x1080 camera, one per observation.
-    let kp: Vec<f32> = (0..m)
-        .flat_map(|i| [300.5 + i as f32, 400.75 + i as f32])
-        .collect();
-    data.keypoints_xy = Some(Array2::from_shape_vec((m, 2), kp).unwrap());
-    data
-}
-
 #[test]
 fn test_sift_files_round_trip_with_inline_keypoints() {
-    let mut data = make_sift_files_data_with_keypoints();
+    let mut data = make_test_data();
     let dir = std::env::temp_dir().join("sfmr_test_sift_inline_keypoints");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("test.sfmr");
@@ -406,38 +397,19 @@ fn test_sift_files_round_trip_with_inline_keypoints() {
 
     // The column is hashed in its lexicographic slot like any other, so
     // verification passes and the tracks hash differs from the same
-    // reconstruction written without it.
+    // reconstruction written with one keypoint moved.
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "verification failed: {errors:?}");
 
-    let mut bare = make_test_data();
-    let bare_path = dir.join("bare.sfmr");
-    write_sfmr_with_options(&bare_path, &mut bare, &options).unwrap();
+    let mut moved = make_test_data();
+    moved.keypoints_xy.as_mut().unwrap()[[0, 0]] += 1.0;
+    let moved_path = dir.join("moved.sfmr");
+    write_sfmr_with_options(&moved_path, &mut moved, &options).unwrap();
     assert_ne!(
-        read_sfmr(&bare_path).unwrap().content_hash.tracks_xxh128,
+        read_sfmr(&moved_path).unwrap().content_hash.tracks_xxh128,
         loaded.content_hash.tracks_xxh128,
         "the inline keypoints must participate in the tracks hash"
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn test_sift_files_round_trip_without_inline_keypoints() {
-    // The column is optional: a sift_files file written without it carries no
-    // keypoints entry and reads back as `None`.
-    let mut data = make_test_data();
-    let dir = std::env::temp_dir().join("sfmr_test_sift_no_keypoints");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.sfmr");
-    write_sfmr(&path, &mut data).unwrap();
-
-    let loaded = read_sfmr(&path).unwrap();
-    assert_eq!(loaded.metadata.feature_source, FEATURE_SOURCE_SIFT_FILES);
-    assert!(loaded.feature_indexes.is_some());
-    assert!(loaded.keypoints_xy.is_none());
-    let (valid, errors) = verify_sfmr(&path).unwrap();
-    assert!(valid, "verification failed: {errors:?}");
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -469,18 +441,12 @@ fn test_sift_files_inline_keypoints_validated_on_read_and_verify() {
     // keypoint is rejected in a sift_files file exactly as in an embedded one.
     let dir = std::env::temp_dir().join("sfmr_test_sift_kp_validate");
     std::fs::create_dir_all(&dir).unwrap();
-    let mut oob = make_sift_files_data_with_keypoints();
+    let mut oob = make_test_data();
     oob.keypoints_xy.as_mut().unwrap()[[2, 1]] = 5000.0;
     let path = dir.join("oob.sfmr");
     let err = write_sfmr(&path, &mut oob).err().unwrap();
     assert!(format!("{err}").contains("image bounds"), "{err}");
-    write_with_keypoint(
-        &dir,
-        &mut make_sift_files_data_with_keypoints(),
-        2 * 2 + 1,
-        5000.0,
-        &path,
-    );
+    write_with_keypoint(&dir, &mut make_test_data(), 2 * 2 + 1, 5000.0, &path);
     let err = read_sfmr(&path).err().unwrap();
     assert!(format!("{err}").contains("image bounds"), "{err}");
     let (valid, errors) = verify_sfmr(&path).unwrap();
@@ -770,8 +736,9 @@ fn test_content_hash_populated() {
     write_sfmr(&path, &mut data).unwrap();
     let loaded = read_sfmr(&path).unwrap();
     // Frozen at format version 17, which stamps the new version into
-    // `metadata.json`, hashed; this fixture has no measurements, so its
-    // sections are what version 16 wrote. Before that it was frozen at format
+    // `metadata.json`, hashed, and requires `tracks/keypoints_xy` in a
+    // `sift_files` file, so the fixture gained that column; it has no
+    // measurements. Before that it was frozen at format
     // version 16, which stores the fixture's sharpness as
     // float16 and stamps the new version; the fixture's sharpness values
     // were also changed then, to float16 values. Before that it was frozen at
@@ -798,7 +765,7 @@ fn test_content_hash_populated() {
     // that; otherwise the writer has regressed.
     assert_eq!(
         loaded.content_hash.content_xxh128,
-        "c54654a80076b524689373b2b605ac5a"
+        "ed513124d277c048fa35551c81b43895"
     );
 
     // All hashes should be non-empty 32-char hex strings
@@ -1138,7 +1105,7 @@ fn test_empty_reconstruction() {
         patch_bitmaps_y_x_rgba: None,
         image_indexes: Array1::from_vec(vec![]),
         feature_indexes: Some(Array1::from_vec(vec![])),
-        keypoints_xy: None,
+        keypoints_xy: Some(Array2::zeros((0, 2))),
         observation_confidence: None,
         observation_readings: None,
         point_indexes: Array1::from_vec(vec![]),
@@ -3627,6 +3594,7 @@ fn archive_entry_names_pin_call_sites() {
         "points3d/reprojection_errors.5.float32.zst",
         "tracks/feature_indexes.8.uint32.zst",
         "tracks/image_indexes.8.uint32.zst",
+        "tracks/keypoints_xy.8.2.float32.zst",
         "tracks/metadata.json.zst",
         "tracks/observation_confidence.8.uint8.zst",
         "tracks/observation_counts.5.uint32.zst",

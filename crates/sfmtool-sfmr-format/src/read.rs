@@ -407,9 +407,10 @@ fn read_images_section(
     // hash, never both). `tracks/metadata.json`'s `has_feature_indexes` mirrors it
     // for section-local readers and is cross-checked in `verify_sfmr`; it
     // intentionally does not gate reading here the way the independent `points3d`
-    // `has_*` flags do. `has_keypoints_xy` is different: the inline keypoint
-    // column is optional under `sift_files`, so that flag is what says whether the
-    // entry is there, and it does gate the read below.
+    // `has_*` flags do. `has_keypoints_xy` is different: a `sift_files` file
+    // older than `SIFT_FILES_KEYPOINTS_FORMAT_VERSION` may lack the inline
+    // keypoint column, so that flag is what says whether the entry is there, and
+    // it does gate the read in `read_tracks_section`.
     let is_embedded = metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES;
 
     // A `sift_files` file links to `.sift` via per-image tool/content hashes; an
@@ -905,15 +906,22 @@ fn read_tracks_section(
         Some(Array1::from_vec(feature_indexes_vec))
     };
 
-    // The inline keypoint column: the coordinate itself under
-    // `embedded_patches`, and under `sift_files` an optional copy of what the
-    // `.sift` companions hold, flagged by `has_keypoints_xy`. Present or absent,
-    // it is validated the same way.
+    // The inline keypoint column: every observation's pixel, in either mode.
+    // Only a `sift_files` file older than `SIFT_FILES_KEYPOINTS_FORMAT_VERSION`
+    // may lack it, flagged by `has_keypoints_xy`; a newer one that says it has
+    // none is refused.
     let has_keypoints_xy = is_embedded
         || tracks_meta
             .get("has_keypoints_xy")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+    if !has_keypoints_xy && metadata.version >= SIFT_FILES_KEYPOINTS_FORMAT_VERSION {
+        return Err(SfmrError::InvalidFormat(format!(
+            "a version {} sift_files file must carry tracks/keypoints_xy, and \
+             tracks/metadata.json does not set has_keypoints_xy",
+            metadata.version
+        )));
+    }
     let keypoints_xy = if has_keypoints_xy {
         let kp_vec: Vec<f32> = read_binary_array(
             archive,

@@ -72,6 +72,7 @@ version changed.
 | `measurements/` section | Not defined | Optional section with one subdirectory per kind of measurement; the one kind is physical distance measurements, under `measurements/distance/` (`distances`, `endpoints_xy`, `image_indexes`, `labels.json`, `metadata.json`, `units`) |
 | `metadata.json.zst` | No `distance_measurement_count` key | Optional `distance_measurement_count` (`u32`, `>= 1`), present iff `measurements/distance/` is present |
 | `content_hash.json.zst` | No `measurements_xxh128` key | Optional `measurements_xxh128`, present iff `measurements/` is present and folded into `content_xxh128` after `tracks_xxh128` |
+| `tracks/keypoints_xy` | Optional in a `sift_files` file, flagged by `has_keypoints_xy` | Required in a `sift_files` file, as in an `embedded_patches` one, with `has_keypoints_xy` `true` |
 
 A version 16 file has no `measurements/` section and reads with no
 measurements. A reader and a verifier refuse a version 16 file that carries
@@ -81,6 +82,16 @@ The version changed because a version 16 reader does not know `measurements/`:
 without a new version it would silently ignore stored measurements and drop
 them on re-save, and its `content_xxh128` check would fail because
 `measurements_xxh128` participates in the whole-file digest.
+
+A version 16 `sift_files` file without `tracks/keypoints_xy` reads with the
+column absent, and is written back as version 17 only once the column is
+supplied: `SfmrReconstruction::load` builds it from the `.sift` files when
+they match the file's `sift_content_hashes`, and `SfmrReconstruction::save`
+reads it from them for a value that still lacks it, refusing to write when
+they cannot supply it. The column became required while version 17 was the
+current version, after the last release, sfmtool 0.4.1, which writes version
+16. No released build and no checked-in file writes version 17, so version 17
+changed in place, with no new version.
 
 ## Coordinate System Conventions
 
@@ -267,7 +278,7 @@ reconstruction.sfmr (ZIP archive)
 │   ├── blur_matched_bitmap_zncc_deficit.{M}.float16.zst  # (Optional, readings) 1 − the blur-matched ZNCC against the stored bitmap
 │   ├── image_indexes.{M}.uint32.zst           # Image index per observation
 │   ├── feature_indexes.{M}.uint32.zst         # (sift_files only) feature index per observation
-│   ├── keypoints_xy.{M}.2.float32.zst         # inline 2D keypoint (embedded_patches; optional in sift_files)
+│   ├── keypoints_xy.{M}.2.float32.zst         # inline 2D keypoint per observation (both modes)
 │   ├── observation_confidence.{M}.uint8.zst   # (Optional) per-observation blur-matched ZNCC against the patch bitmap
 │   ├── plain_bitmap_zncc_deficit.{M}.float16.zst      # (Optional, readings) 1 − the plain ZNCC against the stored bitmap
 │   ├── point_indexes.{M}.uint32.zst           # Point index per observation
@@ -296,9 +307,9 @@ observation's 2D coordinate is carried; there is **no mixing** within a file. Th
 two modes differ only in the per-observation and per-image columns above (marked
 *sift_files only* / *embedded_patches only*). A `sift_files` file is the classic
 model; an `embedded_patches` file stores the
-2D coordinate inline, based on patches. A `sift_files` file MAY additionally
-carry `tracks/keypoints_xy`, stating its observation coordinates inline rather
-than only by reference. See
+2D coordinate inline, based on patches. A `sift_files` file also carries
+`tracks/keypoints_xy`, stating its observation coordinates inline as well as
+by reference. See
 [Observation source](#observation-source) below.
 
 Where:
@@ -357,8 +368,8 @@ JSON structure describing the reconstruction:
 - `feature_source`: (required) How each observation's 2D coordinate is carried
   — `"sift_files"` (a reference into a per-image `.sift` file) or
   `"embedded_patches"` (an inline patch-derived keypoint). A file is wholly one
-  mode, though a `sift_files` file may carry an inline copy of its coordinates
-  alongside the reference. Any other value is refused. See
+  mode, though a `sift_files` file carries its coordinates inline in
+  `tracks/keypoints_xy` alongside the reference. Any other value is refused. See
   [Observation source](#observation-source).
 - `operation`: Type of operation that created this reconstruction
   - `"sfm_solve"`: Structure-from-Motion reconstruction
@@ -510,7 +521,7 @@ in the `content_xxh128` entry below.
 - `frames_xxh128`: (Optional) The `frames/` section hash. Present only when the `frames/` section exists.
 - `images_xxh128`: The `images/` section hash. It does not cover the depth statistics and histogram files, which are the `derived/` section. The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file. The optional `thumbnails_y_x_rgb` participates only when present, in its lexicographic slot (after `sift_content_hashes`, before `translations_xyz`). The optional per-image intrinsic adjustment columns participate only when present, each in its lexicographic slot: `focal_adjustments` after `feature_tool_hashes` (in an `embedded_patches` file, after `camera_indexes`) and before `image_file_hashes` and `metadata.json`; `principal_point_adjustments_xy` after `names.json` and before `quaternions_wxyz`. The optional per-image radial B-spline correction and rolling-shutter rates participate the same way, `radial_bspline_adjustments` then `rolling_shutter_rates_xyz`, after `quaternions_wxyz` and before `sift_content_hashes` (in an `embedded_patches` file, before `thumbnails_y_x_rgb` and `translations_xyz`). The two image-reading columns (required) take their lexicographic slots: `gradient_structure_tensors_xx_yy_xy` after `focal_adjustments` (after `feature_tool_hashes` in a file without focal adjustments, after `camera_indexes` in an `embedded_patches` file without them) and before `image_file_hashes` and `metadata.json`; `sharpness` after `rolling_shutter_rates_xyz` (after `radial_bspline_adjustments` or `quaternions_wxyz` when those are absent) and before `sift_content_hashes` (in an `embedded_patches` file, before `thumbnails_y_x_rgb` and `translations_xyz`). The `images/metadata.json` bytes, which carry the `has_thumbnails` flag and the readings' `image_to_gray`, are always included, so two files that differ only in whether they carry thumbnails hash differently.
 - `points3d_xxh128`: The `points3d/` section hash. Includes the optional per-point arrays — `normals_xyz`, or in a file with the patch frame `underived_normals_xyz` (in its lexicographic slot, after `reprojection_errors`, the last), `normal_confidence`, the constraint triple `point_constraints` / `constraint_distances` / `constraint_reference_images` (in their lexicographic slots: `constraint_distances` and `constraint_reference_images` after `colors_rgb` and before `metadata.json`, `point_constraints` after the patch-frame files and before `positions_xyzw`), and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
-- `tracks_xxh128`: The `tracks/` section hash. `feature_indexes` is present for a `sift_files` file and absent for an `embedded_patches` one. `keypoints_xy` participates whenever it is present — always in an `embedded_patches` file, and in a `sift_files` file when it carries the optional inline copy — in its lexicographic slot (after `image_indexes`, before `metadata.json`). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`). `reference_observations` participates when present (exactly when `points3d/metadata.json` has `has_uv_frames`), in its lexicographic slot, after `point_indexes`. The eight observation-reading columns participate when `has_observation_readings` is set, each in its lexicographic slot: `blur_matched_bitmap_zncc_deficit` first, before `feature_indexes`; `plain_bitmap_zncc_deficit` after `observation_counts`, before `point_indexes`; and the six `zncc_self_similarity_*` columns last, after `reference_observations`, in the order `cos_view_angle`, `ellipse_axes`, `ellipse_axes_is_at_least`, `ellipse_major_angle`, `tilt_angle`, `zoom`.
+- `tracks_xxh128`: The `tracks/` section hash. `feature_indexes` is present for a `sift_files` file and absent for an `embedded_patches` one. `keypoints_xy` participates in either mode (only a version 16 `sift_files` file may lack it) in its lexicographic slot (after `image_indexes`, before `metadata.json`). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`). `reference_observations` participates when present (exactly when `points3d/metadata.json` has `has_uv_frames`), in its lexicographic slot, after `point_indexes`. The eight observation-reading columns participate when `has_observation_readings` is set, each in its lexicographic slot: `blur_matched_bitmap_zncc_deficit` first, before `feature_indexes`; `plain_bitmap_zncc_deficit` after `observation_counts`, before `point_indexes`; and the six `zncc_self_similarity_*` columns last, after `reference_observations`, in the order `cos_view_angle`, `ellipse_axes`, `ellipse_axes_is_at_least`, `ellipse_major_angle`, `tilt_angle`, `zoom`.
 - `measurements_xxh128`: (Optional, version 17+) The `measurements/` section hash, over the entries of every kind present in lexicographic path order: for the distance kind, `measurements/distance/distances`, `measurements/distance/endpoints_xy`, `measurements/distance/image_indexes`, `measurements/distance/labels.json`, `measurements/distance/metadata.json` and `measurements/distance/units`, in that order. Present if and only if the `measurements/` section exists, that is, if at least one kind is present.
 - `derived_xxh128`: (required) The `derived/` section hash, over `depth_statistics.json.zst` then `observed_depth_histogram_counts`. Verified like every other section hash, and **not** part of `content_xxh128`. A file without it is refused.
 - `content_xxh128`: The whole-file digest over the section hashes that say what the reconstruction *is*, in the order metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks, measurements (if present). The `derived/` section is excluded (see "Derived data is verified but not identifying").
@@ -2330,9 +2341,9 @@ alone, which the file holds.
   verifier checks the two agree.
 - `has_keypoints_xy`: whether the `keypoints_xy` column below is
   present. It is a presence flag, not a mode flag: `true` in every
-  `embedded_patches` file, where the column is the observation coordinate, and
-  `true` in a `sift_files` file exactly when that file carries the optional
-  inline copy. A missing flag is `false` in a `sift_files` file.
+  version 17 file, of either mode. A version 16 `sift_files` file sets it
+  exactly when that file carries the column, and a missing flag is `false`
+  there.
 - `has_observation_confidence`: whether the optional
   `observation_confidence` column below is present. Independent of the two flags
   above — it rates observations, which exist in either mode. A missing flag is
@@ -2406,15 +2417,17 @@ The inline 2D keypoint for each observation:
   `sift[feature_indexes[j]]`, and the two need not agree: a producer may write a
   refined position that no `.sift` file holds. The `.sift` files stay the
   referenced source of the feature itself (descriptor, scale, affine shape).
-- **Presence**: `has_keypoints_xy = true`. Always present in `embedded_patches`
-  files. Optional in `sift_files` files: a writer SHOULD store it whenever the
-  `.sift` files its observations reference can be read, and a file without it
-  is one written before that rule or without those files. A reader MAY build
-  the column for such a file from `sift[feature_indexes[j]]`, but only when
-  every `.sift` it reads matches the file's `sift_content_hashes` entry for
-  that image, since a `.sift` with another hash is a different extraction whose
-  feature indexes name other features. The column is one row per observation,
-  so a reader that cannot resolve every row leaves it absent.
+- **Presence**: `has_keypoints_xy = true`. Required in every version 17 file,
+  of either mode: a writer refuses a `sift_files` file without it, and a
+  reader and a verifier refuse a version 17 `sift_files` file whose
+  `has_keypoints_xy` is `false` or absent, or that lacks the entry. A version
+  16 `sift_files` file may lack it. A reader MAY build the column for such a
+  file from `sift[feature_indexes[j]]`, but only when every `.sift` it reads
+  matches the file's `sift_content_hashes` entry for that image, since a
+  `.sift` with another hash is a different extraction whose feature indexes
+  name other features. The column is one row per observation, so a reader
+  that cannot resolve every row leaves it absent, and such a file cannot be
+  written as version 17 until the column is supplied.
 
 The writer rejects a `sift_files` file that also carries the `embedded_patches`
 image-identity column (`images/image_file_hashes`), and an `embedded_patches`
@@ -2956,11 +2969,11 @@ columns:
 | | `sift_files` | `embedded_patches` |
 |---|---|---|
 | `tracks/feature_indexes` | **present** (index into `.sift`) | **absent** |
-| `tracks/keypoints_xy` | **optional** (an inline copy of the coordinate) | **present** (the coordinate) |
+| `tracks/keypoints_xy` | **present** (the coordinate, alongside the reference) | **present** (the coordinate) |
 | `images/feature_tool_hashes` | **present** | **absent** |
 | `images/sift_content_hashes` | **present** | **absent** |
 | `images/image_file_hashes` | **absent** (image hash reachable via the `.sift`) | **present** (direct image identity) |
-| 2D coordinate source | `keypoints_xy[j]` when the inline copy is present, else `.sift[feature_indexes[j]]` | `keypoints_xy[j]` directly |
+| 2D coordinate source | `keypoints_xy[j]`, read in preference to `.sift[feature_indexes[j]]` | `keypoints_xy[j]` directly |
 
 An `embedded_patches` file is self-contained — it needs no `.sift` companion, and
 its workspace `feature_prefix_dir` is optional.
@@ -3174,8 +3187,8 @@ For the structure, a file fails verification when:
   [`tracks/reference_observations`](#tracksreference_observationsnint32zst-with-the-patch-frame)
   states;
 - `has_feature_indexes` in `tracks/metadata.json` disagrees with
-  `feature_source`, or an `embedded_patches` file sets `has_keypoints_xy` to
-  `false`;
+  `feature_source`, an `embedded_patches` file sets `has_keypoints_xy` to
+  `false`, or a version 17 `sift_files` file does not set it to `true`;
 - `keypoints_xy` is not `observation_count` rows of 8 bytes, or a row is not
   finite or lies outside `[0, width) × [0, height)` of its image's camera, the
   constraint [`tracks/keypoints_xy`](#trackskeypoints_xym2float32zst) states;
@@ -3651,6 +3664,8 @@ reads versions 1 to 15; this build reads versions 16 and 17
   `image_indexes`, `labels.json`, `metadata.json` with `unit_names` legend,
   `units`), top-level optional `distance_measurement_count`, and optional
   `measurements_xxh128` folded into `content_xxh128` after `tracks_xxh128`.
+  A `sift_files` file must carry `tracks/keypoints_xy`, optional in it
+  before.
 - **Version 16**: the sharpness and five of the
   observation-reading columns are stored as `float16`, and the two bitmap
   scores as their ZNCC deficits `1 − z` in `float16` under names ending

@@ -173,11 +173,11 @@ class TestInfinityConversions:
             with pytest.raises(ValueError):
                 recon.classify_points_at_infinity(sigma_px=sigma)
 
-    def test_classify_needs_the_pixels(self, seoul_bull_sfmr_only):
-        # A sift_files reconstruction without its .sift files has no pixels to
-        # decide on.
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
-        bare = recon.clone_with_changes(keypoints_xy=None)
+    def test_classify_needs_the_pixels(self, seoul_bull_v16_without_keypoints):
+        # A sift_files reconstruction without its .sift files or its inline
+        # keypoints has no pixels to decide on.
+        bare = SfmrReconstruction.load(seoul_bull_v16_without_keypoints)
+        assert bare.keypoints_xy is None
         with pytest.raises(OSError):
             bare.classify_points_at_infinity()
 
@@ -727,11 +727,25 @@ class TestEmbeddedPatches:
         img_idx = np.array([0, 1, 0, 1, 2, 0], dtype=np.uint32)
         feat_idx = np.array([0, 1, 2, 3, 4, 5], dtype=np.uint32)
         pt_ids = np.array([0, 0, 1, 1, 1, 2], dtype=np.uint32)
+        # The workspace holds no `.sift` files to read the new observations'
+        # pixels from, and a `.sfmr` file stores them, so they come along.
+        keypoints = np.array(
+            [
+                [10.5, 20.5],
+                [11.5, 21.5],
+                [12.5, 22.5],
+                [13.5, 23.5],
+                [14.5, 24.5],
+                [15.5, 25.5],
+            ],
+            dtype=np.float32,
+        )
         out = recon.clone_with_changes(
             positions=positions,
             track_image_indexes=img_idx,
             track_feature_indexes=feat_idx,
             track_point_indexes=pt_ids,
+            keypoints_xy=keypoints,
         )
         assert out.point_count == 3
         counts = np.asarray(out.observation_counts)
@@ -746,6 +760,7 @@ class TestEmbeddedPatches:
         np.testing.assert_array_equal(np.asarray(reloaded.observation_counts), counts)
         np.testing.assert_array_equal(np.asarray(reloaded.track_point_indexes), pt_ids)
         np.testing.assert_array_equal(np.asarray(reloaded.track_image_indexes), img_idx)
+        np.testing.assert_array_equal(np.asarray(reloaded.keypoints_xy), keypoints)
 
 
 class TestSiftFilesInlineKeypoints:

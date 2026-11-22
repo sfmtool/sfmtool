@@ -151,9 +151,6 @@ struct DeferredChanges {
     feature_source: Option<String>,
     /// Whether `keypoints_xy` was passed with an array.
     keypoints_given: bool,
-    /// `keypoints_xy=None` on a `sift_files` value: the result carries no
-    /// inline keypoint column, even when its tracks are replaced.
-    drop_keypoints: bool,
     // The constraint triple, applied once the point count is settled. The
     // outer `Option` is "was the kwarg passed", the inner one "with an array,
     // or with `None` to drop the set".
@@ -767,20 +764,12 @@ fn apply_observation_field(
             deferred.observation_readings = Some(crate::readings::readings_from_py(value, None)?);
         }
         "keypoints_xy" if value.is_none() => {
-            // Drop the optional inline copy a `sift_files` value carries; an
-            // `embedded_patches` value's keypoints are its observations.
-            match &mut recon.point_set.observations {
-                sfmtool_core::ObservationSource::SiftFiles { keypoints_xy, .. } => {
-                    *keypoints_xy = None;
-                    deferred.drop_keypoints = true;
-                }
-                sfmtool_core::ObservationSource::EmbeddedPatches { .. } => {
-                    return Err(pyo3::exceptions::PyValueError::new_err(
-                        "clone_with_changes(): an embedded_patches reconstruction \
-                         cannot drop keypoints_xy",
-                    ));
-                }
-            }
+            // An `embedded_patches` value's keypoints are its observations,
+            // and a `.sfmr` file stores them for a `sift_files` value too.
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "clone_with_changes(): keypoints_xy cannot be None, since a .sfmr \
+                 file stores every observation's pixel",
+            ));
         }
         "keypoints_xy" => {
             let arr = extract_array2!(value, "keypoints_xy", f32)?;
@@ -859,7 +848,6 @@ fn finalize(
         keypoints_xy,
         feature_source,
         keypoints_given,
-        drop_keypoints,
         point_constraints,
         constraint_distances,
         constraint_reference_images,
@@ -982,7 +970,7 @@ fn finalize(
 
     // A `sift_files` value whose tracks were replaced without a keypoint
     // column of their own gets one rebuilt for the new tracks.
-    if replacing_tracks && !keypoints_given && !drop_keypoints {
+    if replacing_tracks && !keypoints_given {
         carry_sift_keypoints(inner, &mut recon);
     }
 
@@ -1659,8 +1647,7 @@ fn rebuild_tracks(recon: &mut SfmrReconstruction, kw: &Bound<'_, PyDict>) -> PyR
     // sift_files reconstructions; keep them in step with the new tracks.
     // (embedded_patches has no feature indices — its per-observation data
     // is keypoints_xy, updated via the 'keypoints_xy' kwarg, which is also
-    // how a sift_files recon carrying the optional inline column keeps that
-    // column in step.)
+    // how a sift_files recon keeps its keypoints_xy column in step.)
     if let sfmtool_core::ObservationSource::SiftFiles {
         feature_indexes, ..
     } = &mut recon.point_set.observations
@@ -1696,7 +1683,8 @@ fn rebuild_tracks(recon: &mut SfmrReconstruction, kw: &Bound<'_, PyDict>) -> PyR
 /// which keeps a coordinate a producer refined past the detection. Rows
 /// `source` did not have are read from the `.sift` files
 /// ([`SfmrReconstruction::fill_keypoints_from_sift`]). When those files cannot
-/// supply them the column is dropped, as it is for a file that never had one.
+/// supply them the result carries no column, and
+/// [`SfmrReconstruction::save`] refuses to write it.
 fn carry_sift_keypoints(source: &SfmrReconstruction, recon: &mut SfmrReconstruction) {
     use sfmtool_core::ObservationSource;
 
@@ -1884,9 +1872,8 @@ fn rebuild_observation_source(
                     )
                 })?;
             require_img_len("sift_content_hashes", sift_content_hashes.len())?;
-            // The inline keypoint column is optional here: a supplied one
-            // replaces it, and otherwise whatever the source carried rides
-            // along. Its row count is checked by the caller's final
+            // A supplied inline keypoint column replaces the source's, and
+            // otherwise whatever the source carried rides along. Its row count is checked by the caller's final
             // `validate_observation_columns`.
             let keypoints_xy = new_keypoints_xy.or_else(|| recon.keypoints_xy().cloned());
             ObservationSource::SiftFiles {

@@ -108,7 +108,10 @@ One change, landed together:
    older file lacks and the file alone cannot supply it, the in-memory form
    says the data is absent, and the writer refuses to write the current
    version until a caller supplies it, as the sfmtool 0.4 reader did for a
-   `.sfmr` file below version 15, which lacks image readings.
+   `.sfmr` file below version 15, which lacks image readings, and as the
+   reader does for a version 16 `sift_files` `.sfmr` file without
+   `tracks/keypoints_xy`, which `SfmrReconstruction::save` reads from the
+   `.sift` files before it writes.
 4. **`sfm ws upgrade`** brings every version the reader accepts to the current
    one ([../cli/workspace/ws-upgrade-command.md](../cli/workspace/ws-upgrade-command.md)).
    For `.sfmr`, `.matches` and `.camrig`, which it rewrites by loading and

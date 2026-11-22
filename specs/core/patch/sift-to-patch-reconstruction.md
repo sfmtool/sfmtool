@@ -5,8 +5,8 @@
 A `.sfmr` reconstruction records where each 3D point is seen in each image in
 one of two ways. In the `sift_files` mode an observation is an index into the
 `.sift` feature file of its image, so those files have to be kept with the
-reconstruction, even when the file also keeps an inline copy of each
-observation's 2D position. In the `embedded_patches` mode the file stores each
+reconstruction, even though the file also states each observation's 2D
+position inline. In the `embedded_patches` mode the file stores each
 observation's 2D image position (its keypoint) with no index, gives each point a
 small flat patch oriented in 3D (`(u, v)` half-vectors + normal, optionally with
 an RGBA image of the patch's appearance), and records each source image's hash

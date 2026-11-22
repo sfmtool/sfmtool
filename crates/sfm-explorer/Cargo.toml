@@ -208,6 +208,11 @@ sfmtool-sfmr-format = { path = "../sfmtool-sfmr-format" }
 # `.kdf` over them, and want the directory gone when the test ends.
 tempfile = "3"
 
+# The open and save tests rewrite a `.sfmr` as a version 16 file without its
+# inline keypoints, which no writer writes, by editing the archive's entries.
+zip = { version = "9", default-features = false, features = ["deflate"] }
+zstd = "0.14"
+
 # `ui_basic` speaks MCP to a real viewer and decodes the PNG a real frame
 # produced. An integration test sees only dev-dependencies, so the three the
 # crate already builds with are named again here.

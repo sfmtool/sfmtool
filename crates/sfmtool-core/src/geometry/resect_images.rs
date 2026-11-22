@@ -861,7 +861,7 @@ fn world_centre(rotation: &UnitQuaternion<f64>, translation: &Vector3<f64>) -> P
 /// The 2D pixel of each requested observation row, in the same order.
 ///
 /// An inline keypoint column answers directly -- always for `embedded_patches`,
-/// and for a `sift_files` reconstruction that carries the optional copy, whose
+/// and for a `sift_files` reconstruction that carries the column, whose
 /// coordinates are what that reconstruction says its observations are. Failing
 /// that, a `sift_files` reconstruction resolves each row through the images'
 /// `.sift` companions, read once per image touched rather than once per row.

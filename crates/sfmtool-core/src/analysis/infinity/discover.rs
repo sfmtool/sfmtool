@@ -663,8 +663,9 @@ impl SfmrReconstruction {
         // Every member is a previously untracked feature, so no appended
         // observation collides with an existing point's observation.
         let mut recon = self.clone_for_edit();
-        // A `sift_files` reconstruction may carry an inline copy of its
-        // observation coordinates; the appended observations extend it in
+        // A `sift_files` reconstruction carries its observation coordinates
+        // inline (unless read from a version 16 file without them); the
+        // appended observations extend them in
         // lockstep with `feature_indexes`. Their pixels are the ones unprojected
         // above, collected here and spliced on once the loop is done. `None`
         // when there is no inline column to extend.

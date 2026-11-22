@@ -5,11 +5,13 @@
 //! `.sift` companions.
 //!
 //! A `sift_files` reconstruction names each observation by a feature index into
-//! its image's `.sift` file, and may also carry an inline copy of each
-//! observation's pixel. Consumers that read pixels (the bench's points source,
-//! bundle adjustment, reprojection errors) answer from the inline copy when it
-//! is there, so [`SfmrReconstruction::load`] fills it in when a file lacks it,
-//! and every later save writes it.
+//! its image's `.sift` file, and also carries each observation's pixel inline,
+//! which a `.sfmr` file of version 17 must store. Consumers that read pixels
+//! (the bench's points source, bundle adjustment, reprojection errors) answer
+//! from the inline column. A version 16 file may lack it, so
+//! [`SfmrReconstruction::load`] fills it in when a file lacks it, and
+//! [`SfmrReconstruction::save`] reads it from the `.sift` files for a value
+//! that still lacks it, refusing to write when they cannot supply it.
 
 use ndarray::Array2;
 
@@ -70,17 +72,44 @@ impl SfmrReconstruction {
     /// # }
     /// ```
     pub fn fill_keypoints_from_sift(&mut self, progress: &Progress<'_>) -> SiftKeypointFill {
-        let (feature_indexes, sift_content_hashes) = match &self.point_set.observations {
+        match &self.point_set.observations {
             ObservationSource::EmbeddedPatches { .. } => return SiftKeypointFill::NotSiftFiles,
             ObservationSource::SiftFiles {
                 keypoints_xy: Some(_),
                 ..
             } => return SiftKeypointFill::AlreadyPresent,
-            ObservationSource::SiftFiles {
-                feature_indexes,
-                sift_content_hashes,
-                ..
-            } => (feature_indexes, sift_content_hashes),
+            ObservationSource::SiftFiles { .. } => {}
+        }
+        match self.sift_keypoint_column(progress) {
+            Ok(column) => {
+                if let ObservationSource::SiftFiles { keypoints_xy, .. } =
+                    &mut self.point_set.observations
+                {
+                    *keypoints_xy = Some(column);
+                }
+                SiftKeypointFill::Filled
+            }
+            Err(outcome) => outcome,
+        }
+    }
+
+    /// The inline `keypoints_xy` column of this `sift_files` reconstruction as
+    /// its `.sift` files give it, one row per observation, whether or not the
+    /// value already carries one. The error is
+    /// [`SiftKeypointFill::Unavailable`] or [`SiftKeypointFill::Cancelled`],
+    /// on the terms [`Self::fill_keypoints_from_sift`] states, or
+    /// [`SiftKeypointFill::NotSiftFiles`] for an `embedded_patches` value.
+    pub(super) fn sift_keypoint_column(
+        &self,
+        progress: &Progress<'_>,
+    ) -> Result<Array2<f32>, SiftKeypointFill> {
+        let ObservationSource::SiftFiles {
+            feature_indexes,
+            sift_content_hashes,
+            ..
+        } = &self.point_set.observations
+        else {
+            return Err(SiftKeypointFill::NotSiftFiles);
         };
 
         let n_images = self.image_set.images.len();
@@ -90,17 +119,17 @@ impl SfmrReconstruction {
         }
         let images: Vec<usize> = (0..n_images).filter(|&i| observed[i]).collect();
         if !images.is_empty() && self.workspace_dir.as_os_str().is_empty() {
-            return SiftKeypointFill::Unavailable {
+            return Err(SiftKeypointFill::Unavailable {
                 image: images[0],
                 reason: "the reconstruction has no workspace directory to find .sift files in"
                     .to_string(),
-            };
+            });
         }
 
         let mut positions: Vec<Vec<[f32; 2]>> = vec![Vec::new(); n_images];
         for (done, &image) in images.iter().enumerate() {
             if progress.check_cancel().is_err() {
-                return SiftKeypointFill::Cancelled;
+                return Err(SiftKeypointFill::Cancelled);
             }
             let path = self.sift_path_for_image(image);
             let unavailable = |reason: String| SiftKeypointFill::Unavailable {
@@ -108,28 +137,28 @@ impl SfmrReconstruction {
                 reason: format!("{}: {reason}", path.display()),
             };
             if !path.is_file() {
-                return unavailable("no such file".to_string());
+                return Err(unavailable("no such file".to_string()));
             }
             let stored = match sfmtool_sift_format::read_sift_metadata(&path) {
                 Ok((_, _, content_hash)) => parse_hash_bytes(&content_hash.content_xxh128).ok(),
-                Err(e) => return unavailable(e.to_string()),
+                Err(e) => return Err(unavailable(e.to_string())),
             };
             if stored != Some(sift_content_hashes[image]) {
-                return unavailable(
+                return Err(unavailable(
                     "its content hash differs from the one the reconstruction records".to_string(),
-                );
+                ));
             }
             let needed = self.point_set.max_track_feature_index[image] as usize + 1;
             match sfmtool_sift_format::read_sift_positions(&path, needed) {
                 Ok(read) if read.len() == needed => positions[image] = read,
                 Ok(read) => {
-                    return unavailable(format!(
+                    return Err(unavailable(format!(
                         "it has {} features, and the observations index feature {}",
                         read.len(),
                         needed - 1
-                    ))
+                    )))
                 }
-                Err(e) => return unavailable(e.to_string()),
+                Err(e) => return Err(unavailable(e.to_string())),
             }
             progress.count(done as u64 + 1, Some(images.len() as u64), "image");
         }
@@ -146,11 +175,7 @@ impl SfmrReconstruction {
             column[[row, 0]] = x;
             column[[row, 1]] = y;
         }
-        if let ObservationSource::SiftFiles { keypoints_xy, .. } = &mut self.point_set.observations
-        {
-            *keypoints_xy = Some(column);
-        }
-        SiftKeypointFill::Filled
+        Ok(column)
     }
 }
 

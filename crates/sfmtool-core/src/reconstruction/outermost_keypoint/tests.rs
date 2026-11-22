@@ -25,7 +25,7 @@ fn feature_xy(camera: &CameraIntrinsics, f: usize) -> [f32; 2] {
 }
 
 fn fixture(dir: &TempDir) -> SfmrReconstruction {
-    let mut recon = SfmrReconstruction::demo(POINTS);
+    let mut recon = SfmrReconstruction::demo_without_keypoints(POINTS);
     recon.workspace_dir = dir.path().to_path_buf();
     recon.metadata.workspace.contents.feature_prefix_dir = "features".into();
     for image in 0..recon.image_set.images.len() {

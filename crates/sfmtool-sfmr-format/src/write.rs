@@ -236,7 +236,10 @@ fn merge_preserving_normals<'a>(
 /// The image readings are required ([`SfmrData::image_readings`]): a value
 /// without them is refused with [`SfmrError::InvalidFormat`] and nothing is
 /// written. This crate does not compute them; `SfmrReconstruction::save` in
-/// `sfmtool-core` gathers them before it writes.
+/// `sfmtool-core` gathers them before it writes. The same holds for the
+/// inline keypoints ([`SfmrData::keypoints_xy`]), which a `sift_files` value
+/// read from an older file may lack and `SfmrReconstruction::save` then reads
+/// from the `.sift` files.
 pub fn write_sfmr(path: &Path, data: &mut SfmrData) -> Result<(), SfmrError> {
     write_sfmr_with_options(path, data, &WriteOptions::default())
 }
@@ -250,7 +253,8 @@ pub fn write_sfmr(path: &Path, data: &mut SfmrData) -> Result<(), SfmrError> {
 /// (the focal scales, the principal-point offsets, the radial B-spline
 /// corrections and the rolling-shutter rates) and the cameras'
 /// `rolling_shutter_scanlines` settings are written as given, and so are the
-/// image readings, which are required (see [`write_sfmr`]).
+/// image readings and the inline keypoints, which are required (see
+/// [`write_sfmr`]).
 pub fn write_sfmr_with_options(
     path: &Path,
     data: &mut SfmrData,
@@ -261,6 +265,15 @@ pub fn write_sfmr_with_options(
             "a version {SFMR_FORMAT_VERSION} file stores every image's sharpness and gradient \
              structure tensor with the image_to_gray they were computed through, and this value \
              has none; supply them as image_readings before writing"
+        )));
+    }
+    // An `embedded_patches` value without them is refused by the shared
+    // feature-source check, which `content_hash_of` runs too.
+    if data.keypoints_xy.is_none() && data.metadata.feature_source == FEATURE_SOURCE_SIFT_FILES {
+        return Err(SfmrError::InvalidFormat(format!(
+            "a version {SFMR_FORMAT_VERSION} file stores every observation's pixel in \
+             tracks/keypoints_xy, and this sift_files value has none; supply them as \
+             keypoints_xy before writing"
         )));
     }
     if let Some(parent) = path.parent() {
@@ -304,7 +317,9 @@ pub fn write_sfmr_with_options(
 /// it stands, with no reading columns and no `image_to_gray` key, although a
 /// write refuses it: a value built in memory before its readings are gathered
 /// still has a content hash. The hash a write stores once the readings are
-/// supplied is a different one.
+/// supplied is a different one. A `sift_files` value without
+/// [`SfmrData::keypoints_xy`], as one read from an older file written without
+/// them, is hashed the same way, without the column.
 ///
 /// The cost is one serialisation of the value plus one XXH128 pass over it,
 /// with no compression; the patch bitmaps dominate both. A caller that asks
@@ -1201,9 +1216,9 @@ fn write_tracks<S: EntrySink>(
         &mut tracks_hasher,
     )?;
 
-    // tracks/keypoints_xy (the coordinate under embedded_patches, an optional
-    // inline copy under sift_files; lexicographically after image_indexes,
-    // before metadata.json)
+    // tracks/keypoints_xy (every observation's pixel, in either mode; missing
+    // only from the hash of a sift_files value read from an older file without
+    // it; lexicographically after image_indexes, before metadata.json)
     if let Some(keypoints_xy) = &data.keypoints_xy {
         binary_hashed(
             sink,
@@ -1564,13 +1579,15 @@ fn presence_of(data: &SfmrData) -> OptionalPresence {
 /// rejected rather than silently dropping the column the chosen mode does not
 /// write.
 ///
-/// `keypoints_xy` is the one column both modes may carry: under
-/// `embedded_patches` it is the observation coordinate and is required, and under
-/// `sift_files` it is an optional inline copy of the coordinate the
-/// `feature_indexes` resolve to. It identifies nothing on its own, so carrying it
-/// alongside the `.sift` link is not a contradiction — unlike
-/// `image_file_hashes`, which is `embedded_patches`' substitute for the `.sift`
-/// hash pair and stays forbidden under `sift_files`.
+/// `keypoints_xy` is the one column both modes carry: under `embedded_patches`
+/// it is the observation coordinate, and under `sift_files` it states where
+/// each observation the `feature_indexes` name sits. It identifies nothing on
+/// its own, so carrying it alongside the `.sift` link is not a contradiction —
+/// unlike `image_file_hashes`, which is `embedded_patches`' substitute for the
+/// `.sift` hash pair and stays forbidden under `sift_files`. Its presence in a
+/// `sift_files` value is checked by [`write_sfmr_with_options`] rather than
+/// here, so [`content_hash_of`] still hashes a value read from an older file
+/// without it.
 fn validate_feature_source(data: &SfmrData) -> Result<(), SfmrError> {
     let src = data.metadata.feature_source.as_str();
     let present = |name: &str, ok: bool| -> Result<(), SfmrError> {

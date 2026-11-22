@@ -118,10 +118,11 @@ impl SfmrReconstruction {
             recon
         };
         recon.workspace_dir = workspace_dir;
-        // A `sift_files` file written before every writer stored the inline
-        // keypoint column gets it here, so every consumer reads observation
-        // pixels the same way. When a `.sift` is missing or is a different
-        // extraction the value loads without the column, as the file has it.
+        // A version 16 `sift_files` file written without the inline keypoint
+        // column gets it here, so every consumer reads observation pixels the
+        // same way. When a `.sift` is missing or is a different extraction the
+        // value loads without the column, as the file has it, and `save`
+        // refuses to write it.
         let mut fill = progress.phase("keypoints");
         match recon.fill_keypoints_from_sift(&fill) {
             SiftKeypointFill::Filled => drop(fill),
@@ -162,7 +163,17 @@ impl SfmrReconstruction {
     /// [`ImageReadingsError`](crate::reconstruction::image_readings::ImageReadingsError)
     /// message). A cancelled `progress` stops the gather and writes nothing,
     /// returning [`SfmrError::Io`] of kind
-    /// [`Interrupted`](std::io::ErrorKind::Interrupted). Pass
+    /// [`Interrupted`](std::io::ErrorKind::Interrupted).
+    ///
+    /// The file also stores every observation's pixel in
+    /// `tracks/keypoints_xy`. A `sift_files` value without that column, as
+    /// one read from a version 16 file whose `.sift` files [`Self::load`]
+    /// could not read, has it read for the write from the `.sift` files
+    /// ([`Self::fill_keypoints_from_sift`] states when they can supply it), in
+    /// a phase `keypoints` of `progress`; the value is not changed. When they
+    /// cannot, nothing is written and the error
+    /// ([`SfmrError::InvalidFormat`]) names the `.sift` file and why, and says
+    /// to restore the `.sift` files the reconstruction was made with. Pass
     /// `&Progress::none()` to report nothing.
     pub fn save(
         &self,
@@ -183,10 +194,49 @@ impl SfmrReconstruction {
             })?;
             data.image_readings = Some(gathered.to_columns());
         }
+        if data.keypoints_xy.is_none() {
+            data.keypoints_xy = self.keypoints_for_save(progress)?;
+        }
         sfmtool_sfmr_format::write_sfmr(path, &mut data)?;
         Ok(sfmtool_sfmr_format::WriteRecord {
             timestamp: data.metadata.timestamp,
         })
+    }
+
+    /// The inline keypoints [`Self::save`] writes for a `sift_files` value
+    /// that carries none, read from its `.sift` files in a phase `keypoints`
+    /// of `progress`; `None` for a value that carries them or is
+    /// `embedded_patches`. The error is the one the save returns: a
+    /// cancellation, or [`SfmrError::InvalidFormat`] naming the `.sift` file
+    /// that could not supply them and saying to restore the `.sift` files.
+    pub(crate) fn keypoints_for_save(
+        &self,
+        progress: &Progress<'_>,
+    ) -> Result<Option<ndarray::Array2<f32>>, SfmrError> {
+        match &self.point_set.observations {
+            ObservationSource::SiftFiles {
+                keypoints_xy: None, ..
+            } => {}
+            _ => return Ok(None),
+        }
+        let phase = progress.phase("keypoints");
+        match self.sift_keypoint_column(&phase) {
+            Ok(column) => Ok(Some(column)),
+            Err(SiftKeypointFill::Unavailable { reason, .. }) => {
+                Err(SfmrError::InvalidFormat(format!(
+                    "a .sfmr file stores every observation's pixel in tracks/keypoints_xy, \
+                     and this sift_files reconstruction does not carry them, so they were \
+                     read from its .sift files, which could not supply them: {reason}. \
+                     Restore the .sift files this reconstruction was made with, then save \
+                     it again"
+                )))
+            }
+            // Cancelled; `NotSiftFiles` and `AlreadyPresent` were answered above.
+            Err(_) => Err(SfmrError::Io(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "the read of the inline keypoints from the .sift files was cancelled",
+            ))),
+        }
     }
 
     /// A copy of this value for a caller that is about to change it.
@@ -223,13 +273,19 @@ impl SfmrReconstruction {
     /// while a save gathers them first
     /// ([`Self::gather_image_readings`]), so the hash it stores is another
     /// one; call [`Self::fill_image_readings`] first for the two to agree, as
-    /// SfM Explorer does before it records the version a save writes.
+    /// SfM Explorer does before it records the version a save writes. The
+    /// same goes for a `sift_files` value without its inline keypoints, as
+    /// one read from a version 16 file whose `.sift` files could not supply
+    /// them: it is hashed without the column, while a save reads it from the
+    /// `.sift` files first; call [`Self::fill_keypoints_from_sift`] first for
+    /// the two to agree.
     ///
-    /// The equality holds against a save that writes this value as it stands. A
-    /// caller that stamps new metadata (an operation name, say) between hashing
-    /// and saving changes the metadata section and so changes the hash; stamp
-    /// first, then hash. The write timestamp is not such a value: the writer
-    /// stamps it, and it lives outside every section digest.
+    /// Apart from those two, the equality holds against a save that writes
+    /// this value as it stands. A caller that stamps new metadata (an
+    /// operation name, say) between hashing and saving changes the metadata
+    /// section and so changes the hash; stamp first, then hash. The write
+    /// timestamp is not such a value: the writer stamps it, and it lives
+    /// outside every section digest.
     ///
     /// The cost is one serialisation of the whole value, and the hashing of the
     /// bytes it produces. Nothing is compressed: the hash is over the
@@ -417,8 +473,8 @@ impl SfmrReconstruction {
                         SfmrError::InvalidFormat("sift_files file missing feature_indexes".into())
                     })?
                     .to_vec(),
-                // Optional: a `sift_files` file may carry an inline copy of its
-                // observation coordinates, and it rides straight through.
+                // A `sift_files` file states its observation coordinates inline
+                // too (a version 16 one may not), and they ride straight through.
                 keypoints_xy: data.keypoints_xy,
                 feature_tool_hashes: data.feature_tool_hashes.ok_or_else(|| {
                     SfmrError::InvalidFormat("sift_files file missing feature_tool_hashes".into())
