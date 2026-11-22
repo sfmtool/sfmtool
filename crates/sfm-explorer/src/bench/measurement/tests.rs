@@ -452,8 +452,7 @@ fn undo_and_redo_carry_the_selected_measurement_across_a_renumbering() {
         state.selected_measurement,
         Some(MeasurementRef::distance(id, 2))
     );
-    // A selected row the undone step dropped comes back selected; one the
-    // redone step drops is cleared.
+    // A selected row the redone step drops is cleared.
     state.undo(id).unwrap();
     state.select_measurement(MeasurementRef::distance(id, 4));
     state.redo(id).unwrap();

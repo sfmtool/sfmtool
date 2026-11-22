@@ -1433,7 +1433,7 @@ fn turn_and_move_onto(
 }
 
 /// A Scene tree double-click on the Bench row at `position` on `id`'s bench:
-/// focus the item and raise Track View on it
+/// focus the item and raise the panel that edits it beside the tree
 /// ([`crate::state::AppState::edit_bench_item_at`]), and move the 3D viewport
 /// onto the item's own point ([`crate::scene::bench_world_point`]). A
 /// cluster-stage item has no point, so for one the viewport stays where it is.

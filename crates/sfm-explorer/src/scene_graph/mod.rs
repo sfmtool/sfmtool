@@ -243,7 +243,7 @@ pub(crate) struct SceneGraphResponse {
     /// `Close` chosen from a reconstruction's context menu.
     pub(crate) close_node: Option<ReconId>,
     /// A Bench row was double-clicked: focus that item, select its node,
-    /// raise Track View on it and move the 3D viewport onto a track's point
+    /// raise the panel that edits it and move the 3D viewport onto a track's point
     /// (`app::apply_bench_edit`). The item is named by its position
     /// on the bench rather than by its label, so this response stays a `Copy`
     /// value. The raise is a layout operation, so the panel also keeps the
