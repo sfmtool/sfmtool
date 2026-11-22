@@ -359,7 +359,10 @@ assembles them from, and refuses with `NeedsTiles` when the photograph does
 not hold all of them; a read that reuses kept regions reads no tile, and the
 tile path's taps lie inside the ungrown regions, so a read that passes the
 check takes either path with the tiles it holds. `read_source_rect` checks
-the tiles under its rectangle. A rectangle is assembled from the part of each
+the tiles under its rectangle, and `source_clipped_share` the level-0 tiles
+under the outline's bounding box and, when the geometry alone says no pixel
+centre lies inside the outline, those under its corners, which it then
+reads. A rectangle is assembled from the part of each
 tile's core inside it, so the pixels are the level's. `NeedsTiles` names
 every tile the read needs, held or not, so a caller makes the photograph
 again of those and the read runs; a photograph of no tiles is refused, since

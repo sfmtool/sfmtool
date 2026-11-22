@@ -230,6 +230,21 @@ impl TiledPhotograph {
         (!keys.iter().all(|key| held.contains_key(key))).then_some(keys)
     }
 
+    /// Whether the photograph is made of tiles and does not hold every one of
+    /// `keys`.
+    pub(crate) fn missing_keys(&self, keys: &[TileKey]) -> bool {
+        match &self.pixels {
+            Pixels::Tiles(held) => !keys.iter().all(|key| held.contains_key(key)),
+            Pixels::Pyramid(_) => false,
+        }
+    }
+
+    /// Whether the photograph is made of tiles ([`Self::from_tiles`]), so a
+    /// read has to work out the tiles it needs before it reads a pixel.
+    pub(crate) fn is_made_of_tiles(&self) -> bool {
+        matches!(self.pixels, Pixels::Tiles(_))
+    }
+
     /// All the tiles a read of `rect` of level `level`, a rectangle inside its
     /// level, needs, when the photograph is made of tiles and does not hold
     /// every one of them; `None` when it can read them.

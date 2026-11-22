@@ -2438,7 +2438,8 @@ in core. Step 17 turns the tier on.
       and [core/camera/photograph-cache.md](../core/camera/photograph-cache.md)
       § "In the viewer", with tests in
       [sampler/source/held_tiles_tests.rs](../../crates/sfmtool-core/src/camera/sampler/source/held_tiles_tests.rs):
-      every render, grid, sample and rectangle read of a photograph made of
+      every render, grid, sample, rectangle and clipped-share read of a
+      photograph made of
       the coarsest first tile alone is refused naming the tiles it needs, the
       photograph made of those tiles less any one is refused naming the same
       tiles, and the photograph made of them reads the whole pyramid's values

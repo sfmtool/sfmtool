@@ -263,3 +263,23 @@ fn from_tiles_refuses_tiles_the_layout_does_not_have_or_place() {
     );
     assert!(!refused(vec![tile(key)]), "the layout's own tile");
 }
+
+#[test]
+fn the_clipped_share_of_its_needed_tiles_equals_the_whole_pyramid_s() {
+    use crate::patch::reference_view::source_clipped_share;
+    let (pyramid, source) = sources();
+    let whole = TiledPhotograph::from_pyramid(pyramid);
+    // An outline across nine of the 32 px tiles, one past the image's right
+    // edge, and one too thin to hold a pixel centre, which reads the pixels
+    // under its corners.
+    for outline in [
+        vec![[20.0, 15.0], [90.0, 25.0], [80.0, 85.0], [25.0, 70.0]],
+        vec![[150.0, 100.0], [230.0, 110.0], [210.0, 149.0]],
+        vec![[40.2, 40.2], [100.3, 40.3], [100.3, 40.4]],
+    ] {
+        let expected = source_clipped_share(&whole, &outline).unwrap();
+        let (share, keys) = read_held(&source, |src| source_clipped_share(src, &outline));
+        assert_eq!(share, expected, "{outline:?}");
+        assert!(keys.len() > 1, "{outline:?} reads several tiles: {keys:?}");
+    }
+}
