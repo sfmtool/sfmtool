@@ -2,12 +2,19 @@
 
 **Status:** Draft. Decided by the maintainer (2026-11-21): the reconstruction
 is an `embedded_patches` one, with keypoints inline, patch bitmaps rendered
-from the scene's photographs and each image's hash taken over its rendered
+from the scene's photographs and each image's hash taken over its written
 file, and no `.sift` file or invented descriptor; *Load Demo Data* writes a
 small workspace to a temporary directory and opens it from there, and the value
 without files stays available to tests; the generator sits beside the sphere
-demo, `SfmrReconstruction::demo`, and does not replace it. Not decided: the
-questions in [Open questions](#open-questions).
+demo, `SfmrReconstruction::demo`, and does not replace it. Decided by the
+maintainer (2026-11-22): the photographs are written as JPEG, so that they
+differ a little from the exact render as a real photograph does; *Load Demo
+Data* keeps a number of points; each surface has its own tint; the scene has
+one undistorted pinhole camera; the temporary workspace lives in the system
+temporary directory and is deleted at exit; the demo node saves as any other
+node does; the first version holds a 1 m distance measurement along a cube
+edge; and the demo scene is bound to Python. Not decided: the question in
+[Open questions](#open-questions).
 
 ## Purpose
 
@@ -17,13 +24,14 @@ right: its poses, points and normals are estimates, and a test built on one can
 only say that a result did not change. This draft proposes a demo
 reconstruction built in the opposite order. A small 3D scene is defined first, a
 textured ground plane with a cube standing on it; photographs of that scene are
-rendered from five pinhole cameras; and the reconstruction is written down from
-the scene: the cameras' poses, 3D points sampled on the surfaces, the pixel
-where each camera sees each point, which cameras do not see it because the cube
-is in the way, each point's surface normal and patch, and the patch bitmaps
-rendered from the photographs. Every one of those is exact by construction, and
-the photographs agree with them, so the result is a whole reconstruction with
-ground truth.
+rendered from five pinhole cameras and written as JPEG; and the reconstruction
+is written down from the scene: the cameras' poses, 3D points sampled on the
+surfaces, the pixel where each camera sees each point, which cameras do not see
+it because the cube is in the way, each point's surface normal and patch, a
+distance measurement of a cube edge, and the patch bitmaps rendered from the
+photographs. The geometry is exact by construction, and the photographs agree
+with it up to the JPEG compression a real photograph also has, so the result is
+a whole reconstruction with ground truth.
 
 The scene is chosen to hold the cases where the toolkit's estimators fail:
 creases, where a patch straddles two faces of the cube or a face and the
@@ -32,11 +40,12 @@ hidden behind the cube from others; and grazing views of the ground. A normal
 estimator, a track check or a bitmap renderer can be run on it and its answer
 compared against the stored truth.
 
-It has two consumers. SfM Explorer's *File > Load Demo Data* writes the scene
+It has three consumers. SfM Explorer's *File > Load Demo Data* writes the scene
 as a workspace and opens it, so every viewer feature that reads photographs
 (Image Detail, the bench, display patch bitmaps, *Build SIFT Files*) works on
-the demo. Tests take the reconstruction value and the rendered photographs in
-memory, with no files.
+the demo. Rust tests take the reconstruction value and the photographs in
+memory, with no files. Python tests take the same through a binding, and can
+write the workspace to run CLI commands on.
 
 The existing demo, `SfmrReconstruction::demo` in
 [demo.rs](../../crates/sfmtool-core/src/reconstruction/data/demo.rs), stays: a
@@ -53,8 +62,7 @@ The generator would live in
 [demo.rs](../../crates/sfmtool-core/src/reconstruction/data/demo.rs), with
 submodules for the renderer and the texture in `demo_scene/`.
 `reconstruction::data` is private to the crate, so the types are re-exported
-from `sfmtool_core::reconstruction`, as `SfmrReconstruction` is. They are not bound
-to Python in this proposal (see [Open questions](#open-questions)).
+from `sfmtool_core::reconstruction`, as `SfmrReconstruction` is.
 
 ```rust
 /// How the demo scene is rendered and sampled. `Default` is the scene this
@@ -84,12 +92,24 @@ pub struct DemoSceneOptions {
     pub seed: u64,
 }
 
+impl DemoSceneOptions {
+    /// The number of points the default options keep, which a test of the
+    /// sampling fixes.
+    pub const DEFAULT_POINT_COUNT: u32;
+
+    /// The default options with both point spacings scaled by
+    /// `sqrt(DEFAULT_POINT_COUNT / point_count)`, so the scene keeps about
+    /// `point_count` points. A `point_count` of 0 is `DemoSceneError::Options`.
+    pub fn for_point_count(point_count: u32) -> Result<DemoSceneOptions, DemoSceneError>;
+}
+
 /// The rendered scene: its cameras, poses and photographs, in memory.
 pub struct DemoScene { /* … */ }
 
 impl DemoScene {
     /// Render the scene's photographs, one per camera, in a phase `render`
-    /// that counts rows.
+    /// that counts rows; then encode each as a JPEG and decode it again, in a
+    /// phase `encode` that counts images.
     pub fn render(
         options: &DemoSceneOptions,
         progress: &Progress<'_>,
@@ -97,27 +117,30 @@ impl DemoScene {
 
     /// The options the scene was rendered with.
     pub fn options(&self) -> &DemoSceneOptions;
-    /// Each photograph's image name, `images/demo_0.png` to `images/demo_4.png`.
+    /// Each photograph's image name, `images/demo_0.jpg` to `images/demo_4.jpg`.
     pub fn image_names(&self) -> &[String];
-    /// The rendered photographs, RGB, in image order.
+    /// The renderer's exact output, RGB, in image order, before JPEG.
+    pub fn rendered_photographs(&self) -> &[ImageU8];
+    /// The photographs as a reader of the written files decodes them: each
+    /// JPEG of `encoded_photographs` decoded by `ImageU8::decode_rgb`.
     pub fn photographs(&self) -> &[ImageU8];
-    /// The photographs as the tiled sources the patch kernels read.
+    /// The decoded photographs as the tiled sources the patch kernels read.
     pub fn tiled_photographs(&self) -> Vec<TiledPhotograph>;
-    /// Each photograph's encoded file, the bytes `write_workspace` writes and
+    /// Each photograph's JPEG file, the bytes `write_workspace` writes and
     /// `image_file_hashes` hashes.
     pub fn encoded_photographs(&self) -> &[Vec<u8>];
 
     /// The reconstruction of the scene, with no files behind it
     /// (`workspace_dir` empty): sample the points, find who sees each one,
-    /// and render the patch bitmaps from the photographs, in phases `points`
-    /// and `patch bitmaps`.
+    /// place the measurement, and render the patch bitmaps from the decoded
+    /// photographs, in phases `points` and `patch bitmaps`.
     pub fn reconstruction(
         &self,
         progress: &Progress<'_>,
     ) -> Result<SfmrReconstruction, DemoSceneError>;
 
     /// Write the scene as a workspace in `dir`, which must be empty or not
-    /// exist: the photographs under `images/`, a `.sfm-workspace.json`, and
+    /// exist: the JPEGs under `images/`, a `.sfm-workspace.json`, and
     /// `demo.sfmr` at the workspace root. Returns the `.sfmr` path.
     pub fn write_workspace(
         &self,
@@ -134,7 +157,7 @@ pub enum DemoSceneError {
     Cancelled,
     /// `dir` holds files, or lies inside another workspace.
     Directory(String),
-    /// A photograph could not be encoded or written.
+    /// A photograph could not be encoded, decoded or written.
     Photograph(image::ImageError),
     /// The `.sfmr` could not be written.
     Save(SfmrError),
@@ -150,21 +173,37 @@ scene's photographs, wants only `render`. The value cannot be built without the
 photographs, because the patch bitmaps, the thumbnails, the image readings and
 the image file hashes all come from them, so the rendered `DemoScene` is what
 `reconstruction` and `write_workspace` are methods of, and the photographs are
-rendered once whichever of the two a caller needs.
+rendered, encoded and decoded once whichever of the two a caller needs.
+
+**Why both the render and the decoded JPEG are kept.** Everything the value
+takes from the photographs is computed from the decoded JPEGs, since those are
+what a reader of the workspace sees
+([The photographs are JPEGs](#the-photographs-are-jpegs)). The exact render is
+kept beside them for the tests of the renderer, which compare a pixel with the
+texture and need no JPEG error in the comparison.
 
 **Why one options struct.** The scene's geometry (the plane, the cube, the
 camera positions) is fixed, and is what the tests reason about; the options are
 the parts a caller has a reason to change: a smaller image or fewer points for
 a cheaper test, a larger bitmap side, no supersampling to test aliasing. It is
 named `*Options` by [GLOSSARY.md](../GLOSSARY.md) § "Rust type names": the
-caller fills it with choices and it has a `Default`.
+caller fills it with choices and it has a `Default`. `for_point_count` is the
+one setting *Load Demo Data* offers, a number of points, turned into the two
+spacings: the points on a surface number about its area over the spacing
+squared, so scaling both spacings by `sqrt(DEFAULT_POINT_COUNT / n)` scales
+the count by about `n / DEFAULT_POINT_COUNT`. The count kept is near `n`, not
+equal to it, since each grid is a whole number of rows and visibility drops
+points.
 
 **Why errors, not panics.** Options come from callers, and
 [STANDARDS.md](../STANDARDS.md) § "Caller input never panics" applies: a zero
 image size, a zero supersampling, a non-finite or non-positive spacing,
 half-extent or focal length, a bitmap side of zero, or an obliquity outside
 `0..=90` is `DemoSceneError::Options`. An option set that leaves some point
-with fewer than two observations is not an error; that point is left out.
+with fewer than two observations is not an error; that point is left out. An
+option set under which a measurement endpoint lies in no observed patch is not
+an error either; the measurement is left out
+([The measurement](#the-measurement)).
 
 **Why `&Progress`.** Each of the three walks every image, row or point, which
 [STANDARDS.md](../STANDARDS.md) § "Long-running functions take a Progress"
@@ -180,17 +219,63 @@ use sfmtool_core::reconstruction::{DemoScene, DemoSceneOptions};
 let scene = DemoScene::render(&DemoSceneOptions::default(), &Progress::none())?;
 let recon = scene.reconstruction(&Progress::none())?;
 let photographs = scene.tiled_photographs();
-// recon.point_set.points[i].normal is the surface's normal exactly, and
-// every keypoint is its point's projection rounded to f32.
+// recon.point_set.points[i].normal is the surface's normal exactly, every
+// keypoint is its point's projection rounded to f32, and the one distance
+// measurement is a cube edge of 1 m.
 ```
 
 And *Load Demo Data*, on a background thread:
 
 ```rust
-let scene = DemoScene::render(&DemoSceneOptions::default(), &progress)?;
+let options = DemoSceneOptions::for_point_count(number_of_points)?;
+let scene = DemoScene::render(&options, &progress)?;
 let sfmr_path = scene.write_workspace(&temp_dir, &progress)?;
 // then the same open as File > Open, of sfmr_path
 ```
+
+## Python binding
+
+The binding is `DemoScene` in `sfmtool.reconstruction`, the module that holds
+`SfmrReconstruction`, in a new source file
+`crates/sfmtool-py/src/reconstruction/demo_scene.rs` with its row in
+[python-bindings.md](../python-bindings.md) § "Submodules". Its methods call
+the Rust ones and hold no logic of their own
+([STANDARDS.md](../STANDARDS.md) § "Logic lives in Rust, not in Python
+wrappers"), with the GIL released while they run.
+
+```python
+from sfmtool import ProgressCounter
+from sfmtool.reconstruction import DemoScene
+
+scene = DemoScene.render(
+    *, image_width=640, image_height=480, focal_length_px=560.0,
+    supersampling=2, ground_point_spacing=0.25, face_point_spacing=0.125,
+    patch_half_extent=0.09, patch_bitmap_resolution=24,
+    max_obliquity_deg=80.0, seed=0, point_count=None, progress=None,
+)                                     # -> DemoScene
+scene.image_names                     # list[str]
+scene.rendered_photographs            # list of read-only (H, W, 3) uint8 arrays
+scene.photographs                     # the decoded JPEGs, the same shape
+scene.encoded_photographs             # list[bytes], the JPEG files
+scene.reconstruction(progress=None)   # -> SfmrReconstruction
+scene.write_workspace(dir, progress=None)  # -> pathlib.Path of demo.sfmr
+```
+
+The keywords are the fields of `DemoSceneOptions` with their defaults.
+`point_count` calls `for_point_count` and cannot be given with either spacing.
+`progress`, an optional `ProgressCounter`, counts what the Rust call's phases
+count: rows rendered and images encoded for `render`, points sampled and
+bitmaps rendered for `reconstruction`, and those followed by files written for
+`write_workspace`; [STANDARDS.md](../STANDARDS.md) § "Long-running functions
+take a Progress" asks a binding of a long call to take one. An option out of
+range, a `point_count` given with a spacing, or a `dir` that holds files or
+lies inside a workspace raises `ValueError` with the Rust error's message; a
+failed encode or write raises `OSError`.
+
+**Cost in a test session.** Rendering and building the value take well under a
+second ([Cost](#cost)), so a session-scoped pytest fixture that renders once
+and writes one workspace for the session's tests costs less than one solve of
+seoul_bull.
 
 ## The scene
 
@@ -211,9 +296,10 @@ right-handed, +Z up, the X-Y plane the ground, in metres, and the file records
   point lies on it.
 - **No lighting.** A surface's colour is its texture alone, the same from
   every direction, so a surface point has the same colour in every photograph
-  that sees it, up to the renderer's sampling and the rounding to 8 bits. This
-  is what makes the patch bitmaps of one point agree between views, and it is
-  the assumption every photometric score in the toolkit makes.
+  that sees it, up to the renderer's sampling, the rounding to 8 bits and the
+  JPEG compression. This is what makes the patch bitmaps of one point agree
+  between views, and it is the assumption every photometric score in the
+  toolkit makes.
 
 ### Texture
 
@@ -248,17 +334,35 @@ maps the shared value to its own range. The two forms are equal in exact
 arithmetic and can differ in the last bit in `f64`, which the bench tests'
 assertions, all tolerances, do not see.
 
-**Colour.** Each surface has its own tint, and its colour is the tint scaled by
-`0.5 + 0.4 · noise`, with one noise channel per surface. A grey scene would
-serve every kernel the same, since they read grey; the tint is for the person
-looking at the viewer, who should see from its colour which face a patch is on.
-Whether to tint is an open question.
+**Colour.** Each surface has its own tint, so that a person looking at the
+viewer can tell from a patch's colour which face it is on. A surface's colour
+is its tint scaled by `0.5 + 0.4 · noise`, one noise value for all three
+channels:
+
+| Surface | Tint (RGB) | Hue | BT.709 luma of the tint |
+|---|---|---|---|
+| Ground | `(215, 180, 130)` | sand | 183.8 |
+| Top, `+z` | `(150, 200, 150)` | green | 185.8 |
+| Face `-a` | `(250, 160, 150)` | red | 178.4 |
+| Face `-b` | `(150, 180, 250)` | blue | 178.7 |
+| Face `+a` | `(235, 160, 235)` | magenta | 181.4 |
+| Face `+b` | `(120, 195, 200)` | cyan | 179.4 |
+
+The kernels read the photographs through `ImageToGray::default()`, BT.709 luma
+unrounded, which is linear in the three channels, so a surface's grey is the
+luma of its tint times `0.5 + 0.4 · noise`: the same noise as a grey scene,
+at a gain set by the tint's luma. The tints are chosen with lumas within 5% of
+each other, near 180, so every surface's grey runs over about `18` to `167`
+and the noise has the same contrast on every surface; what the kernels read is
+in substance the grey scene's. The largest channel times `0.9` is 225, so no
+channel clips. The base, `-z`, is never seen and takes the ground's tint.
 
 ## The cameras
 
 One shared pinhole camera, 640 × 480 px, focal length 560 px on both axes and
 the principal point at the centre `(320, 240)`: a horizontal field of view of
-about 59°. No distortion and no per-image adjustment.
+about 59°. It has no distortion, no image has a per-image adjustment, and there
+is no rig.
 
 Five cameras on an arc 4 m from the Z axis, on the side of the cube toward
 −Y, at azimuths −55°, −27.5°, 0°, 27.5° and 55° from −Y, so the arc spans
@@ -322,20 +426,104 @@ averaging of at most a few dozen 8-bit samples needs `f32` at most
 ([STANDARDS.md](../STANDARDS.md) § "Numeric precision is the smallest the use
 justifies").
 
-**Determinism.** The output depends only on the options. The texture's levels
+**Determinism.** The render depends only on the options. The texture's levels
 come from the hash of the lattice node and the seed, with no random number
 generator, and the renderer uses `+`, `−`, `×`, `÷`, `sqrt` and `floor`, so a
-photograph is the same bytes on every platform. Rows are rendered in parallel
-with rayon, each row written by one thread and summed in a fixed order, so the
-thread count does not change a pixel.
+rendered photograph is the same bytes on every platform. Rows are rendered in
+parallel with rayon, each row written by one thread and summed in a fixed
+order, so the thread count does not change a pixel.
 
-**Cost.** Five 640 × 480 photographs at four rays a pixel are 6.1 million rays.
+### Cost
+
+Five 640 × 480 photographs at four rays a pixel are 6.1 million rays.
 A ray is one slab test, one plane test and one evaluation of the noise (four
 hashes and a bilinear blend), on the order of 50 to 100 ns, so 0.3 to 0.6 s on
-one thread and well under 0.1 s across 16 threads. The bitmaps are cheaper
-still: a whole-cloud render of about 1,000 points takes 0.1 to 0.2 s
-on 32 threads ([reference-view.md § Cost of the stored bitmap](../core/patch/reference-view.md#cost-of-the-stored-bitmap)).
-The step plan measures both.
+one thread and well under 0.1 s across 16 threads. Encoding and decoding five
+640 × 480 JPEGs is a small part of that. The bitmaps are cheaper still: a
+whole-cloud render of about 1,000 points takes 0.1 to 0.2 s on 32 threads
+([reference-view.md § Cost of the stored bitmap](../core/patch/reference-view.md#cost-of-the-stored-bitmap)).
+The step plan measures each.
+
+## The photographs are JPEGs
+
+Each rendered photograph is encoded as a JPEG, and the value is built from the
+JPEG as decoded, not from the render: the thumbnails, the image readings and
+the patch bitmaps are computed from `ImageU8::decode_rgb` of the JPEG's bytes,
+and `image_file_hashes` is the XXH128 of those bytes, which `write_workspace`
+writes unchanged. Everything the scene fixes stays exact from the scene: the
+poses, the points, the normals, the patch frames, the keypoints and the
+measurement's endpoints. The JPEG moves no edge or texel, so a keypoint is
+still where the photograph shows its point; it changes only the pixel values a
+little, as a camera's own compression does.
+
+**The in-memory value and the written file are the same reconstruction.** The
+photograph-derived columns are computed from the pixels that decoding the
+written file gives, so a save of the value needs nothing from disk: its
+readings are its own rows (rule 1 of
+[Where a writer gets the values](../formats/sfmr-file-format.md#where-a-writer-gets-the-values)),
+and a load of the written `.sfmr` gives the value back, equal column for
+column, with the workspace directory filled in. Dropping the bitmaps and adding
+them again from the workspace's photographs gives the same bitmaps, on the
+machine that built the value
+([Determinism of the JPEG encoder and decoder](#determinism-of-the-jpeg-encoder-and-decoder)).
+
+**Quality 95.** The JPEGs are written at `DEFAULT_JPEG_QUALITY`, 95, the
+quality a caller of `ImageU8::write` passes when it has no reason to choose
+another, the default of `sfmtool.fileio.write_image_rgb` and of OpenCV's
+`cv2.imwrite` ([image.rs](../../crates/sfmtool-core/src/camera/image.rs)), with the
+4:2:0 chroma subsampling `ImageU8::write` uses, so the demo's photographs are
+compressed as the photographs the toolkit writes elsewhere are. Measured on a
+full 640 × 480 frame of the sand-tinted texture at 2.8 px a cell with no
+supersampling, the decoded pixels differ from the encoded ones by a mean of
+about 3 levels and at most about 25, and the file is 0.19 MB; the same frame
+as PNG is 0.70 MB. The difference is the small one the maintainer asked for: a
+patch's bitmaps no longer agree between views to the last level, as they do
+not in a real capture.
+
+**Size.** A rendered photograph has the blur of the supersampling and a flat
+background, both of which compress better than that frame, so each JPEG is
+under 0.2 MB and the five are under 1 MB. The `.sfmr`'s largest column is the
+patch bitmaps, about 540 × 24 × 24 × 4 bytes, 1.2 MB before compression.
+
+### Determinism of the JPEG encoder and decoder
+
+**The encoder gives the same bytes on every run and platform.**
+`ImageU8::write` encodes a JPEG with the `jpeg-encoder` crate (0.7.1,
+[sfmtool-core's Cargo.toml](../../crates/sfmtool-core/Cargo.toml)), not with
+the `image` crate's encoder, baseline, 4:2:0 with averaged chroma and the
+optimized Huffman tables off. The crate has no floating-point arithmetic: its
+RGB to YCbCr conversion is a fixed-point formula scaled by 2¹⁶, and its forward
+DCT is the integer slow DCT ported from libjpeg's `jfdctint`. With its `simd`
+feature, which sfmtool-core turns on, it chooses an AVX2 path at run time on an
+x86 CPU that has AVX2 and the scalar path elsewhere, such as the macOS arm64 CI
+runner. The AVX2 colour conversion is the same integer formula with the same
+rounding as the scalar one, and the AVX2 DCT is a port of libjpeg-turbo's
+`jfdctint-avx2`, written to compute the same integers as `jfdctint`. The crate
+has no test that the two paths give the same bytes, so the step plan's test
+does it: it checks the five JPEGs against hashes stored in the test, on every
+CI platform.
+
+**The decoder can differ between platforms in the last level.**
+`ImageU8::decode_rgb` decodes a JPEG with the `jpeg-decoder` crate (0.3.2,
+default features off). That crate chooses SSSE3 code for its inverse DCT and
+colour conversion at run time on x86, and scalar code elsewhere, and its
+changelog says the SSSE3 output is not bit-for-bit the scalar output; its
+`platform_independent` feature runs the scalar code everywhere, and the
+workspace does not turn it on. So the photograph-derived columns (thumbnails,
+readings, bitmaps) built on an x86 machine can differ from those built on an
+arm64 one by a rounding level, while the JPEG bytes, the hashes and every
+column the scene fixes are the same. On any one machine the value and a load
+of the written file agree exactly, as above. Whether to remove the platform
+difference is the [open question](#open-questions).
+
+**What the code has and lacks.** `ImageU8::write` already encodes into a byte
+buffer before it writes the file, but it writes only to a path; the demo needs
+the bytes to hash and decode before anything is written. Step 1 of the plan
+splits the encoding out as `ImageU8::encode(format, jpeg_quality) ->
+Result<Vec<u8>, ImageError>`, which `write` then calls, so both encode the
+same bytes. `ImageU8::decode_rgb(bytes)` already decodes from memory with the
+same decoders as `read_rgb`
+([reading-and-writing-images.md](../core/camera/reading-and-writing-images.md)).
 
 ## The points and who sees them
 
@@ -349,9 +537,12 @@ photographs would echo:
   footprint: about 420 grid points, of which about 350 are observed by two
   cameras or more. The rest lie near the cameras, below the views' lower
   edges, or at the grid's corners outside the outer views.
-- On each cube face but the base, a grid at `face_point_spacing` (0.125 m)
-  whose first row is half a spacing from the edge: 64 points a face. Only the
-  top and the faces `-a` and `-b` keep points, about 190.
+- On each cube face but the base, `k = round(1 / face_point_spacing)` rows and
+  columns at `(i + 0.5) / k` m from one corner along each in-face axis, so the
+  first row is half a spacing from the edge: at 0.125 m, `k = 8` and 64 points
+  a face. Only the top and the faces `-a` and `-b` keep points, about 190. The
+  four points nearest a face's corners are not moved, so that each cube corner
+  lies inside a patch ([The measurement](#the-measurement)).
 
 About 540 points at the defaults. With a patch half-extent of 0.09 m, the
 patches of the outer row on each face cross the cube's edge, and those of the
@@ -384,17 +575,17 @@ The value is an `embedded_patches` reconstruction
 ([sfmr-file-format.md § Observation source](../formats/sfmr-file-format.md#observation-source)),
 the observation mode the maintainer chose: it needs no `.sift` file, and a
 `.sift`'s descriptors could only be invented, since no detector found these
-points. Each column, and why it is exact:
+points. Each column, and why it is exact or what it is computed from:
 
 | Column | Value | Exact because |
 |---|---|---|
 | `cameras` | the one pinhole above | stated |
 | `images/camera_indexes` | `0` for every image | |
 | `images/quaternions_wxyz`, `translations_xyz` | each camera's world-to-camera pose | built from the stated centres and target; `f64` |
-| `images/names` | `images/demo_0.png` … `images/demo_4.png` | |
-| `images/image_file_hashes` | XXH128 of each encoded photograph | the bytes `write_workspace` writes |
-| `images/thumbnails_y_x_rgb` | each photograph through `thumbnail_from_rgb` | the format's area resize of the actual photograph |
-| `images/sharpness`, `gradient_structure_tensors_xx_yy_xy`, `image_to_gray` | `image_readings_from_rgb` of each photograph under `ImageToGray::default()` | computed from the photograph, as a writer that gathers them from the image file would ([sfmr-file-format.md § Image readings](../formats/sfmr-file-format.md#image-readings), rule 3) |
+| `images/names` | `images/demo_0.jpg` … `images/demo_4.jpg` | |
+| `images/image_file_hashes` | XXH128 of each JPEG's bytes | the bytes `write_workspace` writes |
+| `images/thumbnails_y_x_rgb` | each decoded JPEG through `thumbnail_from_rgb` | the format's area resize of the photograph a reader decodes |
+| `images/sharpness`, `gradient_structure_tensors_xx_yy_xy`, `image_to_gray` | `image_readings_from_rgb` of each decoded JPEG under `ImageToGray::default()` | computed from the photograph as decoded, as a writer that gathers them from the image file would ([sfmr-file-format.md § Image readings](../formats/sfmr-file-format.md#image-readings), rule 3) |
 | `points3d/positions_xyzw` | the sampled points, `w = 1` | sampled on the surface; `f64` |
 | `points3d/colors_rgb` | the texture's colour at the point | evaluated, not estimated |
 | `points3d/reprojection_errors` | each point's RMS reprojection error, scored by `recompute_point_errors` | what the stored keypoints give: about `10⁻⁵` px, the rounding of the keypoints to `f32` |
@@ -403,12 +594,13 @@ points. Each column, and why it is exact:
 | `tracks/image_indexes`, `point_indexes`, `observation_counts` | the observations visibility keeps, sorted by `(point, image)` | the ray–box test is exact |
 | `tracks/keypoints_xy` | each point's projection into the image, `f32` | projected through the camera; the keypoint is where the photograph sees the patch's centre, since the photograph was rendered from the same pose |
 | `tracks/reference_observations` | the reference-view rule's pick for each point | the same render `--add-patch-bitmaps` runs |
-| `points3d/patch_bitmaps_y_x_rgba` | each point's reference observation's `24 × 24` render | rendered from the photographs by `render_patch_cloud_bitmaps` with `UnreferencedPoints::Pick` |
+| `points3d/patch_bitmaps_y_x_rgba` | each point's reference observation's `24 × 24` render | rendered from the decoded JPEGs by `render_patch_cloud_bitmaps` with `UnreferencedPoints::Pick` |
+| `measurements/distance/` | one measurement, a cube edge of 1 m ([The measurement](#the-measurement)) | the edge's length is the cube's side; the endpoints are the corners' projections |
 | `derived/` depth statistics | `recompute_depth_statistics` | computed from the poses and points |
-| `metadata` | `operation: "demo"`, `world_space_unit: "m"`, `feature_source: "embedded_patches"` | |
+| `metadata` | `operation: "demo"`, `world_space_unit: "m"`, `feature_source: "embedded_patches"`, `distance_measurement_count: 1` | |
 
 Absent: rigs and frames, per-image adjustments, normal confidence, point
-constraints, observation confidence, observation readings and measurements.
+constraints, observation confidence and observation readings.
 
 **The bitmaps come from the photographs, not from the texture.** The format
 says a point's bitmap is the render of its reference observation from that
@@ -418,19 +610,59 @@ Sampling the texture over the patch instead would give a sharper bitmap that no
 later render reproduces. The generator renders them through the same function
 the viewer's display render and `--add-patch-bitmaps` reach
 ([stored_bitmap.rs](../../crates/sfmtool-core/src/patch/stored_bitmap.rs)),
-with the photographs in memory as `TiledPhotograph`s. The texture is then a
+with the decoded JPEGs in memory as `TiledPhotograph`s. The texture is then a
 check on the renderer: a test can compare a facing point's bitmap with the
-texture sampled over its patch.
+texture sampled over its patch, to within the supersampling's blur and the
+JPEG's error.
 
-**The in-memory value and the written file are the same reconstruction.** The
-photographs are written as PNG, which is lossless, so a photograph decoded from
-the workspace is the pixels the bitmaps, thumbnails and readings were computed
-from, and the image file hashes are of the bytes on disk. A save of the value
-therefore needs nothing from disk: its readings are its own rows (rule 1 of
-"Where a writer gets the values"), and a load of the written `.sfmr` gives the
-value back with the workspace directory filled in. A JPEG would break this: its
-decoded pixels differ from the rendered ones, so the in-memory bitmaps would
-not be what a render from the workspace gives.
+### The measurement
+
+The value holds one distance measurement in the version 17 `measurements/`
+section ([sfmr-file-format.md § 10. Measurements](../formats/sfmr-file-format.md#10-measurements-optional-version-17)):
+the cube's vertical edge where the faces `-a` and `-b` meet, which is exactly
+1 m long. Its corners are `-0.5·a - 0.5·b` at the base and at the top,
+`(-0.1, -0.7, 0)` and `(-0.1, -0.7, 1)`. Both faces are observed by the
+cameras at −27.5° and 0° ([The cameras](#the-cameras)), and each corner is in
+view of all five cameras. The measurement fills the distance kind's columns:
+
+| Column | Value |
+|---|---|
+| `distances` | `[1.0]` |
+| `units` | `[2]`, `"m"` in the canonical legend |
+| `metadata.json` | `distance_measurement_count: 1` and the canonical `unit_names` `["mm", "cm", "m", "in", "ft"]` |
+| `image_indexes` | `[[2, 1]]`: the base corner in `demo_2` (0°, 1.2 m) and the top corner in `demo_1` (−27.5°, 3.0 m) |
+| `endpoints_xy` | each corner's projection into its image, rounded to `f32`, in the convention of `tracks/keypoints_xy` |
+| `labels.json` | `["cube edge"]` |
+
+The top-level `distance_measurement_count` is 1, and the content hash gains
+`measurements_xxh128`. In Rust this is `ImageSet::measurements`, a
+`MeasurementsData` whose `distance` is a `DistanceMeasurementsData`. The two
+endpoints are in different images on purpose: an endpoint resolved through one
+view carries none of that view's keypoint residual into the distance
+([measurement-endpoint.md § From the pixel to a texel](../core/reconstruction/measurement-endpoint.md#from-the-pixel-to-a-texel)),
+and two images test that.
+
+**The endpoints resolve to texels of observed patches.** An endpoint is a
+pixel, and `resolve_measurement_endpoint` gives it a 3D position only when the
+square of an observation in its image holds the pixel
+([measurement-endpoint.md](../core/reconstruction/measurement-endpoint.md)).
+A corner is not a sampled point, so it must lie inside the patch of one that
+is. On each face the point nearest the corner is not moved from its grid
+position, half a spacing, 0.0625 m, from both edges, and the corner is at
+texel `(±0.694, ±0.694)` of its 0.09 m patch, inside `[−1, 1]²`. Each corner
+lies in such a patch on each of the faces `-a` and `-b`, and the top corner on
+the top as well, and the points of `-a` and `-b` are observed in both endpoint
+images. Every candidate square at a corner's pixel that is not behind the
+front layer lies in a plane through the corner: a face that meets at the
+corner, the top, or the ground at the base. So whichever candidate is picked,
+the texel names the corner itself: the endpoint's position is
+`X_p + s·u + t·v` on that point's own patch, which lies in the surface's
+plane. The resolved `scene_distance` is 1 m to within about `10⁻⁶` m, the
+rounding of the keypoints and endpoints to `f32` at about 7 mm a pixel. The
+corners stay covered while half the face spacing is below the patch
+half-extent, `k ≥ 6`; when an option set leaves an endpoint in no square, the
+generator leaves the measurement out, as it leaves out a point with too few
+observations.
 
 ## The workspace
 
@@ -441,9 +673,9 @@ dir/
 ├── .sfm-workspace.json
 ├── demo.sfmr
 └── images/
-    ├── demo_0.png
+    ├── demo_0.jpg
     ├── …
-    └── demo_4.png
+    └── demo_4.jpg
 ```
 
 The marker is a version 2 workspace file for the `sfmtool` feature tool with
@@ -470,9 +702,9 @@ but cannot produce the default options. Python's defaults are not `SiftParams::d
 `double_image_below_long_side` to 4096, where the Rust default has no limit.
 The first step of the plan adds a Rust function that writes a version 2 marker
 for the `sfmtool` tool with the options Python writes today, which Python's
-`init_workspace` then calls, so the two cannot drift. `ImageU8::write` writes to a path only; computing the hash of a
-PNG without writing it needs an encoder to bytes beside it
-([reading-and-writing-images.md](../core/camera/reading-and-writing-images.md)).
+`init_workspace` then calls, so the two cannot drift. Encoding a JPEG to bytes
+without writing it needs `ImageU8::encode`
+([What the code has and lacks](#determinism-of-the-jpeg-encoder-and-decoder)).
 The workspace marker's file name is defined three times in Rust
 (`WORKSPACE_MARKER` in `sfmtool-archive-io`, `WORKSPACE_CONFIG_FILE` in
 `features::sift::files` and `WORKSPACE_FILE_NAME` in `workspace`); the writer
@@ -484,12 +716,18 @@ Today *File > Load Demo Data...* opens a dialog asking for a number of points
 and appends a node holding `SfmrReconstruction::demo(n)` with no path
 (`AppState::load_demo` in [ops.rs](../../crates/sfm-explorer/src/state/ops.rs),
 the dialog in [modals.rs](../../crates/sfm-explorer/src/app/modals.rs)). With
-this proposal it:
+this proposal the dialog keeps its *Number of points* box, which now sets the
+scene's point spacings through `DemoSceneOptions::for_point_count`. The box
+starts at `DEFAULT_POINT_COUNT`, about 540, and takes 300 to 10,000: below
+about 260 the face spacing passes twice the patch half-extent and the
+measurement's corners are no longer covered, and 10,000 points keep the bitmap
+render to about a second. The count kept is near the number asked for, and the
+Action Log line names it. *Load* then:
 
 1. starts a background task, as *File > Open* does, that renders the scene,
-   creates a new directory under the system's temporary directory (for
-   instance `sfmtool-demo-<process id>-<n>`) and calls `write_workspace` into
-   it, reporting through the task's `Progress`;
+   creates a new directory for it in the system temporary directory
+   (`std::env::temp_dir()`), and calls `write_workspace` into it, reporting
+   through the task's `Progress`;
 2. opens the written `demo.sfmr` by the same open as *File > Open*
    (`AppState::start_open` in
    [open.rs](../../crates/sfm-explorer/src/state/open.rs)), so the node is
@@ -497,16 +735,47 @@ this proposal it:
    photograph cache are those of any opened file;
 3. deletes the directory when the viewer exits.
 
+**One directory per load, and how a crashed viewer's directory is removed.**
+Each load writes its own directory, `sfmtool-demo-<process id>-<n>`, with `n`
+counting the loads of this viewer; a second load in one session does not reuse
+the first's directory, since the first node may still be open. Before it
+creates the directory, the viewer creates a lock file beside it in the
+temporary directory, `sfmtool-demo-<process id>-<n>.lock`, and holds an
+exclusive lock on it (`std::fs::File::try_lock`, stable since Rust 1.89, below
+the workspace's MSRV of 1.98) for as long as it runs. The operating system
+releases a lock when its process ends, however it ends. At exit the viewer
+deletes each of its directories, then releases and deletes the lock file. At
+start the viewer looks for `sfmtool-demo-*.lock` files in the temporary
+directory and, for each one whose lock it can take, deletes the directory of
+the same name and the lock file: their owner has ended. A
+`sfmtool-demo-*` directory with no lock file beside it has no owner either,
+since an owner creates the lock file first and deletes it last, and is deleted
+too. The process ID in the name only keeps two running viewers' names apart; it
+does not decide whether the owner is alive, since the operating system reuses
+process IDs. Nothing in the viewer or core does this today: no Rust code checks
+whether another process is alive or takes a file lock, so the lock file and
+the sweep at start are new.
+
 The node now has a path, so several things the viewer and its specs say of
-demo data change: `path` is the temporary file rather than `null` on the wire
-([mcp-server.md](../gui/mcp-server.md)); *Save* on it would write into a
-directory that is deleted at exit ([saving.md](../gui/saving.md)); `--demo`,
-which `ui_basic` uses to set a viewer up
-([architecture.md § Testing](../gui/architecture.md#testing)), becomes a
-background open that a test waits on, as it waits on a file named on the
-command line; and the dialog's *Number of points* box, which the `type_text`
-test types into, has no number to set unless the dialog keeps one. Each is an
-[open question](#open-questions) or a step of the plan.
+demo data change:
+
+- `path` is the file in the temporary workspace rather than `null` on the wire
+  ([mcp-server.md](../gui/mcp-server.md)).
+- The demo node saves as any other node with a file does
+  ([saving.md](../gui/saving.md)): *Save* writes its `demo.sfmr` in the
+  temporary workspace, and *Save As* writes where the user chooses. A file
+  saved inside the temporary workspace is deleted with it when the viewer
+  exits. A file saved elsewhere records the path to the temporary workspace,
+  as any *Save As* records its workspace, and once that directory is deleted
+  it opens without photographs, as an `embedded_patches` file with thumbnails
+  and bitmaps can.
+- `--demo`, which `ui_basic` uses to set a viewer up
+  ([architecture.md § Testing](../gui/architecture.md#testing)), becomes a
+  background open that a test waits on, as it waits on a file named on the
+  command line.
+- The dialog's *Number of points* box, which the MCP `type_text` test types
+  250 into, takes 300 to 10,000 and starts at `DEFAULT_POINT_COUNT` rather
+  than 1000, so that test types a number in the new range.
 
 ## Tests that could move to it
 
@@ -531,6 +800,18 @@ agree with the value:
   are chosen per test and stay; what it can share is the value noise and the
   construction of an `embedded_patches` value from a scene.
 
+The Python tests that could use the binding are those that want a known
+answer on a small workspace with photographs, rather than a solve of
+seoul_bull or kerry_park:
+[test_measurement_endpoint_rust_bindings.py](../../tests/rust_bindings/reconstruction/test_measurement_endpoint_rust_bindings.py)
+and [test_scale_by_measurements.py](../../tests/xform/test_scale_by_measurements.py),
+which would have a measurement of exactly 1 m to resolve and scale by;
+[test_sfmr_image_readings.py](../../tests/test_sfmr_image_readings.py), whose
+readings can be checked against the photographs the workspace holds; and
+[test_web_export.py](../../tests/test_web_export.py) and
+[test_render_patches.py](../../tests/patch/test_render_patches.py), which need
+patch frames, bitmaps and photographs.
+
 The tests that only want a cheap value with no pixels keep the sphere demo: the
 3D view's upload tests, the reconstruction data and per-image adjustment tests,
 the infinity conversion, alignment and reprojection-noise tests, and most of
@@ -540,66 +821,71 @@ nothing from them stays on the sphere demo.
 
 ## Open questions
 
-1. **Image file format.** PNG keeps the in-memory value and the written file
-   identical (see above), at about 0.6 to 0.9 MB a photograph, since noise
-   compresses poorly: under 5 MB for the workspace. JPEG would be a fifth of
-   that and would make the in-memory value differ from a load of the file. The
-   draft proposes PNG.
-2. **Point count and spacing.** About 540 points at the defaults. More points
-   make a denser cloud to look at and cost little; fewer keep the tests fast.
-   Should the viewer keep a *Number of points* setting, which would set the
-   spacings, or load the defaults with no dialog?
-3. **Grey or tinted texture.** The kernels read grey; a tint per surface helps a
-   person see which face a patch is on.
-4. **Lens distortion, a second camera, a rig.** The scene has one undistorted
-   pinhole. A fisheye or a radial B-spline camera, a second camera model, or a
-   two-camera rig would exercise more of the toolkit; each is an option to add
-   later without changing the default scene.
-5. **Where the temporary workspace lives and when it is deleted.** The system
-   temporary directory, deleted at exit, is proposed. A viewer that crashes
-   leaves its directory behind: should the next start remove `sfmtool-demo-*`
-   directories whose process has ended? Two loads in one session write two
-   directories, or the second reuses the first?
-6. **Saving the demo node.** *Save* writes into the temporary workspace, which
-   exit deletes. Should *Save* on a node whose file is in a demo workspace act
-   as *Save As*, as it does today for a node with no file? A *Save As* to
-   another directory records the temporary workspace's absolute path, whose
-   photographs are gone after exit; the file still opens, since an
-   `embedded_patches` file with thumbnails and bitmaps needs no photograph, but
-   without the photographs. Should Load Demo Data instead offer to write the
-   workspace somewhere the user chooses?
-7. **A measurement.** The cube's edge is exactly 1 m. A distance measurement
-   between two of its corners, seen in two images, would give the
-   Measurements panel a known answer. In or out of the first version?
-8. **A Python binding.** The Python tests have no demo today. A binding of
-   `DemoScene` would give them a workspace with photographs to run CLI commands
-   on, at the cost of rendering in each test session.
+1. **The same decoded pixels on every platform.** `jpeg-decoder`'s SSSE3 code
+   on x86 and its scalar code on arm64 can decode the same JPEG to pixels a
+   rounding level apart, so the demo's thumbnails, readings and bitmaps can
+   differ between platforms while its JPEG bytes and geometry do not
+   ([Determinism of the JPEG encoder and decoder](#determinism-of-the-jpeg-encoder-and-decoder)).
+   The draft accepts that, and its tests compare those columns across
+   platforms with a tolerance. Turning on the crate's `platform_independent`
+   feature would make every JPEG the toolkit reads decode to the same pixels
+   on every platform, including the photograph cache's and `read_rgb`'s, at
+   the cost of the SIMD decoding speed on x86, which is not measured. Should
+   the workspace turn it on?
 
 ## Step plan
 
 Each step is one change on its own branch, with its tests.
 
-1. **Renderer and scene.** The shared value noise moved into the library, with
-   the two bench tests calling it; the Rust writer of a version 2 `sfmtool`
-   workspace marker, which Python's `init_workspace` calls; an `ImageU8` PNG
-   encoder to bytes; `DemoSceneOptions` and `DemoScene::render`. Tests: the
-   photographs are the same bytes on two runs and across thread counts; a
-   facing pixel's colour is the texture at the point its centre ray hits, to
-   within the supersampling's blur; the cube's silhouette is where the slab
-   test puts it. Measure the render's time.
+1. **Renderer, scene and JPEGs.** The shared value noise moved into the
+   library, with the two bench tests calling it; the Rust writer of a version
+   2 `sfmtool` workspace marker, which Python's `init_workspace` calls;
+   `ImageU8::encode` to bytes, split out of `ImageU8::write`;
+   `DemoSceneOptions` with `for_point_count`, and `DemoScene::render` with the
+   tinted texture and the JPEG encode and decode. Tests: the rendered
+   photographs are the same bytes on two runs and across thread counts; the
+   five JPEGs match XXH128 hashes stored in the test, checked on every CI
+   platform, so that the x86 AVX2 encoder path and the arm64 scalar one are
+   checked against each other; `photographs()` is `decode_rgb` of
+   `encoded_photographs()`; a facing pixel's colour in the render is the
+   texture at the point its centre ray hits, to within the supersampling's
+   blur; each surface's grey is its tint's luma times the noise factor; the
+   cube's silhouette is where the slab test puts it. Measure the render's and
+   the JPEG encode and decode's time.
 2. **The reconstruction.** Point sampling, visibility, the columns, the
-   bitmaps; `DemoScene::reconstruction` and `DemoScene::write_workspace`.
-   Tests: every keypoint is its point's projection; no observation's segment
-   meets the cube; a ground point behind the cube is hidden from the middle
-   camera and seen from an outer one; the derived normals are the surface
-   normals; the value saves, verifies and loads back equal, with the workspace
-   directory set; the image file hashes match the written files.
-3. **Load Demo Data.** The menu entry and `--demo` load the scene from a
-   temporary workspace; the directory is deleted at exit; the gui specs
-   ([architecture.md](../gui/architecture.md),
+   measurement, the bitmaps; `DemoScene::reconstruction` and
+   `DemoScene::write_workspace`. Tests: the defaults keep
+   `DEFAULT_POINT_COUNT` points, and `for_point_count` keeps within a few
+   percent of the count asked for; every keypoint is its point's projection;
+   no observation's segment meets the cube; a ground point behind the cube is
+   hidden from the middle camera and seen from an outer one; the derived
+   normals are the surface normals; the measurement's endpoints are the
+   corners' projections, each resolves with `resolve_measurement_endpoint` to
+   a texel of an observed patch at its corner, and
+   `resolve_distance_measurements` gives a `scene_distance` of 1 m to within
+   `10⁻⁶` m; an option set that leaves a corner in no patch leaves the
+   measurement out; the value saves, verifies and loads back equal, with the
+   workspace directory set; the image file hashes match the written files; the
+   thumbnails, readings and bitmaps are those computed from the written files
+   decoded again; the photograph-derived columns match stored values within a
+   tolerance of one level on every CI platform.
+3. **Python binding.** `DemoScene` in `sfmtool.reconstruction`, its row in
+   [python-bindings.md](../python-bindings.md) and its entry in
+   [test_reconstruction_patches_registration.py](../../tests/rust_bindings/reconstruction/test_reconstruction_patches_registration.py),
+   the `reconstruction` submodule's registration test. Tests: the binding's value
+   equals the Rust one's on the same options; `write_workspace` writes a
+   workspace that `sfm inspect` reads; `ProgressCounter` climbs; each error
+   raises the stated exception; then the Python tests listed above, one area
+   at a time, each kept only where the scene makes an assertion possible or
+   exact.
+4. **Load Demo Data.** The menu entry and `--demo` load the scene from a
+   temporary workspace, with the *Number of points* box mapped through
+   `for_point_count`; the lock file, the deletion at exit and the sweep at
+   start; the gui specs ([architecture.md](../gui/architecture.md),
    [mcp-server.md](../gui/mcp-server.md), [saving.md](../gui/saving.md),
-   [user-experience.md](../gui/user-experience.md)) and the `ui_basic` tests
-   follow. This step changes what the viewer shows, so its PR carries
-   screenshots.
-4. **Test migration.** The tests listed above, one area at a time, each kept
-   only where real pixels make an assertion possible or exact.
+   [user-experience.md](../gui/user-experience.md)) and the `ui_basic` and MCP
+   tests follow. Tests: a directory whose lock file no process holds is
+   removed at start, and one whose lock a live process holds is kept. This
+   step changes what the viewer shows, so its PR carries screenshots.
+5. **Test migration.** The Rust tests listed above, one area at a time, each
+   kept only where real pixels make an assertion possible or exact.
