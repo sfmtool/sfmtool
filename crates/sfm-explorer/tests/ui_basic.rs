@@ -2800,6 +2800,70 @@ fn an_endpoint_is_set_from_image_detail_s_menu() {
     );
 }
 
+/// Which way [`wait_for_in_measurement_view`] scrolls Measurement View.
+#[derive(Clone, Copy)]
+enum Toward {
+    /// Toward the top left: the toolbar, the header and endpoint A.
+    Start,
+    /// Toward the bottom right: endpoint B and the result.
+    End,
+}
+
+/// Poll Measurement View's widgets until `found` returns something, and
+/// return that, scrolling its content `toward` one end between polls.
+///
+/// A listing holds only what is drawn in the visible part of the panel, and
+/// how much of the content that is depends on the window's size, which
+/// differs between platforms: the macOS runner's panel is 272×399 pixels,
+/// too short for the toolbar, the header and both endpoint blocks. In a panel
+/// 200 to 265 pixels wide on Windows the content is also wider than the
+/// panel, with the blocks side by side and B's to the right, in the scroll
+/// area egui_dock wraps every tab in. So each step scrolls 10 lines sideways,
+/// which reaches that side in a step or two, and 2 lines (80 points) up or
+/// down, so every part of the content's height is drawn on the way. A scroll
+/// past an end stops there, and the polling goes on until
+/// [`CONTENT_TIMEOUT`].
+fn wait_for_in_measurement_view<T>(
+    viewer: &McpViewer,
+    what: &str,
+    toward: Toward,
+    mut found: impl FnMut(&Value) -> Option<T>,
+) -> T {
+    let panel = json!({ "panel_name": "measurement_view" });
+    let lines = match toward {
+        Toward::Start => [10.0, 2.0],
+        Toward::End => [-10.0, -2.0],
+    };
+    let deadline = Instant::now() + CONTENT_TIMEOUT;
+    loop {
+        let result = viewer.call("get_widgets", panel.clone());
+        let last = if result["isError"] == Value::Bool(true) {
+            result.to_string()
+        } else {
+            let listing = &result["structuredContent"];
+            if let Some(value) = found(listing) {
+                return value;
+            }
+            let size = &listing["target"]["size_px"];
+            let n = |i: usize| size[i].as_i64().expect("a whole number of pixels");
+            viewer.ok(
+                "scroll",
+                json!({
+                    "panel_name": "measurement_view",
+                    "at_px": [n(0) / 2, n(1) / 2],
+                    "delta_lines": lines,
+                }),
+            );
+            listing.to_string()
+        };
+        assert!(
+            Instant::now() < deadline,
+            "{what}; the last get_widgets {panel} replied {last}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// Right-click the middle of Image Detail showing photograph `image` with
 /// `pixel` at the middle of the panel, magnified, and choose `entry` from
 /// the menu, which must be enabled. The photograph's name comes back.
@@ -2895,9 +2959,10 @@ fn a_measurement_is_made_from_image_detail_s_menu_and_committed() {
             .contains(&format!("Put {item} on the bench")),
         "{history}"
     );
-    viewer.wait_for(
-        json!({ "panel_name": "measurement_view" }),
+    wait_for_in_measurement_view(
+        &viewer,
         "Measurement View never drew the new item's unplaced endpoint B",
+        Toward::End,
         |listing| {
             find_widget(
                 listing,
@@ -2934,9 +2999,10 @@ fn a_measurement_is_made_from_image_detail_s_menu_and_committed() {
         "{history}"
     );
 
-    let field = viewer.wait_for(
-        json!({ "panel_name": "measurement_view" }),
+    let field = wait_for_in_measurement_view(
+        &viewer,
         "Measurement View never drew the stated distance field",
+        Toward::Start,
         |listing| find_widget(listing, "text_input", "measurement stated distance").cloned(),
     );
     viewer.ok(
@@ -2950,9 +3016,10 @@ fn a_measurement_is_made_from_image_detail_s_menu_and_committed() {
     );
     assert_eq!(got["stated_distance"], 42.0, "{got}");
 
-    let commit = viewer.wait_for(
-        json!({ "panel_name": "measurement_view" }),
+    let commit = wait_for_in_measurement_view(
+        &viewer,
         "Measurement View never offered Commit",
+        Toward::Start,
         |listing| {
             find_widget(listing, "button", "Commit")
                 .filter(|button| button["enabled"] == true)
