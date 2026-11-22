@@ -146,10 +146,12 @@ redone drops clears the selection. When the move ends, and again every frame
 before the panels draw, `AppState::prune_measurement_selection` clears a
 selection whose row the version on screen does not hold, such as one on a row
 an undone commit had appended. A cleared selection stays cleared when a later
-step brings the row back, except while a measurement item is focused: the
-selected measurement is then the item's origin at the cursor, so an undo or a
-redo that brings the origin's row back selects it again, with no Action Log
-row beside the move's own.
+step brings the row back, except while a measurement item is focused and its
+origin was the selection (or both were none, its row gone) before the move:
+the selected measurement is then the item's origin at the cursor, so an undo
+or a redo that brings the origin's row back selects it again, with no Action
+Log row beside the move's own. A selection the person cleared while the item
+stayed focused stays cleared across an undo or a redo.
 
 ## The readings
 
@@ -388,8 +390,9 @@ refused with the view-only sentence ([bench.md](bench.md) § "A view-only
 bench").
 
 **While a measurement item is focused**, the selected measurement is its origin
-followed to the cursor, or none where its row is gone, and the selected point
-is left alone: selecting a point on the same node keeps the item focused, and
+followed to the cursor, or none where its row is gone or the person cleared the
+selection, and the selected point is left alone: selecting a point on the same
+node keeps the item focused, and
 selecting any other measurement, or anything on another node, unfocuses it
 ([bench.md](bench.md) § "The focused item").
 

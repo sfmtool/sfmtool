@@ -539,3 +539,26 @@ fn undo_and_redo_reselect_a_focused_item_s_origin() {
         Some(MeasurementRef::distance(id, 4))
     );
 }
+
+/// A selection the person cleared while a measurement item stays focused
+/// stays cleared across an undo: the move reselects the origin only where it
+/// was the selection before.
+#[test]
+fn a_cleared_selection_stays_cleared_across_an_undo() {
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 3))
+        .unwrap();
+    state
+        .delete_measurement(MeasurementRef::distance(id, 0))
+        .unwrap();
+    assert_eq!(
+        state.selected_measurement,
+        Some(MeasurementRef::distance(id, 2))
+    );
+    state.clear_selection();
+    assert_eq!(state.focused_measurement_label(id), Some("distance #3"));
+    state.undo(id).unwrap();
+    assert_eq!(state.selected_measurement, None);
+    assert_eq!(state.focused_measurement_label(id), Some("distance #3"));
+}

@@ -2199,6 +2199,13 @@ impl AppState {
         // cursor is leaving, and what it is for is finding that photograph
         // again in the one it lands on.
         let carried = self.selected_image_name(id);
+        // Whether the selected measurement is a focused measurement item's
+        // origin before the move (both `None` where its row is gone counts):
+        // only then does the move keep it so. A selection the person cleared
+        // while the item stayed focused stays cleared.
+        let tracks_origin = self.focused_item().is_some_and(|f| f.node == id)
+            && self.focused_item_kind() == Some(sfmtool_core::bench::ItemKind::Measurement)
+            && self.selected_measurement == self.focused_measurement_origin();
         let step = collector.phase(kind.phase());
         while self.scene[index].history.cursor() != target {
             let node = &mut self.scene[index];
@@ -2233,12 +2240,14 @@ impl AppState {
         // it, and is unfocused otherwise; the move's own row says what
         // happened.
         self.settle_focused_item(id);
-        // While a measurement item is focused, the selected measurement is its
-        // origin at the cursor, or none where that row is gone: an undo that
-        // brings the row back selects it again. Assigned directly, so no row
-        // is written beside the move's own.
+        // While a measurement item is focused and its origin was the
+        // selection, the selected measurement is its origin at the cursor, or
+        // none where that row is gone: an undo that brings the row back
+        // selects it again. Assigned directly, so no row is written beside
+        // the move's own.
         let focused_here = self.focused_item().is_some_and(|f| f.node == id);
-        if focused_here
+        if tracks_origin
+            && focused_here
             && self.focused_item_kind() == Some(sfmtool_core::bench::ItemKind::Measurement)
         {
             let origin = self.focused_measurement_origin();
