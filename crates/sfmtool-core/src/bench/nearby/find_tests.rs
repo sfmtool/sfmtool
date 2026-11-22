@@ -19,7 +19,6 @@ use crate::bench::track_at_pixel::{MatchesClusters, STATUS_KEPT, STATUS_REFERENC
 use crate::bench::BenchError;
 use crate::camera::sampler::RegionPool;
 use crate::progress::Progress;
-use crate::reconstruction::data::ObservationSource;
 use crate::reconstruction::edited::EditedReconstruction;
 
 use super::*;
@@ -437,8 +436,7 @@ fn a_far_field_reading_on_an_existing_point_at_infinity_repeats_the_point() {
     let mut recon = fixture_points(&scene, &[direction, finite]);
     recon.point_set.points[0].w = 0.0;
     recon.point_set.points[0].normal = Vector3::zeros();
-    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut recon.point_set.observations
-    else {
+    let Some(keypoints_xy) = recon.point_set.keypoints_xy.as_mut() else {
         panic!("the fixture is embedded_patches");
     };
     for image in 0..scene.len() {

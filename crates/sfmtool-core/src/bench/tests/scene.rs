@@ -388,8 +388,8 @@ pub(in crate::bench) fn fixture_of(
         keypoints[[k, 0]] = p[0] as f32;
         keypoints[[k, 1]] = p[1] as f32;
     }
+    set.keypoints_xy = Some(keypoints);
     set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: keypoints,
         image_file_hashes: vec![[0u8; 16]; n],
     };
     let halfvec = |axis: Vector3<f64>, half: f64| {
@@ -533,8 +533,8 @@ pub(in crate::bench) fn fixture_points(
             keypoints[[p * n + image, 1]] = px[1] as f32;
         }
     }
+    set.keypoints_xy = Some(keypoints);
     set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: keypoints,
         image_file_hashes: vec![[0u8; 16]; n],
     };
     let patch = plane_patch(points[0]);

@@ -172,9 +172,9 @@ fn scene(points: &[([f64; 4], Vec<Row>)]) -> SfmrReconstruction {
     set.observation_confidence = Some((0..tracks.len() as u8).collect());
     set.tracks = tracks;
     set.observation_counts = counts;
+    set.keypoints_xy = Some(keypoints_xy);
     set.observations = ObservationSource::SiftFiles {
         feature_indexes,
-        keypoints_xy: Some(keypoints_xy),
         feature_tool_hashes: vec![[0u8; 16]; IMAGES],
         sift_content_hashes: vec![[0u8; 16]; IMAGES],
     };

@@ -30,8 +30,7 @@ use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Progress};
 use crate::reconstruction::bulk_point_order::BulkPointOrder;
 use crate::reconstruction::data::{
-    ImageSet, ObservationReading, ObservationReadings, ObservationSource, PointSet,
-    SfmrReconstruction,
+    ImageSet, ObservationReading, ObservationReadings, PointSet, SfmrReconstruction,
 };
 use crate::reconstruction::edited::{reprojection_noise_level, EditedReconstruction, PointRecord};
 use crate::reconstruction::triangulation::points::PointDistance;
@@ -794,7 +793,7 @@ pub(super) fn write_in_place(out: &mut SfmrReconstruction, writes: Vec<(usize, P
         points,
         tracks,
         observation_offsets,
-        observations,
+        keypoints_xy,
         patch_u_halfvec_xyz,
         patch_v_halfvec_xyz,
         patch_bitmaps_y_x_rgba,
@@ -806,10 +805,7 @@ pub(super) fn write_in_place(out: &mut SfmrReconstruction, writes: Vec<(usize, P
         display_only_references,
         ..
     } = &mut out.point_set;
-    let mut keypoints = match observations {
-        ObservationSource::EmbeddedPatches { keypoints_xy, .. } => Some(keypoints_xy),
-        ObservationSource::SiftFiles { keypoints_xy, .. } => keypoints_xy.as_mut(),
-    };
+    let mut keypoints = keypoints_xy.as_mut();
     // The column is shared with the value the run was handed, so it is copied
     // once here, not once per point.
     let mut bitmaps = (!writes.is_empty())

@@ -151,8 +151,8 @@ fn scene(
     let set = &mut recon.point_set;
     set.tracks = tracks;
     set.observation_counts = counts;
+    set.keypoints_xy = Some(keypoints_xy);
     set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy,
         image_file_hashes: vec![[0u8; 16]; images],
     };
     let mut u = Array2::<f32>::zeros((POINTS, 3));
@@ -660,8 +660,7 @@ fn a_point_too_few_observations_place_keeps_where_it_stood() {
     let rows: Vec<usize> = (0..recon.point_set.tracks.len())
         .filter(|&row| recon.point_set.tracks[row].point_index != 4 || row == first)
         .collect();
-    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut recon.point_set.observations
-    else {
+    let Some(keypoints_xy) = recon.point_set.keypoints_xy.as_mut() else {
         panic!("the fixture is embedded_patches");
     };
     *keypoints_xy = keypoints_xy.select(ndarray::Axis(0), &rows);
@@ -1024,8 +1023,7 @@ fn move_point(recon: &mut SfmrReconstruction, p: usize, world: Point3<f64>) {
         .iter()
         .map(|&(_, i)| project(recon, i, world).expect("the moved point is in every frame"))
         .collect();
-    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut recon.point_set.observations
-    else {
+    let Some(keypoints_xy) = recon.point_set.keypoints_xy.as_mut() else {
         unreachable!("the fixture embeds its keypoints");
     };
     for (&(row, _), uv) in rows.iter().zip(&pixels) {
@@ -1385,8 +1383,7 @@ fn backward_sighting(p: usize) -> (SfmrReconstruction, SfmrReconstruction) {
         .iter()
         .position(|o| o.point_index == p as u32 && o.image_index == 3)
         .expect("the fourth image sees the point");
-    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut truth.point_set.observations
-    else {
+    let Some(keypoints_xy) = truth.point_set.keypoints_xy.as_mut() else {
         panic!("the fixture is embedded_patches");
     };
     keypoints_xy[[row, 0]] = u as f32;
@@ -1481,8 +1478,7 @@ fn a_point_past_the_reprojection_bar_becomes_a_direction_and_says_why() {
         .iter()
         .position(|o| o.point_index == 3)
         .expect("point 3 is seen");
-    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut recon.point_set.observations
-    else {
+    let Some(keypoints_xy) = recon.point_set.keypoints_xy.as_mut() else {
         panic!("the fixture is embedded_patches");
     };
     keypoints_xy[[row, 0]] += 8.0;

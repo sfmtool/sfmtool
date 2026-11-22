@@ -254,8 +254,9 @@ impl SfmrReconstruction {
                 display_only_references: self.point_set.display_only_references.clone(),
                 // A 3D similarity leaves the 2D image keypoints, feature
                 // indices, and image identity untouched, so the observation
-                // source passes through for both modes.
+                // source and the keypoints pass through for both modes.
                 observations: self.point_set.observations.clone(),
+                keypoints_xy: self.point_set.keypoints_xy.clone(),
                 tracks: self.point_set.tracks.clone(),
                 observation_counts: self.point_set.observation_counts.clone(),
                 observation_offsets: self.point_set.observation_offsets.clone(),
@@ -521,16 +522,10 @@ impl SfmrReconstruction {
         let new_observations = match &self.point_set.observations {
             ObservationSource::SiftFiles {
                 feature_indexes,
-                keypoints_xy,
                 feature_tool_hashes,
                 sift_content_hashes,
             } => ObservationSource::SiftFiles {
                 feature_indexes: kept_obs.iter().map(|&i| feature_indexes[i]).collect(),
-                // The inline column is an observation row like the
-                // feature index, so it selects by `kept_obs` too.
-                keypoints_xy: keypoints_xy
-                    .as_ref()
-                    .map(|kp| kp.select(ndarray::Axis(0), &kept_obs)),
                 feature_tool_hashes: image_indices
                     .iter()
                     .map(|&i| feature_tool_hashes[i as usize])
@@ -540,17 +535,8 @@ impl SfmrReconstruction {
                     .map(|&i| sift_content_hashes[i as usize])
                     .collect(),
             },
-            ObservationSource::EmbeddedPatches {
-                keypoints_xy,
-                image_file_hashes,
-            } => {
-                let mut new_keypoints = ndarray::Array2::<f32>::zeros((kept_obs.len(), 2));
-                for (new_i, &old_i) in kept_obs.iter().enumerate() {
-                    new_keypoints[[new_i, 0]] = keypoints_xy[[old_i, 0]];
-                    new_keypoints[[new_i, 1]] = keypoints_xy[[old_i, 1]];
-                }
+            ObservationSource::EmbeddedPatches { image_file_hashes } => {
                 ObservationSource::EmbeddedPatches {
-                    keypoints_xy: new_keypoints,
                     image_file_hashes: image_indices
                         .iter()
                         .map(|&i| image_file_hashes[i as usize])
@@ -558,6 +544,13 @@ impl SfmrReconstruction {
                 }
             }
         };
+        // The inline keypoints are an observation row like the feature index,
+        // so they select by `kept_obs` too.
+        let new_keypoints_xy = self
+            .point_set
+            .keypoints_xy
+            .as_ref()
+            .map(|kp| kp.select(ndarray::Axis(0), &kept_obs));
 
         // The feature→point maps are meaningful only for SiftFiles; an
         // embedded_patches reconstruction leaves them empty.
@@ -629,6 +622,7 @@ impl SfmrReconstruction {
                 reference_observations: new_reference_observations,
                 display_only_references: new_display_only_references,
                 observations: new_observations,
+                keypoints_xy: new_keypoints_xy,
                 image_feature_to_point: new_image_feature_to_point,
                 max_track_feature_index: new_max_track_feature_index,
             },
@@ -727,29 +721,28 @@ impl SfmrReconstruction {
             .collect();
 
         // Images are unchanged, so per-image hashes pass through; the
-        // per-observation column is filtered by `kept`.
+        // per-observation columns are filtered by `kept`.
         let new_observations = match &self.point_set.observations {
             ObservationSource::SiftFiles {
                 feature_indexes,
-                keypoints_xy,
                 feature_tool_hashes,
                 sift_content_hashes,
             } => ObservationSource::SiftFiles {
                 feature_indexes: kept.iter().map(|&i| feature_indexes[i]).collect(),
-                keypoints_xy: keypoints_xy
-                    .as_ref()
-                    .map(|kp| kp.select(ndarray::Axis(0), &kept)),
                 feature_tool_hashes: feature_tool_hashes.clone(),
                 sift_content_hashes: sift_content_hashes.clone(),
             },
-            ObservationSource::EmbeddedPatches {
-                keypoints_xy,
-                image_file_hashes,
-            } => ObservationSource::EmbeddedPatches {
-                keypoints_xy: keypoints_xy.select(ndarray::Axis(0), &kept),
-                image_file_hashes: image_file_hashes.clone(),
-            },
+            ObservationSource::EmbeddedPatches { image_file_hashes } => {
+                ObservationSource::EmbeddedPatches {
+                    image_file_hashes: image_file_hashes.clone(),
+                }
+            }
         };
+        let new_keypoints_xy = self
+            .point_set
+            .keypoints_xy
+            .as_ref()
+            .map(|kp| kp.select(ndarray::Axis(0), &kept));
 
         let new_observation_offsets = compute_observation_offsets(&new_observation_counts);
 
@@ -798,6 +791,7 @@ impl SfmrReconstruction {
                     .select_reference_observations(&keep_idx, &kept),
                 display_only_references: self.point_set.select_display_only_references(&keep_idx),
                 observations: new_observations,
+                keypoints_xy: new_keypoints_xy,
                 image_feature_to_point: new_image_feature_to_point,
                 max_track_feature_index: new_max_track_feature_index,
             },

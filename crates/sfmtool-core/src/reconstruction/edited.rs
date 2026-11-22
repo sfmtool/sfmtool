@@ -1096,22 +1096,16 @@ impl EditedReconstruction {
                 point_index: local as u32,
             });
         }
-        match &mut set.observations {
-            ObservationSource::SiftFiles {
-                feature_indexes,
-                keypoints_xy,
-                ..
-            } => {
-                for obs in &record.observations {
-                    feature_indexes.push(obs.feature_index.expect("validated present"));
-                }
-                if let Some(kp) = keypoints_xy {
-                    append_keypoints(kp, &record.observations);
-                }
+        if let ObservationSource::SiftFiles {
+            feature_indexes, ..
+        } = &mut set.observations
+        {
+            for obs in &record.observations {
+                feature_indexes.push(obs.feature_index.expect("validated present"));
             }
-            ObservationSource::EmbeddedPatches { keypoints_xy, .. } => {
-                append_keypoints(keypoints_xy, &record.observations);
-            }
+        }
+        if let Some(kp) = &mut set.keypoints_xy {
+            append_keypoints(kp, &record.observations);
         }
         if let Some(c) = &mut set.observation_confidence {
             for obs in &record.observations {
@@ -1510,6 +1504,7 @@ impl EditedReconstruction {
             .collect();
 
         let observations = self.merge_observation_source(&obs_rows);
+        let keypoints_xy = self.merge_keypoints(&obs_rows);
         let observation_confidence = base.observation_confidence.as_ref().map(|c| {
             obs_rows
                 .iter()
@@ -1589,6 +1584,7 @@ impl EditedReconstruction {
             observation_counts,
             tracks,
             observations,
+            keypoints_xy,
             observation_confidence,
             observation_readings,
             reference_observations,
@@ -1644,31 +1640,34 @@ impl EditedReconstruction {
         .with_derived_fields(self.base.image_count())
     }
 
-    /// The merged observation source: the per-observation columns selected in
+    /// The merged `(M, 2)` keypoint column, its rows selected in `obs_rows`
+    /// order, where the base carries one.
+    fn merge_keypoints(&self, obs_rows: &[(bool, usize)]) -> Option<Array2<f32>> {
+        let b = self.base.point_set.keypoints_xy.as_ref()?;
+        let a = self.added.keypoints_xy.as_ref().expect("column parity");
+        let mut out = Array2::<f32>::zeros((obs_rows.len(), 2));
+        for (i, &(is_base, row)) in obs_rows.iter().enumerate() {
+            let src = if is_base { b } else { a };
+            out[[i, 0]] = src[[row, 0]];
+            out[[i, 1]] = src[[row, 1]];
+        }
+        Some(out)
+    }
+
+    /// The merged observation source: the feature indexes selected in
     /// `obs_rows` order, the per-image hashes taken from the base unchanged
     /// (no overlay edit touches an image).
     fn merge_observation_source(&self, obs_rows: &[(bool, usize)]) -> ObservationSource {
         let base = &self.base.point_set;
-        let merge_keypoints = |b: &Array2<f32>, a: &Array2<f32>| {
-            let mut out = Array2::<f32>::zeros((obs_rows.len(), 2));
-            for (i, &(is_base, row)) in obs_rows.iter().enumerate() {
-                let src = if is_base { b } else { a };
-                out[[i, 0]] = src[[row, 0]];
-                out[[i, 1]] = src[[row, 1]];
-            }
-            out
-        };
         match (&base.observations, &self.added.observations) {
             (
                 ObservationSource::SiftFiles {
                     feature_indexes,
-                    keypoints_xy,
                     feature_tool_hashes,
                     sift_content_hashes,
                 },
                 ObservationSource::SiftFiles {
                     feature_indexes: added_features,
-                    keypoints_xy: added_keypoints,
                     ..
                 },
             ) => ObservationSource::SiftFiles {
@@ -1682,23 +1681,13 @@ impl EditedReconstruction {
                         }
                     })
                     .collect(),
-                keypoints_xy: keypoints_xy
-                    .as_ref()
-                    .map(|b| merge_keypoints(b, added_keypoints.as_ref().expect("column parity"))),
                 feature_tool_hashes: feature_tool_hashes.clone(),
                 sift_content_hashes: sift_content_hashes.clone(),
             },
             (
-                ObservationSource::EmbeddedPatches {
-                    keypoints_xy,
-                    image_file_hashes,
-                },
-                ObservationSource::EmbeddedPatches {
-                    keypoints_xy: added_keypoints,
-                    ..
-                },
+                ObservationSource::EmbeddedPatches { image_file_hashes },
+                ObservationSource::EmbeddedPatches { .. },
             ) => ObservationSource::EmbeddedPatches {
-                keypoints_xy: merge_keypoints(keypoints_xy, added_keypoints),
                 image_file_hashes: image_file_hashes.clone(),
             },
             // `new` builds the addition set from the base's variant and nothing
@@ -1909,28 +1898,29 @@ fn push_halfvec(arr: &mut Array2<f32>, v: [f32; 3]) {
 fn empty_like(base: &PointSet, image_count: usize) -> PointSet {
     let observations = match &base.observations {
         ObservationSource::SiftFiles {
-            keypoints_xy,
             feature_tool_hashes,
             sift_content_hashes,
             ..
         } => ObservationSource::SiftFiles {
             feature_indexes: Vec::new(),
-            keypoints_xy: keypoints_xy.as_ref().map(|_| Array2::<f32>::zeros((0, 2))),
             feature_tool_hashes: feature_tool_hashes.clone(),
             sift_content_hashes: sift_content_hashes.clone(),
         },
-        ObservationSource::EmbeddedPatches {
-            image_file_hashes, ..
-        } => ObservationSource::EmbeddedPatches {
-            keypoints_xy: Array2::<f32>::zeros((0, 2)),
-            image_file_hashes: image_file_hashes.clone(),
-        },
+        ObservationSource::EmbeddedPatches { image_file_hashes } => {
+            ObservationSource::EmbeddedPatches {
+                image_file_hashes: image_file_hashes.clone(),
+            }
+        }
     };
     PointSet {
         points: Vec::new(),
         tracks: Vec::new(),
         observation_counts: Vec::new(),
         observations,
+        keypoints_xy: base
+            .keypoints_xy
+            .as_ref()
+            .map(|_| Array2::<f32>::zeros((0, 2))),
         patch_u_halfvec_xyz: base
             .patch_u_halfvec_xyz
             .as_ref()

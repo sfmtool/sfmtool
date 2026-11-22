@@ -152,8 +152,8 @@ fn test_merge_rejects_embedded_patches() {
     let mut recon = SfmrReconstruction::demo(2);
     let n_obs = recon.point_set.tracks.len();
     let n_img = recon.image_set.images.len();
+    recon.point_set.keypoints_xy = Some(ndarray::Array2::zeros((n_obs, 2)));
     recon.point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: ndarray::Array2::zeros((n_obs, 2)),
         image_file_hashes: vec![[0u8; 16]; n_img],
     };
 

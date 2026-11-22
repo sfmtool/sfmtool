@@ -163,8 +163,8 @@ fn inline_keypoints_are_observed_without_reading_a_file() {
         keypoints_xy[[row, 0]] = cx as f32;
         keypoints_xy[[row, 1]] = (cy + row as f64) as f32;
     }
+    recon.point_set.keypoints_xy = Some(keypoints_xy);
     recon.point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy,
         image_file_hashes: vec![[0u8; 16]; recon.image_set.images.len()],
     };
     let reach = outermost_keypoints(&recon, &[0], false);

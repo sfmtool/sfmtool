@@ -501,10 +501,8 @@ pub(crate) fn insert_corners_only(
 pub(crate) fn without_inline_keypoints(
     mut recon: sfmtool_core::SfmrReconstruction,
 ) -> sfmtool_core::SfmrReconstruction {
-    if let sfmtool_core::ObservationSource::SiftFiles { keypoints_xy, .. } =
-        &mut recon.point_set.observations
-    {
-        *keypoints_xy = None;
+    if let sfmtool_core::ObservationSource::SiftFiles { .. } = &recon.point_set.observations {
+        recon.point_set.keypoints_xy = None;
     }
     recon
 }

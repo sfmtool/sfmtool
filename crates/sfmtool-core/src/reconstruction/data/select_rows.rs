@@ -63,31 +63,30 @@ impl SfmrReconstruction {
         let observations = match &set.observations {
             ObservationSource::SiftFiles {
                 feature_indexes,
-                keypoints_xy,
                 feature_tool_hashes,
                 sift_content_hashes,
             } => ObservationSource::SiftFiles {
                 feature_indexes: kept_obs.iter().map(|&row| feature_indexes[row]).collect(),
-                keypoints_xy: keypoints_xy
-                    .as_ref()
-                    .map(|kp| kp.select(Axis(0), &kept_obs)),
                 feature_tool_hashes: feature_tool_hashes.clone(),
                 sift_content_hashes: sift_content_hashes.clone(),
             },
-            ObservationSource::EmbeddedPatches {
-                keypoints_xy,
-                image_file_hashes,
-            } => ObservationSource::EmbeddedPatches {
-                keypoints_xy: keypoints_xy.select(Axis(0), &kept_obs),
-                image_file_hashes: image_file_hashes.clone(),
-            },
+            ObservationSource::EmbeddedPatches { image_file_hashes } => {
+                ObservationSource::EmbeddedPatches {
+                    image_file_hashes: image_file_hashes.clone(),
+                }
+            }
         };
+        let keypoints_xy = set
+            .keypoints_xy
+            .as_ref()
+            .map(|kp| kp.select(Axis(0), &kept_obs));
 
         let mut point_set = PointSet {
             points,
             tracks,
             observation_counts,
             observations,
+            keypoints_xy,
             patch_u_halfvec_xyz: set
                 .patch_u_halfvec_xyz
                 .as_ref()

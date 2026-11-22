@@ -253,8 +253,8 @@ fn an_embedded_patches_value_without_sift_files_reads_its_photographs() {
         .enumerate()
         .map(|(i, name)| write_photograph(dir.path(), name, &photograph(40, 30, i as u32)))
         .collect();
+    recon.point_set.keypoints_xy = Some(Array2::zeros((recon.point_set.tracks.len(), 2)));
     recon.point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: Array2::zeros((recon.point_set.tracks.len(), 2)),
         image_file_hashes: hashes,
     };
     let gathered = recon.fill_image_readings(&Progress::none()).unwrap();
@@ -482,8 +482,8 @@ fn bounded_decodes_give_the_rows_of_each_photograph() {
         .enumerate()
         .map(|(i, name)| write_photograph(dir.path(), name, &photograph(40, 30, i as u32)))
         .collect();
+    recon.point_set.keypoints_xy = Some(Array2::zeros((recon.point_set.tracks.len(), 2)));
     recon.point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: Array2::zeros((recon.point_set.tracks.len(), 2)),
         image_file_hashes: hashes,
     };
     let expected: Vec<ImageReadings> = names

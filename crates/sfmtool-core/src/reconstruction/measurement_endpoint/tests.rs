@@ -141,8 +141,8 @@ fn scene(points: &[Pt]) -> SfmrReconstruction {
     let set = &mut recon.point_set;
     set.tracks = tracks;
     set.observation_counts = counts;
+    set.keypoints_xy = Some(keypoints_xy);
     set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy,
         image_file_hashes: vec![[0u8; 16]; IMAGES],
     };
     set.patch_u_halfvec_xyz = Some(u);
@@ -261,9 +261,7 @@ fn the_pixel_maps_to_the_texel_its_render_shows() {
     let mut recon = scene(&[pt(0.1, -0.2, 0.0, 0.25)]);
     // Move image 0's keypoint 3 px right and 2 px down of the projection, so
     // the square slides off the point.
-    if let ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
-        &mut recon.point_set.observations
-    {
+    if let Some(keypoints_xy) = recon.point_set.keypoints_xy.as_mut() {
         keypoints_xy[[0, 0]] += 3.0;
         keypoints_xy[[0, 1]] += 2.0;
     }

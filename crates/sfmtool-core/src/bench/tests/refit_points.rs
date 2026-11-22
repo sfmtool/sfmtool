@@ -23,8 +23,7 @@ use crate::progress::Event;
 use crate::reconstruction::bulk_point_order::tests::assert_the_point_order_changes_nothing;
 use crate::reconstruction::bulk_point_order::BulkPointOrder;
 use crate::reconstruction::data::{
-    ObservationReading, ObservationReadingOptions, ObservationReadings, ObservationSource,
-    PointConstraintColumns,
+    ObservationReading, ObservationReadingOptions, ObservationReadings, PointConstraintColumns,
 };
 use crate::reconstruction::triangulation::{
     retriangulate_points, triangulate_points_from_observations, ObservationSet, PointDistance,
@@ -125,8 +124,7 @@ fn far_bearing_with_baseline(scene: &Scene) -> SfmrReconstruction {
         BITMAP_R,
     );
     let pixel = scene.project(FAR_OFFSET_IMAGE as usize, far_world());
-    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut recon.point_set.observations
-    else {
+    let Some(keypoints_xy) = recon.point_set.keypoints_xy.as_mut() else {
         panic!("the fixture is embedded_patches");
     };
     let row = FAR_OFFSET_IMAGE as usize;
@@ -300,9 +298,7 @@ fn keypoints_nudged_off_their_content_come_back_on_the_ground_truth() {
     nudged.point_set.reference_observations = Some(vec![REFERENCE as i32; stored.point_count()]);
     let mut moved_rows = Vec::new();
     {
-        let ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
-            &mut nudged.point_set.observations
-        else {
+        let Some(keypoints_xy) = nudged.point_set.keypoints_xy.as_mut() else {
             panic!("the ground truth is embedded_patches");
         };
         for p in 0..stored.point_count() {
@@ -728,7 +724,7 @@ fn a_track_stored_out_of_image_order_is_written_back_at_its_own_rows() {
         if let Some(r) = set.observation_readings.as_mut() {
             r.rows[..n].reverse();
         }
-        let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut set.observations else {
+        let Some(keypoints_xy) = set.keypoints_xy.as_mut() else {
             panic!("the fixture is embedded_patches");
         };
         for k in 0..n / 2 {

@@ -208,9 +208,7 @@ fn every_finite_point_is_turned_onto_the_plane_as_the_bench_turns_and_commits_it
 fn nudged(recon: &SfmrReconstruction, nudge: [f32; 2]) -> SfmrReconstruction {
     let mut out = recon.clone();
     let offsets = out.point_set.observation_offsets.clone();
-    let crate::reconstruction::data::ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
-        &mut out.point_set.observations
-    else {
+    let Some(keypoints_xy) = out.point_set.keypoints_xy.as_mut() else {
         panic!("embedded_patches");
     };
     for p in 0..recon.point_count() {
@@ -340,9 +338,7 @@ fn a_point_with_one_observation_is_refused_and_left_as_it_was() {
         .collect();
     let set = &mut recon.point_set;
     set.tracks = keep.iter().map(|&row| set.tracks[row]).collect();
-    let crate::reconstruction::data::ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
-        &mut set.observations
-    else {
+    let Some(keypoints_xy) = set.keypoints_xy.as_mut() else {
         panic!("embedded_patches");
     };
     *keypoints_xy = keypoints_xy.select(ndarray::Axis(0), &keep);

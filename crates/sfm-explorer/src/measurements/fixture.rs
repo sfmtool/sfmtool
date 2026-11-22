@@ -167,8 +167,8 @@ pub(crate) fn measured_reconstruction(world_space_unit: Option<&str>) -> SfmrRec
     let set = &mut recon.point_set;
     set.tracks = tracks;
     set.observation_counts = counts;
+    set.keypoints_xy = Some(keypoints_xy);
     set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy,
         image_file_hashes: vec![[0u8; 16]; IMAGES],
     };
     set.patch_u_halfvec_xyz = Some(u);

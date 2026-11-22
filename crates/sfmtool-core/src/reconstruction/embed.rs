@@ -109,12 +109,11 @@ impl SfmrReconstruction {
             ));
         }
 
-        let (feature_indexes, inline_keypoints) = match &self.point_set.observations {
+        let inline_keypoints = self.point_set.keypoints_xy.as_ref();
+        let feature_indexes = match &self.point_set.observations {
             ObservationSource::SiftFiles {
-                feature_indexes,
-                keypoints_xy,
-                ..
-            } => (feature_indexes, keypoints_xy.as_ref()),
+                feature_indexes, ..
+            } => feature_indexes,
             // Unreachable: the embedded case returned above.
             ObservationSource::EmbeddedPatches { .. } => unreachable!(),
         };
@@ -237,10 +236,8 @@ impl SfmrReconstruction {
         };
 
         let mut out = self.clone_for_edit();
-        out.point_set.observations = ObservationSource::EmbeddedPatches {
-            keypoints_xy,
-            image_file_hashes,
-        };
+        out.point_set.observations = ObservationSource::EmbeddedPatches { image_file_hashes };
+        out.point_set.keypoints_xy = Some(keypoints_xy);
         out.metadata.feature_source = out.point_set.observations.name().to_string();
         out.point_set.patch_u_halfvec_xyz = Some(patch_u);
         out.point_set.patch_v_halfvec_xyz = Some(patch_v);

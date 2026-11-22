@@ -16,35 +16,26 @@ use sfmtool_sfmr_format::{
 use super::PointConstraintColumns;
 use super::{compute_observation_offsets, count_points_at_infinity, Point3D, TrackObservation};
 
-/// The observation-source-specific columns of a reconstruction, selected once at
-/// the array level (the file is wholly one mode — see "Observation source" in
+/// How a reconstruction's observations are identified, selected once at the
+/// array level (the file is wholly one mode — see "Observation source" in
 /// `specs/formats/sfmr-file-format.md`). Each variant owns exactly its mode's
-/// per-observation and per-image data, so neither carries placeholders for the
-/// other.
+/// identifying columns, so neither carries placeholders for the other. The
+/// pixel each observation sits at is not here: it is
+/// [`PointSet::keypoints_xy`], a column of the point set in either mode.
 #[derive(Debug, Clone)]
 pub enum ObservationSource {
     /// Observations reference external `.sift` features.
     SiftFiles {
         /// `(M,)` feature index per observation, parallel to `tracks`.
         feature_indexes: Vec<u32>,
-        /// Optional `(M, 2)` inline `(u, v)` per observation, parallel to
-        /// `tracks`. When present it is this reconstruction's own statement of
-        /// where each observation sits, and every consumer that resolves an
-        /// observation's pixel reads it in preference to the `.sift` feature the
-        /// matching `feature_indexes` entry points at -- a producer may have
-        /// refined the coordinate past the original detection. The `.sift` files
-        /// stay the source of the feature itself (descriptor, scale, affine
-        /// shape).
-        keypoints_xy: Option<Array2<f32>>,
         /// XXH128 of the feature-extraction tool config, per image.
         feature_tool_hashes: Vec<[u8; 16]>,
         /// XXH128 of the `.sift` file content, per image.
         sift_content_hashes: Vec<[u8; 16]>,
     },
-    /// Per-observation keypoints stored inline (no `.sift` companion).
+    /// Observations are identified by their images alone: each one's pixel is
+    /// stored inline in [`PointSet::keypoints_xy`], with no `.sift` companion.
     EmbeddedPatches {
-        /// `(M, 2)` sub-pixel `(u, v)` per observation, parallel to `tracks`.
-        keypoints_xy: Array2<f32>,
         /// XXH128 of the source image bytes, per image.
         image_file_hashes: Vec<[u8; 16]>,
     },
@@ -84,9 +75,9 @@ pub fn patch_bitmap_is_stored(bitmap: ndarray::ArrayView3<'_, u8>) -> bool {
 /// a caller supplies whole (`from_data` or `clone_with_changes` from Python, as
 /// the COLMAP import does) may hold a point's rows in another order, and the
 /// `.sfmr` writer sorts them on save. Every per-observation column
-/// (`observations`' pixel column, `observation_confidence`) is parallel to
-/// `tracks`; every per-point column (`normal_confidence`, the patch frame and
-/// bitmaps, `point_constraints`) is parallel to `points`.
+/// (`keypoints_xy`, `observations`' feature indexes, `observation_confidence`)
+/// is parallel to `tracks`; every per-point column (`normal_confidence`, the
+/// patch frame and bitmaps, `point_constraints`) is parallel to `points`.
 ///
 /// The derived fields at the bottom are a function of the rest and of the image
 /// count, and [`Self::rebuild_derived_fields`] is what restores them after any
@@ -99,15 +90,35 @@ pub struct PointSet {
     pub tracks: Vec<TrackObservation>,
     /// Number of observations per 3D point.
     pub observation_counts: Vec<u32>,
-    /// The observation-source-specific columns (per-observation feature index or
-    /// keypoint, per-image hashes), selected by variant. The feature→point maps
-    /// below are meaningful only for [`ObservationSource::SiftFiles`].
+    /// How each observation is identified (per-observation feature index and
+    /// per-image `.sift` hashes, or per-image source-image hashes), selected by
+    /// variant. The feature→point maps below are meaningful only for
+    /// [`ObservationSource::SiftFiles`].
     ///
-    /// The per-image hash vectors this carries are the one thing on the point
-    /// side that is measured per image; they travel with the variant that
-    /// selects them rather than splitting a second discriminator off into the
-    /// image set.
+    /// The per-image hash vectors this carries are measured per image, and
+    /// still sit on the point side: they travel with the variant that selects
+    /// them rather than splitting a second discriminator off into the image
+    /// set, so a pass that drops or reindexes images rewrites them here.
     pub observations: ObservationSource,
+    /// `(M, 2)` sub-pixel `(u, v)` per observation, parallel to `tracks`: where
+    /// each observation sits in its image.
+    ///
+    /// For `embedded_patches` it is the observation coordinate itself, and is
+    /// always `Some`. For `sift_files` it is this reconstruction's own
+    /// statement of where each observation sits, and every consumer that
+    /// resolves an observation's pixel reads it in preference to the `.sift`
+    /// feature the matching `feature_indexes` entry points at -- a producer may
+    /// have refined the coordinate past the original detection; the `.sift`
+    /// files stay the source of the feature itself (descriptor, scale, affine
+    /// shape). It is `Some` for every value read from a version 17 file, and
+    /// `None` only in a `sift_files` value read from a version 16 file written
+    /// without the column whose `.sift` files could not supply it
+    /// ([`SfmrReconstruction::fill_keypoints_from_sift`]), or one a caller
+    /// built without it; a save of such a value reads it from the `.sift`
+    /// files or refuses.
+    ///
+    /// [`SfmrReconstruction::fill_keypoints_from_sift`]: super::SfmrReconstruction::fill_keypoints_from_sift
+    pub keypoints_xy: Option<Array2<f32>>,
     /// Optional per-point oriented-patch frame (parallel to `points`), persisted
     /// in `points3d/`. `patch_u_halfvec_xyz` and
     /// `patch_v_halfvec_xyz` are the in-plane half-extent vectors (both present
@@ -293,10 +304,7 @@ impl PointSet {
     /// read from a version 16 file written without it whose `.sift` files
     /// could not supply it.
     pub fn keypoints_xy(&self) -> Option<&Array2<f32>> {
-        match &self.observations {
-            ObservationSource::EmbeddedPatches { keypoints_xy, .. } => Some(keypoints_xy),
-            ObservationSource::SiftFiles { keypoints_xy, .. } => keypoints_xy.as_ref(),
-        }
+        self.keypoints_xy.as_ref()
     }
 
     /// Per-image feature-tool hashes, or `None` for `embedded_patches`.
@@ -672,11 +680,12 @@ impl PointSet {
     }
 
     /// Check that every track row names an image of the image set and that the
-    /// observation-source columns are parallel to the structures they
-    /// annotate: per-observation columns (`feature_indexes` / `keypoints_xy`)
-    /// must match the track count, `keypoints_xy` with two columns, and
-    /// per-image columns (the hashes) must match
-    /// `image_count`. Returns an error message describing the first mismatch.
+    /// per-observation and observation-source columns are parallel to the
+    /// structures they annotate: per-observation columns (`feature_indexes`,
+    /// `keypoints_xy`) must match the track count, `keypoints_xy` with two
+    /// columns and present for `embedded_patches`, and per-image columns (the
+    /// hashes) must match `image_count`. Returns an error message describing
+    /// the first mismatch.
     ///
     /// `from_sfmr_data` builds these in lockstep, but the in-memory editors
     /// (notably `clone_with_changes`, which can replace tracks and columns
@@ -720,10 +729,12 @@ impl PointSet {
             }
             Ok(())
         };
+        if let Some(keypoints_xy) = &self.keypoints_xy {
+            check_keypoints(keypoints_xy)?;
+        }
         match &self.observations {
             ObservationSource::SiftFiles {
                 feature_indexes,
-                keypoints_xy,
                 feature_tool_hashes,
                 sift_content_hashes,
             } => {
@@ -732,9 +743,6 @@ impl PointSet {
                         "feature_indexes length ({}) must match observation count ({n_obs})",
                         feature_indexes.len()
                     ));
-                }
-                if let Some(keypoints_xy) = keypoints_xy {
-                    check_keypoints(keypoints_xy)?;
                 }
                 if feature_tool_hashes.len() != n_img {
                     return Err(format!(
@@ -749,11 +757,14 @@ impl PointSet {
                     ));
                 }
             }
-            ObservationSource::EmbeddedPatches {
-                keypoints_xy,
-                image_file_hashes,
-            } => {
-                check_keypoints(keypoints_xy)?;
+            ObservationSource::EmbeddedPatches { image_file_hashes } => {
+                if self.keypoints_xy.is_none() {
+                    return Err(
+                        "an embedded_patches reconstruction must carry keypoints_xy, \
+                         the pixel of each of its observations"
+                            .to_string(),
+                    );
+                }
                 if image_file_hashes.len() != n_img {
                     return Err(format!(
                         "image_file_hashes length ({}) must match image count ({n_img})",

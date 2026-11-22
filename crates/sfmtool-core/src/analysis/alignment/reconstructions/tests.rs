@@ -72,8 +72,8 @@ fn grid_keypoints(recon: &SfmrReconstruction) -> ndarray::Array2<f32> {
 /// has to match by keypoint position.
 fn embedded(recon: &SfmrReconstruction) -> SfmrReconstruction {
     let mut out = recon.clone();
+    out.point_set.keypoints_xy = Some(grid_keypoints(recon));
     out.point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: grid_keypoints(recon),
         image_file_hashes: vec![[0u8; 16]; out.image_set.images.len()],
     };
     out
@@ -83,9 +83,7 @@ fn embedded(recon: &SfmrReconstruction) -> SfmrReconstruction {
 fn with_inline_keypoints(recon: &SfmrReconstruction) -> SfmrReconstruction {
     let mut out = recon.clone();
     let xy = grid_keypoints(recon);
-    if let ObservationSource::SiftFiles { keypoints_xy, .. } = &mut out.point_set.observations {
-        *keypoints_xy = Some(xy);
-    }
+    out.point_set.keypoints_xy = Some(xy);
     out
 }
 
@@ -286,7 +284,7 @@ fn the_infinity_points_are_left_out_of_a_fit_by_keypoint_position() {
 fn keypoints_that_match_nothing_are_reported_by_keypoint_position() {
     let a = embedded(&SfmrReconstruction::demo(64));
     let mut b = transformed(&a, &known_similarity());
-    if let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut b.point_set.observations {
+    if let Some(keypoints_xy) = b.point_set.keypoints_xy.as_mut() {
         keypoints_xy.mapv_inplace(|v| v + 1000.0);
     }
 

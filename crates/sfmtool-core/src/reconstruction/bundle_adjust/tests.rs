@@ -149,8 +149,8 @@ fn truth_through(
     let set = &mut recon.point_set;
     set.tracks = tracks;
     set.observation_counts = counts;
+    set.keypoints_xy = Some(keypoints_xy);
     set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy,
         image_file_hashes: vec![[0u8; 16]; IMAGES],
     };
     let mut u = Array2::<f32>::zeros((POINTS, 3));
@@ -228,8 +228,7 @@ fn with_one_sighting(mut recon: SfmrReconstruction, point: u32) -> SfmrReconstru
         .filter(|(_, &k)| k)
         .map(|(row, _)| row)
         .collect();
-    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut recon.point_set.observations
-    else {
+    let Some(keypoints_xy) = recon.point_set.keypoints_xy.as_mut() else {
         panic!("the fixture is embedded_patches");
     };
     *keypoints_xy = keypoints_xy.select(ndarray::Axis(0), &rows);
@@ -542,9 +541,9 @@ fn assert_frame_follows_point_in_depth(source: SfmrReconstruction) {
 fn a_value_with_no_keypoints_is_refused() {
     let mut source = perturbed();
     let observations = source.point_set.tracks.len();
+    source.point_set.keypoints_xy = None;
     source.point_set.observations = ObservationSource::SiftFiles {
         feature_indexes: (0..observations as u32).collect(),
-        keypoints_xy: None,
         feature_tool_hashes: vec![[0u8; 16]; IMAGES],
         sift_content_hashes: vec![[0u8; 16]; IMAGES],
     };
@@ -837,9 +836,7 @@ fn an_unbounded_trim_keeps_an_observation_the_default_trims() {
         .iter()
         .position(|o| o.point_index == 7)
         .expect("point 7 has a track");
-    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
-        &mut source.point_set.observations
-    else {
+    let Some(keypoints_xy) = source.point_set.keypoints_xy.as_mut() else {
         panic!("the fixture is embedded_patches");
     };
     keypoints_xy[[row, 0]] += 30.0;
@@ -868,9 +865,7 @@ fn a_solve_that_exits_degenerate_is_refused_rather_than_emptying_the_value() {
     // Nothing agrees with anything: every observation is trimmed, the round
     // exits under `min_obs`, and the state passes through with every residual
     // infinite.
-    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
-        &mut source.point_set.observations
-    else {
+    let Some(keypoints_xy) = source.point_set.keypoints_xy.as_mut() else {
         panic!("the fixture is embedded_patches");
     };
     for row in 0..keypoints_xy.nrows() {

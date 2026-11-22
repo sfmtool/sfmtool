@@ -143,7 +143,8 @@ struct DeferredChanges {
     /// has settled it.
     camera_indexes: Option<Vec<u32>>,
     // Observation-source columns, recombined into the `ObservationSource`
-    // enum after the image count is settled.
+    // enum after the image count is settled, and the keypoint column whose
+    // presence that mode decides.
     feature_tool_hashes: Option<Vec<[u8; 16]>>,
     sift_content_hashes: Option<Vec<[u8; 16]>>,
     image_file_hashes: Option<Vec<[u8; 16]>>,
@@ -1689,14 +1690,12 @@ fn carry_sift_keypoints(source: &SfmrReconstruction, recon: &mut SfmrReconstruct
     use sfmtool_core::ObservationSource;
 
     let ObservationSource::SiftFiles {
-        feature_indexes,
-        keypoints_xy,
-        ..
-    } = &mut recon.point_set.observations
+        feature_indexes, ..
+    } = &recon.point_set.observations
     else {
         return;
     };
-    *keypoints_xy = None;
+    recon.point_set.keypoints_xy = None;
 
     let mut known = std::collections::HashMap::new();
     if let (Some(old_xy), Some(old_features)) = (source.keypoints_xy(), source.feature_indexes()) {
@@ -1735,9 +1734,7 @@ fn carry_sift_keypoints(source: &SfmrReconstruction, recon: &mut SfmrReconstruct
             column[[row, 1]] = *y;
         }
     }
-    if let ObservationSource::SiftFiles { keypoints_xy, .. } = &mut recon.point_set.observations {
-        *keypoints_xy = Some(column);
-    }
+    recon.point_set.keypoints_xy = Some(column);
 }
 
 /// Settle the per-point constraint triple once the point count is final.
@@ -1813,9 +1810,9 @@ fn apply_point_constraints(
 }
 
 /// Recombine the (optionally updated) observation-source columns into the
-/// `ObservationSource` enum, falling back to the reconstruction's current values
-/// for any column not supplied. The target mode is `feature_source` if given,
-/// else the current one.
+/// `ObservationSource` enum, and set the keypoint column beside it, falling
+/// back to the reconstruction's current values for any column not supplied.
+/// The target mode is `feature_source` if given, else the current one.
 fn rebuild_observation_source(
     recon: &mut SfmrReconstruction,
     new_feature_source: Option<String>,
@@ -1848,7 +1845,7 @@ fn rebuild_observation_source(
 
     let target = new_feature_source.unwrap_or_else(|| recon.feature_source().to_string());
 
-    let observations = match target.as_str() {
+    let (observations, keypoints_xy) = match target.as_str() {
         "sift_files" => {
             let feature_indexes = recon.feature_indexes().map(|f| f.to_vec()).ok_or_else(|| {
                 pyo3::exceptions::PyValueError::new_err(
@@ -1876,12 +1873,14 @@ fn rebuild_observation_source(
             // otherwise whatever the source carried rides along. Its row count is checked by the caller's final
             // `validate_observation_columns`.
             let keypoints_xy = new_keypoints_xy.or_else(|| recon.keypoints_xy().cloned());
-            ObservationSource::SiftFiles {
-                feature_indexes,
+            (
+                ObservationSource::SiftFiles {
+                    feature_indexes,
+                    feature_tool_hashes,
+                    sift_content_hashes,
+                },
                 keypoints_xy,
-                feature_tool_hashes,
-                sift_content_hashes,
-            }
+            )
         }
         "embedded_patches" => {
             let keypoints_xy = new_keypoints_xy
@@ -1899,10 +1898,10 @@ fn rebuild_observation_source(
                     )
                 })?;
             require_img_len("image_file_hashes", image_file_hashes.len())?;
-            ObservationSource::EmbeddedPatches {
-                keypoints_xy,
-                image_file_hashes,
-            }
+            (
+                ObservationSource::EmbeddedPatches { image_file_hashes },
+                Some(keypoints_xy),
+            )
         }
         other => {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -1913,5 +1912,6 @@ fn rebuild_observation_source(
 
     recon.metadata.feature_source = target;
     recon.point_set.observations = observations;
+    recon.point_set.keypoints_xy = keypoints_xy;
     Ok(())
 }

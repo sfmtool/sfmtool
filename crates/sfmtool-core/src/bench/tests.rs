@@ -7918,10 +7918,7 @@ fn a_fit_classifies_at_the_reconstructions_measured_noise() {
     // The fixture's stored keypoints moved a third of a pixel off the exact
     // projections, alternately, so the level it measures is a third of a pixel.
     let mut recon = fixture_with_columns(&scene, WORLD, BITMAP_R);
-    if let crate::reconstruction::data::ObservationSource::EmbeddedPatches {
-        keypoints_xy, ..
-    } = &mut recon.point_set.observations
-    {
+    if let Some(keypoints_xy) = recon.point_set.keypoints_xy.as_mut() {
         for (row, mut xy) in keypoints_xy.rows_mut().into_iter().enumerate() {
             let sign = if row % 2 == 0 { 1.0 } else { -1.0 };
             xy[0] += sign / 3.0;

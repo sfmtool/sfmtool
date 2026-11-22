@@ -59,8 +59,8 @@ fn an_embedded_patches_reconstruction_gives_its_stored_column() {
     let mut recon = SfmrReconstruction::demo(12);
     let n = recon.image_set.images.len();
     let hashes: Vec<[u8; 16]> = (0..n).map(|i| [i as u8 + 1; 16]).collect();
+    recon.point_set.keypoints_xy = Some(ndarray::Array2::zeros((recon.point_set.tracks.len(), 2)));
     recon.point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: ndarray::Array2::zeros((recon.point_set.tracks.len(), 2)),
         image_file_hashes: hashes.clone(),
     };
     let found = recon.find_image_file_hashes(&Progress::none()).unwrap();

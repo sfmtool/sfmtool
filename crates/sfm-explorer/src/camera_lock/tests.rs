@@ -42,8 +42,8 @@ fn with_projected_keypoints(mut recon: SfmrReconstruction) -> SfmrReconstruction
             keypoints[[row, 1]] = v as f32;
         }
     }
+    recon.point_set.keypoints_xy = Some(keypoints);
     recon.point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: keypoints,
         image_file_hashes: vec![[0u8; 16]; recon.image_set.images.len()],
     };
     recon.metadata.feature_source =
