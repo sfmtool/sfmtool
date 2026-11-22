@@ -1919,12 +1919,12 @@ impl AppState {
                 return;
             }
         }
-        match self.focused_item_kind() {
-            Some(sfmtool_core::bench::ItemKind::Measurement) => {
-                self.show_panel(crate::dock::Tab::MeasurementView)
-            }
-            _ => self.show_panel(crate::dock::Tab::TrackView),
-        }
+        // Beside the Scene tree, never over it (G2, G9).
+        let tab = match self.focused_item_kind() {
+            Some(sfmtool_core::bench::ItemKind::Measurement) => crate::dock::Tab::MeasurementView,
+            _ => crate::dock::Tab::TrackView,
+        };
+        self.show_panel_beside(tab, crate::dock::Tab::SceneGraph);
     }
 
     /// Take the item called `label` off the bench.

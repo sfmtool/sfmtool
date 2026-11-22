@@ -1675,7 +1675,13 @@ fn no_focused_item(state: &AppState, id: ReconId) -> ToolError {
 }
 
 /// The refusal a label that names nothing gets, in the bench's own words.
+///
+/// A label that names a measurement item is not "nothing": a track tool given
+/// one says what it is, as the panel's steps do.
 fn no_such_item(bench: &Bench, item: &str) -> ToolError {
+    if bench.measurement(item).is_some() {
+        return ToolError::new(crate::bench::measurement::not_a_track(item));
+    }
     let labels: Vec<String> = bench.labels().map(|label| format!("{label:?}")).collect();
     let on_it = if labels.is_empty() {
         "nothing is on it".to_string()

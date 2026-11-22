@@ -523,6 +523,12 @@ impl History {
         self.steps.iter().find(|s| s.serial == serial)
     }
 
+    /// The measurement map of the step that made `serial`, or `None` for the
+    /// node's first version.
+    pub(crate) fn measurement_map_of(&self, serial: VersionSerial) -> Option<&MeasurementMap> {
+        self.step_into(serial).map(|step| &step.measurements)
+    }
+
     /// Append `value` as the next version, discarding any redo tail.
     ///
     /// A **document edit**: the bench and the display transform at the cursor

@@ -465,3 +465,34 @@ fn a_value_with_its_own_measurements_materializes_them() {
     edited.delete_point(0).unwrap();
     assert_eq!(edited.measurements(), next.measurements());
 }
+
+/// A value built by hand whose columns disagree in length is read without a
+/// panic: the row the short columns lack reads as an image past the set and
+/// pixels that are not numbers, which the commit refuses, and a delete still
+/// renumbers the rows.
+#[test]
+fn columns_of_different_lengths_are_read_without_a_panic() {
+    let mut recon = SfmrReconstruction::demo(10);
+    recon.image_set.measurements = MeasurementsData {
+        distance: Some(DistanceMeasurementsData {
+            distances: Array1::from(vec![1.0, 2.0]),
+            units: Array1::from(vec![LengthUnit::Metre.code()]),
+            image_indexes: Array2::from_shape_vec((1, 2), vec![0, 1]).unwrap(),
+            endpoints_xy: Array3::from_shape_vec((1, 2, 2), vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
+            labels: vec!["only".into()],
+        }),
+    };
+    let value = EditedReconstruction::new(Arc::new(recon));
+    let short = item_of(&value, 1);
+    let d = distance(&short);
+    assert_eq!(d.endpoints[0].unwrap().image, u32::MAX);
+    assert!(d.endpoints[1].unwrap().pixel[0].is_nan());
+    assert_eq!(d.distance, Some((2.0, LengthUnit::Metre)));
+    assert!(matches!(
+        commit_measurement(&value, &short, Some(1)).unwrap_err(),
+        MeasurementCommitRefusal::NoSuchImage { side: 0, .. }
+    ));
+    let (next, map) = delete_measurement(&value, MeasurementKind::Distance, 1).unwrap();
+    assert_eq!(map, vec![Some(0), None]);
+    assert_eq!(row(&next, 0).4, "only");
+}

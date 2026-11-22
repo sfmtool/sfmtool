@@ -1637,15 +1637,61 @@ impl AppState {
         }
     }
 
-    /// Clear the measurement selection where the version on screen no longer
-    /// holds its row, and keep it on the same row otherwise.
+    /// Carry the selected measurement of node `id` across one step of an undo
+    /// or a redo: through the measurement map of the step that made version
+    /// `step` ([`crate::document::MeasurementMap`]), forward on a redo onto
+    /// `step`, and inverted on an undo of `step`. A row the step dropped, or
+    /// one it brought into being, clears the selection.
     ///
-    /// Measurements are never renumbered by a point edit, so a row that is
-    /// still there is the same measurement. A bulk edit that drops images can
-    /// drop measurements, and an undo or a redo can arrive at a version with
-    /// fewer of them; the selection is cleared there rather than left naming a
-    /// row that is gone, and stays cleared when a later step brings the row
-    /// back. Called once a frame, before the panels draw.
+    /// What keeps an undo of a measurement delete or an image delete on the
+    /// measurement that was selected, rather than on whatever row now has its
+    /// index.
+    pub(crate) fn follow_measurement_step(
+        &mut self,
+        id: ReconId,
+        step: crate::document::VersionSerial,
+        undo: bool,
+    ) {
+        let Some(measurement) = self.selected_measurement.filter(|m| m.recon == id) else {
+            return;
+        };
+        let Some(map) = self
+            .node(id)
+            .and_then(|node| node.history.measurement_map_of(step))
+        else {
+            return;
+        };
+        let moved = if undo {
+            map.inverse(measurement.kind, measurement.index)
+        } else {
+            map.forward(measurement.kind, measurement.index)
+        };
+        match moved {
+            Some(index) => {
+                self.selected_measurement = Some(MeasurementRef {
+                    index,
+                    ..measurement
+                });
+            }
+            None => {
+                self.selected_measurement = None;
+                self.selected_endpoint = None;
+            }
+        }
+    }
+
+    /// Clear the measurement selection where the version on screen no longer
+    /// holds its row.
+    ///
+    /// The edits that renumber rows (deleting an image, deleting a
+    /// measurement) carry the selection with them
+    /// ([`Self::follow_measurement_rows`]), and an undo or a redo across them
+    /// carries it back ([`Self::follow_measurement_step`]), so a row that is
+    /// still there is the measurement that was selected. This catches what
+    /// neither reaches: a version arrived at that holds fewer rows than the
+    /// index, such as an undo past a commit that appended the selected row.
+    /// The selection is cleared there, and stays cleared when a later step
+    /// brings the row back. Called once a frame, before the panels draw.
     pub(crate) fn prune_measurement_selection(&mut self) {
         let Some(measurement) = self.selected_measurement else {
             return;

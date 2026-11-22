@@ -2213,8 +2213,11 @@ impl AppState {
             let _phase = step.phase("selection follow");
             if stepping_back {
                 self.follow_selection_backward(id, left);
+                self.follow_measurement_step(id, left, true);
             } else {
                 self.follow_selection_forward(id);
+                let landed = self.scene[index].history.current_version().serial;
+                self.follow_measurement_step(id, landed, false);
             }
             // Per step rather than once at the end, so the stage's row counts
             // the steps like every other stage's. The name is the one the move

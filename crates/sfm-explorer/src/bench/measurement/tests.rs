@@ -409,3 +409,98 @@ fn an_item_endpoint_click_selects_its_image_and_the_endpoint() {
     assert_eq!(state.selected_endpoint, Some(EndpointSide::B));
     assert_eq!(state.focused_measurement_label(id), Some("distance #1"));
 }
+
+/// An undo of a measurement delete puts the selection back on the measurement
+/// that was selected, not on the row that now has its index, and a redo moves
+/// it down again; the same across an image delete that drops rows.
+#[test]
+fn undo_and_redo_carry_the_selected_measurement_across_a_renumbering() {
+    let (mut state, id) = measured_state(Some("m"));
+    state.select_measurement(MeasurementRef::distance(id, 2));
+    state
+        .delete_measurement(MeasurementRef::distance(id, 1))
+        .unwrap();
+    assert_eq!(
+        state.selected_measurement,
+        Some(MeasurementRef::distance(id, 1))
+    );
+    state.undo(id).unwrap();
+    assert_eq!(
+        state.selected_measurement,
+        Some(MeasurementRef::distance(id, 2))
+    );
+    state.redo(id).unwrap();
+    assert_eq!(
+        state.selected_measurement,
+        Some(MeasurementRef::distance(id, 1))
+    );
+    // Undo the delete again, then delete image 1, which drops rows 1 and 4.
+    state.undo(id).unwrap();
+    state.select_measurement(MeasurementRef::distance(id, 3));
+    state.delete_image(ImageRef::new(id, 1)).unwrap();
+    assert_eq!(
+        state.selected_measurement,
+        Some(MeasurementRef::distance(id, 2))
+    );
+    state.undo(id).unwrap();
+    assert_eq!(
+        state.selected_measurement,
+        Some(MeasurementRef::distance(id, 3))
+    );
+    state.redo(id).unwrap();
+    assert_eq!(
+        state.selected_measurement,
+        Some(MeasurementRef::distance(id, 2))
+    );
+    // A selected row the undone step dropped comes back selected; one the
+    // redone step drops is cleared.
+    state.undo(id).unwrap();
+    state.select_measurement(MeasurementRef::distance(id, 4));
+    state.redo(id).unwrap();
+    assert_eq!(state.selected_measurement, None);
+}
+
+/// `tab` moved into the Scene tree's node, behind it, and the Scene tree
+/// brought to the front there: an arrangement a person makes by dragging.
+fn docked_behind_the_scene_tree(state: &mut AppState, tab: crate::dock::Tab) {
+    use crate::dock::Tab;
+    state.hide_panel(tab);
+    let at = state.dock.find_tab(&Tab::SceneGraph).expect("docked");
+    state
+        .dock
+        .leaf_mut(at.node_path())
+        .expect("a tab sits in a leaf")
+        .append_tab(tab);
+    let at = state.dock.find_tab(&Tab::SceneGraph).expect("docked");
+    let _ = state.dock.set_active_tab(at);
+    assert!(state.panel_is_in_front(Tab::SceneGraph));
+}
+
+/// A double-click on a Bench row raises the item's panel beside the Scene
+/// tree, never over it (G2, G9): with the panel docked behind the tree,
+/// the tree stays in front, for a measurement and for a track.
+#[test]
+fn a_bench_row_s_double_click_never_covers_the_scene_tree() {
+    use crate::dock::Tab;
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    state
+        .put_point_on_bench(PointRef::new(id, 0), None)
+        .unwrap();
+    state.unfocus_bench_item();
+    for (position, tab) in [(0, Tab::MeasurementView), (1, Tab::TrackView)] {
+        docked_behind_the_scene_tree(&mut state, tab);
+        state.edit_bench_item_at(id, position);
+        assert!(state.panel_is_in_front(Tab::SceneGraph), "{tab:?}");
+        assert!(!state.panel_is_in_front(tab), "{tab:?}");
+        assert!(state.focused_item().is_some());
+    }
+    // From a tree with nothing else in its node, it is a raise.
+    state.hide_panel(Tab::MeasurementView);
+    state.show_panel(Tab::MeasurementView);
+    state.unfocus_bench_item();
+    state.edit_bench_item_at(id, 0);
+    assert!(state.panel_is_in_front(Tab::MeasurementView));
+}

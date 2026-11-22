@@ -150,6 +150,8 @@ intended ("a double-click on a Bench row in the Scene tree ... raise through
 `show_panel` itself"), so that paragraph changes with the fix. Found while
 filing the rules, after this inventory; read from the code.
 
+> _Status (2026-11-22): **Done** — `AppState::edit_bench_item_at` raises the item's panel (Track View for a track, Measurement View for a measurement) through `show_panel_beside(tab, Tab::SceneGraph)`, so it never covers the Scene tree; `panel-layout.md` § "A raise from a gesture" now lists the Bench-row double-click among the gestures that go through `show_panel_beside`, and a test checks that the tree stays in front, branch measurement-bench-item._
+
 ## Checked and found following the rules
 
 - G1: clicks on thumbnails, image rows, camera rows, frustums, points, Bench

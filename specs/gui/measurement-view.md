@@ -136,12 +136,18 @@ point edit. Deleting an image drops the measurements with an endpoint in it and
 renumbers the rows after them, as `SfmrReconstruction::subset_by_image_indices`
 does, and deleting a measurement drops its row and renumbers the rows after
 it; the selection moves with its measurement, or is cleared where its
-measurement was dropped (`AppState::follow_measurement_rows`). Every frame,
-before the panels draw, `AppState::prune_measurement_selection` clears a
-selection whose row the version on screen does not hold, so an undo or a redo
-keeps the selection where the version arrived at has that row and clears it
-where it does not. A cleared selection stays cleared when a later step brings
-the row back.
+measurement was dropped (`AppState::follow_measurement_rows`). Each such
+version keeps that renumbering as its measurement map
+([document-model.md](document-model.md)), and **an undo or a redo carries the
+selection across it** (`AppState::follow_measurement_step`): an undo of the
+delete puts the selection back on the measurement that was selected, at the
+row it holds again, and a redo moves it down once more. A row the step being
+redone drops, or one the step being undone brought into being, clears the
+selection. Every frame, before the panels draw,
+`AppState::prune_measurement_selection` clears a selection whose row the
+version on screen does not hold, such as one on a row an undone commit had
+appended. A cleared selection stays cleared when a later step brings the row
+back.
 
 ## The readings
 
@@ -556,6 +562,12 @@ at-infinity case is covered by the Rust tests.
   `list_measurements`' rows and results, `get_measurement`'s resolutions,
   refusal and median line, an index past the rows refused with the count, and
   `select_measurement` with and without an endpoint.
+- **Undo and redo** (`bench/measurement/tests.rs`, `measurements/tests.rs`):
+  the selection carried back onto its own measurement by an undo of a
+  measurement delete and of an image delete, and down again by the redo; a
+  redo that drops the selected row clearing it.
+- **The save** (`state/save/tests.rs`): a save after a delete and an
+  appending commit writes the value's own rows, read back from the file.
 - **The bench** (`bench/measurement/tests.rs`): a put copies the row and
   focuses the item, selecting its row and leaving the point selection; a
   second put focuses the same item with no version; a point selection keeps a
@@ -567,7 +579,8 @@ at-infinity case is covered by the Rust tests.
   base shared, the node dirty and the row selected, and its undo; a commit that
   changes nothing; the commit refusal matching the button's; a view-only bench
   taking a measurement, renaming and discarding it, and refusing its commit;
-  an item endpoint's click.
+  an item endpoint's click; a Bench row's double-click raising the item's
+  panel beside the Scene tree, never over it.
 - **The edited mode** (`measurement_view/tests.rs`): ticking the box asks for
   the put; the toolbar, the header and the live readings, which follow a step
   on the item while the stored row's do not; an unplaced endpoint's block, the
@@ -575,7 +588,8 @@ at-infinity case is covered by the Rust tests.
 - **The bench tools** (`mcp/tests/measurements.rs`): `put_measurement_on_bench`
   once and twice, `get_bench` listing the item, a track tool refusing it;
   `get_measurement` with an item; `delete_measurement` and
-  `commit_bench_measurement`'s no-effect and appending commits.
+  `commit_bench_measurement`'s no-effect and appending commits; a track tool
+  naming a measurement item saying what it is.
 - **`ui_basic`**: the panel opens from the Panels menu; a double-click on a
   Measurements row puts the measurement on the bench and raises Measurement
   View on the item, and after its row is deleted a click on *Commit* adds it

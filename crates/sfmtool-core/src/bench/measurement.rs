@@ -205,19 +205,17 @@ impl EditableMeasurement {
                 if row >= m.len() {
                     return Err(missing());
                 }
+                let stored = DistanceRow::read(m, row);
                 let endpoint = |k: usize| MeasurementEndpoint {
-                    image: m.image_indexes[[row, k]],
-                    pixel: [
-                        f64::from(m.endpoints_xy[[row, k, 0]]),
-                        f64::from(m.endpoints_xy[[row, k, 1]]),
-                    ],
+                    image: stored.images[k],
+                    pixel: stored.pixels[k].map(f64::from),
                 };
                 // A load refuses a unit code past the legend, so the fallback
                 // is for a value built by hand.
-                let unit = LengthUnit::from_code(m.units[row]).unwrap_or(LengthUnit::Metre);
+                let unit = LengthUnit::from_code(stored.unit).unwrap_or(LengthUnit::Metre);
                 EditableMeasurementBody::Distance(EditableDistance {
                     endpoints: [Some(endpoint(0)), Some(endpoint(1))],
-                    distance: Some((f64::from(m.distances[row]), unit)),
+                    distance: Some((f64::from(stored.distance), unit)),
                 })
             }
         };
@@ -697,15 +695,27 @@ struct DistanceRow {
 
 /// The rows of `m`, in stored order.
 fn distance_rows_of(m: &DistanceMeasurementsData) -> Vec<DistanceRow> {
-    (0..m.len())
-        .map(|i| DistanceRow {
-            distance: m.distances[i],
-            unit: m.units[i],
-            images: [m.image_indexes[[i, 0]], m.image_indexes[[i, 1]]],
-            pixels: [0, 1].map(|k| [m.endpoints_xy[[i, k, 0]], m.endpoints_xy[[i, k, 1]]]),
+    (0..m.len()).map(|i| DistanceRow::read(m, i)).collect()
+}
+
+impl DistanceRow {
+    /// Row `i` of `m`, read with `.get` so a value built by hand whose columns
+    /// disagree in length reads as a row a commit refuses, never as a panic,
+    /// as `resolve_distance_measurements` reads it: a missing image is past
+    /// the image set, a missing pixel or distance is not a number, a missing
+    /// unit is metres and a missing label is empty. A load refuses such a
+    /// value, so a row read from a file is read exactly.
+    fn read(m: &DistanceMeasurementsData, i: usize) -> Self {
+        DistanceRow {
+            distance: m.distances.get(i).copied().unwrap_or(f32::NAN),
+            unit: m.units.get(i).copied().unwrap_or(LengthUnit::Metre.code()),
+            images: [0, 1].map(|k| m.image_indexes.get((i, k)).copied().unwrap_or(u32::MAX)),
+            pixels: [0, 1].map(|k| {
+                [0, 1].map(|c| m.endpoints_xy.get((i, k, c)).copied().unwrap_or(f32::NAN))
+            }),
             label: m.labels.get(i).cloned().unwrap_or_default(),
-        })
-        .collect()
+        }
+    }
 }
 
 /// The columns that hold `rows`, which must not be empty.

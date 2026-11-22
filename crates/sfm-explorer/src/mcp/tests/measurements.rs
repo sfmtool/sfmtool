@@ -307,3 +307,30 @@ fn delete_and_commit_a_measurement_over_the_wire() {
         "{error}"
     );
 }
+
+/// A track tool that names a measurement item by label says it is a
+/// measurement, rather than that nothing on the bench has that name.
+#[test]
+fn a_track_tool_naming_a_measurement_says_what_it_is() {
+    let (mut state, _, mut viewer) = measured();
+    call(
+        &mut state,
+        &mut viewer,
+        "put_measurement_on_bench",
+        json!({ "reconstruction_label": "measured", "measurement_index": 1 }),
+    );
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "apply_bench_track_thresholds",
+        json!({ "reconstruction_label": "measured", "track": "distance #1",
+                "min_zncc": 0.5 }),
+    );
+    assert!(
+        error
+            .0
+            .contains("distance #1 is a measurement, not a track"),
+        "{error}"
+    );
+    assert!(!error.0.contains("Nothing on the bench"), "{error}");
+}

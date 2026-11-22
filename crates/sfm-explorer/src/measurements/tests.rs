@@ -360,24 +360,26 @@ fn a_deleted_image_moves_the_selection_with_its_measurement_or_clears_it() {
     assert_eq!(state.selected_measurement, None);
 }
 
-/// Undo and redo keep the selection where the version arrived at has its row,
-/// and clear it where it does not; a redo that brings the row back leaves it
-/// cleared.
+/// Undo and redo carry the selection across the delete that renumbered the
+/// rows, back onto the measurement that was selected; a redo that drops the
+/// selected row clears the selection, and an undo that brings the row back
+/// leaves it cleared.
 #[test]
-fn undo_and_redo_keep_the_selection_only_where_the_row_is() {
+fn undo_and_redo_carry_the_selection_with_its_measurement() {
     let (mut state, id) = measured_state(Some("m"));
     state
         .delete_image(ImageRef::new(id, 1))
         .expect("the delete runs");
-    // Row 2 of the three rows left.
+    // Row 2 of the three rows left, which was row 3 before the delete.
     state.select_measurement(MeasurementRef::distance(id, 2));
     state.undo(id).expect("an undo");
     state.prune_measurement_selection();
     assert_eq!(
         state.selected_measurement,
-        Some(MeasurementRef::distance(id, 2)),
-        "the version before the delete has five rows"
+        Some(MeasurementRef::distance(id, 3)),
+        "the selection follows its measurement back to its own row"
     );
+    // Row 4 has an endpoint in image 1, so the redo drops it.
     state.select_measurement(MeasurementRef::distance(id, 4));
     state.redo(id).expect("a redo");
     state.prune_measurement_selection();
