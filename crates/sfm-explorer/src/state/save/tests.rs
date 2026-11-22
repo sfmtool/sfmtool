@@ -349,6 +349,40 @@ fn a_save_of_a_value_without_keypoints_records_the_hash_of_the_file_written() {
     );
 }
 
+/// A `sift_files` node whose value holds no inline keypoints, with no `.sift`
+/// files to read them from: the save is refused before anything is pushed or
+/// written, naming the `.sift` file it could not read and saying to restore
+/// the files, and the node keeps its unsaved edit.
+#[test]
+fn a_save_of_a_value_without_keypoints_or_sift_files_is_refused() {
+    let dir = temp_dir("keypoints_refused");
+    let mut recon = SfmrReconstruction::demo(32);
+    recon.workspace_dir = dir.clone();
+    let missing = recon.sift_path_for_image(0);
+    let recon = crate::test_support::without_inline_keypoints(recon);
+    let path = dir.join("recon.sfmr");
+    let mut state = AppState::new();
+    let id = state.append_node(SceneNode::from_path(&path, recon));
+    state
+        .delete_point(PointRef::new(id, 3))
+        .expect("a live point");
+    assert!(state.is_dirty(id));
+    let versions_before = state.scene[0].history.versions().len();
+
+    let why = state
+        .save_node(id)
+        .expect_err("no .sift file can supply the keypoints");
+
+    assert!(
+        why.contains(&format!("{}: no such file", missing.display())),
+        "{why}"
+    );
+    assert!(why.contains("Restore the .sift files"), "{why}");
+    assert_eq!(state.scene[0].history.versions().len(), versions_before);
+    assert!(!path.exists(), "a refused save wrote {}", path.display());
+    assert!(state.is_dirty(id));
+}
+
 #[test]
 fn save_as_writes_elsewhere_and_re_points_the_node() {
     let dir = temp_dir("save_as");
