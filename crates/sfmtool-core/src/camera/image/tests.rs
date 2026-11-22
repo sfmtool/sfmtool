@@ -358,6 +358,31 @@ fn write_jpeg_is_close_and_its_quality_sets_its_size() {
 }
 
 #[test]
+fn encode_gives_the_bytes_write_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let image = gradient(19, 11, 3);
+    for (format, name, quality) in [
+        (::image::ImageFormat::Jpeg, "a.jpg", 80),
+        (::image::ImageFormat::Png, "a.png", DEFAULT_JPEG_QUALITY),
+        (::image::ImageFormat::Tiff, "a.tif", DEFAULT_JPEG_QUALITY),
+    ] {
+        let path = dir.path().join(name);
+        image.write(&path, quality).unwrap();
+        let bytes = image.encode(format, quality).unwrap();
+        assert_eq!(bytes, std::fs::read(&path).unwrap(), "{name}");
+    }
+    // The same checks as a write's, with no file named.
+    assert!(matches!(
+        gradient(4, 4, 4).encode(::image::ImageFormat::Jpeg, DEFAULT_JPEG_QUALITY),
+        Err(::image::ImageError::Unsupported(_))
+    ));
+    assert!(matches!(
+        image.encode(::image::ImageFormat::Png, 101),
+        Err(::image::ImageError::Parameter(_))
+    ));
+}
+
+#[test]
 fn write_refuses_what_it_cannot_encode_and_leaves_no_file() {
     let dir = tempfile::tempdir().unwrap();
     let rgba = gradient(4, 4, 4);
