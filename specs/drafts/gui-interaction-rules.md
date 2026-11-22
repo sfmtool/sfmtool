@@ -151,8 +151,9 @@ observation table is such a list today.
 ## Where the viewer does not follow the rules
 
 Found by the inventory, and each is fixed in the code, or in the spec where
-the code is right and the spec drifted. When the standing spec is filed, they go
-into a dated report under `reports/` so they are tracked as findings.
+the code is right and the spec drifted. They are tracked, with their code
+locations, as the findings of
+[`reports/2026-11-21-gui-interaction-audit.md`](../../reports/2026-11-21-gui-interaction-audit.md).
 
 **Likely accidental:**
 
@@ -197,5 +198,4 @@ into a dated report under `reports/` so they are tracked as findings.
 1. File `specs/gui/interaction-rules.md` with the rules as decided, point every
    panel spec's gesture section at it, add the standard, and add the checks to
    the three skills. Spec and skill text only.
-2. One PR per finding above that is fixed in the code, through
-   `fix-report-findings` once they are in a report.
+2. One PR per finding in the report, through `fix-report-findings`.
