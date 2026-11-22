@@ -135,8 +135,8 @@ fn scene() -> SfmrReconstruction {
     let set = &mut recon.point_set;
     set.tracks = tracks;
     set.observation_counts = counts;
+    set.keypoints_xy = Some(keypoints_xy);
     set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy,
         image_file_hashes: vec![[0u8; 16]; IMAGES],
     };
     let mut u = Array2::<f32>::zeros((POINTS, 3));
@@ -242,8 +242,7 @@ fn a_point_that_loses_a_row_is_scored_again() {
     // Point 1's image-0 keypoint is moved 3 px off its projection, so its
     // stored 0.25 px is wrong for the full track and right for neither.
     let row = start.point_set.observation_offsets[1];
-    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut start.point_set.observations
-    else {
+    let Some(keypoints_xy) = start.point_set.keypoints_xy.as_mut() else {
         panic!("the fixture is embedded_patches");
     };
     keypoints_xy[[row, 0]] += 3.0;
@@ -503,9 +502,9 @@ fn a_value_without_patch_frames_is_refused() {
 #[test]
 fn a_value_without_inline_keypoints_is_refused() {
     let mut recon = scene();
+    recon.point_set.keypoints_xy = None;
     recon.point_set.observations = ObservationSource::SiftFiles {
         feature_indexes: vec![0; recon.point_set.tracks.len()],
-        keypoints_xy: None,
         feature_tool_hashes: vec![[0u8; 16]; IMAGES],
         sift_content_hashes: vec![[0u8; 16]; IMAGES],
     };

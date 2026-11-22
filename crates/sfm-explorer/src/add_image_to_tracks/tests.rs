@@ -21,10 +21,8 @@ fn without_image(mut recon: SfmrReconstruction, image: u32) -> SfmrReconstructio
     let keep: Vec<usize> = (0..set.tracks.len())
         .filter(|&row| set.tracks[row].image_index != image)
         .collect();
-    let ObservationSource::EmbeddedPatches {
-        keypoints_xy,
-        image_file_hashes,
-    } = &set.observations
+    let (ObservationSource::EmbeddedPatches { .. }, Some(keypoints_xy)) =
+        (&set.observations, &set.keypoints_xy)
     else {
         panic!("the plane capture is embedded_patches");
     };
@@ -33,10 +31,7 @@ fn without_image(mut recon: SfmrReconstruction, image: u32) -> SfmrReconstructio
         kps[[k, 0]] = keypoints_xy[[row, 0]];
         kps[[k, 1]] = keypoints_xy[[row, 1]];
     }
-    set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: kps,
-        image_file_hashes: image_file_hashes.clone(),
-    };
+    set.keypoints_xy = Some(kps);
     let tracks: Vec<TrackObservation> = keep.iter().map(|&row| set.tracks[row]).collect();
     let mut counts = vec![0u32; set.points.len()];
     for t in &tracks {
@@ -196,8 +191,8 @@ fn the_refusals_are_the_greyed_entrys_sentences() {
     recon.point_set.points.clear();
     recon.point_set.tracks.clear();
     recon.point_set.observation_counts.clear();
+    recon.point_set.keypoints_xy = Some(Array2::zeros((0, 2)));
     recon.point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: Array2::zeros((0, 2)),
         image_file_hashes: vec![[0u8; 16]; 3],
     };
     recon.point_set.patch_u_halfvec_xyz = Some(Array2::zeros((0, 3)));

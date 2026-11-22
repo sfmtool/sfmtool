@@ -213,10 +213,8 @@ impl SfmrReconstruction {
         &self,
         progress: &Progress<'_>,
     ) -> Result<Option<ndarray::Array2<f32>>, SfmrError> {
-        match &self.point_set.observations {
-            ObservationSource::SiftFiles {
-                keypoints_xy: None, ..
-            } => {}
+        match (&self.point_set.observations, &self.point_set.keypoints_xy) {
+            (ObservationSource::SiftFiles { .. }, None) => {}
             _ => return Ok(None),
         }
         let phase = progress.phase("keypoints");
@@ -454,11 +452,17 @@ impl SfmrReconstruction {
         }
 
         // Build the observation-source columns from the mode-appropriate arrays.
+        // Both modes state each observation's pixel inline, an `embedded_patches`
+        // file always and a `sift_files` one in every version 17 file; a version
+        // 16 `sift_files` file may not, and its `None` rides straight through.
+        if is_embedded && data.keypoints_xy.is_none() {
+            return Err(SfmrError::InvalidFormat(
+                "embedded_patches file missing keypoints_xy".into(),
+            ));
+        }
+        let keypoints_xy = data.keypoints_xy;
         let observations = if is_embedded {
             ObservationSource::EmbeddedPatches {
-                keypoints_xy: data.keypoints_xy.ok_or_else(|| {
-                    SfmrError::InvalidFormat("embedded_patches file missing keypoints_xy".into())
-                })?,
                 image_file_hashes: data.image_file_hashes.ok_or_else(|| {
                     SfmrError::InvalidFormat(
                         "embedded_patches file missing image_file_hashes".into(),
@@ -473,9 +477,6 @@ impl SfmrReconstruction {
                         SfmrError::InvalidFormat("sift_files file missing feature_indexes".into())
                     })?
                     .to_vec(),
-                // A `sift_files` file states its observation coordinates inline
-                // too (a version 16 one may not), and they ride straight through.
-                keypoints_xy: data.keypoints_xy,
                 feature_tool_hashes: data.feature_tool_hashes.ok_or_else(|| {
                     SfmrError::InvalidFormat("sift_files file missing feature_tool_hashes".into())
                 })?,
@@ -567,6 +568,7 @@ impl SfmrReconstruction {
                 tracks,
                 observation_counts,
                 observation_offsets,
+                keypoints_xy,
                 patch_u_halfvec_xyz: data.patch_u_halfvec_xyz,
                 patch_v_halfvec_xyz: data.patch_v_halfvec_xyz,
                 patch_bitmaps_y_x_rgba: data.patch_bitmaps_y_x_rgba.map(Arc::new),
@@ -719,36 +721,23 @@ impl SfmrReconstruction {
         }
 
         // Split the observation source back into the mode-appropriate columns.
-        let (
-            feature_indexes,
-            feature_tool_hashes,
-            sift_content_hashes,
-            keypoints_xy,
-            image_file_hashes,
-        ) = match &self.point_set.observations {
-            ObservationSource::SiftFiles {
-                feature_indexes,
-                keypoints_xy,
-                feature_tool_hashes,
-                sift_content_hashes,
-            } => (
-                Some(Array1::from_vec(feature_indexes.clone())),
-                Some(feature_tool_hashes.clone()),
-                Some(sift_content_hashes.clone()),
-                keypoints_xy.clone(),
-                None,
-            ),
-            ObservationSource::EmbeddedPatches {
-                keypoints_xy,
-                image_file_hashes,
-            } => (
-                None,
-                None,
-                None,
-                Some(keypoints_xy.clone()),
-                Some(image_file_hashes.clone()),
-            ),
-        };
+        let (feature_indexes, feature_tool_hashes, sift_content_hashes, image_file_hashes) =
+            match &self.point_set.observations {
+                ObservationSource::SiftFiles {
+                    feature_indexes,
+                    feature_tool_hashes,
+                    sift_content_hashes,
+                } => (
+                    Some(Array1::from_vec(feature_indexes.clone())),
+                    Some(feature_tool_hashes.clone()),
+                    Some(sift_content_hashes.clone()),
+                    None,
+                ),
+                ObservationSource::EmbeddedPatches { image_file_hashes } => {
+                    (None, None, None, Some(image_file_hashes.clone()))
+                }
+            };
+        let keypoints_xy = self.point_set.keypoints_xy.clone();
 
         let observation_counts = Array1::from_vec(self.point_set.observation_counts.clone());
 

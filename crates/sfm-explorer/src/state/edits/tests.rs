@@ -796,10 +796,11 @@ pub(crate) fn embedded_demo(points: usize) -> SfmrReconstruction {
     let mut recon = SfmrReconstruction::demo(points);
     let images = recon.image_count();
     let observations = recon.point_set.tracks.len();
-    recon.point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: Array2::<f32>::from_shape_fn((observations, 2), |(i, c)| {
+    recon.point_set.keypoints_xy =
+        Some(Array2::<f32>::from_shape_fn((observations, 2), |(i, c)| {
             (i % 64) as f32 + c as f32
-        }),
+        }));
+    recon.point_set.observations = ObservationSource::EmbeddedPatches {
         image_file_hashes: vec![[0u8; 16]; images],
     };
     let p = recon.point_count();
@@ -907,8 +908,8 @@ pub(crate) fn projected_embedded_demo(points: usize) -> SfmrReconstruction {
     let images = recon.image_count();
     recon.point_set.observation_counts = (0..points).map(|p| (p % 3) as u32 + 1).collect();
     recon.point_set.tracks = tracks;
+    recon.point_set.keypoints_xy = Some(keypoints);
     recon.point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: keypoints,
         image_file_hashes: vec![[0u8; 16]; images],
     };
     recon.rebuild_derived_fields();
@@ -1060,9 +1061,7 @@ fn a_refused_estimate_pushes_no_version_and_logs_a_failure() {
             .filter(|(_, o)| o.image_index == 1)
             .map(|(row, _)| row)
             .collect();
-        let sfmtool_core::ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
-            &mut recon.point_set.observations
-        else {
+        let Some(keypoints_xy) = recon.point_set.keypoints_xy.as_mut() else {
             panic!("the fixture is embedded_patches");
         };
         for (k, row) in rows.iter().enumerate() {

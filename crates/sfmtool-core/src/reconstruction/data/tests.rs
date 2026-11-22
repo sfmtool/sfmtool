@@ -564,15 +564,28 @@ fn test_validate_observation_columns_detects_desync() {
 
     // Truncating keypoints below the observation count is caught.
     let mut recon = demo_embedded(4);
-    if let ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
-        &mut recon.point_set.observations
-    {
+    if let Some(keypoints_xy) = recon.point_set.keypoints_xy.as_mut() {
         *keypoints_xy = keypoints_xy.select(ndarray::Axis(0), &[0, 1]);
     }
     let err = recon
         .validate_observation_columns()
         .expect_err("desynced keypoints must be rejected");
     assert!(err.contains("keypoints_xy"), "unexpected message: {err}");
+
+    // An embedded_patches value states each observation only by its pixel, so
+    // one without the column is refused; a sift_files one is not.
+    let mut recon = demo_embedded(4);
+    recon.point_set.keypoints_xy = None;
+    let err = recon
+        .validate_observation_columns()
+        .expect_err("embedded_patches without keypoints must be rejected");
+    assert!(
+        err.contains("embedded_patches") && err.contains("keypoints_xy"),
+        "unexpected message: {err}"
+    );
+    SfmrReconstruction::demo_without_keypoints(4)
+        .validate_observation_columns()
+        .unwrap();
 }
 
 #[test]
@@ -732,11 +745,7 @@ fn test_validate_observation_columns_detects_a_sift_files_inline_desync() {
         .unwrap();
 
     let mut recon = demo_sift_files_inline(4);
-    if let ObservationSource::SiftFiles {
-        keypoints_xy: Some(keypoints_xy),
-        ..
-    } = &mut recon.point_set.observations
-    {
+    if let Some(keypoints_xy) = recon.point_set.keypoints_xy.as_mut() {
         *keypoints_xy = keypoints_xy.select(ndarray::Axis(0), &[0, 1]);
     }
     let err = recon
@@ -859,9 +868,7 @@ fn test_compute_observation_reprojection_errors_embedded() {
     let mut moved = recon.clone();
     let row = 0usize;
     let image_index = moved.point_set.tracks[row].image_index as usize;
-    if let ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
-        &mut moved.point_set.observations
-    {
+    if let Some(keypoints_xy) = moved.point_set.keypoints_xy.as_mut() {
         keypoints_xy[[row, 0]] += 3.0;
         keypoints_xy[[row, 1]] += 4.0;
     }
@@ -916,9 +923,7 @@ fn demo_embedded_projected(num_points: usize) -> SfmrReconstruction {
         keypoints[[obs_index, 0]] = u as f32;
         keypoints[[obs_index, 1]] = v as f32;
     }
-    if let ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
-        &mut recon.point_set.observations
-    {
+    if let Some(keypoints_xy) = recon.point_set.keypoints_xy.as_mut() {
         *keypoints_xy = keypoints;
     }
     // The writer requires the patch frame in this mode, and the frame is
@@ -1509,14 +1514,14 @@ fn test_recompute_point_errors_fisheye_keeps_past_ninety_observations() {
             [(u + 2.0) as f32, v as f32]
         })
         .collect();
-    match &mut recon.point_set.observations {
-        ObservationSource::EmbeddedPatches { keypoints_xy, .. } => {
+    match recon.point_set.keypoints_xy.as_mut() {
+        Some(keypoints_xy) => {
             for (k, uv) in projected.iter().enumerate() {
                 keypoints_xy[[k, 0]] = uv[0];
                 keypoints_xy[[k, 1]] = uv[1];
             }
         }
-        _ => panic!("demo_embedded must be an embedded_patches recon"),
+        None => panic!("demo_embedded must be an embedded_patches recon"),
     }
 
     recon.recompute_point_errors().unwrap();
@@ -1779,11 +1784,10 @@ fn keypoints_off_projection(
 
 /// Replace the inline keypoint column of a `sift_files` reconstruction.
 fn set_sift_files_keypoints(recon: &mut SfmrReconstruction, keypoints: Option<Array2<f32>>) {
-    let ObservationSource::SiftFiles { keypoints_xy, .. } = &mut recon.point_set.observations
-    else {
+    let ObservationSource::SiftFiles { .. } = &recon.point_set.observations else {
         panic!("a sift_files fixture");
     };
-    *keypoints_xy = keypoints;
+    recon.point_set.keypoints_xy = keypoints;
 }
 
 /// The demo's points each have two observations, rows `2p` and `2p + 1`; the

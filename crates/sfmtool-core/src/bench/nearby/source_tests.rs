@@ -27,7 +27,7 @@ use crate::features::kdforest::{
     KdfSiftSources, KdfWorkspaceContents, KdfWorkspaceMetadata, KdfWriteOptions, LazyKdForestU8,
 };
 use crate::progress::Progress;
-use crate::reconstruction::data::{ObservationSource, SfmrReconstruction};
+use crate::reconstruction::data::SfmrReconstruction;
 use crate::reconstruction::edited::EditedReconstruction;
 
 use super::*;
@@ -128,11 +128,11 @@ fn a_point_one_photograph_puts_elsewhere_is_left_out() {
     // The point just right of the held-out one, 3 px off in image 1.
     let moved = HELD_OUT + 1;
     let n = scene.len();
-    match &mut recon.point_set.observations {
-        ObservationSource::EmbeddedPatches { keypoints_xy, .. } => {
+    match recon.point_set.keypoints_xy.as_mut() {
+        Some(keypoints_xy) => {
             keypoints_xy[[moved as usize * n + 1, 0]] += 3.0;
         }
-        _ => unreachable!("the fixture embeds its keypoints"),
+        None => unreachable!("the fixture embeds its keypoints"),
     }
     let edited = held_out(recon);
     let views = scene.views();

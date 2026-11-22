@@ -8,7 +8,7 @@
 
 use crate::camera::IntrinsicAdjustment;
 
-use super::{ObservationSource, SfmrReconstruction};
+use super::SfmrReconstruction;
 
 /// Give image `i` of `recon` the adjustment `adjustment_of(i)`, and move every
 /// inline keypoint to its point's projection through its image's intrinsics: a
@@ -34,12 +34,11 @@ pub(crate) fn adjust_and_reproject(
     let images = recon.image_set.images.clone();
     let points = recon.point_set.points.clone();
     let tracks = recon.point_set.tracks.clone();
-    let keypoints = match &mut recon.point_set.observations {
-        ObservationSource::EmbeddedPatches { keypoints_xy, .. } => keypoints_xy,
-        ObservationSource::SiftFiles { keypoints_xy, .. } => keypoints_xy
-            .as_mut()
-            .expect("the fixture has inline keypoints"),
-    };
+    let keypoints = recon
+        .point_set
+        .keypoints_xy
+        .as_mut()
+        .expect("the fixture has inline keypoints");
     for (row, observation) in tracks.iter().enumerate() {
         let i = observation.image_index as usize;
         let image = &images[i];

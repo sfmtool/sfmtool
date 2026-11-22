@@ -19,7 +19,6 @@ use crate::patch::self_similarity::{
 };
 use crate::patch::stored_bitmap::stored_bitmap_planes;
 use crate::reconstruction::data::observation_reprojection_residual;
-use crate::reconstruction::ObservationSource;
 use crate::RotQuaternion;
 
 /// The projection of `point` into `image`, through its bearing at infinity;
@@ -77,10 +76,7 @@ fn with_keypoints(
         keypoints[[row, 0]] = (xy[0] + d[0]) as f32;
         keypoints[[row, 1]] = (xy[1] + d[1]) as f32;
     }
-    match &mut recon.point_set.observations {
-        ObservationSource::SiftFiles { keypoints_xy, .. } => *keypoints_xy = Some(keypoints),
-        ObservationSource::EmbeddedPatches { .. } => unreachable!("the demo reads .sift files"),
-    }
+    recon.point_set.keypoints_xy = Some(keypoints);
     recon
 }
 

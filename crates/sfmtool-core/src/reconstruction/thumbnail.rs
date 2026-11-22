@@ -478,9 +478,10 @@ mod tests {
         let mut hashes = vec![[0u8; 16]; n];
         hashes[1] = parse_hash_bytes(image_hash).unwrap();
         embedded.point_set.observations = crate::ObservationSource::EmbeddedPatches {
-            keypoints_xy: ndarray::Array2::zeros((embedded.point_set.tracks.len(), 2)),
             image_file_hashes: hashes,
         };
+        embedded.point_set.keypoints_xy =
+            Some(ndarray::Array2::zeros((embedded.point_set.tracks.len(), 2)));
         let row = verified_sift_thumbnail(&embedded, 1).expect("the photograph's .sift");
         assert!(row.iter().all(|&b| b == 90));
         assert!(verified_sift_thumbnail(&embedded, 0).is_none());

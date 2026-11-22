@@ -438,13 +438,12 @@ fn demo_with_observation_columns() -> SfmrReconstruction {
     let mut recon = demo_with_references();
     let n = recon.point_set.tracks.len();
     if let ObservationSource::SiftFiles {
-        feature_indexes,
-        keypoints_xy,
-        ..
+        feature_indexes, ..
     } = &mut recon.point_set.observations
     {
         *feature_indexes = (0..n as u32).map(|k| 100 + k).collect();
-        *keypoints_xy = Some(Array2::from_shape_fn((n, 2), |(k, c)| (10 * k + c) as f32));
+        recon.point_set.keypoints_xy =
+            Some(Array2::from_shape_fn((n, 2), |(k, c)| (10 * k + c) as f32));
     } else {
         panic!("the demo is sift_files");
     }
@@ -470,11 +469,12 @@ fn demo_with_observation_columns() -> SfmrReconstruction {
 /// keypoint, its confidence and its reading's view angle.
 fn observation_row(recon: &SfmrReconstruction, row: usize) -> (u32, u32, [f32; 2], u8, f32) {
     let set = &recon.point_set;
-    let ObservationSource::SiftFiles {
-        feature_indexes,
-        keypoints_xy: Some(kp),
-        ..
-    } = &set.observations
+    let (
+        ObservationSource::SiftFiles {
+            feature_indexes, ..
+        },
+        Some(kp),
+    ) = (&set.observations, &set.keypoints_xy)
     else {
         panic!("sift_files with inline keypoints");
     };
@@ -567,9 +567,7 @@ fn demo_with_offset_keypoints() -> SfmrReconstruction {
         column[[k, 0]] = (u + (k + 1) as f64) as f32;
         column[[k, 1]] = v as f32;
     }
-    if let ObservationSource::SiftFiles { keypoints_xy, .. } = &mut recon.point_set.observations {
-        *keypoints_xy = Some(column);
-    }
+    recon.point_set.keypoints_xy = Some(column);
     recon
 }
 

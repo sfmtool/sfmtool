@@ -158,9 +158,11 @@ fn truth(observed_by: &[Vec<usize>], at_infinity: &[usize]) -> SfmrReconstructio
         .collect();
     set.observation_counts = observed_by.iter().map(|v| v.len() as u32).collect();
     set.tracks = tracks;
-    set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: Array2::from_shape_vec((observation_count, 2), keypoints)
+    set.keypoints_xy = Some(
+        Array2::from_shape_vec((observation_count, 2), keypoints)
             .expect("two columns per observation"),
+    );
+    set.observations = ObservationSource::EmbeddedPatches {
         image_file_hashes: vec![[0u8; 16]; n],
     };
     let mut u = Array2::<f32>::zeros((count, 3));
@@ -413,9 +415,9 @@ fn a_value_with_no_keypoints_moves_its_camera_and_keeps_every_point() {
     let mut recon = truth(&all_seen(WORLD.len()), &[]);
     let observation_count = recon.point_set.tracks.len();
     let image_count = recon.image_set.images.len();
+    recon.point_set.keypoints_xy = None;
     recon.point_set.observations = ObservationSource::SiftFiles {
         feature_indexes: (0..observation_count as u32).collect(),
-        keypoints_xy: None,
         feature_tool_hashes: vec![[0u8; 16]; image_count],
         sift_content_hashes: vec![[0u8; 16]; image_count],
     };

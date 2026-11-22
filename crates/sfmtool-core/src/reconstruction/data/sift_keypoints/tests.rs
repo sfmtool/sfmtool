@@ -140,8 +140,8 @@ fn an_embedded_patches_value_is_not_touched() {
     let mut recon = fixture(&dir);
     recon.fill_keypoints_from_sift(&Progress::none());
     let keypoints = recon.keypoints_xy().unwrap().clone();
+    recon.point_set.keypoints_xy = Some(keypoints);
     recon.point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: keypoints,
         image_file_hashes: vec![[0; 16]; recon.image_set.images.len()],
     };
     assert_eq!(
@@ -187,9 +187,7 @@ fn save_writes_the_column_from_the_sift_files() {
     assert!(recon.keypoints_xy().is_none());
 
     let mut written = recon.clone();
-    if let ObservationSource::SiftFiles { keypoints_xy, .. } = &mut written.point_set.observations {
-        *keypoints_xy = sfmtool_sfmr_format::read_sfmr(&path).unwrap().keypoints_xy;
-    }
+    written.point_set.keypoints_xy = sfmtool_sfmr_format::read_sfmr(&path).unwrap().keypoints_xy;
     assert_rows_match_features(&written);
 
     // A value that carries the column reads no `.sift` file on a save.

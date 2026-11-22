@@ -72,21 +72,18 @@ impl SfmrReconstruction {
     /// # }
     /// ```
     pub fn fill_keypoints_from_sift(&mut self, progress: &Progress<'_>) -> SiftKeypointFill {
-        match &self.point_set.observations {
-            ObservationSource::EmbeddedPatches { .. } => return SiftKeypointFill::NotSiftFiles,
-            ObservationSource::SiftFiles {
-                keypoints_xy: Some(_),
-                ..
-            } => return SiftKeypointFill::AlreadyPresent,
-            ObservationSource::SiftFiles { .. } => {}
+        match (&self.point_set.observations, &self.point_set.keypoints_xy) {
+            (ObservationSource::EmbeddedPatches { .. }, _) => {
+                return SiftKeypointFill::NotSiftFiles
+            }
+            (ObservationSource::SiftFiles { .. }, Some(_)) => {
+                return SiftKeypointFill::AlreadyPresent
+            }
+            (ObservationSource::SiftFiles { .. }, None) => {}
         }
         match self.sift_keypoint_column(progress) {
             Ok(column) => {
-                if let ObservationSource::SiftFiles { keypoints_xy, .. } =
-                    &mut self.point_set.observations
-                {
-                    *keypoints_xy = Some(column);
-                }
+                self.point_set.keypoints_xy = Some(column);
                 SiftKeypointFill::Filled
             }
             Err(outcome) => outcome,

@@ -500,6 +500,9 @@ pub enum AddImageToTracksError {
     NotEmbeddedPatches,
     /// The value carries no patch frames.
     NoPatchFrames,
+    /// The value carries no `keypoints_xy` column, the pixel of each of its
+    /// observations, which every `embedded_patches` value must.
+    NoKeypoints,
     /// A photograph could not be read.
     Photograph(PhotographReadError),
     /// The caller asked the call to stop.
@@ -530,6 +533,11 @@ impl std::fmt::Display for AddImageToTracksError {
                 f,
                 "adding an image to tracks needs a patch frame per point, and this \
                  reconstruction carries none"
+            ),
+            Self::NoKeypoints => write!(
+                f,
+                "this embedded_patches reconstruction carries no keypoints_xy column, the \
+                 pixel of each of its observations"
             ),
             Self::Photograph(e) => write!(f, "a photograph could not be read: {e}"),
             Self::Cancelled => write!(f, "the call was cancelled before it had an answer"),
@@ -639,11 +647,11 @@ pub fn add_image_to_tracks(
     if photographs[image].is_none() {
         return Err(AddImageToTracksError::NoTargetImage(image));
     }
-    let keypoints = match &recon.point_set.observations {
-        ObservationSource::EmbeddedPatches { keypoints_xy, .. } => keypoints_xy,
-        ObservationSource::SiftFiles { .. } => {
-            return Err(AddImageToTracksError::NotEmbeddedPatches)
-        }
+    if let ObservationSource::SiftFiles { .. } = &recon.point_set.observations {
+        return Err(AddImageToTracksError::NotEmbeddedPatches);
+    }
+    let Some(keypoints) = recon.point_set.keypoints_xy.as_ref() else {
+        return Err(AddImageToTracksError::NoKeypoints);
     };
     let (Some(u_col), Some(v_col)) = (
         recon.point_set.patch_u_halfvec_xyz.as_ref(),
@@ -1326,12 +1334,10 @@ fn insert_observations(
     }
     let mut readings: Vec<ObservationReading> =
         Vec::with_capacity(set.tracks.len() + accepted.len());
-    let ObservationSource::EmbeddedPatches {
-        keypoints_xy,
-        image_file_hashes,
-    } = &set.observations
+    let (ObservationSource::EmbeddedPatches { .. }, Some(keypoints_xy)) =
+        (&set.observations, set.keypoints_xy.as_ref())
     else {
-        unreachable!("the caller refused a sift_files value");
+        unreachable!("the caller refused a sift_files value and one without keypoints");
     };
     let total = set.tracks.len() + accepted.len();
     let mut tracks: Vec<TrackObservation> = Vec::with_capacity(total);
@@ -1420,11 +1426,8 @@ fn insert_observations(
     let out = &mut next.point_set;
     out.tracks = tracks;
     out.observation_counts = counts;
-    out.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: Array2::from_shape_vec((n, 2), kp_flat)
-            .expect("two coordinates per observation"),
-        image_file_hashes: image_file_hashes.clone(),
-    };
+    out.keypoints_xy =
+        Some(Array2::from_shape_vec((n, 2), kp_flat).expect("two coordinates per observation"));
     out.observation_confidence = confidence;
     // A column is written where `source` has one, and where a new row was
     // measured.

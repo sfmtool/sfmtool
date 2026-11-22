@@ -216,8 +216,8 @@ fn corrections_source(
     let set = &mut recon.point_set;
     set.observation_counts = counts.iter().copied().filter(|&c| c >= 2).collect();
     set.tracks = kept_tracks;
+    set.keypoints_xy = Some(keypoints_xy);
     set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy,
         image_file_hashes: vec![[0u8; 16]; n_img],
     };
     set.patch_u_halfvec_xyz = None;
@@ -1127,9 +1127,7 @@ fn write_scanlines_race_scenes() {
             }
             // And every keypoint inside its image, which the noise can push a
             // keypoint at the edge out of by a fraction of a pixel.
-            if let ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
-                &mut source.point_set.observations
-            {
+            if let Some(keypoints_xy) = source.point_set.keypoints_xy.as_mut() {
                 for mut row in keypoints_xy.rows_mut() {
                     row[0] = row[0].clamp(0.0, 639.99);
                     row[1] = row[1].clamp(0.0, 479.99);

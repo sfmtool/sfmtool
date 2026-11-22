@@ -59,7 +59,8 @@ pub struct PointSet {
     pub points: Vec<Point3D>,
     pub tracks: Vec<TrackObservation>,
     pub observation_counts: Vec<u32>,
-    pub observations: ObservationSource,
+    pub observations: ObservationSource, // how each observation is identified
+    pub keypoints_xy: Option<Array2<f32>>, // per observation, its pixel
     pub patch_u_halfvec_xyz: Option<Array2<f32>>,
     pub patch_v_halfvec_xyz: Option<Array2<f32>>,
     pub patch_bitmaps_y_x_rgba: Option<Arc<Array4<u8>>>,
@@ -784,18 +785,31 @@ rather than failing. The two in-place `w` mutators refresh
 `infinity_point_count` themselves, because they change no track structure and so
 have no other reason to rebuild.
 
-**`ObservationSource` straddles the split, and stays whole in the point set.**
-The enum carries both the per-observation pixel column (`feature_indexes` and
-`keypoints_xy`) and the per-image hash vectors (`feature_tool_hashes`,
-`sift_content_hashes`, `image_file_hashes`), because a `.sfmr` file is wholly one
-mode and one discriminator selects both sets of columns at once. Splitting the
-per-image half into the image set would put a second discriminator there that
-has to agree with this one, and a pair of enums that can disagree is a worse
-invariant than one field that is measured per image while living on the point
-side. So the enum stays whole in the point set, and it is the single exception to
-the index rule above. The consequence is visible in
-`PointSet::validate_observation_columns`, which takes the image count as an
-argument in order to check the hash vectors' lengths.
+**`ObservationSource` holds how an observation is identified, and straddles the
+split.** The enum's `SiftFiles` variant holds the per-observation
+`feature_indexes` and the per-image `feature_tool_hashes` and
+`sift_content_hashes`; its `EmbeddedPatches` variant holds the per-image
+`image_file_hashes`. A `.sfmr` file is wholly one mode, and one discriminator
+selects both sets of columns at once. The pixel each observation sits at is not
+part of the enum: it is `PointSet::keypoints_xy`, an ordinary per-observation
+column parallel to `tracks` in either mode, selected and reordered with the
+tracks like `observation_confidence`. It is `Some` for every `embedded_patches`
+value, where it is the observation coordinate itself and
+`validate_observation_columns` refuses a value without it, and for every value
+read from a version 17 file. It is `None` only in a `sift_files` value read from
+a version 16 file written without the column whose `.sift` files could not
+supply it (`SfmrReconstruction::fill_keypoints_from_sift`), or one a caller
+built without it; `save` reads the column from the `.sift` files for such a
+value or refuses ([saving](../../gui/saving.md)).
+
+The per-image hash vectors are addressed by image index and live in the point
+set, so they do not follow the index rule above. They stay in the enum because
+moving them into the image set would put a second discriminator there that has
+to agree with this one, and a pair of enums that can disagree is a worse
+invariant than three per-image vectors held on the point side. A pass that drops
+or reindexes images therefore rewrites them in the point set
+(`subset_by_image_indices`), and `PointSet::validate_observation_columns` takes
+the image count as an argument to check their lengths.
 
 **The Python side sees the sharing rule as read-only views.** Every array
 getter on the `SfmrReconstruction` binding returns an array with numpy's
@@ -835,7 +849,8 @@ distances as agreeing, since both say the point is at no distance from anything.
 every track row names an image of the image set (`validate_track_image_indexes`,
 which it runs first: `track row {j}: image index {i} out of range for {n}
 images`), the per-observation columns against the track count and the per-image
-hashes against the image count; `validate_point_columns` checks the constraint triple against
+hashes against the image count, and refuses an `embedded_patches` value
+without `keypoints_xy`; `validate_point_columns` checks the constraint triple against
 the point count and its reference images against the image count, and each
 reference observation against its point's track. A record's
 `reference_observation` is refused unless it is `-1` or an index into its own

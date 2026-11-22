@@ -258,10 +258,10 @@ impl SfmrReconstruction {
                 display_only_references: None,
                 observations: ObservationSource::SiftFiles {
                     feature_indexes,
-                    keypoints_xy: Some(keypoints_xy),
                     feature_tool_hashes: vec![[0u8; 16]; num_images],
                     sift_content_hashes: vec![[0u8; 16]; num_images],
                 },
+                keypoints_xy: Some(keypoints_xy),
                 points,
                 tracks,
                 observation_counts,
@@ -280,10 +280,7 @@ impl SfmrReconstruction {
     /// whose `.sift` files cannot be read, which a save refuses to write.
     pub(crate) fn demo_without_keypoints(num_points: usize) -> Self {
         let mut recon = Self::demo(num_points);
-        if let ObservationSource::SiftFiles { keypoints_xy, .. } = &mut recon.point_set.observations
-        {
-            *keypoints_xy = None;
-        }
+        recon.point_set.keypoints_xy = None;
         recon
     }
 }

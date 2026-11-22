@@ -13,7 +13,6 @@ use ndarray::{Array2, Array3, Array4};
 use sfmtool_sfmr_format::{NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_RANGED};
 
 use super::*;
-use crate::reconstruction::data::ObservationSource;
 
 /// A demo reconstruction carrying *every* optional column, so a record that
 /// omits or invents one is a failure the tests can see.
@@ -49,11 +48,9 @@ pub(super) fn fixture(num_points: usize) -> SfmrReconstruction {
     }
     recon.point_set.point_constraints = Some(constraints);
     recon.point_set.observation_confidence = Some((0..m).map(|i| (i * 11 % 256) as u8).collect());
-    if let ObservationSource::SiftFiles { keypoints_xy, .. } = &mut recon.point_set.observations {
-        *keypoints_xy = Some(Array2::<f32>::from_shape_fn((m, 2), |(i, c)| {
-            (i * 3 + c) as f32 * 0.5
-        }));
-    }
+    recon.point_set.keypoints_xy = Some(Array2::<f32>::from_shape_fn((m, 2), |(i, c)| {
+        (i * 3 + c) as f32 * 0.5
+    }));
     recon.rebuild_derived_fields();
     recon
 }

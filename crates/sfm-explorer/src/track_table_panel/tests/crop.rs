@@ -116,9 +116,7 @@ fn crop_recon() -> SfmrReconstruction {
         let (x, y) = camera
             .ray_to_pixel([cam.x, cam.y, cam.z])
             .expect("the bearing is in front of the demo cameras");
-        if let sfmtool_core::ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
-            &mut recon.point_set.observations
-        {
+        if let Some(keypoints_xy) = recon.point_set.keypoints_xy.as_mut() {
             keypoints_xy[[row, 0]] = x as f32;
             keypoints_xy[[row, 1]] = y as f32;
         }

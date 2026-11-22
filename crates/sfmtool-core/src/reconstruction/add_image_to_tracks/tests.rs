@@ -215,8 +215,8 @@ fn capture(points: &[(Point3<f64>, &[u32])]) -> Capture {
     let m = tracks.len();
     set.tracks = tracks;
     set.observation_counts = counts;
+    set.keypoints_xy = Some(Array2::from_shape_vec((m, 2), kps).unwrap());
     set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: Array2::from_shape_vec((m, 2), kps).unwrap(),
         image_file_hashes: vec![[0u8; 16]; n],
     };
     set.patch_u_halfvec_xyz = Some(Array2::from_shape_vec((points.len(), 3), us).unwrap());
@@ -638,6 +638,22 @@ fn the_calls_preconditions_are_refused_by_name() {
         ),
         Err(AddImageToTracksError::Unposed(TARGET))
     ));
+    // An embedded_patches value whose keypoint column a caller took out has
+    // no pixel to start any observation from.
+    let mut no_keypoints = cap.recon.clone();
+    no_keypoints.point_set.keypoints_xy = None;
+    assert_eq!(
+        add_image_to_tracks(
+            &no_keypoints,
+            TARGET,
+            &photos,
+            crate::camera::sampler::test_pool(),
+            &options,
+            &Progress::none()
+        )
+        .err(),
+        Some(AddImageToTracksError::NoKeypoints)
+    );
 }
 
 #[test]
@@ -941,9 +957,7 @@ fn without_bitmaps_the_stored_reference_observation_is_the_template() {
     // parallel at one depth, so one px there is one px in the target.
     let n = points.len();
     cap.recon.point_set.reference_observations = Some(vec![1; n]);
-    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
-        &mut cap.recon.point_set.observations
-    else {
+    let Some(keypoints_xy) = cap.recon.point_set.keypoints_xy.as_mut() else {
         unreachable!()
     };
     for p in 0..n {
@@ -1342,8 +1356,8 @@ fn pooled_or_track_accepts_what_either_bar_accepts() {
 fn an_added_observation_moves_the_reference_index_past_it() {
     let mut recon = SfmrReconstruction::demo(4);
     let m = recon.point_set.tracks.len();
+    recon.point_set.keypoints_xy = Some(Array2::<f32>::zeros((m, 2)));
     recon.point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: Array2::<f32>::zeros((m, 2)),
         image_file_hashes: vec![[0u8; 16]; recon.image_count()],
     };
     // The reference column is present with the patch frame, so the points

@@ -1696,8 +1696,9 @@ fn the_point_mode_is_offered_when_a_node_has_no_feature_indexes() {
     // position rather than by feature index; the menu does not grey it out.
     let tracks = state.scene[0].recon().point_set.tracks.len();
     let images = state.scene[0].recon().image_set.images.len();
-    state.scene[0].recon_mut().point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: ndarray::Array2::<f32>::from_elem((tracks, 2), 100.0),
+    let set = &mut state.scene[0].recon_mut().point_set;
+    set.keypoints_xy = Some(ndarray::Array2::<f32>::from_elem((tracks, 2), 100.0));
+    set.observations = ObservationSource::EmbeddedPatches {
         image_file_hashes: vec![[0u8; 16]; images],
     };
     let (mut panel, ctx) = settled(&mut state);
@@ -3151,8 +3152,8 @@ pub(crate) fn resectable_node(path: &str) -> SceneNode {
         keypoints_xy[[row, 0]] = uv[0];
         keypoints_xy[[row, 1]] = uv[1];
     }
+    recon.point_set.keypoints_xy = Some(keypoints_xy);
     recon.point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy,
         image_file_hashes: vec![[0u8; 16]; images],
     };
     recon.metadata.feature_source = "embedded_patches".to_string();

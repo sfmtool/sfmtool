@@ -12,7 +12,6 @@ use crate::analysis::reprojection_noise::tests::{as_embedded, as_sift_only, nois
 use crate::reconstruction::triangulation::point_or_bearing::{
     bearing_score, fit_point_and_bearing,
 };
-use crate::ObservationSource;
 
 /// Rays, centres and weights.
 type Rays = (Vec<Vector3<f64>>, Vec<Point3<f64>>, Vec<Matrix2x3<f64>>);
@@ -109,11 +108,7 @@ fn fewer_than_two_usable_rays_gives_none() {
     let mut recon = noisy_demo(10, [0.5, 0.5], 14);
     // Point 3's first observation loses its pixel, leaving one ray.
     let row = recon.point_set.observation_offsets[3];
-    if let ObservationSource::SiftFiles {
-        keypoints_xy: Some(k),
-        ..
-    } = &mut recon.point_set.observations
-    {
+    if let Some(k) = recon.point_set.keypoints_xy.as_mut() {
         k[[row, 0]] = f32::NAN;
     }
     let result = recon

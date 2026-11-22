@@ -58,17 +58,15 @@ pub(crate) fn observe(recon: &mut SfmrReconstruction, sigma_px: [f64; 2], seed: 
         keypoints[[row, 0]] = (u + s * du) as f32;
         keypoints[[row, 1]] = (v + s * dv) as f32;
     }
-    if let ObservationSource::SiftFiles { keypoints_xy, .. } = &mut recon.point_set.observations {
-        *keypoints_xy = Some(keypoints);
-    }
+    recon.point_set.keypoints_xy = Some(keypoints);
 }
 
 /// `recon` as an `embedded_patches` reconstruction with the same pixels.
 pub(crate) fn as_embedded(recon: &SfmrReconstruction) -> SfmrReconstruction {
     let mut out = recon.clone();
     let keypoints = recon.keypoints_xy().expect("inline pixels").clone();
+    out.point_set.keypoints_xy = Some(keypoints);
     out.point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: keypoints,
         image_file_hashes: vec![[7u8; 16]; recon.image_count()],
     };
     out.rebuild_derived_fields();
@@ -119,9 +117,7 @@ pub(crate) fn as_sift_only(recon: &SfmrReconstruction, dir: &TempDir) -> SfmrRec
         std::fs::create_dir_all(path.parent().expect("a feature directory")).unwrap();
         sfmtool_sift_format::write_sift(&path, &data, 3).unwrap();
     }
-    if let ObservationSource::SiftFiles { keypoints_xy, .. } = &mut out.point_set.observations {
-        *keypoints_xy = None;
-    }
+    out.point_set.keypoints_xy = None;
     out
 }
 
@@ -240,11 +236,7 @@ fn no_finite_point_gives_none() {
 fn a_non_finite_pixel_is_left_out() {
     let mut recon = noisy_demo(50, [0.5, 0.5], 7);
     let before = recon.reprojection_noise().unwrap();
-    if let ObservationSource::SiftFiles {
-        keypoints_xy: Some(k),
-        ..
-    } = &mut recon.point_set.observations
-    {
+    if let Some(k) = recon.point_set.keypoints_xy.as_mut() {
         k[[0, 0]] = f32::NAN;
     }
     let after = recon.reprojection_noise().unwrap();
@@ -253,11 +245,7 @@ fn a_non_finite_pixel_is_left_out() {
 
 /// Set the inline keypoint of observation `row`.
 fn set_keypoint(recon: &mut SfmrReconstruction, row: usize, xy: [f32; 2]) {
-    if let ObservationSource::SiftFiles {
-        keypoints_xy: Some(k),
-        ..
-    } = &mut recon.point_set.observations
-    {
+    if let Some(k) = recon.point_set.keypoints_xy.as_mut() {
         k[[row, 0]] = xy[0];
         k[[row, 1]] = xy[1];
     }

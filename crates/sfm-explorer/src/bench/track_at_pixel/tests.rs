@@ -181,8 +181,8 @@ fn plane_recon_with(points: &[Point3<f64>], depth: f64) -> SfmrReconstruction {
         keypoints[[row, 0]] = p[0] as f32;
         keypoints[[row, 1]] = p[1] as f32;
     }
+    set.keypoints_xy = Some(keypoints);
     set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: keypoints,
         image_file_hashes: vec![[0u8; 16]; n],
     };
     let mut u = Array2::<f32>::zeros((points.len(), 3));

@@ -93,8 +93,8 @@ fn scene() -> SfmrReconstruction {
     recon.image_set.per_image_adjustments = vec![every_parameter(); 2];
     let rows = recon.point_set.tracks.len();
     let images = recon.image_set.images.len();
+    recon.point_set.keypoints_xy = Some(Array2::zeros((rows, 2)));
     recon.point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: Array2::zeros((rows, 2)),
         image_file_hashes: vec![[0u8; 16]; images],
     };
     recon.metadata.feature_source =

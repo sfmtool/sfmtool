@@ -312,9 +312,9 @@ fn build_points(
             reference_observations: None,
             display_only_references: None,
             observations: ObservationSource::EmbeddedPatches {
-                keypoints_xy,
                 image_file_hashes: vec![[0u8; 16]; n_images],
             },
+            keypoints_xy: Some(keypoints_xy),
             observation_offsets: Vec::new(),
             image_feature_to_point: Vec::new(),
             max_track_feature_index: Vec::new(),
@@ -346,8 +346,7 @@ fn corrupt_observations(recon: &mut SfmrReconstruction, image_index: usize) {
         .filter(|(_, t)| t.image_index as usize == image_index)
         .map(|(row, _)| row)
         .collect();
-    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut recon.point_set.observations
-    else {
+    let Some(keypoints_xy) = recon.point_set.keypoints_xy.as_mut() else {
         unreachable!("the fixtures are embedded_patches");
     };
     for (n, row) in rows.into_iter().enumerate() {
@@ -851,17 +850,10 @@ fn drop_all_but(mut recon: SfmrReconstruction, rows: &[usize]) -> SfmrReconstruc
     for track in &tracks {
         counts[track.point_index as usize] += 1;
     }
-    let ObservationSource::EmbeddedPatches {
-        keypoints_xy,
-        image_file_hashes,
-    } = &recon.point_set.observations
-    else {
+    let Some(keypoints_xy) = &recon.point_set.keypoints_xy else {
         unreachable!("the fixtures are embedded_patches");
     };
-    recon.point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: keypoints_xy.select(ndarray::Axis(0), &kept),
-        image_file_hashes: image_file_hashes.clone(),
-    };
+    recon.point_set.keypoints_xy = Some(keypoints_xy.select(ndarray::Axis(0), &kept));
     recon.point_set.tracks = tracks;
     recon.point_set.observation_counts = counts;
     recon.rebuild_derived_fields();
@@ -1826,8 +1818,7 @@ fn a_bearing_is_a_correspondence_of_the_finite_path() {
         })
         .expect("image 0 observes a point at infinity");
     let mut moved = source.clone();
-    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut moved.point_set.observations
-    else {
+    let Some(keypoints_xy) = moved.point_set.keypoints_xy.as_mut() else {
         unreachable!("the fixtures are embedded_patches");
     };
     keypoints_xy[[row, 0]] += 30.0;

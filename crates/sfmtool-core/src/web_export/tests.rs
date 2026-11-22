@@ -692,11 +692,7 @@ fn observation_offsets_that_do_not_fit_the_tracks_are_refused_naming_them() {
                 let set = &mut r.point_set;
                 let keep = set.tracks.len() - 3;
                 set.tracks.truncate(keep);
-                if let crate::reconstruction::ObservationSource::EmbeddedPatches {
-                    keypoints_xy,
-                    ..
-                } = &mut set.observations
-                {
+                if let Some(keypoints_xy) = set.keypoints_xy.as_mut() {
                     *keypoints_xy = keypoints_xy.slice(ndarray::s![..keep, ..]).to_owned();
                 }
                 if let Some(confidence) = &mut set.observation_confidence {
@@ -714,11 +710,7 @@ fn observation_offsets_that_do_not_fit_the_tracks_are_refused_naming_them() {
         (
             "keypoints with one column",
             |r| {
-                if let crate::reconstruction::ObservationSource::EmbeddedPatches {
-                    keypoints_xy,
-                    ..
-                } = &mut r.point_set.observations
-                {
+                if let Some(keypoints_xy) = r.point_set.keypoints_xy.as_mut() {
                     *keypoints_xy = keypoints_xy.slice(ndarray::s![.., ..1]).to_owned();
                 }
             },

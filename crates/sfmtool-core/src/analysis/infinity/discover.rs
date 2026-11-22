@@ -747,13 +747,8 @@ impl SfmrReconstruction {
                 .push(members.len() as u32);
         }
 
-        if let (
-            Some(rows),
-            ObservationSource::SiftFiles {
-                keypoints_xy: Some(keypoints_xy),
-                ..
-            },
-        ) = (appended_keypoints, &mut recon.point_set.observations)
+        if let (Some(rows), Some(keypoints_xy)) =
+            (appended_keypoints, recon.point_set.keypoints_xy.as_mut())
         {
             for xy in rows {
                 keypoints_xy

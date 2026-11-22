@@ -222,8 +222,8 @@ fn zero_bitmap_rows(mut recon: SfmrReconstruction, points: &[usize]) -> SfmrReco
 /// inline keypoints instead of the SIFT cache.
 fn with_embedded_keypoints(mut recon: SfmrReconstruction) -> SfmrReconstruction {
     let obs_count = recon.point_set.tracks.len();
+    recon.point_set.keypoints_xy = Some(Array2::<f32>::from_elem((obs_count, 2), 100.0));
     recon.point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: Array2::<f32>::from_elem((obs_count, 2), 100.0),
         image_file_hashes: vec![[0u8; 16]; recon.image_set.images.len()],
     };
     recon

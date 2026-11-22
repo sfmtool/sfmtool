@@ -48,8 +48,8 @@ fn point_set() -> PointSet {
         counts.push(observations.len() as u32);
         offsets.push(tracks.len());
     }
+    set.keypoints_xy = Some(Array2::from_shape_vec((tracks.len(), 2), xy).unwrap());
     set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: Array2::from_shape_vec((tracks.len(), 2), xy).unwrap(),
         image_file_hashes: vec![[0; 16]; 3],
     };
     set.tracks = tracks;
@@ -72,9 +72,9 @@ fn the_points_go_by_reference_image_then_row_then_x_with_the_unreferenced_last()
 #[test]
 fn without_keypoints_the_points_of_one_reference_image_go_by_point_index() {
     let mut set = point_set();
+    set.keypoints_xy = None;
     set.observations = ObservationSource::SiftFiles {
         feature_indexes: vec![0; set.tracks.len()],
-        keypoints_xy: None,
         feature_tool_hashes: vec![[0; 16]; 3],
         sift_content_hashes: vec![[0; 16]; 3],
     };

@@ -124,8 +124,9 @@ added, and a harness can re-judge without re-running. The refusals are
 The call itself is refused (`AddImageToTracksError`) for an image index out of
 range, an unposed image, fewer photographs than images, a target whose own
 photograph is missing, a `sift_files` value (an added observation has no feature
-index to name) and a value without patch frames. It fails with
-`AddImageToTracksError::Photograph` when a read of a photograph fails, the first
+index to name), an `embedded_patches` value without its `keypoints_xy` column
+(`NoKeypoints`, which no validated value is) and a value without patch frames.
+It fails with `AddImageToTracksError::Photograph` when a read of a photograph fails, the first
 candidate's in candidate order.
 
 Every read goes through the render entry points

@@ -837,8 +837,8 @@ pub(crate) fn fisheye_node(path: &str) -> crate::scene::SceneNode {
         keypoints_xy[[row, 0]] = uv[0];
         keypoints_xy[[row, 1]] = uv[1];
     }
+    recon.point_set.keypoints_xy = Some(keypoints_xy);
     recon.point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy,
         image_file_hashes: vec![[0u8; 16]; images],
     };
     recon.metadata.feature_source = "embedded_patches".to_string();
