@@ -3,24 +3,25 @@
 **Status:** Draft
 
 Amends [gui/measurement-view.md](../gui/measurement-view.md), which describes
-what is built (steps 1 to 4 of § "Steps"): the selected measurement, the
+what is built (steps 1 to 5 of § "Steps"): the selected measurement, the
 per-version readings, the Scene tree's Measurements group with its row
 gestures and menu, the Measurement View panel with its header, the distance
 body and the endpoint gestures, its *Edit* box and edited mode with the live
 readings, *Commit*, *Discard* and *Rename*, the header's label and stated
-distance fields with their steps, each endpoint block's *Switch image…* with
-its popup and step, deleting a stored measurement, the *Bench Measurements*
-group, and their tools. The measurement item itself, its origin, the steps
-that set its label, its stated distance and an endpoint's image and pixel, its
-commit and the direct delete are
+distance fields with their steps, each endpoint block's image drop-down and
+pixel fields and its *Switch image…* with its popup and step, *Set Endpoint A
+Here* and *Set Endpoint B Here* in Image Detail's menu and the 3D view's point
+menu, a point's reference pixel, deleting a stored measurement, the *Bench
+Measurements* group, and their tools. The measurement item itself, its origin,
+the steps that set its label, its stated distance and an endpoint's image and
+pixel, its commit and the direct delete are
 [core/bench/editable-measurement.md](../core/bench/editable-measurement.md) and
 [gui/bench.md](../gui/bench.md) § "Measurement items", and the offers of the
 popup are `endpoint_views` in
 [core/reconstruction/measurement-endpoint.md](../core/reconstruction/measurement-endpoint.md)
-§ "The views of an endpoint". This draft keeps the rest: setting an endpoint
-by hand in the panel and from Image Detail and the 3D view, creating a
-measurement, and drawing measurements in the 3D view and Image Detail. It also amends
-[gui/bench.md](../gui/bench.md), [gui/scene-graph.md](../gui/scene-graph.md),
+§ "The views of an endpoint". This draft keeps the rest: creating a
+measurement, and drawing measurements in the 3D view and Image Detail. It also
+amends [gui/bench.md](../gui/bench.md), [gui/scene-graph.md](../gui/scene-graph.md),
 [gui/multi-panel-image-browser.md](../gui/multi-panel-image-browser.md) and the
 3D view's specs, as § "What changes in the standing specs" lists.
 
@@ -67,17 +68,16 @@ whose toolbar and fields Measurement View follows),
 
 The edited mode is built: the toolbar, the header with its label and stated
 distance fields ([gui/measurement-view.md](../gui/measurement-view.md) § "The
-label and the stated distance"), the endpoint blocks with *Switch image…* and
-the right-click menu holding *Switch Image…* (§ "Switching an endpoint's
-image" there), and the live readings. The remaining steps add these controls
-to it:
+label and the stated distance"), the endpoint blocks with their image
+drop-down and pixel fields (§ "Setting an endpoint by hand" there), *Switch
+image…* and the right-click menu holding *Switch Image…* (§ "Switching an
+endpoint's image" there), and the live readings. The remaining step adds one
+thing to it:
 
-- in each endpoint block, the image and pixel as fields (§ "Setting an
-  endpoint by hand"), with the 3D position beside them read-only;
 - an endpoint not yet placed is a block saying how to place it: "Right-click a
   pixel in Image Detail, or a point in the 3D view, and choose Set Endpoint B
-  Here." (Built, the block says only `Endpoint B is not placed.`, since the
-  entries it names are not.)
+  Here." (As built, the block says only `Endpoint B is not placed.`, though the
+  entries it names exist.)
 
 ## Steps on an item
 
@@ -89,47 +89,19 @@ reconstruction or marks the node dirty. Each is a pure core function from one
 same `ItemId`. The steps built so far, setting the label, the stated distance
 and an endpoint's image and pixel, are made this way
 ([gui/measurement-view.md](../gui/measurement-view.md) § "The label and the
-stated distance" and § "Switching an endpoint's image").
+stated distance", § "Switching an endpoint's image" and § "Setting an endpoint
+by hand").
 
 | Step | Label in the Edit History |
 |---|---|
 | Switch an endpoint's image | `Moved endpoint A of distance #2 from IMG_0004.jpg to IMG_0011.jpg` (built) |
-| Set an endpoint's image and pixel | `Moved endpoint A of distance #2 to IMG_0004.jpg (412.3, 230.5)` (built, reached by the wire's `set_bench_measurement_endpoint`) |
+| Set an endpoint's image and pixel | `Moved endpoint A of distance #2 to IMG_0004.jpg (412.3, 230.5)` (built: the endpoint block's fields, *Set Endpoint A Here* and *Set Endpoint B Here*, and the wire's `set_bench_measurement_endpoint`) |
 | Place an endpoint not yet placed | `Set endpoint B of distance from IMG_0042@142,198 to IMG_0050.jpg (88.0, 301.5)` |
 
-A pixel outside its image (`[0, width) × [0, height)` of that image's camera) is
-refused with the format's sentence; the built step already does
-(`set_measurement_endpoint`,
-[core/bench/editable-measurement.md](../core/bench/editable-measurement.md) §
-"Setting an endpoint"). Placing an endpoint not yet placed is that step too,
-labelled `Set endpoint B of distance #2 to ...`; what step 6 adds is the item
-with one endpoint that it starts from, and its label.
-
-## Setting an endpoint by hand
-
-The image and the pixel are the endpoint; everything else the block shows is
-derived from them. So both can be set directly, each the step
-`AppState::set_bench_measurement_endpoint` with `EndpointMove::Set` on the
-focused item, which the wire's `set_bench_measurement_endpoint` already makes:
-
-- **In the endpoint block.** The image name is a drop-down of the
-  reconstruction's images, and the pixel is two number fields. A change is one
-  step that sets both, on Enter or when the field loses focus.
-- **In Image Detail.** With a measurement item focused, Image Detail's context
-  menu gains `Set Endpoint A Here` and `Set Endpoint B Here`, which set that
-  endpoint of the focused item to the image shown and the pixel clicked. The
-  context menu is the viewer's way to name a pixel
-  ([multi-panel-image-browser.md](../gui/multi-panel-image-browser.md) §
-  "Image Detail: the context menu"), so this is where a person zoomed in on a
-  photograph places an endpoint precisely.
-- **In the 3D view.** With a measurement item focused, a right-click on a
-  point, which selects it (G3), offers the same two entries, which set the
-  endpoint to the point's **reference pixel** (§ "A point's reference pixel").
-
-The entries are greyed on a node other than the focused item's, with hover
-text naming the item's node. None of them offers the 3D position, the point or
-the texel: they follow from the image and pixel through the resolver every
-time, and a setting that disagreed with them could not be kept.
+Placing an endpoint not yet placed is the built step too, labelled `Set
+endpoint B of distance #2 to ...`, and the two menus' entries already place
+one; what step 6 adds is the item with one endpoint that it starts from, and
+its label.
 
 ## Creating a measurement
 
@@ -140,7 +112,10 @@ time, and a setting that disagreed with them could not be kept.
   since the pixel is the stored measurement.
 - **The 3D view's point menu.** A right-click on a point selects it (G3) and
   offers the entry, which starts the measurement at the point's reference
-  pixel.
+  pixel ([gui/measurement-view.md](../gui/measurement-view.md) § "A point's
+  reference pixel", `measurements::reference_pixel`, the helper *Set Endpoint
+  A Here* reads). The entry is greyed with that section's three sentences, as
+  *Set Endpoint A Here* is, where the point has no reference pixel.
 
 Either puts a new measurement item on the node's bench with endpoint A at that
 pixel and nothing else, focuses it, and raises Measurement View beside the
@@ -154,29 +129,6 @@ half-made measurement waits on the bench, unfocused, until it is finished or
 discarded. *Commit* is greyed, with the refusal naming what is missing, until
 both endpoints and the distance are given, and appends the measurement as a
 new row, as it does for an item with no origin today.
-
-### A point's reference pixel
-
-A point in the 3D view is not a pixel, and a measurement's endpoint must be
-one. The pixel is taken from the point's **reference observation**
-(`tracks/reference_observations`): the image of that observation, and its
-keypoint. The keypoint is where the reference observation's square is centred,
-so the endpoint resolves to texel `(0, 0)` of the point's own patch, which is
-the point itself, through the observation its bitmap was rendered from.
-
-The entries are greyed, with hover text saying why, where the point has no
-reference pixel:
-
-- it has no patch frame (a `sift_files` reconstruction, or a point the patch
-  pass left without one): "This point has no patch, so no pixel stands for it";
-- it has no reference observation (`-1`): "This point has no reference
-  observation to take a pixel from";
-- it is a point at infinity: "This point is at infinity, so no distance can be
-  measured to it".
-
-The entry does not check that the pixel resolves back to the same point: a
-neighbouring square can hold the same pixel and win the ranking. The endpoint
-block then shows which point it resolved to, as for any endpoint.
 
 ## Drawing measurements
 
@@ -236,16 +188,17 @@ the others are clipped as any scene geometry is.
 
 ## MCP
 
-New tools name the remaining steps, each refused in the panel's words:
+A new tool names the remaining step, refused in the panel's words:
 
-- `create_bench_measurement(reconstruction_label, camera_image, pixel)` and
-  `get_point_reference_pixel(reconstruction_label, point)`, so an agent can
-  start from a point as the 3D view's menu does.
+- `create_bench_measurement(reconstruction_label, camera_image, pixel)`. An
+  agent starts from a point as the 3D view's menu does by passing what the
+  built `get_point_reference_pixel` gives it.
 
 The built tools (`put_measurement_on_bench`, `set_bench_measurement_label`,
 `set_bench_measurement_distance`, `get_measurement_endpoint_views`,
 `set_bench_measurement_endpoint`, which takes any pixel inside the image as the
-panel's fields will, `commit_bench_measurement`, `delete_measurement`,
+panel's fields do, `get_point_reference_pixel`, `commit_bench_measurement`,
+`delete_measurement`,
 `get_measurement` naming an item, and the bench tools on a measurement item)
 are in [gui/mcp-server.md](../gui/mcp-server.md). No tool sets an endpoint's
 3D position.
@@ -260,13 +213,12 @@ measurements changes none of those.
 
 ## What changes in the standing specs
 
-- [gui/measurement-view.md](../gui/measurement-view.md): the endpoint blocks'
-  image and pixel fields, setting an endpoint by hand, creating, drawing, and
-  the tools.
+- [gui/measurement-view.md](../gui/measurement-view.md): the unplaced
+  endpoint's instructions, creating, drawing, and the tools.
 - [gui/bench.md](../gui/bench.md): a new measurement item's label.
 - [gui/multi-panel-image-browser.md](../gui/multi-panel-image-browser.md) and
-  the 3D view's specs: the menu entries, the marks, the handles, the indicator
-  and the *Show all measurements* option.
+  the 3D view's specs: *New Measurement from Here*, the marks, the handles, the
+  indicator and the *Show all measurements* option.
 
 ## Steps
 
@@ -311,10 +263,24 @@ Each step is one PR through `implement-change`, with its MCP tools, its
    and the endpoint blocks stack one above the other where the panel is too
    narrow for two side by side, which also stops a block's lines drawing over
    the other's at the default layout's width.
-5. **Setting an endpoint by hand.** The endpoint block's image and pixel
-   fields, `Set Endpoint A Here` and `Set Endpoint B Here` in Image Detail's
-   menu and the 3D view's point menu, the reference pixel and
-   `get_point_reference_pixel`.
+5. **Setting an endpoint by hand.** Built; see
+   [gui/measurement-view.md](../gui/measurement-view.md) § "Setting an
+   endpoint by hand" and § "A point's reference pixel",
+   [gui/multi-panel-image-browser.md](../gui/multi-panel-image-browser.md) §
+   "Image Detail: the context menu",
+   [gui/viewport-navigation.md](../gui/viewport-navigation.md) § "The point
+   context menu" and [gui/mcp-server.md](../gui/mcp-server.md) §
+   "`get_point_reference_pixel`". Fitted to the code: picking an image in the
+   drop-down is the step at once, with the pixel the endpoint holds, since a
+   drop-down has no Enter; a pixel field's text that is not a number is a
+   failed row in the panel's sentence rather than a step; an unplaced
+   endpoint's block has no fields, since there is no image or pixel to start
+   from, and the menus place it; the entries are greyed by the step's own
+   refusal too, a busy node or a view-only bench; a point's reference is the
+   one it holds in the version on screen, a pick only the display render made
+   included, and no column counts as no reference; and the greying on another
+   node is reachable only on the frame a right-click lands on another node's
+   point, since that selection unfocuses the item.
 6. **Creating a measurement.** `New Measurement from Here` in both menus, an
    item with one endpoint and its label, the unplaced endpoint's block with
    its instructions, and `create_bench_measurement`.
@@ -330,9 +296,8 @@ Each step is one PR through `implement-change`, with its MCP tools, its
   on the item changes its live readings and not the stored measurement's.
 - Creating: starting from a pixel and from a point; the entry greyed, with its
   sentence, on a point with no patch, no reference observation, or at
-  infinity; a point's reference pixel resolving to texel `(0, 0)` of its
-  patch where no other square holds it; *Commit* greyed until B and the
-  distance are given, then appending one row.
+  infinity; *Commit* greyed until B and the distance are given, then
+  appending one row.
 - Drawing: with the option off only the selected measurement and the focused
   item are drawn; with it on, every measurement of a visible reconstruction; a
   hidden reconstruction draws none either way; a handle drag is one version; a

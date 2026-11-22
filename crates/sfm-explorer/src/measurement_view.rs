@@ -21,8 +21,10 @@
 //! endpoint and its image and reveals its pixel in Image Detail, a
 //! double-click enters camera view through its image turned toward the pixel,
 //! and a hover sets the cross-panel hover to its image. The block's own
-//! buttons keep their clicks. In the edited mode each block also has *Switch
-//! image…*, and a right-click menu holding *Switch Image…*, which open a
+//! buttons keep their clicks. In the edited mode each block's image name is a
+//! drop-down of the reconstruction's images and its pixel two number fields,
+//! each of which sets the endpoint's image and pixel in one step, and the block
+//! also has *Switch image…*, and a right-click menu holding *Switch Image…*, which open a
 //! popup of the other photographs that show the endpoint's place (core's
 //! `endpoint_views`); a click on one of its rows asks for the step that moves
 //! the endpoint there. The blocks stand side by side where the panel is wide
@@ -116,6 +118,12 @@ pub(crate) struct MeasurementViewResponse {
     pub(crate) set_distance: Option<(ReconId, String, String)>,
     /// A row of an endpoint's *Switch image…* popup was clicked.
     pub(crate) switch_endpoint: Option<EndpointSwitch>,
+    /// An endpoint block's image drop-down or pixel field was committed: the
+    /// endpoint set to that image and pixel.
+    pub(crate) set_endpoint: Option<crate::bench::measurement::EndpointSet>,
+    /// A pixel field was committed with text that is not a number: the
+    /// sentence the dock writes as a failed row.
+    pub(crate) endpoint_refused: Option<String>,
 }
 
 /// A row of the *Switch image…* popup that was clicked: move endpoint `side`
@@ -175,12 +183,150 @@ pub(crate) const LABEL_FIELD_NAME: &str = "measurement label";
 /// The name of the edited mode's stated distance field.
 pub(crate) const DISTANCE_FIELD_NAME: &str = "measurement stated distance";
 
-/// A header field being typed in: which item, the text the field held when
-/// it took focus, and the text typed so far.
+/// A field of the edited mode being typed in: which item, the text the field
+/// held when it took focus, and the text typed so far.
 struct FieldDraft {
     item: String,
     original: String,
     text: String,
+}
+
+/// One field of the edited mode, as [`draft_field`] draws it.
+struct DraftField<'a> {
+    /// The item the field edits, by its label on the bench.
+    item: &'a str,
+    /// What the field holds while nobody is typing in it.
+    value: &'a str,
+    /// Why a step on the item would be refused, which greys the field.
+    refusal: Option<&'a str>,
+    /// The grey text an empty field shows.
+    empty: &'a str,
+    /// The hover text of a field that can be typed in.
+    hint: &'a str,
+    width: f32,
+    /// The field's name in the widget listing.
+    name: &'a str,
+}
+
+/// A text field of the edited mode, holding `field.value` while nobody is
+/// typing in it and its draft in `slot` while somebody is. What it was set
+/// to, on the frame it is committed: Enter, or the field losing focus, with
+/// text other than the text it held when it took focus. Escape puts the field
+/// back and commits nothing. Where it was drawn comes back too.
+///
+/// Each field keeps its own draft, so moving the focus straight from one
+/// field to another commits the first once rather than losing it or handing
+/// its text to the second.
+fn draft_field(
+    ui: &mut egui::Ui,
+    slot: &mut Option<FieldDraft>,
+    field: DraftField<'_>,
+) -> (Option<String>, Rect) {
+    if slot.as_ref().is_some_and(|draft| draft.item != field.item) {
+        *slot = None;
+    }
+    let mut text = match slot {
+        Some(draft) => draft.text.clone(),
+        None => field.value.to_string(),
+    };
+    let edit = egui::TextEdit::singleline(&mut text)
+        .desired_width(field.width)
+        .hint_text(field.empty);
+    let shown = ui.add_enabled(field.refusal.is_none(), edit);
+    crate::widget_name::set_widget_name(&shown, field.name);
+    let rect = shown.rect;
+    let shown = match field.refusal {
+        Some(why) => shown.on_disabled_hover_text(why),
+        None => shown.on_hover_text(field.hint),
+    };
+    if shown.lost_focus() {
+        let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        let original = slot
+            .take()
+            .map_or_else(|| field.value.to_string(), |draft| draft.original);
+        return ((!cancelled && text != original).then_some(text), rect);
+    }
+    if shown.has_focus() {
+        match slot {
+            Some(draft) => draft.text = text,
+            slot => {
+                *slot = Some(FieldDraft {
+                    item: field.item.to_string(),
+                    original: field.value.to_string(),
+                    text,
+                })
+            }
+        }
+    } else {
+        // Not focused, so whatever was typed here was committed or put back
+        // on the frame focus left.
+        *slot = None;
+    }
+    (None, rect)
+}
+
+/// One of an endpoint block's two pixel fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PixelAxis {
+    X,
+    Y,
+}
+
+impl PixelAxis {
+    const BOTH: [PixelAxis; 2] = [PixelAxis::X, PixelAxis::Y];
+
+    fn index(self) -> usize {
+        match self {
+            PixelAxis::X => 0,
+            PixelAxis::Y => 1,
+        }
+    }
+
+    fn letter(self) -> &'static str {
+        match self {
+            PixelAxis::X => "x",
+            PixelAxis::Y => "y",
+        }
+    }
+}
+
+/// The name of endpoint `side`'s image drop-down in the widget listing.
+pub(crate) fn image_field_name(side: EndpointSide) -> &'static str {
+    match side {
+        EndpointSide::A => "endpoint A image",
+        EndpointSide::B => "endpoint B image",
+    }
+}
+
+/// The name of endpoint `side`'s pixel field `axis` in the widget listing.
+pub(crate) fn pixel_field_name(side: EndpointSide, axis: PixelAxis) -> &'static str {
+    match (side, axis) {
+        (EndpointSide::A, PixelAxis::X) => "endpoint A pixel x",
+        (EndpointSide::A, PixelAxis::Y) => "endpoint A pixel y",
+        (EndpointSide::B, PixelAxis::X) => "endpoint B pixel x",
+        (EndpointSide::B, PixelAxis::Y) => "endpoint B pixel y",
+    }
+}
+
+/// What a pixel field shows of a stored coordinate: the shortest text that
+/// reads back as the same `float32`, which is how the file stores it, so a
+/// field left as it is commits nothing and one typed over holds what was
+/// typed.
+pub(crate) fn pixel_text(coordinate: f64) -> String {
+    format!("{}", coordinate as f32)
+}
+
+/// What an endpoint block's fields keep between frames: each pixel field's
+/// draft, and where the fields and the drop-down's rows were drawn on the
+/// last frame, for the tests that aim at them.
+#[derive(Default)]
+struct EndpointFields {
+    drafts: [Option<FieldDraft>; 2],
+    pixel_rects: [Option<Rect>; 2],
+    image_rect: Option<Rect>,
+    /// The drop-down's rows while it is open: where each was drawn, and the
+    /// image it names.
+    choices: Vec<(Rect, u32)>,
 }
 
 /// Which picture of which endpoint of which version a cached picture is: the
@@ -284,6 +430,9 @@ pub(crate) struct MeasurementView {
     /// The popup's rows as the last frame drew them: where each row's image
     /// name was drawn, and the image and pixel the row moves the endpoint to.
     offer_rows: Vec<(Rect, u32, [f64; 2])>,
+    /// Each endpoint block's image drop-down and pixel fields in the edited
+    /// mode, indexed by [`EndpointSide::index`].
+    endpoint_fields: [EndpointFields; 2],
 }
 
 /// The offers of one endpoint of the focused item, read once per item value,
@@ -365,6 +514,27 @@ impl MeasurementView {
         &self.offer_rows
     }
 
+    /// Where endpoint `side`'s pixel field `axis` was drawn on the last frame,
+    /// in the edited mode.
+    #[cfg(test)]
+    pub(crate) fn pixel_field_rect(&self, side: EndpointSide, axis: PixelAxis) -> Option<Rect> {
+        self.endpoint_fields[side.index()].pixel_rects[axis.index()]
+    }
+
+    /// Where endpoint `side`'s image drop-down was drawn on the last frame, in
+    /// the edited mode.
+    #[cfg(test)]
+    pub(crate) fn image_field_rect(&self, side: EndpointSide) -> Option<Rect> {
+        self.endpoint_fields[side.index()].image_rect
+    }
+
+    /// The rows of endpoint `side`'s open image drop-down as the last frame
+    /// drew them: where each was drawn, and the image it names.
+    #[cfg(test)]
+    pub(crate) fn image_choices(&self, side: EndpointSide) -> &[(Rect, u32)] {
+        &self.endpoint_fields[side.index()].choices
+    }
+
     /// The focused item's readings, as the last frame read them.
     #[cfg(test)]
     pub(crate) fn item_reading(&self) -> Option<&ItemReading> {
@@ -385,6 +555,11 @@ impl MeasurementView {
         self.switches = [None, None];
         self.menu_entries = [None, None];
         self.offer_rows.clear();
+        for fields in &mut self.endpoint_fields {
+            fields.pixel_rects = [None, None];
+            fields.image_rect = None;
+            fields.choices.clear();
+        }
         let Some(node) = crate::scene::selected_node(&state.scene, state.selected_recon) else {
             self.pictures.clear();
             self.reading = None;
@@ -423,6 +598,7 @@ impl MeasurementView {
         self.reading = None;
         self.renaming = None;
         self.drafts = [None, None];
+        self.endpoint_fields = Default::default();
         self.offers = None;
         self.offer_crops.clear();
         let Some(measurement) = selected else {
@@ -620,48 +796,21 @@ impl MeasurementView {
         empty: &str,
         hint: &str,
     ) -> Option<String> {
-        let slot = &mut self.drafts[field.index()];
-        if slot.as_ref().is_some_and(|draft| draft.item != item) {
-            *slot = None;
-        }
-        let mut text = match slot {
-            Some(draft) => draft.text.clone(),
-            None => value.to_string(),
-        };
-        let edit = egui::TextEdit::singleline(&mut text)
-            .desired_width(180.0)
-            .hint_text(empty);
-        let shown = ui.add_enabled(refusal.is_none(), edit);
-        crate::widget_name::set_widget_name(&shown, field.widget_name());
-        self.fields[field.index()] = Some(shown.rect);
-        let shown = match refusal {
-            Some(why) => shown.on_disabled_hover_text(why),
-            None => shown.on_hover_text(hint),
-        };
-        if shown.lost_focus() {
-            let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
-            let original = self.drafts[field.index()]
-                .take()
-                .map_or_else(|| value.to_string(), |draft| draft.original);
-            return (!cancelled && text != original).then_some(text);
-        }
-        if shown.has_focus() {
-            match &mut self.drafts[field.index()] {
-                Some(draft) => draft.text = text,
-                slot => {
-                    *slot = Some(FieldDraft {
-                        item: item.to_string(),
-                        original: value.to_string(),
-                        text,
-                    })
-                }
-            }
-        } else {
-            // Not focused, so whatever was typed here was committed or put
-            // back on the frame focus left.
-            self.drafts[field.index()] = None;
-        }
-        None
+        let (committed, rect) = draft_field(
+            ui,
+            &mut self.drafts[field.index()],
+            DraftField {
+                item,
+                value,
+                refusal,
+                empty,
+                hint,
+                width: 180.0,
+                name: field.widget_name(),
+            },
+        );
+        self.fields[field.index()] = Some(rect);
+        committed
     }
 
     /// The toolbar of the edited mode: *Commit*, greyed with the refusal the
@@ -784,7 +933,12 @@ impl MeasurementView {
             };
             this.ensure_pictures(ui.ctx(), state, &block, key);
             let pictures = this.pictures.get(&key);
-            let drawn = block.show(ui, pictures, response);
+            let fields = edit.map(|edit| BlockFields {
+                item: edit.label,
+                refusal: edit.refusal.as_deref(),
+                kept: &mut this.endpoint_fields[side.index()],
+            });
+            let drawn = block.show(ui, pictures, fields, response);
             this.names[side.index()] = Some(drawn.name);
             this.note_block(side, &drawn);
             if let (Some(edit), Some(button)) = (edit, &drawn.switch_button) {
@@ -1642,7 +1796,10 @@ impl EndpointBlock<'_> {
         format!("{}_{:.3}_{:.3}", self.image, self.pixel[0], self.pixel[1])
     }
 
-    /// Draw the block and report its gestures into `response`.
+    /// Draw the block and report its gestures into `response`. In the edited
+    /// mode (`fields`) the image name is a drop-down of the reconstruction's
+    /// images and the pixel is two number fields
+    /// ([`Self::show_fields`]).
     ///
     /// Every line wraps inside the block's width, so a long one, such as the
     /// position, never reaches into the block beside it.
@@ -1650,6 +1807,7 @@ impl EndpointBlock<'_> {
         &self,
         ui: &mut egui::Ui,
         pictures: Option<&EndpointPictures>,
+        fields: Option<BlockFields<'_>>,
         response: &mut MeasurementViewResponse,
     ) -> BlockDrawn {
         let visuals = ui.visuals().clone();
@@ -1670,23 +1828,32 @@ impl EndpointBlock<'_> {
             let width = ui.available_width();
             ui.set_width(width);
             ui.set_max_width(width);
-            let name = ui.add(
-                egui::Label::new(
-                    egui::RichText::new(format!(
-                        "{}  {}",
-                        self.side.letter(),
-                        measurements::image_name(recon, image)
-                    ))
-                    .strong(),
-                )
-                .sense(egui::Sense::click())
-                .truncate(),
-            );
-            name_rect = name.rect;
-            targets.push(name);
-            targets.push(
-                ui.add(egui::Label::new(format!("({x:.1}, {y:.1})")).sense(egui::Sense::click())),
-            );
+            match fields {
+                None => {
+                    let name = ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(format!(
+                                "{}  {}",
+                                self.side.letter(),
+                                measurements::image_name(recon, image)
+                            ))
+                            .strong(),
+                        )
+                        .sense(egui::Sense::click())
+                        .truncate(),
+                    );
+                    name_rect = name.rect;
+                    targets.push(name);
+                    targets.push(ui.add(
+                        egui::Label::new(format!("({x:.1}, {y:.1})")).sense(egui::Sense::click()),
+                    ));
+                }
+                Some(fields) => {
+                    let letter = self.show_fields(ui, fields, response);
+                    name_rect = letter.rect;
+                    targets.push(letter);
+                }
+            }
             if let Some(refusal) = &self.switch {
                 button = Some(switch_button(ui, refusal.clone()));
             }
@@ -1813,7 +1980,138 @@ fn show_crop(
     }
 }
 
+/// What the edited mode hands an endpoint block for its fields: the item, by
+/// its label on the bench, why a step on it would be refused, which greys
+/// them, and what the block keeps between frames.
+struct BlockFields<'a> {
+    item: &'a str,
+    refusal: Option<&'a str>,
+    kept: &'a mut EndpointFields,
+}
+
 impl EndpointBlock<'_> {
+    /// The edited mode's first two lines of a block: the endpoint's letter,
+    /// the block's click target on that line, beside a drop-down of the
+    /// reconstruction's images, then the pixel as two number fields, `x` and
+    /// `y`. The letter's response comes back.
+    ///
+    /// Picking another image in the drop-down is one step that sets the image
+    /// and the pixel the endpoint holds. A pixel field commits as the header's
+    /// fields do ([`draft_field`]), as one step that sets the image the
+    /// endpoint holds and the pixel with that coordinate typed. Text that is
+    /// not a finite number asks for no step and is reported as a refusal.
+    /// Both are greyed, with the step's refusal as hover text, while a step
+    /// on the item would be refused.
+    fn show_fields(
+        &self,
+        ui: &mut egui::Ui,
+        fields: BlockFields<'_>,
+        response: &mut MeasurementViewResponse,
+    ) -> egui::Response {
+        let BlockFields {
+            item,
+            refusal,
+            kept,
+        } = fields;
+        let recon = self.node.recon();
+        let side = self.side;
+        let set = |image: u32, pixel: [f64; 2]| crate::bench::measurement::EndpointSet {
+            node: self.node.id,
+            item: item.to_string(),
+            side,
+            image,
+            pixel,
+        };
+        let letter = ui
+            .horizontal(|ui| {
+                let letter = ui.add(
+                    egui::Label::new(egui::RichText::new(side.letter()).strong())
+                        .sense(egui::Sense::click()),
+                );
+                let mut chosen = None;
+                let width = (ui.available_width() - 8.0).max(80.0);
+                let combo = ui
+                    .add_enabled_ui(refusal.is_none(), |ui| {
+                        egui::ComboBox::from_id_salt(("measurement_endpoint_image", side.index()))
+                            .selected_text(measurements::image_name(recon, self.image))
+                            .width(width)
+                            .truncate()
+                            .show_ui(ui, |ui| {
+                                for (i, image) in recon.image_set.images.iter().enumerate() {
+                                    let i = i as u32;
+                                    let row = ui.selectable_label(i == self.image, &image.name);
+                                    kept.choices.push((row.rect, i));
+                                    if row.clicked() {
+                                        chosen = Some(i);
+                                    }
+                                }
+                            })
+                    })
+                    .inner
+                    .response;
+                crate::widget_name::set_widget_name(&combo, image_field_name(side));
+                kept.image_rect = Some(combo.rect);
+                match refusal {
+                    Some(why) => {
+                        combo.on_disabled_hover_text(why);
+                    }
+                    None => {
+                        combo.on_hover_text(
+                            "The photograph this endpoint is in. Picking another keeps the \
+                             pixel, which has to be inside that photograph.",
+                        );
+                    }
+                }
+                if let Some(image) = chosen.filter(|&image| image != self.image) {
+                    response.set_endpoint = Some(set(image, self.pixel));
+                }
+                letter
+            })
+            .inner;
+        ui.horizontal(|ui| {
+            for axis in PixelAxis::BOTH {
+                ui.label(axis.letter());
+                let value = pixel_text(self.pixel[axis.index()]);
+                let hint = format!(
+                    "The endpoint's {} pixel coordinate. Enter or clicking elsewhere sets it; \
+                     Escape puts it back.",
+                    axis.letter()
+                );
+                let (committed, rect) = draft_field(
+                    ui,
+                    &mut kept.drafts[axis.index()],
+                    DraftField {
+                        item,
+                        value: &value,
+                        refusal,
+                        empty: "",
+                        hint: &hint,
+                        width: 72.0,
+                        name: pixel_field_name(side, axis),
+                    },
+                );
+                kept.pixel_rects[axis.index()] = Some(rect);
+                let Some(text) = committed else {
+                    continue;
+                };
+                match text.trim().parse::<f64>().ok().filter(|v| v.is_finite()) {
+                    Some(coordinate) => {
+                        let mut pixel = self.pixel;
+                        pixel[axis.index()] = coordinate;
+                        response.set_endpoint = Some(set(self.image, pixel));
+                    }
+                    None => {
+                        response.endpoint_refused = Some(format!(
+                            "Cannot move endpoint {} of {item}: \"{text}\" is not a number.",
+                            side.letter()
+                        ));
+                    }
+                }
+            }
+        });
+        letter
+    }
+
     /// The chosen point's stored patch, with a cross at the endpoint's texel.
     fn show_patch(&self, ui: &mut egui::Ui, patch: &egui::TextureHandle) -> egui::Response {
         let (rect, response) =

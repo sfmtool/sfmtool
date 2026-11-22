@@ -8,8 +8,10 @@
 //! edit, `put_measurement_on_bench`, `set_bench_measurement_label`,
 //! `set_bench_measurement_distance`, `set_bench_measurement_endpoint`,
 //! `commit_bench_measurement` and `delete_measurement`, each one `AppState`
-//! call the panel's gesture makes; and `get_measurement_endpoint_views`, the
-//! offers of the panel's *Switch image…* popup.
+//! call the panel's gesture makes; `get_measurement_endpoint_views`, the
+//! offers of the panel's *Switch image…* popup; and
+//! `get_point_reference_pixel`, the pixel the 3D view's point menu sets an
+//! endpoint to.
 //!
 //! A stored measurement's reading is the node's cached one
 //! ([`crate::measurements::readings`]), so the wire, the tree and the panel
@@ -447,6 +449,35 @@ pub(super) fn get_measurement_endpoint_views(
         "pixel": endpoint.pixel,
         "localization_unit": recon.metadata.world_space_unit,
         "views": listed,
+    }))
+}
+
+/// `get_point_reference_pixel`: point `point`'s reference pixel, the image
+/// and keypoint of its reference observation
+/// ([`crate::measurements::reference_pixel`]), which *Set Endpoint A Here*
+/// and *Set Endpoint B Here* in the 3D view's point menu set an endpoint to.
+///
+/// Refused in the menu entries' words where the point has no patch frame, no
+/// reference observation, or is at infinity. It changes nothing, so it is not
+/// refused on a view-only bench or while a task holds the node.
+pub(super) fn get_point_reference_pixel(
+    state: &AppState,
+    reconstruction_label: &str,
+    point: &crate::goto_point::PointQuery,
+) -> JsonReply {
+    let id = resolve_reconstruction(state, Some(reconstruction_label))?;
+    let point = super::resolve_point_in(state, id, point)?;
+    let node = state.node(id).expect("just resolved");
+    let reference =
+        measurements::reference_pixel(node.edited(), point.point).map_err(ToolError::new)?;
+    Ok(json!({
+        "reconstruction_label": node.label,
+        "point": point.point,
+        "point_id": crate::scene::point_id(node, point.index()),
+        "observation": reference.observation,
+        "camera_image": reference.image,
+        "camera_image_name": measurements::image_name(node.recon(), reference.image),
+        "pixel": reference.pixel,
     }))
 }
 

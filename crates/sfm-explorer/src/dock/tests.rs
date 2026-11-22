@@ -442,3 +442,76 @@ fn a_switch_popup_row_reaches_its_step() {
     let a = item.as_distance().unwrap().endpoints[0].unwrap();
     assert_eq!((a.image, a.pixel), (1, [415.0, 240.0]));
 }
+
+/// An endpoint block's fields reach the step through the dock: a set is one
+/// bench version labelled by the pixel, a pixel outside its image is a failed
+/// row in the format's sentence with no version, and a pixel that is not a
+/// number is the failed row the panel wrote.
+#[test]
+fn the_endpoint_fields_reach_their_step() {
+    use crate::bench::measurement::EndpointSet;
+    use crate::measurements::{EndpointSide, MeasurementRef};
+    let (mut state, id) = crate::measurements::fixture::measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    let set = |pixel: [f64; 2]| EndpointSet {
+        node: id,
+        item: "distance #0".into(),
+        side: EndpointSide::B,
+        image: 1,
+        pixel,
+    };
+    let before = state.node(id).unwrap().history.versions().len();
+    let mut track_view = TrackView::new();
+    with_tabs(&mut state, &mut track_view, |tabs, ui| {
+        tabs.apply_measurement_view_response(
+            ui,
+            crate::measurement_view::MeasurementViewResponse {
+                set_endpoint: Some(set([100.0, 50.5])),
+                ..Default::default()
+            },
+        );
+    });
+    let node = state.node(id).unwrap();
+    assert_eq!(node.history.versions().len(), before + 1);
+    assert_eq!(
+        node.history.current_version().label,
+        "Moved endpoint B of distance #0 to image_001.jpg (100.0, 50.5)"
+    );
+    let b = state.bench_measurement(id, "distance #0").unwrap();
+    let b = b.as_distance().unwrap().endpoints[1].unwrap();
+    assert_eq!((b.image, b.pixel), (1, [100.0, 50.5]));
+
+    with_tabs(&mut state, &mut track_view, |tabs, ui| {
+        tabs.apply_measurement_view_response(
+            ui,
+            crate::measurement_view::MeasurementViewResponse {
+                set_endpoint: Some(set([100.0, 480.0])),
+                ..Default::default()
+            },
+        );
+    });
+    assert_eq!(state.node(id).unwrap().history.versions().len(), before + 1);
+    let last = state.action_log.entries().last().expect("a row");
+    assert!(last.failed);
+    assert_eq!(
+        last.text,
+        "Cannot move endpoint B of distance #0: endpoint B's pixel (100, 480) is outside image \
+         1, which is [0, 640) x [0, 480)."
+    );
+
+    let why = "Cannot move endpoint B of distance #0: \"abc\" is not a number.";
+    with_tabs(&mut state, &mut track_view, |tabs, ui| {
+        tabs.apply_measurement_view_response(
+            ui,
+            crate::measurement_view::MeasurementViewResponse {
+                endpoint_refused: Some(why.into()),
+                ..Default::default()
+            },
+        );
+    });
+    let last = state.action_log.entries().last().expect("a row");
+    assert!(last.failed);
+    assert_eq!(last.text, why);
+}

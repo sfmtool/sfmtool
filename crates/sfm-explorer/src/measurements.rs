@@ -581,6 +581,76 @@ pub(crate) fn image_name(recon: &SfmrReconstruction, image: u32) -> String {
         .map_or_else(|| format!("image #{image}"), |i| i.name.clone())
 }
 
+/// A point's **reference pixel**: the image and keypoint of its reference
+/// observation (`tracks/reference_observations`), the pixel that stands for
+/// the point where a measurement's endpoint is taken from one
+/// ([`reference_pixel`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ReferencePixel {
+    /// The reference observation's index in the point's track.
+    pub(crate) observation: usize,
+    /// Its image.
+    pub(crate) image: u32,
+    /// Its keypoint, the centre of its square.
+    pub(crate) pixel: [f64; 2],
+}
+
+/// Why a point with no patch frame has no reference pixel.
+pub(crate) const NO_PATCH_FOR_PIXEL: &str = "This point has no patch, so no pixel stands for it.";
+
+/// Why a point with no reference observation has no reference pixel.
+pub(crate) const NO_REFERENCE_FOR_PIXEL: &str =
+    "This point has no reference observation to take a pixel from.";
+
+/// Why a point at infinity has no reference pixel.
+pub(crate) const AT_INFINITY_FOR_PIXEL: &str =
+    "This point is at infinity, so no distance can be measured to it.";
+
+/// Point `point`'s reference pixel in `edited`, or the sentence saying why it
+/// has none: no patch frame (a `sift_files` reconstruction, or a point the
+/// patch pass left without one), no reference observation, or a point at
+/// infinity, asked in that order.
+///
+/// A measurement's endpoint is a pixel and a point is not, so a gesture that
+/// takes an endpoint from a point takes this pixel: the keypoint is the centre
+/// of the reference observation's square, so the endpoint resolves to texel
+/// `(0, 0)` of the point's own patch, the point itself, where no other square
+/// in that image holds the pixel and wins the ranking. The reference is the
+/// one the point holds in this version, a pick only the display render made
+/// included, since that is the observation its bitmap on screen was rendered
+/// from. Nothing here checks that the pixel resolves back to the point.
+pub(crate) fn reference_pixel(
+    edited: &EditedReconstruction,
+    point: u32,
+) -> Result<ReferencePixel, String> {
+    let view = edited
+        .point(point)
+        .ok_or_else(|| format!("There is no point {point} in this version."))?;
+    if view.patch_frame().is_none() {
+        return Err(NO_PATCH_FOR_PIXEL.to_string());
+    }
+    let observation = view
+        .reference_observation()
+        .and_then(|k| usize::try_from(k).ok())
+        .filter(|&k| k < view.observations().len())
+        .ok_or_else(|| NO_REFERENCE_FOR_PIXEL.to_string())?;
+    if view.point().is_at_infinity() {
+        return Err(AT_INFINITY_FOR_PIXEL.to_string());
+    }
+    // An `embedded_patches` value keeps a keypoint per observation, and only
+    // such a value carries patch frames, so this is there whenever the frame
+    // is; a value with frames and no inline keypoints has nothing to stand
+    // for the point either.
+    let [x, y] = view
+        .keypoint_xy(observation)
+        .ok_or_else(|| NO_PATCH_FOR_PIXEL.to_string())?;
+    Ok(ReferencePixel {
+        observation,
+        image: view.observations()[observation].image_index,
+        pixel: [f64::from(x), f64::from(y)],
+    })
+}
+
 /// Where the finite endpoints of `measurement` are drawn, in the shared world
 /// space: each finite position put through its node's display transform, as
 /// its points are. Empty for a measurement the version on screen does not

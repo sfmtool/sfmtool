@@ -2520,3 +2520,119 @@ fn a_trackpad_pinch_zooms_the_viewport() {
         "the distance changed by {ratio}"
     );
 }
+
+// ── The measurement item's two entries ──────────────────────────────────
+
+/// A viewport settled over `state`, as [`settled`] settles one over the demo.
+fn settled_over(mut state: AppState) -> (Viewer3D, egui::Context, AppState) {
+    let mut viewer = Viewer3D::new();
+    let ctx = egui::Context::default();
+    for _ in 0..2 {
+        run_frame(
+            &mut viewer,
+            &ctx,
+            &mut state,
+            vec![egui::Event::PointerMoved(OVER_A_POINT)],
+            OVER_A_POINT,
+            None,
+            None,
+        );
+    }
+    viewer.point_menu = None;
+    (viewer, ctx, state)
+}
+
+/// With a measurement item focused, a right-click on a point still asks for
+/// the point to be selected and offers *Set Endpoint A Here* and *Set
+/// Endpoint B Here* after the point's own two; choosing one reports that
+/// endpoint and the point. With none focused the two are not offered.
+#[test]
+fn a_focused_measurement_adds_the_set_endpoint_entries_to_the_point_menu() {
+    use crate::bench::measurement::set_endpoint_here_label;
+    use crate::measurements::EndpointSide;
+    let (mut state, id) = crate::measurements::fixture::referenced_state(Some("m"));
+    state
+        .put_measurement_on_bench(crate::measurements::MeasurementRef::distance(id, 0))
+        .unwrap();
+    let (mut viewer, ctx, mut state) = settled_over(state);
+    let point = PointRef::new(id, 0);
+    let pick = Some(PickTarget::Point(point));
+
+    viewer.endpoint_target = state.endpoint_target();
+    right_click(&mut viewer, &ctx, &mut state, pick, None);
+    assert_eq!(viewer.point_menu, Some(PointGesture::Opened(point)));
+    let offered: Vec<&str> = viewer.menu_entry_rects.iter().map(|(t, _)| *t).collect();
+    assert_eq!(
+        offered,
+        [
+            EDIT_ON_BENCH_LABEL,
+            RETRIANGULATE_POINT_LABEL,
+            set_endpoint_here_label(EndpointSide::A),
+            set_endpoint_here_label(EndpointSide::B),
+        ]
+    );
+    viewer.point_menu = None;
+    click_entry(
+        &mut viewer,
+        &ctx,
+        &mut state,
+        pick,
+        None,
+        set_endpoint_here_label(EndpointSide::B),
+    );
+    assert_eq!(
+        viewer.point_menu,
+        Some(PointGesture::SetEndpointHere(point, EndpointSide::B))
+    );
+
+    // The entry closed the menu; with no measurement item focused the next
+    // one has the point's own two entries only.
+    viewer.endpoint_target = None;
+    viewer.point_menu = None;
+    right_click(&mut viewer, &ctx, &mut state, pick, None);
+    assert_eq!(viewer.point_menu, Some(PointGesture::Opened(point)));
+    let offered: Vec<&str> = viewer.menu_entry_rects.iter().map(|(t, _)| *t).collect();
+    assert_eq!(offered, [EDIT_ON_BENCH_LABEL, RETRIANGULATE_POINT_LABEL]);
+}
+
+/// The two entries are greyed, and a click on one asks for nothing, on a
+/// point with no reference pixel; the point's own entries stay live.
+#[test]
+fn the_set_endpoint_entries_are_greyed_on_a_point_with_no_reference_pixel() {
+    use crate::bench::measurement::set_endpoint_here_label;
+    use crate::measurements::EndpointSide;
+    let (mut state, id) = crate::measurements::fixture::referenced_state(Some("m"));
+    state
+        .put_measurement_on_bench(crate::measurements::MeasurementRef::distance(id, 0))
+        .unwrap();
+    let (mut viewer, ctx, mut state) = settled_over(state);
+    viewer.endpoint_target = state.endpoint_target();
+    // Point 1 has no reference observation.
+    let point = PointRef::new(id, 1);
+    let pick = Some(PickTarget::Point(point));
+    right_click(&mut viewer, &ctx, &mut state, pick, None);
+    assert_eq!(viewer.menu_entry_rects.len(), 4);
+    viewer.point_menu = None;
+    click_entry(
+        &mut viewer,
+        &ctx,
+        &mut state,
+        pick,
+        None,
+        set_endpoint_here_label(EndpointSide::A),
+    );
+    assert_eq!(viewer.point_menu, None, "a greyed entry asked for its step");
+    // The click closed the menu; the point's own entry, in a menu opened
+    // again, still runs.
+    right_click(&mut viewer, &ctx, &mut state, pick, None);
+    viewer.point_menu = None;
+    click_entry(
+        &mut viewer,
+        &ctx,
+        &mut state,
+        pick,
+        None,
+        RETRIANGULATE_POINT_LABEL,
+    );
+    assert_eq!(viewer.point_menu, Some(PointGesture::Retriangulate(point)));
+}

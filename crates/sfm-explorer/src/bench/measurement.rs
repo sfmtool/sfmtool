@@ -68,10 +68,87 @@ pub(crate) enum EndpointMove {
     /// A row of the *Switch image…* popup: to the same place on the surface
     /// in another photograph, named by the two images.
     Switch,
-    /// An image and a pixel given outright, named by the pixel: the wire's
+    /// An image and a pixel given outright, named by the pixel: the endpoint
+    /// block's fields, *Set Endpoint A Here* and *Set Endpoint B Here* in
+    /// Image Detail's menu and the 3D view's point menu, and the wire's
     /// `set_bench_measurement_endpoint`.
-    #[cfg(any(test, feature = "mcp"))]
     Set,
+}
+
+/// What a gesture that sets an endpoint outright asked for: endpoint `side`
+/// of the item `item` on `node`'s bench, to `pixel` of `image`. The endpoint
+/// block's fields, and the two menus' *Set Endpoint … Here*, all end in one
+/// ([`AppState::set_endpoint`]).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct EndpointSet {
+    pub(crate) node: ReconId,
+    pub(crate) item: String,
+    pub(crate) side: EndpointSide,
+    pub(crate) image: u32,
+    pub(crate) pixel: [f64; 2],
+}
+
+/// The focused measurement item, as the menus that set one of its endpoints
+/// see it ([`AppState::endpoint_target`]): where it is, and why a step on it
+/// is refused, if it is.
+///
+/// Read once a frame by the dock, before a panel borrows the scene, and
+/// handed to Image Detail and the 3D view, so the two menus offer and grey
+/// their entries by one answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EndpointTarget {
+    /// The item's node.
+    pub(crate) node: ReconId,
+    /// The item's label on that bench.
+    pub(crate) item: String,
+    /// The node's label, for the sentence naming it.
+    node_label: String,
+    /// Why a step on the item is refused (`AppState::bench_edit_refusal`: a
+    /// task holding the node, or a view-only bench), or `None`.
+    refusal: Option<String>,
+}
+
+impl EndpointTarget {
+    /// Why *Set Endpoint … Here* on `node` cannot set an endpoint of the
+    /// item, or `None` when it can: a node other than the item's, then the
+    /// step's own refusal.
+    pub(crate) fn refusal_on(&self, node: ReconId) -> Option<String> {
+        if node != self.node {
+            return Some(format!(
+                "The measurement being edited, {}, is on {}, so its endpoints are set from \
+                 that reconstruction's images and points.",
+                self.item, self.node_label
+            ));
+        }
+        self.refusal.clone()
+    }
+
+    /// Where *Set Endpoint … Here* on `point` in the 3D view would set the
+    /// endpoint to, `point`'s reference pixel, or why it cannot: the refusals
+    /// of [`Self::refusal_on`] for the point's node, then the point's own
+    /// ([`crate::measurements::reference_pixel`]).
+    pub(crate) fn at_point(
+        &self,
+        scene: &[SceneNode],
+        point: crate::scene::PointRef,
+    ) -> Result<crate::measurements::ReferencePixel, String> {
+        if let Some(why) = self.refusal_on(point.recon) {
+            return Err(why);
+        }
+        let node = crate::scene::node_by_id(scene, point.recon)
+            .ok_or_else(|| "That reconstruction is closed.".to_string())?;
+        crate::measurements::reference_pixel(node.edited(), point.point)
+    }
+}
+
+/// The menu entry that sets endpoint `side` of the focused measurement item at
+/// the place the menu was opened on, in Image Detail's menu and the 3D view's
+/// point menu.
+pub(crate) fn set_endpoint_here_label(side: EndpointSide) -> &'static str {
+    match side {
+        EndpointSide::A => "Set Endpoint A Here",
+        EndpointSide::B => "Set Endpoint B Here",
+    }
 }
 
 /// The unit a bare number typed as a stated distance is in: the
@@ -459,7 +536,6 @@ impl AppState {
         let held = item.as_distance().and_then(|d| d.endpoints[side.index()]);
         let recon = self.scene[index].recon();
         let name = |image: u32| crate::measurements::image_name(recon, image);
-        #[cfg(any(test, feature = "mcp"))]
         let place = format!("{} ({:.1}, {:.1})", name(image), pixel[0], pixel[1]);
         let text = match (how, held) {
             (EndpointMove::Switch, None) => {
@@ -473,11 +549,9 @@ impl AppState {
                 name(from.image),
                 name(image)
             ),
-            #[cfg(any(test, feature = "mcp"))]
             (EndpointMove::Set, Some(_)) => {
                 format!("Moved endpoint {letter} of {label} to {place}")
             }
-            #[cfg(any(test, feature = "mcp"))]
             (EndpointMove::Set, None) => format!("Set endpoint {letter} of {label} to {place}"),
         };
         let as_stored = |p: [f64; 2]| [p[0] as f32, p[1] as f32];
@@ -495,6 +569,67 @@ impl AppState {
         .map_err(|e| format!("Cannot move endpoint {letter} of {label}: {e}."))?;
         self.push_measurement_step(index, &bench, label, next, text)?;
         Ok(true)
+    }
+
+    /// The focused measurement item as the menus that set its endpoints see
+    /// it, or `None` when no measurement item is focused, which takes their
+    /// entries away.
+    pub(crate) fn endpoint_target(&self) -> Option<EndpointTarget> {
+        let focused = *self.focused_item()?;
+        let item = self.focused_measurement_label(focused.node)?.to_string();
+        Some(EndpointTarget {
+            node: focused.node,
+            node_label: self.node(focused.node)?.label.clone(),
+            refusal: self.bench_edit_refusal(focused.node),
+            item,
+        })
+    }
+
+    /// Set an endpoint outright, as a gesture asked: the endpoint block's
+    /// fields and Image Detail's *Set Endpoint … Here*. One
+    /// [`Self::set_bench_measurement_endpoint`] with `EndpointMove::Set`; a
+    /// refusal is one failed `Bench` row in the step's words.
+    pub(crate) fn set_endpoint(&mut self, set: &EndpointSet) {
+        if let Err(why) = self.set_bench_measurement_endpoint(
+            set.node,
+            &set.item,
+            set.side,
+            set.image,
+            set.pixel,
+            EndpointMove::Set,
+        ) {
+            self.action_log.fail(Kind::Bench, why);
+        }
+    }
+
+    /// *Set Endpoint A Here* or *Set Endpoint B Here* in the 3D view's point
+    /// menu: endpoint `side` of the focused measurement item set to `point`'s
+    /// reference pixel ([`crate::measurements::reference_pixel`]), as
+    /// [`Self::set_endpoint`] sets it. A point with no reference pixel, no
+    /// measurement item focused, or one on another node is one failed `Bench`
+    /// row, in the sentence the entry is greyed with.
+    pub(crate) fn set_endpoint_at_point(
+        &mut self,
+        point: crate::scene::PointRef,
+        side: EndpointSide,
+    ) {
+        let asked = self
+            .endpoint_target()
+            .ok_or_else(|| "No measurement is being edited.".to_string())
+            .and_then(|target| {
+                let reference = target.at_point(&self.scene, point)?;
+                Ok(EndpointSet {
+                    node: target.node,
+                    item: target.item,
+                    side,
+                    image: reference.image,
+                    pixel: reference.pixel,
+                })
+            });
+        match asked {
+            Ok(set) => self.set_endpoint(&set),
+            Err(why) => self.action_log.fail(Kind::Bench, why),
+        }
     }
 
     /// Tick (`true`) or clear Measurement View's *Edit* box on `id`.

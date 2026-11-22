@@ -171,6 +171,12 @@ pub(crate) enum Command {
         item: Option<String>,
         endpoint: crate::measurements::EndpointSide,
     },
+    /// A point's reference pixel: the image and keypoint of its reference
+    /// observation, which the 3D view's point menu sets an endpoint to.
+    GetPointReferencePixel {
+        reconstruction_label: String,
+        point: crate::goto_point::PointQuery,
+    },
     /// The Action Log from a revision onward: what happened while the agent
     /// was not looking, whoever did it.
     ///
@@ -1556,6 +1562,14 @@ pub(crate) fn apply_with_window(
             &reconstruction_label,
             item.as_deref(),
             endpoint,
+        )),
+        Command::GetPointReferencePixel {
+            reconstruction_label,
+            point,
+        } => done(measurements::get_point_reference_pixel(
+            state,
+            &reconstruction_label,
+            &point,
         )),
         Command::FindPoints { request } => find_points::find_points(state, request),
         Command::GetActionLog {

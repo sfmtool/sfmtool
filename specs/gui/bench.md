@@ -703,7 +703,9 @@ viewed, and its commit and every step on it (its label, its stated distance
 and moving an endpoint, on the wire `set_bench_measurement_label`,
 `set_bench_measurement_distance` and `set_bench_measurement_endpoint`) are
 refused with the sentence, which greys Measurement View's *Commit*, its header
-fields and its *Switch image…*. `get_measurement_endpoint_views` reads, and is
+fields, its endpoint fields and its *Switch image…*, and *Set Endpoint A Here*
+and *Set Endpoint B Here* in Image Detail's menu and the 3D view's point menu.
+`get_measurement_endpoint_views` and `get_point_reference_pixel` read, and are
 not refused. Deleting a stored measurement is not a bench step and is not
 refused.
 
@@ -1578,8 +1580,12 @@ pixel outside its image, in the commit's sentence
 ([`measurement-view.md`](measurement-view.md) § "Switching an endpoint's
 image").
 
-Setting an endpoint by hand in the panel and from Image Detail and the 3D view,
-and an item started from a pixel with no stored row, are proposed in
+The same step with the pixel given outright is what Measurement View's endpoint
+fields, and *Set Endpoint A Here* and *Set Endpoint B Here* in Image Detail's
+menu and the 3D view's point menu, make (`AppState::set_endpoint`,
+`AppState::set_endpoint_at_point`), on the focused item
+([`measurement-view.md`](measurement-view.md) § "Setting an endpoint by
+hand"). An item started from a pixel with no stored row is proposed in
 [`../drafts/measurement-view.md`](../drafts/measurement-view.md).
 
 ---

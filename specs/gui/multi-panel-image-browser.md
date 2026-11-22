@@ -1274,14 +1274,29 @@ in this order:
 | `Start cluster on the bench here` | Puts a cluster-stage track on the bench seeded at the clicked pixel, with the node's own default patch radius, and raises Track View on it |
 | `Add observation to bench track here` | Adds a candidate sighting at that pixel to the focused item: at the track stage the pixel is its keypoint, at the cluster stage its seed |
 
+With a measurement item focused, two more follow them, after a separator:
+`Set Endpoint A Here` and `Set Endpoint B Here`, which set that endpoint of the
+focused item to the image shown and the pixel the menu was opened at, one bench
+step (`Moved endpoint B of distance #2 to IMG_0004.jpg (412.3, 230.5)`, or `Set
+endpoint B of …` for an endpoint not placed). Any pixel of the photograph is
+taken, since the pixel is what the endpoint stores, whether a feature is under
+it or not. They are absent with no measurement item focused, and greyed with
+the reason as hover text while a step on the item would be refused (a
+background task holding the node, or a view-only bench) and on a node other
+than the item's (`EndpointTarget::refusal_on`). The panel reports the endpoint
+and the pixel in its response (`set_endpoint_here`), and the dock makes the
+step through `AppState::set_endpoint`, a refusal being one failed row
+([measurement-view.md](measurement-view.md) § "Setting an endpoint by hand").
+
 What `Edit on Bench` and the two bench entries put on the bench is edited
 afterwards in Track View ([`track-view.md`](track-view.md)), and the commit
 there is what reaches the reconstruction. `Create Track Here` and `Find Nearby
 Tracks` are the two that commit by themselves, and what they commit stays on
 the bench afterwards, seated on the points it wrote, for Track View to work on
-if it needs it. Every entry but `Edit on Bench` names
-a pixel, and this menu is the viewer's only way to name one, so this is where
-every gesture that needs one lives.
+if it needs it. Every entry but `Edit on Bench` names a pixel, and this menu
+is the viewer's way to name one by pointing at it (Measurement View's endpoint
+fields take one typed), so this is where every gesture that needs one pointed
+at lives.
 
 On a `sift_files` node the bench is view-only ([`bench.md`](bench.md) § "A
 view-only bench"): `Start cluster on the bench here` and `Add observation to

@@ -572,7 +572,7 @@ fn the_fields_are_greyed_while_a_step_would_be_refused() {
         )
         .expect("nothing else is running");
     let (mut panel, ctx) = settled(&state);
-    let mut responses = type_over(&mut panel, &ctx, &state, HeaderField::Label, "x");
+    let mut responses = type_over(&mut panel, &ctx, &state, HeaderField::Label, "typed");
     responses.push(run_frame(
         &mut panel,
         &ctx,
@@ -582,7 +582,7 @@ fn the_fields_are_greyed_while_a_step_would_be_refused() {
     assert_eq!(any_label(&responses), None);
     let texts = painted(&mut panel, &ctx, &state);
     assert!(texts.iter().any(|t| t == "ear to ear"), "{texts:?}");
-    assert!(!texts.iter().any(|t| t == "x"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "typed"), "{texts:?}");
 }
 
 /// Typing a distance and clicking straight into the label field commits the
@@ -899,4 +899,279 @@ fn an_offer_reads_its_length_angle_and_mark() {
         offer_mark(node, &view).as_deref(),
         Some("\u{26a0} no position there")
     );
+}
+
+// ── An endpoint's image and pixel fields ────────────────────────────────
+
+/// Click at `at`, select what the field there holds and type `text` over it,
+/// returning the response of every frame.
+fn type_at(
+    panel: &mut MeasurementView,
+    ctx: &egui::Context,
+    state: &AppState,
+    at: egui::Pos2,
+    text: &str,
+) -> Vec<MeasurementViewResponse> {
+    let mut out = clicks(panel, ctx, state, at, egui::PointerButton::Primary, 1);
+    out.push(run_frame(
+        panel,
+        ctx,
+        state,
+        vec![
+            key(egui::Key::A, egui::Modifiers::COMMAND),
+            egui::Event::Text(text.to_string()),
+        ],
+    ));
+    out
+}
+
+fn pixel_field(panel: &MeasurementView, side: EndpointSide, axis: PixelAxis) -> egui::Pos2 {
+    panel
+        .pixel_field_rect(side, axis)
+        .expect("the field was drawn")
+        .center()
+}
+
+/// Every endpoint set asked for over `responses`.
+fn sets(responses: &[MeasurementViewResponse]) -> Vec<crate::bench::measurement::EndpointSet> {
+    responses
+        .iter()
+        .filter_map(|r| r.set_endpoint.clone())
+        .collect()
+}
+
+/// The image and pixel of endpoint `side` of the focused `distance #0`.
+fn held(state: &AppState, id: ReconId, side: EndpointSide) -> (u32, [f64; 2]) {
+    let item = state.bench_measurement(id, "distance #0").unwrap();
+    let endpoint = item.as_distance().unwrap().endpoints[side.index()].unwrap();
+    (endpoint.image, endpoint.pixel)
+}
+
+fn set_of(
+    id: ReconId,
+    side: EndpointSide,
+    image: u32,
+    pixel: [f64; 2],
+) -> crate::bench::measurement::EndpointSet {
+    crate::bench::measurement::EndpointSet {
+        node: id,
+        item: "distance #0".to_string(),
+        side,
+        image,
+        pixel,
+    }
+}
+
+/// Typing an x and pressing Enter asks, once, for one step that sets both
+/// the image the endpoint holds and the pixel with that x; the fields show
+/// the stored pixel as the shortest text that reads back as it.
+#[test]
+fn a_pixel_field_commits_on_enter_as_one_step_that_sets_both() {
+    let (mut state, id) = measured_state(Some("m"));
+    let (mut panel, ctx) = editing(&mut state, id);
+    let (image, [_, y]) = held(&state, id, EndpointSide::A);
+    let texts = painted(&mut panel, &ctx, &state);
+    assert!(texts.iter().any(|t| *t == pixel_text(y)), "{texts:?}");
+    let at = pixel_field(&panel, EndpointSide::A, PixelAxis::X);
+    let typed = type_at(&mut panel, &ctx, &state, at, "100.5");
+    assert!(sets(&typed).is_empty(), "typing alone committed");
+    let entered = run_frame(
+        &mut panel,
+        &ctx,
+        &state,
+        vec![key(egui::Key::Enter, egui::Modifiers::default())],
+    );
+    assert_eq!(
+        entered.set_endpoint,
+        Some(set_of(id, EndpointSide::A, image, [100.5, y]))
+    );
+    let after = run_frame(&mut panel, &ctx, &state, Vec::new());
+    assert_eq!(after.set_endpoint, None, "the commit was reported twice");
+}
+
+/// Typing a y and clicking elsewhere commits it, on endpoint B.
+#[test]
+fn a_pixel_field_commits_when_it_loses_focus() {
+    let (mut state, id) = measured_state(Some("m"));
+    let (mut panel, ctx) = editing(&mut state, id);
+    let (image, [x, _]) = held(&state, id, EndpointSide::B);
+    let at = pixel_field(&panel, EndpointSide::B, PixelAxis::Y);
+    type_at(&mut panel, &ctx, &state, at, "12");
+    let away = clicks(
+        &mut panel,
+        &ctx,
+        &state,
+        egui::pos2(500.0, 890.0),
+        egui::PointerButton::Primary,
+        1,
+    );
+    assert_eq!(sets(&away), [set_of(id, EndpointSide::B, image, [x, 12.0])]);
+}
+
+/// Escape puts a pixel field back and asks for nothing, then or when the
+/// focus moves on.
+#[test]
+fn escape_puts_a_pixel_field_back() {
+    let (mut state, id) = measured_state(Some("m"));
+    let (mut panel, ctx) = editing(&mut state, id);
+    let at = pixel_field(&panel, EndpointSide::A, PixelAxis::X);
+    let mut responses = type_at(&mut panel, &ctx, &state, at, "77");
+    responses.push(run_frame(
+        &mut panel,
+        &ctx,
+        &state,
+        vec![key(egui::Key::Escape, egui::Modifiers::default())],
+    ));
+    responses.extend(clicks(
+        &mut panel,
+        &ctx,
+        &state,
+        egui::pos2(500.0, 890.0),
+        egui::PointerButton::Primary,
+        1,
+    ));
+    assert!(sets(&responses).is_empty(), "{:?}", sets(&responses));
+    let texts = painted(&mut panel, &ctx, &state);
+    assert!(!texts.iter().any(|t| t == "77"), "{texts:?}");
+}
+
+/// Typing an x and clicking straight into the y field commits the x once,
+/// and the y field takes no part of it; the y typed then commits on its own.
+#[test]
+fn moving_from_the_x_field_to_the_y_field_commits_the_x_once() {
+    let (mut state, id) = measured_state(Some("m"));
+    let (mut panel, ctx) = editing(&mut state, id);
+    let (image, [x, y]) = held(&state, id, EndpointSide::A);
+    let x_at = pixel_field(&panel, EndpointSide::A, PixelAxis::X);
+    let y_at = pixel_field(&panel, EndpointSide::A, PixelAxis::Y);
+    let mut responses = type_at(&mut panel, &ctx, &state, x_at, "101");
+    responses.extend(type_at(&mut panel, &ctx, &state, y_at, "202"));
+    assert_eq!(
+        sets(&responses),
+        [set_of(id, EndpointSide::A, image, [101.0, y])]
+    );
+    let entered = run_frame(
+        &mut panel,
+        &ctx,
+        &state,
+        vec![key(egui::Key::Enter, egui::Modifiers::default())],
+    );
+    // No step was made between the two (the dock makes them), so the x set
+    // with the y is the one the item still holds.
+    assert_eq!(
+        entered.set_endpoint,
+        Some(set_of(id, EndpointSide::A, image, [x, 202.0]))
+    );
+}
+
+/// Text that is not a number asks for no step and is reported in a sentence
+/// naming the endpoint, the item and the text.
+#[test]
+fn a_pixel_that_is_not_a_number_is_refused() {
+    let (mut state, id) = measured_state(Some("m"));
+    let (mut panel, ctx) = editing(&mut state, id);
+    let at = pixel_field(&panel, EndpointSide::B, PixelAxis::X);
+    let mut responses = type_at(&mut panel, &ctx, &state, at, "abc");
+    responses.push(run_frame(
+        &mut panel,
+        &ctx,
+        &state,
+        vec![key(egui::Key::Enter, egui::Modifiers::default())],
+    ));
+    assert!(sets(&responses).is_empty());
+    let refused: Vec<String> = responses
+        .iter()
+        .filter_map(|r| r.endpoint_refused.clone())
+        .collect();
+    assert_eq!(
+        refused,
+        ["Cannot move endpoint B of distance #0: \"abc\" is not a number."]
+    );
+}
+
+/// The image drop-down lists the reconstruction's images; picking another
+/// asks for one step that sets that image and keeps the pixel, and picking
+/// the one it holds asks for nothing.
+#[test]
+fn the_image_drop_down_sets_the_image_and_keeps_the_pixel() {
+    let (mut state, id) = measured_state(Some("m"));
+    let (mut panel, ctx) = editing(&mut state, id);
+    let (image, pixel) = held(&state, id, EndpointSide::A);
+    assert_eq!(image, 0);
+    let open = |panel: &mut MeasurementView| {
+        let at = panel
+            .image_field_rect(EndpointSide::A)
+            .expect("the drop-down was drawn")
+            .center();
+        clicks(panel, &ctx, &state, at, egui::PointerButton::Primary, 1);
+        run_frame(panel, &ctx, &state, Vec::new());
+        panel.image_choices(EndpointSide::A).to_vec()
+    };
+    let choices = open(&mut panel);
+    assert_eq!(
+        choices.iter().map(|(_, i)| *i).collect::<Vec<_>>(),
+        [0, 1, 2]
+    );
+    let same = clicks(
+        &mut panel,
+        &ctx,
+        &state,
+        choices[0].0.center(),
+        egui::PointerButton::Primary,
+        1,
+    );
+    assert!(
+        sets(&same).is_empty(),
+        "the image it holds asked for a step"
+    );
+
+    let choices = open(&mut panel);
+    let picked = clicks(
+        &mut panel,
+        &ctx,
+        &state,
+        choices[2].0.center(),
+        egui::PointerButton::Primary,
+        1,
+    );
+    assert_eq!(sets(&picked), [set_of(id, EndpointSide::A, 2, pixel)]);
+}
+
+/// While a task holds the node the drop-down opens no list and the pixel
+/// fields take no typing, so neither asks for a step.
+#[test]
+fn the_endpoint_fields_are_greyed_while_a_step_would_be_refused() {
+    use crate::background::{Finished, Operation};
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    state
+        .start_background_task(
+            Operation::BENCH_FIT,
+            id,
+            Box::new(move |_| Finished::Cancelled),
+        )
+        .expect("nothing else is running");
+    let (mut panel, ctx) = settled(&state);
+    let at = pixel_field(&panel, EndpointSide::A, PixelAxis::X);
+    let mut responses = type_at(&mut panel, &ctx, &state, at, "100");
+    responses.push(run_frame(
+        &mut panel,
+        &ctx,
+        &state,
+        vec![key(egui::Key::Enter, egui::Modifiers::default())],
+    ));
+    let combo = panel.image_field_rect(EndpointSide::A).unwrap().center();
+    responses.extend(clicks(
+        &mut panel,
+        &ctx,
+        &state,
+        combo,
+        egui::PointerButton::Primary,
+        1,
+    ));
+    run_frame(&mut panel, &ctx, &state, Vec::new());
+    assert!(sets(&responses).is_empty());
+    assert!(panel.image_choices(EndpointSide::A).is_empty());
 }

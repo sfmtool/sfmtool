@@ -573,3 +573,86 @@ fn the_endpoint_tools_refuse_in_the_panel_s_words() {
     );
     assert!(error.0.contains("expected a or b"), "{error}");
 }
+
+/// `get_point_reference_pixel` gives a point's reference pixel, named by
+/// index or by id, which `set_bench_measurement_endpoint` then places an
+/// endpoint at as the 3D view's menu does; a point with no reference pixel
+/// is refused in the menu entry's sentence.
+#[test]
+fn get_point_reference_pixel_gives_the_pixel_the_point_menu_takes() {
+    use crate::measurements::{AT_INFINITY_FOR_PIXEL, NO_REFERENCE_FOR_PIXEL};
+    let (mut state, id) = crate::measurements::fixture::referenced_state(Some("m"));
+    let mut viewer = Viewer3D::new();
+    let reference = call(
+        &mut state,
+        &mut viewer,
+        "get_point_reference_pixel",
+        json!({ "reconstruction_label": "measured", "point": 0 }),
+    );
+    let keypoint = state
+        .node(id)
+        .unwrap()
+        .edited()
+        .point(0)
+        .unwrap()
+        .keypoint_xy(1)
+        .unwrap();
+    let point_id = crate::scene::point_id(state.node(id).unwrap(), 0);
+    assert_eq!(
+        reference,
+        json!({
+            "reconstruction_label": "measured",
+            "point": 0,
+            "point_id": point_id,
+            "observation": 1,
+            "camera_image": 1,
+            "camera_image_name": "image_001.jpg",
+            "pixel": [f64::from(keypoint[0]), f64::from(keypoint[1])],
+        })
+    );
+    let by_id = call(
+        &mut state,
+        &mut viewer,
+        "get_point_reference_pixel",
+        json!({ "reconstruction_label": "measured", "point": point_id }),
+    );
+    assert_eq!(by_id, reference);
+
+    call(
+        &mut state,
+        &mut viewer,
+        "put_measurement_on_bench",
+        json!({ "reconstruction_label": "measured", "measurement_index": 0 }),
+    );
+    let set = call(
+        &mut state,
+        &mut viewer,
+        "set_bench_measurement_endpoint",
+        json!({
+            "reconstruction_label": "measured",
+            "endpoint": "b",
+            "camera_image": reference["camera_image"],
+            "pixel": reference["pixel"],
+        }),
+    );
+    assert_eq!(set["changed"], true, "{set}");
+    let item = call(
+        &mut state,
+        &mut viewer,
+        "get_measurement",
+        json!({ "reconstruction_label": "measured", "item": "distance #0" }),
+    );
+    let resolution = &item["endpoints"][1]["resolution"];
+    let chosen = resolution["chosen"].as_u64().unwrap() as usize;
+    assert_eq!(resolution["candidates"][chosen]["point"], 0);
+
+    for (point, sentence) in [(1, NO_REFERENCE_FOR_PIXEL), (3, AT_INFINITY_FOR_PIXEL)] {
+        let error = refused_call(
+            &mut state,
+            &mut viewer,
+            "get_point_reference_pixel",
+            json!({ "reconstruction_label": "measured", "point": point }),
+        );
+        assert_eq!(error.0, sentence);
+    }
+}

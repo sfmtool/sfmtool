@@ -1056,3 +1056,162 @@ fn moving_an_endpoint_is_refused_while_busy_and_on_a_view_only_bench() {
     assert_eq!(switch(&mut state, id), Err(sentence));
     assert_eq!(endpoints_of(&state, id, "distance #1")[0].unwrap().image, 0);
 }
+
+// ---- Setting an endpoint from a menu --------------------------------------
+
+/// The keypoint of point `point`'s observation `k` in the fixture, as the
+/// pixel an endpoint is set to.
+fn keypoint_of(state: &AppState, id: ReconId, point: u32, k: usize) -> [f64; 2] {
+    let kp = state
+        .node(id)
+        .unwrap()
+        .edited()
+        .point(point)
+        .unwrap()
+        .keypoint_xy(k)
+        .unwrap();
+    [f64::from(kp[0]), f64::from(kp[1])]
+}
+
+/// The 3D view's point menu: a right-click selects the point and keeps the
+/// measurement item focused, *Set Endpoint B Here* moves B to the point's
+/// reference pixel in one bench step, *Set Endpoint A Here* places an
+/// endpoint that is not placed, and a point with no reference pixel is one
+/// failed row in the entry's sentence, with no step.
+#[test]
+fn the_point_menu_sets_an_endpoint_to_the_point_s_reference_pixel() {
+    use crate::measurements::fixture::referenced_state;
+    use crate::state::edits::PointGesture;
+    let (mut state, id) = referenced_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    let from = crate::dock::Tab::Viewer3D;
+    state.apply_point_gesture(PointGesture::Opened(PointRef::new(id, 2)), from);
+    assert_eq!(state.selected_point, Some(PointRef::new(id, 2)));
+    assert_eq!(state.focused_measurement_label(id), Some("distance #0"));
+
+    let before = version_count(&state, id);
+    state.apply_point_gesture(
+        PointGesture::SetEndpointHere(PointRef::new(id, 0), EndpointSide::B),
+        from,
+    );
+    assert_eq!(version_count(&state, id), before + 1);
+    let b = endpoints_of(&state, id, "distance #0")[1].unwrap();
+    // Point 0's reference is its observation in image 1.
+    assert_eq!((b.image, b.pixel), (1, keypoint_of(&state, id, 0, 1)));
+    let label = state
+        .node(id)
+        .unwrap()
+        .history
+        .current_version()
+        .label
+        .clone();
+    assert!(
+        label.starts_with("Moved endpoint B of distance #0 to image_001.jpg ("),
+        "{label}"
+    );
+    assert_eq!(state.selected_point, Some(PointRef::new(id, 0)));
+    assert_eq!(state.focused_measurement_label(id), Some("distance #0"));
+    assert!(
+        !state.node(id).unwrap().history.is_dirty(),
+        "a bench step dirtied the node"
+    );
+
+    edit_item(&mut state, id, "distance #0", |item| {
+        let EditableMeasurementBody::Distance(d) = &mut item.body;
+        d.endpoints[0] = None;
+    });
+    state.apply_point_gesture(
+        PointGesture::SetEndpointHere(PointRef::new(id, 2), EndpointSide::A),
+        from,
+    );
+    let a = endpoints_of(&state, id, "distance #0")[0].unwrap();
+    assert_eq!((a.image, a.pixel), (0, keypoint_of(&state, id, 2, 0)));
+    let label = state
+        .node(id)
+        .unwrap()
+        .history
+        .current_version()
+        .label
+        .clone();
+    assert!(
+        label.starts_with("Set endpoint A of distance #0 to image_000.jpg ("),
+        "{label}"
+    );
+
+    let before = version_count(&state, id);
+    state.apply_point_gesture(
+        PointGesture::SetEndpointHere(PointRef::new(id, 1), EndpointSide::A),
+        from,
+    );
+    assert_eq!(version_count(&state, id), before);
+    assert_eq!(
+        last_row(&state),
+        (
+            crate::measurements::NO_REFERENCE_FOR_PIXEL.to_string(),
+            true
+        )
+    );
+}
+
+/// What the two menus are told: nothing with no measurement item focused;
+/// the item and its node while one is; and the refusals the entries are
+/// greyed with, a node other than the item's naming the item's node, a busy
+/// node and a view-only bench.
+#[test]
+fn the_endpoint_target_is_the_focused_measurement_with_its_refusals() {
+    use crate::background::{Finished, Operation};
+    use crate::measurements::fixture::referenced_reconstruction;
+    let (mut state, id) = measured_state(Some("m"));
+    assert_eq!(state.endpoint_target(), None);
+    let other = state.append_node(SceneNode::from_path(
+        std::path::Path::new("other.sfmr"),
+        referenced_reconstruction(Some("m")),
+    ));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    let target = state.endpoint_target().expect("a measurement is focused");
+    assert_eq!((target.node, target.item.as_str()), (id, "distance #0"));
+    assert_eq!(target.refusal_on(id), None);
+    let label = state.node(id).unwrap().label.clone();
+    assert_eq!(
+        target.refusal_on(other),
+        Some(format!(
+            "The measurement being edited, distance #0, is on {label}, so its endpoints are \
+             set from that reconstruction's images and points."
+        ))
+    );
+    // A point of the other node is refused for its node before its pixel is
+    // asked about, though it has one.
+    assert_eq!(
+        target.at_point(&state.scene, PointRef::new(other, 0)),
+        Err(target.refusal_on(other).unwrap())
+    );
+    state
+        .start_background_task(
+            Operation::BENCH_FIT,
+            id,
+            Box::new(move |_| Finished::Cancelled),
+        )
+        .expect("nothing else is running");
+    let busy = state.busy_refusal(id).expect("the task holds the node");
+    assert_eq!(state.endpoint_target().unwrap().refusal_on(id), Some(busy));
+
+    let (mut state, id) = view_only_state();
+    let sentence = state.bench_view_only_refusal(id).expect("view-only");
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    assert_eq!(
+        state.endpoint_target().unwrap().refusal_on(id),
+        Some(sentence)
+    );
+    // A track focused is not a measurement, and offers the entries nothing.
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_point_on_bench(PointRef::new(id, 0), None)
+        .unwrap();
+    assert_eq!(state.endpoint_target(), None);
+}

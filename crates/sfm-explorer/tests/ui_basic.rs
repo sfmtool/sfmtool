@@ -2584,11 +2584,8 @@ fn a_double_click_puts_a_measurement_on_the_bench_and_commit_writes_it() {
                 && find_widget(listing, "text_input", "measurement label")
                     .is_some_and(|field| field["value"] == "first")
                 && find_widget(listing, "button", "Commit").is_some()
-                && entries(listing).iter().any(|widget| {
-                    widget["name"]
-                        .as_str()
-                        .is_some_and(|name| name.starts_with("A  "))
-                }))
+                && find_widget(listing, "combo_box", "endpoint A image").is_some()
+                && find_widget(listing, "text_input", "endpoint A pixel x").is_some())
             .then_some(())
         },
     );
@@ -2715,4 +2712,90 @@ fn an_endpoint_switched_through_the_popup_is_committed() {
         let set = moved["pixel"][c].as_f64().unwrap();
         assert!((held - set).abs() < 1e-3, "{stored} against {moved}");
     }
+}
+
+/// With a measurement item focused, a right-click on the photograph in Image
+/// Detail offers *Set Endpoint A Here* and *Set Endpoint B Here*; choosing
+/// the second moves endpoint B to the photograph shown, at the pixel
+/// right-clicked, as one bench step.
+#[test]
+fn an_endpoint_is_set_from_image_detail_s_menu() {
+    let (_dir, path) = measured_copy();
+    let viewer = McpViewer::launched(ui_test_lock(), None, &["--no-default-layout", &path]);
+    let label = wait_for_measurements(&viewer, 2);
+    viewer.ok(
+        "put_measurement_on_bench",
+        json!({ "reconstruction_label": label, "measurement_index": 0 }),
+    );
+    // Photograph 3 with the pixel (135, 240) at the middle of the panel,
+    // magnified so a few points of toolbar between the panel's middle and the
+    // picture's are a fraction of a photograph pixel.
+    let asked = [135.0, 240.0];
+    let view = viewer.ok(
+        "set_image_detail_view",
+        json!({
+            "reconstruction_label": label,
+            "camera_image": 3,
+            "pixel": asked,
+            "zoom": 16.0,
+        }),
+    );
+    let image_name = view["image_detail_view"]["camera_image_name"]
+        .as_str()
+        .expect("the view names its photograph")
+        .to_string();
+    let size = viewer.wait_for(
+        json!({ "panel_name": "image_detail" }),
+        "Image Detail never drew photograph 3",
+        |listing| {
+            let drawn = viewer.ok("get_image_detail_view", json!({}));
+            (drawn["image_detail_view"]["camera_image"] == 3)
+                .then(|| listing["target"]["size_px"].clone())
+        },
+    );
+    let n = |i: usize| size[i].as_i64().expect("a whole number of pixels");
+    let middle = json!([n(0) / 2, n(1) / 2]);
+
+    let reply = viewer.click(json!({
+        "panel_name": "image_detail", "at_px": middle, "mouse_button": "right",
+    }));
+    let menu = reply["menus"]
+        .as_array()
+        .and_then(|menus| menus.iter().find(|menu| menu["kind"] == "context_menu"))
+        .unwrap_or_else(|| panic!("the right-click opened no menu: {reply}"));
+    for entry in ["Set Endpoint A Here", "Set Endpoint B Here"] {
+        let item = menu_item(menu, entry).unwrap_or_else(|| panic!("no {entry} in {menu}"));
+        assert_eq!(item["enabled"], true, "{entry} is greyed: {menu}");
+    }
+    let entry = menu_item(menu, "Set Endpoint B Here").expect("just found");
+    viewer.click(json!({ "widget": entry["widget"] }));
+
+    let item = viewer.ok(
+        "get_measurement",
+        json!({ "reconstruction_label": label, "item": "distance #0" }),
+    );
+    let b = &item["endpoints"][1];
+    assert_eq!(b["camera_image"], 3, "{item}");
+    for (c, want) in asked.iter().enumerate() {
+        let got = b["pixel"][c].as_f64().expect("a pixel");
+        assert!((got - want).abs() < 4.0, "endpoint B at {b} for {asked:?}");
+    }
+    let history = viewer.ok(
+        "get_reconstruction_history",
+        json!({ "reconstruction_label": label }),
+    );
+    assert!(
+        history.to_string().contains(&format!(
+            "Moved endpoint B of distance #0 to {image_name} ("
+        )),
+        "{history}"
+    );
+    let stored = viewer.ok(
+        "get_measurement",
+        json!({ "reconstruction_label": label, "measurement_index": 0 }),
+    );
+    assert_eq!(
+        stored["endpoints"][1]["camera_image"], 0,
+        "the stored row moved: {stored}"
+    );
 }

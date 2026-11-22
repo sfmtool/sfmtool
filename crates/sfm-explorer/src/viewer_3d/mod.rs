@@ -383,6 +383,10 @@ pub(crate) struct Viewer3D {
     /// The camera model proposal banner's lines, set by the dock each frame
     /// from the proposal open on the selected node; empty with none open.
     pub(crate) proposal_banner: Vec<crate::camera_model_proposal::banner::BannerLine>,
+    /// The focused measurement item, as the point menu's *Set Endpoint A Here*
+    /// and *Set Endpoint B Here* see it, set by the dock each frame; `None` with
+    /// no measurement item focused, which leaves the two entries out.
+    pub(crate) endpoint_target: Option<crate::bench::measurement::EndpointTarget>,
     /// The bench figure's handle the pointer has hold of, while it has one.
     ///
     /// Held here rather than derived each frame for the reason the Image Detail
@@ -516,6 +520,7 @@ impl Viewer3D {
             patch_menu: None,
             bench_figure: None,
             proposal_banner: Vec::new(),
+            endpoint_target: None,
             bench_drag: None,
             bench_gesture: None,
             menu_entry_rects: Vec::new(),
@@ -558,6 +563,7 @@ impl Viewer3D {
         hover_pick: Option<crate::scene_renderer::PickTarget>,
         busy: Option<&str>,
         bench: Option<&bench_track::BenchTrack<'_>>,
+        scene: &[SceneNode],
     ) {
         if response.clicked_by(egui::PointerButton::Secondary) {
             let on_patch = bench
@@ -584,7 +590,7 @@ impl Viewer3D {
         self.menu_entry_rects.clear();
         match self.menu_target {
             None => {}
-            Some(MenuTarget::Point(point)) => self.show_point_entries(response, point, busy),
+            Some(MenuTarget::Point(point)) => self.show_point_entries(response, point, busy, scene),
             Some(MenuTarget::Patch(node)) => {
                 // The patch as it stands now. A menu left up across an undo that
                 // took the patch away has nothing to stand on, and closes.
@@ -634,18 +640,34 @@ impl Viewer3D {
         self.menu_entry_rects = rects;
     }
 
-    /// The point's two entries.
+    /// The point's entries: `Edit on Bench` and `Retriangulate Point`, and,
+    /// with a measurement item focused, `Set Endpoint A Here` and `Set
+    /// Endpoint B Here`, which set that endpoint to the point's reference
+    /// pixel.
+    ///
+    /// The endpoint entries are greyed with the reason where the point is on a
+    /// node other than the item's, a step on the item is refused, or the point
+    /// has no reference pixel ([`crate::measurements::reference_pixel`]).
     fn show_point_entries(
         &mut self,
         response: &egui::Response,
         point: PointRef,
         busy: Option<&str>,
+        scene: &[SceneNode],
     ) {
-        let mut rects = Vec::with_capacity(2);
+        let endpoint_refusal = self
+            .endpoint_target
+            .as_ref()
+            .map(|target| target.at_point(scene, point).err());
+        let mut rects = Vec::with_capacity(4);
         crate::context_menu::on_secondary_click(response).show(|ui| {
-            let mut entry = |ui: &mut egui::Ui, text: &'static str, hint: &str| -> bool {
+            let mut entry = |ui: &mut egui::Ui,
+                             text: &'static str,
+                             refusal: Option<&str>,
+                             hint: &str|
+             -> bool {
                 let button = egui::Button::new(text);
-                let (response, clicked) = match busy {
+                let (response, clicked) = match refusal {
                     None => {
                         let response = ui.add(button);
                         let clicked = response.clicked();
@@ -662,6 +684,7 @@ impl Viewer3D {
             if entry(
                 ui,
                 EDIT_ON_BENCH_LABEL,
+                busy,
                 "Put this point's track on the bench and open Track View on it.",
             ) {
                 self.point_menu = Some(PointGesture::EditOnBench(point));
@@ -670,11 +693,32 @@ impl Viewer3D {
             if entry(
                 ui,
                 RETRIANGULATE_POINT_LABEL,
+                busy,
                 "Re-solve this point from its own observations at these poses and these \
                  lenses, as one version.",
             ) {
                 self.point_menu = Some(PointGesture::Retriangulate(point));
                 ui.close();
+            }
+            if let Some(refusal) = &endpoint_refusal {
+                ui.separator();
+                for side in crate::measurements::EndpointSide::BOTH {
+                    let hint = format!(
+                        "Set endpoint {} of the measurement being edited to this point's \
+                         reference pixel: the keypoint of the observation its patch is \
+                         rendered from.",
+                        side.letter()
+                    );
+                    if entry(
+                        ui,
+                        crate::bench::measurement::set_endpoint_here_label(side),
+                        refusal.as_deref(),
+                        &hint,
+                    ) {
+                        self.point_menu = Some(PointGesture::SetEndpointHere(point, side));
+                        ui.close();
+                    }
+                }
             }
         });
         self.menu_entry_rects = rects;
@@ -840,7 +884,7 @@ impl Viewer3D {
         if !owns_pointer {
             self.handle_click(ui, &response, rect);
         }
-        self.show_viewport_menu(&response, rect, hover_pick, busy, bench.as_ref());
+        self.show_viewport_menu(&response, rect, hover_pick, busy, bench.as_ref(), scene);
 
         // After this frame's input, so the step starts from the view the input
         // left and the frame draws the result.
