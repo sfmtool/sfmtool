@@ -83,10 +83,9 @@ which compress to about 46%, compressed each worse than two frames did.
 per tree chunk and two per origin block. Its tree chunk entry groups three
 arrays, and its origin entries hold one field each.
 [kdf-file-format.md § How this format meets the container rules](kdf-file-format.md#how-this-format-meets-the-container-rules)
-records the measurements. `.kdf` version 3 describes the chunk entry's layout
-in its spec but not in its metadata;
-[kdf-chunk-layout-legend.md](../drafts/kdf-chunk-layout-legend.md) proposes
-version 4, which adds that description to `metadata.json`.
+records the measurements. `.kdf`'s `metadata.json` describes the chunk
+entry's layout in a `chunk_layout` field
+([kdf-file-format.md § Metadata and versioning](kdf-file-format.md#metadata-and-versioning)).
 
 ### An entry is zstandard frames, and its suffix says how many
 

@@ -491,11 +491,11 @@ fn feature_prefix_dir_py(
 /// The tree is the workspace at or above `path` and every workspace nested in
 /// it. A version 1 workspace file is refused before anything else is read,
 /// naming sfmtool 0.4.1 as the last release that upgrades it. Each
-/// ``.sfmr``, ``.matches`` and ``.camrig`` file below the current version that
-/// the current reader reads is rewritten at its own path as the current
-/// version; a file the reader refuses is left as it is. The walk does not
-/// enter a symbolic link or junction to a directory. A stopped run can be run
-/// again to finish. See ``specs/cli/workspace/ws-upgrade-command.md``.
+/// ``.sfmr``, ``.matches``, ``.camrig`` and ``.kdf`` file below the current
+/// version that the current reader reads is rewritten at its own path as the
+/// current version; a file the reader refuses is left as it is. The walk does
+/// not enter a symbolic link or junction to a directory. A stopped run can be
+/// run again to finish. See ``specs/cli/workspace/ws-upgrade-command.md``.
 ///
 /// Args:
 ///     path: a directory or file in the tree's root workspace.
@@ -507,7 +507,7 @@ fn feature_prefix_dir_py(
 /// Returns:
 ///     A dict: ``workspace_dir``, the tree's root; ``workspaces``, the root
 ///     then each nested workspace; ``dry_run``; ``files``, a list of dicts
-///     with ``path``, ``kind`` (``sfmr``, ``matches`` or ``camrig``),
+///     with ``path``, ``kind`` (``sfmr``, ``matches``, ``camrig`` or ``kdf``),
 ///     ``outcome`` (``converted``, ``already_current``, ``not_converted`` or
 ///     ``failed``) and, for ``not_converted`` and ``failed``, ``reason``;
 ///     ``linked_directories``; ``notes``, lines for the user; and

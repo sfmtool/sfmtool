@@ -3,12 +3,12 @@
 
 //! Bring a workspace's files to the current versions: [`upgrade_workspace`].
 //!
-//! The upgrade rewrites each `.sfmr`, `.matches` and `.camrig` file of a
-//! version 2 workspace that is below the current version and that the reader
-//! reads, at its own path as the current version, by reading it and writing it
-//! back. The readers of all three read only the current version, so a run
-//! rewrites no file until one of the formats next changes version; a file
-//! below the current version is one the reader refuses, which the run leaves
+//! The upgrade rewrites each `.sfmr`, `.matches`, `.camrig` and `.kdf` file of
+//! a version 2 workspace that is below the current version and that the
+//! reader reads, at its own path as the current version: a `.sfmr`,
+//! `.matches` or `.camrig` file by reading it and writing it back, and a
+//! version 3 `.kdf` index by rewriting its metadata and integrity directory
+//! and copying its other entries unchanged. A file the reader refuses is left
 //! as it is. A version 1 `.sfm-workspace.json` is refused:
 //! sfmtool 0.4.1 is the last release that upgrades one, since it is the last
 //! that reads the older `.sift`, `.sfmr`, `.matches` and `.camrig` versions
@@ -53,6 +53,8 @@ pub enum UpgradeFileKind {
     Matches,
     /// A `.camrig` file.
     Camrig,
+    /// A `.kdf` index.
+    Kdf,
 }
 
 /// What the upgrade did to a file, or in a dry run what it would do.
@@ -92,8 +94,8 @@ pub struct UpgradeWorkspaceReport {
     pub workspaces: Vec<PathBuf>,
     /// Whether this was a dry run, which wrote nothing.
     pub dry_run: bool,
-    /// Every `.sfmr`, then `.matches`, then `.camrig` file the walk found,
-    /// each kind sorted by path.
+    /// Every `.sfmr`, then `.matches`, then `.camrig`, then `.kdf` file the
+    /// walk found, each kind sorted by path.
     pub files: Vec<UpgradedFile>,
     /// The symbolic links and junctions to directories the walk found. It
     /// does not enter them, since their targets may be outside the tree.
@@ -201,13 +203,14 @@ impl From<Cancelled> for UpgradeWorkspaceError {
 /// `specs/cli/workspace/ws-upgrade-command.md`:
 ///
 /// 1. Walk the tree, nested workspaces included but no symbolic link or
-///    junction, for `.sfmr`, `.matches` and `.camrig` files.
+///    junction, for `.sfmr`, `.matches`, `.camrig` and `.kdf` files.
 /// 2. Read each file's metadata, and read whole each one below the current
 ///    version, as the run will read it. A file the file system will not give
 ///    up fails; one the current reader refuses is left as it is.
 /// 3. Rewrite each file below the current version at its own path: a `.sfmr`
 ///    by [`SfmrReconstruction::load`] and [`SfmrReconstruction::save`]; a
-///    `.matches` or `.camrig` file by reading and writing it.
+///    `.matches` or `.camrig` file by reading and writing it; a `.kdf` index
+///    by [`sfmtool_kdf_format::upgrade_kdf`].
 ///
 /// A run that stops part way, by cancellation, can be run again to finish.
 ///
@@ -290,6 +293,7 @@ pub fn upgrade_workspace(
                     UpgradeFileKind::Sfmr => rewrite_sfmr(&file.path, &phase)?,
                     UpgradeFileKind::Matches => rewrite_matches(&file.path),
                     UpgradeFileKind::Camrig => rewrite_camrig(&file.path),
+                    UpgradeFileKind::Kdf => rewrite_kdf(&file.path, &phase)?,
                 },
             };
             report.files.push(UpgradedFile {
@@ -354,6 +358,20 @@ fn rewrite_camrig(path: &Path) -> UpgradeOutcome {
     match sfmtool_camrig_format::write_camrig(path, &data, ZSTD_LEVEL) {
         Ok(()) => UpgradeOutcome::Converted,
         Err(e) => UpgradeOutcome::Failed(format!("it could not be written: {e}")),
+    }
+}
+
+/// Phase 3 for one `.kdf` index.
+fn rewrite_kdf(path: &Path, progress: &Progress<'_>) -> Result<UpgradeOutcome, Cancelled> {
+    match sfmtool_kdf_format::upgrade_kdf(path, progress) {
+        Ok(()) => Ok(UpgradeOutcome::Converted),
+        Err(sfmtool_kdf_format::KdfError::Cancelled(cancelled)) => Err(cancelled),
+        // Phase 2 read it, so a file that no longer reads was locked or
+        // changed since; one that reads but cannot be written fails.
+        Err(e) => Ok(match sfmtool_kdf_format::read_kdf_version(path) {
+            Ok(_) => UpgradeOutcome::Failed(format!("it could not be written: {e}")),
+            Err(e) => read_failure(e),
+        }),
     }
 }
 

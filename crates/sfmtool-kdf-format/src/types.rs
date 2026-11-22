@@ -7,7 +7,21 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 /// Current `.kdf` wire-format version.
-pub const KDF_FORMAT_VERSION: u32 = 3;
+pub const KDF_FORMAT_VERSION: u32 = 4;
+
+/// The oldest `.kdf` version this build reads.
+///
+/// No release has written an older version, so no release reads one, and a
+/// file of an older version is refused as a newer one is: the message says to
+/// rebuild the index. See `specs/formats/kdf-file-format.md` § "Format
+/// versions".
+pub const KDF_OLDEST_READ_VERSION: u32 = 3;
+
+/// The version from which `metadata.json` holds the `chunk_layout` legend.
+///
+/// A reader requires the legend in a file of this version or later, and
+/// supplies it for an older one.
+pub(crate) const CHUNK_LAYOUT_VERSION: u32 = 4;
 
 /// Errors from persistent forest I/O, validation, and resource accounting.
 #[derive(thiserror::Error, Debug)]
@@ -473,6 +487,13 @@ pub(crate) struct Metadata {
     pub feature_count: u32,
     pub dimension: u16,
     pub node_kinds: Vec<String>,
+    /// The `chunk_layout` legend. A reader holds it as parsed JSON and
+    /// compares it with [`chunk_layout`], so that a file of another version
+    /// whose legend has another shape still reaches the version check. After
+    /// a read it is always present: a version 3 file has none, and the reader
+    /// supplies the one the layout fixes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_layout: Option<serde_json::Value>,
     pub target_chunk_bytes: u64,
     pub trees: Vec<TreeMetadata>,
     pub feature_source: String,
@@ -528,6 +549,42 @@ pub(crate) struct ImagesMetadata {
 
 /// Node columns packed into every chunk's node array.
 pub(crate) const NODE_COLUMNS: usize = 10;
+
+/// The names of the [`NODE_COLUMNS`] rows of a chunk's node array, in order.
+pub(crate) const NODE_COLUMN_NAMES: [&str; NODE_COLUMNS] = [
+    "kind",
+    "logical_node_id",
+    "split_dimension",
+    "left_chunk",
+    "left_node",
+    "left_logical_node_id",
+    "right_chunk",
+    "right_node",
+    "right_logical_node_id",
+    "leaf_start",
+];
+
+/// The `chunk_layout` legend `metadata.json` holds for an index of
+/// `scalar_type`: the chunk entry's three arrays in the order they are
+/// stored, each with its name, element type and shape, and the names of the
+/// node array's rows.
+///
+/// A shape gives each dimension as the count letter of the entry name (`M`
+/// nodes, `P` feature IDs) or as a fixed integer. The legend describes the
+/// one layout the format has; a reader decodes by that layout and refuses a
+/// file whose legend says anything else.
+pub(crate) fn chunk_layout(scalar_type: &str) -> serde_json::Value {
+    serde_json::json!([
+        {
+            "name": "nodes",
+            "dtype": "uint32",
+            "shape": [NODE_COLUMNS, "M"],
+            "columns": NODE_COLUMN_NAMES,
+        },
+        {"name": "splits", "dtype": scalar_type, "shape": ["M"]},
+        {"name": "feature_ids", "dtype": "uint32", "shape": ["P"]},
+    ])
+}
 
 /// Name of a tree chunk's grouped topology entry.
 ///

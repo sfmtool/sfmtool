@@ -1,17 +1,19 @@
 # `sfm ws upgrade` Command
 
 `sfm ws upgrade` brings the files of a version 2 workspace to the current file
-versions. It rewrites each `.sfmr`, `.matches` and `.camrig` file below the
-current version that the current reader reads, at its own path as the current
-version, so that a later release that stops reading that version reads every
-file in the workspace. Today the `.sfmr` reader reads versions 16 and 17, so
-the command rewrites version 16 `.sfmr` files as version 17; the `.matches`
-and `.camrig` readers read only their current versions, 10 and 2, so no
-`.matches` or `.camrig` file is rewritten until one of those formats next
-changes version. A `.sfmr` file below version 16, a `.matches` file below
-version 10 or a `.camrig` file below version 2 is one the reader refuses, and
-the run lists it with the reader's message, which names sfmtool 0.4.1 as the
-release to upgrade it with ([What is not converted](#what-is-not-converted)).
+versions. It rewrites each `.sfmr`, `.matches`, `.camrig` and `.kdf` file
+below the current version that the current reader reads, at its own path as
+the current version, so that a later release that stops reading that version
+reads every file in the workspace. Today the `.sfmr` reader reads versions 16
+and 17, so the command rewrites version 16 `.sfmr` files as version 17; the
+`.kdf` reader reads versions 3 and 4, so it rewrites version 3 `.kdf` indexes
+as version 4; the `.matches` and `.camrig` readers read only their current
+versions, 10 and 2, so no `.matches` or `.camrig` file is rewritten until one
+of those formats next changes version. A `.sfmr` file below version 16, a
+`.matches` file below version 10 or a `.camrig` file below version 2 is one
+the reader refuses, and the run lists it with the reader's message, which
+names sfmtool 0.4.1 as the release to upgrade it with
+([What is not converted](#what-is-not-converted)).
 When it rewrites files it does so in place, which cannot be undone: **back up
 the workspace first** ([Backing up](#backing-up)).
 
@@ -48,10 +50,10 @@ nothing.
 
 ## Backing up
 
-The command rewrites `.sfmr`, `.matches` and `.camrig` files in place, so it
-cannot be undone. Its help, this spec, and the first line it prints before
-rewriting anything say to back up the workspace first. Saving changes each
-`.sfmr` file's `content_xxh128`, so a point ID (`pt3d_<hash>_<index>`) written
+The command rewrites `.sfmr`, `.matches`, `.camrig` and `.kdf` files in
+place, so it cannot be undone. Its help, this spec, and the first line it
+prints before rewriting anything say to back up the workspace first. Saving
+changes each `.sfmr` file's `content_xxh128`, so a point ID (`pt3d_<hash>_<index>`) written
 down from a `.sfmr` before the upgrade no longer resolves; the report says so
 when it rewrote a `.sfmr`.
 
@@ -62,8 +64,8 @@ it when it is version 1, or cannot be read, or is of a version other than 2.
 
 The command then runs these phases in order.
 
-1. **Find the files.** It walks the tree for `.sfmr`, `.matches` and
-   `.camrig` files, entering nested workspaces. It reads each nested
+1. **Find the files.** It walks the tree for `.sfmr`, `.matches`, `.camrig`
+   and `.kdf` files, entering nested workspaces. It reads each nested
    workspace's file and refuses the run, before reading any other file, when
    one is version 1, cannot be read or is of a version other than 2. It does
    not enter a symbolic link or junction to a directory, whose target may lie
@@ -73,7 +75,9 @@ The command then runs these phases in order.
    A file below the current version is read whole, as phase 3 will read it: a
    `.sfmr` by `SfmrReconstruction::load`, which checks what the format reader
    leaves to it, such as each camera's parameters, and finds the workspace the
-   file records; a `.matches` or `.camrig` file by its format reader. This
+   file records; a `.matches` or `.camrig` file by its format reader. A
+   `.kdf` index's version is read by `read_kdf_version`, which checks the
+   file as opening it does, and that is all phase 3 reads of it. This
    happens in a dry run too, so the report tells a file the run rewrites from
    one the current reader refuses. A file the file system will not give up
    (locked, or it cannot be opened or read) **fails**; one whose content the
@@ -93,11 +97,16 @@ The command then runs these phases in order.
    - a `.matches` file is read and written as the current version (none
      today, since the reader reads only version 10);
    - a `.camrig` file is read and written as the current version (none
-     today, since the reader reads only version 2).
+     today, since the reader reads only version 2);
+   - a `.kdf` index below version 4 (version 3) is rewritten as version 4 by
+     `upgrade_kdf`, which writes `metadata.json.zst` with the `chunk_layout`
+     legend and `content_hash.json.zst` with the digests that cover it, and
+     copies every other entry's stored bytes unchanged
+     ([kdf-file-format.md § Version 3 → Version 4](../../formats/kdf-file-format.md#version-3--version-4)).
 
-The workspace files, the `.sift` files, the `.kdf` indexes, the named image
-lists file and every other file are left as they are: the readers read every
-version of them that a version 2 workspace holds.
+The workspace files, the `.sift` files, the named image lists file and every
+other file are left as they are: the readers read every version of them that
+a version 2 workspace holds.
 
 ### What is not converted
 
@@ -112,9 +121,11 @@ These files are listed in the report with the reason, and left unchanged:
   [matches-file-format.md § Format versions](../../formats/matches-file-format.md#format-versions),
   [camrig-file-format.md § Format versions](../../formats/camrig-file-format.md#format-versions)).
   The run does not fail for it;
-- any other `.sfmr`, `.matches` or `.camrig` file the current reader refuses,
-  such as a `.sfmr` whose camera lacks a parameter its model gained later, one
-  whose recorded workspace cannot be found, or a file that is not an archive.
+- any other `.sfmr`, `.matches`, `.camrig` or `.kdf` file the current reader
+  refuses, such as a `.sfmr` whose camera lacks a parameter its model gained
+  later, one whose recorded workspace cannot be found, a `.kdf` index of a
+  version no release wrote, whose reason says to rebuild it, or a file that
+  is not an archive.
 
 A file the file system will not give up, or a version 16 `sift_files` file
 whose `.sift` files cannot supply its inline keypoints, is not one of these:
@@ -156,7 +167,7 @@ Not converted:
 Nothing to do: no file is left to convert.
 
 $ sfm ws upgrade KerryPark
-Back up the workspace before upgrading it: this rewrites .sfmr, .matches and .camrig files in place, which cannot be undone.
+Back up the workspace before upgrading it: this rewrites .sfmr, .matches, .camrig and .kdf files in place, which cannot be undone.
 Workspace tree: /home/user/KerryPark
 Files:
   .camrig: 1 already current, 1 not converted
@@ -225,9 +236,9 @@ is the stopped run above.
 
 `UpgradeWorkspaceReport` holds the tree's root (`workspace_dir`); the
 workspaces of the tree (`workspaces`, the root first); the dry-run flag; one
-`UpgradedFile` per `.sfmr`, `.matches` and `.camrig` file the walk found, in
-that order of kinds and each kind sorted by path, with its `UpgradeFileKind`
-and `UpgradeOutcome`: `Converted`, `AlreadyCurrent`, `NotConverted(reason)`
+`UpgradedFile` per `.sfmr`, `.matches`, `.camrig` and `.kdf` file the walk
+found, in that order of kinds and each kind sorted by path, with its
+`UpgradeFileKind` and `UpgradeOutcome`: `Converted`, `AlreadyCurrent`, `NotConverted(reason)`
 (one of [What is not converted](#what-is-not-converted)) or `Failed(reason)`
 (could not be read or written); the linked directories the walk did not
 enter; and notes for the user, the point-ID note among them. `nothing_to_do`
@@ -251,4 +262,7 @@ otherwise, and `ValueError` for a workspace file it refuses. The
 
 The `.sfmr` rewrite is in Rust, `SfmrReconstruction::load` then `save`, which
 checks what the format reader leaves to it and gathers any image readings and
-inline keypoints the value lacks.
+inline keypoints the value lacks. The `.kdf` rewrite is
+[`sfmtool_kdf_format::upgrade_kdf`](../../../crates/sfmtool-kdf-format/src/upgrade.rs),
+which reports the entries it copies through the run's `Progress` and stops
+between entries when the run is cancelled.

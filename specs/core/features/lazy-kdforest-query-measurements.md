@@ -154,8 +154,8 @@ The shared layout also reaches full speed on a smaller budget. On
 1 GiB (0.48 s) and takes 8.03 s at 64 MiB. A file 3.3x smaller fits a cache
 3.3x sooner.
 
-**Decision.** Format version 2 kept only the shared corpus, and version 3 keeps
-it. It was 3.3x smaller, faster or equal in every regime measured, insensitive
+**Decision.** Format version 2 kept only the shared corpus, and versions 3 and
+4 keep it. It was 3.3x smaller, faster or equal in every regime measured, insensitive
 to a chunk-size choice that changed tree-local's time by 43x, and at full speed
 on a budget a third the size. Tree-local's resident warm case was faster, but
 keeping a second wire representation for that one case would add permanent

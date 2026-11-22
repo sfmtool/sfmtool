@@ -28,38 +28,63 @@ API and packing policy; all stored values and validity rules are defined here.
 ## Format versions
 
 `metadata.json`'s `version` records the format version. The current version,
-which a conforming writer writes, is `3`, and it is also the oldest version a
-reader reads. Every sfmtool release that writes `.kdf` files, 0.3 and later,
-has written version 3; versions 1 and 2 were written only by development
-builds before sfmtool 0.3, so no release reads them. A reader refuses a file
-of any other version, older or newer, with one message that names the version
-the file holds and the version the reader reads, and says to rebuild the
-index:
+which a conforming writer writes, is `4`. A reader reads versions 3 and 4.
+Every sfmtool release that has written `.kdf` files, 0.3 and later, has
+written version 3, and a reader converts a version 3 file as
+[Version 3 → Version 4](#version-3--version-4) says; versions 1 and 2 were
+written only by development builds before sfmtool 0.3, so no release reads
+them. A reader refuses a file of any other version, older or newer, with one
+message that names the version the file holds and the versions the reader
+reads, and says to rebuild the index:
 
 ```
-invalid KDF format: this is a version 2 index and this build reads version 3;
-rebuild the index
+invalid KDF format: this is a version 2 index and this build reads versions 3
+to 4; rebuild the index
 ```
 
 An index is derived from the `.sift` files it was built over, so rebuilding it
 from them is the whole remedy, and the message names no release.
-`KdfFile::open`, `read_kdf_workspace` and `verify_kdf` return it as
-`KdfError::InvalidFormat`, which the Python bindings raise as `OSError`
-(opening a `LazyKdForest` too). The version is checked as soon as
-`metadata.json.zst` is decoded, before the integrity directory is parsed,
+`KdfFile::open`, `read_kdf_workspace`, `read_kdf_version`, `upgrade_kdf` and
+`verify_kdf` return it as `KdfError::InvalidFormat`, which the Python bindings
+raise as `OSError` (opening a `LazyKdForest` too). The version is checked as
+soon as `metadata.json.zst` is decoded, before the integrity directory is parsed,
 since that directory's layout differs between versions.
 
-The format crate holds the current version as `KDF_FORMAT_VERSION`
+The format crate holds the current version as `KDF_FORMAT_VERSION` and the
+oldest version read as `KDF_OLDEST_READ_VERSION`
 ([`types.rs`](../../crates/sfmtool-kdf-format/src/types.rs)). Because no
-release has read an older version, it holds no constant for the oldest
-version read or for the last release reading older versions, which the other
-four format crates hold. A
-writer always writes the current version. When `.kdf` next changes version,
-its reader reads version 3 too and converts it at the I/O boundary. How the
-version changes, which older versions a reader keeps reading, and how one
-stops being read are in [format-versions.md](format-versions.md).
+release has read a version below 3, it holds no constant for the last release
+reading older versions, which the `.sfmr`, `.matches`, `.sift` and `.camrig`
+crates hold. A writer always writes the current version. How the version
+changes, which older versions a reader keeps reading, and how one stops being
+read are in [format-versions.md](format-versions.md).
 [Version History](#version-history) at the end of this spec lists what each
 version changed.
+
+### Version 3 → Version 4
+
+Version 4 adds one required field to `metadata.json.zst`, `chunk_layout`
+([Metadata and versioning](#metadata-and-versioning)). Every other entry, and
+every other field, is the same in both versions, and so is the layout of the
+chunk entry the field describes.
+
+A reader reads a version 3 file and converts it at the I/O boundary by
+supplying the `chunk_layout` that version 4 requires, which a version 3 file
+does not hold; no caller branches on the version. A `chunk_layout` field in a
+version 3 file is an unknown field, and is ignored. A version 3 file's
+`metadata_xxh128` and `content_xxh128` are verified against its own stored
+bytes.
+
+`sfm ws upgrade` rewrites a version 3 index as version 4
+([ws-upgrade-command.md](../cli/workspace/ws-upgrade-command.md)). Only
+`metadata.json.zst` and `content_hash.json.zst` change: every other entry's
+stored bytes are copied unchanged, `metadata.json` is written with the version
+4 and `chunk_layout`, `metadata_xxh128` is computed over it, and
+`content_xxh128` is folded again from it and the other section digests, which
+are unchanged.
+
+The version changed because the field is required: the version tells a
+reader whether a file must have it.
 
 ## Container and entry layout
 
@@ -97,8 +122,10 @@ between them:
 2. one split coordinate per node, `M` values of the scalar type;
 3. the original row ID of each locally stored vector, `P` `uint32` values.
 
-So it decodes to exactly `40*M + w*M + 4*P` bytes for scalar width `w`, and a
-reader rejects an entry that decodes to any other length. Tree chunks never
+`metadata.json`'s `chunk_layout` describes this layout in the file
+([Metadata and versioning](#metadata-and-versioning)). The entry decodes to
+exactly `40*M + w*M + 4*P` bytes for scalar width `w`, and a reader rejects an
+entry that decodes to any other length. Tree chunks never
 contain vector or geometry rows.
 
 `t` and `c` are zero-based decimal integers without leading zeroes; `M`, `P`, `D`
@@ -116,12 +143,13 @@ Required fields in `metadata.json.zst`:
 | Field | Type and meaning |
 |-------|------------------|
 | `format` | String `"kdf"` |
-| `version` | Integer `3` |
+| `version` | Integer `4`; a reader also reads `3` ([Format versions](#format-versions)) |
 | `scalar_type` | String `"uint8"` or `"float32"` |
 | `metric` | String `"squared_l2"` |
 | `feature_count` | Integer N, `0 <= N <= 2^32 - 1`; valid IDs are `0..N` exclusive |
 | `dimension` | Integer D, `1 <= D <= 65535` |
 | `node_kinds` | Exactly `["internal", "leaf"]`, so node kind code 0 is internal and 1 is leaf; readers reject any other array |
+| `chunk_layout` | (Version 4+) The arrays of a chunk entry, described below; readers reject any other value |
 | `target_chunk_bytes` | Positive integer, writer's target decoded byte size; advisory, not a reader allocation limit |
 | `trees` | Nonempty ordered array of tree objects, described below |
 | `feature_source` | String `"sift_files"` for mapped descriptors, or `"none"` for generic vectors |
@@ -135,14 +163,45 @@ latter equals `40*M + sizeof(scalar_type)*M + 4*P`.
 Chunk and local node indices fit uint32. M is positive; an empty forest has
 no chunks in any tree. No tree is empty when N is positive.
 
+`chunk_layout` describes the [chunk entry](#container-and-entry-layout)'s
+three arrays: an array of three objects, one per array, in the order the
+arrays are stored. Each object has `name`, `dtype`, the element type, and
+`shape`, which gives each dimension as the count letter of the entry name
+(`"M"` for nodes, `"P"` for feature IDs) or as a fixed integer. The `nodes`
+object also has `columns`, the name of each row of the `(10, M)` array in
+order, as [Nodes, leaves, and identity](#nodes-leaves-and-identity) defines
+them. For a `uint8` index the field is:
+
+```json
+"chunk_layout": [
+  {"name": "nodes", "dtype": "uint32", "shape": [10, "M"],
+   "columns": ["kind", "logical_node_id", "split_dimension",
+               "left_chunk", "left_node", "left_logical_node_id",
+               "right_chunk", "right_node", "right_logical_node_id",
+               "leaf_start"]},
+  {"name": "splits", "dtype": "uint8", "shape": ["M"]},
+  {"name": "feature_ids", "dtype": "uint32", "shape": ["P"]}
+]
+```
+
+A `float32` index has `"float32"` as the `splits` dtype, the value of
+`scalar_type`. The field documents the one layout the format has; it does not
+let a writer choose another. A writer writes exactly this value, and a reader
+decodes every chunk by the fixed layout and rejects a version 4 file whose
+`chunk_layout` is absent or `null`, or is any other JSON value: one that
+differs in a name, a dtype, a shape, a column, the order of the arrays or of
+the columns, or has a key or an array of its own. It sits in `metadata.json`,
+so `metadata_xxh128`, and through it `content_xxh128`, covers it.
+
 Optional `provenance` is a JSON object of uninterpreted producer information,
 such as build parameters, seed, descriptor normalization, or source identity.
 It confers no source-file dependency and is not needed to interpret the index.
 There is no implicit SIFT normalization or distance conversion.
 
-Readers reject unsupported scalar, metric, kind, or source names. Unknown JSON fields are
-ignored. Source entries below are conditional; unexpected ZIP entries are
-rejected. A change that a reader of the previous version would refuse,
+Readers reject unsupported scalar, metric, kind, or source names. Unknown
+JSON fields are ignored, except inside `chunk_layout`, which must be exactly
+the value above. Source entries below are conditional; unexpected ZIP entries
+are rejected. A change that a reader of the previous version would refuse,
 misread, or silently drop or misinterpret changes the version, as
 [format-versions.md](format-versions.md) says, so an older reader rejects
 such a file rather than partially interpreting it.
@@ -451,12 +510,11 @@ overall, 2.4% more stored bytes than the three frames cost, or 5.3 MB on a 4 GB
 file. It is paid for by halving the entry count and the open latency with it.
 
 The container rules also ask that an entry which groups arrays have its layout
-described in the format's metadata. Version 3's `metadata.json` does not
-describe the chunk entry's layout: the three arrays, their element types and
-shapes, and the names of the ten node columns are given by this spec, not by
-the file. [kdf-chunk-layout-legend.md](../drafts/kdf-chunk-layout-legend.md)
-proposes version 4, which adds a required `chunk_layout` legend to
-`metadata.json`.
+described in the format's metadata. `metadata.json`'s `chunk_layout` does
+that: it names the three arrays in the order they are stored, with their
+element types and shapes, and the names of the ten node columns
+([Metadata and versioning](#metadata-and-versioning)), so someone with only
+the file can split a decoded chunk entry into its arrays.
 
 **Vectors never join tree chunks.** They live once in the corpus because every
 tree indexes the same feature identities. Keeping descriptor bytes out of tree
@@ -525,6 +583,13 @@ submodule, in
 [`spatial/kdf.rs`](../../crates/sfmtool-py/src/spatial/kdf.rs). `float32` is not bound: the
 eager `KdForest` it would be compared against is `uint8` only.
 
+A file's version is read by
+[`read_kdf_version`](../../crates/sfmtool-kdf-format/src/read.rs), which checks
+the file as `KdfFile::open` does whatever its scalar type, and a version 3
+file is rewritten as version 4 by
+[`upgrade_kdf`](../../crates/sfmtool-kdf-format/src/upgrade.rs), which takes a
+`Progress` and writes through a temporary sibling as the writer does.
+
 Full verification is
 [`verify_kdf`](../../crates/sfmtool-kdf-format/src/verify.rs), which first calls
 [`KdfFile::verify_content`](../../crates/sfmtool-kdf-format/src/read.rs) for the
@@ -543,12 +608,14 @@ in [KDF layout measurements](../core/features/kdf-layout-measurements.md).
 
 ## Version History
 
-One line per version, newest first. Every release that writes `.kdf` files
-writes version 3, and this build reads version 3 only
-([Format versions](#format-versions)).
+One line per version, newest first. This build writes version 4 and reads
+versions 3 and 4 ([Format versions](#format-versions)).
 
-- **Version 3**: the current version, written by sfmtool 0.3 and later. It
-  keeps version 2's layout and changes only the integrity directory:
+- **Version 4**: the current version. It adds the required `chunk_layout`
+  field to `metadata.json`, which describes the chunk entry's three arrays and
+  names the ten node columns.
+- **Version 3**: written by sfmtool 0.3 and later releases. It keeps version
+  2's layout and changes only the integrity directory:
   `content_hash.json.zst` holds one digest per section instead of one per
   descriptor block, geometry block, origin block and tree chunk.
 - **Version 2**: replaced version 1's two layouts with the single shared

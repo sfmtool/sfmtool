@@ -120,16 +120,16 @@ def init(
 def upgrade(path, dry_run):
     """Bring a workspace and every file in it to the current file versions.
 
-    Back up the workspace first: the command rewrites .sfmr, .matches and
-    .camrig files in place, so it cannot be undone.
+    Back up the workspace first: the command rewrites .sfmr, .matches,
+    .camrig and .kdf files in place, so it cannot be undone.
 
     The workspace is found from PATH (or the current directory) by the upward
     search for .sfm-workspace.json, and the run upgrades it and every
-    workspace nested in it. Each .sfmr, .matches and .camrig file older than
-    the current version is rewritten at its own path as the current version.
-    A file the current reader refuses is left as it is. A version 1 workspace
-    is refused: upgrade it with sfmtool 0.4.1 first, the last release that
-    reads the file versions it holds. A run that stops part way, by Ctrl+C,
+    workspace nested in it. Each .sfmr, .matches, .camrig and .kdf file
+    older than the current version is rewritten at its own path as the
+    current version. A file the current reader refuses is left as it is. A
+    version 1 workspace is refused: upgrade it with sfmtool 0.4.1 first, the
+    last release that reads the file versions it holds. A run that stops part way, by Ctrl+C,
     can be run again to finish.
 
     Example usage:
@@ -141,7 +141,7 @@ def upgrade(path, dry_run):
     if not dry_run:
         click.echo(
             "Back up the workspace before upgrading it: this rewrites .sfmr, "
-            ".matches and .camrig files in place, which cannot be undone."
+            ".matches, .camrig and .kdf files in place, which cannot be undone."
         )
     try:
         with _echo_progress() as counter:
@@ -199,7 +199,12 @@ _OUTCOMES = {
     "not_converted": "not converted",
     "failed": "failed",
 }
-_KINDS = {"sfmr": ".sfmr", "matches": ".matches", "camrig": ".camrig"}
+_KINDS = {
+    "sfmr": ".sfmr",
+    "matches": ".matches",
+    "camrig": ".camrig",
+    "kdf": ".kdf",
+}
 
 
 def report_lines(report: dict) -> list[str]:

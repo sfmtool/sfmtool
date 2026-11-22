@@ -15,7 +15,7 @@ use super::{UpgradeFileKind, UpgradeOutcome, UpgradeWorkspaceError, WORKSPACE_FI
 use crate::progress::Progress;
 use crate::workspace::WORKSPACE_VERSION;
 
-/// What a run does to one `.sfmr`, `.matches` or `.camrig` file.
+/// What a run does to one `.sfmr`, `.matches`, `.camrig` or `.kdf` file.
 #[derive(Debug, Clone)]
 pub(super) enum Action {
     /// Read it and write it back as the current version, at its own path.
@@ -38,8 +38,8 @@ pub(super) struct Plan {
     /// The workspaces of the tree, the root first, then the nested ones
     /// sorted by path.
     pub(super) workspaces: Vec<PathBuf>,
-    /// Every `.sfmr`, then `.matches`, then `.camrig` file, each kind sorted
-    /// by path.
+    /// Every `.sfmr`, then `.matches`, then `.camrig`, then `.kdf` file, each
+    /// kind sorted by path.
     pub(super) files: Vec<FilePlan>,
     pub(super) linked_directories: Vec<PathBuf>,
 }
@@ -133,6 +133,7 @@ struct Walk {
     sfmr: Vec<PathBuf>,
     matches: Vec<PathBuf>,
     camrig: Vec<PathBuf>,
+    kdf: Vec<PathBuf>,
     nested_workspaces: Vec<PathBuf>,
     linked_directories: Vec<PathBuf>,
 }
@@ -177,6 +178,7 @@ fn walk(root: &Path, progress: &Progress<'_>) -> Result<Walk, UpgradeWorkspaceEr
                 Some("sfmr") => found.sfmr.push(path),
                 Some("matches") => found.matches.push(path),
                 Some("camrig") => found.camrig.push(path),
+                Some("kdf") => found.kdf.push(path),
                 _ => {}
             }
         }
@@ -187,6 +189,7 @@ fn walk(root: &Path, progress: &Progress<'_>) -> Result<Walk, UpgradeWorkspaceEr
         &mut found.sfmr,
         &mut found.matches,
         &mut found.camrig,
+        &mut found.kdf,
         &mut found.nested_workspaces,
         &mut found.linked_directories,
     ] {
@@ -248,6 +251,19 @@ fn plan_camrig(path: &Path) -> Action {
     }
 }
 
+/// What the run does to the `.kdf` index at `path`: rewrite it when it is
+/// below the current version. Reading its version checks the file as an open
+/// does, which is what the rewrite reads.
+fn plan_kdf(path: &Path) -> Action {
+    match sfmtool_kdf_format::read_kdf_version(path) {
+        Err(e) => Action::Leave(read_failure(e)),
+        Ok(version) if version >= sfmtool_kdf_format::KDF_FORMAT_VERSION => {
+            Action::Leave(UpgradeOutcome::AlreadyCurrent)
+        }
+        Ok(_) => Action::Rewrite,
+    }
+}
+
 /// Phases 1 and 2 for the tree at `root`, whose own workspace file the caller
 /// has checked: walk it, refuse a nested workspace file this build does not
 /// upgrade, and read each file to decide what the run does to it. A file
@@ -269,6 +285,7 @@ pub(super) fn plan(root: &Path, progress: &Progress<'_>) -> Result<Plan, Upgrade
         .map(|p| (UpgradeFileKind::Sfmr, p))
         .chain(found.matches.iter().map(|p| (UpgradeFileKind::Matches, p)))
         .chain(found.camrig.iter().map(|p| (UpgradeFileKind::Camrig, p)))
+        .chain(found.kdf.iter().map(|p| (UpgradeFileKind::Kdf, p)))
         .collect();
     let files: Vec<FilePlan> = candidates
         .par_iter()
@@ -281,6 +298,7 @@ pub(super) fn plan(root: &Path, progress: &Progress<'_>) -> Result<Plan, Upgrade
                     UpgradeFileKind::Sfmr => plan_sfmr(path),
                     UpgradeFileKind::Matches => plan_matches(path),
                     UpgradeFileKind::Camrig => plan_camrig(path),
+                    UpgradeFileKind::Kdf => plan_kdf(path),
                 }
             };
             FilePlan {

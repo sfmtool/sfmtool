@@ -213,9 +213,52 @@ pub fn read_kdf_workspace(path: &Path) -> Result<Option<KdfWorkspaceMetadata>, K
     }
     let limit = KdfOpenOptions::default().max_metadata_bytes;
     let raw = read_bounded_json_raw(&mut archive, &entries, "metadata.json.zst", limit)?;
-    let metadata: Metadata = serde_json::from_slice(&raw)?;
-    check_format_and_version(&metadata)?;
-    Ok(metadata.workspace)
+    Ok(parse_metadata(&raw)?.workspace)
+}
+
+/// The format version of the `.kdf` file at `path`, after checking the file
+/// as [`KdfFile::open`] checks it, whatever its scalar type.
+///
+/// It reads what an open reads: the ZIP directory, `metadata.json.zst`, the
+/// integrity directory, the image table's metadata and the storage row map,
+/// and no tree chunk or block. A version 3 file reads as one, which
+/// [`upgrade_kdf`](crate::upgrade_kdf) rewrites as the current version.
+///
+/// ```no_run
+/// let version = sfmtool_kdf_format::read_kdf_version("kerry-sift-index.kdf".as_ref())?;
+/// if version < sfmtool_kdf_format::KDF_FORMAT_VERSION {
+///     println!("an older index; `sfm ws upgrade` rewrites it");
+/// }
+/// # Ok::<(), sfmtool_kdf_format::KdfError>(())
+/// ```
+///
+/// # Errors
+///
+/// [`KdfError`] for any file [`KdfFile::open`] refuses with
+/// [`KdfOpenOptions::default`], and for a scalar type the format does not
+/// define.
+pub fn read_kdf_version(path: &Path) -> Result<u32, KdfError> {
+    let file = std::fs::File::open(path)?;
+    let mut archive = ZipArchive::new(file)?;
+    let mut entries = HashMap::new();
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i)?;
+        entries.insert(entry.name()?.into_owned(), entry.compressed_size());
+    }
+    let limit = KdfOpenOptions::default().max_metadata_bytes;
+    let raw = read_bounded_json_raw(&mut archive, &entries, "metadata.json.zst", limit)?;
+    let metadata = parse_metadata(&raw)?;
+    drop(archive);
+    match metadata.scalar_type.as_str() {
+        "uint8" => drop(KdfFile::<u8>::open(path, KdfOpenOptions::default())?),
+        "float32" => drop(KdfFile::<f32>::open(path, KdfOpenOptions::default())?),
+        other => {
+            return Err(KdfError::InvalidFormat(format!(
+                "unsupported scalar type {other:?}"
+            )))
+        }
+    }
+    Ok(metadata.version)
 }
 
 /// An open immutable `.kdf` snapshot with lazy, integrity-checked payload access.
@@ -314,13 +357,13 @@ impl<S: KdfScalar> KdfFile<S> {
             "metadata.json.zst",
             remaining.min(options.max_compressed_bytes),
         )?;
-        let metadata: Metadata = serde_json::from_slice(&metadata_raw)?;
-        // Before the integrity directory, not with the rest of the metadata
-        // validation after it: a directory written to another version of the
-        // format does not parse as this one's, and a person whose index is a
-        // version behind should read that rather than a deserializer's account
-        // of where the JSON stopped matching.
-        check_format_and_version(&metadata)?;
+        // The version is checked here, before the integrity directory, not
+        // with the rest of the metadata validation after it: a directory
+        // written to another version of the format does not parse as this
+        // one's, and a person whose index is a version behind should read that
+        // rather than a deserializer's account of where the JSON stopped
+        // matching.
+        let metadata = parse_metadata(&metadata_raw)?;
         let remaining = remaining
             .checked_sub(metadata_raw.len())
             .ok_or_else(|| KdfError::ResourceLimit("metadata exceeds budget".into()))?;
@@ -1268,25 +1311,46 @@ fn central_directory_entry_count(mut file: std::fs::File, start: u64) -> Result<
     Ok(count)
 }
 
-/// Refuse a file this build does not read, before anything else is decoded.
+/// Parse `metadata.json`, refuse a file this build does not read, and bring
+/// an older version's metadata to the current form.
 ///
-/// A version this build does not write is not read either, in either direction:
-/// there is one on-disk shape at a time and no translation layer. The message
-/// names the remedy, because an index is derived from the `.sift` files it was
-/// built from and rebuilding it is the whole fix.
-fn check_format_and_version(m: &Metadata) -> Result<(), KdfError> {
+/// The format and version are checked before anything else is decoded. A
+/// version this build neither writes nor reads is refused in either
+/// direction, with a message that names the remedy, because an index is
+/// derived from the `.sift` files it was built from and rebuilding it is the
+/// whole fix. From version 4 the `chunk_layout` legend must be exactly the
+/// one [`chunk_layout`] gives for the file's scalar type; a version 3 file has
+/// none, and is given that one. Everything else in a version 3 file's
+/// metadata means what it means in version 4, and its digests are verified
+/// against its own stored bytes.
+pub(crate) fn parse_metadata(raw: &[u8]) -> Result<Metadata, KdfError> {
+    let mut m: Metadata = serde_json::from_slice(raw)?;
     if m.format != "kdf" || m.metric != "squared_l2" {
         return Err(KdfError::InvalidFormat(
             "unsupported format or metric".into(),
         ));
     }
-    if m.version != KDF_FORMAT_VERSION {
+    if !(KDF_OLDEST_READ_VERSION..=KDF_FORMAT_VERSION).contains(&m.version) {
         return Err(KdfError::InvalidFormat(format!(
-            "this is a version {} index and this build reads version {}; rebuild the index",
-            m.version, KDF_FORMAT_VERSION
+            "this is a version {} index and this build reads versions {} to {}; rebuild the index",
+            m.version, KDF_OLDEST_READ_VERSION, KDF_FORMAT_VERSION
         )));
     }
-    Ok(())
+    let legend = chunk_layout(&m.scalar_type);
+    if m.version < CHUNK_LAYOUT_VERSION {
+        m.chunk_layout = Some(legend);
+    } else if m.chunk_layout.is_none() {
+        return Err(KdfError::InvalidFormat(format!(
+            "a version {} index must have a chunk_layout",
+            m.version
+        )));
+    } else if m.chunk_layout.as_ref() != Some(&legend) {
+        return Err(KdfError::InvalidFormat(format!(
+            "chunk_layout does not describe the layout of a {} chunk entry",
+            m.scalar_type
+        )));
+    }
+    Ok(m)
 }
 
 fn validate_metadata<S: KdfScalar>(
@@ -1429,7 +1493,7 @@ fn validate_hash_shape(h: &ContentHash, m: &Metadata) -> Result<(), KdfError> {
 }
 
 /// Fold an integrity directory's section digests in the order the format fixes.
-fn compose_content_hash(h: &ContentHash) -> Result<u128, KdfError> {
+pub(crate) fn compose_content_hash(h: &ContentHash) -> Result<u128, KdfError> {
     let mut sections = sfmtool_archive_io::SectionDigests::new();
     for s in [Some(&h.metadata_xxh128), h.images_xxh128.as_ref()]
         .into_iter()
@@ -1594,7 +1658,7 @@ fn decode_nodes<S: KdfScalar>(
     Ok(out)
 }
 
-fn read_bounded_json_raw(
+pub(crate) fn read_bounded_json_raw(
     archive: &mut ZipArchive<std::fs::File>,
     entries: &HashMap<String, u64>,
     name: &str,
