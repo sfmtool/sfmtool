@@ -181,8 +181,8 @@ measurements, after the Points group and before the Bench groups
 The row gestures follow the interaction rules of
 [interaction-rules.md](interaction-rules.md):
 
-- **Click** (G1): select the measurement and nothing else, as a click on a
-  Bench row does.
+- **Click** (G1): select the measurement and its reconstruction, and nothing
+  more (§ "The selection").
 - **Double-click** (G2, a set of things): select it, raise Measurement View
   beside the tree through `show_panel_beside` (G9), and frame the measurement
   in the 3D view: the view keeps its orientation and moves so that its finite
@@ -261,8 +261,9 @@ format), then the result block. Each block shows:
   bitmaps it is the point's stored one; for a file that stores none it is the
   display bitmap the open rendered into the same column
   (`PointSet::patch_bitmaps_for_display`). Absent where the endpoint does not
-  resolve or the point's row is all zero, as Track View and the Track Table
-  treat a row with no patch.
+  resolve, where the reconstruction carries no bitmap column, or where the
+  point's row is all zero, as Track View and the Track Table treat a row with
+  no patch.
 - **The resolution.** Where the endpoint resolves: the chosen point's ID with
   Track View's *Copy Point ID* button and its *Go to Point* button, which
   opens the Go to Point dialog holding that ID; the texel `(s, t)`; and the 3D

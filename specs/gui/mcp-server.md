@@ -1518,7 +1518,10 @@ the length of one scene unit in the measurement's unit), `at_infinity` and
 `refused`, each of the last two naming the `endpoint`. Every reading is in the
 file's own coordinates: a display transform never scales one.
 
-`get_measurement` adds, per endpoint, its `resolution` (`chosen`, an index into
+`get_measurement` gives each endpoint's `endpoint`, `camera_image`,
+`camera_image_name` and `pixel` as above, its `position_unit` (the file's
+`world_space_unit`, null where it declares none), and in place of `resolved`
+its `resolution` (`chosen`, an index into
 `candidates`, and each candidate's `point`, `point_id`, `observation`,
 `patch_coords`, `position` or `direction`, `depth`, `standing`, `exclusion` and
 a ranked candidate's `cost` factors, as

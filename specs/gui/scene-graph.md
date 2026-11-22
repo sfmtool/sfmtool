@@ -685,7 +685,7 @@ Distance #3  8 cm  → 0.317 su
 Each row names its kind and index, its label where it has one, its stated
 distance, and the reconstruction's reading of it, from the node's cached
 readings (`crate::measurements::readings`). A **click** (G1) selects the
-measurement and nothing else, as a click on a Bench row selects only the node.
+measurement and its reconstruction, and nothing more.
 A **double-click** (G2, a set of things) selects it, raises Measurement View
 beside the tree through `show_panel_beside` (G9), and frames the measurement's
 finite endpoints in the 3D view, keeping its orientation. The selected
