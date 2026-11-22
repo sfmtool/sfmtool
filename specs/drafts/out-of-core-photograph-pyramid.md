@@ -1201,9 +1201,10 @@ impl BuildReservation<'_> {
     pub fn granted(&self) -> usize;
     pub fn release_one(&self);
 }
-/// A quarter of physical memory, or 4 GiB where it cannot be read: the
-/// default build budget. A pure function, like `default_budget_bytes`; it
-/// keeps no state, and no environment variable overrides it.
+/// The default build budget, by the rule of `default_budget_bytes`: a
+/// quarter of physical memory clamped to 1 to 16 GiB, or 4 GiB where it
+/// cannot be read, overridden by `SFM_EXPLORER_BUILD_BUDGET_MB`
+/// (`BUILD_BUDGET_ENV_VAR`). It keeps no state.
 pub fn default_build_budget_bytes() -> u64;
 
 /// What a kernel reads a photograph through, for every photograph: the
@@ -2110,8 +2111,11 @@ in core. Step 17 turns the tier on.
     - **13b, the build budget.** **Built.** `PhotographCacheOptions`
       (`budget_bytes`, `build_budget_bytes`, and `tile_size`, which only 13e
       reads), `PhotographCache::new(options)`, `default_build_budget_bytes`
-      (a quarter of physical memory, 4 GiB where it cannot be read, with no
-      environment variable), `reserve_builds`, `try_reserve_build` and
+      (decided by the user: the cache budget's rule, a quarter of physical
+      memory clamped to 1 to 16 GiB, 4 GiB where it cannot be read,
+      overridden in megabytes by `SFM_EXPLORER_BUILD_BUDGET_MB`, whose 0
+      lets each caller decode one photograph at a time; the companion's open
+      question 8), `reserve_builds`, `try_reserve_build` and
       `BuildReservation`. A whole decode reserves 5 bytes per pixel of the
       photograph. `get` reserves its one decode with `reserve_builds` when it
       marks the slot as being made, from an empty slot or one a cancelled

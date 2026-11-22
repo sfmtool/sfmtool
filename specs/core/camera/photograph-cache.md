@@ -45,7 +45,8 @@ beside `ImageU8Pyramid` in [image.rs](../../../crates/sfmtool-core/src/camera/im
 exported as `sfmtool_core::camera::PhotographCache` together with
 `PhotographCacheOptions`, `BuildReservation`, `GetError`, `PeekedPhotograph`,
 `GetManyTally` and `PhotographCacheStats`. `default_budget_bytes`,
-`default_build_budget_bytes`, `BUDGET_ENV_VAR` and `SLOT_WAIT_POLL` are
+`default_build_budget_bytes`, `BUDGET_ENV_VAR`, `BUILD_BUDGET_ENV_VAR` and
+`SLOT_WAIT_POLL` are
 reached through `sfmtool_core::camera::photograph_cache`. It is in `sfmtool-core` rather than
 the viewer so that `render_display_patch_bitmaps`, which `sfm web-export` also
 calls, can take one.
@@ -145,11 +146,16 @@ pub struct PhotographCacheStats {
 /// be read. `BUDGET_ENV_VAR` overrides it.
 pub fn default_budget_bytes() -> u64;
 
-/// A quarter of physical memory; 4 GiB when it cannot be read.
+/// The same rule as `default_budget_bytes`: a quarter of physical memory,
+/// clamped to 1-16 GiB; 4 GiB when it cannot be read.
+/// `BUILD_BUDGET_ENV_VAR` overrides it.
 pub fn default_build_budget_bytes() -> u64;
 
 /// "SFM_EXPLORER_PHOTOGRAPH_CACHE_MB": a whole number of megabytes (10^6 bytes).
 pub const BUDGET_ENV_VAR: &str;
+
+/// "SFM_EXPLORER_BUILD_BUDGET_MB": a whole number of megabytes (10^6 bytes).
+pub const BUILD_BUDGET_ENV_VAR: &str;
 
 /// 50 ms: how often a caller waiting on another caller's decode looks at its
 /// own `Progress` for cancellation.
@@ -283,9 +289,14 @@ at 3840×2160 and 1 GB at 200 megapixels. Each decode reserves that estimate on
 the cache's build count before it reads the pixels, and gives it back when it
 ends, whatever the cache's budget, 0 included. The count is an atomic in the
 cache, checked against `PhotographCacheOptions::build_budget_bytes`, by
-default `default_build_budget_bytes()`: a quarter of physical memory, 16 GiB
-on the 64 GB test machine, or 4 GiB where physical memory cannot be read. No
-environment variable sets it.
+default `default_build_budget_bytes()`, worked out as the cache's budget
+is: a quarter of physical memory clamped to between 1 GiB and 16 GiB, 16 GiB
+on the 64 GB test machine, or 4 GiB where physical memory cannot be read. The
+environment variable `SFM_EXPLORER_BUILD_BUDGET_MB` overrides it with a whole
+number of megabytes of 10^6 bytes, and a value that does not parse is
+ignored. A build budget of 0 lets each caller decode one photograph at a
+time, since `reserve_builds` grants one decode when none fits, and
+`try_reserve_build` refuses every decode.
 
 - **`get`** reads the photograph's header once it has marked the slot as
   being made, whether the slot was empty or a maker that stopped has just
@@ -445,7 +456,8 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 |-----------|---------|---------|
 | budget | `default_budget_bytes()`: physical memory / 4, clamped to 1-16 GiB; 4 GiB when unknown | bytes of pyramids held before the least recently used are dropped; [photograph_cache.rs](../../../crates/sfmtool-core/src/camera/photograph_cache.rs) |
 | `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB` | unset | overrides the budget, in megabytes of 10^6 bytes (`BUDGET_ENV_VAR`) |
-| build budget | `default_build_budget_bytes()`: physical memory / 4; 4 GiB when unknown | estimated bytes of the whole decodes in progress on one cache at once (`PhotographCacheOptions::build_budget_bytes`) |
+| build budget | `default_build_budget_bytes()`: physical memory / 4, clamped to 1-16 GiB; 4 GiB when unknown | estimated bytes of the whole decodes in progress on one cache at once (`PhotographCacheOptions::build_budget_bytes`) |
+| `SFM_EXPLORER_BUILD_BUDGET_MB` | unset | overrides the build budget, in megabytes of 10^6 bytes (`BUILD_BUDGET_ENV_VAR`) |
 | bytes per decode | 5 per pixel of the photograph | what a whole decode reserves on the build count (`WHOLE_DECODE_BYTES_PER_PIXEL`) |
 | levels | `ImageU8Pyramid::full_levels(width, height)` = `floor(log2(min(width, height))) + 1`, at least 2 | pyramid depth of each entry, from its photograph's size; [image.rs](../../../crates/sfmtool-core/src/camera/image.rs) |
 | footprint samples | 9 × 9 | grid `view_could_see_patch` projects over the patch (`FOOTPRINT_SAMPLES` in [view_selection.rs](../../../crates/sfmtool-core/src/patch/view_selection.rs)) |
@@ -461,8 +473,8 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   decoded again, `forget` and `clear` releasing bytes, `get_many` order, tally
   and cancellation, budget 0 keeping nothing, `peek_state` telling a failure
   from no answer and not waiting on a decode in flight, `insert`, the
-  default budget from physical memory and the environment variable, and the
-  default build budget from physical memory. The
+  rule both default budgets share, from physical memory and each one's
+  environment variable. The
   slot's tests hold a decode in progress through a hook the test build
   calls as a decode starts and as a caller starts to wait, and wait for
   every thread they start with a time limit, so a caller that never returns
@@ -518,8 +530,9 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md),
   and a pyramid holding only the region of each level one render reads in
   [view-region-pyramid.md](../../drafts/view-region-pyramid.md).
-- **The budget is set only by the environment variable**, not in the viewer's
-  UI, and the build budget only by `PhotographCacheOptions`.
+- **The budget and the build budget are set only by their environment
+  variables** (or a caller's `PhotographCacheOptions`), not in the viewer's
+  UI.
 
 ## Open questions
 

@@ -776,3 +776,11 @@ decisions.
    missing tile is answered as not ready and drawn as loading; and
    accepting a rare decode on the GUI thread for a tile evicted between the
    peek and the render. It is the main draft's step 13d.
+8. **The default build budget.** *Decided by the user:* it follows the
+   cache's budget: a quarter of physical memory, clamped to 1 to 16 GiB, or
+   4 GiB where physical memory cannot be read, overridden by
+   `SFM_EXPLORER_BUILD_BUDGET_MB` in megabytes (10^6 bytes), parsed as
+   `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB` is, a value that does not parse being
+   ignored. A build budget of 0 lets each kernel caller decode one
+   photograph at a time and refuses every panel decode. Built in the main
+   draft's step 13b.

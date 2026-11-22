@@ -49,6 +49,8 @@ fn byte_len_sums_every_level() {
     assert_eq!(pyramid.byte_len(), 8 * 4 * 3 + 4 * 2 * 3 + 2 * 3);
 }
 
+/// The rule both default budgets share, the cache's and the build budget, each
+/// with its own environment variable.
 #[test]
 fn budget_from_physical_memory_and_env() {
     // A quarter of physical memory, clamped to [1 GiB, 16 GiB].
@@ -59,16 +61,14 @@ fn budget_from_physical_memory_and_env() {
     // Unknown physical memory.
     assert_eq!(budget_from(None, None), 4 * GIB);
     // The environment variable wins, in megabytes; a bad value is ignored.
+    assert_eq!(budget_from(Some("512"), None), 512_000_000);
     assert_eq!(budget_from(Some("512"), Some(64 * GIB)), 512_000_000);
     assert_eq!(budget_from(Some(" 0 "), None), 0);
     assert_eq!(budget_from(Some("lots"), None), 4 * GIB);
 }
 
 #[test]
-fn build_budget_from_physical_memory() {
-    assert_eq!(build_budget_from(Some(64 * GIB)), 16 * GIB);
-    assert_eq!(build_budget_from(Some(16 * GIB)), 4 * GIB);
-    assert_eq!(build_budget_from(None), 4 * GIB);
+fn build_budget_defaults() {
     // A header claiming any size gives an estimate rather than an overflow.
     assert_eq!(whole_decode_bytes(4, 2), 40);
     assert_eq!(whole_decode_bytes(u32::MAX, u32::MAX), u64::MAX);
@@ -78,11 +78,16 @@ fn build_budget_from_physical_memory() {
 }
 
 #[test]
-fn default_budget_is_in_range_or_overridden() {
-    let budget = default_budget_bytes();
-    if std::env::var(BUDGET_ENV_VAR).is_err() {
-        assert!((GIB..=16 * GIB).contains(&budget), "{budget}");
+fn default_budgets_are_in_range_or_overridden() {
+    for (budget, var) in [
+        (default_budget_bytes(), BUDGET_ENV_VAR),
+        (default_build_budget_bytes(), BUILD_BUDGET_ENV_VAR),
+    ] {
+        if std::env::var(var).is_err() {
+            assert!((GIB..=16 * GIB).contains(&budget), "{var}: {budget}");
+        }
     }
+    assert_ne!(BUDGET_ENV_VAR, BUILD_BUDGET_ENV_VAR);
 }
 
 /// Each pyramid's depth is `full_levels` of its own photograph's size, down to

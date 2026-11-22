@@ -43,6 +43,10 @@ pub const SLOT_WAIT_POLL: Duration = Duration::from_millis(50);
 /// megabytes (10^6 bytes), written as a decimal integer.
 pub const BUDGET_ENV_VAR: &str = "SFM_EXPLORER_PHOTOGRAPH_CACHE_MB";
 
+/// The environment variable that overrides [`default_build_budget_bytes`], in
+/// megabytes (10^6 bytes), written as a decimal integer.
+pub const BUILD_BUDGET_ENV_VAR: &str = "SFM_EXPLORER_BUILD_BUDGET_MB";
+
 const GIB: u64 = 1 << 30;
 
 /// The byte budget a cache gets by default: a quarter of physical memory,
@@ -60,8 +64,8 @@ pub fn default_budget_bytes() -> u64 {
     budget_from(env.as_deref(), crate::machine::physical_memory_bytes())
 }
 
-/// [`default_budget_bytes`] with its two inputs passed in, so it can be tested
-/// without touching the environment.
+/// [`default_budget_bytes`] and [`default_build_budget_bytes`] with their two
+/// inputs passed in, so they can be tested without touching the environment.
 fn budget_from(env_megabytes: Option<&str>, physical_bytes: Option<u64>) -> u64 {
     if let Some(mb) = env_megabytes.and_then(|v| v.trim().parse::<u64>().ok()) {
         return mb.saturating_mul(1_000_000);
@@ -72,21 +76,20 @@ fn budget_from(env_megabytes: Option<&str>, physical_bytes: Option<u64>) -> u64 
     }
 }
 
-/// The build budget a cache gets by default: a quarter of physical memory, or
-/// 4 GiB where physical memory cannot be read. A pure function, like
-/// [`default_budget_bytes`]; it keeps no state, and no environment variable
-/// overrides it.
+/// The build budget a cache gets by default, worked out as
+/// [`default_budget_bytes`] is: a quarter of physical memory, clamped to
+/// between 1 GiB and 16 GiB, or 4 GiB where physical memory cannot be read.
+/// It keeps no state.
+///
+/// The environment variable [`BUILD_BUDGET_ENV_VAR`] overrides it with a
+/// number of megabytes (10^6 bytes). `0` there lets each caller decode one
+/// photograph at a time, since [`PhotographCache::reserve_builds`] grants one
+/// decode when none fits, and refuses every decode
+/// [`PhotographCache::try_reserve_build`] asks for. A value that does not
+/// parse as a whole number is ignored.
 pub fn default_build_budget_bytes() -> u64 {
-    build_budget_from(crate::machine::physical_memory_bytes())
-}
-
-/// [`default_build_budget_bytes`] with physical memory passed in, so it can be
-/// tested on any machine.
-fn build_budget_from(physical_bytes: Option<u64>) -> u64 {
-    match physical_bytes {
-        Some(bytes) => bytes / 4,
-        None => 4 * GIB,
-    }
+    let env = std::env::var(BUILD_BUDGET_ENV_VAR).ok();
+    budget_from(env.as_deref(), crate::machine::physical_memory_bytes())
 }
 
 /// The bytes a whole decode of a photograph is estimated to hold while it
