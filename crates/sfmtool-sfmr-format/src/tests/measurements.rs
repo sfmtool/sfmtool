@@ -16,13 +16,6 @@ use super::{
 };
 use crate::*;
 
-fn temp_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
 /// Build `n` valid physical distance measurements for `make_test_data`'s three
 /// `1920x1080` images, cycling through all five units, both same-image and
 /// cross-image endpoint pairs, and empty + non-empty UTF-8 labels.
@@ -154,7 +147,8 @@ fn length_unit_table_agrees_with_world_space_units() {
 
 #[test]
 fn round_trip_with_measurements_in_both_feature_sources() {
-    let dir = temp_dir("sfmr_test_measurements_round_trip");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let expected = sample_measurements(5);
 
     for (name, mut data) in [
@@ -197,8 +191,6 @@ fn round_trip_with_measurements_in_both_feature_sources() {
         let (valid, errors) = verify_sfmr(&path).unwrap();
         assert!(valid, "{name}: {errors:?}");
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 impl SfmrData {
@@ -250,7 +242,8 @@ impl SfmrData {
 
 #[test]
 fn round_trip_without_measurements_omits_section_and_keys() {
-    let dir = temp_dir("sfmr_test_without_measurements");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("plain.sfmr");
     let mut data = make_test_data();
     assert!(data.measurements.is_empty());
@@ -272,8 +265,6 @@ fn round_trip_without_measurements_omits_section_and_keys() {
     assert!(loaded.content_hash.measurements_xxh128.is_none());
     assert!(loaded.measurements.is_empty());
     assert_eq!(verify_sfmr(&path).unwrap(), (true, vec![]));
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -320,7 +311,8 @@ fn every_measurement_field_reaches_the_section_and_content_hash() {
 
 #[test]
 fn measurements_read_and_verify_through_permuted_and_subset_unit_legends() {
-    let dir = temp_dir("sfmr_test_measurements_legends");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let good = dir.join("good.sfmr");
     let mut data = make_test_data();
     data.measurements.distance = Some(sample_measurements(5));
@@ -416,13 +408,12 @@ fn measurements_read_and_verify_through_permuted_and_subset_unit_legends() {
         vec![LENGTH_UNIT_IN, LENGTH_UNIT_CM]
     );
     assert_eq!(verify_sfmr(&sub_path).unwrap(), (true, vec![]));
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn malformed_unit_legend_is_rejected_on_read_and_verify() {
-    let dir = temp_dir("sfmr_test_bad_measurement_legend");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let good = dir.join("good.sfmr");
     let mut data = make_test_data();
     data.measurements.distance = Some(sample_measurements(5));
@@ -492,13 +483,12 @@ fn malformed_unit_legend_is_rejected_on_read_and_verify() {
             "{what}: expected {expected:?} in {errors:?}"
         );
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn invalid_measurements_are_rejected_on_write() {
-    let dir = temp_dir("sfmr_test_bad_measurements_write");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("bad.sfmr");
 
     type Case = (&'static str, Box<dyn Fn(&mut SfmrData)>, &'static str);
@@ -637,13 +627,12 @@ fn invalid_measurements_are_rejected_on_write() {
         );
         assert!(!path.exists(), "{what}: failed write left a file behind");
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
-    let dir = temp_dir("sfmr_test_bad_measurements_archive");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let good = dir.join("good.sfmr");
     let mut data = make_test_data();
     data.measurements.distance = Some(sample_measurements(2));
@@ -914,13 +903,12 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
             )),
         "{errors:?}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn top_level_zero_distance_measurement_count_is_refused_by_every_reader_and_verifier() {
-    let dir = temp_dir("sfmr_test_top_level_zero_distance_measurement_count");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let plain = dir.join("plain.sfmr");
     write_sfmr(&plain, &mut make_test_data()).unwrap();
 
@@ -962,13 +950,12 @@ fn top_level_zero_distance_measurement_count_is_refused_by_every_reader_and_veri
         errors.iter().any(|e| e.contains(expected)),
         "expected {expected:?} in {errors:?}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn version_16_reads_and_verifies_without_measurements_and_refuses_measurements() {
-    let dir = temp_dir("sfmr_test_v16_measurements");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
 
     // A valid version 16 file (no measurements) reads, verifies, and rewrites as version 17.
     let v17_plain = dir.join("v17_plain.sfmr");
@@ -1083,8 +1070,6 @@ fn version_16_reads_and_verifies_without_measurements_and_refuses_measurements()
                 .any(|e| e.contains("must not carry measurements/ entries")),
         "{errors:?}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Copy `src` to `dst` with each entry passed through `edit`, which returns the
@@ -1126,7 +1111,8 @@ fn rebuild_archive(
 /// does not have, and every reader that checks it and the verifier refuse it.
 #[test]
 fn the_flat_measurements_layout_is_not_read_as_distance_measurements() {
-    let dir = temp_dir("sfmr_test_flat_measurements_layout");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let good = dir.join("good.sfmr");
     let mut data = make_test_data();
     data.measurements.distance = Some(sample_measurements(3));
@@ -1199,8 +1185,6 @@ fn the_flat_measurements_layout_is_not_read_as_distance_measurements() {
         errors[1].starts_with("Overall content hash mismatch"),
         "{errors:?}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// An entry under `measurements/` that no kind defines, such as a flat
@@ -1210,7 +1194,8 @@ fn the_flat_measurements_layout_is_not_read_as_distance_measurements() {
 /// still refused.
 #[test]
 fn unknown_entries_under_measurements_are_ignored() {
-    let dir = temp_dir("sfmr_test_unknown_measurement_entries");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let good = dir.join("good.sfmr");
     let mut data = make_test_data();
     data.measurements.distance = Some(sample_measurements(3));
@@ -1258,6 +1243,4 @@ fn unknown_entries_under_measurements_are_ignored() {
         err.contains("must not carry measurements/ entries"),
         "{err}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }

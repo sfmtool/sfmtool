@@ -15,13 +15,6 @@ use ndarray::{Array1, Array2};
 const FOCAL_ENTRY: &str = "images/focal_adjustments.3.float64.zst";
 const PRINCIPAL_POINT_ENTRY: &str = "images/principal_point_adjustments_xy.3.2.float64.zst";
 
-fn temp_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
 /// `make_test_data` with a second camera, holding image 2, that varies
 /// nothing; camera 0 varies both parameters, and images 0 and 1 carry
 /// adjustments whose bits a round trip has to keep.
@@ -60,7 +53,8 @@ fn bits2(a: &Array2<f64>) -> Vec<u64> {
 
 #[test]
 fn both_columns_and_the_camera_key_round_trip_bit_for_bit() {
-    let dir = temp_dir("sfmr_test_per_image_adjustments_round_trip");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     for (name, mut data) in [
         ("sift.sfmr", data_with_adjustments()),
         ("embedded.sfmr", {
@@ -112,12 +106,12 @@ fn both_columns_and_the_camera_key_round_trip_bit_for_bit() {
             "{name}"
         );
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_file_without_adjustments_writes_no_column_and_no_key() {
-    let dir = temp_dir("sfmr_test_per_image_adjustments_absent");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("plain.sfmr");
     write_sfmr(&path, &mut make_test_data()).unwrap();
 
@@ -136,7 +130,6 @@ fn a_file_without_adjustments_writes_no_column_and_no_key() {
     assert!(loaded.focal_adjustments.is_none());
     assert!(loaded.principal_point_adjustments_xy.is_none());
     assert!(loaded.cameras[0].per_image_adjustments.is_empty());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -229,7 +222,8 @@ fn assert_named(err: &str, errors: &[String], needle: &str) {
 
 #[test]
 fn a_column_without_a_listing_camera_is_refused() {
-    let dir = temp_dir("sfmr_test_per_image_adjustments_unlisted_column");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (err, errors) = read_and_verify_edited(
         &dir,
         edit_cameras(|json| {
@@ -237,12 +231,12 @@ fn a_column_without_a_listing_camera_is_refused() {
         }),
     );
     assert_named(&err, &errors, "no camera lists \"focal\"");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_listing_camera_without_its_column_is_refused() {
-    let dir = temp_dir("sfmr_test_per_image_adjustments_missing_column");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let good = dir.join("good.sfmr");
     let mut data = data_with_adjustments();
     write_sfmr_with_options(&good, &mut data, &WriteOptions::default()).unwrap();
@@ -279,12 +273,12 @@ fn a_listing_camera_without_its_column_is_refused() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("images/focal_adjustments is absent"), "{err}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_non_zero_row_under_a_camera_that_does_not_list_it_is_refused() {
-    let dir = temp_dir("sfmr_test_per_image_adjustments_unlisted_row");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     // Image 2 is camera 1's, which varies nothing.
     let (err, errors) = read_and_verify_edited(&dir, edit_focal([0.01, 0.0, 0.002]));
     assert_named(&err, &errors, "row 2");
@@ -299,7 +293,6 @@ fn a_non_zero_row_under_a_camera_that_does_not_list_it_is_refused() {
         err.contains("row 2") && err.contains("does not list"),
         "{err}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -309,7 +302,8 @@ fn a_non_finite_value_or_a_focal_at_or_below_minus_one_is_refused() {
         ("inf", [0.0, f64::INFINITY, 0.0], "not finite"),
         ("minus_one", [-1.0, 0.0, 0.0], "at or below -1"),
     ] {
-        let dir = temp_dir(&format!("sfmr_test_per_image_adjustments_{tag}"));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let (err, errors) = read_and_verify_edited(&dir, edit_focal(values));
         assert_named(&err, &errors, needle);
 
@@ -319,40 +313,39 @@ fn a_non_finite_value_or_a_focal_at_or_below_minus_one_is_refused() {
             .unwrap_err()
             .to_string();
         assert!(err.contains(needle), "{tag}: {err}");
-        let _ = std::fs::remove_dir_all(&dir);
     }
     // Just above -1 is a focal, however short.
     let mut data = data_with_adjustments();
     data.focal_adjustments = Some(Array1::from_vec(vec![-0.999, 0.0, 0.0]));
-    let dir = temp_dir("sfmr_test_per_image_adjustments_above_minus_one");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     write_sfmr_with_options(&dir.join("ok.sfmr"), &mut data, &WriteOptions::default()).unwrap();
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_malformed_camera_key_is_refused() {
-    for (tag, names, needle) in [
-        ("unknown", serde_json::json!(["focal", "skew"]), "\"skew\""),
-        ("twice", serde_json::json!(["focal", "focal"]), "twice"),
+    for (names, needle) in [
+        (serde_json::json!(["focal", "skew"]), "\"skew\""),
+        (serde_json::json!(["focal", "focal"]), "twice"),
         (
-            "order",
             serde_json::json!(["principal_point", "focal"]),
             "out of the order",
         ),
     ] {
-        let dir = temp_dir(&format!("sfmr_test_per_image_adjustments_key_{tag}"));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let (err, errors) = read_and_verify_edited(
             &dir,
             edit_cameras(move |json| json[0]["per_image_adjustments"] = names.clone()),
         );
         assert_named(&err, &errors, needle);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
 #[test]
 fn all_zero_columns_and_the_camera_key_round_trip() {
-    let dir = temp_dir("sfmr_test_per_image_adjustments_zero");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let zero = dir.join("zero.sfmr");
     write_sfmr(&zero, &mut data_with_zero_adjustments()).unwrap();
     let loaded = read_sfmr(&zero).unwrap();
@@ -365,7 +358,6 @@ fn all_zero_columns_and_the_camera_key_round_trip() {
         loaded.cameras[0].per_image_adjustments,
         vec!["focal".to_string(), "principal_point".to_string()]
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -373,9 +365,9 @@ fn a_negative_zero_counts_as_zero() {
     let mut data = data_with_zero_adjustments();
     data.focal_adjustments.as_mut().unwrap()[2] = -0.0;
     data.principal_point_adjustments_xy.as_mut().unwrap()[[0, 1]] = -0.0;
-    let dir = temp_dir("sfmr_test_per_image_adjustments_negative_zero");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     write_sfmr(&dir.join("z.sfmr"), &mut data).unwrap();
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

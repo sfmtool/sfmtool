@@ -238,8 +238,8 @@ fn make_test_data() -> SfmrData {
 #[test]
 fn test_round_trip() {
     let mut data = make_test_data();
-    let dir = std::env::temp_dir().join("sfmr_test_round_trip");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
 
     // Write with skip_recompute_depth_stats to test exact round-trip fidelity
@@ -297,7 +297,6 @@ fn test_round_trip() {
     );
 
     // Clean up
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// Convert the SIFT-referenced test fixture into an `embedded_patches` one:
@@ -329,8 +328,8 @@ fn make_embedded_test_data() -> SfmrData {
 #[test]
 fn test_embedded_patches_round_trip() {
     let mut data = make_embedded_test_data();
-    let dir = std::env::temp_dir().join("sfmr_test_embedded_round_trip");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
 
     let options = WriteOptions {
@@ -367,15 +366,13 @@ fn test_embedded_patches_round_trip() {
     // Integrity verification passes for the embedded-patches layout.
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "verification failed: {errors:?}");
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_sift_files_round_trip_with_inline_keypoints() {
     let mut data = make_test_data();
-    let dir = std::env::temp_dir().join("sfmr_test_sift_inline_keypoints");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
 
     let options = WriteOptions {
@@ -410,8 +407,6 @@ fn test_sift_files_round_trip_with_inline_keypoints() {
         loaded.content_hash.tracks_xxh128,
         "the inline keypoints must participate in the tracks hash"
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// Write `data`, then copy it to `dst` with the `index`-th float of
@@ -439,8 +434,8 @@ fn write_with_keypoint(
 fn test_sift_files_inline_keypoints_validated_on_read_and_verify() {
     // The bounds check is the column's, not the mode's: an out-of-bounds inline
     // keypoint is rejected in a sift_files file exactly as in an embedded one.
-    let dir = std::env::temp_dir().join("sfmr_test_sift_kp_validate");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let mut oob = make_test_data();
     oob.keypoints_xy.as_mut().unwrap()[[2, 1]] = 5000.0;
     let path = dir.join("oob.sfmr");
@@ -454,7 +449,6 @@ fn test_sift_files_inline_keypoints_validated_on_read_and_verify() {
         !valid && errors.iter().any(|e| e.contains("image bounds")),
         "{errors:?}"
     );
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -473,8 +467,8 @@ fn test_sift_files_sort_reorders_inline_keypoints_in_lockstep() {
         .collect();
     d.keypoints_xy = Some(Array2::from_shape_vec((8, 2), kp).unwrap());
 
-    let dir = std::env::temp_dir().join("sfmr_test_sift_kp_reorder");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("u.sfmr");
     write_sfmr(&path, &mut d).unwrap();
     let loaded = read_sfmr(&path).unwrap();
@@ -489,7 +483,6 @@ fn test_sift_files_sort_reorders_inline_keypoints_in_lockstep() {
             "row {j} keypoint misaligned"
         );
     }
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -499,8 +492,8 @@ fn test_embedded_patches_requires_patch_frame() {
     let mut data = make_embedded_test_data();
     data.patch_u_halfvec_xyz = None;
     data.patch_v_halfvec_xyz = None;
-    let dir = std::env::temp_dir().join("sfmr_test_embedded_no_frame");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     let options = WriteOptions {
         skip_recompute_depth_stats: true,
@@ -511,7 +504,6 @@ fn test_embedded_patches_requires_patch_frame() {
         err.to_string().contains("patch_u_halfvec_xyz"),
         "expected a patch-frame requirement error, got: {err}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -520,8 +512,8 @@ fn test_write_rejects_contradictory_columns() {
     // column is the substitute for the .sift link, not an addition to it.
     let mut d = make_test_data();
     d.image_file_hashes = Some(vec![[3u8; 16]; d.metadata.image_count as usize]);
-    let dir = std::env::temp_dir().join("sfmr_test_contradiction1");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let err = write_sfmr(&dir.join("a.sfmr"), &mut d).unwrap_err();
     assert!(
         format!("{err}").contains("must not carry image_file_hashes"),
@@ -545,13 +537,12 @@ fn test_write_rejects_contradictory_columns() {
     f.metadata.feature_source = "bogus".into();
     let err = write_sfmr(&dir.join("c.sfmr"), &mut f).unwrap_err();
     assert!(format!("{err}").contains("unknown feature_source"), "{err}");
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_embedded_keypoints_validated_on_read_and_verify() {
-    let dir = std::env::temp_dir().join("sfmr_test_kp_validate");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
 
     // Out-of-bounds keypoint (camera is 1920x1080) is rejected on read+verify.
     let mut oob = make_embedded_test_data();
@@ -577,13 +568,12 @@ fn test_embedded_keypoints_validated_on_read_and_verify() {
     write_with_keypoint(&dir, &mut make_embedded_test_data(), 3, f32::NAN, &path);
     let err = read_sfmr(&path).err().unwrap();
     assert!(format!("{err}").contains("not finite"), "{err}");
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_keypoints_are_folded_into_tracks_hash() {
-    let dir = std::env::temp_dir().join("sfmr_test_kp_hash");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
 
     let mut a = make_embedded_test_data();
     write_sfmr(&dir.join("a.sfmr"), &mut a).unwrap();
@@ -601,7 +591,6 @@ fn test_keypoints_are_folded_into_tracks_hash() {
         .tracks_xxh128;
 
     assert_ne!(ha, hb, "changing a keypoint must change the tracks hash");
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -621,8 +610,8 @@ fn test_embedded_sort_reorders_keypoints_in_lockstep() {
         .collect();
     d.keypoints_xy = Some(Array2::from_shape_vec((8, 2), kp).unwrap());
 
-    let dir = std::env::temp_dir().join("sfmr_test_kp_reorder");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("u.sfmr");
     write_sfmr(&path, &mut d).unwrap();
     let loaded = read_sfmr(&path).unwrap();
@@ -637,14 +626,13 @@ fn test_embedded_sort_reorders_keypoints_in_lockstep() {
             "row {j} keypoint misaligned"
         );
     }
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_round_trip_verify() {
     let mut data = make_test_data();
-    let dir = std::env::temp_dir().join("sfmr_test_verify");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
 
     write_sfmr(&path, &mut data).unwrap();
@@ -652,15 +640,13 @@ fn test_round_trip_verify() {
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "Verification failed: {:?}", errors);
     assert!(errors.is_empty());
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_read_metadata_only() {
     let mut data = make_test_data();
-    let dir = std::env::temp_dir().join("sfmr_test_metadata");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
 
     write_sfmr(&path, &mut data).unwrap();
@@ -672,8 +658,6 @@ fn test_read_metadata_only() {
     let (metadata, names) = read_sfmr_image_names(&path).unwrap();
     assert_eq!(metadata.operation, "sfm_solve");
     assert_eq!(names, data.image_names);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// `read_sfmr_image_names` reports a file it cannot open with its path, and
@@ -682,8 +666,8 @@ fn test_read_metadata_only() {
 fn test_read_image_names_errors() {
     use std::io::{Read, Write};
 
-    let dir = std::env::temp_dir().join("sfmr_test_image_names_errors");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let missing = dir.join("missing.sfmr");
     let err = read_sfmr_image_names(&missing).unwrap_err();
     assert!(
@@ -723,14 +707,13 @@ fn test_read_image_names_errors() {
         matches!(&err, SfmrError::ShapeMismatch(m) if m.contains("1 != image_count 3")),
         "{err}"
     );
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_content_hash_populated() {
     let mut data = make_test_data();
-    let dir = std::env::temp_dir().join("sfmr_test_hash");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
 
     write_sfmr(&path, &mut data).unwrap();
@@ -778,8 +761,6 @@ fn test_content_hash_populated() {
     // Hashed like any other section even though it stays out of
     // `content_xxh128`.
     assert_eq!(loaded.content_hash.derived_xxh128.len(), 32);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// Copy the archive at `src` to `dst` with `metadata.json`'s version set to
@@ -836,9 +817,8 @@ fn assert_refused_as_no_longer_read(path: &std::path::Path, version: u32) {
 /// other entries this build would read.
 #[test]
 fn a_version_15_file_is_refused_naming_the_last_release_that_reads_it() {
-    let dir = std::env::temp_dir().join("sfmr_test_version_15_refused");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let current = dir.join("current.sfmr");
     let old = dir.join("v15.sfmr");
     write_sfmr(&current, &mut data_with_every_optional_column()).unwrap();
@@ -850,8 +830,6 @@ fn a_version_15_file_is_refused_naming_the_last_release_that_reads_it() {
     let relabelled = dir.join("relabelled.sfmr");
     relabel_version(&current, &relabelled, 15);
     assert_refused_as_no_longer_read(&relabelled, 15);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// Rewrite a current `.sfmr` file into the version 1 on-disk layout: Euclidean
@@ -952,15 +930,13 @@ fn rewrite_current_as_v1(current: &std::path::Path, v1_path: &std::path::Path) {
 /// before anything that depends on it is parsed.
 #[test]
 fn a_version_1_file_is_refused_for_its_version_before_what_it_lacks() {
-    let dir = std::env::temp_dir().join("sfmr_test_version_1_refused");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let current = dir.join("current.sfmr");
     let v1 = dir.join("v1.sfmr");
     write_sfmr(&current, &mut make_test_data()).unwrap();
     rewrite_current_as_v1(&current, &v1);
     assert_refused_as_no_longer_read(&v1, 1);
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// A version newer than this build's, and version 0, which no writer has
@@ -968,9 +944,8 @@ fn a_version_1_file_is_refused_for_its_version_before_what_it_lacks() {
 /// `verify_sfmr`, without naming a release.
 #[test]
 fn a_version_above_the_current_one_or_zero_is_refused_as_unsupported() {
-    let dir = std::env::temp_dir().join("sfmr_test_future_version");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let src = dir.join("current.sfmr");
     write_sfmr(&src, &mut make_test_data()).unwrap();
 
@@ -991,8 +966,6 @@ fn a_version_above_the_current_one_or_zero_is_refused_as_unsupported() {
             (false, vec![format!("Invalid format: {expected}")])
         );
     }
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -1005,8 +978,8 @@ fn test_point_at_infinity_round_trip() {
     data.positions_xyzw[[4, 2]] = -1.0; // toward the content seen by image 0 (−Z)
     data.positions_xyzw[[4, 3]] = 0.0;
 
-    let dir = std::env::temp_dir().join("sfmr_test_infinity_round_trip");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
 
     write_sfmr(&path, &mut data).unwrap();
@@ -1023,8 +996,6 @@ fn test_point_at_infinity_round_trip() {
     let img0 = &loaded.depth_statistics.images[0];
     assert_eq!(img0.observed.infinity_count, 1);
     assert_eq!(img0.observed.count, 2);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 // NOTE: test_reconstruction_round_trip is intentionally omitted here.
@@ -1119,8 +1090,8 @@ fn test_empty_reconstruction() {
         measurements: MeasurementsData::default(),
     };
 
-    let dir = std::env::temp_dir().join("sfmr_test_empty");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
 
     let options = WriteOptions {
@@ -1145,8 +1116,6 @@ fn test_empty_reconstruction() {
         "Empty reconstruction verification failed: {:?}",
         errors
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -1176,8 +1145,8 @@ fn test_multiple_cameras() {
     // Assign image 2 to camera 1
     data.camera_indexes[2] = 1;
 
-    let dir = std::env::temp_dir().join("sfmr_test_multi_cam");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
 
     write_sfmr(&path, &mut data).unwrap();
@@ -1191,15 +1160,13 @@ fn test_multiple_cameras() {
 
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "Multi-camera verification failed: {:?}", errors);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_normals_are_unit_vectors() {
     let mut data = make_test_data();
-    let dir = std::env::temp_dir().join("sfmr_test_normals");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
 
     write_sfmr(&path, &mut data).unwrap();
@@ -1217,8 +1184,6 @@ fn test_normals_are_unit_vectors() {
             "Normal {i} should be unit vector, got norm = {norm}"
         );
     }
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -1242,8 +1207,8 @@ fn test_write_preserves_set_normals_and_fills_missing() {
     set[[1, 1]] = 0.0;
     set[[1, 2]] = 0.0;
 
-    let dir = std::env::temp_dir().join("sfmr_test_preserve_normals");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     write_sfmr(&path, &mut data).unwrap();
     let loaded = read_sfmr(&path).unwrap();
@@ -1269,8 +1234,6 @@ fn test_write_preserves_set_normals_and_fills_missing() {
         n1[0] < 0.0 && n1[2] > 0.0,
         "filled normal should point toward -P"
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -1278,9 +1241,8 @@ fn a_near_zero_normal_is_filled_whether_or_not_the_write_skips_statistics() {
     // A row within the missing-normal tolerance of zero is filled by every
     // write, so skipping the statistics pass does not change which rows count
     // as missing.
-    let dir = std::env::temp_dir().join("sfmr_test_near_zero_normal");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let mut filled = Vec::new();
     for skip in [false, true] {
         let mut data = make_test_data();
@@ -1304,7 +1266,6 @@ fn a_near_zero_normal_is_filled_whether_or_not_the_write_skips_statistics() {
         filled.push(n1);
     }
     assert_eq!(filled[0], filled[1]);
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -1314,8 +1275,8 @@ fn test_round_trip_without_normals() {
     let mut data = make_test_data();
     data.normals_xyz = None;
 
-    let dir = std::env::temp_dir().join("sfmr_test_no_normals");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     write_sfmr(&path, &mut data).unwrap();
 
@@ -1331,8 +1292,6 @@ fn test_round_trip_without_normals() {
 
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "no-normals verification failed: {errors:?}");
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// Copy a `.sfmr` archive, dropping `key` from the JSON entry `meta_entry`
@@ -1629,9 +1588,8 @@ fn test_point_constraints_round_trip() {
         data.constraint_reference_images.clone().unwrap(),
     );
 
-    let dir = std::env::temp_dir().join("sfmr_test_point_constraints");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     write_sfmr(&path, &mut data).unwrap();
 
@@ -1656,8 +1614,6 @@ fn test_point_constraints_round_trip() {
 
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "constraint verification failed: {errors:?}");
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -1684,9 +1640,8 @@ fn test_point_constraint_legend_round_trip() {
     let mut data = make_test_data();
     with_point_constraints(&mut data);
 
-    let dir = std::env::temp_dir().join("sfmr_test_constraint_legend");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     write_sfmr(&path, &mut data).unwrap();
 
@@ -1727,8 +1682,6 @@ fn test_point_constraint_legend_round_trip() {
     assert!(read_points3d_metadata(&plain_path)
         .get("point_constraint_names")
         .is_none());
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -1736,9 +1689,8 @@ fn test_point_constraints_read_through_a_permuted_legend() {
     // A file another writer numbered differently is legal, and the reader
     // normalises it: the codes a consumer sees are the canonical ones whatever
     // legend the file stored its column on.
-    let dir = std::env::temp_dir().join("sfmr_test_permuted_constraint_legend");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let good = dir.join("good.sfmr");
     let mut data = make_test_data();
     with_point_constraints(&mut data);
@@ -1784,8 +1736,6 @@ fn test_point_constraints_read_through_a_permuted_legend() {
             POINT_CONSTRAINT_FREE,
         ]
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -1793,9 +1743,8 @@ fn test_point_constraints_read_through_a_subset_legend() {
     // A legend names only the constraints its file uses: a file with no ranged
     // point may carry `["held", "free"]`, two codes, and the reader still
     // normalises onto the canonical numbering.
-    let dir = std::env::temp_dir().join("sfmr_test_subset_constraint_legend");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let good = dir.join("good.sfmr");
     let mut data = make_test_data();
     data.point_constraints = Some(Array1::from_vec(vec![
@@ -1846,8 +1795,6 @@ fn test_point_constraints_read_through_a_subset_legend() {
         ]
     );
     verify_sfmr(&subset_path).unwrap();
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -1856,9 +1803,8 @@ fn test_malformed_point_constraint_legend_rejected() {
     // that was valid when written -- which is where a hand-edited or
     // foreign-written legend shows up. Each case is refused by the reader and
     // reported by `verify_sfmr`.
-    let dir = std::env::temp_dir().join("sfmr_test_bad_constraint_legend");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let good = dir.join("good.sfmr");
     let mut data = make_test_data();
     with_point_constraints(&mut data);
@@ -1930,8 +1876,6 @@ fn test_malformed_point_constraint_legend_rejected() {
             "{what}: expected {expected:?} in {errors:?}"
         );
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -1943,9 +1887,8 @@ fn test_all_free_point_constraints_are_not_written() {
     data.constraint_distances = Some(Array1::from_vec(vec![f64::NAN; 5]));
     data.constraint_reference_images = Some(Array1::from_vec(vec![NO_REFERENCE_IMAGE; 5]));
 
-    let dir = std::env::temp_dir().join("sfmr_test_all_free_constraints");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     write_sfmr(&path, &mut data).unwrap();
 
@@ -1959,8 +1902,6 @@ fn test_all_free_point_constraints_are_not_written() {
     assert!(archive
         .by_name("points3d/point_constraints.5.uint8.zst")
         .is_err());
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -1969,9 +1910,8 @@ fn test_round_trip_without_point_constraints() {
     let mut data = make_test_data();
     assert!(data.point_constraints.is_none());
 
-    let dir = std::env::temp_dir().join("sfmr_test_no_point_constraints");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     write_sfmr(&path, &mut data).unwrap();
 
@@ -1989,17 +1929,14 @@ fn test_round_trip_without_point_constraints() {
     ] {
         assert!(archive.by_name(name).is_err(), "unexpected {name}");
     }
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_point_constraints_covered_by_points3d_hash() {
     // Changing a constraint changes the section digest, so the columns are
     // inside the integrity envelope rather than beside it.
-    let dir = std::env::temp_dir().join("sfmr_test_point_constraints_hash");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
 
     let mut a = make_test_data();
     with_point_constraints(&mut a);
@@ -2021,17 +1958,14 @@ fn test_point_constraints_covered_by_points3d_hash() {
     let hc = read_sfmr(&pc).unwrap().content_hash.points3d_xxh128;
     assert_ne!(ha, hb);
     assert_ne!(ha, hc);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_malformed_point_constraints_rejected() {
     // Every rule the triple is held to, each as its own write attempt. The
     // table names what is broken so a failure says which rule stopped firing.
-    let dir = std::env::temp_dir().join("sfmr_test_bad_point_constraints");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("bad.sfmr");
 
     /// One rejection case: what is broken, the edit that breaks it, and the
@@ -2105,8 +2039,6 @@ fn test_malformed_point_constraints_rejected() {
             "{what}: expected {expected:?} in {err:?}"
         );
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -2117,8 +2049,8 @@ fn test_normal_confidence_round_trip() {
     let confidence = Array1::from_vec(vec![255u8, 0, 255, 0, 128]);
     data.normal_confidence = Some(confidence.clone());
 
-    let dir = std::env::temp_dir().join("sfmr_test_normal_confidence");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     write_sfmr(&path, &mut data).unwrap();
 
@@ -2134,8 +2066,6 @@ fn test_normal_confidence_round_trip() {
 
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "confidence verification failed: {errors:?}");
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2145,8 +2075,8 @@ fn test_round_trip_without_normal_confidence() {
     let mut data = make_test_data();
     assert!(data.normal_confidence.is_none());
 
-    let dir = std::env::temp_dir().join("sfmr_test_no_normal_confidence");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     write_sfmr(&path, &mut data).unwrap();
 
@@ -2158,8 +2088,6 @@ fn test_round_trip_without_normal_confidence() {
     assert!(archive
         .by_name("points3d/normal_confidence.5.uint8.zst")
         .is_err());
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2167,8 +2095,8 @@ fn test_missing_normal_confidence_flag_reads_as_absent() {
     // A file written before the flag existed carries neither the key nor the
     // array; a missing flag must default to `false` rather than erroring.
     let mut data = make_test_data();
-    let dir = std::env::temp_dir().join("sfmr_test_legacy_normal_confidence");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     let legacy_path = dir.join("legacy.sfmr");
     write_sfmr(&path, &mut data).unwrap();
@@ -2181,8 +2109,6 @@ fn test_missing_normal_confidence_flag_reads_as_absent() {
 
     let loaded = read_sfmr(&legacy_path).unwrap();
     assert!(loaded.normal_confidence.is_none());
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2191,16 +2117,14 @@ fn test_normal_confidence_length_mismatch_rejected() {
     let mut data = make_test_data();
     data.normal_confidence = Some(Array1::from_vec(vec![255u8, 0, 255]));
 
-    let dir = std::env::temp_dir().join("sfmr_test_normal_confidence_len");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     let err = write_sfmr(&path, &mut data).unwrap_err();
     assert!(
         format!("{err}").contains("normal_confidence len 3 != point_count 5"),
         "unexpected error: {err}"
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2211,24 +2135,22 @@ fn test_normal_confidence_without_normals_rejected() {
     data.normals_xyz = None;
     data.normal_confidence = Some(Array1::from_vec(vec![255u8, 0, 255, 0, 128]));
 
-    let dir = std::env::temp_dir().join("sfmr_test_normal_confidence_no_normals");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     let err = write_sfmr(&path, &mut data).unwrap_err();
     assert!(
         format!("{err}").contains("normal_confidence requires normals_xyz"),
         "unexpected error: {err}"
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_normal_confidence_covered_by_points3d_hash() {
     // The confidence array joins the points3d section hash, so two files that
     // differ only in it have different `points3d_xxh128`.
-    let dir = std::env::temp_dir().join("sfmr_test_normal_confidence_hash");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
 
     let mut a = make_test_data();
     a.normal_confidence = Some(Array1::from_vec(vec![255u8, 255, 255, 255, 255]));
@@ -2251,8 +2173,6 @@ fn test_normal_confidence_covered_by_points3d_hash() {
     write_sfmr(&path_c, &mut c).unwrap();
     let hash_c = read_sfmr(&path_c).unwrap().content_hash.points3d_xxh128;
     assert_ne!(hash_a, hash_c);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2263,8 +2183,8 @@ fn test_observation_confidence_round_trip() {
     let confidence = Array1::from_vec(vec![255u8, 1, 0, 128, 64, 0, 200, 1]);
     data.observation_confidence = Some(confidence.clone());
 
-    let dir = std::env::temp_dir().join("sfmr_test_observation_confidence");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     write_sfmr(&path, &mut data).unwrap();
 
@@ -2280,8 +2200,6 @@ fn test_observation_confidence_round_trip() {
 
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "confidence verification failed: {errors:?}");
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2292,8 +2210,8 @@ fn test_embedded_observation_confidence_round_trip() {
     let confidence = Array1::from_vec(vec![0u8, 1, 2, 3, 250, 251, 252, 255]);
     data.observation_confidence = Some(confidence.clone());
 
-    let dir = std::env::temp_dir().join("sfmr_test_embedded_observation_confidence");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     write_sfmr(&path, &mut data).unwrap();
 
@@ -2312,8 +2230,6 @@ fn test_embedded_observation_confidence_round_trip() {
 
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "embedded confidence verification failed: {errors:?}");
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2323,8 +2239,8 @@ fn test_round_trip_without_observation_confidence() {
     let mut data = make_test_data();
     assert!(data.observation_confidence.is_none());
 
-    let dir = std::env::temp_dir().join("sfmr_test_no_observation_confidence");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     write_sfmr(&path, &mut data).unwrap();
 
@@ -2336,8 +2252,6 @@ fn test_round_trip_without_observation_confidence() {
     assert!(archive
         .by_name("tracks/observation_confidence.8.uint8.zst")
         .is_err());
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2345,8 +2259,8 @@ fn test_missing_observation_confidence_flag_reads_as_absent() {
     // A file written before the flag existed carries neither the key nor the
     // array; a missing flag must default to `false` rather than erroring.
     let mut data = make_test_data();
-    let dir = std::env::temp_dir().join("sfmr_test_legacy_observation_confidence");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     let legacy_path = dir.join("legacy.sfmr");
     write_sfmr(&path, &mut data).unwrap();
@@ -2359,8 +2273,6 @@ fn test_missing_observation_confidence_flag_reads_as_absent() {
 
     let loaded = read_sfmr(&legacy_path).unwrap();
     assert!(loaded.observation_confidence.is_none());
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2369,24 +2281,22 @@ fn test_observation_confidence_length_mismatch_rejected() {
     let mut data = make_test_data();
     data.observation_confidence = Some(Array1::from_vec(vec![255u8, 0, 255]));
 
-    let dir = std::env::temp_dir().join("sfmr_test_observation_confidence_len");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     let err = write_sfmr(&path, &mut data).unwrap_err();
     assert!(
         format!("{err}").contains("observation_confidence len 3 != observation_count 8"),
         "unexpected error: {err}"
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_observation_confidence_covered_by_tracks_hash() {
     // The confidence array joins the tracks section hash, so two files that
     // differ only in it have different `tracks_xxh128`.
-    let dir = std::env::temp_dir().join("sfmr_test_observation_confidence_hash");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
 
     let mut a = make_test_data();
     a.observation_confidence = Some(Array1::from_vec(vec![255u8; 8]));
@@ -2412,8 +2322,6 @@ fn test_observation_confidence_covered_by_tracks_hash() {
     let hash_c = read_sfmr(&path_c).unwrap().content_hash.tracks_xxh128;
     assert_ne!(hash_a, hash_c);
     assert_ne!(hash_b, hash_c);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2433,8 +2341,8 @@ fn test_observation_confidence_reordered_in_lockstep_by_sort() {
         (0..8).map(|j| tag(pts[j], imgs[j])).collect(),
     ));
 
-    let dir = std::env::temp_dir().join("sfmr_test_observation_confidence_reorder");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("u.sfmr");
     write_sfmr(&path, &mut d).unwrap();
     let loaded = read_sfmr(&path).unwrap();
@@ -2447,7 +2355,6 @@ fn test_observation_confidence_reordered_in_lockstep_by_sort() {
             "row {j} confidence misaligned"
         );
     }
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// `make_test_data` with a patch frame and patch bitmaps, so it carries
@@ -2474,8 +2381,8 @@ fn test_reference_observations_follow_their_observation_through_the_sort() {
     d.feature_indexes = Some(Array1::from_vec(vec![0; 8]));
     d.observation_counts = Array1::from_vec(vec![2, 3, 1, 1, 1]);
 
-    let dir = std::env::temp_dir().join("sfmr_test_reference_observations_sort");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("u.sfmr");
     write_sfmr(&path, &mut d).unwrap();
     let loaded = read_sfmr(&path).unwrap();
@@ -2487,7 +2394,6 @@ fn test_reference_observations_follow_their_observation_through_the_sort() {
     );
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "{errors:?}");
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2496,8 +2402,8 @@ fn test_reference_observations_without_bitmaps_round_trip_and_verify() {
     // observation a later render renders each point from.
     let mut d = make_framed_test_data(vec![1, 0, -1, 0, -1]);
     d.patch_bitmaps_y_x_rgba = None;
-    let dir = std::env::temp_dir().join("sfmr_test_reference_observations_bare");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("bare.sfmr");
     write_sfmr(&path, &mut d).unwrap();
     let loaded = read_sfmr(&path).unwrap();
@@ -2508,7 +2414,6 @@ fn test_reference_observations_without_bitmaps_round_trip_and_verify() {
     );
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "{errors:?}");
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2520,21 +2425,20 @@ fn test_reference_observations_out_of_range_refused_when_the_tracks_arrive_unsor
     d.image_indexes = Array1::from_vec(vec![2u32, 1, 0, 0, 1, 2, 1, 0]);
     d.feature_indexes = Some(Array1::from_vec(vec![0; 8]));
     d.observation_counts = Array1::from_vec(vec![2, 3, 1, 1, 1]);
-    let dir = std::env::temp_dir().join("sfmr_test_reference_observations_unsorted");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("u.sfmr");
     let result = write_sfmr(&path, &mut d);
     assert!(
         matches!(&result, Err(SfmrError::ShapeMismatch(m)) if m.contains("row 0")),
         "{result:?}"
     );
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_reference_observations_presence_and_range_refused_on_write() {
-    let dir = std::env::temp_dir().join("sfmr_test_reference_observations_refused");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("r.sfmr");
 
     // Required with the patch frame.
@@ -2572,14 +2476,12 @@ fn test_reference_observations_presence_and_range_refused_on_write() {
         );
     }
     assert!(!path.exists());
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_reference_observations_out_of_range_refused_on_read_and_verify() {
-    let dir = std::env::temp_dir().join("sfmr_test_reference_observations_read");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("valid.sfmr");
     write_sfmr(&path, &mut make_framed_test_data(vec![1, 2, 0, -1, 0])).unwrap();
     let edited = dir.join("edited.sfmr");
@@ -2597,19 +2499,15 @@ fn test_reference_observations_out_of_range_refused_on_read_and_verify() {
     let (valid, errors) = verify_sfmr(&edited).unwrap();
     assert!(!valid);
     assert!(errors.iter().any(|e| e.contains("row 1 = 3")), "{errors:?}");
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn a_file_without_the_patch_frame_reads_no_reference_observations() {
-    let dir = std::env::temp_dir().join("sfmr_test_reference_observations_absent");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let plain = dir.join("plain.sfmr");
     write_sfmr(&plain, &mut make_test_data()).unwrap();
     assert!(read_sfmr(&plain).unwrap().reference_observations.is_none());
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2627,8 +2525,8 @@ fn test_reference_observations_are_hashed_in_the_tracks_section() {
 #[test]
 fn test_depth_statistics_structure() {
     let mut data = make_test_data();
-    let dir = std::env::temp_dir().join("sfmr_test_depth_stats");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
 
     write_sfmr(&path, &mut data).unwrap();
@@ -2652,8 +2550,6 @@ fn test_depth_statistics_structure() {
             "Image {i} should have observations"
         );
     }
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2722,8 +2618,8 @@ fn make_rig_test_data() -> SfmrData {
 fn test_round_trip_with_rigs() {
     let mut data = make_rig_test_data();
 
-    let dir = std::env::temp_dir().join("sfmr_test_rigs_round_trip");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
 
     let options = WriteOptions {
@@ -2769,8 +2665,6 @@ fn test_round_trip_with_rigs() {
     // Verify integrity
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "Rig round-trip verification failed: {:?}", errors);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 // The spec requires `rigs/` and `frames/` to be present together. The reader
@@ -2781,8 +2675,8 @@ fn test_frames_without_rigs_rejected() {
     use std::io::{Read, Write};
 
     let mut data = make_rig_test_data();
-    let dir = std::env::temp_dir().join("sfmr_test_frames_without_rigs");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("rigs.sfmr");
     let options = WriteOptions {
         skip_recompute_depth_stats: true,
@@ -2829,8 +2723,6 @@ fn test_frames_without_rigs_rejected() {
             .any(|e| e.contains("frames/ section is present without a rigs/")),
         "unexpected errors: {errors:?}"
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 // Every entry in a .sfmr archive MUST use ZIP's STORE method. Entries are already
@@ -2839,8 +2731,8 @@ fn test_frames_without_rigs_rejected() {
 #[test]
 fn test_archive_uses_stored_compression() {
     let mut data = make_test_data();
-    let dir = std::env::temp_dir().join("sfmr_test_stored_compression");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
 
     write_sfmr(&path, &mut data).unwrap();
@@ -2858,8 +2750,6 @@ fn test_archive_uses_stored_compression() {
             entry.compression(),
         );
     }
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2890,8 +2780,8 @@ fn test_round_trip_with_patches_and_bitmaps() {
     let reprojection_errors = data.reprojection_errors.clone();
     let normals_xyz = data.normals_xyz.clone().unwrap();
 
-    let dir = std::env::temp_dir().join("sfmr_test_patches_round_trip");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     write_sfmr(&path, &mut data).unwrap();
 
@@ -2930,8 +2820,6 @@ fn test_round_trip_with_patches_and_bitmaps() {
 
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "patch round-trip verification failed: {errors:?}");
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2944,8 +2832,8 @@ fn test_round_trip_with_patches_no_bitmaps() {
     data.patch_v_halfvec_xyz = Some(v_halfvec_xyz.clone());
     data.reference_observations = Some(Array1::from_elem(5, NO_REFERENCE_OBSERVATION));
 
-    let dir = std::env::temp_dir().join("sfmr_test_patches_no_bitmaps");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     write_sfmr(&path, &mut data).unwrap();
 
@@ -2957,8 +2845,6 @@ fn test_round_trip_with_patches_no_bitmaps() {
 
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "{errors:?}");
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2974,8 +2860,8 @@ fn test_patch_frame_without_normals_round_trips() {
     data.patch_v_halfvec_xyz = Some(v_halfvec_xyz.clone());
     data.reference_observations = Some(Array1::from_elem(5, NO_REFERENCE_OBSERVATION));
 
-    let dir = std::env::temp_dir().join("sfmr_test_patch_frame_no_normals");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     write_sfmr(&path, &mut data).unwrap();
 
@@ -2986,8 +2872,6 @@ fn test_patch_frame_without_normals_round_trips() {
 
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "{errors:?}");
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2997,16 +2881,14 @@ fn test_patch_bitmaps_without_frame_rejected() {
     let mut data = make_test_data();
     data.patch_bitmaps_y_x_rgba = Some(Array4::<u8>::zeros((5, 4, 4, 4)));
 
-    let dir = std::env::temp_dir().join("sfmr_test_bitmaps_no_frame");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     let result = write_sfmr(&path, &mut data);
     assert!(
         matches!(&result, Err(SfmrError::InvalidFormat(m)) if m.contains("requires the patch frame")),
         "bitmaps without a frame should be rejected, got {result:?}"
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// Write `data`, copy the file with `edit` applied to its
@@ -3018,9 +2900,8 @@ fn assert_points3d_flags_refused(
     edit: impl Fn(&mut serde_json::Value),
     expected: &str,
 ) {
-    let dir = std::env::temp_dir().join(test_name);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("valid.sfmr");
     let options = WriteOptions {
         skip_recompute_depth_stats: true,
@@ -3044,8 +2925,6 @@ fn assert_points3d_flags_refused(
         errors.iter().any(|e| e.contains(expected)),
         "{test_name}: unexpected errors: {errors:?}"
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 // The presence rules the writer applies are the ones the reader and verifier
@@ -3092,9 +2971,8 @@ fn test_embedded_patches_without_frame_refused_on_read_and_verify() {
 fn test_verify_reports_every_broken_presence_rule() {
     // A file whose flags break two rules: the reader stops at the first, the
     // verifier reports both.
-    let dir = std::env::temp_dir().join("sfmr_test_verify_two_presence_rules");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let mut data = make_test_data();
     data.normal_confidence = Some(Array1::from_vec(vec![255u8, 0, 255, 0, 128]));
     data.patch_u_halfvec_xyz = Some(Array2::from_elem((5, 3), 0.5));
@@ -3128,15 +3006,12 @@ fn test_verify_reports_every_broken_presence_rule() {
             "missing {expected:?} in {errors:?}"
         );
     }
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_world_space_unit_checked_on_write_read_and_verify() {
-    let dir = std::env::temp_dir().join("sfmr_test_world_space_unit");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
 
     // Each of the five units round-trips and verifies.
     for (unit, _) in WORLD_SPACE_UNITS {
@@ -3185,8 +3060,6 @@ fn test_world_space_unit_checked_on_write_read_and_verify() {
             .any(|e| e.contains("unknown world_space_unit \"metres\"")),
         "unexpected errors: {errors:?}"
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -3198,16 +3071,14 @@ fn test_patch_frame_half_present_rejected() {
         (i * 3 + j) as f32 * 0.1
     }));
 
-    let dir = std::env::temp_dir().join("sfmr_test_frame_half");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     let result = write_sfmr(&path, &mut data);
     assert!(
         matches!(result, Err(SfmrError::ShapeMismatch(_))),
         "a half-present frame should be rejected, got {result:?}"
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// Camera parameters and `tool_options` serialize in sorted key order.
@@ -3543,9 +3414,8 @@ fn entry_names_are_pinned() {
 /// show up here as a changed number.
 #[test]
 fn archive_entry_names_pin_call_sites() {
-    let dir = std::env::temp_dir().join("sfmr_test_entry_name_pin");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("pin.sfmr");
 
     // Turn on the optional columns that have their own entries.
@@ -3606,8 +3476,6 @@ fn archive_entry_names_pin_call_sites() {
         "archive entry listing changed — a call site is passing a different \
          count, or an entry was added, removed or renamed"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// `make_test_data` with every optional column turned on, so the hash the two
@@ -3683,9 +3551,8 @@ fn depth_statistics_do_not_reach_the_content_hash() {
 fn a_corrupted_derived_entry_still_fails_verification() {
     use std::io::{Read, Write};
 
-    let dir = std::env::temp_dir().join("sfmr_test_derived_corrupt");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let good = dir.join("good.sfmr");
     let bad = dir.join("bad.sfmr");
 
@@ -3730,8 +3597,6 @@ fn a_corrupted_derived_entry_still_fails_verification() {
         errors.iter().any(|e| e.contains("Derived section hash")),
         "the failure should name the derived section: {errors:?}",
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A damaged hash record reports every affected section in traversal order,
@@ -3741,9 +3606,8 @@ fn a_corrupted_derived_entry_still_fails_verification() {
 fn verification_reports_multiple_section_mismatches_in_order() {
     use std::io::{Read, Write};
 
-    let dir = std::env::temp_dir().join("sfmr_test_verifier_error_order");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let good = dir.join("good.sfmr");
     let bad = dir.join("bad.sfmr");
     let mut data = data_with_every_optional_column();
@@ -3799,7 +3663,6 @@ fn verification_reports_multiple_section_mismatches_in_order() {
             "Overall content hash mismatch",
         ],
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A file's `metadata.json` holds `feature_source` and
@@ -3807,9 +3670,8 @@ fn verification_reports_multiple_section_mismatches_in_order() {
 /// without either is refused by every reader and by the verifier.
 #[test]
 fn a_file_without_a_required_metadata_key_is_refused() {
-    let dir = std::env::temp_dir().join("sfmr_test_required_metadata_keys");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let current = dir.join("current.sfmr");
     write_sfmr(&current, &mut make_test_data()).unwrap();
     for key in ["feature_source", "infinity_point_count"] {
@@ -3833,7 +3695,6 @@ fn a_file_without_a_required_metadata_key_is_refused() {
             (false, vec![format!("Invalid format: {expected}")])
         );
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A file holds `written.json` and `content_hash.json`'s `derived_xxh128`: a
@@ -3842,9 +3703,8 @@ fn a_file_without_a_required_metadata_key_is_refused() {
 /// refused by every reader that reads the hashes.
 #[test]
 fn a_file_without_its_write_record_or_derived_hash_is_refused() {
-    let dir = std::env::temp_dir().join("sfmr_test_write_record_and_derived_hash");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let current = dir.join("current.sfmr");
     write_sfmr(&current, &mut make_test_data()).unwrap();
 
@@ -3883,16 +3743,13 @@ fn a_file_without_its_write_record_or_derived_hash_is_refused() {
     // The file both were taken from reads and verifies.
     assert!(read_sfmr(&current).is_ok());
     assert_eq!(verify_sfmr(&current).unwrap(), (true, vec![]));
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A file says what its derived section hashes to.
 #[test]
 fn a_file_carries_its_derived_hash() {
-    let dir = std::env::temp_dir().join("sfmr_test_derived_present");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("derived.sfmr");
 
     let mut data = data_with_every_optional_column();
@@ -3918,8 +3775,6 @@ fn a_file_carries_its_derived_hash() {
     assert!(err.contains("derived_xxh128"), "{err}");
     let err = verify_sfmr(&without).err().unwrap().to_string();
     assert!(err.contains("derived_xxh128"), "{err}");
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -3927,9 +3782,8 @@ fn content_hash_of_matches_what_a_write_stores() {
     // The hash-only path runs no compression and builds no archive, so this is
     // what pins that it still serialises and hashes exactly what the writer
     // does, over every optional column the format has.
-    let dir = std::env::temp_dir().join("sfmr_test_content_hash_of");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("hashed.sfmr");
 
     let mut for_hash = data_with_every_optional_column();
@@ -3948,15 +3802,12 @@ fn content_hash_of_matches_what_a_write_stores() {
     assert_eq!(computed.content_xxh128, stored.content_xxh128);
     // And the file verifies against the hashes it stored.
     assert!(verify_sfmr(&path).unwrap().0);
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn two_saves_a_moment_apart_differ_only_in_the_timestamp() {
-    let dir = std::env::temp_dir().join("sfmr_test_write_record");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
 
     let first = dir.join("first.sfmr");
     let second = dir.join("second.sfmr");
@@ -3975,8 +3826,6 @@ fn two_saves_a_moment_apart_differ_only_in_the_timestamp() {
         read_sfmr_content_hash(&second).unwrap().content_xxh128,
         "the clock is outside the content digest"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ── The retired `lineage` key ───────────────────────────────────────────
@@ -3990,9 +3839,8 @@ fn a_file_carrying_the_retired_lineage_key_reads_verifies_and_drops_it_on_a_save
     // consistent exactly as one of those files is.
     use sfmtool_archive_io::{format_hash, SectionDigests};
 
-    let dir = std::env::temp_dir().join("sfmr_test_retired_lineage");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let plain = dir.join("plain.sfmr");
     let with = dir.join("with_lineage.sfmr");
     let resaved = dir.join("resaved.sfmr");
@@ -4062,8 +3910,6 @@ fn a_file_carrying_the_retired_lineage_key_reads_verifies_and_drops_it_on_a_save
     assert_eq!(resaved_hash.content_xxh128, stored.content_xxh128);
     let (ok, errors) = verify_sfmr(&resaved).unwrap();
     assert!(ok, "{errors:?}");
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ── Atomic writes ───────────────────────────────────────────────────────
@@ -4077,9 +3923,8 @@ fn a_write_that_fails_leaves_an_existing_file_byte_identical() {
     // nothing is left beside them. The failure *after* bytes have been streamed
     // is asserted where it can be injected, in
     // `sfmtool-archive-io`'s `a_failed_write_leaves_the_previous_target_untouched`.
-    let dir = std::env::temp_dir().join("sfmr_test_atomic_write");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("recon.sfmr");
 
     let mut good = make_test_data();
@@ -4102,8 +3947,6 @@ fn a_write_that_fails_leaves_an_existing_file_byte_identical() {
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     assert_eq!(names, vec!["recon.sfmr".to_string()], "{names:?}");
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ── Optional thumbnails (version 11) ────────────────────────────────────
@@ -4173,9 +4016,8 @@ fn data_with_distinct_thumbnails() -> SfmrData {
 
 #[test]
 fn a_value_without_thumbnails_round_trips_and_verifies() {
-    let dir = std::env::temp_dir().join("sfmr_test_no_thumbnails");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("bare.sfmr");
 
     let mut data = make_test_data();
@@ -4214,15 +4056,12 @@ fn a_value_without_thumbnails_round_trips_and_verifies() {
     let computed = content_hash_of(&mut again, &WriteOptions::default()).unwrap();
     assert_eq!(computed.images_xxh128, stored.images_xxh128);
     assert_eq!(computed.content_xxh128, stored.content_xxh128);
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_value_with_thumbnails_round_trips_and_says_so() {
-    let dir = std::env::temp_dir().join("sfmr_test_with_thumbnails");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("thumbs.sfmr");
 
     let mut data = data_with_distinct_thumbnails();
@@ -4250,17 +4089,14 @@ fn a_value_with_thumbnails_round_trips_and_says_so() {
     let bare_hash = content_hash_of(&mut bare, &WriteOptions::default()).unwrap();
     assert_ne!(bare_hash.images_xxh128, stored.images_xxh128);
     assert_ne!(bare_hash.content_xxh128, stored.content_xxh128);
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// `images/metadata.json`'s `has_thumbnails` key is required: a file without
 /// it is refused by the reader and the verifier.
 #[test]
 fn a_file_without_the_thumbnails_flag_is_refused() {
-    let dir = std::env::temp_dir().join("sfmr_test_thumbnails_flag_missing");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let current = dir.join("current.sfmr");
     let without = dir.join("without.sfmr");
 
@@ -4279,15 +4115,12 @@ fn a_file_without_the_thumbnails_flag_is_refused() {
     let (valid, errors) = verify_sfmr(&without).unwrap();
     assert!(!valid);
     assert!(errors.iter().any(|e| e == expected), "{errors:?}");
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_wrong_shaped_thumbnail_column_is_refused() {
-    let dir = std::env::temp_dir().join("sfmr_test_bad_thumbnails");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("bad.sfmr");
 
     let mut data = make_test_data();
@@ -4295,6 +4128,4 @@ fn a_wrong_shaped_thumbnail_column_is_refused() {
     let error = write_sfmr(&path, &mut data).expect_err("shape validation");
     assert!(error.to_string().contains("thumbnails_y_x_rgb"), "{error}");
     assert!(!path.exists());
-
-    let _ = std::fs::remove_dir_all(&dir);
 }

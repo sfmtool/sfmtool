@@ -81,12 +81,10 @@ fn assert_cells_eq(actual: &MemberCellData, expected: &MemberCellData) {
 fn craft_cell_file(
     name: &str,
     mutate: impl FnOnce(&mut Vec<(String, Vec<u8>)>),
-) -> (std::path::PathBuf, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let src = dir.join("valid.matches");
-    let dst = dir.join("crafted.matches");
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = temp_dir_named(name);
+    let src = dir.path().join("valid.matches");
+    let dst = dir.path().join("crafted.matches");
     write_matches(&src, &make_cell_test_data(), 3).unwrap();
     let mut entries = load_archive_entries(&src);
     mutate(&mut entries);
@@ -145,19 +143,17 @@ fn test_member_cells_round_trip() {
     );
 
     // Writing the loaded data back gives the same bytes.
-    let again = dir.join("again.matches");
+    let again = dir.path().join("again.matches");
     write_matches(&again, &loaded, 3).unwrap();
     assert_eq!(
         read_matches(&again).unwrap().content_hash.content_xxh128,
         loaded.content_hash.content_xxh128
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_cluster_patches_without_cells_write_no_cell_entries() {
-    let (dir, path) = write_to_temp(
+    let (_dir, path) = write_to_temp(
         "matches_test_member_cells_absent",
         &make_cluster_patch_test_data(),
     );
@@ -167,7 +163,6 @@ fn test_cluster_patches_without_cells_write_no_cell_entries() {
     assert_eq!(stored_cell_status_names(&path), serde_json::Value::Null);
     let loaded = read_matches(&path).unwrap();
     assert!(loaded.cluster_patches.unwrap().member_cells.is_none());
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -206,13 +201,12 @@ fn test_member_cell_status_read_through_another_legend() {
         &expected,
     );
 
-    let rewritten = dir.join("rewritten.matches");
+    let rewritten = dir.path().join("rewritten.matches");
     write_matches(&rewritten, &loaded, 3).unwrap();
     assert_eq!(
         stored_cell_status_names(&rewritten),
         serde_json::json!(ClusterCellStatus::NAMES)
     );
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -241,7 +235,7 @@ fn test_member_cell_status_partial_legend() {
         .iter()
         .map(|&code| legend.iter().position(|s| *s as u8 == code).unwrap() as u8)
         .collect();
-    let (dir, path) = craft_cell_file("matches_test_member_cell_legend_partial", |entries| {
+    let (_dir, path) = craft_cell_file("matches_test_member_cell_legend_partial", |entries| {
         mutate_cp_metadata(entries, |json| {
             json["member_cell_status_names"] = serde_json::json!(names)
         });
@@ -260,7 +254,6 @@ fn test_member_cell_status_partial_legend() {
             .unwrap(),
         &expected,
     );
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -344,7 +337,7 @@ fn test_malformed_member_cells_rejected() {
         ),
     ];
     for (label, mutate, expected) in cases {
-        let (dir, path) =
+        let (_dir, path) =
             craft_cell_file(&format!("matches_test_bad_member_cells_{label}"), mutate);
         let msg = format!("{}", read_matches(&path).err().unwrap());
         assert!(msg.contains(expected), "{label}: read said {msg}");
@@ -354,7 +347,6 @@ fn test_malformed_member_cells_rejected() {
             errors.iter().any(|e| e.contains(expected)),
             "{label}: verify said {errors:?}"
         );
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
 

@@ -31,8 +31,8 @@ fn make_pinhole_camera(width: u32, height: u32, fx: f64, fy: f64, cx: f64, cy: f
 
 #[test]
 fn test_write_and_read_back_cameras() {
-    let dir = std::env::temp_dir().join("colmap_db_cameras");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let db_path = dir.join("test.db");
 
     let cameras = vec![make_pinhole_camera(
@@ -135,13 +135,12 @@ fn test_write_and_read_back_cameras() {
     assert_eq!(desc_cols, 128);
 
     drop(conn);
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_write_pose_priors() {
-    let dir = std::env::temp_dir().join("colmap_db_priors");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let db_path = dir.join("test.db");
 
     let cameras = vec![make_pinhole_camera(640, 480, 500.0, 500.0, 320.0, 240.0)];
@@ -218,13 +217,12 @@ fn test_write_pose_priors() {
     assert_eq!(coord_sys, 2);
 
     drop(conn);
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_write_two_view_geometries() {
-    let dir = std::env::temp_dir().join("colmap_db_tvg");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let db_path = dir.join("test.db");
 
     let cameras = vec![make_pinhole_camera(640, 480, 500.0, 500.0, 320.0, 240.0)];
@@ -347,14 +345,13 @@ fn test_write_two_view_geometries() {
     assert!((qvec[3]).abs() < 1e-10); // z
 
     drop(conn);
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_pair_id_encoding() {
     // Verify pair_id encoding matches COLMAP's formula
-    let dir = std::env::temp_dir().join("colmap_db_pair_id");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let db_path = dir.join("test.db");
 
     let cameras = vec![make_pinhole_camera(640, 480, 500.0, 500.0, 320.0, 240.0)];
@@ -408,7 +405,6 @@ fn test_pair_id_encoding() {
     assert_eq!(pair_id, 2_147_483_647i64 + 2);
 
     drop(conn);
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -416,10 +412,9 @@ fn sfmtool_fisheye_fails_the_db_export_path() {
     // SFMTOOL_FISHEYE has no COLMAP carrier (unlike EQUIDISTANT_FISHEYE), so
     // the DB writer must surface `UnknownModelName` — remapped from the
     // shared `colmap_io` lookup — rather than writing an approximation.
-    let dir = std::env::temp_dir().join("colmap_db_sfmtool_fisheye_reject");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let db_path = dir.join("reject.db");
-    let _ = std::fs::remove_file(&db_path);
 
     let cameras = vec![SfmrCamera {
         model: "SFMTOOL_FISHEYE".into(),
@@ -466,7 +461,6 @@ fn sfmtool_fisheye_fails_the_db_export_path() {
         matches!(err, ColmapDbError::UnknownModelName(ref name) if name == "SFMTOOL_FISHEYE"),
         "unexpected error: {err:?}"
     );
-    let _ = std::fs::remove_file(&db_path);
 }
 
 #[test]
@@ -474,10 +468,9 @@ fn sfmtool_pinhole_fails_the_db_export_path() {
     // The spline pinhole has no COLMAP carrier either: no COLMAP model
     // parameterizes a B-spline radial correction, so the DB writer rejects it
     // by name rather than writing a polynomial approximation.
-    let dir = std::env::temp_dir().join("colmap_db_sfmtool_pinhole_reject");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let db_path = dir.join("reject.db");
-    let _ = std::fs::remove_file(&db_path);
 
     let cameras = vec![SfmrCamera {
         model: "SFMTOOL_PINHOLE".into(),
@@ -524,13 +517,12 @@ fn sfmtool_pinhole_fails_the_db_export_path() {
         matches!(err, ColmapDbError::UnknownModelName(ref name) if name == "SFMTOOL_PINHOLE"),
         "unexpected error: {err:?}"
     );
-    let _ = std::fs::remove_file(&db_path);
 }
 
 #[test]
 fn test_multiple_cameras() {
-    let dir = std::env::temp_dir().join("colmap_db_multi_cam");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let db_path = dir.join("test.db");
 
     let cameras = vec![
@@ -619,13 +611,12 @@ fn test_multiple_cameras() {
     assert_eq!(assignments[2], ("cam1_002.jpg".to_string(), 1));
 
     drop(conn);
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_overwrite_existing_db() {
-    let dir = std::env::temp_dir().join("colmap_db_overwrite");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let db_path = dir.join("test.db");
 
     let cameras = vec![make_pinhole_camera(640, 480, 500.0, 500.0, 320.0, 240.0)];
@@ -662,7 +653,6 @@ fn test_overwrite_existing_db() {
     assert_eq!(count, 1);
 
     drop(conn);
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 // ── Matches-format interop tests ────────────────────────────────────────
@@ -826,8 +816,8 @@ fn make_matches_data_with_tvg() -> MatchesData {
 
 #[test]
 fn test_feature_then_matches_round_trip() {
-    let dir = std::env::temp_dir().join("colmap_db_feat_match_rt");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let db_path = dir.join("test.db");
 
     let (cameras, image_names, camera_indexes, keypoints, descriptors) = make_feature_data();
@@ -873,14 +863,12 @@ fn test_feature_then_matches_round_trip() {
         .match_descriptor_distances
         .iter()
         .all(|&d| d == 0.0));
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_feature_then_matches_with_tvg_round_trip() {
-    let dir = std::env::temp_dir().join("colmap_db_feat_match_tvg_rt");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let db_path = dir.join("test.db");
 
     let (cameras, image_names, camera_indexes, keypoints, descriptors) = make_feature_data();
@@ -969,14 +957,12 @@ fn test_feature_then_matches_with_tvg_round_trip() {
     // Translation: pair 0 non-zero, pair 1 zero→NULL→zero
     assert!((tvg.translations_xyz[[0, 0]] - 1.0).abs() < 1e-10);
     assert!(tvg.translations_xyz[[1, 0]].abs() < 1e-10);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_read_with_include_tvg_false() {
-    let dir = std::env::temp_dir().join("colmap_db_no_tvg_read");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let db_path = dir.join("test.db");
 
     let (cameras, image_names, camera_indexes, keypoints, descriptors) = make_feature_data();
@@ -1000,14 +986,12 @@ fn test_read_with_include_tvg_false() {
     assert!(!loaded.metadata.has_two_view_geometries);
     assert!(loaded.two_view_geometries.is_none());
     assert_eq!(loaded.metadata.match_count, Some(5));
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_empty_matches_from_db() {
-    let dir = std::env::temp_dir().join("colmap_db_empty_matches");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let db_path = dir.join("test.db");
 
     let (cameras, image_names, camera_indexes, keypoints, descriptors) = make_feature_data();
@@ -1030,15 +1014,12 @@ fn test_empty_matches_from_db() {
     assert_eq!(loaded.metadata.image_pair_count, Some(0));
     assert_eq!(loaded.metadata.match_count, Some(0));
     assert!(loaded.two_view_geometries.is_none());
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn an_image_whose_camera_is_missing_is_an_error() {
-    let dir = std::env::temp_dir().join("colmap_db_missing_camera");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let db_path = dir.join("test.db");
     let (cameras, image_names, camera_indexes, keypoints, descriptors) = make_feature_data();
     let feature_data = ColmapDbFeatureData {
@@ -1066,14 +1047,12 @@ fn an_image_whose_camera_is_missing_is_an_error() {
         )
         .to_string()
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_db_contents_verification() {
-    let dir = std::env::temp_dir().join("colmap_db_contents_verify");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let db_path = dir.join("test.db");
 
     let (cameras, image_names, camera_indexes, keypoints, descriptors) = make_feature_data();
@@ -1110,7 +1089,6 @@ fn test_db_contents_verification() {
     assert_eq!(cols, 2);
 
     drop(conn);
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -1145,8 +1123,8 @@ fn test_config_exhaustive_round_trip() {
 
 #[test]
 fn test_image_id_map_consistency() {
-    let dir = std::env::temp_dir().join("colmap_db_idmap_consistency");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let db_path = dir.join("test.db");
 
     let (cameras, image_names, camera_indexes, keypoints, descriptors) = make_feature_data();
@@ -1181,7 +1159,6 @@ fn test_image_id_map_consistency() {
     }
 
     drop(conn);
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 // ── Rig and frame tests ─────────────────────────────────────────────────
@@ -1190,8 +1167,8 @@ use super::types::{DbFrame, DbFrameDataId, DbRig, DbRigSensor, DbSensor, DbSenso
 
 #[test]
 fn test_write_single_camera_rig_with_frame() {
-    let dir = std::env::temp_dir().join("colmap_db_rig_single");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let db_path = dir.join("test.db");
 
     let cameras = vec![make_pinhole_camera(640, 480, 500.0, 500.0, 320.0, 240.0)];
@@ -1281,13 +1258,12 @@ fn test_write_single_camera_rig_with_frame() {
     assert_eq!(fd_sensor_type, 0);
 
     drop(conn);
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_write_multi_sensor_rig() {
-    let dir = std::env::temp_dir().join("colmap_db_rig_multi");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let db_path = dir.join("test.db");
 
     // Two cameras: left (ref) and right (non-ref)
@@ -1429,5 +1405,4 @@ fn test_write_multi_sensor_rig() {
     assert_eq!(frame1_data_ids, vec![image_ids[0], image_ids[1]]);
 
     drop(conn);
-    std::fs::remove_dir_all(&dir).unwrap();
 }

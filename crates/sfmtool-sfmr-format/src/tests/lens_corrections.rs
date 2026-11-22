@@ -17,13 +17,6 @@ use ndarray::Array2;
 const RADIAL_ENTRY: &str = "images/radial_bspline_adjustments.3.2.float64.zst";
 const ROLLING_ENTRY: &str = "images/rolling_shutter_rates_xyz.3.3.float64.zst";
 
-fn temp_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
 /// Give `data` a second camera, holding image 2, that varies nothing, and
 /// make camera 0 an `SFMTOOL_PINHOLE` camera that reads rows and varies the
 /// radial B-spline correction and the rolling shutter, with values in images
@@ -76,7 +69,8 @@ fn bits(a: &Array2<f64>) -> Vec<u64> {
 
 #[test]
 fn both_columns_and_both_camera_keys_round_trip_bit_for_bit() {
-    let dir = temp_dir("sfmr_test_lens_corrections_round_trip");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     for (name, mut data) in [
         ("sift.sfmr", data_with_corrections()),
         ("embedded.sfmr", {
@@ -128,14 +122,14 @@ fn both_columns_and_both_camera_keys_round_trip_bit_for_bit() {
             "{name}"
         );
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Every one of the four names on one camera, with all four columns, sorts and
 /// hashes in the format's order.
 #[test]
 fn all_four_per_image_columns_round_trip_together() {
-    let dir = temp_dir("sfmr_test_lens_corrections_all_four");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("all.sfmr");
     let mut data = data_with_corrections();
     data.cameras[0].per_image_adjustments = PER_IMAGE_ADJUSTMENT_NAMES
@@ -165,12 +159,12 @@ fn all_four_per_image_columns_round_trip_together() {
         format!("{:032x}", images_digest(&path)),
         loaded.content_hash.images_xxh128
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_scanlines_setting_without_rates_round_trips_through_the_guarded_paths() {
-    let dir = temp_dir("sfmr_test_lens_corrections_scanlines_only");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("scanlines.sfmr");
     let mut data = make_test_data();
     data.cameras[0].rolling_shutter_scanlines = Some(RollingShutterScanlines::Columns);
@@ -190,12 +184,12 @@ fn a_scanlines_setting_without_rates_round_trips_through_the_guarded_paths() {
     assert!(loaded.radial_bspline_adjustments.is_none());
     assert!(loaded.rolling_shutter_rates_xyz.is_none());
     assert!(verify_sfmr(&path).unwrap().0);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_file_without_corrections_writes_no_column_and_no_key() {
-    let dir = temp_dir("sfmr_test_lens_corrections_absent");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("plain.sfmr");
     write_sfmr(&path, &mut make_test_data()).unwrap();
     let names = archive_names(&path);
@@ -214,7 +208,6 @@ fn a_file_without_corrections_writes_no_column_and_no_key() {
     assert!(loaded.radial_bspline_adjustments.is_none());
     assert!(loaded.rolling_shutter_rates_xyz.is_none());
     assert_eq!(loaded.cameras[0].rolling_shutter_scanlines, None);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -320,7 +313,8 @@ fn write_error(dir: &std::path::Path, mut data: SfmrData) -> String {
 
 #[test]
 fn a_column_without_a_listing_camera_is_refused() {
-    let dir = temp_dir("sfmr_test_lens_corrections_unlisted_column");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     for (names, needle) in [
         (
             serde_json::json!(["rolling_shutter"]),
@@ -341,12 +335,12 @@ fn a_column_without_a_listing_camera_is_refused() {
     data.cameras[0].per_image_adjustments = vec!["radial_bspline".into()];
     let err = write_error(&dir, data);
     assert!(err.contains("no camera lists \"rolling_shutter\""), "{err}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_listing_camera_without_its_column_is_refused_by_the_writer() {
-    let dir = temp_dir("sfmr_test_lens_corrections_missing_column");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let mut data = data_with_corrections();
     data.radial_bspline_adjustments = None;
     let err = write_error(&dir, data);
@@ -361,12 +355,12 @@ fn a_listing_camera_without_its_column_is_refused_by_the_writer() {
         err.contains("images/rolling_shutter_rates_xyz is absent"),
         "{err}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_non_zero_row_under_a_camera_that_does_not_list_it_is_refused() {
-    let dir = temp_dir("sfmr_test_lens_corrections_unlisted_row");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     // Image 2 is camera 1's, which varies nothing.
     let (err, errors) = read_and_verify_edited(
         &dir,
@@ -389,12 +383,12 @@ fn a_non_zero_row_under_a_camera_that_does_not_list_it_is_refused() {
     let mut data = data_with_corrections();
     data.rolling_shutter_rates_xyz.as_mut().unwrap()[[2, 0]] = -0.0;
     write_sfmr_with_options(&dir.join("z.sfmr"), &mut data, &WriteOptions::default()).unwrap();
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_non_finite_value_is_refused() {
-    let dir = temp_dir("sfmr_test_lens_corrections_non_finite");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (err, errors) = read_and_verify_edited(
         &dir,
         edit_rates([0.0, f64::NAN, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
@@ -416,12 +410,12 @@ fn a_non_finite_value_is_refused() {
     data.rolling_shutter_rates_xyz.as_mut().unwrap()[[1, 1]] = f64::NEG_INFINITY;
     let err = write_error(&dir, data);
     assert!(err.contains("not finite"), "{err}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_radial_bspline_correction_on_a_camera_that_is_not_sfmtool_pinhole_is_refused() {
-    let dir = temp_dir("sfmr_test_lens_corrections_radial_model");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (err, errors) = read_and_verify_edited(
         &dir,
         edit_cameras(|json| json[0]["model"] = serde_json::json!("SFMTOOL_FISHEYE")),
@@ -432,12 +426,12 @@ fn a_radial_bspline_correction_on_a_camera_that_is_not_sfmtool_pinhole_is_refuse
     data.cameras[0].model = "PINHOLE".into();
     let err = write_error(&dir, data);
     assert!(err.contains("on a PINHOLE camera"), "{err}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn rolling_shutter_rates_without_a_scanlines_setting_are_refused() {
-    let dir = temp_dir("sfmr_test_lens_corrections_no_scanlines");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (err, errors) = read_and_verify_edited(
         &dir,
         edit_cameras(|json| {
@@ -453,13 +447,13 @@ fn rolling_shutter_rates_without_a_scanlines_setting_are_refused() {
     data.cameras[0].rolling_shutter_scanlines = None;
     let err = write_error(&dir, data);
     assert!(err.contains("has no rolling_shutter_scanlines"), "{err}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_scanlines_value_other_than_rows_or_columns_is_refused() {
     for value in ["Rows", "X", "UNKNOWN"] {
-        let dir = temp_dir(&format!("sfmr_test_lens_corrections_scanlines_{value}"));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let (err, errors) = read_and_verify_edited(
             &dir,
             edit_cameras(move |json| {
@@ -467,7 +461,6 @@ fn a_scanlines_value_other_than_rows_or_columns_is_refused() {
             }),
         );
         assert_named(&err, &errors, value);
-        let _ = std::fs::remove_dir_all(&dir);
     }
     assert_eq!(
         RollingShutterScanlines::parse("COLUMNS"),
@@ -501,7 +494,8 @@ fn the_new_names_parse_in_order() {
         assert!(err.contains("out of the order"), "{err}");
     }
 
-    let dir = temp_dir("sfmr_test_lens_corrections_key_order");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (err, errors) = read_and_verify_edited(
         &dir,
         edit_cameras(|json| {
@@ -510,7 +504,6 @@ fn the_new_names_parse_in_order() {
         }),
     );
     assert_named(&err, &errors, "out of the order");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The public reader and writer take a reconstruction that varies either
@@ -518,7 +511,8 @@ fn the_new_names_parse_in_order() {
 /// broken rule is still reported as the format error it is.
 #[test]
 fn the_reader_and_the_writer_keep_each_correction_alone() {
-    let dir = temp_dir("sfmr_test_lens_corrections_alone");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     for (tag, names) in [
         ("radial", vec!["radial_bspline"]),
         ("rolling", vec!["rolling_shutter"]),
@@ -566,5 +560,4 @@ fn the_reader_and_the_writer_keep_each_correction_alone() {
         panic!("the reader accepted a broken file");
     };
     assert!(matches!(err, SfmrError::InvalidFormat(_)), "{err}");
-    let _ = std::fs::remove_dir_all(&dir);
 }

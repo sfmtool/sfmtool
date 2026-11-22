@@ -39,12 +39,6 @@ fn readings_for(rows: &[ObservationReading]) -> ObservationReadingColumns {
     ObservationReadingColumns::from_rows(rows, OPTIONS)
 }
 
-fn temp_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(name);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
 fn tracks_metadata(path: &std::path::Path) -> serde_json::Value {
     use std::io::Read;
     let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
@@ -122,7 +116,8 @@ fn readings_round_trip_and_verify() {
     rows[3] = ObservationReading::NOT_MEASURED;
     data.observation_readings = Some(readings_for(&rows));
 
-    let dir = temp_dir("sfmr_test_observation_readings_round_trip");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     write_sfmr(&path, &mut data).unwrap();
 
@@ -145,13 +140,13 @@ fn readings_round_trip_and_verify() {
     }
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "verification failed: {errors:?}");
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn absent_readings_write_no_entry_and_no_flag() {
     let mut data = make_test_data();
-    let dir = temp_dir("sfmr_test_observation_readings_absent");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     write_sfmr(&path, &mut data).unwrap();
 
@@ -163,7 +158,6 @@ fn absent_readings_write_no_entry_and_no_flag() {
     for name in ENTRIES {
         assert!(archive.by_name(name).is_err(), "{name} present");
     }
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -172,7 +166,8 @@ fn a_file_without_the_flag_loads_without_them() {
     // such key reads as a file without the columns.
     let mut data = make_test_data();
     data.observation_readings = Some(readings_for(&[tagged_row(1.0); 8]));
-    let dir = temp_dir("sfmr_test_observation_readings_legacy");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     let legacy = dir.join("legacy.sfmr");
     write_sfmr(&path, &mut data).unwrap();
@@ -183,14 +178,14 @@ fn a_file_without_the_flag_loads_without_them() {
         HAS_OBSERVATION_READINGS,
     );
     assert!(read_sfmr(&legacy).unwrap().observation_readings.is_none());
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn a_flag_without_options_is_refused() {
     let mut data = make_test_data();
     data.observation_readings = Some(readings_for(&[tagged_row(1.0); 8]));
-    let dir = temp_dir("sfmr_test_observation_readings_no_options");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     let edited = dir.join("edited.sfmr");
     write_sfmr(&path, &mut data).unwrap();
@@ -209,7 +204,6 @@ fn a_flag_without_options_is_refused() {
     );
     let (valid, _) = verify_sfmr(&edited).unwrap();
     assert!(!valid);
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -218,7 +212,8 @@ fn a_shape_mismatch_is_refused_on_write() {
     let mut readings = readings_for(&[tagged_row(1.0); 8]);
     readings.plain_bitmap_zncc = ndarray::Array1::from_vec(vec![0.5; 7]);
     data.observation_readings = Some(readings);
-    let dir = temp_dir("sfmr_test_observation_readings_shape_write");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let err = write_sfmr(&dir.join("test.sfmr"), &mut data).unwrap_err();
     assert!(
         format!("{err}").contains("plain_bitmap_zncc len 7 != observation_count 8"),
@@ -231,14 +226,14 @@ fn a_shape_mismatch_is_refused_on_write() {
     data.observation_readings = Some(readings);
     let err = write_sfmr(&dir.join("test.sfmr"), &mut data).unwrap_err();
     assert!(format!("{err}").contains("not 0 or 1"), "{err}");
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn a_shape_mismatch_is_refused_on_read_and_verify() {
     let mut data = make_test_data();
     data.observation_readings = Some(readings_for(&[tagged_row(1.0); 8]));
-    let dir = temp_dir("sfmr_test_observation_readings_shape_read");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     let short = dir.join("short.sfmr");
     write_sfmr(&path, &mut data).unwrap();
@@ -255,12 +250,12 @@ fn a_shape_mismatch_is_refused_on_read_and_verify() {
             .any(|e| e.contains("zncc_self_similarity_zoom holds 28 bytes")),
         "{errors:?}"
     );
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn every_column_is_part_of_the_tracks_hash() {
-    let dir = temp_dir("sfmr_test_observation_readings_hash");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let rows: Vec<ObservationReading> = (0..8).map(|j| tagged_row(j as f32 + 1.0)).collect();
     let hash_of = |rows: &[ObservationReading], name: &str| {
         let mut data = make_test_data();
@@ -295,7 +290,6 @@ fn every_column_is_part_of_the_tracks_hash() {
     let path = dir.join("none.sfmr");
     write_sfmr(&path, &mut data).unwrap();
     assert_ne!(base, read_sfmr(&path).unwrap().content_hash.tracks_xxh128);
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -310,7 +304,8 @@ fn rows_follow_their_observation_through_the_sort() {
     let rows: Vec<ObservationReading> = (0..8).map(|j| tagged_row(tag(pts[j], imgs[j]))).collect();
     d.observation_readings = Some(readings_for(&rows));
 
-    let dir = temp_dir("sfmr_test_observation_readings_sort");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("u.sfmr");
     write_sfmr(&path, &mut d).unwrap();
     let loaded = read_sfmr(&path).unwrap();
@@ -322,7 +317,6 @@ fn rows_follow_their_observation_through_the_sort() {
             "row {j} misaligned"
         );
     }
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -334,7 +328,8 @@ fn the_tracks_hash_is_over_the_entries_in_sorted_name_order() {
     let mut data = make_test_data();
     let rows: Vec<ObservationReading> = (0..8).map(|j| tagged_row(j as f32 + 1.0)).collect();
     data.observation_readings = Some(readings_for(&rows));
-    let dir = temp_dir("sfmr_test_observation_readings_hash_order");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     write_sfmr(&path, &mut data).unwrap();
 
@@ -359,7 +354,6 @@ fn the_tracks_hash_is_over_the_entries_in_sorted_name_order() {
     }
     let stored = read_sfmr(&path).unwrap().content_hash.tracks_xxh128;
     assert_eq!(sfmtool_archive_io::format_hash(hasher.digest128()), stored);
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -375,7 +369,8 @@ fn a_column_in_another_layout_is_written_in_row_major_order() {
     assert!(column.as_slice().is_none());
     readings.plain_bitmap_zncc = column;
     data.observation_readings = Some(readings);
-    let dir = temp_dir("sfmr_test_observation_readings_layout");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sfmr");
     write_sfmr(&path, &mut data).unwrap();
     assert_eq!(
@@ -386,7 +381,6 @@ fn a_column_in_another_layout_is_written_in_row_major_order() {
             .rows(),
         rows
     );
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// Rows none of whose five `float16` values is a `float16`, with the edge
@@ -424,7 +418,8 @@ fn unrounded_rows() -> Vec<ObservationReading> {
 
 #[test]
 fn the_writer_rounds_the_seven_float_columns_in_the_value_it_writes() {
-    let dir = temp_dir("sfmr_test_observation_readings_float16");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("rounded.sfmr");
     let rows = unrounded_rows();
     let unrounded = || {
@@ -491,12 +486,12 @@ fn the_writer_rounds_the_seven_float_columns_in_the_value_it_writes() {
     );
     let (valid, errors) = verify_sfmr(&resaved).unwrap();
     assert!(valid, "{errors:?}");
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn the_scores_are_stored_as_their_float16_deficits() {
-    let dir = temp_dir("sfmr_test_observation_readings_deficits");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let rows = unrounded_rows();
     let mut data = make_test_data();
     data.observation_readings = Some(readings_for(&rows));
@@ -538,5 +533,4 @@ fn the_scores_are_stored_as_their_float16_deficits() {
     for name in [plain, blur] {
         assert_eq!(raw(&path, name), raw(&second, name), "{name}");
     }
-    std::fs::remove_dir_all(&dir).unwrap();
 }

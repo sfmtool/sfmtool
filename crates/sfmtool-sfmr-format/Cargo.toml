@@ -33,6 +33,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 
 [dev-dependencies]
 approx = "0.5"
+tempfile = "3"
 # Only the round-trip tests reach for the compressor directly; the library
 # goes through `sfmtool-archive-io`.
 zstd = "0.14"
