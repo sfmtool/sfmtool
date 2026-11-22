@@ -17,7 +17,7 @@
 //! never once per frame, and only the visible rows are drawn
 //! (`ScrollArea::show_rows`). The picture columns ([`pictures`]) are pinned
 //! beside the Point column, set the row height, and make a picture only for a
-//! row on screen. The *Crop* column's photographs are decoded, and the
+//! row on screen. The *Crop* column's photograph tiles are asked for, and the
 //! references of points that store none picked ([`picks`]), only for the rows
 //! on screen once the scroll position has stopped changing
 //! ([`SCROLL_SETTLE_S`]).
@@ -40,10 +40,10 @@ use sfmtool_core::analysis::track_table::{
     TrackTableQueryOptions,
 };
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use sfmtool_core::camera::image::ImageU8Pyramid;
-use sfmtool_core::camera::{PeekedPhotograph, TiledPhotograph};
+use sfmtool_core::camera::TileKey;
 use sfmtool_core::EditedReconstruction;
 
 use crate::document::VersionSerial;
@@ -51,7 +51,7 @@ use crate::filter_3d::{Filter3dMode, KeptPoints};
 use crate::patch_pictures::crop;
 use crate::patch_pictures::marks::ProjectionOf;
 use crate::scene::{PointRef, ReconId, SceneNode};
-use crate::state::{AppState, DisplayPhotograph};
+use crate::state::{AppState, PeekedRead, PhotographSource};
 use crate::table_sort::{paint_sort_triangle, SortRule, TableSort, SORT_TRIANGLE_HALF_WIDTH};
 use pictures::{
     hover_size, paint_picture, patch_image, Absent, CellPicture, Made, PictureColumn, PictureKey,
@@ -804,6 +804,9 @@ pub(crate) struct TrackTablePanel {
     /// The region pool the *Crop* cells and their hover views read their
     /// photographs through.
     regions: crate::patch_pictures::PanelRegionPool,
+    /// The photograph tiles each *Crop* cell drawn last frame and not made
+    /// yet needed when its crop was last tried ([`crate::state::read_peeked`]).
+    needs: HashMap<PictureKey, Vec<TileKey>>,
     /// The row height and the vertical scroll offset of the last frame's
     /// rows, so that a new row height (the *Size* dropdown, or a picture column
     /// shown or hidden) keeps the same rows at the top.
@@ -834,8 +837,8 @@ pub(crate) struct TrackTablePanel {
     /// and what the cell drew.
     #[cfg(test)]
     drawn_pictures: Vec<(u32, PictureColumn, CellPicture)>,
-    /// Every image whose photograph a *Crop* cell asked to have decoded, in
-    /// order, over every frame.
+    /// Every image whose photograph tiles a *Crop* cell asked for, in order,
+    /// over every frame.
     #[cfg(test)]
     requested_photographs: Vec<usize>,
 }
@@ -870,7 +873,7 @@ struct Asked {
     /// with their node and version, on a frame whose rows have stopped
     /// changing and are of the version at the cursor; `None` otherwise.
     picks: Option<(ReconId, VersionSerial, Vec<u32>)>,
-    /// The images whose photographs the drawn crops asked to have decoded.
+    /// The images whose photograph tiles the drawn crops asked for.
     #[cfg(test)]
     requested: Vec<usize>,
 }
@@ -1191,6 +1194,8 @@ impl TrackTablePanel {
                 hovered,
                 stale,
                 regions: &self.regions,
+                needs: RefCell::new(std::mem::take(&mut self.needs)),
+                still_needed: RefCell::new(HashMap::new()),
                 wanted_picks: RefCell::new(Vec::new()),
                 requested: RefCell::new(Vec::new()),
             };
@@ -1204,6 +1209,7 @@ impl TrackTablePanel {
                 &mut asked,
             );
             self.pictures.end_frame();
+            self.needs = rows.still_needed.take();
             if shown.settled && !stale {
                 asked.picks = Some((id, document, rows.wanted_picks.take()));
             }
@@ -1758,10 +1764,17 @@ struct RowsView<'a> {
     /// The panel's region pool, which the *Crop* cells and their hover views
     /// read their photographs through.
     regions: &'a crate::patch_pictures::PanelRegionPool,
+    /// The photograph tiles each *Crop* cell needed when its crop was last
+    /// tried, as the last frame left them, taken out as the cells are drawn.
+    needs: RefCell<HashMap<PictureKey, Vec<TileKey>>>,
+    /// The tiles of the cells drawn in this frame whose crops are still
+    /// loading, which the panel keeps for the next frame, so a cell that
+    /// leaves the view leaves nothing kept.
+    still_needed: RefCell<HashMap<PictureKey, Vec<TileKey>>>,
     /// The points whose crops wait for a reference pick, gathered as the
     /// cells are drawn on a frame whose rows have stopped changing.
     wanted_picks: RefCell<Vec<u32>>,
-    /// The images whose photographs the crops drawn asked to have decoded.
+    /// The images whose photograph tiles the crops drawn asked for.
     requested: RefCell<Vec<usize>>,
 }
 
@@ -1895,7 +1908,9 @@ impl RowsView<'_> {
                             let size = hover_size(self.layout.picture_size);
                             let key = self.key(column, point);
                             response.on_hover_ui_at_pointer(|ui| {
-                                self.show_picture_hover(ui, key, picture, size, pictures, &id);
+                                self.show_picture_hover(
+                                    ui, key, picture, size, pictures, &id, settled,
+                                );
                             });
                         }
                         None => {
@@ -1939,14 +1954,16 @@ impl RowsView<'_> {
 
     /// The *Crop* picture of `point`: its reference photograph cut around its
     /// patch's outline, or why there is none, or [`Made::NotYet`] while the
-    /// photograph is decoding or the reference is being picked.
+    /// photograph tiles it needs are loading or the reference is being
+    /// picked.
     ///
     /// The photograph is the point's reference observation's. A point that
     /// stores none gets the reference-view rule's pick ([`picks`]), unless a
     /// bitmap writer already ran the rule for it and found no eligible view
     /// ([`rule_found_no_reference`]): then the cell says *no reference* at
     /// once. Only while `settled` does a crop ask for a pick or for its
-    /// photograph to be decoded; until then it draws what is held.
+    /// photograph tiles; until then it draws from what is there
+    /// ([`crate::state::read_peeked_without_asking`]).
     fn crop_picture(&self, ctx: &egui::Context, point: u32, settled: bool) -> Made {
         let edited = self.node.edited();
         let recon = self.node.recon();
@@ -1987,9 +2004,8 @@ impl RowsView<'_> {
         let Some((camera, pose)) = crate::bench::geometry::view_of(&recon.image_set, image) else {
             return Made::Absent(Absent::Unreadable);
         };
-        let pyramid = match self.photograph(ctx, image, settled) {
-            Ok(pyramid) => pyramid,
-            Err(made) => return made,
+        let Some(path) = crate::state::photograph_path(recon, image) else {
+            return Made::Absent(Absent::Unreadable);
         };
         let outline = crop::patch_outline(
             &patch_frame,
@@ -1999,54 +2015,37 @@ impl RowsView<'_> {
             view.point().position,
             ProjectionOf::Point,
         );
-        // The cache's whole pyramid, read through the panel's pool: the crop
-        // reads only the pixels its texels take.
-        let source = TiledPhotograph::from_pyramid(pyramid);
-        match crop::image(&outline, &source, self.regions.pool()) {
-            Ok(Some(picture)) => Made::Crop {
+        // Read from the photograph tiles it needs, through the panel's pool:
+        // the crop reads only the pixels its texels take.
+        let key = self.key(PictureColumn::Crop, point);
+        let mut needs = self.needs.borrow_mut().remove(&key).unwrap_or_default();
+        let source = PhotographSource {
+            cache: &self.state.photographs,
+            requests: &self.state.photograph_requests,
+            path: &path,
+        };
+        let pool = self.regions.pool();
+        let render = |src: &_| crop::image(&outline, src, pool);
+        let read = if settled {
+            crate::state::read_peeked(source, &mut needs, ctx, render)
+        } else {
+            crate::state::read_peeked_without_asking(source, &mut needs, render)
+        };
+        match read {
+            PeekedRead::Loading => {
+                if settled {
+                    self.requested.borrow_mut().push(image);
+                }
+                self.still_needed.borrow_mut().insert(key, needs);
+                Made::NotYet
+            }
+            PeekedRead::Read(Ok(Some(picture))) => Made::Crop {
                 picture: Box::new(picture),
                 outline: Box::new(outline),
                 image,
             },
-            Ok(None) => Made::Absent(Absent::OffImage),
-            Err(_) => Made::Absent(Absent::Unreadable),
-        }
-    }
-
-    /// The photograph of `image` as the photograph cache holds it. While
-    /// `settled`, a photograph the cache does not hold is asked for
-    /// (`state::display_photograph`, which decodes it on the rayon pool and
-    /// repaints when it lands); otherwise the cache is only looked in.
-    fn photograph(
-        &self,
-        ctx: &egui::Context,
-        image: usize,
-        settled: bool,
-    ) -> Result<Arc<ImageU8Pyramid>, Made> {
-        let recon = self.node.recon();
-        if settled {
-            return match crate::state::display_photograph(
-                &self.state.photographs,
-                &self.state.photograph_requests,
-                recon,
-                image,
-                ctx,
-            ) {
-                DisplayPhotograph::Decoded(pyramid) => Ok(pyramid),
-                DisplayPhotograph::Decoding => {
-                    self.requested.borrow_mut().push(image);
-                    Err(Made::NotYet)
-                }
-                DisplayPhotograph::Unreadable => Err(Made::Absent(Absent::Unreadable)),
-            };
-        }
-        let Some(path) = crate::state::photograph_path(recon, image) else {
-            return Err(Made::Absent(Absent::Unreadable));
-        };
-        match self.state.photographs.peek_state(&path) {
-            PeekedPhotograph::Decoded(pyramid) => Ok(pyramid),
-            PeekedPhotograph::Unreadable => Err(Made::Absent(Absent::Unreadable)),
-            PeekedPhotograph::NotDecoded => Err(Made::NotYet),
+            PeekedRead::Read(Ok(None)) => Made::Absent(Absent::OffImage),
+            PeekedRead::Read(Err(_)) | PeekedRead::Unreadable => Made::Absent(Absent::Unreadable),
         }
     }
 
@@ -2060,6 +2059,11 @@ impl RowsView<'_> {
     /// with the stored-patch text, or, for a point that stores no reference,
     /// a text saying that the bitmap is not the render of the photograph the
     /// Crop column shows.
+    ///
+    /// The crop's hover view is cut from the photograph tiles it needs, which
+    /// it asks for only while `settled`, as the cells do; until they are all
+    /// there it says the photograph is loading.
+    #[allow(clippy::too_many_arguments)]
     fn show_picture_hover(
         &self,
         ui: &mut egui::Ui,
@@ -2068,13 +2072,11 @@ impl RowsView<'_> {
         size: f32,
         pictures: &mut PictureTextures,
         id: &str,
+        settled: bool,
     ) {
         match (key.column, picture) {
             (PictureColumn::Crop, CellPicture::Texture(_)) => {
                 let recon = self.node.recon();
-                let pyramid = |image: usize| {
-                    crate::state::peek_full_res_pyramid(&self.state.photographs, recon, image)
-                };
                 let image = pictures.crop(&key).map(|(_, _, image)| image);
                 if let Some(name) = image
                     .and_then(|image| recon.image_set.images.get(image))
@@ -2082,12 +2084,23 @@ impl RowsView<'_> {
                 {
                     ui.label(egui::RichText::new(name).strong());
                 }
-                match pictures.crop_context(ui.ctx(), key, &pyramid, self.regions.pool()) {
-                    Ok(Some(drawn)) => drawn.show(ui),
-                    Ok(None) => {
-                        ui.label("The photograph is being read again.");
+                let ctx = ui.ctx().clone();
+                match pictures.crop_context(
+                    &ctx,
+                    key,
+                    self.state,
+                    recon,
+                    settled,
+                    self.regions.pool(),
+                ) {
+                    None => {
+                        ui.label(crate::patch_pictures::HOVER_LOADING);
                     }
-                    Err(why) => {
+                    Some(Ok(Some(drawn))) => drawn.show(ui),
+                    Some(Ok(None)) => {
+                        ui.label("Nothing around this crop could be rendered.");
+                    }
+                    Some(Err(why)) => {
                         ui.set_max_width(320.0);
                         ui.label(format!(
                             "The photograph of the point's reference observation could not be \

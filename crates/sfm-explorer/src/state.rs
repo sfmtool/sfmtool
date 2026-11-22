@@ -16,6 +16,7 @@ use crate::scene_renderer::{
     DEFAULT_FRUSTUM_SIZE_MULTIPLIER, DEFAULT_LENGTH_SCALE_MULTIPLIER,
     DEFAULT_TARGET_FOG_MULTIPLIER, DEFAULT_TARGET_SIZE_MULTIPLIER,
 };
+#[cfg(test)]
 use sfmtool_core::camera::image::ImageU8Pyramid;
 use sfmtool_core::camera::{PhotographCache, PhotographCacheOptions};
 use sfmtool_core::progress::Progress;
@@ -30,9 +31,9 @@ pub(crate) mod open;
 #[cfg(test)]
 pub(crate) use photograph_requests::TaskQueue;
 pub(crate) use photograph_requests::{
-    display_layout, display_level, display_photograph, display_tiles, prefetch_tiles, read_peeked,
-    DisplayLayout, DisplayLevel, DisplayPhotograph, DisplayTile, PeekedRead, PhotographRequests,
-    PhotographSource,
+    display_layout, display_level, display_tiles, prefetch_tiles, read_peeked,
+    read_peeked_without_asking, DisplayLayout, DisplayLevel, DisplayTile, PeekedRead,
+    PhotographRequests, PhotographSource, UNREADABLE_PHOTOGRAPH,
 };
 mod ops;
 mod photograph_requests;
@@ -747,7 +748,7 @@ pub(crate) struct AppState {
     /// decodes what is missing into it in parallel, and leaves what it decoded
     /// for the next job and the panels. Level 0 of a pyramid **is** the decoded
     /// photograph, so a consumer that wants the plain image reads
-    /// [`ImageU8Pyramid::level`] 0 rather than holding a second copy.
+    /// [`ImageU8Pyramid::level`](sfmtool_core::camera::image::ImageU8Pyramid::level) 0 rather than holding a second copy.
     ///
     /// Keyed by path rather than by [`ImageRef`], so an edit that renumbers a
     /// node's images leaves its photographs where they are, and two nodes over
@@ -760,14 +761,13 @@ pub(crate) struct AppState {
     /// [`default_budget_bytes`]: sfmtool_core::camera::photograph_cache::default_budget_bytes
     pub(crate) photographs: Arc<PhotographCache>,
 
-    /// The photographs, layouts, tiles and levels a panel has asked to have
-    /// read on the rayon pool and that are still being read, so each is asked
-    /// for once, and the tiles and the level those reads answered. The panels
-    /// read through [`display_layout`] with [`display_tiles`] (Image Detail)
-    /// or [`display_level`] (the 3D view's camera-view background) or
-    /// [`read_peeked`] (Track View), which never decode on the GUI thread,
-    /// and [`display_photograph`] (the Track Table and Measurement View's
-    /// endpoint crops), which does only under a cache of budget 0.
+    /// The layouts, tiles and levels a panel has asked to have read on the
+    /// rayon pool and that are still being read, so each is asked for once,
+    /// and the tiles and the level those reads answered. The panels read
+    /// through [`display_layout`] with [`display_tiles`] (Image Detail) or
+    /// [`display_level`] (the 3D view's camera-view background), or through
+    /// [`read_peeked`] (Track View, the Track Table's crops and Measurement
+    /// View's endpoint crops), none of which decodes on the GUI thread.
     pub(crate) photograph_requests: PhotographRequests,
 
     /// Whether the "Load Demo Data" dialog is currently open.
@@ -2052,17 +2052,6 @@ pub(crate) fn photograph_path(recon: &SfmrReconstruction, index: usize) -> Optio
         .map(|image| recon.workspace_dir.join(&image.name))
 }
 
-/// The pyramid of image `index`'s photograph if the cache already holds it,
-/// without reading anything: what a panel that only draws what is decoded
-/// calls every frame.
-pub(crate) fn peek_full_res_pyramid(
-    cache: &PhotographCache,
-    recon: &SfmrReconstruction,
-    index: usize,
-) -> Option<Arc<ImageU8Pyramid>> {
-    cache.peek(&photograph_path(recon, index)?)
-}
-
 #[cfg(test)]
 impl AppState {
     /// Put `image`, pyramided at the depth the cache's decode gives its size,
@@ -2093,7 +2082,8 @@ impl AppState {
         id: ReconId,
         index: usize,
     ) -> Option<Arc<ImageU8Pyramid>> {
-        peek_full_res_pyramid(&self.photographs, self.node(id)?.recon(), index)
+        let path = photograph_path(self.node(id)?.recon(), index)?;
+        self.photographs.peek(&path)
     }
 }
 

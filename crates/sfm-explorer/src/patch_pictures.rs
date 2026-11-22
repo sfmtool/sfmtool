@@ -73,6 +73,11 @@ pub(crate) const UNREFERENCED_PATCH_HOVER: &str =
      bitmap is not the render of the photograph in the Crop cell, which is the \
      reference-view rule's pick";
 
+/// What the hover of a picture cut from a photograph says while the
+/// photograph tiles of its hover view are loading: Track View's tiles and
+/// crops, and the Track Table's crops.
+pub(crate) const HOVER_LOADING: &str = "Loading the photograph…";
+
 /// The hover text where a point stores no patch: an all-zero bitmap row.
 pub(crate) const NO_STORED_PATCH_HOVER: &str = "The point has no stored patch";
 

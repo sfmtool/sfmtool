@@ -13,18 +13,19 @@
 //! by entry count: the pictures of rows that have left the view are kept until
 //! it is full and then released, the longest unseen first. A cell with nothing
 //! to draw keeps the reason in the cache as a picture is kept, and a cell whose
-//! picture is not ready yet, a crop whose photograph is decoding or whose
+//! picture is not ready yet, a crop whose photograph tiles are loading or whose
 //! reference is being picked, keeps nothing and is asked again.
 
 use std::collections::HashMap;
 
 use sfmtool_core::camera::sampler::RegionPool;
-use sfmtool_core::camera::TiledPhotograph;
-use sfmtool_core::EditedReconstruction;
+use sfmtool_core::camera::TileKey;
+use sfmtool_core::{EditedReconstruction, SfmrReconstruction};
 
 use crate::document::VersionSerial;
 use crate::patch_pictures::crop::{CropPicture, DrawnCrop, Outline, CELL_TEXTURE_OPTIONS};
 use crate::scene::ReconId;
+use crate::state::{AppState, PeekedRead, PhotographSource};
 
 /// The picture sizes the *Size* dropdown offers, in points, smallest first.
 /// At 16 a picture and its [`PICTURE_PAD`] are shorter than a line of body
@@ -252,10 +253,15 @@ pub(super) struct PictureTextures {
     entries: HashMap<PictureKey, Entry>,
     /// The frame now being drawn.
     frame: u64,
-    /// The hover view of the crop the pointer last rested on, cut when it
-    /// first rested there: `Ok(None)` inside for a crop whose hover view cut
-    /// nothing, and why for one whose photograph could not be read.
+    /// The hover view of the crop the pointer last rested on, cut once the
+    /// photograph tiles it needs are there: `Ok(None)` inside for a crop whose
+    /// hover view cut nothing, and why for one whose photograph could not be
+    /// read.
     hover: Option<(PictureKey, Result<Option<DrawnCrop>, String>)>,
+    /// The crop the pointer rests on whose hover view is not cut yet, with
+    /// the photograph tiles it needed when it was last tried
+    /// ([`crate::state::read_peeked`]).
+    hover_needs: Option<(PictureKey, Vec<TileKey>)>,
     /// The key of every picture made, in order, for the tests that hold which
     /// rows ask for one.
     #[cfg(test)]
@@ -363,50 +369,84 @@ impl PictureTextures {
     }
 
     /// The hover view of the crop held for `key`, cut around the same outline
-    /// from the photograph `pyramid` finds for its image, read through
-    /// `pool`, the first time it is asked for, and kept while the pointer
-    /// rests on that cell. `Ok(None)` when no crop is held for `key` or its
-    /// photograph has left the cache, and why when the read of the photograph
-    /// failed.
+    /// from the photograph tiles it needs of its image's photograph in
+    /// `recon`, read through `pool`, and kept while the pointer rests on that
+    /// cell. `None` while those tiles are loading: they are asked for when
+    /// `ask` is set ([`crate::state::read_peeked`]) and only looked for
+    /// otherwise. `Ok(None)` when no crop is held for `key` or its hover view
+    /// cut nothing, and why when the read of the photograph failed.
     pub(super) fn crop_context(
         &mut self,
         ctx: &egui::Context,
         key: PictureKey,
-        pyramid: &dyn Fn(
-            usize,
-        )
-            -> Option<std::sync::Arc<sfmtool_core::camera::image::ImageU8Pyramid>>,
+        state: &AppState,
+        recon: &SfmrReconstruction,
+        ask: bool,
         pool: &RegionPool,
-    ) -> Result<Option<&DrawnCrop>, &str> {
+    ) -> Option<Result<Option<&DrawnCrop>, &str>> {
         if self.hover.as_ref().map(|(held, _)| *held) != Some(key) {
-            let Some((_, outline, image)) = self.crop(&key) else {
-                return Ok(None);
+            let held = self
+                .crop(&key)
+                .map(|(_, outline, image)| (outline.clone(), image));
+            let drawn = match held {
+                None => Ok(None),
+                Some((outline, image)) => {
+                    let mut needs = match self.hover_needs.take() {
+                        Some((held, needs)) if held == key => needs,
+                        _ => Vec::new(),
+                    };
+                    let read = match crate::state::photograph_path(recon, image) {
+                        None => PeekedRead::Unreadable,
+                        Some(path) => {
+                            let source = PhotographSource {
+                                cache: &state.photographs,
+                                requests: &state.photograph_requests,
+                                path: &path,
+                            };
+                            let render =
+                                |src: &_| crate::patch_pictures::crop::context(&outline, src, pool);
+                            if ask {
+                                crate::state::read_peeked(source, &mut needs, ctx, render)
+                            } else {
+                                crate::state::read_peeked_without_asking(source, &mut needs, render)
+                            }
+                        }
+                    };
+                    match read {
+                        PeekedRead::Loading => {
+                            self.hover_needs = Some((key, needs));
+                            return None;
+                        }
+                        PeekedRead::Unreadable => {
+                            Err(crate::state::UNREADABLE_PHOTOGRAPH.to_string())
+                        }
+                        PeekedRead::Read(read) => read
+                            .map(|picture| {
+                                picture.map(|picture| {
+                                    let caption =
+                                        crate::patch_pictures::crop::point_context_caption(
+                                            &picture,
+                                        );
+                                    DrawnCrop::new(
+                                        ctx,
+                                        picture,
+                                        CELL_OUTLINE[1].color,
+                                        format!("track_table_crop_context_{}", key.point),
+                                        egui::TextureOptions::LINEAR,
+                                    )
+                                    .with_caption(caption)
+                                })
+                            })
+                            .map_err(|why| why.to_string()),
+                    }
+                }
             };
-            let Some(src) = pyramid(image) else {
-                return Ok(None);
-            };
-            let source = TiledPhotograph::from_pyramid(src);
-            let drawn = crate::patch_pictures::crop::context(outline, &source, pool)
-                .map(|picture| {
-                    picture.map(|picture| {
-                        let caption = crate::patch_pictures::crop::point_context_caption(&picture);
-                        DrawnCrop::new(
-                            ctx,
-                            picture,
-                            CELL_OUTLINE[1].color,
-                            format!("track_table_crop_context_{}", key.point),
-                            egui::TextureOptions::LINEAR,
-                        )
-                        .with_caption(caption)
-                    })
-                })
-                .map_err(|why| why.to_string());
             self.hover = Some((key, drawn));
         }
         match self.hover.as_ref() {
-            Some((_, Ok(drawn))) => Ok(drawn.as_ref()),
-            Some((_, Err(why))) => Err(why),
-            None => Ok(None),
+            Some((_, Ok(drawn))) => Some(Ok(drawn.as_ref())),
+            Some((_, Err(why))) => Some(Err(why)),
+            None => Some(Ok(None)),
         }
     }
 

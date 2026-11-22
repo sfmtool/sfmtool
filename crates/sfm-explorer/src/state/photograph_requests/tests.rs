@@ -1,12 +1,11 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::time::{Duration, Instant};
-
 use sfmtool_core::camera::image::ImageU8;
 use sfmtool_core::camera::sampler::{read_source_rect, LevelRect, RegionPool};
+use sfmtool_core::SfmrReconstruction;
 
-use super::super::TaskQueue;
+use super::super::{photograph_path, TaskQueue};
 
 use super::*;
 
@@ -23,132 +22,6 @@ fn demo_in(dir: &Path) -> SfmrReconstruction {
         .save(dir.join("photo_00.png"))
         .unwrap();
     recon
-}
-
-/// Wait for the decode of `path` that `requests` started to end.
-fn wait_for(requests: &PhotographRequests, path: &Path) {
-    let start = Instant::now();
-    while requests.is_in_flight(path) {
-        assert!(
-            start.elapsed() < Duration::from_secs(30),
-            "the decode never ended"
-        );
-        std::thread::sleep(Duration::from_millis(1));
-    }
-}
-
-#[test]
-fn a_miss_is_decoded_off_the_calling_thread_and_found_on_a_later_look() {
-    let dir = tempfile::tempdir().unwrap();
-    let recon = demo_in(dir.path());
-    let cache = Arc::new(PhotographCache::new(
-        sfmtool_core::camera::PhotographCacheOptions {
-            budget_bytes: 1 << 30,
-            ..Default::default()
-        },
-    ));
-    let requests = PhotographRequests::default();
-    let ctx = egui::Context::default();
-    let path = photograph_path(&recon, 0).unwrap();
-
-    // Asked twice, perhaps before it lands: one decode either way.
-    for _ in 0..2 {
-        assert!(
-            !matches!(
-                display_photograph(&cache, &requests, &recon, 0, &ctx),
-                DisplayPhotograph::Unreadable
-            ),
-            "the photograph is on disk"
-        );
-    }
-    wait_for(&requests, &path);
-    match display_photograph(&cache, &requests, &recon, 0, &ctx) {
-        DisplayPhotograph::Decoded(pyramid) => assert_eq!(pyramid.level(0).width(), 6),
-        _ => panic!("the decode landed in the cache"),
-    }
-    assert_eq!(cache.stats().misses, 1, "one decode for every look");
-}
-
-#[test]
-fn a_file_that_cannot_be_read_ends_as_unreadable_rather_than_decoding_forever() {
-    let dir = tempfile::tempdir().unwrap();
-    let recon = demo_in(dir.path());
-    let cache = Arc::new(PhotographCache::new(
-        sfmtool_core::camera::PhotographCacheOptions {
-            budget_bytes: 1 << 30,
-            ..Default::default()
-        },
-    ));
-    let requests = PhotographRequests::default();
-    let ctx = egui::Context::default();
-    let path = photograph_path(&recon, 1).unwrap();
-
-    assert!(matches!(
-        display_photograph(&cache, &requests, &recon, 1, &ctx),
-        DisplayPhotograph::Decoding | DisplayPhotograph::Unreadable
-    ));
-    wait_for(&requests, &path);
-    assert!(matches!(
-        display_photograph(&cache, &requests, &recon, 1, &ctx),
-        DisplayPhotograph::Unreadable
-    ));
-    assert!(!requests.is_in_flight(&path), "no second request");
-    assert_eq!(cache.stats().misses, 1);
-
-    // An index past the image set has no file to ask for.
-    assert!(matches!(
-        display_photograph(&cache, &requests, &recon, recon.image_count(), &ctx),
-        DisplayPhotograph::Unreadable
-    ));
-}
-
-#[test]
-fn a_cached_photograph_is_answered_without_a_request() {
-    let dir = tempfile::tempdir().unwrap();
-    let recon = demo_in(dir.path());
-    let cache = Arc::new(PhotographCache::new(
-        sfmtool_core::camera::PhotographCacheOptions {
-            budget_bytes: 1 << 30,
-            ..Default::default()
-        },
-    ));
-    let path = photograph_path(&recon, 1).unwrap();
-    let pyramid = Arc::new(ImageU8Pyramid::from_image(
-        ImageU8::new(2, 2, 3, vec![9; 12]),
-        ImageU8Pyramid::full_levels(2, 2),
-    ));
-    cache.insert(&path, Arc::clone(&pyramid));
-    let requests = PhotographRequests::default();
-    match display_photograph(&cache, &requests, &recon, 1, &egui::Context::default()) {
-        DisplayPhotograph::Decoded(found) => assert!(Arc::ptr_eq(&found, &pyramid)),
-        _ => panic!("the inserted pyramid"),
-    }
-    assert!(!requests.is_in_flight(&path));
-}
-
-/// A cache that keeps nothing would never show a background decode to the
-/// next look, so the photograph is decoded where it is asked for.
-#[test]
-fn a_cache_that_keeps_nothing_decodes_on_the_calling_thread() {
-    let dir = tempfile::tempdir().unwrap();
-    let recon = demo_in(dir.path());
-    let cache = Arc::new(PhotographCache::new(
-        sfmtool_core::camera::PhotographCacheOptions {
-            budget_bytes: 0,
-            ..Default::default()
-        },
-    ));
-    let requests = PhotographRequests::default();
-    let ctx = egui::Context::default();
-    assert!(matches!(
-        display_photograph(&cache, &requests, &recon, 0, &ctx),
-        DisplayPhotograph::Decoded(_)
-    ));
-    assert!(matches!(
-        display_photograph(&cache, &requests, &recon, 1, &ctx),
-        DisplayPhotograph::Unreadable
-    ));
-    assert!(!requests.is_in_flight(&photograph_path(&recon, 0).unwrap()));
 }
 
 // ── Image Detail's layout and tile requests ─────────────────────────────
@@ -865,6 +738,79 @@ fn a_render_of_a_photograph_that_cannot_be_read_is_answered_as_unreadable() {
     ));
 }
 
+/// A render through `read_peeked_without_asking` starts nothing. On a
+/// photograph nothing has asked for it waits, with no header read or decode
+/// started however often it looks; once `read_peeked` has had the
+/// photograph read into the cache it runs on what is there, giving the
+/// photograph's own pixels. A photograph whose decode failed under a cache
+/// that keeps nothing is answered as unreadable, with no check of its file
+/// started.
+#[test]
+fn a_render_that_asks_for_nothing_runs_only_on_what_is_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = level_photo(dir.path(), "photo.png");
+    let cache = small_tile_cache(1 << 30, 1 << 30);
+    let (requests, queue) = PhotographRequests::queued();
+    let source = PhotographSource {
+        cache: &cache,
+        requests: &requests,
+        path: &path,
+    };
+    let ctx = egui::Context::default();
+    let pool = RegionPool::with_capacity(u64::MAX);
+    let render = |src: &TiledPhotograph| read_rect(src, &pool, LEFT);
+    let mut needs = Vec::new();
+    for _ in 0..3 {
+        assert!(matches!(
+            read_peeked_without_asking(source, &mut needs, render),
+            PeekedRead::Loading
+        ));
+    }
+    assert_eq!(queue.len(), 0, "nothing asked for");
+    // The header, then the first tile, whose decode keeps the photograph.
+    let mut asked = Vec::new();
+    for _ in 0..2 {
+        assert!(matches!(
+            read_peeked(source, &mut asked, &ctx, render),
+            PeekedRead::Loading
+        ));
+        assert_eq!(queue.run_off_this_thread(), 1);
+    }
+    let PeekedRead::Read(Ok(pixels)) = read_peeked_without_asking(source, &mut needs, render)
+    else {
+        panic!("the photograph is in the cache");
+    };
+    assert_eq!(pixels, decoded_rect(&path, LEFT));
+    assert_eq!(needs.len(), 12, "the twelve tiles under the rectangle");
+    assert_eq!(queue.len(), 0);
+
+    // A file that goes once its header is read.
+    let cache = small_tile_cache(0, 1 << 30);
+    let gone = level_photo(dir.path(), "gone.png");
+    let source = PhotographSource {
+        cache: &cache,
+        requests: &requests,
+        path: &gone,
+    };
+    let mut needs = Vec::new();
+    assert!(matches!(
+        read_peeked(source, &mut needs, &ctx, render),
+        PeekedRead::Loading
+    ));
+    assert_eq!(queue.run_off_this_thread(), 1, "the header read");
+    std::fs::remove_file(&gone).unwrap();
+    assert!(matches!(
+        read_peeked(source, &mut needs, &ctx, render),
+        PeekedRead::Loading
+    ));
+    assert_eq!(queue.run_off_this_thread(), 1, "the decode, which fails");
+    assert!(matches!(
+        read_peeked_without_asking(source, &mut needs, render),
+        PeekedRead::Unreadable
+    ));
+    assert_eq!(queue.len(), 0, "no check of the file started");
+}
+
 /// Two renders of one photograph that need different tiles, and Image
 /// Detail asking for others of its tiles until it has them, drawn before
 /// both on every frame, all finish under a cache that keeps nothing, where
@@ -987,7 +933,7 @@ fn a_tile_set_takes_nothing_until_every_tile_is_there() {
     };
     // Another render's answer holds the first tile.
     assert!(matches!(
-        display_tile_set(source, &[tile(0)], &ctx),
+        display_tile_set(source, &[tile(0)], Some(&ctx)),
         DisplayTileSet::Loading
     ));
     assert_eq!(queue.run_off_this_thread(), 1);
@@ -995,12 +941,12 @@ fn a_tile_set_takes_nothing_until_every_tile_is_there() {
     // This render needs it and a second.
     let set = [tile(0), tile(1)];
     assert!(matches!(
-        display_tile_set(source, &set, &ctx),
+        display_tile_set(source, &set, Some(&ctx)),
         DisplayTileSet::Loading
     ));
     assert_eq!(requests.kept_tiles(), 1, "the first tile is left kept");
     assert_eq!(queue.run_off_this_thread(), 1, "a decode of the second");
-    let DisplayTileSet::Ready(tiles) = display_tile_set(source, &set, &ctx) else {
+    let DisplayTileSet::Ready(tiles) = display_tile_set(source, &set, Some(&ctx)) else {
         panic!("both tiles are answered");
     };
     assert_eq!(tiles.iter().map(|t| t.key).collect::<Vec<_>>(), set);

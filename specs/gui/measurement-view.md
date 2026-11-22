@@ -419,9 +419,14 @@ inside it, so neither block draws over the other. Each block shows:
   (`patch_pictures::crop::patch_outline` and `region`), with the square's
   outline over it and a cross at the endpoint's pixel. Where it does not, the
   crop is a square of the photograph `UNRESOLVED_CROP_PX` (64) photograph
-  pixels across, centred on the pixel, with the cross alone. While the
-  photograph is decoding the cell says so; where it cannot be read, the cell
-  says why in its hover text.
+  pixels across, centred on the pixel, with the cross alone. The crop and
+  its hover view are cut in one render from a photograph made of the
+  photograph tiles both need (`state::read_peeked`, as Track View's crops
+  are read), so nothing is decoded on the GUI thread and no whole pyramid is
+  read ([photograph-cache.md](../core/camera/photograph-cache.md) § "In the
+  viewer"). While those tiles are loading the cell says *loading…*; where
+  the photograph cannot be read, the cell says *no crop* and why in its
+  hover text.
 - **The crop's hover view.** The photograph's full name, then the same crop in
   context, three times its width and height at 288 points
   (`marks::CONTEXT_FACTOR`, `CONTEXT_HOVER_SIDE`), with the outline and the
@@ -1100,6 +1105,13 @@ at-infinity case is covered by the Rust tests.
   endpoint's sentence; a block's click, double-click, hover and right-click.
   (`dock/tests.rs`): a double-click's camera view is the one
   `look_through_toward_feature` gives the endpoint's pixel.
+- **The crops** (`measurement_view/tests/crops.rs`): the two endpoints' crops
+  and hover views, read from photographs on disk with a cache budget and
+  with one that keeps nothing, equal the crops the whole pyramid gives; until
+  they are drawn each says *loading…*, each photograph is asked for once
+  over three frames, nothing is decoded on the GUI thread, and a crop and a
+  hover view that need different tiles take no more reads than one render
+  does; a photograph that cannot be read gives *no crop*.
 - **The tools** (`mcp/tests/measurements.rs`): `get_scene`'s counts,
   `list_measurements`' rows and results, `get_measurement`'s resolutions,
   refusal and median line, an index past the rows refused with the count, and

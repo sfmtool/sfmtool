@@ -57,7 +57,7 @@ use crate::bench::live::Evaluation;
 use crate::bench::viewed::ViewedTrack;
 use crate::bench::{NormalStep, SplitSettings};
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
-use crate::state::{AppState, PeekedRead, PhotographSource};
+use crate::state::{AppState, PeekedRead, PhotographSource, UNREADABLE_PHOTOGRAPH};
 use crate::track_view::EDIT_LABEL;
 use crate::widget_name::set_widget_name;
 
@@ -418,10 +418,6 @@ enum Picture {
     Crop,
     CropContext,
 }
-
-/// What a cell says of a photograph that cannot be read or decoded, after
-/// "The photograph could not be read: ".
-const UNREADABLE_PHOTOGRAPH: &str = "the file could not be read or decoded";
 
 /// `render` of the photograph at `path`, run once every photograph tile it
 /// needs is there, on a photograph made of exactly those tiles

@@ -29,47 +29,34 @@
 //!   decodes' limit of one task per photograph and their remembered
 //!   failures, and keeps the one level it last answered until the background
 //!   asks for it.
-//! - Track View renders its pictures from photograph tiles. [`read_peeked`]
+//! - Track View, the Track Table's crops and Measurement View's endpoint
+//!   crops render their pictures from photograph tiles. [`read_peeked`]
 //!   runs a render on a photograph made of exactly the tiles it needs
 //!   ([`TiledPhotograph::from_tiles`]), held for the render, once
 //!   [`display_tile_set`] has every one of them, which it asks for together:
 //!   all of them handed over at once or none, the missing ones decoded by
 //!   one [`PhotographCache::try_decode_tiles`] as Image Detail's are.
-//! - The Track Table and Measurement View's endpoint crops still take the
-//!   whole pyramid from [`display_photograph`]
-//!   ([`PhotographCache::peek_state`], and [`PhotographCache::get`] on the
-//!   rayon pool on a miss).
+//!   [`read_peeked_without_asking`] runs the same render on what is already
+//!   there and asks for nothing, for the Track Table's rows while they
+//!   scroll.
+//!
+//! No panel reads a whole pyramid, and none decodes on the GUI thread, at
+//! any budget.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::image::ImageU8;
 use sfmtool_core::camera::{
-    PeekedLayout, PeekedPhotograph, PeekedTile, PhotographCache, PhotographReadError,
-    PhotographTile, PyramidLayout, TileError, TileKey, TiledPhotograph, TryDecode,
+    PeekedLayout, PeekedTile, PhotographCache, PhotographReadError, PhotographTile, PyramidLayout,
+    TileError, TileKey, TiledPhotograph, TryDecode,
 };
 use sfmtool_core::progress::Progress;
-use sfmtool_core::SfmrReconstruction;
-
-use super::photograph_path;
 
 #[cfg(test)]
 mod tests;
-
-/// What a panel has to draw a photograph with on this frame.
-#[derive(Clone)]
-pub(crate) enum DisplayPhotograph {
-    /// Decoded; level 0 is the photograph.
-    Decoded(Arc<ImageU8Pyramid>),
-    /// Being decoded on a worker, or about to be. A repaint follows the
-    /// decode.
-    Decoding,
-    /// The file could not be read or decoded, or the image index is not in the image
-    /// set.
-    Unreadable,
-}
 
 /// What a panel knows of a photograph's layout on this frame.
 #[derive(Clone, Debug)]
@@ -105,6 +92,10 @@ pub(crate) enum DisplayTileSet {
     /// The photograph could not be read or decoded.
     Unreadable,
 }
+
+/// What a panel says of a photograph that cannot be read or decoded, after
+/// "The photograph could not be read: " or a sentence like it.
+pub(crate) const UNREADABLE_PHOTOGRAPH: &str = "the file could not be read or decoded";
 
 /// What a panel's render from its photograph's tiles gave on this frame.
 pub(crate) enum PeekedRead<T> {
@@ -157,11 +148,12 @@ const MAX_ANSWERED_PHOTOGRAPHS: usize = 4;
 /// take the photograph's kept tiles past it replaces them. Image Detail asks
 /// for at most 16 tiles of a photograph at once (`image_detail::photograph_tiles`'s
 /// upload cap) and every ask of its drops the kept tiles it does not ask for,
-/// so its own answers, the kept and the new, are at most 32. Track View's
-/// pictures ask for the tiles of one render together ([`display_tile_set`])
-/// and drop no other ask's, since several of its pictures read one
-/// photograph, so their answers for the photograph build up until the
-/// renders take them; this bounds them.
+/// so its own answers, the kept and the new, are at most 32. The pictures
+/// [`read_peeked`] renders (Track View's, the Track Table's crops and
+/// Measurement View's endpoint crops) ask for the tiles of one render
+/// together ([`display_tile_set`]) and drop no other ask's, since several
+/// pictures read one photograph, so their answers for the photograph build
+/// up until the renders take them; this bounds them.
 const MAX_KEPT_TILES: usize = 32;
 
 /// A file's length and modification time, which tell a file that changed
@@ -334,8 +326,6 @@ impl TileRequests {
 /// once however many frames look at it meanwhile, and the tiles they answered.
 #[derive(Clone)]
 pub(crate) struct PhotographRequests {
-    /// The paths a [`display_photograph`] decode is running for.
-    in_flight: Arc<Mutex<HashSet<PathBuf>>>,
     /// The paths a header read is running for.
     layouts_in_flight: Arc<Mutex<HashSet<PathBuf>>>,
     tiles: Arc<Mutex<TileRequests>>,
@@ -363,30 +353,10 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl PhotographRequests {
     fn with_spawner(spawn: Spawner) -> Self {
         Self {
-            in_flight: Arc::default(),
             layouts_in_flight: Arc::default(),
             tiles: Arc::default(),
             spawn,
         }
-    }
-
-    /// Start decoding `path` into `cache` on the rayon pool unless a decode of
-    /// it is already running, and repaint `ctx` when it ends.
-    fn request(&self, cache: &Arc<PhotographCache>, path: &Path, ctx: &egui::Context) {
-        if !lock(&self.in_flight).insert(path.to_path_buf()) {
-            return;
-        }
-        let cache = Arc::clone(cache);
-        let in_flight = Arc::clone(&self.in_flight);
-        let path = path.to_path_buf();
-        let ctx = ctx.clone();
-        (self.spawn)(Box::new(move || {
-            let _ = cache.get(&path, &Progress::none());
-            // After the get, so a frame that no longer finds the path in flight
-            // finds its entry in the cache.
-            lock(&in_flight).remove(&path);
-            ctx.request_repaint();
-        }));
     }
 
     /// Start reading `path`'s header into `cache` unless a read of it is
@@ -536,6 +506,15 @@ impl PhotographRequests {
         true
     }
 
+    /// [`Self::failed`] with `ctx`; with none, only whether `path`'s decode
+    /// failed, starting no check of the file.
+    fn failed_asking(&self, path: &Path, ctx: Option<&egui::Context>) -> bool {
+        match ctx {
+            Some(ctx) => self.failed(path, ctx),
+            None => lock(&self.tiles).failed(path).is_some(),
+        }
+    }
+
     /// How many answered tiles are kept, of every photograph.
     #[cfg(test)]
     pub(crate) fn kept_tiles(&self) -> usize {
@@ -546,12 +525,6 @@ impl PhotographRequests {
     #[cfg(test)]
     pub(crate) fn keeps_a_level(&self) -> bool {
         lock(&self.tiles).level.is_some()
-    }
-
-    /// Whether a decode of `path` is running.
-    #[cfg(test)]
-    pub(crate) fn is_in_flight(&self, path: &Path) -> bool {
-        lock(&self.in_flight).contains(path)
     }
 
     /// Requests whose tasks wait in the queue answered beside them until a
@@ -598,43 +571,6 @@ impl TaskQueue {
     }
 }
 
-/// The photograph of image `index` of `recon` as `cache` holds it, asking
-/// `requests` to decode it in the background when it holds nothing yet.
-///
-/// Never reads the file on this thread, except under a cache with a budget of
-/// 0: that cache keeps nothing, so a background decode would never be seen
-/// and would be asked for again every frame, and the photograph is decoded
-/// here instead, as it was before panels stopped decoding.
-///
-/// A remembered failure is answered from the cache without a stat of the
-/// file, so a photograph that appears after it failed shows once something
-/// else reads it with `get` or the entry is forgotten.
-pub(crate) fn display_photograph(
-    cache: &Arc<PhotographCache>,
-    requests: &PhotographRequests,
-    recon: &SfmrReconstruction,
-    index: usize,
-    ctx: &egui::Context,
-) -> DisplayPhotograph {
-    let Some(path) = photograph_path(recon, index) else {
-        return DisplayPhotograph::Unreadable;
-    };
-    match cache.peek_state(&path) {
-        PeekedPhotograph::Decoded(pyramid) => DisplayPhotograph::Decoded(pyramid),
-        PeekedPhotograph::Unreadable => DisplayPhotograph::Unreadable,
-        PeekedPhotograph::NotDecoded if cache.budget_bytes() == 0 => {
-            match cache.get(&path, &Progress::none()) {
-                Ok(pyramid) => DisplayPhotograph::Decoded(pyramid),
-                Err(_) => DisplayPhotograph::Unreadable,
-            }
-        }
-        PeekedPhotograph::NotDecoded => {
-            requests.request(cache, &path, ctx);
-            DisplayPhotograph::Decoding
-        }
-    }
-}
-
 /// The layout of `source`'s photograph, starting one read of its header on
 /// the rayon pool when it is not known. Reads nothing on this thread, at any
 /// budget, and allocates nothing for a layout the cache already knows.
@@ -643,16 +579,24 @@ pub(crate) fn display_photograph(
 /// which is what a cache of budget 0, which remembers no failure, would
 /// otherwise never say, until its file changes.
 pub(crate) fn display_layout(source: PhotographSource<'_>, ctx: &egui::Context) -> DisplayLayout {
-    if source.requests.failed(source.path, ctx) {
+    layout_of(source, Some(ctx))
+}
+
+/// [`display_layout`], which with no `ctx` asks for nothing: it neither
+/// starts a header read nor checks whether a file that failed has changed.
+fn layout_of(source: PhotographSource<'_>, ctx: Option<&egui::Context>) -> DisplayLayout {
+    if source.requests.failed_asking(source.path, ctx) {
         return DisplayLayout::Unreadable;
     }
     match source.cache.layout(source.path) {
         PeekedLayout::Known(layout) => DisplayLayout::Known(layout),
         PeekedLayout::Unreadable(_) => DisplayLayout::Unreadable,
         PeekedLayout::NotKnown => {
-            source
-                .requests
-                .request_layout(source.cache, source.path, ctx);
+            if let Some(ctx) = ctx {
+                source
+                    .requests
+                    .request_layout(source.cache, source.path, ctx);
+            }
             DisplayLayout::Loading
         }
     }
@@ -744,17 +688,19 @@ pub(crate) fn prefetch_tiles(source: PhotographSource<'_>, keys: &[TileKey], ctx
 /// starts one decode on the rayon pool for the missing ones, unless one is
 /// already running for the photograph, and takes nothing, so the tiles
 /// answered before stay kept for the frame that finds them all. Never
-/// decodes on this thread, at any budget.
+/// decodes on this thread, at any budget. With no `ctx` it asks for nothing:
+/// it starts no decode for the tiles missing and checks no failed file for a
+/// change.
 ///
 /// Unlike [`display_tiles`] it drops no kept tile it does not ask for, since
 /// several renders of one panel read one photograph and ask for different
 /// tiles; [`MAX_KEPT_TILES`] bounds what a photograph keeps instead.
-pub(crate) fn display_tile_set(
+fn display_tile_set(
     source: PhotographSource<'_>,
     keys: &[TileKey],
-    ctx: &egui::Context,
+    ctx: Option<&egui::Context>,
 ) -> DisplayTileSet {
-    if source.requests.failed(source.path, ctx) {
+    if source.requests.failed_asking(source.path, ctx) {
         return DisplayTileSet::Unreadable;
     }
     let missing = {
@@ -780,9 +726,11 @@ pub(crate) fn display_tile_set(
         }
         missing
     };
-    source
-        .requests
-        .decode_tiles(source.cache, source.path, missing, ctx);
+    if let Some(ctx) = ctx {
+        source
+            .requests
+            .decode_tiles(source.cache, source.path, missing, ctx);
+    }
     DisplayTileSet::Loading
 }
 
@@ -806,9 +754,33 @@ pub(crate) fn read_peeked<T>(
     source: PhotographSource<'_>,
     needs: &mut Vec<TileKey>,
     ctx: &egui::Context,
+    render: impl FnMut(&TiledPhotograph) -> Result<T, PhotographReadError>,
+) -> PeekedRead<T> {
+    read_tiles(source, needs, Some(ctx), render)
+}
+
+/// [`read_peeked`] on what is already there, asking for nothing: `render`
+/// runs once the photograph's layout is known and every tile it needs is in
+/// the cache or kept from a decode that answered it, and otherwise the read
+/// is [`PeekedRead::Loading`] with no header read or decode started. For the
+/// Track Table's rows while they scroll, which draw what is there and ask
+/// for photographs only once the rows stop.
+pub(crate) fn read_peeked_without_asking<T>(
+    source: PhotographSource<'_>,
+    needs: &mut Vec<TileKey>,
+    render: impl FnMut(&TiledPhotograph) -> Result<T, PhotographReadError>,
+) -> PeekedRead<T> {
+    read_tiles(source, needs, None, render)
+}
+
+/// [`read_peeked`], which with no `ctx` asks for nothing.
+fn read_tiles<T>(
+    source: PhotographSource<'_>,
+    needs: &mut Vec<TileKey>,
+    ctx: Option<&egui::Context>,
     mut render: impl FnMut(&TiledPhotograph) -> Result<T, PhotographReadError>,
 ) -> PeekedRead<T> {
-    let layout = match display_layout(source, ctx) {
+    let layout = match layout_of(source, ctx) {
         DisplayLayout::Known(layout) => layout,
         DisplayLayout::Loading => return PeekedRead::Loading,
         DisplayLayout::Unreadable => return PeekedRead::Unreadable,

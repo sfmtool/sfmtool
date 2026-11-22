@@ -17,13 +17,14 @@ pixels, the reuse of kept regions across renders, and the entry points,
 [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md)
 and its companion [view-region-pyramid.md](../../drafts/view-region-pyramid.md)
 propose moving the kernels and panels onto them. Today the entry points read
-photographs made in memory. Track View reads a photograph made of the
-photograph tiles it peeked in the photograph cache, through
-`TiledPhotograph::from_tiles`, and the Track Table reads the cache's whole
-pyramids through `TiledPhotograph::from_pyramid`; both draw every tile, crop
-and hover view through the entry points
+photographs made in memory. Track View, the Track Table's crops and
+Measurement View's endpoint crops read a photograph made of the photograph
+tiles they peeked in the photograph cache, through
+`TiledPhotograph::from_tiles`, and draw every tile, crop and hover view
+through the entry points
 ([gui/track-view.md](../../gui/track-view.md),
-[gui/track-table.md](../../gui/track-table.md)). Every patch kernel reads a
+[gui/track-table.md](../../gui/track-table.md),
+[gui/measurement-view.md](../../gui/measurement-view.md)). Every patch kernel reads a
 `TiledPhotograph` through its `ProjectedImage`, and the bench's own reads go
 through the entry points: the cluster stage's member grids, the grid-plane
 normal's context renders, the pairwise-flow crops and the grown plane's value
