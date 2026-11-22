@@ -114,9 +114,8 @@ impl TiledPhotograph {
     }
 
     /// The same photograph cut into tiles of `tile_size` px (a size of 0 is
-    /// taken as 1); the tests cut small tiles, so that a small image crosses
-    /// many of them.
-    #[cfg(test)]
+    /// taken as 1): the photograph cache's tile size, and in the tests small
+    /// tiles, so that a small image crosses many of them.
     pub(crate) fn with_tile_size(mut self, tile_size: u32) -> Self {
         let [width, height] = self.pyramid.level_full_size(0);
         self.layout = PyramidLayout::in_memory(width, height, self.pyramid.num_levels(), tile_size);

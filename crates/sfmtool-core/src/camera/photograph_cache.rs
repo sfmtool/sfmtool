@@ -19,8 +19,11 @@
 //! [`PhotographCache::peek`] never reads a file and never waits, which is what a
 //! caller that draws every frame wants. Every whole decode is reserved on the
 //! cache's build count first ([`PhotographCache::reserve_builds`]), so the
-//! decodes in progress on one cache stay within its build budget. The design
-//! is in the spec `specs/core/camera/photograph-cache.md`.
+//! decodes in progress on one cache stay within its build budget. A panel
+//! asks for a photograph's layout and tiles, cut from the pyramid held, with
+//! [`PhotographCache::layout`], [`PhotographCache::peek_tile`] and
+//! [`PhotographCache::try_decode_tiles`], which never waits. The design is in
+//! the spec `specs/core/camera/photograph-cache.md`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -31,8 +34,12 @@ use std::time::{Duration, SystemTime};
 use rayon::prelude::*;
 
 use crate::camera::image::{image_dimensions, ImageU8, ImageU8Pyramid};
-use crate::camera::mipmap::{MAX_JPEG_SIDE, PHOTOGRAPH_TILE_SIZE};
+use crate::camera::mipmap::{PyramidLayout, MAX_JPEG_SIDE, PHOTOGRAPH_TILE_SIZE};
 use crate::progress::{Cancelled, Progress};
+
+mod tiles;
+
+pub use tiles::{PeekedLayout, PeekedTile, TileError, TryDecode};
 
 /// How long a caller waiting for another caller's decode of the same path
 /// waits on the slot before it looks at its own `Progress` for cancellation
@@ -116,9 +123,9 @@ pub struct PhotographCacheOptions {
     /// [`PhotographCache::try_reserve_build`] reserve against. By default
     /// [`default_build_budget_bytes`].
     pub build_budget_bytes: u64,
-    /// The side of a photograph tile, by default [`PHOTOGRAPH_TILE_SIZE`];
-    /// only tests change it. The cache holds whole pyramids and does not read
-    /// it yet.
+    /// The side of the photograph tiles the tile requests cut from the
+    /// pyramids held ([`PhotographCache::peek_tile`] and the others), by
+    /// default [`PHOTOGRAPH_TILE_SIZE`]; only tests change it.
     pub tile_size: u32,
 }
 
@@ -341,6 +348,31 @@ fn file_stamp(path: &Path) -> FileStamp {
     Some((meta.len(), meta.modified().ok()))
 }
 
+/// The error a failed read of `path` is answered and remembered as.
+fn unreadable(path: &Path, e: ::image::ImageError) -> GetError {
+    match e {
+        ::image::ImageError::IoError(io) if io.kind() == std::io::ErrorKind::NotFound => {
+            GetError::NotFound(path.to_path_buf())
+        }
+        e => GetError::Unreadable(format!("{}: {e}", path.display())),
+    }
+}
+
+/// The photograph's size from its header, refused as [`GetError::TooLarge`]
+/// with a side over [`MAX_JPEG_SIDE`]: the header decides the refusal, so a
+/// photograph too large for the pyramid readers is never decoded.
+fn header(path: &Path) -> Result<(u32, u32), GetError> {
+    let (width, height) = image_dimensions(path).map_err(|e| unreadable(path, e))?;
+    if width > MAX_JPEG_SIDE || height > MAX_JPEG_SIDE {
+        return Err(GetError::TooLarge {
+            path: path.to_path_buf(),
+            width,
+            height,
+        });
+    }
+    Ok((width, height))
+}
+
 /// Where a slot's decode stands.
 enum SlotState {
     /// Nothing decoded and no one decoding: the next caller decodes. A slot
@@ -436,6 +468,10 @@ struct Inner {
     map: HashMap<PathBuf, Arc<Slot>>,
     /// The sum of every mapped slot's `charged`.
     bytes: u64,
+    /// The layouts [`PhotographCache::request_layout`] read, or why it could
+    /// not, kept whatever the budget and not counted against it, since each
+    /// is a few dozen bytes. `forget` and `clear` drop them.
+    layouts: HashMap<PathBuf, Result<Arc<PyramidLayout>, String>>,
 }
 
 impl Inner {
@@ -488,10 +524,12 @@ pub struct PhotographCache {
     /// Estimated bytes of the whole decodes reserved now.
     build_reserved: AtomicU64,
     /// Called as a decode starts, once its header is read and the decode is
-    /// reserved and before the pixels are read, and as a caller starts to
-    /// wait on a slot being made: what lets a test hold a decode in progress,
+    /// reserved and before the pixels are read, as a caller starts to wait on
+    /// a slot being made, and as a panel's decode has its reservation and is
+    /// about to claim the slot: what lets a test hold a decode in progress,
     /// cancel a caller in the middle of a decode or a wait, make a decode
-    /// panic, or read the build count at those moments.
+    /// panic, change a slot under a panel's decode, or read the build count at
+    /// those moments.
     #[cfg(test)]
     on_slot_event: Option<Box<SlotHook>>,
 }
@@ -507,6 +545,9 @@ type SlotHook = dyn Fn(&PhotographCache, SlotEvent) + Send + Sync;
 enum SlotEvent {
     DecodeStarted,
     WaitStarted,
+    /// A panel's decode ([`PhotographCache::try_decode_tiles`]) has its
+    /// reservation and is about to claim the slot.
+    PanelReserved,
 }
 
 impl std::fmt::Debug for PhotographCache {
@@ -540,6 +581,7 @@ impl PhotographCache {
             inner: Mutex::new(Inner {
                 map: HashMap::new(),
                 bytes: 0,
+                layouts: HashMap::new(),
             }),
             tick: AtomicU64::new(0),
             hits: AtomicU64::new(0),
@@ -811,15 +853,19 @@ impl PhotographCache {
         self.charge(path, &slot, bytes);
     }
 
-    /// Drop one path's entry. The next `get` of it reads the file again.
+    /// Drop one path's entry and its layout. The next `get` of it reads the
+    /// file again.
     pub fn forget(&self, path: &Path) {
-        self.lock().remove(path);
+        let mut inner = self.lock();
+        inner.remove(path);
+        inner.layouts.remove(path);
     }
 
-    /// Drop every entry.
+    /// Drop every entry and every layout.
     pub fn clear(&self) {
         let mut inner = self.lock();
         inner.map.clear();
+        inner.layouts.clear();
         inner.bytes = 0;
     }
 
@@ -881,28 +927,13 @@ impl PhotographCache {
         progress: &Progress<'_>,
         share: &mut Share<'r>,
     ) -> Result<Arc<ImageU8Pyramid>, GetError> {
-        let unreadable = |e: ::image::ImageError| match e {
-            ::image::ImageError::IoError(io) if io.kind() == std::io::ErrorKind::NotFound => {
-                GetError::NotFound(path.to_path_buf())
-            }
-            e => GetError::Unreadable(format!("{}: {e}", path.display())),
-        };
-        // The header decides the refusal, so a photograph too large for the
-        // pyramid readers is never decoded.
-        let (width, height) = image_dimensions(path).map_err(unreadable)?;
-        if width > MAX_JPEG_SIDE || height > MAX_JPEG_SIDE {
-            return Err(GetError::TooLarge {
-                path: path.to_path_buf(),
-                width,
-                height,
-            });
-        }
+        let (width, height) = header(path)?;
         if let Share::None = share {
             *share = Share::Own(self.reserve_builds(whole_decode_bytes(width, height), 1));
         }
         #[cfg(test)]
         self.slot_event(SlotEvent::DecodeStarted);
-        let image = ImageU8::read_rgb(path).map_err(unreadable)?;
+        let image = ImageU8::read_rgb(path).map_err(|e| unreadable(path, e))?;
         self.decodes.fetch_add(1, Ordering::Relaxed);
         if progress.is_cancelled() {
             return Err(GetError::Cancelled);
@@ -929,20 +960,10 @@ impl PhotographCache {
         Some(value)
     }
 
-    /// `get`, telling whether it decoded. `share` is the caller's share of
-    /// the build count when it already holds one (a `get_many` member's), or
-    /// [`Share::None`] for a `get`, which reserves when it decodes. Whatever
-    /// the outcome, the share has been given back when this returns.
-    fn get_found<'r>(
-        &'r self,
-        path: &Path,
-        progress: &Progress<'_>,
-        mut share: Share<'r>,
-    ) -> (Result<Arc<ImageU8Pyramid>, GetError>, Found) {
-        if self.options.budget_bytes == 0 {
-            self.misses.fetch_add(1, Ordering::Relaxed);
-            return (self.decode(path, progress, &mut share), Found::Decoded);
-        }
+    /// `path`'s slot made from the file as it is now, counted as a use for the
+    /// eviction order: the mapped one when its stamp matches the file's,
+    /// otherwise a new empty slot in its place.
+    fn slot_for(&self, path: &Path) -> Arc<Slot> {
         // Stat with the lock released; it is a system call.
         let stamp = file_stamp(path);
         let slot = {
@@ -958,6 +979,24 @@ impl PhotographCache {
             }
         };
         self.touch(&slot);
+        slot
+    }
+
+    /// `get`, telling whether it decoded. `share` is the caller's share of
+    /// the build count when it already holds one (a `get_many` member's), or
+    /// [`Share::None`] for a `get`, which reserves when it decodes. Whatever
+    /// the outcome, the share has been given back when this returns.
+    fn get_found<'r>(
+        &'r self,
+        path: &Path,
+        progress: &Progress<'_>,
+        mut share: Share<'r>,
+    ) -> (Result<Arc<ImageU8Pyramid>, GetError>, Found) {
+        if self.options.budget_bytes == 0 {
+            self.misses.fetch_add(1, Ordering::Relaxed);
+            return (self.decode(path, progress, &mut share), Found::Decoded);
+        }
+        let slot = self.slot_for(path);
 
         // Wait while another caller makes the slot, and take it over when it
         // is empty, as it is before anyone has decoded it and after its maker

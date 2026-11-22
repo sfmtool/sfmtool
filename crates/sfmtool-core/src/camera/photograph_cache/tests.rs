@@ -24,7 +24,7 @@ fn bytes_of(w: u32, h: u32) -> u64 {
 }
 
 /// Write a `w x h` PNG at `dir/name` and return its path.
-fn write_png(dir: &Path, name: &str, w: u32, h: u32) -> PathBuf {
+pub(super) fn write_png(dir: &Path, name: &str, w: u32, h: u32) -> PathBuf {
     let path = dir.join(name);
     let image = image::RgbImage::from_fn(w, h, |x, y| image::Rgb([x as u8, y as u8, 7]));
     image.save(&path).unwrap();
@@ -32,7 +32,7 @@ fn write_png(dir: &Path, name: &str, w: u32, h: u32) -> PathBuf {
 }
 
 /// Options with the default build budget and `budget_bytes`.
-fn with_budget(budget_bytes: u64) -> PhotographCacheOptions {
+pub(super) fn with_budget(budget_bytes: u64) -> PhotographCacheOptions {
     PhotographCacheOptions {
         budget_bytes,
         ..Default::default()
@@ -409,12 +409,12 @@ fn get_many_returns_cancelled() {
 
 /// How long a test waits for a thread it started before it fails: far longer
 /// than any call here takes, so only a caller that never returns reaches it.
-const HANG: Duration = Duration::from_secs(20);
+pub(super) const HANG: Duration = Duration::from_secs(20);
 
 /// Run `call` on a thread of its own and hand back the receiver of its
 /// answer, so the test can wait for it with [`HANG`] as its limit rather
 /// than hang with a caller that never returns.
-fn on_a_thread<T: Send + 'static>(
+pub(super) fn on_a_thread<T: Send + 'static>(
     call: impl FnOnce() -> T + Send + 'static,
 ) -> std::sync::mpsc::Receiver<T> {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -428,14 +428,14 @@ fn on_a_thread<T: Send + 'static>(
 /// `release`. `events` receives every [`SlotEvent`] as it happens, with the
 /// bytes reserved on the build count at that moment, and `decodes` counts the
 /// decodes started.
-struct HeldDecode {
-    cache: Arc<PhotographCache>,
-    events: std::sync::mpsc::Receiver<(SlotEvent, u64)>,
-    release: std::sync::mpsc::Sender<()>,
-    decodes: Arc<AtomicUsize>,
+pub(super) struct HeldDecode {
+    pub(super) cache: Arc<PhotographCache>,
+    pub(super) events: std::sync::mpsc::Receiver<(SlotEvent, u64)>,
+    pub(super) release: std::sync::mpsc::Sender<()>,
+    pub(super) decodes: Arc<AtomicUsize>,
 }
 
-fn cache_holding_its_first_decode() -> HeldDecode {
+pub(super) fn cache_holding_its_first_decode() -> HeldDecode {
     let (event_tx, events) = std::sync::mpsc::channel();
     let (release, release_rx) = std::sync::mpsc::channel::<()>();
     let release_rx = Mutex::new(release_rx);
@@ -461,7 +461,7 @@ fn cache_holding_its_first_decode() -> HeldDecode {
 impl HeldDecode {
     /// Wait for the next event, which must be `expected`, and answer the
     /// bytes reserved on the build count when it happened.
-    fn expect(&self, expected: SlotEvent) -> u64 {
+    pub(super) fn expect(&self, expected: SlotEvent) -> u64 {
         let (event, reserved) = self.events.recv_timeout(HANG).expect("no slot event came");
         assert_eq!(event, expected);
         reserved
@@ -769,10 +769,10 @@ fn an_inserted_pyramid_is_what_get_answers() {
 }
 
 /// The bytes a 16 x 16 photograph's decode reserves.
-const SMALL: u64 = 16 * 16 * WHOLE_DECODE_BYTES_PER_PIXEL;
+pub(super) const SMALL: u64 = 16 * 16 * WHOLE_DECODE_BYTES_PER_PIXEL;
 
 /// Write `n` 16 x 16 PNGs into `dir`.
-fn small_photographs(dir: &Path, n: usize) -> Vec<PathBuf> {
+pub(super) fn small_photographs(dir: &Path, n: usize) -> Vec<PathBuf> {
     (0..n)
         .map(|i| write_png(dir, &format!("p{i:02}.png"), 16, 16))
         .collect()
@@ -780,15 +780,18 @@ fn small_photographs(dir: &Path, n: usize) -> Vec<PathBuf> {
 
 /// The least bytes reserved on a build count as any decode started, and the
 /// most as any decode started or any caller started to wait.
-type Seen = Arc<(AtomicU64, AtomicU64)>;
+pub(super) type Seen = Arc<(AtomicU64, AtomicU64)>;
 
-fn unseen() -> Seen {
+pub(super) fn unseen() -> Seen {
     Arc::new((AtomicU64::new(u64::MAX), AtomicU64::new(0)))
 }
 
 /// A cache made with `options` whose hook keeps in `seen` what its build count
 /// held at each decode's start and each wait's.
-fn cache_watching_its_count(options: PhotographCacheOptions, seen: &Seen) -> PhotographCache {
+pub(super) fn cache_watching_its_count(
+    options: PhotographCacheOptions,
+    seen: &Seen,
+) -> PhotographCache {
     let mut cache = PhotographCache::new(options);
     let seen = Arc::clone(seen);
     cache.on_slot_event = Some(Box::new(move |cache, event| {
