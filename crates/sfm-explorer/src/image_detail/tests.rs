@@ -4591,3 +4591,76 @@ fn the_set_endpoint_entries_follow_the_focused_measurement_item() {
     let texts = context_menu_texts(greyed);
     assert_eq!(after_bench(&texts), labels, "{texts:?}");
 }
+
+// ── New Measurement from Here ───────────────────────────────────────────
+
+/// *New Measurement from Here* is offered whether or not an item is focused,
+/// after the bench's two entries and before the focused measurement item's
+/// two; it is greyed while the node is busy and on a view-only bench, with
+/// the sentence the dock hands in.
+#[test]
+fn new_measurement_from_here_follows_the_bench_entries() {
+    const VIEW_ONLY: &str = "bull keeps its patches in .sift files, so its bench is view-only.";
+    use super::overlay::new_measurement_entry;
+    use crate::bench::measurement::{set_endpoint_here_label, NEW_MEASUREMENT_HERE_LABEL};
+    use crate::measurements::EndpointSide;
+    let order = |texts: &[String]| -> Vec<String> {
+        texts
+            .iter()
+            .filter(|t| {
+                [
+                    ADD_BENCH_OBSERVATION_LABEL,
+                    NEW_MEASUREMENT_HERE_LABEL,
+                    set_endpoint_here_label(EndpointSide::A),
+                ]
+                .contains(&t.as_str())
+            })
+            .cloned()
+            .collect()
+    };
+    assert_eq!(new_measurement_entry(BenchMenu::default()), Ok(()));
+    let texts = context_menu_texts(BenchMenu::default());
+    assert_eq!(
+        order(&texts),
+        [ADD_BENCH_OBSERVATION_LABEL, NEW_MEASUREMENT_HERE_LABEL],
+        "{texts:?}"
+    );
+    let focused = BenchMenu {
+        set_endpoint: Some(None),
+        ..BenchMenu::default()
+    };
+    let texts = context_menu_texts(focused);
+    assert_eq!(
+        order(&texts),
+        [
+            ADD_BENCH_OBSERVATION_LABEL,
+            NEW_MEASUREMENT_HERE_LABEL,
+            set_endpoint_here_label(EndpointSide::A),
+        ],
+        "{texts:?}"
+    );
+    for (menu, why) in [
+        (
+            BenchMenu {
+                busy: Some(BUSY),
+                ..BenchMenu::default()
+            },
+            BUSY,
+        ),
+        (
+            BenchMenu {
+                view_only: Some(VIEW_ONLY),
+                ..BenchMenu::default()
+            },
+            VIEW_ONLY,
+        ),
+    ] {
+        assert_eq!(new_measurement_entry(menu), Err(why.to_string()));
+        // Greyed, and still drawn.
+        let texts = context_menu_texts(menu);
+        assert!(
+            texts.iter().any(|t| t == NEW_MEASUREMENT_HERE_LABEL),
+            "{texts:?}"
+        );
+    }
+}

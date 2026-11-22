@@ -101,10 +101,22 @@ Two entries, in this order:
 | `Edit on Bench` | Puts the point's track on the bench as a track-stage track and raises Track View on it ([track-view.md](track-view.md)) |
 | `Retriangulate Point` | Re-solves the point from its own observations at these poses and these lenses, as one version ([edits/retriangulate-point.md](edits/retriangulate-point.md)) |
 
-With a measurement item focused, two more follow them, after a separator:
+After a separator comes `New Measurement from Here`, offered whether or not
+an item is focused: a new measurement item on the point's node's bench with
+endpoint A at the point's **reference pixel**, the image and keypoint of its
+reference observation, focused, with Measurement View raised beside the 3D
+view, never over it (G9), in one version (`Put distance from
+IMG_0042@142,198 on the bench`). It is greyed with the reason as hover text
+while a background task holds the node, on a view-only bench, and where the
+point has no reference pixel (`MeasurementStart::at_point`, which the dock
+hands the viewport each frame as `Viewer3D::measurement_start`), and reports
+`PointGesture::NewMeasurementHere`, which `AppState::start_measurement_at_point`
+carries out after the point is selected
+([measurement-view.md](measurement-view.md) § "Creating a measurement").
+
+With a measurement item focused, two more follow it:
 `Set Endpoint A Here` and `Set Endpoint B Here`, which set that endpoint of the
-focused item to the point's **reference pixel**, the image and keypoint of its
-reference observation, as one bench step
+focused item to the point's reference pixel, as one bench step
 ([measurement-view.md](measurement-view.md) § "Setting an endpoint by hand"
 and § "A point's reference pixel"). Selecting the point keeps the item focused,
 since the point is on the item's node, so the menu keeps the two entries while

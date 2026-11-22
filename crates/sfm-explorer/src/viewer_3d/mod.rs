@@ -387,6 +387,9 @@ pub(crate) struct Viewer3D {
     /// and *Set Endpoint B Here* see it, set by the dock each frame; `None` with
     /// no measurement item focused, which leaves the two entries out.
     pub(crate) endpoint_target: Option<crate::bench::measurement::EndpointTarget>,
+    /// Why the point menu's *New Measurement from Here* is refused on each
+    /// node where it is, set by the dock each frame.
+    pub(crate) measurement_start: crate::bench::measurement::MeasurementStart,
     /// The bench figure's handle the pointer has hold of, while it has one.
     ///
     /// Held here rather than derived each frame for the reason the Image Detail
@@ -521,6 +524,7 @@ impl Viewer3D {
             bench_figure: None,
             proposal_banner: Vec::new(),
             endpoint_target: None,
+            measurement_start: Default::default(),
             bench_drag: None,
             bench_gesture: None,
             menu_entry_rects: Vec::new(),
@@ -640,14 +644,15 @@ impl Viewer3D {
         self.menu_entry_rects = rects;
     }
 
-    /// The point's entries: `Edit on Bench` and `Retriangulate Point`, and,
-    /// with a measurement item focused, `Set Endpoint A Here` and `Set
-    /// Endpoint B Here`, which set that endpoint to the point's reference
-    /// pixel.
+    /// The point's entries: `Edit on Bench` and `Retriangulate Point`, then
+    /// `New Measurement from Here`, which starts a measurement at the point's
+    /// reference pixel, and, with a measurement item focused, `Set Endpoint A
+    /// Here` and `Set Endpoint B Here`, which set that endpoint to it.
     ///
-    /// The endpoint entries are greyed with the reason where the point is on a
-    /// node other than the item's, a step on the item is refused, or the point
-    /// has no reference pixel ([`crate::measurements::reference_pixel`]).
+    /// The measurement entries are greyed with the reason where a step on the
+    /// bench they edit is refused, the point has no reference pixel
+    /// ([`crate::measurements::reference_pixel`]), or, for the endpoint
+    /// entries, the point is on a node other than the item's.
     fn show_point_entries(
         &mut self,
         response: &egui::Response,
@@ -659,7 +664,8 @@ impl Viewer3D {
             .endpoint_target
             .as_ref()
             .map(|target| target.at_point(scene, point).err());
-        let mut rects = Vec::with_capacity(4);
+        let start_refusal = self.measurement_start.at_point(scene, point).err();
+        let mut rects = Vec::with_capacity(5);
         crate::context_menu::on_secondary_click(response).show(|ui| {
             let mut entry = |ui: &mut egui::Ui,
                              text: &'static str,
@@ -700,8 +706,19 @@ impl Viewer3D {
                 self.point_menu = Some(PointGesture::Retriangulate(point));
                 ui.close();
             }
+            ui.separator();
+            if entry(
+                ui,
+                crate::bench::measurement::NEW_MEASUREMENT_HERE_LABEL,
+                start_refusal.as_deref(),
+                "Start a distance measurement with endpoint A at this point's reference pixel, \
+                 the keypoint of the observation its patch is rendered from, and open \
+                 Measurement View on it.",
+            ) {
+                self.point_menu = Some(PointGesture::NewMeasurementHere(point));
+                ui.close();
+            }
             if let Some(refusal) = &endpoint_refusal {
-                ui.separator();
                 for side in crate::measurements::EndpointSide::BOTH {
                     let hint = format!(
                         "Set endpoint {} of the measurement being edited to this point's \

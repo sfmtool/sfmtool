@@ -420,6 +420,11 @@ pub(crate) fn parse(
             measurement_kind: args.measurement_kind()?,
             measurement_index: args.required_usize("measurement_index")?,
         },
+        "create_bench_measurement" => Command::CreateBenchMeasurement {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            camera_image: args.camera_image("camera_image")?,
+            pixel: args.required_pixel_f64("pixel")?,
+        },
         "commit_bench_measurement" => Command::CommitBenchMeasurement {
             reconstruction_label: args.required_string("reconstruction_label")?,
             item: args.optional_string("item")?,

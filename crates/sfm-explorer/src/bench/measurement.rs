@@ -1,10 +1,10 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Measurements on the bench: putting a stored measurement on, following its
-//! origin, the steps that set an item's label, its stated distance and an
-//! endpoint, the commit that writes it back, and the direct delete of a
-//! stored one.
+//! Measurements on the bench: putting a stored measurement on, starting a
+//! new one from a pixel, following its origin, the steps that set an item's
+//! label, its stated distance and an endpoint, the commit that writes it back,
+//! and the direct delete of a stored one.
 //!
 //! See `specs/gui/bench.md` and `specs/gui/measurement-view.md`. The item and
 //! its pure steps are core's (`sfmtool_core::bench::measurement`,
@@ -134,6 +134,42 @@ impl EndpointTarget {
     ) -> Result<crate::measurements::ReferencePixel, String> {
         if let Some(why) = self.refusal_on(point.recon) {
             return Err(why);
+        }
+        let node = crate::scene::node_by_id(scene, point.recon)
+            .ok_or_else(|| "That reconstruction is closed.".to_string())?;
+        crate::measurements::reference_pixel(node.edited(), point.point)
+    }
+}
+
+/// The menu entry that starts a new measurement at the place the menu was
+/// opened on, in Image Detail's menu and the 3D view's point menu.
+pub(crate) const NEW_MEASUREMENT_HERE_LABEL: &str = "New Measurement from Here";
+
+/// Why *New Measurement from Here* is refused on each node where it is, as
+/// the 3D view's point menu sees it ([`AppState::measurement_start`]).
+///
+/// Read once a frame by the dock, before the viewport borrows the scene, so
+/// the entry on a point of any node is greyed by the answer the step gives.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct MeasurementStart {
+    /// Each node a step on whose bench is refused, with the sentence
+    /// (`AppState::bench_edit_refusal`: a task holding the node, or a
+    /// view-only bench).
+    refusals: Vec<(ReconId, String)>,
+}
+
+impl MeasurementStart {
+    /// Where *New Measurement from Here* on `point` in the 3D view would start
+    /// the measurement, `point`'s reference pixel, or why it cannot: the
+    /// node's refusal, then the point's own
+    /// ([`crate::measurements::reference_pixel`]).
+    pub(crate) fn at_point(
+        &self,
+        scene: &[SceneNode],
+        point: crate::scene::PointRef,
+    ) -> Result<crate::measurements::ReferencePixel, String> {
+        if let Some((_, why)) = self.refusals.iter().find(|(id, _)| *id == point.recon) {
+            return Err(why.clone());
         }
         let node = crate::scene::node_by_id(scene, point.recon)
             .ok_or_else(|| "That reconstruction is closed.".to_string())?;
@@ -381,6 +417,97 @@ impl AppState {
         self.push_bench_step(index, next, text);
         self.focus_put_item(measurement.recon, &label);
         Ok(PutMeasurement { label, made: true })
+    }
+
+    /// Put a new distance measurement on `image`'s node's bench with endpoint
+    /// A at `pixel` of that image and nothing else, and focus it: *New
+    /// Measurement from Here* in Image Detail's menu and the 3D view's point
+    /// menu, and the wire's `create_bench_measurement`.
+    ///
+    /// One version (`Put distance from IMG_0042@142,198 on the bench`),
+    /// through core's `start_measurement`, which mints the item's label from
+    /// the image stem and the rounded pixel with the collision suffix where
+    /// another item holds it. The item has no origin, so its commit appends a
+    /// row; endpoint B, the stated distance and the label are steps of their
+    /// own. Focusing it selects its node and clears the selected measurement,
+    /// since it came from no stored row. Refused while a background task
+    /// holds the node and on a view-only bench, where the item could take no
+    /// step and never be committed, and for an image past the image set or a
+    /// pixel outside its image, in the commit's sentence. The item's label
+    /// comes back.
+    pub(crate) fn start_measurement(
+        &mut self,
+        image: crate::scene::ImageRef,
+        pixel: [f64; 2],
+    ) -> Result<String, String> {
+        let id = image.recon;
+        if let Some(why) = self.bench_edit_refusal(id) {
+            return Err(why);
+        }
+        let index = self.node_index(id)?;
+        let node = &self.scene[index];
+        let endpoint = bench::MeasurementEndpoint {
+            image: image.index() as u32,
+            pixel,
+        };
+        let (next, label) =
+            bench::start_measurement(node.history.current_bench(), node.edited(), endpoint)
+                .map_err(|e| format!("Cannot start a measurement there: {e}."))?;
+        self.push_bench_step(index, next, format!("Put {label} on the bench"));
+        self.focus_put_item(id, &label);
+        Ok(label)
+    }
+
+    /// *New Measurement from Here* in Image Detail's menu, at `pixel` of
+    /// `image`: [`Self::start_measurement`], then Measurement View raised
+    /// beside `from`, the panel the gesture was made in (G9). A refusal is one
+    /// failed `Bench` row, and nothing is raised.
+    ///
+    /// Applied by `app.rs` once the dock is back in the state, since the raise
+    /// is a layout operation.
+    pub(crate) fn start_measurement_here(
+        &mut self,
+        image: crate::scene::ImageRef,
+        pixel: [f64; 2],
+        from: crate::dock::Tab,
+    ) {
+        match self.start_measurement(image, pixel) {
+            Ok(_) => self.show_panel_beside(crate::dock::Tab::MeasurementView, from),
+            Err(why) => self.action_log.fail(Kind::Bench, why),
+        }
+    }
+
+    /// *New Measurement from Here* in the 3D view's point menu: a measurement
+    /// started at `point`'s reference pixel
+    /// ([`crate::measurements::reference_pixel`]), as
+    /// [`Self::start_measurement_here`] starts one. A point with no reference
+    /// pixel is one failed `Bench` row, in the sentence the entry is greyed
+    /// with.
+    pub(crate) fn start_measurement_at_point(
+        &mut self,
+        point: crate::scene::PointRef,
+        from: crate::dock::Tab,
+    ) {
+        match self.measurement_start().at_point(&self.scene, point) {
+            Ok(reference) => self.start_measurement_here(
+                crate::scene::ImageRef::new(point.recon, reference.image as usize),
+                reference.pixel,
+                from,
+            ),
+            Err(why) => self.action_log.fail(Kind::Bench, why),
+        }
+    }
+
+    /// Why *New Measurement from Here* is refused on each node, as the 3D
+    /// view's point menu greys it ([`MeasurementStart`]).
+    pub(crate) fn measurement_start(&self) -> MeasurementStart {
+        MeasurementStart {
+            refusals: self
+                .scene
+                .iter()
+                .filter_map(|node| Some((node.id, self.bench_edit_refusal(node.id)?)))
+                .collect(),
+        }
     }
 
     /// The node, its bench and the measurement a step on one item acts on:

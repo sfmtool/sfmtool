@@ -1274,7 +1274,18 @@ in this order:
 | `Start cluster on the bench here` | Puts a cluster-stage track on the bench seeded at the clicked pixel, with the node's own default patch radius, and raises Track View on it |
 | `Add observation to bench track here` | Adds a candidate sighting at that pixel to the focused item: at the track stage the pixel is its keypoint, at the cluster stage its seed |
 
-With a measurement item focused, two more follow them, after a separator:
+After a separator come the measurement entries. `New Measurement from Here` is
+always offered: it puts a new measurement item on the node's bench with
+endpoint A at the image shown and the pixel the menu was opened at and nothing
+else, focuses it, and raises Measurement View beside Image Detail, never over
+it (G9), in one version (`Put distance from IMG_0042@142,198 on the bench`).
+It is greyed with the reason as hover text while a background task holds the
+node and on a view-only bench (`overlay::new_measurement_entry`), and the
+panel keeps the pixel for `app.rs`, which applies it once the dock is back in
+the state (`ImageDetail::take_measurement_start`,
+`AppState::start_measurement_here`), since the raise is a layout operation
+([measurement-view.md](measurement-view.md) § "Creating a measurement").
+With a measurement item focused, two more follow it:
 `Set Endpoint A Here` and `Set Endpoint B Here`, which set that endpoint of the
 focused item to the image shown and the pixel the menu was opened at, one bench
 step (`Moved endpoint B of distance #2 to IMG_0004.jpg (412.3, 230.5)`, or `Set

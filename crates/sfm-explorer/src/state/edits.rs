@@ -918,6 +918,9 @@ pub(crate) enum PointGesture {
     /// endpoint of the focused measurement item to this point's reference
     /// pixel.
     SetEndpointHere(PointRef, crate::measurements::EndpointSide),
+    /// `New Measurement from Here` was chosen: start a measurement item with
+    /// endpoint A at this point's reference pixel, and show Measurement View.
+    NewMeasurementHere(PointRef),
 }
 
 impl AppState {
@@ -1001,7 +1004,8 @@ impl AppState {
     /// or not an entry is chosen afterwards.
     ///
     /// `from` is the panel the gesture was made in. *Edit on Bench* shows
-    /// Track View beside it rather than over it
+    /// Track View, and *New Measurement from Here* Measurement View, beside it
+    /// rather than over it
     /// ([`AppState::show_panel_beside`]): a double-click on a feature in Image
     /// Detail that brought a Track View tab sharing its node to the front
     /// would hide the image the person was working in.
@@ -1010,7 +1014,8 @@ impl AppState {
             PointGesture::Opened(point)
             | PointGesture::EditOnBench(point)
             | PointGesture::Retriangulate(point)
-            | PointGesture::SetEndpointHere(point, _) => point,
+            | PointGesture::SetEndpointHere(point, _)
+            | PointGesture::NewMeasurementHere(point) => point,
         };
         self.select_point(point);
         match request {
@@ -1032,6 +1037,9 @@ impl AppState {
             // focused, and one on another node has unfocused it, so the step
             // then refuses, since no measurement is being edited.
             PointGesture::SetEndpointHere(point, side) => self.set_endpoint_at_point(point, side),
+            // Measurement View beside the panel, as Edit on Bench raises
+            // Track View.
+            PointGesture::NewMeasurementHere(point) => self.start_measurement_at_point(point, from),
         }
     }
 

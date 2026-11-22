@@ -120,6 +120,19 @@ pub(crate) fn set_endpoint_here_entry(bench: BenchMenu<'_>) -> Option<Result<(),
     })
 }
 
+/// Whether the menu's *New Measurement from Here* entry can run, and why not
+/// when it is greyed.
+///
+/// It is offered whether or not an item is focused, and a pixel of the
+/// photograph is the whole of what it takes from the gesture, so what stops it
+/// is what stops any step on the node's bench: a task holding the node, or a
+/// view-only bench, where the measurement could take no further step
+/// (`AppState::bench_edit_refusal`). These are the start-a-cluster entry's
+/// reasons, in its order.
+pub(crate) fn new_measurement_entry(bench: BenchMenu<'_>) -> Result<(), String> {
+    start_cluster_entry(bench)
+}
+
 /// Whether the menu's *Create Track Here* entry can run, and why not when it
 /// is greyed.
 ///
@@ -553,13 +566,36 @@ impl ImageDetail {
                 ui.close();
             }
 
-            // ── The focused measurement item's two entries ──
+            // ── The measurement entries ──
             //
-            // Offered only while a measurement item is focused, and set that
-            // endpoint to the image shown at the pixel the menu was opened
-            // at: a bench step, like the two entries above.
+            // New Measurement from Here is offered whatever is focused, and
+            // starts a measurement item at the pixel the menu was opened at;
+            // it raises Measurement View, so the panel keeps it for `app.rs`
+            // (`ImageDetail::take_measurement_start`).
+            ui.separator();
+            let button = egui::Button::new(crate::bench::measurement::NEW_MEASUREMENT_HERE_LABEL);
+            let clicked = match new_measurement_entry(bench) {
+                Ok(()) => ui
+                    .add(button)
+                    .on_hover_text(
+                        "Start a distance measurement with endpoint A at this pixel of this \
+                         photograph, and open Measurement View on it.",
+                    )
+                    .clicked(),
+                Err(why) => {
+                    ui.add_enabled(false, button).on_disabled_hover_text(why);
+                    false
+                }
+            };
+            if clicked {
+                response.new_measurement = pixel;
+                ui.close();
+            }
+            // The focused measurement item's two entries, offered only while
+            // one is focused, set that endpoint to the image shown at the
+            // pixel the menu was opened at: a bench step, like the entries
+            // above.
             if let Some(entry) = set_endpoint_here_entry(bench) {
-                ui.separator();
                 for side in crate::measurements::EndpointSide::BOTH {
                     let button =
                         egui::Button::new(crate::bench::measurement::set_endpoint_here_label(side));

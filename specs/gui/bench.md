@@ -307,6 +307,10 @@ impl AppState {
     /// already there.
     pub(crate) fn put_measurement_on_bench(&mut self, measurement: MeasurementRef)
         -> Result<PutMeasurement, String>;
+    /// Put a new measurement item on the bench with endpoint A at `pixel` of
+    /// `image`, and focus it; its label comes back.
+    pub(crate) fn start_measurement(&mut self, image: ImageRef, pixel: [f64; 2])
+        -> Result<String, String>;
     /// Measurement View's Edit box.
     pub(crate) fn set_measurement_editing(&mut self, id: ReconId, on: bool)
         -> Result<(), String>;
@@ -705,6 +709,10 @@ and moving an endpoint, on the wire `set_bench_measurement_label`,
 refused with the sentence, which greys Measurement View's *Commit*, its header
 fields, its endpoint fields and its *Switch image…*, and *Set Endpoint A Here*
 and *Set Endpoint B Here* in Image Detail's menu and the 3D view's point menu.
+Starting a new measurement (*New Measurement from Here* in both menus, and
+`create_bench_measurement`) is refused with it too: unlike a stored
+measurement put on to be viewed, the new item would show nothing a person
+could not see in the photograph, and could take no step after its first.
 `get_measurement_endpoint_views` and `get_point_reference_pixel` read, and are
 not refused. Deleting a stored measurement is not a bench step and is not
 refused.
@@ -1585,8 +1593,23 @@ fields, and *Set Endpoint A Here* and *Set Endpoint B Here* in Image Detail's
 menu and the 3D view's point menu, make (`AppState::set_endpoint`,
 `AppState::set_endpoint_at_point`), on the focused item
 ([`measurement-view.md`](measurement-view.md) § "Setting an endpoint by
-hand"). An item started from a pixel with no stored row is proposed in
-[`../drafts/measurement-view.md`](../drafts/measurement-view.md).
+hand").
+
+**Starting a measurement** (`AppState::start_measurement`) puts a new
+measurement item on the bench with endpoint A at an image and a pixel and
+nothing else, through core's `start_measurement`, and focuses it, in one
+version (`Put distance from IMG_0042@142,198 on the bench`). Its label is
+minted from where it starts, the image stem and the rounded pixel after
+`distance from `, with the collision suffix
+([`../core/bench/bench.md`](../core/bench/bench.md) § "Labels"). It has no
+origin, so focusing it clears the selected measurement and its commit appends
+a row. *New Measurement from Here* in Image Detail's menu and the 3D view's
+point menu makes it and raises Measurement View beside the panel the gesture
+was made in, and the wire's `create_bench_measurement` makes it without the
+raise. It is refused while a background task holds the node and on a
+view-only bench, where the item could take no further step and never be
+committed, and for a pixel outside its image, in the commit's sentence
+([`measurement-view.md`](measurement-view.md) § "Creating a measurement").
 
 ---
 
@@ -1761,10 +1784,12 @@ when the focused item was already what the call asked for.
 // index, and so needs no `.kdf`: track stage only.
 // search_bench_track_geometry     { "reconstruction_label": "bull", "observation": 0 }
 //
-// A measurement item: put on from its row, its label, its stated distance,
-// one endpoint moved to another photograph that shows its place, and the
-// commit. "item" omitted means the focused item.
+// A measurement item: put on from its row or started at a pixel, its label,
+// its stated distance, one endpoint moved to another photograph that shows
+// its place, and the commit. "item" omitted means the focused item.
 // put_measurement_on_bench        { "reconstruction_label": "bull", "measurement_index": 2 }
+// create_bench_measurement        { "reconstruction_label": "bull", "camera_image": 3,
+//                                   "pixel": [141.6, 198.4] }
 // set_bench_measurement_label     { "reconstruction_label": "bull", "label": "paw width" }
 // set_bench_measurement_distance  { "reconstruction_label": "bull", "distance": "4.2 cm" }
 // get_measurement_endpoint_views  { "reconstruction_label": "bull", "endpoint": "a" }
@@ -2296,8 +2321,15 @@ two images, keeping the point and texel and leaving the stored row and the
 dirty flag alone, its undo and redo, the no-effect row, the labels of a pixel
 set outright and of an endpoint placed, and the refusals of a switch of an
 endpoint not placed, of a pixel outside its image, while busy and on a
-view-only bench.
+view-only bench; and starting a measurement: one version labelled by where it
+starts, endpoint A alone, focused, the selected measurement cleared, the node
+clean, the collision suffix, its undo, Measurement View raised and never over
+the panel the gesture was made in, the 3D view's start at a point's reference
+pixel and a point with none, the refusals while busy, on a view-only bench and
+of a pixel outside its image, and the commit refused until endpoint B and the
+distance are given and then appending a row.
 `mcp/tests/measurements.rs` covers `put_measurement_on_bench`,
+`create_bench_measurement`,
 `set_bench_measurement_label`, `set_bench_measurement_distance`,
 `get_measurement_endpoint_views`, `set_bench_measurement_endpoint`,
 `commit_bench_measurement` and `delete_measurement`, `get_bench` listing a

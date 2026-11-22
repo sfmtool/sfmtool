@@ -87,9 +87,10 @@ pub use geometry_search::{
 pub use measurement::{
     commit_measurement, commit_measurement_preconditions, delete_measurement, measurement_title,
     parse_stated_distance, put_measurement, set_measurement_endpoint, set_measurement_label,
-    set_stated_distance, EditableDistance, EditableMeasurement, EditableMeasurementBody,
-    EndpointPlacementRefusal, MeasurementCommit, MeasurementCommitRefusal, MeasurementEndpoint,
-    MeasurementKind, MeasurementOrigin, NoSuchMeasurement, StatedDistanceRefusal,
+    set_stated_distance, start_measurement, EditableDistance, EditableMeasurement,
+    EditableMeasurementBody, EndpointPlacementRefusal, MeasurementCommit, MeasurementCommitRefusal,
+    MeasurementEndpoint, MeasurementKind, MeasurementOrigin, NoSuchMeasurement,
+    StatedDistanceRefusal,
 };
 pub use nearby::{
     camera_spread, classify_range, constellation_seeds, depth_layers, distance_range,
@@ -349,6 +350,18 @@ pub fn check_label(label: &str) -> Result<(), BenchError> {
         Some(c) => Err(BenchError::ControlCharacter(c)),
         None => Ok(()),
     }
+}
+
+/// The stem of image `image`'s name in `edited`, which a label minted from a
+/// pixel of that image starts with ([`steps::ClusterSeed::label`]).
+pub(crate) fn image_stem(
+    edited: &crate::reconstruction::edited::EditedReconstruction,
+    image: u32,
+) -> String {
+    let name = &edited.base.image_set.images[image as usize].name;
+    std::path::Path::new(name)
+        .file_stem()
+        .map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned())
 }
 
 /// The things being worked on beside one reconstruction, in the order they were

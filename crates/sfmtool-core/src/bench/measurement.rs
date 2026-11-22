@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The editable measurement: a stored measurement put on the bench to be worked
-//! on, the steps that set its label, its stated distance and an endpoint, and
-//! the commit that writes it back.
+//! on, or a new one started from a pixel, the steps that set its label, its
+//! stated distance and an endpoint, and the commit that writes it back.
 //!
 //! `specs/core/bench/editable-measurement.md` is the design. An
 //! [`EditableMeasurement`] holds only what the file stores of a measurement:
@@ -13,7 +13,7 @@
 //! ([`resolve_distance_endpoints`](crate::reconstruction::measurement_endpoint::resolve_distance_endpoints)).
 //!
 //! Every function here is pure, as the track's steps are: [`put_measurement`]
-//! gives back the next bench, [`set_measurement_label`],
+//! and [`start_measurement`] give back the next bench, [`set_measurement_label`],
 //! [`set_stated_distance`] and [`set_measurement_endpoint`] the next item, [`commit_measurement`] the next
 //! reconstruction
 //! value, and [`delete_measurement`] the value with one row fewer, which is a
@@ -26,7 +26,8 @@ use ndarray::{Array1, Array2, Array3};
 use crate::reconstruction::edited::EditedReconstruction;
 use crate::{DistanceMeasurementsData, LengthUnit, MeasurementsData};
 
-use super::{Bench, BenchItem};
+use super::steps::ClusterSeed;
+use super::{image_stem, Bench, BenchItem};
 
 /// The kind of a stored measurement, which names the subdirectory of the
 /// file's `measurements/` section its rows are in. Each kind's rows are
@@ -335,6 +336,65 @@ pub fn put_measurement(
     let item = EditableMeasurement::from_stored(edited, kind, index, version)?;
     Ok(bench.put(
         &measurement_title(kind, index),
+        BenchItem::Measurement(Arc::new(item)),
+    ))
+}
+
+/// Put a new distance measurement on the bench with endpoint A at `endpoint`
+/// and nothing else, under a label minted from where it starts, and give back
+/// the bench and the label it took.
+///
+/// The item has no origin, so its commit appends a row; it has no endpoint B,
+/// no stated distance and an empty label of its own, which the other steps
+/// give it. The label is `distance from ` and the form a cluster seeded at
+/// the pixel is labelled with, the image stem and the rounded pixel
+/// (`distance from IMG_0042@142,198`), with the bench's collision suffix
+/// where another item holds that.
+///
+/// # Errors
+///
+/// The commit's refusals of an endpoint, in its sentences, as
+/// [`set_measurement_endpoint`] gives them: an image past the image set, and
+/// a pixel that is not inside `[0, width) × [0, height)` of that image's
+/// camera as the `float32` the file will hold.
+///
+/// ```
+/// use std::sync::Arc;
+/// use sfmtool_core::bench::{start_measurement, Bench, MeasurementEndpoint};
+/// use sfmtool_core::reconstruction::EditedReconstruction;
+/// use sfmtool_core::SfmrReconstruction;
+///
+/// let edited = EditedReconstruction::new(Arc::new(SfmrReconstruction::demo(10)));
+/// let at = MeasurementEndpoint { image: 1, pixel: [141.6, 198.2] };
+/// let (bench, label) = start_measurement(&Bench::new(), &edited, at).unwrap();
+/// assert!(label.starts_with("distance from ") && label.ends_with("@142,198"));
+/// let item = bench.measurement(&label).unwrap();
+/// assert_eq!(item.as_distance().unwrap().endpoints, [Some(at), None]);
+/// assert_eq!(item.origin, None);
+/// ```
+pub fn start_measurement(
+    bench: &Bench,
+    edited: &EditedReconstruction,
+    endpoint: MeasurementEndpoint,
+) -> Result<(Bench, String), EndpointPlacementRefusal> {
+    check_endpoint(edited, 0, endpoint)?;
+    let kind = MeasurementKind::Distance;
+    let seed = ClusterSeed::from_pixel(
+        endpoint.image,
+        image_stem(edited, endpoint.image),
+        endpoint.pixel,
+        1.0,
+    );
+    let item = EditableMeasurement {
+        origin: None,
+        label: String::new(),
+        body: EditableMeasurementBody::Distance(EditableDistance {
+            endpoints: [Some(endpoint), None],
+            distance: None,
+        }),
+    };
+    Ok(bench.put(
+        &format!("{} from {}", kind.name(), seed.label()),
         BenchItem::Measurement(Arc::new(item)),
     ))
 }

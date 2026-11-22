@@ -656,3 +656,107 @@ fn get_point_reference_pixel_gives_the_pixel_the_point_menu_takes() {
         assert_eq!(error.0, sentence);
     }
 }
+
+/// `create_bench_measurement` puts a one-endpoint item on the bench and
+/// focuses it, as *New Measurement from Here* does, without raising a panel;
+/// the item is then finished and committed with the other tools, appending a
+/// row. A pixel outside the image is refused in the commit's words.
+#[test]
+fn create_bench_measurement_starts_an_item_the_other_tools_finish() {
+    let (mut state, id) = crate::measurements::fixture::measured_state(Some("m"));
+    let mut viewer = Viewer3D::new();
+    state.hide_panel(crate::dock::Tab::MeasurementView);
+    let made = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_measurement",
+        json!({
+            "reconstruction_label": "measured",
+            "camera_image": 1,
+            "pixel": [141.6, 198.4],
+        }),
+    );
+    let label = "distance from image_001@142,198";
+    assert_eq!(made["item"], label, "{made}");
+    assert_eq!(made["changed"], true);
+    assert_eq!(made["camera_image"], 1);
+    assert_eq!(made["pixel"], json!([141.6, 198.4]));
+    assert_eq!(state.focused_measurement_label(id), Some(label));
+    assert!(!state.is_panel_open(crate::dock::Tab::MeasurementView));
+
+    let item = call(
+        &mut state,
+        &mut viewer,
+        "get_measurement",
+        json!({ "reconstruction_label": "measured", "item": label }),
+    );
+    assert_eq!(item["origin"], Value::Null, "{item}");
+    let refused = refused_call(
+        &mut state,
+        &mut viewer,
+        "commit_bench_measurement",
+        json!({ "reconstruction_label": "measured" }),
+    );
+    assert_eq!(
+        refused.0,
+        format!(
+            "Cannot commit {label}: endpoint B is not placed, and a distance needs both \
+             endpoints."
+        )
+    );
+    call(
+        &mut state,
+        &mut viewer,
+        "set_bench_measurement_endpoint",
+        json!({
+            "reconstruction_label": "measured",
+            "endpoint": "b",
+            "camera_image": 0,
+            "pixel": [300.0, 200.5],
+        }),
+    );
+    call(
+        &mut state,
+        &mut viewer,
+        "set_bench_measurement_distance",
+        json!({ "reconstruction_label": "measured", "distance": "42 cm" }),
+    );
+    let stored = state
+        .node(id)
+        .unwrap()
+        .edited()
+        .measurements()
+        .distance_measurement_count();
+    let committed = call(
+        &mut state,
+        &mut viewer,
+        "commit_bench_measurement",
+        json!({ "reconstruction_label": "measured" }),
+    );
+    assert_eq!(committed["changed"], true, "{committed}");
+    assert_eq!(
+        state
+            .node(id)
+            .unwrap()
+            .edited()
+            .measurements()
+            .distance_measurement_count(),
+        stored + 1
+    );
+
+    let refused = refused_call(
+        &mut state,
+        &mut viewer,
+        "create_bench_measurement",
+        json!({
+            "reconstruction_label": "measured",
+            "camera_image": 0,
+            "pixel": [640.0, 3.0],
+        }),
+    );
+    assert_eq!(
+        refused.0,
+        "Cannot start a measurement there: endpoint A's pixel (640, 3) is outside image 0, \
+         which is [0, 640) x [0, 480)."
+    );
+}

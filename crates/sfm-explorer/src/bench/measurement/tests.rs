@@ -1215,3 +1215,305 @@ fn the_endpoint_target_is_the_focused_measurement_with_its_refusals() {
         .unwrap();
     assert_eq!(state.endpoint_target(), None);
 }
+
+// ---- Creating a measurement -----------------------------------------------
+
+/// The text of the version the node stands at.
+fn version_label(state: &AppState, id: ReconId) -> String {
+    state
+        .node(id)
+        .unwrap()
+        .history
+        .current_version()
+        .label
+        .clone()
+}
+
+/// `tab` moved into `from`'s node, behind it, and `from` brought to the front
+/// there: an arrangement a person makes by dragging.
+fn docked_behind(state: &mut AppState, tab: crate::dock::Tab, from: crate::dock::Tab) {
+    state.hide_panel(tab);
+    let at = state.dock.find_tab(&from).expect("docked");
+    state
+        .dock
+        .leaf_mut(at.node_path())
+        .expect("a tab sits in a leaf")
+        .append_tab(tab);
+    let at = state.dock.find_tab(&from).expect("docked");
+    let _ = state.dock.set_active_tab(at);
+    assert!(state.panel_is_in_front(from));
+}
+
+/// *New Measurement from Here* in Image Detail puts one item on the bench in
+/// one version labelled by where it starts, with endpoint A at the pixel and
+/// nothing else, focuses it, clears the selected measurement, leaves the node
+/// clean and raises Measurement View; a second at the same rounded pixel,
+/// chosen with a track focused, takes the collision suffix; an undo takes the
+/// item off and unfocuses it.
+#[test]
+fn new_measurement_from_image_detail_puts_a_one_endpoint_item_on_and_focuses_it() {
+    use crate::dock::Tab;
+    let (mut state, id) = measured_state(Some("m"));
+    state.select_measurement(MeasurementRef::distance(id, 1));
+    state.hide_panel(Tab::MeasurementView);
+    let before = version_count(&state, id);
+    state.start_measurement_here(ImageRef::new(id, 1), [141.6, 198.4], Tab::ImageDetail);
+
+    let label = "distance from image_001@142,198";
+    assert_eq!(version_count(&state, id), before + 1);
+    assert_eq!(
+        version_label(&state, id),
+        format!("Put {label} on the bench")
+    );
+    // The step's row, before the raise's own `Layout` row.
+    let row = state
+        .action_log
+        .entries()
+        .rfind(|row| row.kind == crate::action_log::Kind::Bench)
+        .expect("a Bench row");
+    assert!(!row.failed);
+    assert!(
+        row.text.starts_with(&format!("Put {label} on the bench")),
+        "{}",
+        row.text
+    );
+    assert_eq!(state.focused_measurement_label(id), Some(label));
+    assert_eq!(state.selected_measurement, None);
+    assert_eq!(state.selected_recon, Some(id));
+    let held = item(&state, id, label);
+    assert_eq!(held.origin, None);
+    assert_eq!(held.label, "");
+    let d = held.as_distance().unwrap();
+    assert_eq!(d.distance, None);
+    assert_eq!(
+        d.endpoints.map(|e| e.map(|e| (e.image, e.pixel))),
+        [Some((1, [141.6, 198.4])), None]
+    );
+    assert!(!state.node(id).unwrap().history.is_dirty());
+    assert!(state.panel_is_in_front(Tab::MeasurementView));
+
+    // Offered whatever is focused: with a track focused it starts another.
+    state
+        .put_point_on_bench(PointRef::new(id, 0), None)
+        .unwrap();
+    state.start_measurement_here(ImageRef::new(id, 1), [142.4, 197.6], Tab::ImageDetail);
+    let second = format!("{label} (2)");
+    assert_eq!(state.focused_measurement_label(id), Some(second.as_str()));
+    assert_eq!(
+        version_label(&state, id),
+        format!("Put {second} on the bench")
+    );
+
+    state.undo(id).unwrap();
+    assert!(state.bench_measurement(id, &second).is_none());
+    assert_eq!(state.focused_item(), None);
+    assert!(state.bench_measurement(id, label).is_some());
+}
+
+/// The raise is beside the panel the gesture was made in (G9): with
+/// Measurement View docked behind Image Detail or the 3D view, that panel
+/// stays in front.
+#[test]
+fn new_measurement_never_covers_the_panel_it_was_chosen_in() {
+    use crate::dock::Tab;
+    use crate::state::edits::PointGesture;
+    for from in [Tab::ImageDetail, Tab::Viewer3D] {
+        let (mut state, id) = crate::measurements::fixture::referenced_state(Some("m"));
+        docked_behind(&mut state, Tab::MeasurementView, from);
+        match from {
+            Tab::ImageDetail => {
+                state.start_measurement_here(ImageRef::new(id, 0), [10.0, 10.0], from)
+            }
+            _ => state
+                .apply_point_gesture(PointGesture::NewMeasurementHere(PointRef::new(id, 0)), from),
+        }
+        assert!(state.focused_measurement_label(id).is_some(), "{from:?}");
+        assert!(state.panel_is_in_front(from), "{from:?}");
+        assert!(!state.panel_is_in_front(Tab::MeasurementView), "{from:?}");
+    }
+}
+
+/// *New Measurement from Here* in the 3D view's point menu selects the point
+/// and starts the measurement at its reference pixel, raising Measurement
+/// View; a point with no reference pixel is one failed row in the entry's
+/// sentence, with no version and nothing raised.
+#[test]
+fn new_measurement_from_a_point_starts_at_its_reference_pixel() {
+    use crate::dock::Tab;
+    use crate::measurements::fixture::referenced_state;
+    use crate::state::edits::PointGesture;
+    let (mut state, id) = referenced_state(Some("m"));
+    state.hide_panel(Tab::MeasurementView);
+    let before = version_count(&state, id);
+    state.apply_point_gesture(
+        PointGesture::NewMeasurementHere(PointRef::new(id, 0)),
+        Tab::Viewer3D,
+    );
+    assert_eq!(version_count(&state, id), before + 1);
+    assert_eq!(state.selected_point, Some(PointRef::new(id, 0)));
+    // Point 0's reference is its observation in image 1.
+    let pixel = keypoint_of(&state, id, 0, 1);
+    let label = format!(
+        "distance from image_001@{},{}",
+        pixel[0].round() as i64,
+        pixel[1].round() as i64
+    );
+    assert_eq!(state.focused_measurement_label(id), Some(label.as_str()));
+    let held = endpoints_of(&state, id, &label);
+    assert_eq!(held[0].map(|e| (e.image, e.pixel)), Some((1, pixel)));
+    assert_eq!(held[1], None);
+    assert!(state.panel_is_in_front(Tab::MeasurementView));
+
+    state.hide_panel(Tab::MeasurementView);
+    let before = version_count(&state, id);
+    state.apply_point_gesture(
+        PointGesture::NewMeasurementHere(PointRef::new(id, 1)),
+        Tab::Viewer3D,
+    );
+    assert_eq!(version_count(&state, id), before);
+    assert_eq!(
+        last_row(&state),
+        (
+            crate::measurements::NO_REFERENCE_FOR_PIXEL.to_string(),
+            true
+        )
+    );
+    assert!(!state.is_panel_open(Tab::MeasurementView));
+}
+
+/// Refused while a task holds the node and on a view-only bench, where the
+/// item could take no step, each in the shared sentence, which the 3D view's
+/// entry is greyed with before the point's own reason; and for a pixel outside
+/// the image, in the commit's sentence. None pushes a version or raises the
+/// panel.
+#[test]
+fn new_measurement_is_refused_while_busy_on_a_view_only_bench_and_outside_the_image() {
+    use crate::background::{Finished, Operation};
+    use crate::dock::Tab;
+    let (mut state, id) = measured_state(Some("m"));
+    let before = version_count(&state, id);
+    assert_eq!(
+        state.start_measurement(ImageRef::new(id, 0), [640.0, 3.0]),
+        Err(
+            "Cannot start a measurement there: endpoint A's pixel (640, 3) is outside image 0, \
+             which is [0, 640) x [0, 480)."
+                .to_string()
+        )
+    );
+    // Point 1 has no reference observation.
+    assert_eq!(
+        state
+            .measurement_start()
+            .at_point(&state.scene, PointRef::new(id, 1)),
+        Err(crate::measurements::NO_REFERENCE_FOR_PIXEL.to_string())
+    );
+    state
+        .start_background_task(
+            Operation::BENCH_FIT,
+            id,
+            Box::new(move |_| Finished::Cancelled),
+        )
+        .expect("nothing else is running");
+    let busy = state.busy_refusal(id).expect("the task holds the node");
+    state.hide_panel(Tab::MeasurementView);
+    state.start_measurement_here(ImageRef::new(id, 0), [10.0, 10.0], Tab::ImageDetail);
+    assert_eq!(last_row(&state), (busy.clone(), true));
+    assert!(!state.is_panel_open(Tab::MeasurementView));
+    // The node's refusal comes before the point's own.
+    assert_eq!(
+        state
+            .measurement_start()
+            .at_point(&state.scene, PointRef::new(id, 1)),
+        Err(busy)
+    );
+    assert_eq!(version_count(&state, id), before);
+
+    let (mut state, id) = view_only_state();
+    let sentence = state.bench_view_only_refusal(id).expect("view-only");
+    assert_eq!(
+        state.start_measurement(ImageRef::new(id, 0), [10.0, 10.0]),
+        Err(sentence.clone())
+    );
+    assert_eq!(
+        state
+            .measurement_start()
+            .at_point(&state.scene, PointRef::new(id, 0)),
+        Err(sentence)
+    );
+}
+
+/// A new measurement is finished with the steps that already exist: *Set
+/// Endpoint B Here*, then the stated distance and the label. *Commit* is
+/// refused, in the button's sentence, until both endpoints and the distance
+/// are given, and then appends a row, which is selected; an undo takes the
+/// row off again.
+#[test]
+fn a_new_measurement_commits_once_it_has_both_endpoints_and_a_distance() {
+    use crate::bench::measurement::EndpointSet;
+    let (mut state, id) = measured_state(Some("m"));
+    let label = state
+        .start_measurement(ImageRef::new(id, 0), [100.0, 50.0])
+        .unwrap();
+    let stored =
+        crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements()).len();
+    assert_eq!(
+        state.measurement_commit_refusal(id, &label),
+        Some(format!(
+            "Cannot commit {label}: endpoint B is not placed, and a distance needs both \
+             endpoints."
+        ))
+    );
+    assert_eq!(
+        state.commit_bench_measurement(id, &label).unwrap_err(),
+        state.measurement_commit_refusal(id, &label).unwrap()
+    );
+    let target = state.endpoint_target().expect("the new item is focused");
+    assert_eq!(target.item, label);
+    state.set_endpoint(&EndpointSet {
+        node: id,
+        item: label.clone(),
+        side: EndpointSide::B,
+        image: 1,
+        pixel: [300.0, 200.5],
+    });
+    assert_eq!(
+        version_label(&state, id),
+        format!("Set endpoint B of {label} to image_001.jpg (300.0, 200.5)")
+    );
+    assert_eq!(
+        state.measurement_commit_refusal(id, &label),
+        Some(format!(
+            "Cannot commit {label}: no stated distance is given."
+        ))
+    );
+    state
+        .set_bench_measurement_distance(id, &label, "42 cm")
+        .unwrap();
+    state
+        .set_bench_measurement_label(id, &label, "door width")
+        .unwrap();
+    assert_eq!(state.measurement_commit_refusal(id, &label), None);
+    let before = version_count(&state, id);
+    let committed = state.commit_bench_measurement(id, &label).unwrap();
+    assert!(!committed.replaced);
+    assert_eq!(committed.measurement, MeasurementRef::distance(id, stored));
+    assert_eq!(version_count(&state, id), before + 1);
+    let node_label = state.node(id).unwrap().label.clone();
+    assert_eq!(
+        version_label(&state, id),
+        format!("Added distance #{stored} in {node_label}")
+    );
+    let rows = crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements());
+    assert_eq!(rows.len(), stored + 1);
+    assert_eq!(rows[stored].label, "door width");
+    assert_eq!(rows[stored].stated, 42.0);
+    assert_eq!(
+        state.selected_measurement,
+        Some(MeasurementRef::distance(id, stored))
+    );
+    assert!(state.node(id).unwrap().history.is_dirty());
+
+    state.undo(id).unwrap();
+    let rows = crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements());
+    assert_eq!(rows.len(), stored);
+}

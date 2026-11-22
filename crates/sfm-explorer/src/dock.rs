@@ -249,6 +249,8 @@ impl TabContext<'_> {
         // The focused measurement item, which the point menu's Set Endpoint
         // entries set an endpoint of.
         self.viewer_3d.endpoint_target = self.state.endpoint_target();
+        // Why the point menu's New Measurement from Here is refused, by node.
+        self.viewer_3d.measurement_start = self.state.measurement_start();
         // Fetched only after `show_hud` has handed back its `&mut
         // AppState`: the node borrows `state.scene`, and the two cannot
         // overlap.

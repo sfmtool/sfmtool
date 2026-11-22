@@ -246,7 +246,11 @@ fn draft_field(
             .map_or_else(|| field.value.to_string(), |draft| draft.original);
         return ((!cancelled && text != original).then_some(text), rect);
     }
-    if shown.has_focus() {
+    // Focus as egui's memory holds it, which is what the field takes typing
+    // by, rather than `Response::has_focus`, which is also false while the
+    // window lacks the operating system's focus: an agent types into a
+    // viewer that is not the front window.
+    if ui.memory(|memory| memory.has_focus(shown.id)) {
         match slot {
             Some(draft) => draft.text = text,
             slot => {
@@ -314,6 +318,35 @@ pub(crate) fn pixel_field_name(side: EndpointSide, axis: PixelAxis) -> &'static 
 /// typed.
 pub(crate) fn pixel_text(coordinate: f64) -> String {
     format!("{}", coordinate as f32)
+}
+
+/// The widest text a pixel field is sized for, besides the value it holds:
+/// ten digits and a decimal point, which holds the shortest text that reads
+/// back as any `float32` pixel coordinate from 0.1 up to 100,000 (nine
+/// significant digits at most, `117.847664`, `0.123456789`). A smaller
+/// coordinate's leading zeros can make its text wider, and the field then
+/// takes the width of the value.
+const PIXEL_FIELD_TEXT: &str = "00000.00000";
+
+/// The width of a pixel field holding `value`: room for
+/// [`PIXEL_FIELD_TEXT`], or for `value` where it is wider, in the field's
+/// font, with the field's margins and the cursor.
+pub(crate) fn pixel_field_width(ui: &egui::Ui, value: &str) -> f32 {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let text_width = [PIXEL_FIELD_TEXT, value]
+        .into_iter()
+        .map(|text| {
+            ui.fonts_mut(|fonts| {
+                fonts
+                    .layout_no_wrap(text.to_string(), font.clone(), egui::Color32::WHITE)
+                    .size()
+                    .x
+            })
+        })
+        .fold(0.0, f32::max);
+    // `TextEdit`'s default margin is 4 points on each side, and the cursor
+    // takes a point or two beyond the last character.
+    text_width + 2.0 * 4.0 + 2.0
 }
 
 /// What an endpoint block's fields keep between frames: each pixel field's
@@ -1375,8 +1408,17 @@ fn entry(ui: &mut egui::Ui, text: &str, refusal: Option<String>, hint: &str) -> 
     }
 }
 
-/// An endpoint that is not placed: a block saying so, with *Switch image…*
-/// greyed in the edited mode (`switch`).
+/// What an endpoint block that is not placed says to do: the two menus whose
+/// *Set Endpoint … Here* places it.
+pub(crate) fn place_instruction(side: EndpointSide) -> String {
+    format!(
+        "Right-click a pixel in Image Detail, or a point in the 3D view, and choose {}.",
+        crate::bench::measurement::set_endpoint_here_label(side)
+    )
+}
+
+/// An endpoint that is not placed: a block saying so and how to place it,
+/// with *Switch image…* greyed in the edited mode (`switch`).
 fn show_unplaced(
     ui: &mut egui::Ui,
     side: EndpointSide,
@@ -1401,6 +1443,7 @@ fn show_unplaced(
                 .sense(egui::Sense::click()),
             ),
         );
+        targets.push(ui.add(egui::Label::new(place_instruction(side)).sense(egui::Sense::click())));
         if let Some(refusal) = &switch {
             button = Some(switch_button(ui, refusal.clone()));
         }
@@ -2086,7 +2129,7 @@ impl EndpointBlock<'_> {
                         refusal,
                         empty: "",
                         hint: &hint,
-                        width: 72.0,
+                        width: pixel_field_width(ui, &value),
                         name: pixel_field_name(side, axis),
                     },
                 );

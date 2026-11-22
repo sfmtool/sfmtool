@@ -371,6 +371,13 @@ pub(crate) enum Command {
         measurement_kind: crate::measurements::MeasurementKind,
         measurement_index: usize,
     },
+    /// Start a new measurement item at a pixel of a camera image and focus
+    /// it.
+    CreateBenchMeasurement {
+        reconstruction_label: String,
+        camera_image: CameraImageSel,
+        pixel: [f64; 2],
+    },
     /// Write a measurement item into the node's reconstruction. `None` is the
     /// focused item.
     CommitBenchMeasurement {
@@ -1742,6 +1749,16 @@ pub(crate) fn apply_with_window(
             &reconstruction_label,
             measurement_kind,
             measurement_index,
+        )),
+        Command::CreateBenchMeasurement {
+            reconstruction_label,
+            camera_image,
+            pixel,
+        } => done(measurements::create_bench_measurement(
+            state,
+            &reconstruction_label,
+            &camera_image,
+            pixel,
         )),
         Command::CommitBenchMeasurement {
             reconstruction_label,
