@@ -64,6 +64,8 @@ Scene (root, implicit)
 │   │     Style [Dots|Patches]       ← the point style selector, only with patch data
 │   │   ├── ▸ selected: pt3d_a1b2c3_88231   ← selection/hover rows only
 │   │   └── ▸ hovered:  pt3d_a1b2c3_10442
+│   ├── Measurements (4)           ← the stored measurements, when there are any
+│   │   └── Distance #0  ear to ear  12 cm  → 11.94 cm  −0.5%
 │   ├── Bench Points (2)           ← the bench's track-stage items, when it has any
 │   │   └── pt3d_a1b2c3_88231  5 in   ← one row per item, the focused one marked
 │   ├── Bench Clusters (1)         ← its cluster-stage items, likewise
@@ -666,6 +668,33 @@ node with patch data the line `Style [Dots|Patches]`
   mechanically as well as ergonomically. If per-point browsing is ever wanted,
   it should arrive as a filtered/query view (e.g. "worst reprojection error",
   "longest tracks"), not a raw list.
+
+**Measurements group row** — `[▸] Measurements (4)` — no eye, between the
+Points group and the Bench groups, drawn only on a node whose version on screen
+stores measurements. The count is of every kind. It expands, open by default,
+to one row per measurement, directly under the group while distance is the one
+kind ([measurement-view.md](measurement-view.md) § "The Scene tree's
+Measurements group"):
+
+```
+Distance #0  ear to ear  12 cm  → 11.94 cm  −0.5%
+Distance #2  4.2 cm  ⚠ endpoint B: no patch holds the pixel
+Distance #3  8 cm  → 0.317 su
+```
+
+Each row names its kind and index, its label where it has one, its stated
+distance, and the reconstruction's reading of it, from the node's cached
+readings (`crate::measurements::readings`). A **click** selects the measurement
+and nothing else, as a click on a Bench row selects only the node. A
+**double-click** selects it, raises Measurement View beside the tree, and
+frames the measurement's finite endpoints in the 3D view, keeping its
+orientation. The selected measurement's row is drawn selected. A secondary
+click opens no menu and selects nothing. The double-click travels in the
+response as `open_measurement`, which the panel keeps for
+`SceneGraphPanel::take_measurement_open` and `app.rs` applies once the dock is
+back in the state, for the reason the Bench rows' double-click is applied there
+(below). The group is drawn by
+[scene_graph/measurements.rs](../../crates/sfm-explorer/src/scene_graph/measurements.rs).
 
 **Bench group rows** — `[▸] Bench Points (2)` and `[▸] Bench Clusters (1)` — no
 eye, one per **stage** of the node's bench ([bench.md](bench.md)): the
@@ -1469,6 +1498,7 @@ when more than one is contributing:
 | **Scene Graph** | New (this spec). |
 | **Image Browser** | Bound to the **selected** reconstruction; a small header names it, shown only once more than one file is loaded (with a single one it would be chrome in an already-short panel). Thumbnail cache guarded by the owning `ReconId` (fixing the count-only invalidation bug; index keys stay local since the strip only ever shows one reconstruction, so a recon switch drops the old textures instead of accumulating them). Animation and the color barcode are per-selected-recon. A thumbnail's right click opens the image menu for that image of the selected reconstruction. |
 | **Image Detail** | Selection-driven — works via `ImageRef` naturally. Its photograph tiles and overlay state are keyed by `ImageRef`. |
+| **Measurement View** | Follows the selected reconstruction and `AppState::selected_measurement`, a `MeasurementRef` that names its node ([measurement-view.md](measurement-view.md)). |
 | **Track View** | Selection-driven via `PointRef` in Viewed mode, and through the focused item, which names its node, in Edited mode. Its `pt3d_<hash>_<index>` IDs already embed the per-recon content hash, so displayed IDs are already unambiguous across files. Texture maps re-keyed by `ImageRef`. |
 
 Cross-panel selection semantics are otherwise untouched: clicking a frustum in

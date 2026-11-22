@@ -124,8 +124,8 @@ told to check only the tool name.
 
 ## The tool surface
 
-One hundred and five tools. Twenty read -- nineteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- seventy-seven
+One hundred and eight tools. Twenty-two read -- twenty-one that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- seventy-eight
 write, six send input, one writes a file, and one quits the viewer. `get_widgets`
 and the six input tools, `click`, `hover`, `drag`, `scroll`, `press_key` and
 `type_text`, read and press the viewer's widgets the way a person's eyes, mouse
@@ -142,6 +142,8 @@ Quit does (§ "`quit`").
 | `get_intrinsic_adjustments` | read | Every camera image of one intrinsics record with its intrinsic adjustment |
 | `get_point` | read | One 3D point: position, colour, RMS reprojection error (`rms_error_px`), patch frame, full track, and the viewed track's evaluation for the viewed point |
 | `find_points` | read | The points of one reconstruction that pass bounds on the track table's columns, optionally only those one camera image sees, sorted by a column, a page at a time with the values asked for; computes the columns it lacks with *Find points*, on a worker thread |
+| `list_measurements` | read | Every measurement one reconstruction stores, each with the reading its Scene tree row shows |
+| `get_measurement` | read | One measurement whole, as Measurement View shows it: each endpoint's resolution with every candidate or its refusal, the result, and the median line |
 | `get_action_log` | read | What has happened in the viewer, from a revision onward, filtered by who did it, optionally with each row's stages |
 | `get_timing_detail` | read | Whether the detailed stages of an operation are being recorded |
 | `set_timing_detail` | write | Record the detailed stages of an operation, or stop |
@@ -158,6 +160,7 @@ Quit does (§ "`quit`").
 | `select_camera_image` | write | Select a camera image — and with it the intrinsics it was shot through |
 | `select_camera_intrinsics` | write | Select an intrinsics record |
 | `select_point` | write | Select a 3D point |
+| `select_measurement` | write | Select a measurement, or one of its endpoints as a click on its block in Measurement View does |
 | `clear_selection` | write | Drop the selection, wholly or one kind of it |
 | `set_reconstruction_display` | write | One reconstruction's eyes, point style, tint, interactivity |
 | `set_reconstruction_transform` | write | Set one reconstruction's display transform outright, the identity included |
@@ -240,8 +243,8 @@ Quit does (§ "`quit`").
 | `press_key` | input | Press and release one key, with modifiers, optionally with the pointer moved over a panel first |
 | `type_text` | input | Type a string into the focused text input or number box, or into one named by its widget id |
 
-Every tool is annotated: the nineteen reads and `screenshot` carry
-`readOnlyHint: true`, the seventy-seven writes `destructiveHint: false` (none of
+Every tool is annotated: the twenty-one reads and `screenshot` carry
+`readOnlyHint: true`, the seventy-eight writes `destructiveHint: false` (none of
 them deletes or overwrites a file the person made: `close_reconstruction`
 unloads, it does not delete; `set_window_layout` changes the window and the
 dock, not the layout file the menu saves; an **edit** makes a new version of a
@@ -342,11 +345,11 @@ handful of "pane". A panel has one handle, its name, so the argument spells
 both: **`panel_name`**, by the rule below that makes a reconstruction's
 argument `reconstruction_label`.
 
-The ten names are the layout file's, and there is no second spelling of them
+The eleven names are the layout file's, and there is no second spelling of them
 anywhere: `scene`, `background_tasks`, `viewer_3d`, `image_browser`,
-`image_detail`, `track_view`, `camera_intrinsics`, `action_log`,
+`image_detail`, `track_view`, `measurement_view`, `camera_intrinsics`, `action_log`,
 `edit_history`, `track_table` (`Tab::wire_name`). An unknown name is refused with a message
-listing all ten (`Tab::all_wire_names`), and that includes a name no panel
+listing all eleven (`Tab::all_wire_names`), and that includes a name no panel
 carries any more: `point_track`, `track_edit` and `background_task` are refused
 like any other unknown name, with no alias. `Tab` stays the Rust name — it is
 `egui_dock`'s word for the thing in a node, and the code is not the wire.
@@ -551,6 +554,7 @@ addressable. No arguments.
                    "show_camera_images": true, "show_points_at_infinity": true,
                    "tint": null },
       "world_space_unit": "m",            // what the file declares; null for scene units
+      "measurement_counts": { "distance": 0 },  // per kind; list_measurements lists them
       "transformed": false,               // SceneNode::has_transform
       "transform": {                      // the display transform in force
         "rotation_wxyz": [1.0, 0.0, 0.0, 0.0],
@@ -581,7 +585,9 @@ addressable. No arguments.
                       "name": "images/IMG_0042.jpg" },
     "camera_intrinsics": { "reconstruction_label": "seoul_bull",
                            "camera_intrinsics_index": 0 },
-    "point": null
+    "point": null,
+    "measurement": null,                  // see § "The seven selection tools"
+    "measurement_endpoint": null
   },
   "solo": null,                           // a reconstruction label, or null
   "view": {                               // see § "The view block"
@@ -1403,7 +1409,7 @@ refusal.
 both at once: "close this one" and "close everything" are different requests,
 and a call carrying both has no answer.
 
-### The six selection tools
+### The seven selection tools
 
 ```jsonc
 // select_reconstruction     { "reconstruction_label": "global" }
@@ -1414,17 +1420,23 @@ and a call carrying both has no answer.
 // select_camera_intrinsics  { "reconstruction_label": "seoul_bull",
 //                             "camera_intrinsics_index": 0 }
 // select_point              { "point": "pt3d_a1b2c3d4_1207" }  // or bare index
+// select_measurement        { "reconstruction_label": "dino",
+//                             "measurement_index": 2, "endpoint": "a" }
 // clear_selection           { "scope": "all" }
 //   scope: "all" | "camera_image" | "camera_intrinsics" | "point"
 ```
 
-All six return the same thing — the resulting `selection` block, exactly as
+All seven return the same thing — the resulting `selection` block, exactly as
 `get_scene` renders it — so the agent sees what the invariants did to its
 request rather than assuming it got what it asked for:
 
 ```jsonc
 { "selection": { "reconstruction_label": "seoul_bull", "camera_image": {...},
-                 "camera_intrinsics": {...}, "point": null } }
+                 "camera_intrinsics": {...}, "point": null,
+                 "measurement": { "reconstruction_label": "dino",
+                                  "measurement_kind": "distance",
+                                  "measurement_index": 2 },
+                 "measurement_endpoint": "a" } }
 ```
 
 A call carries one target, because `AppState`'s setters are coupled and each
@@ -1435,6 +1447,15 @@ selections:
   and the reconstruction that owns it.
 - `select_camera_intrinsics` clears the camera image, unless that image uses
   those intrinsics.
+- `select_measurement` selects the measurement and its reconstruction and
+  nothing else: no image and no point, and the views do not move. It clears
+  the selected endpoint. Naming an `endpoint` (`a` or `b`) does what a click on
+  its block in Measurement View does: the measurement, then the endpoint's
+  camera image with its pixel for Image Detail to reveal, then the endpoint;
+  the selected point stays ([measurement-view.md](measurement-view.md)
+  § "The selection"). Every other selection tool keeps the measurement only
+  inside the reconstruction it leaves selected, and a camera image other than
+  the endpoint's clears the endpoint.
 - `select_reconstruction` drops finer selections belonging to other
   reconstructions.
 - While a bench item is focused, `select_point` of any point but that item's
@@ -1458,6 +1479,53 @@ before `screenshot` needs a way to say so. Its `scope` follows the viewer's own
 rule — `"camera_image"` drops the camera image and keeps the intrinsics
 (dismissing a photograph says nothing about the lens, per
 `AppState::select_image`), `"all"` drops everything.
+
+### `list_measurements` / `get_measurement`
+
+```jsonc
+// list_measurements  { "reconstruction_label": "seoul_bull" }
+// get_measurement    { "reconstruction_label": "seoul_bull",
+//                      "measurement_kind": "distance", "measurement_index": 0 }
+```
+
+The measurements a reconstruction stores, read as the Scene tree's
+Measurements rows and Measurement View read them
+([measurement-view.md](measurement-view.md)). A measurement is named by
+`measurement_kind`, the subsection of the file its rows are numbered in
+(`distance`, the default and the one kind), and `measurement_index`, its row
+there. An index past the rows is refused with the count.
+
+`list_measurements` answers the reconstruction's `label`, its
+`world_space_unit`, its `measurement_counts` (as `get_scene` gives them, one
+count per kind) and one entry per measurement:
+
+```jsonc
+{ "measurement_kind": "distance", "measurement_index": 0,
+  "label": "ear to ear", "stated_distance": 12.0, "unit": "cm",
+  "row_text": "Distance #0  ear to ear  12 cm  → 11.94 cm  −0.5%",
+  "result": { "state": "with_unit", "reconstructed_distance": 11.94,
+              "error": -0.06, "error_percent": -0.5, "implied_scale": 1.005 },
+  "endpoints": [ { "endpoint": "a", "camera_image": 3, "name": "IMG_0004.jpg",
+                   "pixel": [412.3, 230.5], "resolved": true }, ... ] }
+```
+
+`result.state` is one of `with_unit` (the file declares a `world_space_unit`:
+the reconstructed distance and the error in the measurement's own unit, the
+error as a percentage, and `implied_scale`, stated over reconstructed),
+`scene_units` (it declares none: `scene_distance`, and `unit_per_scene_unit`,
+the length of one scene unit in the measurement's unit), `at_infinity` and
+`refused`, each of the last two naming the `endpoint`. Every reading is in the
+file's own coordinates: a display transform never scales one.
+
+`get_measurement` adds, per endpoint, its `resolution` (`chosen`, an index into
+`candidates`, and each candidate's `point`, `point_id`, `observation`,
+`patch_coords`, `position` or `direction`, `depth`, `standing`, `exclusion` and
+a ranked candidate's `cost` factors, as
+[measurement-endpoint.md](../core/reconstruction/measurement-endpoint.md)
+names them) or its `refusal` (`sentence`, which names the remedy, and
+`short`, the words the row shows), and `median`, the header's comparison line
+(`count`, `median_unit_per_scene_unit`, `deviation_percent` and `text`), null
+with fewer than two readings.
 
 ### `set_reconstruction_display`
 
@@ -1649,7 +1717,7 @@ to set — the same rule as `set_reconstruction_display`.
 
 **The wire spellings are the code's.** `overlay_mode` takes the snake-cased
 `OverlayMode` variant (`OverlayMode::wire_name`, `from_wire_name`,
-`all_wire_names`, exactly as `Tab` spells the ten panels), because the GUI's
+`all_wire_names`, exactly as `Tab` spells the eleven panels), because the GUI's
 labels — `Reproj Error`, `Max Track Angle` — are display text with spaces in
 it, and § "Where the GUI has no word, the code's word wins" applies to a word
 the GUI has only as a label. An unknown mode is refused with a message listing
@@ -3618,13 +3686,14 @@ Where the window is, and which panels are where. No arguments.
     "layout": { "main": { /* … */ }, "windows": [] }
   },
   "window": { /* the window block, live, with `monitors` — null with no window */ },
-  "panels": {                       // one entry per panel, always all ten
+  "panels": {                       // one entry per panel, always all eleven
     "scene":             { "open": true,  "active": true },
     "background_tasks":  { "open": true,  "active": true },
     "viewer_3d":         { "open": true,  "active": true },
     "image_browser":     { "open": true,  "active": true },
     "image_detail":      { "open": true,  "active": false },
     "track_view":        { "open": true,  "active": true },
+    "measurement_view":  { "open": true,  "active": false },
     "camera_intrinsics": { "open": true,  "active": false },
     "action_log":        { "open": true,  "active": false },
     "edit_history":      { "open": true,  "active": false },
@@ -6504,7 +6573,7 @@ above, and `window_min_size` in `ui_basic`). The fixture seeds
 where a test hands no host over.
 
 - **Every command against that scene**: the JSON shape, the ids, and the
-  `selection` block each of the six selection tools returns.
+  `selection` block each of the seven selection tools returns.
 - **A camera's per-image values**: `get_camera_intrinsics`' `per_image_statistics`
   is `null` for a camera that varies nothing and otherwise the statistics of
   each varied parameter in its stored unit, with the panel's unit and scale,
@@ -6982,7 +7051,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is one hundred and five tools**, twenty of them reads, six of the
+- **The catalog is one hundred and eight tools**, twenty-two of them reads, six of the
   `Input` kind, one of the `Save` kind and one of the `Quit` kind, those eight
   carrying `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and

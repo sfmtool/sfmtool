@@ -50,7 +50,8 @@ root, and everything below describes the arrangement to its right.
   selected reconstruction as a sortable, filterable row
   ([track-table.md](track-table.md)); the middle is the area with the height
   for its rows.
-- **Track View**: top-right, ~1/3 width, sharing a tab group with Camera
+- **Track View**: top-right, ~1/3 width, sharing a tab group with Measurement
+  View ([measurement-view.md](measurement-view.md)) and Camera
   Intrinsics, and the active member of it. The column beside the
   pictures is where the tables about the selection go.
 - **Image Browser**: bottom strip, full width, ~20% of the height.
@@ -265,6 +266,7 @@ pub(crate) enum Tab {
     ImageBrowser,
     ImageDetail,
     TrackView,
+    MeasurementView,
     IntrinsicsDetail,
     ActionLog,
     EditHistory,
@@ -280,12 +282,14 @@ specified on its own:
 | `SceneGraph` | Scene | [scene-graph.md](scene-graph.md) |
 | `BackgroundTasks` | Background Tasks | [background-tasks.md](background-tasks.md) |
 | `TrackView` | Track View | [track-view.md](track-view.md) |
+| `MeasurementView` | Measurement View | [measurement-view.md](measurement-view.md) |
 | `IntrinsicsDetail` | Camera Intrinsics | [camera-intrinsics.md](camera-intrinsics.md) |
 | `ActionLog` | Action Log | [action-log.md](action-log.md) |
 | `EditHistory` | Edit History | [edit-history.md](edit-history.md) |
 
-`IntrinsicsDetail` shares Track View's tab group as its second and non-active
-member; `ActionLog` and `EditHistory` share the Image Browser's as its second
+`MeasurementView` and `IntrinsicsDetail` share Track View's tab group as its
+second and third, non-active,
+members; `ActionLog` and `EditHistory` share the Image Browser's as its second
 and third.
 
 ### TabContext and TabViewer
@@ -321,7 +325,7 @@ Split { split: LeftRight, fraction: 0.18,
     second: Split { split: TopBottom, fraction: 0.8,
         first:  Split { split: LeftRight, fraction: 0.67,
             first:  Leaf { tabs: [Viewer3D, ImageDetail] },
-            second: Leaf { tabs: [TrackView, IntrinsicsDetail] } },
+            second: Leaf { tabs: [TrackView, MeasurementView, IntrinsicsDetail] } },
         second: Leaf { tabs: [ImageBrowser, ActionLog, EditHistory] } } }
 ```
 

@@ -1134,7 +1134,7 @@ is tested as [point-cloud-rendering.md](point-cloud-rendering.md) § "The
 Track Table's filter" says.
 
 The layout tests in `layout::tests` and the MCP layout and catalog tests count
-the panel among the ten.
+the panel among the eleven.
 
 ## Non-goals
 
