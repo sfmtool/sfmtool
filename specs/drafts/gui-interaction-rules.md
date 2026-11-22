@@ -8,8 +8,9 @@ follows. The rules are decided; this draft holds only the work that makes the
 viewer follow them everywhere, and is deleted when that work is done.
 
 An inventory of every gesture of every panel, with its spec and its code,
-taken on 2026-11-21 from `main` at `e6aac050`, found fifteen places where the
-viewer or its specs do not follow the rules. They are tracked, with their code
+taken on 2026-11-21 from `main` at `e6aac050`, and the filing of the rules
+found sixteen places where the viewer or its specs do not follow the rules.
+They are tracked, with their code
 locations, as the findings of
 [`reports/2026-11-21-gui-interaction-audit.md`](../../reports/2026-11-21-gui-interaction-audit.md):
 
@@ -30,6 +31,7 @@ locations, as the findings of
 | 13 | G12 | Shift-click on a Track View row selects a range, and Ctrl+Shift-click adds one. |
 | 14 | G1 | A click on an empty part of the photograph in Image Detail clears the selected point. |
 | 15 | G3 | A right-click on a feature in Image Detail selects its point. |
+| 16 | G2, G9 | A double-click on a Scene tree Bench row raises Track View through `show_panel_beside`, and `panel-layout.md` § "A raise from a gesture" says so. |
 
 Each is fixed in the code, or in the spec where the code is right and the spec
 drifted, as its own change through `fix-report-findings`. A panel spec whose

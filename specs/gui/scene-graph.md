@@ -342,7 +342,10 @@ fixed-height for virtualization.
   label names.
 - Bold + accent bar when selected. The row's gestures follow the interaction
   rules ([interaction-rules.md](interaction-rules.md)). Click: G1, select this
-  reconstruction. Double-click: G2 for a set of things, zoom-to-fit this node.
+  reconstruction. Double-click: G2 for a set of things, zoom-to-fit this node;
+  it has no check for a camera held for Move Camera, which
+  [`reports/2026-11-21-gui-interaction-audit.md`](../../reports/2026-11-21-gui-interaction-audit.md)
+  finding 8 tracks.
 - Everything past the two toggles is **one click target spanning the row** —
   the name, the gap, the counts — carrying select, zoom-to-fit and the context
   menu alike, under an explicit id rather than an auto-generated one (egui keys

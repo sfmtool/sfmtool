@@ -470,8 +470,10 @@ The node body has a group above the images group, so its two rows read:
   ([interaction-rules.md](interaction-rules.md)),
   `select_camera(Some(CameraRef))` — with the deselect-the-image consequence
   from the coupling table.
-- **Double-click**: G2 for a set of things, the images using this camera. It
-  zooms the 3D viewport to fit every image using this camera —
+- **Double-click**: G2 for a set of things, the images using this camera
+  (with no check for a camera held for Move Camera, finding 8 of
+  [`reports/2026-11-21-gui-interaction-audit.md`](../../reports/2026-11-21-gui-interaction-audit.md)).
+  It zooms the 3D viewport to fit every image using this camera —
   the same `zoom_to_fit_points` call `zoom_to_node` makes, over that subset of
   the node's **camera centres** rather than over the node's points. (The two
   frame different things: a node's zoom-to-fit frames its point cloud, and a

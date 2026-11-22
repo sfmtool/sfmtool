@@ -30,6 +30,7 @@ in a running viewer and need a repro before a fix. Paths are under
 | 13 | G12 | Track View | Shift-click adds one row instead of selecting a range |
 | 14 | G1 | Image Detail | A click on an empty part of the photograph keeps the selected point |
 | 15 | G3 | Image Detail | A right-click on a feature does not select its point |
+| 16 | G2, G9 | Scene tree | A double-click on a Bench row raises Track View through `show_panel`, not `show_panel_beside` |
 
 ## Findings
 
@@ -136,6 +137,19 @@ G3: a right-click on a point selects it before its menu opens. In the 3D view
 it does (`viewer_3d/mod.rs:572-577`); on a feature in Image Detail it does not
 (`multi-panel-image-browser.md:402`, "A right click selects nothing").
 
+### 16. A Bench row's double-click raises Track View over the panel it was made in
+
+G2: a double-click raises a panel only through `show_panel_beside`; G9: a
+gesture that raises a panel never covers the panel it was made in. A
+double-click on a Bench row in the Scene tree is applied by `apply_bench_edit`
+(`app.rs:1434-1445`), which calls `AppState::edit_bench_item_at`, and that
+raises Track View with `show_panel` (`bench.rs:1880`). When Track View is
+docked behind the Scene tree in the same node, the raise covers the tree.
+`panel-layout.md` § "A raise from a gesture" (near line 174) presents this as
+intended ("a double-click on a Bench row in the Scene tree ... raise through
+`show_panel` itself"), so that paragraph changes with the fix. Found while
+filing the rules, after this inventory; read from the code.
+
 ## Checked and found following the rules
 
 - G1: clicks on thumbnails, image rows, camera rows, frustums, points, Bench
@@ -148,5 +162,6 @@ it does (`viewer_3d/mod.rs:572-577`); on a feature in Image Detail it does not
   and thumbnails select nothing.
 - G4 and G5: `turn_and_move_target_to` and `Look::Reveal` as described.
 - G7: bench handles and marks own their press in the 3D view and Image Detail.
-- G9: every raise goes through `show_panel_beside`.
+- G9: every raise from a gesture goes through `show_panel_beside`, except the
+  Bench row's double-click (finding 16).
 - G11: an Edit History click jumps the cursor.
