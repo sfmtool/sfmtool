@@ -16,7 +16,9 @@ node does; the first version holds a 1 m distance measurement along a cube
 edge; the demo scene is bound to Python; and decoded JPEG pixels may differ
 by one level between x86 and arm64, which the tests tolerate. Step 1 of the
 [step plan](#step-plan) is built; it found that the JPEG encoder's two paths
-give different bytes, which needs a decision
+give different bytes. Decided by the maintainer (2026-11-22): the encoder keeps
+its AVX2 path, and the tests store the JPEG hashes and the photograph-derived
+values once for each encoder path
 ([Determinism of the JPEG encoder and decoder](#determinism-of-the-jpeg-encoder-and-decoder)).
 
 ## Purpose
@@ -535,15 +537,15 @@ Windows runners, and on the macOS arm64 runner the scalar set, computed on x86
 with `simd` off, which so checks that the scalar path gives the same bytes on
 x86 and arm64.
 
-**Needs decision.** A written demo workspace's JPEGs, their
-`image_file_hashes`, and every column computed from the decoded photographs
-then differ between an x86 machine with AVX2 and any other machine. There are
-two ways to go: turn off `jpeg-encoder`'s `simd` feature, so every machine
-encodes on the scalar path and the demo's JPEG bytes are the same everywhere,
-at the cost of encode time for every JPEG the toolkit writes (on the five
-default photographs, 30 to 39 ms against 26 to 28 ms); or keep it, and let step 2
-store the photograph-derived values and the file hashes for each path. Step 1
-does neither: it pins the bytes of the two paths as they are.
+**Decided by the maintainer (2026-11-22): `simd` stays on.** A written demo
+workspace's JPEGs, their `image_file_hashes`, and every column computed from
+the decoded photographs differ between an x86 machine with AVX2 and any other
+machine. Turning off `jpeg-encoder`'s `simd` feature would make the demo's
+JPEG bytes the same everywhere, at the cost of encode time for every JPEG the
+toolkit writes (on the five default photographs, 30 to 39 ms against 26 to
+28 ms). Instead the encoder keeps its AVX2 path, and the tests store the file
+hashes and the photograph-derived values once for each encoder path and check
+the set of the path the encoder takes, as step 1's hash test does.
 
 **The decoder can differ between platforms in the last level.**
 `ImageU8::decode_rgb` decodes a JPEG with the `jpeg-decoder` crate (0.3.2,
@@ -559,9 +561,8 @@ On any one machine the value and a load of the written file agree exactly, as
 above. The workspace keeps `platform_independent` off, so the toolkit's
 decoding of real photographs keeps its x86 speed: the demo's tests pin the
 JPEG bytes of each encoder path exactly and compare the photograph-derived
-columns across platforms to within one level, once the encoder's
-[decision](#determinism-of-the-jpeg-encoder-and-decoder) makes the bytes the
-same, or against values stored for each path if it does not.
+columns to within one level against the values stored for the encoder path
+taken.
 
 **What the code has.** `ImageU8::encode(format, jpeg_quality) ->
 Result<Vec<u8>, ImageError>` encodes to bytes in memory, with the checks of
@@ -880,9 +881,9 @@ Each step is one change on its own branch, with its tests.
    `DemoSceneOptions` with `for_point_count`, and `DemoScene::render` with the
    tinted texture and the JPEG encode and decode. Tests: the rendered
    photographs are the same bytes on two runs and across thread counts; the
-   five JPEGs match XXH128 hashes stored in the test, checked on every CI
-   platform, so that the x86 AVX2 encoder path and the arm64 scalar one are
-   checked against each other; `photographs()` is `decode_rgb` of
+   five JPEGs match XXH128 hashes stored in the test for each encoder path,
+   checked on every CI platform, so that the x86 AVX2 encoder path and the
+   arm64 scalar one are each checked; `photographs()` is `decode_rgb` of
    `encoded_photographs()`; a facing pixel's colour in the render is the
    texture at the point its centre ray hits, to within the supersampling's
    blur; each surface's grey is its tint's luma times the noise factor; the
@@ -921,8 +922,9 @@ Each step is one change on its own branch, with its tests.
    measurement out; the value saves, verifies and loads back equal, with the
    workspace directory set; the image file hashes match the written files; the
    thumbnails, readings and bitmaps are those computed from the written files
-   decoded again; the photograph-derived columns match stored values within a
-   tolerance of one level on every CI platform.
+   decoded again; the photograph-derived columns match the values stored for
+   the encoder path taken, within a tolerance of one level, on every CI
+   platform.
 3. **Python binding.** `DemoScene` in `sfmtool.reconstruction`, its row in
    [python-bindings.md](../python-bindings.md) and its entry in
    [test_reconstruction_patches_registration.py](../../tests/rust_bindings/reconstruction/test_reconstruction_patches_registration.py),
