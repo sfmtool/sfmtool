@@ -723,7 +723,7 @@ fn a_save_writes_the_value_s_own_measurements() {
     let demo = SfmrReconstruction::demo(1);
     recon.image_set.image_to_gray = demo.image_set.image_to_gray.clone();
     for image in &mut recon.image_set.images {
-        image.readings = demo.image_set.images[0].readings.clone();
+        image.readings = demo.image_set.images[0].readings;
     }
     let id = state.append_node(SceneNode::from_path(&path, recon));
     let first = crate::measurements::MeasurementRef::distance(id, 0);
