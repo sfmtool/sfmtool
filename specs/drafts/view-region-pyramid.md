@@ -586,7 +586,7 @@ each moved reader wraps the pyramid it gets in a `TiledPhotograph`
 the main draft's step 13 makes the cache hand out tiled photographs only, and
 there is no whole pyramid for any reader to fall back on. That step is five
 pull requests: 13a makes the cache's slot cancellable (built), 13b bounds the
-decodes in progress by the build budget, 13c and 13d move the panels to the
+decodes in progress by the build budget (built), 13c and 13d move the panels to the
 cache's layout and tile requests while it still holds whole pyramids, and
 13e replaces the pyramids with tiles, which is where the tests of this
 draft's step 5 that count decodes run.
