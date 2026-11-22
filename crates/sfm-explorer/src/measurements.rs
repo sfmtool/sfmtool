@@ -607,8 +607,9 @@ pub(crate) fn world_endpoints(
 }
 
 /// Where each distance measurement of `recon` goes when image `removed` is
-/// deleted: `None` for a row with an endpoint in it, which the subset drops,
-/// and otherwise its index among the rows that survive, in stored order, as
+/// deleted: `None` for a row with an endpoint in it or past the image set,
+/// which the subset drops, and otherwise its index among the rows that
+/// survive, in stored order, as
 /// `SfmrReconstruction::subset_by_image_indices` keeps them.
 pub(crate) fn distance_rows_after_deleting_image(
     recon: &SfmrReconstruction,
