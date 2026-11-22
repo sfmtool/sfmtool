@@ -30,8 +30,8 @@ pub(crate) mod open;
 #[cfg(test)]
 pub(crate) use photograph_requests::TaskQueue;
 pub(crate) use photograph_requests::{
-    display_layout, display_level, display_photograph, display_tiles, prefetch_tiles,
-    DisplayLayout, DisplayLevel, DisplayPhotograph, DisplayTile, PhotographRequests,
+    display_layout, display_level, display_photograph, display_tiles, prefetch_tiles, read_peeked,
+    DisplayLayout, DisplayLevel, DisplayPhotograph, DisplayTile, PeekedRead, PhotographRequests,
     PhotographSource,
 };
 mod ops;
@@ -736,9 +736,10 @@ pub(crate) struct AppState {
     /// read on the rayon pool and that are still being read, so each is asked
     /// for once, and the tiles and the level those reads answered. The panels
     /// read through [`display_layout`] with [`display_tiles`] (Image Detail)
-    /// or [`display_level`] (the 3D view's camera-view background), which
-    /// never decode on the GUI thread, and [`display_photograph`] (Track View
-    /// and the Track Table), which does only under a cache of budget 0.
+    /// or [`display_level`] (the 3D view's camera-view background) or
+    /// [`read_peeked`] (Track View), which never decode on the GUI thread,
+    /// and [`display_photograph`] (the Track Table and Measurement View's
+    /// endpoint crops), which does only under a cache of budget 0.
     pub(crate) photograph_requests: PhotographRequests,
 
     /// Whether the "Load Demo Data" dialog is currently open.

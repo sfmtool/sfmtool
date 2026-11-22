@@ -676,47 +676,6 @@ impl TabContext<'_> {
         }
     }
 
-    /// Ask for the photographs the focused bench track's rows draw their tiles
-    /// from to be decoded into the viewer's photograph cache, on the rayon
-    /// pool ([`crate::state::display_photograph`]).
-    ///
-    /// Here rather than in the panel for the reason the viewed track's
-    /// pre-cache is here: the panel only peeks at the cache while it draws, and never waits
-    /// on a decode. The images are the ones that track's observations name,
-    /// each decoded once for the whole viewer; a decode that lands repaints,
-    /// and the panel draws its tile on that frame.
-    fn cache_bench_track_images(&mut self, ctx: &egui::Context) {
-        let Some(id) = self.state.selected_recon else {
-            return;
-        };
-        let Some(track) = self
-            .state
-            .focused_track_label(id)
-            .and_then(|label| self.state.bench_track(id, label))
-        else {
-            return;
-        };
-        let mut images: Vec<usize> = track
-            .observations
-            .iter()
-            .map(|o| o.image as usize)
-            .collect();
-        images.sort_unstable();
-        images.dedup();
-        let Some(node) = crate::scene::node_by_id(&self.state.scene, id) else {
-            return;
-        };
-        for img_idx in images {
-            crate::state::display_photograph(
-                &self.state.photographs,
-                &self.state.photograph_requests,
-                node.recon(),
-                img_idx,
-                ctx,
-            );
-        }
-    }
-
     /// The Image Detail tab: one image at full size with its feature and
     /// intrinsics overlays, and the selection the overlays report back.
     fn show_image_detail(&mut self, ui: &mut egui::Ui) {
@@ -1001,7 +960,7 @@ impl TabContext<'_> {
         // frame cleared it before the dock drew, so a frame that does not draw
         // this tab leaves none (`crate::bench::viewed`).
         self.state.refresh_viewed_track();
-        self.cache_track_view_images(ui.ctx());
+        self.cache_track_view_sift();
         // The node's index files, opened on sight in either mode: a `.kdf`
         // opens without decoding a tree or a descriptor block and the
         // cluster-patches file is read for its image table alone, so a session
@@ -1158,32 +1117,25 @@ impl TabContext<'_> {
         }
     }
 
-    /// Load what the mode Track View is about to draw reads from: in Viewed
-    /// mode the selected point's `.sift` positions and photographs, in Edited
-    /// mode the focused item's photographs. The `.sift` positions are read
-    /// here; the photographs are asked for on the rayon pool, and `ctx` is
-    /// repainted when each lands.
+    /// Load the `.sift` positions of every image observing the selected point
+    /// when Track View is about to draw it in Viewed mode. The photographs
+    /// its tiles and crops are cut from are asked for by the panel as it
+    /// draws them, a picture at a time (`crate::state::read_peeked`).
     ///
-    /// Here rather than in the panel because filling the caches needs
+    /// Here rather than in the panel because filling the SIFT cache needs
     /// `&mut AppState` and the panel is handed `&AppState` while it draws.
-    fn cache_track_view_images(&mut self, ctx: &egui::Context) {
+    fn cache_track_view_sift(&mut self) {
         let Some(id) = self.state.selected_recon else {
             return;
         };
-        let editing = self.state.focused_track_label(id).is_some();
-        if editing {
-            self.cache_bench_track_images(ctx);
-        } else {
-            self.cache_selected_point_images(id, ctx);
+        if self.state.focused_track_label(id).is_none() {
+            self.cache_selected_point_sift(id);
         }
     }
 
-    /// Load what the viewed track reads for the selected point: the `.sift`
-    /// positions of every observing image and, where the reconstruction
-    /// carries patch frames, a request for the photographs its tiles and
-    /// crops are cut from. A frameless point is refused by the evaluation and
-    /// draws no tile, so its photographs are not asked for.
-    fn cache_selected_point_images(&mut self, id: ReconId, ctx: &egui::Context) {
+    /// Load the `.sift` positions of every image observing the selected
+    /// point, which the viewed track reads.
+    fn cache_selected_point_sift(&mut self, id: ReconId) {
         let Some(node) = crate::scene::node_by_id(&self.state.scene, id) else {
             return;
         };
@@ -1206,17 +1158,6 @@ impl TabContext<'_> {
                     ImageRef::new(id, img_idx),
                     need,
                     &self.frame,
-                );
-            }
-        }
-        if recon.point_set.patch_u_halfvec_xyz.is_some() {
-            for img_idx in node.edited().track_image_indices(pt_idx as u32) {
-                crate::state::display_photograph(
-                    &self.state.photographs,
-                    &self.state.photograph_requests,
-                    recon,
-                    img_idx,
-                    ctx,
                 );
             }
         }

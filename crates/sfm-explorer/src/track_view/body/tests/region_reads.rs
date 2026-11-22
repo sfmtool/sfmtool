@@ -548,3 +548,135 @@ fn stretched_cluster_stage_pictures_drawn_through_regions_equal_the_whole_pyrami
     assert!(rows_reading_coarser_levels(&state, id, &label) > 0);
     drawn_pictures_equal_the_whole_pyramids(&state, id, &label);
 }
+
+/// A row whose photograph's tiles are not there yet draws its tile and crop
+/// cells empty, their loading state, with no failure, while the other rows
+/// draw their pictures; its photograph's layout is asked for once however
+/// many frames look, nothing is decoded on the GUI thread, and once the
+/// photograph is there the next frame draws the row's pictures with nothing
+/// more asked for.
+#[test]
+fn a_row_whose_tiles_are_not_there_draws_its_loading_state_and_asks_once() {
+    let (mut state, id, label, _, _) = on_the_bench();
+    let (requests, queue) = crate::state::PhotographRequests::queued();
+    state.photograph_requests = requests;
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let image = track.observations[0].image as usize;
+    let recon = state.node(id).expect("loaded").recon();
+    let path = crate::state::photograph_path(recon, image).expect("a path");
+    let pyramid = state.cached_photograph(id, image).expect("cached");
+    state.photographs.forget(&path);
+    let decodes = state.photographs.stats().decodes;
+
+    let mut panel = TrackBody::new();
+    let ctx = egui::Context::default();
+    let mut uploaded = Uploaded::new();
+    for _ in 0..3 {
+        frame(&mut panel, &ctx, &state, Vec::new(), &mut uploaded);
+        assert!(!panel.tiles.contains_key(&0) && !panel.crops.contains_key(&0));
+        assert!(panel.read_failure(0).is_none());
+        for observation in 1..track.observations.len() {
+            assert!(panel.tiles[&observation].is_some());
+            assert!(panel.crops[&observation].is_some());
+        }
+    }
+    assert_eq!(queue.len(), 1, "one header read, asked for once");
+    assert_eq!(state.photographs.stats().decodes, decodes, "no decode here");
+
+    // The photograph lands, as the decode the next frames would ask for
+    // puts it in the cache.
+    state.photographs.insert(&path, pyramid);
+    frame(&mut panel, &ctx, &state, Vec::new(), &mut uploaded);
+    assert!(panel.tiles[&0].is_some() && panel.crops[&0].is_some());
+    assert_eq!(queue.len(), 1, "nothing more asked for");
+    assert_eq!(state.photographs.stats().decodes, decodes);
+}
+
+/// A row whose photograph cannot be read, found once its header read has run
+/// off the GUI thread, draws the cells' error state, its hover saying why.
+#[test]
+fn a_row_whose_photograph_file_cannot_be_read_draws_the_cells_error_state() {
+    let (mut state, id, label, _, _) = on_the_bench();
+    let (requests, queue) = crate::state::PhotographRequests::queued();
+    state.photograph_requests = requests;
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let image = track.observations[0].image as usize;
+    let recon = state.node(id).expect("loaded").recon();
+    let path = crate::state::photograph_path(recon, image).expect("a path");
+    assert!(
+        !path.exists(),
+        "the fixture's photographs are only in the cache"
+    );
+    state.photographs.forget(&path);
+
+    let mut panel = TrackBody::new();
+    let ctx = egui::Context::default();
+    let mut uploaded = Uploaded::new();
+    frame(&mut panel, &ctx, &state, Vec::new(), &mut uploaded);
+    assert!(panel.read_failure(0).is_none());
+    assert_eq!(queue.run_off_this_thread(), 1, "the header read");
+    let texts = super::painted(&mut panel, &ctx, &state, Vec::new());
+    assert!(panel.tiles[&0].is_none() && panel.crops[&0].is_none());
+    assert_eq!(
+        panel.read_failure(0),
+        Some(super::super::UNREADABLE_PHOTOGRAPH)
+    );
+    let unreadable = texts
+        .iter()
+        .filter(|t| *t == super::super::table::READ_FAILURE_CELL)
+        .count();
+    assert_eq!(unreadable, 2, "{texts:?}");
+}
+
+/// The hover views of a row whose tile and crop are drawn but whose
+/// photograph the cache has since dropped say that the photograph is
+/// loading, rather than that nothing could be rendered, ask for its layout
+/// once, and are drawn once the photograph is back.
+#[test]
+fn a_hover_view_whose_tiles_are_not_there_says_it_is_loading() {
+    let (mut state, id, label, _, _) = on_the_bench();
+    let (requests, queue) = crate::state::PhotographRequests::queued();
+    state.photograph_requests = requests;
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let image = track.observations[0].image as usize;
+    let recon = state.node(id).expect("loaded").recon();
+    let path = crate::state::photograph_path(recon, image).expect("a path");
+    let pyramid = state.cached_photograph(id, image).expect("cached");
+
+    let mut panel = TrackBody::new();
+    let ctx = egui::Context::default();
+    ctx.all_styles_mut(|style| {
+        style.interaction.tooltip_delay = 0.0;
+        style.interaction.tooltip_grace_time = 0.0;
+    });
+    let y = row_y(&mut panel, &ctx, &state, image);
+    assert!(panel.tiles[&0].is_some() && panel.crops[&0].is_some());
+    state.photographs.forget(&path);
+    let layout = ColumnLayout::new();
+    let loading = super::super::table::HOVER_LOADING.to_string();
+    for x in [layout.tile_x(), layout.crop_x()] {
+        let at = egui::pos2(x + TILE_SIZE / 2.0 + 8.0, y + 20.0);
+        let mut texts = Vec::new();
+        for _ in 0..14 {
+            texts = super::painted(
+                &mut panel,
+                &ctx,
+                &state,
+                vec![egui::Event::PointerMoved(at)],
+            );
+        }
+        assert!(texts.contains(&loading), "{loading:?} not in {texts:?}");
+    }
+    assert!(!panel.contexts.contains_key(&0) && !panel.crop_contexts.contains_key(&0));
+    assert!(panel.read_failure(0).is_none());
+    assert_eq!(queue.len(), 1, "one header read, asked for once");
+
+    state.photographs.insert(&path, pyramid);
+    let mut uploaded = Uploaded::new();
+    for x in [layout.tile_x(), layout.crop_x()] {
+        let at = egui::pos2(x + TILE_SIZE / 2.0 + 8.0, y + 20.0);
+        hover(&mut panel, &ctx, &state, at, &mut uploaded);
+    }
+    assert!(panel.contexts[&0].is_some() && panel.crop_contexts[&0].is_some());
+    assert_eq!(queue.len(), 1, "nothing more asked for");
+}

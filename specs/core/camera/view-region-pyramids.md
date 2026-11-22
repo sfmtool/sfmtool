@@ -17,9 +17,11 @@ pixels, the reuse of kept regions across renders, and the entry points,
 [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md)
 and its companion [view-region-pyramid.md](../../drafts/view-region-pyramid.md)
 propose moving the kernels and panels onto them. Today the entry points read
-photographs made in memory. Track View and the Track Table read the
-photograph cache's whole pyramids through `TiledPhotograph::from_pyramid` and
-draw every tile, crop and hover view through the entry points
+photographs made in memory. Track View reads a photograph made of the
+photograph tiles it peeked in the photograph cache, through
+`TiledPhotograph::from_tiles`, and the Track Table reads the cache's whole
+pyramids through `TiledPhotograph::from_pyramid`; both draw every tile, crop
+and hover view through the entry points
 ([gui/track-view.md](../../gui/track-view.md),
 [gui/track-table.md](../../gui/track-table.md)). Every patch kernel reads a
 `TiledPhotograph` through its `ProjectedImage`, and the bench's own reads go
@@ -80,10 +82,21 @@ pub struct TiledPhotograph { /* … */ }
 impl TiledPhotograph {
     pub fn from_image(image: ImageU8) -> Self;              // its full-depth pyramid
     pub fn from_pyramid(pyramid: Arc<ImageU8Pyramid>) -> Self; // a whole pyramid, read in place
+    /// The photograph tiles `tiles` of `layout`'s photograph, held, and no
+    /// other pixel; refuses no tiles, tiles of different channels and a tile
+    /// the layout does not have or place as the tile says.
+    pub fn from_tiles(layout: PyramidLayout,
+        tiles: impl IntoIterator<Item = Arc<PhotographTile>>) -> Result<Self, PhotographReadError>;
     pub fn layout(&self) -> &PyramidLayout;
     pub fn channels(&self) -> u32;
 }
-pub enum PhotographReadError { Cancelled, OutOfRange { path: Option<PathBuf>, why: String } }
+pub enum PhotographReadError {
+    Cancelled,
+    OutOfRange { path: Option<PathBuf>, why: String },
+    /// Every tile the read needs, which a photograph made by `from_tiles`
+    /// does not all hold.
+    NeedsTiles { keys: Vec<TileKey> },
+}
 
 pub const REGION_REUSE_MARGIN: f64 = 0.25;
 pub const REGION_POOL_BYTES_PER_THREAD: u64 = 4 * 512 * 512 * 3;
@@ -174,7 +187,14 @@ a time and copies nothing. The panels' reads on the GUI thread are not one
 kernel call but many small ones a frame, so each panel owns one pool of
 `REGION_POOL_BYTES_PER_THREAD` that all of them share, and makes a
 `ViewRegions` for each picture it cuts, dropped once the picture is cut: a
-panel keeps the picture, not the regions. `sample_source_member_grid` is the
+panel keeps the picture, not the regions. A panel renders on the GUI thread,
+which must never decode, from what the photograph cache holds, which another
+thread can evict at any time, so Track View renders from a photograph made
+by `from_tiles` of the tiles it peeked, which holds them for the render; a
+read of it that needs a tile it does not hold is refused with `NeedsTiles`
+before any pixel is read, naming every tile the read needs, so the panel
+learns them from the read itself, with no second copy of the region logic,
+and asks for them together. `sample_source_member_grid` is the
 cluster member grid's read for a caller that is not the cluster refinement,
 which keeps its own level rule private; Track View's cluster-stage tiles call
 it.
@@ -330,6 +350,21 @@ looks up a tile only when a tap leaves the last tile used. Its rows run in
 order on the calling thread, so the window has one owner. A tile read that
 fails is remembered, its taps read as 0, and the entry point returns the error
 instead of the result.
+
+**Photographs made of tiles.** `from_tiles` keeps its tiles by key and
+answers a tile read with the tile it holds. Every entry point that goes
+through the kept regions works out, before its reservation, the tiles under
+its regions grown by `REGION_REUSE_MARGIN`, the tiles a copied read
+assembles them from, and refuses with `NeedsTiles` when the photograph does
+not hold all of them; a read that reuses kept regions reads no tile, and the
+tile path's taps lie inside the ungrown regions, so a read that passes the
+check takes either path with the tiles it holds. `read_source_rect` checks
+the tiles under its rectangle. A rectangle is assembled from the part of each
+tile's core inside it, so the pixels are the level's. `NeedsTiles` names
+every tile the read needs, held or not, so a caller makes the photograph
+again of those and the read runs; a photograph of no tiles is refused, since
+its channels are its tiles', so a caller that does not know the tiles a read
+needs yet makes one of the coarsest level's first tile.
 
 **Photographs in memory.** `from_image` builds the image's pyramid of
 `ImageU8Pyramid::full_levels` depth; `from_pyramid` reads a whole pyramid in
