@@ -14,6 +14,7 @@ from sfmtool.bench import (
     commit_measurement,
     parse_stated_distance,
     put_measurement,
+    set_measurement_endpoint,
     set_measurement_label,
     set_stated_distance,
 )
@@ -162,3 +163,22 @@ def test_a_typed_distance_reads_its_unit_or_the_bare_one():
         parse_stated_distance("3yd")
     with pytest.raises(ValueError, match="must be finite and strictly positive"):
         parse_stated_distance("-1cm")
+
+
+def test_setting_an_endpoint_gives_a_new_item_or_refuses(edited):
+    _, item = put_measurement(Bench(), edited, "distance", 0)
+    moved = set_measurement_endpoint(edited, item, 1, 5, (12.5, 40.0))
+    assert moved.endpoints == [(0, (10.5, 20.25)), (5, (12.5, 40.0))]
+    assert item.endpoints[1] == (3, (100.0, 200.5))
+    assert moved.distance == item.distance
+    assert moved.label == item.label
+    nxt, report = commit_measurement(edited, moved, 0)
+    assert report["wrote"] is True
+    stored = nxt.materialize()[0].measurements["distance"]
+    assert stored["image_indexes"][0].tolist() == [0, 5]
+    with pytest.raises(ValueError, match=r"endpoint B's pixel \(-1, 3\) is outside"):
+        set_measurement_endpoint(edited, item, 1, 5, (-1.0, 3.0))
+    with pytest.raises(ValueError, match="past the reconstruction's"):
+        set_measurement_endpoint(edited, item, 0, 999, (1.0, 1.0))
+    with pytest.raises(ValueError, match="there is no endpoint 2"):
+        set_measurement_endpoint(edited, item, 2, 0, (1.0, 1.0))

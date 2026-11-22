@@ -1,8 +1,9 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for `SfmrReconstruction.resolve_measurement_endpoint` and
-`SfmrReconstruction.resolve_distance_measurements` on the seoul_bull ground truth."""
+"""Tests for `SfmrReconstruction.resolve_measurement_endpoint`,
+`SfmrReconstruction.resolve_distance_measurements` and
+`SfmrReconstruction.measurement_endpoint_views` on the seoul_bull ground truth."""
 
 import numpy as np
 import pytest
@@ -87,3 +88,35 @@ def test_distance_measurements_resolve_with_their_scene_distance(recon):
         float(np.linalg.norm(np.subtract(ends[0], ends[1]))), rel=1e-12
     )
     assert m["scene_distance"] > 0
+
+
+def test_the_views_of_a_keypoint_are_the_other_keypoints_of_its_track(recon):
+    (j,) = _finite_rows(recon, 1)
+    image = int(recon.track_image_indexes[j])
+    point = int(recon.track_point_indexes[j])
+    x, y = (float(v) for v in recon.keypoints_xy[j])
+    res = recon.resolve_measurement_endpoint(image, (x, y))
+    chosen = res["candidates"][res["chosen"]]["point"]
+
+    views = recon.measurement_endpoint_views(image, (x, y))
+
+    assert views[0]["point"] == chosen
+    own = [v for v in views if v["point"] == point]
+    rows = np.flatnonzero(recon.track_point_indexes == point)
+    assert 0 < len(own) <= len(rows) - 1
+    for v in own:
+        # The texel is the keypoint's own, (0, 0), so each other square holds
+        # it at that observation's keypoint.
+        row = rows[v["observation"]]
+        assert v["image"] == int(recon.track_image_indexes[row])
+        assert v["image"] != image
+        np.testing.assert_allclose(v["pixel"], recon.keypoints_xy[row], atol=1e-2)
+        assert v["resolves_elsewhere"] == (v["resolves_to"] != point)
+        if not v["resolves_elsewhere"]:
+            moved = recon.resolve_measurement_endpoint(v["image"], v["pixel"])
+            assert moved["candidates"][moved["chosen"]]["point"] == point
+
+
+def test_the_views_refuse_as_the_resolver_does(recon):
+    with pytest.raises(ValueError, match="place the endpoint inside the image"):
+        recon.measurement_endpoint_views(0, (-1.0, 10.0))

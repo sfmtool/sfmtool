@@ -16,7 +16,10 @@ whose squares hold the pixel, picks one, and returns the texel and the 3D point
 it stands for. When no observation's square holds the pixel, it refuses and
 gives the reason in a sentence a person can act on; in SfM Explorer the usual
 remedy is **Create Track Here** at the endpoint's pixel, which builds a track
-with an observation centred on it.
+with an observation centred on it. The same mapping run backwards gives, for
+each candidate, the pixels in the point's other photographs that show the same
+texel, where the endpoint can move to without moving on the surface (§ "The
+views of an endpoint").
 
 The candidates are only the observations in the endpoint's own image. Patches
 with no observation in the image are not candidates. Usually exactly one
@@ -125,6 +128,28 @@ pub fn resolve_distance_endpoints(
     endpoints: [(u32, [f64; 2]); 2],
     options: &MeasurementEndpointOptions,
 ) -> ResolvedDistanceMeasurement;
+
+/// Another observation of a candidate's point, at the pixel where its square
+/// holds the candidate's texel.
+pub struct EndpointView {
+    pub point: u32,
+    pub observation: usize,             // within the point's track
+    pub image: u32,
+    pub pixel: [f64; 2],
+    pub patch_coords: [f64; 2],         // the candidate's (s, t)
+    pub localization: Option<f64>,      // the observation's stored ℓ; None unread
+    pub viewing_angle_deg: Option<f64>,
+    pub resolves_to: Option<u32>,       // the resolver's pick at that pixel
+}
+impl EndpointView { pub fn resolves_elsewhere(&self) -> bool; }
+/// The pixels in other images that hold the same texel of each candidate's
+/// patch as `(image, pixel)` does.
+pub fn endpoint_views(
+    edited: &EditedReconstruction,
+    image: u32,
+    pixel: [f64; 2],
+    options: &MeasurementEndpointOptions,
+) -> Result<Vec<EndpointView>, EndpointRefusal>;
 ```
 
 `resolve_distance_measurements` reads the value's measurements
@@ -338,10 +363,54 @@ measured by the harness in
 | `placeholder_normal_factor` | `4.0` | A placeholder normal can be off by tens of degrees. |
 | `reference_view` | `ReferenceViewOptions::default()` | The cost reads its `angle_weight`, `capped_radius_factor`, `unread_radius`, `agreement_band` and `agreement_scale`: the same readings, read the same way as the rule reads them. Its other fields do not apply. |
 
+## The views of an endpoint
+
+`endpoint_views` runs the mapping of § "From the pixel to a texel" backwards,
+so that an endpoint can move to another photograph without moving on the
+surface. SfM Explorer's *Switch image…* popup lists what it returns
+([../../gui/measurement-view.md](../../gui/measurement-view.md) § "Switching
+an endpoint's image").
+
+**Which observations are offered.** The resolver's candidates at `(image,
+pixel)`, chosen or not, excluded or not, each a texel `(s, t)` of its point's
+patch. For each, every other observation `k` of the point gives one view: its
+square, the patch slid onto `k`'s keypoint and seen through `k`'s image's own
+intrinsics (`seen_at_keypoint`, as § "From the pixel to a texel" builds it),
+holds the texel at `A_k + s·u + t·v`, and the view's pixel is where that place
+projects in `k`'s image. The resolver at that pixel solves the same system for
+the same square and finds the same `(s, t)`, so a switch keeps the point and
+the texel unless another square holds the pixel there and wins. For a point
+at infinity the place is the direction `p_k + s·u + t·v`, projected as a ray.
+
+**A view is dropped** where its image has no pose, where the place projects
+outside `[0, width) × [0, height)` of the image or behind the camera, and
+where the square faces away from that camera along the ray to the place
+(`n · d ≥ 0`, the resolver's back-facing test), since the resolver would not
+use that square there.
+
+**What each view carries.** The observation's own stored `ℓ`, read as the
+cost reads it (§ "The cost"), or `None` where it has no reading; the viewing
+angle of its square from its camera; and `resolves_to`, the point the
+resolver picks at the view's pixel, `None` where it refuses the pixel there.
+`resolves_elsewhere` is whether that is not the view's own point: another
+square holds the pixel in that photograph and wins the ranking, or none is
+eligible. The views of the chosen candidate's point come first, then the
+others' in the resolver's order of candidates, each in the order of its
+point's track.
+
+**It shares the resolver's refusals.** Where the endpoint itself is refused
+there is no texel to carry anywhere, and the caller shows the same sentence
+for both.
+
+**Cost of a call.** One resolver call per view, run in parallel, so a call
+costs about as many resolutions as the candidates' tracks have observations.
+A caller computes the views when they are asked for, not every frame.
+
 ## Python bindings
 
-`SfmrReconstruction.resolve_measurement_endpoint(image, xy, **options)` and
-`SfmrReconstruction.resolve_distance_measurements(**options)`, in
+`SfmrReconstruction.resolve_measurement_endpoint(image, xy, **options)`,
+`SfmrReconstruction.resolve_distance_measurements(**options)` and
+`SfmrReconstruction.measurement_endpoint_views(image, xy, **options)`, in
 [`reconstruction/measurement_endpoint.rs`](../../../crates/sfmtool-py/src/reconstruction/measurement_endpoint.rs).
 The options are keywords named as the fields above, with the reference-view
 fields flat (`angle_weight`, `capped_radius_factor`, `unread_radius`,
@@ -351,7 +420,10 @@ fields flat (`angle_weight`, `capped_radius_factor`, `unread_radius`,
 `"excluded"`, `exclusion` and `cost`. The single endpoint raises `ValueError`
 with the refusal's sentence; the batch gives each measurement's `endpoints`
 (`None` where refused), `refusals` (the sentence, `None` where resolved) and
-`scene_distance`. Each call wraps a copy of the reconstruction in an
+`scene_distance`. The views are a list of dicts of `EndpointView`'s fields,
+`pixel` and `patch_coords` as pairs, with `resolves_elsewhere` beside
+`resolves_to`; a refusal raises `ValueError` with its sentence. Each call
+wraps a copy of the reconstruction in an
 `EditedReconstruction`. The logic stays in Rust.
 
 ## Testing
@@ -377,6 +449,15 @@ on synthetic reconstructions of two posed cameras and a few patches:
   measurement with such an endpoint has no `scene_distance`.
 - A similarity transform keeps every texel, moves every position with it, and
   scales `scene_distance` and every cost by its scale.
+- The views of an endpoint on a known texel land at the pixels where the other
+  observations' squares, slid onto their keypoints, hold that texel, each with
+  its stored `ℓ`; the resolver at each finds the same point and texel.
+- A view whose texel lands outside its image, and one whose square faces away
+  from its camera, are dropped.
+- A view whose pixel another square holds and wins there resolves elsewhere.
+- Every candidate is offered, the chosen one's views first; the views refuse as
+  the resolver does.
 
 [`tests/rust_bindings/reconstruction/test_measurement_endpoint_rust_bindings.py`](../../../tests/rust_bindings/reconstruction/test_measurement_endpoint_rust_bindings.py)
-checks the bindings on the seoul_bull ground truth.
+checks the bindings on the seoul_bull ground truth, the views of an
+observation's keypoint landing on the other keypoints of its track.

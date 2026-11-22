@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The editable measurement: a stored measurement put on the bench to be worked
-//! on, the steps that set its label and its stated distance, and the commit
-//! that writes it back.
+//! on, the steps that set its label, its stated distance and an endpoint, and
+//! the commit that writes it back.
 //!
 //! `specs/core/bench/editable-measurement.md` is the design. An
 //! [`EditableMeasurement`] holds only what the file stores of a measurement:
@@ -13,8 +13,8 @@
 //! ([`resolve_distance_endpoints`](crate::reconstruction::measurement_endpoint::resolve_distance_endpoints)).
 //!
 //! Every function here is pure, as the track's steps are: [`put_measurement`]
-//! gives back the next bench, [`set_measurement_label`] and
-//! [`set_stated_distance`] the next item, [`commit_measurement`] the next
+//! gives back the next bench, [`set_measurement_label`],
+//! [`set_stated_distance`] and [`set_measurement_endpoint`] the next item, [`commit_measurement`] the next
 //! reconstruction
 //! value, and [`delete_measurement`] the value with one row fewer, which is a
 //! direct edit of the reconstruction rather than a bench step.
@@ -377,6 +377,148 @@ pub fn set_stated_distance(
     })
 }
 
+/// The item with endpoint `side` (0 for A, 1 for B) set to `endpoint`, and
+/// nothing else changed: the step that moves an endpoint to another image and
+/// pixel, or places one that is not placed.
+///
+/// Only the image and the pixel are set. The point the endpoint lands on, its
+/// texel and its 3D position follow from them through the resolver, read
+/// against whichever version the caller stands at; a pixel no square holds is
+/// still an endpoint, as it is in the file.
+///
+/// # Errors
+///
+/// [`EndpointPlacementRefusal::NoSuchEndpoint`] for a side other than 0 and 1,
+/// and the commit's own refusals of an endpoint
+/// ([`MeasurementCommitRefusal::NoSuchImage`],
+/// [`MeasurementCommitRefusal::PixelOutsideImage`]) in its sentences: an
+/// image past the image set, and a pixel that is not inside
+/// `[0, width) × [0, height)` of that image's camera as the `float32` the file
+/// will hold.
+///
+/// ```
+/// use std::sync::Arc;
+/// use sfmtool_core::bench::{
+///     set_measurement_endpoint, EditableDistance, EditableMeasurement,
+///     EditableMeasurementBody, MeasurementEndpoint,
+/// };
+/// use sfmtool_core::reconstruction::EditedReconstruction;
+/// use sfmtool_core::{LengthUnit, SfmrReconstruction};
+///
+/// let edited = EditedReconstruction::new(Arc::new(SfmrReconstruction::demo(10)));
+/// let item = EditableMeasurement {
+///     origin: None,
+///     label: String::new(),
+///     body: EditableMeasurementBody::Distance(EditableDistance {
+///         endpoints: [Some(MeasurementEndpoint { image: 0, pixel: [10.0, 12.5] }), None],
+///         distance: Some((12.0, LengthUnit::Centimetre)),
+///     }),
+/// };
+/// let moved = MeasurementEndpoint { image: 1, pixel: [40.0, 30.5] };
+/// let next = set_measurement_endpoint(&edited, &item, 0, moved).unwrap();
+/// assert_eq!(next.as_distance().unwrap().endpoints[0], Some(moved));
+/// let outside = MeasurementEndpoint { image: 1, pixel: [-1.0, 30.5] };
+/// assert!(set_measurement_endpoint(&edited, &item, 0, outside).is_err());
+/// ```
+pub fn set_measurement_endpoint(
+    edited: &EditedReconstruction,
+    item: &EditableMeasurement,
+    side: usize,
+    endpoint: MeasurementEndpoint,
+) -> Result<EditableMeasurement, EndpointPlacementRefusal> {
+    if side > 1 {
+        return Err(EndpointPlacementRefusal::NoSuchEndpoint { side });
+    }
+    check_endpoint(edited, side, endpoint)?;
+    let EditableMeasurementBody::Distance(held) = &item.body;
+    let mut endpoints = held.endpoints;
+    endpoints[side] = Some(endpoint);
+    Ok(EditableMeasurement {
+        body: EditableMeasurementBody::Distance(EditableDistance {
+            endpoints,
+            distance: held.distance,
+        }),
+        ..item.clone()
+    })
+}
+
+/// Why an endpoint cannot be set to an image and a pixel
+/// ([`set_measurement_endpoint`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum EndpointPlacementRefusal {
+    /// The side is neither 0 (A) nor 1 (B).
+    NoSuchEndpoint {
+        /// The side asked for.
+        side: usize,
+    },
+    /// The image is past the image set, or the pixel is outside the image:
+    /// the commit's refusal of such an endpoint, in its sentence.
+    Outside(MeasurementCommitRefusal),
+}
+
+impl std::fmt::Display for EndpointPlacementRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EndpointPlacementRefusal::NoSuchEndpoint { side } => write!(
+                f,
+                "a distance has endpoints 0 (A) and 1 (B), so there is no endpoint {side}"
+            ),
+            EndpointPlacementRefusal::Outside(refusal) => write!(f, "{refusal}"),
+        }
+    }
+}
+
+impl std::error::Error for EndpointPlacementRefusal {}
+
+impl From<MeasurementCommitRefusal> for EndpointPlacementRefusal {
+    fn from(refusal: MeasurementCommitRefusal) -> Self {
+        EndpointPlacementRefusal::Outside(refusal)
+    }
+}
+
+/// Whether `endpoint`, on `side`, names an image of `base` and a pixel inside
+/// `[0, width) × [0, height)` of its camera as the `float32` the file will
+/// hold: what the commit asks of each endpoint, and what
+/// [`set_measurement_endpoint`] asks of the one it sets.
+fn check_endpoint(
+    base: &EditedReconstruction,
+    side: usize,
+    endpoint: MeasurementEndpoint,
+) -> Result<(), MeasurementCommitRefusal> {
+    let images = &base.base.image_set;
+    let image = endpoint.image;
+    let no_such_image = MeasurementCommitRefusal::NoSuchImage {
+        side,
+        image,
+        image_count: images.image_count(),
+    };
+    let camera = images
+        .images
+        .get(image as usize)
+        .and_then(|i| images.cameras.get(i.camera_index as usize))
+        .ok_or(no_such_image)?;
+    let [x, y] = endpoint.pixel;
+    // The pixel the file will hold is the `float32` one, so that is the one
+    // checked against the bounds.
+    let (xf, yf) = (x as f32, y as f32);
+    let inside = xf.is_finite()
+        && yf.is_finite()
+        && xf >= 0.0
+        && xf < camera.width as f32
+        && yf >= 0.0
+        && yf < camera.height as f32;
+    if !inside {
+        return Err(MeasurementCommitRefusal::PixelOutsideImage {
+            side,
+            image,
+            pixel: endpoint.pixel,
+            width: camera.width,
+            height: camera.height,
+        });
+    }
+    Ok(())
+}
+
 /// Whether `distance` is finite and strictly positive as the `float32` the
 /// file stores it as.
 fn stated_distance_is_positive(distance: f64) -> bool {
@@ -694,7 +836,6 @@ fn checked_distance(
     origin_row: Option<u32>,
 ) -> Result<([MeasurementEndpoint; 2], f64, LengthUnit), MeasurementCommitRefusal> {
     let EditableMeasurementBody::Distance(distance) = &item.body;
-    let images = &base.base.image_set;
     let mut placed = [MeasurementEndpoint {
         image: 0,
         pixel: [0.0; 2],
@@ -702,36 +843,7 @@ fn checked_distance(
     for (side, endpoint) in distance.endpoints.iter().enumerate() {
         let endpoint = endpoint.ok_or(MeasurementCommitRefusal::EndpointNotPlaced { side })?;
         placed[side] = endpoint;
-        let image = endpoint.image;
-        let no_such_image = MeasurementCommitRefusal::NoSuchImage {
-            side,
-            image,
-            image_count: images.image_count(),
-        };
-        let camera = images
-            .images
-            .get(image as usize)
-            .and_then(|i| images.cameras.get(i.camera_index as usize))
-            .ok_or(no_such_image)?;
-        let [x, y] = endpoint.pixel;
-        // The pixel the file will hold is the `float32` one, so that is the
-        // one checked against the bounds.
-        let (xf, yf) = (x as f32, y as f32);
-        let inside = xf.is_finite()
-            && yf.is_finite()
-            && xf >= 0.0
-            && xf < camera.width as f32
-            && yf >= 0.0
-            && yf < camera.height as f32;
-        if !inside {
-            return Err(MeasurementCommitRefusal::PixelOutsideImage {
-                side,
-                image,
-                pixel: endpoint.pixel,
-                width: camera.width,
-                height: camera.height,
-            });
-        }
+        check_endpoint(base, side, endpoint)?;
     }
     let (stated, unit) = distance
         .distance
