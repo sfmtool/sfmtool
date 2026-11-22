@@ -433,10 +433,10 @@ pub fn parse_stated_distance(
     let unreadable = || StatedDistanceRefusal::Unreadable {
         text: trimmed.to_string(),
     };
-    let suffix_start = trimmed
-        .rfind(|c: char| !c.is_ascii_lowercase())
-        .map_or(0, |i| i + 1);
-    let (number, suffix) = trimmed.split_at(suffix_start);
+    // Split on characters, not bytes, so text holding a multi-byte character
+    // is refused rather than cut inside one.
+    let number = trimmed.trim_end_matches(|c: char| c.is_ascii_lowercase());
+    let suffix = &trimmed[number.len()..];
     let number = number.trim_end();
     if !is_decimal_number(number) {
         return Err(unreadable());

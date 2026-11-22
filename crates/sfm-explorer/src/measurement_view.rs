@@ -143,11 +143,10 @@ pub(crate) const LABEL_FIELD_NAME: &str = "measurement label";
 /// The name of the edited mode's stated distance field.
 pub(crate) const DISTANCE_FIELD_NAME: &str = "measurement stated distance";
 
-/// A header field being typed in: which item and field, the text the field
-/// held when it took focus, and the text typed so far.
+/// A header field being typed in: which item, the text the field held when
+/// it took focus, and the text typed so far.
 struct FieldDraft {
     item: String,
-    field: HeaderField,
     original: String,
     text: String,
 }
@@ -222,8 +221,10 @@ pub(crate) struct MeasurementView {
     reading: Option<HeldReading>,
     /// A rename in progress: the item, and the text typed so far.
     renaming: Option<(String, String)>,
-    /// A header field being typed in.
-    draft: Option<FieldDraft>,
+    /// Each header field's typing in progress, indexed by
+    /// [`HeaderField::index`]. One per field, so moving the focus straight from
+    /// one field to the other commits the first rather than losing it.
+    drafts: [Option<FieldDraft>; 2],
     /// Where each header field was drawn on the last frame, for the tests
     /// that click one.
     fields: [Option<Rect>; 2],
@@ -321,7 +322,7 @@ impl MeasurementView {
         }
         self.reading = None;
         self.renaming = None;
-        self.draft = None;
+        self.drafts = [None, None];
         let Some(measurement) = selected else {
             self.pictures.clear();
             self.show_empty_state(ui, node, &rows, &readings.distance, &mut response);
@@ -504,10 +505,13 @@ impl MeasurementView {
         empty: &str,
         hint: &str,
     ) -> Option<String> {
-        let mine = |draft: &FieldDraft| draft.item == item && draft.field == field;
-        let mut text = match &self.draft {
-            Some(draft) if mine(draft) => draft.text.clone(),
-            _ => value.to_string(),
+        let slot = &mut self.drafts[field.index()];
+        if slot.as_ref().is_some_and(|draft| draft.item != item) {
+            *slot = None;
+        }
+        let mut text = match slot {
+            Some(draft) => draft.text.clone(),
+            None => value.to_string(),
         };
         let edit = egui::TextEdit::singleline(&mut text)
             .desired_width(180.0)
@@ -521,27 +525,26 @@ impl MeasurementView {
         };
         if shown.lost_focus() {
             let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
-            let original = match self.draft.take() {
-                Some(draft) if mine(&draft) => draft.original,
-                other => {
-                    self.draft = other;
-                    value.to_string()
-                }
-            };
+            let original = self.drafts[field.index()]
+                .take()
+                .map_or_else(|| value.to_string(), |draft| draft.original);
             return (!cancelled && text != original).then_some(text);
         }
         if shown.has_focus() {
-            match &mut self.draft {
-                Some(draft) if mine(draft) => draft.text = text,
-                _ => {
-                    self.draft = Some(FieldDraft {
+            match &mut self.drafts[field.index()] {
+                Some(draft) => draft.text = text,
+                slot => {
+                    *slot = Some(FieldDraft {
                         item: item.to_string(),
-                        field,
                         original: value.to_string(),
                         text,
                     })
                 }
             }
+        } else {
+            // Not focused, so whatever was typed here was committed or put
+            // back on the frame focus left.
+            self.drafts[field.index()] = None;
         }
         None
     }

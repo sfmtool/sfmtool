@@ -621,7 +621,22 @@ fn a_distance_reads_as_a_number_with_an_optional_unit() {
 fn a_distance_that_does_not_read_is_refused_with_why() {
     let parse = |text: &str| parse_stated_distance(text, LengthUnit::Metre);
     for unreadable in [
-        "", "cm", "abc", "inf", "nan", "12 IN", "1.2.3", "1e", "e5", "-", ".",
+        "",
+        "cm",
+        "abc",
+        "inf",
+        "nan",
+        "12 IN",
+        "1.2.3",
+        "1e",
+        "e5",
+        "-",
+        ".",
+        // Text holding a multi-byte character is refused, not cut inside one.
+        "12\u{e9}",
+        "\u{e9}",
+        "12m\u{e9}",
+        "\u{661}\u{662}",
     ] {
         // `1e` reads as the number 1 with the unit `e`, which is unknown.
         let refusal = parse(unreadable).unwrap_err();
@@ -645,6 +660,9 @@ fn a_distance_that_does_not_read_is_refused_with_why() {
         "\"12 IN\" is not a distance: give a number with an optional unit suffix, such as \
          304.8, 12in or 0.3048 m"
     );
+    // A space other than ASCII's between the number and the unit is a space.
+    assert_eq!(parse("12\u{a0}cm"), Ok((12.0, LengthUnit::Centimetre)));
+    assert_eq!(parse("12\u{2009}cm"), Ok((12.0, LengthUnit::Centimetre)));
     assert_eq!(
         parse("12yd"),
         Err(StatedDistanceRefusal::UnknownUnit {

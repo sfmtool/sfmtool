@@ -153,6 +153,11 @@ def test_a_typed_distance_reads_its_unit_or_the_bare_one():
     assert parse_stated_distance("2") == (2.0, "m")
     with pytest.raises(ValueError, match="is not a distance"):
         parse_stated_distance("twelve")
+    # Text holding a multi-byte character is refused, not cut inside one.
+    for text in ["12é", "é", "12mé", "١٢"]:
+        with pytest.raises(ValueError, match="is not a distance"):
+            parse_stated_distance(text)
+    assert parse_stated_distance("12 cm") == (12.0, "cm")
     with pytest.raises(ValueError, match='"yd" is not a unit'):
         parse_stated_distance("3yd")
     with pytest.raises(ValueError, match="must be finite and strictly positive"):

@@ -584,3 +584,50 @@ fn the_fields_are_greyed_while_a_step_would_be_refused() {
     assert!(texts.iter().any(|t| t == "ear to ear"), "{texts:?}");
     assert!(!texts.iter().any(|t| t == "x"), "{texts:?}");
 }
+
+/// Typing a distance and clicking straight into the label field commits the
+/// distance: each field keeps its own draft, so the field that gains the
+/// focus does not take the other's.
+#[test]
+fn moving_from_the_distance_field_to_the_label_field_commits_the_distance() {
+    let (mut state, id) = measured_state(Some("m"));
+    let (mut panel, ctx) = editing(&mut state, id);
+    type_over(&mut panel, &ctx, &state, HeaderField::Distance, "4.2 cm");
+    let label = panel.field_rect(HeaderField::Label).unwrap().center();
+    let moved = clicks(
+        &mut panel,
+        &ctx,
+        &state,
+        label,
+        egui::PointerButton::Primary,
+        1,
+    );
+    assert_eq!(
+        any_distance(&moved),
+        Some((id, "distance #0".to_string(), "4.2 cm".to_string()))
+    );
+    assert_eq!(any_label(&moved), None);
+}
+
+/// The same the other way: typing a label and clicking straight into the
+/// stated distance field commits the label.
+#[test]
+fn moving_from_the_label_field_to_the_distance_field_commits_the_label() {
+    let (mut state, id) = measured_state(Some("m"));
+    let (mut panel, ctx) = editing(&mut state, id);
+    type_over(&mut panel, &ctx, &state, HeaderField::Label, "paw width");
+    let distance = panel.field_rect(HeaderField::Distance).unwrap().center();
+    let moved = clicks(
+        &mut panel,
+        &ctx,
+        &state,
+        distance,
+        egui::PointerButton::Primary,
+        1,
+    );
+    assert_eq!(
+        any_label(&moved),
+        Some((id, "distance #0".to_string(), "paw width".to_string()))
+    );
+    assert_eq!(any_distance(&moved), None);
+}
