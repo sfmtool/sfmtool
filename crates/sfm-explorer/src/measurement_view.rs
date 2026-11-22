@@ -9,8 +9,9 @@
 //! selected node's bench. With it clear, the panel shows the selected stored
 //! measurement, read-only: its header, then the body for its kind. With it
 //! ticked, it shows the focused item instead, with a toolbar (*Commit*,
-//! *Discard*, *Rename*) and the item's **live readings**, read from the item
-//! rather than from a stored row. A distance measurement's body is its two
+//! *Discard*, *Rename*), fields that set its label and stated distance, and
+//! the item's **live readings**, read from the item rather than from a stored
+//! row. A distance measurement's body is its two
 //! endpoint blocks side by side, `A` and `B`, then the result block. Each
 //! block shows the endpoint's photograph and pixel, a crop of the photograph
 //! around it with a larger view on hover, the stored patch of the point it
@@ -103,6 +104,51 @@ pub(crate) struct MeasurementViewResponse {
     pub(crate) discard: Option<(ReconId, String)>,
     /// *Rename* was committed: the item, and the label it should take.
     pub(crate) rename: Option<(ReconId, String, String)>,
+    /// The label field was committed: the item, and the label it should
+    /// hold.
+    pub(crate) set_label: Option<(ReconId, String, String)>,
+    /// The stated distance field was committed: the item, and the text typed.
+    pub(crate) set_distance: Option<(ReconId, String, String)>,
+}
+
+/// One of the edited mode header's fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HeaderField {
+    /// The measurement's own label.
+    Label,
+    /// The stated distance, a number and a unit.
+    Distance,
+}
+
+impl HeaderField {
+    fn index(self) -> usize {
+        match self {
+            HeaderField::Label => 0,
+            HeaderField::Distance => 1,
+        }
+    }
+
+    /// The field's name, in the widget listing.
+    pub(crate) fn widget_name(self) -> &'static str {
+        match self {
+            HeaderField::Label => LABEL_FIELD_NAME,
+            HeaderField::Distance => DISTANCE_FIELD_NAME,
+        }
+    }
+}
+
+/// The name of the edited mode's label field.
+pub(crate) const LABEL_FIELD_NAME: &str = "measurement label";
+
+/// The name of the edited mode's stated distance field.
+pub(crate) const DISTANCE_FIELD_NAME: &str = "measurement stated distance";
+
+/// A header field being typed in: which item, the text the field held when
+/// it took focus, and the text typed so far.
+struct FieldDraft {
+    item: String,
+    original: String,
+    text: String,
 }
 
 /// Which picture of which endpoint of which version a cached picture is: the
@@ -175,6 +221,13 @@ pub(crate) struct MeasurementView {
     reading: Option<HeldReading>,
     /// A rename in progress: the item, and the text typed so far.
     renaming: Option<(String, String)>,
+    /// Each header field's typing in progress, indexed by
+    /// [`HeaderField::index`]. One per field, so moving the focus straight from
+    /// one field to the other commits the first rather than losing it.
+    drafts: [Option<FieldDraft>; 2],
+    /// Where each header field was drawn on the last frame, for the tests
+    /// that click one.
+    fields: [Option<Rect>; 2],
     /// Where each endpoint block's name was drawn on the last frame, for the
     /// tests that click one.
     names: [Option<Rect>; 2],
@@ -195,6 +248,12 @@ impl MeasurementView {
     #[cfg(test)]
     pub(crate) fn name_rect(&self, side: EndpointSide) -> Option<Rect> {
         self.names[side.index()]
+    }
+
+    /// Where the edited mode header's `field` was drawn on the last frame.
+    #[cfg(test)]
+    pub(crate) fn field_rect(&self, field: HeaderField) -> Option<Rect> {
+        self.fields[field.index()]
     }
 
     /// Where the empty state's measurement links were drawn on the last frame.
@@ -223,6 +282,7 @@ impl MeasurementView {
             response.has_pointer = ui.available_rect_before_wrap().contains(pos);
         }
         self.names = [None, None];
+        self.fields = [None, None];
         self.links.clear();
         self.toolbar.clear();
         let Some(node) = crate::scene::selected_node(&state.scene, state.selected_recon) else {
@@ -262,6 +322,7 @@ impl MeasurementView {
         }
         self.reading = None;
         self.renaming = None;
+        self.drafts = [None, None];
         let Some(measurement) = selected else {
             self.pictures.clear();
             self.show_empty_state(ui, node, &rows, &readings.distance, &mut response);
@@ -347,7 +408,9 @@ impl MeasurementView {
             .show(ui, |ui| {
                 self.show_toolbar(ui, state, node.id, label, response);
                 ui.separator();
-                show_item_header(ui, node, label, &item, origin, row.as_ref(), || {
+                show_item_origin(ui, node, label, &item, origin);
+                self.show_header_fields(ui, state, node, label, &item, response);
+                show_item_comparison(ui, row.as_ref(), || {
                     let row = row.as_ref()?;
                     let reading = reading.resolved.as_ref()?;
                     measurements::item_scale_comparison(rows, resolved, origin, row, reading)
@@ -363,6 +426,127 @@ impl MeasurementView {
                     }
                 }
             });
+    }
+
+    /// The edited mode header's two fields: the measurement's own label and
+    /// its stated distance, each greyed with the refusal a step would give
+    /// while a task holds the node or the bench is view-only.
+    fn show_header_fields(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &AppState,
+        node: &SceneNode,
+        label: &str,
+        item: &EditableMeasurement,
+        response: &mut MeasurementViewResponse,
+    ) {
+        let refusal = state.bench_edit_refusal(node.id);
+        let bare =
+            crate::bench::measurement::bare_unit(node.recon().metadata.world_space_unit.as_deref());
+        let stated = item
+            .as_distance()
+            .and_then(|d| d.distance)
+            .map_or(String::new(), |(distance, unit)| {
+                format!("{} {}", measurements::length_number(distance), unit.name())
+            });
+        egui::Grid::new("measurement_view_header_fields")
+            .num_columns(2)
+            .show(ui, |ui| {
+                ui.label("Label");
+                if let Some(to) = self.header_field(
+                    ui,
+                    label,
+                    HeaderField::Label,
+                    &item.label,
+                    refusal.as_deref(),
+                    "No label",
+                    "The measurement's own label, written into the file on commit. Enter or \
+                     clicking elsewhere sets it; Escape puts it back.",
+                ) {
+                    response.set_label = Some((node.id, label.to_string(), to));
+                }
+                ui.end_row();
+                ui.label("Stated distance");
+                let hint = format!(
+                    "A number and a unit: 12in, 30.48 cm. A bare number is in {}. Enter or \
+                     clicking elsewhere sets it; Escape puts it back.",
+                    bare.name()
+                );
+                if let Some(to) = self.header_field(
+                    ui,
+                    label,
+                    HeaderField::Distance,
+                    &stated,
+                    refusal.as_deref(),
+                    "No stated distance",
+                    &hint,
+                ) {
+                    response.set_distance = Some((node.id, label.to_string(), to));
+                }
+                ui.end_row();
+            });
+    }
+
+    /// One header field of the item `item`, holding `value` while nobody is
+    /// typing in it. What it was set to, on the frame it is committed: Enter,
+    /// or the field losing focus, with text other than the text it held when
+    /// it took focus. Escape puts the field back and commits nothing.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the field's own inputs, each one read once"
+    )]
+    fn header_field(
+        &mut self,
+        ui: &mut egui::Ui,
+        item: &str,
+        field: HeaderField,
+        value: &str,
+        refusal: Option<&str>,
+        empty: &str,
+        hint: &str,
+    ) -> Option<String> {
+        let slot = &mut self.drafts[field.index()];
+        if slot.as_ref().is_some_and(|draft| draft.item != item) {
+            *slot = None;
+        }
+        let mut text = match slot {
+            Some(draft) => draft.text.clone(),
+            None => value.to_string(),
+        };
+        let edit = egui::TextEdit::singleline(&mut text)
+            .desired_width(180.0)
+            .hint_text(empty);
+        let shown = ui.add_enabled(refusal.is_none(), edit);
+        crate::widget_name::set_widget_name(&shown, field.widget_name());
+        self.fields[field.index()] = Some(shown.rect);
+        let shown = match refusal {
+            Some(why) => shown.on_disabled_hover_text(why),
+            None => shown.on_hover_text(hint),
+        };
+        if shown.lost_focus() {
+            let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let original = self.drafts[field.index()]
+                .take()
+                .map_or_else(|| value.to_string(), |draft| draft.original);
+            return (!cancelled && text != original).then_some(text);
+        }
+        if shown.has_focus() {
+            match &mut self.drafts[field.index()] {
+                Some(draft) => draft.text = text,
+                slot => {
+                    *slot = Some(FieldDraft {
+                        item: item.to_string(),
+                        original: value.to_string(),
+                        text,
+                    })
+                }
+            }
+        } else {
+            // Not focused, so whatever was typed here was committed or put
+            // back on the frame focus left.
+            self.drafts[field.index()] = None;
+        }
+        None
     }
 
     /// The toolbar of the edited mode: *Commit*, greyed with the refusal the
@@ -651,17 +835,16 @@ pub(crate) fn item_without_result(item: &EditableMeasurement) -> String {
     "No distance: no stated distance is given.".to_string()
 }
 
-/// The edited mode's header: the item's bench label and node, where it came
-/// from, its label, its stated distance, and the median line, which compares
-/// the item with the stored measurements other than its origin.
-fn show_item_header(
+/// The start of the edited mode's header: the item's bench label and node,
+/// and where it came from. The label and stated distance fields follow
+/// ([`MeasurementView::show_header_fields`]), then the median line
+/// ([`show_item_comparison`]).
+fn show_item_origin(
     ui: &mut egui::Ui,
     node: &SceneNode,
     label: &str,
     item: &EditableMeasurement,
     origin: Option<u32>,
-    row: Option<&DistanceRow>,
-    comparison: impl FnOnce() -> Option<measurements::ScaleComparison>,
 ) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(label).strong());
@@ -681,23 +864,15 @@ fn show_item_header(
             ui.weak("From no stored row: Commit adds it as a new row");
         }
     }
-    if item.label.is_empty() {
-        ui.weak("No label");
-    } else {
-        ui.label(format!("Label: {}", item.label));
-    }
-    match item.as_distance().and_then(|d| d.distance) {
-        Some((stated, unit)) => {
-            ui.label(format!(
-                "Stated distance: {} {}",
-                measurements::length_number(stated),
-                unit.name()
-            ));
-        }
-        None => {
-            ui.weak("No stated distance");
-        }
-    }
+}
+
+/// The end of the edited mode's header: the median line, which compares the
+/// item with the stored measurements other than its origin.
+fn show_item_comparison(
+    ui: &mut egui::Ui,
+    row: Option<&DistanceRow>,
+    comparison: impl FnOnce() -> Option<measurements::ScaleComparison>,
+) {
     if let (Some(row), Some(line)) = (row, comparison()) {
         ui.label(measurements::scale_comparison_text(&line, row.unit))
             .on_hover_text(

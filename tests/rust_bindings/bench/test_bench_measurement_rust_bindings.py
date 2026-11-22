@@ -9,7 +9,14 @@ import numpy as np
 import pytest
 
 from sfmtool import bench as bench_module
-from sfmtool.bench import Bench, commit_measurement, put_measurement
+from sfmtool.bench import (
+    Bench,
+    commit_measurement,
+    parse_stated_distance,
+    put_measurement,
+    set_measurement_label,
+    set_stated_distance,
+)
 from sfmtool.fileio import LENGTH_UNIT_NAMES
 from sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
 from tests.conftest import SEOUL_BULL_GROUND_TRUTH
@@ -111,3 +118,47 @@ def test_replace_takes_a_measurement_and_with_origin_reseats_it(edited):
     with pytest.raises(ValueError, match="EditableTrack or an EditableMeasurement"):
         bench.replace("distance #0", 3)
     assert isinstance(item, bench_module.EditableMeasurement)
+
+
+def test_setting_the_label_gives_a_new_item_and_commits(edited):
+    _, item = put_measurement(Bench(), edited, "distance", 0)
+    renamed = set_measurement_label(item, "tape across the base")
+    assert renamed.label == "tape across the base"
+    assert item.label == "ruler edge"
+    assert renamed.endpoints == item.endpoints
+    assert renamed.distance == item.distance
+    assert renamed.origin == item.origin
+    nxt, report = commit_measurement(edited, renamed, 0)
+    assert report["wrote"] is True
+    labels = nxt.materialize()[0].measurements["distance"]["labels"]
+    assert labels == ["tape across the base", ""]
+
+
+def test_setting_the_stated_distance_gives_a_new_item_or_refuses(edited):
+    _, item = put_measurement(Bench(), edited, "distance", 0)
+    restated = set_stated_distance(item, 4.2, "cm")
+    assert restated.distance == (4.2, "cm")
+    assert item.distance[1] == "m"
+    assert restated.endpoints == item.endpoints
+    with pytest.raises(ValueError, match="must be finite and strictly positive"):
+        set_stated_distance(item, 0.0, "cm")
+    with pytest.raises(ValueError, match="is not a unit"):
+        set_stated_distance(item, 1.0, "yd")
+
+
+def test_a_typed_distance_reads_its_unit_or_the_bare_one():
+    assert parse_stated_distance("12in") == (12.0, "in")
+    assert parse_stated_distance("30.48 cm", "m") == (30.48, "cm")
+    assert parse_stated_distance("304.8", "mm") == (304.8, "mm")
+    assert parse_stated_distance("2") == (2.0, "m")
+    with pytest.raises(ValueError, match="is not a distance"):
+        parse_stated_distance("twelve")
+    # Text holding a multi-byte character is refused, not cut inside one.
+    for text in ["12é", "é", "12mé", "١٢"]:
+        with pytest.raises(ValueError, match="is not a distance"):
+            parse_stated_distance(text)
+    assert parse_stated_distance("12 cm") == (12.0, "cm")
+    with pytest.raises(ValueError, match='"yd" is not a unit'):
+        parse_stated_distance("3yd")
+    with pytest.raises(ValueError, match="must be finite and strictly positive"):
+        parse_stated_distance("-1cm")

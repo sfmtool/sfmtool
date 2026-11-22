@@ -15,6 +15,7 @@ import click
 import numpy as np
 import yaml
 
+from .._sfmtool.bench import parse_stated_distance
 from .._sfmtool.reconstruction import SfmrReconstruction
 from .._sfmtool.geometry import Se3Transform
 
@@ -32,9 +33,6 @@ _VALID_UNITS = set(_UNIT_TO_METERS.keys())
 # Pattern for Point IDs: pt3d_{8 hex}_{index}
 _POINT_ID_RE = re.compile(r"^pt3d_([0-9a-f]{8})_(\d+)$")
 
-# Pattern for distance values with optional unit suffix
-_DISTANCE_RE = re.compile(r"^([+-]?(?:\d+\.?\d*|\.\d+))([a-z]*)$")
-
 
 def _parse_point_id(point_id: str) -> tuple[str, int]:
     m = _POINT_ID_RE.match(point_id)
@@ -47,35 +45,15 @@ def _parse_point_id(point_id: str) -> tuple[str, int]:
 
 
 def _parse_distance(value, target_unit: str) -> float:
-    if isinstance(value, (int, float)):
-        if value <= 0:
-            raise ValueError(f"Distance must be positive, got {value}")
-        return float(value)
+    """A measurement's ``distance`` in `target_unit`.
 
-    value_str = str(value).strip()
-    m = _DISTANCE_RE.match(value_str)
-    if not m:
-        raise ValueError(
-            f"Invalid distance format: '{value_str}'. "
-            f"Expected a number with optional unit suffix (e.g., '304.8', '12in', '0.3048m')"
-        )
-
-    num = float(m.group(1))
-    suffix = m.group(2)
-
-    if num <= 0:
-        raise ValueError(f"Distance must be positive, got {num}")
-
-    if not suffix:
-        return num
-
-    if suffix not in _UNIT_TO_METERS:
-        raise ValueError(
-            f"Unknown unit suffix '{suffix}'. Supported: {', '.join(sorted(_VALID_UNITS))}"
-        )
-
-    meters = num * _UNIT_TO_METERS[suffix]
-    return meters / _UNIT_TO_METERS[target_unit]
+    YAML hands a bare number over as an ``int`` or a ``float``, and anything
+    with a suffix as a string; both are read by the parser Measurement View's
+    stated distance field uses, a bare number in `target_unit`.
+    """
+    text = value if isinstance(value, str) else repr(value)
+    distance, unit = parse_stated_distance(text, target_unit)
+    return distance * _UNIT_TO_METERS[unit] / _UNIT_TO_METERS[target_unit]
 
 
 def _build_observation_index(

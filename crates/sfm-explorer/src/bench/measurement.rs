@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Measurements on the bench: putting a stored measurement on, following its
-//! origin, the commit that writes it back, and the direct delete of a stored
-//! one.
+//! origin, the steps that set an item's label and stated distance, the
+//! commit that writes it back, and the direct delete of a stored one.
 //!
 //! See `specs/gui/bench.md` and `specs/gui/measurement-view.md`. The item and
 //! its pure steps are core's (`sfmtool_core::bench::measurement`,
@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use sfmtool_core::bench::{self, BenchItem, EditableMeasurement, ItemKind};
+use sfmtool_core::LengthUnit;
 
 use crate::action_log::{version_step_text, Kind};
 use crate::document::MeasurementMap;
@@ -47,6 +48,24 @@ pub(crate) struct MeasurementCommitted {
     pub(crate) replaced: bool,
     /// Whether a version was pushed.
     pub(crate) changed: bool,
+}
+
+/// What setting a measurement item's stated distance left
+/// ([`AppState::set_bench_measurement_distance`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct StatedDistanceSet {
+    /// The distance and unit the item states afterwards.
+    pub(crate) distance: (f64, LengthUnit),
+    /// Whether a version was pushed.
+    pub(crate) changed: bool,
+}
+
+/// The unit a bare number typed as a stated distance is in: the
+/// reconstruction's `world_space_unit`, or metres where it names none.
+pub(crate) fn bare_unit(world_space_unit: Option<&str>) -> LengthUnit {
+    world_space_unit
+        .and_then(LengthUnit::from_name)
+        .unwrap_or(LengthUnit::Metre)
 }
 
 /// The sentence a track step names a measurement item with when it was asked
@@ -271,6 +290,129 @@ impl AppState {
         self.push_bench_step(index, next, text);
         self.focus_put_item(measurement.recon, &label);
         Ok(PutMeasurement { label, made: true })
+    }
+
+    /// The node, its bench and the measurement a step on one item acts on:
+    /// refused while a background task holds the node and on a view-only
+    /// bench ([`Self::bench_edit_refusal`]), then for a label that names no
+    /// item or names a track.
+    fn measurement_step_target(
+        &self,
+        id: ReconId,
+        label: &str,
+    ) -> Result<(usize, Arc<bench::Bench>, Arc<EditableMeasurement>), String> {
+        if let Some(why) = self.bench_edit_refusal(id) {
+            return Err(why);
+        }
+        let index = self.node_index(id)?;
+        let bench = Arc::clone(self.scene[index].history.current_bench());
+        let item = match bench.get(label) {
+            Some(BenchItem::Measurement(item)) => Arc::clone(item),
+            Some(BenchItem::Track(_)) => return Err(not_a_measurement(label)),
+            None => return Err(format!("Nothing on the bench is called {label}.")),
+        };
+        Ok((index, bench, item))
+    }
+
+    /// Replace the measurement `label` on the bench at `index` with `next`,
+    /// as one bench step labelled `text`. The item keeps its ID.
+    fn push_measurement_step(
+        &mut self,
+        index: usize,
+        bench: &bench::Bench,
+        label: &str,
+        next: EditableMeasurement,
+        text: String,
+    ) -> Result<(), String> {
+        let next_bench = bench
+            .replace(label, BenchItem::Measurement(Arc::new(next)))
+            .map_err(|e| format!("Cannot install that step: {e}"))?;
+        self.push_bench_step(index, next_bench, text);
+        Ok(())
+    }
+
+    /// Set the measurement's own label of the item `label` on `id`'s bench
+    /// to `to`: the label field in Measurement View's edited mode, and the
+    /// wire's `set_bench_measurement_label`.
+    ///
+    /// One bench step (`Set the label of distance #2 to "paw width"`), which
+    /// leaves the reconstruction alone. A label the item holds already pushes
+    /// no version and writes the no-effect row. Refused while a background
+    /// task holds the node and on a view-only bench. Whether a version was
+    /// pushed comes back.
+    pub(crate) fn set_bench_measurement_label(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        to: &str,
+    ) -> Result<bool, String> {
+        let (index, bench, item) = self.measurement_step_target(id, label)?;
+        if item.label == to {
+            self.no_effect(format!(
+                "Set the label of {label} to \"{to}\": no effect, it has that label already"
+            ));
+            return Ok(false);
+        }
+        let next = bench::set_measurement_label(&item, to);
+        let text = format!("Set the label of {label} to \"{to}\"");
+        self.push_measurement_step(index, &bench, label, next, text)?;
+        Ok(true)
+    }
+
+    /// Set the stated distance of the item `label` on `id`'s bench to what
+    /// `text` says: the stated distance field in Measurement View's edited
+    /// mode, and the wire's `set_bench_measurement_distance`.
+    ///
+    /// `text` is a number with an optional unit suffix, read by core's
+    /// `parse_stated_distance` as `sfm xform --scale-by-measurements` reads a
+    /// distance; a bare number is in the reconstruction's `world_space_unit`,
+    /// or in metres where it has none. One bench step (`Set the stated
+    /// distance of distance #2 to 4.2 cm`). A distance the item states
+    /// already, as the file would store it, pushes no version and writes the
+    /// no-effect row. Refused while a background task holds the node, on a
+    /// view-only bench, and for text that does not read or a value that is not
+    /// finite and positive, in core's sentence. What the item states
+    /// afterwards, and whether a version was pushed, come back.
+    pub(crate) fn set_bench_measurement_distance(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        text: &str,
+    ) -> Result<StatedDistanceSet, String> {
+        let (index, bench, item) = self.measurement_step_target(id, label)?;
+        let bare = bare_unit(
+            self.scene[index]
+                .recon()
+                .metadata
+                .world_space_unit
+                .as_deref(),
+        );
+        let refused = |e: bench::StatedDistanceRefusal| {
+            format!("Cannot set the stated distance of {label}: {e}.")
+        };
+        let (distance, unit) = bench::parse_stated_distance(text, bare).map_err(refused)?;
+        let stated = format!(
+            "{} {}",
+            crate::measurements::length_number(distance),
+            unit.name()
+        );
+        let held = item.as_distance().and_then(|d| d.distance);
+        if held.is_some_and(|(d, u)| u == unit && d as f32 == distance as f32) {
+            self.no_effect(format!(
+                "Set the stated distance of {label} to {stated}: no effect, it states that already"
+            ));
+            return Ok(StatedDistanceSet {
+                distance: held.expect("just compared"),
+                changed: false,
+            });
+        }
+        let next = bench::set_stated_distance(&item, distance, unit).map_err(refused)?;
+        let text = format!("Set the stated distance of {label} to {stated}");
+        self.push_measurement_step(index, &bench, label, next, text)?;
+        Ok(StatedDistanceSet {
+            distance: (distance, unit),
+            changed: true,
+        })
     }
 
     /// Tick (`true`) or clear Measurement View's *Edit* box on `id`.

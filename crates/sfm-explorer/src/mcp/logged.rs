@@ -120,6 +120,8 @@ impl Command {
             Command::CommitBenchTrack { .. } => "commit_bench_track",
             Command::PutMeasurementOnBench { .. } => "put_measurement_on_bench",
             Command::CommitBenchMeasurement { .. } => "commit_bench_measurement",
+            Command::SetBenchMeasurementLabel { .. } => "set_bench_measurement_label",
+            Command::SetBenchMeasurementDistance { .. } => "set_bench_measurement_distance",
             Command::DeleteMeasurement { .. } => "delete_measurement",
             Command::FitBenchTrack { .. } => "fit_bench_track",
             Command::FitBenchTrackNormal { .. } => "fit_bench_track_normal",
@@ -436,6 +438,8 @@ impl Command {
             // as an `Edit` itself.
             | Command::FindNearbyTracks { .. }
             | Command::PutMeasurementOnBench { .. }
+            | Command::SetBenchMeasurementLabel { .. }
+            | Command::SetBenchMeasurementDistance { .. }
             | Command::RenameBenchItem { .. }
             | Command::DiscardBenchItem { .. }
             | Command::DuplicateBenchItem { .. }

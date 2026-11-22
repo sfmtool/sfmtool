@@ -414,6 +414,16 @@ pub(crate) fn parse(
             reconstruction_label: args.required_string("reconstruction_label")?,
             item: args.optional_string("item")?,
         },
+        "set_bench_measurement_label" => Command::SetBenchMeasurementLabel {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            item: args.optional_string("item")?,
+            label: args.required_string("label")?,
+        },
+        "set_bench_measurement_distance" => Command::SetBenchMeasurementDistance {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            item: args.optional_string("item")?,
+            distance: args.distance_text("distance")?,
+        },
         "delete_points" => Command::DeletePoints {
             reconstruction_label: args.required_string("reconstruction_label")?,
             points: args.point_indexes("points")?,
@@ -1397,6 +1407,17 @@ impl Args<'_> {
     fn required_string(&self, key: &str) -> Result<String, ToolError> {
         self.optional_string(key)?
             .ok_or_else(|| self.error(format!("needs {key}.")))
+    }
+
+    /// A stated distance as the text the panel's field reads: a string as it
+    /// is, or a JSON number written out, which reads as a bare number.
+    fn distance_text(&self, key: &str) -> Result<String, ToolError> {
+        match self.map.get(key) {
+            None | Some(Value::Null) => Err(self.error(format!("needs {key}."))),
+            Some(Value::String(s)) => Ok(s.clone()),
+            Some(Value::Number(n)) => Ok(n.to_string()),
+            Some(other) => Err(self.wrong_type(key, "a string or a number", other)),
+        }
     }
 
     /// The `measurement_kind` a measurement tool names, `distance` when it

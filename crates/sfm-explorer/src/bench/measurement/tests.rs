@@ -560,3 +560,278 @@ fn a_cleared_selection_stays_cleared_across_an_undo() {
     assert_eq!(state.selected_measurement, None);
     assert_eq!(state.focused_measurement_label(id), Some("distance #3"));
 }
+
+// ---- Setting the label and the stated distance ----------------------------
+
+fn distance_of(state: &AppState, id: ReconId, label: &str) -> Option<(f64, LengthUnit)> {
+    item(state, id, label).as_distance().unwrap().distance
+}
+
+/// The newest Action Log row's text, and whether it is a failure.
+fn last_row(state: &AppState) -> (String, bool) {
+    let entry = state.action_log.entries().last().expect("a row");
+    (entry.text.clone(), entry.failed)
+}
+
+/// The fixture on a `sift_files` node, whose bench is view-only.
+fn view_only_state() -> (AppState, ReconId) {
+    let mut recon = measured_reconstruction(Some("m"));
+    let count = recon.point_set.tracks.len();
+    recon.point_set.observations = sfmtool_core::ObservationSource::SiftFiles {
+        feature_indexes: vec![0; count],
+        feature_tool_hashes: vec![[0u8; 16]; 3],
+        sift_content_hashes: vec![[0u8; 16]; 3],
+    };
+    let mut state = AppState::new();
+    let id = state.append_node(SceneNode::from_path(
+        std::path::Path::new("measured.sfmr"),
+        recon,
+    ));
+    (state, id)
+}
+
+/// Setting the label is one bench step with its label in the Edit History,
+/// leaves the reconstruction and the stored row alone, keeps the item's ID
+/// and focus, and is undone by an undo.
+#[test]
+fn setting_the_label_is_one_bench_step_and_undoes() {
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 2))
+        .unwrap();
+    let before = version_count(&state, id);
+    let document = state
+        .node(id)
+        .unwrap()
+        .history
+        .current_version()
+        .document_serial;
+    let item_id = state.focused_item().unwrap().item;
+    assert!(state
+        .set_bench_measurement_label(id, "distance #2", "paw width")
+        .unwrap());
+    assert_eq!(version_count(&state, id), before + 1);
+    let node = state.node(id).unwrap();
+    assert_eq!(
+        node.history.current_version().label,
+        "Set the label of distance #2 to \"paw width\""
+    );
+    assert_eq!(node.history.current_version().document_serial, document);
+    assert!(!node.history.is_dirty());
+    assert_eq!(item(&state, id, "distance #2").label, "paw width");
+    assert_eq!(state.focused_item().unwrap().item, item_id);
+    let rows = crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements());
+    assert_eq!(rows[2].label, "", "the stored row changed");
+    assert!(last_row(&state)
+        .0
+        .starts_with("Set the label of distance #2 to \"paw width\""));
+    state.undo(id).unwrap();
+    assert_eq!(item(&state, id, "distance #2").label, "");
+}
+
+/// The label an item holds already pushes no version and writes the
+/// no-effect row.
+#[test]
+fn setting_the_label_it_has_is_no_step() {
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    let before = version_count(&state, id);
+    assert!(!state
+        .set_bench_measurement_label(id, "distance #0", "ear to ear")
+        .unwrap());
+    assert_eq!(version_count(&state, id), before);
+    assert_eq!(
+        last_row(&state),
+        (
+            "Set the label of distance #0 to \"ear to ear\": no effect, it has that label \
+             already"
+                .to_string(),
+            false
+        )
+    );
+}
+
+/// The stated distance is read as the CLI reads one: a suffix names the
+/// unit, a bare number takes the reconstruction's unit, and the step's label
+/// names the distance it set. Undo and redo move between them, and the
+/// commit writes the one at the cursor.
+#[test]
+fn setting_the_stated_distance_reads_the_unit_and_is_one_bench_step() {
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 2))
+        .unwrap();
+    let before = version_count(&state, id);
+    let set = state
+        .set_bench_measurement_distance(id, "distance #2", "4.2 cm")
+        .unwrap();
+    assert!(set.changed);
+    assert_eq!(set.distance, (4.2, LengthUnit::Centimetre));
+    assert_eq!(
+        distance_of(&state, id, "distance #2"),
+        Some((4.2, LengthUnit::Centimetre))
+    );
+    assert_eq!(version_count(&state, id), before + 1);
+    assert_eq!(
+        state.node(id).unwrap().history.current_version().label,
+        "Set the stated distance of distance #2 to 4.2 cm"
+    );
+    assert_eq!(stated_of(&state, id, 2), 1.0, "the stored row changed");
+    // A bare number is in the file's unit, metres here.
+    let set = state
+        .set_bench_measurement_distance(id, "distance #2", "0.25")
+        .unwrap();
+    assert_eq!(set.distance, (0.25, LengthUnit::Metre));
+    state.undo(id).unwrap();
+    assert_eq!(
+        distance_of(&state, id, "distance #2"),
+        Some((4.2, LengthUnit::Centimetre))
+    );
+    state.undo(id).unwrap();
+    assert_eq!(
+        distance_of(&state, id, "distance #2"),
+        Some((1.0, LengthUnit::Metre))
+    );
+    state.redo(id).unwrap();
+    let committed = state.commit_bench_measurement(id, "distance #2").unwrap();
+    assert!(committed.changed);
+    let rows = crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements());
+    assert_eq!(
+        (rows[2].stated as f32, rows[2].unit),
+        (4.2, LengthUnit::Centimetre)
+    );
+}
+
+/// With no `world_space_unit` a bare number is in metres, and with another
+/// unit it is in that one. A distance the item states already, as the file
+/// holds it, is no step.
+#[test]
+fn a_bare_number_takes_the_file_s_unit_or_metres() {
+    let (mut state, id) = measured_state(None);
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 2))
+        .unwrap();
+    let set = state
+        .set_bench_measurement_distance(id, "distance #2", "3")
+        .unwrap();
+    assert_eq!(set.distance, (3.0, LengthUnit::Metre));
+    let (mut state, id) = measured_state(Some("ft"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 2))
+        .unwrap();
+    let set = state
+        .set_bench_measurement_distance(id, "distance #2", "3")
+        .unwrap();
+    assert_eq!(set.distance, (3.0, LengthUnit::Foot));
+    let before = version_count(&state, id);
+    let again = state
+        .set_bench_measurement_distance(id, "distance #2", "3.0ft")
+        .unwrap();
+    assert!(!again.changed);
+    assert_eq!(version_count(&state, id), before);
+    assert_eq!(
+        last_row(&state).0,
+        "Set the stated distance of distance #2 to 3 ft: no effect, it states that already"
+    );
+}
+
+/// Text that does not read, an unknown unit and a value that is not finite
+/// and positive are each refused in core's sentence, and push nothing.
+#[test]
+fn a_stated_distance_that_does_not_read_is_refused_in_core_s_words() {
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    let before = version_count(&state, id);
+    assert_eq!(
+        state
+            .set_bench_measurement_distance(id, "distance #0", "-2cm")
+            .map(|_| ()),
+        Err(
+            "Cannot set the stated distance of distance #0: the stated distance is -2, which \
+             must be finite and strictly positive."
+                .to_string()
+        )
+    );
+    assert_eq!(
+        state
+            .set_bench_measurement_distance(id, "distance #0", "12yd")
+            .map(|_| ()),
+        Err(
+            "Cannot set the stated distance of distance #0: \"yd\" is not a unit: the units \
+             are mm, cm, m, in, ft."
+                .to_string()
+        )
+    );
+    assert!(state
+        .set_bench_measurement_distance(id, "distance #0", "twelve")
+        .unwrap_err()
+        .contains("\"twelve\" is not a distance"));
+    assert_eq!(version_count(&state, id), before);
+    assert_eq!(
+        distance_of(&state, id, "distance #0"),
+        Some((153.0, LengthUnit::Centimetre))
+    );
+}
+
+/// Both steps are refused while a background task holds the node and on a
+/// view-only bench, in the shared sentence, and for a track named as the
+/// item.
+#[test]
+fn both_steps_are_refused_while_busy_on_a_view_only_bench_and_for_a_track() {
+    use crate::background::{Finished, Operation};
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    state
+        .start_background_task(
+            Operation::BENCH_FIT,
+            id,
+            Box::new(move |_| Finished::Cancelled),
+        )
+        .expect("nothing else is running");
+    let busy = state.busy_refusal(id).expect("the task holds the node");
+    let before = version_count(&state, id);
+    assert_eq!(
+        state.set_bench_measurement_label(id, "distance #0", "x"),
+        Err(busy.clone())
+    );
+    assert_eq!(
+        state
+            .set_bench_measurement_distance(id, "distance #0", "1m")
+            .map(|_| ()),
+        Err(busy)
+    );
+    assert_eq!(version_count(&state, id), before);
+
+    let (mut state, id) = view_only_state();
+    let sentence = state.bench_view_only_refusal(id).expect("view-only");
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    assert_eq!(
+        state.set_bench_measurement_label(id, "distance #0", "x"),
+        Err(sentence.clone())
+    );
+    assert_eq!(
+        state
+            .set_bench_measurement_distance(id, "distance #0", "1m")
+            .map(|_| ()),
+        Err(sentence)
+    );
+    assert_eq!(item(&state, id, "distance #0").label, "ear to ear");
+
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_point_on_bench(PointRef::new(id, 0), None)
+        .unwrap();
+    let track = state.focused_track_label(id).unwrap().to_string();
+    assert_eq!(
+        state.set_bench_measurement_label(id, &track, "x"),
+        Err(super::not_a_measurement(&track))
+    );
+}

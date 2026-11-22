@@ -364,6 +364,19 @@ pub(crate) enum Command {
         reconstruction_label: String,
         item: Option<String>,
     },
+    /// Set a measurement item's own label. `None` is the focused item.
+    SetBenchMeasurementLabel {
+        reconstruction_label: String,
+        item: Option<String>,
+        label: String,
+    },
+    /// Set a measurement item's stated distance from text. `None` is the
+    /// focused item.
+    SetBenchMeasurementDistance {
+        reconstruction_label: String,
+        item: Option<String>,
+        distance: String,
+    },
     /// Delete many points of one reconstruction as one version.
     DeletePoints {
         reconstruction_label: String,
@@ -1697,6 +1710,26 @@ pub(crate) fn apply_with_window(
             state,
             &reconstruction_label,
             item.as_deref(),
+        )),
+        Command::SetBenchMeasurementLabel {
+            reconstruction_label,
+            item,
+            label,
+        } => done(measurements::set_bench_measurement_label(
+            state,
+            &reconstruction_label,
+            item.as_deref(),
+            &label,
+        )),
+        Command::SetBenchMeasurementDistance {
+            reconstruction_label,
+            item,
+            distance,
+        } => done(measurements::set_bench_measurement_distance(
+            state,
+            &reconstruction_label,
+            item.as_deref(),
+            &distance,
         )),
         Command::DeletePoints {
             reconstruction_label,

@@ -2581,7 +2581,8 @@ fn a_double_click_puts_a_measurement_on_the_bench_and_commit_writes_it() {
         "Measurement View never drew the item",
         |listing| {
             (find_widget(listing, "label", "distance #0").is_some()
-                && find_widget(listing, "label", "Label: first").is_some()
+                && find_widget(listing, "text_input", "measurement label")
+                    .is_some_and(|field| field["value"] == "first")
                 && find_widget(listing, "button", "Commit").is_some()
                 && entries(listing).iter().any(|widget| {
                     widget["name"]

@@ -180,6 +180,13 @@ fn put_measurement_on_bench_puts_on_once_and_get_bench_lists_it() {
     );
     assert_eq!(again["item"], "distance #3");
     assert_eq!(again["changed"], false);
+    // The reply's sentence is about the item this call focused, not the
+    // version an earlier step wrote.
+    assert_eq!(
+        again["report"],
+        "Put distance #3 on the bench: no effect, it is on the bench already as distance #3, \
+         now the focused item"
+    );
     let bench = call(
         &mut state,
         &mut viewer,
@@ -333,4 +340,115 @@ fn a_track_tool_naming_a_measurement_says_what_it_is() {
         "{error}"
     );
     assert!(!error.0.contains("Nothing on the bench"), "{error}");
+}
+
+/// `set_bench_measurement_label` sets the focused item's label as one bench
+/// version, says so in its reply, and answers changed: false for the label
+/// it holds.
+#[test]
+fn set_bench_measurement_label_sets_the_focused_item_s_label() {
+    let (mut state, id, mut viewer) = measured();
+    call(
+        &mut state,
+        &mut viewer,
+        "put_measurement_on_bench",
+        json!({ "reconstruction_label": "measured", "measurement_index": 2 }),
+    );
+    let set = call(
+        &mut state,
+        &mut viewer,
+        "set_bench_measurement_label",
+        json!({ "reconstruction_label": "measured", "label": "paw width" }),
+    );
+    assert_eq!(set["changed"], true);
+    assert_eq!(set["item"], "distance #2");
+    assert_eq!(set["measurement_label"], "paw width");
+    assert_eq!(
+        set["label"],
+        "Set the label of distance #2 to \"paw width\""
+    );
+    assert_eq!(set["dirty"], false);
+    assert_eq!(
+        state.bench_measurement(id, "distance #2").unwrap().label,
+        "paw width"
+    );
+    let again = call(
+        &mut state,
+        &mut viewer,
+        "set_bench_measurement_label",
+        json!({ "reconstruction_label": "measured", "item": "distance #2",
+                "label": "paw width" }),
+    );
+    assert_eq!(again["changed"], false);
+    assert!(
+        again["report"]
+            .as_str()
+            .unwrap()
+            .ends_with("no effect, it has that label already"),
+        "{again}"
+    );
+}
+
+/// `set_bench_measurement_distance` reads text and a JSON number, a bare
+/// number in the file's unit, and refuses a distance that is not positive in
+/// core's sentence.
+#[test]
+fn set_bench_measurement_distance_reads_text_and_numbers() {
+    let (mut state, id, mut viewer) = measured();
+    call(
+        &mut state,
+        &mut viewer,
+        "put_measurement_on_bench",
+        json!({ "reconstruction_label": "measured", "measurement_index": 2 }),
+    );
+    let set = call(
+        &mut state,
+        &mut viewer,
+        "set_bench_measurement_distance",
+        json!({ "reconstruction_label": "measured", "distance": "12in" }),
+    );
+    assert_eq!(set["changed"], true);
+    assert_eq!(set["item"], "distance #2");
+    assert_eq!(set["stated_distance"], 12.0);
+    assert_eq!(set["unit"], "in");
+    assert_eq!(
+        set["label"],
+        "Set the stated distance of distance #2 to 12 in"
+    );
+    let bare = call(
+        &mut state,
+        &mut viewer,
+        "set_bench_measurement_distance",
+        json!({ "reconstruction_label": "measured", "distance": 0.5 }),
+    );
+    assert_eq!(bare["stated_distance"], 0.5);
+    assert_eq!(bare["unit"], "m");
+    assert_eq!(
+        state
+            .bench_measurement(id, "distance #2")
+            .unwrap()
+            .as_distance()
+            .unwrap()
+            .distance,
+        Some((0.5, sfmtool_core::LengthUnit::Metre))
+    );
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_bench_measurement_distance",
+        json!({ "reconstruction_label": "measured", "distance": "-3cm" }),
+    );
+    assert!(
+        error
+            .0
+            .contains("the stated distance is -3, which must be finite and strictly positive"),
+        "{error}"
+    );
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_bench_measurement_distance",
+        json!({ "reconstruction_label": "measured", "distance": true }),
+    );
+    assert!(error.0.contains("a string or a number"), "{error}");
 }

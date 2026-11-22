@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Python bindings for the editable measurement: the item, putting a stored
-//! measurement on the bench, and the commit that writes it back.
+//! measurement on the bench, the steps that set its label and its stated
+//! distance, the parser of a typed distance, and the commit that writes it
+//! back.
 //!
 //! `specs/core/bench/editable-measurement.md` is the design. The item is a
 //! plain value like the track, and both steps give back the next value and
@@ -15,9 +17,13 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyDictMethods};
 
 use sfmtool_core::bench::{
-    commit_measurement as core_commit_measurement, put_measurement as core_put_measurement,
-    EditableMeasurement, EditableMeasurementBody, MeasurementKind,
+    commit_measurement as core_commit_measurement,
+    parse_stated_distance as core_parse_stated_distance, put_measurement as core_put_measurement,
+    set_measurement_label as core_set_measurement_label,
+    set_stated_distance as core_set_stated_distance, EditableMeasurement, EditableMeasurementBody,
+    MeasurementKind,
 };
+use sfmtool_core::LengthUnit;
 
 use super::{refused, PyBench};
 use crate::reconstruction::edited::PyEditedReconstruction;
@@ -186,10 +192,72 @@ fn commit_measurement(
     ))
 }
 
+/// The unit `name` spells, or a ``ValueError`` naming the units there are.
+fn unit_named(name: &str) -> PyResult<LengthUnit> {
+    LengthUnit::from_name(name).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "{name:?} is not a unit: the units are {}",
+            LengthUnit::NAMES.join(", ")
+        ))
+    })
+}
+
+/// `measurement` with its own label set to `label`, and nothing else changed.
+///
+/// Any text is a label, the empty one included. Returns the new
+/// :class:`EditableMeasurement` and leaves `measurement` as it was.
+#[pyfunction]
+fn set_measurement_label(
+    measurement: &PyEditableMeasurement,
+    label: &str,
+) -> PyEditableMeasurement {
+    PyEditableMeasurement {
+        inner: Arc::new(core_set_measurement_label(&measurement.inner, label)),
+    }
+}
+
+/// `measurement` with its stated distance set to `distance` in `unit` (a unit
+/// name, ``"cm"``), and nothing else changed.
+///
+/// A distance that is not finite and strictly positive as the ``float32`` the
+/// file holds, or a unit that is not one of ``mm``, ``cm``, ``m``, ``in`` and
+/// ``ft``, is a ``ValueError``. Returns the new :class:`EditableMeasurement`
+/// and leaves `measurement` as it was.
+#[pyfunction]
+fn set_stated_distance(
+    measurement: &PyEditableMeasurement,
+    distance: f64,
+    unit: &str,
+) -> PyResult<PyEditableMeasurement> {
+    let unit = unit_named(unit)?;
+    let next = core_set_stated_distance(&measurement.inner, distance, unit).map_err(refused)?;
+    Ok(PyEditableMeasurement {
+        inner: Arc::new(next),
+    })
+}
+
+/// Read a distance written as a number with an optional unit suffix,
+/// ``"12in"``, ``"30.48 cm"`` or ``"304.8"``, into ``(value, unit_name)``.
+///
+/// A bare number is in `bare_unit`. The suffixes are ``mm``, ``cm``, ``m``,
+/// ``in`` and ``ft``, with or without a space before them. Text that is not
+/// such a number, an unknown suffix, and a value that is not finite and
+/// strictly positive are each a ``ValueError`` saying which.
+#[pyfunction]
+#[pyo3(signature = (text, bare_unit = "m"))]
+fn parse_stated_distance(text: &str, bare_unit: &str) -> PyResult<(f64, &'static str)> {
+    let bare_unit = unit_named(bare_unit)?;
+    let (value, unit) = core_parse_stated_distance(text, bare_unit).map_err(refused)?;
+    Ok((value, unit.name()))
+}
+
 /// Register the measurement bindings on the `sfmtool.bench` submodule.
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyEditableMeasurement>()?;
     m.add_function(wrap_pyfunction!(put_measurement, m)?)?;
     m.add_function(wrap_pyfunction!(commit_measurement, m)?)?;
+    m.add_function(wrap_pyfunction!(set_measurement_label, m)?)?;
+    m.add_function(wrap_pyfunction!(set_stated_distance, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_stated_distance, m)?)?;
     Ok(())
 }

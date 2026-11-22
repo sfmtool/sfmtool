@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The editable measurement: a stored measurement put on the bench to be worked
-//! on, and the commit that writes it back.
+//! on, the steps that set its label and its stated distance, and the commit
+//! that writes it back.
 //!
 //! `specs/core/bench/editable-measurement.md` is the design. An
 //! [`EditableMeasurement`] holds only what the file stores of a measurement:
@@ -12,7 +13,9 @@
 //! ([`resolve_distance_endpoints`](crate::reconstruction::measurement_endpoint::resolve_distance_endpoints)).
 //!
 //! Every function here is pure, as the track's steps are: [`put_measurement`]
-//! gives back the next bench, [`commit_measurement`] the next reconstruction
+//! gives back the next bench, [`set_measurement_label`] and
+//! [`set_stated_distance`] the next item, [`commit_measurement`] the next
+//! reconstruction
 //! value, and [`delete_measurement`] the value with one row fewer, which is a
 //! direct edit of the reconstruction rather than a bench step.
 
@@ -336,6 +339,203 @@ pub fn put_measurement(
     ))
 }
 
+/// The item with its own label set to `label`, and nothing else changed: the
+/// step that sets the label the file stores for the measurement.
+///
+/// Any text is a label, the empty one included, since the file allows an
+/// unlabelled measurement and labels need not be unique.
+pub fn set_measurement_label(item: &EditableMeasurement, label: &str) -> EditableMeasurement {
+    EditableMeasurement {
+        label: label.to_string(),
+        ..item.clone()
+    }
+}
+
+/// The item with its stated distance set to `distance` in `unit`, and nothing
+/// else changed: the step that sets the length a measurement states.
+///
+/// # Errors
+///
+/// [`StatedDistanceRefusal::NotPositive`] where `distance` is not finite and
+/// strictly positive as the `float32` the file will hold, the rule the commit
+/// asks too.
+pub fn set_stated_distance(
+    item: &EditableMeasurement,
+    distance: f64,
+    unit: LengthUnit,
+) -> Result<EditableMeasurement, StatedDistanceRefusal> {
+    if !stated_distance_is_positive(distance) {
+        return Err(StatedDistanceRefusal::NotPositive { distance });
+    }
+    let EditableMeasurementBody::Distance(held) = &item.body;
+    Ok(EditableMeasurement {
+        body: EditableMeasurementBody::Distance(EditableDistance {
+            endpoints: held.endpoints,
+            distance: Some((distance, unit)),
+        }),
+        ..item.clone()
+    })
+}
+
+/// Whether `distance` is finite and strictly positive as the `float32` the
+/// file stores it as.
+fn stated_distance_is_positive(distance: f64) -> bool {
+    let stored = distance as f32;
+    stored.is_finite() && stored > 0.0
+}
+
+/// The sentence for a stated distance that is not finite and strictly
+/// positive, shared by [`StatedDistanceRefusal::NotPositive`] and
+/// [`MeasurementCommitRefusal::DistanceNotPositive`].
+fn not_positive_sentence(f: &mut std::fmt::Formatter<'_>, distance: f64) -> std::fmt::Result {
+    write!(
+        f,
+        "the stated distance is {distance}, which must be finite and strictly positive"
+    )
+}
+
+/// Read a distance written as a number with an optional unit suffix, `12in`,
+/// `30.48 cm` or `304.8`, into its value and unit.
+///
+/// A bare number is in `bare_unit`. The suffixes are the format's unit names
+/// (`mm`, `cm`, `m`, `in`, `ft`), with or without a space before them. The
+/// number is an optional sign, digits with an optional decimal point (`12`,
+/// `12.`, `0.3048`, `.5`), and an optional exponent (`1e-3`). Surrounding
+/// space is ignored. This is how `sfm xform --scale-by-measurements` reads a
+/// measurement's `distance`, and how Measurement View's stated distance field
+/// reads what is typed in it.
+///
+/// # Errors
+///
+/// [`StatedDistanceRefusal::Unreadable`] for text that is not such a number,
+/// [`StatedDistanceRefusal::UnknownUnit`] for a suffix that names no unit, and
+/// [`StatedDistanceRefusal::NotPositive`] for a value that is not finite and
+/// strictly positive as a `float32`.
+///
+/// ```
+/// use sfmtool_core::bench::parse_stated_distance;
+/// use sfmtool_core::LengthUnit;
+///
+/// assert_eq!(
+///     parse_stated_distance("12in", LengthUnit::Metre),
+///     Ok((12.0, LengthUnit::Inch))
+/// );
+/// assert_eq!(
+///     parse_stated_distance("4.2", LengthUnit::Centimetre),
+///     Ok((4.2, LengthUnit::Centimetre))
+/// );
+/// ```
+pub fn parse_stated_distance(
+    text: &str,
+    bare_unit: LengthUnit,
+) -> Result<(f64, LengthUnit), StatedDistanceRefusal> {
+    let trimmed = text.trim();
+    let unreadable = || StatedDistanceRefusal::Unreadable {
+        text: trimmed.to_string(),
+    };
+    // Split on characters, not bytes, so text holding a multi-byte character
+    // is refused rather than cut inside one.
+    let number = trimmed.trim_end_matches(|c: char| c.is_ascii_lowercase());
+    let suffix = &trimmed[number.len()..];
+    let number = number.trim_end();
+    if !is_decimal_number(number) {
+        return Err(unreadable());
+    }
+    let value: f64 = number.parse().map_err(|_| unreadable())?;
+    let unit = if suffix.is_empty() {
+        bare_unit
+    } else {
+        LengthUnit::from_name(suffix).ok_or_else(|| StatedDistanceRefusal::UnknownUnit {
+            unit: suffix.to_string(),
+        })?
+    };
+    if !stated_distance_is_positive(value) {
+        return Err(StatedDistanceRefusal::NotPositive { distance: value });
+    }
+    Ok((value, unit))
+}
+
+/// Whether `text` is an optional sign, then digits with an optional decimal
+/// point or a decimal point and digits, then an optional exponent: the
+/// numbers [`parse_stated_distance`] reads, which leaves out `inf`, `nan` and
+/// the other spellings Rust's own parser takes.
+fn is_decimal_number(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    if matches!(bytes.first(), Some(b'+' | b'-')) {
+        i += 1;
+    }
+    let digits = |from: usize| {
+        bytes[from..]
+            .iter()
+            .take_while(|b| b.is_ascii_digit())
+            .count()
+    };
+    let whole = digits(i);
+    i += whole;
+    let mut fraction = 0;
+    if bytes.get(i) == Some(&b'.') {
+        i += 1;
+        fraction = digits(i);
+        i += fraction;
+    }
+    if whole == 0 && fraction == 0 {
+        return false;
+    }
+    if matches!(bytes.get(i), Some(b'e' | b'E')) {
+        i += 1;
+        if matches!(bytes.get(i), Some(b'+' | b'-')) {
+            i += 1;
+        }
+        let exponent = digits(i);
+        if exponent == 0 {
+            return false;
+        }
+        i += exponent;
+    }
+    i == bytes.len()
+}
+
+/// Why a stated distance cannot be read or given to a measurement.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StatedDistanceRefusal {
+    /// The text is not a number with an optional unit suffix.
+    Unreadable {
+        /// The text, trimmed.
+        text: String,
+    },
+    /// The suffix names no unit the format defines.
+    UnknownUnit {
+        /// The suffix.
+        unit: String,
+    },
+    /// The distance is not finite and strictly positive as a `float32`.
+    NotPositive {
+        /// The distance given.
+        distance: f64,
+    },
+}
+
+impl std::fmt::Display for StatedDistanceRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StatedDistanceRefusal::Unreadable { text } => write!(
+                f,
+                "{text:?} is not a distance: give a number with an optional unit suffix, \
+                 such as 304.8, 12in or 0.3048 m"
+            ),
+            StatedDistanceRefusal::UnknownUnit { unit } => write!(
+                f,
+                "{unit:?} is not a unit: the units are {}",
+                LengthUnit::NAMES.join(", ")
+            ),
+            StatedDistanceRefusal::NotPositive { distance } => not_positive_sentence(f, *distance),
+        }
+    }
+}
+
+impl std::error::Error for StatedDistanceRefusal {}
+
 /// Why a measurement cannot be written into the reconstruction.
 ///
 /// Each says what is missing or wrong in a sentence a person can act on,
@@ -401,10 +601,9 @@ impl std::fmt::Display for MeasurementCommitRefusal {
             MeasurementCommitRefusal::NoStatedDistance => {
                 write!(f, "no stated distance is given")
             }
-            MeasurementCommitRefusal::DistanceNotPositive { distance } => write!(
-                f,
-                "the stated distance is {distance}, which must be finite and strictly positive"
-            ),
+            MeasurementCommitRefusal::DistanceNotPositive { distance } => {
+                not_positive_sentence(f, *distance)
+            }
             MeasurementCommitRefusal::NoSuchImage {
                 side,
                 image,
@@ -537,8 +736,7 @@ fn checked_distance(
     let (stated, unit) = distance
         .distance
         .ok_or(MeasurementCommitRefusal::NoStatedDistance)?;
-    let stored = stated as f32;
-    if !(stored.is_finite() && stored > 0.0) {
+    if !stated_distance_is_positive(stated) {
         return Err(MeasurementCommitRefusal::DistanceNotPositive { distance: stated });
     }
     if let Some(row) = origin_row {
