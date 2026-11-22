@@ -270,12 +270,14 @@ fn the_clipped_share_of_its_needed_tiles_equals_the_whole_pyramid_s() {
     let (pyramid, source) = sources();
     let whole = TiledPhotograph::from_pyramid(pyramid);
     // An outline across nine of the 32 px tiles, one past the image's right
-    // edge, and one too thin to hold a pixel centre, which reads the pixels
-    // under its corners.
+    // edge, one too thin to hold a pixel centre, which reads the pixels
+    // under its corners, and one wholly past the right edge, whose corners'
+    // pixels, clamped to the image, lie in tiles its box has none of.
     for outline in [
         vec![[20.0, 15.0], [90.0, 25.0], [80.0, 85.0], [25.0, 70.0]],
         vec![[150.0, 100.0], [230.0, 110.0], [210.0, 149.0]],
         vec![[40.2, 40.2], [100.3, 40.3], [100.3, 40.4]],
+        vec![[210.0, 10.0], [230.0, 12.0], [220.0, 70.0]],
     ] {
         let expected = source_clipped_share(&whole, &outline).unwrap();
         let (share, keys) = read_held(&source, |src| source_clipped_share(src, &outline));
