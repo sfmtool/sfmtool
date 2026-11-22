@@ -351,6 +351,11 @@ derived from them. So both can be set directly, in two places:
   ([multi-panel-image-browser.md](../gui/multi-panel-image-browser.md) §
   "Image Detail: the context menu"), so this is where a person zoomed in on a
   photograph places an endpoint precisely.
+- **In the 3D view.** With a distance measurement selected, a right-click on a
+  point, which selects it (rule G3 of the proposed interaction rules,
+  `specs/drafts/gui-interaction-rules.md`), offers `Move Endpoint A Here` and
+  `Move Endpoint B Here`, which set the endpoint to the point's **reference
+  pixel** (§ "A point's reference pixel").
 
 Neither offers the 3D position, the point or the texel: they follow from the
 image and pixel through the resolver every time, and a setting that disagreed
@@ -379,8 +384,82 @@ The edits, in the order they are built:
 | Set the stated distance | `Set distance #2 in dino to 4.2 cm` | Number and unit in one field, parsed as the CLI's YAML parses a distance (`12in`, `30.48cm`, or a bare number in the current unit); refuses a value that is not finite and positive with the format's sentence |
 | Delete | `Deleted distance #2 in dino` | Renumbers the rows after it; the selection follows (§ "The selected measurement") |
 
-Placing a new measurement, and dragging an endpoint in Image Detail, are a
-later draft's.
+| Add a distance measurement | `Added distance #4 in dino` | § "Creating a measurement" |
+
+Dragging an endpoint in Image Detail is a later draft's.
+
+## Creating a measurement
+
+A measurement is made in two gestures, one per endpoint, each a right-click
+that names a pixel, then a short prompt for what was measured.
+
+**Starting it.** Two menus offer `New Measurement from Here`:
+
+- **Image Detail's context menu**, at the clicked pixel of the image shown.
+  Any pixel inside the image will do; the endpoint does not have to resolve,
+  since the pixel is the stored measurement.
+- **The 3D view's point menu.** A right-click on a point selects it (G3) and
+  offers the entry, which starts the measurement at the point's reference
+  pixel.
+
+Either puts the new endpoint A in a **pending measurement**:
+
+```rust
+// on AppState: view state, not part of any version
+pub pending_measurement: Option<PendingMeasurement>,
+
+pub struct PendingMeasurement {
+    pub recon: ReconId,
+    pub a: (u32, [f64; 2]), // image and pixel of endpoint A
+}
+```
+
+A pending measurement is not a version and is not saved. Measurement View shows
+it in place of the selected measurement: endpoint A's block, as for any
+measurement, and in place of endpoint B a line saying how to finish
+("Right-click a point in the 3D view, or a pixel in Image Detail, and choose
+End Measurement Here. Escape cancels."). Image Detail and the 3D view draw
+endpoint A's mark. Starting another one replaces it, and Escape, closing the
+node, or *Cancel* in the panel discards it.
+
+**Finishing it.** While a measurement is pending, the same two menus offer
+`End Measurement Here` instead, with the same gates, on the pending
+measurement's reconstruction only (a point or an image of another node shows
+the entry greyed, its hover text saying the measurement was started in the
+other node). Choosing it opens a prompt for:
+
+- the stated distance, a number and a unit in one field, parsed as the *Set
+  the stated distance* edit parses it, with the reconstruction's
+  `world_space_unit` as the unit of a bare number, or `m` where it has none;
+- the label, which may be empty.
+
+*Add* is enabled once the distance parses to a finite, positive length, and
+adds the measurement as one version (`Added distance #4 in dino`), at the end
+of the distance rows, and selects it. *Cancel* leaves the measurement pending,
+so a mistyped prompt does not lose the two endpoints.
+
+### A point's reference pixel
+
+A point in the 3D view is not a pixel, and a measurement's endpoint must be
+one. The pixel is taken from the point's **reference observation**
+(`tracks/reference_observations`): the image of that observation, and its
+keypoint. The keypoint is where the reference observation's square is centred,
+so the endpoint resolves to texel `(0, 0)` of the point's own patch, which is
+the point itself, through the observation its bitmap was rendered from.
+
+The entry is greyed, with hover text saying why, where the point has no
+reference pixel:
+
+- it has no patch frame (a `sift_files` reconstruction, or a point the patch
+  pass left without one): "This point has no patch, so no pixel stands for it";
+- it has no reference observation (`-1`): "This point has no reference
+  observation to take a pixel from";
+- it is a point at infinity: "This point is at infinity, so no distance can be
+  measured to it".
+
+The entry does not check that the pixel resolves back to the same point: a
+neighbouring square can hold the same pixel and win the ranking. The endpoint
+block then shows which point it resolved to, as for any endpoint.
 
 ## Drawing measurements
 
@@ -443,6 +522,10 @@ existing tools ([mcp-server.md](../gui/mcp-server.md)):
   images, pixels and resolutions (with every candidate), and the result block.
 - `get_measurement_endpoint_views(recon, index, endpoint)`: the offers of
   § "Switching an endpoint's image".
+- `add_distance_measurement(recon, a, b, distance, label)`, each endpoint an
+  image and a pixel, and `get_point_reference_pixel(recon, point)`, so an agent
+  can start from a point as the 3D view's menu does. The pending measurement
+  is a GUI state with no tool of its own.
 - `set_measurement_endpoint(recon, index, endpoint, image, pixel)`,
   `rename_measurement`, `set_measurement_distance`, `delete_measurement`: the
   edits, each refused in the panel's words.
@@ -510,11 +593,15 @@ Each step is one PR through `implement-change`, with its MCP tools, its
    switch popup, `get_measurement_endpoint_views` and
    `set_measurement_endpoint`.
 3. **Setting an endpoint by hand.** The endpoint block's image and pixel
-   fields, Image Detail's `Move Endpoint A Here` and `Move Endpoint B Here`,
-   and `set_measurement_endpoint` taking any pixel.
+   fields, `Move Endpoint A Here` and `Move Endpoint B Here` in Image Detail's
+   menu and the 3D view's point menu, the reference pixel, and
+   `set_measurement_endpoint` taking any pixel.
 4. **The other edits.** Rename, set the stated distance, delete, and their
    tools.
-5. **Drawing.** The selected measurement's marks and line in the 3D view and
+5. **Creating a measurement.** The pending measurement, `New Measurement from
+   Here` and `End Measurement Here` in both menus, the prompt,
+   `add_distance_measurement` and `get_point_reference_pixel`.
+6. **Drawing.** The selected measurement's marks and line in the 3D view and
    Image Detail, their hover and click, the off-screen indicator and its
    click, and the *Show all measurements* option in each view, with
    `get_viewer_3d_display`, `set_viewer_3d_display` and the Image Detail
@@ -554,5 +641,13 @@ Each step is one PR through `implement-change`, with its MCP tools, its
   endpoint.
 - The Scene tree row: a click selects and moves nothing; a double-click frames
   the measurement's finite endpoints and leaves the view alone with none.
+- Creating: starting from a pixel and from a point; the entry greyed, with its
+  sentence, on a point with no patch, no reference observation, or at
+  infinity; a point's reference pixel resolving to texel `(0, 0)` of its
+  patch where no other square holds it; finishing in another node greyed;
+  *Cancel* in the prompt keeping the pending measurement; *Add* pushing one
+  version and selecting the new row; Escape discarding a pending measurement
+  without a version.
 - `ui_basic`: the panel opens from the Panels menu and from a double-click on a
-  row, on an artificial-measurements copy.
+  row, on an artificial-measurements copy; a measurement made with the two
+  menus and the prompt.
