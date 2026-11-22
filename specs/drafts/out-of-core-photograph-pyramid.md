@@ -886,10 +886,11 @@ written.
 **A budget of 0.** `display_photograph` with `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB=0`
 calls `get` on the GUI thread today for the panels that still call it, since
 nothing it decodes would be kept for the next frame; Image Detail has not since
-step 13c2, nor the 3D background since step 13c3. No panel decodes on the GUI thread in this design, at any
-budget: with a budget of 0, a tile decoded on the rayon pool is handed to the
-panel that asked for it, whose texture keeps it, the cache keeps nothing, and
-an out-of-core photograph is still queued for *Build mipmaps*.
+step 13c2, nor the 3D background since step 13c3. No panel decodes on the
+GUI thread in this design, at any budget: with a budget of 0, a tile decoded
+on the rayon pool is handed to the panel that asked for it, whose texture
+keeps it, the cache keeps nothing, and an out-of-core photograph is still
+queued for *Build mipmaps*.
 
 ## Display
 
@@ -2330,10 +2331,11 @@ in core. Step 17 turns the tier on.
       the photograph evicted by another decode since the tiles were cut and
       wait on its slot while another caller decoded it, so the user decided,
       once building it found that gap, that the level is built from the
-      tiles at every budget. The background draws the same pixels as before: the level,
-      its size, the texture coordinates' scale and the RGBA bytes it uploads,
-      for one photograph of each of the four test-data sets in viewports from
-      16 to 3840 px wide, with a budget and with a budget of 0, were compared
+      tiles at every budget. The background draws the same pixels as
+      before: the level, its size, the texture coordinates' scale and the
+      RGBA bytes it uploads, for one photograph of each of the four test-data
+      sets in viewports from 16 to 3840 px wide, with a budget and with a
+      budget of 0, were compared
       with those of the background before this step and are identical. Five
       things the plan did not say, found while building it: `upload_bg_image`
       takes two closures, the layout's and the level's, since the level is
@@ -2382,9 +2384,10 @@ in core. Step 17 turns the tier on.
       and a level not taken is dropped when another is asked for; a level
       read against a layout the file no longer has, wider so a tile does not
       fit or narrower so the tiles would leave a column unset, or of a level
-      the layout does not have, reads the layout again; a failed level read is answered
-      as unreadable and not decoded again; and the background, drawn through
-      `display_layout` and `display_level`, asks for the header and the level
+      the layout does not have, reads the layout again; a failed level read
+      is answered as unreadable and not decoded again; and the background,
+      drawn through `display_layout` and `display_level`, asks for the header
+      and the level
       once each, decodes nothing on the GUI thread and draws the photograph
       once it lands, keeps the previous photograph while the layout or the
       level loads, and clears it for an unreadable layout or level. Each of

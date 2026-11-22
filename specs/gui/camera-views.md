@@ -711,16 +711,16 @@ starts one read of the photograph's header on the rayon pool. The second
 starts one task on the rayon pool that asks for the level's tiles with the
 cache's `try_decode_tiles` and builds the level from the tiles that call
 answers, at every budget; the task makes no other call to the cache, and
-never calls `get_level`, which could wait on the photograph's slot. When the decode
-does not fit under the build budget beside other decodes, or another caller
-is decoding the photograph, `try_decode_tiles` answers `Busy` without
+never calls `get_level`, which could wait on the photograph's slot. When the
+decode does not fit under the build budget beside other decodes, or another
+caller is decoding the photograph, `try_decode_tiles` answers `Busy` without
 waiting, and the background asks again 50 ms later. Each task asks for a
-repaint when it ends, and the level it read is kept until the next frame takes
-it. So no frame and no task of the background waits on a slot or on the
-build count, at any budget, and a read of a photograph shares the limit of
-one task per photograph with Image Detail's tile decodes. The decode is the cache's
-`ImageU8::read_rgb` (the file's contents choose the decoder and the EXIF
-orientation is ignored, as in
+repaint when it ends, and the level it read is kept until the background next
+asks for a level. So no frame and no task of the background waits on a slot
+or on the build count, at any budget, and a read of a photograph shares the
+limit of one task per photograph with Image Detail's tile decodes. The decode
+is the cache's `ImageU8::read_rgb` (the file's contents choose the decoder
+and the EXIF orientation is ignored, as in
 [reading-and-writing-images.md](../core/camera/reading-and-writing-images.md))
 and its pyramid of `ImageU8Pyramid::full_levels` levels, so the background
 shares its pixels with Image Detail. A photograph whose decode failed is
@@ -789,9 +789,11 @@ When exiting camera view: `clear_bg_image()` releases the texture and bind
 group. Re-entering finds the photograph in the cache, if the budget kept it,
 and a task reads its level again, without decoding.
 
-**Memory.** Beside the texture, the level a task read is held until the next
-frame copies it into the texture, and one level at most: asking for another
-photograph or level drops it. It is the level the background draws, as RGB,
+**Memory.** Beside the texture, the level a task read is held until the
+background next asks for a level, and one level at most: the frame that asks
+for it copies it into the texture, and asking for another photograph or level
+drops it. A level that lands after camera view is left is held until camera
+view is entered again. It is the level the background draws, as RGB,
 so 37 MB for level 2 (4080 x 3060) of a 200-megapixel photograph in a 3840 px
 viewport, and at most 8192 x 6144 x 3 bytes, 151 MB, for a 4:3 photograph
 under the texture limit of 8192. While it builds the level, the task also

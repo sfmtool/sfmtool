@@ -664,8 +664,9 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   layout again; tiles asked for ahead handed over with no second decode; the
   3D background's level read once, off the calling thread, with a budget and
   with a budget of 0, built from the tiles with one call to the cache and
-  equal to the level of the pyramid the cache decodes; a level read answering `Busy` asked again on a later frame and
-  read once the reservation is given back; a level read waiting behind a
+  equal to the level of the pyramid the cache decodes; a level read
+  answering `Busy` asked again on a later frame and read once the
+  reservation is given back; a level read waiting behind a
   tile decode of the same photograph, and a level not taken dropped when
   another is asked for; a level read against a layout the file no longer
   has reading the layout again; and a failed level read not decoded again),
