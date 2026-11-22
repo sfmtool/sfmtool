@@ -246,7 +246,11 @@ fn draft_field(
             .map_or_else(|| field.value.to_string(), |draft| draft.original);
         return ((!cancelled && text != original).then_some(text), rect);
     }
-    if shown.has_focus() {
+    // Focus as egui's memory holds it, which is what the field takes typing
+    // by, rather than `Response::has_focus`, which is also false while the
+    // window lacks the operating system's focus: an agent types into a
+    // viewer that is not the front window.
+    if ui.memory(|memory| memory.has_focus(shown.id)) {
         match slot {
             Some(draft) => draft.text = text,
             slot => {

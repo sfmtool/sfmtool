@@ -1293,3 +1293,64 @@ fn a_pixel_field_fits_its_coordinate() {
     let texts = painted(&mut panel, &ctx, &state);
     assert!(texts.contains(&value), "{texts:?}");
 }
+
+/// A field takes typing, and commits it on Enter, while the window does not
+/// have the operating system's focus, as when an agent types into a viewer
+/// behind another window; and an empty field, as a new measurement's stated
+/// distance and label are, takes it as one holding text does.
+#[test]
+fn a_field_takes_typing_while_the_window_lacks_focus() {
+    let (mut state, id) = measured_state(Some("m"));
+    let label = state
+        .start_measurement(ImageRef::new(id, 0), [100.0, 50.0])
+        .unwrap();
+    let (mut panel, ctx) = settled(&state);
+    let unfocused = |panel: &mut MeasurementView, events: Vec<egui::Event>| {
+        let mut response = None;
+        let raw = egui::RawInput {
+            focused: false,
+            ..input(events)
+        };
+        crate::test_support::run_frame_headless(&ctx, raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                response = Some(panel.show(ui, &state));
+            });
+        });
+        response.expect("the panel ran")
+    };
+    for (field, text) in [
+        (HeaderField::Distance, "42 cm"),
+        (HeaderField::Label, "door"),
+    ] {
+        let at = panel
+            .field_rect(field)
+            .expect("the field was drawn")
+            .center();
+        let mut responses = vec![
+            unfocused(&mut panel, vec![egui::Event::PointerMoved(at)]),
+            unfocused(
+                &mut panel,
+                vec![button(at, egui::PointerButton::Primary, true)],
+            ),
+            unfocused(
+                &mut panel,
+                vec![button(at, egui::PointerButton::Primary, false)],
+            ),
+            unfocused(&mut panel, vec![egui::Event::Text(text.to_string())]),
+        ];
+        assert_eq!(any_distance(&responses), None, "typing alone committed");
+        responses.push(unfocused(
+            &mut panel,
+            vec![key(egui::Key::Enter, egui::Modifiers::default())],
+        ));
+        let committed = match field {
+            HeaderField::Distance => any_distance(&responses),
+            HeaderField::Label => any_label(&responses),
+        };
+        assert_eq!(
+            committed,
+            Some((id, label.clone(), text.to_string())),
+            "{field:?}"
+        );
+    }
+}

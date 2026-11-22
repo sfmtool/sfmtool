@@ -517,7 +517,11 @@ the unit in one, `153 cm`. An empty field shows *No label* or *No stated
 distance* in grey. A field commits on Enter or when it loses focus, with text
 other than what it held when it took focus, and Escape puts it back and
 commits nothing, as Track View's *Rename* field reads Enter
-([track-view.md](track-view.md)). The panel reports the text and the dock makes
+([track-view.md](track-view.md)). A field reads whether it has the keyboard
+focus from egui's memory, which is what the text input takes typing by, and
+not from `Response::has_focus`, which is also false while the window is not
+the operating system's front window, so typing that reaches a field, such as
+an agent's `type_text` into a viewer behind another window, is committed. The panel reports the text and the dock makes
 the step, so a refusal is a failed Action Log row in the step's words.
 
 Each commit is one bench step on the focused item, made by a pure core function
@@ -972,8 +976,10 @@ at-infinity case is covered by the Rust tests.
   result's line and *Commit* greyed with the refusal; the label field
   committing on Enter, the stated distance field when it loses focus, Escape
   putting a field back, a field left unchanged asking for nothing, and the
-  fields greyed while a task holds the node. (`dock/tests.rs`): a committed
-  field reaching its step, and a refused one writing a failed row.
+  fields greyed while a task holds the node; and an empty field taking typing
+  and committing it on Enter while the window lacks the operating system's
+  focus. (`dock/tests.rs`): a committed field reaching its step, and a
+  refused one writing a failed row.
 - **The layout** (`measurement_view/tests.rs`): at the width the panel has in
   the default layout of a 1280 x 720 window the blocks are one above the
   other, inside the panel and not overlapping, in both modes, and side by side
