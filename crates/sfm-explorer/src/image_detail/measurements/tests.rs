@@ -10,6 +10,7 @@
 //! The photograph is a flat stand-in of the fixture's size; the panel is the
 //! whole frame, so at zoom 1 the image is fitted and centred in it.
 
+use crate::test_support::HeldPhotograph;
 use eframe::egui;
 use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
 
@@ -17,7 +18,7 @@ use crate::measurement_marks::{DrawnId, MeasurementGesture};
 use crate::measurements::{EndpointSide, MeasurementRef};
 use crate::state::{AppState, FeatureDisplaySettings, IntrinsicsDisplaySettings};
 
-use super::super::{BenchMenu, DetailPhotograph, ImageDetail, ImageDetailResponse};
+use super::super::{BenchMenu, ImageDetail, ImageDetailResponse};
 use super::Placement;
 
 const PANEL: egui::Vec2 = egui::vec2(900.0, 700.0);
@@ -30,9 +31,9 @@ struct Frame {
     cursor: egui::CursorIcon,
 }
 
-fn pyramid() -> ImageU8Pyramid {
+fn pyramid() -> HeldPhotograph {
     let pixels = ImageU8::new(640, 480, 3, vec![90u8; 640 * 480 * 3]);
-    ImageU8Pyramid::build(&pixels, 1)
+    HeldPhotograph::new(ImageU8Pyramid::build(&pixels, 1))
 }
 
 /// One frame of the panel on image 0 of the fixture's node, its layer built
@@ -41,7 +42,7 @@ fn frame(
     detail: &mut ImageDetail,
     ctx: &egui::Context,
     state: &AppState,
-    photograph: &ImageU8Pyramid,
+    photograph: &HeldPhotograph,
     events: Vec<egui::Event>,
 ) -> Frame {
     detail.measurements = state.measurement_layer(state.feature_display.show_all_measurements);
@@ -75,7 +76,7 @@ fn frame(
             &[],
             &crate::platform::ScrollInput::default(),
             None,
-            DetailPhotograph::Decoded(photograph),
+            Some(photograph.source()),
             &features,
             &mut intrinsics,
             None,
@@ -132,7 +133,7 @@ fn click(
     detail: &mut ImageDetail,
     ctx: &egui::Context,
     state: &AppState,
-    photograph: &ImageU8Pyramid,
+    photograph: &HeldPhotograph,
     pos: egui::Pos2,
     times: usize,
 ) -> Vec<ImageDetailResponse> {
@@ -153,7 +154,7 @@ fn click(
 }
 
 /// A panel and context that have laid out twice.
-fn settled(state: &AppState, photograph: &ImageU8Pyramid) -> (ImageDetail, egui::Context) {
+fn settled(state: &AppState, photograph: &HeldPhotograph) -> (ImageDetail, egui::Context) {
     let mut detail = ImageDetail::new();
     let ctx = egui::Context::default();
     for _ in 0..2 {
@@ -303,7 +304,7 @@ fn drag(
     detail: &mut ImageDetail,
     ctx: &egui::Context,
     state: &AppState,
-    photograph: &ImageU8Pyramid,
+    photograph: &HeldPhotograph,
     from: egui::Pos2,
     by: egui::Vec2,
 ) -> Vec<ImageDetailResponse> {
@@ -397,11 +398,9 @@ fn a_handle_drag_sets_the_endpoint_in_one_version() {
 #[test]
 fn a_view_only_bench_draws_no_handles() {
     let mut recon = crate::measurements::fixture::measured_reconstruction(Some("m"));
-    let keypoints = recon.point_set.keypoints_xy().cloned();
     let count = recon.point_set.tracks.len();
     recon.point_set.observations = sfmtool_core::ObservationSource::SiftFiles {
         feature_indexes: vec![0; count],
-        keypoints_xy: keypoints,
         feature_tool_hashes: vec![[0u8; 16]; 3],
         sift_content_hashes: vec![[0u8; 16]; 3],
     };
