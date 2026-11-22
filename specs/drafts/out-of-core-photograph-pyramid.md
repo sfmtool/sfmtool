@@ -892,7 +892,7 @@ Step 2 built this from the cache's in-memory pyramids, as
 [gui/multi-panel-image-browser.md](../gui/multi-panel-image-browser.md)
 § "Image Detail" describes, except the tiles asked for from the cache
 (`peek_tile`), the `Building` state, the next image's tiles asked for a frame
-ahead and the two `get_image_detail_view` fields, which come with step 13 or
+ahead and the two `get_image_detail_view` fields, which come with step 13c or
 later:
 
 - **Which level.** With `s` the panel's physical screen pixels per level-0
@@ -955,7 +955,7 @@ describes; the level rule, the texture coordinates, the alpha and the
 remembered failure are as below. Until a photograph lands, the previous
 image's photograph stays on its own mesh (nothing is drawn before any has
 landed), since there is no coarsest level to draw before the tiled cache.
-Step 13 swaps the source for `get_level`, inside the closure the app passes to
+Step 13c swaps the source for `get_level`, inside the closure the app passes to
 `upload_bg_image` and its `Decoded` answer:
 
 - **Level.** The coarsest level whose longer side is still at least the
@@ -1218,7 +1218,7 @@ impl TiledPhotograph {
     /// read copies only the pixels it asks for from the pyramid's levels, and
     /// the source keeps no tile, so a reader that moves holds no more than
     /// the pyramid it held before. Made in step 7, read by moved readers from
-    /// step 9, and deleted in step 13, when the cache hands out tiled
+    /// step 9, and deleted in step 13e, when the cache hands out tiled
     /// photographs itself.
     pub fn from_pyramid(pyramid: Arc<ImageU8Pyramid>) -> Self;
     /// Every level's size and the number of levels, read with no pixel: what
@@ -1388,8 +1388,9 @@ each in the step that moves its readers:
 |------|------------------------|
 | 9 | Track View's and the Track Table's renders, which draw a cell's error state instead of the tile (built) |
 | 10 | `ViewSources::fetch` in [state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs), which returns `PhotographReadError` instead of `Cancelled` (`get_many` still returns `Cancelled`, which converts), and the bench kernels (`bench::evaluate`, `evaluate_rendering_bitmap`, `score_bitmap`, `fit`, `render_bitmap_in_place`, `search_geometry`, `set_stage`, `build_track_at_pixel`, `classify`) and the patch kernels they and the reference picks share (`view_selection::select_patch_views`, `select_patch_cloud_views`, `reference_view::render_view_tile`, `read_track`, `stored_bitmap::render_reference`, `keypoint_localize`'s and `keypoint_subpixel`'s entry points, `member_coherence`'s, `observation_reading::read_cloud_observations`, `spawn::spawn_candidate_tracks`), and every kernel that calls one of them or that the bench runs, since a kernel passes its caller's pool down and its errors up: the normal kernels the bench's normal steps run (`pairwise_flow_normal`, `grown_plane_normal`, `grid_plane_normal`, `finite_difference_normal`) and `refine_normals`, which runs them; the cluster refinement's entry points (`refine_cluster_patches`, `refine_cluster_patches_borrowed`), which the bench's evaluation of a cluster-stage track runs, and the bench's member-grid reads, which move to `sample_source_member_grid`, the source form of `sample_member_grid` that step 9 added beside it; `stored_bitmap::render_patch_bitmap`, `render_patch_cloud_bitmaps` and `refit_points`. Their callers that step 11 moves keep their fetch: each wraps the whole pyramids it holds with `from_pyramid` (the cluster-patches build, until 11b, its decoded images with `from_image`), makes the region pool for its call, and reports the error as its step's failure |
-| 11 | the public `render_patch_bitmap_column` / `render_display_patch_bitmaps` in [display_bitmaps.rs](../../crates/sfmtool-core/src/patch/display_bitmaps.rs), which return `PhotographReadError` instead of `Cancelled`, and `WebExportError`, which gains `Photograph` (built, 11a); the viewer's bulk jobs (the conversion to embedded patches, *Refine all normals*, *Refit all points*, the cluster-patches build) and `sfm web-export` take tiled photographs from `get_many` once step 13 makes it answer them, wrapping its whole pyramids with `from_pyramid` until then, and the cluster-patches build fetches through the cache from 11b (built) |
+| 11 | the public `render_patch_bitmap_column` / `render_display_patch_bitmaps` in [display_bitmaps.rs](../../crates/sfmtool-core/src/patch/display_bitmaps.rs), which return `PhotographReadError` instead of `Cancelled`, and `WebExportError`, which gains `Photograph` (built, 11a); the viewer's bulk jobs (the conversion to embedded patches, *Refine all normals*, *Refit all points*, the cluster-patches build) and `sfm web-export` take tiled photographs from `get_many` once step 13e makes it answer them, wrapping its whole pyramids with `from_pyramid` until then, and the cluster-patches build fetches through the cache from 11b (built) |
 | 12 | `read_patch_along_ray` and `depth_layers`, which take the caller's `&RegionPool` in place of the `&GreyImages` cache, and `far_field_sweep` and `find_nearby_tracks`, which took the pool in 10a and drop the cache; `PatchReadError` and `DepthLayerError` gain `Photograph(PhotographReadError)` in place of `GreyMismatch`, and `GreyImages`, with its `get` and `GreyImageError::NoSuchImage`, is gone (built). The plan also listed `guided_matches`, `nearby_cluster_tracks`, `constellation_seeds`, `nearby_points` and `distance_range`, which read the reconstruction, its index files and the cameras but no photograph, so their signatures do not change |
+| 13 | `PhotographCache::get`, which takes the caller's `&Progress`, and `GetError`, which gains `Cancelled` (built, 13a); `PhotographCache::new`, which takes `PhotographCacheOptions` (13b); `display_photograph`, which gives way to `display_tile` (13c); `get`, `get_many`, `peek` and `peek_state`, which answer `Arc<TiledPhotograph>`, `insert`, which takes an `ImageU8`, `PhotographReadError`, which gains `Changed`, `NotFound`, `TooLarge` and `Unreadable` with the conversions from `TileError` and `GetError`, and `from_pyramid`, which is deleted (13e) |
 | 16 | `ImagePyramidSet.read`, the first binding whose photographs come from the cache. The bindings over the kernels above change with their kernels in steps 10 to 12, build their tiled photographs from arrays with `from_image`, and raise the error from then on, though tiles cut from arrays cannot fail |
 
 The viewer's side, in
@@ -1566,7 +1567,8 @@ readers to view-region pyramids, one group per pull request, while the cache
 still hands out whole pyramids: a moved reader wraps the pyramid it gets in a
 `TiledPhotograph` (`from_pyramid`), so readers that have moved and readers
 that have not both work. Step 13 makes the cache hand out tiled photographs
-only, once every reader takes them. Steps 14 to 16 build the out-of-core tier
+only, once every reader takes them, in five pull requests: the slot and the
+build budget first, then the panels, then the tiles. Steps 14 to 16 build the out-of-core tier
 without turning it on anywhere but in tests: until step 17, neither
 `sfm ws init` nor any other command writes `mipmap_options`, so no workspace
 has the object unless its owner writes it by hand, and every photograph stays
@@ -1581,11 +1583,11 @@ in core. Step 17 turns the tier on.
    level rule, the coarser fallback, the per-frame upload cap of 16, the
    texture limit of 256 and the zoom limit `max(32, 8 / fit_scale)`, so no
    texture is larger than 514 x 514 and Image Detail no longer crashes on any
-   photograph, though a 200-megapixel one is still read whole until step 13;
+   photograph, though a 200-megapixel one is still read whole until step 13e;
    specified in [gui/multi-panel-image-browser.md](../gui/multi-panel-image-browser.md)
    § "Image Detail" and § "Image Detail: 2D pan and zoom navigation". Two
    parts of § "Image Detail" are not in it and come with the cache's
-   tiles in step 13: asking for the next image's tiles a frame ahead while
+   tile requests in step 13c: asking for the next image's tiles a frame ahead while
    animation plays, and the `level` and `tiles_pending` fields of
    `get_image_detail_view`. The zoom limit's `fit_scale` is in panel points, the unit
    the panel's view arithmetic and `set_image_detail_view` work in.
@@ -1660,7 +1662,7 @@ in core. Step 17 turns the tier on.
      photograph in memory can meet, `Cancelled` and `OutOfRange`, whose
      `path` is `None` for such a photograph, and gains the others, with the
      conversions from `TileError` and `GetError`, when the cache hands out
-     tiled photographs (step 13); `TileKey` and `PhotographTile` live in
+     tiled photographs (step 13e); `TileKey` and `PhotographTile` live in
      `camera::tiled_photograph` beside `TiledPhotograph`; and a sampler
      subtracts a region's origin from its integer tap addresses after the
      `floor`, not from the coordinate, so the fractions are the whole level's
@@ -1731,7 +1733,7 @@ in core. Step 17 turns the tier on.
 9. **Track View and the Track Table** on view-region pyramids (companion
    step 3), with the step-9 signature changes, peeking the cache's whole
    pyramids as today and reading them through `from_pyramid`; they peek
-   tiles from step 13. **Built**, before step 8: each panel owns a region
+   tiles from step 13d. **Built**, before step 8: each panel owns a region
    pool of `REGION_POOL_BYTES_PER_THREAD`; Track View's track-stage tiles
    and hover views render through `render_source_tile`, its cluster-stage
    ones through `sample_source_member_grid`, and the crops of both panels
@@ -1903,13 +1905,13 @@ in core. Step 17 turns the tier on.
     the step-11 signature changes and their bindings.
 
     Only the cache can hand out a tiled photograph, and it hands out whole
-    pyramids until step 13, so what these callers fetch changes there: until
+    pyramids until step 13e, so what these callers fetch changes there: until
     then each wraps the whole pyramids `get_many` answers with
-    `from_pyramid`, as the bench's `ViewSources` does, and step 13's
+    `from_pyramid`, as the bench's `ViewSources` does, and step 13e's
     `get_many` answers `Arc<TiledPhotograph>` to all of them at once. The
     companion's step-5 tests that count decodes, and its test of a budget
     smaller than one photograph's level 0, need the tiled cache, so they come
-    with step 13. Before it, the step is three pull requests, 11a to 11c:
+    with step 13e. Before it, the step is three pull requests, 11a to 11c:
 
     - **11a, the display bitmaps' error.** **Built.**
       `render_patch_bitmap_column` and `render_display_patch_bitmaps` return
@@ -1992,7 +1994,7 @@ in core. Step 17 turns the tier on.
       half what the run by index held at once, the pool never exceeded,
       every read counted in it, and some reads copied and others taken
       through the tiles). That the order decodes fewer tiles is tested in step
-      13.
+      13e.
 
     Each of 11a to 11c reports in its pull request, for the kernels it
     changes, the count of renders that took the tile path on the test data
@@ -2049,41 +2051,146 @@ in core. Step 17 turns the tier on.
     Image Detail, the 3D background and every other reader read tiles from
     the cache; Image Detail asking for the next image's tiles a frame ahead while
     animation plays, and `get_image_detail_view`'s `level` and
-    `tiles_pending`; `from_pyramid` deleted. Tests: an in-core photograph's tiles
-    equal the same pixels of today's pyramid; a request for one tile decodes
-    the photograph once and leaves its other tiles as unused, evicted first;
-    a tile evicted and asked for again decodes the photograph again, counted
-    in `stats`; a kernel's `get_many` over 20 in-core photographs decodes
-    them all into tiles in its read phase, in groups that never exceed the
-    build budget (set small for the test, checked through the count), so
-    its renders decode nothing when the tiles fit the budget; a panel
-    needing ten tiles of one in-core photograph starts one task, and a
-    second panel needing the same photograph starts none while it runs; a
-    panel decode whose `try_reserve_build` is refused (the budget used up by
-    another caller's reservation) starts no decode, is asked again on a later
-    frame and decodes once the reservation is given back, and no rayon
-    worker waits on a slot or the count meanwhile; a `get_many` over 20
-    photographs holds no pyramid (the
-    cache's stats show only tiles, within a small budget); several
-    `get_many` callers on one cache started at the same moment on separate
-    threads never reserve more than the build budget plus one decode each,
-    panel decodes never take the count past the build budget,
-    two caches in one process keep separate counts, and their decodes never
-    add to the count beyond what was reserved; a caller cancelled mid-decode
-    stops before the cutting and leaves the slot empty with its share given
-    back, a waiter on that slot then reserves and decodes, and a waiter that
-    is cancelled stops waiting within 50 ms; no panel decodes on the GUI
-    thread, with a budget of 0 too; a bulk kernel whose photographs' tiles do
-    not fit a small budget still completes, with its decodes counted, and so
-    does one with a budget smaller than one photograph's level 0. The bulk
-    callers (`ViewSources`, the display bitmaps, the cluster-patches build)
-    take the tiled photographs `get_many` answers in place of wrapping whole
-    pyramids, and the companion's step-5 test of the point order runs here:
-    on a rayon pool of one thread, with a budget smaller than the
-    reconstruction's tiles but holding the tiles of every photograph one
-    reference image's points are seen in, each in-core photograph is decoded
-    at most once in the read phase and once more for each reference image
-    whose points it sees, and the same points in shuffled order decode more.
+    `tiles_pending`; `from_pyramid` deleted.
+
+    The step is five pull requests, 13a to 13e. Once the cache keeps tiles
+    in place of pyramids, no reader can be handed a whole pyramid, so every
+    reader that still takes one (Image Detail, the 3D background, Track View,
+    the Track Table, the bulk callers that wrap with `from_pyramid`) has to
+    move before that, and the slot and the build budget, which every decode
+    goes through, come first. So the split runs from the slot up: 13a makes
+    the slot cancellable, 13b bounds the decodes in progress by the build
+    budget, 13c and 13d move the panels to the cache's layout and tile
+    requests while the cache still holds whole pyramids and cuts each tile
+    it hands out from one, and 13e replaces the pyramids with tiles, which
+    every reader then reads. Until 13e the cache decodes as it does today, so
+    every result and every picture is identical after each of 13a to 13d;
+    13e keeps every result identical too, since an in-core photograph's tiles
+    hold its pyramid's pixels.
+
+    - **13a, the slot.** **Built.** A path's slot is a mutex over its state
+      (empty, being made by one caller, or made, with the pyramid or the
+      remembered failure) and a condition variable, in place of a
+      `OnceLock`. `PhotographCache::get` takes the caller's `&Progress`,
+      which it polls for cancellation and reports nothing through, and
+      `GetError` gains `Cancelled`, which is never remembered; `get_many`
+      passes its own `Progress` down. A caller that finds the slot being
+      made waits with `Condvar::wait_timeout` of `SLOT_WAIT_POLL` (50 ms),
+      polling its `Progress`, and stops with `Cancelled`, leaving the decode
+      to its maker. The maker polls once between the decode and building the
+      pyramid, which 13e replaces with cutting the tiles; a cancelled maker
+      builds nothing, sets the slot back to empty and wakes the waiters, and
+      the first waiter to take the lock decodes in its place. A guard
+      empties the slot and wakes the waiters when the maker unwinds. The
+      callers that have a `Progress` pass it (the cluster-patches build's
+      `get` for the reason a photograph failed, which reports a cancelled
+      wait as the build's cancellation, and the reference picks' `get` per
+      observation, after which a cancelled pick sends nothing rather than a
+      point without a pick); the panels' decode task passes
+      `&Progress::none()`.
+      Specified in
+      [core/camera/photograph-cache.md](../core/camera/photograph-cache.md),
+      with tests in
+      [photograph_cache/tests.rs](../../crates/sfmtool-core/src/camera/photograph_cache/tests.rs),
+      each waiting for the threads it starts with a time limit, so a caller
+      that never returns fails the test rather than hang it: a caller
+      cancelled mid-decode stops before the pyramid and leaves the slot
+      empty, and a waiter on that slot then decodes; a `get` and a
+      `get_many` waiting on a decode held in progress stop when they are
+      cancelled, and the decode goes on for its maker; a maker that panics
+      leaves the slot empty for the next caller; and a cancelled decode is
+      not remembered, with a budget or without one. The tests do not time
+      the 50 ms, since a time measured across threads depends on how they
+      are scheduled; they hold the decode a waiter waits on until the waiter
+      has stopped, so only its own polling can stop it.
+    - **13b, the build budget.** `PhotographCacheOptions` (`budget_bytes`,
+      `build_budget_bytes`, and `tile_size`, which only 13e reads),
+      `PhotographCache::new(options)`, `default_build_budget_bytes`,
+      `reserve_builds`, `try_reserve_build` and `BuildReservation`. `get`
+      reserves its one decode with `reserve_builds` when it marks the slot as
+      being made, from an empty slot or one a cancelled maker has just
+      emptied, and gives it back when it ends, is cancelled or unwinds;
+      `get_many` reads each path's header first, to know its misses and
+      their sizes, then decodes the misses in groups sized by the build
+      budget, one `par_iter` a group, a member that finds its slot being
+      made by another caller keeping its share while it waits; `stats`
+      gains the build budget, the bytes reserved and the whole decodes.
+      Still whole pyramids. Tests: a `get_many` over 20 photographs decodes
+      them in groups that never exceed the build budget (set small for the
+      test, checked through the count); several `get_many` callers on one
+      cache started at the same moment on separate threads never reserve
+      more than the build budget plus one decode each; `try_reserve_build`
+      never takes the count past the build budget; two caches in one
+      process keep separate counts, and their decodes never add to the count
+      beyond what was reserved; a caller cancelled mid-decode gives its share
+      back, and the waiter that decodes in its place reserves.
+    - **13c, the panels' requests by layout and tile, Image Detail and the 3D
+      background.** `layout`, `request_layout` and `PeekedLayout` (whose
+      `Building` comes with step 14), `peek_tile` and `PeekedTile`,
+      `get_tile`, `view_region_pyramid`, `get_level`, `try_decode_tiles`
+      and `TryDecode`, and `TileError`, over the whole pyramids the cache
+      still holds: a tile, a region or a level is cut from the held pyramid
+      when it is asked for. `display_tile` replaces `display_photograph`
+      for Image Detail, which draws the tiles the cache hands it in place of
+      cutting them itself, asks for the next image's tiles a frame ahead
+      while animation plays, and reports `level` and `tiles_pending` in
+      `get_image_detail_view`; and for the 3D background, which asks for its
+      level with `get_level` on the rayon pool. A panel's decode reserves
+      with `try_reserve_build` and claims the slot without waiting. Both
+      panels draw the same pixels as before. Tests: a panel needing ten tiles
+      of one photograph starts one task, and a second panel needing the same
+      photograph starts none while it runs; a panel decode whose
+      `try_reserve_build` is refused (the budget used up by another caller's
+      reservation) starts no decode, is asked again on a later frame and
+      decodes once the reservation is given back, and no rayon worker waits
+      on a slot or the count meanwhile; panel decodes never take the count
+      past the build budget; no panel decodes on the GUI thread, with a
+      budget of 0 too.
+    - **13d, Track View and the Track Table.** Track View's patch tiles,
+      cluster-stage tiles and hover views, and the crops of both panels and
+      their hover views, act on the layout state and peek tiles, asking for
+      the missing ones with `try_decode_tiles`, and render only once every
+      tile they need is there, so no panel reads a whole pyramid any more and
+      the viewer's `peek_full_res_pyramid` goes. `peek` and `peek_state` stay
+      for the callers that only ask whether a photograph is decoded (the
+      image menu's *Add image to tracks* check), and answer tiled
+      photographs from 13e. Tests: the panels' tests of their pictures, which
+      compare them with the whole pyramid's, pass unchanged; a cell whose
+      tiles are not all there draws its loading state and asks for them
+      once; no panel decodes on the GUI thread.
+    - **13e, tiles in the cache.** The cache keeps photograph tiles in place
+      of pyramids, the tiles a request asked for as used and the rest of the
+      decode as unused, evicted first, under the one budget; `get`,
+      `get_many`, `peek` and `insert` answer or take `Arc<TiledPhotograph>`
+      and `ImageU8`; a tiled photograph from the cache reads its tiles
+      through `get_tile`, decoding an in-core photograph again, with
+      `reserve_builds`, for a tile evicted during its kernel; `from_image`
+      cuts tiles the source owns, and `from_pyramid` is deleted, with
+      `held_pyramid`, so the bulk callers (`ViewSources`, the display
+      bitmaps, the cluster-patches build, `sfm web-export`) and the
+      bindings take what `get_many` and `from_image` answer;
+      `PhotographReadError` gains `Changed`, `NotFound`, `TooLarge` and
+      `Unreadable` with the conversions from `TileError` and `GetError`, and
+      `sfm web-export` reports the `RuntimeError` a read that fails raises
+      through `write_web_export` as its failure, as it reports the
+      `ValueError` of a refusal, since a read can fail from here on. Tests:
+      an in-core photograph's tiles equal the same pixels of today's pyramid;
+      a request for one tile decodes the photograph once and leaves its
+      other tiles as unused, evicted first; a tile evicted and asked for
+      again decodes the photograph again, counted in `stats`; a kernel's
+      `get_many` over 20 in-core photographs decodes them all into tiles in
+      its read phase, so its renders decode nothing when the tiles fit the
+      budget; a `get_many` over 20 photographs holds no pyramid (the cache's
+      stats show only tiles, within a small budget); a bulk kernel whose
+      photographs' tiles do not fit a small budget still completes, with its
+      decodes counted, and so does one with a budget smaller than one
+      photograph's level 0; and the companion's step-5 test of the point
+      order: on a rayon pool of one thread, with a budget smaller than the
+      reconstruction's tiles but holding the tiles of every photograph one
+      reference image's points are seen in, each in-core photograph is
+      decoded at most once in the read phase and once more for each
+      reference image whose points it sees, and the same points in shuffled
+      order decode more.
 14. **The out-of-core tier, off.** Photographs of a workspace with
     `mipmap_options` read through their mip level files: tiles from the
     files, mipmaps made in the slot when missing or stale (the misses of a

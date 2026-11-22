@@ -13,7 +13,8 @@
 //!
 //! Its callers hold it in an `Arc` and call it through `&self`: a worker thread
 //! puts what it decodes where the next worker and the GUI thread find it.
-//! [`PhotographCache::get`] blocks while another thread decodes the same path;
+//! [`PhotographCache::get`] waits while another thread decodes the same path,
+//! and stops waiting when its caller is cancelled;
 //! [`PhotographCache::peek`] never reads a file and never waits, which is what a
 //! caller that draws every frame wants. The design is in the spec
 //! `specs/core/camera/photograph-cache.md`.
@@ -21,14 +22,19 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
-use std::time::SystemTime;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::{Duration, SystemTime};
 
 use rayon::prelude::*;
 
 use crate::camera::image::{image_dimensions, ImageU8, ImageU8Pyramid};
 use crate::camera::mipmap::MAX_JPEG_SIDE;
 use crate::progress::{Cancelled, Progress};
+
+/// How long a caller waiting for another caller's decode of the same path
+/// waits on the slot before it looks at its own `Progress` for cancellation
+/// again: a cancelled waiter stops within about this long.
+pub const SLOT_WAIT_POLL: Duration = Duration::from_millis(50);
 
 /// The environment variable that overrides [`default_budget_bytes`], in
 /// megabytes (10^6 bytes), written as a decimal integer.
@@ -79,6 +85,10 @@ pub enum GetError {
         width: u32,
         height: u32,
     },
+    /// The caller's `Progress` was cancelled while it decoded the photograph
+    /// or waited for another caller's decode of it. Never remembered: the
+    /// next `get` decodes or waits again.
+    Cancelled,
 }
 
 impl std::fmt::Display for GetError {
@@ -96,6 +106,7 @@ impl std::fmt::Display for GetError {
                  {MAX_JPEG_SIDE} px cannot be read",
                 path.display()
             ),
+            Self::Cancelled => write!(f, "{Cancelled}"),
         }
     }
 }
@@ -114,9 +125,10 @@ pub struct PhotographCacheStats {
     pub budget_bytes: u64,
     /// `get` answers that decoded nothing: the entry was there, or another
     /// thread's decode of the same path was waited on. Each path of a
-    /// `get_many` counts as one `get`. `peek` is not counted.
+    /// `get_many` counts as one `get`. `peek` is not counted, and neither is
+    /// a `get` that stopped waiting because it was cancelled.
     pub hits: u64,
-    /// Decodes run, whether they succeeded or not.
+    /// Decodes started, whether they succeeded, failed or were cancelled.
     pub misses: u64,
 }
 
@@ -156,10 +168,24 @@ fn file_stamp(path: &Path) -> FileStamp {
     Some((meta.len(), meta.modified().ok()))
 }
 
+/// Where a slot's decode stands.
+enum SlotState {
+    /// Nothing decoded and no one decoding: the next caller decodes. A slot
+    /// starts so, and goes back to it when its decoding caller is cancelled
+    /// or unwinds.
+    Empty,
+    /// One caller is decoding; the others wait on [`Slot::ready`].
+    Making,
+    /// The pyramid, or the failure remembered for the file.
+    Made(Result<Arc<ImageU8Pyramid>, GetError>),
+}
+
 /// One path's entry. Shared between the map and every thread using it, so a
 /// thread can decode into it with the map lock released.
 struct Slot {
-    value: OnceLock<Result<Arc<ImageU8Pyramid>, GetError>>,
+    state: Mutex<SlotState>,
+    /// Woken when the state leaves [`SlotState::Making`].
+    ready: Condvar,
     stamp: FileStamp,
     /// The cache's tick when the slot was last asked for, for LRU order.
     last_used: AtomicU64,
@@ -167,6 +193,64 @@ struct Slot {
     /// the map lock; 0 until the decoding thread charges it, and 0 for a
     /// failure.
     charged: AtomicU64,
+}
+
+impl Slot {
+    fn new(state: SlotState, stamp: FileStamp) -> Self {
+        Self {
+            state: Mutex::new(state),
+            ready: Condvar::new(),
+            stamp,
+            last_used: AtomicU64::new(0),
+            charged: AtomicU64::new(0),
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, SlotState> {
+        // The lock is held only to read or set the state, never across a
+        // decode, so nothing panics while it is held; poisoning is ignored.
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The pyramid or the remembered failure, once made; `None` while the
+    /// slot is empty or being made.
+    fn made(&self) -> Option<Result<Arc<ImageU8Pyramid>, GetError>> {
+        match &*self.lock() {
+            SlotState::Made(value) => Some(value.clone()),
+            SlotState::Empty | SlotState::Making => None,
+        }
+    }
+
+    /// Set the state and wake every caller waiting on the slot.
+    fn set(&self, state: SlotState) {
+        *self.lock() = state;
+        self.ready.notify_all();
+    }
+}
+
+/// The decoding caller's hold on a slot it marked [`SlotState::Making`]. A
+/// hold dropped without [`Self::finish`] (the caller was cancelled, or it
+/// unwinds from a panic) empties the slot and wakes its waiters, so no slot is
+/// left marked as being made by a caller that has stopped, and the first
+/// waiter to take the lock decodes in its place.
+struct Making<'s> {
+    slot: &'s Slot,
+    finished: bool,
+}
+
+impl Making<'_> {
+    fn finish(mut self, value: Result<Arc<ImageU8Pyramid>, GetError>) {
+        self.finished = true;
+        self.slot.set(SlotState::Made(value));
+    }
+}
+
+impl Drop for Making<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.slot.set(SlotState::Empty);
+        }
+    }
 }
 
 struct Inner {
@@ -200,12 +284,34 @@ impl Inner {
 /// pyramids are dropped until the total is back under it, never the one just
 /// decoded. Only the cache's `Arc` is dropped: a caller still holding a
 /// pyramid keeps it alive.
+///
+/// Each path has one slot, empty, being made by one caller, or made. The
+/// caller that finds it empty marks it as being made and decodes; the others
+/// wait on it, looking at their own `Progress` every [`SLOT_WAIT_POLL`], and
+/// stop with [`GetError::Cancelled`] when it is cancelled, leaving the decode
+/// to its maker. A maker that is cancelled between the decode and building
+/// the pyramid, or that unwinds, empties the slot, and a waiter decodes in its
+/// place.
 pub struct PhotographCache {
     budget_bytes: u64,
     inner: Mutex<Inner>,
     tick: AtomicU64,
     hits: AtomicU64,
     misses: AtomicU64,
+    /// Called as a decode starts, before the file is read, and as a caller
+    /// starts to wait on a slot being made: what lets a test hold a decode in
+    /// progress, cancel a caller in the middle of a decode or a wait, or make
+    /// a decode panic.
+    #[cfg(test)]
+    on_slot_event: Option<Box<dyn Fn(SlotEvent) + Send + Sync>>,
+}
+
+/// What [`PhotographCache::on_slot_event`] is told.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SlotEvent {
+    DecodeStarted,
+    WaitStarted,
 }
 
 impl std::fmt::Debug for PhotographCache {
@@ -238,6 +344,8 @@ impl PhotographCache {
             tick: AtomicU64::new(0),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
+            #[cfg(test)]
+            on_slot_event: None,
         }
     }
 
@@ -247,17 +355,28 @@ impl PhotographCache {
         self.budget_bytes
     }
 
-    /// The pyramid for `path`, decoding on a miss. Blocks while another thread
+    /// The pyramid for `path`, decoding on a miss. Waits while another thread
     /// is decoding the same path, and then returns its result rather than
-    /// decoding a second time. An error when the file does not exist, cannot
-    /// be read, or has a side over [`MAX_JPEG_SIDE`]; that answer is
-    /// remembered until `forget` or `clear`, or until the file's length or
-    /// modification time changes.
+    /// decoding a second time; if that thread is cancelled or unwinds, the
+    /// first waiter decodes in its place. An error when the file does not
+    /// exist, cannot be read, or has a side over [`MAX_JPEG_SIDE`]; that
+    /// answer is remembered until `forget` or `clear`, or until the file's
+    /// length or modification time changes.
+    ///
+    /// Polls `progress` for cancellation while it waits, every
+    /// [`SLOT_WAIT_POLL`], and after its own decode, before it builds the
+    /// pyramid, and answers [`GetError::Cancelled`] when it is cancelled,
+    /// remembering nothing. It reports nothing through `progress`; a caller
+    /// with nothing to cancel passes `&Progress::none()`.
     ///
     /// A caller already inside a rayon parallel loop calls this rather than
     /// [`Self::get_many`].
-    pub fn get(&self, path: &Path) -> Result<Arc<ImageU8Pyramid>, GetError> {
-        self.get_found(path).0
+    pub fn get(
+        &self,
+        path: &Path,
+        progress: &Progress<'_>,
+    ) -> Result<Arc<ImageU8Pyramid>, GetError> {
+        self.get_found(path, progress).0
     }
 
     /// The pyramid for `path` if it is decoded, without reading anything and
@@ -283,12 +402,14 @@ impl PhotographCache {
         let Some(slot) = self.lock().map.get(path).map(Arc::clone) else {
             return PeekedPhotograph::NotDecoded;
         };
-        let Some(value) = slot.value.get() else {
+        // The slot's lock is never held across a decode, so this does not
+        // wait on one.
+        let Some(value) = slot.made() else {
             return PeekedPhotograph::NotDecoded;
         };
         self.touch(&slot);
         match value {
-            Ok(pyramid) => PeekedPhotograph::Decoded(Arc::clone(pyramid)),
+            Ok(pyramid) => PeekedPhotograph::Decoded(pyramid),
             Err(_) => PeekedPhotograph::Unreadable,
         }
     }
@@ -297,15 +418,16 @@ impl PhotographCache {
     /// pool. Returns one entry per path, in order, and the tally the caller's
     /// phase note reports.
     ///
-    /// Counts `images` through `progress` as each path is answered and polls
-    /// it for cancellation before each decode. It opens no phase of its own:
+    /// Counts `images` through `progress` as each path is answered, and polls
+    /// it for cancellation before each path and as [`Self::get`] polls it. It
+    /// opens no phase of its own:
     /// the caller names the phase (the viewer's is `decode images`) and writes
     /// its note from the tally, and may add [`Self::stats`] to it.
     ///
     /// # Errors
     ///
     /// [`Cancelled`] when `progress` was cancelled. What was decoded before
-    /// that stays in the cache.
+    /// that stays in the cache; a decode it stopped leaves its slot empty.
     // Spelled out rather than behind an alias, so the signature reads the same
     // here, in the docs and in the spec.
     #[allow(clippy::type_complexity)]
@@ -322,7 +444,7 @@ impl PhotographCache {
                 if progress.is_cancelled() {
                     return None;
                 }
-                let found = self.get_found(path);
+                let found = self.get_found(path, progress);
                 let n = answered.fetch_add(1, Ordering::Relaxed) + 1;
                 progress.count(n as u64, Some(total as u64), "images");
                 Some(found)
@@ -336,6 +458,7 @@ impl PhotographCache {
                 // Every entry is `Some` when the call was not cancelled.
                 let (pyramid, how) = entry.ok_or(Cancelled)?;
                 match (&pyramid, how) {
+                    (Err(GetError::Cancelled), _) => return Err(Cancelled),
                     (Err(_), _) => tally.unreadable += 1,
                     (Ok(_), Found::Decoded) => tally.read += 1,
                     (Ok(_), Found::Reused) => tally.reused += 1,
@@ -363,12 +486,7 @@ impl PhotographCache {
             return;
         }
         let bytes = pyramid.byte_len() as u64;
-        let slot = Arc::new(Slot {
-            value: OnceLock::from(Ok(pyramid)),
-            stamp: file_stamp(path),
-            last_used: AtomicU64::new(0),
-            charged: AtomicU64::new(0),
-        });
+        let slot = Arc::new(Slot::new(SlotState::Made(Ok(pyramid)), file_stamp(path)));
         {
             let mut inner = self.lock();
             inner.remove(path);
@@ -396,7 +514,7 @@ impl PhotographCache {
         let entries = inner
             .map
             .values()
-            .filter(|slot| matches!(slot.value.get(), Some(Ok(_))))
+            .filter(|slot| matches!(slot.made(), Some(Ok(_))))
             .count();
         PhotographCacheStats {
             entries,
@@ -413,19 +531,36 @@ impl PhotographCache {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    #[cfg(test)]
+    fn slot_event(&self, event: SlotEvent) {
+        if let Some(on_slot_event) = &self.on_slot_event {
+            on_slot_event(event);
+        }
+    }
+
     fn touch(&self, slot: &Slot) {
         let tick = self.tick.fetch_add(1, Ordering::Relaxed);
         slot.last_used.store(tick, Ordering::Relaxed);
     }
 
-    /// Must not use rayon. It runs inside a slot's `get_or_init`, and a rayon
-    /// worker waiting in a nested join may steal another `get_many` item for
-    /// the same path, which would re-enter that `OnceLock` on the same thread
-    /// and deadlock. Neither the file decode nor `ImageU8Pyramid::from_image`
-    /// uses rayon's global pool. The decode may start threads of its own (one
-    /// per colour component in `jpeg-decoder`, a private pool in `exr`), which
-    /// take no work from the global pool; see the photograph-cache spec.
-    fn decode(&self, path: &Path) -> Result<Arc<ImageU8Pyramid>, GetError> {
+    /// Decode `path` and build its pyramid, polling `progress` between the
+    /// two: [`GetError::Cancelled`] when it was cancelled during the decode.
+    ///
+    /// Must not use rayon. It runs while its slot is marked as being made, and
+    /// a rayon worker waiting in a nested join may steal another `get_many`
+    /// item for the same path, which would find that slot being made by its
+    /// own thread and wait on itself forever. Neither the file decode nor
+    /// `ImageU8Pyramid::from_image` uses rayon's global pool. The decode may
+    /// start threads of its own (one per colour component in `jpeg-decoder`,
+    /// a private pool in `exr`), which take no work from the global pool; see
+    /// the photograph-cache spec.
+    fn decode(
+        &self,
+        path: &Path,
+        progress: &Progress<'_>,
+    ) -> Result<Arc<ImageU8Pyramid>, GetError> {
+        #[cfg(test)]
+        self.slot_event(SlotEvent::DecodeStarted);
         let unreadable = |e: ::image::ImageError| match e {
             ::image::ImageError::IoError(io) if io.kind() == std::io::ErrorKind::NotFound => {
                 GetError::NotFound(path.to_path_buf())
@@ -443,14 +578,21 @@ impl PhotographCache {
             });
         }
         let image = ImageU8::read_rgb(path).map_err(unreadable)?;
+        if progress.is_cancelled() {
+            return Err(GetError::Cancelled);
+        }
         let levels = ImageU8Pyramid::full_levels(image.width, image.height);
         Ok(Arc::new(ImageU8Pyramid::from_image(image, levels)))
     }
 
-    fn get_found(&self, path: &Path) -> (Result<Arc<ImageU8Pyramid>, GetError>, Found) {
+    fn get_found(
+        &self,
+        path: &Path,
+        progress: &Progress<'_>,
+    ) -> (Result<Arc<ImageU8Pyramid>, GetError>, Found) {
         if self.budget_bytes == 0 {
             self.misses.fetch_add(1, Ordering::Relaxed);
-            return (self.decode(path), Found::Decoded);
+            return (self.decode(path, progress), Found::Decoded);
         }
         // Stat with the lock released; it is a system call.
         let stamp = file_stamp(path);
@@ -460,12 +602,7 @@ impl PhotographCache {
                 Some(slot) if slot.stamp == stamp => Arc::clone(slot),
                 _ => {
                     inner.remove(path);
-                    let slot = Arc::new(Slot {
-                        value: OnceLock::new(),
-                        stamp,
-                        last_used: AtomicU64::new(0),
-                        charged: AtomicU64::new(0),
-                    });
+                    let slot = Arc::new(Slot::new(SlotState::Empty, stamp));
                     inner.map.insert(path.to_path_buf(), Arc::clone(&slot));
                     slot
                 }
@@ -473,19 +610,51 @@ impl PhotographCache {
         };
         self.touch(&slot);
 
-        let mut decoded_here = false;
-        let value = slot
-            .value
-            .get_or_init(|| {
-                decoded_here = true;
-                self.decode(path)
-            })
-            .clone();
-        if !decoded_here {
-            self.hits.fetch_add(1, Ordering::Relaxed);
-            return (value, Found::Reused);
-        }
+        // Wait while another caller makes the slot, and take it over when it
+        // is empty, as it is before anyone has decoded it and after its maker
+        // stopped.
+        #[cfg(test)]
+        let mut told_waiting = false;
+        let making = {
+            let mut state = slot.lock();
+            loop {
+                match &*state {
+                    SlotState::Made(value) => {
+                        self.hits.fetch_add(1, Ordering::Relaxed);
+                        return (value.clone(), Found::Reused);
+                    }
+                    SlotState::Making => {
+                        if progress.is_cancelled() {
+                            return (Err(GetError::Cancelled), Found::Reused);
+                        }
+                        #[cfg(test)]
+                        if !std::mem::replace(&mut told_waiting, true) {
+                            self.slot_event(SlotEvent::WaitStarted);
+                        }
+                        state = slot
+                            .ready
+                            .wait_timeout(state, SLOT_WAIT_POLL)
+                            .unwrap_or_else(|e| e.into_inner())
+                            .0;
+                    }
+                    SlotState::Empty => {
+                        *state = SlotState::Making;
+                        break Making {
+                            slot: &slot,
+                            finished: false,
+                        };
+                    }
+                }
+            }
+        };
         self.misses.fetch_add(1, Ordering::Relaxed);
+        let value = self.decode(path, progress);
+        if let Err(GetError::Cancelled) = value {
+            // Dropping the hold empties the slot and wakes its waiters.
+            drop(making);
+            return (value, Found::Decoded);
+        }
+        making.finish(value.clone());
         if let Ok(pyramid) = &value {
             self.charge(path, &slot, pyramid.byte_len() as u64);
         }

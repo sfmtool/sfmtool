@@ -42,7 +42,7 @@ The cache lives in
 beside `ImageU8Pyramid` in [image.rs](../../../crates/sfmtool-core/src/camera/image.rs),
 exported as `sfmtool_core::camera::PhotographCache` together with
 `GetError`, `PeekedPhotograph`, `GetManyTally` and `PhotographCacheStats`.
-`default_budget_bytes` and `BUDGET_ENV_VAR` are reached through
+`default_budget_bytes`, `BUDGET_ENV_VAR` and `SLOT_WAIT_POLL` are reached through
 `sfmtool_core::camera::photograph_cache`. It is in `sfmtool-core` rather than
 the viewer so that `render_display_patch_bitmaps`, which `sfm web-export` also
 calls, can take one.
@@ -59,11 +59,14 @@ impl PhotographCache {
     pub fn new(budget_bytes: u64) -> Self;
     pub fn budget_bytes(&self) -> u64;
 
-    /// The pyramid for `path`, decoding on a miss. Blocks while another thread
+    /// The pyramid for `path`, decoding on a miss. Waits while another thread
     /// is decoding the same path, and then returns its result rather than
-    /// decoding a second time. An error when the file does not exist, cannot
-    /// be read, or has a side over `MAX_JPEG_SIDE` (65535).
-    pub fn get(&self, path: &Path) -> Result<Arc<ImageU8Pyramid>, GetError>;
+    /// decoding a second time, or decodes in its place if that thread stops.
+    /// An error when the file does not exist, cannot be read, or has a side
+    /// over `MAX_JPEG_SIDE` (65535), and `Cancelled` when `progress` is
+    /// cancelled while it waits or decodes.
+    pub fn get(&self, path: &Path, progress: &Progress<'_>)
+        -> Result<Arc<ImageU8Pyramid>, GetError>;
 
     /// The pyramid for `path` if it is decoded, without reading or stat'ing
     /// anything and without waiting on a decode in flight.
@@ -74,7 +77,8 @@ impl PhotographCache {
 
     /// `get` for every path, the misses decoded in parallel on the rayon
     /// pool. One entry per path, in order, and a tally. Counts `images`
-    /// through `progress` and polls it for cancellation before each decode.
+    /// through `progress` and polls it for cancellation before each path and
+    /// as `get` does.
     pub fn get_many(
         &self,
         paths: &[&Path],
@@ -93,7 +97,7 @@ impl PhotographCache {
 }
 
 pub enum GetError { NotFound(PathBuf), Unreadable(String),
-                    TooLarge { path: PathBuf, width: u32, height: u32 } }
+                    TooLarge { path: PathBuf, width: u32, height: u32 }, Cancelled }
 
 pub enum PeekedPhotograph { Decoded(Arc<ImageU8Pyramid>), Unreadable, NotDecoded }
 
@@ -109,6 +113,10 @@ pub fn default_budget_bytes() -> u64;
 
 /// "SFM_EXPLORER_PHOTOGRAPH_CACHE_MB": a whole number of megabytes (10^6 bytes).
 pub const BUDGET_ENV_VAR: &str;
+
+/// 50 ms: how often a caller waiting on another caller's decode looks at its
+/// own `Progress` for cancellation.
+pub const SLOT_WAIT_POLL: Duration;
 ```
 
 Why it is shaped this way:
@@ -123,8 +131,12 @@ Why it is shaped this way:
 - **Taking `&self` and held in an `Arc`.** A caller holds
   `Arc<PhotographCache>` and a background job's closure captures a clone, so a
   worker puts what it decodes where the next worker and the panels find it.
-- **`get` blocks, `peek` does not.** A worker wants the pixels and is prepared
-  to wait for them. The GUI thread must not wait on a decode, so it asks
+- **`get` waits, `peek` does not.** A worker wants the pixels and is prepared
+  to wait for them, as long as its own task is not cancelled: `get` takes the
+  caller's `Progress` so that a cancelled task stops waiting on a decode
+  another caller started, rather than wait out a decode of a second or more.
+  A caller with nothing to cancel passes `&Progress::none()`. `get` reports
+  nothing through it. The GUI thread must not wait on a decode, so it asks
   whether they are there. `peek_state` adds the one thing a caller that starts
   a decode on a miss needs: whether a decode was already tried and failed, so
   it does not start another for a file that cannot be read.
@@ -297,19 +309,36 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 ## Implementation notes
 
 - **Concurrency.** The map is a `Mutex<HashMap<PathBuf, Arc<Slot>>>`, where a
-  slot holds a `OnceLock` for the result, the file stamp and a last-used tick.
-  `get` holds the lock only to find or insert the slot, stats the file with the
-  lock released, and calls `get_or_init` on the slot with the lock released.
-  Two threads asking for one path decode it once, and the second waits for the
-  first. Different paths decode at the same time. The byte count and the
-  eviction happen under the map lock after a slot is filled, not inside the
-  decode. A decode whose slot left the map meanwhile (forgotten, cleared,
-  evicted or replaced by a newer file) still returns its pyramid to the caller,
-  but the cache neither keeps nor counts it.
-- **The decode must not use rayon.** It runs inside a slot's `get_or_init`.
-  If it used rayon, a rayon worker waiting in a nested join could steal
-  another `get_many` item for the same path, re-enter that `OnceLock` on the
-  same thread and deadlock. So the decode is `ImageU8::read_rgb` followed by
+  slot holds its state behind a mutex of its own (empty, being made by one
+  caller, or made, with the pyramid or the remembered failure), a condition
+  variable, the file stamp and a last-used tick. `get` holds the map lock only
+  to find or insert the slot, and stats the file with it released. A caller
+  that finds the slot empty marks it as being made and decodes with no lock
+  held; a caller that finds it being made waits on the condition variable
+  with `Condvar::wait_timeout` of `SLOT_WAIT_POLL`, looking at its own
+  `Progress` after each wake, and stops with `GetError::Cancelled` when it is
+  cancelled, leaving the decode to its maker. So two threads asking for one
+  path decode it once, and the second waits for the first. Different paths
+  decode at the same time. The byte count and the eviction happen under the
+  map lock after a slot is made, not inside the decode. A decode whose slot
+  left the map meanwhile (forgotten, cleared, evicted or replaced by a newer
+  file) still returns its pyramid to the caller, but the cache neither keeps
+  nor counts it.
+- **Cancellation, and a maker that stops.** The maker looks at its
+  `Progress` once more after the decode, before it builds the pyramid; when
+  it is cancelled it builds nothing, remembers nothing, sets the slot back to
+  empty and wakes the waiters, and the first waiter to take the slot's lock
+  marks it as being made and decodes the photograph itself, while the others
+  go on waiting. A slot is never left marked as being made by a caller that
+  has stopped: the maker's hold on the slot is a guard that empties it and
+  wakes the waiters when it is dropped unfinished, a panic included. The slot
+  is not a `OnceLock` because a `OnceLock` cannot be abandoned once a thread
+  has started to fill it, so its waiters could not stop, and a cancelled
+  maker would have to finish.
+- **The decode must not use rayon.** It runs while its slot is marked as
+  being made. If it used rayon, a rayon worker waiting in a nested join could
+  steal another `get_many` item for the same path, find that slot being made
+  by its own thread, and wait on itself for ever. So the decode is `ImageU8::read_rgb` followed by
   `ImageU8Pyramid::from_image(image, levels)`, neither of which uses rayon's
   global pool, and the rayon parallelism is across paths in `get_many`.
   `read_rgb` is not always single-threaded, but nothing it starts takes work
@@ -323,8 +352,10 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   already inside a rayon parallel loop calls `get` rather than `get_many`.
 - **Counters.** A `get` that decoded nothing is a hit, whether the entry was
   there or another thread's decode was waited on; each path of a `get_many`
-  counts as one `get`. Every decode is a miss, whether it succeeded or not.
-  `peek` counts as a use for the eviction order but not as a hit.
+  counts as one `get`. Every decode started is a miss, whether it succeeded,
+  failed or was cancelled, and a `get` that stopped waiting because it was
+  cancelled is neither. `peek` counts as a use for the eviction order but not
+  as a hit.
 
 ## Parameters
 
@@ -346,7 +377,16 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   decoded again, `forget` and `clear` releasing bytes, `get_many` order, tally
   and cancellation, budget 0 keeping nothing, `peek_state` telling a failure
   from no answer and not waiting on a decode in flight, `insert`, and the
-  default budget from physical memory and the environment variable.
+  default budget from physical memory and the environment variable. The
+  slot's tests hold a decode in progress through a hook the test build
+  calls as a decode starts and as a caller starts to wait, and wait for
+  every thread they start with a time limit, so a caller that never returns
+  fails the test rather than hang it: a maker cancelled during its decode
+  answers `Cancelled` and a caller waiting on it decodes in its place; a
+  `get` and a `get_many` waiting on a held decode stop when they are
+  cancelled, and the decode goes on for its maker; a maker that panics leaves
+  the slot empty for the next caller; and a cancelled decode is not
+  remembered, with a budget or without one.
 - [view_selection/tests.rs](../../../crates/sfmtool-core/src/patch/view_selection/tests.rs):
   the cull on a camera behind the patch, one the patch faces away from, a
   footprint off frame or partly in frame, a point at infinity, a footprint that

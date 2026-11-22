@@ -458,7 +458,7 @@ fn a_photograph_in_core_writes_nothing() {
     ));
     for path in [&photograph, &alone] {
         let cache = PhotographCache::new(1 << 30);
-        assert!(cache.get(path).is_ok());
+        assert!(cache.get(path, &Progress::none()).is_ok());
     }
     assert!(!ws.mipmaps().exists());
     assert_eq!(files_under(bare.path()).len(), 1);
@@ -531,7 +531,14 @@ fn a_side_of_65536_is_refused_from_the_header_in_every_workspace_kind() {
             photograph_layout(path, TILE).unwrap_err().to_string(),
             message
         );
-        assert_eq!(cache.get(path).err().unwrap().to_string(), message);
+        assert_eq!(
+            cache
+                .get(path, &Progress::none())
+                .err()
+                .unwrap()
+                .to_string(),
+            message
+        );
         match photograph_layout(path, TILE) {
             Err(MipmapError::TooLarge {
                 path: named,
@@ -540,7 +547,7 @@ fn a_side_of_65536_is_refused_from_the_header_in_every_workspace_kind() {
             }) => assert_eq!(&named, path),
             other => panic!("{}: {other:?}", path.display()),
         }
-        match cache.get(path) {
+        match cache.get(path, &Progress::none()) {
             Err(GetError::TooLarge {
                 path: named,
                 width: 65536,

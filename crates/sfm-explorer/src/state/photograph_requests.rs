@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use sfmtool_core::camera::image::ImageU8Pyramid;
 use sfmtool_core::camera::{PeekedPhotograph, PhotographCache};
+use sfmtool_core::progress::Progress;
 use sfmtool_core::SfmrReconstruction;
 
 use super::photograph_path;
@@ -60,7 +61,7 @@ impl PhotographRequests {
         let path = path.to_path_buf();
         let ctx = ctx.clone();
         rayon::spawn(move || {
-            let _ = cache.get(&path);
+            let _ = cache.get(&path, &Progress::none());
             // After the get, so a frame that no longer finds the path in flight
             // finds its entry in the cache.
             in_flight
@@ -105,10 +106,12 @@ pub(crate) fn display_photograph(
     match cache.peek_state(&path) {
         PeekedPhotograph::Decoded(pyramid) => DisplayPhotograph::Decoded(pyramid),
         PeekedPhotograph::Unreadable => DisplayPhotograph::Unreadable,
-        PeekedPhotograph::NotDecoded if cache.budget_bytes() == 0 => match cache.get(&path) {
-            Ok(pyramid) => DisplayPhotograph::Decoded(pyramid),
-            Err(_) => DisplayPhotograph::Unreadable,
-        },
+        PeekedPhotograph::NotDecoded if cache.budget_bytes() == 0 => {
+            match cache.get(&path, &Progress::none()) {
+                Ok(pyramid) => DisplayPhotograph::Decoded(pyramid),
+                Err(_) => DisplayPhotograph::Unreadable,
+            }
+        }
         PeekedPhotograph::NotDecoded => {
             requests.request(cache, &path, ctx);
             DisplayPhotograph::Decoding
