@@ -5,7 +5,7 @@
 //! one every row built at once, from the `.sift` first, the photograph second
 //! and the grey placeholder last.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -15,14 +15,6 @@ use sfmtool_core::{ObservationSource, SfmrReconstruction, THUMBNAIL_SIZE};
 
 use super::{row_for, BuiltFrom, DisplayThumbnails, PLACEHOLDER_GREY};
 use crate::scene::SceneNode;
-
-/// A directory of this test's own under the system temp dir, emptied first.
-pub(crate) fn temp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("sfm_explorer_display_thumbnails_{name}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("a writable temp dir");
-    dir
-}
 
 /// The flat colour photograph `image` is written as.
 pub(crate) fn colour_of(image: usize) -> [u8; 3] {
@@ -152,7 +144,8 @@ fn a_file_with_thumbnails_shares_its_own_column() {
 /// reconstruction vouches for, then the photograph, then the grey.
 #[test]
 fn a_row_comes_from_the_sift_first_the_photograph_second_and_the_grey_last() {
-    let dir = temp_dir("sources");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let mut recon = workspace_with_photographs(&dir, &[2, 5]);
     // 0, 1 and 2 have a vouched-for .sift, 2 without its photograph; 3 has a
     // .sift the reconstruction does not vouch for; 5 has neither.
@@ -183,12 +176,12 @@ fn a_row_comes_from_the_sift_first_the_photograph_second_and_the_grey_last() {
         "row 4 is its photograph's resize"
     );
     assert!(is_flat(row(5), [PLACEHOLDER_GREY; 3]));
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_capture_with_nothing_to_build_from_has_no_display_column() {
-    let dir = temp_dir("absent");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let all: Vec<usize> = (0..8).collect();
     let recon = workspace_with_photographs(&dir, &all);
     let (display, from) = build(&recon);
@@ -196,22 +189,22 @@ fn a_capture_with_nothing_to_build_from_has_no_display_column() {
     assert_eq!(from.placeholders, recon.image_set.images.len());
     // Every panel falls back to its placeholder.
     assert!(row_for(None, &recon, 0).is_none());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_build_that_is_cancelled_says_so() {
-    let dir = temp_dir("cancelled");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let recon = workspace_with_photographs(&dir, &[]);
     let stop = AtomicBool::new(true);
     let progress = Progress::none().cancelled_by(&stop);
     assert!(DisplayThumbnails::build(&recon, &progress).is_err());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn rows_follow_the_image_name_across_a_renumbering() {
-    let dir = temp_dir("renumber");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let recon = workspace_with_photographs(&dir, &[]);
     let display = build(&recon).0.expect("photographs");
 
@@ -222,12 +215,12 @@ fn rows_follow_the_image_name_across_a_renumbering() {
         .unwrap();
     let row = row_for(Some(&display), &subset, 2).expect("a row");
     assert!(is_flat(row, colour_of(3)));
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn an_image_the_column_was_not_built_for_falls_back_to_the_values_column() {
-    let dir = temp_dir("fallback");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let recon = workspace_with_photographs(&dir, &[]);
     let display = build(&recon).0.expect("photographs");
 
@@ -247,5 +240,4 @@ fn an_image_the_column_was_not_built_for_falls_back_to_the_values_column() {
         row_for(Some(&display), &other, 4).unwrap(),
         colour_of(4)
     ));
-    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -54,11 +54,6 @@ pub(crate) fn saved_with_photographs(dir: &Path) -> PathBuf {
     save_into(dir, &recon, "recon.sfmr")
 }
 
-/// A directory of this test's own, emptied first.
-fn temp_dir(name: &str) -> PathBuf {
-    crate::display_thumbnails::tests::temp_dir(&format!("open_{name}"))
-}
-
 /// The newest Action Log entry.
 fn newest(state: &AppState) -> &crate::action_log::Entry {
     state.action_log.entries().next_back().expect("an entry")
@@ -66,7 +61,8 @@ fn newest(state: &AppState) -> &crate::action_log::Entry {
 
 #[test]
 fn opening_builds_every_thumbnail_from_the_sift_first_then_the_photographs() {
-    let dir = temp_dir("thumbnails");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let mut recon = workspace_with_photographs(&dir, &[2, 5]);
     write_sift_thumbnails(&mut recon, &[0, 1, 2], &[0, 1, 2]);
     let n = recon.image_set.images.len();
@@ -96,12 +92,12 @@ fn opening_builds_every_thumbnail_from_the_sift_first_then_the_photographs() {
             n - 4
         )),
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn opening_renders_the_patch_bitmaps_a_file_does_not_carry() {
-    let dir = temp_dir("bitmaps");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = saved_with_photographs(&dir);
 
     let mut state = AppState::new();
@@ -188,14 +184,14 @@ fn opening_renders_the_patch_bitmaps_a_file_does_not_carry() {
         regions.ends_with("reads on tiles") && !regions.starts_with("0 region pyramids assembled"),
         "{regions}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A photograph the cache hands back that lacks pixels a render reads fails
 /// the open, naming the read, rather than being left out of the render.
 #[test]
 fn an_open_whose_photographs_lack_pixels_fails() {
-    let dir = temp_dir("bitmaps_unreadable");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = saved_with_photographs(&dir);
     let recon = SfmrReconstruction::load(&path, &sfmtool_core::progress::Progress::none())
         .expect("the file reads");
@@ -217,7 +213,6 @@ fn an_open_whose_photographs_lack_pixels_fails() {
             && error.contains("a photograph could not be read: a photograph in memory: "),
         "{error}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A file without bitmaps that stores references gets display bitmaps rendered
@@ -227,7 +222,8 @@ fn an_open_whose_photographs_lack_pixels_fails() {
 /// column back.
 #[test]
 fn opening_renders_display_bitmaps_from_the_file_s_references() {
-    let dir = temp_dir("bitmaps_from_references");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let first = saved_with_photographs(&dir);
     let mut recon = SfmrReconstruction::load(&first, &sfmtool_core::progress::Progress::none())
         .expect("the file reads");
@@ -302,14 +298,14 @@ fn opening_renders_display_bitmaps_from_the_file_s_references() {
             .to_vec(),
         stored
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The open reads the photographs through the viewer's cache, so opening the
 /// file again, or anything else that reads them afterwards, decodes nothing.
 #[test]
 fn a_second_open_reads_the_photographs_from_the_cache() {
-    let dir = temp_dir("bitmaps_cached");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = saved_with_photographs(&dir);
 
     let mut state = AppState::new();
@@ -347,7 +343,6 @@ fn a_second_open_reads_the_photographs_from_the_cache() {
         column(second),
         "the same pixels, the same tiles"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// What the open filled in is not part of the reconstruction: the value keeps
@@ -355,7 +350,8 @@ fn a_second_open_reads_the_photographs_from_the_cache() {
 /// writes the columns the file had.
 #[test]
 fn the_fill_in_keeps_the_files_identity_and_a_save_writes_its_own_columns() {
-    let dir = temp_dir("identity");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = saved_with_photographs(&dir);
     let file_hash = sfmtool_sfmr_format::read_sfmr(&path)
         .unwrap()
@@ -406,12 +402,12 @@ fn the_fill_in_keeps_the_files_identity_and_a_save_writes_its_own_columns() {
             .shape()[0],
         node.recon().point_count()
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_path_that_is_not_a_file_is_refused_before_anything_starts() {
-    let dir = temp_dir("missing");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let mut state = AppState::new();
     let error = state
         .start_open(vec![dir.join("there-is-no-such-file.sfmr")])
@@ -419,7 +415,6 @@ fn a_path_that_is_not_a_file_is_refused_before_anything_starts() {
     assert!(error.starts_with("Failed to load "), "{error}");
     assert!(state.running_tasks().next().is_none());
     assert_eq!(state.action_log.entries().count(), 0, "nothing is logged");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// An open runs from the fast queue: one started while another fast task runs
@@ -427,7 +422,8 @@ fn a_path_that_is_not_a_file_is_refused_before_anything_starts() {
 /// once.
 #[test]
 fn an_open_waits_while_the_fast_queue_runs_and_not_the_slow_one() {
-    let dir = temp_dir("busy");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let recon = workspace_with_photographs(&dir, &[]);
     let path = save_into(&dir, &recon, "recon.sfmr");
     let mut state = AppState::new();
@@ -469,12 +465,12 @@ fn an_open_waits_while_the_fast_queue_runs_and_not_the_slow_one() {
     );
     gate.send(()).expect("the solve is waiting");
     state.finish_background_task(slow);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn several_files_open_in_order_as_one_task() {
-    let dir = temp_dir("several");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let recon = workspace_with_photographs(&dir, &[]);
     let first = save_into(&dir, &recon, "first.sfmr");
     let second = save_into(&dir, &recon, "second.sfmr");
@@ -506,7 +502,6 @@ fn several_files_open_in_order_as_one_task() {
             .as_str()
         )
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Open the fixture with both columns filled in, and delete a point so the
@@ -523,7 +518,8 @@ fn opened_and_edited(dir: &Path) -> (AppState, ReconId, PathBuf) {
 
 #[test]
 fn save_as_minimal_writes_the_minimal_file_and_leaves_the_node() {
-    let dir = temp_dir("minimal");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (mut state, id, path) = opened_and_edited(&dir);
     let (versions, disk, points) = {
         let node = state.node(id).unwrap();
@@ -565,12 +561,12 @@ fn save_as_minimal_writes_the_minimal_file_and_leaves_the_node() {
         "{}",
         entry.text
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_minimal_copy_over_the_nodes_own_file_is_refused() {
-    let dir = temp_dir("minimal_own");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (mut state, id, path) = opened_and_edited(&dir);
     let before = std::fs::read(&path).unwrap();
     let error = state
@@ -585,5 +581,4 @@ fn a_minimal_copy_over_the_nodes_own_file_is_refused() {
         before,
         "the file is untouched"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }

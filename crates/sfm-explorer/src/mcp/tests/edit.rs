@@ -2677,20 +2677,12 @@ fn a_node_from_no_file_reports_no_version_on_disk() {
     assert_eq!(history["versions"][0]["is_on_disk"], false);
 }
 
-/// A directory of this test's own under the system temp dir, emptied first so a
-/// rerun does not read a previous run's file.
-pub(super) fn temp_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("sfm_explorer_mcp_{name}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("a writable temp dir");
-    dir
-}
-
 /// Save As writes where it is told and re-points the node; Save afterwards
 /// writes over what Save As chose.
 #[test]
 fn save_reconstruction_writes_to_a_path_and_then_over_it() {
-    let dir = temp_dir("save");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("edited.sfmr");
     // A plain demo node rather than [`editable`]'s: what a save is about is the
     // file it writes, and this one is a value the writer accepts whole.
@@ -2760,7 +2752,8 @@ fn saving_a_node_from_no_file_without_a_path_is_refused() {
 /// was; it needs a path, and never goes over the node's own file.
 #[test]
 fn save_reconstruction_minimal_writes_a_copy_and_leaves_the_node() {
-    let dir = temp_dir("save_minimal");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let own = dir.join("recon.sfmr");
     let copy = dir.join("recon-minimal.sfmr");
     let mut state = AppState::new();
@@ -2806,7 +2799,6 @@ fn save_reconstruction_minimal_writes_a_copy_and_leaves_the_node() {
         json!({ "reconstruction_label": "recon", "minimal": true }),
     );
     assert!(error.0.contains("pass path"), "{error}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// `workspace_path` is recorded as it stands, wherever the file is written, and
@@ -2814,7 +2806,8 @@ fn save_reconstruction_minimal_writes_a_copy_and_leaves_the_node() {
 /// where it already is, so the path it records is already the right one.
 #[test]
 fn save_reconstruction_states_the_workspace_path_and_needs_a_path() {
-    let dir = temp_dir("save_workspace_path");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let own = dir.join("recon.sfmr");
     let copy = dir.join("published").join("recon.sfmr");
     std::fs::create_dir_all(copy.parent().expect("a parent")).expect("a writable temp dir");
@@ -2843,7 +2836,6 @@ fn save_reconstruction_states_the_workspace_path_and_needs_a_path() {
         json!({ "reconstruction_label": "recon", "workspace_path": "." }),
     );
     assert!(error.0.contains("pass path with workspace_path"), "{error}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The editing tools name their reconstruction rather than defaulting to the

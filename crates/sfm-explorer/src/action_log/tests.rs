@@ -1248,15 +1248,6 @@ fn a_headless_bundle_adjustment_records_its_stages_and_the_kernels() {
 
 // -- Coverage: every operation names its stages --------------------------
 
-/// A directory of this test's own under the system temp dir, emptied first so
-/// a rerun does not read a previous run's file.
-fn temp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("sfm_explorer_progress_{name}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("a writable temp dir");
-    dir
-}
-
 /// A `.sfmr` file in `dir`, and the workspace marker an open resolves against.
 ///
 /// The marker is what makes the file openable at all: a load resolves the
@@ -1375,7 +1366,8 @@ fn every_operation_names_at_least_one_stage() {
     ];
 
     for (what, drive) in operations {
-        let state = drive(&temp_dir(&what.replace(' ', "_")));
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let state = drive(dir.path());
         let entry = state
             .action_log
             .entries()
@@ -1398,7 +1390,8 @@ fn every_operation_names_at_least_one_stage() {
 /// stage either.
 #[test]
 fn opening_a_file_names_the_loads_stages_and_the_append() {
-    let dir = temp_dir("open_stages");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = openable_file(&dir);
     // A version 16 `sift_files` file written without the inline keypoints, with
     // no `.sift` beside it.

@@ -5,8 +5,6 @@
 //! saved, and which point an id lands on after an undo, an edit over it, or a
 //! materialisation.
 
-use std::path::PathBuf;
-
 use sfmtool_core::SfmrReconstruction;
 
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
@@ -19,15 +17,6 @@ fn state() -> AppState {
     let mut state = AppState::new();
     state.append_node(SceneNode::demo(SfmrReconstruction::demo(64)));
     state
-}
-
-/// A directory of this test's own under the system temp dir, emptied first so a
-/// rerun does not read a previous run's file.
-fn temp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("sfm_explorer_ids_{name}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("a writable temp dir");
-    dir
 }
 
 /// A state holding one node that came from `dir/recon.sfmr`, selected, with its
@@ -185,7 +174,8 @@ fn a_save_moves_the_id_onto_the_file_that_was_just_written() {
     // Loaded, edited, saved. The point is a row of the file now on disk, so its
     // id is that file's hash and that row: a reader of the saved file resolves
     // it with nothing else to hand.
-    let dir = temp_dir("after_save");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let mut state = state_from_file(&dir);
     let node_id = id(&state);
     let loaded_hash = disk_hash(&state);
@@ -218,7 +208,8 @@ fn an_undo_past_a_save_puts_the_id_back_on_the_loaded_file() {
     // The cursor is on a version the saved one is not an ancestor of, so the
     // point's identity does not reach the disk version and the earliest rule
     // takes over: the file the node was loaded from.
-    let dir = temp_dir("undo_past_save");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let mut state = state_from_file(&dir);
     let node_id = id(&state);
     let loaded_hash = disk_hash(&state);
@@ -248,7 +239,8 @@ fn a_point_created_since_the_last_save_is_named_by_the_edit_that_made_it() {
     // It is a row of no base, the one on disk included, so there is nothing for
     // the disk rule to name it with and the creating edit's own hash is the
     // earliest content its identity reaches.
-    let dir = temp_dir("created");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let mut state = state_from_file(&dir);
     let record = state.scene[0]
         .edited()
