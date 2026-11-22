@@ -163,7 +163,7 @@ fn summary(
             json!({
                 "endpoint": side.wire_name(),
                 "camera_image": image,
-                "name": recon.image_set.images.get(image as usize).map(|i| i.name.clone()),
+                "camera_image_name": recon.image_set.images.get(image as usize).map(|i| i.name.clone()),
                 "pixel": row.pixel(side),
                 "resolved": measurements::endpoint(resolved, side).is_ok(),
             })
@@ -233,7 +233,7 @@ fn endpoint_detail(
     json!({
         "endpoint": side.wire_name(),
         "camera_image": image,
-        "name": recon.image_set.images.get(image as usize).map(|i| i.name.clone()),
+        "camera_image_name": recon.image_set.images.get(image as usize).map(|i| i.name.clone()),
         "pixel": row.pixel(side),
         "position_unit": unit,
         "resolution": resolution,
