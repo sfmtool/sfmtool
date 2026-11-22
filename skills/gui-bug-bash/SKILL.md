@@ -181,6 +181,27 @@ Each of these found at least one real bug in the first run.
   scrolls every list. The context menus of Image
   Detail and the Scene tree are listed in `click`'s reply as soon as they
   open.
+- **Probe the gestures against the interaction rules.** Every gesture follows
+  the rules G1 to G12 in `specs/gui/interaction-rules.md`, so they are a
+  probe list. For each panel in scope, `click`, `click` with `count: 2`,
+  `click` with `mouse_button: "right"` and `hover` each kind of target it
+  shows (a thumbnail, each kind of tree row, a frustum, a point, a feature,
+  empty space, a Bench row, a Track Table row, a Track View row, an Edit
+  History row, a mark), and the modifier clicks on a Track View row (G12).
+  After each, read what the rule says should have happened: the `selection`
+  block of `get_scene` (G1, G3), the 3D view in `get_scene`'s `view` (G1
+  says a click leaves it alone, G2 and G4 say how a double-click moves it),
+  `get_image_detail_view` (G5), the version count in
+  `get_reconstruction_history` (a click pushes none, a double-click on a
+  point pushes one when its track is not on the bench), which panel is in
+  front in `get_window_layout` (G2, G9), the menu `click`'s reply lists
+  (G3), and the hover a panel draws (G6, by screenshot). Repeat a point
+  double-click, and a double-click on a reconstruction or camera row, with a
+  camera held for Move Camera (`press_key` `M` in camera view), where G4
+  says nothing moves. **A gesture the rules
+  allow is not a bug even if it is surprising; one they do not allow is a
+  bug even if its own panel's spec describes it.** Cite the rule in the
+  finding.
 - **Change the layout.** `get_window_layout`, edit the document, and
   `set_window_layout`: put two panels in one dock node, or split ones that
   share a node. The stock layout (from `--no-default-layout`) is only one
@@ -233,6 +254,12 @@ A candidate becomes a finding only when all of these hold:
    the Points size slider reading 0.0 (it is log2), point ids that do not
    match the index after a commit (stable ids), save-as relabelling the node,
    the FOV kept after camera view, Find Nearby skipping points at infinity.
+   For a gesture, `specs/gui/interaction-rules.md` comes before the panel's
+   own spec: a gesture that breaks a rule is
+   a finding even where its panel's spec describes it, and one the rules
+   allow is ruled out as by design, citing the rule. A gesture already listed
+   as a finding of an open `reports/*-gui-interaction-audit.md` is listed as
+   known rather than reported again.
 3. **The evidence is in hand**: the calls, the reply values, and what a
    following read or screenshot showed. Say what was observed, and next to it
    what was expected and where that expectation comes from.

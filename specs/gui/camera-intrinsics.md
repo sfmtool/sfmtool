@@ -466,17 +466,20 @@ The node body has a group above the images group, so its two rows read:
   separator. Not a tooltip on the `β` itself: egui hangs a tooltip off a whole
   widget, and the row is one button, so a sub-span of its label has nowhere to
   put one.
-- **Click**: `select_camera(Some(CameraRef))` — with the deselect-the-image
-  consequence from the coupling table.
-- **Double-click**: zoom the 3D viewport to fit every image using this camera —
+- **Click**: G1 of the interaction rules
+  ([interaction-rules.md](interaction-rules.md)),
+  `select_camera(Some(CameraRef))` — with the deselect-the-image consequence
+  from the coupling table.
+- **Double-click**: G2 for a set of things, the images using this camera
+  (with no check for a camera held for Move Camera, finding 8 of
+  [`reports/2026-11-21-gui-interaction-audit.md`](../../reports/2026-11-21-gui-interaction-audit.md)).
+  It zooms the 3D viewport to fit every image using this camera —
   the same `zoom_to_fit_points` call `zoom_to_node` makes, over that subset of
   the node's **camera centres** rather than over the node's points. (The two
   frame different things: a node's zoom-to-fit frames its point cloud, and a
   camera has no points of its own.)
   For a rig this frames one sensor's whole trajectory
-  in a single gesture, which nothing else in the viewer does. It is the tree's
-  third double-click target, and consistent with the other two: a double-click
-  frames what the row denotes, and a camera row denotes a set of images.
+  in a single gesture, which nothing else in the viewer does.
 - **Selected row**: highlighted like a camera-image row. The row is *also*
   highlighted, more weakly, whenever `selected_image`'s camera is this one and
   the row is not itself the click target — but by the invariant those are the
@@ -486,7 +489,7 @@ The node body has a group above the images group, so its two rows read:
   of distinct intrinsics, which is small even in the pathological case, and the
   list is capped at `LIST_MAX_HEIGHT` — the same cap the images list uses, and
   named for neither list because it is the height of both.
-- **Context menu**: one entry, **Switch Camera Model…**, which opens a camera
+- **Context menu** (G3): one entry, **Switch Camera Model…**, which opens a camera
   model proposal on the row's camera and brings this panel to the front
   ([edits/switch-camera-model.md](edits/switch-camera-model.md) § "Invocation").
   It is greyed, with the reason as hover text, on a busy node, on another camera

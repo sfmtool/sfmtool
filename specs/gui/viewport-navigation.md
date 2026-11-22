@@ -64,6 +64,12 @@ during Zoom to Fit to center on the point cloud.
 | Point menu | Right button click on a point | Select that point and open its context menu (see [The point context menu](#the-point-context-menu)) |
 | Edit on Bench | Double-click a point | Select that point, put its track on the bench, raise Track View, and pan so the target lands on the point, or turn toward a point at infinity (see [The point context menu](#the-point-context-menu)) |
 
+The clicks in this table follow the interaction rules
+([interaction-rules.md](interaction-rules.md)). Click a frustum or a point:
+G1. Double-click a frustum: G2, enter camera view. Right-click a point: G3,
+the point menu below. Double-click a point: G2, with the move G4 gives a point
+on screen.
+
 Every binding above belongs to the viewport's **Navigate** tool, which is on at
 launch. The tool strip at the viewport's left edge chooses between it and the
 **eraser brush** ([edits/eraser-brush.md](edits/eraser-brush.md)), which takes
@@ -139,13 +145,12 @@ It moves nothing when a camera is in hand (the motion would move the held
 camera, which the double-click does not ask for), for a point behind the camera,
 or with Alt held, where the Alt + Click depth pick has already set the target.
 A double-click on a track's Bench row in the Scene tree moves the viewport onto
-the track's own point with the same pan when that point is in the middle of the
-view, turning first when it is not ([scene-graph.md](scene-graph.md) § "Tree
-rows").
+the track's own point under G4, turning first when the point is not in the
+middle of the view ([scene-graph.md](scene-graph.md) § "Tree rows").
 
 **A double-click on a point at infinity turns the camera toward its bearing**
-(`Viewer3D::turn_toward_bearing`). Its stored coordinates are a direction rather
-than a place, so there is no target to put on it and no pan that changes where
+(`Viewer3D::turn_toward_bearing`, G4). Its stored coordinates are a direction
+rather than a place, so there is no target to put on it and no pan that changes where
 it is drawn. The camera turns in place, level with the world's up, by about as
 little as brings the bearing inside the middle 1/2 of the viewport on both axes,
 over the same ~200ms transition; the position and the orbit distance stay, and

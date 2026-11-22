@@ -426,6 +426,46 @@ of scope: the other crates, whose `pub` items are their public API, and the
 integration tests in `crates/sfm-explorer/tests/`, each of which is its own
 crate.
 
+## A viewer gesture follows the interaction rules
+
+Every pointer gesture `sfm-explorer` defines (a click, a double-click, a
+right-click, a hover, a press on a mark or handle, a modifier click in a
+list) follows the rules G1 to G12 in
+[gui/interaction-rules.md](gui/interaction-rules.md), and a panel's spec says
+which rule each of its gestures follows rather than restating it. This exists
+because the viewer shows the same things in many panels, and a person who
+learns what a click does in one expects the same kind of thing in all of
+them; a panel that gives a gesture its own meaning breaks that expectation in
+every other panel. Where a gesture and a rule disagree, the gesture changes,
+or the maintainer changes the rule for every panel at once. A spec does not
+record a gesture that breaks a rule as that panel's own convention.
+
+Look for:
+
+- The gestures the code defines: `clicked`, `double_clicked`,
+  `secondary_clicked`, `clicked_by`, `hovered` and `hover_pos` reads on a
+  panel's responses, its `context_menu::on_secondary_click` and
+  `on_secondary_click_where` handlers, and the 3D view's pick handling. Check
+  each against the rule for its target: what a click selects and whether it
+  also moves a view, raises a panel or pushes a version (G1); what a
+  double-click does for what the target denotes (G2); what a right-click
+  selects and how its menu opens (G3); how a view moves onto a point or a
+  pixel (G4, G5); which hover a panel sets and clears (G6).
+- A gesture whose code differs between two panels for the same kind of
+  target, such as a menu built twice or a move onto a point written twice
+  (G8), and a raise that does not go through `AppState::show_panel_beside`
+  (G2, G9).
+- A spec sentence that describes a gesture the rules do not allow, or that
+  restates a rule in other words instead of citing it.
+
+Confirm before reporting: name the rule, the target and what the gesture does
+instead, read from the code or seen over MCP. Out of scope: keyboard
+shortcuts, and the drags, scrolls and trackpad gestures that move the 3D view
+or Image Detail's picture
+([gui/viewport-navigation.md](gui/viewport-navigation.md)). A gesture already listed
+as a finding of an open report is still a finding, as § "A convention has no
+documented exceptions" says of listed backlog.
+
 ## Python names mark what is public
 
 A leading `_` on a Python module, function, class, constant or attribute name

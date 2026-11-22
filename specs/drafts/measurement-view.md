@@ -230,8 +230,8 @@ draws the selected observation's circle larger.
 
 These are Track View's row gestures ([track-view.md](../gui/track-view.md) §
 "Row gestures"), applied to an endpoint, and they follow rules G1, G2 (a
-pixel of an image), G3, G5 and G6 of the proposed interaction rules
-([gui-interaction-rules.md](gui-interaction-rules.md)). The block's own controls (the image
+pixel of an image), G3, G5 and G6 of the interaction rules
+([interaction-rules.md](../gui/interaction-rules.md)). The block's own controls (the image
 drop-down, the pixel fields, the buttons) keep their clicks; everywhere else in
 the block, the name, the crop and the patch among it, is one target.
 
@@ -352,8 +352,8 @@ derived from them. So both can be set directly, in two places:
   "Image Detail: the context menu"), so this is where a person zoomed in on a
   photograph places an endpoint precisely.
 - **In the 3D view.** With a distance measurement selected, a right-click on a
-  point, which selects it (rule G3 of the proposed interaction rules,
-  [gui-interaction-rules.md](gui-interaction-rules.md)), offers `Move Endpoint A Here` and
+  point, which selects it (rule G3 of the interaction rules,
+  [interaction-rules.md](../gui/interaction-rules.md)), offers `Move Endpoint A Here` and
   `Move Endpoint B Here`, which set the endpoint to the point's **reference
   pixel** (§ "A point's reference pixel").
 

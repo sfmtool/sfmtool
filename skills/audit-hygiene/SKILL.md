@@ -1,6 +1,6 @@
 ---
 name: audit-hygiene
-description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation — and for code that breaks the quality standards in specs/STANDARDS.md (points at infinity, Progress on long-running work, no panics on caller input, no Python wrappers over bindings, medians and quantiles from sfmtool_core::numeric, the smallest numeric precision the use justifies, one I/O shape per file format, file format versions changed and dropped as format-versions.md says, viewer item visibility, Python names and lazy loading, Rust module files and *Options settings structs, license headers, rustdoc, MSRV and mcp-less builds, no documented exceptions, tests that can fail, tests that cost only what their assertions need). Use when the user asks to clean up, reorganize, or review codebase structure.
+description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation — and for code that breaks the quality standards in specs/STANDARDS.md (points at infinity, Progress on long-running work, no panics on caller input, no Python wrappers over bindings, medians and quantiles from sfmtool_core::numeric, the smallest numeric precision the use justifies, one I/O shape per file format, file format versions changed and dropped as format-versions.md says, viewer item visibility, viewer gestures that follow the interaction rules, Python names and lazy loading, Rust module files and *Options settings structs, license headers, rustdoc, MSRV and mcp-less builds, no documented exceptions, tests that can fail, tests that cost only what their assertions need). Use when the user asks to clean up, reorganize, or review codebase structure.
 ---
 
 # Codebase hygiene audit
@@ -510,6 +510,22 @@ how this audit runs them.
   never a spec or doc edit that describes the breach. When the code fix is a
   large design change, say so under Effort and Risk and leave the choice to
   the maintainer, rather than proposing the doc edit instead.
+- **List a viewer unit's gestures.** For each `sfm-explorer` unit read in
+  full, list the gestures its code defines: every `clicked`,
+  `double_clicked`, `secondary_clicked` / `clicked_by` and `hovered` handler
+  on a panel's responses, every `context_menu::on_secondary_click` (or
+  `on_secondary_click_where`) menu, and the 3D view's pick handling. Give
+  each its target (a thumbnail, a row of which kind, a frustum, a point, a
+  mark) and what it does: what it selects, whether it moves a view, raises a
+  panel (and through which call) or pushes a version. Check each against
+  [`specs/gui/interaction-rules.md`](../../specs/gui/interaction-rules.md),
+  citing the rule (G1 to G12) a breach concerns, and against the panel's
+  own spec in `specs/gui/`. A gesture that breaks a rule is a finding under
+  STANDARDS.md § "A viewer gesture follows the interaction rules", even when
+  its panel's spec describes it; a spec that disagrees with the code is a
+  finding of spec drift, which names the side that is right. A
+  gesture already listed as a finding of an open
+  `reports/*-gui-interaction-audit.md` is a carried finding, not a new one.
 
 ## How to work
 
@@ -536,7 +552,9 @@ how this audit runs them.
    glossary has already retired.
    Give each one `specs/STANDARDS.md` as well, so every unit is checked
    against the same standards, and the previous report's findings whose
-   Location lies in its unit, so it re-measures them.
+   Location lies in its unit, so it re-measures them. Give each
+   `sfm-explorer` unit's subagent `specs/gui/interaction-rules.md` too, and
+   ask it for the unit's list of gestures under E above.
 5. Carry the previous report's findings forward, per "Carried findings"
    under Output.
 6. Consolidate findings, removing duplicates and ranking.

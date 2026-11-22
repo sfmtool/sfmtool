@@ -158,7 +158,8 @@ the 3D viewport or Image Detail (and the double-click on a point or a tracked
 feature that does the same), and Image Detail's *Start cluster on the bench
 here*, each show Track View. Those go through
 `AppState::show_panel_beside(tab, from)`, where `from` is the panel the
-gesture was made in, and that call never puts `tab` in front of `from`:
+gesture was made in, and that call never puts `tab` in front of `from`, as G9
+of the interaction rules ([interaction-rules.md](interaction-rules.md)) says:
 
 - **`tab` is docked in `from`'s node, and `from` is in front:** nothing
   moves and no row is written. `tab` stays behind `from`, because bringing it

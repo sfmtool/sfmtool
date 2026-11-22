@@ -282,7 +282,8 @@ version ever minted, so the history still knows what happened there, and only
 the value it would return to is gone.
 
 **Clicking a row jumps the cursor to it**, in either direction and in one step
-(§ "Jumping to a version"). The cursor's own row is not a jump and is disabled;
+(§ "Jumping to a version"): G11 of the interaction rules
+([interaction-rules.md](interaction-rules.md)). The cursor's own row is not a jump and is disabled;
 its hover says it is what the node shows.
 
 **With no node selected**, or with a node whose history is the one version it

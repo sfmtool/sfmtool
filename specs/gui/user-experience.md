@@ -123,6 +123,9 @@ The viewer uses a dark theme:
 | Zoom to fit everything | Press Z | Press Z |
 | View through a selected camera | Select frustum, then Z (or double-click frustum) | Select frustum, then Z (or double-click frustum) |
 
+What a click, a double-click, a right-click and a hover do in every panel
+follows one set of numbered rules, [interaction-rules.md](interaction-rules.md).
+
 ### Information Overlays
 
 Contextual information is painted straight onto the viewport, anchored to its

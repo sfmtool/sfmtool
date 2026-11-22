@@ -225,6 +225,33 @@ template. A spec whose interface section is missing but whose theory is exact is
 in better shape than one that fills every heading with prose that no longer
 matches the code.
 
+### Gesture sentences in `specs/gui/`, against the interaction rules
+
+Every viewer gesture follows the rules G1 to G12 in
+[`specs/gui/interaction-rules.md`](../../specs/gui/interaction-rules.md)
+(STANDARDS.md § "A viewer gesture follows the interaction rules"), and a
+panel's spec cites the rule a gesture follows rather than restating it. So for
+each sampled spec under `specs/gui/`, list its gesture sentences (what a
+click, a double-click, a right-click, a hover, a press on a mark or a modifier
+click on a list row does) and compare each with the rules as well as with the
+code:
+
+- **A gesture the rules do not allow**, described as the panel's design (a
+  click that also moves the 3D view, a right-click on a row that selects it, a
+  raise that covers the panel the gesture was made in), is a finding against
+  the code, citing the rule. Per STANDARDS.md § "Direction of a fix", the fix
+  changes the gesture; the spec sentence is corrected with it.
+- **A rule restated in other words** (the reveal's margin, the turn-then-pan
+  move, the no-toggle-off click) is a finding even when it agrees with the
+  rule today, since it is a second copy that drifts: replace it with the rule's
+  number and keep only what the rule leaves to the panel.
+- **A citation that does not hold**: a spec that cites a rule for a gesture
+  the code does something else for. Read the code before deciding which side is
+  wrong.
+
+A gesture already listed as a finding of an open
+`reports/*-gui-interaction-audit.md` is not reported again; note it as known.
+
 ## How to work
 
 1. Run the mechanical checks below. They cover every spec and cost almost no
@@ -232,7 +259,7 @@ matches the code.
    corpus-wide section.
 2. Choose the sample, per "Choosing the sample" above. Record the seed.
 3. List every significant code surface (each CLI command, each crate, each major module, each file format) and mark which have a spec. This is a table, not prose.
-4. For each **sampled** spec, read it, then read the implementing code. Dispatch `Agent` subagents in parallel — one per spec, or one per small group — so the main context stays clean; each returns a structured summary in the report's per-spec shape. This is what keeps a ten-spec run affordable, so do it even when the sample is small.
+4. For each **sampled** spec, read it, then read the implementing code. Dispatch `Agent` subagents in parallel — one per spec, or one per small group — so the main context stays clean; each returns a structured summary in the report's per-spec shape. This is what keeps a ten-spec run affordable, so do it even when the sample is small. Give each subagent with a `specs/gui/` spec `specs/gui/interaction-rules.md` as well, for the gesture check above.
 5. Consolidate into a single report.
 
 ### Mechanical checks

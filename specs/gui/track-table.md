@@ -672,7 +672,9 @@ the job still read the cache only for the version at the cursor.
 
 ## Selection and hover
 
-- **Clicking a row** calls `AppState::select_point`, so Track View, Image
+- **Clicking a row**: G1 of the interaction rules
+  ([interaction-rules.md](interaction-rules.md)). It calls
+  `AppState::select_point`, so Track View, Image
   Detail and the 3D viewer follow it as they follow any other selection, and
   the Action Log gets its *Selected point* row.
 - **The selected point's row** is drawn in the selection colour. When the

@@ -55,8 +55,9 @@ of the two produced what they are looking at.
 
 **One point.** Right-click a point in the 3D viewport -- its dot or its patch,
 which the GPU pick decodes to the same point -- and choose `Retriangulate
-Point`. The right click selects the point as it opens the menu, so the panels
-beside the viewport are describing the point the entry will act on. A right
+Point`. The right click selects the point as it opens the menu (G3 of the
+interaction rules, [../interaction-rules.md](../interaction-rules.md)), so the
+panels beside the viewport are describing the point the entry will act on. A right
 *drag* is the viewport's zoom and opens nothing;
 [../viewport-navigation.md](../viewport-navigation.md) § "The point context
 menu" carries that distinction and the menu's other entry, `Edit on Bench`.
