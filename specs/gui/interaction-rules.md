@@ -32,9 +32,9 @@ and the work that brings each into line is
 
 **G1. A click selects what it is on, and nothing more.** The selection is the
 viewer's one selected item of each kind: a reconstruction, an image, a camera,
-a point, and the bench observation Track View edits. Other panels follow it: the Image Browser and the Scene tree scroll
-it into view, the Track Table scrolls its row into view, and Image Detail
-reveals a pixel it names under G5. A click never moves the 3D view, never
+a point, and the bench observation Track View edits. Other panels follow it:
+the Image Browser and the Scene tree scroll it into view, the Track Table
+scrolls its row into view, and Image Detail reveals a pixel it names under G5. A click never moves the 3D view, never
 raises a panel and never pushes a version. A click on the item already
 selected keeps it selected; nothing toggles off. A click on empty space in the
 3D view, or on a part of the photograph in Image Detail where nothing is

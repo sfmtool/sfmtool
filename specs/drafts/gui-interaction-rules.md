@@ -8,10 +8,10 @@ follows. The rules are decided; this draft holds only the work that makes the
 viewer follow them everywhere, and is deleted when that work is done.
 
 An inventory of every gesture of every panel, with its spec and its code,
-taken on 2026-11-21 from `main` at `e6aac050`, and the filing of the rules
-found sixteen places where the viewer or its specs do not follow the rules.
-They are tracked, with their code
-locations, as the findings of
+taken on 2026-11-21 from `main` at `e6aac050`, found fifteen places where the
+viewer or its specs do not follow the rules, and filing the rules found a
+sixteenth. The sixteen are tracked, with their code locations, as the findings
+of
 [`reports/2026-11-21-gui-interaction-audit.md`](../../reports/2026-11-21-gui-interaction-audit.md):
 
 | Finding | Rule | What changes |

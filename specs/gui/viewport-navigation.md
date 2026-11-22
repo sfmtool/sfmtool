@@ -149,8 +149,8 @@ the track's own point under G4, turning first when the point is not in the
 middle of the view ([scene-graph.md](scene-graph.md) § "Tree rows").
 
 **A double-click on a point at infinity turns the camera toward its bearing**
-(`Viewer3D::turn_toward_bearing`, G4). Its stored coordinates are a direction rather
-than a place, so there is no target to put on it and no pan that changes where
+(`Viewer3D::turn_toward_bearing`, G4). Its stored coordinates are a direction
+rather than a place, so there is no target to put on it and no pan that changes where
 it is drawn. The camera turns in place, level with the world's up, by about as
 little as brings the bearing inside the middle 1/2 of the viewport on both axes,
 over the same ~200ms transition; the position and the orbit distance stay, and
