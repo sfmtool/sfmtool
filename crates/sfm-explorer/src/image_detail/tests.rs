@@ -97,8 +97,11 @@ fn look_frame(
             &[],
             &crate::platform::ScrollInput::default(),
             None,
-            crate::image_detail::DetailPhotograph::Decoded(
-                &sfmtool_core::camera::image::ImageU8Pyramid::build(image, 1),
+            Some(
+                crate::test_support::HeldPhotograph::new(
+                    sfmtool_core::camera::image::ImageU8Pyramid::build(image, 1),
+                )
+                .source(),
             ),
             &feature_display,
             &mut intrinsics_display,
@@ -533,8 +536,11 @@ fn overlay_frame(
             &[],
             &crate::platform::ScrollInput::default(),
             Some(sift),
-            crate::image_detail::DetailPhotograph::Decoded(
-                &sfmtool_core::camera::image::ImageU8Pyramid::build(image, 1),
+            Some(
+                crate::test_support::HeldPhotograph::new(
+                    sfmtool_core::camera::image::ImageU8Pyramid::build(image, 1),
+                )
+                .source(),
             ),
             feature_display,
             &mut intrinsics_display,
@@ -719,8 +725,11 @@ fn context_menu_texts(bench: BenchMenu<'_>) -> Vec<String> {
                 &[],
                 &crate::platform::ScrollInput::default(),
                 Some(&sift),
-                crate::image_detail::DetailPhotograph::Decoded(
-                    &sfmtool_core::camera::image::ImageU8Pyramid::build(&image, 1),
+                Some(
+                    crate::test_support::HeldPhotograph::new(
+                        sfmtool_core::camera::image::ImageU8Pyramid::build(&image, 1),
+                    )
+                    .source(),
                 ),
                 &display,
                 &mut intrinsics_display,
@@ -884,8 +893,11 @@ fn chord_click(
                 &[],
                 &crate::platform::ScrollInput::default(),
                 Some(&sift),
-                crate::image_detail::DetailPhotograph::Decoded(
-                    &sfmtool_core::camera::image::ImageU8Pyramid::build(&image, 1),
+                Some(
+                    crate::test_support::HeldPhotograph::new(
+                        sfmtool_core::camera::image::ImageU8Pyramid::build(&image, 1),
+                    )
+                    .source(),
                 ),
                 &display,
                 &mut intrinsics_display,
@@ -1122,8 +1134,11 @@ fn click_frames(
                 &[],
                 &crate::platform::ScrollInput::default(),
                 Some(sift),
-                crate::image_detail::DetailPhotograph::Decoded(
-                    &sfmtool_core::camera::image::ImageU8Pyramid::build(image, 1),
+                Some(
+                    crate::test_support::HeldPhotograph::new(
+                        sfmtool_core::camera::image::ImageU8Pyramid::build(image, 1),
+                    )
+                    .source(),
                 ),
                 &display,
                 &mut intrinsics_display,
@@ -1324,8 +1339,11 @@ fn bench_frame(
                 &[],
                 &crate::platform::ScrollInput::default(),
                 None,
-                crate::image_detail::DetailPhotograph::Decoded(
-                    &sfmtool_core::camera::image::ImageU8Pyramid::build(&image, 1),
+                Some(
+                    crate::test_support::HeldPhotograph::new(
+                        sfmtool_core::camera::image::ImageU8Pyramid::build(&image, 1),
+                    )
+                    .source(),
                 ),
                 &display,
                 &mut intrinsics_display,
@@ -1987,8 +2005,11 @@ fn published_frame(
             &[],
             &crate::platform::ScrollInput::default(),
             None,
-            crate::image_detail::DetailPhotograph::Decoded(
-                &sfmtool_core::camera::image::ImageU8Pyramid::build(image, 1),
+            Some(
+                crate::test_support::HeldPhotograph::new(
+                    sfmtool_core::camera::image::ImageU8Pyramid::build(image, 1),
+                )
+                .source(),
             ),
             &feature_display,
             &mut intrinsics_display,
@@ -2242,32 +2263,37 @@ fn gesture(
         };
         let mut response = None;
         let mut output = ctx.run_ui(input, |ui| {
-            response = Some(detail.show(
-                ui,
-                node.edited(),
-                node.id,
-                node.history.current_version().serial,
-                Some(image_index),
-                None,
-                None,
-                None,
-                BenchMenu {
-                    busy: None,
-                    view_only: None,
-                    focused_track: Some(track),
-                    lock,
-                    create_track: None,
-                },
-                &[],
-                &crate::platform::ScrollInput::default(),
-                None,
-                crate::image_detail::DetailPhotograph::Decoded(
-                    &sfmtool_core::camera::image::ImageU8Pyramid::build(&image, 1),
+            response = Some(
+                detail.show(
+                    ui,
+                    node.edited(),
+                    node.id,
+                    node.history.current_version().serial,
+                    Some(image_index),
+                    None,
+                    None,
+                    None,
+                    BenchMenu {
+                        busy: None,
+                        view_only: None,
+                        focused_track: Some(track),
+                        lock,
+                        create_track: None,
+                    },
+                    &[],
+                    &crate::platform::ScrollInput::default(),
+                    None,
+                    Some(
+                        crate::test_support::HeldPhotograph::new(
+                            sfmtool_core::camera::image::ImageU8Pyramid::build(&image, 1),
+                        )
+                        .source(),
+                    ),
+                    &display,
+                    &mut intrinsics_display,
+                    None,
                 ),
-                &display,
-                &mut intrinsics_display,
-                None,
-            ));
+            );
         });
         output.textures_delta.clear();
         // The hover frame, before any button is down: what the layer asks for
@@ -3908,8 +3934,11 @@ fn scroll_frame(
             &[],
             &scroll_input,
             None,
-            crate::image_detail::DetailPhotograph::Decoded(
-                &sfmtool_core::camera::image::ImageU8Pyramid::build(image, 1),
+            Some(
+                crate::test_support::HeldPhotograph::new(
+                    sfmtool_core::camera::image::ImageU8Pyramid::build(image, 1),
+                )
+                .source(),
             ),
             &feature_display,
             &mut intrinsics_display,

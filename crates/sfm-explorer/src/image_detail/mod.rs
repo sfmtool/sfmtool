@@ -31,6 +31,7 @@ pub(crate) use intrinsics::{
     show_intrinsics_controls, CameraLayer, ChangeLayer, ImageIntrinsicsKey, LayerModel,
 };
 pub(crate) use overlay::{BenchMenu, START_CLUSTER_LABEL};
+pub(crate) use photograph_tiles::DrawnTiles;
 #[cfg(feature = "mcp")]
 pub(crate) use view::look_at;
 pub(crate) use view::{Look, ViewGeometry};
@@ -41,9 +42,9 @@ use crate::platform::{GestureEvent, ScrollInput};
 use crate::scene::{ImageRef, PointRef, ReconId};
 use crate::state::edits::PointGesture;
 use crate::state::{
-    CachedSiftFeatures, FeatureDisplaySettings, IntrinsicsDisplaySettings, OverlayMode,
+    CachedSiftFeatures, DisplayLayout, FeatureDisplaySettings, IntrinsicsDisplaySettings,
+    OverlayMode, PhotographSource,
 };
-use sfmtool_core::camera::image::ImageU8Pyramid;
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::spatial::PointCloud2;
 use sfmtool_core::EditedReconstruction;
@@ -51,21 +52,8 @@ use std::collections::HashMap;
 
 use intrinsics::View;
 
-/// The photograph the panel is asked to draw, as far as the photograph cache
-/// has got with it.
-#[derive(Clone, Copy)]
-pub(crate) enum DetailPhotograph<'a> {
-    /// Decoded: the photograph's whole pyramid, which the panel cuts its
-    /// photograph tiles from.
-    Decoded(&'a ImageU8Pyramid),
-    /// Being decoded off the GUI thread. The panel says so and draws the
-    /// photograph on the frame after it arrives.
-    Decoding,
-    /// The file could not be read or decoded.
-    Unreadable,
-}
-
-/// What the panel says in place of a photograph still being decoded.
+/// What the panel says in place of a photograph whose layout is still being
+/// read.
 pub(crate) const DECODING_LABEL: &str = "Loading image…";
 
 /// What the panel says in place of a photograph that could not be read.
@@ -275,6 +263,11 @@ pub(crate) struct ImageDetailResponse {
     /// dock puts it on `AppState`, where the wire's view tools read it
     /// ([`mod@view`]).
     pub(crate) view: Option<ViewGeometry>,
+    /// The level the frame drew the photograph at, and how many of its
+    /// visible tiles were not drawn at that level yet, or `None` on a frame
+    /// that drew no image. Published beside [`Self::view`] for the wire's
+    /// `get_image_detail_view`.
+    pub(crate) tiles: Option<DrawnTiles>,
 }
 
 impl ImageDetail {
@@ -675,6 +668,21 @@ impl ImageDetail {
         self.pan.y = self.pan.y.clamp(-max_pan_y, max_pan_y);
     }
 
+    /// Ask the photograph cache, a frame ahead, for the tiles of `image` that
+    /// the panel would upload on the frame it shows `image` in place of the
+    /// image of `view`, the view it ended this frame on: what animation
+    /// playback calls for the image it shows next, so its decode starts
+    /// before the frame that draws it.
+    pub(crate) fn prefetch(
+        &self,
+        ctx: &egui::Context,
+        view: &ViewGeometry,
+        image: ImageRef,
+        source: PhotographSource<'_>,
+    ) {
+        self.tiles.prefetch(ctx, view, image, source);
+    }
+
     /// Show the image detail panel.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn show(
@@ -693,7 +701,9 @@ impl ImageDetail {
         gesture_events: &[GestureEvent],
         scroll_input: &ScrollInput,
         sift_features: Option<&CachedSiftFeatures>,
-        photograph: DetailPhotograph<'_>,
+        // The selected image's photograph, as the panel asks the cache for
+        // it; `None` when the image set has no such image.
+        photograph: Option<PhotographSource<'_>>,
         feature_display: &FeatureDisplaySettings,
         intrinsics_display: &mut IntrinsicsDisplaySettings,
         // The open camera model proposal, drawn by the intrinsics layer when it
@@ -713,6 +723,7 @@ impl ImageDetail {
             select_bench_row: None,
             bench_edit: None,
             view: None,
+            tiles: None,
         };
 
         // If no image selected, show placeholder
@@ -726,17 +737,17 @@ impl ImageDetail {
 
         let image_ref = ImageRef::new(recon_id, img_idx);
 
-        // The pyramid comes from the shared photograph cache (decoded once, on
-        // a worker thread that dock.rs asks for); this panel only cuts the
-        // photograph tiles it draws out of it and uploads them. Until it
-        // arrives the panel has no layout for a new image and says so below;
-        // an image it has drawn keeps its layout and its uploaded tiles, so a
-        // pyramid the cache has since dropped still draws what was uploaded.
-        let pyramid = match photograph {
-            DetailPhotograph::Decoded(pyramid) => Some(pyramid),
-            DetailPhotograph::Decoding | DetailPhotograph::Unreadable => None,
+        // The layout and the tiles come from the shared photograph cache, read
+        // and decoded on the rayon pool, never here. Until the layout is known
+        // the panel has none for a new image and says so below; an image it
+        // has drawn keeps its layout and its uploaded tiles, so a photograph
+        // the cache has since dropped still draws what was uploaded.
+        let layout = photograph.map(|source| crate::state::display_layout(source, ui.ctx()));
+        let known = match &layout {
+            Some(DisplayLayout::Known(known)) => Some(known),
+            _ => None,
         };
-        let layout_size = self.tiles.layout(image_ref, pyramid).map(|l| l.size());
+        let layout_size = self.tiles.layout(image_ref, known).map(|l| l.size());
 
         // Determine whether to show features based on overlay mode
         let show_features = feature_display.overlay_mode != OverlayMode::None;
@@ -773,11 +784,11 @@ impl ImageDetail {
         // size: every coordinate below, the overlays' included, is in level-0
         // pixels whichever level the tiles are drawn from.
         let Some(size) = layout_size else {
-            ui.centered_and_justified(|ui| match photograph {
-                DetailPhotograph::Decoding => {
+            ui.centered_and_justified(|ui| match layout {
+                Some(DisplayLayout::Loading) => {
                     ui.label(DECODING_LABEL);
                 }
-                DetailPhotograph::Decoded(_) | DetailPhotograph::Unreadable => {
+                Some(DisplayLayout::Known(_) | DisplayLayout::Unreadable) | None => {
                     ui.label(UNREADABLE_LABEL);
                 }
             });
@@ -842,11 +853,11 @@ impl ImageDetail {
         // Draw the image (clipped to panel) from the photograph tiles of the
         // level that matches the zoom.
         let painter = ui.painter_at(panel_rect);
-        self.tiles.draw(
+        response.tiles = self.tiles.draw(
             ui.ctx(),
             &painter,
             image_ref,
-            pyramid,
+            photograph,
             image_rect,
             effective_scale,
             ui.ctx().pixels_per_point(),

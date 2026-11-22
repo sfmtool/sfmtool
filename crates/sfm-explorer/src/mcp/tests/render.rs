@@ -22,6 +22,13 @@ const VIEW_PANEL: [f32; 2] = [800.0, 600.0];
 /// The demo photograph's size, which is its lens's.
 const VIEW_IMAGE: [f32; 2] = [1920.0, 1080.0];
 
+/// What a frame the tests draw drew the photograph with: a level and tiles
+/// still to draw that no default would give.
+const DRAWN_TILES: crate::image_detail::DrawnTiles = crate::image_detail::DrawnTiles {
+    level: 2,
+    tiles_pending: 3,
+};
+
 /// `alpha` with image 0 selected and the Image Detail panel standing at
 /// `zoom`, centred, as a frame that drew it would have left things.
 fn looking_at(zoom: f32) -> (AppState, Viewer3D) {
@@ -455,7 +462,7 @@ fn panel_draws_at(state: &mut AppState, image: crate::scene::ImageRef, panel: [f
     }
     // Through the publication, not the field: the serial and the layout it was
     // drawn in are what a waiting call and a view tool read it by.
-    state.publish_image_detail_view(geometry);
+    state.publish_image_detail_view(geometry, Some(DRAWN_TILES));
 }
 
 /// The wait a view call left behind, or a panic saying it did not wait.
@@ -505,6 +512,12 @@ fn a_panel_that_has_never_drawn_reports_nothing_and_waits_for_a_frame() {
         "{view}"
     );
     assert_eq!(view["image_detail_view"]["zoom"], Value::Null, "{view}");
+    assert_eq!(view["image_detail_view"]["level"], Value::Null, "{view}");
+    assert_eq!(
+        view["image_detail_view"]["tiles_pending"],
+        Value::Null,
+        "{view}"
+    );
 
     let image = crate::scene::ImageRef::new(state.scene[0].id, 0);
     state.select_image(Some(image));
@@ -671,6 +684,45 @@ fn get_image_detail_view_reports_the_panel_s_last_frame() {
     );
     let after = call(&mut state, &mut viewer, "get_image_detail_view", json!({}));
     assert_eq!(after, before, "the reading followed the selection");
+}
+
+/// The level the panel drew the photograph at and its tiles still to draw are
+/// the drawn frame's: `get_image_detail_view` and the reply to a call that
+/// waited for a frame report the ones that frame published, and a reply worked
+/// out from a standing reading, before any frame has drawn the view it names,
+/// reports them as null.
+#[test]
+fn the_level_and_the_tiles_pending_are_the_drawn_frame_s() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let image = crate::scene::ImageRef::new(state.scene[0].id, 0);
+    state.select_image(Some(image));
+    let pending = deferred_view(&mut state, &mut viewer, json!({ "fit": true }));
+    panel_draws(&mut state, image);
+    let drawn = [
+        view_reply(&state, &pending),
+        call(&mut state, &mut viewer, "get_image_detail_view", json!({})),
+    ];
+    for reply in drawn {
+        let view = &reply["image_detail_view"];
+        assert_eq!(view["level"], json!(DRAWN_TILES.level), "{reply}");
+        assert_eq!(
+            view["tiles_pending"],
+            json!(DRAWN_TILES.tiles_pending),
+            "{reply}"
+        );
+    }
+
+    let (mut state, mut viewer) = looking_at(1.0);
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "pixel": [300.0, 200.0], "zoom": 4.0 }),
+    );
+    let view = &reply["image_detail_view"];
+    assert_eq!(view["zoom"], json!(4.0), "{reply}");
+    assert_eq!(view["level"], Value::Null, "{reply}");
+    assert_eq!(view["tiles_pending"], Value::Null, "{reply}");
 }
 
 /// A bench observation names its own photograph, so walking a track's sightings

@@ -226,3 +226,24 @@ fn hovering_a_thumbnail_names_the_image_in_full() {
         "{texts:?}"
     );
 }
+
+/// While animation plays, the image it shows next is the one after the
+/// selection in its direction, wrapping round when it loops; paused, or at
+/// the end of a sequence that does not loop, there is none.
+#[test]
+fn the_upcoming_image_is_the_one_animation_shows_next() {
+    let mut browser = ImageBrowser::new();
+    assert_eq!(browser.upcoming_image(Some(3), 17), None, "paused");
+    browser.animation.playing = true;
+    assert_eq!(browser.upcoming_image(Some(3), 17), Some(4));
+    assert_eq!(browser.upcoming_image(None, 17), Some(1));
+    assert_eq!(browser.upcoming_image(Some(16), 17), Some(0), "looping");
+    assert_eq!(browser.upcoming_image(Some(0), 1), None, "one image");
+    browser.animation.direction = super::PlayDirection::Backward;
+    assert_eq!(browser.upcoming_image(Some(3), 17), Some(2));
+    assert_eq!(browser.upcoming_image(Some(0), 17), Some(16), "looping");
+    browser.animation.looping = false;
+    assert_eq!(browser.upcoming_image(Some(0), 17), None, "the start");
+    browser.animation.direction = super::PlayDirection::Forward;
+    assert_eq!(browser.upcoming_image(Some(16), 17), None, "the end");
+}

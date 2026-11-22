@@ -27,7 +27,12 @@ use std::sync::Arc;
 
 pub(crate) mod edits;
 pub(crate) mod open;
-pub(crate) use photograph_requests::{display_photograph, DisplayPhotograph, PhotographRequests};
+#[cfg(test)]
+pub(crate) use photograph_requests::TaskQueue;
+pub(crate) use photograph_requests::{
+    display_layout, display_photograph, display_tiles, prefetch_tiles, DisplayLayout,
+    DisplayPhotograph, DisplayTile, PhotographRequests, PhotographSource,
+};
 mod ops;
 mod photograph_requests;
 mod save;
@@ -543,6 +548,14 @@ pub(crate) struct AppState {
     /// frame to do it in would be a guess.
     pub(crate) image_detail_view: Option<ViewGeometry>,
 
+    /// The level that frame drew the photograph at and how many of its visible
+    /// tiles were not drawn at that level yet, published with
+    /// [`Self::image_detail_view`] and read by `get_image_detail_view`; `None`
+    /// when that frame drew no tile, its panel having no visible part of the
+    /// image. Read only while [`Self::image_detail_view`] is `Some`.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub(crate) image_detail_tiles: Option<crate::image_detail::DrawnTiles>,
+
     /// The dock rectangle the panel's body was laid out in when
     /// [`Self::image_detail_view`] was published.
     ///
@@ -718,10 +731,12 @@ pub(crate) struct AppState {
     /// [`default_budget_bytes`]: sfmtool_core::camera::photograph_cache::default_budget_bytes
     pub(crate) photographs: Arc<PhotographCache>,
 
-    /// The photographs a panel has asked to have decoded on the rayon pool and
-    /// that are still decoding, so each is asked for once. The panels read
-    /// through [`display_photograph`], which never decodes on the
-    /// GUI thread.
+    /// The photographs, layouts and tiles a panel has asked to have read on the
+    /// rayon pool and that are still being read, so each is asked for once,
+    /// and the tiles those reads answered. The panels read through
+    /// [`display_layout`] and [`display_tiles`] (Image Detail), which never
+    /// decode on the GUI thread, and [`display_photograph`] (the others),
+    /// which does only under a cache of budget 0.
     pub(crate) photograph_requests: PhotographRequests,
 
     /// Whether the "Load Demo Data" dialog is currently open.
@@ -1023,6 +1038,7 @@ impl AppState {
             selected_endpoint: None,
             look: None,
             image_detail_view: None,
+            image_detail_tiles: None,
             image_detail_view_layout: None,
             image_detail_view_serial: 0,
             hovered_image: None,
@@ -1232,16 +1248,22 @@ impl AppState {
         self.track_tables.forget_node(id);
     }
 
-    /// Take the panel's own reading of the view it drew, with the dock rectangle
-    /// it was laid out in and a serial for the frame that published it.
+    /// Take the panel's own reading of the view it drew and of the tiles it drew
+    /// it with, with the dock rectangle it was laid out in and a serial for the
+    /// frame that published it.
     ///
     /// The one door for [`Self::image_detail_view`], so the three things a view
     /// tool has to know about a reading -- what it says, which layout it says it
     /// of, and how recent it is -- cannot come apart.
-    pub(crate) fn publish_image_detail_view(&mut self, view: ViewGeometry) {
+    pub(crate) fn publish_image_detail_view(
+        &mut self,
+        view: ViewGeometry,
+        tiles: Option<crate::image_detail::DrawnTiles>,
+    ) {
         self.image_detail_view_layout =
             crate::dock::panel_body_points(&self.dock, crate::dock::Tab::ImageDetail);
         self.image_detail_view = Some(view);
+        self.image_detail_tiles = tiles;
         self.image_detail_view_serial = self.image_detail_view_serial.wrapping_add(1);
     }
 

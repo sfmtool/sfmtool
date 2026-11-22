@@ -548,3 +548,57 @@ pub(crate) fn rewrite_as_version_16_without_keypoints(path: &std::path::Path) {
     }
     zip.finish().unwrap();
 }
+
+/// A photograph held in a photograph cache of its own, as a panel test hands
+/// it to Image Detail: the cache answers its layout and its tiles at once,
+/// cut from `pyramid`, so a frame draws it as the panel draws a photograph
+/// the session's cache holds, and starts no task.
+pub(crate) struct HeldPhotograph {
+    cache: std::sync::Arc<sfmtool_core::camera::PhotographCache>,
+    requests: crate::state::PhotographRequests,
+    path: std::path::PathBuf,
+}
+
+impl HeldPhotograph {
+    pub(crate) fn new(pyramid: sfmtool_core::camera::image::ImageU8Pyramid) -> Self {
+        let cache = sfmtool_core::camera::PhotographCache::new(
+            sfmtool_core::camera::PhotographCacheOptions {
+                budget_bytes: 1 << 30,
+                ..Default::default()
+            },
+        );
+        let path = std::path::PathBuf::from("/held/photograph.jpg");
+        cache.insert(&path, std::sync::Arc::new(pyramid));
+        Self {
+            cache: std::sync::Arc::new(cache),
+            requests: crate::state::PhotographRequests::default(),
+            path,
+        }
+    }
+
+    /// A photograph the cache does not hold and knows nothing of, whose reads
+    /// wait in a queue that is never run: what the panel sees of a
+    /// photograph the cache has dropped, until it is read again.
+    pub(crate) fn dropped() -> Self {
+        let cache = sfmtool_core::camera::PhotographCache::new(
+            sfmtool_core::camera::PhotographCacheOptions {
+                budget_bytes: 1 << 30,
+                ..Default::default()
+            },
+        );
+        Self {
+            cache: std::sync::Arc::new(cache),
+            requests: crate::state::PhotographRequests::queued().0,
+            path: std::path::PathBuf::from("/held/photograph.jpg"),
+        }
+    }
+
+    /// The photograph as the panel asks for it.
+    pub(crate) fn source(&self) -> crate::state::PhotographSource<'_> {
+        crate::state::PhotographSource {
+            cache: &self.cache,
+            requests: &self.requests,
+            path: &self.path,
+        }
+    }
+}
