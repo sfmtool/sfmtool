@@ -883,7 +883,7 @@ reconstruction is visible, and the focused measurement item. A **Show all
 measurements** option, off by default, draws every stored measurement of every
 visible reconstruction as well, so a reconstruction with many measurements
 stays readable, and the person who wants to see them all together asks for it.
-Each view has its own: a check box in the 3D view's HUD, in its Layers section,
+Each view has its own: a checkbox in the 3D view's HUD, in its Layers section,
 and one in Image Detail's toolbar ([viewport-hud.md](viewport-hud.md),
 [multi-panel-image-browser.md](multi-panel-image-browser.md) § "Image Detail").
 With it on, the selected measurement is drawn wider (3.5 points against 2) and
@@ -1250,7 +1250,7 @@ at-infinity case is covered by the Rust tests.
   tool, recording its own row.
 - **`ui_basic`, drawing**: on the measured copy, endpoint A of the focused item
   dragged in Image Detail moves to the pixel under the release in one version,
-  and Image Detail's *Show all measurements* check box turns its option on.
+  and Image Detail's *Show all measurements* checkbox turns its option on.
 - **The script** (`tests/test_add_artificial_measurements.py`): every case
   with its known scale read back through the resolver, the copy without a
   unit, the recorded workspace, and a path under `test-data/` refused with
