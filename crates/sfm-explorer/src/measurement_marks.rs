@@ -179,7 +179,11 @@ impl AppState {
         let mut others = Vec::new();
         let mut selected = Vec::new();
         for node in &self.scene {
-            if !crate::scene::is_visible(node, self.solo) {
+            // A node that draws nothing here is not resolved for it.
+            let selected_here = self
+                .selected_measurement
+                .is_some_and(|m| m.recon == node.id);
+            if !crate::scene::is_visible(node, self.solo) || !(show_all || selected_here) {
                 continue;
             }
             let rows = measurements::distance_rows(node.edited().measurements());
