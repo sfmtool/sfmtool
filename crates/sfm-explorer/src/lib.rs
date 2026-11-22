@@ -59,6 +59,7 @@ mod patch_pictures;
 mod platform;
 mod point_ids;
 mod progress;
+mod repaint;
 mod resect;
 mod save_minimal_prompt;
 mod scene;
@@ -131,6 +132,13 @@ pub(crate) enum UserEvent {
     /// however many requests arrived alongside it.
     #[cfg(feature = "mcp")]
     McpRequest,
+    /// egui asked for a repaint from a thread other than the GUI thread.
+    ///
+    /// Carries nothing: the redraw `App::user_event` asks for is the whole of
+    /// it. A wake rather than a call to `Window::request_redraw` on that
+    /// thread, which on macOS waits for the main thread while egui's lock is
+    /// held; see [`repaint`].
+    Repaint,
 }
 
 impl From<egui_winit::accesskit_winit::Event> for UserEvent {
@@ -770,6 +778,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Background => {}
             #[cfg(feature = "mcp")]
             UserEvent::McpRequest => {}
+            UserEvent::Repaint => {}
         }
         if let Some(window) = self.window.as_ref() {
             window.request_redraw();
@@ -897,11 +906,17 @@ impl App {
             Some(max_texture_side),
         );
 
-        // Repaint callback
+        // Repaint callback: a redraw on this thread, the GUI thread, and a
+        // wake through the proxy on any other (see `repaint`).
         let repaint_window = window.clone();
-        self.egui_ctx.set_request_repaint_callback(move |_info| {
-            repaint_window.request_redraw();
-        });
+        let repaint_proxy = self.proxy.clone();
+        self.egui_ctx
+            .set_request_repaint_callback(repaint::repaint_callback(
+                move || repaint_window.request_redraw(),
+                move || {
+                    let _ = repaint_proxy.send_event(UserEvent::Repaint);
+                },
+            ));
 
         // Initialize AccessKit so egui's widget tree is visible to UIAutomation
         // (and screen readers). Must happen after egui_winit_state is created
