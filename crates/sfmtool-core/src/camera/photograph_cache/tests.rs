@@ -846,10 +846,13 @@ fn reserve_builds_grants_what_fits_and_one_when_none_does() {
     assert_eq!(reserved(), 0);
 }
 
-/// `try_reserve_build` is refused whenever the decode would take the count
-/// past the build budget, from one thread and from eight at once.
+/// `try_reserve_build` is refused whenever another decode is reserved and its
+/// decode would take the count past the build budget, from one thread and from
+/// eight at once; with nothing reserved it grants a decode larger than the
+/// whole budget, which then runs alone, so the count passes the budget by that
+/// one decode only. Under a build budget of 0 that is every decode.
 #[test]
-fn try_reserve_build_never_takes_the_count_past_the_build_budget() {
+fn try_reserve_build_passes_the_build_budget_only_alone() {
     let cache = PhotographCache::new(PhotographCacheOptions {
         build_budget_bytes: 10_000,
         ..with_budget(0)
@@ -863,7 +866,11 @@ fn try_reserve_build_never_takes_the_count_past_the_build_budget() {
     assert!(cache.try_reserve_build(u64::MAX).is_none());
     drop((held, fits));
     assert_eq!(reserved(), 0);
-    assert!(cache.try_reserve_build(10_001).is_none());
+    let alone = cache.try_reserve_build(10_001).expect("granted when idle");
+    assert_eq!(reserved(), 10_001);
+    assert!(cache.try_reserve_build(1).is_none());
+    drop(alone);
+    assert_eq!(reserved(), 0);
 
     let threads = 8;
     let barrier = Barrier::new(threads);
@@ -884,12 +891,15 @@ fn try_reserve_build_never_takes_the_count_past_the_build_budget() {
     assert!(most.load(Ordering::SeqCst) <= 10_000);
     assert_eq!(reserved(), 0);
 
-    // A build budget of 0 refuses every decode that has a size.
+    // A build budget of 0 grants one decode at a time.
     let none = PhotographCache::new(PhotographCacheOptions {
         build_budget_bytes: 0,
         ..with_budget(0)
     });
+    let one = none.try_reserve_build(1).expect("one decode at a time");
     assert!(none.try_reserve_build(1).is_none());
+    drop(one);
+    assert!(none.try_reserve_build(1).is_some());
 }
 
 /// A `get_many` over 20 photographs decodes them in groups whose reservations

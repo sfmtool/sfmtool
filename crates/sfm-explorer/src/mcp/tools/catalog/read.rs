@@ -455,10 +455,14 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             description: "Where the Image Detail panel is looking: the camera image on screen, \
                           the zoom (1.0 is the whole photograph fitted to the panel), the \
                           rectangle of the photograph the panel shows in its own pixels, the \
-                          panel's size in points and the photograph's size in pixels. This is \
-                          what the last drawn frame settled on, so it is what a screenshot of \
-                          the panel would show — a select_camera_image sent a moment ago is not \
-                          in it until the next frame. Every field is null before the panel has \
+                          panel's size in points, the photograph's size in pixels, the pyramid \
+                          level the photograph is drawn at (0 is full resolution) and \
+                          tiles_pending, how many visible tiles of that level are not drawn \
+                          yet, which show coarser pixels or none. This is what the last drawn \
+                          frame settled on, so it is what a screenshot of the panel would show \
+                          — a select_camera_image sent a moment ago is not in it until the next \
+                          frame. Wait for tiles_pending to be 0 before a screenshot whose \
+                          pixels you mean to judge. Every field is null before the panel has \
                           drawn a photograph at all.",
             kind: Read,
             schema: object(&[], &[]),

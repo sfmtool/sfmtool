@@ -7,11 +7,12 @@ is a dot in the 3D view, a feature in Image Detail, a bench row and a Track
 Table row. A person learns what a click does in one panel and expects it to do
 the same kind of thing everywhere. This spec holds the rules every pointer
 gesture in the viewer follows (a click, a double-click, a right-click, a hover,
-a press on a mark, and the modifier clicks of a list with a multi-selection),
+a press on a mark, the modifier clicks of a list with a multi-selection, and a
+picture still drawn while its replacement loads),
 so that a click, a double-click, a hover and a right-click mean the same kind
 of thing in every panel.
 
-Each rule has a number, G1 to G12, so a spec, an audit finding or a commit can
+Each rule has a number, G1 to G13, so a spec, an audit finding or a commit can
 cite it. A panel's spec says which rule each of its gestures follows ("Click:
 G1. Double-click: G2, enter camera view") and states only what the rule leaves
 to the panel, such as which panel a double-click raises. `specs/STANDARDS.md`
@@ -40,7 +41,9 @@ raises a panel and never pushes a version. A click on the item already
 selected keeps it selected; nothing toggles off. A click on empty space in the
 3D view, or on a part of the photograph in Image Detail where nothing is
 drawn, clears the selection a click there could have made: the image and the
-point in the 3D view, the point in Image Detail.
+point in the 3D view, the point in Image Detail. G1, like G2 and G3, applies to
+what a panel shows as current; a picture a panel still draws while the one
+selected loads takes the gestures G13 gives it.
 
 **G2. A double-click does what the target stands for, which a click does
 first.** It is the click, then one action chosen by what the target denotes:
@@ -115,6 +118,18 @@ in the order the list shows, in place of the selection. Ctrl+Shift-click adds
 those rows to the selection. On macOS, Cmd stands for Ctrl. Track View's
 observation table is such a list.
 
+**G13. A picture kept while its replacement loads takes no click.** A panel
+that keeps drawing the picture it showed before while the one now selected
+loads, as Image Detail keeps the previous photograph until the new one's first
+tiles land, takes no click, double-click, drag or right-click on that picture:
+the drawn picture is not the selected one, so a click would select, edit or
+open a menu on something the user did not choose. No selection is made or
+cleared, no drag pans the view or moves a mark, and no menu opens. Hover still
+works under G6, and the wheel and the keys that move the view, such as `Z`,
+still move it, and the view they leave carries over to the picture that
+replaces it. Once the selected picture is
+drawn, G1 to G12 apply to it as usual.
+
 ## Where the rules live in the code
 
 The functions the rules name are the ones every panel calls, which is how a
@@ -138,6 +153,10 @@ rule stays one code path (G8):
   `Look::Reveal`, Image Detail's reveal (G5), whose margin is the constant
   `REVEAL_MARGIN` (0.05 of the panel on each side) in
   [image_detail/mod.rs](../../crates/sfm-explorer/src/image_detail/mod.rs).
+- [image_detail/mod.rs](../../crates/sfm-explorer/src/image_detail/mod.rs):
+  `ImageDetail::what_to_show`, which keeps the previous photograph while the
+  selected one loads, and the hover-only sense `ImageDetail::show` gives the
+  panel meanwhile (G13).
 - [image_menu.rs](../../crates/sfm-explorer/src/image_menu.rs): `image_menu::show`,
   the one image menu (G8); [scene-graph.md](scene-graph.md) § "Tree rows"
   describes it.

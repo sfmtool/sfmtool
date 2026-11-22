@@ -89,7 +89,6 @@ impl ViewGeometry {
     /// where it landed wants to see. What is always true is that the centre of
     /// this rectangle is the image pixel at the centre of the panel, which is
     /// what a [`Look`] aims.
-    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) fn visible_rect(&self) -> [f32; 4] {
         let scale = self.scale();
         let display = self.display_size();
@@ -101,6 +100,33 @@ impl ViewGeometry {
             left + self.panel_size[0] / scale,
             top + self.panel_size[1] / scale,
         ]
+    }
+
+    /// The view the panel holds on the frame it first draws `image`, of
+    /// `image_size` pixels, in place of this one's image, in the same panel:
+    /// `pan` rescaled by the new displayed extent against this one's, so the
+    /// same region of the image stays framed, then clamped, and the zoom
+    /// brought back to the new image's limit about the panel centre, the
+    /// steps and the order the panel's own frame takes them in.
+    pub(crate) fn carried_to(&self, image: ImageRef, image_size: [f32; 2]) -> ViewGeometry {
+        let mut next = ViewGeometry {
+            image,
+            image_size,
+            ..*self
+        };
+        let (old, new) = (self.display_size(), next.display_size());
+        if old[0] > 0.0 && old[1] > 0.0 {
+            next.pan = [next.pan[0] * new[0] / old[0], next.pan[1] * new[1] / old[1]];
+        }
+        next.pan = clamp_pan(next.pan, new, next.panel_size);
+        let limit = next.zoom_limit();
+        if next.zoom > limit {
+            let zoom = clamp_zoom(limit, limit);
+            let ratio = zoom / next.zoom;
+            next.pan = [next.pan[0] * ratio, next.pan[1] * ratio];
+            next.zoom = zoom;
+        }
+        next
     }
 
     /// The same view with `pan` and `zoom` replaced, the frame left alone.

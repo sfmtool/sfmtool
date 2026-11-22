@@ -16,12 +16,18 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::{
+    PhotographCache, PhotographCacheOptions, PhotographTile, PHOTOGRAPH_TILE_SIZE as TILE_SIZE,
+};
 
 use super::super::view::zoom_limit;
-use super::super::{DetailPhotograph, ImageDetail, Look, ViewGeometry};
-use super::{level_for_scale, Layout, PhotographTileKey, MAX_UPLOADS_PER_FRAME, TILE_SIZE};
+use super::super::{ImageDetail, Look, ViewGeometry};
+use super::{level_for_scale, Layout, PhotographTileKey, MAX_UPLOADS_PER_FRAME};
 use crate::scene::SceneNode;
-use crate::state::{FeatureDisplaySettings, IntrinsicsDisplaySettings};
+use crate::state::{
+    FeatureDisplaySettings, IntrinsicsDisplaySettings, PhotographRequests, PhotographSource,
+};
+use crate::test_support::HeldPhotograph;
 
 #[test]
 fn the_level_is_the_one_whose_pixels_are_about_one_screen_pixel() {
@@ -69,6 +75,7 @@ fn the_zoom_limit_lets_one_pixel_reach_eight_points_and_keeps_32_otherwise() {
 fn a_view_asks_for_the_tiles_whose_cores_it_meets() {
     let layout = Layout {
         sizes: vec![[2000, 1500], [1000, 750], [500, 375]],
+        tile_size: TILE_SIZE,
     };
     let all: Vec<(u32, u32)> = (0..3)
         .flat_map(|row| (0..4).map(move |col| (col, row)))
@@ -97,6 +104,7 @@ fn a_view_asks_for_the_tiles_whose_cores_it_meets() {
     assert_eq!(layout.overview_level(), 2);
     let long = Layout {
         sizes: vec![[9000, 16], [4500, 8], [2250, 4], [1125, 2], [562, 1]],
+        tile_size: TILE_SIZE,
     };
     assert_eq!(
         long.overview_level(),
@@ -105,30 +113,20 @@ fn a_view_asks_for_the_tiles_whose_cores_it_meets() {
     );
 }
 
+/// A tile the cache hands over is uploaded as its pixels, border and all, one
+/// colour a pixel, whatever its channels. The cache's tests check that a tile
+/// carries its neighbours' pixels as its border.
 #[test]
-fn a_tile_carries_its_neighbours_pixels_as_a_border() {
-    let (w, h) = (600u32, 520u32);
-    let data: Vec<u8> = (0..h)
-        .flat_map(|y| (0..w).flat_map(move |x| [(x % 251) as u8, (y % 241) as u8, 7]))
-        .collect();
-    let level = ImageU8::new(w, h, 3, data);
-    let at = |x: u32, y: u32| egui::Color32::from_rgb((x % 251) as u8, (y % 241) as u8, 7);
-
-    let first = super::cut_tile(&level, 0, 0);
-    assert_eq!(first.size, [514, 514]);
-    // The core starts one texel in, and the border to the right and below is
-    // the next tile's first column and row.
-    assert_eq!(first.pixels[514 + 1], at(0, 0));
-    assert_eq!(first.pixels[514 * 513 + 513], at(512, 512));
-    // At the photograph's own edge the edge pixel is repeated.
-    assert_eq!(first.pixels[0], at(0, 0));
-
-    let corner = super::cut_tile(&level, 1, 1);
-    assert_eq!(corner.size, [(600 - 512) + 2, (520 - 512) + 2]);
-    let cw = corner.size[0];
-    assert_eq!(corner.pixels[0], at(511, 511));
-    assert_eq!(corner.pixels[cw + 1], at(512, 512));
-    assert_eq!(corner.pixels[corner.pixels.len() - 1], at(599, 519));
+fn a_tile_is_uploaded_as_its_pixels() {
+    let rgb = super::texture_image(&ImageU8::new(3, 2, 3, (0..18).collect()));
+    assert_eq!(rgb.size, [3, 2]);
+    assert_eq!(rgb.pixels[0], egui::Color32::from_rgb(0, 1, 2));
+    assert_eq!(rgb.pixels[4], egui::Color32::from_rgb(12, 13, 14));
+    let grey = super::texture_image(&ImageU8::new(2, 1, 1, vec![5, 6]));
+    assert_eq!(
+        grey.pixels,
+        vec![egui::Color32::from_gray(5), egui::Color32::from_gray(6)]
+    );
 }
 
 /// What one frame of the panel handed egui.
@@ -140,6 +138,10 @@ struct Frame {
     repaint: bool,
     /// The view the panel published.
     view: Option<ViewGeometry>,
+    /// The level it drew and its tiles still to draw.
+    tiles: Option<super::DrawnTiles>,
+    /// Every text it painted.
+    texts: Vec<String>,
 }
 
 /// The textures a run of frames has handed egui, by id, as egui would hold
@@ -176,7 +178,22 @@ fn frame(
     detail: &mut ImageDetail,
     ctx: &egui::Context,
     node: &SceneNode,
-    photograph: DetailPhotograph<'_>,
+    photograph: Option<PhotographSource<'_>>,
+    panel: egui::Vec2,
+    look: Option<Look>,
+    gpu: &mut Gpu,
+) -> Frame {
+    frame_of(detail, ctx, node, 0, photograph, panel, look, gpu)
+}
+
+/// The same, showing image `index` of `node`.
+#[allow(clippy::too_many_arguments)]
+fn frame_of(
+    detail: &mut ImageDetail,
+    ctx: &egui::Context,
+    node: &SceneNode,
+    index: usize,
+    photograph: Option<PhotographSource<'_>>,
     panel: egui::Vec2,
     look: Option<Look>,
     gpu: &mut Gpu,
@@ -190,14 +207,14 @@ fn frame(
         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, panel)),
         ..Default::default()
     };
-    let mut view = None;
+    let (mut view, mut tiles) = (None, None);
     let mut output = ctx.run_ui(input, |ui| {
         let response = detail.show(
             ui,
             node.edited(),
             node.id,
             node.history.current_version().serial,
-            Some(0),
+            Some(index),
             look,
             None,
             None,
@@ -211,6 +228,7 @@ fn frame(
             None,
         );
         view = response.view;
+        tiles = response.tiles;
     });
     #[allow(clippy::iter_over_hash_type)]
     for (id, deltas) in &output.textures_delta.set {
@@ -225,6 +243,7 @@ fn frame(
         }
     }
     output.textures_delta.clear();
+    let texts = crate::test_support::output_texts(&output);
     let mut meshes = Vec::new();
     for clipped in &output.shapes {
         collect_meshes(&clipped.shape, &mut meshes);
@@ -237,6 +256,8 @@ fn frame(
         meshes,
         repaint,
         view,
+        tiles,
+        texts,
     }
 }
 
@@ -285,7 +306,7 @@ fn resident_tiles(detail: &ImageDetail) -> HashSet<Tile> {
 #[test]
 fn a_view_uploads_the_tiles_it_shows_and_the_overview() {
     let node = node();
-    let pyramid = pyramid_of(synthetic(2400, 1800));
+    let pyramid = HeldPhotograph::new(pyramid_of(synthetic(2400, 1800)));
     let ctx = egui::Context::default();
     let mut detail = ImageDetail::new();
     let mut gpu = Gpu::default();
@@ -294,7 +315,7 @@ fn a_view_uploads_the_tiles_it_shows_and_the_overview() {
         &mut detail,
         &ctx,
         &node,
-        DetailPhotograph::Decoded(&pyramid),
+        Some(pyramid.source()),
         egui::vec2(500.0, 500.0),
         Some(Look::Rect([600.0, 100.0, 1100.0, 600.0])),
         &mut gpu,
@@ -308,7 +329,7 @@ fn a_view_uploads_the_tiles_it_shows_and_the_overview() {
 #[test]
 fn a_long_photograph_never_makes_a_texture_over_514_px() {
     let node = node();
-    let pyramid = pyramid_of(synthetic(9000, 16));
+    let pyramid = HeldPhotograph::new(pyramid_of(synthetic(9000, 16)));
     let ctx = egui::Context::default();
     let mut detail = ImageDetail::new();
     let mut gpu = Gpu::default();
@@ -334,7 +355,7 @@ fn a_long_photograph_never_makes_a_texture_over_514_px() {
             &mut detail,
             &ctx,
             &node,
-            DetailPhotograph::Decoded(&pyramid),
+            Some(pyramid.source()),
             panel,
             look,
             &mut gpu,
@@ -363,14 +384,14 @@ fn the_zoom_reaches_eight_points_a_pixel_on_a_large_photograph_and_32_on_a_small
     });
 
     // 9000 px across 900 points fits at 0.1, so the limit is 80.
-    let large = pyramid_of(synthetic(9000, 16));
+    let large = HeldPhotograph::new(pyramid_of(synthetic(9000, 16)));
     let mut detail = ImageDetail::new();
     let mut gpu = Gpu::default();
     let view = frame(
         &mut detail,
         &ctx,
         &node,
-        DetailPhotograph::Decoded(&large),
+        Some(large.source()),
         panel,
         zoom_in,
         &mut gpu,
@@ -384,13 +405,13 @@ fn the_zoom_reaches_eight_points_a_pixel_on_a_large_photograph_and_32_on_a_small
         view.zoom
     );
 
-    let small = pyramid_of(synthetic(640, 480));
+    let small = HeldPhotograph::new(pyramid_of(synthetic(640, 480)));
     let mut detail = ImageDetail::new();
     let view = frame(
         &mut detail,
         &ctx,
         &node,
-        DetailPhotograph::Decoded(&small),
+        Some(small.source()),
         panel,
         zoom_in,
         &mut gpu,
@@ -406,17 +427,17 @@ fn the_zoom_reaches_eight_points_a_pixel_on_a_large_photograph_and_32_on_a_small
         &mut detail,
         &ctx,
         &node,
-        DetailPhotograph::Decoded(&large),
+        Some(large.source()),
         panel,
         zoom_in,
         &mut gpu,
     );
-    let other = ImageU8Pyramid::from_image(synthetic(640, 480), 1);
+    let other = HeldPhotograph::new(ImageU8Pyramid::from_image(synthetic(640, 480), 1));
     let view = frame(
         &mut detail,
         &ctx,
         &node,
-        DetailPhotograph::Decoded(&other),
+        Some(other.source()),
         panel,
         None,
         &mut gpu,
@@ -438,7 +459,7 @@ fn level0_of_uv((level, col, row): Tile, size: [usize; 2], uv: egui::Rect) -> [f
 #[test]
 fn a_missing_tile_is_drawn_from_the_coarser_level_until_it_is_uploaded() {
     let node = node();
-    let pyramid = pyramid_of(synthetic(2400, 1800));
+    let pyramid = HeldPhotograph::new(pyramid_of(synthetic(2400, 1800)));
     let ctx = egui::Context::default();
     ctx.set_pixels_per_point(2.0);
     let mut detail = ImageDetail::new();
@@ -449,11 +470,12 @@ fn a_missing_tile_is_drawn_from_the_coarser_level_until_it_is_uploaded() {
     let panel = egui::vec2(1200.0, 900.0);
     // egui takes a new scale on the frame after it is set, so one frame with
     // nothing to draw yet settles it.
+    let dropped = HeldPhotograph::dropped();
     frame(
         &mut detail,
         &ctx,
         &node,
-        DetailPhotograph::Decoding,
+        Some(dropped.source()),
         panel,
         None,
         &mut gpu,
@@ -462,7 +484,7 @@ fn a_missing_tile_is_drawn_from_the_coarser_level_until_it_is_uploaded() {
         &mut detail,
         &ctx,
         &node,
-        DetailPhotograph::Decoded(&pyramid),
+        Some(pyramid.source()),
         panel,
         None,
         &mut gpu,
@@ -512,7 +534,7 @@ fn a_missing_tile_is_drawn_from_the_coarser_level_until_it_is_uploaded() {
         &mut detail,
         &ctx,
         &node,
-        DetailPhotograph::Decoded(&pyramid),
+        Some(pyramid.source()),
         panel,
         None,
         &mut gpu,
@@ -526,7 +548,7 @@ fn a_missing_tile_is_drawn_from_the_coarser_level_until_it_is_uploaded() {
         &mut detail,
         &ctx,
         &node,
-        DetailPhotograph::Decoded(&pyramid),
+        Some(pyramid.source()),
         panel,
         None,
         &mut gpu,
@@ -543,7 +565,7 @@ fn a_missing_tile_is_drawn_from_the_coarser_level_until_it_is_uploaded() {
         &mut detail,
         &ctx,
         &node,
-        DetailPhotograph::Decoded(&pyramid),
+        Some(pyramid.source()),
         panel,
         None,
         &mut gpu,
@@ -553,7 +575,7 @@ fn a_missing_tile_is_drawn_from_the_coarser_level_until_it_is_uploaded() {
         &mut detail,
         &ctx,
         &node,
-        DetailPhotograph::Decoded(&pyramid),
+        Some(pyramid.source()),
         panel,
         None,
         &mut gpu,
@@ -574,7 +596,7 @@ fn a_missing_tile_is_drawn_from_the_coarser_level_until_it_is_uploaded() {
         &mut detail,
         &ctx,
         &node,
-        DetailPhotograph::Decoding,
+        Some(dropped.source()),
         panel,
         None,
         &mut gpu,
@@ -582,7 +604,7 @@ fn a_missing_tile_is_drawn_from_the_coarser_level_until_it_is_uploaded() {
     assert_eq!(
         gpu.made.len(),
         made,
-        "nothing is uploaded without a pyramid"
+        "nothing is uploaded while the cache does not hold the photograph"
     );
     let from_overview: Vec<_> = third
         .meshes
@@ -686,10 +708,10 @@ fn a_test_data_photograph_looks_as_it_did_with_one_texture() {
     ));
     let image = ImageU8::read_rgb(path).expect("the test-data photograph reads");
     assert_eq!((image.width(), image.height()), (360, 640));
-    let pyramid = ImageU8Pyramid::build(
+    let pyramid = HeldPhotograph::new(ImageU8Pyramid::build(
         &image,
         ImageU8Pyramid::full_levels(image.width(), image.height()),
-    );
+    ));
     let node = node();
     let ctx = egui::Context::default();
     let mut detail = ImageDetail::new();
@@ -707,7 +729,7 @@ fn a_test_data_photograph_looks_as_it_did_with_one_texture() {
             &mut detail,
             &ctx,
             &node,
-            DetailPhotograph::Decoded(&pyramid),
+            Some(pyramid.source()),
             panel,
             look,
             &mut gpu,
@@ -730,9 +752,23 @@ fn a_test_data_photograph_looks_as_it_did_with_one_texture() {
 #[test]
 fn the_panel_keeps_256_tiles_and_drops_the_least_recently_drawn() {
     let ctx = egui::Context::default();
-    // 300 tiles side by side, two pixels high, so each costs almost nothing
-    // to cut.
-    let pyramid = ImageU8Pyramid::from_image(synthetic(300 * TILE_SIZE, 2), 1);
+    // Tiles of a photograph 300 tiles wide and two pixels high, so each costs
+    // almost nothing to make.
+    let pixels = |col: u32| PhotographTile {
+        key: sfmtool_core::camera::TileKey {
+            level: 0,
+            col,
+            row: 0,
+        },
+        origin: [col * TILE_SIZE, 0],
+        size: [TILE_SIZE, 2],
+        pixels: ImageU8::new(
+            TILE_SIZE + 2,
+            4,
+            3,
+            vec![7; (TILE_SIZE as usize + 2) * 4 * 3],
+        ),
+    };
     let image = crate::scene::ImageRef::new(node().id, 0);
     let mut tiles = super::PhotographTiles::new();
     let tile = |col: u32| PhotographTileKey {
@@ -743,7 +779,7 @@ fn the_panel_keeps_256_tiles_and_drops_the_least_recently_drawn() {
     };
     for col in 0..super::MAX_TILE_TEXTURES as u32 {
         tiles.frame += 1;
-        tiles.upload(&ctx, &pyramid, tile(col));
+        tiles.upload(&ctx, tile(col), &pixels(col));
     }
     assert_eq!(tiles.resident.len(), super::MAX_TILE_TEXTURES);
     // Tile 0 is drawn again, so tile 1 is now the one drawn longest ago.
@@ -762,7 +798,7 @@ fn the_panel_keeps_256_tiles_and_drops_the_least_recently_drawn() {
     );
     for col in 256..260 {
         tiles.frame += 1;
-        tiles.upload(&ctx, &pyramid, tile(col));
+        tiles.upload(&ctx, tile(col), &pixels(col));
     }
     assert_eq!(tiles.resident.len(), super::MAX_TILE_TEXTURES);
     for col in [0, 5, 255, 256, 259] {
@@ -774,4 +810,279 @@ fn the_panel_keeps_256_tiles_and_drops_the_least_recently_drawn() {
             "tile {col} dropped"
         );
     }
+}
+
+/// A photograph cache of `budget_bytes`, as the viewer makes its own.
+fn cache_of(budget_bytes: u64) -> Arc<PhotographCache> {
+    Arc::new(PhotographCache::new(PhotographCacheOptions {
+        budget_bytes,
+        ..Default::default()
+    }))
+}
+
+/// A JPEG of `width x height` written in `dir`.
+fn jpeg_in(dir: &std::path::Path, name: &str, width: u32, height: u32) -> std::path::PathBuf {
+    let path = dir.join(name);
+    image::RgbImage::from_fn(width, height, |x, y| {
+        image::Rgb([x as u8, y as u8, (x ^ y) as u8])
+    })
+    .save(&path)
+    .expect("the photograph is written");
+    path
+}
+
+/// Two panels showing a photograph the cache does not hold, which needs ten
+/// tiles of level 0 and the overview's, ask for its layout with one header
+/// read and for its eleven tiles with one decode, the second panel starting
+/// none while the first's runs, and neither decodes on the thread that draws
+/// it: the decode count stays 0 until the queued tasks run on a thread of
+/// their own. The frames before its first tiles land draw no image, since the
+/// panel had none to keep. With a budget and with a cache that keeps nothing.
+#[test]
+fn panels_ask_for_a_photographs_tiles_in_one_decode_and_never_decode_themselves() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = jpeg_in(dir.path(), "wide.jpg", 2560, 1024);
+    let node = node();
+    // One screen pixel a photograph pixel: level 0, five by two tiles, and
+    // the overview at level 3.
+    let panel = egui::vec2(2560.0, 1024.0);
+    for budget in [1 << 30, 0] {
+        let cache = cache_of(budget);
+        let (requests, queue) = PhotographRequests::queued();
+        let source = Some(PhotographSource {
+            cache: &cache,
+            requests: &requests,
+            path: &path,
+        });
+        let (ctx_a, ctx_b) = (egui::Context::default(), egui::Context::default());
+        let (mut a, mut b) = (ImageDetail::new(), ImageDetail::new());
+        let (mut gpu_a, mut gpu_b) = (Gpu::default(), Gpu::default());
+
+        let unknown = frame(&mut a, &ctx_a, &node, source, panel, None, &mut gpu_a);
+        assert_eq!(unknown.view, None, "nothing to draw before the layout");
+        frame(&mut b, &ctx_b, &node, source, panel, None, &mut gpu_b);
+        assert_eq!(queue.len(), 1, "one header read for both panels");
+        assert_eq!(queue.run_off_this_thread(), 1);
+
+        let waiting = frame(&mut a, &ctx_a, &node, source, panel, None, &mut gpu_a);
+        assert_eq!(waiting.view, None, "nothing drawn before the first tiles");
+        frame(&mut b, &ctx_b, &node, source, panel, None, &mut gpu_b);
+        frame(&mut a, &ctx_a, &node, source, panel, None, &mut gpu_a);
+        assert_eq!(queue.len(), 1, "one decode for both panels");
+        assert_eq!(cache.stats().decodes, 0, "no panel decodes as it draws");
+        assert!(gpu_a.made.is_empty() && gpu_b.made.is_empty());
+        assert_eq!(queue.run_off_this_thread(), 1);
+        assert_eq!(cache.stats().decodes, 1);
+
+        let drawn = frame(&mut a, &ctx_a, &node, source, panel, None, &mut gpu_a);
+        assert_eq!(gpu_a.made.len(), 11, "budget {budget}");
+        assert_eq!(
+            drawn.tiles,
+            Some(super::DrawnTiles {
+                level: 0,
+                tiles_pending: 0
+            })
+        );
+        assert_eq!(drawn.meshes.len(), 10);
+        if budget > 0 {
+            // The cache holds the photograph, so the second panel's tiles are
+            // cut from it with no decode.
+            frame(&mut b, &ctx_b, &node, source, panel, None, &mut gpu_b);
+            assert_eq!(gpu_b.made.len(), 11);
+        }
+        assert_eq!(queue.len(), 0, "budget {budget}");
+        assert_eq!(cache.stats().decodes, 1);
+    }
+}
+
+/// The tiles asked for ahead of an image switch are the ones the frame that
+/// shows the next image draws, at the view the panel carries over to it,
+/// zoomed in and panned: that frame starts no read, decodes nothing and
+/// leaves no tile pending. Under a cache that keeps nothing, so only what the
+/// decode asked for ahead answered is there to draw.
+#[test]
+fn the_tiles_asked_for_ahead_are_the_ones_the_next_image_draws() {
+    let dir = tempfile::tempdir().unwrap();
+    // Portrait where the shown image is landscape, so carrying the view over
+    // rescales the pan on both axes.
+    let next_path = jpeg_in(dir.path(), "next.jpg", 2000, 3000);
+    let node = node();
+    let panel = egui::vec2(500.0, 500.0);
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+    let mut gpu = Gpu::default();
+    let shown = HeldPhotograph::new(pyramid_of(synthetic(2400, 1800)));
+    let view = frame(
+        &mut detail,
+        &ctx,
+        &node,
+        Some(shown.source()),
+        panel,
+        Some(Look::Pixel {
+            pixel: [1700.0, 400.0],
+            zoom: Some(4.0),
+        }),
+        &mut gpu,
+    )
+    .view
+    .expect("a drawn frame publishes its view");
+
+    let cache = cache_of(0);
+    let (requests, queue) = PhotographRequests::queued();
+    let next = PhotographSource {
+        cache: &cache,
+        requests: &requests,
+        path: &next_path,
+    };
+    let next_image = crate::scene::ImageRef::new(node.id, 1);
+    detail.prefetch(&ctx, &view, next_image, next);
+    assert_eq!(queue.run_off_this_thread(), 1, "the header read");
+    detail.prefetch(&ctx, &view, next_image, next);
+    detail.prefetch(&ctx, &view, next_image, next);
+    assert_eq!(queue.len(), 1, "one decode");
+    assert_eq!(cache.stats().decodes, 0);
+    assert_eq!(queue.run_off_this_thread(), 1);
+
+    let made = gpu.made.len();
+    let switched = frame_of(
+        &mut detail,
+        &ctx,
+        &node,
+        1,
+        Some(next),
+        panel,
+        None,
+        &mut gpu,
+    );
+    // The view the tiles were asked for at is the one the panel carried over.
+    let carried = view.carried_to(next_image, [2000.0, 3000.0]);
+    let landed = switched.view.expect("the next image is drawn");
+    assert_eq!(landed.zoom, carried.zoom);
+    for axis in 0..2 {
+        assert!(
+            (landed.pan[axis] - carried.pan[axis]).abs() < 1e-3,
+            "{landed:?} against {carried:?}"
+        );
+    }
+    let tiles = switched.tiles.expect("the next image is drawn");
+    assert_eq!(tiles.tiles_pending, 0, "{tiles:?}");
+    assert!(gpu.made.len() > made + 1, "its tiles were uploaded");
+    assert_eq!(queue.len(), 0, "nothing was asked for on the switch");
+    assert_eq!(cache.stats().decodes, 1);
+}
+
+/// Stepping to an image whose tiles are not uploaded keeps drawing the image
+/// shown before, its tiles and its view, until the tiles the new image
+/// uploads first (its overview) have landed, and then draws the new image,
+/// with the look asked for on the switch applied: no frame between draws an
+/// empty image area or says it is loading. The decodes are stepped by hand,
+/// so the frames that hold are the ones before each lands.
+#[test]
+fn a_switch_keeps_the_previous_image_until_the_new_ones_overview_lands() {
+    let dir = tempfile::tempdir().unwrap();
+    let next_path = jpeg_in(dir.path(), "next.jpg", 1200, 900);
+    let node = node();
+    let panel = egui::vec2(600.0, 450.0);
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+    let mut gpu = Gpu::default();
+    let shown = HeldPhotograph::new(pyramid_of(synthetic(800, 600)));
+    let before = frame(
+        &mut detail,
+        &ctx,
+        &node,
+        Some(shown.source()),
+        panel,
+        None,
+        &mut gpu,
+    );
+    let before_view = before.view.expect("the first image is drawn");
+    let before_textures: HashSet<egui::TextureId> =
+        before.meshes.iter().map(|(id, ..)| *id).collect();
+    assert!(!before_textures.is_empty());
+
+    let cache = cache_of(0);
+    let (requests, queue) = PhotographRequests::queued();
+    let next = Some(PhotographSource {
+        cache: &cache,
+        requests: &requests,
+        path: &next_path,
+    });
+    let look = Some(Look::Pixel {
+        pixel: [300.0, 200.0],
+        zoom: Some(2.0),
+    });
+    // The header read, then the decode, each held over until it has run.
+    for (step, look) in [look, None].into_iter().enumerate() {
+        let held = frame_of(&mut detail, &ctx, &node, 1, next, panel, look, &mut gpu);
+        assert_eq!(
+            held.view,
+            Some(before_view),
+            "step {step}: the previous view"
+        );
+        let textures: HashSet<egui::TextureId> = held.meshes.iter().map(|(id, ..)| *id).collect();
+        assert_eq!(textures, before_textures, "step {step}: the previous tiles");
+        assert!(
+            !held.texts.iter().any(|t| t == super::super::DECODING_LABEL),
+            "step {step}: {:?}",
+            held.texts
+        );
+        assert_eq!(queue.run_off_this_thread(), 1, "step {step}");
+    }
+
+    let switched = frame_of(&mut detail, &ctx, &node, 1, next, panel, None, &mut gpu);
+    let view = switched.view.expect("the new image is drawn");
+    assert_eq!(view.image, crate::scene::ImageRef::new(node.id, 1));
+    assert_eq!(view.image_size, [1200.0, 900.0]);
+    assert_eq!(view.zoom, 2.0, "the look asked for on the switch");
+    let rect = view.visible_rect();
+    let centre = [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0];
+    assert!((centre[0] - 300.0).abs() < 1e-2 && (centre[1] - 200.0).abs() < 1e-2);
+    assert!(
+        !switched.meshes.is_empty()
+            && switched
+                .meshes
+                .iter()
+                .all(|(id, ..)| !before_textures.contains(id)),
+        "the new image's own tiles"
+    );
+}
+
+/// With no image shown before, a photograph whose first tiles have not landed
+/// is "Loading image…", and is drawn once they have.
+#[test]
+fn the_first_image_says_it_is_loading_until_its_tiles_land() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = jpeg_in(dir.path(), "first.jpg", 1200, 900);
+    let node = node();
+    let panel = egui::vec2(600.0, 450.0);
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+    let mut gpu = Gpu::default();
+    let cache = cache_of(0);
+    let (requests, queue) = PhotographRequests::queued();
+    let source = Some(PhotographSource {
+        cache: &cache,
+        requests: &requests,
+        path: &path,
+    });
+    for step in 0..2 {
+        let loading = frame(&mut detail, &ctx, &node, source, panel, None, &mut gpu);
+        assert_eq!(loading.view, None, "step {step}");
+        assert!(
+            loading
+                .texts
+                .iter()
+                .any(|t| t == super::super::DECODING_LABEL),
+            "step {step}: {:?}",
+            loading.texts
+        );
+        assert_eq!(queue.run_off_this_thread(), 1, "step {step}");
+    }
+    let drawn = frame(&mut detail, &ctx, &node, source, panel, None, &mut gpu);
+    assert!(drawn.view.is_some() && !drawn.meshes.is_empty());
+    assert!(!drawn
+        .texts
+        .iter()
+        .any(|t| t == super::super::DECODING_LABEL));
 }

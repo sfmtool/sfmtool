@@ -138,6 +138,20 @@ impl AnimationState {
         self.playing = false;
         self.last_time = 0.0;
     }
+
+    /// The image the next advance shows after `current` of `num_images`, or
+    /// `None` when it stops there, at the end of the sequence without
+    /// looping.
+    fn step(&self, current: usize, num_images: usize) -> Option<usize> {
+        match self.direction {
+            PlayDirection::Forward if current + 1 >= num_images => self.looping.then_some(0),
+            PlayDirection::Forward => Some(current + 1),
+            PlayDirection::Backward if current == 0 => {
+                self.looping.then(|| num_images.saturating_sub(1))
+            }
+            PlayDirection::Backward => Some(current - 1),
+        }
+    }
 }
 
 /// Navigation minibar state — thin bar below the thumbnail strip.
@@ -224,6 +238,21 @@ impl ImageBrowser {
             #[cfg(test)]
             hits: HashMap::new(),
         }
+    }
+
+    /// The image animation playback shows next after `selected` of
+    /// `num_images`, while it plays, for Image Detail to ask for that image's
+    /// tiles a frame ahead; `None` while it is paused, for fewer than two
+    /// images, and where it stops at `selected`.
+    pub(crate) fn upcoming_image(
+        &self,
+        selected: Option<usize>,
+        num_images: usize,
+    ) -> Option<usize> {
+        if !self.animation.playing || num_images < 2 {
+            return None;
+        }
+        self.animation.step(selected.unwrap_or(0), num_images)
     }
 
     /// Where the element recorded under `id` landed on the last frame.
@@ -501,35 +530,12 @@ impl ImageBrowser {
             if dt >= frame_interval {
                 self.animation.last_time = now;
                 let current = selected_image.unwrap_or(0);
-                let mut ended = false;
-                let next = match self.animation.direction {
-                    PlayDirection::Forward => {
-                        if current + 1 >= num_images {
-                            if self.animation.looping {
-                                0
-                            } else {
-                                self.animation.playing = false;
-                                ended = true;
-                                current
-                            }
-                        } else {
-                            current + 1
-                        }
-                    }
-                    PlayDirection::Backward => {
-                        if current == 0 {
-                            if self.animation.looping {
-                                num_images - 1
-                            } else {
-                                self.animation.playing = false;
-                                ended = true;
-                                current
-                            }
-                        } else {
-                            current - 1
-                        }
-                    }
-                };
+                let step = self.animation.step(current, num_images);
+                let ended = step.is_none();
+                if ended {
+                    self.animation.playing = false;
+                }
+                let next = step.unwrap_or(current);
                 if ended {
                     // The viewer's own doing, not the user's: nobody asked for
                     // this frame, the sequence simply ran out.

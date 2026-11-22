@@ -3,7 +3,7 @@
 **Status:** Draft
 
 Amends [gui/interaction-rules.md](../gui/interaction-rules.md), the standing
-spec of the rules G1 to G12 that every pointer gesture in SfM Explorer
+spec of the rules G1 to G13 that every pointer gesture in SfM Explorer
 follows. The rules are decided; this draft holds only the work that makes the
 viewer follow them everywhere, and is deleted when that work is done.
 

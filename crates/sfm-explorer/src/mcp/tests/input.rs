@@ -168,11 +168,14 @@ impl TabViewer for Tabs<'_> {
                     &[],
                     &crate::platform::ScrollInput::default(),
                     Some(&self.photograph.sift),
-                    crate::image_detail::DetailPhotograph::Decoded(
-                        &sfmtool_core::camera::image::ImageU8Pyramid::build(
-                            &self.photograph.image,
-                            1,
-                        ),
+                    Some(
+                        crate::test_support::HeldPhotograph::new(
+                            sfmtool_core::camera::image::ImageU8Pyramid::build(
+                                &self.photograph.image,
+                                1,
+                            ),
+                        )
+                        .source(),
                     ),
                     &state.feature_display,
                     &mut state.intrinsics_display,

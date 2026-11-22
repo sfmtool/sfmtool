@@ -8,7 +8,7 @@ an interactive GUI for exploring Structure-from-Motion reconstructions.
 | Document | Description |
 |----------|-------------|
 | [user-experience.md](user-experience.md) | Vision, design principles, and product design. Start here to understand what the viewer is and why it's built this way. |
-| [interaction-rules.md](interaction-rules.md) | The numbered rules G1 to G12 every pointer gesture in the viewer follows (click, double-click, right-click, hover, marks and handles, controls, the Edit History list, multi-selection), which panel specs cite rather than restate, and the functions they name. |
+| [interaction-rules.md](interaction-rules.md) | The numbered rules G1 to G13 every pointer gesture in the viewer follows (click, double-click, right-click, hover, marks and handles, controls, the Edit History list, multi-selection, a picture kept while its replacement loads), which panel specs cite rather than restate, and the functions they name. |
 | [viewport-navigation.md](viewport-navigation.md) | Orbit camera model, input controls (mouse, trackpad, keyboard), and the Alt-mode target control system. |
 | [windows-precision-touchpad.md](windows-precision-touchpad.md) | Windows precision touchpad gestures through the DirectManipulation API: why winit alone is not enough, the setup order beside the winit window and event loop, how a gesture is routed to the panel under the cursor, the feature-gated reference examples, and why eframe's window creation is not used. |
 | [point-cloud-rendering.md](point-cloud-rendering.md) | Point splat rendering, Eye-Dome Lighting post-processing, target indicator (rotating compass), and supernova lighting effect. |

@@ -7,9 +7,13 @@
 //! A photograph tile is a 512 x 512 block of one level of the photograph's
 //! pyramid with a one-pixel border of its neighbours' pixels, uploaded as one
 //! egui texture of at most 514 x 514. No texture is ever larger than that, so
-//! a photograph of any size fits the GPU device's 8192 px texture limit, and
-//! the GUI thread copies only the tiles it uploads, never the whole level 0.
-//! See `specs/gui/multi-panel-image-browser.md` § "Image Detail".
+//! a photograph of any size fits the GPU device's 8192 px texture limit. The
+//! tiles come from the photograph cache through [`display_tiles`], which
+//! hands over the tiles the cache holds and decodes the photograph on the
+//! rayon pool when it holds none; the panel asks only for the tiles it
+//! uploads on the frame, and draws an uploaded tile from its texture without
+//! asking again. See `specs/gui/multi-panel-image-browser.md` § "Image
+//! Detail".
 //!
 //! Three rules shape what a frame draws:
 //!
@@ -29,16 +33,19 @@
 //!   recently drawn evicted first.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::image::ImageU8;
+use sfmtool_core::camera::{PhotographTile, PyramidLayout, TileKey};
 
+use super::view::ViewGeometry;
 use crate::scene::{ImageRef, ReconId};
+use crate::state::{
+    display_layout, display_tiles, prefetch_tiles, DisplayLayout, DisplayTile, PhotographSource,
+};
 
 #[cfg(test)]
 mod tests;
-
-/// The side of a photograph tile's core, in pixels of its level.
-pub(super) const TILE_SIZE: u32 = 512;
 
 /// The most tile textures the panel keeps: about 270 MB of GPU memory at
 /// 514 x 514 RGBA each.
@@ -68,24 +75,28 @@ pub(super) fn level_for_scale(screen_px_per_source_px: f32, num_levels: usize) -
     }
 }
 
-/// The size of each level of one photograph's pyramid, which is all the
-/// arithmetic of where its tiles go needs.
+/// The size of each level of one photograph's pyramid and the side of its
+/// tiles, which is all the arithmetic of where its tiles go needs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Layout {
     /// `[width, height]` of each level, level 0 first.
     sizes: Vec<[u32; 2]>,
+    /// The side of a tile's core, in pixels of its level: 512 from the
+    /// viewer's photograph cache.
+    tile_size: u32,
 }
 
 impl Layout {
-    /// The layout of `pyramid`.
-    pub(super) fn of(pyramid: &ImageU8Pyramid) -> Self {
+    /// The layout of a photograph the cache describes with `layout`.
+    pub(super) fn of(layout: &PyramidLayout) -> Self {
         Self {
-            sizes: (0..pyramid.num_levels())
+            sizes: (0..layout.levels())
                 .map(|level| {
-                    let image = pyramid.level(level);
-                    [image.width(), image.height()]
+                    let (w, h) = layout.level_size(level);
+                    [w, h]
                 })
                 .collect(),
+            tile_size: layout.tile_size(),
         }
     }
 
@@ -105,7 +116,7 @@ impl Layout {
     pub(super) fn overview_level(&self) -> usize {
         self.sizes
             .iter()
-            .position(|&[w, h]| w <= TILE_SIZE && h <= TILE_SIZE)
+            .position(|&[w, h]| w <= self.tile_size && h <= self.tile_size)
             .unwrap_or(self.sizes.len() - 1)
     }
 
@@ -119,10 +130,10 @@ impl Layout {
     pub(super) fn core_rect(&self, level: usize, col: u32, row: u32) -> [f32; 4] {
         let [w, h] = self.sizes[level];
         let factor = (1u64 << level) as f32;
-        let x0 = col * TILE_SIZE;
-        let y0 = row * TILE_SIZE;
-        let x1 = (x0 + TILE_SIZE).min(w);
-        let y1 = (y0 + TILE_SIZE).min(h);
+        let x0 = col * self.tile_size;
+        let y0 = row * self.tile_size;
+        let x1 = (x0 + self.tile_size).min(w);
+        let y1 = (y0 + self.tile_size).min(h);
         [
             x0 as f32 * factor,
             y0 as f32 * factor,
@@ -144,48 +155,73 @@ impl Layout {
         if x1 <= x0 || y1 <= y0 {
             return Vec::new();
         }
-        let tile = TILE_SIZE as f32;
+        let tile = self.tile_size as f32;
         let (c0, c1) = ((x0 / tile).floor() as u32, (x1 / tile).ceil() as u32);
         let (r0, r1) = ((y0 / tile).floor() as u32, (y1 / tile).ceil() as u32);
         (r0..r1)
             .flat_map(|row| (c0..c1).map(move |col| (col, row)))
             .collect()
     }
+
+    /// The tiles a frame drawing `level` over `visible` (level-0 pixels)
+    /// uploads, in order, at most `cap`: the overview level's first when it is
+    /// coarser than `level`, then `level`'s, each left out when `uploaded`
+    /// says it already is.
+    fn to_upload(
+        &self,
+        level: usize,
+        visible: [f32; 4],
+        cap: usize,
+        uploaded: impl Fn(usize, (u32, u32)) -> bool,
+    ) -> Vec<(usize, (u32, u32))> {
+        let overview = self.overview_level();
+        let levels: &[usize] = if overview > level {
+            &[overview, level]
+        } else {
+            &[level]
+        };
+        levels
+            .iter()
+            .flat_map(|&l| self.tiles_in(l, visible).into_iter().map(move |t| (l, t)))
+            .filter(|&(l, tile)| !uploaded(l, tile))
+            .take(cap)
+            .collect()
+    }
+
+    /// The level a frame drawing `level` over `visible` uploads first, the
+    /// overview's or `level` when that is coarser, and its tiles there: what
+    /// has to be uploaded before the frame draws the photograph at all.
+    fn first_upload(&self, level: usize, visible: [f32; 4]) -> (usize, Vec<(u32, u32)>) {
+        let first = self.overview_level().max(level);
+        (first, self.tiles_in(first, visible))
+    }
 }
 
-/// Cut tile `(col, row)` out of `level` as the texture it is uploaded as: its
-/// core and a one-pixel border all round, `(core + 2)` pixels on each side,
-/// so at most 514 x 514.
-///
-/// The border holds the neighbouring tiles' pixels, and at the edge of the
-/// level the edge pixel repeated, which is what a texture of the whole level
-/// would read there with clamp-to-edge sampling.
-pub(super) fn cut_tile(level: &ImageU8, col: u32, row: u32) -> egui::ColorImage {
-    let (w, h) = (level.width(), level.height());
-    let channels = level.channels() as usize;
-    let x0 = col * TILE_SIZE;
-    let y0 = row * TILE_SIZE;
-    let x1 = (x0 + TILE_SIZE).min(w);
-    let y1 = (y0 + TILE_SIZE).min(h);
-    let (tw, th) = ((x1 - x0 + 2) as usize, (y1 - y0 + 2) as usize);
-    let clamp = |v: i64, n: u32| v.clamp(0, i64::from(n) - 1) as usize;
-    let data = level.data();
-    let mut pixels = Vec::with_capacity(tw * th);
-    for ty in 0..th {
-        let sy = clamp(i64::from(y0) + ty as i64 - 1, h);
-        let row_start = sy * w as usize * channels;
-        for tx in 0..tw {
-            let sx = clamp(i64::from(x0) + tx as i64 - 1, w);
-            let p = &data[row_start + sx * channels..][..channels];
-            pixels.push(match channels {
-                1 => egui::Color32::from_gray(p[0]),
-                2 => egui::Color32::from_rgba_unmultiplied(p[0], p[0], p[0], p[1]),
-                3 => egui::Color32::from_rgb(p[0], p[1], p[2]),
-                _ => egui::Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]),
-            });
-        }
+/// The cache's key for tile `(col, row)` of `level`. A pyramid has at most 17
+/// levels, so the level fits.
+fn cache_key(level: usize, (col, row): (u32, u32)) -> TileKey {
+    TileKey {
+        level: level as u8,
+        col,
+        row,
     }
-    egui::ColorImage::new([tw, th], pixels)
+}
+
+/// `pixels`, a photograph tile with its border, as the texture it is
+/// uploaded as.
+fn texture_image(pixels: &ImageU8) -> egui::ColorImage {
+    let channels = (pixels.channels() as usize).max(1);
+    let colours = pixels
+        .data()
+        .chunks_exact(channels)
+        .map(|p| match channels {
+            1 => egui::Color32::from_gray(p[0]),
+            2 => egui::Color32::from_rgba_unmultiplied(p[0], p[0], p[0], p[1]),
+            3 => egui::Color32::from_rgb(p[0], p[1], p[2]),
+            _ => egui::Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]),
+        })
+        .collect();
+    egui::ColorImage::new([pixels.width() as usize, pixels.height() as usize], colours)
 }
 
 /// One photograph tile, by the image it is of, its level, column and row.
@@ -197,9 +233,21 @@ pub(super) struct PhotographTileKey {
     pub(super) row: u32,
 }
 
+/// What one frame drew of the photograph: the level, and how many of that
+/// level's visible tiles were not uploaded yet, so it drew them from a coarser
+/// level or not at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+pub(crate) struct DrawnTiles {
+    pub(crate) level: usize,
+    pub(crate) tiles_pending: usize,
+}
+
 /// An uploaded tile.
 struct Resident {
     texture: egui::TextureHandle,
+    /// Its core's top-left pixel, in pixels of its level.
+    origin: [u32; 2],
     /// The frame that last drew it, for the least-recently-drawn eviction.
     last_drawn: u64,
 }
@@ -207,13 +255,18 @@ struct Resident {
 /// The tile textures the panel holds, and the layout of the photograph it
 /// shows.
 pub(super) struct PhotographTiles {
-    /// The layout of the image last drawn, kept so that its uploaded tiles can
-    /// still be drawn on a frame the cache no longer holds its pyramid.
-    layout: Option<(ImageRef, Layout)>,
+    /// The layout of the image last drawn, as the cache answered it and as the
+    /// panel's arithmetic reads it, kept so that its uploaded tiles can still
+    /// be drawn on a frame the cache does not know it.
+    layout: Option<(ImageRef, Arc<PyramidLayout>, Layout)>,
     /// Every uploaded tile, of any image, at most [`MAX_TILE_TEXTURES`].
     resident: HashMap<PhotographTileKey, Resident>,
     /// Counts [`Self::draw`] calls, the clock the eviction reads.
     frame: u64,
+    /// Tiles [`Self::fetch`] uploaded on this frame before [`Self::draw`],
+    /// which uploads only as many more as keep the frame within
+    /// [`MAX_UPLOADS_PER_FRAME`].
+    uploaded_early: usize,
 }
 
 impl PhotographTiles {
@@ -222,69 +275,93 @@ impl PhotographTiles {
             layout: None,
             resident: HashMap::new(),
             frame: 0,
+            uploaded_early: 0,
         }
     }
 
-    /// The layout of `image`: `pyramid`'s when the cache handed one over,
-    /// otherwise the one kept from the last frame that drew `image`, or `None`
-    /// when there is neither.
+    /// The image whose layout is kept, the one drawn last, with that layout.
+    pub(super) fn shown(&self) -> Option<(ImageRef, &Layout)> {
+        self.layout
+            .as_ref()
+            .map(|(image, _, layout)| (*image, layout))
+    }
+
+    /// Whether any tile of `image` is uploaded.
+    pub(super) fn has_resident(&self, image: ImageRef) -> bool {
+        self.resident.keys().any(|key| key.image == image)
+    }
+
+    /// The layout of `image`: `known` when the cache knows it, otherwise the
+    /// one kept from the last frame that drew `image`, or `None` when there
+    /// is neither.
     ///
-    /// A pyramid whose sizes differ from the kept layout of the same image
+    /// A known layout that differs from the kept layout of the same image
     /// (the file was replaced by one of another size) drops that image's
-    /// tiles, which were cut from the old pixels.
+    /// tiles, which were cut from the old pixels. The cache answers the same
+    /// `Arc` for a layout it keeps, so a frame that changes nothing compares
+    /// two pointers and builds nothing.
     pub(super) fn layout(
         &mut self,
         image: ImageRef,
-        pyramid: Option<&ImageU8Pyramid>,
+        known: Option<&Arc<PyramidLayout>>,
     ) -> Option<&Layout> {
-        if let Some(pyramid) = pyramid {
-            let layout = Layout::of(pyramid);
-            let changed = self
+        if let Some(known) = known {
+            let kept = self
                 .layout
                 .as_ref()
-                .is_some_and(|(kept, old)| *kept == image && *old != layout);
-            if changed {
-                self.resident.retain(|key, _| key.image != image);
+                .filter(|(kept, ..)| *kept == image)
+                .map(|(_, layout, _)| Arc::clone(layout));
+            match kept {
+                Some(kept) if Arc::ptr_eq(&kept, known) => {}
+                Some(kept) if *kept == **known => {
+                    if let Some((_, layout, _)) = &mut self.layout {
+                        *layout = Arc::clone(known);
+                    }
+                }
+                changed => {
+                    if changed.is_some() {
+                        self.resident.retain(|key, _| key.image != image);
+                    }
+                    self.layout = Some((image, Arc::clone(known), Layout::of(known)));
+                }
             }
-            self.layout = Some((image, layout));
         }
         self.layout
             .as_ref()
-            .filter(|(kept, _)| *kept == image)
-            .map(|(_, layout)| layout)
+            .filter(|(kept, ..)| *kept == image)
+            .map(|(.., layout)| layout)
     }
 
     /// Draw `image` into `image_rect`, clipped by `painter`, from the tiles of
     /// the level [`level_for_scale`] picks at `scale` panel points per level-0
-    /// pixel and `pixels_per_point`, uploading what is missing from `pyramid`
-    /// when there is one.
+    /// pixel and `pixels_per_point`, asking `source` for the tiles that are
+    /// not uploaded yet, at most [`MAX_UPLOADS_PER_FRAME`] of them, and
+    /// uploading the ones it hands over.
     ///
     /// Needs a layout from [`Self::layout`] for `image` this frame, and draws
-    /// nothing without one. Asks for a repaint while a visible tile is still
-    /// to be uploaded from a pyramid at hand.
+    /// nothing and answers `None` without one. Asks for a repaint when it
+    /// uploaded as many tiles as a frame may and visible tiles are still to
+    /// be uploaded; a tile still being decoded repaints when its decode ends.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw(
         &mut self,
         ctx: &egui::Context,
         painter: &egui::Painter,
         image: ImageRef,
-        pyramid: Option<&ImageU8Pyramid>,
+        source: Option<PhotographSource<'_>>,
         image_rect: egui::Rect,
         scale: f32,
         pixels_per_point: f32,
-    ) {
+    ) -> Option<DrawnTiles> {
         self.frame += 1;
-        let Some(layout) = self
+        let layout = self
             .layout
             .as_ref()
-            .filter(|(kept, _)| *kept == image)
-            .map(|(_, layout)| layout.clone())
-        else {
-            return;
-        };
+            .filter(|(kept, ..)| *kept == image)
+            .map(|(.., layout)| layout.clone())?;
         let visible = painter.clip_rect().intersect(image_rect);
         if !visible.is_positive() || scale.is_nan() || scale <= 0.0 {
-            return;
+            return None;
         }
         let level = level_for_scale(scale * pixels_per_point, layout.num_levels());
         let to_source = |p: egui::Pos2| (p - image_rect.min) / scale;
@@ -297,47 +374,147 @@ impl PhotographTiles {
             row,
         };
 
-        if let Some(pyramid) = pyramid {
-            let overview = layout.overview_level();
-            let levels: &[usize] = if overview > level {
-                &[overview, level]
-            } else {
-                &[level]
-            };
-            let mut uploads = 0;
-            'upload: for &l in levels {
-                for tile in layout.tiles_in(l, visible) {
-                    if uploads == MAX_UPLOADS_PER_FRAME {
-                        break 'upload;
-                    }
-                    let key = key(l, tile);
-                    if !self.resident.contains_key(&key) {
-                        self.upload(ctx, pyramid, key);
+        let early = std::mem::take(&mut self.uploaded_early);
+        let mut uploads = early;
+        if let Some(source) = source {
+            let cap = MAX_UPLOADS_PER_FRAME.saturating_sub(early);
+            let wanted = layout.to_upload(level, visible, cap, |l, tile| {
+                self.resident.contains_key(&key(l, tile))
+            });
+            if !wanted.is_empty() {
+                let keys: Vec<TileKey> = wanted.iter().map(|&(l, t)| cache_key(l, t)).collect();
+                for (&(l, t), answer) in wanted.iter().zip(display_tiles(source, &keys, ctx)) {
+                    if let DisplayTile::Ready(tile) = answer {
+                        self.upload(ctx, key(l, t), &tile);
                         uploads += 1;
                     }
                 }
             }
         }
 
-        let mut pending = false;
+        let mut pending = 0;
         for tile in layout.tiles_in(level, visible) {
             let key = key(level, tile);
             let core = layout.core_rect(level, tile.0, tile.1);
             if self.resident.contains_key(&key) {
                 self.paint(painter, key, core, image_rect, scale);
             } else {
-                pending = true;
+                pending += 1;
                 self.paint_fallback(painter, &layout, key, core, image_rect, scale);
             }
         }
-        if pending && pyramid.is_some() {
+        if pending > 0 && uploads == MAX_UPLOADS_PER_FRAME {
             ctx.request_repaint();
+        }
+        Some(DrawnTiles {
+            level,
+            tiles_pending: pending,
+        })
+    }
+
+    /// Ask `source` ahead of time for the tiles of `image` that a frame
+    /// showing it in place of the image `view` shows would upload: the view
+    /// carried over to `image` as the panel carries it on an image switch,
+    /// at `pixels_per_point`. Starts a read of the layout when the cache does
+    /// not know it, and asks for the tiles on a later frame; asks for none
+    /// already uploaded.
+    pub(super) fn prefetch(
+        &self,
+        ctx: &egui::Context,
+        view: &ViewGeometry,
+        image: ImageRef,
+        source: PhotographSource<'_>,
+    ) {
+        let DisplayLayout::Known(known) = display_layout(source, ctx) else {
+            return;
+        };
+        let layout = Layout::of(&known);
+        let [w, h] = layout.size();
+        let next = view.carried_to(image, [w as f32, h as f32]);
+        let Some(level) = Self::level_of(ctx, &next, &layout) else {
+            return;
+        };
+        let keys: Vec<TileKey> = layout
+            .to_upload(
+                level,
+                next.visible_rect(),
+                MAX_UPLOADS_PER_FRAME,
+                |l, tile| self.is_resident(image, l, tile),
+            )
+            .into_iter()
+            .map(|(l, t)| cache_key(l, t))
+            .collect();
+        if !keys.is_empty() {
+            prefetch_tiles(source, &keys, ctx);
         }
     }
 
-    /// Cut `key`'s tile from `pyramid` and upload it, evicting the least
-    /// recently drawn tile first when the panel holds its limit.
-    fn upload(&mut self, ctx: &egui::Context, pyramid: &ImageU8Pyramid, key: PhotographTileKey) {
+    /// Upload the tiles of `image`, of layout `known`, that a frame drawing it
+    /// in `view` uploads first, asking `source` for them as [`Self::draw`]
+    /// does, and answer whether the level it uploads first is all uploaded
+    /// now, so a frame can draw the photograph rather than hold the image it
+    /// showed before. Counts what it uploads against the frame's
+    /// [`MAX_UPLOADS_PER_FRAME`].
+    pub(super) fn fetch(
+        &mut self,
+        ctx: &egui::Context,
+        view: &ViewGeometry,
+        image: ImageRef,
+        known: &PyramidLayout,
+        source: PhotographSource<'_>,
+    ) -> bool {
+        self.uploaded_early = 0;
+        let layout = Layout::of(known);
+        let Some(level) = Self::level_of(ctx, view, &layout) else {
+            return false;
+        };
+        let visible = view.visible_rect();
+        let (first, tiles) = layout.first_upload(level, visible);
+        let landed = |tiles_of: &Self| {
+            !tiles.is_empty() && tiles.iter().all(|&t| tiles_of.is_resident(image, first, t))
+        };
+        if landed(self) {
+            return true;
+        }
+        let wanted = layout.to_upload(level, visible, MAX_UPLOADS_PER_FRAME, |l, tile| {
+            self.is_resident(image, l, tile)
+        });
+        let keys: Vec<TileKey> = wanted.iter().map(|&(l, t)| cache_key(l, t)).collect();
+        for (&(l, (col, row)), answer) in wanted.iter().zip(display_tiles(source, &keys, ctx)) {
+            if let DisplayTile::Ready(tile) = answer {
+                let key = PhotographTileKey {
+                    image,
+                    level: l,
+                    col,
+                    row,
+                };
+                self.upload(ctx, key, &tile);
+                self.uploaded_early += 1;
+            }
+        }
+        landed(self)
+    }
+
+    /// The level a frame drawing `view` draws `layout` at, or `None` for a
+    /// view whose scale is not a positive number.
+    fn level_of(ctx: &egui::Context, view: &ViewGeometry, layout: &Layout) -> Option<usize> {
+        let scale = view.scale();
+        (scale > 0.0).then(|| level_for_scale(scale * ctx.pixels_per_point(), layout.num_levels()))
+    }
+
+    /// Whether tile `(col, row)` of `level` of `image` is uploaded.
+    fn is_resident(&self, image: ImageRef, level: usize, (col, row): (u32, u32)) -> bool {
+        self.resident.contains_key(&PhotographTileKey {
+            image,
+            level,
+            col,
+            row,
+        })
+    }
+
+    /// Upload `tile` as `key`'s texture, evicting the least recently drawn
+    /// tile first when the panel holds its limit.
+    fn upload(&mut self, ctx: &egui::Context, key: PhotographTileKey, tile: &PhotographTile) {
         while self.resident.len() >= MAX_TILE_TEXTURES {
             let Some(oldest) = self
                 .resident
@@ -349,7 +526,6 @@ impl PhotographTiles {
             };
             self.resident.remove(&oldest);
         }
-        let pixels = cut_tile(pyramid.level(key.level), key.col, key.row);
         let texture = ctx.load_texture(
             format!(
                 "detail_tile_{}_{}_{}_{}",
@@ -358,13 +534,14 @@ impl PhotographTiles {
                 key.col,
                 key.row
             ),
-            pixels,
+            texture_image(&tile.pixels),
             egui::TextureOptions::LINEAR,
         );
         self.resident.insert(
             key,
             Resident {
                 texture,
+                origin: tile.origin,
                 last_drawn: self.frame,
             },
         );
@@ -386,7 +563,7 @@ impl PhotographTiles {
         resident.last_drawn = self.frame;
         let [tw, th] = resident.texture.size();
         let factor = (1u64 << key.level) as f32;
-        let (tile_x0, tile_y0) = ((key.col * TILE_SIZE) as f32, (key.row * TILE_SIZE) as f32);
+        let (tile_x0, tile_y0) = (resident.origin[0] as f32, resident.origin[1] as f32);
         // Level-0 pixels to texture coordinates: into the level's pixels, then
         // into the tile's, then past the one-texel border.
         let uv = |x: f32, y: f32| {
@@ -451,7 +628,7 @@ impl PhotographTiles {
         if self
             .layout
             .as_ref()
-            .is_some_and(|(image, _)| image.recon == id)
+            .is_some_and(|(image, ..)| image.recon == id)
         {
             self.layout = None;
         }

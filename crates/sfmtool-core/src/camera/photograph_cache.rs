@@ -91,9 +91,10 @@ fn budget_from(env_megabytes: Option<&str>, physical_bytes: Option<u64>) -> u64 
 /// The environment variable [`BUILD_BUDGET_ENV_VAR`] overrides it with a
 /// number of megabytes (10^6 bytes). `0` there lets each caller decode one
 /// photograph at a time, since [`PhotographCache::reserve_builds`] grants one
-/// decode when none fits, and refuses every decode
-/// [`PhotographCache::try_reserve_build`] asks for. A value that does not
-/// parse as a whole number is ignored.
+/// decode when none fits, and lets panels decode one photograph at a time,
+/// since [`PhotographCache::try_reserve_build`] grants a decode that does not
+/// fit when nothing is reserved. A value that does not parse as a whole number
+/// is ignored.
 pub fn default_build_budget_bytes() -> u64 {
     let env = std::env::var(BUILD_BUDGET_ENV_VAR).ok();
     budget_from(env.as_deref(), crate::machine::physical_memory_bytes())
@@ -469,8 +470,9 @@ struct Inner {
     /// The sum of every mapped slot's `charged`.
     bytes: u64,
     /// The layouts [`PhotographCache::request_layout`] read, or why it could
-    /// not, kept whatever the budget and not counted against it, since each
-    /// is a few dozen bytes. `forget` and `clear` drop them.
+    /// not, and those [`PhotographCache::layout`] answered for a held
+    /// photograph, kept whatever the budget and not counted against it, since
+    /// each is a few dozen bytes. `forget` and `clear` drop them.
     layouts: HashMap<PathBuf, Result<Arc<PyramidLayout>, String>>,
 }
 
@@ -513,7 +515,7 @@ impl Inner {
 /// [`PhotographCacheOptions::build_budget_bytes`]. Nothing waits on the
 /// count: [`Self::reserve_builds`] grants at least one decode, so a caller
 /// always makes progress, and [`Self::try_reserve_build`] is refused when its
-/// decode does not fit.
+/// decode does not fit while another decode is reserved.
 pub struct PhotographCache {
     options: PhotographCacheOptions,
     inner: Mutex<Inner>,
@@ -634,14 +636,18 @@ impl PhotographCache {
         }
     }
 
-    /// Reserve one whole decode of `bytes` estimated bytes only if it fits
-    /// under this cache's build budget beside what other callers have
-    /// reserved: `None` when it does not, so it never takes the count past the
-    /// budget. Never waits; a caller that is refused asks again later.
+    /// Reserve one whole decode of `bytes` estimated bytes if it fits under
+    /// this cache's build budget beside what other callers have reserved, or
+    /// if nothing at all is reserved: `None` otherwise. So a decode larger
+    /// than the whole budget, every decode under a build budget of 0, runs
+    /// alone when the count is idle, as [`Self::reserve_builds`] grants one
+    /// decode when none fits, and the count passes the budget only by that
+    /// one decode. Never waits; a caller that is refused asks again later.
     pub fn try_reserve_build(&self, bytes: u64) -> Option<BuildReservation<'_>> {
         let budget = self.options.build_budget_bytes;
         update(&self.build_reserved, |reserved| {
-            reserved.checked_add(bytes).filter(|&after| after <= budget)
+            let after = reserved.saturating_add(bytes);
+            (reserved == 0 || after <= budget).then_some(after)
         })?;
         Some(BuildReservation {
             count: &self.build_reserved,

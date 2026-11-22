@@ -519,7 +519,7 @@ how this audit runs them.
   mark) and what it does: what it selects, whether it moves a view, raises a
   panel (and through which call) or pushes a version. Check each against
   [`specs/gui/interaction-rules.md`](../../specs/gui/interaction-rules.md),
-  citing the rule (G1 to G12) a breach concerns, and against the panel's
+  citing the rule (G1 to G13) a breach concerns, and against the panel's
   own spec in `specs/gui/`. A gesture that breaks a rule is a finding under
   STANDARDS.md § "A viewer gesture follows the interaction rules", even when
   its panel's spec describes it; a spec that disagrees with the code is a

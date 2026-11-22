@@ -350,7 +350,9 @@ fn ladder<T: std::fmt::Display>(values: &[T]) -> String {
 /// what fit means, and therefore what the zoom and the visible rectangle mean,
 /// is settled by a panel size that does not exist yet.
 pub(super) fn get_view(state: &AppState) -> JsonReply {
-    Ok(json!({ "image_detail_view": view_document(state, state.image_detail_view) }))
+    Ok(json!({
+        "image_detail_view": view_document(state, state.image_detail_view, state.image_detail_tiles)
+    }))
 }
 
 /// `set_image_detail_view`: point the panel at one place in one photograph.
@@ -429,7 +431,7 @@ fn apply_view(
     };
     let landed = crate::image_detail::look_at(geometry, &look);
     Ok(super::done(Ok(
-        json!({ "image_detail_view": view_document(state, Some(landed)) }),
+        json!({ "image_detail_view": view_document(state, Some(landed), None) }),
     )))
 }
 
@@ -447,9 +449,9 @@ pub(super) fn pending_view_reply(state: &AppState, pending: &super::PendingView)
         .filter(|_| state.image_detail_view_serial > pending.after)
         .filter(|view| view.image == pending.image)
     {
-        return Some(Ok(ToolOutput::Json(
-            json!({ "image_detail_view": view_document(state, Some(view)) }),
-        )));
+        return Some(Ok(ToolOutput::Json(json!({
+            "image_detail_view": view_document(state, Some(view), state.image_detail_tiles)
+        }))));
     }
     if pending.started.elapsed() < DRAWS_WITHIN {
         return None;
@@ -465,9 +467,12 @@ pub(super) fn pending_view_reply(state: &AppState, pending: &super::PendingView)
 
 /// How long a view request waits for the panel to draw the photograph.
 ///
-/// The panel draws in the very frame the call is applied in -- the drain runs
-/// before the egui pass, and the decode is on this thread -- so this is not a
-/// budget for the work but a bound on a frame that is never coming: a closed
+/// The panel draws the photograph on the first frame its overview tiles are
+/// uploaded: the frame the call is applied in when the cache holds it, since
+/// the drain runs before the egui pass, and otherwise the frame after its
+/// decode on the rayon pool, tens of milliseconds later for most photographs.
+/// So this is not a budget for the work but a bound on a frame that is never
+/// coming: a closed
 /// window, or a photograph that cannot be read. Half a second is a dozen frames
 /// of slack and still short of a wait anyone would sit through.
 const DRAWS_WITHIN: std::time::Duration = std::time::Duration::from_millis(500);
@@ -605,7 +610,16 @@ fn image_size_px(state: &AppState, image: ImageRef) -> Option<[f32; 2]> {
 /// what every target aims. `panel_size_points` is in egui points rather than
 /// pixels, which is what the panel lays out in; `screenshot` is where physical
 /// pixels are.
-fn view_document(state: &AppState, view: Option<ViewGeometry>) -> Value {
+///
+/// `tiles` is what the frame that drew `view` drew it with: `None` for a view
+/// no frame has drawn yet, the one `set_image_detail_view` answers before the
+/// panel applies it, and for a frame that drew no tile, so `level` and
+/// `tiles_pending` are null there.
+fn view_document(
+    state: &AppState,
+    view: Option<ViewGeometry>,
+    tiles: Option<crate::image_detail::DrawnTiles>,
+) -> Value {
     let Some(view) = view else {
         return json!({
             "reconstruction_label": Value::Null,
@@ -615,6 +629,8 @@ fn view_document(state: &AppState, view: Option<ViewGeometry>) -> Value {
             "visible_rect_px": Value::Null,
             "panel_size_points": Value::Null,
             "image_size_px": Value::Null,
+            "level": Value::Null,
+            "tiles_pending": Value::Null,
         });
     };
     json!({
@@ -625,6 +641,8 @@ fn view_document(state: &AppState, view: Option<ViewGeometry>) -> Value {
         "visible_rect_px": view.visible_rect().map(f64::from),
         "panel_size_points": view.panel_size.map(f64::from),
         "image_size_px": view.image_size.map(f64::from),
+        "level": tiles.map(|t| t.level),
+        "tiles_pending": tiles.map(|t| t.tiles_pending),
     })
 }
 

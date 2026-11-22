@@ -430,7 +430,7 @@ crate.
 
 Every pointer gesture `sfm-explorer` defines (a click, a double-click, a
 right-click, a hover, a press on a mark or handle, a modifier click in a
-list) follows the rules G1 to G12 in
+list) follows the rules G1 to G13 in
 [gui/interaction-rules.md](gui/interaction-rules.md), and a panel's spec says
 which rule each of its gestures follows rather than restating it. This exists
 because the viewer shows the same things in many panels, and a person who

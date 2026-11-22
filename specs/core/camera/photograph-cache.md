@@ -79,8 +79,9 @@ impl PhotographCache {
     /// none fit, so a caller always makes progress.
     pub fn reserve_builds(&self, bytes_per_build: u64, wanted: usize) -> BuildReservation<'_>;
 
-    /// One decode, only if it fits under the build budget: `None` otherwise,
-    /// so it never takes the count past the budget. Never waits.
+    /// One decode, if it fits under the build budget or nothing at all is
+    /// reserved: `None` otherwise, so the count passes the budget only by one
+    /// decode that runs alone. Never waits.
     pub fn try_reserve_build(&self, bytes: u64) -> Option<BuildReservation<'_>>;
 
     /// The pyramid for `path`, decoding on a miss. Waits while another thread
@@ -321,7 +322,11 @@ environment variable `SFM_EXPLORER_BUILD_BUDGET_MB` overrides it with a whole
 number of megabytes of 10^6 bytes, and a value that does not parse is
 ignored. A build budget of 0 lets each caller decode one photograph at a
 time, since `reserve_builds` grants one decode when none fits, and
-`try_reserve_build` refuses every decode.
+`try_reserve_build` grants a decode that does not fit when nothing at all is
+reserved, so panels decode one photograph at a time too. The same rule lets a
+decode larger than the whole budget, a photograph over about 214 megapixels at
+the 1 GiB minimum, run alone when the count is idle rather than be refused for
+ever.
 
 - **`get`** reads the photograph's header once it has marked the slot as
   being made, whether the slot was empty or a maker that stopped has just
@@ -362,8 +367,10 @@ level's edge, so tiles drawn side by side with linear filtering show no seam.
   photograph is held or its header has been read, `Unreadable` with the
   message once a read has failed, and `NotKnown` otherwise. It reads
   nothing, waits on nothing and does not stat the file. The layout of a
-  photograph the cache holds is the held pyramid's; otherwise it is what
-  `request_layout` last read.
+  photograph the cache holds is the held pyramid's, kept beside the layouts
+  `request_layout` reads, so a panel that asks every frame is answered the
+  same `Arc` while the held pyramid's size stays the same and nothing is
+  allocated; otherwise it is what `request_layout` last read.
 - **`request_layout`** reads the header and keeps the layout, or why it
   could not be read. Layouts are kept whatever the budget, a budget of 0
   included, and are not counted against it, since each is a few dozen
@@ -381,8 +388,8 @@ level's edge, so tiles drawn side by side with linear filtering show no seam.
   caller is decoding in it, giving the reservation back if one is, and
   decodes in the slot as `get` does. It answers `Busy`, decoding nothing,
   when the reservation is refused or another caller holds the slot, so it
-  never waits on a slot or on the build count, and panel decodes never take
-  the count past the build budget. The tiles it answers are the caller's
+  never waits on a slot or on the build count, and panel decodes take the
+  count past the build budget only by one decode that runs alone. The tiles it answers are the caller's
   under a budget of 0, where the cache keeps nothing. A file whose header
   cannot be read is remembered as its failure, as `get` remembers it.
 - **`get_tile`, `view_region_pyramid` and `get_level`** are a kernel's
@@ -449,19 +456,39 @@ reconstruction's photographs goes through it except the ones under
   answers from the remembered failure
   ([cluster_patches.rs](../../../crates/sfm-explorer/src/cluster_patches.rs);
   [index-files.md](../../gui/index-files.md)).
-- **The panels** (Image Detail, and Track View's patch tiles) never decode on
-  the GUI thread. They call `display_photograph` in
+- **Image Detail** never reads or decodes on the GUI thread, at any budget.
+  It calls `display_layout` and `display_tiles` in
   [photograph_requests.rs](../../../crates/sfm-explorer/src/state/photograph_requests.rs),
-  which calls `peek_state`; on a miss it starts one `get` of that path on the
-  rayon pool, records the path in `PhotographRequests` so later frames do not
-  start a second, and asks egui for a repaint when the decode ends. Until then
-  Image Detail says "Loading image…", and "Failed to load image" once the
-  decode has failed. Once it has the pyramid, Image Detail cuts the
-  photograph tiles it draws out of it, a few at a time, rather than copying
-  the photograph whole. Under a budget of 0 nothing would be kept for the next
-  frame to find, so there the photograph is decoded where it is asked for
+  which call `layout` and `peek_tile`; while the layout is `NotKnown` the
+  first starts one `request_layout` of that path on the rayon pool, and for
+  the tiles the cache does not hold the second starts one `try_decode_tiles`
+  of them, each recorded in `PhotographRequests` so later frames and other
+  panels do not start a second while it runs, and each asking egui for a
+  repaint when it ends (50 ms later when the decode answered `Busy`, so the
+  panel asks again then). The tiles a decode answers are kept in
+  `PhotographRequests` until the panel asks for them, which is how a cache of
+  budget 0, which keeps nothing, hands them over; each ask for a photograph
+  drops its kept tiles the ask does not name, so a photograph keeps at most
+  one decode's answer, and only the four photographs answered last are kept.
+  A decode's failure is kept there too, with the file's length and
+  modification time, so under a budget of 0 the panel says "Failed to load
+  image" rather than decode again, until a check of the file on the rayon
+  pool, started by a frame that asks for it, finds that the file changed. A key the photograph does not have, which
+  only a layout read before the file changed size names, makes the decode
+  `forget` the path, so the next frame reads the header again. While
+  animation plays the panel asks for the next image's tiles a frame ahead
+  with `prefetch_tiles`, which starts the same decode and peeks at nothing
+  ([multi-panel-image-browser.md](../../gui/multi-panel-image-browser.md)
+  § "Image Detail").
+- **Track View's patch tiles and the Track Table's crops** never decode on the
+  GUI thread either. They call `display_photograph` in the same file, which
+  calls `peek_state`; on a miss it starts one `get` of that path on the rayon
+  pool, records the path in `PhotographRequests` so later frames do not start
+  a second, and asks egui for a repaint when the decode ends. Under a budget
+  of 0 nothing would be kept for the next frame to find, so there the
+  photograph is decoded where it is asked for
   ([track-view.md](../../gui/track-view.md),
-  [multi-panel-image-browser.md](../../gui/multi-panel-image-browser.md)).
+  [track-table.md](../../gui/track-table.md)).
 
 - **The 3D view's camera-view background** takes its pixels through
   `display_photograph` too, and only when the level it wants is not the one
@@ -588,8 +615,9 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   held photograph following the held pyramid, and a cache of budget 0
   keeping layouts; a panel's decode refused by `try_reserve_build` decoding
   and reserving nothing and decoding once the other reservation is given
-  back, with a budget and without one, and every panel decode refused under
-  a build budget of 0; a panel's decode answering `Busy` at once, with no
+  back, with a budget and without one, and under a build budget of 0 a panel
+  decode refused while another decode is reserved and granted when the
+  count is idle; a panel's decode answering `Busy` at once, with no
   wait and no reservation, while another caller's decode of the same path is
   held in progress (the test bounds that thread with a time limit); one that
   loses the slot after it reserved giving the reservation back; and panel
@@ -597,7 +625,9 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   a build budget of three decodes, with a budget and without one; and each
   of the four calls that can decode a whole photograph, cancelled during its
   decode, answering `Cancelled` with nothing reserved or remembered, the next
-  call decoding, with a budget and without one.
+  call decoding, with a budget and without one; and a held photograph's
+  layout answered as the same `Arc` while its size stays the same and as a new
+  one once a pyramid of another size is held.
 - [view_selection/tests.rs](../../../crates/sfmtool-core/src/patch/view_selection/tests.rs):
   the cull on a camera behind the patch, one the patch faces away from, a
   footprint off frame or partly in frame, a point at infinity, a footprint that
@@ -612,7 +642,21 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   (a second open reads the photographs from the cache),
   [state/photograph_requests/tests.rs](../../../crates/sfm-explorer/src/state/photograph_requests/tests.rs)
   (a panel's miss is decoded off the calling thread, an unreadable file ends as
-  unreadable, a budget of 0 decodes on the calling thread),
+  unreadable, a budget of 0 decodes on the calling thread; Image Detail's
+  layout and tiles each read once, off the calling thread, with a budget and
+  with a budget of 0, their tasks run from a queue the test steps on a thread
+  of its own bounded by a time limit; a decode refused by the build budget
+  ending at once while the other reservation is held, asked again on the next
+  look and decoding once it is given back; a failed decode answered as
+  unreadable and not decoded again until its file changes; tiles answered for
+  a view that moved on dropped; a key the photograph does not have reading the
+  layout again; and tiles asked for ahead handed over with no second decode),
+  [image_detail/photograph_tiles/tests.rs](../../../crates/sfm-explorer/src/image_detail/photograph_tiles/tests.rs)
+  (two panels showing one photograph ask for its layout and its tiles once,
+  neither decoding as it draws, with a budget and with a budget of 0; the tiles
+  asked for ahead of an image switch are the ones the next image draws; a
+  switch keeps drawing the previous image until the new one's overview has
+  landed, and the first image says it is loading until then),
   [scene_renderer/upload/tests.rs](../../../crates/sfm-explorer/src/scene_renderer/upload/tests.rs)
   (the camera-view background's photograph decoded off the calling thread and
   drawn once it lands, an unreadable one read once), and

@@ -539,8 +539,11 @@ fn panel_frame_with_input(
             &[],
             &crate::platform::ScrollInput::default(),
             Some(sift),
-            crate::image_detail::DetailPhotograph::Decoded(
-                &sfmtool_core::camera::image::ImageU8Pyramid::build(image, 1),
+            Some(
+                crate::test_support::HeldPhotograph::new(
+                    sfmtool_core::camera::image::ImageU8Pyramid::build(image, 1),
+                )
+                .source(),
             ),
             feature_display,
             intrinsics,
@@ -563,8 +566,11 @@ fn panel_frame_with_input(
             &[],
             &crate::platform::ScrollInput::default(),
             Some(sift),
-            crate::image_detail::DetailPhotograph::Decoded(
-                &sfmtool_core::camera::image::ImageU8Pyramid::build(image, 1),
+            Some(
+                crate::test_support::HeldPhotograph::new(
+                    sfmtool_core::camera::image::ImageU8Pyramid::build(image, 1),
+                )
+                .source(),
             ),
             feature_display,
             intrinsics,
@@ -1063,8 +1069,11 @@ fn proposal_detail_frames(
                 &[],
                 &crate::platform::ScrollInput::default(),
                 None,
-                crate::image_detail::DetailPhotograph::Decoded(
-                    &sfmtool_core::camera::image::ImageU8Pyramid::build(&image, 1),
+                Some(
+                    crate::test_support::HeldPhotograph::new(
+                        sfmtool_core::camera::image::ImageU8Pyramid::build(&image, 1),
+                    )
+                    .source(),
                 ),
                 &feature_display,
                 intrinsics,

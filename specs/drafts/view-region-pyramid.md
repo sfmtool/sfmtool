@@ -587,8 +587,9 @@ the main draft's step 13 makes the cache hand out tiled photographs only, and
 there is no whole pyramid for any reader to fall back on. That step is seven
 pull requests: 13a makes the cache's slot cancellable (built), 13b bounds the
 decodes in progress by the build budget (built), 13c1 adds the cache's layout
-and tile requests (built), 13c2, 13c3 and 13d move the panels to them while
-the cache still holds whole pyramids, and
+and tile requests (built), 13c2 moves Image Detail to them (built), and 13c3
+and 13d move the other panels to them, while the cache still holds whole
+pyramids, and
 13e replaces the pyramids with tiles, which is where the tests of this
 draft's step 5 that count decodes run.
 
@@ -783,8 +784,14 @@ decisions.
    `SFM_EXPLORER_BUILD_BUDGET_MB` in megabytes (10^6 bytes), parsed as
    `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB` is, a value that does not parse being
    ignored. A build budget of 0 lets each kernel caller decode one
-   photograph at a time and refuses every panel decode. Built in the main
-   draft's step 13b.
+   photograph at a time, and the panels one photograph at a time, when no
+   other decode is reserved. The user first decided that it
+   refuses every panel decode, and revised that while step 13c2 was built:
+   refused, Image Detail could never draw under a build budget of 0, and a
+   photograph larger than the whole budget would answer `Busy` for ever. So
+   `try_reserve_build` grants a decode that does not fit when nothing at all
+   is reserved, and under "0" no caller waits for ever. Built in the
+   main draft's step 13b, and the revision in its step 13c2.
 9. **How the 3D background reads its level.** *Decided by the user:* the
    background first asks for its level's tiles with `try_decode_tiles`,
    asking again on a later frame when the answer is `Busy`, then reads the

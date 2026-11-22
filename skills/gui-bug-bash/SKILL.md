@@ -182,7 +182,7 @@ Each of these found at least one real bug in the first run.
   Detail and the Scene tree are listed in `click`'s reply as soon as they
   open.
 - **Probe the gestures against the interaction rules.** Every gesture follows
-  the rules G1 to G12 in `specs/gui/interaction-rules.md`, so they are a
+  the rules G1 to G13 in `specs/gui/interaction-rules.md`, so they are a
   probe list. For each panel in scope, `click`, `click` with `count: 2`,
   `click` with `mouse_button: "right"` and `hover` each kind of target it
   shows (a thumbnail, each kind of tree row, a frustum, a point, a feature,

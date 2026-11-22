@@ -149,7 +149,7 @@ Quit does (§ "`quit`").
 | `set_timing_detail` | write | Record the detailed stages of an operation, or stop |
 | `get_window_layout` | read | The window's placement and the panel arrangement as one document, the live window block, and each panel's open state |
 | `get_image_detail_display` | read | The Image Detail panel's controls — the feature overlay and its filters, and the intrinsics layer — as one document |
-| `get_image_detail_view` | read | Where that panel is looking: the photograph, the zoom, and the rectangle of it on screen |
+| `get_image_detail_view` | read | Where that panel is looking: the photograph, the zoom, the rectangle of it on screen, the pyramid level drawn and the tiles still to draw |
 | `get_viewer_3d_display` | read | The 3D viewport's display controls — the HUD's layer toggles, sizes, Maintain Z-up and the rest of its checkboxes and sliders — as one flat document |
 | `get_track_table_query` | read | The Track Table panel's query — its bounds, sort, columns shown, *Seen in selected image* box and *Filter the 3D view* — as one document, with the reconstruction it applies to |
 | `get_reconstruction_history` | read | One reconstruction's versions, its cursor, and what a save would find |
@@ -1850,10 +1850,6 @@ that can only fit the whole photograph cannot look at a feature, and a
 `screenshot` of a 4000-pixel frame scaled into a panel shows nothing a
 reprojection error is visible in.
 
-Two more fields, the pyramid level the panel draws and how many visible tiles
-are not yet drawn at it, are proposed in
-[out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md).
-
 `get_image_detail_view` takes no arguments and returns the document both tools
 answer with:
 
@@ -1866,10 +1862,23 @@ answer with:
     "zoom": 6.0,                              // 1.0 fits the photograph to the panel
     "visible_rect_px": [128.0, 96.0, 448.0, 336.0],   // of the photograph, in its own pixels
     "panel_size_points": [800.0, 600.0],
-    "image_size_px": [1920.0, 1080.0]
+    "image_size_px": [1920.0, 1080.0],
+    "level": 0,                               // the pyramid level drawn, 0 = full resolution
+    "tiles_pending": 0                        // visible tiles of that level not drawn yet
   }
 }
 ```
+
+**`level` and `tiles_pending` say how far the frame got with the pixels.** The
+panel draws photograph tiles of the pyramid level that matches the zoom, and a
+tile the photograph cache has not handed over yet is drawn from a coarser level
+or not at all ([multi-panel-image-browser.md](multi-panel-image-browser.md)
+§ "Image Detail"). `tiles_pending` counts that level's visible tiles the frame
+did not draw from their own texture, so an agent that means to judge pixels in a
+`screenshot` waits for `0` first. Both are `null` in the reply
+`set_image_detail_view` works out from a standing reading, since no frame has
+drawn the view it reports yet, and in the reply of a frame whose panel showed no
+part of the photograph.
 
 **It reports the panel's own last frame**, not the selection: a
 `select_camera_image` sent a moment ago is not in it until the panel has drawn
@@ -6767,7 +6776,9 @@ where a test hands no host over.
   with none selected, whose sentence names both `camera_image` and
   `select_camera_image` and which leaves no request standing.
   `get_image_detail_view` reports the panel's last frame and does **not** follow
-  a selection the panel has not drawn yet.
+  a selection the panel has not drawn yet. Its `level` and `tiles_pending`, and
+  those of a waiting call's reply, are the ones the drawing frame published, and
+  a reply worked out from a standing reading reports both as null.
 - **A view of a photograph the panel has not drawn waits for the frame that
   draws it.** With no frame ever drawn, `get_image_detail_view` answers in
   nulls while `set_image_detail_view` defers; a frame seeded as the dock seeds

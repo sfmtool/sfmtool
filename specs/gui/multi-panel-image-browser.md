@@ -100,8 +100,9 @@ All four panels share `AppState::selected_image` as the central image selection 
 - 3D Viewer: frustum re-upload with new selection color (already implemented via
   `prev_selected_image` change detection)
 - Image Detail: shows the new full-resolution image from the viewer's photograph cache
-  ([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)), which decodes
-  it on the rayon pool on a miss while the panel says "Loading image…" (same path as
+  ([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)), which reads
+  its header and decodes it on the rayon pool on a miss while the panel says "Loading
+  image…" until its layout is known (same path as
   `upload_bg_image` in camera view mode, but drawn as egui textures of photograph tiles instead of a wgpu
   background pass)
 
@@ -526,12 +527,49 @@ Full-resolution image display for the selected camera, with SIFT feature overlay
 #### Base Image
 
 **Image loading**: The panel draws the photograph at `workspace_dir.join(&img.name)`, the
-same path `SceneRenderer::upload_bg_image` reads for camera view mode. Its pixels come
-from the viewer's photograph cache, as the photograph's whole pyramid, and are never
-decoded on the GUI thread: on a miss `state::display_photograph` starts the decode on the
-rayon pool and repaints when it lands, and until then the panel shows "Loading image…",
-or "Failed to load image" for a file that cannot be read
-([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)).
+same path `SceneRenderer::upload_bg_image` reads for camera view mode. Its layout and its
+photograph tiles come from the viewer's photograph cache and are never read or decoded on
+the GUI thread, at any cache budget
+([state/photograph_requests.rs](../../crates/sfm-explorer/src/state/photograph_requests.rs),
+[../core/camera/photograph-cache.md](../core/camera/photograph-cache.md) § "Layouts and
+tiles"):
+
+- **The layout.** Each frame asks `state::display_layout`, which answers the cache's
+  `layout` and, while it is not known, starts one `request_layout` on the rayon pool, a
+  read of the file's header, and repaints when it ends. A file that cannot be read or
+  decoded shows "Failed to load image".
+- **Switching images.** A newly selected image is drawn once the tiles its first frame
+  uploads first, the overview level's (§ "Uploads" below), have landed: each frame asks
+  for them and uploads them at the view the panel will carry over to the image, with any
+  look asked for on the switch applied. Until then the panel keeps drawing the image it
+  showed before, its tiles, its overlays and its view, so stepping, the strip and
+  animation never flash an empty image area; a look asked for meanwhile is kept and
+  applied on the frame that first draws the new image, and `get_image_detail_view`
+  reports the image still drawn. Only where there is no such image (the first image the
+  panel shows, an image of another reconstruction, or a previous image with no tile
+  uploaded) the panel shows "Loading image…" instead. While the previous image is kept,
+  its gestures follow G13 ([interaction-rules.md](interaction-rules.md)): a click,
+  double-click, drag or right-click on it does nothing, hover highlights the point under
+  the pointer (G6), and the wheel and `Z` move the view, which carries over to the new
+  image.
+- **The tiles.** Each frame asks `state::display_tiles` for the tiles it would upload
+  this frame (§ "Uploads" below), and for no tile it has uploaded already. Those the cache
+  holds are handed over at once; for the rest it starts one `try_decode_tiles` on the
+  rayon pool per photograph, at most one in flight per photograph however many frames or
+  panels ask, and repaints when it ends. That decode never waits: when the build budget
+  has no room for it or another caller is decoding the photograph it ends at once, decoding
+  nothing, and the panel asks again on a frame 50 ms later. A decode that does not fit
+  under the build budget is granted when nothing else is reserved, so under a build
+  budget of 0 (`SFM_EXPLORER_BUILD_BUDGET_MB=0`) the panel decodes one photograph at a
+  time, and a photograph larger than the whole budget is decoded when no other decode
+  runs. The tiles a decode answers are
+  kept for the panel until it asks for them, so a cache of budget 0, which keeps nothing,
+  still hands them over; each ask for a photograph drops the kept tiles of it that it does
+  not ask for, answered for a view that has moved on, so a photograph keeps at most one
+  decode's answer, 16 tiles, and the answers of the four photographs answered last are
+  kept, about 51 MB at most. A photograph whose decode fails is answered as unreadable
+  until its file's length or modification time changes, which each frame that asks for
+  it checks with one stat of the file on the rayon pool; then it is decoded again.
 
 **Display: photograph tiles.** The panel never makes a texture of the whole photograph.
 It draws **photograph tiles**: 512 x 512 blocks of one pyramid level, each uploaded as
@@ -558,22 +596,32 @@ level 0. The code is
   panel shows.
 - **Uploads.** At most 16 tiles are uploaded in one frame. The first is the overview
   level's, the finest level that is one tile (or the coarsest level when none is), when
-  it is coarser than the level drawn; the rest are the drawn level's visible tiles. The
-  panel asks for a repaint while a visible tile of the drawn level is still to be
-  uploaded, so a jump to a new place spreads its uploads over a few frames.
+  it is coarser than the level drawn; the rest are the drawn level's visible tiles. These
+  are the tiles the panel asks the cache for on the frame. A frame that uploaded 16 while
+  visible tiles of the drawn level are still to be uploaded asks for a repaint, so a jump
+  to a new place spreads its uploads over a few frames; a tile still being decoded
+  repaints when its decode ends.
 - **While tiles load.** A tile that is not uploaded yet is drawn from the nearest
   coarser level whose tiles over its area are all uploaded, clipped to its area, so once
   a photograph has been drawn the panel is never blank and sharpens tile by tile.
 - **Textures kept.** At most 256 tile textures (about 270 MB of GPU memory), of any of
   the images shown, the least recently drawn dropped first. The panel also keeps the
   level sizes of the image it showed last, so when the cache has dropped that image's
-  pyramid its uploaded tiles are still drawn while it is decoded again.
-
-Reading the tiles from the photograph cache instead of cutting them from a whole pyramid,
-with the next image's tiles asked for a frame ahead while animation plays and the
-level and the tiles still to draw reported to agents, is specified in
-[out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md)
-§ "Image Detail".
+  pyramid its uploaded tiles are still drawn while it is decoded again. The cache answers
+  the same layout on every frame while the photograph's size stays the same, so a frame
+  that changes nothing builds no layout.
+- **The next image while animation plays.** On every frame of animation playback the
+  dock asks the panel (`ImageDetail::prefetch`) for the tiles of the image the animation
+  shows next, the ones the frame that shows it would upload, at the view the panel
+  carries over to it (§ "View persistence across image, reconstruction and panel
+  changes") and without the ones already uploaded. They are asked for with
+  `state::prefetch_tiles`, which starts the same one decode a photograph has on the
+  rayon pool, peeks at nothing on the GUI thread, and starts nothing once every tile is
+  answered; the frame that shows the image is handed them.
+- **For agents.** `get_image_detail_view` reports the level the last frame drew and
+  `tiles_pending`, how many of that level's visible tiles it drew from a coarser level or
+  not at all, so an agent waits for `0` before a screenshot it means to judge pixels by
+  ([mcp-server.md](mcp-server.md) § "The Image Detail view").
 
 **Empty state**: When no image is selected, show "No image selected" centered in the panel.
 

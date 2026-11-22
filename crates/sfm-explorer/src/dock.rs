@@ -818,31 +818,21 @@ impl TabContext<'_> {
                     &self.frame,
                 )
             });
-            // Full-res CPU pixels come from the shared cache (also
-            // used by Track View's patch tiles), so each image is decoded
-            // from disk at most once, and never on this thread: a miss starts
-            // the decode on the rayon pool and the panel says it is loading
-            // until the repaint that follows it.
-            let photograph = selected_image.map(|idx| {
-                crate::state::display_photograph(
-                    &self.state.photographs,
-                    &self.state.photograph_requests,
-                    recon,
-                    idx,
-                    ui.ctx(),
-                )
-            });
-            let detail_photograph = match &photograph {
-                Some(crate::state::DisplayPhotograph::Decoded(pyramid)) => {
-                    crate::image_detail::DetailPhotograph::Decoded(pyramid)
-                }
-                Some(crate::state::DisplayPhotograph::Decoding) => {
-                    crate::image_detail::DetailPhotograph::Decoding
-                }
-                Some(crate::state::DisplayPhotograph::Unreadable) | None => {
-                    crate::image_detail::DetailPhotograph::Unreadable
-                }
-            };
+            // The photograph's layout and tiles come from the shared cache
+            // (also used by Track View's patch tiles), so each image is
+            // decoded from disk at most once while the cache holds it, and
+            // never on this thread: the panel asks for what it misses on the
+            // rayon pool and draws it on the repaint that follows.
+            let photograph_path =
+                selected_image.and_then(|idx| crate::state::photograph_path(recon, idx));
+            let detail_photograph =
+                photograph_path
+                    .as_deref()
+                    .map(|path| crate::state::PhotographSource {
+                        cache: &self.state.photographs,
+                        requests: &self.state.photograph_requests,
+                        path,
+                    });
             let detail_response = self.image_detail.show(
                 ui,
                 node.edited(),
@@ -867,6 +857,26 @@ impl TabContext<'_> {
                 &mut self.state.intrinsics_display,
                 self.state.camera_model_proposal.as_ref(),
             );
+            // While animation plays, the tiles of the image it shows next at
+            // the view the panel will carry over to it, asked for a frame
+            // ahead so their decode starts before the frame that draws them.
+            let upcoming = self
+                .image_browser
+                .upcoming_image(selected_image, recon.image_set.images.len());
+            if let (Some(view), Some(next)) = (&detail_response.view, upcoming) {
+                if let Some(path) = crate::state::photograph_path(recon, next) {
+                    self.image_detail.prefetch(
+                        ui.ctx(),
+                        view,
+                        ImageRef::new(id, next),
+                        crate::state::PhotographSource {
+                            cache: &self.state.photographs,
+                            requests: &self.state.photograph_requests,
+                            path: &path,
+                        },
+                    );
+                }
+            }
             let after = crate::state::ImageDetailDisplay::snapshot(
                 &self.state.feature_display,
                 &self.state.intrinsics_display,
@@ -878,7 +888,8 @@ impl TabContext<'_> {
             // last reading standing, which is the reading a view tool should
             // still be answering from.
             if let Some(view) = detail_response.view {
-                self.state.publish_image_detail_view(view);
+                self.state
+                    .publish_image_detail_view(view, detail_response.tiles);
             }
             if let Some(point_idx) = detail_response.select_point {
                 // Through the setter rather than the field: the point
