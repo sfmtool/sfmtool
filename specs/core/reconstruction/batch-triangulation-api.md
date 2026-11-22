@@ -723,8 +723,9 @@ println!("{sigma_px:.4} px, {} outliers left out", noise.outlier_count);
   (see "Open questions").
 - **Where the pixel comes from.** An observation's pixel is the inline
   keypoint when the reconstruction carries the column (every
-  `embedded_patches` file, and a `sift_files` one with the optional copy,
-  which a load fills in from the `.sift` files), and otherwise the `.sift`
+  `embedded_patches` file, and every `sift_files` one but a version 16 file
+  written without it whose `.sift` files a load could not fill it from), and
+  otherwise the `.sift`
   position its feature index names, read from the workspace. Both go through
   the same lookup, `SfmrReconstruction::observation_pixels` in
   [recompute.rs](../../../crates/sfmtool-core/src/reconstruction/data/recompute.rs),

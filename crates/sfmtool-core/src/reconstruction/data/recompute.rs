@@ -143,8 +143,8 @@ impl SfmrReconstruction {
     /// `tracks`.
     ///
     /// The reconstruction's inline `keypoints_xy` when it carries one (every
-    /// `embedded_patches` reconstruction, and a `sift_files` one with the
-    /// optional copy), borrowed. Otherwise the `.sift` positions the feature
+    /// `embedded_patches` reconstruction, and a `sift_files` one that
+    /// carries it), borrowed. Otherwise the `.sift` positions the feature
     /// indexes name, read only for the images where `images[i]` is true; the
     /// rows of the other images, and of a feature index past the end of its
     /// file, are NaN. `images` has one entry per image.
@@ -226,7 +226,7 @@ impl SfmrReconstruction {
     /// (in-front) observation gets `0.0`.
     ///
     /// Returns `None` when the reconstruction carries no inline column -- a
-    /// `sift_files` one without the optional copy, whose 2D observations live in
+    /// `sift_files` one without the column, whose 2D observations live in
     /// external `.sift` files and must be read via
     /// [`Self::compute_observation_reprojection_errors`] instead.
     fn inline_point_reprojection_errors(&self) -> Option<Vec<f32>> {
@@ -313,7 +313,7 @@ impl SfmrReconstruction {
     /// binary stores errors in normalized image coordinates, not pixels).
     ///
     /// A reconstruction carrying inline `keypoints_xy` -- every
-    /// `embedded_patches` one, and a `sift_files` one with the optional copy --
+    /// `embedded_patches` one, and a `sift_files` one that carries it --
     /// uses those directly and reads no `.sift` file.
     pub fn recompute_point_errors(&mut self) -> Result<(), ReconstructionError> {
         if let Some(errors) = self.inline_point_reprojection_errors() {

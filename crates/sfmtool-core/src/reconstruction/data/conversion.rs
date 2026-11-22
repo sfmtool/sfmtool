@@ -283,8 +283,9 @@ impl SfmrReconstruction {
     /// Apart from those two, the equality holds against a save that writes
     /// this value as it stands. A caller that stamps new metadata (an
     /// operation name, say) between hashing and saving changes the metadata
-    /// section and so changes the hash; stamp first, then hash. The write timestamp is not such a value: the writer
-    /// stamps it, and it lives outside every section digest.
+    /// section and so changes the hash; stamp first, then hash. The write
+    /// timestamp is not such a value: the writer stamps it, and it lives
+    /// outside every section digest.
     ///
     /// The cost is one serialisation of the whole value, and the hashing of the
     /// bytes it produces. Nothing is compressed: the hash is over the

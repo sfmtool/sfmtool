@@ -218,12 +218,12 @@ every count that is live progress only, not kept in the finished row. The rows
 are gathered into the materialised value before it is pushed as a version, as a stated workspace path
 is (`AppState::materialize_for_save`), so such a save folds, stamps and pushes a
 version even with an empty overlay, and the version the node holds is the file
-written and its content hash is the file's. The same holds for a `sift_files` value
-without its inline keypoints, one read from a version 16 file whose `.sift`
-files the open could not read: the save reads them from the `.sift` files in
-a phase `keypoints` under `materialise`, and is refused, naming the `.sift`
-file and saying to restore the `.sift` files, when they cannot supply them. The display thumbnails the
-open builds for a file without thumbnails are the node's and never reach a
+written and its content hash is the file's. The same holds for a `sift_files`
+value without its inline keypoints, one read from a version 16 file whose
+`.sift` files the open could not read: the save reads them from the `.sift`
+files in a phase `keypoints` under `materialise`, and is refused, naming the
+`.sift` file and saying to restore the `.sift` files, when they cannot supply
+them. The display thumbnails the open builds for a file without thumbnails are the node's and never reach a
 value, so no save writes them. The patch bitmaps the open renders for a file
 without bitmaps are in the value, marked `PointSet::patch_bitmaps_for_display`,
 and the mark keeps them out of the written file and out of the content hash: a

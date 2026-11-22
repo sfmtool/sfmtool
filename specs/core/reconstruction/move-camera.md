@@ -166,7 +166,8 @@ projection is repeated.
      behind one of the cameras — keeps its position, and is counted;
    - a **track whose observations carry no pixel** keeps its position. A
      `sift_files` value without the inline keypoint column (one read from a
-     version 16 file whose `.sift` files cannot be read) states no ray at all, so its cameras move and its points stand.
+     version 16 file whose `.sift` files cannot be read) states no ray at
+     all, so its cameras move and its points stand.
 
 3. **The derived indexes are rebuilt**, so the value that comes back is
    complete.

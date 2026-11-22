@@ -1872,9 +1872,8 @@ fn rebuild_observation_source(
                     )
                 })?;
             require_img_len("sift_content_hashes", sift_content_hashes.len())?;
-            // The inline keypoint column is optional here: a supplied one
-            // replaces it, and otherwise whatever the source carried rides
-            // along. Its row count is checked by the caller's final
+            // A supplied inline keypoint column replaces the source's, and
+            // otherwise whatever the source carried rides along. Its row count is checked by the caller's final
             // `validate_observation_columns`.
             let keypoints_xy = new_keypoints_xy.or_else(|| recon.keypoints_xy().cloned());
             ObservationSource::SiftFiles {
