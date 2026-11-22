@@ -91,6 +91,20 @@ impl History {
                      bench: Arc<Bench>, transform: Option<Se3Transform>,
                      map: PointMap, label: impl Into<String>,
                      created: Option<CreatedPoints>) -> VersionSerial;
+    /// `push_pair` for a step that renumbered measurement rows: deleting an
+    /// image, and deleting a measurement.
+    pub fn push_renumbering(&mut self, value: Option<EditedReconstruction>,
+                            bench: Arc<Bench>, transform: Option<Se3Transform>,
+                            map: PointMap, measurements: MeasurementMap,
+                            label: impl Into<String>,
+                            created: Option<CreatedPoints>) -> VersionSerial;
+    /// Where a point index of one version is in another, over the point maps.
+    pub fn follow(&self, from: VersionSerial, to: VersionSerial, index: u32)
+        -> Result<u32, VersionSerial>;
+    /// The same walk over the measurement maps, for one kind's rows.
+    pub fn follow_measurement(&self, from: VersionSerial, to: VersionSerial,
+                              kind: MeasurementKind, index: u32)
+        -> Result<u32, VersionSerial>;
     /// Whether the **document** half at the cursor is not the one on disk.
     pub fn is_dirty(&self) -> bool;
     pub fn can_undo(&self) -> bool;
@@ -145,6 +159,17 @@ own, so two nodes over one file are two independent documents.
 A **version serial** is minted from a process-wide counter and never reused, by
 any node, including by a version a discarded redo tail took with it. It is what
 the Action Log names a step by, and what a map is keyed on.
+
+**Each step keeps a measurement map beside its point map.** A stored
+measurement has no portable id, so its row is its only name, and two edits
+renumber rows: deleting an image drops the measurements with an endpoint in it,
+and deleting a measurement drops one row. Each pushes its row map as the step's
+`MeasurementMap` (`push_renumbering`); every other step's is the identity,
+including a measurement commit that appends a row, since no row moves and the
+item seated on the new row lives only in the commit's descendants.
+`follow_measurement` walks the version graph over these maps as `follow` walks
+it over the point maps, which is how a measurement item's origin is followed to
+the cursor ([bench.md](bench.md) § "Measurement items").
 
 The node offers the reads every panel makes:
 

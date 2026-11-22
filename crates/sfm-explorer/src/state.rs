@@ -896,8 +896,10 @@ pub(crate) struct AppState {
     pub(crate) focused_item: Option<crate::bench::FocusedItem>,
 
     /// Every item focused this session, most recently focused first, each
-    /// once: what ticking Track View's *Edit* box with no point selected
-    /// focuses the first of ([`AppState::most_recent_item`]).
+    /// once, tracks and measurements alike: what ticking Track View's *Edit*
+    /// box with no point selected, or Measurement View's with no measurement
+    /// selected, focuses the first of its kind from
+    /// ([`AppState::most_recent_item_of`]).
     ///
     /// Session state, not part of any version. An entry is moved to the front
     /// whenever its item is focused, and dropped when its node is closed. It

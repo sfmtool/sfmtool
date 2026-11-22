@@ -124,8 +124,8 @@ told to check only the tool name.
 
 ## The tool surface
 
-One hundred and eight tools. Twenty-two read -- twenty-one that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- seventy-eight
+One hundred and eleven tools. Twenty-two read -- twenty-one that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- eighty-one
 write, six send input, one writes a file, and one quits the viewer. `get_widgets`
 and the six input tools, `click`, `hover`, `drag`, `scroll`, `press_key` and
 `type_text`, read and press the viewer's widgets the way a person's eyes, mouse
@@ -143,7 +143,7 @@ Quit does (§ "`quit`").
 | `get_point` | read | One 3D point: position, colour, RMS reprojection error (`rms_error_px`), patch frame, full track, and the viewed track's evaluation for the viewed point |
 | `find_points` | read | The points of one reconstruction that pass bounds on the track table's columns, optionally only those one camera image sees, sorted by a column, a page at a time with the values asked for; computes the columns it lacks with *Find points*, on a worker thread |
 | `list_measurements` | read | Every measurement one reconstruction stores, each with the reading its Scene tree row shows |
-| `get_measurement` | read | One measurement whole, as Measurement View shows it: each endpoint's resolution with every candidate or its refusal, the result, and the median line |
+| `get_measurement` | read | One measurement whole, as Measurement View shows it: each endpoint's resolution with every candidate or its refusal, the result, and the median line; or a measurement item on the bench, read live |
 | `get_action_log` | read | What has happened in the viewer, from a revision onward, filtered by who did it, optionally with each row's stages |
 | `get_timing_detail` | read | Whether the detailed stages of an operation are being recorded |
 | `set_timing_detail` | write | Record the detailed stages of an operation, or stop |
@@ -179,6 +179,7 @@ Quit does (§ "`quit`").
 | `undo` / `redo` | write | Step one reconstruction's history back or forward a version |
 | `jump_to_version` | write | Move its cursor straight to a version |
 | `delete_point` | write | Delete one 3D point and its track |
+| `delete_measurement` | write | Delete one stored measurement, the rows after it renumbered |
 | `delete_points` | write | Delete many 3D points of one reconstruction and their tracks, as one version |
 | `retriangulate_point` | write | Re-solve one 3D point from its own observations at the poses and lenses the reconstruction holds |
 | `retriangulate_all_points` | write | Re-solve every 3D point the same way, on a worker thread |
@@ -224,6 +225,8 @@ Quit does (§ "`quit`").
 | `split_bench_track` | write | Move some observations onto a second track beside this one |
 | `select_bench_observations` | write | Replace the selected observations of the focused item: Track View's highlighted rows |
 | `commit_bench_track` | write | Write a bench track into the reconstruction |
+| `put_measurement_on_bench` | write | Put a stored measurement on the bench and focus it, or focus the item already there |
+| `commit_bench_measurement` | write | Write a measurement item into the reconstruction, replacing its row or appending one |
 | `fit_bench_track` | write | Localize, re-triangulate and re-render the bitmap of a bench track, then read it back, on a worker thread |
 | `fit_bench_track_normal` | write | Turn a track-stage bench track's patch to a normal estimated from a row of fitted pieces along each axis, from the plane through a grid of fitted pieces, from one plane grown and fitted to the photographs, or from the optical flow between pairs of its views, keeping its centre, then read it back, on a worker thread |
 | `set_bench_track_stage` | write | Move a track between its cluster and track representations, on a worker thread |
@@ -244,7 +247,7 @@ Quit does (§ "`quit`").
 | `type_text` | input | Type a string into the focused text input or number box, or into one named by its widget id |
 
 Every tool is annotated: the twenty-one reads and `screenshot` carry
-`readOnlyHint: true`, the seventy-eight writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the eighty-one writes `destructiveHint: false` (none of
 them deletes or overwrites a file the person made: `close_reconstruction`
 unloads, it does not delete; `set_window_layout` changes the window and the
 dock, not the layout file the menu saves; an **edit** makes a new version of a
@@ -1486,6 +1489,7 @@ rule — `"camera_image"` drops the camera image and keeps the intrinsics
 // list_measurements  { "reconstruction_label": "seoul_bull" }
 // get_measurement    { "reconstruction_label": "seoul_bull",
 //                      "measurement_kind": "distance", "measurement_index": 0 }
+// get_measurement    { "reconstruction_label": "seoul_bull", "item": "distance #0" }
 ```
 
 The measurements a reconstruction stores, read as the Scene tree's
@@ -1530,6 +1534,29 @@ names them) or its `refusal` (`sentence`, which names the remedy, and
 `short`, the words the row shows), and `median`, the header's comparison line
 (`count`, `median_unit_per_scene_unit`, `deviation_percent` and `text`), null
 with fewer than two readings.
+
+**Naming `item` in place of `measurement_index`** reads a measurement item on
+the bench, live from the item as Measurement View's edited mode reads it
+([measurement-view.md](measurement-view.md) § "Live readings"): the same
+fields, plus `item`, `focused`, and `origin`, `{ "measurement_index": n }` for
+the row its commit would replace or null where it would append one. An
+endpoint not placed is null in `endpoints`, and then `result` is null too; the
+median line leaves the item's origin out. A call naming neither is refused.
+
+### `delete_measurement`
+
+```jsonc
+{ "reconstruction_label": "dino", "measurement_index": 2 }
+```
+
+Delete one stored measurement, as *Delete* in its Scene tree row's menu does
+(`AppState::delete_measurement`): a direct edit of the reconstruction, not a
+bench step, so it answers as an edit answers, with the version it pushed
+(`Deleted distance #2 in dino`). Each row after it takes the index one lower,
+and the selected measurement and every measurement item's origin follow
+([bench.md](bench.md) § "Measurement items"). Refused while a background task
+or a camera model proposal holds the node, and for an index past the rows with
+the count.
 
 ### `set_reconstruction_display`
 
@@ -5163,9 +5190,9 @@ image of which carries a pose projects nothing.
 
 ### The bench family
 
-Thirty-eight tools that read and work the **bench** beside a node
-([bench.md](bench.md)): the place where a track is held and judged before it is
-written into the reconstruction. Every one of them is one `AppState` call from
+Forty tools that read and work the **bench** beside a node
+([bench.md](bench.md)): the place where a track or a measurement is held and
+judged before it is written into the reconstruction. Every one of them is one `AppState` call from
 `crate::bench` -- the same call a Track View gesture or the Image
 Detail menu entry makes -- so an agent's verdict, split or commit is a version
 in the history the human is looking at, undoable by either of them. A tool that
@@ -5180,10 +5207,32 @@ bench's own vocabulary is: what an item is, what a stage is, and what a verdict
 means. What this surface adds is the three things every tool family here adds.
 
 **An item is named by its label**, exactly as a node is by
-`reconstruction_label`. The bench tools take `item`; the track tools take
-`track`, and **a call that names no track acts on the focused item**, which is
-what a gesture in Track View's Edited mode means when it names no item. A label that
-names nothing on the bench is refused naming it.
+`reconstruction_label`. The bench tools take `item`, whatever the item's kind:
+`get_bench`, `focus_bench_item`, `rename_bench_item` and `discard_bench_item`
+work on a measurement item as on a track. The track tools take `track`, and
+**a call that names no track acts on the focused item**, which is what a
+gesture in Track View's Edited mode means when it names no item. A label that
+names nothing on the bench is refused naming it, and a track tool given a
+measurement item is refused saying so (*"distance #3 is a measurement, not a
+track."*).
+
+**Two tools are a measurement's.** `put_measurement_on_bench` takes
+`reconstruction_label`, `measurement_kind` and `measurement_index` and is a
+Measurements row's double-click without the raise and the framing
+(`AppState::put_measurement_on_bench`): the measurement selected, put on the
+bench as `distance #2` and focused, in one version, or its item focused with
+no version where it is on the bench already. The reply names the `item`.
+`commit_bench_measurement` takes `reconstruction_label` and `item`, the focused
+item where it names none, and is Measurement View's *Commit*
+(`AppState::commit_bench_measurement`): the row its origin names replaced, or
+a row appended where it names none, as one `Edit` version; a row that already
+holds the item answers `changed: false`. The reply carries `measurement`, the
+row written as `measurement_kind`, `measurement_index` and `replaced`. Each is
+refused in the panel's words ([bench.md](bench.md) § "Measurement items"); on
+a view-only bench the put is allowed and the commit refused. `get_bench`
+lists a measurement item with `kind: "measurement"`, its `measurement_kind`,
+its `origin` (`{ "measurement_index": n }` or null), its `label` and
+`counts.endpoints`, and `get_measurement` with `item` reads it whole.
 
 **A `sift_files` node's bench is view-only.** `create_bench_track` puts a
 point on it and every read works, but every tool that edits an item, and
@@ -5760,7 +5809,7 @@ walk is accepted with `sight_bench_observation`**, passing `walked_to` as the
 the observation and drops the measurements read at the seed. No tool of its own
 carries it, because what it writes is exactly what that tool writes.
 
-**Eight of the thirty-eight are the patch a track is**, and they are the
+**Eight of the forty are the patch a track is**, and they are the
 wire's half of the handles the two panels offer
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "The bench
 layer"). **Each is named for the part it acts on** -- the patch, one sighting,
@@ -5872,7 +5921,7 @@ creates one, which is what it must do; otherwise the second commit would delete
 what the first wrote. The copy is the focused item and the reply names it, as a
 split's does.
 
-**Four of the thirty-eight are about the index files**, the node's SIFT index and
+**Four of the forty are about the index files**, the node's SIFT index and
 its cluster patches, which are the node's rather than any track's:
 `open_index_files` opens both, from the node's own paths or from a
 `sift_index_path` and a `cluster_patches_path` of the caller's;
@@ -7055,7 +7104,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is one hundred and eight tools**, twenty-two of them reads, six of the
+- **The catalog is one hundred and eleven tools**, twenty-two of them reads, six of the
   `Input` kind, one of the `Save` kind and one of the `Quit` kind, those eight
   carrying `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and

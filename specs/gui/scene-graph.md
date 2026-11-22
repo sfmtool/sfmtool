@@ -70,6 +70,8 @@ Scene (root, implicit)
 │   │   └── pt3d_a1b2c3_88231  5 in   ← one row per item, the focused one marked
 │   ├── Bench Clusters (1)         ← its cluster-stage items, likewise
 │   │   └── IMG_0004@120,90  3 in
+│   ├── Bench Measurements (1)     ← its measurement items, likewise
+│   │   └── distance #0
 │   └── Index Files  1 of 2 current  ← the files beside the .sfmr that a
 │       │                               bench search reads
 │       ├── SIFT Index  1.2M descriptors  ← each current, stale or absent
@@ -686,42 +688,51 @@ Each row names its kind and index, its label where it has one, its stated
 distance, and the reconstruction's reading of it, from the node's cached
 readings (`crate::measurements::readings`). A **click** (G1) selects the
 measurement and its reconstruction, and nothing more.
-A **double-click** (G2, a set of things) selects it, raises Measurement View
-beside the tree through `show_panel_beside` (G9), and frames the measurement's
-finite endpoints in the 3D view, keeping its orientation. The selected
-measurement's row is drawn selected. A secondary click (G3) opens no menu and
-selects nothing. The double-click travels in the
+A **double-click** (G2, a stored measurement) puts it on the bench and focuses
+it, or focuses its item where it is on the bench already, which selects it;
+raises Measurement View beside the tree through `show_panel_beside` (G9); and
+frames the measurement's finite endpoints in the 3D view, keeping its
+orientation ([measurement-view.md](measurement-view.md) § "The Edit box"). The
+selected measurement's row is drawn selected. A secondary click (G3) selects
+nothing and opens the row's menu: *Edit on Bench*, which is the double-click,
+and *Delete*, which deletes the stored measurement as a direct edit
+(`delete_measurement` in the response, applied by the dock), greyed while a
+background task or a camera model proposal holds the node. The double-click
+and *Edit on Bench* travel in the
 response as `open_measurement`, which the panel keeps for
 `SceneGraphPanel::take_measurement_open` and `app.rs` applies once the dock is
 back in the state, for the reason the Bench rows' double-click is applied there
 (below). The group is drawn by
 [scene_graph/measurements.rs](../../crates/sfm-explorer/src/scene_graph/measurements.rs).
 
-**Bench group rows** — `[▸] Bench Points (2)` and `[▸] Bench Clusters (1)` — no
-eye, one per **stage** of the node's bench ([bench.md](bench.md)): the
-track-stage items, which stand at a position, and the cluster-stage ones, which
-are image patches with no geometry behind them. The split is the tree saying
-which of the two an item is, rather than leaving it to a row's hover text, and
-an item taken up or down moves between the groups. A group with nothing in it is
+**Bench group rows** — `[▸] Bench Points (2)`, `[▸] Bench Clusters (1)` and
+`[▸] Bench Measurements (1)` — no eye: one per **stage** of the node's bench's
+tracks ([bench.md](bench.md)), the track-stage items, which stand at a
+position, and the cluster-stage ones, which are image patches with no geometry
+behind them, and one for its measurement items. The split is the tree saying
+which an item is, rather than leaving it to a row's hover text, and a track
+taken up or down moves between its two groups. A group with nothing in it is
 not drawn, which is what the single bench group did with an empty bench, so a
 node whose bench holds only tracks shows only *Bench Points*; each remembers its
-own expansion, and both open by default.
+own expansion, and all open by default.
 
-Each expands to one row per item of its stage, in the bench's own order, by
-label and with its `in` count; the focused item
+Each expands to one row per item of its group, in the bench's own order, by
+label, a track's row with its `in` count and a measurement's hover text naming
+each endpoint's image; the focused item
 ([`bench.md`](bench.md) § "The focused item") is drawn as the selected row, in
 whichever group holds it. A **click** on a row (G1) selects the node it is
 under and does nothing to the bench, the pair the node row follows (click to select,
 double-click to act), so a pass of clicks down the tree pushes no versions. A
 **double-click** focuses the item, which is not a step of the node's history and
-pushes no version, selects the node, and raises Track View on it; on the item
+pushes no version, selects the node, and raises the panel that edits it on it,
+Track View for a track and Measurement View for a measurement; on the item
 that is focused already it writes no row. On a track-stage item it also moves
 the 3D viewport onto the item's point (below). A secondary click
-offers *Discard* (G3). An item is named by its position in the whole bench, so both
-groups' rows reach the same list.
+offers *Discard* (G3). An item is named by its position in the whole bench, so every
+group's rows reach the same list.
 
-A secondary click on either group's own header offers **Clear the Bench**,
-which takes every item off the bench, both groups', since they are one bench
+A secondary click on any group's own header offers **Clear the Bench**,
+which takes every item off the bench, every group's, since they are one bench
 (`AppState::clear_bench`, reported as `clear_bench` and applied by the dock).
 Like a discard it asks for no confirmation and is one version, so one undo puts
 every item back; the focused item, when it was on this bench, is unfocused and

@@ -678,7 +678,7 @@ impl AppState {
         let bench = self.bench(id).ok_or(crate::state::NOT_LOADED)?;
         let track = bench
             .track(label)
-            .ok_or_else(|| format!("Nothing on the bench is called {label}."))?;
+            .ok_or_else(|| self.no_such_track(id, label))?;
         let item = bench.id(label).expect("the track is on the bench");
         if self.focused_item != Some(FocusedItem { node: id, item }) {
             return Err(format!(
@@ -789,6 +789,15 @@ impl AppState {
     /// The track called `label` on `id`'s bench, at that node's cursor.
     pub(crate) fn bench_track(&self, id: ReconId, label: &str) -> Option<&Arc<EditableTrack>> {
         self.bench(id)?.track(label)
+    }
+
+    /// Why `label` names no track on `id`'s bench: it names a measurement
+    /// ([`measurement::not_a_track`]), or nothing.
+    fn no_such_track(&self, id: ReconId, label: &str) -> String {
+        match self.bench(id).and_then(|bench| bench.measurement(label)) {
+            Some(_) => measurement::not_a_track(label),
+            None => format!("Nothing on the bench is called {label}."),
+        }
     }
 
     /// Put the point `point` names on its node's bench as a track-stage
@@ -2078,7 +2087,7 @@ impl AppState {
         let bench = Arc::clone(node.history.current_bench());
         let track = bench
             .track(label)
-            .ok_or_else(|| format!("Nothing on the bench is called {label}."))?;
+            .ok_or_else(|| self.no_such_track(id, label))?;
         let serial = node.history.current_version().serial;
         let seated = match self.resolved_origin(node, track) {
             Some(point) => track.with_origin(serial.as_u64(), point),
@@ -3125,7 +3134,7 @@ impl AppState {
             .history
             .current_bench()
             .track(label)
-            .ok_or_else(|| format!("Nothing on the bench is called {label}."))?;
+            .ok_or_else(|| self.no_such_track(id, label))?;
         let track = (**track).clone();
         let (edited, sources) = self.track_photometric_inputs(id, &track)?;
         Ok((edited, track, sources))
@@ -3156,7 +3165,7 @@ impl AppState {
             .history
             .current_bench()
             .track(label)
-            .ok_or_else(|| format!("Nothing on the bench is called {label}."))?;
+            .ok_or_else(|| self.no_such_track(id, label))?;
         let track = (**track).clone();
         let image_set = &node.recon().image_set;
         let patch_frame = match &track.stage {
