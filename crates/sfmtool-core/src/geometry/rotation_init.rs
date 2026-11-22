@@ -75,10 +75,34 @@ const BA_MIN_TRACK: usize = 2;
 /// Degenerate floor for the bundle adjustment.
 const BA_MIN_OBS: usize = 12;
 
-/// Default component-size floor (`min_images`).
+/// Default of [`RotationInitOptions::min_images`].
 pub const DEFAULT_MIN_IMAGES: usize = 8;
-/// Default core size budget (`max_images`).
+/// Default of [`RotationInitOptions::max_images`].
 pub const DEFAULT_MAX_IMAGES: usize = 14;
+
+/// Settings of [`rotation_init`].
+#[derive(Clone, Debug)]
+pub struct RotationInitOptions {
+    /// SplitMix64 seed for the homography RANSAC; same inputs and seed give
+    /// bit-identical output.
+    pub seed: u64,
+    /// The largest connected component of the rotation edge graph must hold
+    /// at least this many images (and at least 2), or the call returns `None`.
+    pub min_images: usize,
+    /// Core size budget: the translation growth stops once this many images
+    /// are posed. Below 2 the call returns `None`.
+    pub max_images: usize,
+}
+
+impl Default for RotationInitOptions {
+    fn default() -> Self {
+        Self {
+            seed: 0,
+            min_images: DEFAULT_MIN_IMAGES,
+            max_images: DEFAULT_MAX_IMAGES,
+        }
+    }
+}
 
 /// Result of [`rotation_init`]: a posed core for a caller's refinement
 /// machinery.
@@ -610,19 +634,20 @@ fn retriangulate_posed(
 /// contiguous run); `image_indexes` and `positions_xy` are the image id and
 /// full-pixel keypoint position per observation; all images share
 /// `width × height` and the focal `f0` (typically a focal-vote consensus),
-/// with the principal point at the image centre. `seed` drives the homography
-/// RANSAC; same inputs and seed give bit-identical output.
+/// with the principal point at the image centre. `options` holds the
+/// homography RANSAC seed and the component-size floor and core size budget;
+/// same inputs and options give bit-identical output.
 ///
 /// Every image is modelled as a distortion-free `SimplePinhole` at `f0`, so
 /// the positions must be pinhole pixels: distorted input gives wrong poses
 /// with no error.
 ///
 /// Returns `None` when the arrays are empty or their lengths differ, `f0` is
-/// not finite and positive, `max_images < 2`, no rotation edge validates, the
-/// largest connected component has fewer than `min_images` (or 2) images, or
-/// the seed baseline fails: fewer than 10 near-field rows, no usable
-/// translation direction, or fewer than 10 points in front under either sign.
-#[allow(clippy::too_many_arguments)]
+/// not finite and positive, `options.max_images < 2`, no rotation edge
+/// validates, the largest connected component has fewer than
+/// `options.min_images` (or 2) images, or the seed baseline fails: fewer than
+/// 10 near-field rows, no usable translation direction, or fewer than 10
+/// points in front under either sign.
 pub fn rotation_init(
     cluster_indexes: &[u32],
     image_indexes: &[u32],
@@ -630,10 +655,13 @@ pub fn rotation_init(
     width: u32,
     height: u32,
     f0: f64,
-    seed: u64,
-    min_images: usize,
-    max_images: usize,
+    options: &RotationInitOptions,
 ) -> Option<RotationInit> {
+    let RotationInitOptions {
+        seed,
+        min_images,
+        max_images,
+    } = *options;
     let n_obs = cluster_indexes.len();
     if n_obs == 0 || image_indexes.len() != n_obs || positions_xy.len() != n_obs {
         return None;

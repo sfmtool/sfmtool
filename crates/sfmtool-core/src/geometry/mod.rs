@@ -64,5 +64,5 @@ pub use resect_images::{
 pub use resect_translation::{resect_translation, TranslationResection};
 pub use rigid_transform::RigidTransform;
 pub use rot_quaternion::RotQuaternion;
-pub use rotation_init::{rotation_init, RotationInit};
+pub use rotation_init::{rotation_init, RotationInit, RotationInitOptions};
 pub use se3_transform::Se3Transform;
