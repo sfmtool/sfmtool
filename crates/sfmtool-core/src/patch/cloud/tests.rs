@@ -855,14 +855,16 @@ fn assert_clouds_equal(a: &PatchCloud, b: &PatchCloud) {
 /// each feature's affine column-0 norm set to a distinct `σ(image, feature)`, and
 /// point the recon's workspace/prefix at it. Returns the per-observation scale
 /// vector (parallel to `recon.tracks`) that `from_reconstruction` will read back,
-/// ready to hand to `from_tracks`.
-fn write_demo_sift(recon: &mut SfmrReconstruction, tag: &str) -> Vec<f64> {
+/// ready to hand to `from_tracks`, and the workspace's temporary directory,
+/// which the caller keeps alive while it reads the `.sift` files.
+fn write_demo_sift(recon: &mut SfmrReconstruction) -> (Vec<f64>, tempfile::TempDir) {
     use ndarray::{Array2, Array3};
 
     // Distinct, positive per-observation scale.
     let sigma = |img: usize, feat: usize| 2.0 + 0.37 * img as f64 + 0.11 * feat as f64;
 
-    let dir = std::env::temp_dir().join(format!("patch_from_tracks_{tag}_{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let features_dir = dir.join("features");
     std::fs::create_dir_all(&features_dir).unwrap();
     recon.workspace_dir = dir.clone();
@@ -907,13 +909,14 @@ fn write_demo_sift(recon: &mut SfmrReconstruction, tag: &str) -> Vec<f64> {
     // The scale is stored (and read back) as f32, so round-trip through f32 to
     // match exactly what `read_image_scales` recovers (`a00 as f64`).
     let feats = recon.feature_indexes().unwrap().to_vec();
-    recon
+    let scales = recon
         .point_set
         .tracks
         .iter()
         .enumerate()
         .map(|(j, o)| sigma(o.image_index as usize, feats[j] as usize) as f32 as f64)
-        .collect()
+        .collect();
+    (scales, tmp)
 }
 
 #[test]
@@ -922,7 +925,7 @@ fn from_tracks_reproduces_from_reconstruction_feature_size() {
     // files carry reproduces `from_reconstruction` patch-for-patch under the
     // scale-reading FeatureSize policy.
     let mut recon = SfmrReconstruction::demo(12);
-    let obs_scales = write_demo_sift(&mut recon, "eq");
+    let (obs_scales, _workspace) = write_demo_sift(&mut recon);
 
     let extent = PatchExtent::FeatureSize {
         factor: 5.0,
@@ -966,8 +969,6 @@ fn from_tracks_reproduces_from_reconstruction_feature_size() {
     assert_clouds_equal(&from_recon, &from_arrays);
     // FeatureSize actually sized the patches (non-trivial equivalence).
     assert!(from_arrays.len() == 12 && from_arrays.patch(0).half_extent[0] > 0.0);
-
-    std::fs::remove_dir_all(&recon.workspace_dir).ok();
 }
 
 #[test]
@@ -1028,7 +1029,8 @@ fn feature_size_with_unreadable_sift_is_not_a_missing_file() {
     // `.sift` archive. The refusal counts every observation as an unreadable
     // scale and none as a missing file.
     let mut recon = SfmrReconstruction::demo(12);
-    let dir = std::env::temp_dir().join(format!("patch_bad_sift_{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     std::fs::create_dir_all(dir.join("features")).unwrap();
     recon.workspace_dir = dir.clone();
     recon.metadata.workspace.contents.feature_prefix_dir = "features".into();
@@ -1050,7 +1052,6 @@ fn feature_size_with_unreadable_sift_is_not_a_missing_file() {
     )
     .unwrap_err();
     let message = err.to_string();
-    let _ = std::fs::remove_dir_all(&dir);
     let PatchCloudError::MissingFeatureScale {
         observations,
         missing_sift_file,
@@ -1780,7 +1781,7 @@ fn reported_by_a_build(recon: &SfmrReconstruction) -> (Vec<&'static str>, Vec<f3
 #[test]
 fn a_build_names_its_passes_and_climbs_to_the_end() {
     let mut recon = SfmrReconstruction::demo(12);
-    let _ = write_demo_sift(&mut recon, "reporting");
+    let (_, _workspace) = write_demo_sift(&mut recon);
 
     let (left, fractions) = reported_by_a_build(&recon);
     // No point is at infinity and `MeanViewing` wants no spatial index, so
@@ -1874,7 +1875,7 @@ fn a_cancel_between_the_images_stops_the_scale_read() {
     use std::sync::Mutex;
 
     let mut recon = SfmrReconstruction::demo(12);
-    let _ = write_demo_sift(&mut recon, "cancel");
+    let (_, _workspace) = write_demo_sift(&mut recon);
 
     let flag = AtomicBool::new(false);
     let read = Mutex::new(0u64);

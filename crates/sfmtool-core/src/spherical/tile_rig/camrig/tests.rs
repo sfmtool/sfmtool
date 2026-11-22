@@ -61,15 +61,13 @@ fn camrig_struct_round_trip() {
 #[test]
 fn camrig_file_round_trip() {
     let rig = sample_rig(128);
-    let dir = std::env::temp_dir().join("camrig_conv_file_test");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("sph.camrig");
 
     rig.write_camrig(&path, "sph").unwrap();
     let back = SphericalTileRig::read_camrig(&path).unwrap();
     assert_rigs_match(&rig, &back);
-
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 fn expect_conversion_error(data: &CamRigData) -> CamRigConversionError {

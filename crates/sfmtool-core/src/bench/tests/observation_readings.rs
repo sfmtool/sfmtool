@@ -181,14 +181,13 @@ fn a_reading_carries_the_rows_of_a_point_it_does_not_read() {
     let (next, point, _) = evaluated_and_committed(&scene);
     let (written, map) = next.materialize();
     let p = map.forward(point).expect("kept") as usize;
-    let dir = std::env::temp_dir().join(format!("sfmtool_readings_carry_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("committed.sfmr");
     let mut data = written.to_sfmr_data();
     sfmtool_sfmr_format::write_sfmr(&path, &mut data).unwrap();
     let recon =
         SfmrReconstruction::from_sfmr_data(sfmtool_sfmr_format::read_sfmr(&path).unwrap()).unwrap();
-    std::fs::remove_dir_all(&dir).unwrap();
     // The write rounds the value it was handed to what the file stores.
     let saved = data.observation_readings.expect("written");
     let loaded = recon.point_set.observation_readings.as_ref().expect("read");
