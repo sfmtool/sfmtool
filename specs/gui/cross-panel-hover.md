@@ -159,6 +159,7 @@ Hover state is transient but persists across frames:
 ### Interaction with Selection
 
 - Hover and selection are independent: hovering does not change selection
+  (G6 of the interaction rules, [interaction-rules.md](interaction-rules.md))
 - When `hovered_point == selected_point`, the hover highlight is suppressed
   (the selection highlight is already stronger)
 - When `hovered_image == selected_image`, the hover highlight is suppressed

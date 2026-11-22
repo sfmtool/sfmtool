@@ -340,8 +340,9 @@ fixed-height for virtualization.
   (`SceneNode::is_dirty`, [saving.md](saving.md)). It rides on
   the label rather than taking a column, since it is a fact about the value the
   label names.
-- Bold + accent bar when selected. Click: select this reconstruction.
-  Double-click: zoom-to-fit this node.
+- Bold + accent bar when selected. The row's gestures follow the interaction
+  rules ([interaction-rules.md](interaction-rules.md)). Click: G1, select this
+  reconstruction. Double-click: G2 for a set of things, zoom-to-fit this node.
 - Everything past the two toggles is **one click target spanning the row** —
   the name, the gap, the counts — carrying select, zoom-to-fit and the context
   menu alike, under an explicit id rather than an auto-generated one (egui keys
@@ -360,7 +361,7 @@ fixed-height for virtualization.
   are loaded together. A node that came from no file says
   *"This reconstruction came from no file."*, the vocabulary `File > Save`'s own
   refusal uses ([saving.md](saving.md)).
-- Context menu: `Select`, `Zoom to Fit`, `Align to ▸` (one entry per other
+- Context menu (G3): `Select`, `Zoom to Fit`, `Align to ▸` (one entry per other
   loaded node — see "Node Transforms and Alignment"), `Reset Transform`,
   `Bake Transform`, `Tint ▸` (Original / palette of distinguishable colors),
   `Bundle Adjust...`, `Retriangulate All Points`, `Refit All Points`,
@@ -567,15 +568,15 @@ fixed-height for virtualization.
   cost tens of rows per frame.
 
 **Camera image row** — `IMG_0001.jpg`
-- Click: `select_image(Some(ImageRef))`, which also selects the camera that
-  image was taken through (the coupling above). Double-click: enter/switch
-  camera view (same semantics as a browser thumbnail double-click).
+- Click: G1, `select_image(Some(ImageRef))`, which also selects the camera
+  that image was taken through (the coupling above). Double-click: G2, enter
+  or switch camera view.
 - Hover: sets `hovered_image` (participates in cross-panel hover exactly like
   a browser thumbnail; the row highlights when the same image is hovered
   elsewhere, e.g. from the 3D viewport pick).
 - Context menu: the **image menu** (below), the one menu an image has, which a
-  thumbnail of the Image Browser strip opens too. A right click opens it and
-  selects nothing.
+  thumbnail of the Image Browser strip opens too (G8). A right click opens it
+  and selects nothing (G3).
 - Selected row: highlight + auto-scroll into view when the selection changes
   from another panel (scroll-to happens only on selection *change*, so the
   user's manual scrolling isn't fought).
@@ -676,14 +677,14 @@ own expansion, and both open by default.
 Each expands to one row per item of its stage, in the bench's own order, by
 label and with its `in` count; the focused item
 ([`bench.md`](bench.md) § "The focused item") is drawn as the selected row, in
-whichever group holds it. A **click** on a row selects the node it is under and
-does nothing to the bench, the pair the node row follows (click to select,
+whichever group holds it. A **click** on a row (G1) selects the node it is
+under and does nothing to the bench, the pair the node row follows (click to select,
 double-click to act), so a pass of clicks down the tree pushes no versions. A
 **double-click** focuses the item, which is not a step of the node's history and
 pushes no version, selects the node, and raises Track View on it; on the item
 that is focused already it writes no row. On a track-stage item it also moves
 the 3D viewport onto the item's point (below). A secondary click
-offers *Discard*. An item is named by its position in the whole bench, so both
+offers *Discard* (G3). An item is named by its position in the whole bench, so both
 groups' rows reach the same list.
 
 A secondary click on either group's own header offers **Clear the Bench**,
@@ -722,18 +723,13 @@ transition, and camera view is left (for a track at infinity, see below).
   `scene::world_point`), so the view lands where the point is drawn.
 - **The move may turn the camera.** A row can name a point anywhere in the
   scene, off screen or behind the camera, where a pan alone would carry the
-  camera far or do nothing. So the move is the one Image Detail's double-click on
-  a tracked feature makes (`Viewer3D::turn_and_move_target_to`,
-  [multi-panel-image-browser.md](multi-panel-image-browser.md)): a point already
-  inside the middle 2/3 of the viewport on both axes is panned to by the code
-  the viewport's double-click pans with, to the same end state, and any other
-  point first has the camera turn in place until it is inside the middle 1/2.
-  A track at infinity is turned toward instead
-  (`Viewer3D::turn_toward_bearing`), which keeps camera view, as the viewport's
-  double-click on a point at infinity does.
+  camera far or do nothing. So the move is G4's, the one Image Detail's
+  double-click on a tracked feature makes (`Viewer3D::turn_and_move_target_to`,
+  or `Viewer3D::turn_toward_bearing` for a track at infinity, which keeps
+  camera view).
 - **Nothing moves** for a cluster-stage item, which has no place in the world,
-  for a track whose observations have not been triangulated, or while a camera
-  is held for Move Camera.
+  for a track whose observations have not been triangulated, or, under G4,
+  while a camera is held for Move Camera.
 
 Only the double-click moves the view. The other ways to focus an item -- a chip
 in Track View's recent items strip, its *Edit* box, and the wire's

@@ -771,8 +771,8 @@ reads or sets one value:
 - a click on a Track View row selects that observation alone, and a Ctrl-click
   or Shift-click adds it or takes it out (`pick_bench_observation`);
 - a click on a mark in Image Detail's bench layer or on the 3D viewer's bench
-  figure selects that observation alone, since the mark and the row are one
-  observation;
+  figure selects that observation alone (G7), since the mark and the row are
+  one observation;
 - the wire's `select_bench_observations` replaces the whole set, and
   `get_bench_track` reports it as `selected_observations` (§ "The wire").
 
@@ -1439,14 +1439,15 @@ label, with its `in` count, the focused item marked as a selected row. There is 
 eye: nothing on the bench is drawn from these rows, and an item is not part of
 the reconstruction.
 
-A click on a row selects the node it is under and does nothing to the bench,
-as a click on the node's own row selects it, so a pass of clicks down the tree
-pushes no versions. A **double-click** focuses the item, selects the node and
+A click on a row (G1 of the interaction rules,
+[interaction-rules.md](interaction-rules.md)) selects the node it is under and
+does nothing to the bench, as a click on the node's own row selects it, so a
+pass of clicks down the tree pushes no versions. A **double-click** focuses the item, selects the node and
 raises Track View on it (`AppState::edit_bench_item_at`), with no version and
 the one `Selection` row a focus writes; on the item that is focused already it
 writes no row, since the gesture asked for the panel. On a track-stage item the
 double-click also moves the 3D viewport onto the track's own point
-([scene-graph.md](scene-graph.md) § "Tree rows"). A secondary click offers
+([scene-graph.md](scene-graph.md) § "Tree rows"). A secondary click (G3) offers
 *Discard*, and one on either group's header offers *Clear the Bench*, which
 takes off every item of both groups in one version (`AppState::clear_bench`).
 The bench is in the tree

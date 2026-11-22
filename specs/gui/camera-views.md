@@ -433,12 +433,12 @@ flag tracks whether a click needs to be resolved.
 
 On click result:
 - **Alt+Click**: Uses `depth` to set orbit target via `apply_pick_result()`
-- **Any click**: Uses `pick` to select frustums
-  - Clicking a frustum selects it (`selected_image = Some(idx)`).
-    Clicking an already-selected frustum keeps it selected (no toggle).
-  - Double-clicking a frustum enters camera view (or switches camera if
-    already in camera view) and selects the frustum.
-  - Clicking background (non-Alt) deselects
+- **Any click**: Uses `pick` to select frustums, under the interaction rules
+  ([interaction-rules.md](interaction-rules.md)):
+  - Click a frustum: G1 (`selected_image = Some(idx)`).
+  - Double-click a frustum: G2, enter camera view through its image, or
+    switch camera when already in camera view.
+  - Click background (non-Alt): G1, which clears the selection.
 
 ### Why GPU picking over CPU ray testing
 

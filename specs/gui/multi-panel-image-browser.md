@@ -386,7 +386,9 @@ so that the image at the center of the viewport stays anchored in place.
   browser auto-scrolls to keep the selected thumbnail visible.
 
 **Context menu**: a right click on a thumbnail opens the **image menu** for that
-image, the same menu a camera image row of the Scene tree opens
+image (G3 and G8 of the interaction rules,
+[interaction-rules.md](interaction-rules.md)), the same menu a camera image row
+of the Scene tree opens
 ([scene-graph.md](scene-graph.md) § "Image menu", which owns its entries). The
 two are one menu: the strip and the tree both call `image_menu::show` in
 [image_menu.rs](../../crates/sfm-explorer/src/image_menu.rs), which lays out the
@@ -399,9 +401,9 @@ through the same function whichever place it came from.
   menu acts on the selected one, the one the strip's header names; choosing
   another reconstruction switches the strip and with it the node a thumbnail's
   menu acts on.
-- A right click selects nothing, as on a tree row: it opens the menu on the
-  thumbnail under the pointer and leaves `selected_image` alone. A right click
-  on the minibar or between thumbnails opens no menu.
+- A right click selects nothing (G3): it opens the menu on the thumbnail under
+  the pointer and leaves `selected_image` alone. A right click on the minibar
+  or between thumbnails opens no menu.
 - The strip draws its thumbnails with one painter and hit-tests them itself, so
   the menu hangs off the strip's own response and remembers which thumbnail it
   was opened on (`context_menu::on_secondary_click_where` opens it only over a
@@ -713,7 +715,8 @@ would be seen, not a claim that nothing stands in front of it.
 Clicking a mark selects that observation's row in Track View's Edited mode
 ([`track-view.md`](track-view.md) § "Row gestures"): the mark and the row are one observation, so
 clicking either is the one gesture. The layer is on top, so a click it catches
-does not also select a feature underneath. That holds for every handle below,
+does not also select a feature underneath (G7 of the interaction rules,
+[interaction-rules.md](interaction-rules.md)). That holds for every handle below,
 the ones that are no observation's mark included (an outline's corner or edge
 past the marks, the normal's arrowhead, the ghost's centre): a click whose press
 a handle took selects no feature's point, and a double-click on a handle is
@@ -1106,10 +1109,11 @@ pane also shows the same image in its own panel.
 Camera view mode can be entered in three ways:
 
 - **Z key** (existing): with a frustum selected, press Z to view through that camera.
-- **Double-click a frustum** in the 3D viewer: selects the image and immediately enters
-  camera view mode.
-- **Double-click a thumbnail** in the image browser: selects the image and enters camera
-  view mode in the 3D viewer.
+- **Double-click a frustum** in the 3D viewer: G2 of the interaction rules
+  ([interaction-rules.md](interaction-rules.md)), which selects the image and
+  enters camera view mode.
+- **Double-click a thumbnail** in the image browser: G2, which selects the image and
+  enters camera view mode in the 3D viewer.
 
 All three paths set `selected_image` and activate `CameraViewMode` on the `Viewer3D`. The
 3D viewer then snaps to the camera's pose with best-fit FOV and loads the full-resolution
@@ -1163,31 +1167,23 @@ image, similar to how the 3D viewer navigates the point cloud but in 2D.
   to it about the panel centre.
 - **Pan limits**: Clamped so the image overlaps the panel by at least 50px.
 - **View persistence**: The view outlives the image it was set on — see below.
-- **What a double-click means is decided before the view input runs.** On a
-  feature that observes a point it is `Edit on Bench` (see "the context menu"
-  below) and the view does not move; anywhere else -- empty image, or a keypoint
-  the solve matched to no point -- it is the zoom above. The hit test is the
+- **What a double-click means is decided before the view input runs.** It
+  follows G2 of the interaction rules ([interaction-rules.md](interaction-rules.md)).
+  On a feature that observes a point it is `Edit on Bench` (see "the context
+  menu" below) and the view does not move; anywhere else -- empty image, or a
+  keypoint the solve matched to no point -- it is the zoom above. The hit test is the
   click's own, so a double-click stages the point a single click there would
   have selected. Two double-clicks are a doubling of the magnification, and √2
   is what puts the steps on the round zooms a reader thinks in.
 - **A double-click on a tracked feature also moves the 3D viewport's orbit
-  target onto its point** (`Viewer3D::turn_and_move_target_to`), over the
-  viewport's ~200ms eased transition; the `Edit on Bench` entry does not. The
-  point can be anywhere in the scene, so the move may turn the camera. A point
-  already inside the middle 2/3 of the 3D viewport on both axes is panned to as
-  a double-click on it in the viewport does ([viewport-navigation.md](viewport-navigation.md)):
-  orientation kept, the camera moved across the view direction, the orbit
-  distance set to the point's depth. Any other point, including one behind the
-  camera, first has the camera turn in place, level with the world's up, by
-  about as little as brings the point inside the middle 1/2, and the pan is then
-  made with that orientation; the two are one transition. The panel reports the
-  point with `ImageDetail::take_target_point` and `app.rs` applies it after the
-  frame, since the 3D viewport is not the panel's to move. It moves nothing while
-  a camera is held for Move Camera, and it leaves camera view. A point at
-  infinity has no place for the target, so for one the camera instead turns in
-  place toward its bearing until the bearing is inside the middle 1/2, keeping
-  camera view (`Viewer3D::turn_toward_bearing`), as a double-click on it in the
-  viewport does ([viewport-navigation.md](viewport-navigation.md)).
+  target onto its point**, under G4 (`Viewer3D::turn_and_move_target_to`, or
+  `Viewer3D::turn_toward_bearing` for a point at infinity, which keeps camera
+  view), over the viewport's ~200ms eased transition; the `Edit on Bench`
+  entry does not. The point can be anywhere in the scene, so the move may turn
+  the camera, level with the world's up, before the pan; the two are one
+  transition, and a pan leaves camera view. The panel reports the point with
+  `ImageDetail::take_target_point` and `app.rs` applies it after the frame,
+  since the 3D viewport is not the panel's to move.
 - **Fit is the `Z` key**, with the pointer over the panel, and the wire's
   `set_image_detail_view { fit }` ([mcp-server.md](mcp-server.md)).
 - **A left click with Control and Shift held is `Create Track Here`** at the

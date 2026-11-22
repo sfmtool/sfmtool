@@ -206,7 +206,9 @@ a few hundred instances.
 ## The handles
 
 Every rule the Image Detail handles follow holds here, and this section says
-only what the world view adds or does differently.
+only what the world view adds or does differently. A handle owns its press, as
+G7 of the interaction rules ([interaction-rules.md](interaction-rules.md))
+says of every mark drawn over other content.
 
 **The press decides which handle, not the drag.** A primary press in the
 viewport is hit-tested against the figure as the last frame built it, which is
@@ -450,9 +452,9 @@ than 85 degrees from the bearing, where the tangent point runs off to infinity.
 
 ## The patch menu
 
-A right-click on the square opens a menu of four entries that put the world's
-frame onto the patch, so a wall, a table or a floor in the scene can be made the
-ground by eye. Each sets the node's **display transform**
+A right-click on the square (G3, which selects nothing) opens a menu of four
+entries that put the world's frame onto the patch, so a wall, a table or a
+floor in the scene can be made the ground by eye. Each sets the node's **display transform**
 ([scene-graph.md](scene-graph.md) § "The transform") and nothing else: it pushes
 one **reframe**, a version whose value half is untouched, labelled with the
 sentence the Action Log records. The node does not go dirty, nothing is written,
@@ -507,7 +509,8 @@ named; a secondary click that claims neither clears it.
 **The patch wins.** On the frame of the click the figure's hit test runs first,
 and when it claims the pointer the pick is not consulted: the square is drawn on
 top of the cloud, and a right-click on it means the square, for the reason a
-primary click one of its handles catches does not reach the points under it.
+primary click one of its handles catches does not reach the points under it
+(G7).
 
 The reach is `Handles::covers` rather than `Handles::hit`. A handle's reach is a
 few pixels, which suits a drag and not a menu, since a person right-clicking the

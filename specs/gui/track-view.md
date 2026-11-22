@@ -2103,46 +2103,43 @@ something was marked, and the control sits where the state is shown.
 
 #### Row gestures
 
-In both modes:
+The row gestures follow the interaction rules
+([interaction-rules.md](interaction-rules.md)); each bullet names the rule and
+says what the rule leaves to this panel. In both modes:
 
-- **Click a row**: select its image, which the 3D viewer, the Image Browser and
-  Image Detail follow, and **reveal** the observation: its pixel, where the
+- **Click a row**: G1, select its image, which the 3D viewer, the Image Browser
+  and Image Detail follow, and **reveal** the observation: its pixel, where the
   Image Detail bench layer draws its mark, rides along in `reveal_feature`, and
-  Image Detail pans (never zooms) to centre it when its current view is not
-  showing it ([multi-panel-image-browser.md](multi-panel-image-browser.md) §
+  Image Detail reveals it under G5
+  ([multi-panel-image-browser.md](multi-panel-image-browser.md) §
   "Revealing a feature named by another panel"). In Edited mode the click also
   takes the row into the split selection; Ctrl-click or Shift-click extends the
   selection. The viewed track has no row selection, since there is no step it
   could be taken to.
-- **Double-click a row**: enter camera view for its image, and turn the view
-  until the row's observation is inside the middle 1/2 of the viewport on both
-  axes (`Viewer3D::look_through_toward_feature`), in one animated transition. A
-  double-click on a frustum or a thumbnail enters camera view the same way but
-  names no feature, and looking straight through the camera can leave the
-  observation near the edge of a photograph wider than the viewport, or off it;
-  the row names an observation, so the view it opens shows where it is. An
-  observation nothing has placed yet has no pixel, and its double-click enters
-  camera view without the turn.
-- **Hover a row**: set the cross-panel hover, which brightens the frustum and
-  outlines the thumbnail. The body produces no point hover, since every row is
-  about the one track, so owning the pointer clears it.
+- **Double-click a row**: G2 for a pixel of an image, camera view for its image
+  turned toward the observation (`Viewer3D::look_through_toward_feature`), in
+  one animated transition. An observation nothing has placed yet has no pixel,
+  and its double-click enters camera view without the turn.
+- **Hover a row**: G6, set the cross-panel image hover, which brightens the
+  frustum and outlines the thumbnail. The body produces no point hover, since
+  every row is about the one track, so owning the pointer clears it.
 - **Copy Point ID**, **Copy coordinates** and **Go to Point**, in the header,
   and in the empty state *Go to Point...*: copy the ID or the coordinates
   (`1.234, -0.567, 2.891, 1`), or open the dialog.
 
 In Edited mode only:
 
-- **Click the Keep switch**: turn the observation `in` or `out` by hand, which
-  pins it (`AppState::set_bench_verdict`). The row rect is registered first and
+- **Click the Keep switch**: a control (G10). Turn the observation `in` or
+  `out` by hand, which pins it (`AppState::set_bench_verdict`). The row rect is registered first and
   the switch after it, so the switch keeps its own click. Turning a row `in`
   while another row of its image is `in` is refused with core's sentence.
-- **Click the pin**: on a pinned row, clear the pin and give the row the
-  verdict the bars propose (`AppState::unpin_bench_verdicts`, core's
+- **Click the pin**: a control (G10). On a pinned row, clear the pin and give
+  the row the verdict the bars propose (`AppState::unpin_bench_verdicts`, core's
   `unpin_verdicts`); on an unpinned row, pin the verdict it carries
   (`AppState::set_bench_verdict` with that verdict). One version and one
   `Bench` row either way.
-- **Right-click the Keep switch**, or the row: *Unpin, let the thresholds
-  decide*, the same unpinning as a click on a solid pin, on a pinned row only
+- **Right-click the Keep switch**, or the row (G3, which selects nothing):
+  *Unpin, let the thresholds decide*, the same unpinning as a click on a solid pin, on a pinned row only
   (greyed on the others). On a row that is one of several selected, the row's
   menu acts on the selection instead: *Unpin 4 verdicts, let the thresholds
   decide* unpins every pinned row among the selected in one step, so the bars
@@ -2262,8 +2259,9 @@ The Bench group rows are one per item, by label with its `in` count, the focused
 item drawn as a selected row, *Discard* on the secondary click
 ([`scene-graph.md`](scene-graph.md)).
 
-- **Single click** selects the node the row is under and does nothing to the
-  bench, the node row's own pattern (click to select, double-click to act), so a
+- **Single click**: G1 of the interaction rules
+  ([interaction-rules.md](interaction-rules.md)). It selects the node the row
+  is under and does nothing to the bench, the node row's own pattern (click to select, double-click to act), so a
   pass of clicks down the tree pushes no versions.
 - **Double-click** focuses the item, selects its node and brings Track View
   to the front, reopening it at its home when it is closed
