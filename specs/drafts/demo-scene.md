@@ -15,7 +15,7 @@ SfM Explorer and the tests need a reconstruction whose every number is known
 to be right. A reconstruction solved from real photographs is never known to be
 right: its poses, points and normals are estimates, and a test built on one can
 only say that a result did not change. This draft proposes a demo
-reconstruction made the other way round. A small 3D scene is defined first, a
+reconstruction built in the opposite order. A small 3D scene is defined first, a
 textured ground plane with a cube standing on it; photographs of that scene are
 rendered from five pinhole cameras; and the reconstruction is written down from
 the scene: the cameras' poses, 3D points sampled on the surfaces, the pixel
@@ -42,17 +42,18 @@ The existing demo, `SfmrReconstruction::demo` in
 [demo.rs](../../crates/sfmtool-core/src/reconstruction/data/demo.rs), stays: a
 relaxed sphere of points seen by a ring of eight cameras, with no photographs,
 invented readings and `sift_files` observations. It is cheap and has no pixels,
-which is what most of its 220-odd call sites, nearly all of them tests, want. The demo scene is the second
-generator, for the tests and the viewer that need pixels.
+which is what most of its roughly 300 call sites, nearly all of them tests,
+want. The demo scene is the second generator, for the tests and the viewer
+that need pixels.
 
 ## Rust API
 
 The generator would live in
 `crates/sfmtool-core/src/reconstruction/data/demo_scene.rs`, beside
 [demo.rs](../../crates/sfmtool-core/src/reconstruction/data/demo.rs), with
-submodules for the renderer and the texture in `demo_scene/`. `reconstruction::data`
-is private to the crate, so the types are re-exported from
-`sfmtool_core::reconstruction`, as `SfmrReconstruction` is. They are not bound
+submodules for the renderer and the texture in `demo_scene/`.
+`reconstruction::data` is private to the crate, so the types are re-exported
+from `sfmtool_core::reconstruction`, as `SfmrReconstruction` is. They are not bound
 to Python in this proposal (see [Open questions](#open-questions)).
 
 ```rust
@@ -227,8 +228,8 @@ from one corner.
 
 The lattice spacing is 0.02 m. A surface about 4 m from a camera with a focal
 length of 560 px is about 7 mm per pixel, so a lattice cell spans about 2.8 px
-in a view that faces it: detail at the scale of a patch, as the bench tests choose it
-(their plane texture is about 2.5 px a cell in a facing view,
+in a view that faces it: detail at the scale of a patch, as the bench tests
+choose it (their plane texture is about 2.5 px a cell in a facing view,
 [grown_plane_normal.rs](../../crates/sfmtool-core/src/bench/tests/grown_plane_normal.rs)).
 The far ground and the ground at a grazing angle have cells under 2 px across,
 which the supersampling averages rather than aliases.
@@ -250,7 +251,7 @@ assertions, all tolerances, do not see.
 **Colour.** Each surface has its own tint, and its colour is the tint scaled by
 `0.5 + 0.4 · noise`, with one noise channel per surface. A grey scene would
 serve every kernel the same, since they read grey; the tint is for the person
-looking at the viewer, who should see at a glance which face a patch is on.
+looking at the viewer, who should see from its colour which face a patch is on.
 Whether to tint is an open question.
 
 ## The cameras
@@ -278,21 +279,22 @@ normals:
 
 | Camera azimuth | Height | Face `-b = (0.6, -0.8, 0)` | Face `-a = (-0.8, -0.6, 0)` | Top |
 |---|---|---|---|---|
-| −55° | 1.2 m | about 92° off its normal: not seen | about 3°: facing | about 87°: past the 80° cut |
-| −27.5° | 3.0 m | about 64° | about 26° | about 61° |
-| 0° | 1.2 m | about 37° | about 53° | about 87°: past the cut |
-| 27.5° | 3.0 m | about 26° | about 81°: past the cut | about 61° |
-| 55° | 1.2 m | about 18° | not seen | about 87°: past the cut |
+| −55° | 1.2 m | about 99° off its normal: not seen | about 12°: facing | about 87°: past the 80° cut |
+| −27.5° | 3.0 m | about 74° | about 44° | about 63° |
+| 0° | 1.2 m | about 43° | about 60° | about 87°: past the cut |
+| 27.5° | 3.0 m | about 37° | about 88°: past the cut | about 63° |
+| 55° | 1.2 m | about 23° | not seen | about 87°: past the cut |
 
-(For a side face, the angle between its normal and the horizontal direction
-to the camera, which the high cameras' elevation widens by several degrees; for
-the top, the angle between `+z` and the direction to the top's centre.) The
-face `-b` is observed by four cameras, from 18° to grazing; the face `-a` by
-three, and seen by a fourth at 81°, past the cut. The top is observed only by
+(The angle between the face's outward normal and the direction from the
+face's centre to the camera; points away from the centre differ by a few
+degrees.) The face `-b` is observed by four cameras, from 23° to 74°; the face
+`-a` by three, and seen by a fourth at 88°, past the cut. The top is observed only by
 the two high cameras, which is the fewest a point can have, and is seen almost
 edge-on by the low ones. The ground is seen at a grazing angle by the three low
-cameras, about 12° to 19° above the ground around the cube. The faces `+a` and `+b` face away from every
-camera, so no point is kept on them.
+cameras, about 12° to 19° above the ground around the cube. The face `+a` is
+seen only by the camera at 55°, about 79° off its normal and so just inside the
+cut, and `+b` by no camera, so no point on either has two observations and none
+is kept.
 
 ## The renderer
 
@@ -332,7 +334,7 @@ A ray is one slab test, one plane test and one evaluation of the noise (four
 hashes and a bilinear blend), on the order of 50 to 100 ns, so 0.3 to 0.6 s on
 one thread and well under 0.1 s across 16 threads. The bitmaps are cheaper
 still: a whole-cloud render of about 1,000 points takes 0.1 to 0.2 s
-([reference-view.md § Cost of the stored bitmap](../core/patch/reference-view.md#cost-of-the-stored-bitmap)).
+on 32 threads ([reference-view.md § Cost of the stored bitmap](../core/patch/reference-view.md#cost-of-the-stored-bitmap)).
 The step plan measures both.
 
 ## The points and who sees them
@@ -344,12 +346,14 @@ photographs would echo:
 
 - On the ground, a grid at `ground_point_spacing` (0.25 m) over
   `[-2.5, 2.5] × [-2.5, 2.5]`, leaving out the points inside the cube's
-  footprint: about 420 points.
+  footprint: about 420 grid points, of which about 350 are observed by two
+  cameras or more. The rest lie near the cameras, below the views' lower
+  edges, or at the grid's corners outside the outer views.
 - On each cube face but the base, a grid at `face_point_spacing` (0.125 m)
   whose first row is half a spacing from the edge: 64 points a face. Only the
   top and the faces `-a` and `-b` keep points, about 190.
 
-About 600 points at the defaults. With a patch half-extent of 0.09 m, the
+About 540 points at the defaults. With a patch half-extent of 0.09 m, the
 patches of the outer row on each face cross the cube's edge, and those of the
 ground points next to the cube run into its side: those are the crease cases.
 The ground points behind the cube, seen past it by the outer cameras and hidden
@@ -385,6 +389,7 @@ points. Each column, and why it is exact:
 | Column | Value | Exact because |
 |---|---|---|
 | `cameras` | the one pinhole above | stated |
+| `images/camera_indexes` | `0` for every image | |
 | `images/quaternions_wxyz`, `translations_xyz` | each camera's world-to-camera pose | built from the stated centres and target; `f64` |
 | `images/names` | `images/demo_0.png` … `images/demo_4.png` | |
 | `images/image_file_hashes` | XXH128 of each encoded photograph | the bytes `write_workspace` writes |
@@ -392,9 +397,9 @@ points. Each column, and why it is exact:
 | `images/sharpness`, `gradient_structure_tensors_xx_yy_xy`, `image_to_gray` | `image_readings_from_rgb` of each photograph under `ImageToGray::default()` | computed from the photograph, as a writer that gathers them from the image file would ([sfmr-file-format.md § Image readings](../formats/sfmr-file-format.md#image-readings), rule 3) |
 | `points3d/positions_xyzw` | the sampled points, `w = 1` | sampled on the surface; `f64` |
 | `points3d/colors_rgb` | the texture's colour at the point | evaluated, not estimated |
-| `points3d/reprojection_errors` | each point's RMS reprojection error, scored by `recompute_point_errors` | what the stored keypoints give: about `10⁻⁴` px, the rounding of the keypoints to `f32` |
+| `points3d/reprojection_errors` | each point's RMS reprojection error, scored by `recompute_point_errors` | what the stored keypoints give: about `10⁻⁵` px, the rounding of the keypoints to `f32` |
 | normals (`has_normals`) | `+z` on the ground, the face's outward normal on the cube | derived from the patch frame, `normalize(u × v)` in `f32`, as the format defines it ([sfmr-file-format.md § Derived normals](../formats/sfmr-file-format.md#derived-normals)) |
-| `points3d/patch_u_halfvec_xyz`, `patch_v_halfvec_xyz` | a square frame of half-extent 0.09 m in the surface: on the ground `u = h·x̂`, `v = h·ŷ`; on a side face with normal `n`, `v = h·ẑ` and `u = h·(ẑ × n)`; on the top `u = h·a`, `v = h·b` | each makes `u × v` point along the surface's outward normal, toward the cameras that see it |
+| `points3d/patch_u_halfvec_xyz`, `patch_v_halfvec_xyz` | a square patch frame of half-extent 0.09 m in the surface: on the ground `u = h·x̂`, `v = h·ŷ`; on a side face with normal `n`, `v = h·ẑ` and `u = h·(ẑ × n)`; on the top `u = h·a`, `v = h·b` | each makes `u × v` point along the surface's outward normal, toward the cameras that see it |
 | `tracks/image_indexes`, `point_indexes`, `observation_counts` | the observations visibility keeps, sorted by `(point, image)` | the ray–box test is exact |
 | `tracks/keypoints_xy` | each point's projection into the image, `f32` | projected through the camera; the keypoint is where the photograph sees the patch's centre, since the photograph was rendered from the same pose |
 | `tracks/reference_observations` | the reference-view rule's pick for each point | the same render `--add-patch-bitmaps` runs |
@@ -461,10 +466,11 @@ default `feature_options` are built in Python
 (`feature_prefix_dir` in
 [workspace/feature_options.rs](../../crates/sfmtool-core/src/workspace/feature_options.rs))
 and read the options into `SiftParams` (`SiftParams::from_feature_options`),
-but cannot produce the default options. The first step of the plan adds a Rust
-function that writes a version 2 marker for the `sfmtool` tool from
-`SiftParams::default()`, which Python's `init_workspace` then calls, so the two
-cannot drift. `ImageU8::write` writes to a path only; computing the hash of a
+but cannot produce the default options. Python's defaults are not `SiftParams::default()`: they set
+`double_image_below_long_side` to 4096, where the Rust default has no limit.
+The first step of the plan adds a Rust function that writes a version 2 marker
+for the `sfmtool` tool with the options Python writes today, which Python's
+`init_workspace` then calls, so the two cannot drift. `ImageU8::write` writes to a path only; computing the hash of a
 PNG without writing it needs an encoder to bytes beside it
 ([reading-and-writing-images.md](../core/camera/reading-and-writing-images.md)).
 The workspace marker's file name is defined three times in Rust
@@ -511,7 +517,7 @@ agree with the value:
 - SfM Explorer's `embedded_demo` and `projected_embedded_demo`
   ([state/edits/tests.rs](../../crates/sfm-explorer/src/state/edits/tests.rs)),
   which convert the sphere demo to `embedded_patches` with invented keypoints
-  or frames turned toward the cameras and no photographs, used by the bench,
+  or patch frames turned toward the cameras and no photographs, used by the bench,
   Track View, Image Detail and MCP bench tests. On the scene, a bench step such
   as Grown Plane Normal or track-at-pixel runs on photographs and its answer
   can be checked against the stored normal.
@@ -529,8 +535,8 @@ The tests that only want a cheap value with no pixels keep the sphere demo: the
 3D view's upload tests, the reconstruction data and per-image adjustment tests,
 the infinity conversion, alignment and reprojection-noise tests, and most of
 the viewer's scene graph and save tests. Each migration is decided test by
-test, by whether the test's assertions gain from real pixels; none moves only
-to move.
+test, by whether the test's assertions gain from real pixels; a test that gains
+nothing from them stays on the sphere demo.
 
 ## Open questions
 
@@ -539,7 +545,7 @@ to move.
    compresses poorly: under 5 MB for the workspace. JPEG would be a fifth of
    that and would make the in-memory value differ from a load of the file. The
    draft proposes PNG.
-2. **Point count and spacing.** About 600 points at the defaults. More points
+2. **Point count and spacing.** About 540 points at the defaults. More points
    make a denser cloud to look at and cost little; fewer keep the tests fast.
    Should the viewer keep a *Number of points* setting, which would set the
    spacings, or load the defaults with no dialog?
