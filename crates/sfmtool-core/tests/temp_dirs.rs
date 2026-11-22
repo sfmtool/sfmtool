@@ -12,20 +12,40 @@
 //! that names the system temporary directory, since that is how a fixed path
 //! under it is built.
 //!
-//! Test code is a `tests.rs` file, any file under a `tests/` directory, and the
-//! body of a `#[cfg(test)] mod … { … }` block in any other file. Production
-//! code that uses the temporary directory on purpose is not test code and is
-//! not read. Comment lines are skipped, so a doc comment may name the function.
+//! Test code is a `tests.rs` file, any file under a `tests/` directory, the
+//! file of a module declared `#[cfg(test)] mod name;` (such as
+//! `source_tests.rs`) with any file under its directory, and the body of a
+//! `#[cfg(test)] mod … { … }` block in any other file. Production code that
+//! uses the temporary directory on purpose is not test code and is not read.
+//! Comment lines are skipped, so a doc comment may name the function.
 //!
 //! It lives in `sfmtool-core/tests/` beside `license_headers.rs`, the other
 //! scan whose subject is the repository rather than one crate.
 
 use std::path::{Path, PathBuf};
 
-/// What a use of the system temporary directory contains, whether written
-/// `std::env::…` or `env::…` or imported by name. Built from two parts so this
-/// file, which is itself test code, does not contain it.
-const NEEDLE: &str = concat!("env::", "temp_dir");
+/// The function's name, built from two parts so this file, which is itself
+/// test code, does not contain it.
+const NAME: &str = concat!("temp", "_dir");
+
+/// Whether `line` names the system temporary directory: as `env::temp_dir`
+/// (written `std::env::…` or `env::…`, or imported by that path), as
+/// `temp_dir` in a line that also names `env` (a grouped import such as
+/// `use std::env::{self, temp_dir};`), or as a bare `temp_dir()` call, which
+/// is what a grouped import spread over several lines leaves to find.
+fn names_temp_dir(line: &str) -> bool {
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    line.match_indices(NAME).any(|(at, _)| {
+        let before = line[..at].chars().next_back();
+        let after = &line[at + NAME.len()..];
+        if before.is_some_and(is_ident) || after.chars().next().is_some_and(is_ident) {
+            return false;
+        }
+        line[..at].ends_with("env::")
+            || line.contains("env")
+            || (after.starts_with("()") && !line[..at].trim_end().ends_with("fn"))
+    })
+}
 
 /// The repository root: `crates/sfmtool-core` → `crates` → the checkout.
 fn repo_root() -> PathBuf {
@@ -62,6 +82,46 @@ fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
 fn is_test_file(path: &Path) -> bool {
     path.file_name().is_some_and(|n| n == "tests.rs")
         || path.components().any(|c| c.as_os_str() == "tests")
+}
+
+/// The paths, as a file `name.rs` and a directory `name/`, of the modules
+/// `source` (the file at `path`) declares `#[cfg(test)] mod name;`. A module
+/// of `lib.rs`, `main.rs` or `mod.rs` sits beside it; a module of `foo.rs`
+/// sits in `foo/`.
+fn cfg_test_module_files(path: &Path, source: &str) -> Vec<PathBuf> {
+    let parent = path.parent().unwrap_or(Path::new(""));
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    let base = if matches!(stem, "lib" | "main" | "mod") {
+        parent.to_path_buf()
+    } else {
+        parent.join(stem)
+    };
+    let lines: Vec<&str> = source.lines().collect();
+    let mut found = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim() != "#[cfg(test)]" {
+            continue;
+        }
+        let mut j = i + 1;
+        while j < lines.len() && lines[j].trim_start().starts_with("#[") {
+            j += 1;
+        }
+        let Some(item) = lines.get(j).map(|l| l.trim()) else {
+            continue;
+        };
+        let item = item
+            .strip_prefix("pub(crate) ")
+            .or_else(|| item.strip_prefix("pub "))
+            .unwrap_or(item);
+        if let Some(name) = item.strip_prefix("mod ").and_then(|r| r.strip_suffix(';')) {
+            found.push(base.join(format!("{name}.rs")));
+            found.push(base.join(name));
+        }
+    }
+    found
 }
 
 /// The 1-based line ranges of `source` inside `#[cfg(test)] mod … { … }`
@@ -110,7 +170,7 @@ fn temp_dir_uses(source: &str, in_test: impl Fn(usize) -> bool) -> Vec<(usize, S
         .enumerate()
         .map(|(i, line)| (i + 1, line))
         .filter(|&(n, line)| {
-            in_test(n) && !line.trim_start().starts_with("//") && line.contains(NEEDLE)
+            in_test(n) && !line.trim_start().starts_with("//") && names_temp_dir(line)
         })
         .map(|(n, line)| (n, line.trim().to_string()))
         .collect()
@@ -122,14 +182,25 @@ fn shared_temp_paths(crates: &Path) -> Vec<String> {
     let mut files = Vec::new();
     rust_sources(crates, &mut files);
     files.sort();
+    let sources: Vec<(PathBuf, String)> = files
+        .into_iter()
+        .map(|path| {
+            let source = std::fs::read_to_string(&path).expect("valid UTF-8 source");
+            (path, source)
+        })
+        .collect();
+    let test_modules: Vec<PathBuf> = sources
+        .iter()
+        .flat_map(|(path, source)| cfg_test_module_files(path, source))
+        .collect();
     let mut found = Vec::new();
-    for path in files {
-        let source = std::fs::read_to_string(&path).expect("valid UTF-8 source");
-        let uses = if is_test_file(&path) {
-            temp_dir_uses(&source, |_| true)
+    for (path, source) in &sources {
+        let whole = is_test_file(path) || test_modules.iter().any(|m| path.starts_with(m));
+        let uses = if whole {
+            temp_dir_uses(source, |_| true)
         } else {
-            let ranges = cfg_test_module_lines(&source);
-            temp_dir_uses(&source, |n| {
+            let ranges = cfg_test_module_lines(source);
+            temp_dir_uses(source, |n| {
                 ranges.iter().any(|&(a, b)| (a..=b).contains(&n))
             })
         };
@@ -173,7 +244,7 @@ mod tests {
     let _ = std::T();
 }
 "
-    .replace('T', NEEDLE);
+    .replace('T', &format!("env::{NAME}"));
     let in_mod = in_mod.as_str();
     let ranges = cfg_test_module_lines(in_mod);
     let uses = temp_dir_uses(in_mod, |n| {
@@ -189,4 +260,36 @@ mod tests {
     assert!(is_test_file(Path::new("crates/x/src/foo/tests/bar.rs")));
     assert!(is_test_file(Path::new("crates/x/tests/it.rs")));
     assert!(!is_test_file(Path::new("crates/x/src/foo.rs")));
+
+    // A test module in a file of its own is found from its declaration.
+    let declares = "mod a;
+#[cfg(test)]
+mod a_tests;
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) mod fixture;
+";
+    assert_eq!(
+        cfg_test_module_files(Path::new("src/foo.rs"), declares),
+        [
+            Path::new("src/foo/a_tests.rs"),
+            Path::new("src/foo/a_tests"),
+            Path::new("src/foo/fixture.rs"),
+            Path::new("src/foo/fixture"),
+        ]
+    );
+    assert_eq!(
+        cfg_test_module_files(Path::new("src/lib.rs"), declares)[0],
+        Path::new("src/a_tests.rs")
+    );
+
+    // Each way of naming the function is found; other names are not.
+    let named = |code: &str| names_temp_dir(&code.replace('T', NAME));
+    assert!(named("let d = std::env::T();"));
+    assert!(named("use std::env::T;"));
+    assert!(named("use std::env::{self, T};"));
+    assert!(named("    let d = T().join(\"x\");"));
+    assert!(!named("let T = tempfile::tempdir().unwrap();"));
+    assert!(!named("fn T() -> tempfile::TempDir {"));
+    assert!(!named("let d = Tx_named(\"a\");"));
 }

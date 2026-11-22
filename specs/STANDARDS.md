@@ -854,10 +854,11 @@ Look for `std::env::temp_dir()` or `env::temp_dir()` in Rust test code, for a
 fixed file or directory name joined onto it, and for a Python test that writes
 under `tempfile.gettempdir()` or another fixed path instead of `tmp_path`.
 [`crates/sfmtool-core/tests/temp_dirs.rs`](../crates/sfmtool-core/tests/temp_dirs.rs)
-reads every `tests.rs` file, every file under a `tests/` directory and every
-`#[cfg(test)] mod` block in the workspace's crates, and fails with each line
-that names the system temporary directory, so in Rust there is nothing to look
-for by hand beyond running it. Confirm a Python finding by naming the path two
+reads every `tests.rs` file, every file under a `tests/` directory, every
+module file declared `#[cfg(test)] mod name;` and every `#[cfg(test)] mod`
+block in the workspace's crates, and fails with each line that names the
+system temporary directory, so in Rust there is nothing to look for by hand
+beyond running it. Confirm a Python finding by naming the path two
 concurrent runs of the test would share. Out of scope: production code that
 uses the temporary directory on purpose, such as a cache whose name is meant
 to be found again by the next run.
