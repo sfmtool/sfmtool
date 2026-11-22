@@ -469,8 +469,9 @@ struct Inner {
     /// The sum of every mapped slot's `charged`.
     bytes: u64,
     /// The layouts [`PhotographCache::request_layout`] read, or why it could
-    /// not, kept whatever the budget and not counted against it, since each
-    /// is a few dozen bytes. `forget` and `clear` drop them.
+    /// not, and those [`PhotographCache::layout`] answered for a held
+    /// photograph, kept whatever the budget and not counted against it, since
+    /// each is a few dozen bytes. `forget` and `clear` drop them.
     layouts: HashMap<PathBuf, Result<Arc<PyramidLayout>, String>>,
 }
 
