@@ -443,3 +443,274 @@ fn tiles_asked_for_ahead_are_handed_over_when_drawn() {
     assert_eq!(cache.stats().decodes, 1);
     assert_eq!(queue.len(), 0);
 }
+
+// ── The 3D background's level ───────────────────────────────────────────
+
+/// A 37 x 23 photograph at `dir/name`, whose levels cross several tiles of
+/// [`small_tile_cache`]'s 8 px, with a partial tile at the right and bottom
+/// edges.
+fn level_photo(dir: &Path, name: &str) -> PathBuf {
+    let path = dir.join(name);
+    image::RgbImage::from_fn(37, 23, |x, y| {
+        image::Rgb([(x * 7) as u8, (y * 11) as u8, (x * y) as u8])
+    })
+    .save(&path)
+    .unwrap();
+    path
+}
+
+/// A cache of `budget_bytes` that cuts tiles of 8 px.
+fn small_tile_cache(budget_bytes: u64, build_budget_bytes: u64) -> Arc<PhotographCache> {
+    Arc::new(PhotographCache::new(
+        sfmtool_core::camera::PhotographCacheOptions {
+            budget_bytes,
+            build_budget_bytes,
+            tile_size: 8,
+        },
+    ))
+}
+
+fn level_of(answer: DisplayLevel) -> Arc<ImageU8> {
+    match answer {
+        DisplayLevel::Ready(pixels) => pixels,
+        DisplayLevel::Loading => panic!("still loading"),
+        DisplayLevel::Unreadable => panic!("unreadable"),
+    }
+}
+
+/// Every level of the photograph is read off the calling thread by one task
+/// however often it is asked for while the task runs, with a budget and with
+/// a cache that keeps nothing, and is the level of the pyramid the background
+/// drew before, which `display_photograph` handed it.
+#[test]
+fn the_level_is_read_once_off_the_calling_thread_and_is_the_pyramid_s_level() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = level_photo(dir.path(), "level.png");
+    let before = PhotographCache::new(sfmtool_core::camera::PhotographCacheOptions {
+        budget_bytes: 0,
+        ..Default::default()
+    })
+    .get(&path, &Progress::none())
+    .unwrap();
+    for budget in [1 << 30, 0] {
+        let cache = small_tile_cache(budget, 1 << 30);
+        let (requests, queue) = PhotographRequests::queued();
+        let source = PhotographSource {
+            cache: &cache,
+            requests: &requests,
+            path: &path,
+        };
+        let ctx = egui::Context::default();
+        let layout = known_layout(source, &queue);
+        assert_eq!(layout.levels(), before.num_levels());
+        assert_eq!(layout.tiles(0), (5, 3), "level 0 crosses several tiles");
+        for level in 0..layout.levels() {
+            for _ in 0..3 {
+                assert!(matches!(
+                    display_level(source, &layout, level, &ctx),
+                    DisplayLevel::Loading
+                ));
+            }
+            assert_eq!(queue.len(), 1, "one task however often it is asked");
+            let decodes = cache.stats().decodes;
+            assert_eq!(queue.run_off_this_thread(), 1);
+            assert!(requests.keeps_a_level());
+            let pixels = level_of(display_level(source, &layout, level, &ctx));
+            assert!(!requests.keeps_a_level(), "handed over once");
+            let expected = before.level(level);
+            assert_eq!(
+                (pixels.width(), pixels.height(), pixels.channels()),
+                (expected.width(), expected.height(), expected.channels()),
+            );
+            assert!(
+                pixels.data() == expected.data(),
+                "level {level}, budget {budget}"
+            );
+            // Under a budget the photograph is decoded once and then held;
+            // under a budget of 0 each level's task decodes it. None is
+            // decoded on this thread.
+            let expected_decodes = if budget == 0 || level == 0 {
+                decodes + 1
+            } else {
+                decodes
+            };
+            assert_eq!(cache.stats().decodes, expected_decodes);
+        }
+    }
+}
+
+/// A level read whose decode does not fit under the build budget, which
+/// another caller's reservation holds, answers `Busy`: it decodes nothing and
+/// ends within the time limit while the reservation is still held, and the
+/// next frame asks again. Once the reservation is given back the level is
+/// read. With a budget and with a cache that keeps nothing.
+#[test]
+fn a_busy_level_read_is_asked_again_on_a_later_frame() {
+    for budget in [1 << 30, 0] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = level_photo(dir.path(), "busy.png");
+        let build_budget = 1000;
+        let cache = small_tile_cache(budget, build_budget);
+        let (requests, queue) = PhotographRequests::queued();
+        let source = PhotographSource {
+            cache: &cache,
+            requests: &requests,
+            path: &path,
+        };
+        let ctx = egui::Context::default();
+        let layout = known_layout(source, &queue);
+        let other = cache.reserve_builds(build_budget, 1);
+        for _ in 0..2 {
+            assert!(matches!(
+                display_level(source, &layout, 1, &ctx),
+                DisplayLevel::Loading
+            ));
+            assert_eq!(queue.len(), 1, "asked again on a later frame");
+            assert_eq!(queue.run_off_this_thread(), 1);
+            assert_eq!(cache.stats().decodes, 0, "budget {budget}");
+            assert!(!requests.keeps_a_level());
+        }
+        drop(other);
+        assert!(matches!(
+            display_level(source, &layout, 1, &ctx),
+            DisplayLevel::Loading
+        ));
+        assert_eq!(queue.run_off_this_thread(), 1);
+        assert_eq!(cache.stats().decodes, 1);
+        assert_eq!(
+            level_of(display_level(source, &layout, 1, &ctx)).width(),
+            18
+        );
+    }
+}
+
+/// The background shares the tile decodes' one task per photograph: while
+/// Image Detail's decode of the photograph runs, a level read of it starts
+/// nothing, and once that decode has ended the level read starts. A level
+/// answered and not taken is dropped when another level is asked for.
+#[test]
+fn a_level_read_waits_its_turn_behind_a_tile_decode_of_the_photograph() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = level_photo(dir.path(), "shared.png");
+    let cache = small_tile_cache(0, 1 << 30);
+    let (requests, queue) = PhotographRequests::queued();
+    let source = PhotographSource {
+        cache: &cache,
+        requests: &requests,
+        path: &path,
+    };
+    let ctx = egui::Context::default();
+    let layout = known_layout(source, &queue);
+    let tile = TileKey {
+        level: 0,
+        col: 0,
+        row: 0,
+    };
+    assert!(is_loading(&display_tiles(source, &[tile], &ctx)));
+    assert!(matches!(
+        display_level(source, &layout, 2, &ctx),
+        DisplayLevel::Loading
+    ));
+    assert_eq!(queue.len(), 1, "one task for the photograph");
+    assert_eq!(queue.run_off_this_thread(), 1);
+    assert!(!requests.keeps_a_level(), "the task was the tile decode");
+    assert!(matches!(
+        display_level(source, &layout, 2, &ctx),
+        DisplayLevel::Loading
+    ));
+    assert_eq!(queue.run_off_this_thread(), 1, "the level read, after it");
+    assert!(requests.keeps_a_level());
+    assert!(matches!(
+        display_level(source, &layout, 1, &ctx),
+        DisplayLevel::Loading
+    ));
+    assert!(!requests.keeps_a_level(), "level 2 dropped");
+    assert_eq!(queue.run_off_this_thread(), 1);
+    assert_eq!(
+        level_of(display_level(source, &layout, 1, &ctx)).width(),
+        18
+    );
+}
+
+/// A level read of a photograph whose file has changed size since its layout
+/// was read, or of a level the layout does not have, reads the layout again
+/// rather than ask for the same level on every frame: with a budget, where
+/// the level read is checked against the layout, and with a cache that keeps
+/// nothing, where the level is built from tiles that would not fit it.
+#[test]
+fn a_level_read_against_a_stale_layout_reads_the_layout_again() {
+    for budget in [1 << 30, 0] {
+        for (grow, level) in [(true, 0), (false, 9)] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = level_photo(dir.path(), "changed.png");
+            let cache = small_tile_cache(budget, 1 << 30);
+            let (requests, queue) = PhotographRequests::queued();
+            let source = PhotographSource {
+                cache: &cache,
+                requests: &requests,
+                path: &path,
+            };
+            let ctx = egui::Context::default();
+            let layout = known_layout(source, &queue);
+            if grow {
+                image::RgbImage::from_fn(39, 23, |x, _| image::Rgb([x as u8, 0, 0]))
+                    .save(&path)
+                    .unwrap();
+            }
+            assert!(matches!(
+                display_level(source, &layout, level, &ctx),
+                DisplayLevel::Loading
+            ));
+            assert_eq!(queue.run_off_this_thread(), 1);
+            assert!(!requests.keeps_a_level(), "budget {budget}, level {level}");
+            assert!(matches!(
+                display_layout(source, &ctx),
+                DisplayLayout::Loading
+            ));
+            assert_eq!(queue.len(), 1, "the header read again");
+        }
+    }
+}
+
+/// A level read of a photograph whose header reads but whose pixels do not
+/// is answered as unreadable, layout and level alike, and is not decoded
+/// again while its file stays the same, under a cache that keeps nothing and
+/// so remembers no failure itself.
+#[test]
+fn a_failed_level_read_is_answered_as_unreadable_and_not_decoded_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cut_short.png");
+    image::RgbImage::from_fn(64, 64, |x, y| image::Rgb([x as u8, y as u8, 3]))
+        .save(&path)
+        .unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::write(&path, &bytes[..bytes.len() / 2]).unwrap();
+    let cache = tile_cache(0, 1 << 30);
+    let (requests, queue) = PhotographRequests::queued();
+    let source = PhotographSource {
+        cache: &cache,
+        requests: &requests,
+        path: &path,
+    };
+    let ctx = egui::Context::default();
+    let layout = known_layout(source, &queue);
+    assert!(matches!(
+        display_level(source, &layout, 0, &ctx),
+        DisplayLevel::Loading
+    ));
+    assert_eq!(queue.run_off_this_thread(), 1);
+    assert_eq!(cache.stats().misses, 1);
+    for _ in 0..2 {
+        assert!(matches!(
+            display_level(source, &layout, 0, &ctx),
+            DisplayLevel::Unreadable
+        ));
+        assert!(matches!(
+            display_layout(source, &ctx),
+            DisplayLayout::Unreadable
+        ));
+        // Only a check of the file runs, and it finds the file unchanged.
+        assert_eq!(queue.run_off_this_thread(), 1);
+    }
+    assert_eq!(cache.stats().misses, 1, "not decoded again");
+}

@@ -577,8 +577,8 @@ length_scale / frustum_size_multiplier changes (same as frustum wireframes).
 
 `upload_bg_image()` draws the viewed camera's photograph from one level of its
 pyramid, the coarsest that covers the viewport within the GPU's texture limit.
-The pixels come from the viewer's photograph cache, decoded on the rayon pool
-on a miss, not on the GUI thread, and `clear_bg_image()` releases the texture
+The pixels come from the viewer's photograph cache, read on the rayon pool,
+never on the GUI thread, and `clear_bg_image()` releases the texture
 on leaving camera view. Exactly one background texture is resident at a time;
 there is no prefetch — see [Photograph background](#photograph-background) and
 [Non-goals](#non-goals).
@@ -700,24 +700,32 @@ the 128×128 thumbnail used for frustum far-plane textures.
 
 `upload_bg_image()` on `SceneRenderer`
 ([bg_image.rs](../../crates/sfm-explorer/src/scene_renderer/upload/bg_image.rs))
-holds one photograph level at a time, the viewed camera's. It takes the pixels
-from a closure the app passes, `state::display_photograph` over the viewer's
+holds one photograph level at a time, the viewed camera's. It takes the
+photograph's layout and the level's pixels from two closures the app passes,
+`state::display_layout` and `state::display_level` over the viewer's
 photograph cache
-([photograph-cache.md](../core/camera/photograph-cache.md) § "In the viewer"),
-which looks in the cache and on a miss starts the decode on the rayon pool and
-asks for a repaint when it lands. The decode is the cache's `ImageU8::read_rgb`
-(the file's contents choose the decoder and the EXIF orientation is ignored, as
-in [reading-and-writing-images.md](../core/camera/reading-and-writing-images.md))
-and its pyramid of `ImageU8Pyramid::full_levels` levels, so nothing is decoded
-on the GUI thread and the background shares its pixels with Image Detail. A
-cache with a budget of 0 keeps nothing for a later frame to find, so there, as
-for the panels, `display_photograph` decodes where it is asked: the background
-then decodes on the GUI thread once per change of image or level, and reads an
-unreadable photograph again on every frame. The
-whole photograph is still decoded to make the level; assembling the level from
-photograph tiles instead is proposed in
-[out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md)
-§ "The 3D view's camera-view background".
+([photograph_requests.rs](../../crates/sfm-explorer/src/state/photograph_requests.rs);
+[photograph-cache.md](../core/camera/photograph-cache.md) § "In the viewer").
+The first answers the layout the cache knows, and while it is not known
+starts one read of the photograph's header on the rayon pool. The second
+starts one task on the rayon pool that asks for the level's tiles with the
+cache's `try_decode_tiles` and then reads the level whole with `get_level`,
+or, under a cache with a budget of 0, which keeps nothing for `get_level` to
+find, builds the level from the tiles that call answers. When the decode
+does not fit under the build budget beside other decodes, or another caller
+is decoding the photograph, `try_decode_tiles` answers `Busy` without
+waiting, and the background asks again 50 ms later. Each task asks for a
+repaint when it ends, and the level it read is kept until the next frame takes
+it. So no frame of the background waits on a decode, at any budget, and a
+read of a photograph shares the limit of one task per photograph with Image
+Detail's tile decodes. The decode is the cache's
+`ImageU8::read_rgb` (the file's contents choose the decoder and the EXIF
+orientation is ignored, as in
+[reading-and-writing-images.md](../core/camera/reading-and-writing-images.md))
+and its pyramid of `ImageU8Pyramid::full_levels` levels, so the background
+shares its pixels with Image Detail. A photograph whose decode failed is
+remembered with its file's length and modification time and not decoded
+again until the file changes, under a budget of 0 too.
 
 The loader state:
 
@@ -744,19 +752,22 @@ When viewing camera N, each frame:
   current viewport, the texture is kept and the photograph is not asked for.
   The level is chosen from the stored level sizes, so a resize that does not
   change the level asks for nothing, and one that does asks the cache again.
-- Otherwise the photograph is asked for:
-  - **Decoded**: the chosen level is copied into a new `Rgba8UnormSrgb`
-    texture of its size, RGB to RGBA with alpha 255 (the pipeline draws with
-    no blending, so the alpha has no visible effect), and the bind group is
-    rebuilt. This copy, of a level whose longer side is less than twice the
-    viewport's, is the only work on the GUI thread.
-  - **Decoding**: the texture keeps what it holds, so on a camera switch or
-    while the Image Browser animates, the previous image's photograph stays on
-    its own mesh until the next one lands; a background of another node is
-    cleared, since the frame's node transform is not its node's. Before any
-    photograph has landed, nothing is drawn.
-  - **Unreadable**: nothing is drawn. The photograph cache remembers the
-    failure, so later frames ask again without reading the file.
+- Otherwise the photograph's layout is asked for, the level chosen from its
+  level sizes, and that level asked for:
+  - **Ready**: the level is copied into a new `Rgba8UnormSrgb` texture of its
+    size, RGB to RGBA with alpha 255 (the pipeline draws with no blending, so
+    the alpha has no visible effect), and the bind group is rebuilt. This
+    copy, of a level whose longer side is less than twice the viewport's, is
+    the only work on the GUI thread.
+  - **Loading**, the layout or the level: the texture keeps what it holds, so
+    on a camera switch or while the Image Browser animates, the previous
+    image's photograph stays on its own mesh until the next one lands; a
+    background of another node is cleared, since the frame's node transform
+    is not its node's. Before any photograph has landed, nothing is drawn.
+    The 3D view takes clicks as usual meanwhile, since a click picks a
+    frustum or a point and never the photograph.
+  - **Unreadable**, the layout or the level: nothing is drawn. The failure is
+    remembered, so later frames ask again without decoding the file.
 - Then, if `bg_image_mesh_key` does not hold the loaded image with its
   intrinsics (its camera with its intrinsic adjustment applied), its
   camera-to-world rotation and the level's texture-coordinate scale, rebuild
@@ -776,7 +787,16 @@ edge, where the sampler clamps, instead of the level being stretched over them.
 
 When exiting camera view: `clear_bg_image()` releases the texture and bind
 group. Re-entering finds the photograph in the cache, if the budget kept it,
-and copies its level again.
+and a task reads its level again, without decoding.
+
+**Memory.** Beside the texture, the level a task read is held until the next
+frame copies it into the texture, and one level at most: asking for another
+photograph or level drops it. It is the level the background draws, as RGB,
+so 37 MB for level 2 (4080 x 3060) of a 200-megapixel photograph in a 3840 px
+viewport, and at most 8192 x 6144 x 3 bytes, 151 MB, for a 4:3 photograph
+under the texture limit of 8192. While it runs, the task also holds the
+level's tiles that `try_decode_tiles` answered, each with its one-pixel
+border, about as many bytes again.
 
 #### Rendering the background image
 
@@ -1876,6 +1896,7 @@ mode.
 | Readback staging buffers (2 × 256 × 5 bytes) | 2.5 KB |
 | Thumbnail texture array atlas (128×128 RGBA × 10K cameras) | 625 MB (across multiple pages if needed) |
 | Background texture: one level, its longer side less than twice the viewport's (level 2 of a 16320×12240 photograph, 4080×3060 RGBA, for a 3840 px viewport) | ~50 MB |
+| Background level read and not yet copied into the texture (the same level, RGB) | ~37 MB |
 | Background uniform buffer (view_proj mat4) | 64 bytes |
 
 † Fisheye cameras at 10K scale are unlikely in practice — fisheye is
