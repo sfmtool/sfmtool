@@ -123,10 +123,11 @@ that keeps drawing the picture it showed before while the one now selected
 loads, as Image Detail keeps the previous photograph until the new one's first
 tiles land, takes no click, double-click, drag or right-click on that picture:
 the drawn picture is not the selected one, so a click would select, edit or
-open a menu on something the user did not choose. Nothing is selected, cleared,
-moved or opened. Hover still works under G6, and the gestures that move the
-view, such as the wheel and `Z`, still move it, and the view they leave
-carries over to the picture that replaces it. Once the selected picture is
+open a menu on something the user did not choose. No selection is made or
+cleared, no drag pans the view or moves a mark, and no menu opens. Hover still
+works under G6, and the wheel and the keys that move the view, such as `Z`,
+still move it, and the view they leave carries over to the picture that
+replaces it. Once the selected picture is
 drawn, G1 to G12 apply to it as usual.
 
 ## Where the rules live in the code
