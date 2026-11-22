@@ -81,11 +81,14 @@ directory entries. Names are unique.
 | `content_hash.json.zst` | One digest per section, and one over all of them |
 
 Here C = `ceil(N / descriptor_block_rows)` is the number of descriptor blocks.
-Every entry is a single zstd frame **except** `features/corpus` and optional
-`features/geometry`, which concatenate one frame per descriptor block and are
-named `.frames` to say so.
-[Where this format departs from the container conventions](#where-this-format-departs-from-the-container-conventions)
-explains both that and the grouped chunk entry.
+Each `.zst` entry is a single zstd frame, and each `.frames` entry,
+`features/corpus` and optional `features/geometry`, holds one zstd frame per
+descriptor block, back to back, as the
+[archive container](archive-container.md#an-entry-is-zstandard-frames-and-its-suffix-says-how-many)
+defines the two suffixes.
+[How this format meets the container rules](#how-this-format-meets-the-container-rules)
+says why the corpora are `.frames` entries and why a chunk's arrays share one
+entry.
 
 A chunk entry holds, concatenated in this order and with no padding or header
 between them:
@@ -409,25 +412,14 @@ directory by filename, so opening separately counts its raw file records and
 rejects a count greater than the unique-name index; otherwise a duplicate name
 would be collapsed before entry-set validation could see it.
 
-## Where this format departs from the container conventions
+## How this format meets the container rules
 
-The [archive container](archive-container.md) sets conventions all the formats in
-this repository follow, and two of them are about what an entry is: **one entry
-per field, one primitive type per entry**, and **each entry's stored bytes are a
-single zstd frame**, with the shape in the name so a reader knows the exact
-decoded length before decompressing. Those conventions buy something real — a
-consumer reads the columns it wants and skips the rest, and `unzip -l` plus a
-`zstd -d` explains the file without this spec.
-
-This format breaks both, deliberately, in two places. The reason is that `.kdf`
-is the only format here whose entry count scales with the *data*, rather than
-with the schema.
-
-A `.sfmr`, `.sift`, `.matches` or `.camrig` file has a fixed set of entries: one
-per column the schema defines, however large the reconstruction. A `.kdf` has one
-per tree chunk and one per descriptor block, so a 9.7M-descriptor corpus reaches
-tens or hundreds of thousands of entries. At that scale the conventions have a
-measurable cost:
+`.kdf` is the format whose entry count grows with its data. A `.sfmr`, `.sift`,
+`.matches` or `.camrig` file has a fixed set of entries: one per column the
+schema defines, however large the data. A `.kdf` has an entry per tree chunk and
+two per origin block, and a 9.7M-descriptor corpus with an entry per descriptor
+block would reach tens or hundreds of thousands of entries. At that scale the
+entry count has a measurable cost:
 
 - A ZIP entry costs about 164 bytes of local header and central directory record
   with names of this length, and a reader parses the whole central directory
@@ -436,63 +428,80 @@ measurable cost:
 - Independent zstd frames do not share compression context, so cutting the same
   bytes into more entries compresses them slightly worse.
 
-Both departures buy back that cost without changing what is stored.
+The [archive container's rules](archive-container.md#what-an-entry-holds) let
+such a format group arrays that are always read together into one entry, and
+[store data that is read block by block](archive-container.md#an-entry-is-zstandard-frames-and-its-suffix-says-how-many)
+as one `.frames` entry. They ask the format spec to record the measured
+open-time saving of a grouping against its compression cost. This section is
+that record, and gives the measurements behind the `.frames` entries too.
+Neither changes what is stored.
 
-**A chunk's three integer arrays share one entry.** Node columns, splits and
-feature IDs are always read together — decoding a node needs the columns and the
-splits, reaching a leaf needs the IDs — so the "read the columns you want" benefit
-never applied to them. The name still carries every count, so the decoded length is
-still known before decompressing and still checked; what is given up is one
-primitive type per entry, and the section above says what lies at which offset
-instead. This is the same trade the format already makes for the ten node columns,
-one level up.
+**A chunk's three arrays share one entry.** Node columns, splits and feature IDs
+are always read together: decoding a node needs the columns and the splits, and
+reaching a leaf needs the IDs. No consumer reads one of them without the others.
+The name carries every count, so the decoded length is known before
+decompressing and is checked, and
+[Container and entry layout](#container-and-entry-layout) says what lies at
+which offset. The format makes the same choice for the ten node columns, which
+are stored as one `(10, M)` array rather than ten.
 
-Grouping is not quite free, and the measurement says so: those three arrays
-compress to 25.6%, 64.9% and 84.6% separately, and sharing one frame gives 45.7%
-overall — 2.4% more stored bytes than the three frames cost, or 5.3 MB on a 4 GB
+Grouping is not free, and the measurement says so: those three arrays compress
+to 25.6%, 64.9% and 84.6% separately, and sharing one zstd frame gives 45.7%
+overall, 2.4% more stored bytes than the three frames cost, or 5.3 MB on a 4 GB
 file. It is paid for by halving the entry count and the open latency with it.
+
+The container rules also ask that an entry which groups arrays have its layout
+described in the format's metadata. Version 3's `metadata.json` does not
+describe the chunk entry's layout: the three arrays, their element types and
+shapes, and the names of the ten node columns are given by this spec, not by
+the file. [kdf-chunk-layout-legend.md](../drafts/kdf-chunk-layout-legend.md)
+proposes version 4, which adds a required `chunk_layout` legend to
+`metadata.json`.
 
 **Vectors never join tree chunks.** They live once in the corpus because every
 tree indexes the same feature identities. Keeping descriptor bytes out of tree
-frames also avoids mixing their roughly 76% compression ratio with the much more
-compressible topology columns.
+chunk entries also keeps their roughly 76% compression ratio apart from the much
+more compressible topology columns: a trial that folded the descriptors into
+the chunk entry was reverted, because one zstd frame holding both compressed
+each worse than two frames did.
 
-**Each corpus is one entry of many frames.** Descriptor and optional geometry
-blocks must stay
-independently decodable — reading one descriptor may not require decompressing the
-corpus — so they remain one frame each, and each is digested on its own before
-those digests are folded into the section's. What changes is that the frames are
+**Each corpus is one `.frames` entry.** Descriptor and optional geometry blocks
+must stay independently decodable, since reading one descriptor may not require
+decompressing the corpus, so each block is one zstd frame, and each is digested
+on its own before those digests are folded into the section's. The frames are
 concatenated into a single entry and addressed by a stored offsets array instead
 of by the ZIP directory.
 
-This is the departure that matters most, because the useful configurations use
-small blocks: at 16 KiB on DinoLedge, descriptor blocks were ~76,000 of ~100,000
-entries and become one corpus entry plus one offsets entry, taking the measured
+Of the three, this saves the most, because the useful configurations use small
+blocks: at 16 KiB on DinoLedge, descriptor blocks were ~76,000 of ~100,000
+entries and became one corpus entry plus one offsets entry, taking the measured
 version-1 open latency from 674 ms to 130 ms. SIFT geometry adds its own two
-entries. It also makes block size
-free in entry count, which it was not before — the choice is now purely about
-read granularity. Unlike the grouping above it costs nothing in compression,
-because the frames are unchanged; only their addressing moved.
+entries. It also makes block size free in entry count, so the choice of block
+size is only about read granularity. Unlike the grouping above it costs nothing
+in compression, because the frames are the same frames an entry per block would
+hold; only their addressing differs. Without it, a file's open cost would grow
+without bound in the number of descriptors.
 
-The entries are named `.frames` rather than `.zst` so that a tool which assumes
-one frame per entry reports an error instead of decoding only the first block and
-reporting success. Descriptor and geometry blocks use the same logical row
-boundaries but separate offsets because their compressed lengths differ.
+The entries are named `.frames` rather than `.zst` so that a tool which decodes
+each `.zst` entry as one frame does not take a corpus for one and return its
+first block as the whole corpus. Descriptor and geometry blocks use the same
+logical row boundaries but separate offsets because their compressed lengths
+differ.
 
-The properties a reader relies on are preserved. The file is still a ZIP of
-STORE entries, so standard tools still list it and still extract any entry. Binary
-arrays are still little-endian and row-major with no headers of their own. Names
-still encode shape and type, and every decoded length is still derivable from a
-name and checked against it. The digests still cover decoded bytes and still
-identify the same byte sequences they would have identified had those bytes sat
-in separate entries. A reader that knows this section can
-still be written against the spec alone, in another language, without consulting
-the implementation — which is the standard `specs/formats/` is actually held to.
+The corpus can be taken apart with standard tools: `unzip -p` piped into
+`zstd -d` decodes every frame of `features/corpus...frames` in order and gives
+the whole `(N, D)` array in storage-row order, and likewise the geometry corpus.
+Reading one block on its own needs the offsets array, and mapping a storage row
+back to its feature ID needs the storage row map.
 
-The one genuine loss is shell-level inspection of the corpus: `unzip` will hand
-over `features/corpus...frames`, and splitting it into blocks needs the offsets
-array rather than a `zstd -d`. The tradeoff was accepted because the alternative is
-a file whose open cost grows without bound in the number of descriptors.
+The container's other properties hold here as in every format. The file is a
+ZIP of STORE entries, so standard tools list it and extract any entry. Binary
+arrays are little-endian and row-major with no headers of their own. Names
+encode shape and type, and every decoded length is derivable from a name and
+checked against it. The digests cover decoded bytes and identify the same byte
+sequences they would identify had those bytes sat in separate entries. A reader
+can be written against this spec alone, in another language, without consulting
+the implementation, which is the standard `specs/formats/` is held to.
 
 ## Implementations
 
