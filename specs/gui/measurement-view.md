@@ -426,7 +426,8 @@ inside it, so neither block draws over the other. Each block shows:
   read ([photograph-cache.md](../core/camera/photograph-cache.md) § "In the
   viewer"). While those tiles are loading the cell says *loading…*; where
   the photograph cannot be read, the cell says *no crop* and why in its
-  hover text.
+  hover text, and the crop is cut again on every frame, so it is drawn once
+  the photograph can be read.
 - **The crop's hover view.** The photograph's full name, then the same crop in
   context, three times its width and height at 288 points
   (`marks::CONTEXT_FACTOR`, `CONTEXT_HOVER_SIDE`), with the outline and the
@@ -1111,7 +1112,8 @@ at-infinity case is covered by the Rust tests.
   they are drawn each says *loading…*, each photograph is asked for once
   over three frames, nothing is decoded on the GUI thread, and a crop and a
   hover view that need different tiles take no more reads than one render
-  does; a photograph that cannot be read gives *no crop*.
+  does; a photograph that cannot be read gives *no crop*, and the crop is
+  drawn on the frame after the photograph lands in the cache.
 - **The tools** (`mcp/tests/measurements.rs`): `get_scene`'s counts,
   `list_measurements`' rows and results, `get_measurement`'s resolutions,
   refusal and median line, an index past the rows refused with the count, and

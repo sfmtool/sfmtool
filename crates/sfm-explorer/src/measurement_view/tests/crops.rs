@@ -212,3 +212,47 @@ fn an_endpoint_whose_photograph_cannot_be_read_says_so() {
     }
     assert_eq!(queue.len(), 0, "nothing more asked for");
 }
+
+/// An endpoint's crop drawn after the read of its photograph's header failed
+/// says *no crop*, and that answer is asked again rather than kept, so the
+/// crop is drawn once the photograph arrives. A frame meets this when the
+/// header read ends while it draws the panel.
+#[test]
+fn an_unreadable_crop_is_drawn_once_its_photograph_arrives() {
+    let (mut state, id) = crate::measurements::fixture::measured_state(Some("m"));
+    let (requests, queue) = PhotographRequests::queued();
+    state.photograph_requests = requests;
+    state.select_measurement(MeasurementRef::distance(id, TWO_PHOTOGRAPHS));
+    let mut panel = MeasurementView::new();
+    let ctx = egui::Context::default();
+    painted(&mut panel, &ctx, &state);
+    assert_eq!(queue.run_off_this_thread(), 2, "a header read a photograph");
+    let texts = painted(&mut panel, &ctx, &state);
+    assert_eq!(texts.iter().filter(|t| *t == "no crop").count(), 2);
+
+    let recon = state.node(id).expect("loaded").recon();
+    let camera = recon.image_set.cameras[0].clone();
+    for image in 0..2 {
+        state.insert_photograph(
+            id,
+            image,
+            ImageU8::new(
+                camera.width,
+                camera.height,
+                3,
+                vec![90; (camera.width * camera.height * 3) as usize],
+            ),
+        );
+    }
+    let texts = painted(&mut panel, &ctx, &state);
+    assert_eq!(
+        texts.iter().filter(|t| *t == "no crop").count(),
+        0,
+        "{texts:?}"
+    );
+    assert!(panel
+        .pictures
+        .values()
+        .all(|pictures| matches!(pictures.crop, Crop::Ready { .. })));
+    assert_eq!(queue.len(), 0, "nothing more asked for");
+}

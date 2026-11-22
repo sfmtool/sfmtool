@@ -462,7 +462,11 @@ cuts a row's crop with,
     reference is being picked, or while the scroll has not yet stopped over
     it (below);
   - *unreadable*, when the photograph cannot be read or decoded, or the
-    crop's read of it fails;
+    crop's read of it fails. It is the one reason not kept: the cell asks
+    again on every frame it is drawn, so it draws its crop once the
+    photograph can be read, as when the photograph lands in the cache after
+    its header read found no file; a hover view whose read failed is asked
+    again the same way;
   - *no reference*, when the point stores no reference observation and the
     reference-view rule picks none;
   - *off image*, when no sample of the outline projects into the photograph
@@ -1085,7 +1089,8 @@ camera and one at infinity:
   nothing more asked for; the hover view of a crop whose photograph has left
   the cache says *Loading the photograph…*, asks once, and is drawn once the
   photograph is back, and that of a crop whose photograph can no longer be
-  read says why;
+  read says why; a cell that says *unreadable* after its photograph's header
+  read found no file draws its crop on the frame after the photograph lands;
 - a crop and its hover view drawn by whole frames, through the panel's region
   pool and through a pool that holds nothing so every read takes the
   photograph's tiles, equal the crop and hover view the whole pyramid gives,

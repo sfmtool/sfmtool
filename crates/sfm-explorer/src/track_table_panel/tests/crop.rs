@@ -1263,3 +1263,42 @@ fn a_crop_hover_view_whose_photograph_cannot_be_read_says_why() {
     assert!(texts.contains(&said), "{said:?} not in {texts:?}");
     assert!(panel.pictures.hover_crop().is_none());
 }
+
+/// A Crop cell drawn after the read of its photograph's header failed says
+/// *unreadable*, and that answer is asked again rather than kept, so the
+/// cell draws its crop once the photograph arrives, without the version
+/// moving. A frame meets this when the header read ends while it draws its
+/// rows: the rows drawn after it say *unreadable*.
+#[test]
+fn an_unreadable_crop_is_drawn_once_its_photograph_arrives() {
+    let mut clock = Clock(0.0);
+    let (mut state, id) = crop_state();
+    let (requests, queue) = crate::state::PhotographRequests::queued();
+    state.photograph_requests = requests;
+    let recon = state.node(id).expect("loaded").recon();
+    let path = crate::state::photograph_path(recon, 0).expect("a path");
+    let pyramid = state.cached_photograph(id, 0).expect("cached");
+    state.photographs.forget(&path);
+    assert_eq!(stored_reference(0), 0);
+
+    let (ctx, mut panel) = shown(&mut state, 4800.0, &mut clock);
+    assert_eq!(
+        cell(&panel, 0, PictureColumn::Crop),
+        Some(CellPicture::Waiting)
+    );
+    // The header read ends, finding no file: the fixture's photographs are
+    // only ever in the cache.
+    assert_eq!(queue.run_off_this_thread(), 1, "the header read");
+    frame(&ctx, &mut panel, &mut state, 4800.0, clock.tick());
+    assert_eq!(
+        cell(&panel, 0, PictureColumn::Crop),
+        Some(CellPicture::Absent(Absent::Unreadable))
+    );
+
+    state.photographs.insert(&path, pyramid);
+    frame(&ctx, &mut panel, &mut state, 4800.0, clock.tick());
+    assert!(matches!(
+        cell(&panel, 0, PictureColumn::Crop),
+        Some(CellPicture::Texture(_))
+    ));
+}

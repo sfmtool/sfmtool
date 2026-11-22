@@ -39,7 +39,7 @@
 //! `AppState::bench_rows`, and a row click in Edited mode reports through
 //! [`TrackBodyResponse::pick_row`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -325,6 +325,12 @@ pub(crate) struct TrackBody {
     /// [`crate::state::read_peeked`] asks for together until all are there.
     /// Dropped for a picture once it is drawn, and with [`TrackBody::tiles`].
     needs: HashMap<(usize, Picture), Vec<TileKey>>,
+    /// The rows whose photograph could not be read when a picture of theirs
+    /// was last asked for. That answer is not kept: the next frame drops the
+    /// pictures it left empty and asks again ([`TrackBody::retile_if_stale`]),
+    /// so a row draws its pictures once its photograph can be read, whatever
+    /// made it readable.
+    unreadable: HashSet<usize>,
     /// The region pool the tiles, the crops and their hover views read their
     /// photographs through.
     regions: crate::patch_pictures::PanelRegionPool,
@@ -424,9 +430,11 @@ enum Picture {
 /// ([`crate::state::read_peeked`]), the tiles it needed kept in `needs`
 /// under `key` until it has run. `None` while the photograph's layout or
 /// tiles are being read, which repaints when they land; otherwise the
-/// render's answer, or why it failed, or why the photograph cannot be read.
+/// render's answer, or why it failed, or why the photograph cannot be read,
+/// which also puts the row in `unreadable`.
 fn read_picture<T>(
     needs: &mut HashMap<(usize, Picture), Vec<TileKey>>,
+    unreadable: &mut HashSet<usize>,
     state: &AppState,
     path: &std::path::Path,
     key: (usize, Picture),
@@ -441,7 +449,10 @@ fn read_picture<T>(
     let answer = match crate::state::read_peeked(source, needs.entry(key).or_default(), ctx, render)
     {
         PeekedRead::Loading => return None,
-        PeekedRead::Unreadable => Err(UNREADABLE_PHOTOGRAPH.to_string()),
+        PeekedRead::Unreadable => {
+            unreadable.insert(key.0);
+            Err(UNREADABLE_PHOTOGRAPH.to_string())
+        }
         PeekedRead::Read(read) => read.map_err(|why| why.to_string()),
     };
     needs.remove(&key);
@@ -475,6 +486,7 @@ impl TrackBody {
             crop_contexts: HashMap::new(),
             read_failures: HashMap::new(),
             needs: HashMap::new(),
+            unreadable: HashSet::new(),
             regions: crate::patch_pictures::PanelRegionPool::default(),
             blurred_bitmaps: HashMap::new(),
             hover_bitmap: None,
@@ -555,6 +567,7 @@ impl TrackBody {
         self.crop_contexts.clear();
         self.read_failures.clear();
         self.needs.clear();
+        self.unreadable.clear();
         self.blurred_bitmaps.clear();
         self.hover_bitmap = None;
         self.track_patch = None;
@@ -1179,6 +1192,7 @@ impl TrackBody {
         let pool = self.regions.pool();
         let tile = read_picture(
             &mut self.needs,
+            &mut self.unreadable,
             state,
             &path,
             (observation, Picture::Tile),
@@ -1272,6 +1286,7 @@ impl TrackBody {
             let pool = self.regions.pool();
             let context = read_picture(
                 &mut self.needs,
+                &mut self.unreadable,
                 state,
                 &path,
                 (observation, Picture::Context),
@@ -1417,6 +1432,7 @@ impl TrackBody {
             (
                 read_picture(
                     &mut self.needs,
+                    &mut self.unreadable,
                     state,
                     &path,
                     (observation, Picture::CropContext),
@@ -1430,6 +1446,7 @@ impl TrackBody {
             (
                 read_picture(
                     &mut self.needs,
+                    &mut self.unreadable,
                     state,
                     &path,
                     (observation, Picture::Crop),
@@ -1487,8 +1504,24 @@ impl TrackBody {
 
     /// Drop the rendered tiles when the track they were rendered from has
     /// moved, so a row never shows a picture of a position the observation has
-    /// left.
+    /// left; and, on every frame, the pictures a row's unreadable photograph
+    /// left empty, so they are asked for again
+    /// ([`TrackBody::unreadable`]).
     fn retile_if_stale(&mut self, label: &str, track: &std::sync::Arc<EditableTrack>) {
+        for observation in std::mem::take(&mut self.unreadable) {
+            for pictures in [&mut self.crops, &mut self.crop_contexts] {
+                if matches!(pictures.get(&observation), Some(None)) {
+                    pictures.remove(&observation);
+                }
+            }
+            if matches!(self.tiles.get(&observation), Some(None)) {
+                self.tiles.remove(&observation);
+            }
+            if matches!(self.contexts.get(&observation), Some(None)) {
+                self.contexts.remove(&observation);
+            }
+            self.read_failures.remove(&observation);
+        }
         let key = (label.to_string(), std::sync::Arc::as_ptr(track) as usize);
         if self.tiles_for.as_ref() == Some(&key) {
             return;
@@ -1500,6 +1533,7 @@ impl TrackBody {
         self.crop_contexts.clear();
         self.read_failures.clear();
         self.needs.clear();
+        self.unreadable.clear();
         self.blurred_bitmaps.clear();
         self.hover_bitmap = None;
         self.track_patch = None;

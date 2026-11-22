@@ -289,12 +289,24 @@ impl PictureTextures {
     /// [`CellPicture::Waiting`]. With no `make`, as for the rows of a version
     /// the node has left, nothing is made and the cell is
     /// [`CellPicture::Waiting`].
+    ///
+    /// *unreadable* is the one reason not kept: with `make` given it is made
+    /// again on every frame, so a crop is drawn once its photograph can be
+    /// read, whatever made it readable.
     pub(super) fn picture(
         &mut self,
         ctx: &egui::Context,
         key: PictureKey,
         make: Option<&dyn Fn() -> Made>,
     ) -> CellPicture {
+        if make.is_some()
+            && matches!(
+                self.entries.get(&key).map(|entry| &entry.held),
+                Some(Held::Absent(Absent::Unreadable))
+            )
+        {
+            self.entries.remove(&key);
+        }
         let frame = self.frame;
         let entry = match self.entries.get_mut(&key) {
             Some(entry) => entry,
@@ -371,9 +383,9 @@ impl PictureTextures {
     /// The hover view of the crop held for `key`, cut around the same outline
     /// from the photograph tiles it needs of its image's photograph in
     /// `recon`, read through `pool`, and kept while the pointer rests on that
-    /// cell. `None` while those tiles are loading: they are asked for when
-    /// `ask` is set ([`crate::state::read_peeked`]) and only looked for
-    /// otherwise. `Ok(None)` when no crop is held for `key` or its hover view
+    /// cell; one whose read failed is cut again on every call. `None` while
+    /// those tiles are loading: they are asked for when `ask` is set
+    /// ([`crate::state::read_peeked`]) and only looked for otherwise. `Ok(None)` when no crop is held for `key` or its hover view
     /// cut nothing, and why when the read of the photograph failed.
     pub(super) fn crop_context(
         &mut self,
@@ -384,7 +396,9 @@ impl PictureTextures {
         ask: bool,
         pool: &RegionPool,
     ) -> Option<Result<Option<&DrawnCrop>, &str>> {
-        if self.hover.as_ref().map(|(held, _)| *held) != Some(key) {
+        // A hover view whose read failed is not kept, as an unreadable cell
+        // is not.
+        if !matches!(&self.hover, Some((held, Ok(_))) if *held == key) {
             let held = self
                 .crop(&key)
                 .map(|(_, outline, image)| (outline.clone(), image));

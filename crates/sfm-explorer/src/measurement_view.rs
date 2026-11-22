@@ -392,6 +392,12 @@ impl PictureKey {
     }
 }
 
+/// Why an endpoint has no crop when its photograph cannot be read. The one
+/// reason not kept: a crop absent for it is cut again on every frame
+/// ([`Crop::is_unreadable`]), so it is drawn once the photograph can be
+/// read, whatever made it readable.
+const UNREADABLE_CROP: &str = "The photograph could not be read";
+
 /// An endpoint's crop, cut once the photograph tiles it needs are there.
 enum Crop {
     /// The crop in its cell and in its hover view, with the caption the hover
@@ -403,6 +409,14 @@ enum Crop {
     },
     /// Why there is no crop.
     Absent(&'static str),
+}
+
+impl Crop {
+    /// Whether there is no crop because the photograph cannot be read, which
+    /// the panel asks again rather than keep.
+    fn is_unreadable(&self) -> bool {
+        matches!(self, Crop::Absent(why) if *why == UNREADABLE_CROP)
+    }
 }
 
 /// What the panel keeps of one endpoint's pictures between frames.
@@ -1145,7 +1159,7 @@ impl MeasurementView {
             observation: view.observation,
             pixel: view.pixel.map(f64::to_bits),
         };
-        if !self.offer_crops.contains_key(&key) {
+        if self.offer_crops.get(&key).is_none_or(Crop::is_unreadable) {
             let name = format!(
                 "measurement_offer_{:?}_{}_{}_{:.3}_{:.3}",
                 node.id, view.point, view.observation, view.pixel[0], view.pixel[1]
@@ -1266,7 +1280,9 @@ impl MeasurementView {
     /// and its point's stored patch.
     ///
     /// Tiles still loading leave nothing held, so the next frame asks again;
-    /// [`crate::state::read_peeked`] repaints when they land.
+    /// [`crate::state::read_peeked`] repaints when they land. A crop held as
+    /// unreadable is cut again on every frame ([`UNREADABLE_CROP`]), and
+    /// keeps what it shows until the new cut is done.
     fn ensure_pictures(
         &mut self,
         ctx: &egui::Context,
@@ -1274,7 +1290,11 @@ impl MeasurementView {
         block: &EndpointBlock<'_>,
         key: PictureKey,
     ) {
-        if self.pictures.contains_key(&key) {
+        if self
+            .pictures
+            .get(&key)
+            .is_some_and(|pictures| !pictures.crop.is_unreadable())
+        {
             return;
         }
         let square = block.resolution.as_ref().ok().map(|resolution| {
@@ -1301,6 +1321,12 @@ impl MeasurementView {
             return;
         };
         self.picture_needs.remove(&key);
+        if let Some(held) = self.pictures.get_mut(&key) {
+            // A crop asked again because its photograph could not be read:
+            // the patch is the one already uploaded.
+            held.crop = crop;
+            return;
+        }
         let patch = block.resolution.as_ref().ok().and_then(|resolution| {
             let view = block.node.edited().point(resolution.chosen().point)?;
             let image = crate::patch_pictures::stored_patch_image(view.patch_bitmap()?)?;
@@ -2348,7 +2374,7 @@ fn endpoint_crop(
     }
     let (outline, resolved) = endpoint_outline(node, image, pixel, square);
     let Some(path) = crate::state::photograph_path(recon, image) else {
-        return Some(Crop::Absent("The photograph could not be read"));
+        return Some(Crop::Absent(UNREADABLE_CROP));
     };
     let source = PhotographSource {
         cache: &state.photographs,
@@ -2389,7 +2415,7 @@ fn endpoint_crop(
         PeekedRead::Loading => return None,
         PeekedRead::Read(Ok(pictures)) => pictures,
         PeekedRead::Read(Err(_)) | PeekedRead::Unreadable => {
-            return Some(Crop::Absent("The photograph could not be read"))
+            return Some(Crop::Absent(UNREADABLE_CROP))
         }
     };
     let Some(picture) = cell else {
