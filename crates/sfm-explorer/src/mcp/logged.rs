@@ -34,6 +34,7 @@ impl Command {
             Command::GetPoint { .. } => "get_point",
             Command::ListMeasurements { .. } => "list_measurements",
             Command::GetMeasurement { .. } => "get_measurement",
+            Command::GetMeasurementEndpointViews { .. } => "get_measurement_endpoint_views",
             Command::FindPoints { .. } => "find_points",
             Command::GetActionLog { .. } => "get_action_log",
             Command::OpenReconstruction { .. } => "open_reconstruction",
@@ -122,6 +123,7 @@ impl Command {
             Command::CommitBenchMeasurement { .. } => "commit_bench_measurement",
             Command::SetBenchMeasurementLabel { .. } => "set_bench_measurement_label",
             Command::SetBenchMeasurementDistance { .. } => "set_bench_measurement_distance",
+            Command::SetBenchMeasurementEndpoint { .. } => "set_bench_measurement_endpoint",
             Command::DeleteMeasurement { .. } => "delete_measurement",
             Command::FitBenchTrack { .. } => "fit_bench_track",
             Command::FitBenchTrackNormal { .. } => "fit_bench_track_normal",
@@ -382,6 +384,7 @@ impl Command {
             | Command::GetPoint { .. }
             | Command::ListMeasurements { .. }
             | Command::GetMeasurement { .. }
+            | Command::GetMeasurementEndpointViews { .. }
             | Command::FindPoints { .. }
             | Command::GetActionLog { .. }
             | Command::GetWindowLayout
@@ -440,6 +443,7 @@ impl Command {
             | Command::PutMeasurementOnBench { .. }
             | Command::SetBenchMeasurementLabel { .. }
             | Command::SetBenchMeasurementDistance { .. }
+            | Command::SetBenchMeasurementEndpoint { .. }
             | Command::RenameBenchItem { .. }
             | Command::DiscardBenchItem { .. }
             | Command::DuplicateBenchItem { .. }
@@ -595,6 +599,15 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
                 index.map_or_else(|| "?".to_string(), |i| i.to_string())
             ),
         },
+        Command::GetMeasurementEndpointViews {
+            reconstruction_label,
+            item,
+            endpoint,
+        } => format!(
+            "get_measurement_endpoint_views {reconstruction_label} {} endpoint {}",
+            item.as_deref().unwrap_or("(focused item)"),
+            endpoint.letter()
+        ),
         Command::FindPoints { request } => format!(
             "find_points {} {}..{}",
             named(&request.reconstruction_label),

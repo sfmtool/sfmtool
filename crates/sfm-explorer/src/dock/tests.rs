@@ -405,3 +405,40 @@ fn the_measurement_header_fields_reach_their_steps() {
          be finite and strictly positive."
     );
 }
+
+/// A row of the *Switch image…* popup reaches its step through the dock: one
+/// bench version, labelled by the two images, moving the endpoint.
+#[test]
+fn a_switch_popup_row_reaches_its_step() {
+    use crate::measurements::{EndpointSide, MeasurementRef};
+    let (mut state, id) = crate::measurements::fixture::measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 1))
+        .unwrap();
+    let before = state.node(id).unwrap().history.versions().len();
+    let mut track_view = TrackView::new();
+    with_tabs(&mut state, &mut track_view, |tabs, ui| {
+        tabs.apply_measurement_view_response(
+            ui,
+            crate::measurement_view::MeasurementViewResponse {
+                switch_endpoint: Some(crate::measurement_view::EndpointSwitch {
+                    node: id,
+                    item: "distance #1".into(),
+                    side: EndpointSide::A,
+                    image: 1,
+                    pixel: [415.0, 240.0],
+                }),
+                ..Default::default()
+            },
+        );
+    });
+    let node = state.node(id).unwrap();
+    assert_eq!(node.history.versions().len(), before + 1);
+    assert_eq!(
+        node.history.current_version().label,
+        "Moved endpoint A of distance #1 from image_000.jpg to image_001.jpg"
+    );
+    let item = state.bench_measurement(id, "distance #1").unwrap();
+    let a = item.as_distance().unwrap().endpoints[0].unwrap();
+    assert_eq!((a.image, a.pixel), (1, [415.0, 240.0]));
+}

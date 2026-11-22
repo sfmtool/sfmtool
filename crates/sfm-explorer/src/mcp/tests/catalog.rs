@@ -117,6 +117,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             "select_measurement",
             json!({ "measurement_index": 0, "endpoint": "a" }),
         ),
+        (
+            "get_measurement_endpoint_views",
+            json!({ "reconstruction_label": "alpha", "endpoint": "a" }),
+        ),
         ("clear_selection", json!({ "scope": "all" })),
         (
             "set_reconstruction_display",
@@ -192,6 +196,15 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
         (
             "set_bench_measurement_distance",
             json!({ "reconstruction_label": "alpha", "distance": "4.2 cm" }),
+        ),
+        (
+            "set_bench_measurement_endpoint",
+            json!({
+                "reconstruction_label": "alpha",
+                "endpoint": "b",
+                "camera_image": 0,
+                "pixel": [12.5, 40.0],
+            }),
         ),
         (
             "retriangulate_point",
@@ -1298,6 +1311,7 @@ fn only_the_reads_are_annotated_read_only() {
             "find_points",
             "list_measurements",
             "get_measurement",
+            "get_measurement_endpoint_views",
             "get_action_log",
             "get_timing_detail",
             "get_window_layout",
@@ -1313,16 +1327,16 @@ fn only_the_reads_are_annotated_read_only() {
             "get_widgets",
         ]
     );
-    // Twenty-one JSON reads, the one read that hands back a picture, eighty-three
-    // writes, six input tools, the one that writes a file, and the one that
-    // quits.
-    assert_eq!(catalog.len(), 113, "the catalog has grown or shrunk");
+    // Twenty-two JSON reads, the one read that hands back a picture,
+    // eighty-four writes, six input tools, the one that writes a file, and the
+    // one that quits.
+    assert_eq!(catalog.len(), 115, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        83
+        84
     );
     // One tool can overwrite a file by name, six can press what a person can
     // press, File ▸ Save included, and one ends the viewer, losing what is not

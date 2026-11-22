@@ -347,6 +347,36 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "get_measurement_endpoint_views",
+            description: "The other images that show the place one endpoint of a measurement \
+                          item names, as Measurement View's Switch image… popup lists them: \
+                          for each observation in the endpoint's image whose square holds its \
+                          pixel (chosen or not), every other observation of that point, at \
+                          the pixel where that observation's square holds the same texel. \
+                          views lists each with point and point_id, observation, camera_image \
+                          and camera_image_name, pixel, patch_coords (s, t), localization (the \
+                          observation's stored self-similarity length on the patch, in scene \
+                          units or degrees at infinity; null where it has no reading), \
+                          viewing_angle_deg, resolves_to and resolves_to_point_id (the point \
+                          the endpoint would resolve to at that pixel, null where it would \
+                          have no position) and resolves_elsewhere (true where that is not \
+                          the view's own point, because another square holds the pixel there). \
+                          The chosen point's views come first. A view is left out where its \
+                          texel lands outside its image or its square faces away from its \
+                          camera. Refused, in the button's words, where the endpoint is not \
+                          placed or has no position. Naming no item reads the focused one. \
+                          Pass a view's camera_image and pixel to \
+                          set_bench_measurement_endpoint to make the switch.",
+            kind: Read,
+            schema: object(
+                &[("item", bench_item_schema())],
+                &[
+                    ("reconstruction_label", reconstruction_label_schema()),
+                    ("endpoint", endpoint_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "get_action_log",
             description: "What has happened in the viewer, oldest first — the human's selections \
                           and file loads, the agent's own calls, and every refusal, each with the \

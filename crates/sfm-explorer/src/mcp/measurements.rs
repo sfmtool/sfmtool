@@ -4,10 +4,12 @@
 //! The measurement tools: `list_measurements` and `get_measurement`, which
 //! read what the Scene tree's Measurements rows and Measurement View show;
 //! `select_measurement`, which selects a measurement, or one of its
-//! endpoints, as a click on its row or its block does; and the three that
+//! endpoints, as a click on its row or its block does; and the ones that
 //! edit, `put_measurement_on_bench`, `set_bench_measurement_label`,
-//! `set_bench_measurement_distance`, `commit_bench_measurement` and
-//! `delete_measurement`, each one `AppState` call the panel's gesture makes.
+//! `set_bench_measurement_distance`, `set_bench_measurement_endpoint`,
+//! `commit_bench_measurement` and `delete_measurement`, each one `AppState`
+//! call the panel's gesture makes; and `get_measurement_endpoint_views`, the
+//! offers of the panel's *Switch image…* popup.
 //!
 //! A stored measurement's reading is the node's cached one
 //! ([`crate::measurements::readings`]), so the wire, the tree and the panel
@@ -17,8 +19,8 @@
 
 use serde_json::{json, Value};
 use sfmtool_core::reconstruction::measurement_endpoint::{
-    CandidateStanding, EndpointCandidate, EndpointPosition, EndpointRefusal, EndpointResolution,
-    ResolvedDistanceMeasurement,
+    endpoint_views, CandidateStanding, EndpointCandidate, EndpointPosition, EndpointRefusal,
+    EndpointResolution, MeasurementEndpointOptions, ResolvedDistanceMeasurement,
 };
 
 use super::{edit, render, resolve_reconstruction, JsonReply, ToolError};
@@ -359,6 +361,127 @@ pub(super) fn set_bench_measurement_distance(
     object.insert("item".into(), json!(item));
     object.insert("stated_distance".into(), json!(stated));
     object.insert("unit".into(), json!(unit.name()));
+    Ok(reply)
+}
+
+/// `get_measurement_endpoint_views`: the offers of Measurement View's *Switch
+/// image…* popup for endpoint `side` of the item named, or of the focused one
+/// (core's `endpoint_views`), in the popup's order: the chosen candidate's
+/// point first.
+///
+/// Refused, in the popup button's words, where the endpoint is not placed or
+/// the resolver refuses it. Not refused on a view-only bench or while a task
+/// holds the node, since it changes nothing.
+pub(super) fn get_measurement_endpoint_views(
+    state: &AppState,
+    reconstruction_label: &str,
+    named: Option<&str>,
+    side: EndpointSide,
+) -> JsonReply {
+    let (id, item) = measurement_target(state, reconstruction_label, named)?;
+    let node = state.node(id).expect("just resolved");
+    let measurement = match node.history.current_bench().get(&item) {
+        Some(sfmtool_core::bench::BenchItem::Measurement(m)) => m,
+        Some(sfmtool_core::bench::BenchItem::Track(_)) => {
+            return Err(ToolError::new(
+                crate::bench::measurement::not_a_measurement(&item),
+            ))
+        }
+        None => {
+            return Err(ToolError::new(format!(
+                "Nothing on {}'s bench is called {item}.",
+                node.label
+            )))
+        }
+    };
+    let refused = |resolution: Option<&Result<EndpointResolution, EndpointRefusal>>| {
+        ToolError::new(
+            crate::measurement_view::switch_refusal(None, side, resolution)
+                .unwrap_or_else(|| "The endpoint has no views.".to_string()),
+        )
+    };
+    let Some(endpoint) = measurement
+        .as_distance()
+        .and_then(|d| d.endpoints[side.index()])
+    else {
+        return Err(refused(None));
+    };
+    let options = MeasurementEndpointOptions::default();
+    let views = endpoint_views(node.edited(), endpoint.image, endpoint.pixel, &options)
+        .map_err(|refusal| refused(Some(&Err(refusal))))?;
+    let recon = node.recon();
+    let image_name = |image: u32| {
+        recon
+            .image_set
+            .images
+            .get(image as usize)
+            .map(|i| i.name.clone())
+    };
+    let listed: Vec<Value> = views
+        .iter()
+        .map(|view| {
+            json!({
+                "point": view.point,
+                "point_id": crate::scene::point_id(node, view.point as usize),
+                "observation": view.observation,
+                "camera_image": view.image,
+                "camera_image_name": image_name(view.image),
+                "pixel": view.pixel,
+                "patch_coords": view.patch_coords,
+                "localization": view.localization,
+                "viewing_angle_deg": view.viewing_angle_deg,
+                "resolves_to": view.resolves_to,
+                "resolves_to_point_id": view
+                    .resolves_to
+                    .map(|point| crate::scene::point_id(node, point as usize)),
+                "resolves_elsewhere": view.resolves_elsewhere(),
+            })
+        })
+        .collect();
+    Ok(json!({
+        "reconstruction_label": node.label,
+        "item": item,
+        "endpoint": side.wire_name(),
+        "camera_image": endpoint.image,
+        "camera_image_name": image_name(endpoint.image),
+        "pixel": endpoint.pixel,
+        "localization_unit": recon.metadata.world_space_unit,
+        "views": listed,
+    }))
+}
+
+/// `set_bench_measurement_endpoint`: move endpoint `side` of the item named,
+/// or of the focused one, to `pixel` of the camera image named
+/// ([`AppState::set_bench_measurement_endpoint`]). Any pixel inside the image
+/// is taken, not only one the popup offers. The reply names the item and
+/// carries the endpoint's image and pixel as they stand after the call.
+pub(super) fn set_bench_measurement_endpoint(
+    state: &mut AppState,
+    reconstruction_label: &str,
+    named: Option<&str>,
+    side: EndpointSide,
+    selector: &super::CameraImageSel,
+    pixel: [f64; 2],
+) -> JsonReply {
+    let (id, item) = measurement_target(state, reconstruction_label, named)?;
+    let image = super::resolve_camera_image(state, id, selector)?.index() as u32;
+    let mut reply = edit::edited(state, id, |state| {
+        state
+            .set_bench_measurement_endpoint(
+                id,
+                &item,
+                side,
+                image,
+                pixel,
+                crate::bench::measurement::EndpointMove::Set,
+            )
+            .map(|_| ())
+    })?;
+    let object = reply.as_object_mut().expect("an edit reply is an object");
+    object.insert("item".into(), json!(item));
+    object.insert("endpoint".into(), json!(side.wire_name()));
+    object.insert("camera_image".into(), json!(image));
+    object.insert("pixel".into(), json!(pixel));
     Ok(reply)
 }
 

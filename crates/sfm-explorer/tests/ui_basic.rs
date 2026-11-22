@@ -2626,3 +2626,93 @@ fn a_double_click_puts_a_measurement_on_the_bench_and_commit_writes_it() {
     );
     assert_eq!(item["origin"], json!({ "measurement_index": 1 }), "{item}");
 }
+
+/// In Measurement View's edited mode, *Switch image…* on endpoint A opens
+/// the popup of other photographs that show its place; a click on one of its
+/// rows moves the endpoint there as a bench step, and *Commit* writes the
+/// moved endpoint into the stored row.
+#[test]
+fn an_endpoint_switched_through_the_popup_is_committed() {
+    let (_dir, path) = measured_copy();
+    let viewer = McpViewer::launched(ui_test_lock(), None, &["--no-default-layout", &path]);
+    let label = wait_for_measurements(&viewer, 2);
+    viewer.ok(
+        "put_measurement_on_bench",
+        json!({ "reconstruction_label": label, "measurement_index": 0 }),
+    );
+    viewer.ok("show_panel", json!({ "panel_name": "measurement_view" }));
+    let before = viewer.ok(
+        "get_measurement",
+        json!({ "reconstruction_label": label, "item": "distance #0" }),
+    );
+    let from = before["endpoints"][0]["camera_image_name"]
+        .as_str()
+        .expect("endpoint A's image")
+        .to_string();
+    let switch = viewer.wait_for(
+        json!({ "panel_name": "measurement_view" }),
+        "Measurement View never drew an enabled Switch image… for endpoint A",
+        |listing| {
+            find_widget(listing, "button", "Switch image\u{2026}")
+                .filter(|button| button["enabled"] == true)
+                .cloned()
+        },
+    );
+    let reply = viewer.click(json!({ "widget": switch["widget"] }));
+    let popup = menu_owned_by(&reply, "Switch image\u{2026}")
+        .unwrap_or_else(|| panic!("Switch image… opened no popup: {reply}"));
+    let row = entries(popup)
+        .iter()
+        .find(|widget| {
+            widget["name"]
+                .as_str()
+                .is_some_and(|name| name.ends_with(".jpg"))
+        })
+        .unwrap_or_else(|| panic!("the popup lists no photograph: {popup}"))
+        .clone();
+    let image_name = row["name"].as_str().unwrap().to_string();
+    viewer.click(json!({ "widget": row["widget"] }));
+
+    let item = viewer.ok(
+        "get_measurement",
+        json!({ "reconstruction_label": label, "item": "distance #0" }),
+    );
+    let moved = &item["endpoints"][0];
+    assert_eq!(moved["camera_image_name"], image_name, "{item}");
+    assert_ne!(moved["camera_image"], 0, "{item}");
+    let history = viewer.ok(
+        "get_reconstruction_history",
+        json!({ "reconstruction_label": label }),
+    );
+    assert!(
+        history.to_string().contains(&format!(
+            "Moved endpoint A of distance #0 from {from} to {image_name}"
+        )),
+        "{history}"
+    );
+
+    let commit = viewer.wait_for(
+        json!({ "panel_name": "measurement_view" }),
+        "Measurement View never offered Commit",
+        |listing| {
+            find_widget(listing, "button", "Commit")
+                .filter(|button| button["enabled"] == true)
+                .cloned()
+        },
+    );
+    viewer.click(json!({ "widget": commit["widget"] }));
+    let stored = viewer.ok(
+        "get_measurement",
+        json!({ "reconstruction_label": label, "measurement_index": 0 }),
+    );
+    assert_eq!(
+        stored["endpoints"][0]["camera_image"], moved["camera_image"],
+        "{stored}"
+    );
+    // The file holds the pixel as a float32.
+    for c in 0..2 {
+        let held = stored["endpoints"][0]["pixel"][c].as_f64().unwrap();
+        let set = moved["pixel"][c].as_f64().unwrap();
+        assert!((held - set).abs() < 1e-3, "{stored} against {moved}");
+    }
+}

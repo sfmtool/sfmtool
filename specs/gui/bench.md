@@ -318,6 +318,13 @@ impl AppState {
     pub(crate) fn set_bench_measurement_distance(&mut self, id: ReconId, label: &str,
                                                  text: &str)
         -> Result<StatedDistanceSet, String>;
+    /// A bench step moving one endpoint to an image and a pixel: a row of the
+    /// Switch image… popup (`EndpointMove::Switch`), or the wire's pixel
+    /// given outright (`EndpointMove::Set`).
+    pub(crate) fn set_bench_measurement_endpoint(&mut self, id: ReconId, label: &str,
+                                                 side: EndpointSide, image: u32,
+                                                 pixel: [f64; 2], how: EndpointMove)
+        -> Result<bool, String>;
     pub(crate) fn measurement_commit_refusal(&self, id: ReconId, label: &str)
         -> Option<String>;
     pub(crate) fn commit_bench_measurement(&mut self, id: ReconId, label: &str)
@@ -692,8 +699,12 @@ that is not busy. The same sentence is given everywhere:
 
 A measurement item on a view-only bench is the same: it goes on the bench
 (`put_measurement_on_bench`, a double-click on a Measurements row) and is
-viewed, and its commit is refused with the sentence, which greys Measurement
-View's *Commit*. Deleting a stored measurement is not a bench step and is not
+viewed, and its commit and every step on it (its label, its stated distance
+and moving an endpoint, on the wire `set_bench_measurement_label`,
+`set_bench_measurement_distance` and `set_bench_measurement_endpoint`) are
+refused with the sentence, which greys Measurement View's *Commit*, its header
+fields and its *Switch image…*. `get_measurement_endpoint_views` reads, and is
+not refused. Deleting a stored measurement is not a bench step and is not
 refused.
 
 **Not refused**: putting a point on the bench (`create_bench_track`,
@@ -1550,8 +1561,25 @@ writes the no-effect row. Both are refused while a background task holds the
 node and on a view-only bench ([`measurement-view.md`](measurement-view.md) §
 "The label and the stated distance").
 
-The steps that move a measurement item's endpoints, and an item started from a
-pixel with no stored row, are proposed in
+**Moving an endpoint** (`AppState::set_bench_measurement_endpoint`) is a bench
+step of the same shape, made by core's `set_measurement_endpoint`: it sets one
+endpoint's image and pixel and nothing else, since the point, texel and
+position it lands on follow from them through the resolver. A row of
+Measurement View's *Switch image…* popup is a switch, labelled by the two
+images (`Moved endpoint A of distance #2 from IMG_0004.jpg to
+IMG_0011.jpg`); the wire's `set_bench_measurement_endpoint` gives the pixel
+outright and is labelled by it (`Moved endpoint A of distance #2 to
+IMG_0004.jpg (412.3, 230.5)`, or `Set endpoint B of distance #2 to ...` for an
+endpoint not placed). An endpoint at that image and pixel already, as the file
+would store the pixel, pushes no version and writes the no-effect row. It is
+refused while a background task holds the node, on a view-only bench, for a
+switch of an endpoint not placed, and for an image past the image set or a
+pixel outside its image, in the commit's sentence
+([`measurement-view.md`](measurement-view.md) § "Switching an endpoint's
+image").
+
+Setting an endpoint by hand in the panel and from Image Detail and the 3D view,
+and an item started from a pixel with no stored row, are proposed in
 [`../drafts/measurement-view.md`](../drafts/measurement-view.md).
 
 ---
@@ -1604,9 +1632,12 @@ is drawn under, so every group's rows reach one list.
 
 ## The wire
 
-An agent gets the same bench a human does, through forty MCP tools
+An agent gets the same bench a human does, through forty-three MCP tools
 ([mcp-server.md](mcp-server.md) § "The bench family"), in
-[mcp/bench.rs](../../crates/sfm-explorer/src/mcp/bench.rs). **Each one is one of
+[mcp/bench.rs](../../crates/sfm-explorer/src/mcp/bench.rs) and, for a
+measurement item,
+[mcp/measurements.rs](../../crates/sfm-explorer/src/mcp/measurements.rs).
+**Each one is one of
 the `AppState` methods above**, which is the whole of what makes an agent's
 verdict, split or commit a version in the history the human is looking at.
 
@@ -1723,7 +1754,24 @@ when the focused item was already what the call asked for.
 // The other search, which asks the reconstruction's geometry rather than an
 // index, and so needs no `.kdf`: track stage only.
 // search_bench_track_geometry     { "reconstruction_label": "bull", "observation": 0 }
+//
+// A measurement item: put on from its row, its label, its stated distance,
+// one endpoint moved to another photograph that shows its place, and the
+// commit. "item" omitted means the focused item.
+// put_measurement_on_bench        { "reconstruction_label": "bull", "measurement_index": 2 }
+// set_bench_measurement_label     { "reconstruction_label": "bull", "label": "paw width" }
+// set_bench_measurement_distance  { "reconstruction_label": "bull", "distance": "4.2 cm" }
+// get_measurement_endpoint_views  { "reconstruction_label": "bull", "endpoint": "a" }
+// set_bench_measurement_endpoint  { "reconstruction_label": "bull", "endpoint": "a",
+//                                   "camera_image": 10, "pixel": [388.2, 241.7] }
+// commit_bench_measurement        { "reconstruction_label": "bull" }
 ```
+
+The measurement tools are in [mcp-server.md](mcp-server.md) § "The bench
+family", and each is the `AppState` call of § "Measurement items" its panel
+gesture makes; `get_measurement_endpoint_views` reads the offers of
+Measurement View's *Switch image…* popup, and passing one of them to
+`set_bench_measurement_endpoint` is the popup's step.
 
 **The two reads have no panel gesture behind them**, because a panel shows what
 they answer. `get_bench` is the bench as JSON: each item's label, kind, stage,
@@ -2236,9 +2284,16 @@ commit that replaces its row sharing the base and its undo, a commit that
 appends, one that changes nothing, the refusals and the view-only bench, and
 setting the label and the stated distance: one step each with its label, its
 undo, the no-effect row, a bare number in the file's unit or metres, and the
-refusals while busy, on a view-only bench and of a distance that does not read.
+refusals while busy, on a view-only bench and of a distance that does not read;
+and moving an endpoint: a switch to an offered view as one step labelled by the
+two images, keeping the point and texel and leaving the stored row and the
+dirty flag alone, its undo and redo, the no-effect row, the labels of a pixel
+set outright and of an endpoint placed, and the refusals of a switch of an
+endpoint not placed, of a pixel outside its image, while busy and on a
+view-only bench.
 `mcp/tests/measurements.rs` covers `put_measurement_on_bench`,
 `set_bench_measurement_label`, `set_bench_measurement_distance`,
+`get_measurement_endpoint_views`, `set_bench_measurement_endpoint`,
 `commit_bench_measurement` and `delete_measurement`, `get_bench` listing a
 measurement item, and a track tool refusing one.
 

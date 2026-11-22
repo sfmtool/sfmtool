@@ -452,3 +452,124 @@ fn set_bench_measurement_distance_reads_text_and_numbers() {
     );
     assert!(error.0.contains("a string or a number"), "{error}");
 }
+
+/// `get_measurement_endpoint_views` lists the popup's offers for an
+/// endpoint of the focused item, and `set_bench_measurement_endpoint` moved
+/// to one of them is the switch: one bench version, the endpoint on the
+/// same point there.
+#[test]
+fn an_endpoint_switched_over_the_wire_lands_on_the_same_point() {
+    let (mut state, id, mut viewer) = measured();
+    call(
+        &mut state,
+        &mut viewer,
+        "put_measurement_on_bench",
+        json!({ "reconstruction_label": "measured", "measurement_index": 1 }),
+    );
+    let offered = call(
+        &mut state,
+        &mut viewer,
+        "get_measurement_endpoint_views",
+        json!({ "reconstruction_label": "measured", "endpoint": "a" }),
+    );
+    assert_eq!(offered["item"], "distance #1");
+    assert_eq!(offered["endpoint"], "a");
+    assert_eq!(offered["camera_image"], 0);
+    let views = offered["views"].as_array().expect("an array");
+    assert_eq!(views.len(), 1, "{offered}");
+    let view = &views[0];
+    assert_eq!(view["point"], 1);
+    assert_eq!(view["camera_image"], 1);
+    assert_eq!(view["camera_image_name"], "image_001.jpg");
+    assert_eq!(view["resolves_to"], 1);
+    assert_eq!(view["resolves_elsewhere"], false);
+    assert_eq!(view["localization"], Value::Null);
+    assert!(view["viewing_angle_deg"].as_f64().is_some(), "{view}");
+
+    let set = call(
+        &mut state,
+        &mut viewer,
+        "set_bench_measurement_endpoint",
+        json!({
+            "reconstruction_label": "measured",
+            "endpoint": "a",
+            "camera_image": "image_001.jpg",
+            "pixel": view["pixel"],
+        }),
+    );
+    assert_eq!(set["changed"], true, "{set}");
+    assert_eq!(set["item"], "distance #1");
+    assert_eq!(set["camera_image"], 1);
+    assert!(
+        set["label"]
+            .as_str()
+            .unwrap()
+            .starts_with("Moved endpoint A of distance #1 to image_001.jpg ("),
+        "{set}"
+    );
+    let item = call(
+        &mut state,
+        &mut viewer,
+        "get_measurement",
+        json!({ "reconstruction_label": "measured", "item": "distance #1" }),
+    );
+    let a = &item["endpoints"][0];
+    assert_eq!(a["camera_image"], 1);
+    let resolution = &a["resolution"];
+    let chosen = resolution["chosen"].as_u64().unwrap() as usize;
+    assert_eq!(resolution["candidates"][chosen]["point"], 1);
+    assert_eq!(
+        crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements())[1]
+            .images,
+        [0, 1],
+        "the stored row changed"
+    );
+}
+
+/// The views are refused in the button's words, and the step refuses a
+/// pixel outside its image in the commit's.
+#[test]
+fn the_endpoint_tools_refuse_in_the_panel_s_words() {
+    let (mut state, _, mut viewer) = measured();
+    call(
+        &mut state,
+        &mut viewer,
+        "put_measurement_on_bench",
+        json!({ "reconstruction_label": "measured", "measurement_index": 2 }),
+    );
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "get_measurement_endpoint_views",
+        json!({ "reconstruction_label": "measured", "endpoint": "b" }),
+    );
+    assert!(
+        error
+            .0
+            .starts_with("Endpoint B has no position, so no other image can be offered:"),
+        "{error}"
+    );
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_bench_measurement_endpoint",
+        json!({
+            "reconstruction_label": "measured",
+            "endpoint": "b",
+            "camera_image": 0,
+            "pixel": [3.0, 480.0],
+        }),
+    );
+    assert_eq!(
+        error.0,
+        "Cannot move endpoint B of distance #2: endpoint B's pixel (3, 480) is outside image \
+         0, which is [0, 640) x [0, 480)."
+    );
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "get_measurement_endpoint_views",
+        json!({ "reconstruction_label": "measured", "endpoint": "c" }),
+    );
+    assert!(error.0.contains("expected a or b"), "{error}");
+}

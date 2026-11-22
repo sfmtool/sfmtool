@@ -835,3 +835,224 @@ fn both_steps_are_refused_while_busy_on_a_view_only_bench_and_for_a_track() {
         Err(super::not_a_measurement(&track))
     );
 }
+
+// ---- Moving an endpoint ---------------------------------------------------
+
+fn endpoints_of(
+    state: &AppState,
+    id: ReconId,
+    label: &str,
+) -> [Option<sfmtool_core::bench::MeasurementEndpoint>; 2] {
+    item(state, id, label).as_distance().unwrap().endpoints
+}
+
+/// The offers of endpoint A of `distance #1`, on point 1 in image 0: its
+/// observation in image 1, at its keypoint.
+fn offers_of_a(
+    state: &AppState,
+    id: ReconId,
+) -> Vec<sfmtool_core::reconstruction::measurement_endpoint::EndpointView> {
+    let node = state.node(id).unwrap();
+    let a = endpoints_of(state, id, "distance #1")[0].unwrap();
+    sfmtool_core::reconstruction::measurement_endpoint::endpoint_views(
+        node.edited(),
+        a.image,
+        a.pixel,
+        &Default::default(),
+    )
+    .unwrap()
+}
+
+/// Switching an endpoint to an offered view is one bench step, labelled by
+/// the two images, which moves the endpoint, leaves the stored row and the
+/// dirty flag alone, keeps the endpoint on the same point and texel, and is
+/// undone and redone. The same switch again is no step.
+#[test]
+fn switching_an_endpoint_is_one_bench_step_and_undoes() {
+    use crate::bench::measurement::EndpointMove;
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 1))
+        .unwrap();
+    let before = version_count(&state, id);
+    let was = endpoints_of(&state, id, "distance #1");
+    let offers = offers_of_a(&state, id);
+    assert_eq!(offers.len(), 1);
+    let view = &offers[0];
+    assert_eq!((view.point, view.image), (1, 1));
+
+    let moved = state
+        .set_bench_measurement_endpoint(
+            id,
+            "distance #1",
+            EndpointSide::A,
+            view.image,
+            view.pixel,
+            EndpointMove::Switch,
+        )
+        .unwrap();
+    assert!(moved);
+    assert_eq!(version_count(&state, id), before + 1);
+    let node = state.node(id).unwrap();
+    assert_eq!(
+        node.history.current_version().label,
+        "Moved endpoint A of distance #1 from image_000.jpg to image_001.jpg"
+    );
+    assert!(!node.is_dirty());
+    let now = endpoints_of(&state, id, "distance #1");
+    assert_eq!(now[0].map(|e| (e.image, e.pixel)), Some((1, view.pixel)));
+    assert_eq!(now[1], was[1]);
+    let rows = crate::measurements::distance_rows(node.edited().measurements());
+    assert_eq!(rows[1].images, [0, 1], "the stored row changed");
+    let reading =
+        crate::measurements::item_reading(node.edited(), &item(&state, id, "distance #1"));
+    let a = reading.endpoints[0].as_ref().unwrap().as_ref().unwrap();
+    assert_eq!(a.chosen().point, 1);
+    for c in a.chosen().patch_coords {
+        assert!(c.abs() < 1e-4, "the texel moved: {c}");
+    }
+    assert_eq!(state.focused_measurement_label(id), Some("distance #1"));
+
+    state.undo(id).unwrap();
+    assert_eq!(endpoints_of(&state, id, "distance #1"), was);
+    state.redo(id).unwrap();
+    assert_eq!(endpoints_of(&state, id, "distance #1")[0].unwrap().image, 1);
+
+    let again = state
+        .set_bench_measurement_endpoint(
+            id,
+            "distance #1",
+            EndpointSide::A,
+            view.image,
+            view.pixel,
+            EndpointMove::Switch,
+        )
+        .unwrap();
+    assert!(!again);
+    assert_eq!(version_count(&state, id), before + 1);
+    assert_eq!(
+        last_row(&state),
+        (
+            "Moved endpoint A of distance #1 from image_001.jpg to image_001.jpg: no effect, \
+             the endpoint is there already"
+                .to_string(),
+            false
+        )
+    );
+}
+
+/// Setting an endpoint outright is labelled by the pixel, and placing one not
+/// placed says so; a switch of an endpoint not placed, and a pixel outside its
+/// image, are refused and push nothing.
+#[test]
+fn setting_an_endpoint_names_the_pixel_and_refuses_one_outside_the_image() {
+    use crate::bench::measurement::EndpointMove;
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 1))
+        .unwrap();
+    assert!(state
+        .set_bench_measurement_endpoint(
+            id,
+            "distance #1",
+            EndpointSide::A,
+            2,
+            [10.0, 20.25],
+            EndpointMove::Set,
+        )
+        .unwrap());
+    assert_eq!(
+        state.node(id).unwrap().history.current_version().label,
+        "Moved endpoint A of distance #1 to image_002.jpg (10.0, 20.2)"
+    );
+    edit_item(&mut state, id, "distance #1", |item| {
+        let EditableMeasurementBody::Distance(d) = &mut item.body;
+        d.endpoints[1] = None;
+    });
+    let before = version_count(&state, id);
+    assert_eq!(
+        state.set_bench_measurement_endpoint(
+            id,
+            "distance #1",
+            EndpointSide::B,
+            0,
+            [1.0, 1.0],
+            EndpointMove::Switch,
+        ),
+        Err(
+            "Cannot switch endpoint B of distance #1: it is not placed, so it has no image to \
+             switch from."
+                .to_string()
+        )
+    );
+    assert_eq!(
+        state.set_bench_measurement_endpoint(
+            id,
+            "distance #1",
+            EndpointSide::A,
+            0,
+            [640.0, 3.0],
+            EndpointMove::Set,
+        ),
+        Err(
+            "Cannot move endpoint A of distance #1: endpoint A's pixel (640, 3) is outside \
+             image 0, which is [0, 640) x [0, 480)."
+                .to_string()
+        )
+    );
+    assert_eq!(version_count(&state, id), before);
+    assert!(state
+        .set_bench_measurement_endpoint(
+            id,
+            "distance #1",
+            EndpointSide::B,
+            0,
+            [1.0, 1.0],
+            EndpointMove::Set,
+        )
+        .unwrap());
+    assert_eq!(
+        state.node(id).unwrap().history.current_version().label,
+        "Set endpoint B of distance #1 to image_000.jpg (1.0, 1.0)"
+    );
+}
+
+/// Moving an endpoint is refused while a background task holds the node and
+/// on a view-only bench, in the shared sentence.
+#[test]
+fn moving_an_endpoint_is_refused_while_busy_and_on_a_view_only_bench() {
+    use crate::background::{Finished, Operation};
+    use crate::bench::measurement::EndpointMove;
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 1))
+        .unwrap();
+    let view = offers_of_a(&state, id).remove(0);
+    state
+        .start_background_task(
+            Operation::BENCH_FIT,
+            id,
+            Box::new(move |_| Finished::Cancelled),
+        )
+        .expect("nothing else is running");
+    let busy = state.busy_refusal(id).expect("the task holds the node");
+    let switch = |state: &mut AppState, id| {
+        state.set_bench_measurement_endpoint(
+            id,
+            "distance #1",
+            EndpointSide::A,
+            view.image,
+            view.pixel,
+            EndpointMove::Switch,
+        )
+    };
+    assert_eq!(switch(&mut state, id), Err(busy));
+
+    let (mut state, id) = view_only_state();
+    let sentence = state.bench_view_only_refusal(id).expect("view-only");
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 1))
+        .unwrap();
+    assert_eq!(switch(&mut state, id), Err(sentence));
+    assert_eq!(endpoints_of(&state, id, "distance #1")[0].unwrap().image, 0);
+}

@@ -202,14 +202,20 @@ pub(crate) fn parse(
             measurement_index: args.required_usize("measurement_index")?,
             endpoint: match args.optional_string("endpoint")? {
                 None => None,
-                Some(name) => Some(
-                    crate::measurements::EndpointSide::from_wire_name(&name).ok_or_else(|| {
-                        args.error(format!(
-                            "does not know the endpoint {name:?} — expected a or b."
-                        ))
-                    })?,
-                ),
+                Some(name) => Some(args.endpoint_side(&name)?),
             },
+        },
+        "get_measurement_endpoint_views" => Command::GetMeasurementEndpointViews {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            item: args.optional_string("item")?,
+            endpoint: args.endpoint_side(&args.required_string("endpoint")?)?,
+        },
+        "set_bench_measurement_endpoint" => Command::SetBenchMeasurementEndpoint {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            item: args.optional_string("item")?,
+            endpoint: args.endpoint_side(&args.required_string("endpoint")?)?,
+            camera_image: args.camera_image("camera_image")?,
+            pixel: args.required_pixel_f64("pixel")?,
         },
         "clear_selection" => {
             let scope = match args.optional_string("scope")?.as_deref() {
@@ -1418,6 +1424,15 @@ impl Args<'_> {
             Some(Value::Number(n)) => Ok(n.to_string()),
             Some(other) => Err(self.wrong_type(key, "a string or a number", other)),
         }
+    }
+
+    /// The endpoint `name` spells on the wire, `a` or `b`.
+    fn endpoint_side(&self, name: &str) -> Result<crate::measurements::EndpointSide, ToolError> {
+        crate::measurements::EndpointSide::from_wire_name(name).ok_or_else(|| {
+            self.error(format!(
+                "does not know the endpoint {name:?} — expected a or b."
+            ))
+        })
     }
 
     /// The `measurement_kind` a measurement tool names, `distance` when it

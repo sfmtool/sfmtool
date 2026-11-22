@@ -164,6 +164,13 @@ pub(crate) enum Command {
         measurement_index: Option<usize>,
         item: Option<String>,
     },
+    /// The offers of Measurement View's *Switch image…* popup for one
+    /// endpoint of a measurement item. `None` is the focused item.
+    GetMeasurementEndpointViews {
+        reconstruction_label: String,
+        item: Option<String>,
+        endpoint: crate::measurements::EndpointSide,
+    },
     /// The Action Log from a revision onward: what happened while the agent
     /// was not looking, whoever did it.
     ///
@@ -369,6 +376,15 @@ pub(crate) enum Command {
         reconstruction_label: String,
         item: Option<String>,
         label: String,
+    },
+    /// Move one endpoint of a measurement item to an image and a pixel.
+    /// `None` is the focused item.
+    SetBenchMeasurementEndpoint {
+        reconstruction_label: String,
+        item: Option<String>,
+        endpoint: crate::measurements::EndpointSide,
+        camera_image: CameraImageSel,
+        pixel: [f64; 2],
     },
     /// Set a measurement item's stated distance from text. `None` is the
     /// focused item.
@@ -1531,6 +1547,16 @@ pub(crate) fn apply_with_window(
             measurement_index,
             item.as_deref(),
         )),
+        Command::GetMeasurementEndpointViews {
+            reconstruction_label,
+            item,
+            endpoint,
+        } => done(measurements::get_measurement_endpoint_views(
+            state,
+            &reconstruction_label,
+            item.as_deref(),
+            endpoint,
+        )),
         Command::FindPoints { request } => find_points::find_points(state, request),
         Command::GetActionLog {
             since_revision,
@@ -1720,6 +1746,20 @@ pub(crate) fn apply_with_window(
             &reconstruction_label,
             item.as_deref(),
             &label,
+        )),
+        Command::SetBenchMeasurementEndpoint {
+            reconstruction_label,
+            item,
+            endpoint,
+            camera_image,
+            pixel,
+        } => done(measurements::set_bench_measurement_endpoint(
+            state,
+            &reconstruction_label,
+            item.as_deref(),
+            endpoint,
+            &camera_image,
+            pixel,
         )),
         Command::SetBenchMeasurementDistance {
             reconstruction_label,
