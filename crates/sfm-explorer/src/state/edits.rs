@@ -2233,6 +2233,24 @@ impl AppState {
         // it, and is unfocused otherwise; the move's own row says what
         // happened.
         self.settle_focused_item(id);
+        // While a measurement item is focused, the selected measurement is its
+        // origin at the cursor, or none where that row is gone: an undo that
+        // brings the row back selects it again. Assigned directly, so no row
+        // is written beside the move's own.
+        let focused_here = self.focused_item().is_some_and(|f| f.node == id);
+        if focused_here
+            && self.focused_item_kind() == Some(sfmtool_core::bench::ItemKind::Measurement)
+        {
+            let origin = self.focused_measurement_origin();
+            if self.selected_measurement != origin {
+                self.selected_measurement = origin;
+                self.selected_endpoint = None;
+            }
+        }
+        // A selection on a row the version landed on does not hold (one an
+        // undone commit had appended) is cleared now, so a reply to the move
+        // never names it.
+        self.prune_measurement_selection();
         let landed = self.scene[index].history.current_version();
         let (to, text) = (landed.serial, kind.text(&left_label, &landed.label));
         {

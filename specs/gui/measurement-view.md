@@ -142,12 +142,14 @@ version keeps that renumbering as its measurement map
 selection across it** (`AppState::follow_measurement_step`): an undo of the
 delete puts the selection back on the measurement that was selected, at the
 row it holds again, and a redo moves it down once more. A row the step being
-redone drops, or one the step being undone brought into being, clears the
-selection. Every frame, before the panels draw,
-`AppState::prune_measurement_selection` clears a selection whose row the
-version on screen does not hold, such as one on a row an undone commit had
-appended. A cleared selection stays cleared when a later step brings the row
-back.
+redone drops clears the selection. When the move ends, and again every frame
+before the panels draw, `AppState::prune_measurement_selection` clears a
+selection whose row the version on screen does not hold, such as one on a row
+an undone commit had appended. A cleared selection stays cleared when a later
+step brings the row back, except while a measurement item is focused: the
+selected measurement is then the item's origin at the cursor, so an undo or a
+redo that brings the origin's row back selects it again, with no Action Log
+row beside the move's own.
 
 ## The readings
 

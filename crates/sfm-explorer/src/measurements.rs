@@ -166,17 +166,26 @@ pub(crate) fn distance_rows(measurements: &MeasurementsData) -> Vec<DistanceRow>
     let Some(m) = measurements.distance.as_ref() else {
         return Vec::new();
     };
+    // Read through `.get`, so a value built by hand whose columns disagree in
+    // length reads as rows the resolver refuses rather than as a panic: a
+    // missing image is past the image set, a missing pixel or distance is not
+    // a number and a missing unit is metres, as core's readers take them.
     (0..m.len())
         .map(|i| DistanceRow {
             label: m.labels.get(i).cloned().unwrap_or_default(),
-            stated: f64::from(m.distances[i]),
-            unit: LengthUnit::from_code(m.units[i]).unwrap_or(LengthUnit::Metre),
-            images: [m.image_indexes[[i, 0]], m.image_indexes[[i, 1]]],
+            stated: m.distances.get(i).map_or(f64::NAN, |&d| f64::from(d)),
+            unit: m
+                .units
+                .get(i)
+                .and_then(|&code| LengthUnit::from_code(code))
+                .unwrap_or(LengthUnit::Metre),
+            images: [0, 1].map(|k| m.image_indexes.get((i, k)).copied().unwrap_or(u32::MAX)),
             pixels: [0, 1].map(|k| {
-                [
-                    f64::from(m.endpoints_xy[[i, k, 0]]),
-                    f64::from(m.endpoints_xy[[i, k, 1]]),
-                ]
+                [0, 1].map(|c| {
+                    m.endpoints_xy
+                        .get((i, k, c))
+                        .map_or(f64::NAN, |&v| f64::from(v))
+                })
             }),
         })
         .collect()
@@ -606,10 +615,18 @@ pub(crate) fn distance_rows_after_deleting_image(
     removed: u32,
 ) -> Vec<Option<u32>> {
     let mut next = 0;
+    // A row survives where both its images do, as the subset keeps it: an
+    // image past the set (or missing from a hand-built value) survives no
+    // delete.
+    let count = recon.image_count() as u32;
     distance_rows(&recon.image_set.measurements)
         .iter()
         .map(|row| {
-            if row.images.contains(&removed) {
+            if row
+                .images
+                .iter()
+                .any(|&image| image == removed || image >= count)
+            {
                 None
             } else {
                 next += 1;

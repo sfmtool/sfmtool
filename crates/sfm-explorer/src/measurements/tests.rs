@@ -405,3 +405,31 @@ fn the_fixtures_endpoints_resolve_to_its_points() {
         }
     }
 }
+
+/// Deleting an image of a value built by hand whose measurement columns
+/// disagree in length does not panic, and the selection follows the rows the
+/// subset keeps: the row with no image index survives no delete.
+#[test]
+fn deleting_an_image_of_mismatched_measurement_columns_does_not_panic() {
+    let mut recon = crate::measurements::fixture::measured_reconstruction(Some("m"));
+    let m = recon.image_set.measurements.distance.as_mut().unwrap();
+    // Five distances, but image indexes and units for the first four only.
+    m.image_indexes = m.image_indexes.slice(ndarray::s![..4, ..]).to_owned();
+    m.units = m.units.slice(ndarray::s![..4]).to_owned();
+    let mut state = crate::state::AppState::new();
+    let id = state.append_node(crate::scene::SceneNode::from_path(
+        std::path::Path::new("measured.sfmr"),
+        recon,
+    ));
+    state.select_measurement(MeasurementRef::distance(id, 3));
+    state
+        .delete_image(ImageRef::new(id, 2))
+        .expect("the delete runs");
+    // Rows 0 to 3 name images 0 and 1 only and survive; row 4 has none.
+    let node = state.node(id).unwrap();
+    assert_eq!(measurement_count(node.edited().measurements()), 4);
+    assert_eq!(
+        state.selected_measurement,
+        Some(MeasurementRef::distance(id, 3))
+    );
+}

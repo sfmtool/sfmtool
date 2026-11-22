@@ -1640,8 +1640,11 @@ impl AppState {
     /// Carry the selected measurement of node `id` across one step of an undo
     /// or a redo: through the measurement map of the step that made version
     /// `step` ([`crate::document::MeasurementMap`]), forward on a redo onto
-    /// `step`, and inverted on an undo of `step`. A row the step dropped, or
-    /// one it brought into being, clears the selection.
+    /// `step`, and inverted on an undo of `step`. A row the step dropped
+    /// clears the selection. A row an appending commit added keeps its index
+    /// here, since that commit's map is the identity; the move that walks
+    /// these steps then calls [`Self::prune_measurement_selection`], which
+    /// clears it where the version landed on holds no such row.
     ///
     /// What keeps an undo of a measurement delete or an image delete on the
     /// measurement that was selected, rather than on whatever row now has its

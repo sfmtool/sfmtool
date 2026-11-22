@@ -503,3 +503,39 @@ fn a_bench_row_s_double_click_never_covers_the_scene_tree() {
     state.edit_bench_item_at(id, 0);
     assert!(state.panel_is_in_front(Tab::MeasurementView));
 }
+
+/// While a measurement item is focused, an undo or a redo that brings its
+/// origin's row back selects that row again: after an undo of the delete of
+/// its row, and after a redo of a commit that appended it.
+#[test]
+fn undo_and_redo_reselect_a_focused_item_s_origin() {
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 3))
+        .unwrap();
+    state
+        .delete_measurement(MeasurementRef::distance(id, 3))
+        .unwrap();
+    assert_eq!(state.selected_measurement, None);
+    state.undo(id).unwrap();
+    assert_eq!(state.focused_measurement_label(id), Some("distance #3"));
+    assert_eq!(
+        state.selected_measurement,
+        Some(MeasurementRef::distance(id, 3))
+    );
+
+    // The delete again, then a commit that appends the row as row 4.
+    state.redo(id).unwrap();
+    assert_eq!(state.selected_measurement, None);
+    let committed = state.commit_bench_measurement(id, "distance #3").unwrap();
+    assert_eq!(committed.measurement, MeasurementRef::distance(id, 4));
+    state.undo(id).unwrap();
+    // The version before the commit holds four rows, so nothing is selected.
+    assert_eq!(state.selected_measurement, None);
+    state.redo(id).unwrap();
+    assert_eq!(state.focused_measurement_label(id), Some("distance #3"));
+    assert_eq!(
+        state.selected_measurement,
+        Some(MeasurementRef::distance(id, 4))
+    );
+}
