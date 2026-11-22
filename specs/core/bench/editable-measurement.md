@@ -18,16 +18,19 @@ stores is [`../../formats/sfmr-file-format.md`](../../formats/sfmr-file-format.m
 [`../reconstruction/measurement-endpoint.md`](../reconstruction/measurement-endpoint.md).
 The viewer's half (the versions, Measurement View's edited mode and the wire)
 is [`../../gui/measurement-view.md`](../../gui/measurement-view.md) and
-[`../../gui/bench.md`](../../gui/bench.md); the steps that edit an item are
-proposed in [`../../drafts/measurement-view.md`](../../drafts/measurement-view.md).
+[`../../gui/bench.md`](../../gui/bench.md). Two steps edit an item: setting its
+label and setting its stated distance (§ "The label and the stated distance").
+The steps that move an endpoint are proposed in
+[`../../drafts/measurement-view.md`](../../drafts/measurement-view.md).
 
 ## Rust API
 
 The item and its steps live in
 [bench/measurement.rs](../../../crates/sfmtool-core/src/bench/measurement.rs),
 re-exported from `sfmtool_core::bench`, and bound as
-`sfmtool.bench.EditableMeasurement`, `sfmtool.bench.put_measurement` and
-`sfmtool.bench.commit_measurement`.
+`sfmtool.bench.EditableMeasurement`, `sfmtool.bench.put_measurement`,
+`sfmtool.bench.set_measurement_label`, `sfmtool.bench.set_stated_distance`,
+`sfmtool.bench.parse_stated_distance` and `sfmtool.bench.commit_measurement`.
 
 ```rust
 pub enum MeasurementKind {
@@ -94,6 +97,26 @@ pub fn put_measurement(
     index: u32,
     version: u64,
 ) -> Result<(Bench, String), NoSuchMeasurement>;
+
+pub fn set_measurement_label(item: &EditableMeasurement, label: &str) -> EditableMeasurement;
+
+pub fn set_stated_distance(
+    item: &EditableMeasurement,
+    distance: f64,
+    unit: LengthUnit,
+) -> Result<EditableMeasurement, StatedDistanceRefusal>;
+
+/// `12in`, `30.48 cm`, or a bare number in `bare_unit`.
+pub fn parse_stated_distance(
+    text: &str,
+    bare_unit: LengthUnit,
+) -> Result<(f64, LengthUnit), StatedDistanceRefusal>;
+
+pub enum StatedDistanceRefusal {
+    Unreadable { text: String },
+    UnknownUnit { unit: String },
+    NotPositive { distance: f64 },
+}
 
 pub fn commit_measurement(
     base: &EditedReconstruction,
@@ -202,6 +225,30 @@ let commit = commit_measurement(&edited, item, Some(2))?;
 assert!(!commit.wrote); // nothing changed, so nothing is written
 ```
 
+## The label and the stated distance
+
+`set_measurement_label` and `set_stated_distance` are the steps that edit an
+item, each from one `EditableMeasurement` to the next, with nothing else
+changed. A caller that keeps versions replaces the item's `Arc` under the same
+`ItemId` with the result. Any text is a label, the empty one included. A stated
+distance is refused where it is not finite and strictly positive as the
+`float32` the file will hold, in the commit's sentence: *"the stated distance
+is -2, which must be finite and strictly positive"*.
+
+**A typed distance is read by `parse_stated_distance`.** It is a number with an
+optional unit suffix, `12in`, `30.48cm` or `30.48 cm`: an optional sign, digits
+with an optional decimal point, and an optional exponent, then optionally a
+space and one of the format's unit names (`mm`, `cm`, `m`, `in`, `ft`).
+Surrounding space is ignored. A bare number is in `bare_unit`, which the caller
+chooses: Measurement View passes the reconstruction's `world_space_unit`, or
+metres where it has none, and `sfm xform --scale-by-measurements` passes the
+unit its YAML file names
+([`../../cli/reconstruction/xform/scale-by-measurements-command.md`](../../cli/reconstruction/xform/scale-by-measurements-command.md)),
+so the panel and the command read a distance the same way. Text that is not
+such a number (`inf` and `nan` among it), a suffix that names no unit, and a
+value that is not finite and strictly positive are each refused with a
+sentence saying which.
+
 ## The commit
 
 The commit checks, in order, that both endpoints are placed, that each names an
@@ -273,7 +320,11 @@ assert report["wrote"] is False
 ```
 
 `put_measurement(bench, edited, kind, index, *, version=0)` returns
-`(Bench, EditableMeasurement)`. `commit_measurement(edited, measurement,
+`(Bench, EditableMeasurement)`. `set_measurement_label(measurement, label)`
+and `set_stated_distance(measurement, distance, unit)`, the unit a name
+(`"cm"`), each return the next `EditableMeasurement` and leave their input
+as it was. `parse_stated_distance(text, bare_unit="m")` returns
+`(value, unit_name)`. `commit_measurement(edited, measurement,
 origin_row=None, *, node="the reconstruction")` returns
 `(EditedReconstruction, report)`, the report carrying `index`, `replaced`,
 `wrote` and `label`. A refusal is a `ValueError` carrying the core sentence.
@@ -290,16 +341,19 @@ its ID), the commit (a replaced row and the rows around it, an appended row, a
 first row of a kind, the no-effect case, each refusal with the preconditions
 giving the same sentence, a re-seated item committing to no effect), the
 pointer equality of the shared base and point column, the direct delete and
-its row map, the last row leaving the kind absent, and a value with
-measurements of its own materializing them.
+its row map, the last row leaving the kind absent, a value with
+measurements of its own materializing them, the two steps changing their field
+and nothing else, a stated distance that is not finite and positive refused in
+the commit's sentence, and the parser: each unit suffix with and without a
+space, a bare number in the unit given, the number's other spellings, and each
+refusal.
 [tests/rust_bindings/bench/test_bench_measurement_rust_bindings.py](../../../tests/rust_bindings/bench/test_bench_measurement_rust_bindings.py)
 covers the same through the bindings.
 
 ## Non-goals
 
-- **Steps that edit an item.** Switching an endpoint to another photograph,
-  setting an endpoint's image and pixel, and setting the label and the stated
-  distance are proposed in
+- **Steps that move an endpoint.** Switching an endpoint to another
+  photograph and setting an endpoint's image and pixel are proposed in
   [`../../drafts/measurement-view.md`](../../drafts/measurement-view.md), as is
   an item started from one pixel with no stored row behind it.
 - **An endpoint's 3D position as part of the item.** It always follows from

@@ -22,6 +22,7 @@ from sfmtool.xform._scale_by_measurements import (
     ScaleByMeasurementsTransform,
     _SourceTracks,
     _build_observation_index,
+    _parse_distance,
     _resolve_point_cross_recon,
 )
 
@@ -285,3 +286,20 @@ def test_a_measured_point_at_infinity_is_refused(seoul_bull_sfmr_only, tmp_path)
         ValueError, match=rf"'sky': point pt3d_{prefix}_0 .* is at infinity"
     ):
         ScaleByMeasurementsTransform(yaml_path).apply(recon)
+
+
+def test_a_distance_is_read_by_the_shared_parser_and_converted():
+    """A YAML ``distance`` goes through the parser Measurement View's field
+    uses, then into the target unit: a suffix converts, a bare number (text or
+    a YAML number) is already in it, and a value that is not positive is
+    refused in that parser's words."""
+    assert _parse_distance("12in", "mm") == pytest.approx(304.8)
+    assert _parse_distance("0.3048m", "mm") == pytest.approx(304.8)
+    assert _parse_distance("30.48 cm", "ft") == pytest.approx(1.0)
+    assert _parse_distance("304.8", "mm") == pytest.approx(304.8)
+    assert _parse_distance(152.4, "mm") == pytest.approx(152.4)
+    assert _parse_distance(2, "m") == 2.0
+    with pytest.raises(ValueError, match="must be finite and strictly positive"):
+        _parse_distance(-1.0, "m")
+    with pytest.raises(ValueError, match="is not a unit"):
+        _parse_distance("3yd", "m")

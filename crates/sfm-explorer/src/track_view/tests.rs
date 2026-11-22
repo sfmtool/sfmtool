@@ -248,7 +248,10 @@ fn with_nothing_to_edit_the_box_is_greyed_and_names_the_ways_in() {
 
     let why = super::nothing_to_edit();
     assert!(why.contains("select a point"), "{why}");
-    assert!(why.contains("Bench groups"), "{why}");
+    assert!(
+        why.contains("Bench Points and Bench Clusters groups"),
+        "{why}"
+    );
     assert!(
         why.contains(crate::image_detail::START_CLUSTER_LABEL),
         "{why}"
@@ -278,7 +281,7 @@ fn the_empty_state_says_what_the_bench_holds() {
     assert!(
         texts
             .iter()
-            .any(|t| t.starts_with("1 item on the bench: double-click it")),
+            .any(|t| t.starts_with("1 track on the bench: double-click it")),
         "{texts:?}"
     );
 }
@@ -846,4 +849,50 @@ fn a_chip_draws_the_items_patch_or_an_empty_frame() {
     let texts = hover_texts_at(&mut panel, &ctx, &mut state, at);
     assert!(texts.iter().any(|t| t == "The cluster stage"), "{texts:?}");
     assert!(texts.iter().any(|t| t.starts_with("New")), "{texts:?}");
+}
+
+/// With a measurement item focused, Track View's empty state counts the
+/// bench's tracks only and points only at their groups: the measurement is
+/// edited in Measurement View, so it is neither counted nor offered here, and
+/// the greyed box names no group a measurement item is in.
+#[test]
+fn a_focused_measurement_is_neither_counted_nor_offered() {
+    use crate::measurements::MeasurementRef;
+    let (mut state, id) = crate::measurements::fixture::measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    state.deselect_point();
+    let (mut panel, ctx) = settled(&mut state);
+    let texts = painted(&mut panel, &ctx, &mut state);
+    assert!(
+        !texts
+            .iter()
+            .any(|t| t.contains("on the bench: double-click")),
+        "a measurement was counted as something Track View edits: {texts:?}"
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.contains(crate::image_detail::START_CLUSTER_LABEL)),
+        "the empty bench's line is missing: {texts:?}"
+    );
+    let response = click_text(&mut panel, &ctx, &mut state, EDIT_LABEL);
+    assert_eq!(response.set_edit, None, "a greyed box reported a tick");
+
+    // A track beside it is counted, and the measurement still is not.
+    state
+        .put_point_on_bench(PointRef::new(id, 0), None)
+        .unwrap();
+    state.unfocus_bench_item();
+    state.deselect_point();
+    state.recent_items.clear();
+    let texts = painted(&mut panel, &ctx, &mut state);
+    assert!(
+        texts.iter().any(|t| t.starts_with(
+            "1 track on the bench: double-click it in the Scene tree's Bench Points and Bench \
+             Clusters groups"
+        )),
+        "{texts:?}"
+    );
 }

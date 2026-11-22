@@ -920,6 +920,68 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "set_bench_measurement_label",
+            description: "Set a measurement item's own label, the text the file stores for \
+                          the measurement, as Measurement View's label field does: one bench \
+                          version labelled like \"Set the label of distance #2 to \\\"paw \
+                          width\\\"\", which leaves the reconstruction alone until the item is \
+                          committed. Any text is a label, the empty one included; it is not the \
+                          item's name on the bench, which rename_bench_item sets. A label the \
+                          item holds already pushes no version (changed: false). Refused on a \
+                          sift_files reconstruction (view-only bench) and while a background \
+                          task holds the node. Naming no item sets the focused one's. The reply \
+                          names the item and carries measurement_label.",
+            kind: Write,
+            schema: object(
+                &[("item", bench_item_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    (
+                        "label",
+                        json!({
+                            "type": "string",
+                            "description": "The measurement's label. May be empty.",
+                        }),
+                    ),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "set_bench_measurement_distance",
+            description: "Set a measurement item's stated distance, as Measurement View's \
+                          stated distance field does: one bench version labelled like \"Set the \
+                          stated distance of distance #2 to 4.2 cm\", which leaves the \
+                          reconstruction alone until the item is committed. The distance is a \
+                          number with an optional unit suffix, read as sfm xform \
+                          --scale-by-measurements reads one (\"12in\", \"30.48 cm\"); a bare \
+                          number, or a JSON number, is in the reconstruction's \
+                          world_space_unit, or in metres where it has none. Refused, in the \
+                          panel's words, for text that does not read, a unit other than mm, \
+                          cm, m, in and ft, and a value that is not finite and strictly \
+                          positive, on a sift_files reconstruction (view-only bench) and while \
+                          a background task holds the node. A distance the item states already \
+                          pushes no version (changed: false). Naming no item sets the focused \
+                          one's. The reply names the item and carries stated_distance and unit.",
+            kind: Write,
+            schema: object(
+                &[("item", bench_item_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    (
+                        "distance",
+                        json!({
+                            "description": "The stated distance: a number with an optional \
+                                            unit suffix, as text, or a bare number.",
+                            "anyOf": [
+                                { "type": "string" },
+                                { "type": "number" },
+                            ],
+                        }),
+                    ),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "fit_bench_track",
             description: "Fit a bench track at the stage it is in — the step that MOVES it. At \
                           the track stage it localizes every sighting against the patch, \

@@ -3,16 +3,18 @@
 **Status:** Draft
 
 Amends [gui/measurement-view.md](../gui/measurement-view.md), which describes
-what is built (steps 1 and 2 of § "Steps"): the selected measurement, the
+what is built (steps 1 to 3 of § "Steps"): the selected measurement, the
 per-version readings, the Scene tree's Measurements group with its row
 gestures and menu, the Measurement View panel with its header, the distance
 body and the endpoint gestures, its *Edit* box and edited mode with the live
-readings, *Commit*, *Discard* and *Rename*, deleting a stored measurement, the
-*Bench Measurements* group, and their tools. The measurement item itself, its
-origin, its commit and the direct delete are
+readings, *Commit*, *Discard* and *Rename*, the header's label and stated
+distance fields with their steps, deleting a stored measurement, the *Bench
+Measurements* group, and their tools. The measurement item itself, its origin,
+the steps that set its label and stated distance, its commit and the direct
+delete are
 [core/bench/editable-measurement.md](../core/bench/editable-measurement.md) and
 [gui/bench.md](../gui/bench.md) § "Measurement items". This draft keeps the
-rest: the steps that edit an item on the bench, creating a measurement, and
+rest: the steps that move an item's endpoints, creating a measurement, and
 drawing measurements in the 3D view and Image Detail. It also amends
 [gui/bench.md](../gui/bench.md), [gui/scene-graph.md](../gui/scene-graph.md),
 [gui/multi-panel-image-browser.md](../gui/multi-panel-image-browser.md) and the
@@ -24,8 +26,7 @@ Decided by the maintainer:
   item is a bench version that leaves the reconstruction alone, and the commit
   is the one step that writes the measurement into the file. A new measurement
   is a bench item from its first endpoint on, with no state outside the
-  history. Setting the label and the stated distance go through the bench as
-  well, with no direct shortcut.
+  history.
 - **The bench of a `sift_files` reconstruction stays view-only** for
   measurements too, with the same sentence: every step that edits an item is
   refused.
@@ -60,11 +61,11 @@ whose toolbar and fields Measurement View follows),
 
 ## Measurement View's edited mode, with the steps
 
-The edited mode is built: the toolbar, the header, the endpoint blocks shown
-read-only, and the live readings. The steps add these controls to it:
+The edited mode is built: the toolbar, the header with its label and stated
+distance fields ([gui/measurement-view.md](../gui/measurement-view.md) § "The
+label and the stated distance"), the endpoint blocks shown read-only, and the
+live readings. The steps add these controls to it:
 
-- the header's label and stated distance as fields, each a step on Enter or
-  when the field loses focus, and Escape cancelling (§ "Steps on an item");
 - in each endpoint block, *Switch image…*, and the image and pixel as fields
   (§ "Switching an endpoint's image", § "Setting an endpoint by hand"), with
   the 3D position beside them read-only;
@@ -83,21 +84,18 @@ Edit History and undone by `Ctrl+Z`, with an Action Log row, refused while a
 background task holds the node and on a view-only bench. None changes the
 reconstruction or marks the node dirty. Each is a pure core function from one
 `EditableMeasurement` to the next, which replaces the item's `Arc` under the
-same `ItemId`.
+same `ItemId`. The two steps built so far, setting the label and the stated
+distance, are made this way
+([gui/measurement-view.md](../gui/measurement-view.md) § "The label and the
+stated distance").
 
 | Step | Label in the Edit History |
 |---|---|
 | Switch an endpoint's image | `Moved endpoint A of distance #2 from IMG_0004.jpg to IMG_0011.jpg` |
 | Set an endpoint's image and pixel | `Moved endpoint A of distance #2 to IMG_0004.jpg (412.3, 230.5)` |
 | Place an endpoint not yet placed | `Set endpoint B of distance from IMG_0042@142,198 to IMG_0050.jpg (88.0, 301.5)` |
-| Set the measurement's label | `Set the label of distance #2 to "paw width"` |
-| Set the stated distance | `Set the stated distance of distance #2 to 4.2 cm` |
 
-The stated distance is a number and a unit in one field, parsed as the CLI's
-YAML parses a distance (`12in`, `30.48cm`), with the reconstruction's
-`world_space_unit` as the unit of a bare number, or `m` where it has none. A
-value that is not finite and positive is refused with the format's sentence. A
-pixel outside its image (`[0, width) × [0, height)` of that image's camera) is
+A pixel outside its image (`[0, width) × [0, height)` of that image's camera) is
 refused with the format's sentence.
 
 ## Switching an endpoint's image
@@ -298,9 +296,9 @@ New tools name the remaining steps, each refused in the panel's words:
   camera_image, pixel)`, taking any pixel inside the image, not only an
   offered one, as the panel's fields do. No tool sets an endpoint's 3D
   position.
-- `set_bench_measurement_label` and `set_bench_measurement_distance`.
 
-The built tools (`put_measurement_on_bench`, `commit_bench_measurement`,
+The built tools (`put_measurement_on_bench`, `set_bench_measurement_label`,
+`set_bench_measurement_distance`, `commit_bench_measurement`,
 `delete_measurement`, `get_measurement` naming an item, and the bench tools on
 a measurement item) are in [gui/mcp-server.md](../gui/mcp-server.md).
 
@@ -315,12 +313,11 @@ measurements changes none of those.
 ## What changes in the standing specs
 
 - [core/bench/editable-measurement.md](../core/bench/editable-measurement.md):
-  the item's steps and `endpoint_views`'s caller.
+  the endpoint steps and `endpoint_views`'s caller.
 - [core/reconstruction/measurement-endpoint.md](../core/reconstruction/measurement-endpoint.md):
   `endpoint_views`.
-- [gui/measurement-view.md](../gui/measurement-view.md): the header's fields,
-  the endpoint blocks' controls and menu, the steps, creating, drawing, and
-  the tools.
+- [gui/measurement-view.md](../gui/measurement-view.md): the endpoint blocks'
+  controls and menu, the endpoint steps, creating, drawing, and the tools.
 - [gui/bench.md](../gui/bench.md): the measurement steps on the wire, and a new
   measurement item's label.
 - [gui/multi-panel-image-browser.md](../gui/multi-panel-image-browser.md) and
@@ -344,8 +341,16 @@ Each step is one PR through `implement-change`, with its MCP tools, its
    point columns, which are not shared pointers; and each version keeps a
    measurement row map beside its point map, which an item's origin is
    followed through ([gui/document-model.md](../gui/document-model.md)).
-3. **Editing the label and the stated distance.** The header's fields and
-   their steps and tools.
+3. **Editing the label and the stated distance.** Built; see
+   [gui/measurement-view.md](../gui/measurement-view.md) § "The label and the
+   stated distance" and
+   [core/bench/editable-measurement.md](../core/bench/editable-measurement.md)
+   § "The label and the stated distance". Fitted to the code: the stated
+   distance is read by `parse_stated_distance` in core, which
+   `sfm xform --scale-by-measurements` calls too, and which takes a space
+   between the number and the unit and an exponent, so the field reads back
+   the `153 cm` it shows; and the fields commit only text other than what
+   they held when they took focus.
 4. **Switching an endpoint's image.** `endpoint_views` in core with its
    binding, the switch popup, `get_measurement_endpoint_views` and
    `set_bench_measurement_endpoint`.

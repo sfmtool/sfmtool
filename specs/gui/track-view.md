@@ -329,10 +329,12 @@ names it, so a panel too narrow to draw the chip still says what the tick does:
 *"Tick to edit pt3d_a1b2c3d4_1207 again"* (`track_view::again_hint`). It is
 greyed only when no entry is on a bench, and
 its refusal is then one sentence naming the three ways in: *"Nothing to edit:
-select a point, double-click an item in the Scene tree's Bench groups, or
-right-click a pixel in Image Detail and choose "Start cluster on the bench
-here"."*, the last quoted from that entry's own constant
-(`track_view::nothing_to_edit`).
+select a point, double-click a track in the Scene tree's Bench Points and Bench
+Clusters groups, or right-click a pixel in Image Detail and choose "Start
+cluster on the bench here"."*, the last quoted from that entry's own constant
+(`track_view::nothing_to_edit`). It names the groups that hold tracks and not
+Bench Measurements, since a measurement item is edited in Measurement View
+([measurement-view.md](measurement-view.md)).
 
 **The recent list** is `AppState::recent_items`: every item focused this
 session, most recently focused first and each once. Every focus, whether a
@@ -525,12 +527,15 @@ its empty state: `No point selected` above a **Go to Point...** button, which is
 where a person who has an ID and does not know where to enter it looks
 ([goto-point.md](goto-point.md)). Under the button one line names the item a
 tick of *Edit* goes back to when there is one, *"Tick Edit to edit
-pt3d_a1b2c3d4_1207 again, click a recent item beside it, or double-click an item
-in the Scene tree's Bench groups."*; otherwise it says what the bench holds when it holds anything, *"3
-items on the bench: double-click one in the Scene tree's Bench groups to edit
-it."*, and otherwise names the pixel gesture: *"To work on a track from a
+pt3d_a1b2c3d4_1207 again, click a recent item beside it, or double-click a track
+in the Scene tree's Bench Points and Bench Clusters groups."*; otherwise it says
+how many tracks the bench holds when it holds any, *"3 tracks on the bench:
+double-click one in the Scene tree's Bench Points and Bench Clusters groups to
+edit it."*, and otherwise names the pixel gesture: *"To work on a track from a
 pixel: right-click it in the Image Detail panel and choose "Start cluster on
-the bench here"."*.
+the bench here"."*. The count leaves out measurement items, which
+Measurement View edits, so a bench holding only measurements takes the pixel
+gesture's line.
 
 A selected index the version at the cursor does not hold -- a point an edit
 deleted, or an index past the end of the points -- is no selection here, and

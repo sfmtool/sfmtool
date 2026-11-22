@@ -311,6 +311,13 @@ impl AppState {
     pub(crate) fn set_measurement_editing(&mut self, id: ReconId, on: bool)
         -> Result<(), String>;
     /// What greys Measurement View's Commit.
+    /// Bench steps on one measurement item: its own label, and its stated
+    /// distance from text such as `4.2 cm`.
+    pub(crate) fn set_bench_measurement_label(&mut self, id: ReconId, label: &str, to: &str)
+        -> Result<bool, String>;
+    pub(crate) fn set_bench_measurement_distance(&mut self, id: ReconId, label: &str,
+                                                 text: &str)
+        -> Result<StatedDistanceSet, String>;
     pub(crate) fn measurement_commit_refusal(&self, id: ReconId, label: &str)
         -> Option<String>;
     pub(crate) fn commit_bench_measurement(&mut self, id: ReconId, label: &str)
@@ -1532,8 +1539,19 @@ The selected measurement follows the row map, and every item's origin follows
 it through the version graph; an item whose origin was the deleted row stays on
 the bench with none.
 
-The steps that edit a measurement item, and an item started from a pixel with
-no stored row, are proposed in
+**Setting the label and the stated distance**
+(`AppState::set_bench_measurement_label` and
+`AppState::set_bench_measurement_distance`) are bench steps on one item: each
+replaces the item's `Arc` under the same `ItemId` in one version through
+`History::push_bench` (`Set the label of distance #2 to "paw width"`, `Set the
+stated distance of distance #2 to 4.2 cm`), with one `Bench` row, and leaves
+the reconstruction alone. A value the item holds already pushes no version and
+writes the no-effect row. Both are refused while a background task holds the
+node and on a view-only bench ([`measurement-view.md`](measurement-view.md) §
+"The label and the stated distance").
+
+The steps that move a measurement item's endpoints, and an item started from a
+pixel with no stored row, are proposed in
 [`../drafts/measurement-view.md`](../drafts/measurement-view.md).
 
 ---
@@ -2215,8 +2233,12 @@ focused measurement keeps and the one that unfocuses it, each panel's label
 naming its own kind, the origin following a measurement delete and an image
 delete with their undo and redo, the endpoints following an image delete, a
 commit that replaces its row sharing the base and its undo, a commit that
-appends, one that changes nothing, the refusals and the view-only bench.
+appends, one that changes nothing, the refusals and the view-only bench, and
+setting the label and the stated distance: one step each with its label, its
+undo, the no-effect row, a bare number in the file's unit or metres, and the
+refusals while busy, on a view-only bench and of a distance that does not read.
 `mcp/tests/measurements.rs` covers `put_measurement_on_bench`,
+`set_bench_measurement_label`, `set_bench_measurement_distance`,
 `commit_bench_measurement` and `delete_measurement`, `get_bench` listing a
 measurement item, and a track tool refusing one.
 

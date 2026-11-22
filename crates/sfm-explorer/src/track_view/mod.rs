@@ -203,7 +203,12 @@ impl TrackView {
                 empty.has_pointer = ui.available_rect_before_wrap().contains(pos);
             }
             let recent_label = recent.as_ref().map(|(_, label)| label.as_str());
-            let note = bench_note(bench.len(), recent_label);
+            let tracks = bench
+                .entries()
+                .iter()
+                .filter(|entry| entry.item.kind() == sfmtool_core::bench::ItemKind::Track)
+                .count();
+            let note = bench_note(tracks, recent_label);
             empty.request_goto_point = show_empty_state(ui, &note);
             response.body = Some(empty);
         }
@@ -250,11 +255,16 @@ fn put_refusal(state: &AppState, point: crate::scene::PointRef) -> Option<String
 /// constant.
 pub(crate) fn nothing_to_edit() -> String {
     format!(
-        "Nothing to edit: select a point, double-click an item in the Scene tree's \
-         Bench groups, or right-click a pixel in Image Detail and choose \"{}\".",
+        "Nothing to edit: select a point, double-click a track in the Scene tree's \
+         {BENCH_TRACK_GROUPS}, or right-click a pixel in Image Detail and choose \"{}\".",
         crate::image_detail::START_CLUSTER_LABEL
     )
 }
+
+/// The Scene tree's groups that hold the bench's tracks, by their row text. A
+/// measurement item is in the third, Bench Measurements, and is edited in
+/// Measurement View.
+const BENCH_TRACK_GROUPS: &str = "Bench Points and Bench Clusters groups";
 
 /// The box's hover text with no point selected, naming the item a tick
 /// focuses, so a panel with no room to show it elsewhere still says what the
@@ -264,27 +274,31 @@ pub(crate) fn again_hint(label: &str) -> String {
 }
 
 /// The line under the empty state: the item a tick of *Edit* goes back to when
-/// there is one, else what the bench holds when it holds anything, and
+/// there is one, else how many tracks the bench holds when it holds any, and
 /// otherwise the way to start a track from a pixel.
-fn bench_note(items: usize, recent: Option<&str>) -> String {
+///
+/// `tracks` counts the track items only: a measurement item is edited in
+/// Measurement View, not here, so it is neither counted nor pointed at.
+fn bench_note(tracks: usize, recent: Option<&str>) -> String {
     if let Some(label) = recent {
         return format!(
             "Tick {EDIT_LABEL} to edit {label} again, click a recent item beside it, or \
-             double-click an item in the Scene tree's Bench groups."
+             double-click a track in the Scene tree's {BENCH_TRACK_GROUPS}."
         );
     }
-    match items {
+    match tracks {
         0 => format!(
             "To work on a track from a pixel: right-click it in the Image Detail panel \
              and choose \"{}\".",
             crate::image_detail::START_CLUSTER_LABEL
         ),
-        1 => "1 item on the bench: double-click it in the Scene tree's Bench groups to edit \
-              it."
-        .to_string(),
+        1 => format!(
+            "1 track on the bench: double-click it in the Scene tree's {BENCH_TRACK_GROUPS} \
+             to edit it."
+        ),
         n => format!(
-            "{n} items on the bench: double-click one in the Scene tree's Bench groups to \
-             edit it."
+            "{n} tracks on the bench: double-click one in the Scene tree's \
+             {BENCH_TRACK_GROUPS} to edit it."
         ),
     }
 }

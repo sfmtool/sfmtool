@@ -373,3 +373,35 @@ fn an_endpoints_double_click_looks_through_its_image_toward_its_pixel() {
     assert_eq!(state.selected_endpoint, Some(EndpointSide::B));
     assert_eq!(state.selected_image, Some(image));
 }
+
+/// The edited mode header's fields reach the steps through the dock: a label
+/// committed in the panel is the label step, and a stated distance the step
+/// refuses is a failed row in the step's words.
+#[test]
+fn the_measurement_header_fields_reach_their_steps() {
+    use crate::measurements::MeasurementRef;
+    let (mut state, id) = crate::measurements::fixture::measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    let mut track_view = TrackView::new();
+    with_tabs(&mut state, &mut track_view, |tabs, ui| {
+        tabs.apply_measurement_view_response(
+            ui,
+            crate::measurement_view::MeasurementViewResponse {
+                set_label: Some((id, "distance #0".into(), "paw width".into())),
+                set_distance: Some((id, "distance #0".into(), "0cm".into())),
+                ..Default::default()
+            },
+        );
+    });
+    let item = state.bench_measurement(id, "distance #0").unwrap();
+    assert_eq!(item.label, "paw width");
+    let last = state.action_log.entries().last().expect("a row");
+    assert!(last.failed);
+    assert_eq!(
+        last.text,
+        "Cannot set the stated distance of distance #0: the stated distance is 0, which must \
+         be finite and strictly positive."
+    );
+}

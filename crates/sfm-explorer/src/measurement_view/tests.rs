@@ -317,8 +317,11 @@ fn the_edited_mode_shows_the_item_s_live_readings() {
     for expected in [
         "distance #0",
         "From Distance #0: Commit replaces it",
-        "Label: ear to ear",
-        "Stated distance: 153 cm",
+        // The label and the stated distance, each in its field.
+        "Label",
+        "ear to ear",
+        "Stated distance",
+        "153 cm",
         "Reconstructed: 150.0 cm",
         // The median leaves the origin out, and compares the item with the
         // other two readings.
@@ -403,4 +406,181 @@ fn an_unplaced_endpoint_greys_commit_and_says_so() {
              endpoints."
         )
     );
+}
+
+// ── The header's fields ─────────────────────────────────────────────────
+
+fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+    egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers,
+    }
+}
+
+/// A settled panel showing the focused item `distance #0`.
+fn editing(state: &mut AppState, id: ReconId) -> (MeasurementView, egui::Context) {
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    settled(state)
+}
+
+/// Click into `field`, select what it holds and type `text` over it,
+/// returning the response of every frame.
+fn type_over(
+    panel: &mut MeasurementView,
+    ctx: &egui::Context,
+    state: &AppState,
+    field: HeaderField,
+    text: &str,
+) -> Vec<MeasurementViewResponse> {
+    let at = panel
+        .field_rect(field)
+        .expect("the field was drawn")
+        .center();
+    let mut out = clicks(panel, ctx, state, at, egui::PointerButton::Primary, 1);
+    out.push(run_frame(
+        panel,
+        ctx,
+        state,
+        vec![
+            key(egui::Key::A, egui::Modifiers::COMMAND),
+            egui::Event::Text(text.to_string()),
+        ],
+    ));
+    out
+}
+
+fn any_label(responses: &[MeasurementViewResponse]) -> Option<(ReconId, String, String)> {
+    responses.iter().find_map(|r| r.set_label.clone())
+}
+
+fn any_distance(responses: &[MeasurementViewResponse]) -> Option<(ReconId, String, String)> {
+    responses.iter().find_map(|r| r.set_distance.clone())
+}
+
+/// Typing a label and pressing Enter asks for the label step, once, on the
+/// item the panel shows.
+#[test]
+fn the_label_field_commits_on_enter() {
+    let (mut state, id) = measured_state(Some("m"));
+    let (mut panel, ctx) = editing(&mut state, id);
+    let typed = type_over(&mut panel, &ctx, &state, HeaderField::Label, "paw width");
+    assert_eq!(any_label(&typed), None, "typing alone committed");
+    let texts = painted(&mut panel, &ctx, &state);
+    assert!(texts.iter().any(|t| t == "paw width"), "{texts:?}");
+    let entered = run_frame(
+        &mut panel,
+        &ctx,
+        &state,
+        vec![key(egui::Key::Enter, egui::Modifiers::default())],
+    );
+    assert_eq!(
+        entered.set_label,
+        Some((id, "distance #0".to_string(), "paw width".to_string()))
+    );
+    assert_eq!(entered.set_distance, None);
+    let after = run_frame(&mut panel, &ctx, &state, Vec::new());
+    assert_eq!(after.set_label, None, "the commit was reported twice");
+}
+
+/// Typing a distance and clicking elsewhere, which takes the focus from the
+/// field, asks for the distance step with the text typed.
+#[test]
+fn the_distance_field_commits_when_it_loses_focus() {
+    let (mut state, id) = measured_state(Some("m"));
+    let (mut panel, ctx) = editing(&mut state, id);
+    type_over(&mut panel, &ctx, &state, HeaderField::Distance, "4.2 cm");
+    // A click on the empty foot of the panel.
+    let away = clicks(
+        &mut panel,
+        &ctx,
+        &state,
+        egui::pos2(500.0, 890.0),
+        egui::PointerButton::Primary,
+        1,
+    );
+    assert_eq!(
+        any_distance(&away),
+        Some((id, "distance #0".to_string(), "4.2 cm".to_string()))
+    );
+    assert_eq!(any_label(&away), None);
+}
+
+/// Escape puts the field back to what the item holds and asks for nothing.
+#[test]
+fn escape_puts_a_field_back() {
+    let (mut state, id) = measured_state(Some("m"));
+    let (mut panel, ctx) = editing(&mut state, id);
+    type_over(&mut panel, &ctx, &state, HeaderField::Label, "paw width");
+    let escaped = run_frame(
+        &mut panel,
+        &ctx,
+        &state,
+        vec![key(egui::Key::Escape, egui::Modifiers::default())],
+    );
+    assert_eq!(escaped.set_label, None);
+    // Nothing is asked for when the focus moves on either.
+    let away = clicks(
+        &mut panel,
+        &ctx,
+        &state,
+        egui::pos2(500.0, 890.0),
+        egui::PointerButton::Primary,
+        1,
+    );
+    assert_eq!(any_label(&away), None);
+    let texts = painted(&mut panel, &ctx, &state);
+    assert!(texts.iter().any(|t| t == "ear to ear"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "paw width"), "{texts:?}");
+}
+
+/// A field left with the text it took focus with asks for no step.
+#[test]
+fn a_field_left_unchanged_asks_for_nothing() {
+    let (mut state, id) = measured_state(Some("m"));
+    let (mut panel, ctx) = editing(&mut state, id);
+    let typed = type_over(&mut panel, &ctx, &state, HeaderField::Distance, "153 cm");
+    let entered = run_frame(
+        &mut panel,
+        &ctx,
+        &state,
+        vec![key(egui::Key::Enter, egui::Modifiers::default())],
+    );
+    assert_eq!(any_distance(&typed), None);
+    assert_eq!(entered.set_distance, None);
+}
+
+/// While a task holds the node the fields are greyed, with the refusal a step
+/// would give (`AppState::bench_edit_refusal`, which a view-only bench answers
+/// too): they take no typing and ask for nothing.
+#[test]
+fn the_fields_are_greyed_while_a_step_would_be_refused() {
+    use crate::background::{Finished, Operation};
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    state
+        .start_background_task(
+            Operation::BENCH_FIT,
+            id,
+            Box::new(move |_| Finished::Cancelled),
+        )
+        .expect("nothing else is running");
+    let (mut panel, ctx) = settled(&state);
+    let mut responses = type_over(&mut panel, &ctx, &state, HeaderField::Label, "x");
+    responses.push(run_frame(
+        &mut panel,
+        &ctx,
+        &state,
+        vec![key(egui::Key::Enter, egui::Modifiers::default())],
+    ));
+    assert_eq!(any_label(&responses), None);
+    let texts = painted(&mut panel, &ctx, &state);
+    assert!(texts.iter().any(|t| t == "ear to ear"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "x"), "{texts:?}");
 }

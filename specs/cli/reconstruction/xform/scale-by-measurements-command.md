@@ -92,9 +92,14 @@ Supported unit suffixes:
 | `in` | inches | x 0.0254 |
 | `ft` | feet | x 0.3048 |
 
-The suffix is parsed by matching a trailing alphabetic string after the numeric value. No
-whitespace is allowed between the number and the suffix (e.g., `12in` not `12 in`). The numeric
-part follows standard floating-point syntax (e.g., `12`, `12.0`, `0.3048`).
+The suffix is the trailing run of lowercase letters after the numeric value, with or without a
+space before it (`12in` and `12 in` are the same). The numeric part is an optional sign, digits
+with an optional decimal point, and an optional exponent (`12`, `12.0`, `.5`, `0.3048`, `1e-3`).
+The value is read by core's `parse_stated_distance`, the parser Measurement View's stated distance
+field uses ([core/bench/editable-measurement.md](../../../core/bench/editable-measurement.md)
+§ "The label and the stated distance"), with the target `unit` as the unit of a bare number; a
+YAML number is read as the bare number it spells. Text that is not such a number, an unknown
+suffix, and a value that is not finite and strictly positive are each an error saying which.
 
 ### Conversion Logic
 
@@ -158,7 +163,7 @@ distorted.
 - **Zero reconstruction distance**: Error — the two points are coincident in the reconstruction.
 - **Point at infinity**: Error naming the measurement and the Point ID — a `w = 0` point is a
   direction with no position, so no distance to it can be measured.
-- **Negative or zero real distance**: Error at parse time.
+- **Negative, zero or non-finite real distance**: Error at parse time.
 
 ## Point ID Resolution
 

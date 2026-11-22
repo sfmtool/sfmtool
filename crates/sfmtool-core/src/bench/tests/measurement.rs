@@ -496,3 +496,178 @@ fn columns_of_different_lengths_are_read_without_a_panic() {
     assert_eq!(map, vec![Some(0), None]);
     assert_eq!(row(&next, 0).4, "only");
 }
+
+// ---- Setting the label and the stated distance ----------------------------
+
+#[test]
+fn setting_the_label_changes_the_label_and_nothing_else() {
+    let value = measured();
+    let item = item_of(&value, 0);
+    let next = set_measurement_label(&item, "paw width");
+    assert_eq!(next.label, "paw width");
+    assert_eq!(item.label, "ear to ear", "the step changed its input");
+    assert_eq!(next.origin, item.origin);
+    assert_eq!(next.body, item.body);
+    // The empty label is a label: the file allows an unlabelled measurement.
+    assert_eq!(set_measurement_label(&item, "").label, "");
+    // A commit writes the new label into the row and nothing else.
+    let commit = commit_measurement(&value, &next, Some(0)).unwrap();
+    assert!(commit.wrote);
+    let (d, unit, images, pixels, label) = row(&commit.value, 0);
+    assert_eq!(label, "paw width");
+    assert_eq!((d, unit, images, pixels), {
+        let (d, unit, images, pixels, _) = row(&value, 0);
+        (d, unit, images, pixels)
+    });
+}
+
+#[test]
+fn setting_the_stated_distance_changes_the_distance_and_nothing_else() {
+    let value = measured();
+    let item = item_of(&value, 0);
+    let next = set_stated_distance(&item, 4.2, LengthUnit::Inch).unwrap();
+    assert_eq!(distance(&next).distance, Some((4.2, LengthUnit::Inch)));
+    assert_eq!(distance(&next).endpoints, distance(&item).endpoints);
+    assert_eq!(next.label, item.label);
+    assert_eq!(next.origin, item.origin);
+    assert_eq!(
+        distance(&item).distance,
+        Some((12.0, LengthUnit::Centimetre)),
+        "the step changed its input"
+    );
+    // An item with no stated distance takes one.
+    let unstated = with_distance(&item, |d| d.distance = None);
+    assert_eq!(
+        distance(&set_stated_distance(&unstated, 3.0, LengthUnit::Metre).unwrap()).distance,
+        Some((3.0, LengthUnit::Metre))
+    );
+}
+
+#[test]
+fn a_stated_distance_that_is_not_finite_and_positive_is_refused() {
+    let item = item_of(&measured(), 0);
+    for bad in [0.0, -1.0, f64::NAN, f64::INFINITY, 1e300, 1e-60] {
+        let refusal = set_stated_distance(&item, bad, LengthUnit::Metre).unwrap_err();
+        assert!(
+            matches!(refusal, StatedDistanceRefusal::NotPositive { .. }),
+            "{bad}: {refusal:?}"
+        );
+    }
+    // The sentence is the commit's, so the step and the commit read alike.
+    assert_eq!(
+        set_stated_distance(&item, -1.0, LengthUnit::Metre)
+            .unwrap_err()
+            .to_string(),
+        MeasurementCommitRefusal::DistanceNotPositive { distance: -1.0 }.to_string()
+    );
+    assert_eq!(
+        StatedDistanceRefusal::NotPositive { distance: -1.0 }.to_string(),
+        "the stated distance is -1, which must be finite and strictly positive"
+    );
+}
+
+#[test]
+fn a_distance_reads_as_a_number_with_an_optional_unit() {
+    let parse = |text: &str, bare: LengthUnit| parse_stated_distance(text, bare);
+    // A suffix names the unit, with or without a space before it.
+    assert_eq!(
+        parse("12in", LengthUnit::Metre),
+        Ok((12.0, LengthUnit::Inch))
+    );
+    assert_eq!(
+        parse("30.48cm", LengthUnit::Metre),
+        Ok((30.48, LengthUnit::Centimetre))
+    );
+    assert_eq!(
+        parse(" 4.2 cm ", LengthUnit::Metre),
+        Ok((4.2, LengthUnit::Centimetre))
+    );
+    assert_eq!(
+        parse("0.3048m", LengthUnit::Foot),
+        Ok((0.3048, LengthUnit::Metre))
+    );
+    assert_eq!(parse("2ft", LengthUnit::Metre), Ok((2.0, LengthUnit::Foot)));
+    assert_eq!(
+        parse("5mm", LengthUnit::Metre),
+        Ok((5.0, LengthUnit::Millimetre))
+    );
+    // A bare number takes the unit the caller gives.
+    assert_eq!(
+        parse("304.8", LengthUnit::Millimetre),
+        Ok((304.8, LengthUnit::Millimetre))
+    );
+    assert_eq!(
+        parse("12", LengthUnit::Metre),
+        Ok((12.0, LengthUnit::Metre))
+    );
+    // The number's other spellings.
+    assert_eq!(parse(".5", LengthUnit::Metre), Ok((0.5, LengthUnit::Metre)));
+    assert_eq!(
+        parse("12.", LengthUnit::Metre),
+        Ok((12.0, LengthUnit::Metre))
+    );
+    assert_eq!(parse("+3", LengthUnit::Metre), Ok((3.0, LengthUnit::Metre)));
+    assert_eq!(
+        parse("1e-3m", LengthUnit::Inch),
+        Ok((0.001, LengthUnit::Metre))
+    );
+    assert_eq!(
+        parse("2.5E2", LengthUnit::Metre),
+        Ok((250.0, LengthUnit::Metre))
+    );
+}
+
+#[test]
+fn a_distance_that_does_not_read_is_refused_with_why() {
+    let parse = |text: &str| parse_stated_distance(text, LengthUnit::Metre);
+    for unreadable in [
+        "", "cm", "abc", "inf", "nan", "12 IN", "1.2.3", "1e", "e5", "-", ".",
+    ] {
+        // `1e` reads as the number 1 with the unit `e`, which is unknown.
+        let refusal = parse(unreadable).unwrap_err();
+        assert!(
+            matches!(
+                refusal,
+                StatedDistanceRefusal::Unreadable { .. }
+                    | StatedDistanceRefusal::UnknownUnit { .. }
+            ),
+            "{unreadable:?}: {refusal:?}"
+        );
+    }
+    assert_eq!(
+        parse("12 IN"),
+        Err(StatedDistanceRefusal::Unreadable {
+            text: "12 IN".to_string()
+        })
+    );
+    assert_eq!(
+        parse("12 IN").unwrap_err().to_string(),
+        "\"12 IN\" is not a distance: give a number with an optional unit suffix, such as \
+         304.8, 12in or 0.3048 m"
+    );
+    assert_eq!(
+        parse("12yd"),
+        Err(StatedDistanceRefusal::UnknownUnit {
+            unit: "yd".to_string()
+        })
+    );
+    assert_eq!(
+        parse("12yd").unwrap_err().to_string(),
+        "\"yd\" is not a unit: the units are mm, cm, m, in, ft"
+    );
+    for not_positive in ["0", "-2cm", "0.0m", "1e-60"] {
+        assert!(
+            matches!(
+                parse(not_positive),
+                Err(StatedDistanceRefusal::NotPositive { .. })
+            ),
+            "{not_positive:?}"
+        );
+    }
+    // Too long for a `float32`, so the file could not hold it.
+    let huge = format!("1{}", "0".repeat(40));
+    assert!(matches!(
+        parse(&huge),
+        Err(StatedDistanceRefusal::NotPositive { .. })
+    ));
+}

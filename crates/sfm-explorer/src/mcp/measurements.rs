@@ -5,7 +5,8 @@
 //! read what the Scene tree's Measurements rows and Measurement View show;
 //! `select_measurement`, which selects a measurement, or one of its
 //! endpoints, as a click on its row or its block does; and the three that
-//! edit, `put_measurement_on_bench`, `commit_bench_measurement` and
+//! edit, `put_measurement_on_bench`, `set_bench_measurement_label`,
+//! `set_bench_measurement_distance`, `commit_bench_measurement` and
 //! `delete_measurement`, each one `AppState` call the panel's gesture makes.
 //!
 //! A stored measurement's reading is the node's cached one
@@ -241,6 +242,20 @@ pub(super) fn put_measurement_on_bench(
     })?;
     let put = put.expect("a put that succeeded named its item");
     let object = reply.as_object_mut().expect("an edit reply is an object");
+    if !put.made {
+        // The focus pushes no version, so without this the only sentence in
+        // the reply would be the `label` of the version the node stands at,
+        // which an earlier step wrote; `create_bench_track` answers the same.
+        object.insert(
+            "report".into(),
+            json!(format!(
+                "Put {} on the bench: no effect, it is on the bench already as {}, now the \
+                 focused item",
+                measurement.lower_title(),
+                put.label
+            )),
+        );
+    }
     object.insert("item".into(), json!(put.label));
     Ok(reply)
 }
@@ -253,20 +268,7 @@ pub(super) fn commit_bench_measurement(
     reconstruction_label: &str,
     named: Option<&str>,
 ) -> JsonReply {
-    let id = resolve_reconstruction(state, Some(reconstruction_label))?;
-    let item = match named {
-        Some(item) => item.to_string(),
-        None => state
-            .focused_item_label(id)
-            .map(str::to_string)
-            .ok_or_else(|| {
-                ToolError::new(format!(
-                    "No item on {reconstruction_label}'s bench is focused. Name one with item, \
-                     focus one with focus_bench_item, or put one on with \
-                     put_measurement_on_bench."
-                ))
-            })?,
-    };
+    let (id, item) = measurement_target(state, reconstruction_label, named)?;
     let mut committed = None;
     let mut reply = edit::edited(state, id, |state| {
         state
@@ -284,6 +286,79 @@ pub(super) fn commit_bench_measurement(
             "replaced": committed.replaced,
         }),
     );
+    Ok(reply)
+}
+
+/// The node a measurement item tool names, and the item: the one named, or
+/// the focused item where none is.
+fn measurement_target(
+    state: &AppState,
+    reconstruction_label: &str,
+    named: Option<&str>,
+) -> Result<(ReconId, String), ToolError> {
+    let id = resolve_reconstruction(state, Some(reconstruction_label))?;
+    let item = match named {
+        Some(item) => item.to_string(),
+        None => state
+            .focused_item_label(id)
+            .map(str::to_string)
+            .ok_or_else(|| {
+                ToolError::new(format!(
+                    "No item on {reconstruction_label}'s bench is focused. Name one with item, \
+                     focus one with focus_bench_item, or put one on with \
+                     put_measurement_on_bench."
+                ))
+            })?,
+    };
+    Ok((id, item))
+}
+
+/// `set_bench_measurement_label`: the label field of Measurement View's
+/// edited mode ([`AppState::set_bench_measurement_label`]), on the item
+/// named or the focused one. The reply names the item and carries the
+/// measurement's label as it stands after the call.
+pub(super) fn set_bench_measurement_label(
+    state: &mut AppState,
+    reconstruction_label: &str,
+    named: Option<&str>,
+    label: &str,
+) -> JsonReply {
+    let (id, item) = measurement_target(state, reconstruction_label, named)?;
+    let mut reply = edit::edited(state, id, |state| {
+        state
+            .set_bench_measurement_label(id, &item, label)
+            .map(|_| ())
+    })?;
+    let object = reply.as_object_mut().expect("an edit reply is an object");
+    object.insert("item".into(), json!(item));
+    object.insert("measurement_label".into(), json!(label));
+    Ok(reply)
+}
+
+/// `set_bench_measurement_distance`: the stated distance field of Measurement
+/// View's edited mode ([`AppState::set_bench_measurement_distance`]), on the
+/// item named or the focused one. The reply names the item and carries the
+/// stated distance and its unit as they stand after the call.
+pub(super) fn set_bench_measurement_distance(
+    state: &mut AppState,
+    reconstruction_label: &str,
+    named: Option<&str>,
+    distance: &str,
+) -> JsonReply {
+    let (id, item) = measurement_target(state, reconstruction_label, named)?;
+    let mut set = None;
+    let mut reply = edit::edited(state, id, |state| {
+        state
+            .set_bench_measurement_distance(id, &item, distance)
+            .map(|done| set = Some(done))
+    })?;
+    let (stated, unit) = set
+        .expect("a step that succeeded said what it set")
+        .distance;
+    let object = reply.as_object_mut().expect("an edit reply is an object");
+    object.insert("item".into(), json!(item));
+    object.insert("stated_distance".into(), json!(stated));
+    object.insert("unit".into(), json!(unit.name()));
     Ok(reply)
 }
 

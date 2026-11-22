@@ -17,11 +17,11 @@ endpoint comes from
 A measurement is edited on the bench, as a track is ([bench.md](bench.md)): a
 double-click on its row puts it on the bench as an item and focuses it, the
 panel's **Edit** box shows that item with its readings taken live from it, and
-*Commit* writes it back into the file in one step. Deleting a stored
-measurement is a direct edit from its row's menu. Switching an endpoint to
-another photograph, setting one by hand, setting the label and the stated
-distance, creating a measurement, and drawing measurements in the 3D view and
-Image Detail are proposed in
+*Commit* writes it back into the file in one step. The edited mode's header
+sets the item's label and its stated distance, each a bench step. Deleting a
+stored measurement is a direct edit from its row's menu. Switching an endpoint
+to another photograph, setting one by hand, creating a measurement, and drawing
+measurements in the 3D view and Image Detail are proposed in
 [drafts/measurement-view.md](../drafts/measurement-view.md).
 
 Related specs: [track-view.md](track-view.md) (the panel this one is modelled
@@ -77,6 +77,12 @@ impl AppState {
         -> Result<(), String>;
     pub(crate) fn commit_bench_measurement(&mut self, id: ReconId, label: &str)
         -> Result<MeasurementCommitted, String>;
+    /// The header's fields (§ "The label and the stated distance").
+    pub(crate) fn set_bench_measurement_label(&mut self, id: ReconId, label: &str,
+                                              to: &str) -> Result<bool, String>;
+    pub(crate) fn set_bench_measurement_distance(&mut self, id: ReconId, label: &str,
+                                                 text: &str)
+        -> Result<StatedDistanceSet, String>;
     pub(crate) fn delete_measurement(&mut self, measurement: MeasurementRef)
         -> Result<(), String>;
     /// A click on an endpoint block of the focused item.
@@ -408,14 +414,58 @@ With the box ticked the panel shows the focused item:
 - **The header**: the item's label on the bench and its node; where it came
   from, `From Distance #2: Commit replaces it`, or `From no stored row: Commit
   adds it as a new row` where its origin resolves to none; the measurement's
-  own label, or *No label*; the stated distance; and the median line (§ "Live
-  readings").
+  own label and its stated distance, each in a field (§ "The label and the
+  stated distance"); and the median line (§ "Live readings").
 - **The endpoint blocks**, as for a stored measurement, read from the item's
   endpoints. They show the endpoints read-only. An endpoint that is not placed,
   which deleting the image it was in leaves, is a block saying `Endpoint B is
   not placed.`
 - **The result block**, from the live readings, or `No distance: endpoint B is
   not placed.` where an endpoint is missing.
+
+### The label and the stated distance
+
+The header shows the measurement's own label and its stated distance as two
+fields, **Label** and **Stated distance**, the second holding the number and
+the unit in one, `153 cm`. An empty field shows *No label* or *No stated
+distance* in grey. A field commits on Enter or when it loses focus, with text
+other than what it held when it took focus, and Escape puts it back and
+commits nothing, as Track View's *Rename* field reads Enter
+([track-view.md](track-view.md)). The panel reports the text and the dock makes
+the step, so a refusal is a failed Action Log row in the step's words.
+
+Each commit is one bench step on the focused item, made by a pure core function
+from one `EditableMeasurement` to the next
+([core/bench/editable-measurement.md](../core/bench/editable-measurement.md) §
+"The label and the stated distance"), which replaces the item's `Arc` under
+the same `ItemId`: one version through `History::push_bench`, listed in the
+Edit History and undone by `Ctrl+Z`, with one `Bench` row. Neither changes the
+reconstruction or marks the node dirty; the stored row changes only when the
+item is committed.
+
+| Step | Label in the Edit History |
+|---|---|
+| Set the measurement's label (`AppState::set_bench_measurement_label`) | `Set the label of distance #2 to "paw width"` |
+| Set the stated distance (`AppState::set_bench_measurement_distance`) | `Set the stated distance of distance #2 to 4.2 cm` |
+
+- **The label** is any text, the empty one included; it is not the item's name
+  on the bench, which *Rename* sets.
+- **The stated distance** is read by core's `parse_stated_distance`, the parser
+  `sfm xform --scale-by-measurements` reads a YAML distance with: a number with
+  an optional unit suffix, `12in`, `30.48cm` or `30.48 cm`. A bare number is in
+  the reconstruction's `world_space_unit`, or in metres where it has none, and
+  the field's hover text names that unit. Text that does not read, a suffix
+  other than `mm`, `cm`, `m`, `in` and `ft`, and a value that is not finite and
+  strictly positive as the file's `float32` are refused with core's sentence:
+  *Cannot set the stated distance of distance #2: the stated distance is -2,
+  which must be finite and strictly positive.*
+- **A value the item holds already**, the same label or the same distance and
+  unit as the file would store them, pushes no version and writes the no-effect
+  row (`Set the label of distance #2 to "paw width": no effect, it has that
+  label already`).
+- **Both are refused** while a background task holds the node and on a
+  view-only bench, with the shared sentence (`AppState::bench_edit_refusal`).
+  The fields are then greyed, with that sentence as their hover text.
 
 ### Live readings
 
@@ -480,8 +530,11 @@ The panel's content is reachable over MCP ([mcp-server.md](mcp-server.md)):
   an `endpoint`, that endpoint as a click on its block does, including the
   reveal.
 - `put_measurement_on_bench` is a row's double-click without the raise and the
-  framing; `commit_bench_measurement` is *Commit*, on the item named or the
-  focused one; `delete_measurement` is *Delete*.
+  framing, and where the item is on the bench already its reply's `report`
+  says so and names it; `set_bench_measurement_label` and
+  `set_bench_measurement_distance` are the header's two fields, and
+  `commit_bench_measurement` is *Commit*, each on the item named or the focused
+  one; `delete_measurement` is *Delete*.
 - `get_measurement` naming an `item` gives a measurement item on the bench
   with its live readings and its `origin`, and `get_bench` lists measurement
   items beside tracks. `focus_bench_item`, `unfocus_bench_item`,
@@ -589,9 +642,22 @@ at-infinity case is covered by the Rust tests.
 - **The edited mode** (`measurement_view/tests.rs`): ticking the box asks for
   the put; the toolbar, the header and the live readings, which follow a step
   on the item while the stored row's do not; an unplaced endpoint's block, the
-  result's line and *Commit* greyed with the refusal.
+  result's line and *Commit* greyed with the refusal; the label field
+  committing on Enter, the stated distance field when it loses focus, Escape
+  putting a field back, a field left unchanged asking for nothing, and the
+  fields greyed while a task holds the node. (`dock/tests.rs`): a committed
+  field reaching its step, and a refused one writing a failed row.
+- **The label and the stated distance** (`bench/measurement/tests.rs`): each
+  step's label in the Edit History, the stored row and the dirty flag left
+  alone, the item's ID kept, undo and redo; a bare number in the file's unit,
+  in feet, and in metres with no unit; the no-effect row; text that does not
+  read, an unknown unit and a value that is not positive refused in core's
+  sentence; both refused while busy, on a view-only bench, and for a track.
 - **The bench tools** (`mcp/tests/measurements.rs`): `put_measurement_on_bench`
-  once and twice, `get_bench` listing the item, a track tool refusing it;
+  once and twice, the second's `report` naming the item, `get_bench` listing
+  the item, a track tool refusing it; `set_bench_measurement_label` and its
+  no-effect answer; `set_bench_measurement_distance` with text, a JSON number
+  and a refused value;
   `get_measurement` with an item; `delete_measurement` and
   `commit_bench_measurement`'s no-effect and appending commits; a track tool
   naming a measurement item saying what it is.
@@ -606,9 +672,9 @@ at-infinity case is covered by the Rust tests.
 
 ## Non-goals
 
-The panel has no step that edits a measurement item: switching an endpoint to
-another photograph, setting an endpoint's image and pixel, and setting the
-label and the stated distance, as well as creating a measurement and drawing
-measurements in the 3D view and Image Detail, are proposed in
+The panel has no step that moves a measurement item's endpoint: switching an
+endpoint to another photograph and setting an endpoint's image and pixel, as
+well as creating a measurement and drawing measurements in the 3D view and
+Image Detail, are proposed in
 [drafts/measurement-view.md](../drafts/measurement-view.md). An endpoint's 3D
 position is never set directly: it always follows from its image and pixel.
