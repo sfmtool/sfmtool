@@ -13,8 +13,8 @@ Data* keeps a number of points; each surface has its own tint; the scene has
 one undistorted pinhole camera; the temporary workspace lives in the system
 temporary directory and is deleted at exit; the demo node saves as any other
 node does; the first version holds a 1 m distance measurement along a cube
-edge; and the demo scene is bound to Python. Not decided: the question in
-[Open questions](#open-questions).
+edge; the demo scene is bound to Python; and decoded JPEG pixels may differ
+by one level between x86 and arm64, which the tests tolerate.
 
 ## Purpose
 
@@ -514,8 +514,10 @@ workspace does not turn it on. So the photograph-derived columns (thumbnails,
 readings, bitmaps) built on an x86 machine can differ from those built on an
 arm64 one by a rounding level, while the JPEG bytes, the hashes and every
 column the scene fixes are the same. On any one machine the value and a load
-of the written file agree exactly, as above. Whether to remove the platform
-difference is the [open question](#open-questions).
+of the written file agree exactly, as above. The workspace keeps
+`platform_independent` off, so the toolkit's decoding of real photographs keeps
+its x86 speed: the demo's tests pin the JPEG bytes exactly and compare the
+photograph-derived columns across platforms to within one level.
 
 **What the code has and lacks.** `ImageU8::write` already encodes into a byte
 buffer before it writes the file, but it writes only to a path; the demo needs
@@ -757,6 +759,13 @@ process IDs. Nothing in the viewer or core does this today: no Rust code checks
 whether another process is alive or takes a file lock, so the lock file and
 the sweep at start are new.
 
+A lock file exists unlocked for a moment between its creation and the
+`try_lock`, and a sweep in another viewer that starts in that moment could take
+the lock and delete the file. Step 4 closes that gap, for example by having the
+sweep delete only a lock file whose directory exists and leave a lone lock file
+to a later sweep once it is older than the sweep's start, and by having a
+viewer that fails its own `try_lock` move on to the next `n`.
+
 The node now has a path, so several things the viewer and its specs say of
 demo data change:
 
@@ -819,20 +828,6 @@ the infinity conversion, alignment and reprojection-noise tests, and most of
 the viewer's scene graph and save tests. Each migration is decided test by
 test, by whether the test's assertions gain from real pixels; a test that gains
 nothing from them stays on the sphere demo.
-
-## Open questions
-
-1. **The same decoded pixels on every platform.** `jpeg-decoder`'s SSSE3 code
-   on x86 and its scalar code on arm64 can decode the same JPEG to pixels a
-   rounding level apart, so the demo's thumbnails, readings and bitmaps can
-   differ between platforms while its JPEG bytes and geometry do not
-   ([Determinism of the JPEG encoder and decoder](#determinism-of-the-jpeg-encoder-and-decoder)).
-   The draft accepts that, and its tests compare those columns across
-   platforms with a tolerance. Turning on the crate's `platform_independent`
-   feature would make every JPEG the toolkit reads decode to the same pixels
-   on every platform, including the photograph cache's and `read_rgb`'s, at
-   the cost of the SIMD decoding speed on x86, which is not measured. Should
-   the workspace turn it on?
 
 ## Step plan
 
