@@ -654,12 +654,13 @@ fn views_land_where_the_other_squares_hold_the_texel() {
     let mut recon = scene(&[p]);
     // Move image 1's keypoint (observation 1) off the projection, so its
     // square slides off the point.
-    if let ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
-        &mut recon.point_set.observations
-    {
-        keypoints_xy[[1, 0]] += 3.0;
-        keypoints_xy[[1, 1]] -= 2.0;
-    }
+    let keypoints_xy = recon
+        .point_set
+        .keypoints_xy
+        .as_mut()
+        .expect("the scene carries keypoints");
+    keypoints_xy[[1, 0]] += 3.0;
+    keypoints_xy[[1, 1]] -= 2.0;
     let recon = with_readings(recon, vec![reading(0.6, 0.9); 3]);
     let value = edited(recon.clone());
     let (s, t) = (0.4, -0.3);
