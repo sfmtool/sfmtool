@@ -1,14 +1,14 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::atomic::{AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 use std::sync::Mutex;
 
 use super::super::tests::{
     cache_holding_its_first_decode, cache_watching_its_count, on_a_thread, small_photographs,
     unseen, write_png, HANG, SMALL,
 };
-use super::super::{PhotographCacheOptions, SlotEvent};
+use super::super::{PeekedPhotograph, PhotographCacheOptions, SlotEvent};
 use super::*;
 
 const GIB: u64 = 1 << 30;
@@ -96,7 +96,10 @@ fn tiles_regions_and_levels_are_the_held_pyramids_pixels() {
     assert_eq!(cache.stats().misses, 0, "a header read decodes nothing");
 
     let keys = every_key(&layout);
-    let TryDecode::Decoded(tiles) = cache.try_decode_tiles(&path, &keys).unwrap() else {
+    let TryDecode::Decoded(tiles) = cache
+        .try_decode_tiles(&path, &keys, &Progress::none())
+        .unwrap()
+    else {
         panic!("nothing else holds the slot or the build count");
     };
     assert_eq!(tiles.len(), keys.len());
@@ -115,10 +118,15 @@ fn tiles_regions_and_levels_are_the_held_pyramids_pixels() {
             panic!("{key:?} is held");
         };
         assert_tile(&pyramid, 16, key, &peeked);
-        assert_tile(&pyramid, 16, key, &cache.get_tile(&path, key).unwrap());
+        assert_tile(
+            &pyramid,
+            16,
+            key,
+            &cache.get_tile(&path, key, &Progress::none()).unwrap(),
+        );
     }
     for level in 0..layout.levels() {
-        let whole = cache.get_level(&path, level).unwrap();
+        let whole = cache.get_level(&path, level, &Progress::none()).unwrap();
         let expected = pyramid.level(level);
         assert_eq!(
             (whole.width(), whole.height(), whole.channels()),
@@ -134,7 +142,9 @@ fn tiles_regions_and_levels_are_the_held_pyramids_pixels() {
         y1: 9,
     };
     regions.set_region(1, rect);
-    let region = cache.view_region_pyramid(&path, &regions).unwrap();
+    let region = cache
+        .view_region_pyramid(&path, &regions, &Progress::none())
+        .unwrap();
     assert_eq!(region.level_origin(1), [3, 4]);
     assert_eq!(region.level_full_size(1), [35, 25]);
     let held = region.level(1);
@@ -153,7 +163,7 @@ fn tiles_regions_and_levels_are_the_held_pyramids_pixels() {
     // A second panel's ask is answered from the pyramid held, as a hit.
     let hits = cache.stats().hits;
     assert!(matches!(
-        cache.try_decode_tiles(&path, &keys[..1]),
+        cache.try_decode_tiles(&path, &keys[..1], &Progress::none()),
         Ok(TryDecode::Decoded(_))
     ));
     let stats = cache.stats();
@@ -171,20 +181,27 @@ fn what_the_photograph_does_not_have_is_out_of_range() {
     let out_of_range = |result: Result<TryDecode, TileError>| matches!(result, Err(TileError::OutOfRange { path: p, .. }) if p == path);
     for bad in [key(0, 5, 0), key(0, 0, 4), key(6, 0, 0), key(255, 0, 0)] {
         assert!(
-            out_of_range(cache.try_decode_tiles(&path, &[bad])),
+            out_of_range(cache.try_decode_tiles(&path, &[bad], &Progress::none())),
             "{bad:?}"
         );
     }
     assert_eq!(cache.stats().decodes, 0);
     assert_eq!(cache.stats().build_reserved_bytes, 0);
     assert!(matches!(
-        cache.try_decode_tiles(&path, &[key(0, 4, 3)]),
+        cache.try_decode_tiles(&path, &[key(0, 4, 3)], &Progress::none()),
         Ok(TryDecode::Decoded(_))
     ));
 
     let tile_err = |e: TileError| matches!(e, TileError::OutOfRange { .. });
-    assert!(tile_err(cache.get_tile(&path, key(1, 3, 0)).err().unwrap()));
-    assert!(tile_err(cache.get_level(&path, 6).err().unwrap()));
+    assert!(tile_err(
+        cache
+            .get_tile(&path, key(1, 3, 0), &Progress::none())
+            .err()
+            .unwrap()
+    ));
+    assert!(tile_err(
+        cache.get_level(&path, 6, &Progress::none()).err().unwrap()
+    ));
     assert!(matches!(
         cache.peek_tile(&path, key(2, 0, 1)),
         PeekedTile::Unreadable
@@ -194,7 +211,10 @@ fn what_the_photograph_does_not_have_is_out_of_range() {
     };
     let empty = LevelRegions::new(&layout);
     assert!(tile_err(
-        cache.view_region_pyramid(&path, &empty).err().unwrap()
+        cache
+            .view_region_pyramid(&path, &empty, &Progress::none())
+            .err()
+            .unwrap()
     ));
     let mut past = LevelRegions::new(&layout);
     past.set_region(
@@ -206,7 +226,10 @@ fn what_the_photograph_does_not_have_is_out_of_range() {
             y1: 12,
         },
     );
-    let e = cache.view_region_pyramid(&path, &past).err().unwrap();
+    let e = cache
+        .view_region_pyramid(&path, &past, &Progress::none())
+        .err()
+        .unwrap();
     assert!(tile_err(e.clone()), "{e}");
     assert!(e.to_string().contains("p.png"), "{e}");
 }
@@ -229,7 +252,7 @@ fn an_unreadable_photograph_is_answered_and_remembered() {
         |e: TileError| matches!(e, TileError::Unreadable { path, .. } if path == missing);
     assert!(unreadable(
         cache
-            .try_decode_tiles(&missing, &[key(0, 0, 0)])
+            .try_decode_tiles(&missing, &[key(0, 0, 0)], &Progress::none())
             .err()
             .unwrap()
     ));
@@ -242,20 +265,28 @@ fn an_unreadable_photograph_is_answered_and_remembered() {
     // Answered from the remembered failure, with no second read.
     assert!(unreadable(
         cache
-            .try_decode_tiles(&missing, &[key(0, 0, 0)])
+            .try_decode_tiles(&missing, &[key(0, 0, 0)], &Progress::none())
             .err()
             .unwrap()
     ));
     assert_eq!(cache.stats().misses, 1);
     assert!(unreadable(
-        cache.get_tile(&missing, key(0, 0, 0)).err().unwrap()
+        cache
+            .get_tile(&missing, key(0, 0, 0), &Progress::none())
+            .err()
+            .unwrap()
     ));
-    assert!(unreadable(cache.get_level(&missing, 0).err().unwrap()));
+    assert!(unreadable(
+        cache
+            .get_level(&missing, 0, &Progress::none())
+            .err()
+            .unwrap()
+    ));
 
     // With a budget of 0 nothing is remembered, and the answer is the same.
     let none = cache_of(0, 16);
     assert!(unreadable(
-        none.try_decode_tiles(&missing, &[key(0, 0, 0)])
+        none.try_decode_tiles(&missing, &[key(0, 0, 0)], &Progress::none())
             .err()
             .unwrap()
     ));
@@ -317,7 +348,7 @@ fn a_refused_panel_decode_decodes_nothing_until_the_budget_has_room() {
         let other = cache.reserve_builds(1, 1);
         for _ in 0..3 {
             assert!(matches!(
-                cache.try_decode_tiles(&path, &[key(0, 0, 0)]),
+                cache.try_decode_tiles(&path, &[key(0, 0, 0)], &Progress::none()),
                 Ok(TryDecode::Busy)
             ));
         }
@@ -326,7 +357,7 @@ fn a_refused_panel_decode_decodes_nothing_until_the_budget_has_room() {
         assert_eq!(stats.build_reserved_bytes, 1);
         drop(other);
         assert!(matches!(
-            cache.try_decode_tiles(&path, &[key(0, 0, 0)]),
+            cache.try_decode_tiles(&path, &[key(0, 0, 0)], &Progress::none()),
             Ok(TryDecode::Decoded(tiles)) if tiles.len() == 1
         ));
         let stats = cache.stats();
@@ -339,7 +370,7 @@ fn a_refused_panel_decode_decodes_nothing_until_the_budget_has_room() {
         ..PhotographCacheOptions::default()
     });
     assert!(matches!(
-        refused.try_decode_tiles(&path, &[]),
+        refused.try_decode_tiles(&path, &[], &Progress::none()),
         Ok(TryDecode::Busy)
     ));
     assert_eq!(refused.stats().decodes, 0);
@@ -363,7 +394,7 @@ fn a_panel_decode_never_waits_on_a_slot_being_made() {
         let (cache, path) = (Arc::clone(&held.cache), path.clone());
         on_a_thread(move || {
             let busy = matches!(
-                cache.try_decode_tiles(&path, &[key(0, 0, 0)]),
+                cache.try_decode_tiles(&path, &[key(0, 0, 0)], &Progress::none()),
                 Ok(TryDecode::Busy)
             );
             (busy, cache.stats().build_reserved_bytes)
@@ -379,7 +410,8 @@ fn a_panel_decode_never_waits_on_a_slot_being_made() {
     held.release.send(()).unwrap();
     maker.recv_timeout(HANG).unwrap().unwrap();
     assert!(matches!(
-        held.cache.try_decode_tiles(&path, &[key(0, 0, 0)]),
+        held.cache
+            .try_decode_tiles(&path, &[key(0, 0, 0)], &Progress::none()),
         Ok(TryDecode::Decoded(_))
     ));
     assert_eq!(held.decodes.load(Ordering::SeqCst), 1);
@@ -415,7 +447,7 @@ fn a_panel_decode_that_loses_the_slot_gives_its_reservation_back() {
                 *slot.lock() = taken.lock().unwrap().take().unwrap();
             }
         }));
-        let answer = cache.try_decode_tiles(&path, &[key(0, 0, 0)]);
+        let answer = cache.try_decode_tiles(&path, &[key(0, 0, 0)], &Progress::none());
         assert_eq!(
             reserved_then.load(Ordering::SeqCst),
             16 * 16 * 5,
@@ -464,7 +496,7 @@ fn panel_decodes_never_take_the_count_past_the_build_budget() {
                         // Asked again on every refusal, as a panel asks on
                         // later frames.
                         while let Ok(TryDecode::Busy) =
-                            cache.try_decode_tiles(path, &[key(0, 0, 0)])
+                            cache.try_decode_tiles(path, &[key(0, 0, 0)], &Progress::none())
                         {
                             std::thread::yield_now();
                         }
@@ -492,4 +524,82 @@ fn panel_decodes_never_take_the_count_past_the_build_budget() {
         );
         assert_eq!(stats.build_reserved_bytes, 0);
     }
+}
+
+/// A cache of `budget_bytes` whose every decode, once started, sets `flag`,
+/// so a call whose `Progress` is cancelled by it is cancelled mid-decode.
+fn cache_cancelling(budget_bytes: u64, flag: &Arc<AtomicBool>) -> PhotographCache {
+    let mut cache = cache_of(budget_bytes, 16);
+    let flag = Arc::clone(flag);
+    cache.on_slot_event = Some(Box::new(move |_, event| {
+        if event == SlotEvent::DecodeStarted {
+            flag.store(true, Ordering::SeqCst);
+        }
+    }));
+    cache
+}
+
+/// One of the calls that decode a whole photograph on a miss.
+type DecodingCall = fn(&PhotographCache, &Path, &Progress<'_>) -> Result<(), TileError>;
+
+/// Each call that decodes a whole photograph on a miss, cancelled during its
+/// decode, answers `Cancelled`, gives its reservation back and remembers
+/// nothing, so the next call decodes; with a budget and with a cache that
+/// keeps nothing.
+#[test]
+fn a_cancelled_decode_answers_cancelled_and_leaves_nothing_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_png(dir.path(), "p.png", 16, 16);
+    let calls: [(&str, DecodingCall); 4] = [
+        ("try_decode_tiles", |cache, path, progress| {
+            cache
+                .try_decode_tiles(path, &[key(0, 0, 0)], progress)
+                .map(|_| ())
+        }),
+        ("get_tile", |cache, path, progress| {
+            cache.get_tile(path, key(0, 0, 0), progress).map(|_| ())
+        }),
+        ("get_level", |cache, path, progress| {
+            cache.get_level(path, 1, progress).map(|_| ())
+        }),
+        ("view_region_pyramid", |cache, path, progress| {
+            let layout = PyramidLayout::in_memory(16, 16, 5, 16);
+            let mut regions = LevelRegions::new(&layout);
+            regions.set_region(
+                0,
+                LevelRect {
+                    x0: 0,
+                    y0: 0,
+                    x1: 4,
+                    y1: 4,
+                },
+            );
+            cache
+                .view_region_pyramid(path, &regions, progress)
+                .map(|_| ())
+        }),
+    ];
+    for budget_bytes in [GIB, 0] {
+        for (name, call) in calls {
+            let flag = Arc::new(AtomicBool::new(false));
+            let cache = cache_cancelling(budget_bytes, &flag);
+            let cancelled = Progress::none().cancelled_by(&flag);
+            assert_eq!(
+                call(&cache, &path, &cancelled),
+                Err(TileError::Cancelled),
+                "{name}, budget {budget_bytes}"
+            );
+            let stats = cache.stats();
+            assert_eq!(stats.decodes, 1, "{name}");
+            assert_eq!(stats.build_reserved_bytes, 0, "{name} gave its share back");
+            assert!(
+                matches!(cache.peek_state(&path), PeekedPhotograph::NotDecoded),
+                "{name} remembered nothing"
+            );
+            call(&cache, &path, &Progress::none()).unwrap();
+            assert_eq!(cache.stats().decodes, 2, "{name} decoded again");
+            assert_eq!(cache.stats().build_reserved_bytes, 0);
+        }
+    }
+    assert_eq!(TileError::Cancelled.to_string(), Cancelled.to_string());
 }

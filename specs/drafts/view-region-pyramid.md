@@ -785,3 +785,13 @@ decisions.
    ignored. A build budget of 0 lets each kernel caller decode one
    photograph at a time and refuses every panel decode. Built in the main
    draft's step 13b.
+9. **How the 3D background reads its level.** *Decided by the user:* the
+   background first asks for its level's tiles with `try_decode_tiles`,
+   asking again on a later frame when the answer is `Busy`, then reads the
+   level with `get_level` once they are present; under a cache budget of 0
+   it builds the level from the tiles that call returns. So no panel task
+   waits on a slot or on the build count, and the rule has no exception. The
+   options considered were that; accepting the background as an exception,
+   whose `get_level` would reserve with `reserve_builds` and wait on the slot
+   on a miss; and a variant of `get_level` that never waits. It is the main
+   draft's step 13c3.

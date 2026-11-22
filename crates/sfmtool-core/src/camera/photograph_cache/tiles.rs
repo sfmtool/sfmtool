@@ -29,7 +29,7 @@ use crate::camera::sampler::{copy_regions, LevelRect, LevelRegions};
 use crate::camera::tiled_photograph::{
     PhotographReadError, PhotographTile, TileKey, TiledPhotograph,
 };
-use crate::progress::Progress;
+use crate::progress::{Cancelled, Progress};
 
 #[cfg(test)]
 mod tests;
@@ -68,6 +68,10 @@ pub enum TileError {
     /// A level, tile or rectangle the photograph does not have, or an empty
     /// rectangle, was asked for.
     OutOfRange { path: PathBuf, why: String },
+    /// The caller's `Progress` was cancelled while it decoded the photograph
+    /// or waited for another caller's decode of it. Never remembered: the
+    /// next call decodes or waits again.
+    Cancelled,
 }
 
 impl fmt::Display for TileError {
@@ -75,6 +79,7 @@ impl fmt::Display for TileError {
         match self {
             Self::Unreadable { why, .. } => write!(f, "{why}"),
             Self::OutOfRange { path, why } => write!(f, "{}: {why}", path.display()),
+            Self::Cancelled => write!(f, "{Cancelled}"),
         }
     }
 }
@@ -121,11 +126,15 @@ fn claim<'s, 'r>(slot: &'s Slot, share: Share<'r>) -> Claim<'s, 'r> {
     }
 }
 
-/// [`TileError::Unreadable`] for a [`GetError`].
+/// The [`TileError`] for a [`GetError`]: [`TileError::Cancelled`] for a
+/// cancelled call, and [`TileError::Unreadable`] for every other.
 fn unreadable(path: &Path, e: GetError) -> TileError {
-    TileError::Unreadable {
-        path: path.to_path_buf(),
-        why: e.to_string(),
+    match e {
+        GetError::Cancelled => TileError::Cancelled,
+        e => TileError::Unreadable {
+            path: path.to_path_buf(),
+            why: e.to_string(),
+        },
     }
 }
 
@@ -256,35 +265,46 @@ impl PhotographCache {
     /// [`Self::get`] does: reserving with [`Self::reserve_builds`] and waiting
     /// while another caller decodes it. A kernel's read; a panel asks with
     /// [`Self::try_decode_tiles`], which never waits.
-    pub fn get_tile(&self, path: &Path, key: TileKey) -> Result<Arc<PhotographTile>, TileError> {
-        let pyramid = self
-            .get(path, &Progress::none())
-            .map_err(|e| unreadable(path, e))?;
+    ///
+    /// A whole decode can take over a second, so it takes the caller's
+    /// `progress`, which it polls for cancellation as `get` does and reports
+    /// nothing through, and answers [`TileError::Cancelled`] when it is
+    /// cancelled, remembering nothing and holding no reservation.
+    pub fn get_tile(
+        &self,
+        path: &Path,
+        key: TileKey,
+        progress: &Progress<'_>,
+    ) -> Result<Arc<PhotographTile>, TileError> {
+        let pyramid = self.get(path, progress).map_err(|e| unreadable(path, e))?;
         self.cut(path, &pyramid, key)
     }
 
     /// A view-region pyramid of `path`: the region of each level `regions`
     /// names, copied from the photograph, decoded on a miss as
-    /// [`Self::get_tile`] decodes it. A level or region the photograph does
-    /// not have, or no region at all, is [`TileError::OutOfRange`].
+    /// [`Self::get_tile`] decodes it, polling `progress` as it does. A level
+    /// or region the photograph does not have, or no region at all, is
+    /// [`TileError::OutOfRange`].
     pub fn view_region_pyramid(
         &self,
         path: &Path,
         regions: &LevelRegions,
+        progress: &Progress<'_>,
     ) -> Result<ImageU8Pyramid, TileError> {
-        let pyramid = self
-            .get(path, &Progress::none())
-            .map_err(|e| unreadable(path, e))?;
+        let pyramid = self.get(path, progress).map_err(|e| unreadable(path, e))?;
         copy_regions(&self.tiled(&pyramid), regions).map_err(|e| out_of_range(path, e))
     }
 
     /// Level `level` of `path` whole, decoded on a miss as
-    /// [`Self::get_tile`] decodes it. A level the photograph does not have is
-    /// [`TileError::OutOfRange`].
-    pub fn get_level(&self, path: &Path, level: usize) -> Result<Arc<ImageU8>, TileError> {
-        let pyramid = self
-            .get(path, &Progress::none())
-            .map_err(|e| unreadable(path, e))?;
+    /// [`Self::get_tile`] decodes it, polling `progress` as it does. A level
+    /// the photograph does not have is [`TileError::OutOfRange`].
+    pub fn get_level(
+        &self,
+        path: &Path,
+        level: usize,
+        progress: &Progress<'_>,
+    ) -> Result<Arc<ImageU8>, TileError> {
+        let pyramid = self.get(path, progress).map_err(|e| unreadable(path, e))?;
         let tiled = self.tiled(&pyramid);
         let (x1, y1) = tiled.layout().level_size(level);
         let rect = LevelRect {
@@ -311,9 +331,20 @@ impl PhotographCache {
     /// waits on a slot or on the build count, and never takes the count past
     /// the build budget.
     ///
+    /// Polls `progress` for cancellation after its decode, as `get` does, and
+    /// answers [`TileError::Cancelled`] when it is cancelled: the slot is left
+    /// empty, nothing is remembered and the reservation is given back. It
+    /// reports nothing through `progress`; a panel's task passes its own, or
+    /// `&Progress::none()`.
+    ///
     /// A cache with a budget of 0 keeps nothing, so there the tiles it
     /// answers are the only ones the caller gets.
-    pub fn try_decode_tiles(&self, path: &Path, keys: &[TileKey]) -> Result<TryDecode, TileError> {
+    pub fn try_decode_tiles(
+        &self,
+        path: &Path,
+        keys: &[TileKey],
+        progress: &Progress<'_>,
+    ) -> Result<TryDecode, TileError> {
         let slot = (self.options.budget_bytes > 0).then(|| self.slot_for(path));
         if let Some(slot) = &slot {
             // Read with the slot's lock released before the tiles are cut.
@@ -340,11 +371,12 @@ impl PhotographCache {
         }
         #[cfg(test)]
         self.slot_event(super::SlotEvent::PanelReserved);
-        let none = Progress::none();
         let value = match &slot {
             None => {
                 self.misses.fetch_add(1, Ordering::Relaxed);
-                size.and_then(|_| self.decode(path, &none, &mut share))
+                // The reservation is given back when `share` drops, whatever
+                // the outcome.
+                size.and_then(|_| self.decode(path, progress, &mut share))
             }
             Some(slot) => {
                 let mut making = match claim(slot, share) {
@@ -357,7 +389,13 @@ impl PhotographCache {
                     Claim::Making(making) => making,
                 };
                 self.misses.fetch_add(1, Ordering::Relaxed);
-                let value = size.and_then(|_| self.decode(path, &none, &mut making.share));
+                let value = size.and_then(|_| self.decode(path, progress, &mut making.share));
+                if let Err(GetError::Cancelled) = value {
+                    // Dropping the hold gives the share back, empties the slot
+                    // and wakes its waiters.
+                    drop(making);
+                    return Err(TileError::Cancelled);
+                }
                 making.finish(value.clone());
                 if let Ok(pyramid) = &value {
                     self.charge(path, slot, pyramid.byte_len() as u64);

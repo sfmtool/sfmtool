@@ -114,16 +114,19 @@ impl PhotographCache {
     /// `peek_tile` read nothing and never wait; `request_layout` reads the
     /// header; `try_decode_tiles` is a panel's decode, which never waits;
     /// `get_tile`, `view_region_pyramid` and `get_level` decode on a miss as
-    /// `get` does.
+    /// `get` does. The four that can decode a whole photograph take the
+    /// caller's `Progress` and poll it for cancellation as `get` does.
     pub fn layout(&self, path: &Path) -> PeekedLayout;
     pub fn request_layout(&self, path: &Path);
     pub fn peek_tile(&self, path: &Path, key: TileKey) -> PeekedTile;
-    pub fn try_decode_tiles(&self, path: &Path, keys: &[TileKey])
+    pub fn try_decode_tiles(&self, path: &Path, keys: &[TileKey], progress: &Progress<'_>)
         -> Result<TryDecode, TileError>;
-    pub fn get_tile(&self, path: &Path, key: TileKey) -> Result<Arc<PhotographTile>, TileError>;
-    pub fn view_region_pyramid(&self, path: &Path, regions: &LevelRegions)
-        -> Result<ImageU8Pyramid, TileError>;
-    pub fn get_level(&self, path: &Path, level: usize) -> Result<Arc<ImageU8>, TileError>;
+    pub fn get_tile(&self, path: &Path, key: TileKey, progress: &Progress<'_>)
+        -> Result<Arc<PhotographTile>, TileError>;
+    pub fn view_region_pyramid(&self, path: &Path, regions: &LevelRegions,
+        progress: &Progress<'_>) -> Result<ImageU8Pyramid, TileError>;
+    pub fn get_level(&self, path: &Path, level: usize, progress: &Progress<'_>)
+        -> Result<Arc<ImageU8>, TileError>;
 
     /// Put pixels that did not come from this cache's decode in as `path`'s.
     pub fn insert(&self, path: &Path, pyramid: Arc<ImageU8Pyramid>);
@@ -156,7 +159,7 @@ pub struct GetManyTally { pub read: usize, pub reused: usize, pub unreadable: us
 pub enum PeekedLayout { Known(Arc<PyramidLayout>), Unreadable(String), NotKnown }
 pub enum PeekedTile { Ready(Arc<PhotographTile>), Unreadable, NotReady }
 pub enum TileError { Unreadable { path: PathBuf, why: String },
-                     OutOfRange { path: PathBuf, why: String } }
+                     OutOfRange { path: PathBuf, why: String }, Cancelled }
 pub enum TryDecode { Decoded(Vec<Arc<PhotographTile>>), Busy }
 
 pub struct PhotographCacheStats {
@@ -388,6 +391,14 @@ level's edge, so tiles drawn side by side with linear filtering show no seam.
   A level, tile or rectangle the photograph does not have, or an empty
   set of regions, is `TileError::OutOfRange`; a photograph that cannot be
   read is `TileError::Unreadable`, with `GetError`'s message.
+- **Cancellation.** A whole decode can take over a second, so the four
+  calls that can make one, `try_decode_tiles`, `get_tile`,
+  `view_region_pyramid` and `get_level`, take the caller's `&Progress`,
+  which they poll for cancellation as `get` does and report nothing
+  through. A cancelled call answers `TileError::Cancelled`, which is never
+  remembered: the slot is left empty, the decode's reservation is given
+  back, and the next call decodes. A panel's task passes its own `Progress`,
+  or `&Progress::none()`.
 
 ## A changed file and remembered failures
 
@@ -583,7 +594,10 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   held in progress (the test bounds that thread with a time limit); one that
   loses the slot after it reserved giving the reservation back; and panel
   decodes from eight threads over 20 photographs never taking the count past
-  a build budget of three decodes, with a budget and without one.
+  a build budget of three decodes, with a budget and without one; and each
+  of the four calls that can decode a whole photograph, cancelled during its
+  decode, answering `Cancelled` with nothing reserved or remembered, the next
+  call decoding, with a budget and without one.
 - [view_selection/tests.rs](../../../crates/sfmtool-core/src/patch/view_selection/tests.rs):
   the cull on a camera behind the patch, one the patch faces away from, a
   footprint off frame or partly in frame, a point at infinity, a footprint that
