@@ -358,6 +358,7 @@ impl AppState {
                     let already = bench.entries().iter().find_map(|entry| match &entry.item {
                         BenchItem::Track(t) => (self.resolved_origin(node, t) == Some(point))
                             .then(|| entry.label.clone()),
+                        BenchItem::Measurement(_) => None,
                     });
                     match already {
                         Some(item) => Landing::Existing {

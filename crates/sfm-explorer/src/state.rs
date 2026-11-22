@@ -1534,9 +1534,18 @@ impl AppState {
     /// keeps them. A measurement the version on screen does not hold selects
     /// nothing. Selecting the measurement already selected changes nothing
     /// and writes no row.
+    ///
+    /// **Selecting any measurement but a focused measurement item's origin
+    /// unfocuses the item**, with its `Stopped editing` row before the
+    /// selection's own, as selecting a point does for a focused track.
     pub(crate) fn select_measurement(&mut self, measurement: MeasurementRef) {
         if self.distance_row(measurement).is_none() {
             return;
+        }
+        if self.focused_item_kind() == Some(sfmtool_core::bench::ItemKind::Measurement)
+            && self.focused_measurement_origin() != Some(measurement)
+        {
+            self.leave_focused_item();
         }
         self.select_recon(measurement.recon);
         if self.selected_measurement == Some(measurement) {
@@ -1598,7 +1607,7 @@ impl AppState {
         let node = self.node(measurement.recon)?;
         match measurement.kind {
             crate::measurements::MeasurementKind::Distance => {
-                crate::measurements::distance_rows(node.recon())
+                crate::measurements::distance_rows(node.edited().measurements())
                     .into_iter()
                     .nth(measurement.index())
             }
@@ -1640,7 +1649,8 @@ impl AppState {
             return;
         };
         let held = self.node(measurement.recon).is_some_and(|node| {
-            measurement.index() < crate::measurements::measurement_count(node.recon())
+            measurement.index()
+                < crate::measurements::measurement_count(node.edited().measurements())
         });
         if !held {
             self.selected_measurement = None;
@@ -1691,8 +1701,19 @@ impl AppState {
     /// point it wrote before selecting it and so keeps the item focused. The
     /// selection that follows the point maps after an edit assigns
     /// `selected_point` directly, and does not unfocus.
+    ///
+    /// A focused **measurement** item has no point for its origin, so a point
+    /// selection leaves it focused unless the point is on another node: the
+    /// selected point is the measurement item's to leave alone.
     pub(crate) fn select_point(&mut self, point: PointRef) {
-        if self.focused_item().is_some() && self.focused_origin() != Some(point) {
+        let leaves = match self.focused_item_kind() {
+            Some(sfmtool_core::bench::ItemKind::Track) => self.focused_origin() != Some(point),
+            Some(sfmtool_core::bench::ItemKind::Measurement) => self
+                .focused_item()
+                .is_some_and(|focused| focused.node != point.recon),
+            None => self.focused_item().is_some(),
+        };
+        if leaves {
             self.leave_focused_item();
         }
         let moved = self.selected_point != Some(point);

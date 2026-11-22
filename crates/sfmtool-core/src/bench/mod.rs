@@ -2,13 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The bench: a place beside a reconstruction where things are put to be worked
-//! on, and the [`EditableTrack`] that is the first kind of thing put there.
+//! on, and the two kinds of thing put there, the [`EditableTrack`] and the
+//! [`EditableMeasurement`].
 //!
-//! `specs/core/bench/bench.md` and `specs/core/bench/editable-track.md` are the
-//! design. A [`Bench`] is an ordered list of labelled items and nothing else;
-//! which item a caller works on is the caller's to hold. An item is not part of
-//! the reconstruction, so nothing here writes one except
-//! [`commit`](commit::commit), which is the one step that does.
+//! `specs/core/bench/bench.md`, `specs/core/bench/editable-track.md` and
+//! `specs/core/bench/editable-measurement.md` are the design. A [`Bench`] is an
+//! ordered list of labelled items and nothing else; which item a caller works
+//! on is the caller's to hold. An item is not part of the reconstruction, so
+//! nothing here writes one except [`commit`](commit::commit) for a track and
+//! [`commit_measurement`] for a measurement, which are the steps that do.
 //!
 //! Everything in this module is a plain value or a pure function over one. No
 //! step takes `&mut`: each returns the next value and a report, so a caller
@@ -52,6 +54,7 @@ pub mod commit;
 pub mod evaluate;
 pub mod fit;
 pub mod geometry_search;
+pub mod measurement;
 pub mod nearby;
 pub mod normal;
 mod read_failure;
@@ -80,6 +83,12 @@ pub use fit::{fit, fit_preconditions, render_bitmap_in_place, FitError, FitOptio
 pub use geometry_search::{
     search_geometry, GeometryMatch, GeometrySearchError, GeometrySearchOptions,
     GeometrySearchReport,
+};
+pub use measurement::{
+    commit_measurement, commit_measurement_preconditions, delete_measurement, measurement_title,
+    put_measurement, EditableDistance, EditableMeasurement, EditableMeasurementBody,
+    MeasurementCommit, MeasurementCommitRefusal, MeasurementEndpoint, MeasurementKind,
+    MeasurementOrigin, NoSuchMeasurement,
 };
 pub use nearby::{
     camera_spread, classify_range, constellation_seeds, depth_layers, distance_range,
@@ -152,14 +161,15 @@ pub use track_at_pixel::{
 
 /// One thing on the bench.
 ///
-/// An `enum` with one variant today. The point of the enum is that the list and
-/// the labels belong to the [`Bench`] and not to the value being worked on, so
-/// a second kind of item joins by adding a variant rather than by widening the
-/// track.
+/// The list and the labels belong to the [`Bench`] and not to the value being
+/// worked on, so each kind of item is a variant rather than a widening of
+/// another kind.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BenchItem {
     /// A track being worked on.
     Track(Arc<EditableTrack>),
+    /// A measurement being worked on.
+    Measurement(Arc<EditableMeasurement>),
 }
 
 /// Which kind of item something is, without its value.
@@ -170,12 +180,15 @@ pub enum BenchItem {
 pub enum ItemKind {
     /// [`BenchItem::Track`].
     Track,
+    /// [`BenchItem::Measurement`].
+    Measurement,
 }
 
 impl std::fmt::Display for ItemKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ItemKind::Track => write!(f, "track"),
+            ItemKind::Measurement => write!(f, "measurement"),
         }
     }
 }
@@ -185,6 +198,7 @@ impl BenchItem {
     pub fn kind(&self) -> ItemKind {
         match self {
             BenchItem::Track(_) => ItemKind::Track,
+            BenchItem::Measurement(_) => ItemKind::Measurement,
         }
     }
 
@@ -192,6 +206,25 @@ impl BenchItem {
     pub fn as_track(&self) -> Option<&Arc<EditableTrack>> {
         match self {
             BenchItem::Track(track) => Some(track),
+            BenchItem::Measurement(_) => None,
+        }
+    }
+
+    /// The measurement, when this item is one.
+    pub fn as_measurement(&self) -> Option<&Arc<EditableMeasurement>> {
+        match self {
+            BenchItem::Measurement(measurement) => Some(measurement),
+            BenchItem::Track(_) => None,
+        }
+    }
+
+    /// Whether this item and `other` are the same value: the same `Arc`, which
+    /// is how a step that did not touch an item leaves it.
+    pub fn same_value(&self, other: &BenchItem) -> bool {
+        match (self, other) {
+            (BenchItem::Track(a), BenchItem::Track(b)) => Arc::ptr_eq(a, b),
+            (BenchItem::Measurement(a), BenchItem::Measurement(b)) => Arc::ptr_eq(a, b),
+            _ => false,
         }
     }
 }
@@ -380,6 +413,12 @@ impl Bench {
         self.get(label)?.as_track()
     }
 
+    /// The measurement called `label`, or `None` when nothing is or the item
+    /// is of another kind.
+    pub fn measurement(&self, label: &str) -> Option<&Arc<EditableMeasurement>> {
+        self.get(label)?.as_measurement()
+    }
+
     /// The ID of the item called `label`, or `None` when nothing is.
     pub fn id(&self, label: &str) -> Option<ItemId> {
         self.position(label).map(|i| self.entries[i].id)
@@ -484,6 +523,12 @@ impl Bench {
     /// begin with is left alone, as is every track that observes no image at
     /// or past `image`; those keep the same `Arc`.
     ///
+    /// Each measurement is put through [`EditableMeasurement::delete_image`]
+    /// the same way: an endpoint in `image` is cleared and one in a later image
+    /// moves down by one, and **a measurement left with neither endpoint is
+    /// discarded**. One with no endpoint placed to begin with, or none at or
+    /// past `image`, keeps the same `Arc`.
+    ///
     /// The report says what changed, so a caller can follow its own indexes
     /// into the observation lists and say in a sentence what the delete did
     /// to the bench.
@@ -491,7 +536,27 @@ impl Bench {
         let mut next = Bench::new();
         let mut report = ImageDeletion::default();
         for entry in &self.entries {
-            let BenchItem::Track(track) = &entry.item;
+            let track = match &entry.item {
+                BenchItem::Track(track) => track,
+                BenchItem::Measurement(measurement) => {
+                    let Some((measurement, cleared)) = measurement.delete_image(image) else {
+                        next.entries.push(entry.clone());
+                        continue;
+                    };
+                    report.endpoints_cleared += cleared;
+                    if measurement.placed_endpoints() == 0 {
+                        report.discarded.push(entry.label.clone());
+                        continue;
+                    }
+                    report.moved_measurements.push(entry.id);
+                    next.entries.push(BenchEntry {
+                        id: entry.id,
+                        label: entry.label.clone(),
+                        item: BenchItem::Measurement(Arc::new(measurement)),
+                    });
+                    continue;
+                }
+            };
             let Some((track, map)) = track.delete_image(image) else {
                 next.entries.push(entry.clone());
                 continue;
@@ -519,18 +584,26 @@ pub struct ImageDeletion {
     /// each of its observations went: entry `i` is the new index of
     /// observation `i`, or `None` for one in the deleted image.
     pub renumbered: Vec<(ItemId, Vec<Option<usize>>)>,
-    /// How many observations were in the deleted image, over the items kept
-    /// and the items discarded.
+    /// How many observations were in the deleted image, over the tracks kept
+    /// and the tracks discarded.
     pub dropped: usize,
-    /// The labels of the items discarded because every observation they had
-    /// was in the deleted image, in bench order.
+    /// Each measurement still on the bench whose endpoints changed: one was
+    /// cleared, or moved down with its image.
+    pub moved_measurements: Vec<ItemId>,
+    /// How many measurement endpoints were in the deleted image, over the
+    /// measurements kept and the measurements discarded.
+    pub endpoints_cleared: usize,
+    /// The labels of the items discarded because every observation or
+    /// endpoint they had was in the deleted image, in bench order.
     pub discarded: Vec<String>,
 }
 
 impl ImageDeletion {
     /// Whether the delete changed anything on the bench.
     pub fn changed(&self) -> bool {
-        !self.renumbered.is_empty() || !self.discarded.is_empty()
+        !self.renumbered.is_empty()
+            || !self.moved_measurements.is_empty()
+            || !self.discarded.is_empty()
     }
 
     /// Where the delete moved the observations of item `id`: `None` when it

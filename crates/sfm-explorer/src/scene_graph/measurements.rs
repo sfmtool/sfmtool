@@ -27,10 +27,13 @@ use crate::scene::SceneNode;
 /// while it is selected, which is a later step's.
 ///
 /// A click on a row selects the measurement and nothing else, as a click on a
-/// Bench row does. A double-click selects it, raises Measurement View beside
-/// the tree and frames the measurement's finite endpoints in the 3D view
-/// (`app::apply_measurement_open`). A right-click opens no menu yet and
-/// selects nothing. The selected measurement's row is drawn selected.
+/// Bench row does. A double-click puts it on the bench and focuses it (or
+/// focuses its item where it is on the bench already), raises Measurement
+/// View beside the tree and frames the measurement's finite endpoints in the
+/// 3D view (`app::apply_measurement_open`). A right-click selects nothing and
+/// opens the row's menu: *Edit on Bench*, which is the double-click, and
+/// *Delete*, greyed while the node is busy. The selected measurement's row is
+/// drawn selected.
 pub(super) fn show_measurements_group(
     ui: &mut egui::Ui,
     node: &SceneNode,
@@ -38,7 +41,7 @@ pub(super) fn show_measurements_group(
     out: &mut TreeOutput,
 ) {
     let recon = node.recon();
-    let rows = measurements::distance_rows(recon);
+    let rows = measurements::distance_rows(node.edited().measurements());
     if rows.is_empty() {
         return;
     }
@@ -55,7 +58,7 @@ pub(super) fn show_measurements_group(
         let title = ui.add(
             egui::Label::new(format!(
                 "Measurements ({})",
-                measurements::measurement_count(recon)
+                measurements::measurement_count(node.edited().measurements())
             ))
             .selectable(false),
         );
@@ -85,6 +88,30 @@ pub(super) fn show_measurements_group(
             if response.double_clicked() {
                 out.response.open_measurement = Some(measurement);
             }
+            crate::context_menu::on_secondary_click(&response).show(|ui| {
+                let edit = ui
+                    .button(EDIT_ON_BENCH_LABEL)
+                    .on_hover_text("Put this measurement on the bench and edit it");
+                let key = format!("measurement_distance_{index}_edit");
+                if out.hit(row_id(id, &key), edit).clicked() {
+                    out.response.open_measurement = Some(measurement);
+                    ui.close();
+                }
+                let refusal = out.edit_refusal(id).map(str::to_string);
+                let delete = ui.add_enabled(refusal.is_none(), egui::Button::new("Delete"));
+                let delete = match refusal {
+                    Some(why) => delete.on_disabled_hover_text(why),
+                    None => delete.on_hover_text(
+                        "Delete this measurement from the reconstruction; each row after it \
+                         takes the index one lower",
+                    ),
+                };
+                let key = format!("measurement_distance_{index}_delete");
+                if out.hit(row_id(id, &key), delete).clicked() {
+                    out.response.delete_measurement = Some(measurement);
+                    ui.close();
+                }
+            });
         }
     });
 }
@@ -112,6 +139,10 @@ fn row_hover(
     if unit.is_none() {
         lines.push("su: the reconstruction's own scene units".to_string());
     }
-    lines.push("Click to select, double-click to open in Measurement View".to_string());
+    lines
+        .push("Click to select, double-click to edit on the bench in Measurement View".to_string());
     lines.join("\n")
 }
+
+/// The row menu's entry that puts the measurement on the bench.
+pub(crate) const EDIT_ON_BENCH_LABEL: &str = "Edit on Bench";

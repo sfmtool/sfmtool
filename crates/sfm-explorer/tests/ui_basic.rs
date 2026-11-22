@@ -2526,11 +2526,13 @@ fn measurement_view_opens_from_the_panels_menu() {
     );
 }
 
-/// A double-click on a Measurements row in the Scene tree selects the
-/// measurement and raises Measurement View on it, which draws the
-/// measurement's header and its two endpoint blocks.
+/// A double-click on a Measurements row in the Scene tree puts the
+/// measurement on the bench, selects it and raises Measurement View on the
+/// item, which draws its toolbar, its header and its two endpoint blocks. Its
+/// stored row is then deleted, and a click on *Commit* adds the item back as a
+/// new row.
 #[test]
-fn a_double_click_on_a_measurement_row_opens_it_in_measurement_view() {
+fn a_double_click_puts_a_measurement_on_the_bench_and_commit_writes_it() {
     let (_dir, path) = measured_copy();
     let viewer = McpViewer::launched(ui_test_lock(), None, &["--no-default-layout", &path]);
     let label = wait_for_measurements(&viewer, 2);
@@ -2571,12 +2573,16 @@ fn a_double_click_on_a_measurement_row_opens_it_in_measurement_view() {
         json!({ "open": true, "active": true }),
         "{layout}"
     );
+    let bench = viewer.ok("get_bench", json!({ "reconstruction_label": label }));
+    assert_eq!(bench["focused_item"], "distance #0", "{bench}");
+    assert_eq!(bench["items"][0]["kind"], "measurement", "{bench}");
     viewer.wait_for(
         json!({ "panel_name": "measurement_view" }),
-        "Measurement View never drew the measurement",
+        "Measurement View never drew the item",
         |listing| {
-            (find_widget(listing, "label", "Distance #0").is_some()
+            (find_widget(listing, "label", "distance #0").is_some()
                 && find_widget(listing, "label", "Label: first").is_some()
+                && find_widget(listing, "button", "Commit").is_some()
                 && entries(listing).iter().any(|widget| {
                     widget["name"]
                         .as_str()
@@ -2585,4 +2591,37 @@ fn a_double_click_on_a_measurement_row_opens_it_in_measurement_view() {
             .then_some(())
         },
     );
+
+    // Delete the stored row; the item stays on the bench with no row to
+    // replace, so Commit adds it back after the one row left.
+    viewer.ok(
+        "delete_measurement",
+        json!({ "reconstruction_label": label, "measurement_index": 0 }),
+    );
+    wait_for_measurements(&viewer, 1);
+    let commit = viewer.wait_for(
+        json!({ "panel_name": "measurement_view" }),
+        "Measurement View never offered Commit for an item with no row",
+        |listing| {
+            find_widget(
+                listing,
+                "label",
+                "From no stored row: Commit adds it as a new row",
+            )
+            .and(find_widget(listing, "button", "Commit"))
+            .cloned()
+        },
+    );
+    viewer.click(json!({ "widget": commit["widget"] }));
+    wait_for_measurements(&viewer, 2);
+    let scene = viewer.ok("get_scene", json!({}));
+    assert_eq!(
+        scene["selection"]["measurement"]["measurement_index"], 1,
+        "{scene}"
+    );
+    let item = viewer.ok(
+        "get_measurement",
+        json!({ "reconstruction_label": label, "item": "distance #0" }),
+    );
+    assert_eq!(item["origin"], json!({ "measurement_index": 1 }), "{item}");
 }

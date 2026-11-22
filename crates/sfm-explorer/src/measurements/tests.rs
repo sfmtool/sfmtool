@@ -20,7 +20,7 @@ fn assert_close(a: f64, b: f64, tol: f64, what: &str) {
 /// The rows and readings of the fixture, its file declaring `unit`.
 fn read(unit: Option<&str>) -> (Vec<DistanceRow>, MeasurementReadings) {
     let recon = measured_reconstruction(unit);
-    let rows = distance_rows(&recon);
+    let rows = distance_rows(&recon.image_set.measurements);
     let readings = MeasurementReadings::of(&EditedReconstruction::new(Arc::new(recon)));
     (rows, readings)
 }
@@ -136,7 +136,7 @@ fn a_scaled_display_transform_never_scales_a_reading() {
     let node = crate::scene::node_by_id(&state.scene, id).unwrap();
     let scaled = readings(node);
     assert_eq!(plain.distance, scaled.distance);
-    let rows = distance_rows(node.recon());
+    let rows = distance_rows(node.edited().measurements());
     assert_eq!(
         distance_result(&rows[0], &plain.distance[0], Some("m")),
         distance_result(&rows[0], &scaled.distance[0], Some("m"))
@@ -349,8 +349,8 @@ fn a_deleted_image_moves_the_selection_with_its_measurement_or_clears_it() {
         Some(MeasurementRef::distance(id, 1))
     );
     let node = crate::scene::node_by_id(&state.scene, id).unwrap();
-    assert_eq!(measurement_count(node.recon()), 3);
-    assert_eq!(distance_rows(node.recon())[1].label, "");
+    assert_eq!(measurement_count(node.edited().measurements()), 3);
+    assert_eq!(distance_rows(node.edited().measurements())[1].label, "");
 
     let (mut state, id) = measured_state(Some("m"));
     state.select_measurement(MeasurementRef::distance(id, 4));

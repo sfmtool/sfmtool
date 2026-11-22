@@ -529,24 +529,36 @@ fn prune_covered_summary(report: &PruneCoveredReport) -> String {
 /// sentence ends with: empty when no bench observation was in the image, since
 /// moving the later ones down by one is bookkeeping a reader need not be told.
 fn bench_deletion_text(deletion: &ImageDeletion) -> String {
-    if deletion.dropped == 0 {
+    let plural = |n: usize, one: &'static str, many: &'static str| if n == 1 { one } else { many };
+    let mut parts = Vec::new();
+    if deletion.dropped > 0 {
+        parts.push(format!(
+            "dropped {} bench {} in it",
+            deletion.dropped,
+            plural(deletion.dropped, "observation", "observations")
+        ));
+    }
+    if deletion.endpoints_cleared > 0 {
+        parts.push(format!(
+            "cleared {} bench measurement {} in it",
+            deletion.endpoints_cleared,
+            plural(deletion.endpoints_cleared, "endpoint", "endpoints")
+        ));
+    }
+    if parts.is_empty() {
         return String::new();
     }
-    let observations = if deletion.dropped == 1 {
-        "observation"
-    } else {
-        "observations"
+    let mut text = format!("; {}", parts.join(" and "));
+    let left = match (deletion.dropped > 0, deletion.endpoints_cleared > 0) {
+        (true, false) => "no other observations",
+        (false, true) => "no other endpoint",
+        _ => "nothing in another image",
     };
-    let mut text = format!("; dropped {} bench {observations} in it", deletion.dropped);
-    match deletion.discarded.as_slice() {
-        [] => {}
-        [one] => text.push_str(&format!(
-            " and discarded {one}, which had no other observations"
-        )),
-        many => text.push_str(&format!(
-            " and discarded {}, which had no other observations",
-            many.join(", ")
-        )),
+    if !deletion.discarded.is_empty() {
+        text.push_str(&format!(
+            " and discarded {}, which had {left}",
+            deletion.discarded.join(", ")
+        ));
     }
     text
 }
@@ -1368,14 +1380,13 @@ impl AppState {
 
         // Materialise only when there is an overlay to fold in; an empty one
         // materialises to its own base, and the subset can read that directly.
-        let (materialised, mat_map) =
-            if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
-                (None, None)
-            } else {
-                let _phase = collector.phase("materialise");
-                let (value, map) = edited.materialize();
-                (Some(value), Some(PointMap::Rows(map)))
-            };
+        let (materialised, mat_map) = if !edited.has_edits() {
+            (None, None)
+        } else {
+            let _phase = collector.phase("materialise");
+            let (value, map) = edited.materialize();
+            (Some(value), Some(PointMap::Rows(map)))
+        };
         let source: &SfmrReconstruction = match materialised.as_ref() {
             Some(value) => value,
             None => &edited.base,
@@ -1437,11 +1448,15 @@ impl AppState {
         let node = &mut self.scene[index];
         let serial = {
             let _phase = collector.phase("push version");
-            node.history.push_pair(
+            node.history.push_renumbering(
                 Some(EditedReconstruction::new(Arc::new(subset))),
                 bench,
                 None,
                 map,
+                crate::document::MeasurementMap::of(
+                    crate::measurements::MeasurementKind::Distance,
+                    measurement_rows.clone(),
+                ),
                 text.clone(),
                 None,
             )
@@ -1563,14 +1578,13 @@ impl AppState {
         // Materialise only when there is an overlay to fold in; an empty one
         // materialises to its own base, which the resection can read directly.
         let edited = self.scene[index].history.current();
-        let (materialised, mat_map) =
-            if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
-                (None, None)
-            } else {
-                let _phase = collector.phase("materialise");
-                let (value, map) = edited.materialize();
-                (Some(value), Some(PointMap::Rows(map)))
-            };
+        let (materialised, mat_map) = if !edited.has_edits() {
+            (None, None)
+        } else {
+            let _phase = collector.phase("materialise");
+            let (value, map) = edited.materialize();
+            (Some(value), Some(PointMap::Rows(map)))
+        };
         let source_value: &SfmrReconstruction = match materialised.as_ref() {
             Some(value) => value,
             None => &self.scene[index].history.current().base,
@@ -1700,14 +1714,13 @@ impl AppState {
         // Materialise only when there is an overlay to fold in; an empty one
         // materialises to its own base, which the move can read directly.
         let edited = self.scene[index].history.current();
-        let (materialised, mat_map) =
-            if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
-                (None, None)
-            } else {
-                let _phase = collector.phase("materialise");
-                let (value, map) = edited.materialize();
-                (Some(value), Some(PointMap::Rows(map)))
-            };
+        let (materialised, mat_map) = if !edited.has_edits() {
+            (None, None)
+        } else {
+            let _phase = collector.phase("materialise");
+            let (value, map) = edited.materialize();
+            (Some(value), Some(PointMap::Rows(map)))
+        };
         let source: &SfmrReconstruction = match materialised.as_ref() {
             Some(value) => value,
             None => &self.scene[index].history.current().base,
@@ -1841,14 +1854,13 @@ impl AppState {
             // Materialise only when there is an overlay to fold in; an empty
             // one materialises to its own base, which the solve can read
             // directly.
-            let (materialised, mat_map) =
-                if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
-                    (None, None)
-                } else {
-                    let _phase = progress.phase("materialise");
-                    let (value, map) = edited.materialize();
-                    (Some(value), Some(PointMap::Rows(map)))
-                };
+            let (materialised, mat_map) = if !edited.has_edits() {
+                (None, None)
+            } else {
+                let _phase = progress.phase("materialise");
+                let (value, map) = edited.materialize();
+                (Some(value), Some(PointMap::Rows(map)))
+            };
             let source: &SfmrReconstruction = match materialised.as_ref() {
                 Some(value) => value,
                 None => &edited.base,
@@ -1997,14 +2009,13 @@ impl AppState {
             // Materialise only when there is an overlay to fold in; an empty
             // one materialises to its own base, which the conversion can read
             // directly.
-            let (materialised, mat_map) =
-                if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
-                    (None, None)
-                } else {
-                    let _phase = progress.phase("materialise");
-                    let (value, map) = edited.materialize();
-                    (Some(value), Some(PointMap::Rows(map)))
-                };
+            let (materialised, mat_map) = if !edited.has_edits() {
+                (None, None)
+            } else {
+                let _phase = progress.phase("materialise");
+                let (value, map) = edited.materialize();
+                (Some(value), Some(PointMap::Rows(map)))
+            };
             let source: &SfmrReconstruction = match materialised.as_ref() {
                 Some(value) => value,
                 None => &edited.base,

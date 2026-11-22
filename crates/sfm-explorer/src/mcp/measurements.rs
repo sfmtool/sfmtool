@@ -2,12 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The measurement tools: `list_measurements` and `get_measurement`, which
-//! read what the Scene tree's Measurements rows and Measurement View show, and
+//! read what the Scene tree's Measurements rows and Measurement View show;
 //! `select_measurement`, which selects a measurement, or one of its
-//! endpoints, as a click on its row or its block does.
+//! endpoints, as a click on its row or its block does; and the three that
+//! edit, `put_measurement_on_bench`, `commit_bench_measurement` and
+//! `delete_measurement`, each one `AppState` call the panel's gesture makes.
 //!
-//! Every reading is the node's cached one ([`crate::measurements::readings`]),
-//! so the wire, the tree and the panel report the same numbers.
+//! A stored measurement's reading is the node's cached one
+//! ([`crate::measurements::readings`]), so the wire, the tree and the panel
+//! report the same numbers; an item's is its live reading
+//! ([`crate::measurements::item_reading`]), as Measurement View's edited mode
+//! reads it.
 
 use serde_json::{json, Value};
 use sfmtool_core::reconstruction::measurement_endpoint::{
@@ -15,7 +20,7 @@ use sfmtool_core::reconstruction::measurement_endpoint::{
     ResolvedDistanceMeasurement,
 };
 
-use super::{render, resolve_reconstruction, JsonReply, ToolError};
+use super::{edit, render, resolve_reconstruction, JsonReply, ToolError};
 use crate::measurements::{
     self, DistanceResult, DistanceRow, EndpointSide, MeasurementKind, MeasurementRef,
 };
@@ -30,7 +35,7 @@ pub(super) fn list_measurements(state: &AppState, reconstruction_label: Option<&
     let recon = node.recon();
     let unit = recon.metadata.world_space_unit.as_deref();
     let readings = measurements::readings(node);
-    let rows = measurements::distance_rows(recon);
+    let rows = measurements::distance_rows(node.edited().measurements());
     let listed: Vec<Value> = rows
         .iter()
         .enumerate()
@@ -48,7 +53,7 @@ pub(super) fn list_measurements(state: &AppState, reconstruction_label: Option<&
     Ok(json!({
         "reconstruction_label": node.label,
         "world_space_unit": unit,
-        "measurement_counts": counts(recon),
+        "measurement_counts": counts(node.edited()),
         "measurements": listed,
     }))
 }
@@ -56,26 +61,50 @@ pub(super) fn list_measurements(state: &AppState, reconstruction_label: Option<&
 /// `get_measurement`: one measurement whole. For a distance, both endpoints'
 /// images, pixels and resolutions with every candidate, the result block and
 /// the header's comparison line.
+///
+/// Naming an `item` instead gives a measurement item on the bench with its
+/// live readings, as Measurement View's edited mode shows it
+/// ([`item_detail`]).
 pub(super) fn get_measurement(
     state: &AppState,
     reconstruction_label: Option<&str>,
     kind: MeasurementKind,
-    index: usize,
+    index: Option<usize>,
+    item: Option<&str>,
 ) -> JsonReply {
     let id = resolve_reconstruction(state, reconstruction_label)?;
+    let index = match (index, item) {
+        (_, Some(item)) => return item_detail(state, id, item),
+        (Some(index), None) => index,
+        (None, None) => {
+            return Err(ToolError::new(
+                "Name a stored measurement with measurement_index, or an item on the bench \
+                 with item.",
+            ))
+        }
+    };
     let measurement = resolve_measurement(state, id, kind, index)?;
     let node = state.node(id).expect("just resolved");
     let recon = node.recon();
     let unit = recon.metadata.world_space_unit.as_deref();
     let readings = measurements::readings(node);
-    let rows = measurements::distance_rows(recon);
+    let rows = measurements::distance_rows(node.edited().measurements());
     let row = &rows[index];
     let resolved = &readings.distance[index];
     let mut out = summary(node, measurement, row, resolved, unit);
     let object = out.as_object_mut().expect("a summary is an object");
     let endpoints: Vec<Value> = EndpointSide::BOTH
         .into_iter()
-        .map(|side| endpoint_detail(node, row, resolved, side, unit))
+        .map(|side| {
+            endpoint_detail(
+                node,
+                side,
+                row.image(side),
+                row.pixel(side),
+                measurements::endpoint(resolved, side),
+                unit,
+            )
+        })
         .collect();
     object.insert("endpoints".into(), Value::Array(endpoints));
     // The header's comparison line, null with fewer than two readings.
@@ -110,6 +139,167 @@ pub(super) fn select_measurement(
     render::selection_reply(state)
 }
 
+/// `get_measurement` naming an item: the measurement item called `item` on
+/// node `id`'s bench, with its live readings.
+///
+/// The fields of a stored measurement's reply where the item has them, plus
+/// `item`, `focused`, and `origin`, the row its origin names at the cursor
+/// (`null` for an item with no row to replace, whose commit appends one). An
+/// endpoint not placed is `null` in `endpoints`, and with one the result is
+/// `null`; the median line compares the item with every stored measurement
+/// but its origin.
+fn item_detail(state: &AppState, id: ReconId, item: &str) -> JsonReply {
+    let node = state.node(id).expect("resolved by the caller");
+    let bench = node.history.current_bench();
+    let measurement = match bench.get(item) {
+        Some(sfmtool_core::bench::BenchItem::Measurement(m)) => m,
+        Some(sfmtool_core::bench::BenchItem::Track(_)) => {
+            return Err(ToolError::new(
+                crate::bench::measurement::not_a_measurement(item),
+            ))
+        }
+        None => {
+            return Err(ToolError::new(format!(
+                "Nothing on {}'s bench is called {item}.",
+                node.label
+            )))
+        }
+    };
+    let unit = node.recon().metadata.world_space_unit.as_deref();
+    let reading = measurements::item_reading(node.edited(), measurement);
+    let origin = state.resolved_measurement_origin(node, measurement);
+    let endpoints = measurement
+        .as_distance()
+        .map_or([None, None], |d| d.endpoints);
+    let endpoint_values: Vec<Value> = EndpointSide::BOTH
+        .into_iter()
+        .map(|side| {
+            match (
+                endpoints[side.index()],
+                reading.endpoints[side.index()].as_ref(),
+            ) {
+                (Some(endpoint), Some(resolution)) => {
+                    endpoint_detail(node, side, endpoint.image, endpoint.pixel, resolution, unit)
+                }
+                _ => Value::Null,
+            }
+        })
+        .collect();
+    let row = measurements::item_row(measurement);
+    let result_value = match (&row, &reading.resolved) {
+        (Some(row), Some(resolved)) => result(measurements::distance_result(row, resolved, unit)),
+        _ => Value::Null,
+    };
+    let median = match (&row, &reading.resolved) {
+        (Some(row), Some(resolved)) => {
+            let rows = measurements::distance_rows(node.edited().measurements());
+            let stored = measurements::readings(node);
+            measurements::item_scale_comparison(&rows, &stored.distance, origin, row, resolved).map(
+                |line| {
+                    json!({
+                        "count": line.count,
+                        "median_unit_per_scene_unit": line.median_unit_per_scene_unit,
+                        "deviation_percent": line.deviation_percent,
+                        "text": measurements::scale_comparison_text(&line, row.unit),
+                    })
+                },
+            )
+        }
+        _ => None,
+    };
+    let distance = measurement.as_distance().and_then(|d| d.distance);
+    Ok(json!({
+        "reconstruction_label": node.label,
+        "item": item,
+        "focused": state.focused_item_label(id) == Some(item),
+        "measurement_kind": measurement.kind().name(),
+        "origin": origin.map(|index| json!({ "measurement_index": index })),
+        "label": measurement.label,
+        "stated_distance": distance.map(|(d, _)| d),
+        "unit": distance.map(|(_, u)| u.name()),
+        "result": result_value,
+        "endpoints": endpoint_values,
+        "median": median,
+    }))
+}
+
+/// `put_measurement_on_bench`: the Measurements row's double-click without
+/// the raise and the framing ([`AppState::put_measurement_on_bench`]).
+pub(super) fn put_measurement_on_bench(
+    state: &mut AppState,
+    reconstruction_label: &str,
+    kind: MeasurementKind,
+    index: usize,
+) -> JsonReply {
+    let id = resolve_reconstruction(state, Some(reconstruction_label))?;
+    let measurement = resolve_measurement(state, id, kind, index)?;
+    let mut put = None;
+    let mut reply = edit::edited(state, id, |state| {
+        state
+            .put_measurement_on_bench(measurement)
+            .map(|done| put = Some(done))
+    })?;
+    let put = put.expect("a put that succeeded named its item");
+    let object = reply.as_object_mut().expect("an edit reply is an object");
+    object.insert("item".into(), json!(put.label));
+    Ok(reply)
+}
+
+/// `commit_bench_measurement`: Measurement View's *Commit*
+/// ([`AppState::commit_bench_measurement`]) on the item named, or on the
+/// focused item when none is.
+pub(super) fn commit_bench_measurement(
+    state: &mut AppState,
+    reconstruction_label: &str,
+    named: Option<&str>,
+) -> JsonReply {
+    let id = resolve_reconstruction(state, Some(reconstruction_label))?;
+    let item = match named {
+        Some(item) => item.to_string(),
+        None => state
+            .focused_item_label(id)
+            .map(str::to_string)
+            .ok_or_else(|| {
+                ToolError::new(format!(
+                    "No item on {reconstruction_label}'s bench is focused. Name one with item, \
+                     focus one with focus_bench_item, or put one on with \
+                     put_measurement_on_bench."
+                ))
+            })?,
+    };
+    let mut committed = None;
+    let mut reply = edit::edited(state, id, |state| {
+        state
+            .commit_bench_measurement(id, &item)
+            .map(|done| committed = Some(done))
+    })?;
+    let committed = committed.expect("a commit that succeeded named its row");
+    let object = reply.as_object_mut().expect("an edit reply is an object");
+    object.insert("item".into(), json!(item));
+    object.insert(
+        "measurement".into(),
+        json!({
+            "measurement_kind": committed.measurement.kind.name(),
+            "measurement_index": committed.measurement.index(),
+            "replaced": committed.replaced,
+        }),
+    );
+    Ok(reply)
+}
+
+/// `delete_measurement`: *Delete* in a Measurements row's menu
+/// ([`AppState::delete_measurement`]).
+pub(super) fn delete_measurement(
+    state: &mut AppState,
+    reconstruction_label: &str,
+    kind: MeasurementKind,
+    index: usize,
+) -> JsonReply {
+    let id = resolve_reconstruction(state, Some(reconstruction_label))?;
+    let measurement = resolve_measurement(state, id, kind, index)?;
+    edit::edited(state, id, |state| state.delete_measurement(measurement))
+}
+
 /// The measurement `kind` `index` names in node `id`, or a refusal that says
 /// how many there are.
 fn resolve_measurement(
@@ -119,18 +309,12 @@ fn resolve_measurement(
     index: usize,
 ) -> Result<MeasurementRef, ToolError> {
     let node = state.node(id).expect("resolved by the caller");
-    let count = match kind {
-        MeasurementKind::Distance => node
-            .recon()
-            .image_set
-            .measurements
-            .distance_measurement_count(),
-    };
+    let count = kind.count(node.edited().measurements());
     if index >= count {
         return Err(ToolError::new(format!(
             "{} stores {count} {} measurement{}, so there is no measurement_index {index}",
             node.label,
-            kind.wire_name(),
+            kind.name(),
             if count == 1 { "" } else { "s" }
         )));
     }
@@ -141,8 +325,8 @@ fn resolve_measurement(
 
 /// A reconstruction's `measurement_counts` block: how many measurements of
 /// each kind it stores.
-pub(super) fn counts(recon: &sfmtool_core::SfmrReconstruction) -> Value {
-    json!({ "distance": recon.image_set.measurements.distance_measurement_count() })
+pub(super) fn counts(edited: &sfmtool_core::EditedReconstruction) -> Value {
+    json!({ "distance": edited.measurements().distance_measurement_count() })
 }
 
 /// One measurement as `list_measurements` lists it: its kind and index, its
@@ -170,7 +354,7 @@ fn summary(
         })
         .collect();
     json!({
-        "measurement_kind": measurement.kind.wire_name(),
+        "measurement_kind": measurement.kind.name(),
         "measurement_index": measurement.index(),
         "label": row.label,
         "stated_distance": row.stated,
@@ -219,14 +403,14 @@ fn result(result: DistanceResult) -> Value {
 /// resolution with every candidate, or the refusal's sentence.
 fn endpoint_detail(
     node: &SceneNode,
-    row: &DistanceRow,
-    resolved: &ResolvedDistanceMeasurement,
     side: EndpointSide,
+    image: u32,
+    pixel: [f64; 2],
+    resolution: &Result<EndpointResolution, EndpointRefusal>,
     unit: Option<&str>,
 ) -> Value {
     let recon = node.recon();
-    let image = row.image(side);
-    let (resolution, refusal) = match measurements::endpoint(resolved, side) {
+    let (resolution, refusal) = match resolution {
         Ok(resolution) => (Some(resolution_json(node, resolution)), None),
         Err(refusal) => (None, Some(refusal_json(refusal))),
     };
@@ -234,7 +418,7 @@ fn endpoint_detail(
         "endpoint": side.wire_name(),
         "camera_image": image,
         "camera_image_name": recon.image_set.images.get(image as usize).map(|i| i.name.clone()),
-        "pixel": row.pixel(side),
+        "pixel": pixel,
         "position_unit": unit,
         "resolution": resolution,
         "refusal": refusal,

@@ -413,14 +413,13 @@ impl AppState {
         // Materialise only when there is an overlay to fold in; an empty one
         // materialises to its own base, which the switch can read directly.
         let edited = self.scene[index].history.current();
-        let (materialised, mat_map) =
-            if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
-                (None, None)
-            } else {
-                let _phase = collector.phase("materialise");
-                let (value, map) = edited.materialize();
-                (Some(value), Some(map))
-            };
+        let (materialised, mat_map) = if !edited.has_edits() {
+            (None, None)
+        } else {
+            let _phase = collector.phase("materialise");
+            let (value, map) = edited.materialize();
+            (Some(value), Some(map))
+        };
         let source: &SfmrReconstruction = match materialised.as_ref() {
             Some(value) => value,
             None => &self.scene[index].history.current().base,
@@ -609,13 +608,12 @@ impl AppState {
             .current()
             .clone();
         Ok(Box::new(move |progress| {
-            let (source, mat_map) =
-                if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
-                    (Arc::clone(&edited.base), None)
-                } else {
-                    let (value, map) = edited.materialize();
-                    (Arc::new(value), Some(map))
-                };
+            let (source, mat_map) = if !edited.has_edits() {
+                (Arc::clone(&edited.base), None)
+            } else {
+                let (value, map) = edited.materialize();
+                (Arc::new(value), Some(map))
+            };
             match switch_and_retriangulate(&source, mat_map, &resolved, progress, |_| {}) {
                 Ok((run, _report)) => Finished::SwitchedCamera(Box::new(run)),
                 Err(SwitchEnd::Cancelled) => Finished::Cancelled,

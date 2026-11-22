@@ -115,7 +115,7 @@ pub(super) fn reconstruction(node: &SceneNode, solo: Option<ReconId>, index_file
         "world_space_unit": recon.metadata.world_space_unit,
         // How many measurements of each kind the version on screen stores,
         // which list_measurements lists.
-        "measurement_counts": super::measurements::counts(recon),
+        "measurement_counts": super::measurements::counts(node.edited()),
         "transformed": node.has_transform(),
         // The display transform in force, always present and reading as the
         // identity for a node that carries none, so an agent that wants the
@@ -195,7 +195,7 @@ pub(super) fn selection(state: &AppState) -> Value {
         })),
         "measurement": state.selected_measurement.map(|measurement| json!({
             "reconstruction_label": label_of(state, measurement.recon),
-            "measurement_kind": measurement.kind.wire_name(),
+            "measurement_kind": measurement.kind.name(),
             "measurement_index": measurement.index(),
         })),
         // `a` or `b`, the endpoint of the selected measurement a click on its

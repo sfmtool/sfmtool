@@ -156,7 +156,7 @@ fn a_selected_measurement_draws_its_header_endpoints_and_result() {
 fn the_result_block_reads_scene_units_infinity_and_a_refusal() {
     let (rows, readings) = {
         let recon = crate::measurements::fixture::measured_reconstruction(None);
-        let rows = crate::measurements::distance_rows(&recon);
+        let rows = crate::measurements::distance_rows(&recon.image_set.measurements);
         let edited = sfmtool_core::EditedReconstruction::new(std::sync::Arc::new(recon));
         (rows, crate::measurements::MeasurementReadings::of(&edited))
     };
@@ -269,5 +269,138 @@ fn an_endpoint_blocks_gestures_are_track_views_row_gestures() {
             .iter()
             .all(|r| r.select_endpoint.is_none() && r.look_through.is_none()),
         "a right click selected something"
+    );
+}
+
+// ── The edited mode ──────────────────────────────────────────────────────
+
+/// The Edit box is drawn clear with a stored measurement selected, and a click
+/// on it asks for the measurement to be put on the bench.
+#[test]
+fn ticking_the_edit_box_asks_to_edit_the_selected_measurement() {
+    let (mut state, id) = measured_state(Some("m"));
+    state.select_measurement(MeasurementRef::distance(id, 0));
+    let (mut panel, ctx) = settled(&state);
+    assert!(panel.toolbar().is_empty());
+    let texts = painted(&mut panel, &ctx, &state);
+    assert!(texts.iter().any(|t| t == EDIT_LABEL), "{texts:?}");
+    // The box is the first widget of the panel, at its top left.
+    let at = egui::pos2(14.0, 14.0);
+    let responses = clicks(
+        &mut panel,
+        &ctx,
+        &state,
+        at,
+        egui::PointerButton::Primary,
+        1,
+    );
+    assert!(
+        responses.iter().any(|r| r.set_edit == Some((id, true))),
+        "the box was not ticked"
+    );
+}
+
+/// With a measurement item focused the panel shows the item: its toolbar,
+/// where it came from, and its live readings, which follow a step on the item
+/// while the stored row's stay as they were.
+#[test]
+fn the_edited_mode_shows_the_item_s_live_readings() {
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    let (mut panel, ctx) = settled(&state);
+    let toolbar: Vec<&str> = panel.toolbar().iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(toolbar, ["Commit", "Discard", "Rename"]);
+    assert!(panel.toolbar().iter().all(|(_, refusal)| refusal.is_none()));
+    let texts = painted(&mut panel, &ctx, &state);
+    for expected in [
+        "distance #0",
+        "From Distance #0: Commit replaces it",
+        "Label: ear to ear",
+        "Stated distance: 153 cm",
+        "Reconstructed: 150.0 cm",
+        // The median leaves the origin out, and compares the item with the
+        // other two readings.
+        "Median over 3: 1 su = 102 cm; this one +0.0%",
+    ] {
+        assert!(
+            texts.iter().any(|t| t == expected),
+            "{expected:?} not in {texts:?}"
+        );
+    }
+    let stored = crate::measurements::readings(state.node(id).unwrap());
+    let reading = panel.item_reading().expect("read").clone();
+    assert_eq!(reading.resolved.as_ref(), stored.distance.first());
+
+    // Move endpoint B onto point 2, as a later step will: the item's reading
+    // changes and the stored row's does not.
+    let index = state.node_index(id).unwrap();
+    let mut moved = (**state.bench_measurement(id, "distance #0").unwrap()).clone();
+    let sfmtool_core::bench::EditableMeasurementBody::Distance(d) = &mut moved.body;
+    let row4 =
+        &crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements())[4];
+    d.endpoints[1] = Some(sfmtool_core::bench::MeasurementEndpoint {
+        image: row4.images[1],
+        pixel: row4.pixels[1],
+    });
+    let bench = state.scene[index]
+        .history
+        .current_bench()
+        .replace(
+            "distance #0",
+            sfmtool_core::bench::BenchItem::Measurement(std::sync::Arc::new(moved)),
+        )
+        .unwrap();
+    state.scene[index]
+        .history
+        .push_bench(std::sync::Arc::new(bench), "moved B");
+    run_frame(&mut panel, &ctx, &state, Vec::new());
+    let after = panel.item_reading().expect("read").clone();
+    assert_ne!(after.resolved, reading.resolved);
+    let chosen = after.endpoints[1]
+        .as_ref()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .chosen()
+        .point;
+    assert_eq!(chosen, 2);
+    assert_eq!(
+        crate::measurements::readings(state.node(id).unwrap()).distance,
+        stored.distance
+    );
+}
+
+/// An endpoint the item lacks is a block saying so, the result says why
+/// there is no distance, and Commit is greyed with the refusal.
+#[test]
+fn an_unplaced_endpoint_greys_commit_and_says_so() {
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 1))
+        .unwrap();
+    // Deleting image 1 clears endpoint B, which was in it.
+    state.delete_image(ImageRef::new(id, 1)).unwrap();
+    let (mut panel, ctx) = settled(&state);
+    let texts = painted(&mut panel, &ctx, &state);
+    for expected in [
+        "Endpoint B is not placed.",
+        "No distance: endpoint B is not placed.",
+        "From no stored row: Commit adds it as a new row",
+    ] {
+        assert!(
+            texts.iter().any(|t| t == expected),
+            "{expected:?} not in {texts:?}"
+        );
+    }
+    let commit = &panel.toolbar()[0];
+    assert_eq!(commit.0, "Commit");
+    assert_eq!(
+        commit.1.as_deref(),
+        Some(
+            "Cannot commit distance #1: endpoint B is not placed, and a distance needs both \
+             endpoints."
+        )
     );
 }

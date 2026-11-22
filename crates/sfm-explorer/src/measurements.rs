@@ -25,7 +25,7 @@ use sfmtool_core::reconstruction::measurement_endpoint::{
     resolve_distance_measurements, EndpointRefusal, EndpointResolution, MeasurementEndpointOptions,
     ResolvedDistanceMeasurement,
 };
-use sfmtool_core::{EditedReconstruction, LengthUnit, SfmrReconstruction};
+use sfmtool_core::{EditedReconstruction, LengthUnit, MeasurementsData, SfmrReconstruction};
 
 use crate::scene::{ReconId, SceneNode};
 
@@ -34,39 +34,10 @@ pub(crate) mod fixture;
 #[cfg(test)]
 mod tests;
 
-/// The kind of a stored measurement, which names the subsection of the
-/// file's `measurements/` section its rows are in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum MeasurementKind {
-    /// A physical length between two endpoints.
-    Distance,
-}
-
-impl MeasurementKind {
-    /// Every kind, in the order the Scene tree and the wire list them.
-    pub(crate) const ALL: [MeasurementKind; 1] = [MeasurementKind::Distance];
-
-    /// The kind's name in a row, a header and the Action Log: `Distance`.
-    pub(crate) fn title(self) -> &'static str {
-        match self {
-            MeasurementKind::Distance => "Distance",
-        }
-    }
-
-    /// The kind's name on the wire, the file's subdirectory name.
-    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
-    pub(crate) fn wire_name(self) -> &'static str {
-        match self {
-            MeasurementKind::Distance => "distance",
-        }
-    }
-
-    /// The kind `name` spells on the wire, or `None`.
-    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
-    pub(crate) fn from_wire_name(name: &str) -> Option<MeasurementKind> {
-        Self::ALL.into_iter().find(|kind| kind.wire_name() == name)
-    }
-}
+/// The kind of a stored measurement: core's, which names the subsection of the
+/// file's `measurements/` section its rows are in (`title()` for a row, a
+/// header and the Action Log; `name()` in a sentence and on the wire).
+pub(crate) use sfmtool_core::bench::MeasurementKind;
 
 /// One measurement of one loaded reconstruction: its node, its kind, and its
 /// row within that kind's rows.
@@ -102,9 +73,10 @@ impl MeasurementRef {
         format!("{} #{}", self.kind.title(), self.index)
     }
 
-    /// `distance #2`, the same in the middle of a sentence.
+    /// `distance #2`, the same in the middle of a sentence, and the label a
+    /// measurement put on the bench from this row is minted from.
     pub(crate) fn lower_title(self) -> String {
-        format!("{} #{}", self.kind.title().to_lowercase(), self.index)
+        sfmtool_core::bench::measurement_title(self.kind, self.index)
     }
 }
 
@@ -184,10 +156,14 @@ impl DistanceRow {
     }
 }
 
-/// The distance measurements `recon` stores, in stored order; empty where it
-/// stores none.
-pub(crate) fn distance_rows(recon: &SfmrReconstruction) -> Vec<DistanceRow> {
-    let Some(m) = recon.image_set.measurements.distance.as_ref() else {
+/// The distance measurements `measurements` holds, in stored order; empty
+/// where it holds none.
+///
+/// A version's measurements are its own where an edit set them, so a caller
+/// reads them through `EditedReconstruction::measurements` rather than off the
+/// base.
+pub(crate) fn distance_rows(measurements: &MeasurementsData) -> Vec<DistanceRow> {
+    let Some(m) = measurements.distance.as_ref() else {
         return Vec::new();
     };
     (0..m.len())
@@ -206,9 +182,9 @@ pub(crate) fn distance_rows(recon: &SfmrReconstruction) -> Vec<DistanceRow> {
         .collect()
 }
 
-/// How many measurements of every kind `recon` stores.
-pub(crate) fn measurement_count(recon: &SfmrReconstruction) -> usize {
-    recon.image_set.measurements.distance_measurement_count()
+/// How many measurements of every kind `measurements` holds.
+pub(crate) fn measurement_count(measurements: &MeasurementsData) -> usize {
+    measurements.distance_measurement_count()
 }
 
 /// What one version reads its measurements as: each distance measurement's
@@ -485,6 +461,99 @@ pub(crate) fn scale_comparison_text(line: &ScaleComparison, unit: LengthUnit) ->
     )
 }
 
+/// What the version on screen makes of a measurement item on the bench: its
+/// **live readings**, read from the item rather than from any stored row.
+///
+/// Each placed endpoint is resolved against the version with the resolver's
+/// default options, as a stored row's are, so the item and the row it came
+/// from read alike until a step changes one of them.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ItemReading {
+    /// Each endpoint's resolution, `A` first, or `None` for one not placed.
+    pub(crate) endpoints: [Option<Result<EndpointResolution, EndpointRefusal>>; 2],
+    /// Both endpoints resolved together, where both are placed: what a
+    /// stored row with the item's endpoints would read as.
+    pub(crate) resolved: Option<ResolvedDistanceMeasurement>,
+}
+
+/// The live readings of `item` against `edited`.
+pub(crate) fn item_reading(
+    edited: &EditedReconstruction,
+    item: &sfmtool_core::bench::EditableMeasurement,
+) -> ItemReading {
+    let options = MeasurementEndpointOptions::default();
+    let endpoints = item
+        .as_distance()
+        .map_or([None, None], |distance| distance.endpoints);
+    match endpoints {
+        [Some(a), Some(b)] => {
+            let resolved = sfmtool_core::reconstruction::measurement_endpoint::resolve_distance_endpoints(
+                edited,
+                [(a.image, a.pixel), (b.image, b.pixel)],
+                &options,
+            );
+            ItemReading {
+                endpoints: [
+                    Some(resolved.endpoints[0].clone()),
+                    Some(resolved.endpoints[1].clone()),
+                ],
+                resolved: Some(resolved),
+            }
+        }
+        partial => ItemReading {
+            endpoints: partial.map(|endpoint| {
+                endpoint.map(|e| {
+                    sfmtool_core::reconstruction::measurement_endpoint::resolve_measurement_endpoint(
+                        edited, e.image, e.pixel, &options,
+                    )
+                })
+            }),
+            resolved: None,
+        },
+    }
+}
+
+/// `item` as a stored row would hold it, or `None` where an endpoint is not
+/// placed or no stated distance is given.
+pub(crate) fn item_row(item: &sfmtool_core::bench::EditableMeasurement) -> Option<DistanceRow> {
+    let distance = item.as_distance()?;
+    let [Some(a), Some(b)] = distance.endpoints else {
+        return None;
+    };
+    let (stated, unit) = distance.distance?;
+    Some(DistanceRow {
+        label: item.label.clone(),
+        stated,
+        unit,
+        images: [a.image, b.image],
+        pixels: [a.pixel, b.pixel],
+    })
+}
+
+/// The median line for an item: the item compared with every stored
+/// measurement of its kind but the row `origin` it came from, so a person
+/// sees whether a change brings it into line before committing it.
+pub(crate) fn item_scale_comparison(
+    rows: &[DistanceRow],
+    resolved: &[ResolvedDistanceMeasurement],
+    origin: Option<u32>,
+    row: &DistanceRow,
+    reading: &ResolvedDistanceMeasurement,
+) -> Option<ScaleComparison> {
+    let keep = |i: &usize| Some(*i as u32) != origin;
+    let mut others: Vec<DistanceRow> = (0..rows.len())
+        .filter(keep)
+        .map(|i| rows[i].clone())
+        .collect();
+    let mut readings: Vec<ResolvedDistanceMeasurement> = (0..resolved.len())
+        .filter(keep)
+        .map(|i| resolved[i].clone())
+        .collect();
+    others.push(row.clone());
+    readings.push(reading.clone());
+    scale_comparison(&others, &readings, others.len() - 1)
+}
+
 /// The resolution of the endpoint on `side`, or why it has none.
 pub(crate) fn endpoint(
     resolved: &ResolvedDistanceMeasurement,
@@ -537,7 +606,7 @@ pub(crate) fn distance_rows_after_deleting_image(
     removed: u32,
 ) -> Vec<Option<u32>> {
     let mut next = 0;
-    distance_rows(recon)
+    distance_rows(&recon.image_set.measurements)
         .iter()
         .map(|row| {
             if row.images.contains(&removed) {

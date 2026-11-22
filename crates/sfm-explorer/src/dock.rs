@@ -220,7 +220,7 @@ impl TabContext<'_> {
         // is -- and owned (its own `Arc`, not a borrow of the state), the way
         // the Image Detail panel's own bench value is read out.
         let focused = self.state.selected_recon.and_then(|id| {
-            let label = self.state.focused_item_label(id)?.to_string();
+            let label = self.state.focused_track_label(id)?.to_string();
             let track = self.state.bench_track(id, &label).cloned()?;
             // The one selected observation, which the figure draws larger.
             let selected = self.state.selected_bench_observation(id, &label);
@@ -402,7 +402,7 @@ impl TabContext<'_> {
         }
         // Everything below acts on the focused item, which is what a bench
         // panel's gesture means when it names no item.
-        let focused = self.state.focused_item_label(id).map(str::to_string);
+        let focused = self.state.focused_track_label(id).map(str::to_string);
         let Some(label) = focused else {
             return;
         };
@@ -688,7 +688,7 @@ impl TabContext<'_> {
         };
         let Some(track) = self
             .state
-            .focused_item_label(id)
+            .focused_track_label(id)
             .and_then(|label| self.state.bench_track(id, label))
         else {
             return;
@@ -747,7 +747,7 @@ impl TabContext<'_> {
             // image shown, if they are.
             let create_track_refusal = selected_image
                 .and_then(|idx| self.state.create_track_here_refusal(ImageRef::new(id, idx)));
-            let (bench_label, bench_track) = match self.state.focused_item_label(id) {
+            let (bench_label, bench_track) = match self.state.focused_track_label(id) {
                 Some(label) => (
                     Some(label.to_string()),
                     self.state.bench_track(id, label).cloned(),
@@ -1022,7 +1022,7 @@ impl TabContext<'_> {
     }
 
     /// Apply what Measurement View asked for: the hover, the selections, the
-    /// Go to Point dialog and the camera view.
+    /// *Edit* box, the toolbar, the Go to Point dialog and the camera view.
     pub(crate) fn apply_measurement_view_response(
         &mut self,
         ui: &egui::Ui,
@@ -1038,8 +1038,39 @@ impl TabContext<'_> {
         if let Some((measurement, side)) = response.select_endpoint {
             self.state.select_endpoint(measurement, side);
         }
+        if let Some((id, side)) = response.select_item_endpoint {
+            self.state.select_item_endpoint(id, side);
+        }
         if let Some(id) = response.goto_point {
             self.state.goto_point.open(Some(id));
+        }
+        // The box: a put is a bench step, refused in its own words; focusing
+        // an item already on the bench and unfocusing are not.
+        if let Some((id, on)) = response.set_edit {
+            if let Err(why) = self.state.set_measurement_editing(id, on) {
+                self.state.action_log.fail(Kind::Bench, why);
+            }
+        }
+        if let Some((id, label)) = response.commit {
+            if let Err(why) = self.state.commit_bench_measurement(id, &label) {
+                self.state.action_log.fail(Kind::Edit, why);
+            }
+        }
+        if let Some((id, label)) = response.discard {
+            if let Err(why) = self.state.discard_bench_item(id, &label) {
+                self.state.action_log.fail(Kind::Bench, why);
+            }
+        }
+        if let Some((id, label, to)) = response.rename {
+            if let Err(why) = self.state.rename_bench_item(id, &label, &to) {
+                self.state.action_log.fail(Kind::Bench, why);
+            }
+        }
+        if let Some((id, side)) = response.look_through_item {
+            self.state.select_item_endpoint(id, side);
+            if let Some((image, [x, y])) = self.state.focused_item_endpoint(id, side) {
+                self.look_through_toward(ui, image, Some([x as f32, y as f32]));
+            }
         }
         // Last, because ending a held camera move needs the state mutably.
         if let Some((measurement, side)) = response.look_through {
@@ -1072,7 +1103,7 @@ impl TabContext<'_> {
         let Some(id) = self.state.selected_recon else {
             return;
         };
-        let editing = self.state.focused_item_label(id).is_some();
+        let editing = self.state.focused_track_label(id).is_some();
         if editing {
             self.cache_bench_track_images(ctx);
         } else {
@@ -1447,6 +1478,11 @@ impl TabContext<'_> {
         if let Some(id) = response.clear_bench {
             if let Err(why) = self.state.clear_bench(id) {
                 self.state.action_log.fail(Kind::Bench, why);
+            }
+        }
+        if let Some(measurement) = response.delete_measurement {
+            if let Err(why) = self.state.delete_measurement(measurement) {
+                self.state.action_log.fail(Kind::Edit, why);
             }
         }
     }

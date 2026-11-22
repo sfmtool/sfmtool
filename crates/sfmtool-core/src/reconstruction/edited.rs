@@ -21,8 +21,8 @@ use xxhash_rust::xxh3::Xxh3;
 
 use sfmtool_archive_io::format_hash;
 use sfmtool_sfmr_format::{
-    ContentHash, SfmrError, NO_REFERENCE_IMAGE, NO_REFERENCE_OBSERVATION, POINT_CONSTRAINT_FREE,
-    POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED,
+    ContentHash, MeasurementsData, SfmrError, NO_REFERENCE_IMAGE, NO_REFERENCE_OBSERVATION,
+    POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED,
 };
 
 use crate::patch::cloud::{split_halfvec, OrientedPatch};
@@ -517,11 +517,16 @@ fn halfvec_row(arr: &Option<Array2<f32>>, i: usize) -> Option<[f32; 3]> {
 /// never reused, and an addition takes the next index at or after the base's
 /// point count. [`Self::materialize`] is the one operation that renumbers.
 ///
+/// The one thing besides points an overlay holds is the measurements
+/// ([`Self::with_measurements`]): a version whose measurements differ from its
+/// base's carries its own, so a measurement edit shares the whole base rather
+/// than copying the point columns into a new one.
+///
 /// Equality is over the base's *contents* and the edits, so two values built
 /// from equal bases with equal edits are equal even when the bases are separate
-/// allocations. It compares the point side only, which is what an overlay edit
-/// can change, and it reads two `NaN` constraint distances as agreeing, since
-/// both say the point is at no distance from anything.
+/// allocations. It compares the point side and the measurements, which is what
+/// an overlay edit can change, and it reads two `NaN` constraint distances as
+/// agreeing, since both say the point is at no distance from anything.
 pub struct EditedReconstruction {
     /// What was loaded, or the last materialisation. Shared by every version in
     /// a run of point edits.
@@ -539,6 +544,10 @@ pub struct EditedReconstruction {
     /// `None` for a point that is new. What puts a modified point back in its
     /// place at materialisation.
     pub replaces: Vec<Option<u32>>,
+    /// The measurements this version holds in place of the base's, or `None`
+    /// where it holds the base's own. Read them through
+    /// [`Self::measurements`]; set them with [`Self::with_measurements`].
+    measurements: Option<Arc<MeasurementsData>>,
     /// The base's content hashes, computed on first request. Not part of the
     /// value: two equal values agree on it whether or not either has asked.
     base_hash: OnceLock<ContentHash>,
@@ -566,6 +575,7 @@ impl Clone for EditedReconstruction {
             deleted_points: self.deleted_points.clone(),
             added: self.added.clone(),
             replaces: self.replaces.clone(),
+            measurements: self.measurements.clone(),
             base_hash: self.base_hash.clone(),
             base_measures: Arc::clone(&self.base_measures),
         }
@@ -578,6 +588,7 @@ impl std::fmt::Debug for EditedReconstruction {
             .field("base_point_count", &self.base.point_count())
             .field("deleted", &self.deleted_points.len())
             .field("added", &self.added.point_count())
+            .field("own_measurements", &self.measurements.is_some())
             .finish()
     }
 }
@@ -589,6 +600,7 @@ impl PartialEq for EditedReconstruction {
         self.deleted_points == other.deleted_points
             && self.replaces == other.replaces
             && point_sets_equal(&self.added, &other.added)
+            && self.measurements() == other.measurements()
             && (Arc::ptr_eq(&self.base, &other.base)
                 || point_sets_equal(&self.base.point_set, &other.base.point_set))
     }
@@ -666,9 +678,49 @@ impl EditedReconstruction {
             deleted_points: HashSet::new(),
             added,
             replaces: Vec::new(),
+            measurements: None,
             base_hash: OnceLock::new(),
             base_measures: Arc::default(),
         }
+    }
+
+    /// The measurements this version holds: its own where an edit set them
+    /// ([`Self::with_measurements`]), and otherwise the base's.
+    pub fn measurements(&self) -> &MeasurementsData {
+        self.measurements
+            .as_deref()
+            .unwrap_or(&self.base.image_set.measurements)
+    }
+
+    /// This version with `measurements` in place of the ones it holds, and
+    /// nothing else changed.
+    ///
+    /// The result shares the base (the same [`Arc`]) and carries the point
+    /// overlay across as it is, since a measurement names images and pixels
+    /// and no point index. So a measurement edit costs the measurements and
+    /// nothing of the points, the tracks or the patch bitmaps, and every point
+    /// index means in the result what it meant here. [`Self::materialize`]
+    /// writes them into the plain value, which is how they reach a save.
+    ///
+    /// They are not checked against the image set here: the caller builds
+    /// them from rows it has checked, as
+    /// [`commit_measurement`](crate::bench::commit_measurement) does.
+    pub fn with_measurements(&self, measurements: MeasurementsData) -> Self {
+        let mut next = self.clone();
+        next.measurements = Some(Arc::new(measurements));
+        next
+    }
+
+    /// Whether this version differs from its base: a point deleted, added or
+    /// replaced, or measurements of its own ([`Self::with_measurements`]).
+    ///
+    /// A value for which this is false is exactly its base, so a caller that
+    /// wants the plain reconstruction can read the base instead of
+    /// materialising.
+    pub fn has_edits(&self) -> bool {
+        !self.deleted_points.is_empty()
+            || !self.added.points.is_empty()
+            || self.measurements.is_some()
     }
 
     /// The base's reprojection noise level, in px: its
@@ -1438,10 +1490,7 @@ impl EditedReconstruction {
         metadata.image_count = self.base.image_count() as u32;
         metadata.camera_count = self.base.camera_count() as u32;
         metadata.infinity_point_count = point_set.infinity_point_count as u32;
-        self.base
-            .image_set
-            .measurements
-            .set_metadata_counts(&mut metadata);
+        self.measurements().set_metadata_counts(&mut metadata);
 
         let recon = SfmrReconstruction {
             workspace_dir: self.base.workspace_dir.clone(),
@@ -1458,6 +1507,7 @@ impl EditedReconstruction {
             image_set: ImageSet {
                 thumbnails_y_x_rgb: self.base.image_set.thumbnails_y_x_rgb.clone(),
                 image_to_gray: self.base.image_set.image_to_gray.clone(),
+                measurements: self.measurements().clone(),
                 ..self.base.image_set.clone()
             },
             point_set,

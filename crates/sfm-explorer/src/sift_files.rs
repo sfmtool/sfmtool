@@ -322,7 +322,7 @@ fn build(plan: SiftFilesPlan, progress: &Progress<'_>) -> Finished {
     };
     // The definition is the base's, so a value with point edits over its base
     // is materialised first, as every whole-value edit does.
-    let (mut value, map) = if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
+    let (mut value, map) = if !edited.has_edits() {
         (edited.base.clone_for_edit(), PointMap::Removed(Vec::new()))
     } else {
         let _phase = progress.phase("materialise");

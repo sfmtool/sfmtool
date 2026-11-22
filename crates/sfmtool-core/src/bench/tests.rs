@@ -14,6 +14,7 @@
 mod delete_image;
 mod grid_plane_normal;
 mod grown_plane_normal;
+mod measurement;
 mod normal;
 mod observation_readings;
 mod pairwise_flow_normal;

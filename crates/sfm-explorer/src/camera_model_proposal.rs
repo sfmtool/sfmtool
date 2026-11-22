@@ -810,7 +810,7 @@ impl AppState {
             .node(camera.recon)
             .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
         let edited = node.history.current();
-        let (value, rows) = if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
+        let (value, rows) = if !edited.has_edits() {
             (Arc::clone(&edited.base), None)
         } else {
             let (value, map) = edited.materialize();

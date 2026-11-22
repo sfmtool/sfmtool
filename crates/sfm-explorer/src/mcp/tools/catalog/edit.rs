@@ -122,6 +122,26 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "delete_measurement",
+            description: "Delete one stored measurement from the reconstruction, as Delete in \
+                          its Scene tree row's menu does: a direct edit, one version labelled \
+                          like \"Deleted distance #2 in dino\", undoable. Each row after it \
+                          takes the index one lower, and the selected measurement and every \
+                          measurement item's origin follow; an item whose origin was the \
+                          deleted row stays on the bench, and committing it adds the \
+                          measurement back as a new row. Allowed on a sift_files \
+                          reconstruction; refused while a background task or a camera model \
+                          proposal holds the node.",
+            kind: Write,
+            schema: object(
+                &[("measurement_kind", measurement_kind_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("measurement_index", measurement_index_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "delete_points",
             description: "Delete many 3D points of one reconstruction, and their tracks, as one \
                           version that one undo reverses. The same point edit as delete_point, \

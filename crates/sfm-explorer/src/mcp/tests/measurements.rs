@@ -156,3 +156,154 @@ fn select_measurement_selects_the_measurement_and_its_endpoint() {
     );
     assert_eq!(state.selected_endpoint, Some(EndpointSide::A));
 }
+
+// ── The bench ────────────────────────────────────────────────────────────
+
+/// `put_measurement_on_bench` puts the measurement on and focuses it, a second
+/// call focuses the same item with no version, and `get_bench` lists it.
+#[test]
+fn put_measurement_on_bench_puts_on_once_and_get_bench_lists_it() {
+    let (mut state, _, mut viewer) = measured();
+    let put = call(
+        &mut state,
+        &mut viewer,
+        "put_measurement_on_bench",
+        json!({ "reconstruction_label": "measured", "measurement_index": 3 }),
+    );
+    assert_eq!(put["item"], "distance #3");
+    assert_eq!(put["changed"], true);
+    let again = call(
+        &mut state,
+        &mut viewer,
+        "put_measurement_on_bench",
+        json!({ "reconstruction_label": "measured", "measurement_index": 3 }),
+    );
+    assert_eq!(again["item"], "distance #3");
+    assert_eq!(again["changed"], false);
+    let bench = call(
+        &mut state,
+        &mut viewer,
+        "get_bench",
+        json!({ "reconstruction_label": "measured" }),
+    );
+    assert_eq!(bench["focused_item"], "distance #3");
+    let items = bench["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["kind"], "measurement");
+    assert_eq!(items[0]["origin"], json!({ "measurement_index": 3 }));
+    assert_eq!(items[0]["counts"]["endpoints"], 2);
+    // A track tool on it says what it is.
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "measured" }),
+    );
+    assert!(
+        error
+            .0
+            .contains("distance #3 is a measurement, not a track"),
+        "{error}"
+    );
+}
+
+/// `get_measurement` naming an item reads it live, with its origin.
+#[test]
+fn get_measurement_reads_an_item_live() {
+    let (mut state, _, mut viewer) = measured();
+    call(
+        &mut state,
+        &mut viewer,
+        "put_measurement_on_bench",
+        json!({ "reconstruction_label": "measured", "measurement_index": 0 }),
+    );
+    let item = call(
+        &mut state,
+        &mut viewer,
+        "get_measurement",
+        json!({ "reconstruction_label": "measured", "item": "distance #0" }),
+    );
+    assert_eq!(item["item"], "distance #0");
+    assert_eq!(item["focused"], true);
+    assert_eq!(item["origin"], json!({ "measurement_index": 0 }));
+    assert_eq!(item["label"], "ear to ear");
+    assert_eq!(item["result"]["state"], "with_unit");
+    assert_eq!(
+        item["endpoints"][0]["resolution"]["candidates"][0]["point"],
+        0
+    );
+    assert_eq!(
+        item["median"]["text"],
+        "Median over 3: 1 su = 102 cm; this one +0.0%"
+    );
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "get_measurement",
+        json!({ "reconstruction_label": "measured" }),
+    );
+    assert!(error.0.contains("measurement_index"), "{error}");
+}
+
+/// `delete_measurement` drops one row as an edit, and
+/// `commit_bench_measurement` puts an item whose row was deleted back as a
+/// new row; an unchanged commit answers changed: false.
+#[test]
+fn delete_and_commit_a_measurement_over_the_wire() {
+    let (mut state, id, mut viewer) = measured();
+    call(
+        &mut state,
+        &mut viewer,
+        "put_measurement_on_bench",
+        json!({ "reconstruction_label": "measured", "measurement_index": 4 }),
+    );
+    let unchanged = call(
+        &mut state,
+        &mut viewer,
+        "commit_bench_measurement",
+        json!({ "reconstruction_label": "measured" }),
+    );
+    assert_eq!(unchanged["changed"], false);
+    assert_eq!(unchanged["measurement"]["measurement_index"], 4);
+    let deleted = call(
+        &mut state,
+        &mut viewer,
+        "delete_measurement",
+        json!({ "reconstruction_label": "measured", "measurement_index": 4 }),
+    );
+    assert_eq!(deleted["changed"], true);
+    let scene = call(&mut state, &mut viewer, "get_scene", json!({}));
+    assert_eq!(
+        scene["scene"][0]["measurement_counts"],
+        json!({ "distance": 4 })
+    );
+    let committed = call(
+        &mut state,
+        &mut viewer,
+        "commit_bench_measurement",
+        json!({ "reconstruction_label": "measured", "item": "distance #4" }),
+    );
+    assert_eq!(committed["changed"], true);
+    assert_eq!(
+        committed["measurement"],
+        json!({
+            "measurement_kind": "distance",
+            "measurement_index": 4,
+            "replaced": false,
+        })
+    );
+    assert_eq!(
+        state.selected_measurement,
+        Some(MeasurementRef::distance(id, 4))
+    );
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "delete_measurement",
+        json!({ "reconstruction_label": "measured", "measurement_index": 7 }),
+    );
+    assert!(
+        error.0.contains("stores 5 distance measurements"),
+        "{error}"
+    );
+}

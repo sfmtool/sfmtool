@@ -476,7 +476,10 @@ fn the_tick_goes_back_to_an_item_on_another_node_and_skips_a_discarded_one() {
     state.discard_bench_item(b, &on_b).expect("on b's bench");
     state.deselect_point();
     assert_eq!(state.selected_recon, Some(b));
-    assert_eq!(state.most_recent_item(), Some((a, on_a.clone())));
+    assert_eq!(
+        state.most_recent_item_of(sfmtool_core::bench::ItemKind::Track),
+        Some((a, on_a.clone()))
+    );
 
     let (mut panel, ctx) = settled(&mut state);
     let response = click_text(&mut panel, &ctx, &mut state, EDIT_LABEL);

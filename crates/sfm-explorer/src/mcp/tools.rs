@@ -193,7 +193,8 @@ pub(crate) fn parse(
         "get_measurement" => Command::GetMeasurement {
             reconstruction_label: args.optional_string("reconstruction_label")?,
             measurement_kind: args.measurement_kind()?,
-            measurement_index: args.required_usize("measurement_index")?,
+            measurement_index: args.optional_usize("measurement_index")?,
+            item: args.optional_string("item")?,
         },
         "select_measurement" => Command::SelectMeasurement {
             reconstruction_label: args.optional_string("reconstruction_label")?,
@@ -398,6 +399,20 @@ pub(crate) fn parse(
         "delete_point" => Command::DeletePoint {
             reconstruction_label: args.required_string("reconstruction_label")?,
             point: args.point("point")?,
+        },
+        "delete_measurement" => Command::DeleteMeasurement {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            measurement_kind: args.measurement_kind()?,
+            measurement_index: args.required_usize("measurement_index")?,
+        },
+        "put_measurement_on_bench" => Command::PutMeasurementOnBench {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            measurement_kind: args.measurement_kind()?,
+            measurement_index: args.required_usize("measurement_index")?,
+        },
+        "commit_bench_measurement" => Command::CommitBenchMeasurement {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            item: args.optional_string("item")?,
         },
         "delete_points" => Command::DeletePoints {
             reconstruction_label: args.required_string("reconstruction_label")?,
@@ -1389,13 +1404,11 @@ impl Args<'_> {
     fn measurement_kind(&self) -> Result<crate::measurements::MeasurementKind, ToolError> {
         match self.optional_string("measurement_kind")? {
             None => Ok(crate::measurements::MeasurementKind::Distance),
-            Some(name) => {
-                crate::measurements::MeasurementKind::from_wire_name(&name).ok_or_else(|| {
-                    self.error(format!(
-                        "does not know the measurement_kind {name:?} — expected distance."
-                    ))
-                })
-            }
+            Some(name) => crate::measurements::MeasurementKind::from_name(&name).ok_or_else(|| {
+                self.error(format!(
+                    "does not know the measurement_kind {name:?} — expected distance."
+                ))
+            }),
         }
     }
 

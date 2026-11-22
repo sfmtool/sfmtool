@@ -4,12 +4,17 @@
 //! The Measurement View panel: one measurement of the selected reconstruction,
 //! in the way Track View shows one track.
 //!
-//! See `specs/gui/measurement-view.md`. The panel shows the selected
-//! measurement's header, then the body for its kind. A distance measurement's
-//! body is its two endpoint blocks side by side, `A` and `B`, then the result
-//! block. Each block shows the endpoint's photograph and pixel, a crop of the
-//! photograph around it with a larger view on hover, the stored patch of the
-//! point it resolves to with a cross at its texel, and how it was resolved.
+//! See `specs/gui/measurement-view.md`. The panel opens with Track View's
+//! **Edit** box, ticked exactly when the focused item is a measurement on the
+//! selected node's bench. With it clear, the panel shows the selected stored
+//! measurement, read-only: its header, then the body for its kind. With it
+//! ticked, it shows the focused item instead, with a toolbar (*Commit*,
+//! *Discard*, *Rename*) and the item's **live readings**, read from the item
+//! rather than from a stored row. A distance measurement's body is its two
+//! endpoint blocks side by side, `A` and `B`, then the result block. Each
+//! block shows the endpoint's photograph and pixel, a crop of the photograph
+//! around it with a larger view on hover, the stored patch of the point it
+//! resolves to with a cross at its texel, and how it was resolved.
 //!
 //! An endpoint block takes Track View's row gestures: a click selects the
 //! endpoint and its image and reveals its pixel in Image Detail, a
@@ -19,11 +24,15 @@
 //!
 //! The panel decides nothing. What a person does lands in
 //! [`MeasurementViewResponse`], and the dock applies it through `AppState`.
-//! Every reading is the node's cached one ([`crate::measurements::readings`]).
+//! A stored measurement's reading is the node's cached one
+//! ([`crate::measurements::readings`]); an item's is kept here per item value
+//! and document serial.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use egui::{Color32, Pos2, Rect, Stroke};
+use sfmtool_core::bench::EditableMeasurement;
 use sfmtool_core::camera::TiledPhotograph;
 use sfmtool_core::reconstruction::measurement_endpoint::{
     CandidateStanding, EndpointPosition, EndpointRefusal, EndpointResolution,
@@ -32,7 +41,9 @@ use sfmtool_core::reconstruction::measurement_endpoint::{
 use sfmtool_core::LengthUnit;
 
 use crate::document::VersionSerial;
-use crate::measurements::{self, DistanceResult, DistanceRow, EndpointSide, MeasurementRef, MINUS};
+use crate::measurements::{
+    self, DistanceResult, DistanceRow, EndpointSide, ItemReading, MeasurementRef, MINUS,
+};
 use crate::patch_pictures::crop::{self, DrawnCrop, Outline, CELL_TEXTURE_OPTIONS};
 use crate::patch_pictures::marks::CONTEXT_HOVER_SIDE;
 use crate::patch_pictures::PanelRegionPool;
@@ -55,6 +66,12 @@ const PATCH_SIDE: f32 = 64.0;
 /// The empty state's first line with no measurement selected.
 pub(crate) const NO_MEASUREMENT: &str = "No measurement selected";
 
+/// The *Edit* box's label, Track View's word.
+pub(crate) const EDIT_LABEL: &str = "Edit";
+
+/// The name of the field *Rename* opens.
+pub(crate) const RENAME_NAME: &str = "measurement item name";
+
 /// What one frame of the panel asks the dock to do.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct MeasurementViewResponse {
@@ -65,24 +82,57 @@ pub(crate) struct MeasurementViewResponse {
     pub(crate) hovered_image: Option<ImageRef>,
     /// A measurement link of the empty state was clicked.
     pub(crate) select_measurement: Option<MeasurementRef>,
-    /// An endpoint block was clicked: select the endpoint and its image, and
-    /// reveal its pixel in Image Detail.
+    /// An endpoint block of a stored measurement was clicked: select the
+    /// endpoint and its image, and reveal its pixel in Image Detail.
     pub(crate) select_endpoint: Option<(MeasurementRef, EndpointSide)>,
-    /// An endpoint block was double-clicked: enter camera view through its
-    /// image, turned toward its pixel.
+    /// An endpoint block of a stored measurement was double-clicked: enter
+    /// camera view through its image, turned toward its pixel.
     pub(crate) look_through: Option<(MeasurementRef, EndpointSide)>,
+    /// An endpoint block of the focused item on this node was clicked.
+    pub(crate) select_item_endpoint: Option<(ReconId, EndpointSide)>,
+    /// An endpoint block of the focused item on this node was double-clicked.
+    pub(crate) look_through_item: Option<(ReconId, EndpointSide)>,
     /// *Go to Point* beside an endpoint's point was clicked: open the Go to
     /// Point dialog with this ID in it.
     pub(crate) goto_point: Option<String>,
+    /// The *Edit* box was ticked (`true`) or cleared on this node.
+    pub(crate) set_edit: Option<(ReconId, bool)>,
+    /// *Commit* was clicked on the item with this label.
+    pub(crate) commit: Option<(ReconId, String)>,
+    /// *Discard* was clicked on the item with this label.
+    pub(crate) discard: Option<(ReconId, String)>,
+    /// *Rename* was committed: the item, and the label it should take.
+    pub(crate) rename: Option<(ReconId, String, String)>,
 }
 
-/// Which picture of which endpoint of which version a cached picture is.
+/// Which picture of which endpoint of which version a cached picture is: the
+/// endpoint's image and pixel, which is all a picture is cut from, so a
+/// stored row and an item with the same endpoint share one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct PictureKey {
     node: ReconId,
     document: VersionSerial,
-    measurement: MeasurementRef,
     side: EndpointSide,
+    image: u32,
+    pixel: [u64; 2],
+}
+
+impl PictureKey {
+    fn new(
+        node: ReconId,
+        document: VersionSerial,
+        side: EndpointSide,
+        image: u32,
+        pixel: [f64; 2],
+    ) -> Self {
+        Self {
+            node,
+            document,
+            side,
+            image,
+            pixel: pixel.map(f64::to_bits),
+        }
+    }
 }
 
 /// An endpoint's crop, cut once its photograph is decoded.
@@ -106,18 +156,33 @@ struct EndpointPictures {
     patch: Option<egui::TextureHandle>,
 }
 
-/// Measurement View panel state: the pictures of the selected measurement's
-/// endpoints, and the region pool its crops are read through.
+/// The live readings of the focused item, kept against the item value and
+/// the document serial they were read at, so a step on the item, or an edit
+/// of the reconstruction under it, reads them again on the next frame.
+struct HeldReading {
+    item: Arc<EditableMeasurement>,
+    document: VersionSerial,
+    reading: ItemReading,
+}
+
+/// Measurement View panel state: the pictures of the shown measurement's
+/// endpoints, the focused item's readings, a rename in progress, and the
+/// region pool its crops are read through.
 #[derive(Default)]
 pub(crate) struct MeasurementView {
     regions: PanelRegionPool,
     pictures: HashMap<PictureKey, EndpointPictures>,
+    reading: Option<HeldReading>,
+    /// A rename in progress: the item, and the text typed so far.
+    renaming: Option<(String, String)>,
     /// Where each endpoint block's name was drawn on the last frame, for the
     /// tests that click one.
     names: [Option<Rect>; 2],
     /// Where each measurement link of the empty state was drawn on the last
     /// frame, for the tests that click one.
     links: Vec<Rect>,
+    /// What the toolbar drew on the last frame, for the tests that read it.
+    toolbar: Vec<(String, Option<String>)>,
 }
 
 impl MeasurementView {
@@ -138,6 +203,19 @@ impl MeasurementView {
         &self.links
     }
 
+    /// The toolbar's buttons as the last frame drew them, each with the
+    /// refusal it was greyed with, if any. Empty with the *Edit* box clear.
+    #[cfg(test)]
+    pub(crate) fn toolbar(&self) -> &[(String, Option<String>)] {
+        &self.toolbar
+    }
+
+    /// The focused item's readings, as the last frame read them.
+    #[cfg(test)]
+    pub(crate) fn item_reading(&self) -> Option<&ItemReading> {
+        self.reading.as_ref().map(|held| &held.reading)
+    }
+
     /// Draw the panel and report what the person did with it.
     pub(crate) fn show(&mut self, ui: &mut egui::Ui, state: &AppState) -> MeasurementViewResponse {
         let mut response = MeasurementViewResponse::default();
@@ -146,66 +224,255 @@ impl MeasurementView {
         }
         self.names = [None, None];
         self.links.clear();
+        self.toolbar.clear();
         let Some(node) = crate::scene::selected_node(&state.scene, state.selected_recon) else {
             self.pictures.clear();
+            self.reading = None;
             ui.centered_and_justified(|ui| {
                 ui.label("No reconstruction loaded");
             });
             return response;
         };
-        let recon = node.recon();
-        let rows = measurements::distance_rows(recon);
+        let rows = measurements::distance_rows(node.edited().measurements());
         let readings = measurements::readings(node);
-        let unit = recon.metadata.world_space_unit.as_deref();
         let selected = state
             .selected_measurement
             .filter(|m| m.recon == node.id && m.index() < rows.len());
+        let editing = state.focused_measurement_label(node.id).map(str::to_string);
+        show_edit_box(
+            ui,
+            state,
+            node.id,
+            editing.is_some(),
+            selected,
+            &mut response,
+        );
+        ui.separator();
+        if let Some(label) = editing {
+            self.show_item(
+                ui,
+                state,
+                node,
+                &label,
+                &rows,
+                &readings.distance,
+                &mut response,
+            );
+            return response;
+        }
+        self.reading = None;
+        self.renaming = None;
         let Some(measurement) = selected else {
             self.pictures.clear();
             self.show_empty_state(ui, node, &rows, &readings.distance, &mut response);
             return response;
         };
-        let document = node.history.current_version().document_serial;
-        self.pictures
-            .retain(|key, _| key.measurement == measurement && key.document == document);
         let row = &rows[measurement.index()];
         let Some(resolved) = readings.distance.get(measurement.index()) else {
             return response;
         };
-
+        let unit = node.recon().metadata.world_space_unit.as_deref();
+        let blocks = EndpointSide::BOTH.map(|side| {
+            Some(Endpoint {
+                image: row.image(side),
+                pixel: row.pixel(side),
+                resolution: measurements::endpoint(resolved, side).clone(),
+            })
+        });
+        let target = Target::Stored(measurement);
         egui::ScrollArea::vertical()
             .id_salt("measurement_view")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 show_header(ui, node, measurement, row, &rows, &readings.distance);
                 ui.separator();
-                ui.columns(2, |columns| {
-                    for side in EndpointSide::BOTH {
-                        let key = PictureKey {
-                            node: node.id,
-                            document,
-                            measurement,
-                            side,
-                        };
-                        let ui = &mut columns[side.index()];
-                        let block = EndpointBlock {
-                            node,
-                            measurement,
-                            row,
-                            side,
-                            resolution: measurements::endpoint(resolved, side),
-                            selected: state.selected_endpoint == Some(side),
-                            unit,
-                        };
-                        self.ensure_pictures(ui.ctx(), state, &block, key);
-                        let pictures = self.pictures.get(&key);
-                        self.names[side.index()] = block.show(ui, pictures, &mut response);
-                    }
-                });
+                self.show_blocks(ui, state, node, target, &blocks, &mut response);
                 ui.separator();
                 show_result(ui, row, resolved, unit);
             });
         response
+    }
+
+    /// Edited mode: the focused item `label` on `node`'s bench, with the
+    /// toolbar, its header and its endpoints read live.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the frame's inputs, read once by show"
+    )]
+    fn show_item(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &AppState,
+        node: &SceneNode,
+        label: &str,
+        rows: &[DistanceRow],
+        resolved: &[ResolvedDistanceMeasurement],
+        response: &mut MeasurementViewResponse,
+    ) {
+        let Some(item) = state.bench_measurement(node.id, label).cloned() else {
+            return;
+        };
+        let document = node.history.current_version().document_serial;
+        let stale = self
+            .reading
+            .as_ref()
+            .is_none_or(|held| !Arc::ptr_eq(&held.item, &item) || held.document != document);
+        if stale {
+            self.reading = Some(HeldReading {
+                item: Arc::clone(&item),
+                document,
+                reading: measurements::item_reading(node.edited(), &item),
+            });
+        }
+        let reading = self
+            .reading
+            .as_ref()
+            .map(|held| held.reading.clone())
+            .expect("just read");
+        let origin = state.resolved_measurement_origin(node, &item);
+        let unit = node.recon().metadata.world_space_unit.as_deref();
+        let endpoints = item.as_distance().map_or([None, None], |d| d.endpoints);
+        let blocks: [Option<Endpoint>; 2] = [0, 1].map(|k| {
+            let endpoint = endpoints[k]?;
+            Some(Endpoint {
+                image: endpoint.image,
+                pixel: endpoint.pixel,
+                resolution: reading.endpoints[k].clone()?,
+            })
+        });
+        let row = measurements::item_row(&item);
+        egui::ScrollArea::vertical()
+            .id_salt("measurement_view_item")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                self.show_toolbar(ui, state, node.id, label, response);
+                ui.separator();
+                show_item_header(ui, node, label, &item, origin, row.as_ref(), || {
+                    let row = row.as_ref()?;
+                    let reading = reading.resolved.as_ref()?;
+                    measurements::item_scale_comparison(rows, resolved, origin, row, reading)
+                });
+                ui.separator();
+                self.show_blocks(ui, state, node, Target::Item(node.id), &blocks, response);
+                ui.separator();
+                match (&row, &reading.resolved) {
+                    (Some(row), Some(resolved)) => show_result(ui, row, resolved, unit),
+                    _ => {
+                        ui.label(egui::RichText::new("Result").strong());
+                        ui.label(item_without_result(&item));
+                    }
+                }
+            });
+    }
+
+    /// The toolbar of the edited mode: *Commit*, greyed with the refusal the
+    /// step would give; *Discard* and *Rename*, greyed only while a task holds
+    /// the node, since neither edits the item.
+    fn show_toolbar(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &AppState,
+        id: ReconId,
+        label: &str,
+        response: &mut MeasurementViewResponse,
+    ) {
+        let busy = state.busy_refusal(id);
+        let commit_refusal = state.measurement_commit_refusal(id, label);
+        ui.horizontal_wrapped(|ui| {
+            self.toolbar
+                .push(("Commit".to_string(), commit_refusal.clone()));
+            if entry(
+                ui,
+                "Commit",
+                commit_refusal,
+                "Write this measurement into the reconstruction",
+            ) {
+                response.commit = Some((id, label.to_string()));
+            }
+            self.toolbar.push(("Discard".to_string(), busy.clone()));
+            if entry(
+                ui,
+                "Discard",
+                busy.clone(),
+                "Take this measurement off the bench",
+            ) {
+                response.discard = Some((id, label.to_string()));
+            }
+            self.toolbar.push(("Rename".to_string(), busy.clone()));
+            match self.renaming.as_mut().filter(|(item, _)| item == label) {
+                None => {
+                    if entry(ui, "Rename", busy, "Give this item a name of your own") {
+                        self.renaming = Some((label.to_string(), label.to_string()));
+                    }
+                }
+                Some((item, text)) => {
+                    let item = item.clone();
+                    let field = ui.add(egui::TextEdit::singleline(text).desired_width(140.0));
+                    crate::widget_name::set_widget_name(&field, RENAME_NAME);
+                    let commit =
+                        field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let typed = text.clone();
+                    if commit || ui.button("Set").clicked() {
+                        response.rename = Some((id, item, typed));
+                        self.renaming = None;
+                    } else if ui.button("Cancel").clicked() {
+                        self.renaming = None;
+                    }
+                }
+            }
+        });
+    }
+
+    /// The two endpoint blocks side by side, each with its pictures cut on
+    /// the first frame that shows it.
+    fn show_blocks(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &AppState,
+        node: &SceneNode,
+        target: Target,
+        blocks: &[Option<Endpoint>; 2],
+        response: &mut MeasurementViewResponse,
+    ) {
+        let document = node.history.current_version().document_serial;
+        let unit = node.recon().metadata.world_space_unit.as_deref();
+        let keys: Vec<PictureKey> = EndpointSide::BOTH
+            .into_iter()
+            .filter_map(|side| {
+                let endpoint = blocks[side.index()].as_ref()?;
+                Some(PictureKey::new(
+                    node.id,
+                    document,
+                    side,
+                    endpoint.image,
+                    endpoint.pixel,
+                ))
+            })
+            .collect();
+        self.pictures.retain(|key, _| keys.contains(key));
+        ui.columns(2, |columns| {
+            for side in EndpointSide::BOTH {
+                let ui = &mut columns[side.index()];
+                let Some(endpoint) = &blocks[side.index()] else {
+                    show_unplaced(ui, side);
+                    continue;
+                };
+                let key = PictureKey::new(node.id, document, side, endpoint.image, endpoint.pixel);
+                let block = EndpointBlock {
+                    node,
+                    target,
+                    image: endpoint.image,
+                    pixel: endpoint.pixel,
+                    side,
+                    resolution: &endpoint.resolution,
+                    selected: state.selected_endpoint == Some(side),
+                    unit,
+                };
+                self.ensure_pictures(ui.ctx(), state, &block, key);
+                let pictures = self.pictures.get(&key);
+                self.names[side.index()] = block.show(ui, pictures, response);
+            }
+        });
     }
 
     /// No measurement selected: one line saying so, then, where the
@@ -266,7 +533,7 @@ impl MeasurementView {
                 format!(
                     "measurement_patch_{:?}_{}_{}",
                     key.node,
-                    block.measurement.index,
+                    block.texture_stem(),
                     block.side.letter()
                 ),
                 image,
@@ -274,6 +541,170 @@ impl MeasurementView {
             ))
         });
         self.pictures.insert(key, EndpointPictures { crop, patch });
+    }
+}
+
+/// Which measurement an endpoint block is a block of, which says where its
+/// gestures go.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Target {
+    /// A stored row: the read-only mode.
+    Stored(MeasurementRef),
+    /// The focused item on this node's bench: the edited mode.
+    Item(ReconId),
+}
+
+/// One placed endpoint, with what the version makes of it.
+struct Endpoint {
+    image: u32,
+    pixel: [f64; 2],
+    resolution: Result<EndpointResolution, EndpointRefusal>,
+}
+
+/// The *Edit* box, Track View's, with the same meaning: ticked exactly when
+/// the focused item is a measurement on `id`'s bench.
+///
+/// A tick puts the selected measurement on the bench and focuses it, or
+/// focuses its item where it is on the bench already; with no measurement
+/// selected it focuses the most recent measurement item, and with none of
+/// those it is greyed naming the ways in. Only a tick that would put a
+/// measurement on is greyed by a task holding the node, since focusing and
+/// unfocusing push no version.
+fn show_edit_box(
+    ui: &mut egui::Ui,
+    state: &AppState,
+    id: ReconId,
+    editing: bool,
+    selected: Option<MeasurementRef>,
+    response: &mut MeasurementViewResponse,
+) {
+    let recent = state.most_recent_item_of(sfmtool_core::bench::ItemKind::Measurement);
+    let refusal = if editing {
+        None
+    } else {
+        match selected {
+            None => recent
+                .is_none()
+                .then(crate::bench::measurement::nothing_to_edit),
+            Some(measurement) => {
+                if state.bench_item_from_measurement(measurement).is_some() {
+                    None
+                } else {
+                    state.busy_refusal(id)
+                }
+            }
+        }
+    };
+    let hint = match (editing, selected, &recent) {
+        (true, _, _) => "Stop editing this measurement: it stays on the bench, and the panel \
+                         shows the stored measurement it came from, when it has one"
+            .to_string(),
+        (false, None, Some((_, label))) => format!("Edit {label} again"),
+        (false, _, _) => "Put the selected measurement on the bench and edit it".to_string(),
+    };
+    let mut checked = editing;
+    let checkbox = ui.add_enabled(
+        refusal.is_none(),
+        egui::Checkbox::new(&mut checked, EDIT_LABEL),
+    );
+    let checkbox = match &refusal {
+        Some(why) => checkbox.on_disabled_hover_text(why),
+        None => checkbox.on_hover_text(hint),
+    };
+    if checkbox.changed() {
+        response.set_edit = Some((id, checked));
+    }
+}
+
+/// A toolbar button: enabled with `hint` as its hover text, or greyed with
+/// the refusal as its hover text. Whether it was clicked.
+fn entry(ui: &mut egui::Ui, text: &str, refusal: Option<String>, hint: &str) -> bool {
+    let button = egui::Button::new(text);
+    match refusal {
+        None => ui.add(button).on_hover_text(hint).clicked(),
+        Some(why) => {
+            ui.add_enabled(false, button).on_disabled_hover_text(why);
+            false
+        }
+    }
+}
+
+/// An endpoint that is not placed: a block saying so.
+fn show_unplaced(ui: &mut egui::Ui, side: EndpointSide) {
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(egui::RichText::new(side.letter()).strong());
+        ui.weak(format!("Endpoint {} is not placed.", side.letter()));
+    });
+}
+
+/// The result block's line for an item that has no result: what it lacks.
+pub(crate) fn item_without_result(item: &EditableMeasurement) -> String {
+    let Some(distance) = item.as_distance() else {
+        return "No distance.".to_string();
+    };
+    for side in EndpointSide::BOTH {
+        if distance.endpoints[side.index()].is_none() {
+            return format!("No distance: endpoint {} is not placed.", side.letter());
+        }
+    }
+    "No distance: no stated distance is given.".to_string()
+}
+
+/// The edited mode's header: the item's bench label and node, where it came
+/// from, its label, its stated distance, and the median line, which compares
+/// the item with the stored measurements other than its origin.
+fn show_item_header(
+    ui: &mut egui::Ui,
+    node: &SceneNode,
+    label: &str,
+    item: &EditableMeasurement,
+    origin: Option<u32>,
+    row: Option<&DistanceRow>,
+    comparison: impl FnOnce() -> Option<measurements::ScaleComparison>,
+) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(label).strong());
+        ui.weak("on the bench of");
+        ui.label(&node.label);
+    });
+    match origin {
+        Some(index) => {
+            let from = MeasurementRef {
+                recon: node.id,
+                kind: item.kind(),
+                index,
+            };
+            ui.weak(format!("From {}: Commit replaces it", from.title()));
+        }
+        None => {
+            ui.weak("From no stored row: Commit adds it as a new row");
+        }
+    }
+    if item.label.is_empty() {
+        ui.weak("No label");
+    } else {
+        ui.label(format!("Label: {}", item.label));
+    }
+    match item.as_distance().and_then(|d| d.distance) {
+        Some((stated, unit)) => {
+            ui.label(format!(
+                "Stated distance: {} {}",
+                measurements::length_number(stated),
+                unit.name()
+            ));
+        }
+        None => {
+            ui.weak("No stated distance");
+        }
+    }
+    if let (Some(row), Some(line)) = (row, comparison()) {
+        ui.label(measurements::scale_comparison_text(&line, row.unit))
+            .on_hover_text(
+                "The median of the scales this measurement and the other stored ones imply, \
+                 and how far this one's is from it. su: one unit of the reconstruction's own \
+                 coordinates.",
+            );
     }
 }
 
@@ -442,8 +873,9 @@ fn signed_significant(value: f64, digits: i32) -> String {
 /// One endpoint block's inputs.
 struct EndpointBlock<'a> {
     node: &'a SceneNode,
-    measurement: MeasurementRef,
-    row: &'a DistanceRow,
+    target: Target,
+    image: u32,
+    pixel: [f64; 2],
     side: EndpointSide,
     resolution: &'a Result<EndpointResolution, EndpointRefusal>,
     selected: bool,
@@ -451,6 +883,12 @@ struct EndpointBlock<'a> {
 }
 
 impl EndpointBlock<'_> {
+    /// What the block's textures are named by: the endpoint's image and
+    /// pixel, which is all its pictures are cut from.
+    fn texture_stem(&self) -> String {
+        format!("{}_{:.3}_{:.3}", self.image, self.pixel[0], self.pixel[1])
+    }
+
     /// Draw the block and report its gestures into `response`, returning
     /// where its name line was drawn.
     fn show(
@@ -468,8 +906,8 @@ impl EndpointBlock<'_> {
             egui::Frame::group(ui.style())
         };
         let recon = self.node.recon();
-        let image = self.row.image(self.side);
-        let [x, y] = self.row.pixel(self.side);
+        let image = self.image;
+        let [x, y] = self.pixel;
         let mut targets: Vec<egui::Response> = Vec::new();
         let mut name_rect = None;
         frame.show(ui, |ui| {
@@ -504,10 +942,20 @@ impl EndpointBlock<'_> {
             response.hovered_image = Some(ImageRef::new(self.node.id, image as usize));
         }
         if targets.iter().any(egui::Response::clicked) {
-            response.select_endpoint = Some((self.measurement, self.side));
+            match self.target {
+                Target::Stored(measurement) => {
+                    response.select_endpoint = Some((measurement, self.side))
+                }
+                Target::Item(id) => response.select_item_endpoint = Some((id, self.side)),
+            }
         }
         if targets.iter().any(egui::Response::double_clicked) {
-            response.look_through = Some((self.measurement, self.side));
+            match self.target {
+                Target::Stored(measurement) => {
+                    response.look_through = Some((measurement, self.side))
+                }
+                Target::Item(id) => response.look_through_item = Some((id, self.side)),
+            }
         }
         name_rect
     }
@@ -518,7 +966,7 @@ impl EndpointBlock<'_> {
             ui.allocate_exact_size(egui::vec2(CROP_SIDE, CROP_SIDE), egui::Sense::click());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
-        let full_name = measurements::image_name(self.node.recon(), self.row.image(self.side));
+        let full_name = measurements::image_name(self.node.recon(), self.image);
         match pictures.map(|p| &p.crop) {
             Some(Crop::Ready {
                 cell,
@@ -743,11 +1191,11 @@ fn endpoint_crop(
     regions: &PanelRegionPool,
 ) -> Option<Crop> {
     let recon = block.node.recon();
-    let image = block.row.image(block.side) as usize;
+    let image = block.image as usize;
     if image >= recon.image_set.images.len() {
         return Some(Crop::Absent("The image is not in the reconstruction"));
     }
-    let pixel = block.row.pixel(block.side);
+    let pixel = block.pixel;
     let square = block.resolution.as_ref().ok().and_then(|resolution| {
         let chosen = resolution.chosen();
         let view = block.node.edited().point(chosen.point)?;
@@ -831,7 +1279,7 @@ fn endpoint_crop(
     let name = format!(
         "measurement_crop_{:?}_{}_{}",
         block.node.id,
-        block.measurement.index,
+        block.texture_stem(),
         block.side.letter()
     );
     let cell = Box::new(DrawnCrop::new(

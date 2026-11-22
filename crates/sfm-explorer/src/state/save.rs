@@ -204,7 +204,7 @@ impl AppState {
             let version = node.history.current_version();
             let edited = node.history.current();
             let materialised;
-            let base = if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
+            let base = if !edited.has_edits() {
                 &*edited.base
             } else {
                 let _phase = save.phase("materialise");

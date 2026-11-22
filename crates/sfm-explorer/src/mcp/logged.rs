@@ -118,6 +118,9 @@ impl Command {
             Command::SplitBenchTrack { .. } => "split_bench_track",
             Command::SelectBenchObservations { .. } => "select_bench_observations",
             Command::CommitBenchTrack { .. } => "commit_bench_track",
+            Command::PutMeasurementOnBench { .. } => "put_measurement_on_bench",
+            Command::CommitBenchMeasurement { .. } => "commit_bench_measurement",
+            Command::DeleteMeasurement { .. } => "delete_measurement",
             Command::FitBenchTrack { .. } => "fit_bench_track",
             Command::FitBenchTrackNormal { .. } => "fit_bench_track_normal",
             Command::SetBenchTrackStage { .. } => "set_bench_track_stage",
@@ -238,6 +241,16 @@ impl Command {
                 ..
             }
             | Command::FindNearbyTracks {
+                reconstruction_label,
+                ..
+            }
+            // The two measurement edits push a version of the value. They move
+            // nothing a held camera stands on, so they are not `edits`.
+            | Command::CommitBenchMeasurement {
+                reconstruction_label,
+                ..
+            }
+            | Command::DeleteMeasurement {
                 reconstruction_label,
                 ..
             }
@@ -405,9 +418,11 @@ impl Command {
             | Command::ApplyCameraModelProposal { .. }
             | Command::BakeReconstructionTransform { .. }
             | Command::ConvertToEmbeddedPatches { .. }
-            // The one bench step whose row is an `Edit`, because it is one
-            // (`specs/gui/edits/commit-track.md`).
+            // The two bench steps whose row is an `Edit`, because each is one
+            // (`specs/gui/edits/commit-track.md`, `specs/gui/measurement-view.md`).
             | Command::CommitBenchTrack { .. }
+            | Command::CommitBenchMeasurement { .. }
+            | Command::DeleteMeasurement { .. }
             | Command::CancelBackgroundTasks { .. } => Kind::Edit,
             // Every other bench step writes the bench beside the
             // reconstruction, which is the kind the panel's own refusals carry.
@@ -420,6 +435,7 @@ impl Command {
             // Its refusals are the bench's; a run that commits writes its row
             // as an `Edit` itself.
             | Command::FindNearbyTracks { .. }
+            | Command::PutMeasurementOnBench { .. }
             | Command::RenameBenchItem { .. }
             | Command::DiscardBenchItem { .. }
             | Command::DuplicateBenchItem { .. }
@@ -562,11 +578,19 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
             reconstruction_label,
             measurement_kind,
             measurement_index,
-        } => format!(
-            "get_measurement {} {} #{measurement_index}",
-            named(reconstruction_label),
-            measurement_kind.wire_name()
-        ),
+            item,
+        } => match (item, measurement_index) {
+            (Some(item), _) => format!(
+                "get_measurement {} item {item}",
+                named(reconstruction_label)
+            ),
+            (None, index) => format!(
+                "get_measurement {} {} #{}",
+                named(reconstruction_label),
+                measurement_kind.name(),
+                index.map_or_else(|| "?".to_string(), |i| i.to_string())
+            ),
+        },
         Command::FindPoints { request } => format!(
             "find_points {} {}..{}",
             named(&request.reconstruction_label),
