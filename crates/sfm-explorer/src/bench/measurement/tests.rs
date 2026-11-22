@@ -576,11 +576,9 @@ fn last_row(state: &AppState) -> (String, bool) {
 /// The fixture on a `sift_files` node, whose bench is view-only.
 fn view_only_state() -> (AppState, ReconId) {
     let mut recon = measured_reconstruction(Some("m"));
-    let keypoints = recon.point_set.keypoints_xy().cloned();
     let count = recon.point_set.tracks.len();
     recon.point_set.observations = sfmtool_core::ObservationSource::SiftFiles {
         feature_indexes: vec![0; count],
-        keypoints_xy: keypoints,
         feature_tool_hashes: vec![[0u8; 16]; 3],
         sift_content_hashes: vec![[0u8; 16]; 3],
     };
