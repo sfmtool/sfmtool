@@ -3,8 +3,9 @@
 An inventory of every pointer gesture SfM Explorer defines (click,
 double-click, right-click, hover, modifiers and marks, in every panel), each
 read in its spec and in its code, at `main` `e6aac050`. The findings are the
-places where the viewer does not follow the interaction rules proposed in
-[`specs/drafts/gui-interaction-rules.md`](../specs/drafts/gui-interaction-rules.md),
+places where the viewer does not follow the interaction rules, proposed in
+`specs/drafts/gui-interaction-rules.md` and since filed as
+[`specs/gui/interaction-rules.md`](../specs/gui/interaction-rules.md),
 cited by rule number (G1 to G12), or where a spec and its code disagree. The
 code was read, not driven: findings marked **read from the code** were not seen
 in a running viewer and need a repro before a fix. Paths are under
