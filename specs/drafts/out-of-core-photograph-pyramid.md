@@ -2060,15 +2060,16 @@ in core. Step 17 turns the tier on.
     animation plays, and `get_image_detail_view`'s `level` and
     `tiles_pending`; `from_pyramid` deleted.
 
-    The step is seven pull requests, 13a to 13e, with 13c in three. Once the cache keeps tiles
-    in place of pyramids, no reader can be handed a whole pyramid, so every
-    reader that still takes one (Image Detail, the 3D background, Track View,
-    the Track Table, the bulk callers that wrap with `from_pyramid`) has to
-    move before that, and the slot and the build budget, which every decode
-    goes through, come first. So the split runs from the slot up: 13a makes
-    the slot cancellable, 13b bounds the decodes in progress by the build
-    budget, 13c1 adds the cache's layout and tile requests, 13c2, 13c3 and
-    13d move the panels to them while the cache still holds whole pyramids and cuts each tile
+    The step is seven pull requests, 13a to 13e, with 13c in three. Once the
+    cache keeps tiles in place of pyramids, no reader can be handed a whole
+    pyramid, so every reader that still takes one (Image Detail, the 3D
+    background, Track View, the Track Table, the bulk callers that wrap with
+    `from_pyramid`) has to move before that, and the slot and the build
+    budget, which every decode goes through, come first. So the split runs
+    from the slot up: 13a makes the slot cancellable, 13b bounds the decodes
+    in progress by the build budget, 13c1 adds the cache's layout and tile
+    requests, 13c2, 13c3 and 13d move the panels to them while the cache
+    still holds whole pyramids and cuts each tile
     it hands out from one, and 13e replaces the pyramids with tiles, which
     every reader then reads. Until 13e the cache decodes as it does today, so
     every result and every picture is identical after each of 13a to 13d;

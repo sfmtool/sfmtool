@@ -611,8 +611,8 @@ draft's step 5 that count decodes run.
    The cache's `view_region_pyramid` is built, as the main draft's step 13c1.
 3. **Track View and the Track Table** on region pyramids, peeking the
    cache's whole pyramids as today and reading them through `from_pyramid`;
-   they peek tiles from the main draft's step 13d, now that 13c1 has added `peek_tile`. Track
-   View's tiles and track-stage hover contexts call `render_tile`, and its
+   they peek tiles from the main draft's step 13d, now that 13c1 has added
+   `peek_tile`. Track View's tiles and track-stage hover contexts call `render_tile`, and its
    cluster-stage tiles and contexts `sample_member_grid`, on the region
    pyramid they assembled, so no kernel signature changes here; the crops
    and their hover views of both panels cut their region as § "Readers that
