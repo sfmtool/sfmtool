@@ -2453,8 +2453,10 @@ in core. Step 17 turns the tier on.
       calling thread, with a budget and with a budget of 0; a photograph that
       cannot be read is answered as unreadable, its render never run; two
       renders of one photograph and Image Detail asking for others of its
-      tiles all get them under a budget of 0, nothing left kept; and a
-      photograph keeps at most 32 answered tiles, past which the newest
+      tiles all get them under a budget of 0, nothing left kept; a render's
+      set of tiles partly answered takes none of them, leaving the answered
+      ones kept while the rest are decoded, and is handed over whole after
+      that decode; and a photograph keeps at most 32 answered tiles, past which the newest
       answer replaces them; and
       [track_view/body/tests/region_reads.rs](../../crates/sfm-explorer/src/track_view/body/tests/region_reads.rs):
       the panel's tests of its pictures, which compare them with the whole

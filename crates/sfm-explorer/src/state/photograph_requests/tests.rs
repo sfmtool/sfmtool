@@ -963,3 +963,47 @@ fn a_photograph_keeps_at_most_max_kept_tiles_answered_tiles() {
     assert_eq!(tiles.kept_tiles(), 40);
     assert!((30..40).contains(&MAX_KEPT_TILES));
 }
+
+/// A render's tiles are handed over together or not at all: under a cache
+/// that keeps nothing, a set whose tiles are partly answered takes none of
+/// them, so the answered ones stay kept while the rest are decoded, and the
+/// look after that decode hands over the whole set with no third decode.
+#[test]
+fn a_tile_set_takes_nothing_until_every_tile_is_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = level_photo(dir.path(), "photo.png");
+    let cache = small_tile_cache(0, 1 << 30);
+    let (requests, queue) = PhotographRequests::queued();
+    let source = PhotographSource {
+        cache: &cache,
+        requests: &requests,
+        path: &path,
+    };
+    let ctx = egui::Context::default();
+    let tile = |col| TileKey {
+        level: 0,
+        col,
+        row: 0,
+    };
+    // Another render's answer holds the first tile.
+    assert!(matches!(
+        display_tile_set(source, &[tile(0)], &ctx),
+        DisplayTileSet::Loading
+    ));
+    assert_eq!(queue.run_off_this_thread(), 1);
+    assert_eq!(requests.kept_tiles(), 1);
+    // This render needs it and a second.
+    let set = [tile(0), tile(1)];
+    assert!(matches!(
+        display_tile_set(source, &set, &ctx),
+        DisplayTileSet::Loading
+    ));
+    assert_eq!(requests.kept_tiles(), 1, "the first tile is left kept");
+    assert_eq!(queue.run_off_this_thread(), 1, "a decode of the second");
+    let DisplayTileSet::Ready(tiles) = display_tile_set(source, &set, &ctx) else {
+        panic!("both tiles are answered");
+    };
+    assert_eq!(tiles.iter().map(|t| t.key).collect::<Vec<_>>(), set);
+    assert_eq!(requests.kept_tiles(), 0, "taken together");
+    assert_eq!(cache.stats().decodes, 2);
+}
