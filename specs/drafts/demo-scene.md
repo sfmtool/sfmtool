@@ -499,8 +499,9 @@ x86 CPU that has AVX2 and the scalar path elsewhere, such as the macOS arm64 CI
 runner. The AVX2 colour conversion is the same integer formula with the same
 rounding as the scalar one, and the AVX2 DCT is a port of libjpeg-turbo's
 `jfdctint-avx2`, written to compute the same integers as `jfdctint`. The crate
-has no test that the two paths give the same bytes, so the step plan's test
-does it: it checks the five JPEGs against hashes stored in the test, on every
+tests that its AVX2 colour conversion matches the scalar one
+(`avx_matches_scalar_rgb`), but has no test that the two DCTs, or two whole
+encodes, give the same bytes, so the step plan's test does it: it checks the five JPEGs against hashes stored in the test, on every
 CI platform.
 
 **The decoder can differ between platforms in the last level.**
