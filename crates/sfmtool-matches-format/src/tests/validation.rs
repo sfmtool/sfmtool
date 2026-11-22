@@ -34,8 +34,8 @@ fn expect_read_error(
     mutate: impl FnOnce(&mut Vec<(String, Vec<u8>)>),
     expected: &str,
 ) {
-    let dir = std::env::temp_dir().join(name);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = temp_dir_named(name);
+    let dir = tmp.path().to_path_buf();
     let src = dir.join("valid.matches");
     let dst = dir.join("invalid.matches");
     write_matches(&src, data, 3).unwrap();
@@ -50,8 +50,6 @@ fn expect_read_error(
         Err(other) => panic!("expected InvalidFormat({expected:?}), got {other}"),
         Ok(_) => panic!("expected InvalidFormat({expected:?}), but the file read"),
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -242,8 +240,8 @@ fn inliers_in_another_order_than_their_candidates_are_accepted() {
     let mut data = make_test_data_with_tvg();
     let tvg = data.two_view_geometries.as_mut().unwrap();
     tvg.inlier_feature_indexes = Array2::from_shape_vec((3, 2), vec![1, 1, 0, 0, 5, 10]).unwrap();
-    let dir = std::env::temp_dir().join("matches_test_inliers_reordered");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("reordered.matches");
     write_matches(&path, &data, 3).unwrap();
     let read = read_matches(&path).unwrap();
@@ -252,5 +250,4 @@ fn inliers_in_another_order_than_their_candidates_are_accepted() {
         data.two_view_geometries.unwrap().inlier_feature_indexes
     );
     assert_eq!(verify_matches(&path).unwrap(), (true, vec![]));
-    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -30,16 +30,15 @@ fn make_clusters_matches_data() -> ClustersMatchesData {
     }
 }
 
-/// Write `data` with the clusters writer into a fresh directory under the
-/// system temp directory; return the directory and the result.
+/// Write `data` with the clusters writer into a new temporary directory whose
+/// name starts with `name`; return the directory, removed when it drops, and
+/// the result.
 fn write_clusters_to_temp(
     name: &str,
     data: ClustersMatchesData,
-) -> (std::path::PathBuf, Result<(), MatchesError>) {
-    let dir = std::env::temp_dir().join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let result = write_clusters_matches(&dir.join("test.matches"), data, 3);
+) -> (tempfile::TempDir, Result<(), MatchesError>) {
+    let dir = temp_dir_named(name);
+    let result = write_clusters_matches(&dir.path().join("test.matches"), data, 3);
     (dir, result)
 }
 
@@ -52,8 +51,7 @@ fn expect_clusters_write_error(name: &str, data: ClustersMatchesData, expected_f
         msg.contains(expected_fragment),
         "Error should mention {expected_fragment:?}, got: {msg}"
     );
-    assert!(!dir.join("test.matches").exists());
-    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!dir.path().join("test.matches").exists());
 }
 
 #[test]
@@ -62,7 +60,7 @@ fn test_clusters_writer_round_trip() {
     let expected = make_clusters_matches_data();
     let (dir, result) = write_clusters_to_temp("matches_test_clusters_writer_round_trip", data);
     result.unwrap();
-    let path = dir.join("test.matches");
+    let path = dir.path().join("test.matches");
     let loaded = read_matches(&path).unwrap();
 
     // The derived metadata.
@@ -141,8 +139,6 @@ fn test_clusters_writer_round_trip() {
 
     let (valid, errors) = verify_matches(&path).unwrap();
     assert!(valid, "Verification failed: {errors:?}");
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// The clusters writer and `write_matches` given the same file write the
@@ -157,13 +153,12 @@ fn test_clusters_writer_matches_general_writer() {
     general.metadata.matching_options = clusters.matching_options.clone();
 
     let (dir, general_path) = write_to_temp("matches_test_clusters_writer_same_bytes", &general);
-    let clusters_path = dir.join("clusters.matches");
+    let clusters_path = dir.path().join("clusters.matches");
     write_clusters_matches(&clusters_path, clusters, 3).unwrap();
     assert_eq!(
         std::fs::read(&general_path).unwrap(),
         std::fs::read(&clusters_path).unwrap()
     );
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]

@@ -4947,6 +4947,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sfmtool-archive-io",
+ "tempfile",
  "thiserror 2.0.21",
  "xxhash-rust",
  "zip",
@@ -4962,6 +4963,7 @@ dependencies = [
  "serde_json",
  "sfmtool-matches-format",
  "sfmtool-sfmr-format",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
@@ -5083,6 +5085,7 @@ dependencies = [
  "serde_json",
  "sfmtool-archive-io",
  "sfmtool-sift-format",
+ "tempfile",
  "thiserror 2.0.21",
  "xxhash-rust",
  "zip",
@@ -5099,6 +5102,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sfmtool-archive-io",
+ "tempfile",
  "thiserror 2.0.21",
  "xxhash-rust",
  "zip",

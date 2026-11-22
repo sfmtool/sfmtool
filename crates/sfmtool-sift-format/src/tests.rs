@@ -55,8 +55,8 @@ fn make_test_data() -> SiftData {
 #[test]
 fn test_round_trip() {
     let data = make_test_data();
-    let dir = std::env::temp_dir().join("sift_test_round_trip");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sift");
 
     // Write
@@ -79,15 +79,13 @@ fn test_round_trip() {
     assert_eq!(loaded.affine_shapes, data.affine_shapes);
     assert_eq!(loaded.descriptors, data.descriptors);
     assert_eq!(loaded.thumbnail_y_x_rgb, data.thumbnail_y_x_rgb);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_round_trip_verify() {
     let data = make_test_data();
-    let dir = std::env::temp_dir().join("sift_test_verify");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sift");
 
     write_sift(&path, &data, 3).unwrap();
@@ -95,15 +93,13 @@ fn test_round_trip_verify() {
     let (valid, errors) = verify_sift(&path).unwrap();
     assert!(valid, "Verification failed: {:?}", errors);
     assert!(errors.is_empty());
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_read_metadata_only() {
     let data = make_test_data();
-    let dir = std::env::temp_dir().join("sift_test_metadata");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sift");
 
     write_sift(&path, &data, 3).unwrap();
@@ -113,15 +109,13 @@ fn test_read_metadata_only() {
     assert_eq!(meta.feature_count, 4);
     assert_eq!(tool_meta.feature_tool, "colmap");
     assert_eq!(hash.feature_tool_xxh128.len(), 32);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_read_thumbnail_only() {
     let data = make_test_data();
-    let dir = std::env::temp_dir().join("sift_test_thumbnail");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sift");
 
     write_sift(&path, &data, 3).unwrap();
@@ -131,15 +125,13 @@ fn test_read_thumbnail_only() {
     assert_eq!(thumbnail, data.thumbnail_y_x_rgb);
     assert_eq!(meta.image_file_xxh128, full.metadata.image_file_xxh128);
     assert_eq!(hash.content_xxh128, full.content_hash.content_xxh128);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_content_hash_populated() {
     let data = make_test_data();
-    let dir = std::env::temp_dir().join("sift_test_hash");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sift");
 
     write_sift(&path, &data, 3).unwrap();
@@ -154,15 +146,13 @@ fn test_content_hash_populated() {
     // All hashes should be 32-char hex strings
     assert_eq!(loaded.content_hash.feature_tool_xxh128.len(), 32);
     assert_eq!(loaded.content_hash.content_xxh128.len(), 32);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_partial_read() {
     let data = make_test_data();
-    let dir = std::env::temp_dir().join("sift_test_partial");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sift");
 
     write_sift(&path, &data, 3).unwrap();
@@ -182,15 +172,13 @@ fn test_partial_read() {
         partial.descriptors,
         data.descriptors.slice(ndarray::s![..2, ..]).to_owned()
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_read_positions_descriptors_reads_what_read_sift_features_reads() {
     let data = make_test_data();
-    let dir = std::env::temp_dir().join("sift_test_positions_descriptors");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sift");
     write_sift(&path, &data, 3).unwrap();
 
@@ -204,8 +192,6 @@ fn test_read_positions_descriptors_reads_what_read_sift_features_reads() {
         data.positions_xy.as_slice().unwrap()
     );
     assert_eq!(descriptors, data.descriptors.as_slice().unwrap());
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// Copy the `.sift` archive at `from` to `to`, storing `stored` as the raw
@@ -245,8 +231,8 @@ fn stored_entry(path: &std::path::Path, name: &str) -> Vec<u8> {
 fn test_corrupt_feature_entries_are_errors() {
     let data = make_test_data();
     let n = data.metadata.feature_count as usize;
-    let dir = std::env::temp_dir().join("sift_test_corrupt_entries");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sift");
     write_sift(&path, &data, 3).unwrap();
 
@@ -293,15 +279,13 @@ fn test_corrupt_feature_entries_are_errors() {
         data.positions_xy.as_slice().unwrap()
     );
     assert_eq!(descriptors, data.descriptors.as_slice().unwrap());
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_partial_read_oversize() {
     let data = make_test_data();
-    let dir = std::env::temp_dir().join("sift_test_partial_over");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sift");
 
     write_sift(&path, &data, 3).unwrap();
@@ -309,8 +293,6 @@ fn test_partial_read_oversize() {
     // Request more than available — should return all
     let partial = read_sift_partial(&path, 100).unwrap();
     assert_eq!(partial.positions_xy.shape(), &[4, 2]);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -319,8 +301,8 @@ fn test_write_validation_wrong_positions_shape() {
     // Wrong positions shape: 3 positions but feature_count = 4
     data.positions_xy = Array2::zeros((3, 2));
 
-    let dir = std::env::temp_dir().join("sift_test_bad_pos");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sift");
 
     let result = write_sift(&path, &data, 3);
@@ -330,8 +312,6 @@ fn test_write_validation_wrong_positions_shape() {
         err_msg.contains("positions_xy") || err_msg.contains("Shape"),
         "Error should mention positions_xy shape, got: {err_msg}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -340,8 +320,8 @@ fn test_write_validation_wrong_affine_shape() {
     // Wrong affine shapes: 3 features instead of 4
     data.affine_shapes = Array3::zeros((3, 2, 2));
 
-    let dir = std::env::temp_dir().join("sift_test_bad_aff");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sift");
 
     let result = write_sift(&path, &data, 3);
@@ -351,8 +331,6 @@ fn test_write_validation_wrong_affine_shape() {
         err_msg.contains("affine") || err_msg.contains("Shape"),
         "Error should mention affine shape, got: {err_msg}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -361,8 +339,8 @@ fn test_write_validation_wrong_descriptors_shape() {
     // Wrong descriptor shape: 3 features instead of 4
     data.descriptors = Array2::zeros((3, 128));
 
-    let dir = std::env::temp_dir().join("sift_test_bad_desc");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sift");
 
     let result = write_sift(&path, &data, 3);
@@ -372,8 +350,6 @@ fn test_write_validation_wrong_descriptors_shape() {
         err_msg.contains("descriptor") || err_msg.contains("Shape"),
         "Error should mention descriptor shape, got: {err_msg}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -384,24 +360,23 @@ fn test_write_validation_all_wrong_shapes() {
     data.affine_shapes = Array3::zeros((5, 2, 2));
     data.descriptors = Array2::zeros((3, 128));
 
-    let dir = std::env::temp_dir().join("sift_test_all_bad");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sift");
 
     let result = write_sift(&path, &data, 3);
     assert!(result.is_err());
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Write `data` with `metadata.version` set to `version`, bypassing the
-/// writer's own version check, and return the file's directory and path.
-fn write_with_version(version: u32, name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+/// writer's own version check, into a new temporary directory whose name
+/// starts with `name`; return the directory, removed when it drops, and the
+/// file's path.
+fn write_with_version(version: u32, name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let mut data = make_test_data();
     data.metadata.version = version;
-    let dir = std::env::temp_dir().join(name);
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.sift");
+    let dir = tempfile::Builder::new().prefix(name).tempdir().unwrap();
+    let path = dir.path().join("test.sift");
     crate::write::write_sift_any_version(&path, &data, 3).unwrap();
     (dir, path)
 }
@@ -412,7 +387,7 @@ fn test_read_rejects_unsupported_versions() {
         (0, "sift_test_version_zero"),
         (SIFT_FORMAT_VERSION + 1, "sift_test_future_version"),
     ] {
-        let (dir, path) = write_with_version(version, name);
+        let (_dir, path) = write_with_version(version, name);
         for result in [
             read_sift(&path).err(),
             read_sift_partial(&path, 2).err(),
@@ -436,8 +411,6 @@ fn test_read_rejects_unsupported_versions() {
         assert!(!ok, "version {version} must fail verification");
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("unsupported .sift format version"));
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
 
@@ -503,8 +476,8 @@ fn write_version_1_file(path: &std::path::Path) {
 /// version, the oldest version read and the last release that reads it.
 #[test]
 fn test_readers_refuse_version_1_naming_the_last_release_that_reads_it() {
-    let dir = std::env::temp_dir().join("sift_test_version_1_refused");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("image.jpg.sift");
     write_version_1_file(&path);
     let expected = format!(
@@ -532,7 +505,6 @@ fn test_readers_refuse_version_1_naming_the_last_release_that_reads_it() {
     }
     // The file is sound, so the version is the one error verification reports.
     assert_eq!(verify_sift(&path).unwrap(), (false, vec![expected]));
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -540,15 +512,13 @@ fn test_write_rejects_unsupported_versions() {
     for version in [0, 1, SIFT_FORMAT_VERSION + 1] {
         let mut data = make_test_data();
         data.metadata.version = version;
-        let dir = std::env::temp_dir().join(format!("sift_test_write_version_{version}"));
-        std::fs::create_dir_all(&dir).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let path = dir.join("test.sift");
 
         let err = write_sift(&path, &data, 3).expect_err("unsupported version must be rejected");
         assert!(err.to_string().contains("unsupported .sift format version"));
         assert!(!path.exists(), "a rejected write must leave no file");
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
 
@@ -573,8 +543,8 @@ fn test_read_nonexistent_file() {
 #[test]
 fn test_archive_uses_stored_compression() {
     let data = make_test_data();
-    let dir = std::env::temp_dir().join("sift_test_stored_compression");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sift");
 
     write_sift(&path, &data, 3).unwrap();
@@ -592,8 +562,6 @@ fn test_archive_uses_stored_compression() {
             entry.compression(),
         );
     }
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -622,12 +590,11 @@ fn test_validate_rejects_non_object_feature_options() {
     assert!(matches!(err, SiftError::InvalidMetadata(_)), "{err}");
     assert!(err.to_string().contains("feature_options"), "{err}");
 
-    let dir = std::env::temp_dir().join("sift_test_bad_feature_options");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sift");
     assert!(write_sift(&path, &data, 3).is_err());
     assert!(!path.exists(), "a rejected write must leave no file");
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -682,11 +649,15 @@ fn test_metadata_for_write_rejects_unknown_missing_and_mistyped_keys() {
 }
 
 /// Write a `.sift` archive holding just the three JSON entries, with
-/// `metadata.json` taken as given, for the readers that stop after them.
-fn write_raw_metadata_archive(name: &str, metadata: &serde_json::Value) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(name);
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.sift");
+/// `metadata.json` taken as given, for the readers that stop after them, in a
+/// new temporary directory whose name starts with `name`. Returns the
+/// directory, removed when it drops, and the file's path.
+fn write_raw_metadata_archive(
+    name: &str,
+    metadata: &serde_json::Value,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::Builder::new().prefix(name).tempdir().unwrap();
+    let path = dir.path().join("test.sift");
     let file = std::fs::File::create(&path).unwrap();
     let mut zip = zip::ZipWriter::new(file);
     let data = make_test_data();
@@ -706,7 +677,7 @@ fn write_raw_metadata_archive(name: &str, metadata: &serde_json::Value) -> std::
     )
     .unwrap();
     zip.finish().unwrap();
-    path
+    (dir, path)
 }
 
 /// The format asks a reader to ignore a metadata key it does not know, so a
@@ -715,17 +686,16 @@ fn write_raw_metadata_archive(name: &str, metadata: &serde_json::Value) -> std::
 fn test_read_ignores_unknown_metadata_keys() {
     let mut metadata = valid_metadata_json();
     metadata["added_in_a_later_version"] = serde_json::json!(true);
-    let path = write_raw_metadata_archive("sift_test_read_extra_key", &metadata);
+    let (_dir, path) = write_raw_metadata_archive("sift_test_read_extra_key", &metadata);
     let (_, read, _) = read_sift_metadata(&path).unwrap();
     assert_eq!(read.image_name, "test_image.jpg");
-    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 
 #[test]
 fn test_version_2_round_trip_keeps_readings_exactly() {
     let data = make_test_data();
-    let dir = std::env::temp_dir().join("sift_test_v2_round_trip");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sift");
     write_sift(&path, &data, 3).unwrap();
     let loaded = read_sift(&path).unwrap();
@@ -742,7 +712,6 @@ fn test_version_2_round_trip_keeps_readings_exactly() {
     let (_, metadata, _) = read_sift_metadata(&path).unwrap();
     assert_eq!(metadata.sharpness, data.metadata.sharpness);
     assert_eq!(verify_sift(&path).unwrap(), (true, vec![]));
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -819,13 +788,12 @@ fn test_read_rejects_version_2_without_readings() {
     for reading in ["sharpness", "gradient_structure_tensor_xx_yy_xy"] {
         let mut metadata = valid_metadata_json();
         metadata.as_object_mut().unwrap().remove(reading);
-        let path = write_raw_metadata_archive("sift_test_v2_no_readings", &metadata);
+        let (_dir, path) = write_raw_metadata_archive("sift_test_v2_no_readings", &metadata);
         let message = read_sift_metadata(&path).err().unwrap().to_string();
         assert!(
             message.contains(&format!("missing field `{reading}`")),
             "{message}"
         );
-        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 }
 
@@ -833,8 +801,8 @@ fn test_read_rejects_version_2_without_readings() {
 fn test_verify_reports_version_2_without_image_to_gray() {
     let mut data = make_test_data();
     data.feature_tool_metadata.feature_options = serde_json::json!({});
-    let dir = std::env::temp_dir().join("sift_test_v2_no_image_to_gray");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.sift");
     crate::write::write_sift_any_version(&path, &data, 3).unwrap();
     let (ok, errors) = verify_sift(&path).unwrap();
@@ -843,7 +811,6 @@ fn test_verify_reports_version_2_without_image_to_gray() {
         errors[0].contains("must carry 'image_to_gray'"),
         "{errors:?}"
     );
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// `array`'s shape and values in column-major (Fortran) order.
@@ -880,8 +847,8 @@ fn test_write_arrays_out_of_standard_layout() {
     altered.descriptors = strided(&altered.descriptors);
     altered.thumbnail_y_x_rgb = fortran_order(&altered.thumbnail_y_x_rgb);
 
-    let dir = std::env::temp_dir().join("sift_test_non_standard_layout");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (path_a, path_b) = (dir.join("standard.sift"), dir.join("altered.sift"));
     write_sift(&path_a, &standard, 3).unwrap();
     write_sift(&path_b, &altered, 3).unwrap();
@@ -898,5 +865,4 @@ fn test_write_arrays_out_of_standard_layout() {
     assert_eq!(loaded_b.thumbnail_y_x_rgb, standard.thumbnail_y_x_rgb);
     let (valid, errors) = verify_sift(&path_b).unwrap();
     assert!(valid, "Verification failed: {errors:?}");
-    std::fs::remove_dir_all(&dir).unwrap();
 }

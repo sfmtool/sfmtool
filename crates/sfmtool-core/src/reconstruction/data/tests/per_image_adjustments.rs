@@ -202,9 +202,8 @@ fn a_flag_without_a_value_writes_a_zero_column() {
 
 #[test]
 fn a_save_keeps_every_adjustment_and_refuses_one_its_camera_does_not_vary() {
-    let dir = std::env::temp_dir().join("sfmr_core_per_image_adjustments_save");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
 
     // A non-zero adjustment comes back on load bit for bit, with its
@@ -266,8 +265,6 @@ fn a_save_keeps_every_adjustment_and_refuses_one_its_camera_does_not_vary() {
         .images
         .iter()
         .all(|im| im.intrinsic_adjustment.is_zero()));
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -484,9 +481,8 @@ fn rates_on_another_model_are_refused_and_a_save_keeps_both_corrections() {
 
     // A save keeps both corrections and the scanlines setting, and a load
     // reads them back bit for bit.
-    let dir = std::env::temp_dir().join("sfmr_core_lens_corrections_save");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
     let path = dir.join("corrected.sfmr");
     let corrected = corrected_demo();
@@ -516,7 +512,6 @@ fn rates_on_another_model_are_refused_and_a_save_keeps_both_corrections() {
         loaded.content_xxh128().unwrap().content_xxh128,
         corrected.content_xxh128().unwrap().content_xxh128
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

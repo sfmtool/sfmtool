@@ -299,12 +299,22 @@ fn make_cluster_patch_test_data() -> MatchesData {
     data
 }
 
-fn write_to_temp(name: &str, data: &MatchesData) -> (std::path::PathBuf, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(name);
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.matches");
+/// Write `data` into a new temporary directory whose name starts with `name`;
+/// return the directory, removed when it drops, and the file's path.
+fn write_to_temp(name: &str, data: &MatchesData) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = temp_dir_named(name);
+    let path = dir.path().join("test.matches");
     write_matches(&path, data, 3).unwrap();
     (dir, path)
+}
+
+/// A new temporary directory of the caller's own, its name starting with
+/// `name` so a failing test's files are easy to find; removed when it drops.
+pub(crate) fn temp_dir_named(name: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(name)
+        .tempdir()
+        .expect("a temporary directory")
 }
 
 /// Bit-exact f32 comparison (NaN == NaN).
@@ -322,7 +332,7 @@ fn assert_f32_bits_eq(actual: &Array1<f32>, expected: &Array1<f32>) {
 #[test]
 fn test_round_trip_no_tvg() {
     let data = make_test_data();
-    let (dir, path) = write_to_temp("matches_test_round_trip", &data);
+    let (_dir, path) = write_to_temp("matches_test_round_trip", &data);
     let loaded = read_matches(&path).unwrap();
     // Frozen from the writer at format version 10 (the version is in the
     // hashed top-level metadata, so a version bump moves this value).
@@ -369,14 +379,12 @@ fn test_round_trip_no_tvg() {
     assert!(loaded.clusters.is_none());
     assert!(loaded.cluster_patches.is_none());
     assert!(loaded.two_view_geometries.is_none());
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_round_trip_with_tvg() {
     let data = make_test_data_with_tvg();
-    let (dir, path) = write_to_temp("matches_test_tvg_round_trip", &data);
+    let (_dir, path) = write_to_temp("matches_test_tvg_round_trip", &data);
     let loaded = read_matches(&path).unwrap();
 
     assert!(loaded.metadata.has_two_view_geometries);
@@ -393,14 +401,12 @@ fn test_round_trip_with_tvg() {
     assert_eq!(tvg.h_matrices, orig_tvg.h_matrices);
     assert_eq!(tvg.quaternions_wxyz, orig_tvg.quaternions_wxyz);
     assert_eq!(tvg.translations_xyz, orig_tvg.translations_xyz);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_round_trip_clusters_only() {
     let data = make_cluster_test_data();
-    let (dir, path) = write_to_temp("matches_test_clusters_round_trip", &data);
+    let (_dir, path) = write_to_temp("matches_test_clusters_round_trip", &data);
     let loaded = read_matches(&path).unwrap();
 
     assert!(loaded.metadata.has_clusters);
@@ -429,14 +435,12 @@ fn test_round_trip_clusters_only() {
 
     let (valid, errors) = verify_matches(&path).unwrap();
     assert!(valid, "Verification failed: {errors:?}");
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_round_trip_clusters_with_patches() {
     let data = make_cluster_patch_test_data();
-    let (dir, path) = write_to_temp("matches_test_cluster_patches_round_trip", &data);
+    let (_dir, path) = write_to_temp("matches_test_cluster_patches_round_trip", &data);
     let loaded = read_matches(&path).unwrap();
 
     assert!(loaded.metadata.has_clusters);
@@ -467,38 +471,32 @@ fn test_round_trip_clusters_with_patches() {
 
     let (valid, errors) = verify_matches(&path).unwrap();
     assert!(valid, "Verification failed: {errors:?}");
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_verify_no_tvg() {
     let data = make_test_data();
-    let (dir, path) = write_to_temp("matches_test_verify", &data);
+    let (_dir, path) = write_to_temp("matches_test_verify", &data);
 
     let (valid, errors) = verify_matches(&path).unwrap();
     assert!(valid, "Verification failed: {:?}", errors);
     assert!(errors.is_empty());
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_verify_with_tvg() {
     let data = make_test_data_with_tvg();
-    let (dir, path) = write_to_temp("matches_test_verify_tvg", &data);
+    let (_dir, path) = write_to_temp("matches_test_verify_tvg", &data);
 
     let (valid, errors) = verify_matches(&path).unwrap();
     assert!(valid, "Verification failed: {:?}", errors);
     assert!(errors.is_empty());
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_read_metadata_only() {
     let data = make_test_data();
-    let (dir, path) = write_to_temp("matches_test_metadata", &data);
+    let (_dir, path) = write_to_temp("matches_test_metadata", &data);
 
     let metadata = read_matches_metadata(&path).unwrap();
     assert_eq!(metadata.matching_method, "sequential");
@@ -506,26 +504,22 @@ fn test_read_metadata_only() {
     assert_eq!(metadata.match_count, Some(5));
     assert!(!metadata.has_two_view_geometries);
     assert!(!metadata.has_clusters);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_read_image_names_only() {
     let data = make_test_data();
-    let (dir, path) = write_to_temp("matches_test_image_names", &data);
+    let (_dir, path) = write_to_temp("matches_test_image_names", &data);
 
     let (metadata, names) = read_matches_image_names(&path).unwrap();
     assert_eq!(metadata.image_count, 3);
     assert_eq!(names, data.image_names);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_content_hash_populated() {
     let data = make_test_data();
-    let (dir, path) = write_to_temp("matches_test_hash", &data);
+    let (_dir, path) = write_to_temp("matches_test_hash", &data);
     let loaded = read_matches(&path).unwrap();
 
     assert_eq!(loaded.content_hash.metadata_xxh128.len(), 32);
@@ -535,14 +529,12 @@ fn test_content_hash_populated() {
     assert!(loaded.content_hash.clusters_xxh128.is_none());
     assert!(loaded.content_hash.cluster_patches_xxh128.is_none());
     assert!(loaded.content_hash.two_view_geometries_xxh128.is_none());
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_content_hash_with_tvg() {
     let data = make_test_data_with_tvg();
-    let (dir, path) = write_to_temp("matches_test_hash_tvg", &data);
+    let (_dir, path) = write_to_temp("matches_test_hash_tvg", &data);
     let loaded = read_matches(&path).unwrap();
 
     assert!(loaded.content_hash.two_view_geometries_xxh128.is_some());
@@ -554,8 +546,6 @@ fn test_content_hash_with_tvg() {
             .len(),
         32
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -576,7 +566,7 @@ fn test_empty_matches() {
         match_descriptor_distances: Array1::from_vec(vec![]),
     });
 
-    let (dir, path) = write_to_temp("matches_test_empty", &data);
+    let (_dir, path) = write_to_temp("matches_test_empty", &data);
     let loaded = read_matches(&path).unwrap();
 
     assert_eq!(loaded.metadata.image_count, 0);
@@ -585,13 +575,11 @@ fn test_empty_matches() {
 
     let (valid, errors) = verify_matches(&path).unwrap();
     assert!(valid, "Empty matches verification failed: {:?}", errors);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 fn expect_write_error(name: &str, data: &MatchesData, expected_fragment: &str) {
-    let dir = std::env::temp_dir().join(name);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = temp_dir_named(name);
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("test.matches");
 
     let result = write_matches(&path, data, 3);
@@ -604,8 +592,6 @@ fn expect_write_error(name: &str, data: &MatchesData, expected_fragment: &str) {
         msg.contains(expected_fragment),
         "Error should mention {expected_fragment:?}, got: {msg}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -806,13 +792,12 @@ fn test_write_validation_reference_row_non_identity_ok() {
     let data = make_cluster_patch_test_data();
     let s_ref = data.member_affine_shapes().unwrap();
     assert_ne!(s_ref[[0, 0, 0]], 1.0, "fixture reference shape is identity");
-    let dir = std::env::temp_dir().join("matches_test_cp_ref_non_identity_ok");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("out.matches");
     write_matches(&path, &data, 3).unwrap();
     let (valid, errors) = verify_matches(&path).unwrap();
     assert!(valid, "non-identity reference row rejected: {errors:?}");
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -1145,8 +1130,8 @@ fn expect_verify_error(
     mutate: impl FnOnce(&mut Vec<(String, Vec<u8>)>),
     expected_fragment: &str,
 ) {
-    let dir = std::env::temp_dir().join(name);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = temp_dir_named(name);
+    let dir = tmp.path().to_path_buf();
     let src = dir.join("valid.matches");
     let dst = dir.join("invalid.matches");
     write_matches(&src, data, 3).unwrap();
@@ -1161,8 +1146,6 @@ fn expect_verify_error(
         errors.iter().any(|e| e.contains(expected_fragment)),
         "Expected an error containing {expected_fragment:?}, got: {errors:?}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// [`expect_verify_error`] for the whole finding list: craft an invalid file
@@ -1174,8 +1157,8 @@ fn expect_verify_errors(
     mutate: impl FnOnce(&mut Vec<(String, Vec<u8>)>),
     expected: &[&str],
 ) {
-    let dir = std::env::temp_dir().join(name);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = temp_dir_named(name);
+    let dir = tmp.path().to_path_buf();
     let src = dir.join("valid.matches");
     let dst = dir.join("invalid.matches");
     write_matches(&src, data, 3).unwrap();
@@ -1187,15 +1170,13 @@ fn expect_verify_errors(
     let (valid, errors) = verify_matches(&dst).unwrap();
     assert_eq!(errors, expected);
     assert!(!valid);
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_verify_rejects_both_backbones() {
     // A cluster-bearing file that also contains image_pairs/ entries.
-    let dir = std::env::temp_dir().join("matches_test_verify_both_backbones");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let pairwise_path = dir.join("pairwise.matches");
     write_matches(&pairwise_path, &make_test_data(), 3).unwrap();
     let pair_entries: Vec<(String, Vec<u8>)> = load_archive_entries(&pairwise_path)
@@ -1209,15 +1190,14 @@ fn test_verify_rejects_both_backbones() {
         move |entries| entries.extend(pair_entries),
         "contains image_pairs/ entries",
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_verify_rejects_two_view_geometries_flag_mismatch() {
     // The two_view_geometries/ entries must match has_two_view_geometries, on
     // either backbone. Borrow real entries from a file that carries them.
-    let dir = std::env::temp_dir().join("matches_test_verify_tvg_flag_mismatch");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let tvg_path = dir.join("with_tvg.matches");
     write_matches(&tvg_path, &make_test_data_with_tvg(), 3).unwrap();
     let tvg_entries: Vec<(String, Vec<u8>)> = load_archive_entries(&tvg_path)
@@ -1249,8 +1229,6 @@ fn test_verify_rejects_two_view_geometries_flag_mismatch() {
         |entries| entries.retain(|(n, _)| !n.starts_with("two_view_geometries/")),
         &["file claims has_two_view_geometries but has no two_view_geometries/ section"],
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -1666,12 +1644,10 @@ fn test_verify_gates_pair_checks_on_array_consistency() {
 fn test_writer_always_writes_current_version() {
     let mut data = make_test_data();
     data.metadata.version = 1; // stale caller-supplied version is overridden
-    let (dir, path) = write_to_temp("matches_test_write_version", &data);
+    let (_dir, path) = write_to_temp("matches_test_write_version", &data);
 
     let metadata = read_matches_metadata(&path).unwrap();
     assert_eq!(metadata.version, MATCHES_FORMAT_VERSION);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -1680,7 +1656,7 @@ fn test_clusters_member_geometry_round_trip() {
     // f32 bits it went in with: in a matcher output the values are verbatim
     // copies of `.sift` rows, so a dtype round trip would corrupt them.
     let data = make_cluster_test_data();
-    let (dir, path) = write_to_temp("matches_test_member_geometry", &data);
+    let (_dir, path) = write_to_temp("matches_test_member_geometry", &data);
 
     let (valid, errors) = verify_matches(&path).unwrap();
     assert!(valid, "verification failed: {errors:?}");
@@ -1708,8 +1684,6 @@ fn test_clusters_member_geometry_round_trip() {
     // The accessors read the backbone.
     assert_eq!(loaded.member_positions().unwrap(), o_pos);
     assert_eq!(loaded.member_affine_shapes().unwrap(), o_shp);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -1719,7 +1693,7 @@ fn test_enriched_geometry_is_the_refinement_where_it_measured() {
     // with, and nothing is NaN — member_status is what tells them apart.
     let bare = make_cluster_test_data();
     let data = make_cluster_patch_test_data();
-    let (dir, path) = write_to_temp("matches_test_enriched_geometry", &data);
+    let (_dir, path) = write_to_temp("matches_test_enriched_geometry", &data);
     let loaded = read_matches(&path).unwrap();
 
     let detected = bare.member_positions().unwrap();
@@ -1742,8 +1716,6 @@ fn test_enriched_geometry_is_the_refinement_where_it_measured() {
     }
     // Member 2 was rejected on ZNCC but measured, so it keeps its own value.
     assert_ne!(positions[[2, 0]].to_bits(), detected[[2, 0]].to_bits());
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -1799,8 +1771,8 @@ fn test_relative_warp_recovered_from_reference_member() {
     // reference→member warp survives a write/read round trip as
     // `W = S·S_ref⁻¹` through the cluster's reference member.
     let data = make_cluster_patch_test_data();
-    let dir = std::env::temp_dir().join("matches_test_warp_recovery");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("out.matches");
     write_matches(&path, &data, 3).unwrap();
     let loaded = read_matches(&path).unwrap();
@@ -1851,8 +1823,6 @@ fn test_relative_warp_recovered_from_reference_member() {
         w[1][0] * (x_ref[0] - x_ref[0]) + w[1][1] * (x_ref[1] - x_ref[1]) + p[1],
     ];
     assert_eq!(mapped, p);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// Copy the written archive at `src` to `dst` with `metadata.json`'s version
@@ -2014,7 +1984,7 @@ fn a_current_file_without_a_backbone_flag_is_refused() {
 #[test]
 fn test_archive_uses_stored_compression() {
     let data = make_test_data_with_tvg();
-    let (dir, path) = write_to_temp("matches_test_stored_compression", &data);
+    let (_dir, path) = write_to_temp("matches_test_stored_compression", &data);
 
     let file = std::fs::File::open(&path).unwrap();
     let mut archive = zip::ZipArchive::new(file).unwrap();
@@ -2029,14 +1999,12 @@ fn test_archive_uses_stored_compression() {
             entry.compression(),
         );
     }
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn test_cluster_archive_uses_stored_compression() {
     let data = make_cluster_patch_test_data();
-    let (dir, path) = write_to_temp("matches_test_cluster_stored_compression", &data);
+    let (_dir, path) = write_to_temp("matches_test_cluster_stored_compression", &data);
 
     let file = std::fs::File::open(&path).unwrap();
     let mut archive = zip::ZipArchive::new(file).unwrap();
@@ -2050,8 +2018,6 @@ fn test_cluster_archive_uses_stored_compression() {
             entry.compression(),
         );
     }
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 // ── Cluster selection (select_clusters) ──────────────────────────────────────
@@ -2274,8 +2240,8 @@ fn test_select_clusters_default_round_trip() {
     assert!(prov.get("source_selection").is_none());
 
     // Round trip: write -> read -> verify -> arrays equal.
-    let dir = std::env::temp_dir().join("matches_test_select_round_trip");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("selected.matches");
     write_matches(&path, &sel, 3).unwrap();
     let (valid, errors) = verify_matches(&path).unwrap();
@@ -2308,7 +2274,6 @@ fn test_select_clusters_default_round_trip() {
         loaded.metadata.matching_options["cluster_selection"],
         sel.metadata.matching_options["cluster_selection"]
     );
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2376,14 +2341,13 @@ fn test_select_clusters_without_id_restriction_is_byte_identical() {
     assert_eq!(&a_prov, prov);
 
     // Byte identity on disk for the unrestricted case.
-    let dir = std::env::temp_dir().join("matches_test_select_ids_byte_identity");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let p1 = dir.join("plain.matches");
     let p2 = dir.join("explicit_none.matches");
     write_matches(&p1, &plain, 3).unwrap();
     write_matches(&p2, &explicit_none, 3).unwrap();
     assert_eq!(std::fs::read(&p1).unwrap(), std::fs::read(&p2).unwrap());
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2423,8 +2387,8 @@ fn test_select_clusters_restrict_cluster_ids() {
     assert_eq!(prov["restrict_images"], serde_json::Value::Null);
 
     // The derived file writes, verifies and re-reads.
-    let dir = std::env::temp_dir().join("matches_test_select_restrict_ids");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("selected.matches");
     write_matches(&path, &sel, 3).unwrap();
     let (valid, errors) = verify_matches(&path).unwrap();
@@ -2438,7 +2402,6 @@ fn test_select_clusters_restrict_cluster_ids() {
         loaded.metadata.matching_options["cluster_selection"]["restrict_cluster_ids"],
         serde_json::json!([0, 3])
     );
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2599,8 +2562,8 @@ fn test_select_clusters_restriction_absent_reference() {
 
     // The absent-reference derived file writes, verifies, and re-reads: the
     // sentinel is always allowed.
-    let dir = std::env::temp_dir().join("matches_test_select_absent_ref");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("selected.matches");
     write_matches(&path, &sel, 3).unwrap();
     let (valid, errors) = verify_matches(&path).unwrap();
@@ -2610,7 +2573,6 @@ fn test_select_clusters_restriction_absent_reference() {
         loaded.cluster_patches.as_ref().unwrap().reference_members,
         cp.reference_members
     );
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2642,13 +2604,12 @@ fn test_select_clusters_zero_member_requested_image_kept() {
     assert_eq!(clusters.member_images, Array1::from_vec(vec![0, 1]));
     // No member references img4 (index 2), and the file still writes and
     // verifies.
-    let dir = std::env::temp_dir().join("matches_test_select_zero_member_img");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("selected.matches");
     write_matches(&path, &sel, 3).unwrap();
     let (valid, errors) = verify_matches(&path).unwrap();
     assert!(valid, "verification failed: {errors:?}");
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -3027,9 +2988,8 @@ fn archive_entry_names_pin_call_sites() {
     ];
 
     for (label, data, expected) in cases {
-        let dir = std::env::temp_dir().join(format!("matches_test_entry_name_pin_{label}"));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let path = dir.join("pin.matches");
         write_matches(&path, &data, 3).unwrap();
 
@@ -3045,7 +3005,6 @@ fn archive_entry_names_pin_call_sites() {
             "{label}: archive entry listing changed — a call site is passing a \
              different count, or an entry was added, removed or renamed"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
@@ -3088,12 +3047,10 @@ fn test_shared_image_dims_empty() {
 fn craft_cluster_patch_file(
     name: &str,
     mutate: impl FnOnce(&mut Vec<(String, Vec<u8>)>),
-) -> (std::path::PathBuf, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let src = dir.join("valid.matches");
-    let dst = dir.join("crafted.matches");
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = temp_dir_named(name);
+    let src = dir.path().join("valid.matches");
+    let dst = dir.path().join("crafted.matches");
     write_matches(&src, &make_cluster_patch_test_data(), 3).unwrap();
     let mut entries = load_archive_entries(&src);
     mutate(&mut entries);
@@ -3147,7 +3104,7 @@ fn test_member_status_code_is_its_place_in_the_legend() {
 #[test]
 fn test_member_status_legend_round_trip() {
     let data = make_cluster_patch_test_data();
-    let (dir, path) = write_to_temp("matches_test_member_status_legend_round_trip", &data);
+    let (_dir, path) = write_to_temp("matches_test_member_status_legend_round_trip", &data);
 
     // The writer states the whole canonical legend beside the column.
     assert_eq!(
@@ -3168,16 +3125,13 @@ fn test_member_status_legend_round_trip() {
     assert!(valid, "{errors:?}");
 
     // A bare backbone has no cluster_patches/ and so no legend.
-    let (bare_dir, bare_path) = write_to_temp(
+    let (_bare_dir, bare_path) = write_to_temp(
         "matches_test_member_status_legend_bare",
         &make_cluster_test_data(),
     );
     assert!(!load_archive_entries(&bare_path)
         .iter()
         .any(|(n, _)| n.starts_with("cluster_patches/")));
-
-    std::fs::remove_dir_all(&dir).unwrap();
-    std::fs::remove_dir_all(&bare_dir).unwrap();
 }
 
 #[test]
@@ -3207,7 +3161,7 @@ fn test_member_status_read_through_another_legend() {
         assert!(valid, "{label}: {errors:?}");
 
         // Writing it back states the canonical legend and numbering again.
-        let rewritten = dir.join("rewritten.matches");
+        let rewritten = dir.path().join("rewritten.matches");
         write_matches(&rewritten, &loaded, 3).unwrap();
         assert_eq!(
             stored_member_status_names(&rewritten),
@@ -3220,8 +3174,6 @@ fn test_member_status_read_through_another_legend() {
             .unwrap()
             .1;
         assert_eq!(status.as_slice(), expected.as_slice().unwrap(), "{label}");
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
 
@@ -3294,7 +3246,7 @@ fn test_malformed_member_status_legend_rejected() {
         ),
     ];
     for (label, mutate, expected) in cases {
-        let (dir, path) =
+        let (_dir, path) =
             craft_cluster_patch_file(&format!("matches_test_bad_status_legend_{label}"), mutate);
         let msg = format!("{}", read_matches(&path).err().unwrap());
         assert!(msg.contains(expected), "{label}: read said {msg}");
@@ -3304,7 +3256,6 @@ fn test_malformed_member_status_legend_rejected() {
             errors.iter().any(|e| e.contains(expected)),
             "{label}: verify said {errors:?}"
         );
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
 
@@ -3316,7 +3267,7 @@ fn test_refined_shape_statuses_round_trip() {
     let cp = data.cluster_patches.as_mut().unwrap();
     cp.member_status[3] = ClusterMemberStatus::RejectedUnlocalizableRefined as u8;
     cp.member_status[4] = ClusterMemberStatus::RejectedUnlocalizableCells as u8;
-    let (dir, path) = write_to_temp("matches_test_refined_shape_statuses", &data);
+    let (_dir, path) = write_to_temp("matches_test_refined_shape_statuses", &data);
     assert_eq!(
         stored_member_status_names(&path),
         serde_json::json!(ClusterMemberStatus::NAMES)
@@ -3345,7 +3296,6 @@ fn test_refined_shape_statuses_round_trip() {
         ClusterMemberStatus::RejectedUnlocalizableCells.as_str(),
         "rejected_unlocalizable_cells"
     );
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -3389,7 +3339,7 @@ fn test_member_status_legend_is_inside_the_section_hash() {
     mutate_cp_metadata(&mut entries, |json| {
         json["member_status_names"] = serde_json::json!(reversed)
     });
-    let edited = dir.join("edited.matches");
+    let edited = dir.path().join("edited.matches");
     let mut zip_out = zip::ZipWriter::new(std::fs::File::create(&edited).unwrap());
     let stored =
         zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
@@ -3411,6 +3361,4 @@ fn test_member_status_legend_is_inside_the_section_hash() {
             .any(|e| e.starts_with("Cluster patches hash mismatch")),
         "{errors:?}"
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }

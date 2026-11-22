@@ -127,8 +127,8 @@ fn test_write_arrays_out_of_standard_layout() {
     let mut altered = make_full_test_data();
     to_non_standard(&mut altered);
 
-    let dir = std::env::temp_dir().join("sfmr_test_non_standard_layout");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (path_a, path_b) = (dir.join("standard.sfmr"), dir.join("altered.sfmr"));
     write_sfmr_with_options(&path_a, &mut standard, &options).unwrap();
     write_sfmr_with_options(&path_b, &mut altered, &options).unwrap();
@@ -180,5 +180,4 @@ fn test_write_arrays_out_of_standard_layout() {
         a.point_indexes,
         Array1::from_vec(vec![0, 0, 1, 1, 1, 2, 3, 4])
     );
-    std::fs::remove_dir_all(&dir).unwrap();
 }

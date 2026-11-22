@@ -1439,10 +1439,8 @@ fn the_default_file_is_in_the_home_directory() {
 
 #[test]
 fn loading_a_file_records_where_it_came_from() {
-    let directory =
-        std::env::temp_dir().join(format!("sfm-explorer-layout-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).expect("a scratch directory");
-    let path = directory.join("good.json");
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let path = directory.path().join("good.json");
     let saved = WindowLayout {
         window: Some(WindowChange {
             state: Some(WindowState::Maximized),
@@ -1468,7 +1466,7 @@ fn loading_a_file_records_where_it_came_from() {
 
     // A file that does not validate is refused whole, and the entry says why —
     // which is what puts it on the viewport status line.
-    let bad = directory.join("bad.json");
+    let bad = directory.path().join("bad.json");
     std::fs::write(
         &bad,
         r#"{"sfm_explorer_layout": 2, "layout": {"main": {}}}"#,
@@ -1483,8 +1481,6 @@ fn loading_a_file_records_where_it_came_from() {
     assert_eq!(entries.len(), 1, "{entries:?}");
     assert!(entries[0].0, "the entry is a failure: {entries:?}");
     assert!(entries[0].1.contains("layout.main"), "{entries:?}");
-
-    std::fs::remove_dir_all(&directory).ok();
 }
 
 /// The startup path over a default-layout file saved before Track View: the
@@ -1497,10 +1493,8 @@ fn loading_a_file_records_where_it_came_from() {
 /// with the file at startup, between creating the window and showing it.
 #[test]
 fn a_default_layout_file_naming_a_retired_panel_starts_on_the_stock_grid() {
-    let directory =
-        std::env::temp_dir().join(format!("sfm-explorer-retired-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).expect("a scratch directory");
-    let path = directory.join(DEFAULT_LAYOUT_FILE_NAME);
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let path = directory.path().join(DEFAULT_LAYOUT_FILE_NAME);
     let earlier = DEFAULT_JSON.replace("\"track_view\"", "\"point_track\"");
     std::fs::write(&path, &earlier).expect("write");
 
@@ -1531,6 +1525,4 @@ fn a_default_layout_file_naming_a_retired_panel_starts_on_the_stock_grid() {
     );
     let status = state.status_message().expect("a status line");
     assert!(status.contains("unknown panel \"point_track\""), "{status}");
-
-    std::fs::remove_dir_all(&directory).ok();
 }

@@ -292,7 +292,8 @@ fn open_reconstruction_on_an_unreadable_path_records_one_failed_entry() {
 /// answer it comes back with is the reconstruction entry it always gave.
 #[test]
 fn open_reconstruction_defers_and_answers_with_the_reconstruction() {
-    let dir = temp_dir("open_defers");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
     let path = dir.join("scene.sfmr");
     SfmrReconstruction::demo(16)
@@ -326,7 +327,6 @@ fn open_reconstruction_defers_and_answers_with_the_reconstruction() {
     let reply = open(&mut state, &mut viewer);
     assert_eq!(reply["label"], "scene (2)", "{reply}");
     assert_eq!(reply["already_open"], true);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ── Reading the Action Log back ─────────────────────────────────────────

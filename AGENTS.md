@@ -70,8 +70,10 @@ rules G1–G13 in `specs/gui/interaction-rules.md`, which a panel's spec cites
 rather than restates; a convention has no documented exceptions; a
 test asserts something that can fail; a test takes only the time its
 assertions need, made faster by a cheaper input or shared work, never by
-dropping a case or an assertion. If code breaks a standard, fix the code; fix
-a spec or doc only where the code is right.
+dropping a case or an assertion; a test writes only under a temporary
+directory of its own (`tempfile::TempDir` or `tmp_path`), never a fixed path
+under the system temporary directory. If code breaks a standard, fix the
+code; fix a spec or doc only where the code is right.
 
 The standards on names, layout and builds are the easiest to miss while
 editing:

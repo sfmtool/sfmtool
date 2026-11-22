@@ -57,15 +57,6 @@ fn press(key: egui::Key) -> Vec<egui::Event> {
     }]
 }
 
-/// A directory of this test's own under the system temp dir, emptied first so a
-/// rerun does not read a previous run's file.
-fn temp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("sfm_explorer_minimal_prompt_{name}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("a writable temp dir");
-    dir
-}
-
 /// A state holding one node that came from `dir/recon.sfmr`, over a workspace at
 /// `dir` itself, so the measurement from anywhere under `dir` means something.
 fn state_over(dir: &Path) -> (AppState, crate::scene::ReconId) {
@@ -217,21 +208,22 @@ fn the_prompt_says_what_the_field_is_and_that_empty_is_an_answer() {
 
 #[test]
 fn the_field_starts_at_the_path_the_save_would_measure() {
-    let dir = temp_dir("prefill");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (state, id) = state_over(&dir);
     let out = dir.join("published").join("recon.sfmr");
 
     // The workspace is one directory up from where the copy is going, and that
     // is what a user accepting the prompt unread gets.
     assert_eq!(state.minimal_copy_workspace_path(id, &out), "..");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// With nothing to measure, the path the value already records; and with that
 /// empty too, empty, since an empty value is "none recorded".
 #[test]
 fn the_field_falls_back_to_the_recorded_path_and_then_to_nothing() {
-    let dir = temp_dir("fallback");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let mut recon = SfmrReconstruction::demo(8);
     // No workspace directory to measure to, and the file's own recorded path is
     // all that is left to offer.
@@ -248,14 +240,14 @@ fn the_field_falls_back_to_the_recorded_path_and_then_to_nothing() {
     bare.metadata.workspace.relative_path.clear();
     let bare_id = state.append_node(SceneNode::from_path(&dir.join("bare.sfmr"), bare));
     assert_eq!(state.minimal_copy_workspace_path(bare_id, &out), "");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The copy over the node's own file is refused before the prompt is put up, so
 /// nobody fills in a field for a save that cannot happen.
 #[test]
 fn the_nodes_own_file_is_refused_before_the_prompt() {
-    let dir = temp_dir("refusal");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (state, id) = state_over(&dir);
     let own = dir.join("recon.sfmr");
 
@@ -269,14 +261,14 @@ fn the_nodes_own_file_is_refused_before_the_prompt() {
     assert!(state
         .minimal_copy_refusal(id, &dir.join("published").join("recon.sfmr"))
         .is_none());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The whole flow after the file dialog: the prompt opens at the measurement,
 /// the user states something else, and the copy records what was stated.
 #[test]
 fn answering_the_prompt_writes_the_copy_with_the_stated_path() {
-    let dir = temp_dir("answer");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (mut state, id) = state_over(&dir);
     let out = dir.join("published").join("recon.sfmr");
     std::fs::create_dir_all(out.parent().expect("a parent")).expect("a writable temp dir");
@@ -299,14 +291,14 @@ fn answering_the_prompt_writes_the_copy_with_the_stated_path() {
     let written = sfmtool_sfmr_format::read_sfmr(&out).expect("a readable copy");
     assert_eq!(written.metadata.workspace.relative_path, ".");
     assert!(written.metadata.workspace.absolute_path.is_empty());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Cancelling writes nothing: the file dialog named a path, and backing out here
 /// backs out of the whole save.
 #[test]
 fn cancelling_the_prompt_writes_no_file() {
-    let dir = temp_dir("cancel");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (state, id) = state_over(&dir);
     let out = dir.join("published").join("recon.sfmr");
     std::fs::create_dir_all(out.parent().expect("a parent")).expect("a writable temp dir");
@@ -323,5 +315,4 @@ fn cancelling_the_prompt_writes_no_file() {
     assert_eq!(node.history.versions().len(), versions);
     // Nothing was logged either: choosing not to save is not a failure.
     assert!(state.action_log.entries().next().is_none());
-    let _ = std::fs::remove_dir_all(&dir);
 }

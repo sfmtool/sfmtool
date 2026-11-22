@@ -31,13 +31,6 @@ impl MapF64 for Vec<f32> {
     }
 }
 
-fn temp_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
 /// The test value with a patch frame on five points of each kind: points 0
 /// and 1 finite with a patch, point 2 finite with a degenerate frame (`v`
 /// along `u`), point 3 finite without a patch, and point 4 at infinity with a
@@ -121,7 +114,8 @@ fn row(a: &Array2<f32>, i: usize) -> Vec<f32> {
 
 #[test]
 fn only_the_normals_the_frame_does_not_give_are_stored() {
-    let dir = temp_dir("sfmr_test_patch_normals_round_trip");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("normals.sfmr");
     let given = data_with_every_kind_of_point();
     let given_normals = given.normals_xyz.clone().unwrap();
@@ -202,12 +196,12 @@ fn only_the_normals_the_frame_does_not_give_are_stored() {
         hash(|d| d.patch_v_halfvec_xyz.as_mut().unwrap()[[1, 2]] = 0.07),
         stored_hash.content_xxh128
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_file_whose_every_normal_is_derived_stores_no_normals_entry() {
-    let dir = temp_dir("sfmr_test_patch_normals_all_derived");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("all.sfmr");
     let mut data = data_with_every_kind_of_point();
     // Every point finite with a usable frame.
@@ -246,12 +240,12 @@ fn a_file_whose_every_normal_is_derived_stores_no_normals_entry() {
     write_sfmr(&path, &mut none).unwrap();
     assert_eq!(super::read_points3d_metadata(&path)["has_normals"], false);
     assert!(read_sfmr(&path).unwrap().normals_xyz.is_none());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_point_at_infinity_stores_no_normal_and_reads_back_zero() {
-    let dir = temp_dir("sfmr_test_patch_normals_infinity");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("infinity.sfmr");
     let mut data = data_with_every_kind_of_point();
     // A normal left on a point at infinity is not a normal the file holds.
@@ -261,7 +255,6 @@ fn a_point_at_infinity_stores_no_normal_and_reads_back_zero() {
     assert_eq!(row(data.normals_xyz.as_ref().unwrap(), 4), vec![0.0; 3]);
     let loaded = read_sfmr(&path).unwrap();
     assert_eq!(row(loaded.normals_xyz.as_ref().unwrap(), 4), vec![0.0; 3]);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 fn assert_refused(path: &std::path::Path, needle: &str) {
@@ -277,7 +270,8 @@ fn assert_refused(path: &std::path::Path, needle: &str) {
 
 #[test]
 fn an_entry_of_the_wrong_count_is_refused() {
-    let dir = temp_dir("sfmr_test_patch_normals_wrong_count");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let good = dir.join("good.sfmr");
     write_sfmr(&good, &mut data_with_every_kind_of_point()).unwrap();
     // Three rows where two points' normals are not derived.
@@ -325,12 +319,12 @@ fn an_entry_of_the_wrong_count_is_refused() {
         &missing,
         "and no points3d/underived_normals_xyz.2.3.float32.zst",
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_full_normals_column_in_a_file_with_the_frame_is_refused() {
-    let dir = temp_dir("sfmr_test_patch_normals_full_column");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let good = dir.join("good.sfmr");
     let mut data = data_with_every_kind_of_point();
     write_sfmr(&good, &mut data).unwrap();
@@ -343,12 +337,12 @@ fn a_full_normals_column_in_a_file_with_the_frame_is_refused() {
         &bad,
         "and this one holds the full column points3d/normals_xyz.5.3",
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn normal_confidence_is_kept_as_stored() {
-    let dir = temp_dir("sfmr_test_patch_normals_confidence");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("confidence.sfmr");
     let mut data = data_with_every_kind_of_point();
     let confidence = Array1::from_vec(vec![0u8, 7, 0, 9, 0]);
@@ -360,19 +354,18 @@ fn normal_confidence_is_kept_as_stored() {
         row(loaded.normals_xyz.as_ref().unwrap(), 0),
         vec![0.0, 0.0, 1.0]
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_patch_frame_without_normals_stays_without_them() {
-    let dir = temp_dir("sfmr_test_patch_normals_absent");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("no_normals.sfmr");
     let mut data = data_with_every_kind_of_point();
     data.normals_xyz = None;
     write_sfmr(&path, &mut data).unwrap();
     assert!(read_sfmr(&path).unwrap().normals_xyz.is_none());
     assert!(data.normals_xyz.is_none());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -380,7 +373,8 @@ fn normals_of_the_wrong_shape_are_written_with_the_frames_normals() {
     // A (0, 3) normals array makes the writer fall back to the recomputed
     // mean-viewing normals wholesale; the finite patched points still take
     // their frames' normals, so the file is one its reader accepts.
-    let dir = temp_dir("sfmr_test_patch_normals_wrong_shape");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("fallback.sfmr");
     let mut data = data_with_every_kind_of_point();
     let (u, v) = (
@@ -404,7 +398,6 @@ fn normals_of_the_wrong_shape_are_written_with_the_frames_normals() {
     }
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "{errors:?}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Copy `src` to `dst` with the entry `name` holding `raw` added, its bytes
@@ -433,7 +426,8 @@ const STRAY_ENTRY: &str = "points3d/underived_normals_xyz.2.3.float32.zst";
 
 #[test]
 fn an_underived_entry_in_a_file_without_the_frame_is_refused() {
-    let dir = temp_dir("sfmr_test_patch_normals_stray_no_frame");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let good = dir.join("good.sfmr");
     // Normals and no patch frame: the full column, and nothing derived.
     write_sfmr(&good, &mut make_test_data()).unwrap();
@@ -452,12 +446,12 @@ fn an_underived_entry_in_a_file_without_the_frame_is_refused() {
              and this file is not one"
         ),
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_file_that_sets_has_normals_without_its_column_fails_verification() {
-    let dir = temp_dir("sfmr_test_patch_normals_missing_column");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let good = dir.join("good.sfmr");
     // Without the patch frame no normal is derived, so has_normals needs the
     // full column.
@@ -475,5 +469,4 @@ fn a_file_that_sets_has_normals_without_its_column_fails_verification() {
         ))),
         "{errors:?}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }

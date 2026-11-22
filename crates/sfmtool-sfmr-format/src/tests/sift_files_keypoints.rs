@@ -12,13 +12,6 @@ use sfmtool_archive_io::{format_hash, SectionDigests};
 use super::{make_test_data, read_json_entry_of};
 use crate::*;
 
-fn temp_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
 /// Every entry of the archive at `path`, decompressed, in archive order.
 fn decompressed_entries(path: &Path) -> Vec<(String, Vec<u8>)> {
     let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
@@ -137,7 +130,8 @@ fn without_keypoints(src: &Path, dst: &Path, version: u32, has_keypoints_xy: boo
 
 #[test]
 fn the_writer_refuses_a_sift_files_value_without_keypoints() {
-    let dir = temp_dir("sfmr_test_sift_kp_writer_refuses");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("refused.sfmr");
     let mut data = make_test_data();
     data.keypoints_xy = None;
@@ -158,13 +152,12 @@ fn the_writer_refuses_a_sift_files_value_without_keypoints() {
     let bare = content_hash_of(&mut data, &options).unwrap();
     let with = content_hash_of(&mut make_test_data(), &options).unwrap();
     assert_ne!(bare.tracks_xxh128, with.tracks_xxh128);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn a_version_17_sift_files_file_without_keypoints_is_refused() {
-    let dir = temp_dir("sfmr_test_sift_kp_v17_refused");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let src = dir.join("src.sfmr");
     write_sfmr(&src, &mut make_test_data()).unwrap();
 
@@ -190,13 +183,12 @@ fn a_version_17_sift_files_file_without_keypoints_is_refused() {
     without_keypoints(&src, &missing, 17, true);
     assert!(read_sfmr(&missing).is_err());
     assert!(!matches!(verify_sfmr(&missing), Ok((true, _))));
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn a_version_16_sift_files_file_without_keypoints_reads_and_verifies() {
-    let dir = temp_dir("sfmr_test_sift_kp_v16_reads");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let src = dir.join("src.sfmr");
     write_sfmr(&src, &mut make_test_data()).unwrap();
     let v16 = dir.join("v16.sfmr");
@@ -221,6 +213,4 @@ fn a_version_16_sift_files_file_without_keypoints_reads_and_verifies() {
     let rewritten = read_sfmr(&out).unwrap();
     assert_eq!(rewritten.metadata.version, SFMR_FORMAT_VERSION);
     assert_eq!(rewritten.keypoints_xy, make_test_data().keypoints_xy);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -275,8 +275,8 @@ fn spherical_tile_rig(n: usize, overlap_factor: f64) -> CamRigData {
 // ── Round-trip assertion ────────────────────────────────────────────
 
 fn assert_round_trip(data: &CamRigData, label: &str) -> CamRigData {
-    let dir = std::env::temp_dir().join(format!("camrig_test_{label}"));
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join(format!("{label}.camrig"));
 
     write_camrig(&path, data, 3).unwrap_or_else(|e| panic!("write {label}: {e}"));
@@ -302,7 +302,6 @@ fn assert_round_trip(data: &CamRigData, label: &str) -> CamRigData {
     assert_eq!(hash_only.content_xxh128, loaded.content_hash.content_xxh128);
     assert_eq!(hash_only.content_xxh128.len(), 32);
 
-    std::fs::remove_dir_all(&dir).ok();
     loaded
 }
 
@@ -386,8 +385,8 @@ fn large_co_centric_rig_compresses_small() {
     // A 100k-tile rig has one camera and all-zero translations; the file
     // should stay far below the 100k×4×8 = 3.2 MB raw quaternion size.
     let data = spherical_tile_rig(100_000, 1.15);
-    let dir = std::env::temp_dir().join("camrig_test_size");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("big.camrig");
     write_camrig(&path, &data, 3).unwrap();
     let size = std::fs::metadata(&path).unwrap().len();
@@ -395,7 +394,6 @@ fn large_co_centric_rig_compresses_small() {
         size < 4_000_000,
         "100k-sensor rig file unexpectedly large: {size} bytes"
     );
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -413,8 +411,8 @@ fn anonymous_and_named_sensors_both_round_trip() {
 #[test]
 fn verify_detects_tampering() {
     let data = cubemap_rig(256);
-    let dir = std::env::temp_dir().join("camrig_test_tamper");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("c.camrig");
     write_camrig(&path, &data, 3).unwrap();
 
@@ -432,14 +430,14 @@ fn verify_detects_tampering() {
     if let Ok((valid, _errors)) = verify_camrig(&path) {
         assert!(!valid, "tampered file passed verification");
     }
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
 fn write_rejects_wrong_quaternion_shape() {
     let mut data = cubemap_rig(256);
     data.quaternions_wxyz = Array2::zeros((6, 3)); // should be (6, 4)
-    let path = std::env::temp_dir().join("camrig_bad_quat.camrig");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("camrig_bad_quat.camrig");
     let err = write_camrig(&path, &data, 3).unwrap_err();
     assert!(format!("{err}").contains("quaternions_wxyz"));
 }
@@ -461,7 +459,8 @@ fn no_sensor_need_be_at_the_identity_pose() {
 fn write_rejects_out_of_range_camera_index() {
     let mut data = cubemap_rig(256);
     data.camera_indexes[3] = 5; // pool has only 1 camera
-    let path = std::env::temp_dir().join("camrig_bad_idx.camrig");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("camrig_bad_idx.camrig");
     let err = write_camrig(&path, &data, 3).unwrap_err();
     assert!(format!("{err}").contains("out of range"));
 }
@@ -470,7 +469,8 @@ fn write_rejects_out_of_range_camera_index() {
 fn write_rejects_non_unit_quaternion() {
     let mut data = cubemap_rig(256);
     data.quaternions_wxyz[[1, 1]] = 0.5; // breaks unit length on sensor 1
-    let path = std::env::temp_dir().join("camrig_bad_norm.camrig");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("camrig_bad_norm.camrig");
     let err = write_camrig(&path, &data, 3).unwrap_err();
     assert!(format!("{err}").contains("unit length"));
 }
@@ -479,7 +479,8 @@ fn write_rejects_non_unit_quaternion() {
 fn write_rejects_mismatched_sensor_image_patterns_length() {
     let mut data = cubemap_rig(256);
     data.sensor_image_patterns = vec!["only_one".into()]; // 1 name for 6 sensors
-    let path = std::env::temp_dir().join("camrig_bad_names.camrig");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("camrig_bad_names.camrig");
     let err = write_camrig(&path, &data, 3).unwrap_err();
     assert!(format!("{err}").contains("sensor_image_patterns"));
 }
@@ -490,7 +491,8 @@ fn write_rejects_multi_sensor_pattern_without_frame_field() {
     // rig cannot use — every pattern must carry a `%d` / `%0Nd` field.
     let mut data = cubemap_rig(256);
     data.sensor_image_patterns[2] = "back/*.jpg".into();
-    let path = std::env::temp_dir().join("camrig_no_frame_field.camrig");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("camrig_no_frame_field.camrig");
     let err = write_camrig(&path, &data, 3).unwrap_err();
     assert!(format!("{err}").contains("frame field"));
 }
@@ -513,7 +515,8 @@ fn write_rejects_pattern_with_two_frame_fields() {
     // a single-sensor rig.
     let mut data = single_camera_rig();
     data.sensor_image_patterns = vec!["cam_%d_%04d.jpg".into()];
-    let path = std::env::temp_dir().join("camrig_two_frame_fields.camrig");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("camrig_two_frame_fields.camrig");
     let err = write_camrig(&path, &data, 3).unwrap_err();
     assert!(format!("{err}").contains("at most one"));
 }
@@ -525,7 +528,8 @@ fn write_rejects_camera_with_zero_dimension() {
     // rejects it.
     let mut data = single_camera_rig();
     data.cameras[0].height = 0;
-    let path = std::env::temp_dir().join("camrig_zero_dimension.camrig");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("camrig_zero_dimension.camrig");
     let err = write_camrig(&path, &data, 3).unwrap_err();
     assert!(format!("{err}").contains("non-positive dimension"));
 }
@@ -562,7 +566,8 @@ fn write_handles_non_contiguous_pose_arrays() {
 fn read_rejects_out_of_range_camera_index() {
     let mut data = cubemap_rig(256);
     data.camera_indexes[3] = 5; // pool has only 1 camera
-    let path = std::env::temp_dir().join("camrig_read_bad_idx.camrig");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("camrig_read_bad_idx.camrig");
     crate::write::write_camrig_unchecked(&path, &data, 3).unwrap();
 
     let err = read_camrig(&path).unwrap_err();
@@ -571,7 +576,6 @@ fn read_rejects_out_of_range_camera_index() {
     let (valid, errors) = verify_camrig(&path).unwrap();
     assert!(!valid);
     assert!(errors.iter().any(|e| e.contains("Structural validation")));
-    std::fs::remove_file(&path).ok();
 }
 
 #[test]
@@ -579,7 +583,8 @@ fn write_and_read_reject_a_space_padded_frame_field() {
     // `%4d` pads with spaces; a pattern takes `%04d` or `%d` instead.
     let mut data = single_camera_rig();
     data.sensor_image_patterns = vec!["cam_%4d.jpg".into()];
-    let path = std::env::temp_dir().join("camrig_space_padded_field.camrig");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("camrig_space_padded_field.camrig");
     let err = write_camrig(&path, &data, 3).unwrap_err();
     assert!(
         format!("{err}").contains("the frame field '%4d', which pads a number with spaces"),
@@ -588,19 +593,18 @@ fn write_and_read_reject_a_space_padded_frame_field() {
     crate::write::write_camrig_unchecked(&path, &data, 3).unwrap();
     let err = read_camrig(&path).unwrap_err();
     assert!(format!("{err}").contains("use '%04d'"), "{err}");
-    std::fs::remove_file(&path).ok();
 }
 
 #[test]
 fn read_rejects_non_unit_quaternion() {
     let mut data = cubemap_rig(256);
     data.quaternions_wxyz[[2, 1]] = 0.5; // breaks unit length on sensor 2
-    let path = std::env::temp_dir().join("camrig_read_bad_norm.camrig");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("camrig_read_bad_norm.camrig");
     crate::write::write_camrig_unchecked(&path, &data, 3).unwrap();
 
     let err = read_camrig(&path).unwrap_err();
     assert!(format!("{err}").contains("unit length"));
-    std::fs::remove_file(&path).ok();
 }
 
 #[test]
@@ -614,24 +618,24 @@ fn read_rejects_zero_sensors() {
         quaternions_wxyz: Array2::zeros((0, 4)),
         translations_xyz: Array2::zeros((0, 3)),
     };
-    let path = std::env::temp_dir().join("camrig_read_zero.camrig");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("camrig_read_zero.camrig");
     crate::write::write_camrig_unchecked(&path, &data, 3).unwrap();
 
     let err = read_camrig(&path).unwrap_err();
     assert!(format!("{err}").contains("at least one sensor"));
-    std::fs::remove_file(&path).ok();
 }
 
 #[test]
 fn writer_always_writes_current_version() {
     let mut data = cubemap_rig(256);
     data.metadata.version = 1; // stale caller-supplied version is overridden
-    let path = std::env::temp_dir().join("camrig_write_version.camrig");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("camrig_write_version.camrig");
     write_camrig(&path, &data, 3).unwrap();
 
     let (meta, _) = read_camrig_metadata(&path).unwrap();
     assert_eq!(meta.version, CAMRIG_FORMAT_VERSION);
-    std::fs::remove_file(&path).ok();
 }
 
 /// Write `data` to `path` labelled `version`, through the unchecked writer,
@@ -659,8 +663,8 @@ fn every_reader_error(path: &std::path::Path) -> Vec<(&'static str, Option<CamRi
 /// `spherical_tiles` rig.
 #[test]
 fn a_version_1_file_is_refused_naming_the_last_release_that_reads_it() {
-    let dir = std::env::temp_dir().join("camrig_v1_refused");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     for (label, data) in [
         ("insv2", insv2_rig()),
         ("tiles", spherical_tile_rig(8, 1.3)),
@@ -685,7 +689,6 @@ fn a_version_1_file_is_refused_naming_the_last_release_that_reads_it() {
         assert_eq!(read_camrig(&path).err().unwrap().to_string(), expected);
         assert_eq!(verify_camrig(&path).unwrap(), (false, vec![expected]));
     }
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// A version newer than this build's, and version 0, which no writer has
@@ -693,8 +696,8 @@ fn a_version_1_file_is_refused_naming_the_last_release_that_reads_it() {
 /// `verify_camrig`, without naming a release.
 #[test]
 fn a_version_above_the_current_one_or_zero_is_refused_as_unsupported() {
-    let dir = std::env::temp_dir().join("camrig_unsupported_version");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     for version in [CAMRIG_FORMAT_VERSION + 1, 0] {
         let path = dir.join(format!("v{version}.camrig"));
         write_labelled(&path, &cubemap_rig(16), version);
@@ -712,21 +715,19 @@ fn a_version_above_the_current_one_or_zero_is_refused_as_unsupported() {
             (false, vec![format!("Invalid format: {expected}")])
         );
     }
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// The same rig at the current version reads and verifies, so the refusals
 /// above are the version's alone.
 #[test]
 fn the_current_version_is_read() {
-    let dir = std::env::temp_dir().join("camrig_current_version");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("v2.camrig");
     write_labelled(&path, &cubemap_rig(16), CAMRIG_FORMAT_VERSION);
     assert_eq!(read_camrig_metadata(&path).unwrap().0.version, 2);
     assert_eq!(read_camrig(&path).unwrap().metadata.version, 2);
     assert_eq!(verify_camrig(&path).unwrap(), (true, vec![]));
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -740,8 +741,8 @@ fn read_nonexistent_file_reports_path() {
 #[test]
 fn archive_uses_stored_compression() {
     let data = insv2_rig();
-    let dir = std::env::temp_dir().join("camrig_test_stored");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("s.camrig");
     write_camrig(&path, &data, 3).unwrap();
 
@@ -757,5 +758,4 @@ fn archive_uses_stored_compression() {
             entry.name().unwrap()
         );
     }
-    std::fs::remove_dir_all(&dir).ok();
 }

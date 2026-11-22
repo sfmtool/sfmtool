@@ -370,15 +370,14 @@ fn a_reordered_track_keeps_its_reference_through_a_save() {
     let keep: Vec<u32> = (0..8u32).rev().collect();
     let out = recon.subset_by_image_indices(&keep, true).unwrap();
     let images_before = reference_images(&out);
-    let dir = std::env::temp_dir().join("sfmtool_core_reference_reorder");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("r.sfmr");
     let mut data = out.to_sfmr_data();
     sfmtool_sfmr_format::write_sfmr(&path, &mut data).unwrap();
     let loaded =
         SfmrReconstruction::from_sfmr_data(sfmtool_sfmr_format::read_sfmr(&path).unwrap()).unwrap();
     assert_eq!(reference_images(&loaded), images_before);
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]

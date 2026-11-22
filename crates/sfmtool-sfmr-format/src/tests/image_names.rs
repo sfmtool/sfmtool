@@ -31,10 +31,8 @@ fn names_image_1(error: &str, name: &str) -> bool {
 
 #[test]
 fn write_refuses_each_form_and_keeps_accepted_names() {
-    let dir = std::env::temp_dir().join("sfmr_test_image_names_write");
-    // A run that failed part-way leaves its files here.
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("names.sfmr");
     for &name in REFUSED {
         let mut data = make_test_data();
@@ -53,15 +51,12 @@ fn write_refuses_each_form_and_keeps_accepted_names() {
     data.image_names = accepted.to_vec();
     write_sfmr(&path, &mut data).unwrap();
     assert_eq!(read_sfmr(&path).unwrap().image_names, accepted);
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn read_and_verify_refuse_each_form() {
-    let dir = std::env::temp_dir().join("sfmr_test_image_names_read");
-    // A run that failed part-way leaves its files here.
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let src = dir.join("valid.sfmr");
     write_sfmr(&src, &mut make_test_data()).unwrap();
     let path = dir.join("bad.sfmr");
@@ -78,5 +73,4 @@ fn read_and_verify_refuse_each_form() {
             "{name:?}: {errors:?}"
         );
     }
-    std::fs::remove_dir_all(&dir).unwrap();
 }

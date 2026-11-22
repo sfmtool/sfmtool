@@ -85,8 +85,8 @@ fn write_both(name: &str, make: fn() -> MatchesData) -> (MatchesData, MatchesDat
     let standard = make();
     let mut altered = make();
     to_non_standard(&mut altered);
-    let (dir_a, path_a) = write_to_temp(&format!("{name}_standard"), &standard);
-    let (dir_b, path_b) = write_to_temp(&format!("{name}_non_standard"), &altered);
+    let (_dir_a, path_a) = write_to_temp(&format!("{name}_standard"), &standard);
+    let (_dir_b, path_b) = write_to_temp(&format!("{name}_non_standard"), &altered);
     let loaded_a = read_matches(&path_a).unwrap();
     let loaded_b = read_matches(&path_b).unwrap();
     assert_eq!(
@@ -95,8 +95,6 @@ fn write_both(name: &str, make: fn() -> MatchesData) -> (MatchesData, MatchesDat
     );
     let (valid, errors) = verify_matches(&path_b).unwrap();
     assert!(valid, "Verification failed: {errors:?}");
-    std::fs::remove_dir_all(&dir_a).unwrap();
-    std::fs::remove_dir_all(&dir_b).unwrap();
     (loaded_a, loaded_b)
 }
 

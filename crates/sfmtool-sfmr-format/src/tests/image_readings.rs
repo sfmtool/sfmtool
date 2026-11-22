@@ -23,13 +23,6 @@ fn float16_bytes(values: &[f32]) -> Vec<u8> {
         .collect()
 }
 
-fn temp_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
 /// Readings whose bits a round trip has to keep: a subnormal, a value with
 /// every mantissa bit set, a negative zero cross term and a negative `Exy`.
 /// The sharpness values are those of a `float16` (`2^-20` is a subnormal
@@ -57,7 +50,8 @@ fn bits(values: impl IntoIterator<Item = f32>) -> Vec<u32> {
 
 #[test]
 fn the_readings_round_trip_bit_for_bit_in_both_feature_sources() {
-    let dir = temp_dir("sfmr_test_image_readings_round_trip");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     for (name, mut data) in [
         ("sift.sfmr", make_test_data()),
         ("embedded.sfmr", make_embedded_test_data()),
@@ -98,7 +92,6 @@ fn the_readings_round_trip_bit_for_bit_in_both_feature_sources() {
         let (valid, errors) = verify_sfmr(&path).unwrap();
         assert!(valid, "{name}: {errors:?}");
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -133,7 +126,8 @@ fn every_reading_and_the_conversion_reach_the_images_hash() {
 
 #[test]
 fn a_value_without_readings_is_refused_by_the_writer_and_hashed_as_it_stands() {
-    let dir = temp_dir("sfmr_test_image_readings_required");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("none.sfmr");
     let mut data = make_test_data();
     data.image_readings = None;
@@ -146,12 +140,12 @@ fn a_value_without_readings_is_refused_by_the_writer_and_hashed_as_it_stands() {
     let mut with = make_test_data();
     let with = content_hash_of(&mut with, &WriteOptions::default()).unwrap();
     assert_ne!(without.images_xxh128, with.images_xxh128);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn the_writer_refuses_readings_the_format_does_not_allow() {
-    let dir = temp_dir("sfmr_test_image_readings_invalid");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     type Edit = fn(&mut ImageReadingColumns);
     let cases: [(&str, Edit, &str); 11] = [
         (
@@ -222,7 +216,6 @@ fn the_writer_refuses_readings_the_format_does_not_allow() {
     let mut data = make_test_data();
     data.image_readings.as_mut().unwrap().sharpness[0] = 0.0;
     write_sfmr(&dir.join("zero.sfmr"), &mut data).unwrap();
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Write `make_test_data`, rewrite it with `edit`, restamp nothing, and return
@@ -275,7 +268,8 @@ fn assert_named(err: &str, errors: &[String], needle: &str) {
 
 #[test]
 fn a_current_file_without_a_column_or_the_key_is_refused() {
-    let dir = temp_dir("sfmr_test_image_readings_missing");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let good = dir.join("good.sfmr");
     write_sfmr(&good, &mut make_test_data()).unwrap();
     for (skip, needle) in [
@@ -304,12 +298,12 @@ fn a_current_file_without_a_column_or_the_key_is_refused() {
         })
     });
     assert_named(&err, &errors, "lacks the image_to_gray key");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn the_reader_and_the_verifier_refuse_a_reading_out_of_range() {
-    let dir = temp_dir("sfmr_test_image_readings_out_of_range");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (err, errors) = read_and_verify_edited(&dir, |name, raw| {
         (name == SHARPNESS_ENTRY).then(|| {
             let mut values = float16_payload(raw);
@@ -336,12 +330,12 @@ fn the_reader_and_the_verifier_refuse_a_reading_out_of_range() {
         })
     });
     assert_named(&err, &errors, "'quantize_bits' must be an integer");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_corrupted_reading_fails_the_images_hash() {
-    let dir = temp_dir("sfmr_test_image_readings_corrupt");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let good = dir.join("good.sfmr");
     write_sfmr(&good, &mut make_test_data()).unwrap();
     let bad = dir.join("bad.sfmr");
@@ -363,12 +357,12 @@ fn a_corrupted_reading_fails_the_images_hash() {
         errors.iter().any(|e| e.contains("Images hash mismatch")),
         "{errors:?}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn the_writer_rounds_the_sharpness_to_float16_in_the_value_it_writes() {
-    let dir = temp_dir("sfmr_test_image_readings_float16_rounding");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("rounded.sfmr");
     // None of these is a float16: 0.01 rounds to a neighbour, 3.5e-8 (just
     // above 2^-25) to the smallest subnormal 2^-24, and 0.0123 to its
@@ -432,12 +426,12 @@ fn the_writer_rounds_the_sharpness_to_float16_in_the_value_it_writes() {
         stored_hash.content_xxh128
     );
     assert!(verify_sfmr(&resaved).unwrap().0);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_sharpness_above_the_largest_float16_is_refused() {
-    let dir = temp_dir("sfmr_test_image_readings_float16_overflow");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("bad.sfmr");
     let mut data = make_test_data();
     data.image_readings.as_mut().unwrap().sharpness[2] = 70_000.0;
@@ -452,5 +446,4 @@ fn a_sharpness_above_the_largest_float16_is_refused() {
     write_sfmr(&path, &mut data).unwrap();
     let loaded = read_sfmr(&path).unwrap();
     assert_eq!(loaded.image_readings.unwrap().sharpness[2], 65_504.0);
-    let _ = std::fs::remove_dir_all(&dir);
 }

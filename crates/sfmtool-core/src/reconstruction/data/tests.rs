@@ -973,9 +973,8 @@ fn assert_projects_onto_keypoints(recon: &SfmrReconstruction, tol: f64, ctx: &st
 /// own content and its reprojection onto its keypoints.
 #[test]
 fn test_current_file_loads_without_convention_conversion() {
-    let dir = std::env::temp_dir().join("sfmr_core_load_as_written");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
 
     let recon = demo_embedded_projected(24);
@@ -1064,8 +1063,6 @@ fn test_current_file_loads_without_convention_conversion() {
             .collect();
         assert_eq!(stored, recomputed, "{ctx}: recomputed errors differ");
     }
-
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// A file that is loaded and saved again round-trips to the same geometry,
@@ -1073,9 +1070,8 @@ fn test_current_file_loads_without_convention_conversion() {
 /// way in or on the way out.
 #[test]
 fn test_current_file_round_trips_through_load_and_save() {
-    let dir = std::env::temp_dir().join("sfmr_core_round_trip");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
 
     let recon = demo_embedded_projected(24);
@@ -1135,26 +1131,23 @@ fn test_current_file_round_trips_through_load_and_save() {
         .map(|p| p.rms_reprojection_error)
         .collect();
     assert_eq!(stored, recomputed, "resaved: recomputed errors differ");
-
-    std::fs::remove_dir_all(&dir).ok();
 }
 
-/// A current-version `.sfmr` file of `points` demo points, in a directory of
-/// its own, with the workspace marker a load resolves against.
+/// A current-version `.sfmr` file of `points` demo points, in a temporary
+/// directory of its own, with the workspace marker a load resolves against.
+/// The directory is returned with the path, and is removed when it drops.
 ///
 /// The marker is what makes the file loadable at all: a load resolves the
 /// workspace directory by searching upward for one, and a lone `.sfmr` in a
 /// temp directory is refused rather than guessed at.
-fn saved_demo(name: &str, points: usize) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("sfmr_core_{name}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
-    let path = dir.join("demo.sfmr");
+fn saved_demo(points: usize) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(".sfm-workspace.json"), "{}").unwrap();
+    let path = dir.path().join("demo.sfmr");
     SfmrReconstruction::demo(points)
         .save(&path, &Progress::none())
         .unwrap();
-    path
+    (dir, path)
 }
 
 /// Every number a load writes into the value, as bit patterns: the poses, the
@@ -1210,7 +1203,7 @@ fn load_bits(recon: &SfmrReconstruction) -> Vec<u64> {
 /// What a load names, and what it says each stage did.
 #[test]
 fn a_recorded_load_names_the_read_and_the_derive() {
-    let path = saved_demo("load_phases", 32);
+    let (_dir, path) = saved_demo(32);
     // A version 16 file written without the inline keypoints, and no `.sift`
     // files behind it, so `keypoints` runs and says why it left the column out.
     super::demo::rewrite_as_version_16_without_keypoints(&path);
@@ -1254,7 +1247,7 @@ fn a_recorded_load_names_the_read_and_the_derive() {
 /// value a silent one does, to the bit.
 #[test]
 fn reporting_moves_not_one_bit_of_what_a_load_returns() {
-    let path = saved_demo("load_parity", 48);
+    let (_dir, path) = saved_demo(48);
     let quiet = SfmrReconstruction::load(&path, &Progress::none()).expect("the file loads");
     let (loud, phases) = load_recording(&path);
 
@@ -2023,11 +2016,8 @@ fn a_missing_normal_of_a_finite_patched_point_is_filled_from_its_frame() {
     assert_eq!(normal(&recon, 2), kept);
 
     // The file stores what memory holds, and reads it back the same.
-    let dir = std::env::temp_dir().join(format!(
-        "sfmtool_frame_filled_normals_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
     let path = dir.join("filled.sfmr");
     let mut data = recon.to_sfmr_data();
@@ -2038,7 +2028,6 @@ fn a_missing_normal_of_a_finite_patched_point_is_filled_from_its_frame() {
     sfmtool_sfmr_format::write_sfmr_with_options(&path, &mut data, &options).unwrap();
     let loaded =
         SfmrReconstruction::from_sfmr_data(sfmtool_sfmr_format::read_sfmr(&path).unwrap()).unwrap();
-    std::fs::remove_dir_all(&dir).unwrap();
     for i in 0..2 {
         assert_eq!(normal(&loaded, i), normal(&recon, i), "point {i}");
     }

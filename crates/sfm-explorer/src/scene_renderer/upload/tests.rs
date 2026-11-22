@@ -276,34 +276,6 @@ fn edge_length(e: &super::super::gpu_types::EdgeInstance) -> f64 {
     (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
 }
 
-/// A uniquely-named temp directory removed on drop, so a failing assertion
-/// cannot leak it into the next run (a leftover directory owned by another
-/// user makes the image write fail for unrelated reasons).
-struct TempDir(std::path::PathBuf);
-
-impl TempDir {
-    fn new(tag: &str) -> Self {
-        let unique = format!(
-            "sfm-explorer-upload-tests-{tag}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id(),
-        );
-        let dir = std::env::temp_dir().join(unique);
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        TempDir(dir)
-    }
-
-    fn path(&self) -> &std::path::Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.0).ok();
-    }
-}
-
 // ── points ──────────────────────────────────────────────────────────────
 
 #[test]
@@ -1571,11 +1543,14 @@ fn clear_track_rays_drops_the_buffer() {
 /// Name of the background image written into the fixture directory.
 const BG_NAME: &str = "bg.png";
 
-/// Write an 8x4 PNG into a unique temp dir and point the reconstruction's
-/// first image at it. The returned `TempDir` cleans up on drop, including
-/// when a test panics.
-fn recon_with_real_bg_image(tag: &str) -> (SfmrReconstruction, TempDir) {
-    let dir = TempDir::new(tag);
+/// Write an 8x4 PNG into a temporary directory of the test's own and point
+/// the reconstruction's first image at it. The returned `TempDir` cleans up on
+/// drop, including when a test panics.
+fn recon_with_real_bg_image(tag: &str) -> (SfmrReconstruction, tempfile::TempDir) {
+    let dir = tempfile::Builder::new()
+        .prefix(&format!("sfm-explorer-upload-tests-{tag}-"))
+        .tempdir()
+        .expect("create temp dir");
     image::RgbImage::new(8, 4)
         .save(dir.path().join(BG_NAME))
         .expect("write test png");
@@ -3449,10 +3424,11 @@ fn upload_thumbnails_builds_no_atlas_without_any_column() {
 
 #[test]
 fn a_built_column_fills_the_atlas_and_keeps_it() {
-    use crate::display_thumbnails::tests::{temp_dir, workspace_with_photographs};
+    use crate::display_thumbnails::tests::workspace_with_photographs;
     use crate::display_thumbnails::DisplayThumbnails;
 
-    let dir = temp_dir("atlas");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let recon = workspace_with_photographs(&dir, &[]);
     let display = DisplayThumbnails::build(&recon, &SILENT)
         .expect("nothing cancels it")
@@ -3472,7 +3448,6 @@ fn a_built_column_fills_the_atlas_and_keeps_it() {
         r.upload_thumbnails(&device, &queue, RECON, &recon, Some(&display), &SILENT),
         Uploaded::Reused
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ── The camera model proposal's preview ─────────────────────────────────

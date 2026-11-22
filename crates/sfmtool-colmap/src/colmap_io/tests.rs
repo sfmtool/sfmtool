@@ -81,8 +81,8 @@ fn test_round_trip() {
         frames: None,
     };
 
-    let dir = std::env::temp_dir().join("colmap_io_round_trip");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
 
     write_colmap_binary(&dir, &write_data).unwrap();
     let recon = read_colmap_binary(&dir).unwrap();
@@ -128,8 +128,6 @@ fn test_round_trip() {
     assert_eq!(recon.keypoints_per_image[1][1].point3d_index, Some(1));
     // Image 2, feature 0 -> point 1
     assert_eq!(recon.keypoints_per_image[2][0].point3d_index, Some(1));
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -184,8 +182,8 @@ fn test_unsorted_image_names() {
         frames: None,
     };
 
-    let dir = std::env::temp_dir().join("colmap_io_unsorted");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
 
     write_colmap_binary(&dir, &write_data).unwrap();
     let recon = read_colmap_binary(&dir).unwrap();
@@ -214,8 +212,6 @@ fn test_unsorted_image_names() {
     assert_eq!(recon.tracks.len(), 1);
     assert!(recon.tracks[0].contains(&(2, 0))); // C at feat 0
     assert!(recon.tracks[0].contains(&(0, 0))); // A at feat 0
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -371,8 +367,8 @@ fn test_camera_model_round_trip() {
         frames: None,
     };
 
-    let dir = std::env::temp_dir().join("colmap_io_camera_models");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
 
     write_colmap_binary(&dir, &write_data).unwrap();
     let recon = read_colmap_binary(&dir).unwrap();
@@ -398,8 +394,6 @@ fn test_camera_model_round_trip() {
             );
         }
     }
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -428,8 +422,8 @@ fn test_empty_reconstruction() {
         frames: None,
     };
 
-    let dir = std::env::temp_dir().join("colmap_io_empty");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
 
     write_colmap_binary(&dir, &write_data).unwrap();
     let recon = read_colmap_binary(&dir).unwrap();
@@ -439,8 +433,6 @@ fn test_empty_reconstruction() {
     assert_eq!(recon.positions_xyz.len(), 0);
     assert_eq!(recon.tracks.len(), 0);
     assert_eq!(recon.keypoints_per_image.len(), 0);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -449,8 +441,8 @@ fn test_rigs_frames_round_trip() {
         ColmapDataId, ColmapFrame, ColmapRig, ColmapRigSensor, ColmapSensor, ColmapSensorType,
     };
 
-    let dir = std::env::temp_dir().join("colmap_io_rigs_frames");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
 
     // Write a rig with a reference sensor (camera_id=1) and one non-ref sensor (camera_id=2).
     // COLMAP uses 1-based camera IDs.
@@ -584,8 +576,6 @@ fn test_rigs_frames_round_trip() {
     assert_eq!(read_frames[1].frame_id, 2);
     assert_eq!(read_frames[1].data_ids.len(), 1);
     assert_eq!(read_frames[1].data_ids[0].data_id, 1); // image_id 3 -> sorted index 1
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -632,8 +622,8 @@ fn test_implicit_rigs_frames_round_trip() {
         frames: None,
     };
 
-    let dir = std::env::temp_dir().join("colmap_io_implicit_rigs");
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     write_colmap_binary(&dir, &write_data).unwrap();
 
     assert!(dir.join("rigs.bin").exists());
@@ -672,8 +662,6 @@ fn test_implicit_rigs_frames_round_trip() {
         assert_eq!(d.sensor_id, camera_indexes[j]);
         assert_eq!(d.data_id, j as u64);
     }
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -720,7 +708,7 @@ fn simple_radial_fisheye_camera(k: f64) -> SfmrCamera {
 }
 
 /// Write cameras to a scratch COLMAP directory and read them back.
-fn colmap_camera_round_trip(cameras: &[SfmrCamera], tag: &str) -> Vec<SfmrCamera> {
+fn colmap_camera_round_trip(cameras: &[SfmrCamera]) -> Vec<SfmrCamera> {
     let n = cameras.len();
     let image_names: Vec<String> = (0..n).map(|i| format!("img_{i:03}.jpg")).collect();
     let camera_indexes: Vec<u32> = (0..n as u32).collect();
@@ -743,19 +731,17 @@ fn colmap_camera_round_trip(cameras: &[SfmrCamera], tag: &str) -> Vec<SfmrCamera
         rigs: None,
         frames: None,
     };
-    let dir = std::env::temp_dir().join(format!("colmap_io_{tag}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     write_colmap_binary(&dir, &write_data).unwrap();
     let recon = read_colmap_binary(&dir).unwrap();
-    std::fs::remove_dir_all(&dir).unwrap();
     recon.cameras
 }
 
 #[test]
 fn equidistant_fisheye_round_trips_through_colmap_as_itself() {
     let orig = equidistant_camera();
-    let loaded = colmap_camera_round_trip(std::slice::from_ref(&orig), "equidistant_rt");
+    let loaded = colmap_camera_round_trip(std::slice::from_ref(&orig));
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].model, "EQUIDISTANT_FISHEYE");
     assert_eq!(loaded[0].width, 480);
@@ -887,15 +873,13 @@ fn sfmtool_fisheye_fails_the_binary_write_path() {
         rigs: None,
         frames: None,
     };
-    let dir = std::env::temp_dir().join("colmap_io_sfmtool_fisheye_reject");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let err = write_colmap_binary(&dir, &write_data).unwrap_err();
     assert!(
         matches!(err, ColmapIoError::UnknownModelName(ref name) if name == "SFMTOOL_FISHEYE"),
         "unexpected error: {err:?}"
     );
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -973,15 +957,13 @@ fn sfmtool_pinhole_fails_the_binary_write_path() {
         rigs: None,
         frames: None,
     };
-    let dir = std::env::temp_dir().join("colmap_io_sfmtool_pinhole_reject");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let err = write_colmap_binary(&dir, &write_data).unwrap_err();
     assert!(
         matches!(err, ColmapIoError::UnknownModelName(ref name) if name == "SFMTOOL_PINHOLE"),
         "unexpected error: {err:?}"
     );
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -991,7 +973,7 @@ fn simple_radial_fisheye_import_claims_zero_k_and_keeps_the_rest() {
         simple_radial_fisheye_camera(0.0),
         simple_radial_fisheye_camera(-0.017),
     ];
-    let loaded = colmap_camera_round_trip(&cameras, "equidistant_claim");
+    let loaded = colmap_camera_round_trip(&cameras);
     assert_eq!(loaded[0].model, "EQUIDISTANT_FISHEYE");
     assert_eq!(loaded[0].parameters.len(), 3);
     assert_eq!(loaded[1].model, "SIMPLE_RADIAL_FISHEYE");

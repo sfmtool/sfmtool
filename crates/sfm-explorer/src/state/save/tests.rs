@@ -12,15 +12,6 @@ use crate::scene::{PointRef, ReconId, SceneNode};
 use crate::state::AppState;
 use crate::test_support::{assert_timed_from_the_work, phase_note, phase_rows};
 
-/// A directory of this test's own under the system temp dir, emptied first so a
-/// rerun does not read a previous run's file.
-fn temp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("sfm_explorer_save_{name}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("a writable temp dir");
-    dir
-}
-
 /// A state holding one demo node that came from `dir/recon.sfmr`, selected.
 ///
 /// Built with [`SceneNode::from_path`] rather than by reading a file back:
@@ -46,7 +37,8 @@ fn texts(state: &AppState) -> Vec<String> {
 
 #[test]
 fn a_loaded_node_starts_clean_and_an_edit_makes_it_dirty() {
-    let dir = temp_dir("dirty");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (mut state, id, _) = state_from_file(&dir);
     assert!(!state.is_dirty(id));
     assert!(!state.any_dirty());
@@ -73,7 +65,8 @@ fn a_node_that_came_from_no_file_has_only_save_as() {
 
 #[test]
 fn a_save_with_an_overlay_materialises_into_a_version_the_cursor_sits_on() {
-    let dir = temp_dir("materialise");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (mut state, id, path) = state_from_file(&dir);
     let versions_before = state.scene[0].history.versions().len();
 
@@ -108,7 +101,8 @@ fn a_save_with_an_overlay_materialises_into_a_version_the_cursor_sits_on() {
 
 #[test]
 fn a_save_stamps_the_provenance_it_hashed() {
-    let dir = temp_dir("provenance");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (mut state, id, path) = state_from_file(&dir);
 
     state
@@ -130,7 +124,8 @@ fn an_id_from_before_a_save_still_resolves_after_it() {
     // point, because the version the save materialised from is still a version
     // of this session's graph and the materialisation's row map is one more step
     // along it.
-    let dir = temp_dir("ids");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (mut state, id, _) = state_from_file(&dir);
     let before = crate::scene::point_id(&state.scene[0], 40);
 
@@ -150,7 +145,8 @@ fn an_id_from_before_a_save_still_resolves_after_it() {
 
 #[test]
 fn a_save_with_no_overlay_writes_the_value_and_mints_nothing() {
-    let dir = temp_dir("clean");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (mut state, id, _) = state_from_file(&dir);
     let versions_before = state.scene[0].history.versions().len();
     let hash_before = state.scene[0]
@@ -184,7 +180,8 @@ fn a_save_of_a_value_without_readings_records_the_hash_of_the_file_written() {
     use sfmtool_core::features::sift::ImageToGray;
     use sfmtool_sift_format::*;
 
-    let dir = temp_dir("readings");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let mut recon = SfmrReconstruction::demo(32);
     recon.workspace_dir = dir.clone();
     recon.image_set.image_to_gray = None;
@@ -260,7 +257,8 @@ fn a_save_of_a_value_without_readings_records_the_hash_of_the_file_written() {
 fn a_save_of_a_value_without_keypoints_records_the_hash_of_the_file_written() {
     use sfmtool_sift_format::*;
 
-    let dir = temp_dir("keypoints");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let mut recon = SfmrReconstruction::demo(32);
     recon.workspace_dir = dir.clone();
     let keypoints = recon
@@ -355,7 +353,8 @@ fn a_save_of_a_value_without_keypoints_records_the_hash_of_the_file_written() {
 /// the files, and the node keeps its unsaved edit.
 #[test]
 fn a_save_of_a_value_without_keypoints_or_sift_files_is_refused() {
-    let dir = temp_dir("keypoints_refused");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let mut recon = SfmrReconstruction::demo(32);
     recon.workspace_dir = dir.clone();
     let missing = recon.sift_path_for_image(0);
@@ -385,7 +384,8 @@ fn a_save_of_a_value_without_keypoints_or_sift_files_is_refused() {
 
 #[test]
 fn save_as_writes_elsewhere_and_re_points_the_node() {
-    let dir = temp_dir("save_as");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let mut state = AppState::new();
     let id = state.append_node(SceneNode::demo(SfmrReconstruction::demo(16)));
     let path = dir.join("chosen.sfmr");
@@ -407,7 +407,8 @@ fn save_as_writes_elsewhere_and_re_points_the_node() {
 /// there was no overlay to fold.
 #[test]
 fn save_as_states_the_workspace_path_and_keeps_the_hash_honest() {
-    let dir = temp_dir("save_as_workspace_path");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let mut state = AppState::new();
     let id = state.append_node(SceneNode::demo(SfmrReconstruction::demo(16)));
     let path = dir.join("stated.sfmr");
@@ -458,7 +459,11 @@ fn state_in_workspace(root: &std::path::Path) -> (AppState, ReconId, PathBuf) {
 /// nothing, and the file finds its workspace through the relative path alone.
 #[test]
 fn save_as_elsewhere_records_the_workspace_path_from_the_new_file() {
-    let root = temp_dir("save_as_measured");
+    // The tree is moved inside a temporary directory of the test's own, so the
+    // move needs no name outside it and the directory removes both on drop.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("tree");
+    std::fs::create_dir(&root).expect("a writable temp dir");
     let (mut state, id, _) = state_in_workspace(&root);
     let versions_before = state.scene[0].history.versions().len();
     let path = root.join("elsewhere").join("deep").join("moved.sfmr");
@@ -481,8 +486,7 @@ fn save_as_elsewhere_records_the_workspace_path_from_the_new_file() {
     );
     assert!(!node.is_dirty());
 
-    let moved = root.with_file_name("sfm_explorer_save_save_as_measured_moved");
-    let _ = std::fs::remove_dir_all(&moved);
+    let moved = tmp.path().join("moved");
     std::fs::rename(&root, &moved).expect("a movable temp dir");
     let read = sfmtool_sfmr_format::read_sfmr(&moved.join("elsewhere/deep/moved.sfmr"))
         .expect("a readable file");
@@ -498,7 +502,8 @@ fn save_as_elsewhere_records_the_workspace_path_from_the_new_file() {
 /// version.
 #[test]
 fn save_as_beside_the_file_keeps_the_value_as_it_stands() {
-    let root = temp_dir("save_as_beside");
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
     let (mut state, id, workspace) = state_in_workspace(&root);
     let versions_before = state.scene[0].history.versions().len();
     let path = workspace.join("a").join("renamed.sfmr");
@@ -516,7 +521,8 @@ fn save_as_beside_the_file_keeps_the_value_as_it_stands() {
 /// Save As would measure.
 #[test]
 fn a_stated_workspace_path_wins_over_the_measured_one() {
-    let root = temp_dir("save_as_stated_wins");
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
     let (mut state, id, _) = state_in_workspace(&root);
     let path = root.join("elsewhere").join("stated.sfmr");
     std::fs::create_dir_all(path.parent().unwrap()).expect("a writable temp dir");
@@ -531,7 +537,8 @@ fn a_stated_workspace_path_wins_over_the_measured_one() {
 
 #[test]
 fn a_save_writes_one_log_entry_naming_the_path_and_the_version() {
-    let dir = temp_dir("log");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (mut state, id, path) = state_from_file(&dir);
 
     state.save_node(id).expect("a writable path");
@@ -552,7 +559,8 @@ fn a_save_writes_one_log_entry_naming_the_path_and_the_version() {
 /// pushes inside that, and the write.
 #[test]
 fn a_save_names_the_fold_and_the_write() {
-    let dir = temp_dir("stages");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (mut state, id, _) = state_from_file(&dir);
     state
         .delete_point(PointRef::new(id, 3))
@@ -588,7 +596,8 @@ fn a_save_names_the_fold_and_the_write() {
 /// the same.
 #[test]
 fn a_save_with_nothing_to_fold_says_so_and_still_writes() {
-    let dir = temp_dir("nothing_to_fold");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (mut state, id, _) = state_from_file(&dir);
 
     state.save_node(id).expect("a writable path");
@@ -612,7 +621,8 @@ fn a_save_with_nothing_to_fold_says_so_and_still_writes() {
 
 #[test]
 fn a_write_that_fails_is_refused_with_a_reason_and_changes_nothing() {
-    let dir = temp_dir("refused");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (mut state, id, _) = state_from_file(&dir);
     // A directory is not a path a file can be written to.
     let blocked = dir.join("a-directory.sfmr");
@@ -631,7 +641,8 @@ fn a_write_that_fails_is_refused_with_a_reason_and_changes_nothing() {
 
 #[test]
 fn the_window_title_marks_the_first_node_while_it_is_dirty() {
-    let dir = temp_dir("title");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let (mut state, id, _) = state_from_file(&dir);
     assert_eq!(state.window_title(), "SfM Explorer - recon.sfmr");
 
@@ -650,7 +661,8 @@ fn a_created_point_survives_the_save_and_keeps_its_id() {
     // wrote it rather than against any content. The save folds it into rows of
     // the file; the hash the id carries is held on the version that created it,
     // which is where the id keeps resolving from.
-    let dir = temp_dir("created_point");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("recon.sfmr");
     let mut state = AppState::new();
     let id = state.append_node(SceneNode::from_path(
@@ -714,7 +726,8 @@ fn a_created_point_survives_the_save_and_keeps_its_id() {
 /// version the save leaves at the cursor holds them in its base.
 #[test]
 fn a_save_writes_the_value_s_own_measurements() {
-    let dir = temp_dir("measurements");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("measured.sfmr");
     let mut state = AppState::new();
     // The fixture's images carry no readings, which a save must write; the

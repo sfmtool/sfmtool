@@ -743,15 +743,6 @@ fn an_element_count_too_large_to_hold_is_a_shape_mismatch() {
 
 // ── Atomic writes ───────────────────────────────────────────────────────
 
-/// A directory of this test's own under the system temp dir, emptied first so a
-/// rerun does not read a previous run's files.
-fn temp_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("archive_io_atomic_{name}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("a writable temp dir");
-    dir
-}
-
 /// The names of the files in `dir`, sorted.
 fn entries(dir: &std::path::Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
@@ -769,7 +760,8 @@ fn entries(dir: &std::path::Path) -> Vec<String> {
 
 #[test]
 fn a_successful_write_leaves_the_target_and_no_temporary_file() {
-    let dir = temp_dir("success");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("out.bin");
 
     let bytes: usize = write_atomically(&path, |file| {
@@ -786,7 +778,8 @@ fn a_successful_write_leaves_the_target_and_no_temporary_file() {
 #[test]
 fn overwriting_an_existing_target_replaces_it() {
     // The rename has to replace, not fail, on every platform this builds for.
-    let dir = temp_dir("overwrite");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("out.bin");
     std::fs::write(&path, b"old content, longer than the new").unwrap();
 
@@ -804,7 +797,8 @@ fn overwriting_an_existing_target_replaces_it() {
 fn a_failed_write_leaves_the_previous_target_untouched() {
     // The whole point: the target is either what it was or what was written,
     // never a prefix of what was being written.
-    let dir = temp_dir("failure");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("out.bin");
     std::fs::write(&path, b"the only copy").unwrap();
 
@@ -823,7 +817,8 @@ fn a_failed_write_leaves_the_previous_target_untouched() {
 
 #[test]
 fn a_panic_in_the_write_leaves_no_temporary_file() {
-    let dir = temp_dir("panic");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("out.bin");
     std::fs::write(&path, b"the only copy").unwrap();
 
@@ -844,7 +839,8 @@ fn a_missing_parent_directory_is_an_error_and_creates_nothing() {
     // The same answer a direct write gives. Whether a missing parent should be
     // created is a decision about what a path means, and it belongs to the
     // caller: some writers create it first and some deliberately do not.
-    let dir = temp_dir("parent");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let path = dir.join("nested").join("out.bin");
 
     let error = write_atomically(&path, |file| {

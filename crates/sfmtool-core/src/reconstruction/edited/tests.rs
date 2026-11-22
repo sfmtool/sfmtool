@@ -555,15 +555,11 @@ fn the_materialised_hash_is_the_files_hash_after_a_save() {
     assert!(mat.content_hash.rigs_xxh128.is_none());
 
     let computed = mat.content_xxh128().expect("hashable");
-    let path = std::env::temp_dir().join(format!(
-        "sfmtool-edited-hash-{}-{:?}.sfmr",
-        std::process::id(),
-        std::thread::current().id()
-    ));
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("edited.sfmr");
     mat.save(&path, &crate::progress::Progress::none())
         .expect("saved");
     let stored = sfmtool_sfmr_format::read_sfmr_content_hash(&path).expect("read back");
-    let _ = std::fs::remove_file(&path);
     assert_eq!(computed.content_xxh128, stored.content_xxh128);
     assert_eq!(computed.points3d_xxh128, stored.points3d_xxh128);
     assert_eq!(computed.tracks_xxh128, stored.tracks_xxh128);
@@ -608,12 +604,8 @@ fn the_hash_survives_the_clock() {
     let (mat, _) = edited.materialize();
     let computed = mat.content_xxh128().expect("hashable");
 
-    let dir = std::env::temp_dir().join(format!(
-        "sfmtool-edited-clock-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    std::fs::create_dir_all(&dir).expect("temp dir");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let first = dir.join("first.sfmr");
     let second = dir.join("second.sfmr");
     mat.save(&first, &crate::progress::Progress::none())
@@ -626,7 +618,6 @@ fn the_hash_survives_the_clock() {
     let b = sfmtool_sfmr_format::read_sfmr_content_hash(&second).expect("read back");
     let stamp_a = sfmtool_sfmr_format::read_sfmr_metadata(&first).expect("metadata");
     let stamp_b = sfmtool_sfmr_format::read_sfmr_metadata(&second).expect("metadata");
-    let _ = std::fs::remove_dir_all(&dir);
 
     assert_eq!(computed.content_xxh128, a.content_xxh128);
     assert_eq!(a.content_xxh128, b.content_xxh128);
