@@ -776,8 +776,9 @@ What changes it:
 - **unfocusing**: clearing *Edit* and the wire's `unfocus_bench_item`.
   **Unfocusing selects**: a track's origin when it resolves at the cursor, or
   else the point selection is cleared; the node stays selected. Unfocusing a
-  measurement leaves the selection as it is, its origin already the selected
-  measurement. No rows beyond the `Stopped editing` one;
+  measurement leaves the selection as it is: its origin, or none where the
+  origin's row is gone or the person cleared the selection. No rows beyond the
+  `Stopped editing` one;
 - **a selection that leaves the item**: `AppState::select_point` of any point
   but the focused item's origin, and `select_point`, `select_image`,
   `select_camera` or `select_recon` naming another node, unfocus it with its
