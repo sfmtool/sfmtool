@@ -20,6 +20,8 @@
 //!   ▾ 👁 Points (1,204,551)      ∞
 //!       Style  Dots  Patches       ← the point style selector, only with patch data
 //!       selected: pt3d_a1b2c3_88231   ← selection / hover rows only
+//!   ▾   Measurements (2)       ← stored measurements, when there are any
+//!         Distance #0  12 cm  → 11.94 cm  −0.5%
 //!   ▾   Index Files  1 of 2 current
 //!         SIFT Index       1.2M descriptors   ← current / stale / none
 //!         Cluster Patches  none
@@ -41,6 +43,8 @@
 //! - [`mod@cameras`] — the Camera Intrinsics and Camera Images groups, and the
 //!   virtualized image list, whose rows open the image menu
 //!   ([`crate::image_menu`]) that the Image Browser strip opens too.
+//! - [`mod@measurements`] — the Measurements group, one row per stored
+//!   measurement.
 //! - [`mod@menus`] — the context menus of the other row kinds.
 //! - [`mod@widgets`] — the eye and glyph toggles every row is built from, and
 //!   the two spellings of a count.
@@ -63,14 +67,17 @@ use crate::action_log::{
 };
 use crate::align::AlignOptions;
 use crate::index_files::IndexFileState;
+use crate::measurements::MeasurementRef;
 use crate::scene::{point_id, CameraRef, ImageRef, PointRef, PointStyle, ReconId, SceneNode};
 use crate::state::AppState;
 
 mod cameras;
+mod measurements;
 mod menus;
 mod widgets;
 
 use cameras::{show_camera_images_group, show_camera_intrinsics_group};
+use measurements::show_measurements_group;
 pub(crate) use menus::SWITCH_CAMERA_MODEL;
 use menus::{cluster_patches_menu, index_files_menu, node_context_menu, sift_index_menu};
 use widgets::{counts_text, eye_toggle, glyph_toggle, point_style_selector, with_thousands};
@@ -257,6 +264,16 @@ pub(crate) struct SceneGraphResponse {
     /// entry. The dock carries it out after the frame, through the same path
     /// as the Image Browser strip's menu (`crate::image_menu`).
     pub(crate) image_menu: Option<(ImageRef, crate::image_menu::ImageMenuAction)>,
+    /// A Measurements row was clicked: select that measurement and nothing
+    /// else.
+    pub(crate) select_measurement: Option<MeasurementRef>,
+    /// A Measurements row was double-clicked: select the measurement, raise
+    /// Measurement View and frame the measurement in the 3D view
+    /// (`app::apply_measurement_open`). The raise is a layout operation, so
+    /// the panel also keeps the request for
+    /// [`SceneGraphPanel::take_measurement_open`], which `app.rs` drains once
+    /// the dock is back in the state.
+    pub(crate) open_measurement: Option<MeasurementRef>,
 }
 
 /// Scene Graph panel state.
@@ -285,6 +302,10 @@ pub(crate) struct SceneGraphPanel {
     /// apply after the dock is back in the state. See
     /// [`SceneGraphPanel::take_switch_camera_model`].
     switch_camera_model: Option<CameraRef>,
+    /// A Measurements row's double-click, kept for `app.rs` to apply after
+    /// the dock is back in the state. See
+    /// [`SceneGraphPanel::take_measurement_open`].
+    measurement_open: Option<MeasurementRef>,
 }
 
 impl SceneGraphPanel {
@@ -309,6 +330,15 @@ impl SceneGraphPanel {
     /// Intrinsics panel.
     pub(crate) fn take_switch_camera_model(&mut self) -> Option<CameraRef> {
         self.switch_camera_model.take()
+    }
+
+    /// Take the Measurements row double-click the last frame reported, if
+    /// any.
+    ///
+    /// Drained by `app.rs` once the dock is back in the state, for the reason
+    /// [`Self::take_bench_edit`] is: the gesture raises Measurement View.
+    pub(crate) fn take_measurement_open(&mut self) -> Option<MeasurementRef> {
+        self.measurement_open.take()
     }
 
     /// Where a row or toggle was drawn on the last frame, if it was drawn.
@@ -393,6 +423,7 @@ impl SceneGraphPanel {
         let selected_image = state.selected_image;
         let selected_camera = state.selected_camera;
         let selected_point = state.selected_point;
+        let selected_measurement = state.selected_measurement;
         let hovered_image = state.hovered_image;
         let hovered_point = state.hovered_point;
         let focused_item = state.focused_item().copied();
@@ -434,6 +465,7 @@ impl SceneGraphPanel {
                         selected_image,
                         selected_camera,
                         selected_point,
+                        selected_measurement,
                         hovered_image,
                         hovered_point,
                         selection_moved,
@@ -447,6 +479,9 @@ impl SceneGraphPanel {
         }
         if let Some(camera) = out.response.switch_camera_model {
             self.switch_camera_model = Some(camera);
+        }
+        if let Some(measurement) = out.response.open_measurement {
+            self.measurement_open = Some(measurement);
         }
         out.response
     }
@@ -585,6 +620,7 @@ struct NodeContext {
     /// and "the camera the image you picked was taken through".
     selected_camera: Option<CameraRef>,
     selected_point: Option<PointRef>,
+    selected_measurement: Option<MeasurementRef>,
     hovered_image: Option<ImageRef>,
     hovered_point: Option<PointRef>,
     selection_moved: bool,
@@ -606,6 +642,7 @@ fn show_node(ui: &mut egui::Ui, node: &mut SceneNode, ctx: &NodeContext, out: &m
         show_camera_intrinsics_group(ui, node, ctx, out);
         show_camera_images_group(ui, node, ctx, out);
         show_points_group(ui, node, ctx, out);
+        show_measurements_group(ui, node, ctx, out);
         show_bench_groups(ui, node, out);
         show_index_files_group(ui, node, out);
     });

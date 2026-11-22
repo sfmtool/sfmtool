@@ -389,7 +389,21 @@ pub(crate) struct SceneNode {
     /// photographs, keyed by image name so one column serves every version. Never written into an `ImageSet`, so
     /// nothing drawn here can reach a save. See [`crate::display_thumbnails`].
     pub(crate) display_thumbnails: Option<Arc<DisplayThumbnails>>,
+    /// The measurement readings of the last version they were asked for,
+    /// keyed by that version's document serial
+    /// ([`SceneNode::measurement_readings`]). A version never changes, so a
+    /// reading taken once holds for as long as the cursor stays on a version
+    /// sharing that document half.
+    measurement_readings: MeasurementReadingsCache,
 }
+
+/// [`SceneNode`]'s cache of the measurement readings of one version.
+type MeasurementReadingsCache = std::sync::Mutex<
+    Option<(
+        crate::document::VersionSerial,
+        Arc<crate::measurements::MeasurementReadings>,
+    )>,
+>;
 
 impl SceneNode {
     /// A node for `recon`, labeled `label` and sourced from `path`.
@@ -410,7 +424,28 @@ impl SceneNode {
             show_points_at_infinity: true,
             tint: NodeTint::Original,
             display_thumbnails,
+            measurement_readings: std::sync::Mutex::new(None),
         }
+    }
+
+    /// The measurement readings of the version this node shows: every stored
+    /// measurement's endpoints resolved against it, computed the first time a
+    /// version is asked for and kept after that, so the Scene tree's rows,
+    /// Measurement View and the wire share one resolution per version.
+    pub(crate) fn measurement_readings(&self) -> Arc<crate::measurements::MeasurementReadings> {
+        let serial = self.history.current_version().document_serial;
+        let mut cache = self
+            .measurement_readings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((at, readings)) = cache.as_ref() {
+            if *at == serial {
+                return Arc::clone(readings);
+            }
+        }
+        let readings = Arc::new(crate::measurements::MeasurementReadings::of(self.edited()));
+        *cache = Some((serial, Arc::clone(&readings)));
+        readings
     }
 
     /// A node for a reconstruction read from `path`, labeled with its file stem.

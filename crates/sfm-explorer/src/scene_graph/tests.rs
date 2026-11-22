@@ -2651,7 +2651,7 @@ fn the_image_group_is_labelled_camera_images_and_counts_the_images() {
     state.append_node(two_camera_node("/runs/rig.sfmr"));
     let (mut panel, ctx) = settled(&mut state);
 
-    let texts = painted_at_width(&mut panel, &ctx, &mut state, VIEWPORT.x);
+    let texts = painted_at_width(&mut panel, &ctx, &mut state, 1200.0);
     assert!(
         texts.iter().any(|t| t == "Camera Images (8)"),
         "no Camera Images group row was painted; got {texts:?}"
@@ -2715,7 +2715,7 @@ fn the_intrinsics_group_labels_and_counts_the_cameras_and_lists_them() {
     state.append_node(two_camera_node("/runs/rig.sfmr"));
     let (mut panel, ctx) = settled(&mut state);
 
-    let texts = painted_at_width(&mut panel, &ctx, &mut state, VIEWPORT.x);
+    let texts = painted_at_width(&mut panel, &ctx, &mut state, 1200.0);
     assert!(
         texts.iter().any(|t| t == "Camera Intrinsics (2)"),
         "no Camera Intrinsics group row was painted; got {texts:?}"
@@ -2745,7 +2745,7 @@ fn the_intrinsics_group_row_carries_no_eye() {
     state.append_node(two_camera_node("/runs/rig.sfmr"));
     let (mut panel, ctx) = settled(&mut state);
 
-    let texts = painted_at_width(&mut panel, &ctx, &mut state, VIEWPORT.x);
+    let texts = painted_at_width(&mut panel, &ctx, &mut state, 1200.0);
     let eyes = texts
         .iter()
         .filter(|t| t.as_str() == super::EYE_GLYPH)
@@ -2823,7 +2823,7 @@ fn a_camera_row_carries_the_tag_of_its_per_image_parameters() {
     state.append_node(node);
     let (mut panel, ctx) = settled(&mut state);
 
-    let texts = painted_at_width(&mut panel, &ctx, &mut state, VIEWPORT.x);
+    let texts = painted_at_width(&mut panel, &ctx, &mut state, 1200.0);
     assert!(
         texts
             .iter()
@@ -2844,7 +2844,7 @@ fn a_camera_no_image_references_reads_zero_images() {
     state.append_node(unused_camera_node("/runs/rig.sfmr"));
     let (mut panel, ctx) = settled(&mut state);
 
-    let texts = painted_at_width(&mut panel, &ctx, &mut state, VIEWPORT.x);
+    let texts = painted_at_width(&mut panel, &ctx, &mut state, 1200.0);
     assert!(
         texts.iter().any(|t| t.ends_with("0 images")),
         "an unreferenced camera should say so rather than be hidden; got {texts:?}"
@@ -4432,4 +4432,62 @@ fn the_sift_files_build_sits_above_the_index_files_build() {
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
     let response = click(&mut panel, &ctx, &mut state, row_id(id, "build_sift_files"));
     assert_eq!(response.build_sift_files, Some(id));
+}
+
+// ── Measurements ────────────────────────────────────────────────────────
+
+/// The Measurements group is drawn only on a node that stores measurements,
+/// with one row per measurement, and a row reads as the measurement's row
+/// text.
+#[test]
+fn the_measurements_group_appears_only_on_a_node_with_measurements() {
+    let mut state = AppState::new();
+    let plain = state.append_node(file_node("/runs/plain.sfmr", 3, "p"));
+    let (panel, ctx) = settled(&mut state);
+    assert!(!drawn(&ctx, row_id(plain, "measurements")));
+    assert!(panel
+        .hit_rect(row_id(plain, "measurement_distance_0"))
+        .is_none());
+
+    let (mut state, id) = crate::measurements::fixture::measured_state(Some("m"));
+    let (mut panel, ctx) = settled(&mut state);
+    assert!(drawn(&ctx, row_id(id, "measurements")));
+    for i in 0..5 {
+        assert!(
+            panel
+                .hit_rect(row_id(id, &format!("measurement_distance_{i}")))
+                .is_some(),
+            "row {i} was not drawn"
+        );
+    }
+    let texts = painted_at_width(&mut panel, &ctx, &mut state, 1200.0);
+    assert!(texts.iter().any(|t| t == "Measurements (5)"), "{texts:?}");
+    assert!(
+        texts
+            .iter()
+            .any(|t| t == "Distance #2  1 m  \u{26a0} endpoint B: no patch holds the pixel"),
+        "{texts:?}"
+    );
+}
+
+/// A click on a row selects that measurement and asks for nothing else; a
+/// double-click asks for it to be opened, which the panel keeps for `app.rs`.
+#[test]
+fn a_measurement_rows_click_selects_it_and_its_double_click_opens_it() {
+    let (mut state, id) = crate::measurements::fixture::measured_state(Some("m"));
+    let (mut panel, ctx) = settled(&mut state);
+    let row = row_id(id, "measurement_distance_1");
+    let response = click(&mut panel, &ctx, &mut state, row);
+    let measurement = crate::measurements::MeasurementRef::distance(id, 1);
+    assert_eq!(response.select_measurement, Some(measurement));
+    assert_eq!(response.open_measurement, None);
+    assert_eq!(response.select_image, None);
+    assert_eq!(response.select_point, None);
+    assert_eq!(panel.take_measurement_open(), None);
+
+    let pos = panel.hit_rect(row).expect("the row was drawn").center();
+    let second = click_at(&mut panel, &ctx, &mut state, pos);
+    assert_eq!(second.open_measurement, Some(measurement));
+    assert_eq!(panel.take_measurement_open(), Some(measurement));
+    assert_eq!(panel.take_measurement_open(), None, "taken twice");
 }

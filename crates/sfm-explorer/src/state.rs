@@ -10,6 +10,7 @@ use crate::dock::Tab;
 use crate::goto_point::{self, GotoPointDialog};
 use crate::image_detail::{Look, ViewGeometry};
 use crate::layout::Layout;
+use crate::measurements::{EndpointSide, MeasurementRef};
 use crate::scene::{node_by_id, unique_label, CameraRef, ImageRef, PointRef, ReconId, SceneNode};
 use crate::scene_renderer::{
     DEFAULT_FRUSTUM_SIZE_MULTIPLIER, DEFAULT_LENGTH_SCALE_MULTIPLIER,
@@ -504,6 +505,17 @@ pub(crate) struct AppState {
 
     /// Currently selected 3D point.
     pub(crate) selected_point: Option<PointRef>,
+
+    /// The selected measurement: one in the whole viewer, inside the selected
+    /// reconstruction. Set through [`AppState::select_measurement`], which
+    /// selects nothing else, and kept on its row across a version that still
+    /// holds the row ([`AppState::prune_measurement_selection`]).
+    pub(crate) selected_measurement: Option<MeasurementRef>,
+
+    /// The selected endpoint of the selected measurement, when one is. Set
+    /// through [`AppState::select_endpoint`]; cleared when another measurement
+    /// is selected and when the image selection moves to another image.
+    pub(crate) selected_endpoint: Option<EndpointSide>,
 
     /// Where the Image Detail panel is being asked to look: the image, and the
     /// request in that image's own source coordinates.
@@ -1003,6 +1015,8 @@ impl AppState {
             selected_image: None,
             selected_camera: None,
             selected_point: None,
+            selected_measurement: None,
+            selected_endpoint: None,
             look: None,
             image_detail_view: None,
             image_detail_view_layout: None,
@@ -1166,6 +1180,8 @@ impl AppState {
         self.selected_image = None;
         self.selected_camera = None;
         self.selected_point = None;
+        self.selected_measurement = None;
+        self.selected_endpoint = None;
         self.look = None;
         self.image_detail_view = None;
         self.image_detail_view_layout = None;
@@ -1197,6 +1213,7 @@ impl AppState {
         self.selected_image = self.selected_image.filter(|i| i.recon != id);
         self.selected_camera = self.selected_camera.filter(|c| c.recon != id);
         self.selected_point = self.selected_point.filter(|p| p.recon != id);
+        self.keep_measurement_in(|recon| recon != id);
         self.look = self.look.filter(|(image, _)| image.recon != id);
         self.image_detail_view = self.image_detail_view.filter(|view| view.image.recon != id);
         if self.image_detail_view.is_none() {
@@ -1258,6 +1275,7 @@ impl AppState {
         self.selected_image = self.selected_image.filter(|i| i.recon == id);
         self.selected_camera = self.selected_camera.filter(|c| c.recon == id);
         self.selected_point = self.selected_point.filter(|p| p.recon == id);
+        self.keep_measurement_in(|recon| recon == id);
         if moved {
             let label = self.label_of(id);
             self.action_log.record_run(
@@ -1348,7 +1366,11 @@ impl AppState {
         self.selected_recon = Some(image.recon);
         self.selected_camera = self.camera_of(image);
         self.selected_point = self.selected_point.filter(|p| p.recon == image.recon);
+        self.keep_measurement_in(|recon| recon == image.recon);
         if moved {
+            // The endpoint is a pixel of the image it was selected with, so
+            // another image leaves it; `select_endpoint` sets it after this.
+            self.selected_endpoint = None;
             let text = format!(
                 "Selected image {} in {}",
                 self.image_name(image),
@@ -1452,6 +1474,7 @@ impl AppState {
             self.selected_image = None;
         }
         self.selected_point = self.selected_point.filter(|p| p.recon == camera.recon);
+        self.keep_measurement_in(|recon| recon == camera.recon);
         if moved {
             let text = format!(
                 "Selected camera intrinsics #{} in {}",
@@ -1476,16 +1499,151 @@ impl AppState {
         if self.selected_image.is_none()
             && self.selected_camera.is_none()
             && self.selected_point.is_none()
+            && self.selected_measurement.is_none()
         {
             return;
         }
         self.action_log.mute();
         // `select_camera(None)` clears the image with it, so "everything" is
-        // that followed by the point.
+        // that followed by the point and the measurement.
         self.select_camera(None);
         self.selected_point = None;
+        self.selected_measurement = None;
+        self.selected_endpoint = None;
         self.action_log.unmute();
         self.action_log.record(Kind::Selection, "Cleared selection");
+    }
+
+    /// Keep the selected measurement only where `keep` holds of its node, and
+    /// its endpoint with it: the recon-scoped half of every selection setter.
+    fn keep_measurement_in(&mut self, keep: impl Fn(ReconId) -> bool) {
+        self.selected_measurement = self.selected_measurement.filter(|m| keep(m.recon));
+        if self.selected_measurement.is_none() {
+            self.selected_endpoint = None;
+        }
+    }
+
+    /// Select a measurement, and with it the reconstruction that holds it.
+    ///
+    /// **Selecting a measurement selects nothing else**: neither endpoint's
+    /// image nor its point, so the 3D view and Image Detail stay where they
+    /// are. It clears the selected endpoint. The other selections are kept
+    /// inside the measurement's reconstruction as [`Self::select_recon`]
+    /// keeps them. A measurement the version on screen does not hold selects
+    /// nothing. Selecting the measurement already selected changes nothing
+    /// and writes no row.
+    pub(crate) fn select_measurement(&mut self, measurement: MeasurementRef) {
+        if self.distance_row(measurement).is_none() {
+            return;
+        }
+        self.select_recon(measurement.recon);
+        if self.selected_measurement == Some(measurement) {
+            return;
+        }
+        self.selected_measurement = Some(measurement);
+        self.selected_endpoint = None;
+        let text = format!(
+            "Selected {} in {}",
+            measurement.lower_title(),
+            self.label_of(measurement.recon)
+        );
+        self.action_log
+            .record_run(Kind::Selection, "measurement", text);
+    }
+
+    /// Select an endpoint of a distance measurement, as a click on its block
+    /// in Measurement View does: the measurement, then the endpoint's image,
+    /// with the endpoint's pixel for Image Detail to reveal
+    /// ([`Self::reveal_in_image`]), then the endpoint. The selected point is
+    /// left alone, as a Track View row click leaves the track's point alone.
+    ///
+    /// A measurement the version on screen does not hold selects nothing.
+    pub(crate) fn select_endpoint(&mut self, measurement: MeasurementRef, side: EndpointSide) {
+        let Some(row) = self.distance_row(measurement) else {
+            return;
+        };
+        self.select_measurement(measurement);
+        let image = row.image(side) as usize;
+        let in_set = self
+            .node(measurement.recon)
+            .is_some_and(|node| image < node.recon().image_set.images.len());
+        if in_set {
+            let [x, y] = row.pixel(side);
+            self.reveal_in_image(
+                ImageRef::new(measurement.recon, image),
+                [x as f32, y as f32],
+            );
+        }
+        if self.selected_endpoint != Some(side) {
+            self.selected_endpoint = Some(side);
+            let text = format!(
+                "Selected endpoint {} of {} in {}",
+                side.letter(),
+                measurement.lower_title(),
+                self.label_of(measurement.recon)
+            );
+            self.action_log
+                .record_run(Kind::Selection, "measurement endpoint", text);
+        }
+    }
+
+    /// The stored distance measurement `measurement` names, in the version its
+    /// node shows, or `None` where that version has no such row.
+    pub(crate) fn distance_row(
+        &self,
+        measurement: MeasurementRef,
+    ) -> Option<crate::measurements::DistanceRow> {
+        let node = self.node(measurement.recon)?;
+        match measurement.kind {
+            crate::measurements::MeasurementKind::Distance => {
+                crate::measurements::distance_rows(node.recon())
+                    .into_iter()
+                    .nth(measurement.index())
+            }
+        }
+    }
+
+    /// Move the selected distance measurement of node `id` to the row `rows`
+    /// puts it at, an edit's map from each old row to its new one, or clear it
+    /// where the edit dropped its row.
+    pub(crate) fn follow_measurement_rows(&mut self, id: ReconId, rows: &[Option<u32>]) {
+        let Some(measurement) = self.selected_measurement.filter(|m| m.recon == id) else {
+            return;
+        };
+        match rows.get(measurement.index()).copied().flatten() {
+            Some(index) => {
+                self.selected_measurement = Some(MeasurementRef {
+                    index,
+                    ..measurement
+                });
+            }
+            None => {
+                self.selected_measurement = None;
+                self.selected_endpoint = None;
+            }
+        }
+    }
+
+    /// Clear the measurement selection where the version on screen no longer
+    /// holds its row, and keep it on the same row otherwise.
+    ///
+    /// Measurements are never renumbered by a point edit, so a row that is
+    /// still there is the same measurement. A bulk edit that drops images can
+    /// drop measurements, and an undo or a redo can arrive at a version with
+    /// fewer of them; the selection is cleared there rather than left naming a
+    /// row that is gone, and stays cleared when a later step brings the row
+    /// back. Called once a frame, before the panels draw.
+    pub(crate) fn prune_measurement_selection(&mut self) {
+        let Some(measurement) = self.selected_measurement else {
+            return;
+        };
+        let held = self.node(measurement.recon).is_some_and(|node| {
+            measurement.index() < crate::measurements::measurement_count(node.recon())
+        });
+        if !held {
+            self.selected_measurement = None;
+            self.selected_endpoint = None;
+        }
     }
 
     /// Drop the point selection alone.
@@ -1540,6 +1698,7 @@ impl AppState {
         self.selected_recon = Some(point.recon);
         self.selected_image = self.selected_image.filter(|i| i.recon == point.recon);
         self.selected_camera = self.selected_camera.filter(|c| c.recon == point.recon);
+        self.keep_measurement_in(|recon| recon == point.recon);
         if moved {
             let id = self
                 .node(point.recon)

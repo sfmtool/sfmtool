@@ -631,3 +631,54 @@ fn a_double_click_on_a_cluster_row_leaves_the_view_alone() {
     );
     assert_eq!(state.focused_item_label(id), Some(label.as_str()));
 }
+
+/// A Scene tree double-click on a Measurements row selects the measurement,
+/// raises Measurement View, and frames the measurement's finite endpoints
+/// keeping the view's orientation, both projecting inside the view; a
+/// measurement with no finite endpoint leaves the view where it is.
+#[test]
+fn opening_a_measurement_raises_its_panel_and_frames_its_finite_endpoints() {
+    use crate::measurements::MeasurementRef;
+    let (mut state, id) = crate::measurements::fixture::measured_state(Some("m"));
+    state.hide_panel(crate::dock::Tab::MeasurementView);
+    let mut viewer = crate::viewer_3d::Viewer3D::new();
+    let orientation = viewer.camera.camera.orientation;
+    let measurement = MeasurementRef::distance(id, 0);
+    super::apply_measurement_open(&mut state, &mut viewer, measurement, 0.0);
+    assert_eq!(state.selected_measurement, Some(measurement));
+    assert!(state.is_panel_open(crate::dock::Tab::MeasurementView));
+    let (position, end_orientation, _, camera_view) =
+        viewer.transition_end().expect("the view moves");
+    assert!(
+        end_orientation.angle_to(&orientation) < 1e-12,
+        "the view turned"
+    );
+    assert_eq!(camera_view, None);
+    let aspect = 16.0 / 9.0;
+    let tan_y = (viewer.camera.vertical_fov(aspect) / 2.0).tan();
+    for p in crate::measurements::world_endpoints(&state.scene, measurement) {
+        let local = end_orientation * (p - position);
+        let depth = -local.z;
+        assert!(depth > 0.0);
+        let ndc = [
+            local.x / (depth * tan_y * aspect),
+            local.y / (depth * tan_y),
+        ];
+        assert!(ndc.iter().all(|a| a.abs() <= 0.5 + 1e-9), "{ndc:?}");
+    }
+
+    // Measurement 3's endpoint B is at infinity, so its one finite endpoint is
+    // centred at the orbit distance the view had. A measurement past the rows
+    // has no endpoint, and the view stays where it is.
+    let mut one = crate::viewer_3d::Viewer3D::new();
+    let distance = one.camera.camera.target_distance;
+    super::apply_measurement_open(&mut state, &mut one, MeasurementRef::distance(id, 3), 0.0);
+    let (_, _, end_distance, _) = one.transition_end().expect("the view centres the endpoint");
+    assert_eq!(end_distance, distance);
+    let mut still = crate::viewer_3d::Viewer3D::new();
+    super::apply_measurement_open(&mut state, &mut still, MeasurementRef::distance(id, 9), 0.0);
+    assert!(
+        still.transition_end().is_none(),
+        "the view moved for nothing"
+    );
+}

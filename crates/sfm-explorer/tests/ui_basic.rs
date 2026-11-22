@@ -2411,3 +2411,178 @@ fn the_proposals_drop_row_ticks_and_greys_what_the_target_cannot_carry() {
         std::thread::sleep(Duration::from_millis(100));
     }
 }
+
+// --- Measurement View ---
+
+/// A copy of the seoul bull ground truth with two artificial distance
+/// measurements, in a temporary directory that is removed when the guard is
+/// dropped, recording the dataset's directory as its workspace so the viewer
+/// finds the photographs. The endpoints are the keypoints of the first two
+/// observations in image 0; whether they resolve does not matter to the tests
+/// that use the copy, which are about the panel and its gestures.
+fn measured_copy() -> (tempfile::TempDir, String) {
+    let dataset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-data/images/seoul_bull_sculpture");
+    let source = dataset.join("seoul_bull_sculpture_ground_truth_v02.sfmr");
+    let mut data = sfmtool_sfmr_format::read_sfmr(&source).expect("the ground truth reads");
+    let in_image_0: Vec<usize> = data
+        .image_indexes
+        .iter()
+        .enumerate()
+        .filter(|(_, &image)| image == 0)
+        .map(|(row, _)| row)
+        .take(2)
+        .collect();
+    let keypoints = data
+        .keypoints_xy
+        .as_ref()
+        .expect("the ground truth stores its keypoints");
+    let mut endpoints_xy = ndarray::Array3::<f32>::zeros((2, 2, 2));
+    for (k, &row) in in_image_0.iter().enumerate() {
+        for m in 0..2 {
+            endpoints_xy[[m, k, 0]] = keypoints[[row, 0]];
+            endpoints_xy[[m, k, 1]] = keypoints[[row, 1]];
+        }
+    }
+    data.measurements.distance = Some(sfmtool_sfmr_format::DistanceMeasurementsData {
+        distances: ndarray::Array1::from(vec![12.0f32, 30.0]),
+        units: ndarray::Array1::from(vec![
+            sfmtool_sfmr_format::LENGTH_UNIT_CM,
+            sfmtool_sfmr_format::LENGTH_UNIT_CM,
+        ]),
+        image_indexes: ndarray::Array2::zeros((2, 2)),
+        endpoints_xy,
+        labels: vec!["first".to_string(), "second".to_string()],
+    });
+    data.measurements.set_metadata_counts(&mut data.metadata);
+    data.metadata.workspace.absolute_path = dataset
+        .canonicalize()
+        .expect("the dataset is on disk")
+        .display()
+        .to_string();
+    data.metadata.workspace.relative_path = String::new();
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let path = dir.path().join("seoul_bull_measured.sfmr");
+    sfmtool_sfmr_format::write_sfmr(&path, &mut data).expect("the copy writes");
+    let path = path.display().to_string();
+    (dir, path)
+}
+
+/// Wait until the scene holds a reconstruction with `count` distance
+/// measurements, and return its label.
+fn wait_for_measurements(viewer: &McpViewer, count: u64) -> String {
+    let deadline = Instant::now() + CONTENT_TIMEOUT;
+    loop {
+        let scene = viewer.call("get_scene", json!({}));
+        let entry = &scene["structuredContent"]["scene"][0];
+        if entry["measurement_counts"]["distance"].as_u64() == Some(count) {
+            return entry["label"].as_str().expect("a label").to_string();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the measured reconstruction never appeared: {scene}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Measurement View opens from the Panels menu, in the stock layout's place
+/// for it, showing its empty state with the reconstruction's measurements
+/// listed.
+#[test]
+fn measurement_view_opens_from_the_panels_menu() {
+    let (_dir, path) = measured_copy();
+    let viewer = McpViewer::launched(ui_test_lock(), None, &["--no-default-layout", &path]);
+    wait_for_measurements(&viewer, 2);
+    viewer.ok("hide_panel", json!({ "panel_name": "measurement_view" }));
+    let layout = viewer.ok("get_window_layout", json!({}));
+    assert_eq!(
+        layout["panels"]["measurement_view"]["open"], false,
+        "{layout}"
+    );
+
+    let menu = viewer.open_menu("Panels");
+    let item = menu_item(&menu, "Measurement View")
+        .unwrap_or_else(|| panic!("no Measurement View in {menu}"));
+    viewer.click(json!({ "widget": item["widget"] }));
+    let layout = viewer.ok("get_window_layout", json!({}));
+    assert_eq!(
+        layout["panels"]["measurement_view"],
+        json!({ "open": true, "active": true }),
+        "{layout}"
+    );
+    viewer.wait_for(
+        json!({ "panel_name": "measurement_view" }),
+        "Measurement View never drew its empty state",
+        |listing| {
+            (find_widget(listing, "label", "No measurement selected").is_some()
+                && entries(listing).iter().any(|widget| {
+                    widget["name"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with("Distance #1  second  30 cm"))
+                }))
+            .then_some(())
+        },
+    );
+}
+
+/// A double-click on a Measurements row in the Scene tree selects the
+/// measurement and raises Measurement View on it, which draws the
+/// measurement's header and its two endpoint blocks.
+#[test]
+fn a_double_click_on_a_measurement_row_opens_it_in_measurement_view() {
+    let (_dir, path) = measured_copy();
+    let viewer = McpViewer::launched(ui_test_lock(), None, &["--no-default-layout", &path]);
+    let label = wait_for_measurements(&viewer, 2);
+    let layout = viewer.ok("get_window_layout", json!({}));
+    assert_eq!(
+        layout["panels"]["measurement_view"]["active"], false,
+        "Measurement View starts behind Track View: {layout}"
+    );
+    let row = viewer.wait_for(
+        json!({ "panel_name": "scene" }),
+        "the Scene tree never listed the measurement rows",
+        |listing| {
+            entries(listing)
+                .iter()
+                .find(|widget| {
+                    widget["name"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with("Distance #0  first  12 cm"))
+                })
+                .cloned()
+        },
+    );
+    viewer.click(json!({ "widget": row["widget"], "count": 2 }));
+
+    let scene = viewer.ok("get_scene", json!({}));
+    assert_eq!(
+        scene["selection"]["measurement"],
+        json!({
+            "reconstruction_label": label,
+            "measurement_kind": "distance",
+            "measurement_index": 0,
+        }),
+        "{scene}"
+    );
+    let layout = viewer.ok("get_window_layout", json!({}));
+    assert_eq!(
+        layout["panels"]["measurement_view"],
+        json!({ "open": true, "active": true }),
+        "{layout}"
+    );
+    viewer.wait_for(
+        json!({ "panel_name": "measurement_view" }),
+        "Measurement View never drew the measurement",
+        |listing| {
+            (find_widget(listing, "label", "Distance #0").is_some()
+                && find_widget(listing, "label", "Label: first").is_some()
+                && entries(listing).iter().any(|widget| {
+                    widget["name"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with("A  "))
+                }))
+            .then_some(())
+        },
+    );
+}

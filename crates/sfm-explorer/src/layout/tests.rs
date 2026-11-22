@@ -47,7 +47,7 @@ const DEFAULT_JSON: &str = r#"{
             "active": "viewer_3d"
           },
           "second": {
-            "tabs": ["track_view", "camera_intrinsics"],
+            "tabs": ["track_view", "measurement_view", "camera_intrinsics"],
             "active": "track_view"
           }
         },
@@ -178,7 +178,10 @@ fn the_viewport_opens_with_image_detail_behind_it_and_the_tables_beside_it() {
         .iter()
         .find(|(tabs, _)| tabs.contains(&Tab::TrackView))
         .expect("no leaf holds Track View");
-    assert_eq!(right.0, vec![Tab::TrackView, Tab::IntrinsicsDetail]);
+    assert_eq!(
+        right.0,
+        vec![Tab::TrackView, Tab::MeasurementView, Tab::IntrinsicsDetail]
+    );
     assert_eq!(right.1, Tab::TrackView);
 }
 
@@ -302,8 +305,8 @@ fn every_panel_appears_exactly_once_in_the_default() {
     assert!(layout.validate("layout").is_ok());
 }
 
-/// The menu lists the panels in this fixed order, the Track Table, the tenth
-/// panel, last.
+/// The menu lists the panels in this fixed order, Measurement View after
+/// Track View and the Track Table, the eleventh panel, last.
 #[test]
 fn tab_all_is_in_the_menus_order() {
     assert_eq!(
@@ -315,6 +318,7 @@ fn tab_all_is_in_the_menus_order() {
             Tab::ImageBrowser,
             Tab::ImageDetail,
             Tab::TrackView,
+            Tab::MeasurementView,
             Tab::IntrinsicsDetail,
             Tab::ActionLog,
             Tab::EditHistory,
@@ -556,6 +560,9 @@ fn a_raise_from_a_gesture_does_not_cover_the_panel_it_came_from() {
 fn a_panel_opened_into_the_gestures_node_goes_in_behind_it() {
     let mut state = docked_behind_image_detail(Tab::IntrinsicsDetail);
     state.hide_panel(Tab::TrackView);
+    // Measurement View is a group-mate too, and an open one would take Track
+    // View into its own node.
+    state.hide_panel(Tab::MeasurementView);
     state.show_panel_beside(Tab::TrackView, Tab::ImageDetail);
     let leaf = main_leaves(&state.layout())
         .into_iter()
@@ -647,8 +654,8 @@ fn an_unknown_panel_name_lists_them_all() {
     assert_eq!(
         message,
         "layout.main: unknown panel \"viewer3d\"; the panels are scene, background_tasks, viewer_3d, \
-         image_browser, image_detail, track_view, camera_intrinsics, action_log, edit_history, \
-         track_table"
+         image_browser, image_detail, track_view, measurement_view, camera_intrinsics, action_log, \
+         edit_history, track_table"
     );
 }
 
@@ -680,7 +687,7 @@ fn a_retired_panel_name_is_refused_whole() {
 #[test]
 fn the_earlier_stock_layout_is_refused_and_leaves_the_dock_alone() {
     let earlier = DEFAULT_JSON.replace(
-        r#""tabs": ["track_view", "camera_intrinsics"],
+        r#""tabs": ["track_view", "measurement_view", "camera_intrinsics"],
             "active": "track_view""#,
         r#""tabs": ["point_track", "camera_intrinsics", "track_edit"],
             "active": "point_track""#,
@@ -690,8 +697,8 @@ fn the_earlier_stock_layout_is_refused_and_leaves_the_dock_alone() {
     assert_eq!(
         message,
         "layout.main.second.first.second: unknown panel \"point_track\"; the panels are scene, \
-         background_tasks, viewer_3d, image_browser, image_detail, track_view, camera_intrinsics, \
-         action_log, edit_history, track_table"
+         background_tasks, viewer_3d, image_browser, image_detail, track_view, measurement_view, \
+         camera_intrinsics, action_log, edit_history, track_table"
     );
 }
 

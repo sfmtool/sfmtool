@@ -1384,6 +1384,10 @@ impl AppState {
         let keep: Vec<u32> = (0..source.image_count() as u32)
             .filter(|&i| i != removed)
             .collect();
+        // The measurements move with the image set, which the selected one
+        // follows below.
+        let measurement_rows =
+            crate::measurements::distance_rows_after_deleting_image(source, removed);
         let subset = {
             let _phase = collector.phase("subset");
             source
@@ -1444,6 +1448,7 @@ impl AppState {
         };
         let parent = version_before(node, serial);
         self.follow_selection_forward(image.recon);
+        self.follow_measurement_rows(image.recon, &measurement_rows);
         // The selected observations are indexes into the focused track's list,
         // which the delete may have shortened, so they follow it; a focused
         // track the delete discarded is unfocused.

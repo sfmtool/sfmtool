@@ -188,3 +188,42 @@ fn nothing_to_frame_moves_nothing() {
     assert_eq!(camera.compute_fit(&FitPoints::default(), 1.5, true), None);
     assert_eq!(framing_bearing(&[Vector3::zeros()]), None);
 }
+
+/// Framing keeping the orientation: the camera turns not at all, looks at the
+/// points' centroid, and stands where every point projects inside the middle
+/// `fraction` of the viewport, one of them on its edge. A single point keeps
+/// the orbit distance it is given.
+#[test]
+fn framing_keeping_the_orientation_fits_every_point_into_the_middle() {
+    let orientation = UnitQuaternion::from_euler_angles(0.3, -0.4, 0.2);
+    let points = [Point3::new(1.0, 2.0, 0.5), Point3::new(-0.5, 1.0, 2.0)];
+    let (tan_y, aspect, fraction) = (0.4, 1.6, 0.5);
+    let (position, distance) =
+        keeping_orientation(orientation, &points, tan_y, aspect, fraction, 7.0)
+            .expect("two points frame");
+    let centroid = Point3::new(0.25, 1.5, 1.25);
+    let forward = orientation.inverse() * -Vector3::z();
+    assert!((position + forward * distance - centroid).norm() < 1e-12);
+    let mut widest: f64 = 0.0;
+    for p in &points {
+        let local = orientation * (p - position);
+        let depth = -local.z;
+        assert!(depth > 0.0, "a point is behind the camera");
+        let ndc = [
+            local.x / (depth * tan_y * aspect),
+            local.y / (depth * tan_y),
+        ];
+        assert!(ndc.iter().all(|a| a.abs() <= fraction + 1e-9), "{ndc:?}");
+        widest = widest.max(ndc[0].abs()).max(ndc[1].abs());
+    }
+    assert!(
+        (widest - fraction).abs() < 1e-9,
+        "no point is on the edge: {widest}"
+    );
+
+    let one = keeping_orientation(orientation, &points[..1], tan_y, aspect, fraction, 7.0)
+        .expect("one point frames");
+    assert_eq!(one.1, 7.0);
+    assert!((one.0 + forward * 7.0 - points[0]).norm() < 1e-12);
+    assert!(keeping_orientation(orientation, &[], tan_y, aspect, fraction, 7.0).is_none());
+}

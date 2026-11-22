@@ -123,10 +123,10 @@ fn held(state: &AppState, id: ReconId) -> Vec<TrackTableColumn> {
 // -- Registration and placement ---------------------------------------------
 
 #[test]
-fn the_panel_is_the_tenth_tab_titled_track_table() {
+fn the_panel_is_the_eleventh_tab_titled_track_table() {
     use crate::dock::Tab;
-    assert_eq!(Tab::ALL.len(), 10);
-    assert_eq!(Tab::ALL[9], Tab::TrackTable);
+    assert_eq!(Tab::ALL.len(), 11);
+    assert_eq!(Tab::ALL[10], Tab::TrackTable);
     assert_eq!(Tab::TrackTable.title(), "Track Table");
     assert_eq!(Tab::TrackTable.wire_name(), "track_table");
     assert_eq!(Tab::from_wire_name("track_table"), Some(Tab::TrackTable));

@@ -32,6 +32,8 @@ impl Command {
             Command::GetCameraIntrinsics { .. } => "get_camera_intrinsics",
             Command::GetIntrinsicAdjustments { .. } => "get_intrinsic_adjustments",
             Command::GetPoint { .. } => "get_point",
+            Command::ListMeasurements { .. } => "list_measurements",
+            Command::GetMeasurement { .. } => "get_measurement",
             Command::FindPoints { .. } => "find_points",
             Command::GetActionLog { .. } => "get_action_log",
             Command::OpenReconstruction { .. } => "open_reconstruction",
@@ -40,6 +42,7 @@ impl Command {
             Command::SelectCameraImage { .. } => "select_camera_image",
             Command::SelectCameraIntrinsics { .. } => "select_camera_intrinsics",
             Command::SelectPoint { .. } => "select_point",
+            Command::SelectMeasurement { .. } => "select_measurement",
             Command::ClearSelection { .. } => "clear_selection",
             Command::SetReconstructionDisplay { .. } => "set_reconstruction_display",
             Command::SetReconstructionTransform { .. } => "set_reconstruction_transform",
@@ -362,6 +365,8 @@ impl Command {
             | Command::GetCameraIntrinsics { .. }
             | Command::GetIntrinsicAdjustments { .. }
             | Command::GetPoint { .. }
+            | Command::ListMeasurements { .. }
+            | Command::GetMeasurement { .. }
             | Command::FindPoints { .. }
             | Command::GetActionLog { .. }
             | Command::GetWindowLayout
@@ -450,6 +455,7 @@ impl Command {
             | Command::SelectCameraImage { .. }
             | Command::SelectCameraIntrinsics { .. }
             | Command::SelectPoint { .. }
+            | Command::SelectMeasurement { .. }
             | Command::SelectBenchObservations { .. }
             // Not bench steps: the focused item is beside the selection and
             // outside every version.
@@ -549,6 +555,18 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
             named(reconstruction_label)
         ),
         Command::GetPoint { point } => format!("get_point {}", point_text(point)),
+        Command::ListMeasurements {
+            reconstruction_label,
+        } => format!("list_measurements {}", named(reconstruction_label)),
+        Command::GetMeasurement {
+            reconstruction_label,
+            measurement_kind,
+            measurement_index,
+        } => format!(
+            "get_measurement {} {} #{measurement_index}",
+            named(reconstruction_label),
+            measurement_kind.wire_name()
+        ),
         Command::FindPoints { request } => format!(
             "find_points {} {}..{}",
             named(&request.reconstruction_label),

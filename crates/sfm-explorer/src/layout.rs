@@ -182,20 +182,22 @@ pub(crate) enum Home {
 const GROUPS: [&[Tab]; 4] = [
     &[Tab::SceneGraph, Tab::BackgroundTasks],
     &[Tab::Viewer3D, Tab::ImageDetail, Tab::TrackTable],
-    &[Tab::TrackView, Tab::IntrinsicsDetail],
+    &[Tab::TrackView, Tab::MeasurementView, Tab::IntrinsicsDetail],
     &[Tab::ImageBrowser, Tab::ActionLog, Tab::EditHistory],
 ];
 
 impl Tab {
     /// Every panel, in the Panels menu's order: the default layout's order for
-    /// the first nine, then the Track Table, the tenth panel, last.
-    pub(crate) const ALL: [Tab; 10] = [
+    /// the first ten, Measurement View after Track View, then the Track Table,
+    /// the eleventh panel, last.
+    pub(crate) const ALL: [Tab; 11] = [
         Tab::SceneGraph,
         Tab::BackgroundTasks,
         Tab::Viewer3D,
         Tab::ImageBrowser,
         Tab::ImageDetail,
         Tab::TrackView,
+        Tab::MeasurementView,
         Tab::IntrinsicsDetail,
         Tab::ActionLog,
         Tab::EditHistory,
@@ -215,6 +217,7 @@ impl Tab {
             Tab::ImageBrowser => "image_browser",
             Tab::ImageDetail => "image_detail",
             Tab::TrackView => "track_view",
+            Tab::MeasurementView => "measurement_view",
             Tab::IntrinsicsDetail => "camera_intrinsics",
             Tab::ActionLog => "action_log",
             Tab::EditHistory => "edit_history",
@@ -254,10 +257,12 @@ impl Tab {
                 edge: Split::Below,
                 share: 0.20,
             },
-            Tab::ImageDetail | Tab::TrackView | Tab::IntrinsicsDetail => Home::Edge {
-                edge: Split::Right,
-                share: 0.33,
-            },
+            Tab::ImageDetail | Tab::TrackView | Tab::MeasurementView | Tab::IntrinsicsDetail => {
+                Home::Edge {
+                    edge: Split::Right,
+                    share: 0.33,
+                }
+            }
         }
     }
 
@@ -283,7 +288,7 @@ impl Tab {
 const LEFT_COLUMN_SPLIT: f32 = 0.72;
 
 impl Default for Layout {
-    /// The stock ten-panel grid:
+    /// The stock eleven-panel grid:
     ///
     /// ```text
     /// ┌────────┬──────────────────────────────────────┬──────────────┐
@@ -300,8 +305,8 @@ impl Default for Layout {
     /// than one tab, and in all three the first is the active one: the bottom
     /// node opens on the Image Browser with the Action Log and the Edit History
     /// behind it, the middle node on the 3D Viewer with Image Detail and the
-    /// Track Table behind it, and the right-hand node on Track View with Camera
-    /// Intrinsics behind it.
+    /// Track Table behind it, and the right-hand node on Track View with
+    /// Measurement View and Camera Intrinsics behind it.
     ///
     /// The viewport and Image Detail share a node because they are the two
     /// large pictures of the same selection and each wants the width: flipping
@@ -336,6 +341,7 @@ impl Default for Layout {
                         ])),
                         second: Box::new(LayoutNode::leaf(&[
                             Tab::TrackView,
+                            Tab::MeasurementView,
                             Tab::IntrinsicsDetail,
                         ])),
                     }),
