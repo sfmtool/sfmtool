@@ -15,8 +15,11 @@
 //! here; reading the rest of that file is the caller's (see `specs/workspace/workspace.md`).
 //! [`upgrade`] brings a version 2 workspace's files to the current file
 //! versions: [`upgrade_workspace`].
+//! [`marker`] writes a new `sfmtool` workspace's `.sfm-workspace.json`
+//! ([`write_sfmtool_workspace_marker`]).
 
 pub mod feature_options;
+pub mod marker;
 pub mod mipmap_options;
 pub mod named_image_lists;
 pub mod upgrade;
@@ -27,6 +30,10 @@ pub use feature_options::{
     feature_prefix_dir, feature_type_for_tool, has_image_to_gray, recorded_image_to_gray,
     tool_image_to_gray, FeatureOptionsError, COLMAP_TOOL, OPENCV_TOOL, SFMTOOL_TOOL,
     UNDISTORT_TOOL, WORKSPACE_LAST_RELEASE_READING_VERSION_1, WORKSPACE_VERSION,
+};
+pub use marker::{
+    sfmtool_workspace_marker, write_sfmtool_workspace_marker, SfmtoolWorkspaceOptions,
+    NEW_WORKSPACE_DOUBLE_IMAGE_BELOW_LONG_SIDE,
 };
 pub use mipmap_options::{read_mipmap_options, WorkspaceConfigError};
 pub use named_image_lists::{

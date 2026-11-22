@@ -72,7 +72,8 @@ def init_workspace(
     settings: the tool's default options, the given overrides, and the tool's
     ``image_to_gray`` object, with a new ``feature_prefix_dir`` named from
     them. An existing file is replaced; its folder and the named image lists
-    file stay on disk.
+    file stay on disk. The ``sfmtool`` tool's file is written by
+    ``sfmtool.workspace.write_sfmtool_workspace_marker``.
 
     Args:
         workspace_dir: The SfM workspace directory.
@@ -100,9 +101,12 @@ def init_workspace(
     """
     from sfmtool.sift.extract_colmap import get_colmap_feature_options
     from sfmtool.sift.extract_opencv import get_default_opencv_feature_options
-    from sfmtool.sift.extract_sfmtool import get_default_sfmtool_feature_options
     from sfmtool.workspace import feature_prefix_dir as named_feature_prefix_dir
-    from sfmtool.workspace import feature_type_for_tool
+    from sfmtool.workspace import (
+        feature_type_for_tool,
+        tool_image_to_gray,
+        write_sfmtool_workspace_marker,
+    )
 
     workspace_dir = Path(workspace_dir)
 
@@ -114,12 +118,21 @@ def init_workspace(
                 "image_to_gray and quantize_bits can only be set for sfmtool."
             )
         from sfmtool.sift import ImageToGray
-        from sfmtool.sift.extract_sfmtool import get_default_sfmtool_feature_options
 
         formula = image_to_gray_formula
         if formula is None:
-            formula = get_default_sfmtool_feature_options()["image_to_gray"]["formula"]
-        image_to_gray = ImageToGray(formula, quantize_bits).to_dict()
+            formula = tool_image_to_gray("sfmtool").formula
+        image_to_gray = ImageToGray(formula, quantize_bits)
+
+    if feature_tool.lower() == "sfmtool":
+        # The one writer of a new sfmtool workspace is in Rust, which also
+        # names its features folder.
+        marker = write_sfmtool_workspace_marker(
+            workspace_dir,
+            max_num_features=max_num_features,
+            image_to_gray=image_to_gray,
+        )
+        return json.loads(marker)
 
     workspace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -132,11 +145,6 @@ def init_workspace(
         )
     elif feature_tool.lower() == "opencv":
         feature_options = get_default_opencv_feature_options()
-    elif feature_tool.lower() == "sfmtool":
-        feature_options = get_default_sfmtool_feature_options(
-            max_num_features=max_num_features,
-            image_to_gray=image_to_gray,
-        )
     else:
         raise ValueError(f"Unsupported feature tool: {feature_tool}")
 

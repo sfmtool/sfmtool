@@ -73,6 +73,15 @@ No flag sets it. Editing the key in `.sfm-workspace.json` changes the options
 the next extraction uses, but not the recorded `feature_prefix_dir`, which
 keeps the name of the options `sfm ws init` wrote.
 
+The `sfmtool` tool's file is written by `write_sfmtool_workspace_marker` in
+[workspace/marker.rs](../../../crates/sfmtool-core/src/workspace/marker.rs),
+the one writer of a new `sfmtool` workspace, which Python's `init_workspace`
+calls through its binding and whose options
+`get_default_sfmtool_feature_options` returns. It writes the record as
+Python's `json.dump(record, f, indent=2)` writes it, with LF line breaks on
+every platform. The `colmap` and `opencv` files are written by
+`init_workspace` itself.
+
 `use_gpu` is the one option excluded from the feature-cache hash
 (`feature_prefix_dir`): GPU vs CPU is a hardware/performance choice, so toggling
 it does not change the cache directory.
