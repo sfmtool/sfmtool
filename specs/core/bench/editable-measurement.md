@@ -7,9 +7,10 @@ several steps: a person moves an endpoint, compares the result with the other
 measurements, and only then wants it written into the file. The **editable
 measurement** is a stored measurement taken out of the reconstruction onto the
 bench to be worked on that way, or a new one started from one pixel, and the
-**commit** is the one step that writes it back. It holds only what the file stores of a measurement, so whatever is
-derived from it, such as the 3D position an endpoint lands on, is read again
-against whichever version of the reconstruction the caller stands at.
+**commit** is the one step that writes it back. It holds only what the file
+stores of a measurement, so whatever is derived from it, such as the 3D
+position an endpoint lands on, is read again against whichever version of the
+reconstruction the caller stands at.
 
 The bench and its other kind of item, the editable track, are
 [bench.md](bench.md) and [editable-track.md](editable-track.md). What the file

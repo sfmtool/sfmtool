@@ -322,8 +322,10 @@ pub(crate) fn pixel_text(coordinate: f64) -> String {
 
 /// The widest text a pixel field is sized for, besides the value it holds:
 /// ten digits and a decimal point, which holds the shortest text that reads
-/// back as any `float32` pixel coordinate of a photograph under 100,000 pixels
-/// across (nine significant digits at most, `117.847664`, `0.123456789`).
+/// back as any `float32` pixel coordinate from 0.1 up to 100,000 (nine
+/// significant digits at most, `117.847664`, `0.123456789`). A smaller
+/// coordinate's leading zeros can make its text wider, and the field then
+/// takes the width of the value.
 const PIXEL_FIELD_TEXT: &str = "00000.00000";
 
 /// The width of a pixel field holding `value`: room for

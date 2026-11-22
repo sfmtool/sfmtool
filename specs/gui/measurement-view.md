@@ -521,8 +521,9 @@ commits nothing, as Track View's *Rename* field reads Enter
 focus from egui's memory, which is what the text input takes typing by, and
 not from `Response::has_focus`, which is also false while the window is not
 the operating system's front window, so typing that reaches a field, such as
-an agent's `type_text` into a viewer behind another window, is committed. The panel reports the text and the dock makes
-the step, so a refusal is a failed Action Log row in the step's words.
+an agent's `type_text` into a viewer behind another window, is committed. The
+panel reports the text and the dock makes the step, so a refusal is a failed
+Action Log row in the step's words.
 
 Each commit is one bench step on the focused item, made by a pure core function
 from one `EditableMeasurement` to the next
@@ -649,9 +650,10 @@ number fields, `x` and `y` (`endpoint A pixel x`, `endpoint A pixel y`). A
 field shows its coordinate as the shortest text that reads back as the same
 `float32`, which is how the file stores it (`148.00723`), so a field left as it
 is commits nothing. Each field is wide enough for that text: for eleven
-characters of digits and a decimal point, which hold any such coordinate of a
-photograph under 100,000 pixels across (`117.847664`, `0.123456789`), or for
-the text it holds where that is wider (`measurement_view::pixel_field_width`).
+characters of digits and a decimal point, which hold any such coordinate from
+0.1 up to 100,000 pixels (`117.847664`, `0.123456789`), or for the text it
+holds where that is wider, as a smaller coordinate's leading zeros can make it
+(`measurement_view::pixel_field_width`).
 
 - **Picking another image** in the drop-down is one step that sets that image
   and the pixel the endpoint holds; picking the image it holds asks for
