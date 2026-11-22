@@ -172,7 +172,8 @@ pub(crate) enum Command {
         endpoint: crate::measurements::EndpointSide,
     },
     /// A point's reference pixel: the image and keypoint of its reference
-    /// observation, which the 3D view's point menu sets an endpoint to.
+    /// observation, which the 3D view's point menu sets an endpoint to where
+    /// its right-click was not on the point's drawn patch.
     GetPointReferencePixel {
         reconstruction_label: String,
         point: crate::goto_point::PointQuery,

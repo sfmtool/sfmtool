@@ -21,8 +21,8 @@ panel's **Edit** box shows that item with its readings taken live from it, and
 sets the item's label and its stated distance, and each endpoint block sets
 its endpoint's image and pixel in fields or switches it to another photograph
 that shows the same place. Image Detail's context menu and the 3D view's point
-menu set an endpoint too, to a pixel of the photograph shown or to a point's
-reference pixel. Each is a bench step. A new measurement starts from the same
+menu set an endpoint too, to a pixel of the photograph shown or to the pixel
+that shows the spot right-clicked on a point's patch. Each is a bench step. A new measurement starts from the same
 two menus, with its first endpoint at the pixel or point they were opened on,
 and is finished with the same steps. Deleting a stored measurement is a direct
 edit from its row's menu. The 3D view and Image Detail draw the selected
@@ -95,8 +95,8 @@ impl AppState {
     /// View raised beside `from`; a refusal one failed row.
     pub(crate) fn start_measurement_here(&mut self, image: ImageRef, pixel: [f64; 2],
                                          from: Tab);
-    /// The 3D view's: the same, at the point's reference pixel.
-    pub(crate) fn start_measurement_at_point(&mut self, point: PointRef, from: Tab);
+    /// The 3D view's: the same, at the pixel that shows the spot right-clicked.
+    pub(crate) fn start_measurement_at_point(&mut self, spot: PointSpot, from: Tab);
     /// Why the 3D view's entry is greyed, by node.
     pub(crate) fn measurement_start(&self) -> MeasurementStart;
     pub(crate) fn set_measurement_editing(&mut self, id: ReconId, on: bool)
@@ -120,9 +120,9 @@ impl AppState {
     /// The fields and Image Detail's Set Endpoint … Here: the step with
     /// `EndpointMove::Set`, a refusal one failed row.
     pub(crate) fn set_endpoint(&mut self, set: &EndpointSet);
-    /// The 3D view's Set Endpoint … Here: the same, at the point's reference
-    /// pixel.
-    pub(crate) fn set_endpoint_at_point(&mut self, point: PointRef, side: EndpointSide);
+    /// The 3D view's Set Endpoint … Here: the same, at the pixel that shows the
+    /// spot right-clicked.
+    pub(crate) fn set_endpoint_at_point(&mut self, spot: PointSpot, side: EndpointSide);
     /// The focused measurement item as the two menus see it, or `None`.
     pub(crate) fn endpoint_target(&self) -> Option<EndpointTarget>;
     pub(crate) fn delete_measurement(&mut self, measurement: MeasurementRef)
@@ -143,10 +143,23 @@ pub(crate) fn distance_rows(measurements: &MeasurementsData) -> Vec<DistanceRow>
 /// A measurement item's live readings against a version.
 pub(crate) fn item_reading(edited: &EditedReconstruction,
                            item: &EditableMeasurement) -> ItemReading;
-/// A point's reference pixel (§ "A point's reference pixel"), or the
+/// A point's reference pixel (§ "The spot under the pointer"), or the
 /// sentence saying why it has none.
 pub(crate) fn reference_pixel(edited: &EditedReconstruction, point: u32)
     -> Result<ReferencePixel, String>;
+/// Where on a point the 3D view's point menu was opened: the point, and the
+/// texel of its drawn square under the pointer, or `None`.
+pub(crate) struct PointSpot { pub(crate) point: PointRef, pub(crate) texel: Option<[f64; 2]> }
+/// The pixel of the reference image that shows `texel`, else the reference
+/// pixel; refused as `reference_pixel` is.
+pub(crate) fn spot_pixel(edited: &EditedReconstruction, point: u32,
+                         texel: Option<[f64; 2]>) -> Result<ReferencePixel, String>;
+/// The texel of a patch frame's square, drawn at `surfel_scale`, that a ray
+/// meets, in the reconstruction's own coordinates; `None` off the square, on
+/// its back, or grazing it.
+pub(crate) fn texel_under_ray(patch_frame: &OrientedPatch, origin: Point3<f64>,
+                              direction: Vector3<f64>, surfel_scale: f64)
+    -> Option<[f64; 2]>;
 
 // bench/measurement.rs
 /// What a gesture that sets an endpoint outright asks for.
@@ -162,8 +175,8 @@ pub(crate) struct EndpointTarget { pub(crate) node: ReconId, pub(crate) item: St
 impl EndpointTarget {
     /// Why the entries are greyed on `node`, or `None`.
     pub(crate) fn refusal_on(&self, node: ReconId) -> Option<String>;
-    /// The 3D view's entries: `point`'s reference pixel, or why not.
-    pub(crate) fn at_point(&self, scene: &[SceneNode], point: PointRef)
+    /// The 3D view's entries: the pixel that shows `spot`, or why not.
+    pub(crate) fn at_point(&self, scene: &[SceneNode], spot: PointSpot)
         -> Result<ReferencePixel, String>;
 }
 /// "New Measurement from Here", in both menus.
@@ -172,8 +185,8 @@ pub(crate) const NEW_MEASUREMENT_HERE_LABEL: &str;
 /// Measurement from Here sees it.
 pub(crate) struct MeasurementStart { .. }
 impl MeasurementStart {
-    /// `point`'s reference pixel, or why the entry is greyed.
-    pub(crate) fn at_point(&self, scene: &[SceneNode], point: PointRef)
+    /// The pixel that shows `spot`, or why the entry is greyed.
+    pub(crate) fn at_point(&self, scene: &[SceneNode], spot: PointSpot)
         -> Result<ReferencePixel, String>;
 }
 
@@ -211,11 +224,12 @@ MeasurementGesture::SelectEndpoint(DrawnId::Stored(MeasurementRef::distance(id, 
 // applied as state.select_endpoint(MeasurementRef::distance(id, 2), EndpointSide::B)
 ```
 
-The reference pixel is in
+The reference pixel and the spot's pixel are in
 [measurements.rs](../../crates/sfm-explorer/src/measurements.rs) rather than
-beside the 3D view's menu because three things read it: the menu's *Set
-Endpoint … Here* entries, its *New Measurement from Here*, and the wire's
-`get_point_reference_pixel`.
+beside the 3D view's menu because three things read the reference pixel: the
+menu's *Set Endpoint … Here* entries, its *New Measurement from Here*, and the
+wire's `get_point_reference_pixel`. The texel-to-pixel mapping itself is
+core's `texel_pixel`, the one `endpoint_views` offers its views through.
 
 The reference carries the kind because each kind's rows are numbered within
 their own subsection of the file, and a later kind would otherwise reuse the
@@ -731,7 +745,9 @@ since the pixel is what the file stores.
 **In the 3D view.** With a measurement item focused, a right-click on a point,
 which selects it (G3) and keeps the item focused since the point is on the
 item's node, offers the same two entries after the point's own, which set the
-endpoint to the point's **reference pixel** (§ "A point's reference pixel")
+endpoint to the pixel that shows the **spot right-clicked** on the point's
+patch, or to the point's reference pixel where the right-click was not on its
+drawn patch (§ "The spot under the pointer")
 ([viewport-navigation.md](viewport-navigation.md) § "The point context menu").
 
 The entries of both menus are offered only while a measurement item is
@@ -746,17 +762,50 @@ photograph of the selected node, so the menus meet this last case only on the
 frame a right-click in the 3D view lands on a point of another node; once that
 point is selected no measurement item is focused, and the entries are gone.
 
-#### A point's reference pixel
+#### The spot under the pointer
 
 A point in the 3D view is not a pixel, and a measurement's endpoint must be
-one. The pixel is taken from the point's **reference observation**
-(`tracks/reference_observations`): the image of that observation, and its
-keypoint (`measurements::reference_pixel`). The keypoint is where the
-reference observation's square is centred, so the endpoint resolves to texel
-`(0, 0)` of the point's own patch, which is the point itself, through the
-observation its bitmap was rendered from. The reference is the one the point
-holds in the version on screen, a pick only the display render made included,
-since that is the observation the bitmap on screen was rendered from.
+one. The pixel is taken in the image of the point's **reference observation**
+(`tracks/reference_observations`), the observation its bitmap on screen was
+rendered from. The reference is the one the point holds in the version on
+screen, a pick only the display render made included.
+
+**The spot.** On the frame the right-click lands, the viewport reads where the
+pointer is on the point's drawn patch (`Viewer3D::texel_under_pointer`): its
+pick ray, taken back through the node's display transform as the bench
+handles' readings are, is met with the plane of the point's patch frame
+(`measurements::texel_under_ray`). The surfel is drawn at the HUD's patch size,
+`2^patch_size_log2` times the stored patch, with its bitmap stretched over it,
+so the hit is divided by that scale: the texel `(s, t)` is the one the bitmap
+shows under the pointer, in the units the resolver and `OrientedPatch` use,
+each in `[-1, 1]`. The menu records the texel with the point
+(`measurements::PointSpot`) on that frame, as Image Detail records its
+`context_menu_pixel`, because the entries are chosen on later frames, after
+the pointer has moved. An entry then maps the texel into the reference
+image (`measurements::spot_pixel`): the pixel where the reference
+observation's square, the patch slid onto its keypoint and seen through that
+image's own intrinsics, holds the texel, core's `texel_pixel`, the mapping
+`endpoint_views` offers its views through. The endpoint resolves back to the
+same point at that texel, unless another square in that image holds the pixel
+and wins the ranking.
+
+**The reference pixel** is what the entries take where there is no spot: the
+image of the reference observation and its keypoint
+(`measurements::reference_pixel`). The keypoint is where the reference
+observation's square is centred, so the endpoint resolves to texel `(0, 0)` of
+the point's own patch, which is the point itself. The entries fall back to it
+where:
+
+- the pointer is not on the point's drawn square: the node draws its points as
+  dots (its style is Dots, its points are hidden, or the patch opacity is 0),
+  or the click landed on the point's dot outside the square;
+- the ray sees the square's back, which the viewport culls, or meets its plane
+  at under 5° (the bench's `MIN_PLANE_ANGLE_DEG`): a pixel of pointer travel
+  then crosses more than eleven pixels' worth of the square, so the texel under
+  the pointer is not the one aimed at, the reason the bench's plane handles
+  refuse a press under the same angle;
+- the texel's place falls outside the reference image, or the square faces
+  away from that image's camera.
 
 The 3D view's entries are greyed, with hover text saying why, where the point
 has no reference pixel, asked in this order:
@@ -768,7 +817,7 @@ has no reference pixel, asked in this order:
 - it is a point at infinity: "This point is at infinity, so no distance can be
   measured to it."
 
-The entry does not check that the pixel resolves back to the same point: a
+The entries do not check that the pixel resolves back to the same point: a
 neighbouring square can hold the same pixel and win the ranking. The endpoint
 block then shows which point it resolved to, as for any endpoint.
 
@@ -819,8 +868,9 @@ menus that set an endpoint, and finished with the steps above.
 **Starting it.** `New Measurement from Here` is in Image Detail's context menu,
 at the pixel the menu was opened at of the photograph shown
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "Image Detail:
-the context menu"), and in the 3D view's point menu, at the point's reference
-pixel (§ "A point's reference pixel",
+the context menu"), and in the 3D view's point menu, at the pixel that shows
+the spot right-clicked on the point's patch, or its reference pixel off the
+patch (§ "The spot under the pointer",
 [viewport-navigation.md](viewport-navigation.md) § "The point context menu"),
 whose right-click selects the point first (G3). Any pixel of the photograph is
 taken; it does not have to resolve, since the pixel is the stored measurement.
@@ -1004,10 +1054,13 @@ The panel's content is reachable over MCP ([mcp-server.md](mcp-server.md)):
   sentence (§ "Switching an endpoint's image"); it is the step the block's
   fields and the two menus' *Set Endpoint … Here* make.
 - `get_point_reference_pixel` gives a point's reference pixel, refused in the
-  3D view's entries' words (§ "A point's reference pixel"), so an agent places
-  an endpoint from a point as that menu does, passing its `camera_image` and
-  `pixel` to `set_bench_measurement_endpoint`, or starts a measurement there,
-  passing them to `create_bench_measurement`.
+  3D view's entries' words (§ "The spot under the pointer"), so an agent places
+  an endpoint from a point as that menu does for a right-click off the point's
+  drawn patch, passing its `camera_image` and `pixel` to
+  `set_bench_measurement_endpoint`, or starts a measurement there, passing them
+  to `create_bench_measurement`. It has no pointer, so it gives no spot on the
+  patch; a right-click through `click` in the 3D view does, as a person's
+  does.
 - `create_bench_measurement` is *New Measurement from Here* without the raise:
   the item with endpoint A at a pixel of a camera image, put on the bench and
   focused, refused in the panel's words (§ "Creating a measurement").
@@ -1181,7 +1234,9 @@ at-infinity case is covered by the Rust tests.
   selected and offering the two entries after the point's own with a
   measurement item focused, and not without; an entry reporting its endpoint
   and point; both greyed, asking for nothing, on a point with no reference
-  pixel. (`bench/measurement/tests.rs`): the point menu's selection keeping
+  pixel; each entry setting its endpoint to the pixel that shows the spot
+  right-clicked under a display transform, resolving back to the point at that
+  texel. (`bench/measurement/tests.rs`): the point menu's selection keeping
   the item focused; *Set Endpoint B Here* moving B to the reference pixel in
   one step that leaves the node clean; *Set Endpoint A Here* placing an
   endpoint not placed; a point with no reference pixel a failed row; the
@@ -1202,17 +1257,27 @@ at-infinity case is covered by the Rust tests.
   with nothing focused and greyed while busy and on a view-only bench.
   (`viewer_3d/tests.rs`): the entry after the point's own, a click reporting
   the gesture, and greyed, asking for nothing, on a point with no reference
-  pixel and on a busy node. (`measurement_view/tests.rs`): the new item's
+  pixel and on a busy node; the texel of the spot right-clicked recorded on
+  the frame the menu opens, carried by the entry chosen after the pointer has
+  moved, and the measurement started at the pixel that shows it, resolving
+  back to the point at that texel under a display transform; the point's
+  centre taken past the square's edge, in the Dots style and at zero patch
+  opacity, and the texel read at the patch size drawn. (`measurement_view/tests.rs`): the new item's
   unplaced block with its instructions, the empty header fields, the result's
   line and *Commit*'s refusal following B and the distance; and a pixel field
   wide enough for `117.847664`. (`mcp/tests/measurements.rs`):
   `create_bench_measurement` starting an item, focused with no panel raised,
   that the other tools finish and commit as a new row, and its refusal of a
   pixel outside the image.
-- **The reference pixel** (`measurements/tests.rs`): the keypoint of the
-  reference observation in its own image, which resolves alone to texel
-  `(0, 0)` of the point's patch; and the three refusals, with no column at all
-  counted as no reference observation.
+- **The reference pixel and the spot** (`measurements/tests.rs`): the
+  keypoint of the reference observation in its own image, which resolves alone
+  to texel `(0, 0)` of the point's patch; and the three refusals, with no
+  column at all counted as no reference observation. The texel a ray meets on
+  a tilted square at any drawn size; none off the square, from behind, away
+  from it, at infinity, under the grazing bar and on degenerate input; the
+  spot's pixel resolving to its point at its texel, and the reference pixel
+  where the texel's place is off the reference image, on a square facing away
+  from its camera, and outside the square, with the three refusals kept.
 - **`ui_basic`**: the panel opens from the Panels menu; a double-click on a
   Measurements row puts the measurement on the bench and raises Measurement
   View on the item, with its image drop-down and pixel fields, and after its

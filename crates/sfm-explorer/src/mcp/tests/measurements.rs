@@ -576,8 +576,9 @@ fn the_endpoint_tools_refuse_in_the_panel_s_words() {
 
 /// `get_point_reference_pixel` gives a point's reference pixel, named by
 /// index or by id, which `set_bench_measurement_endpoint` then places an
-/// endpoint at as the 3D view's menu does; a point with no reference pixel
-/// is refused in the menu entry's sentence.
+/// endpoint at as the 3D view's menu does for a right-click off the point's
+/// drawn patch; a point with no reference pixel is refused in the menu
+/// entry's sentence.
 #[test]
 fn get_point_reference_pixel_gives_the_pixel_the_point_menu_takes() {
     use crate::measurements::{AT_INFINITY_FOR_PIXEL, NO_REFERENCE_FOR_PIXEL};

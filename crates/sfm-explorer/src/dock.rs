@@ -251,6 +251,11 @@ impl TabContext<'_> {
         self.viewer_3d.endpoint_target = self.state.endpoint_target();
         // Why the point menu's New Measurement from Here is refused, by node.
         self.viewer_3d.measurement_start = self.state.measurement_start();
+        // The size surfels are drawn at, which the point menu reads the
+        // texel under the pointer against; none at zero opacity, where every
+        // node draws dots (`NodeDisplay::of`).
+        self.viewer_3d.surfel_scale = (self.state.patch_opacity > 0.0)
+            .then(|| 2f64.powf(f64::from(self.state.patch_size_log2)));
         // The measurements it draws, with its own Show all measurements.
         self.viewer_3d.measurements = self
             .state

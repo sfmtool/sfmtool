@@ -911,8 +911,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           commit appends one; place endpoint B with \
                           set_bench_measurement_endpoint and give the stated distance with \
                           set_bench_measurement_distance before commit_bench_measurement. To \
-                          start from a 3D point, as the 3D view's point menu does, pass the \
-                          camera_image and pixel get_point_reference_pixel gives. Refused, in \
+                          start from a 3D point, as the 3D view's point menu does on a \
+                          right-click off the point's drawn patch, pass the camera_image and \
+                          pixel get_point_reference_pixel gives. Refused, in \
                           the commit's words, for a pixel outside [0, width) x [0, height) of \
                           the image, on a sift_files reconstruction (view-only bench) and while \
                           a background task holds the node. The reply names the item and \

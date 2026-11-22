@@ -150,6 +150,15 @@ pub fn endpoint_views(
     pixel: [f64; 2],
     options: &MeasurementEndpointOptions,
 ) -> Result<Vec<EndpointView>, EndpointRefusal>;
+/// The pixel of observation `observation`'s image where its square holds
+/// texel `patch_coords` of point `point`'s patch; `None` where a view of it
+/// would be dropped.
+pub fn texel_pixel(
+    edited: &EditedReconstruction,
+    point: u32,
+    observation: usize,
+    patch_coords: [f64; 2],
+) -> Option<[f64; 2]>;
 ```
 
 `resolve_distance_measurements` reads the value's measurements
@@ -402,6 +411,17 @@ point's track.
 there is no texel to carry anywhere, and the caller shows the same sentence
 for both.
 
+**One observation and one texel.** `texel_pixel` is the same mapping for a
+texel that did not come from a pixel: the pixel of observation `k`'s image
+that shows texel `(s, t)` of the point's patch, `None` where a view of it would
+be dropped, and also for a texel outside `[-1, 1]²` or not a number, which no
+square holds. SfM Explorer's 3D view maps the texel under the pointer on a
+point's drawn patch into its reference image with it, so an endpoint taken
+there resolves to the spot clicked
+([../../gui/measurement-view.md](../../gui/measurement-view.md) § "The spot
+under the pointer"). `endpoint_views` builds each view through the same
+private function, so the two cannot disagree.
+
 **Cost of a call.** One pass over the live points gathers every image's
 observations, as `(point, k)` lists in the order the resolver visits them.
 The endpoint and each view are then resolved against their own image's list
@@ -462,6 +482,11 @@ on synthetic reconstructions of two posed cameras and a few patches:
   its stored `ℓ`; the resolver at each finds the same point and texel.
 - A view whose texel lands outside its image, and one whose square faces away
   from its camera, are dropped.
+- `texel_pixel` lands where the square slid onto each observation's keypoint
+  holds the texel, the centre texel on the keypoint, and the resolver there
+  finds the same point and texel; it answers `None` for a texel outside the
+  square or not a number, a point or observation that does not exist, a place
+  off the image, and a square seen from behind.
 - A view whose pixel another square holds and wins there resolves elsewhere.
 - Every candidate is offered, the chosen one's views first; the views refuse as
   the resolver does.

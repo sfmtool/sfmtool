@@ -382,7 +382,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           reference observation (tracks/reference_observations, the observation \
                           its patch bitmap is rendered from), which is what Set Endpoint A Here \
                           and Set Endpoint B Here in the 3D view's point menu set a measurement \
-                          endpoint to. The keypoint is the centre of that observation's square, \
+                          endpoint to, and New Measurement from Here starts one at, when the \
+                          right-click that opened the menu was not on the point's drawn patch; \
+                          on the patch they take the pixel of the same image that shows the spot \
+                          clicked. The keypoint is the centre of that observation's square, \
                           so an endpoint there resolves to texel (0, 0) of the point's own patch \
                           wherever no other square holding the pixel wins. Replies with point \
                           and point_id, observation (the reference observation's index in the \
