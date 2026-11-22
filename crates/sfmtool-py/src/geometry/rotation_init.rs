@@ -9,7 +9,7 @@ use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArr
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use sfmtool_core::geometry::rotation_init as core_rotation_init;
+use sfmtool_core::geometry::{rotation_init as core_rotation_init, RotationInitOptions};
 
 /// Build an initial multi-camera reconstruction from cluster tracks by
 /// far-field rotation initialization (see ``specs/core/geometry/rotation-init.md``).
@@ -96,10 +96,13 @@ pub fn rotation_init<'py>(
         ));
     }
 
+    let options = RotationInitOptions {
+        seed,
+        min_images,
+        max_images,
+    };
     let result = py.detach(move || {
-        core_rotation_init(
-            &clusters, &images, &positions, width, height, f0, seed, min_images, max_images,
-        )
+        core_rotation_init(&clusters, &images, &positions, width, height, f0, &options)
     });
     let Some(out) = result else {
         return Ok(None);

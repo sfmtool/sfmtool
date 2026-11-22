@@ -29,8 +29,8 @@ triangulated points) for a caller's refinement machinery.
   displacement gate in § 1 scales by.
 - A focal `f0` in pixels, shared by every image, typically a focal-vote
   consensus.
-- A `seed` for the homography RANSAC, and the core's size bounds
-  `min_images` and `max_images`.
+- `RotationInitOptions`: a `seed` for the homography RANSAC, and the
+  core's size bounds `min_images` and `max_images`.
 
 The kernel models every image as one distortion-free pinhole camera, a
 `SimplePinhole` at `f0` with its principal point at the image centre, and
@@ -188,6 +188,12 @@ staged bundle adjustment ([bundle-adjustment.md](bundle-adjustment.md)).
 
 ```rust
 // sfmtool_core::geometry::rotation_init
+pub struct RotationInitOptions {
+    pub seed: u64,         // default 0
+    pub min_images: usize, // DEFAULT_MIN_IMAGES = 8
+    pub max_images: usize, // DEFAULT_MAX_IMAGES = 14
+}
+
 pub fn rotation_init(
     cluster_indexes: &[u32],
     image_indexes: &[u32],
@@ -195,11 +201,14 @@ pub fn rotation_init(
     width: u32,
     height: u32,
     f0: f64,
-    seed: u64,
-    min_images: usize,     // DEFAULT_MIN_IMAGES = 8
-    max_images: usize,     // DEFAULT_MAX_IMAGES = 14
+    options: &RotationInitOptions,
 ) -> Option<RotationInit>
 ```
+
+The observations, image size and focal describe the capture and have no
+default, so they stay arguments. `RotationInitOptions` holds the caller's
+choices of how the call runs, and its `Default` holds the values above. The
+binding keeps them as keyword arguments with the same defaults.
 
 ```python
 rotation_init(cluster_indexes, image_indexes, positions_xy,

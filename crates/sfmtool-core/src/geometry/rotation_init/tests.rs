@@ -201,9 +201,11 @@ fn run(scene: &Scene, seed: u64, min_images: usize, max_images: usize) -> Option
         W,
         H,
         F0,
-        seed,
-        min_images,
-        max_images,
+        &RotationInitOptions {
+            seed,
+            min_images,
+            max_images,
+        },
     )
 }
 
@@ -466,7 +468,16 @@ fn all_parallax_scene_returns_none() {
         }
         next_cid += 1;
     }
-    assert!(rotation_init(&cluster, &image, &pos, W, H, F0, 0, 8, 14).is_none());
+    assert!(rotation_init(
+        &cluster,
+        &image,
+        &pos,
+        W,
+        H,
+        F0,
+        &RotationInitOptions::default()
+    )
+    .is_none());
 }
 
 #[test]
@@ -491,9 +502,27 @@ fn determinism_same_seed() {
 
 #[test]
 fn empty_and_invalid_inputs_return_none() {
-    assert!(rotation_init(&[], &[], &[], W, H, F0, 0, 8, 14).is_none());
+    assert!(rotation_init(&[], &[], &[], W, H, F0, &RotationInitOptions::default()).is_none());
     // Mismatched lengths.
-    assert!(rotation_init(&[0, 0], &[0], &[[0.0, 0.0]; 2], W, H, F0, 0, 8, 14).is_none());
+    assert!(rotation_init(
+        &[0, 0],
+        &[0],
+        &[[0.0, 0.0]; 2],
+        W,
+        H,
+        F0,
+        &RotationInitOptions::default()
+    )
+    .is_none());
     // Non-positive focal.
-    assert!(rotation_init(&[0, 0], &[0, 1], &[[0.0, 0.0]; 2], W, H, 0.0, 0, 8, 14).is_none());
+    assert!(rotation_init(
+        &[0, 0],
+        &[0, 1],
+        &[[0.0, 0.0]; 2],
+        W,
+        H,
+        0.0,
+        &RotationInitOptions::default()
+    )
+    .is_none());
 }
