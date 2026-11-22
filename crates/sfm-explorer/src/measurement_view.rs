@@ -1443,7 +1443,15 @@ fn show_unplaced(
                 .sense(egui::Sense::click()),
             ),
         );
-        targets.push(ui.add(egui::Label::new(place_instruction(side)).sense(egui::Sense::click())));
+        // In a layout of its own that does not justify: a block in one of two
+        // columns is laid out justified, and a label there spreads each
+        // wrapped line to the column's width with wide gaps between its words.
+        targets.push(
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.add(egui::Label::new(place_instruction(side)).sense(egui::Sense::click()))
+            })
+            .inner,
+        );
         if let Some(refusal) = &switch {
             button = Some(switch_button(ui, refusal.clone()));
         }

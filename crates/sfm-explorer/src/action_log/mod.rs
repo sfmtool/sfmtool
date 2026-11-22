@@ -529,11 +529,18 @@ impl ActionLog {
     /// Whether a widget's frame changed its value with the pointer or the
     /// keyboard on it: the test [`ActionLog::changed`] applies before it
     /// records, for a caller that writes the entry itself.
+    ///
+    /// The keyboard is on the widget when egui's memory gives it the focus,
+    /// which is what a text input or a `DragValue` takes typing by, and not
+    /// when [`egui::Response::has_focus`] says so: that is also false while the
+    /// window is not the operating system's front window, so typing that
+    /// reaches a field of a viewer behind another window, such as an agent's
+    /// `type_text`, would change the value and record nothing.
     pub(crate) fn is_action(response: &egui::Response) -> bool {
         let touched = response.is_pointer_button_down_on()
             || response.clicked()
             || response.drag_stopped()
-            || response.has_focus();
+            || response.ctx.memory(|memory| memory.has_focus(response.id));
         response.changed() && touched
     }
 

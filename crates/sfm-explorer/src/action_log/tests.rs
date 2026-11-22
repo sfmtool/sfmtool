@@ -2165,3 +2165,69 @@ fn a_model_switch_row_has_a_glyph_for_every_character_of_its_tooltip() {
         );
     }
 }
+
+/// One headless frame of a single-line text field over `text`, in a window
+/// that does not have the operating system's focus: whether the field's frame
+/// was an action, and where the field was drawn.
+fn unfocused_field_frame(
+    ctx: &egui::Context,
+    text: &mut String,
+    events: Vec<egui::Event>,
+) -> (bool, bool, egui::Rect) {
+    let raw = egui::RawInput {
+        focused: false,
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(400.0, 200.0),
+        )),
+        events,
+        ..Default::default()
+    };
+    let mut out = None;
+    crate::test_support::run_frame_headless(ctx, raw, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
+            let response = ui.text_edit_singleline(text);
+            out = Some((
+                response.changed(),
+                ActionLog::is_action(&response),
+                response.rect,
+            ));
+        });
+    });
+    out.expect("the field ran")
+}
+
+/// Typing into a field of a viewer behind another window, as an agent's
+/// `type_text` does, is an action: the field has the keyboard by egui's
+/// memory, though `Response::has_focus` is false while the window is not the
+/// operating system's front window.
+#[test]
+fn typing_into_a_field_of_a_window_behind_another_is_an_action() {
+    let ctx = egui::Context::default();
+    let mut text = String::new();
+    let (_, _, rect) = unfocused_field_frame(&ctx, &mut text, Vec::new());
+    let at = rect.center();
+    let press = |pressed| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    };
+    unfocused_field_frame(&ctx, &mut text, vec![egui::Event::PointerMoved(at)]);
+    unfocused_field_frame(&ctx, &mut text, vec![press(true)]);
+    unfocused_field_frame(&ctx, &mut text, vec![press(false)]);
+    // The pointer leaves the field, so only the keyboard is on it.
+    unfocused_field_frame(
+        &ctx,
+        &mut text,
+        vec![egui::Event::PointerMoved(egui::pos2(390.0, 190.0))],
+    );
+    let (changed, action, _) =
+        unfocused_field_frame(&ctx, &mut text, vec![egui::Event::Text("42".to_string())]);
+    assert_eq!(text, "42", "the typing reached the field");
+    assert!(changed, "the field reported the change");
+    assert!(action, "a change typed into the field is an action");
+    // A frame that changes nothing is not one, focus or no focus.
+    let (changed, action, _) = unfocused_field_frame(&ctx, &mut text, Vec::new());
+    assert!(!changed && !action);
+}

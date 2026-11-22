@@ -1354,3 +1354,55 @@ fn a_field_takes_typing_while_the_window_lacks_focus() {
         );
     }
 }
+
+/// The galley painted for `text` in one frame of the panel.
+fn painted_galley(
+    panel: &mut MeasurementView,
+    ctx: &egui::Context,
+    state: &AppState,
+    text: &str,
+) -> Option<std::sync::Arc<egui::Galley>> {
+    fn find(shape: &egui::Shape, text: &str) -> Option<std::sync::Arc<egui::Galley>> {
+        match shape {
+            egui::Shape::Text(shape) if shape.galley.text() == text => Some(shape.galley.clone()),
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| find(s, text)),
+            _ => None,
+        }
+    }
+    let mut output = ctx.run_ui(input(Vec::new()), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
+            panel.show(ui, state);
+        });
+    });
+    output.textures_delta.clear();
+    output.shapes.iter().find_map(|c| find(&c.shape, text))
+}
+
+/// Endpoint B's instruction wraps as a paragraph does where the blocks are side
+/// by side: each glyph follows the one before it by that glyph's own advance,
+/// with no gap spread between the words to fill the column.
+#[test]
+fn an_unplaced_endpoint_s_instruction_is_not_justified() {
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .start_measurement(ImageRef::new(id, 0), [100.0, 50.0])
+        .unwrap();
+    let (mut panel, ctx) = settled(&state);
+    let side_by_side = panel.block_rect(EndpointSide::A).unwrap().top()
+        == panel.block_rect(EndpointSide::B).unwrap().top();
+    assert!(side_by_side, "the blocks are in two columns at this width");
+    let instruction = place_instruction(EndpointSide::B);
+    let galley = painted_galley(&mut panel, &ctx, &state, &instruction).expect("drawn");
+    assert!(galley.rows.len() > 1, "the instruction wraps in its column");
+    for row in &galley.rows {
+        for pair in row.glyphs.windows(2) {
+            let gap = pair[1].pos.x - (pair[0].pos.x + pair[0].advance_width);
+            assert!(
+                gap.abs() < 1.5,
+                "a gap of {gap} after {:?} in {:?}",
+                pair[0].chr,
+                instruction
+            );
+        }
+    }
+}
