@@ -409,7 +409,7 @@ impl MeasurementView {
                 ui.separator();
                 show_item_origin(ui, node, label, &item, origin);
                 self.show_header_fields(ui, state, node, label, &item, response);
-                show_item_median(ui, row.as_ref(), || {
+                show_item_comparison(ui, row.as_ref(), || {
                     let row = row.as_ref()?;
                     let reading = reading.resolved.as_ref()?;
                     measurements::item_scale_comparison(rows, resolved, origin, row, reading)
@@ -835,7 +835,7 @@ pub(crate) fn item_without_result(item: &EditableMeasurement) -> String {
 /// The start of the edited mode's header: the item's bench label and node,
 /// and where it came from. The label and stated distance fields follow
 /// ([`MeasurementView::show_header_fields`]), then the median line
-/// ([`show_item_median`]).
+/// ([`show_item_comparison`]).
 fn show_item_origin(
     ui: &mut egui::Ui,
     node: &SceneNode,
@@ -865,7 +865,7 @@ fn show_item_origin(
 
 /// The end of the edited mode's header: the median line, which compares the
 /// item with the stored measurements other than its origin.
-fn show_item_median(
+fn show_item_comparison(
     ui: &mut egui::Ui,
     row: Option<&DistanceRow>,
     comparison: impl FnOnce() -> Option<measurements::ScaleComparison>,
