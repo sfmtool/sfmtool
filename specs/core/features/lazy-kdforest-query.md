@@ -234,10 +234,10 @@ original SIFT feature indices even though input row IDs are newly dense.
 
 ## One corpus, one search implementation
 
-The format, at version 3, has one storage layout. `KdfWriteOptions::default()`
+The format, at version 4, has one storage layout. `KdfWriteOptions::default()`
 selects the descriptor, tree-chunk, origin, and compression defaults; callers may
-tune block sizes but cannot duplicate vectors per tree. Files of any other
-version are rejected.
+tune block sizes but cannot duplicate vectors per tree. Files of a version the
+reader does not read are rejected.
 
 There is one best-bin-first traversal, result set, dedup set and scalar distance
 implementation. Storage access supplies node data, ordered leaf feature IDs and

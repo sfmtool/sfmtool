@@ -100,10 +100,10 @@ fn tiny_u8_content_hash_is_stable() {
     let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
     let raw = sfmtool_archive_io::read_zst_entry(&mut archive, "content_hash.json.zst").unwrap();
     let hash: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-    // Frozen from the version 3 writer. The whole-file digest depends on
+    // Frozen from the version 4 writer. The whole-file digest depends on
     // packing, node layout and JSON serialization, so a change to any of those
     // lands here first.
-    assert_eq!(hash["content_xxh128"], "cf4fe8eb28d7891f29fe619fe2e60f52");
+    assert_eq!(hash["content_xxh128"], "a3ee89b651a7893abcac397c0825f720");
     // One digest a section, whatever the corpus: nothing in this object is a
     // list, so its size does not grow with the number of blocks or chunks.
     let object = hash.as_object().unwrap();
@@ -560,21 +560,25 @@ fn metadata_version_scalar_and_declared_shape_are_checked() {
     let dir = tempfile::tempdir().unwrap();
     let good = write_tiny_u8(dir.path(), "good.kdf", 1);
 
-    for old_or_future in [1, 99] {
+    for old_or_future in [1, 2, 5, 99] {
         let version = dir.path().join(format!("version-{old_or_future}.kdf"));
         mutate_rehashed(&good, &version, "metadata.json.zst", |raw| {
             let mut value: serde_json::Value = serde_json::from_slice(raw).unwrap();
             value["version"] = old_or_future.into();
             *raw = serde_json::to_vec(&value).unwrap();
         });
-        // A version this build does not write is refused with the remedy in the
-        // message, because rebuilding is the only way past it: there is no
-        // translation from an older shape and none to a newer one.
+        // A version this build does not read is refused with the remedy in the
+        // message, because rebuilding is the only way past it: no release
+        // wrote an older one, and there is no translation to a newer one.
+        let message = format!(
+            "this is a version {old_or_future} index and this build reads versions 3 to 4; rebuild the index"
+        );
+        assert_invalid(open_error(&version), &message);
+        assert_invalid(read_kdf_version(&version).unwrap_err(), &message);
+        assert_invalid(read_kdf_workspace(&version).unwrap_err(), &message);
         assert_invalid(
-            open_error(&version),
-            &format!(
-                "this is a version {old_or_future} index and this build reads version 3; rebuild the index"
-            ),
+            upgrade_kdf(&version, &Progress::none()).unwrap_err(),
+            &message,
         );
     }
 
@@ -582,6 +586,7 @@ fn metadata_version_scalar_and_declared_shape_are_checked() {
     mutate_rehashed(&good, &scalar, "metadata.json.zst", |raw| {
         let mut value: serde_json::Value = serde_json::from_slice(raw).unwrap();
         value["scalar_type"] = "float32".into();
+        value["chunk_layout"][1]["dtype"] = "float32".into();
         *raw = serde_json::to_vec(&value).unwrap();
     });
     assert!(matches!(
@@ -599,6 +604,239 @@ fn metadata_version_scalar_and_declared_shape_are_checked() {
         open_error(&shape),
         "declared chunk bytes disagree with its shape",
     );
+}
+
+/// `metadata.json` of the file at `path`, as JSON.
+fn metadata_json(path: &Path) -> serde_json::Value {
+    serde_json::from_slice(&decode_entry(&read_stored(path), "metadata.json.zst")).unwrap()
+}
+
+/// Write at `older` the version 3 file of the version 4 file at `current`:
+/// the same entries, with no `chunk_layout` and the version 3, and the
+/// digests that cover the metadata recomputed.
+fn as_version_3(current: &Path, older: &Path) {
+    mutate_rehashed(current, older, "metadata.json.zst", |raw| {
+        let mut value: serde_json::Value = serde_json::from_slice(raw).unwrap();
+        value.as_object_mut().unwrap().remove("chunk_layout");
+        value["version"] = 3.into();
+        *raw = serde_json::to_vec(&value).unwrap();
+    });
+}
+
+/// The writer writes the legend the format fixes, naming the scalar type as
+/// the splits' element type.
+#[test]
+fn the_writer_writes_the_chunk_layout_legend() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_tiny_u8(dir.path(), "legend.kdf", 1);
+    let metadata = metadata_json(&path);
+    assert_eq!(metadata["version"], 4);
+    assert_eq!(
+        metadata["chunk_layout"],
+        serde_json::json!([
+            {
+                "name": "nodes",
+                "dtype": "uint32",
+                "shape": [10, "M"],
+                "columns": [
+                    "kind",
+                    "logical_node_id",
+                    "split_dimension",
+                    "left_chunk",
+                    "left_node",
+                    "left_logical_node_id",
+                    "right_chunk",
+                    "right_node",
+                    "right_logical_node_id",
+                    "leaf_start",
+                ],
+            },
+            {"name": "splits", "dtype": "uint8", "shape": ["M"]},
+            {"name": "feature_ids", "dtype": "uint32", "shape": ["P"]},
+        ])
+    );
+
+    let float = dir.path().join("legend-f32.kdf");
+    write_kdf(
+        &float,
+        &tiny_f32(&[0.0, 0.0, 1.0, 1.0, 9.0, 9.0]),
+        None,
+        &KdfWriteOptions::default(),
+        &Progress::none(),
+    )
+    .unwrap();
+    assert_eq!(metadata_json(&float)["chunk_layout"][1]["dtype"], "float32");
+    assert_eq!(read_kdf_version(&float).unwrap(), KDF_FORMAT_VERSION);
+}
+
+/// A version 4 file whose legend is missing or says anything but the fixed
+/// layout is refused, wherever the metadata is read.
+#[test]
+fn a_version_4_file_without_the_fixed_chunk_layout_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let good = write_tiny_u8(dir.path(), "good.kdf", 1);
+    let missing = "a version 4 index must have a chunk_layout";
+    let differs = "chunk_layout does not describe the layout of a uint8 chunk entry";
+    type Edit = fn(&mut serde_json::Value);
+    let cases: [(&str, Edit, &str); 9] = [
+        (
+            "missing",
+            |m| {
+                m.as_object_mut().unwrap().remove("chunk_layout");
+            },
+            missing,
+        ),
+        (
+            "null",
+            |m| m["chunk_layout"] = serde_json::Value::Null,
+            missing,
+        ),
+        (
+            "array-name",
+            |m| m["chunk_layout"][2]["name"] = "ids".into(),
+            differs,
+        ),
+        (
+            "nodes-dtype",
+            |m| m["chunk_layout"][0]["dtype"] = "uint16".into(),
+            differs,
+        ),
+        (
+            "splits-dtype",
+            |m| m["chunk_layout"][1]["dtype"] = "float32".into(),
+            differs,
+        ),
+        (
+            "shape",
+            |m| m["chunk_layout"][0]["shape"] = serde_json::json!(["M", 10]),
+            differs,
+        ),
+        (
+            "column",
+            |m| m["chunk_layout"][0]["columns"][9] = "leaf_end".into(),
+            differs,
+        ),
+        (
+            "order",
+            |m| m["chunk_layout"].as_array_mut().unwrap().swap(1, 2),
+            differs,
+        ),
+        (
+            "extra-array",
+            |m| {
+                m["chunk_layout"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::json!({"name": "pad", "dtype": "uint8", "shape": [0]}))
+            },
+            differs,
+        ),
+    ];
+    for (label, edit, message) in cases {
+        let bad = dir.path().join(format!("legend-{label}.kdf"));
+        mutate_rehashed(&good, &bad, "metadata.json.zst", |raw| {
+            let mut value: serde_json::Value = serde_json::from_slice(raw).unwrap();
+            edit(&mut value);
+            *raw = serde_json::to_vec(&value).unwrap();
+        });
+        assert_invalid(open_error(&bad), message);
+        assert_invalid(read_kdf_version(&bad).unwrap_err(), message);
+        assert_invalid(read_kdf_workspace(&bad).unwrap_err(), message);
+        assert_invalid(verify_kdf::<u8>(&bad, roomy()).unwrap_err(), message);
+    }
+}
+
+/// A version 3 file reads, verifies and answers as the version 4 file it was
+/// made from, and its upgrade is that file's metadata and integrity
+/// directory with every other entry's stored bytes unchanged.
+#[test]
+fn a_version_3_file_reads_and_upgrades_to_what_the_writer_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let generic = write_tiny_u8(dir.path(), "generic.kdf", 2);
+    let sourced = write_sourced(dir.path());
+    let not_rewritten = |entries: &StoredEntries| {
+        let mut kept: StoredEntries = entries
+            .iter()
+            .filter(|(name, _)| name != "metadata.json.zst" && name != "content_hash.json.zst")
+            .cloned()
+            .collect();
+        kept.sort();
+        kept
+    };
+    for current in [generic, sourced] {
+        let older = current.with_extension("v3.kdf");
+        as_version_3(&current, &older);
+        assert!(metadata_json(&older).get("chunk_layout").is_none());
+        assert_eq!(metadata_json(&older)["version"], 3);
+        assert_eq!(read_kdf_version(&older).unwrap(), 3);
+        assert_eq!(
+            read_kdf_workspace(&older).unwrap(),
+            read_kdf_workspace(&current).unwrap()
+        );
+        verify_kdf::<u8>(&older, roomy()).unwrap();
+        let (old_file, new_file) = (
+            KdfFile::<u8>::open(&older, roomy()).unwrap(),
+            KdfFile::<u8>::open(&current, roomy()).unwrap(),
+        );
+        assert_ne!(old_file.content_xxh128(), new_file.content_xxh128());
+        for tree in 0..new_file.tree_count() {
+            for chunk in 0..new_file.chunk_count(tree) {
+                assert_eq!(
+                    format!("{:?}", old_file.decoded_chunk(tree as u32, chunk as u32)),
+                    format!("{:?}", new_file.decoded_chunk(tree as u32, chunk as u32)),
+                );
+            }
+        }
+        for feature in 0..3 {
+            assert_eq!(
+                old_file.vector(feature).unwrap(),
+                new_file.vector(feature).unwrap()
+            );
+        }
+        drop((old_file, new_file));
+
+        let before = read_stored(&older);
+        upgrade_kdf(&older, &Progress::none()).unwrap();
+        assert_eq!(read_kdf_version(&older).unwrap(), KDF_FORMAT_VERSION);
+        verify_kdf::<u8>(&older, roomy()).unwrap();
+        let (upgraded, written) = (read_stored(&older), read_stored(&current));
+        for name in ["metadata.json.zst", "content_hash.json.zst"] {
+            assert_eq!(
+                decode_entry(&upgraded, name),
+                decode_entry(&written, name),
+                "{name}"
+            );
+        }
+        assert_eq!(not_rewritten(&upgraded), not_rewritten(&before));
+
+        // A current file is left byte for byte as it is.
+        let bytes = std::fs::read(&older).unwrap();
+        upgrade_kdf(&older, &Progress::none()).unwrap();
+        assert_eq!(std::fs::read(&older).unwrap(), bytes);
+    }
+}
+
+/// An upgrade asked to stop leaves the version 3 file as it was, and nothing
+/// beside it.
+#[test]
+fn a_cancelled_upgrade_leaves_the_file_as_it_was() {
+    let dir = tempfile::tempdir().unwrap();
+    let current = write_tiny_u8(dir.path(), "current.kdf", 1);
+    let older = dir.path().join("older.kdf");
+    as_version_3(&current, &older);
+    let bytes = std::fs::read(&older).unwrap();
+    let stop = std::sync::atomic::AtomicBool::new(true);
+    let progress = Progress::none().cancelled_by(&stop);
+    assert!(matches!(
+        upgrade_kdf(&older, &progress),
+        Err(KdfError::Cancelled(_))
+    ));
+    assert_eq!(std::fs::read(&older).unwrap(), bytes);
+    let names: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
 }
 
 #[test]

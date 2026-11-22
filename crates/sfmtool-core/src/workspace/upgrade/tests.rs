@@ -190,6 +190,77 @@ fn as_version_15(name: &str, bytes: Vec<u8>) -> Option<(String, Vec<u8>)> {
     Some((name.replace(".float16.", ".float32."), widened))
 }
 
+/// Write a `.kdf` index of three 2-D vectors in one tree at `path`.
+fn write_index(path: &Path) {
+    use sfmtool_kdf_format::*;
+    let data = KdfForestData {
+        vectors: &[0u8, 0, 1, 1, 9, 9],
+        feature_count: 3,
+        dimension: 2,
+        trees: vec![KdfTree {
+            nodes: vec![
+                KdfNode::Internal {
+                    split_dimension: 0,
+                    split: 1,
+                    left: 1,
+                    right: 2,
+                },
+                KdfNode::Leaf { start: 0, len: 2 },
+                KdfNode::Leaf { start: 2, len: 1 },
+            ],
+            feature_ids: vec![0, 1, 2],
+        }],
+        provenance: None,
+        descriptor_order: None,
+    };
+    write_kdf(
+        path,
+        &data,
+        None,
+        &KdfWriteOptions::default(),
+        &Progress::none(),
+    )
+    .unwrap();
+}
+
+/// Rewrite the current `.kdf` index at `path` as the version 3 file of the
+/// same index: `metadata.json` with no `chunk_layout` and the version 3, and
+/// the two digests that cover it recomputed, as the `.kdf` reader checks
+/// them at open.
+fn as_kdf_version_3(path: &Path) {
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+    let metadata = sfmtool_archive_io::read_zst_entry(&mut archive, "metadata.json.zst").unwrap();
+    drop(archive);
+    let mut json: serde_json::Value = serde_json::from_slice(&metadata).unwrap();
+    json.as_object_mut().unwrap().remove("chunk_layout");
+    json["version"] = 3.into();
+    let metadata = serde_json::to_vec(&json).unwrap();
+    let metadata_digest = xxhash_rust::xxh3::xxh3_128(&metadata);
+    rewrite_archive(path, |name, bytes| match name {
+        "metadata.json.zst" => Some((name.to_string(), metadata.clone())),
+        "content_hash.json.zst" => {
+            let mut hashes: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            hashes["metadata_xxh128"] = sfmtool_archive_io::format_hash(metadata_digest).into();
+            // The whole-file digest folds the section digests in the order
+            // the format fixes; this generic index has no images, origins or
+            // geometry sections.
+            let mut sections = sfmtool_archive_io::SectionDigests::new();
+            for field in [
+                "metadata_xxh128",
+                "storage_rows_xxh128",
+                "descriptors_xxh128",
+                "trees_xxh128",
+            ] {
+                sections
+                    .push(sfmtool_archive_io::parse_hash(hashes[field].as_str().unwrap()).unwrap());
+            }
+            hashes["content_xxh128"] = sfmtool_archive_io::format_hash(sections.finish()).into();
+            Some((name.to_string(), serde_json::to_vec(&hashes).unwrap()))
+        }
+        _ => Some((name.to_string(), bytes)),
+    });
+}
+
 fn write_rig(path: &Path) {
     use sfmtool_camrig_format::*;
     let mut parameters = BTreeMap::new();
@@ -242,9 +313,9 @@ fn reconstruction() -> SfmrReconstruction {
     recon
 }
 
-/// The fixture: a version 2 workspace with a current `.sfmr`, `.matches` and
-/// `.camrig`, and a version 15 `.sfmr`, a version 9 `.matches` and a version 1
-/// `.camrig`, which the readers no longer read.
+/// The fixture: a version 2 workspace with a current `.sfmr`, `.matches`,
+/// `.camrig` and `.kdf`, and a version 15 `.sfmr`, a version 9 `.matches` and
+/// a version 1 `.camrig`, which the readers no longer read.
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("ws");
@@ -271,6 +342,7 @@ fn fixture() -> Fixture {
     write_rig(&fixture.path("old.camrig"));
     rewrite_archive(&fixture.path("old.camrig"), relabel(1, |_| false));
     write_rig(&fixture.path("current.camrig"));
+    write_index(&fixture.path("current.kdf"));
     fixture
 }
 
@@ -330,6 +402,7 @@ fn expected_outcomes(fixture: &Fixture) -> Vec<(PathBuf, UpgradeFileKind, &'stat
         ),
         (fixture.path("current.camrig"), Camrig, "already_current"),
         (fixture.path("old.camrig"), Camrig, "not_converted"),
+        (fixture.path("current.kdf"), Kdf, "already_current"),
     ]
 }
 
@@ -694,4 +767,51 @@ fn a_version_16_sfmr_without_keypoints_or_sift_files_fails_in_a_dry_run_as_in_a_
     );
     assert_eq!(reason_of(&dry, &v16), reason);
     assert_eq!(snapshot(&fixture.root), before);
+}
+
+#[test]
+fn a_version_3_kdf_is_upgraded_to_the_current_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("ws");
+    let fixture = Fixture { dir, root };
+    write_workspace_file(&fixture.root, 2);
+
+    let current = fixture.path("current.kdf");
+    write_index(&current);
+    let v3 = fixture.path("index/v3.kdf");
+    std::fs::create_dir_all(v3.parent().unwrap()).unwrap();
+    std::fs::copy(&current, &v3).unwrap();
+    as_kdf_version_3(&v3);
+    assert_eq!(sfmtool_kdf_format::read_kdf_version(&v3).unwrap(), 3);
+    let options = sfmtool_kdf_format::KdfOpenOptions::default();
+    sfmtool_kdf_format::verify_kdf::<u8>(&v3, options.clone()).unwrap();
+
+    let expected = vec![
+        (current.clone(), UpgradeFileKind::Kdf, "already_current"),
+        (v3.clone(), UpgradeFileKind::Kdf, "converted"),
+    ];
+    let before = snapshot(&fixture.root);
+    let dry = run(&fixture, true);
+    assert_eq!(outcomes(&dry), expected);
+    assert_eq!(snapshot(&fixture.root), before);
+
+    let report = run(&fixture, false);
+    assert_eq!(outcomes(&report), expected);
+    // Rewriting an index changes no point ID, so there is no note.
+    assert!(report.notes.is_empty(), "{:?}", report.notes);
+    assert_eq!(
+        sfmtool_kdf_format::read_kdf_version(&v3).unwrap(),
+        sfmtool_kdf_format::KDF_FORMAT_VERSION
+    );
+    sfmtool_kdf_format::verify_kdf::<u8>(&v3, options.clone()).unwrap();
+    // The upgraded index is the index the writer writes.
+    let (upgraded, written) = (
+        sfmtool_kdf_format::KdfFile::<u8>::open(&v3, options.clone()).unwrap(),
+        sfmtool_kdf_format::KdfFile::<u8>::open(&current, options).unwrap(),
+    );
+    assert_eq!(upgraded.content_xxh128(), written.content_xxh128());
+    drop((upgraded, written));
+
+    let again = run(&fixture, false);
+    assert!(again.nothing_to_do(), "{again:?}");
 }

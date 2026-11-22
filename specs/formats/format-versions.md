@@ -20,7 +20,7 @@ Each format crate has one constant for the version its writer writes:
 | `.matches` | [`MATCHES_FORMAT_VERSION`](../../crates/sfmtool-matches-format/src/types.rs) | 10 | 10 |
 | `.sift` | [`SIFT_FORMAT_VERSION`](../../crates/sfmtool-sift-format/src/types.rs) | 2 | 2 |
 | `.camrig` | [`CAMRIG_FORMAT_VERSION`](../../crates/sfmtool-camrig-format/src/types.rs) | 2 | 2 |
-| `.kdf` | [`KDF_FORMAT_VERSION`](../../crates/sfmtool-kdf-format/src/types.rs) | 3 | 3 |
+| `.kdf` | [`KDF_FORMAT_VERSION`](../../crates/sfmtool-kdf-format/src/types.rs) | 4 | 3 |
 
 A version at which something changed that a reader gates on is a constant of
 its own in the format crate, so a later version change does not move the gate,
@@ -34,16 +34,19 @@ ones, which its refusal names ([Dropping a version](#dropping-a-version)):
 `MATCHES_LAST_RELEASE_READING_OLDER_VERSIONS` for `.matches`,
 `SIFT_OLDEST_READ_VERSION` and `SIFT_LAST_RELEASE_READING_OLDER_VERSIONS` for
 `.sift`, and `CAMRIG_OLDEST_READ_VERSION` and
-`CAMRIG_LAST_RELEASE_READING_OLDER_VERSIONS` for `.camrig`.
+`CAMRIG_LAST_RELEASE_READING_OLDER_VERSIONS` for `.camrig`. `.kdf` holds
+`KDF_OLDEST_READ_VERSION` alone, since no release has read a `.kdf` version
+below it.
 
 The `.sfmr` readers stop at version 16, the `.matches` readers at version 10
 and the `.sift` and `.camrig` readers at version 2, the versions sfmtool 0.4
 writes. sfmtool 0.4.1's release notes announced that the next release stops
 reading the older `.sfmr`, `.matches` and `.sift` versions; `.camrig` version
 1 is one no release wrote, so it was dropped with no announcement. Every
-release that writes `.kdf` files has written version 3, and no release has
-read `.kdf` versions 1 and 2, so the `.kdf` crate holds no oldest version read
-and no last release reading older versions
+release that has written `.kdf` files has written version 3, which the
+`.kdf` reader reads and converts to version 4, and no release has read `.kdf`
+versions 1 and 2, so the `.kdf` crate holds no last release reading older
+versions
 ([kdf-file-format.md § Format versions](kdf-file-format.md#format-versions)).
 
 ## When a format's version changes
@@ -119,10 +122,10 @@ One change, landed together:
    a lossless conversion of its own, as sfmtool 0.4.1's upgrade converted
    version 1 to version 2, because extracting the features again does not
    reproduce them and every file that records their indexes and hashes would
-   break. Every `.kdf` file a release has written is at the current version,
-   so the upgrade reads none today; the change that next moves the `.kdf`
-   version makes the upgrade rewrite a version 3 index as the current version,
-   as it rewrites the other formats.
+   break. A `.kdf` change names what its upgrade rewrites: `.kdf` version 4
+   only added a `metadata.json` field, so the upgrade rewrites a version 3
+   index's metadata and integrity directory and copies its other entries
+   unchanged.
 5. **Tests** read a file of each accepted older version and check what it
    converts to, and check that the reader refuses a version newer than the
    current one and, where the oldest version read is above 1, a version below

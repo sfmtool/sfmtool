@@ -74,8 +74,8 @@ def test_run_asks_for_a_back_up_first_then_reports_each_file(workspace: Path):
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
     assert lines[0] == (
-        "Back up the workspace before upgrading it: this rewrites .sfmr, .matches "
-        "and .camrig files in place, which cannot be undone."
+        "Back up the workspace before upgrading it: this rewrites .sfmr, .matches, "
+        ".camrig and .kdf files in place, which cannot be undone."
     )
     assert lines[1] == f"Workspace tree: {workspace}"
     assert "  .camrig: 1 already current, 1 not converted" in lines
@@ -131,6 +131,7 @@ def test_the_report_groups_files_by_reason(tmp_path: Path):
             file("c.sfmr", "sfmr", "converted"),
             file("d.matches", "matches", "failed", "it could not be written: denied"),
             file("e.camrig", "camrig", "already_current"),
+            file("f.kdf", "kdf", "converted"),
         ],
         workspaces=[root, str(tmp_path / "nested")],
         linked_directories=[str(tmp_path / "link")],
@@ -139,10 +140,11 @@ def test_the_report_groups_files_by_reason(tmp_path: Path):
     lines = ws_command.report_lines(report)
     at = lines.index("Nested workspaces:")
     assert lines[at + 1] == "  nested"
-    assert lines[lines.index("Files:") + 1 :][:3] == [
+    assert lines[lines.index("Files:") + 1 :][:4] == [
         "  .sfmr: 1 converted, 2 not converted",
         "  .matches: 1 failed",
         "  .camrig: 1 already current",
+        "  .kdf: 1 converted",
     ]
     at = lines.index("Not converted:")
     assert lines[at + 1 : at + 4] == [

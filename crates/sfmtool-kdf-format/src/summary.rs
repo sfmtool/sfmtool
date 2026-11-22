@@ -98,7 +98,7 @@ fn decoded_bytes_from_name(name: &str) -> Option<u64> {
     let mut parts: Vec<&str> = file.split('.').collect();
     let suffix = parts.pop()?;
 
-    // `chunk.{M}.{P}[.{D}].{scalar}.zst` is the one heterogeneous entry: ten
+    // `chunk.{M}.{P}.{scalar}.zst` is the one heterogeneous entry: ten
     // uint32 node columns, then one split per node, then one uint32 per feature.
     // The generic product-of-counts rule below cannot express a sum of arrays.
     if parts.first() == Some(&"chunk") && suffix == "zst" {

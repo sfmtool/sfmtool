@@ -575,6 +575,7 @@ fn metadata<S: KdfScalar>(
         feature_count: data.feature_count as u32,
         dimension: data.dimension as u16,
         node_kinds: vec!["internal".into(), "leaf".into()],
+        chunk_layout: Some(chunk_layout(S::TYPE_NAME)),
         target_chunk_bytes: options.target_chunk_bytes as u64,
         trees: packed
             .iter()

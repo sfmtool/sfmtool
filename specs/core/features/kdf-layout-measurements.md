@@ -139,7 +139,7 @@ the bottom of the projected range. Four trees over 9,701,948 of these descriptor
 at a 1 MiB chunk target and zstd level 3, via the revision of
 [`scripts/benchmark_kdf_layouts.py`](../../../scripts/benchmark_kdf_layouts.py)
 added in PR #421 and that PR's version-1 writer (the current script measures
-version 3). PR #421 added these numbers and was squash-merged as `95cb784b`; it
+the current version). PR #421 added these numbers and was squash-merged as `95cb784b`; it
 does not record which of its branch commits the run used. The sizes:
 
 | Section | Decoded | Stored | Ratio |
