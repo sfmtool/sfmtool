@@ -833,3 +833,31 @@ cut it, how each of its cases and assertions is kept, and how each event its
 input exercises still happens. A test over the limits that none of the ways
 above would make faster without dropping a case or weakening an assertion
 meets this standard.
+
+## A test writes only under a temporary directory of its own
+
+Every file a test writes, and every directory it makes, is under a temporary
+directory created for that test alone and removed when the test ends: in Rust
+a `tempfile::TempDir` (from `tempfile::tempdir()`, or `tempfile::Builder` with
+a name prefix) held until the test's last use of its path, in pytest the
+`tmp_path` fixture. A helper that writes a file a test reads afterwards hands
+the `TempDir` back to the test with the path, so the directory outlives the
+read. A test that depends on a name, such as one that moves a directory or
+asserts a file name, uses that name inside its own directory. This exists
+because a fixed path under the system temporary directory is shared: two
+checkouts, two worktrees or two `cargo test` runs on one machine read and
+write the same files at once and fail with missing paths, truncated files and
+wrong counts that do not happen when either runs alone; and a directory a
+failed run leaves behind changes what the next run reads.
+
+Look for `std::env::temp_dir()` or `env::temp_dir()` in Rust test code, for a
+fixed file or directory name joined onto it, and for a Python test that writes
+under `tempfile.gettempdir()` or another fixed path instead of `tmp_path`.
+[`crates/sfmtool-core/tests/temp_dirs.rs`](../crates/sfmtool-core/tests/temp_dirs.rs)
+reads every `tests.rs` file, every file under a `tests/` directory and every
+`#[cfg(test)] mod` block in the workspace's crates, and fails with each line
+that names the system temporary directory, so in Rust there is nothing to look
+for by hand beyond running it. Confirm a Python finding by naming the path two
+concurrent runs of the test would share. Out of scope: production code that
+uses the temporary directory on purpose, such as a cache whose name is meant
+to be found again by the next run.
