@@ -493,9 +493,9 @@ fn feature_prefix_dir_py(
 /// naming sfmtool 0.4.1 as the last release that upgrades it. Each
 /// ``.sfmr``, ``.matches``, ``.camrig`` and ``.kdf`` file below the current
 /// version that the current reader reads is rewritten at its own path as the
-/// current version; a file the reader refuses is left as it is. The walk does not
-/// enter a symbolic link or junction to a directory. A stopped run can be run
-/// again to finish. See ``specs/cli/workspace/ws-upgrade-command.md``.
+/// current version; a file the reader refuses is left as it is. The walk does
+/// not enter a symbolic link or junction to a directory. A stopped run can be
+/// run again to finish. See ``specs/cli/workspace/ws-upgrade-command.md``.
 ///
 /// Args:
 ///     path: a directory or file in the tree's root workspace.

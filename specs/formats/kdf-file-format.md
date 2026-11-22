@@ -46,8 +46,8 @@ An index is derived from the `.sift` files it was built over, so rebuilding it
 from them is the whole remedy, and the message names no release.
 `KdfFile::open`, `read_kdf_workspace`, `read_kdf_version`, `upgrade_kdf` and
 `verify_kdf` return it as `KdfError::InvalidFormat`, which the Python bindings
-raise as `OSError` (opening a `LazyKdForest` too). The version is checked as soon as
-`metadata.json.zst` is decoded, before the integrity directory is parsed,
+raise as `OSError` (opening a `LazyKdForest` too). The version is checked as
+soon as `metadata.json.zst` is decoded, before the integrity directory is parsed,
 since that directory's layout differs between versions.
 
 The format crate holds the current version as `KDF_FORMAT_VERSION` and the
@@ -199,8 +199,9 @@ It confers no source-file dependency and is not needed to interpret the index.
 There is no implicit SIFT normalization or distance conversion.
 
 Readers reject unsupported scalar, metric, kind, or source names. Unknown
-top-level JSON fields are ignored. Source entries below are conditional;
-unexpected ZIP entries are rejected. A change that a reader of the previous version would refuse,
+JSON fields are ignored, except inside `chunk_layout`, which must be exactly
+the value above. Source entries below are conditional; unexpected ZIP entries
+are rejected. A change that a reader of the previous version would refuse,
 misread, or silently drop or misinterpret changes the version, as
 [format-versions.md](format-versions.md) says, so an older reader rejects
 such a file rather than partially interpreting it.

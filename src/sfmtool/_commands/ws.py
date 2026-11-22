@@ -127,9 +127,9 @@ def upgrade(path, dry_run):
     search for .sfm-workspace.json, and the run upgrades it and every
     workspace nested in it. Each .sfmr, .matches, .camrig and .kdf file
     older than the current version is rewritten at its own path as the
-    current version. A file the current reader refuses is left as it is. A version 1 workspace
-    is refused: upgrade it with sfmtool 0.4.1 first, the last release that
-    reads the file versions it holds. A run that stops part way, by Ctrl+C,
+    current version. A file the current reader refuses is left as it is. A
+    version 1 workspace is refused: upgrade it with sfmtool 0.4.1 first, the
+    last release that reads the file versions it holds. A run that stops part way, by Ctrl+C,
     can be run again to finish.
 
     Example usage:

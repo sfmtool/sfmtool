@@ -9,10 +9,11 @@ and 17, so the command rewrites version 16 `.sfmr` files as version 17; the
 `.kdf` reader reads versions 3 and 4, so it rewrites version 3 `.kdf` indexes
 as version 4; the `.matches` and `.camrig` readers read only their current
 versions, 10 and 2, so no `.matches` or `.camrig` file is rewritten until one
-of those formats next changes version. A `.sfmr` file below version 16, a `.matches` file below
-version 10 or a `.camrig` file below version 2 is one the reader refuses, and
-the run lists it with the reader's message, which names sfmtool 0.4.1 as the
-release to upgrade it with ([What is not converted](#what-is-not-converted)).
+of those formats next changes version. A `.sfmr` file below version 16, a
+`.matches` file below version 10 or a `.camrig` file below version 2 is one
+the reader refuses, and the run lists it with the reader's message, which
+names sfmtool 0.4.1 as the release to upgrade it with
+([What is not converted](#what-is-not-converted)).
 When it rewrites files it does so in place, which cannot be undone: **back up
 the workspace first** ([Backing up](#backing-up)).
 
@@ -50,9 +51,9 @@ nothing.
 ## Backing up
 
 The command rewrites `.sfmr`, `.matches`, `.camrig` and `.kdf` files in
-place, so it cannot be undone. Its help, this spec, and the first line it prints before
-rewriting anything say to back up the workspace first. Saving changes each
-`.sfmr` file's `content_xxh128`, so a point ID (`pt3d_<hash>_<index>`) written
+place, so it cannot be undone. Its help, this spec, and the first line it
+prints before rewriting anything say to back up the workspace first. Saving
+changes each `.sfmr` file's `content_xxh128`, so a point ID (`pt3d_<hash>_<index>`) written
 down from a `.sfmr` before the upgrade no longer resolves; the report says so
 when it rewrote a `.sfmr`.
 
@@ -236,8 +237,8 @@ is the stopped run above.
 `UpgradeWorkspaceReport` holds the tree's root (`workspace_dir`); the
 workspaces of the tree (`workspaces`, the root first); the dry-run flag; one
 `UpgradedFile` per `.sfmr`, `.matches`, `.camrig` and `.kdf` file the walk
-found, in that order of kinds and each kind sorted by path, with its `UpgradeFileKind`
-and `UpgradeOutcome`: `Converted`, `AlreadyCurrent`, `NotConverted(reason)`
+found, in that order of kinds and each kind sorted by path, with its
+`UpgradeFileKind` and `UpgradeOutcome`: `Converted`, `AlreadyCurrent`, `NotConverted(reason)`
 (one of [What is not converted](#what-is-not-converted)) or `Failed(reason)`
 (could not be read or written); the linked directories the walk did not
 enter; and notes for the user, the point-ID note among them. `nothing_to_do`
