@@ -187,6 +187,29 @@ pub(crate) fn parse(
         "select_point" => Command::SelectPoint {
             point: args.point("point")?,
         },
+        "list_measurements" => Command::ListMeasurements {
+            reconstruction_label: args.optional_string("reconstruction_label")?,
+        },
+        "get_measurement" => Command::GetMeasurement {
+            reconstruction_label: args.optional_string("reconstruction_label")?,
+            measurement_kind: args.measurement_kind()?,
+            measurement_index: args.required_usize("measurement_index")?,
+        },
+        "select_measurement" => Command::SelectMeasurement {
+            reconstruction_label: args.optional_string("reconstruction_label")?,
+            measurement_kind: args.measurement_kind()?,
+            measurement_index: args.required_usize("measurement_index")?,
+            endpoint: match args.optional_string("endpoint")? {
+                None => None,
+                Some(name) => Some(
+                    crate::measurements::EndpointSide::from_wire_name(&name).ok_or_else(|| {
+                        args.error(format!(
+                            "does not know the endpoint {name:?} — expected a or b."
+                        ))
+                    })?,
+                ),
+            },
+        },
         "clear_selection" => {
             let scope = match args.optional_string("scope")?.as_deref() {
                 None | Some("all") => SelectionScope::All,
@@ -1359,6 +1382,21 @@ impl Args<'_> {
     fn required_string(&self, key: &str) -> Result<String, ToolError> {
         self.optional_string(key)?
             .ok_or_else(|| self.error(format!("needs {key}.")))
+    }
+
+    /// The `measurement_kind` a measurement tool names, `distance` when it
+    /// names none.
+    fn measurement_kind(&self) -> Result<crate::measurements::MeasurementKind, ToolError> {
+        match self.optional_string("measurement_kind")? {
+            None => Ok(crate::measurements::MeasurementKind::Distance),
+            Some(name) => {
+                crate::measurements::MeasurementKind::from_wire_name(&name).ok_or_else(|| {
+                    self.error(format!(
+                        "does not know the measurement_kind {name:?} — expected distance."
+                    ))
+                })
+            }
+        }
     }
 
     pub(super) fn optional_bool(&self, key: &str) -> Result<Option<bool>, ToolError> {

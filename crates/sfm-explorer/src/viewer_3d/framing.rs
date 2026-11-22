@@ -129,3 +129,49 @@ impl ViewportCamera {
         self.world_up = end.world_up;
     }
 }
+
+/// Where a camera that keeps `orientation` stands to show every one of
+/// `points` inside the middle `fraction` of the viewport on both axes, looking
+/// at their centroid: the camera's position and its orbit distance to the
+/// centroid, or `None` for no points.
+///
+/// `tan_y` is the tangent of half the vertical field of view and `aspect` the
+/// viewport's width over its height. The camera backs away from the centroid
+/// along its own forward axis until the point that needs the most room fits;
+/// a single point, or points that all coincide, need none, and keep
+/// `distance` as the orbit distance.
+pub(crate) fn keeping_orientation(
+    orientation: UnitQuaternion<f64>,
+    points: &[Point3<f64>],
+    tan_y: f64,
+    aspect: f64,
+    fraction: f64,
+    distance: f64,
+) -> Option<(Point3<f64>, f64)> {
+    if points.is_empty() {
+        return None;
+    }
+    let centroid =
+        Point3::from(points.iter().map(|p| p.coords).sum::<Vector3<f64>>() / points.len() as f64);
+    // The camera's axes in the world: orientation maps world to camera.
+    let to_world = orientation.inverse();
+    let right = to_world * Vector3::x();
+    let up = to_world * Vector3::y();
+    let forward = to_world * -Vector3::z();
+    let tan_x = tan_y * aspect;
+    let mut needed: f64 = 0.0;
+    for p in points {
+        let offset = p - centroid;
+        // A point `along` further along the view axis than the centroid sits
+        // that much deeper, so needs that much less distance.
+        let along = offset.dot(&forward);
+        needed = needed
+            .max(offset.dot(&right).abs() / (fraction * tan_x) - along)
+            .max(offset.dot(&up).abs() / (fraction * tan_y) - along)
+            // And in front of the camera, as deep again as it is near.
+            .max(-2.0 * along);
+    }
+    let spread = points.iter().any(|p| (p - centroid).norm() > 1e-12);
+    let distance = if spread { needed.max(1e-9) } else { distance };
+    Some((centroid - forward * distance, distance))
+}

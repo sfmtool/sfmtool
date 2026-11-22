@@ -258,12 +258,17 @@ panels. Panels can be re-docked, reordered, and resized:
   Full-resolution image of the selected camera, with a 7-mode overlay toolbar
   (features, reproj error, track length, max track angle, depth reliability,
   condition number, none).
-- **Track View** — Top-right (~33% width), with Camera Intrinsics behind it.
+- **Track View** — Top-right (~33% width), with Measurement View and Camera
+  Intrinsics behind it.
   With its *Edit* box clear, per-observation diagnostics for the selected 3D
   point: per-image reprojection error, ray angle, thumbnails,
   copy-`pt3d_<hash>_<index>` and the Go to Point button that takes one back.
   With it ticked, the focused item and the steps that measure, fit and
   commit it.
+- **Measurement View** — Behind Track View. One stored measurement of the
+  selected reconstruction: each endpoint's photograph, pixel and crop, the
+  point it resolves to, and the length the reconstruction gives it against the
+  stated one ([measurement-view.md](measurement-view.md)).
 - **Image Browser** — Bottom strip (~20% height). Horizontally-scrollable
   thumbnails with click-to-select, gesture-driven panning, and a navigation
   minibar with animation playback.

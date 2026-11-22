@@ -441,9 +441,17 @@ impl DrawnCrop {
         self
     }
 
+    /// Where the picture's keypoint lands when the picture is drawn fitted
+    /// into `cell`, as [`Self::paint_cell`] draws it: what Measurement View
+    /// draws its cross at.
+    pub(crate) fn keypoint_in(&self, cell: Rect) -> Pos2 {
+        let rect = self.fitted(cell);
+        self.to_screen(rect)(self.keypoint)
+    }
+
     /// The largest rect of the picture's shape that fits in `bounds`, centred
     /// in it.
-    fn fitted(&self, bounds: Rect) -> Rect {
+    pub(crate) fn fitted(&self, bounds: Rect) -> Rect {
         let scale =
             (bounds.width() / self.size.x.max(1.0)).min(bounds.height() / self.size.y.max(1.0));
         Rect::from_center_size(bounds.center(), self.size * scale)

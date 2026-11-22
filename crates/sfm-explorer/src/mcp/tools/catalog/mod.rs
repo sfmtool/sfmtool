@@ -101,6 +101,27 @@ fn reconstruction_label_schema() -> Value {
     })
 }
 
+/// The kind of a measurement, which names the subsection of the file its rows
+/// are numbered in.
+fn measurement_kind_schema() -> Value {
+    json!({
+        "type": "string",
+        "enum": crate::measurements::MeasurementKind::ALL.map(|kind| kind.wire_name()),
+        "description": "The kind of measurement, the subsection of the file's measurements \
+                        its index counts in. Defaults to distance, the one kind.",
+    })
+}
+
+/// A measurement's row within its kind's rows, as list_measurements lists it.
+fn measurement_index_schema() -> Value {
+    json!({
+        "type": "integer",
+        "minimum": 0,
+        "description": "The measurement's index within its kind's rows, as list_measurements \
+                        reports it.",
+    })
+}
+
 /// The reconstruction argument of a tool that edits one, reads its history or
 /// writes it out.
 ///

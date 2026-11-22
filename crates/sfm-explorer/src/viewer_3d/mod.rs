@@ -64,6 +64,11 @@ const PAN_ONLY_FRACTION: f64 = 2.0 / 3.0;
 /// inside before panning to it.
 const TURN_INTO_FRACTION: f64 = 0.5;
 
+/// Where a transition ends: position, orientation, orbit distance, and the
+/// image it enters camera view through ([`Viewer3D::transition_end`]).
+#[cfg(test)]
+pub(crate) type TransitionEnd = (Point3<f64>, UnitQuaternion<f64>, f64, Option<ImageRef>);
+
 /// How many aim-and-level steps the turn takes at most. Each step's error is a
 /// small fraction of the last one's, so a handful is enough.
 const TURN_STEPS: usize = 16;
@@ -1384,6 +1389,67 @@ impl Viewer3D {
     /// Cancels any in-progress camera transition, snapping to the current interpolated state.
     pub(crate) fn cancel_transition(&mut self) {
         self.target_transition = None;
+    }
+
+    /// Where the transition in flight ends: its position, orientation and
+    /// orbit distance, and the image it enters camera view through, for the
+    /// tests outside this module that check what a gesture started.
+    #[cfg(test)]
+    pub(crate) fn transition_end(&self) -> Option<TransitionEnd> {
+        self.target_transition.as_ref().map(|t| {
+            (
+                t.end_position,
+                t.end_orientation,
+                t.end_distance,
+                t.pending_camera_view.as_ref().map(|v| v.image),
+            )
+        })
+    }
+
+    /// Frame `points` without turning: keep the orientation and move the
+    /// camera so every one of them is inside the middle [`TURN_INTO_FRACTION`]
+    /// of the viewport on both axes, the orbit target on their centroid
+    /// ([`framing::keeping_orientation`]), with the animated transition the
+    /// other target moves use. A single point keeps the orbit distance.
+    ///
+    /// What a Scene tree double-click on a measurement's row does with the
+    /// measurement's finite endpoints. Returns whether a transition was
+    /// started: not for no points, and not while a camera is in hand, for
+    /// the reason [`Self::move_target_to`] gives.
+    pub(crate) fn frame_keeping_orientation(
+        &mut self,
+        points: &[Point3<f64>],
+        current_time: f64,
+    ) -> bool {
+        if self.camera_lock.is_some() {
+            return false;
+        }
+        let aspect = self.panel_aspect().unwrap_or(16.0 / 9.0);
+        let tan_y = (self.camera.vertical_fov(aspect) / 2.0).tan();
+        let orientation = self.camera.camera.orientation;
+        let Some((position, distance)) = framing::keeping_orientation(
+            orientation,
+            points,
+            tan_y,
+            aspect,
+            TURN_INTO_FRACTION,
+            self.camera.camera.target_distance,
+        ) else {
+            return false;
+        };
+        // A move is a step away from the pose being looked through.
+        self.leave_camera_view();
+        self.start_transition(
+            position,
+            orientation,
+            distance,
+            self.camera.fov,
+            self.camera.world_up,
+            None,
+            true,
+            current_time,
+        );
+        true
     }
 
     /// Frame `points`, with the same animated transition the `Z` key uses.

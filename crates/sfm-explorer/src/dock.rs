@@ -42,6 +42,9 @@ pub(crate) enum Tab {
     /// The selected point read as a track, or the focused item
     /// while its *Edit* box is ticked. See [`crate::track_view`].
     TrackView,
+    /// One measurement of the selected reconstruction: its endpoints and what
+    /// the reconstruction makes of it. See [`crate::measurement_view`].
+    MeasurementView,
     IntrinsicsDetail,
     ActionLog,
     EditHistory,
@@ -59,6 +62,7 @@ impl Tab {
             Tab::ImageBrowser => "Image Browser",
             Tab::ImageDetail => "Image Detail",
             Tab::TrackView => "Track View",
+            Tab::MeasurementView => "Measurement View",
             Tab::IntrinsicsDetail => "Camera Intrinsics",
             Tab::ActionLog => "Action Log",
             Tab::EditHistory => "Edit History",
@@ -91,6 +95,7 @@ pub(crate) struct TabContext<'a> {
     pub(crate) image_browser: &'a mut ImageBrowser,
     pub(crate) image_detail: &'a mut ImageDetail,
     pub(crate) track_view: &'a mut TrackView,
+    pub(crate) measurement_view: &'a mut crate::measurement_view::MeasurementView,
     pub(crate) track_table: &'a mut TrackTablePanel,
     pub(crate) intrinsics_detail: &'a mut IntrinsicsDetail,
     /// Where the panel work that can outlast a frame reports: the `.sift`
@@ -139,6 +144,7 @@ impl TabViewer for TabContext<'_> {
             Tab::ImageBrowser => self.show_image_browser(ui),
             Tab::ImageDetail => self.show_image_detail(ui),
             Tab::TrackView => self.show_track_view(ui),
+            Tab::MeasurementView => self.show_measurement_view(ui),
             Tab::IntrinsicsDetail => self.show_intrinsics_detail(ui),
             // One of the two tabs with no empty state: an empty scene still has
             // a session, and the log is exactly what says so.
@@ -1002,6 +1008,58 @@ impl TabContext<'_> {
         }
     }
 
+    /// The Measurement View tab: the selected measurement, and what its
+    /// endpoint blocks and links report.
+    ///
+    /// An endpoint's click selects the endpoint and its image and reveals its
+    /// pixel in Image Detail (`AppState::select_endpoint`); its double-click
+    /// does that, then enters camera view through the image turned toward the
+    /// pixel, as a double-click on a Track View row does. The panel owns both
+    /// hover fields while it has the pointer, and produces no hovered point.
+    fn show_measurement_view(&mut self, ui: &mut egui::Ui) {
+        let response = self.measurement_view.show(ui, self.state);
+        self.apply_measurement_view_response(ui, response);
+    }
+
+    /// Apply what Measurement View asked for: the hover, the selections, the
+    /// Go to Point dialog and the camera view.
+    pub(crate) fn apply_measurement_view_response(
+        &mut self,
+        ui: &egui::Ui,
+        response: crate::measurement_view::MeasurementViewResponse,
+    ) {
+        if response.has_pointer {
+            self.state.hovered_image = response.hovered_image;
+            self.state.hovered_point = None;
+        }
+        if let Some(measurement) = response.select_measurement {
+            self.state.select_measurement(measurement);
+        }
+        if let Some((measurement, side)) = response.select_endpoint {
+            self.state.select_endpoint(measurement, side);
+        }
+        if let Some(id) = response.goto_point {
+            self.state.goto_point.open(Some(id));
+        }
+        // Last, because ending a held camera move needs the state mutably.
+        if let Some((measurement, side)) = response.look_through {
+            self.state.select_endpoint(measurement, side);
+            if let Some(row) = self.state.distance_row(measurement) {
+                let image = row.image(side) as usize;
+                let held = crate::scene::node_by_id(&self.state.scene, measurement.recon)
+                    .is_some_and(|node| image < node.recon().image_set.images.len());
+                if held {
+                    let [x, y] = row.pixel(side);
+                    self.look_through_toward(
+                        ui,
+                        ImageRef::new(measurement.recon, image),
+                        Some([x as f32, y as f32]),
+                    );
+                }
+            }
+        }
+    }
+
     /// Load what the mode Track View is about to draw reads from: in Viewed
     /// mode the selected point's `.sift` positions and photographs, in Edited
     /// mode the focused item's photographs. The `.sift` positions are read
@@ -1218,6 +1276,11 @@ impl TabContext<'_> {
         }
         if let Some(point) = response.select_point {
             self.state.select_point(point);
+        }
+        // A double-click's raise and framing are `app.rs`'s, once the dock is
+        // back in the state; its click selects here like any other.
+        if let Some(measurement) = response.select_measurement {
+            self.state.select_measurement(measurement);
         }
         if let Some(image) = response.request_camera_view {
             self.look_through(ui, image);

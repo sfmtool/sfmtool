@@ -55,6 +55,7 @@ mod frame;
 mod input;
 mod layout;
 mod logged;
+mod measurements;
 mod panel_rect;
 mod read;
 pub(crate) mod server;
@@ -149,6 +150,18 @@ pub(crate) enum Command {
     GetPoint {
         point: crate::goto_point::PointQuery,
     },
+    /// Every measurement of one reconstruction, with the readings the Scene
+    /// tree rows show.
+    ListMeasurements {
+        reconstruction_label: Option<String>,
+    },
+    /// One measurement whole: its endpoints with their resolutions, and the
+    /// result.
+    GetMeasurement {
+        reconstruction_label: Option<String>,
+        measurement_kind: crate::measurements::MeasurementKind,
+        measurement_index: usize,
+    },
     /// The Action Log from a revision onward: what happened while the agent
     /// was not looking, whoever did it.
     ///
@@ -185,6 +198,14 @@ pub(crate) enum Command {
     },
     SelectPoint {
         point: crate::goto_point::PointQuery,
+    },
+    /// Select a measurement, or one of its endpoints, as a click on its row or
+    /// its block does.
+    SelectMeasurement {
+        reconstruction_label: Option<String>,
+        measurement_kind: crate::measurements::MeasurementKind,
+        measurement_index: usize,
+        endpoint: Option<crate::measurements::EndpointSide>,
     },
     ClearSelection {
         scope: SelectionScope,
@@ -1458,6 +1479,22 @@ pub(crate) fn apply_with_window(
             camera_intrinsics_index,
         )),
         Command::GetPoint { point } => done(read::get_point(state, &point)),
+        Command::ListMeasurements {
+            reconstruction_label,
+        } => done(measurements::list_measurements(
+            state,
+            reconstruction_label.as_deref(),
+        )),
+        Command::GetMeasurement {
+            reconstruction_label,
+            measurement_kind,
+            measurement_index,
+        } => done(measurements::get_measurement(
+            state,
+            reconstruction_label.as_deref(),
+            measurement_kind,
+            measurement_index,
+        )),
         Command::FindPoints { request } => find_points::find_points(state, request),
         Command::GetActionLog {
             since_revision,
@@ -1493,6 +1530,18 @@ pub(crate) fn apply_with_window(
             camera_intrinsics_index,
         )),
         Command::SelectPoint { point } => done(write::select_point(state, &point)),
+        Command::SelectMeasurement {
+            reconstruction_label,
+            measurement_kind,
+            measurement_index,
+            endpoint,
+        } => done(measurements::select_measurement(
+            state,
+            reconstruction_label.as_deref(),
+            measurement_kind,
+            measurement_index,
+            endpoint,
+        )),
         Command::ClearSelection { scope } => done(write::clear_selection(state, scope)),
         Command::SetReconstructionDisplay {
             reconstruction_label,

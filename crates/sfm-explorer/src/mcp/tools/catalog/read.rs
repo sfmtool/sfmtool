@@ -300,6 +300,45 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "list_measurements",
+            description: "Every measurement one reconstruction stores, each with the reading \
+                          its Scene tree row shows: measurement_kind and measurement_index (the \
+                          handle get_measurement and select_measurement take), label, \
+                          stated_distance and its unit, row_text (the row as drawn), result, \
+                          and each endpoint's camera image, pixel and whether it resolved. The \
+                          result's state is with_unit (reconstructed_distance and error in the \
+                          measurement's own unit, error_percent, implied_scale = stated over \
+                          reconstructed) where the file declares a world_space_unit, \
+                          scene_units (scene_distance and unit_per_scene_unit, the length of \
+                          one scene unit in the measurement's unit) where it declares none, \
+                          at_infinity or refused (with the endpoint). Readings are in the \
+                          file's own coordinates: a display transform never scales them. \
+                          measurement_counts gives the count of each kind.",
+            kind: Read,
+            schema: object(&[("reconstruction_label", reconstruction_label_schema())], &[]),
+        },
+        ToolSpec {
+            name: "get_measurement",
+            description: "One measurement whole, as Measurement View shows it: \
+                          list_measurements' fields, then each endpoint with its camera image, \
+                          pixel and resolution (chosen, an index into candidates; each \
+                          candidate's point and point_id, observation, patch_coords (s, t), \
+                          position or, at infinity, direction, depth, standing alone, ranked \
+                          or excluded, exclusion, and a ranked candidate's cost factors), or \
+                          its refusal (the sentence naming the remedy, and its short form), \
+                          and median, the header's line comparing this measurement's implied \
+                          scale with the median of every measurement of its kind with a \
+                          reading (null with fewer than two).",
+            kind: Read,
+            schema: object(
+                &[
+                    ("reconstruction_label", reconstruction_label_schema()),
+                    ("measurement_kind", measurement_kind_schema()),
+                ],
+                &[("measurement_index", measurement_index_schema())],
+            ),
+        },
+        ToolSpec {
             name: "get_action_log",
             description: "What has happened in the viewer, oldest first — the human's selections \
                           and file loads, the agent's own calls, and every refusal, each with the \

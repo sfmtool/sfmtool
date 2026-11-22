@@ -105,6 +105,18 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             json!({ "camera_intrinsics_index": 0 }),
         ),
         ("select_point", json!({ "point": 0 })),
+        (
+            "list_measurements",
+            json!({ "reconstruction_label": "alpha" }),
+        ),
+        (
+            "get_measurement",
+            json!({ "measurement_kind": "distance", "measurement_index": 0 }),
+        ),
+        (
+            "select_measurement",
+            json!({ "measurement_index": 0, "endpoint": "a" }),
+        ),
         ("clear_selection", json!({ "scope": "all" })),
         (
             "set_reconstruction_display",
@@ -1264,6 +1276,8 @@ fn only_the_reads_are_annotated_read_only() {
             "get_intrinsic_adjustments",
             "get_point",
             "find_points",
+            "list_measurements",
+            "get_measurement",
             "get_action_log",
             "get_timing_detail",
             "get_window_layout",
@@ -1279,16 +1293,16 @@ fn only_the_reads_are_annotated_read_only() {
             "get_widgets",
         ]
     );
-    // Nineteen JSON reads, the one read that hands back a picture, seventy-seven
+    // Twenty-one JSON reads, the one read that hands back a picture, seventy-eight
     // writes, six input tools, the one that writes a file, and the one that
     // quits.
-    assert_eq!(catalog.len(), 105, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 108, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        77
+        78
     );
     // One tool can overwrite a file by name, six can press what a person can
     // press, File ▸ Save included, and one ends the viewer, losing what is not

@@ -1075,6 +1075,7 @@ impl App {
         let image_detail = &mut self.image_detail;
         let track_view = &mut self.track_view;
         let track_table = &mut self.track_table;
+        let measurement_view = &mut self.measurement_view;
         let intrinsics_detail = &mut self.intrinsics_detail;
 
         // Both close paths are collected here rather than acted on in the menu
@@ -1115,6 +1116,9 @@ impl App {
                 // Track View asks for the viewed track again when it draws, so
                 // a frame in which it is hidden leaves none current and the
                 // live evaluation drops it (`crate::bench::viewed`).
+                // A selected measurement the version on screen no longer holds
+                // is cleared before any panel reads it.
+                app_state.prune_measurement_selection();
                 app_state.hide_viewed_track();
                 // The Track Table says which node it shows when it draws, for
                 // the same reason: a frame in which it is hidden asks its table
@@ -1128,6 +1132,7 @@ impl App {
                     image_detail,
                     track_view,
                     track_table,
+                    measurement_view,
                     intrinsics_detail,
                     frame: *progress,
                     scene_texture_id,
@@ -1181,6 +1186,10 @@ impl App {
                 if let Some((id, position)) = scene_graph.take_bench_edit() {
                     let current_time = ui.input(|i| i.time);
                     apply_bench_edit(app_state, viewer_3d, id, position, current_time);
+                }
+                if let Some(measurement) = scene_graph.take_measurement_open() {
+                    let current_time = ui.input(|i| i.time);
+                    apply_measurement_open(app_state, viewer_3d, measurement, current_time);
                 }
                 // A Camera Intrinsics row's `Switch Camera Model…`, which
                 // raises the Camera Intrinsics panel on the proposal.
@@ -1442,6 +1451,29 @@ fn apply_bench_edit(
     let target = crate::scene::node_by_id(&state.scene, id)
         .and_then(|node| crate::scene::bench_world_point(node, position));
     turn_and_move_onto(viewer_3d, target, current_time);
+}
+
+/// A Scene tree double-click on a Measurements row: select the measurement,
+/// raise Measurement View beside the tree, and frame the measurement's finite
+/// endpoints in the 3D view, keeping its orientation
+/// ([`crate::viewer_3d::Viewer3D::frame_keeping_orientation`]). A measurement
+/// with no finite endpoint leaves the view where it is.
+///
+/// Applied by the frame once the dock is back in the state, since the raise is
+/// a layout operation.
+pub(crate) fn apply_measurement_open(
+    state: &mut crate::state::AppState,
+    viewer_3d: &mut crate::viewer_3d::Viewer3D,
+    measurement: crate::measurements::MeasurementRef,
+    current_time: f64,
+) {
+    state.select_measurement(measurement);
+    state.show_panel_beside(
+        crate::dock::Tab::MeasurementView,
+        crate::dock::Tab::SceneGraph,
+    );
+    let points = crate::measurements::world_endpoints(&state.scene, measurement);
+    viewer_3d.frame_keeping_orientation(&points, current_time);
 }
 
 /// What a viewport click that picked a point does to the document: select it,

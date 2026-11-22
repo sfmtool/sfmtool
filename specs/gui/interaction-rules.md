@@ -32,7 +32,8 @@ and the work that brings each into line is
 
 **G1. A click selects what it is on, and nothing more.** The selection is the
 viewer's one selected item of each kind: a reconstruction, an image, a camera,
-a point, and the bench observation Track View edits. Other panels follow it:
+a point, a measurement and its endpoint, and the bench observation Track View
+edits. Other panels follow it:
 the Image Browser and the Scene tree scroll it into view, the Track Table
 scrolls its row into view, and Image Detail reveals a pixel it names under G5. A click never moves the 3D view, never
 raises a panel and never pushes a version. A click on the item already
@@ -47,10 +48,10 @@ first.** It is the click, then one action chosen by what the target denotes:
 | The target denotes | The double-click |
 |---|---|
 | An image (a thumbnail, an image row, a frustum) | Enter camera view through it. |
-| A pixel of an image (a Track View observation row) | Enter camera view through its image, turned until the pixel is inside the middle 1/2 of the viewport (`Viewer3D::look_through_toward_feature`). |
+| A pixel of an image (a Track View observation row, a Measurement View endpoint block) | Enter camera view through its image, turned until the pixel is inside the middle 1/2 of the viewport (`Viewer3D::look_through_toward_feature`). |
 | A point (a dot in the 3D view, a feature in Image Detail) | Put its track on the bench when it is not there already, which pushes a version, raise Track View on it, and move the 3D view onto it under G4. |
 | An item on the bench (a Bench row) | Focus it, raise Track View on it, and move the 3D view onto its point under G4. |
-| A set of things (a reconstruction, a camera's images) | Frame the set in the 3D view. |
+| A set of things (a reconstruction, a camera's images, a measurement's endpoints) | Frame the set in the 3D view. |
 | A position inside a picture with nothing on it (empty photograph in Image Detail) | Zoom the picture about the pointer. |
 
 A double-click raises a panel only through `AppState::show_panel_beside`, so

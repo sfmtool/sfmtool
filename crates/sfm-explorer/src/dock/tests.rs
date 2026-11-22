@@ -120,6 +120,7 @@ fn with_tabs(
     let mut image_detail = ImageDetail::new();
     let mut intrinsics_detail = IntrinsicsDetail::new();
     let mut track_table = crate::track_table_panel::TrackTablePanel::new();
+    let mut measurement_view = crate::measurement_view::MeasurementView::new();
     let scroll_input = platform::ScrollInput::default();
     let ctx = egui::Context::default();
     let mut apply = Some(apply);
@@ -135,6 +136,7 @@ fn with_tabs(
             image_detail: &mut image_detail,
             track_view: &mut *track_view,
             track_table: &mut track_table,
+            measurement_view: &mut measurement_view,
             intrinsics_detail: &mut intrinsics_detail,
             frame: Progress::none(),
             scene_texture_id: None,
@@ -322,4 +324,52 @@ fn an_image_detail_sighting_edit_starts_no_sequence() {
     let last = state.action_log.entries().last().expect("a row");
     assert!(!last.failed, "{}", last.text);
     assert!(state.surface_tiling.is_none(), "{}", last.text);
+}
+
+/// A double-click on an endpoint block in Measurement View is the click, then
+/// camera view through the endpoint's image turned toward its pixel: the same
+/// end state `Viewer3D::look_through_toward_feature` gives that pixel, as a
+/// double-click on a Track View row does.
+#[test]
+fn an_endpoints_double_click_looks_through_its_image_toward_its_pixel() {
+    use crate::measurements::{EndpointSide, MeasurementRef};
+    let (mut state, id) = crate::measurements::fixture::measured_state(Some("m"));
+    let measurement = MeasurementRef::distance(id, 1);
+    let row = state.distance_row(measurement).expect("row 1");
+    let image = ImageRef::new(id, row.image(EndpointSide::B) as usize);
+    let [x, y] = row.pixel(EndpointSide::B);
+    let mut expected = Viewer3D::new();
+    let node = crate::scene::node_by_id(&state.scene, id).unwrap();
+    expected.look_through_toward_feature(
+        image,
+        node,
+        [x as f32, y as f32],
+        0.0,
+        &mut crate::action_log::ActionLog::default(),
+    );
+    let expected = expected.transition_end().expect("a transition");
+
+    let mut track_view = TrackView::new();
+    let mut end = None;
+    with_tabs(&mut state, &mut track_view, |tabs, ui| {
+        tabs.apply_measurement_view_response(
+            ui,
+            crate::measurement_view::MeasurementViewResponse {
+                select_endpoint: Some((measurement, EndpointSide::B)),
+                look_through: Some((measurement, EndpointSide::B)),
+                ..Default::default()
+            },
+        );
+        end = tabs.viewer_3d.transition_end();
+    });
+    let end = end.expect("the double-click started a transition");
+    assert_eq!(
+        end.3,
+        Some(image),
+        "it does not end in camera view on the image"
+    );
+    assert!(end.1.angle_to(&expected.1) < 1e-9, "turned differently");
+    assert!((end.0 - expected.0).norm() < 1e-9, "stands elsewhere");
+    assert_eq!(state.selected_endpoint, Some(EndpointSide::B));
+    assert_eq!(state.selected_image, Some(image));
 }

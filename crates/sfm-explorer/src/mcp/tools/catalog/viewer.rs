@@ -112,6 +112,33 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             schema: object(&[], &[("point", point_schema())]),
         },
         ToolSpec {
+            name: "select_measurement",
+            description: "Select a measurement, and with it the reconstruction that holds it, as \
+                          a click on its Scene tree row does: nothing else is selected and the \
+                          views do not move, and the selected endpoint is cleared. Naming an \
+                          endpoint does what a click on its block in Measurement View does: \
+                          it selects the measurement, then the endpoint's camera image, and \
+                          Image Detail pans (never zooms) to show the endpoint's pixel when \
+                          its view does not; the selected point is left alone.",
+            kind: Write,
+            schema: object(
+                &[
+                    ("reconstruction_label", reconstruction_label_schema()),
+                    ("measurement_kind", measurement_kind_schema()),
+                    (
+                        "endpoint",
+                        json!({
+                            "type": "string",
+                            "enum": ["a", "b"],
+                            "description": "Also select this endpoint: a is the format's \
+                                            endpoint 0, b its endpoint 1.",
+                        }),
+                    ),
+                ],
+                &[("measurement_index", measurement_index_schema())],
+            ),
+        },
+        ToolSpec {
             name: "clear_selection",
             description: "Drop the selection, wholly or one kind of it. Selection is visible — a \
                           selected image tints its frustum, a selected point draws its track — so \

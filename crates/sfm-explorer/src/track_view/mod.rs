@@ -31,7 +31,7 @@
 //! holds `&AppState` while it draws.
 
 pub(crate) mod body;
-mod header_buttons;
+pub(crate) mod header_buttons;
 mod recent;
 
 #[cfg(test)]
