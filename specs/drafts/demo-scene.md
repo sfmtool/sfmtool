@@ -378,8 +378,8 @@ windows, in grey levels:
 | Surface (windows) | Value noise, std. dev. | fBm, std. dev. | Value noise, pixel-scale | fBm, pixel-scale | fBm without the 0.02 m octave, pixel-scale |
 |---|---|---|---|---|---|
 | Ground (1347) | 23.6, 28.8 | 10.0, 13.2 | 11.6, 16.5 | 3.1, 4.3 | 2.3, 3.7 |
-| Top (12) | 27.4, 29.0 | 11.5, 13.6 | 18.1, 18.7 | 4.6, 4.9 | 4.3, 4.7 |
-| Face `-a` (45) | 27.6, 29.4 | 10.1, 12.4 | 11.0, 13.1 | 2.9, 3.3 | 2.2, 2.6 |
+| Top (12) | 27.4, 29.0 | 11.6, 13.6 | 18.1, 18.7 | 4.6, 4.9 | 4.3, 4.7 |
+| Face `-a` (45) | 27.6, 29.4 | 10.4, 12.4 | 11.0, 13.1 | 2.9, 3.3 | 2.2, 2.6 |
 | Face `-b` (59) | 26.9, 28.0 | 9.0, 10.6 | 10.8, 12.6 | 3.0, 3.3 | 2.2, 2.5 |
 
 The fBm keeps about 45% of the value noise's standard deviation within a

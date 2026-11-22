@@ -839,7 +839,7 @@ fn window_contrasts() -> std::collections::BTreeMap<u8, Vec<(f64, f64)>> {
 #[test]
 fn every_patch_sized_window_has_texture_to_match() {
     // Measured on the default scene: the 10th percentile of the windows'
-    // standard deviations is 9.0 to 11.5 levels across the four surfaces
+    // standard deviations is 9.0 to 11.6 levels across the four surfaces
     // seen, and of their pixel-scale contrasts 2.9 to 4.6. Without the
     // finest octave the pixel-scale contrast's falls to 2.2 on the ground and
     // both side faces.
@@ -857,9 +857,8 @@ fn every_patch_sized_window_has_texture_to_match() {
             windows.len()
         );
         let tenth = |key: fn(&(f64, f64)) -> f64| {
-            let mut values: Vec<f64> = windows.iter().map(key).collect();
-            values.sort_by(f64::total_cmp);
-            values[values.len() / 10]
+            let values: Vec<f64> = windows.iter().map(key).collect();
+            crate::numeric::quantile(&values, 0.1)
         };
         let (sd, fine) = (tenth(|w| w.0), tenth(|w| w.1));
         assert!(sd >= 8.0, "{surface:?}: standard deviation {sd}");
