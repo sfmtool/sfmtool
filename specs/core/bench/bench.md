@@ -10,8 +10,8 @@ beside it where things that are not settled yet are held. It is a list of
 labelled **items**, in the order they were put there, each with an ID that
 stays the same when its label changes, and nothing on it is part of the
 reconstruction: a save does
-not write an item, the point count does not include one, and exactly one step
-crosses from an item to a point.
+not write an item, the point count does not include one, and a commit is the one
+step that crosses from an item into the reconstruction.
 
 The bench is a value. Putting something on, taking something off and renaming
 an item are each a function from one bench to the next, and every item the operation did not touch is the same shared pointer in
@@ -19,11 +19,17 @@ both. That is what lets a caller keep a run of benches and go back to any of
 them, and it is why the viewer can hold the bench as the second half of a
 version and undo the reconstruction and the bench with one gesture.
 
-The first and, today, only kind of item is the **editable track**
-([editable-track.md](editable-track.md)). The enum is what makes it the first
-rather than the only: a second kind joins by adding a variant, without touching the list, the labels or the steps that work on a track.
+There are two kinds of item. The **editable track**
+([editable-track.md](editable-track.md)) is a track taken out of the
+reconstruction, or started from a pixel, and the **editable measurement**
+([editable-measurement.md](editable-measurement.md)) is a stored measurement
+taken out to have its endpoints worked on. Each kind is a variant of one enum,
+so a kind joins without touching the list, the labels or the steps that work on
+another kind. Each kind has its own commit: `commit` writes a track as a point,
+and `commit_measurement` writes a measurement as a row.
 
-Related specs: [editable-track.md](editable-track.md) (the item),
+Related specs: [editable-track.md](editable-track.md) and
+[editable-measurement.md](editable-measurement.md) (the two kinds of item),
 [`../reconstruction/edited-reconstruction.md`](../reconstruction/edited-reconstruction.md)
 (the reconstruction value a commit writes into),
 [`../../gui/bench.md`](../../gui/bench.md) (the viewer's half: the version each
@@ -42,11 +48,22 @@ pub struct Bench { /* … */ }
 
 pub enum BenchItem {
     Track(Arc<EditableTrack>),
+    Measurement(Arc<EditableMeasurement>),
+}
+
+impl BenchItem {
+    pub fn kind(&self) -> ItemKind;
+    pub fn as_track(&self) -> Option<&Arc<EditableTrack>>;
+    pub fn as_measurement(&self) -> Option<&Arc<EditableMeasurement>>;
+    /// The same `Arc`, which is how a step that did not touch an item leaves it.
+    pub fn same_value(&self, other: &BenchItem) -> bool;
 }
 
 pub enum ItemKind {
     Track,
+    Measurement,
 }
+// Display writes `track` or `measurement`.
 
 /// Minted by `put` from one counter shared by the whole process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -81,6 +98,7 @@ impl Bench {
     pub fn position(&self, label: &str) -> Option<usize>;
     pub fn get(&self, label: &str) -> Option<&BenchItem>;
     pub fn track(&self, label: &str) -> Option<&Arc<EditableTrack>>;
+    pub fn measurement(&self, label: &str) -> Option<&Arc<EditableMeasurement>>;
     pub fn id(&self, label: &str) -> Option<ItemId>;
     pub fn label_of(&self, id: ItemId) -> Option<&str>;
 
@@ -95,12 +113,18 @@ impl Bench {
 
 /// What `Bench::delete_image` did.
 pub struct ImageDeletion {
-    /// Items still on the bench whose observations moved, with where each
+    /// Tracks still on the bench whose observations moved, with where each
     /// observation went (`None` for one in the deleted image).
     pub renumbered: Vec<(ItemId, Vec<Option<usize>>)>,
-    /// Observations that were in the deleted image, over every item.
+    /// Observations that were in the deleted image, over every track.
     pub dropped: usize,
-    /// Items discarded because every observation was in the deleted image.
+    /// Measurements still on the bench whose endpoints changed.
+    pub moved_measurements: Vec<ItemId>,
+    /// Measurement endpoints that were in the deleted image, over every
+    /// measurement.
+    pub endpoints_cleared: usize,
+    /// Items discarded because every observation or endpoint they had was in
+    /// the deleted image.
     pub discarded: Vec<String>,
 }
 
@@ -185,6 +209,7 @@ uniqueness.
 | A pixel | the image stem and the rounded pixel, `IMG_0042@142,198` | `ClusterSeed::label` |
 | A `.sift` feature | the image stem and the feature index, `IMG_0042#847` | `ClusterSeed::label` |
 | A split | the parent's label with `-split` appended | `split` |
+| A stored measurement | its kind and row, `distance #2` | `put_measurement` |
 
 A collision takes ` (2)`, ` (3)`, the same disambiguation a scene node's label
 takes, so a reader who knows one knows the other. A label is stable until
@@ -227,7 +252,13 @@ deleted image would name the photograph after the one it was sighted in.
 `Bench::delete_image(image)` is the bench as it reads after the delete: each
 track goes through `EditableTrack::delete_image`
 ([editable-track.md](editable-track.md) § "When an image is deleted"), which
-drops its observations in `image` and moves those in later images down by one.
+drops its observations in `image` and moves those in later images down by one,
+and each measurement through `EditableMeasurement::delete_image`
+([editable-measurement.md](editable-measurement.md) § "When an image is
+deleted"), which clears an endpoint in `image` and moves one in a later image
+down by one. **A measurement left with neither endpoint is discarded** for the
+reason a track left with no observation is, and one with no endpoint placed to
+begin with is left alone.
 
 **A track left with no observations is discarded.** When every observation a
 track had was in the deleted image, nothing it was made of is left in the
@@ -244,12 +275,13 @@ the image or after it, was not taken: it would make a bench item a lock on the
 reconstruction, and a person deleting an image has usually decided that image
 is wrong, which is a decision about the tracks that sighted it too.
 
-Every item the delete does not reach (one whose observations are all in
-earlier images) is the same `Arc` in both benches, and every item keeps its
-`ItemId`. The report carries, per item it renumbered, where each observation
-went, so a caller holding observation indexes can follow them; how many
-observations were dropped; and the labels it discarded. `changed()` is false
-when no item observed the deleted image or any after it.
+Every item the delete does not reach (one whose observations or endpoints are
+all in earlier images) is the same `Arc` in both benches, and every item keeps
+its `ItemId`. The report carries, per track it renumbered, where each
+observation went, so a caller holding observation indexes can follow them; how
+many observations were dropped; the measurements whose endpoints changed and
+how many endpoints were cleared; and the labels it discarded. `changed()` is
+false when no item reached the deleted image or any after it.
 
 ## Implementation notes
 
@@ -260,11 +292,13 @@ label it already holds is allowed, because the label it collides with is itself;
 ## Python bindings
 
 `sfmtool.bench.Bench`. Construct one with `Bench()`; read it with
-`len(bench)`, `bench.labels`, `bench.track(label)`, `bench.id(label)` (the
-item's ID as an `int`, or `None` when nothing has that label); change it with
-`bench.discard`, `bench.rename` and `bench.replace`, each of which returns the next bench and
-leaves the object it was called on as it was. A refusal is a `ValueError`
-carrying the core sentence.
+`len(bench)`, `bench.labels`, `bench.track(label)`, `bench.measurement(label)`,
+`bench.kind(label)` (`"track"`, `"measurement"`, or `None`), `bench.id(label)`
+(the item's ID as an `int`, or `None` when nothing has that label); change it
+with `bench.discard`, `bench.rename` and `bench.replace` (which takes an
+`EditableTrack` or an `EditableMeasurement`), each of which returns the next
+bench and leaves the object it was called on as it was. A refusal is a
+`ValueError` carrying the core sentence.
 
 The `bench` submodule is deliberately **not** re-exported into the flat
 `sfmtool.*` namespace the way the others are: its steps are named for what they
@@ -304,6 +338,11 @@ deleted image discarded and named in the report, an empty track and a track
 in earlier images kept as the same `Arc`, every kept item keeping its ID, the
 dropped count and the per-item observation map, and a delete no item reaches
 changing nothing.
+[bench/tests/measurement.rs](../../../crates/sfmtool-core/src/bench/tests/measurement.rs)
+covers the measurement item on the bench: its label and the collision suffix,
+`Bench::measurement` and the item's kind, and `Bench::delete_image` on it (an
+endpoint cleared, one moved down, an item left with none discarded, an item
+the delete does not reach keeping its `Arc`).
 [tests/rust_bindings/bench/test_bench_rust_bindings.py](../../../tests/rust_bindings/bench/test_bench_rust_bindings.py)
 covers the same through the bindings, `bench.id` (an `int`, kept by a rename,
 `None` for an unknown label), a discard taking off only its item, and the
@@ -312,9 +351,8 @@ on unchanged.
 
 ## Non-goals
 
-- **A second kind of item.** The bench is shaped so one can be added; only the
-  editable track exists, and a pose being re-fitted or a set of images judged
-  together is proposed in
+- **A third kind of item.** The bench holds tracks and measurements; a pose
+  being re-fitted or a set of images judged together is proposed in
   [`../../drafts/sfm-explorer-track-editing.md`](../../drafts/sfm-explorer-track-editing.md).
 - **A bench across reconstructions.** A bench belongs to one reconstruction, and
   an item names that reconstruction's images.

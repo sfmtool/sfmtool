@@ -55,6 +55,7 @@ use crate::state::AppState;
 
 pub(crate) mod geometry;
 pub(crate) mod live;
+pub(crate) mod measurement;
 pub(crate) mod nearby_tracks;
 pub(crate) mod surface_tiling;
 pub(crate) mod track_at_pixel;
@@ -461,9 +462,22 @@ impl AppState {
             );
             return;
         }
-        let origin = self.focused_origin();
+        // A measurement item leaves the point selection alone, and its origin
+        // is the selected measurement already.
+        let left = self.left_origin();
         self.leave_focused_item();
-        self.select_left_origin(origin);
+        if let Some(origin) = left {
+            self.select_left_origin(origin);
+        }
+    }
+
+    /// The point selection unfocusing the focused item leaves: `Some` of its
+    /// origin as it resolves now, or of no point, when the focused item is a
+    /// track; `None` when it is a measurement, which leaves the point
+    /// selection alone, or when nothing is focused.
+    fn left_origin(&self) -> Option<Option<PointRef>> {
+        (self.focused_item_kind() == Some(sfmtool_core::bench::ItemKind::Track))
+            .then(|| self.focused_origin())
     }
 
     /// Unfocus the focused item and write its `Stopped editing` row, leaving
@@ -523,9 +537,21 @@ impl AppState {
         if self.selected_recon != Some(focused.node) {
             self.select_recon(focused.node);
         }
-        match self.focused_origin() {
-            Some(origin) => self.select_point(origin),
-            None => self.selected_point = None,
+        // A measurement item selects its origin, the stored measurement, or
+        // none, and leaves the point selection alone.
+        if self.focused_item_kind() == Some(sfmtool_core::bench::ItemKind::Measurement) {
+            match self.focused_measurement_origin() {
+                Some(origin) => self.select_measurement(origin),
+                None => {
+                    self.selected_measurement = None;
+                    self.selected_endpoint = None;
+                }
+            }
+        } else {
+            match self.focused_origin() {
+                Some(origin) => self.select_point(origin),
+                None => self.selected_point = None,
+            }
         }
         self.action_log.unmute();
     }
@@ -541,17 +567,22 @@ impl AppState {
         }
     }
 
-    /// The most recently focused item that is on its node's bench at the
-    /// cursor, as its node and its label there: what ticking Track View's
-    /// *Edit* box with no point selected focuses.
+    /// The most recently focused item of `kind` that is on its node's bench
+    /// at the cursor, as its node and its label there: what ticking Track
+    /// View's *Edit* box with no point selected focuses (a track), and
+    /// Measurement View's with no measurement selected (a measurement).
     ///
-    /// The first entry of [`AppState::recent_items`] that resolves, so an item
-    /// discarded since it was focused is passed over for the next, and comes
-    /// back when an undo puts it on the bench again.
-    pub(crate) fn most_recent_item(&self) -> Option<(ReconId, String)> {
+    /// The first entry of [`AppState::recent_items`] of that kind that
+    /// resolves, so an item discarded since it was focused is passed over for
+    /// the next, and comes back when an undo puts it on the bench again.
+    pub(crate) fn most_recent_item_of(
+        &self,
+        kind: sfmtool_core::bench::ItemKind,
+    ) -> Option<(ReconId, String)> {
         self.recent_items.iter().find_map(|recent| {
-            let label = self.bench(recent.node)?.label_of(recent.item)?;
-            Some((recent.node, label.to_string()))
+            let bench = self.bench(recent.node)?;
+            let label = bench.label_of(recent.item)?;
+            (bench.get(label)?.kind() == kind).then(|| (recent.node, label.to_string()))
         })
     }
 
@@ -647,7 +678,7 @@ impl AppState {
         let bench = self.bench(id).ok_or(crate::state::NOT_LOADED)?;
         let track = bench
             .track(label)
-            .ok_or_else(|| format!("Nothing on the bench is called {label}."))?;
+            .ok_or_else(|| self.no_such_track(id, label))?;
         let item = bench.id(label).expect("the track is on the bench");
         if self.focused_item != Some(FocusedItem { node: id, item }) {
             return Err(format!(
@@ -758,6 +789,15 @@ impl AppState {
     /// The track called `label` on `id`'s bench, at that node's cursor.
     pub(crate) fn bench_track(&self, id: ReconId, label: &str) -> Option<&Arc<EditableTrack>> {
         self.bench(id)?.track(label)
+    }
+
+    /// Why `label` names no track on `id`'s bench: it names a measurement
+    /// ([`measurement::not_a_track`]), or nothing.
+    fn no_such_track(&self, id: ReconId, label: &str) -> String {
+        match self.bench(id).and_then(|bench| bench.measurement(label)) {
+            Some(_) => measurement::not_a_track(label),
+            None => format!("Nothing on the bench is called {label}."),
+        }
     }
 
     /// Put the point `point` names on its node's bench as a track-stage
@@ -1057,6 +1097,7 @@ impl AppState {
                 BenchItem::Track(track) => self
                     .resolved_origin(node, track)
                     .is_some_and(|origin| origin == point.point),
+                BenchItem::Measurement(_) => false,
             })
             .map(|entry| entry.label.clone())
     }
@@ -1795,7 +1836,7 @@ impl AppState {
     /// second is not. With no point selected on `id`, or a selected point the
     /// version at the cursor no longer holds
     /// ([`Self::selected_point_held_in`]), the tick focuses the
-    /// most recently focused item still on a bench ([`Self::most_recent_item`]),
+    /// most recently focused item still on a bench ([`Self::most_recent_item_of`]),
     /// which may be on another node and selects it, and is refused with the
     /// ways in when there is none. Cleared (`false`), nothing is focused and
     /// every item stays on the bench ([`Self::unfocus_bench_item`]), which is
@@ -1811,7 +1852,7 @@ impl AppState {
                 .map(|_| ()),
             None => {
                 let (node, label) = self
-                    .most_recent_item()
+                    .most_recent_item_of(sfmtool_core::bench::ItemKind::Track)
                     .ok_or_else(crate::track_view::nothing_to_edit)?;
                 self.focus_bench_item(node, &label)
             }
@@ -1857,8 +1898,9 @@ impl AppState {
     }
 
     /// Focus the item at `position` on `id`'s bench, which selects the node it
-    /// is on, and raise Track View on it: a Scene tree double-click on a Bench
-    /// row.
+    /// is on, and raise the panel that edits it on it, Track View for a track
+    /// and Measurement View for a measurement: a Scene tree double-click on a
+    /// Bench row.
     ///
     /// An item already focused writes no row: the gesture asked for the panel,
     /// and the panel is what it gets. Applied by `app.rs` once the dock is
@@ -1877,7 +1919,12 @@ impl AppState {
                 return;
             }
         }
-        self.show_panel(crate::dock::Tab::TrackView);
+        // Beside the Scene tree, never over it (G2, G9).
+        let tab = match self.focused_item_kind() {
+            Some(sfmtool_core::bench::ItemKind::Measurement) => crate::dock::Tab::MeasurementView,
+            _ => crate::dock::Tab::TrackView,
+        };
+        self.show_panel_beside(tab, crate::dock::Tab::SceneGraph);
     }
 
     /// Take the item called `label` off the bench.
@@ -1898,15 +1945,20 @@ impl AppState {
             .discard(label)
             .map_err(|e| format!("Cannot discard that item: {e}"))?;
         let text = format!("Discarded {label} from the bench");
-        let left = self.focused_on(id).then(|| self.focused_origin());
+        let left = self.left_origin_on(id);
         self.push_bench_step(index, next, text);
         self.select_after_discard(left);
         Ok(())
     }
 
-    /// Whether the focused item is on `id`'s bench.
-    fn focused_on(&self, id: ReconId) -> bool {
-        self.focused_item.is_some_and(|focused| focused.node == id)
+    /// [`Self::left_origin`] when the focused item is on `id`'s bench, and
+    /// `None` otherwise.
+    fn left_origin_on(&self, id: ReconId) -> Option<Option<PointRef>> {
+        if self.focused_item.is_some_and(|focused| focused.node == id) {
+            self.left_origin()
+        } else {
+            None
+        }
     }
 
     /// The selection after a step that may have taken the focused item off
@@ -1939,7 +1991,7 @@ impl AppState {
         let count = bench.len();
         let items = if count == 1 { "item" } else { "items" };
         let text = format!("Cleared the bench of {count} {items}");
-        let left = self.focused_on(id).then(|| self.focused_origin());
+        let left = self.left_origin_on(id);
         self.push_bench_step(index, Bench::new(), text);
         self.select_after_discard(left);
         Ok(())
@@ -2035,7 +2087,7 @@ impl AppState {
         let bench = Arc::clone(node.history.current_bench());
         let track = bench
             .track(label)
-            .ok_or_else(|| format!("Nothing on the bench is called {label}."))?;
+            .ok_or_else(|| self.no_such_track(id, label))?;
         let serial = node.history.current_version().serial;
         let seated = match self.resolved_origin(node, track) {
             Some(point) => track.with_origin(serial.as_u64(), point),
@@ -3082,7 +3134,7 @@ impl AppState {
             .history
             .current_bench()
             .track(label)
-            .ok_or_else(|| format!("Nothing on the bench is called {label}."))?;
+            .ok_or_else(|| self.no_such_track(id, label))?;
         let track = (**track).clone();
         let (edited, sources) = self.track_photometric_inputs(id, &track)?;
         Ok((edited, track, sources))
@@ -3113,7 +3165,7 @@ impl AppState {
             .history
             .current_bench()
             .track(label)
-            .ok_or_else(|| format!("Nothing on the bench is called {label}."))?;
+            .ok_or_else(|| self.no_such_track(id, label))?;
         let track = (**track).clone();
         let image_set = &node.recon().image_set;
         let patch_frame = match &track.stage {
@@ -3206,11 +3258,11 @@ impl AppState {
         }
         let index = self.node_index(id)?;
         let bench = Arc::clone(self.scene[index].history.current_bench());
-        let track = Arc::clone(
-            bench
-                .track(label)
-                .ok_or_else(|| format!("Nothing on the bench is called {label}."))?,
-        );
+        let track = match bench.get(label) {
+            Some(BenchItem::Track(track)) => Arc::clone(track),
+            Some(BenchItem::Measurement(_)) => return Err(measurement::not_a_track(label)),
+            None => return Err(format!("Nothing on the bench is called {label}.")),
+        };
         Ok((index, bench, track))
     }
 

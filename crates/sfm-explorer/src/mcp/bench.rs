@@ -60,22 +60,41 @@ pub(super) fn get_bench(state: &AppState, label: &str) -> JsonReply {
     let items: Vec<Value> = bench
         .entries()
         .iter()
-        .filter_map(|entry| {
-            let track = entry.item.as_track()?;
-            let (kept, out) = track.verdict_counts();
-            Some(json!({
+        .map(|entry| {
+            let measurement = match &entry.item {
+                sfmtool_core::bench::BenchItem::Track(track) => {
+                    let (kept, out) = track.verdict_counts();
+                    return json!({
+                        "item": entry.label,
+                        "kind": "track",
+                        "focused": focused == Some(entry.label.as_str()),
+                        "stage": track.stage_kind().to_string(),
+                        "origin": origin(track),
+                        "evaluation": evaluation(state, id, &entry.label),
+                        "counts": {
+                            "observations": track.observations.len(),
+                            "in": kept,
+                            "out": out,
+                        },
+                    });
+                }
+                sfmtool_core::bench::BenchItem::Measurement(measurement) => measurement,
+            };
+            // A measurement item: its kind, the row its origin names at the
+            // cursor (null where its commit would append one), and how many
+            // endpoints are placed. get_measurement with item reads it whole.
+            let row = state
+                .node(id)
+                .and_then(|node| state.resolved_measurement_origin(node, measurement));
+            json!({
                 "item": entry.label,
-                "kind": "track",
+                "kind": "measurement",
                 "focused": focused == Some(entry.label.as_str()),
-                "stage": track.stage_kind().to_string(),
-                "origin": origin(track),
-                "evaluation": evaluation(state, id, &entry.label),
-                "counts": {
-                    "observations": track.observations.len(),
-                    "in": kept,
-                    "out": out,
-                },
-            }))
+                "measurement_kind": measurement.kind().name(),
+                "origin": row.map(|index| json!({ "measurement_index": index })),
+                "label": measurement.label,
+                "counts": { "endpoints": measurement.placed_endpoints() },
+            })
         })
         .collect();
     Ok(json!({
@@ -137,9 +156,16 @@ pub(super) fn get_bench_track(state: &AppState, label: &str, named: Option<&str>
     let bench = state
         .bench(id)
         .ok_or_else(|| ToolError::new(crate::state::NOT_LOADED))?;
-    let track = bench
-        .track(&item)
-        .ok_or_else(|| no_such_item(bench, &item))?;
+    let track = match bench.get(&item) {
+        Some(sfmtool_core::bench::BenchItem::Track(track)) => track,
+        Some(sfmtool_core::bench::BenchItem::Measurement(_)) => {
+            return Err(ToolError::new(format!(
+                "{} Read it with get_measurement and item.",
+                crate::bench::measurement::not_a_track(&item)
+            )))
+        }
+        None => return Err(no_such_item(bench, &item)),
+    };
     let stage = track.stage_kind();
     let (kept, out) = track.verdict_counts();
     let observations = observation_rows(state, id, track);
@@ -1649,7 +1675,13 @@ fn no_focused_item(state: &AppState, id: ReconId) -> ToolError {
 }
 
 /// The refusal a label that names nothing gets, in the bench's own words.
+///
+/// A label that names a measurement item is not "nothing": a track tool given
+/// one says what it is, as the panel's steps do.
 fn no_such_item(bench: &Bench, item: &str) -> ToolError {
+    if bench.measurement(item).is_some() {
+        return ToolError::new(crate::bench::measurement::not_a_track(item));
+    }
     let labels: Vec<String> = bench.labels().map(|label| format!("{label:?}")).collect();
     let on_it = if labels.is_empty() {
         "nothing is on it".to_string()

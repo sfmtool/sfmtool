@@ -20,7 +20,7 @@ fn assert_close(a: f64, b: f64, tol: f64, what: &str) {
 /// The rows and readings of the fixture, its file declaring `unit`.
 fn read(unit: Option<&str>) -> (Vec<DistanceRow>, MeasurementReadings) {
     let recon = measured_reconstruction(unit);
-    let rows = distance_rows(&recon);
+    let rows = distance_rows(&recon.image_set.measurements);
     let readings = MeasurementReadings::of(&EditedReconstruction::new(Arc::new(recon)));
     (rows, readings)
 }
@@ -136,7 +136,7 @@ fn a_scaled_display_transform_never_scales_a_reading() {
     let node = crate::scene::node_by_id(&state.scene, id).unwrap();
     let scaled = readings(node);
     assert_eq!(plain.distance, scaled.distance);
-    let rows = distance_rows(node.recon());
+    let rows = distance_rows(node.edited().measurements());
     assert_eq!(
         distance_result(&rows[0], &plain.distance[0], Some("m")),
         distance_result(&rows[0], &scaled.distance[0], Some("m"))
@@ -349,8 +349,8 @@ fn a_deleted_image_moves_the_selection_with_its_measurement_or_clears_it() {
         Some(MeasurementRef::distance(id, 1))
     );
     let node = crate::scene::node_by_id(&state.scene, id).unwrap();
-    assert_eq!(measurement_count(node.recon()), 3);
-    assert_eq!(distance_rows(node.recon())[1].label, "");
+    assert_eq!(measurement_count(node.edited().measurements()), 3);
+    assert_eq!(distance_rows(node.edited().measurements())[1].label, "");
 
     let (mut state, id) = measured_state(Some("m"));
     state.select_measurement(MeasurementRef::distance(id, 4));
@@ -360,24 +360,26 @@ fn a_deleted_image_moves_the_selection_with_its_measurement_or_clears_it() {
     assert_eq!(state.selected_measurement, None);
 }
 
-/// Undo and redo keep the selection where the version arrived at has its row,
-/// and clear it where it does not; a redo that brings the row back leaves it
-/// cleared.
+/// Undo and redo carry the selection across the delete that renumbered the
+/// rows, back onto the measurement that was selected; a redo that drops the
+/// selected row clears the selection, and an undo that brings the row back
+/// leaves it cleared.
 #[test]
-fn undo_and_redo_keep_the_selection_only_where_the_row_is() {
+fn undo_and_redo_carry_the_selection_with_its_measurement() {
     let (mut state, id) = measured_state(Some("m"));
     state
         .delete_image(ImageRef::new(id, 1))
         .expect("the delete runs");
-    // Row 2 of the three rows left.
+    // Row 2 of the three rows left, which was row 3 before the delete.
     state.select_measurement(MeasurementRef::distance(id, 2));
     state.undo(id).expect("an undo");
     state.prune_measurement_selection();
     assert_eq!(
         state.selected_measurement,
-        Some(MeasurementRef::distance(id, 2)),
-        "the version before the delete has five rows"
+        Some(MeasurementRef::distance(id, 3)),
+        "the selection follows its measurement back to its own row"
     );
+    // Row 4 has an endpoint in image 1, so the redo drops it.
     state.select_measurement(MeasurementRef::distance(id, 4));
     state.redo(id).expect("a redo");
     state.prune_measurement_selection();
@@ -402,4 +404,32 @@ fn the_fixtures_endpoints_resolve_to_its_points() {
             assert_close(position[c], POINTS[point as usize][c], 1e-4, "position");
         }
     }
+}
+
+/// Deleting an image of a value built by hand whose measurement columns
+/// disagree in length does not panic, and the selection follows the rows the
+/// subset keeps: the row with no image index survives no delete.
+#[test]
+fn deleting_an_image_of_mismatched_measurement_columns_does_not_panic() {
+    let mut recon = crate::measurements::fixture::measured_reconstruction(Some("m"));
+    let m = recon.image_set.measurements.distance.as_mut().unwrap();
+    // Five distances, but image indexes and units for the first four only.
+    m.image_indexes = m.image_indexes.slice(ndarray::s![..4, ..]).to_owned();
+    m.units = m.units.slice(ndarray::s![..4]).to_owned();
+    let mut state = crate::state::AppState::new();
+    let id = state.append_node(crate::scene::SceneNode::from_path(
+        std::path::Path::new("measured.sfmr"),
+        recon,
+    ));
+    state.select_measurement(MeasurementRef::distance(id, 3));
+    state
+        .delete_image(ImageRef::new(id, 2))
+        .expect("the delete runs");
+    // Rows 0 to 3 name images 0 and 1 only and survive; row 4 has none.
+    let node = state.node(id).unwrap();
+    assert_eq!(measurement_count(node.edited().measurements()), 4);
+    assert_eq!(
+        state.selected_measurement,
+        Some(MeasurementRef::distance(id, 3))
+    );
 }

@@ -335,6 +335,29 @@ two parts instead: an immutable base, and the small set of edits made on it.
 The images and the cameras are the base's. An edit to the image set is not an
 overlay edit.
 
+### Measurements of the value's own
+
+The one thing besides points an overlay can hold is the **measurements**, the
+file's `measurements/` section. A value holds the base's measurements until an
+edit sets its own with `with_measurements`, which returns the value with those
+measurements in place and nothing else changed: the same base `Arc`, the same
+deleted set and additions. A measurement names images and pixels and no point,
+so replacing the measurements moves no point index, and sharing the base is
+what makes a measurement edit cost the measurements alone rather than a copy of
+every point, track and patch bitmap. `measurements()` reads the value's own, or
+the base's where it has none, and everything that reads a value's measurements
+reads them there, not off the base.
+
+`with_measurements` checks nothing against the image set: its callers build the
+measurements from rows they have checked, as the bench's measurement commit
+does ([../bench/editable-measurement.md](../bench/editable-measurement.md)).
+
+`has_edits` is whether the value differs from its base at all: a point deleted,
+added or replaced, or measurements of its own. A caller that wants the plain
+reconstruction reads the base directly only where it is false, and
+materialises otherwise, so measurements of the value's own are never lost to a
+shortcut that took the base as the value.
+
 ### Two kinds of edit
 
 A **point edit** lives in the overlay and is always delete-and-re-add. A point
@@ -398,10 +421,17 @@ pub struct EditedReconstruction {
     pub added: PointSet,
     /// Per added point: the base index it replaces, or `None` if it is new.
     pub replaces: Vec<Option<u32>>,
+    // and, private, the measurements of the value's own, if any
 }
 
 impl EditedReconstruction {
     pub fn new(base: Arc<SfmrReconstruction>) -> Self;
+
+    // The measurements: the value's own, or the base's.
+    pub fn measurements(&self) -> &MeasurementsData;
+    pub fn with_measurements(&self, measurements: MeasurementsData) -> Self;
+    /// A point deleted, added or replaced, or measurements of its own.
+    pub fn has_edits(&self) -> bool;
 
     // Counts, all O(1).
     pub fn point_count(&self) -> usize;
@@ -540,7 +570,8 @@ its new record and track; a deleted point's slot closes up, shifting the points
 after it down by one; and only a point that is new to this base is appended,
 after the last base point, in the order the additions were made. The derived
 indexes are rebuilt at the end. The image set is the base's, thumbnails shared
-rather than copied.
+rather than copied, with the value's measurements (its own where it has them)
+in place of the base's, and the metadata's counts of them to match.
 
 Keeping places is what makes the materialised file readable beside the one it
 came from: a point that was edited is at the same row in both, a point that was

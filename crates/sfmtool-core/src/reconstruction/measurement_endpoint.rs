@@ -725,7 +725,7 @@ pub fn resolve_distance_measurements(
     edited: &EditedReconstruction,
     options: &MeasurementEndpointOptions,
 ) -> Vec<ResolvedDistanceMeasurement> {
-    let Some(m) = edited.base.image_set.measurements.distance.as_ref() else {
+    let Some(m) = edited.measurements().distance.as_ref() else {
         return Vec::new();
     };
     (0..m.len())
@@ -740,20 +740,34 @@ pub fn resolve_distance_measurements(
                         .get((i, k, c))
                         .map_or(f64::NAN, |&v| f64::from(v))
                 };
-                resolve_measurement_endpoint(edited, image, [xy(0), xy(1)], options)
+                (image, [xy(0), xy(1)])
             };
-            let endpoints = [endpoint(0), endpoint(1)];
-            let finite = |e: &Result<EndpointResolution, EndpointRefusal>| {
-                e.as_ref().ok().and_then(|r| r.position().finite())
-            };
-            let scene_distance = match (finite(&endpoints[0]), finite(&endpoints[1])) {
-                (Some(a), Some(b)) => Some((Vector3::from(a) - Vector3::from(b)).norm()),
-                _ => None,
-            };
-            ResolvedDistanceMeasurement {
-                endpoints,
-                scene_distance,
-            }
+            resolve_distance_endpoints(edited, [endpoint(0), endpoint(1)], options)
         })
         .collect()
+}
+
+/// Resolve the two endpoints of one distance measurement, each an image and
+/// a pixel in it, with the distance between them in scene units where both
+/// are finite: what [`resolve_distance_measurements`] does for each stored
+/// row, for a measurement that is not stored, such as one being edited on the
+/// bench (`specs/core/bench/editable-measurement.md`).
+pub fn resolve_distance_endpoints(
+    edited: &EditedReconstruction,
+    endpoints: [(u32, [f64; 2]); 2],
+    options: &MeasurementEndpointOptions,
+) -> ResolvedDistanceMeasurement {
+    let endpoints =
+        endpoints.map(|(image, pixel)| resolve_measurement_endpoint(edited, image, pixel, options));
+    let finite = |e: &Result<EndpointResolution, EndpointRefusal>| {
+        e.as_ref().ok().and_then(|r| r.position().finite())
+    };
+    let scene_distance = match (finite(&endpoints[0]), finite(&endpoints[1])) {
+        (Some(a), Some(b)) => Some((Vector3::from(a) - Vector3::from(b)).norm()),
+        _ => None,
+    };
+    ResolvedDistanceMeasurement {
+        endpoints,
+        scene_distance,
+    }
 }

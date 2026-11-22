@@ -199,8 +199,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           Selection row in the Action Log, and a background task on the \
                           reconstruction does not refuse it. It selects the item's \
                           reconstruction and its origin point, or clears the point selection \
-                          when the item has none. The reply names the item, with changed: false \
-                          when it was focused already.",
+                          when the item has none; a measurement item selects its origin \
+                          measurement instead and leaves the point selection alone. The reply \
+                          names the item, with changed: false when it was focused already.",
             kind: Write,
             schema: object(
                 &[],
@@ -213,9 +214,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "unfocus_bench_item",
             description: "Stop editing: every item stays on its bench and none is focused, which \
-                          is Track View's Edit box cleared. It selects the item's origin point, \
-                          or clears the point selection when the item has none, so the panel \
-                          shows that point's committed track. It names no reconstruction, since there is \
+                          is Track View's or Measurement View's Edit box cleared. For a track it \
+                          selects the item's origin point, or clears the point selection when \
+                          the item has none, so the panel shows that point's committed track; a \
+                          measurement leaves the selection as it is. It names no reconstruction, since there is \
                           one focused item for the viewer. Not a step: it pushes no version and \
                           writes one Selection row. The reply names the item it unfocused; with \
                           nothing focused, both are null and changed is false. get_bench then \
@@ -873,6 +875,47 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             kind: Write,
             schema: object(
                 &[("track", bench_track_schema())],
+                &[("reconstruction_label", edited_label_schema())],
+            ),
+        },
+        ToolSpec {
+            name: "put_measurement_on_bench",
+            description: "Put a stored measurement on the bench and focus it, as a double-click \
+                          on its Scene tree Measurements row does, without raising Measurement \
+                          View or framing the measurement: one version labelled like \"Put \
+                          distance #2 on the bench\", the item labelled by its kind and row \
+                          (distance #2, with a suffix where another item holds that). The \
+                          measurement is selected first. Where an item on the bench already came \
+                          from that row, that item is focused and no version is pushed \
+                          (changed: false). Allowed on a sift_files reconstruction, whose bench \
+                          is view-only: the item can be viewed and every step that edits it is \
+                          refused. The reply names the item.",
+            kind: Write,
+            schema: object(
+                &[("measurement_kind", measurement_kind_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("measurement_index", measurement_index_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "commit_bench_measurement",
+            description: "Write a measurement item into the reconstruction as one version, as \
+                          Measurement View's Commit does: the row its origin names at the \
+                          cursor is replaced, and where it names none (the item's row was \
+                          deleted) a row is appended. Only the measurements change: no point \
+                          index moves. Refused, in the panel's words, for an endpoint not \
+                          placed, no stated distance, an endpoint image past the image set, a \
+                          pixel outside its image, on a sift_files reconstruction (view-only \
+                          bench) and while a background task holds the node. The item stays on \
+                          the bench, seated on the row written, which becomes the selected \
+                          measurement; the reply names it with replaced. A commit onto a row \
+                          that already holds exactly what the item holds pushes no version \
+                          and answers changed: false. Naming no item commits the focused one.",
+            kind: Write,
+            schema: object(
+                &[("item", bench_item_schema())],
                 &[("reconstruction_label", edited_label_schema())],
             ),
         },

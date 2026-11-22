@@ -14,14 +14,21 @@ reconstruction makes of the length between them. The 3D position of an
 endpoint comes from
 [core/reconstruction/measurement-endpoint.md](../core/reconstruction/measurement-endpoint.md).
 
-The panel reads measurements and does not edit them. Switching an endpoint to
-another photograph, setting one by hand, renaming, setting the stated distance,
-deleting and creating a measurement, and drawing measurements in the 3D view
-and Image Detail are proposed in
+A measurement is edited on the bench, as a track is ([bench.md](bench.md)): a
+double-click on its row puts it on the bench as an item and focuses it, the
+panel's **Edit** box shows that item with its readings taken live from it, and
+*Commit* writes it back into the file in one step. Deleting a stored
+measurement is a direct edit from its row's menu. Switching an endpoint to
+another photograph, setting one by hand, setting the label and the stated
+distance, creating a measurement, and drawing measurements in the 3D view and
+Image Detail are proposed in
 [drafts/measurement-view.md](../drafts/measurement-view.md).
 
 Related specs: [track-view.md](track-view.md) (the panel this one is modelled
-on, and the crops it reuses), [scene-graph.md](scene-graph.md) (the tree the
+on, and the crops it reuses), [bench.md](bench.md) § "Measurement items" (the
+item, its origin and its commit, in the viewer) and
+[core/bench/editable-measurement.md](../core/bench/editable-measurement.md)
+(in core), [scene-graph.md](scene-graph.md) (the tree the
 rows go in), [panel-layout.md](panel-layout.md) (the tab),
 [mcp-server.md](mcp-server.md) (the tools), and
 [formats/sfmr-file-format.md](../formats/sfmr-file-format.md) § 10
@@ -31,16 +38,19 @@ rows go in), [panel-layout.md](panel-layout.md) (the tab),
 
 The code is in
 [measurements.rs](../../crates/sfm-explorer/src/measurements.rs) (the
-reference, the readings and their text),
+reference, the readings and their text, and an item's live readings),
 [measurement_view.rs](../../crates/sfm-explorer/src/measurement_view.rs) (the
 panel),
+[bench/measurement.rs](../../crates/sfm-explorer/src/bench/measurement.rs)
+(putting a measurement on the bench, the commit and the delete),
 [scene_graph/measurements.rs](../../crates/sfm-explorer/src/scene_graph/measurements.rs)
 (the Scene tree group) and
 [mcp/measurements.rs](../../crates/sfm-explorer/src/mcp/measurements.rs) (the
 tools).
 
 ```rust
-pub(crate) enum MeasurementKind { Distance }
+// Core's, re-exported: `title()` is `Distance`, `name()` is `distance`.
+pub(crate) use sfmtool_core::bench::MeasurementKind;
 
 /// One measurement of one loaded reconstruction.
 pub(crate) struct MeasurementRef {
@@ -59,6 +69,18 @@ impl AppState {
     pub(crate) fn select_measurement(&mut self, measurement: MeasurementRef);
     pub(crate) fn select_endpoint(&mut self, measurement: MeasurementRef, side: EndpointSide);
     pub(crate) fn prune_measurement_selection(&mut self);
+
+    // The bench (bench.md § "Measurement items").
+    pub(crate) fn put_measurement_on_bench(&mut self, measurement: MeasurementRef)
+        -> Result<PutMeasurement, String>;
+    pub(crate) fn set_measurement_editing(&mut self, id: ReconId, on: bool)
+        -> Result<(), String>;
+    pub(crate) fn commit_bench_measurement(&mut self, id: ReconId, label: &str)
+        -> Result<MeasurementCommitted, String>;
+    pub(crate) fn delete_measurement(&mut self, measurement: MeasurementRef)
+        -> Result<(), String>;
+    /// A click on an endpoint block of the focused item.
+    pub(crate) fn select_item_endpoint(&mut self, id: ReconId, side: EndpointSide);
 }
 
 /// The readings of the version a node shows, resolved once per version.
@@ -68,6 +90,11 @@ pub(crate) fn distance_result(
     resolved: &ResolvedDistanceMeasurement,
     world_space_unit: Option<&str>,
 ) -> DistanceResult;
+/// A version's stored distance rows, read from the value's measurements.
+pub(crate) fn distance_rows(measurements: &MeasurementsData) -> Vec<DistanceRow>;
+/// A measurement item's live readings against a version.
+pub(crate) fn item_reading(edited: &EditedReconstruction,
+                           item: &EditableMeasurement) -> ItemReading;
 ```
 
 The reference carries the kind because each kind's rows are numbered within
@@ -107,13 +134,24 @@ endpoint.
 **The selection follows the version.** Measurements are never renumbered by a
 point edit. Deleting an image drops the measurements with an endpoint in it and
 renumbers the rows after them, as `SfmrReconstruction::subset_by_image_indices`
-does; the selection moves with its measurement, or is cleared where its
-measurement was dropped (`AppState::follow_measurement_rows`). Every frame,
+does, and deleting a measurement drops its row and renumbers the rows after
+it; the selection moves with its measurement, or is cleared where its
+measurement was dropped (`AppState::follow_measurement_rows`). Each such
+version keeps that renumbering as its measurement map
+([document-model.md](document-model.md)), and **an undo or a redo carries the
+selection across it** (`AppState::follow_measurement_step`): an undo of the
+delete puts the selection back on the measurement that was selected, at the
+row it holds again, and a redo moves it down once more. A row the step being
+redone drops clears the selection. When the move ends, and again every frame
 before the panels draw, `AppState::prune_measurement_selection` clears a
-selection whose row the version on screen does not hold, so an undo or a redo
-keeps the selection where the version arrived at has that row and clears it
-where it does not. A cleared selection stays cleared when a later step brings
-the row back.
+selection whose row the version on screen does not hold, such as one on a row
+an undone commit had appended. A cleared selection stays cleared when a later
+step brings the row back, except while a measurement item is focused and its
+origin was the selection (or both were none, its row gone) before the move:
+the selected measurement is then the item's origin at the cursor, so an undo
+or a redo that brings the origin's row back selects it again, with no Action
+Log row beside the move's own. A selection the person cleared while the item
+stayed focused stays cleared across an undo or a redo.
 
 ## The readings
 
@@ -183,17 +221,24 @@ The row gestures follow the interaction rules of
 
 - **Click** (G1): select the measurement and its reconstruction, and nothing
   more (§ "The selection").
-- **Double-click** (G2, a set of things): select it, raise Measurement View
-  beside the tree through `show_panel_beside` (G9), and frame the measurement
-  in the 3D view: the view keeps its orientation and moves so that its finite
-  endpoints are inside the middle half of the viewport, the orbit target on
-  their centroid (`Viewer3D::frame_keeping_orientation`). A measurement with
-  one finite endpoint centres it at the orbit distance the view had, and one
-  with none leaves the view where it is. The raise is a layout operation, so
-  the double-click is kept for `SceneGraphPanel::take_measurement_open` and
-  applied by `app.rs` once the dock is back in the state
-  (`app::apply_measurement_open`).
-- **Right-click** (G3): opens no menu, and selects nothing.
+- **Double-click** (G2, a stored measurement): put it on the bench and focus
+  it, or focus its item where it is on the bench already, which selects it
+  (`AppState::put_measurement_on_bench`, § "The Edit box"); raise Measurement
+  View beside the tree through `show_panel_beside` (G9); and frame the
+  measurement in the 3D view: the view keeps its orientation and moves so that
+  its finite endpoints are inside the middle half of the viewport, the orbit
+  target on their centroid (`Viewer3D::frame_keeping_orientation`). A
+  measurement with one finite endpoint centres it at the orbit distance the
+  view had, and one with none leaves the view where it is. The raise is a
+  layout operation, so the double-click is kept for
+  `SceneGraphPanel::take_measurement_open` and applied by `app.rs` once the
+  dock is back in the state (`app::apply_measurement_open`). A put refused
+  while a background task holds the node is one failed row, and nothing is
+  raised or framed.
+- **Right-click** (G3): selects nothing and opens the row's menu: *Edit on
+  Bench*, which is the double-click, and *Delete*, which deletes the stored
+  measurement (§ "Deleting a measurement"), greyed with the reason while a
+  background task or a camera model proposal holds the node.
 
 The selected measurement's row is drawn selected.
 
@@ -212,6 +257,10 @@ panel existed loads with it closed ([panel-layout.md](panel-layout.md)
 ## What the panel shows
 
 **No reconstruction loaded**: one line saying so.
+
+Otherwise the panel opens with the **Edit** box (§ "The Edit box"). With it
+clear, the panel shows the selected stored measurement, read-only, as below;
+with it ticked, the focused measurement item (§ "The edited mode").
 
 **No measurement selected**: one line saying so, then, where the selected
 reconstruction has measurements, each listed as the Scene tree lists it, as a
@@ -308,6 +357,113 @@ patch are one target.
   frustum and outlines its thumbnail, and clears the hovered point.
 - **Right-click** (G3): opens no menu, and selects nothing.
 
+In the edited mode a click on a block selects the endpoint and its image with a
+reveal of the item's pixel (`AppState::select_item_endpoint`), and a
+double-click enters camera view toward it, as for a stored row.
+
+## The Edit box
+
+Track View's **Edit** box, with the same meaning: it is ticked exactly when the
+focused item is a measurement on the selected node's bench
+(`AppState::focused_measurement_label`). Track View and Measurement View each
+tick their box only for their own kind of item, so with a measurement focused
+Track View's box is clear, and the reverse.
+
+- **Ticking it with a measurement selected** puts that measurement on the bench
+  and focuses it (`AppState::set_measurement_editing`, which calls
+  `put_measurement_on_bench`): one version, `Put distance #2 on the bench`,
+  the item labelled by the measurement's kind and row. Where an item on the
+  bench already came from that row (its origin, followed to the cursor), that
+  item is focused instead and no version is pushed. Only the put is refused
+  while a background task holds the node, and the box is greyed with the
+  node's sentence then.
+- **Ticking it with none selected** focuses the most recently focused
+  measurement item still on a bench (`AppState::most_recent_item_of`), and with
+  none of those the box is greyed, naming the ways in.
+- **Clearing it** unfocuses the item, which stays on the bench; the selection
+  is left as it is.
+
+A double-click on a Measurements row and *Edit on Bench* in its menu do what a
+tick does, and raise the panel. On a `sift_files` reconstruction the
+measurement goes on the bench and is viewed as on any other, and its commit is
+refused with the view-only sentence ([bench.md](bench.md) § "A view-only
+bench").
+
+**While a measurement item is focused**, the selected measurement is its origin
+followed to the cursor, or none where its row is gone or the person cleared the
+selection, and the selected point is left alone: selecting a point on the same
+node keeps the item focused, and
+selecting any other measurement, or anything on another node, unfocuses it
+([bench.md](bench.md) § "The focused item").
+
+## The edited mode
+
+With the box ticked the panel shows the focused item:
+
+- **The toolbar**: *Commit* (§ "The commit"), greyed with the refusal the step
+  would give; *Discard*, which takes the item off the bench in one version;
+  and *Rename*, which opens a field in place and commits on Enter or *Set*, as
+  Track View's do. *Discard* and *Rename* are greyed only while a background
+  task holds the node.
+- **The header**: the item's label on the bench and its node; where it came
+  from, `From Distance #2: Commit replaces it`, or `From no stored row: Commit
+  adds it as a new row` where its origin resolves to none; the measurement's
+  own label, or *No label*; the stated distance; and the median line (§ "Live
+  readings").
+- **The endpoint blocks**, as for a stored measurement, read from the item's
+  endpoints. They show the endpoints read-only. An endpoint that is not placed,
+  which deleting the image it was in leaves, is a block saying `Endpoint B is
+  not placed.`
+- **The result block**, from the live readings, or `No distance: endpoint B is
+  not placed.` where an endpoint is missing.
+
+### Live readings
+
+The focused item's readings are computed from the item, not read from the
+stored row: each placed endpoint is resolved against the version at the cursor
+with the resolver's default options (`measurements::item_reading`, which calls
+core's `resolve_distance_endpoints`), and the result block and the median line
+are computed from those. The panel keeps them against the item's `Arc` and the
+version's document serial, so a step on the item, or an edit of the
+reconstruction under it, reads them again on the next frame. The median line
+compares the item with the stored measurements other than its origin, so a
+person sees whether a change brings it into line before committing it.
+
+### The commit
+
+*Commit* writes the focused item into the reconstruction
+(`AppState::commit_bench_measurement`, [bench.md](bench.md) § "Measurement
+items"): the row its origin names at the cursor is replaced, or, where it names
+none, a row is appended. It is one ordinary edit, as a track's commit is
+([edits/commit-track.md](edits/commit-track.md)): one version, one Action Log
+row of kind `Edit` (`Committed distance #2 in dino`, `Added distance #4 in
+dino`), undoable like any other, and the node is marked dirty. The new value
+shares the old one's base, so no point, track or patch bitmap is copied and no
+point index moves. The item stays on the bench and focused, its origin
+re-seated on the row written, which is selected. A commit onto a row that
+already holds exactly what the item holds pushes no version and writes a
+no-effect row, and still selects the row.
+
+The button is greyed with the refusal as its hover text, asked of the item it
+would commit (`AppState::measurement_commit_refusal`), so the button and the
+step cannot disagree: a background task or a camera model proposal holding the
+node, a view-only bench, and core's refusals, an endpoint not placed, no stated
+distance, an endpoint's image past the image set, a pixel outside its image
+([core/bench/editable-measurement.md](../core/bench/editable-measurement.md)
+§ "The commit"). An endpoint the resolver refuses does not stop a commit, since
+the pixel is what the file stores.
+
+## Deleting a measurement
+
+*Delete* in a Measurements row's menu deletes the stored measurement
+(`AppState::delete_measurement`): a direct edit of the reconstruction, as
+deleting a point is, and not a bench step. One version (`Deleted distance #2 in
+dino`), one `Edit` row, the node marked dirty. The rows after it move down by
+one; the selected measurement follows, and every measurement item's origin
+follows through the version graph. An item whose origin was the deleted row
+stays on the bench with no row to replace, so committing it adds the
+measurement back as a new row.
+
 ## MCP
 
 The panel's content is reachable over MCP ([mcp-server.md](mcp-server.md)):
@@ -323,6 +479,14 @@ The panel's content is reachable over MCP ([mcp-server.md](mcp-server.md)):
 - `select_measurement` selects a measurement as a row click does, and, naming
   an `endpoint`, that endpoint as a click on its block does, including the
   reveal.
+- `put_measurement_on_bench` is a row's double-click without the raise and the
+  framing; `commit_bench_measurement` is *Commit*, on the item named or the
+  focused one; `delete_measurement` is *Delete*.
+- `get_measurement` naming an `item` gives a measurement item on the bench
+  with its live readings and its `origin`, and `get_bench` lists measurement
+  items beside tracks. `focus_bench_item`, `unfocus_bench_item`,
+  `rename_bench_item` and `discard_bench_item` work on a measurement item as on
+  a track.
 - `screenshot` accepts `measurement_view` as a `panel_name`.
 
 ## Artificial measurements
@@ -403,9 +567,38 @@ at-infinity case is covered by the Rust tests.
   `list_measurements`' rows and results, `get_measurement`'s resolutions,
   refusal and median line, an index past the rows refused with the count, and
   `select_measurement` with and without an endpoint.
-- **`ui_basic`**: the panel opens from the Panels menu, and from a
-  double-click on a Measurements row, on a measured copy of the seoul bull
-  ground truth.
+- **Undo and redo** (`bench/measurement/tests.rs`, `measurements/tests.rs`):
+  the selection carried back onto its own measurement by an undo of a
+  measurement delete and of an image delete, and down again by the redo; a
+  redo that drops the selected row clearing it.
+- **The save** (`state/save/tests.rs`): a save after a delete and an
+  appending commit writes the value's own rows, read back from the file.
+- **The bench** (`bench/measurement/tests.rs`): a put copies the row and
+  focuses the item, selecting its row and leaving the point selection; a
+  second put focuses the same item with no version; a point selection keeps a
+  focused measurement and another measurement's unfocuses it; Track View's and
+  Measurement View's labels each name their own kind; the *Edit* box's put,
+  focus, unfocus and refusal; the origin following a measurement delete, its
+  undo and redo, and a deleted origin's commit appending; the origin and the
+  endpoints following an image delete; a commit replacing the row with the
+  base shared, the node dirty and the row selected, and its undo; a commit that
+  changes nothing; the commit refusal matching the button's; a view-only bench
+  taking a measurement, renaming and discarding it, and refusing its commit;
+  an item endpoint's click; a Bench row's double-click raising the item's
+  panel beside the Scene tree, never over it.
+- **The edited mode** (`measurement_view/tests.rs`): ticking the box asks for
+  the put; the toolbar, the header and the live readings, which follow a step
+  on the item while the stored row's do not; an unplaced endpoint's block, the
+  result's line and *Commit* greyed with the refusal.
+- **The bench tools** (`mcp/tests/measurements.rs`): `put_measurement_on_bench`
+  once and twice, `get_bench` listing the item, a track tool refusing it;
+  `get_measurement` with an item; `delete_measurement` and
+  `commit_bench_measurement`'s no-effect and appending commits; a track tool
+  naming a measurement item saying what it is.
+- **`ui_basic`**: the panel opens from the Panels menu; a double-click on a
+  Measurements row puts the measurement on the bench and raises Measurement
+  View on the item, and after its row is deleted a click on *Commit* adds it
+  back as a new row, on a measured copy of the seoul bull ground truth.
 - **The script** (`tests/test_add_artificial_measurements.py`): every case
   with its known scale read back through the resolver, the copy without a
   unit, the recorded workspace, and a path under `test-data/` refused with
@@ -413,7 +606,9 @@ at-infinity case is covered by the Rust tests.
 
 ## Non-goals
 
-The panel does not edit a measurement or create one, and the 3D view and Image
-Detail do not draw measurements; those are proposed in
+The panel has no step that edits a measurement item: switching an endpoint to
+another photograph, setting an endpoint's image and pixel, and setting the
+label and the stated distance, as well as creating a measurement and drawing
+measurements in the 3D view and Image Detail, are proposed in
 [drafts/measurement-view.md](../drafts/measurement-view.md). An endpoint's 3D
 position is never set directly: it always follows from its image and pixel.

@@ -42,7 +42,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use jiff::Timestamp;
-use sfmtool_core::bench::{Bench, BenchItem};
+use sfmtool_core::bench::{Bench, BenchItem, MeasurementKind};
 use sfmtool_core::{EditedReconstruction, Se3Transform, SfmrReconstruction};
 
 /// What one step did to point indexes, which is the core edits' own vocabulary:
@@ -159,12 +159,64 @@ impl Version {
     }
 }
 
+/// What one step did to the rows of each kind of stored measurement: the
+/// measurements' analogue of its [`PointMap`].
+///
+/// Only two edits renumber rows: deleting an image drops the measurements with
+/// an endpoint in it, and deleting a measurement drops one row. Every other
+/// step leaves every row where it was, which is the identity, the empty map.
+/// A commit that appends a row is the identity too: no row moves, and the
+/// appended row exists only in the commit's own descendants, which are the
+/// only versions whose bench can name it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct MeasurementMap {
+    /// For each kind a step renumbered, entry `i` is where row `i` went, or
+    /// `None` for a row it dropped. A kind not listed kept its rows.
+    rows: Vec<(MeasurementKind, Vec<Option<u32>>)>,
+}
+
+impl MeasurementMap {
+    /// The map of a step that moved no row.
+    pub(crate) fn identity() -> Self {
+        Self::default()
+    }
+
+    /// The map of a step that renumbered `kind`'s rows as `rows` says: entry
+    /// `i` is where row `i` went, `None` for one dropped.
+    pub(crate) fn of(kind: MeasurementKind, rows: Vec<Option<u32>>) -> Self {
+        Self {
+            rows: vec![(kind, rows)],
+        }
+    }
+
+    /// Where row `index` of `kind` went, or `None` where the step dropped it.
+    pub(crate) fn forward(&self, kind: MeasurementKind, index: u32) -> Option<u32> {
+        match self.rows.iter().find(|(k, _)| *k == kind) {
+            None => Some(index),
+            Some((_, rows)) => rows.get(index as usize).copied().flatten(),
+        }
+    }
+
+    /// Which row of `kind` became row `index`, or `None` where none did.
+    pub(crate) fn inverse(&self, kind: MeasurementKind, index: u32) -> Option<u32> {
+        match self.rows.iter().find(|(k, _)| *k == kind) {
+            None => Some(index),
+            Some((_, rows)) => rows
+                .iter()
+                .position(|to| *to == Some(index))
+                .map(|from| from as u32),
+        }
+    }
+}
+
 /// One edge of the version graph: a version, the version it was made from, what
-/// the step did to point indexes, and which points it created.
+/// the step did to point indexes and to measurement rows, and which points it
+/// created.
 struct Step {
     serial: VersionSerial,
     parent: VersionSerial,
     map: PointMap,
+    measurements: MeasurementMap,
     created: Option<CreatedPoints>,
 }
 
@@ -403,6 +455,48 @@ impl History {
         to: VersionSerial,
         index: u32,
     ) -> Result<u32, VersionSerial> {
+        self.walk(
+            from,
+            to,
+            index,
+            |step, i| step.map.forward(i),
+            |step, i| step.map.inverse(i),
+        )
+    }
+
+    /// Where row `index` of `kind`'s measurements in version `from` is in
+    /// version `to`: [`Self::follow`]'s walk over the steps' measurement maps
+    /// ([`MeasurementMap`]) rather than their point maps.
+    ///
+    /// What a measurement item's origin is followed with, since a measurement
+    /// has no portable id and its row is its only name.
+    pub(crate) fn follow_measurement(
+        &self,
+        from: VersionSerial,
+        to: VersionSerial,
+        kind: MeasurementKind,
+        index: u32,
+    ) -> Result<u32, VersionSerial> {
+        self.walk(
+            from,
+            to,
+            index,
+            |step, i| step.measurements.forward(kind, i),
+            |step, i| step.measurements.inverse(kind, i),
+        )
+    }
+
+    /// The walk [`Self::follow`] and [`Self::follow_measurement`] share: back
+    /// from `from` to the last version both share, through `inverse` of each
+    /// step, then forward to `to` through `forward`.
+    fn walk(
+        &self,
+        from: VersionSerial,
+        to: VersionSerial,
+        index: u32,
+        forward: impl Fn(&Step, u32) -> Option<u32>,
+        inverse: impl Fn(&Step, u32) -> Option<u32>,
+    ) -> Result<u32, VersionSerial> {
         let up = self.ancestry(from);
         let down = self.ancestry(to);
         let meet = up.iter().copied().find(|s| down.contains(s)).ok_or(from)?;
@@ -411,19 +505,28 @@ impl History {
         // Back to the meeting point, inverting the step that made each version
         // along the way.
         for serial in up.iter().take_while(|s| **s != meet) {
-            let parent = self.parent_of(*serial).ok_or(*serial)?;
-            let map = self.map_between(parent, *serial).ok_or(*serial)?;
-            index = map.inverse(index).ok_or(*serial)?;
+            let step = self.step_into(*serial).ok_or(*serial)?;
+            index = inverse(step, index).ok_or(*serial)?;
         }
         // Then forward, in order, to the destination.
         let forward_leg: Vec<VersionSerial> =
             down.iter().copied().take_while(|s| *s != meet).collect();
         for serial in forward_leg.iter().rev() {
-            let parent = self.parent_of(*serial).ok_or(*serial)?;
-            let map = self.map_between(parent, *serial).ok_or(*serial)?;
-            index = map.forward(index).ok_or(*serial)?;
+            let step = self.step_into(*serial).ok_or(*serial)?;
+            index = forward(step, index).ok_or(*serial)?;
         }
         Ok(index)
+    }
+
+    /// The step that made `serial`, or `None` for the node's first version.
+    fn step_into(&self, serial: VersionSerial) -> Option<&Step> {
+        self.steps.iter().find(|s| s.serial == serial)
+    }
+
+    /// The measurement map of the step that made `serial`, or `None` for the
+    /// node's first version.
+    pub(crate) fn measurement_map_of(&self, serial: VersionSerial) -> Option<&MeasurementMap> {
+        self.step_into(serial).map(|step| &step.measurements)
     }
 
     /// Append `value` as the next version, discarding any redo tail.
@@ -534,6 +637,31 @@ impl History {
         label: impl Into<String>,
         created: Option<CreatedPoints>,
     ) -> VersionSerial {
+        self.push_renumbering(
+            value,
+            bench,
+            transform,
+            map,
+            MeasurementMap::identity(),
+            label,
+            created,
+        )
+    }
+
+    /// [`Self::push_pair`] for a step that renumbered measurement rows, which
+    /// says how in `measurements`: deleting an image, and deleting a
+    /// measurement.
+    #[allow(clippy::too_many_arguments, reason = "push_pair's, and the map")]
+    pub(crate) fn push_renumbering(
+        &mut self,
+        value: Option<EditedReconstruction>,
+        bench: Arc<Bench>,
+        transform: Option<Se3Transform>,
+        map: PointMap,
+        measurements: MeasurementMap,
+        label: impl Into<String>,
+        created: Option<CreatedPoints>,
+    ) -> VersionSerial {
         // The redo tail's values go; its maps stay, which is what lets an index
         // taken on a discarded version still be followed.
         self.versions.truncate(self.cursor + 1);
@@ -569,6 +697,7 @@ impl History {
             serial,
             parent,
             map,
+            measurements,
             created,
         });
         self.enforce_budget();
@@ -712,9 +841,7 @@ fn bench_bytes(bench: &Bench, previous: Option<&Bench>) -> u64 {
             !previous.is_some_and(|before| {
                 before
                     .get(&entry.label)
-                    .is_some_and(|held| match (held, &entry.item) {
-                        (BenchItem::Track(held), BenchItem::Track(now)) => Arc::ptr_eq(held, now),
-                    })
+                    .is_some_and(|held| held.same_value(&entry.item))
             })
         })
         .map(|entry| match &entry.item {
@@ -726,6 +853,12 @@ fn bench_bytes(bench: &Bench, previous: Option<&Bench>) -> u64 {
                     .and_then(|payload| payload.bitmap.as_ref())
                     .map_or(0, |bitmap| bitmap.len());
                 (entry.label.len() + observations + bitmap) as u64
+            }
+            // A measurement is two endpoints, a distance and a label.
+            BenchItem::Measurement(measurement) => {
+                (entry.label.len()
+                    + std::mem::size_of::<sfmtool_core::bench::EditableMeasurement>()
+                    + measurement.label.len()) as u64
             }
         })
         .sum()

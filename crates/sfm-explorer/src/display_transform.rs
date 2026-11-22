@@ -241,7 +241,10 @@ impl PatchCoordinateSystem {
 pub(crate) fn bake_bench(bench: &Bench, transform: &Se3Transform) -> Bench {
     let mut baked = bench.clone();
     for entry in bench.entries() {
-        let BenchItem::Track(track) = &entry.item;
+        // A measurement names pixels, which a bake does not move.
+        let BenchItem::Track(track) = &entry.item else {
+            continue;
+        };
         if let Some(moved) = bake_track(track, transform) {
             baked = baked
                 .replace(&entry.label, BenchItem::Track(Arc::new(moved)))
@@ -446,8 +449,8 @@ impl AppState {
         };
         let bench = node.history.current_bench();
         let item = self
-            .focused_item_label(id)
-            .ok_or_else(|| refuse("no item on its bench is being edited.".to_string()))?;
+            .focused_track_label(id)
+            .ok_or_else(|| refuse("no track on its bench is being edited.".to_string()))?;
         let track = bench.track(item).expect("the focused label names an item");
         let payload = match &track.stage {
             Stage::Track(payload) => payload,
@@ -571,14 +574,13 @@ impl AppState {
         // Materialise only when there is an overlay to fold in; an empty one
         // materialises to its own base, which the transform can read directly.
         let edited = node.history.current();
-        let (materialised, mat_map) =
-            if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
-                (None, None)
-            } else {
-                let _phase = collector.phase("materialise");
-                let (value, map) = edited.materialize();
-                (Some(value), Some(PointMap::Rows(map)))
-            };
+        let (materialised, mat_map) = if !edited.has_edits() {
+            (None, None)
+        } else {
+            let _phase = collector.phase("materialise");
+            let (value, map) = edited.materialize();
+            (Some(value), Some(PointMap::Rows(map)))
+        };
         let (baked, bench) = {
             let _phase = collector.phase("transform");
             let source = materialised.as_ref().unwrap_or(&edited.base);

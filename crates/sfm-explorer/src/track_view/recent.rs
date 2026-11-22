@@ -12,13 +12,14 @@
 //!
 //! A chip is the item's patch, the picture the header's patch slot draws
 //! ([`crate::track_view::body::track_patch_image`]), and its label cut in the
-//! middle to [`CHIP_LABEL_WIDTH`]. A click lands in the value [`RecentStrip::show`]
+//! middle to [`CHIP_LABEL_WIDTH`]. A measurement item has no patch, and its
+//! chip draws the empty frame. A click lands in the value [`RecentStrip::show`]
 //! returns, and the dock applies it through `AppState::focus_bench_item`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use sfmtool_core::bench::{EditableTrack, ItemId, Stage};
+use sfmtool_core::bench::{BenchItem, EditableMeasurement, EditableTrack, ItemId, Stage};
 
 use crate::bench::live::Evaluation;
 use crate::scene::ReconId;
@@ -41,12 +42,12 @@ const CHIP_LABEL_WIDTH: f32 = 72.0;
 const CHIP_PAD: f32 = 4.0;
 
 /// One item the strip can draw: its node, its ID, its label at the cursor and
-/// its track.
+/// its value.
 struct Entry {
     node: ReconId,
     item: ItemId,
     label: String,
-    track: Arc<EditableTrack>,
+    value: BenchItem,
 }
 
 /// One chip the strip drew on the last frame.
@@ -158,21 +159,21 @@ impl RecentStrip {
     /// The item's patch, uploaded on the first frame that draws it since its
     /// track moved.
     fn ensure_patch(&mut self, ctx: &egui::Context, entry: &Entry) -> Option<egui::TextureId> {
+        let track = entry.value.as_track()?;
         let key = (entry.node, entry.item);
         let stale = self
             .patches
             .get(&key)
-            .is_none_or(|(track, _)| !Arc::ptr_eq(track, &entry.track));
+            .is_none_or(|(held, _)| !Arc::ptr_eq(held, track));
         if stale {
-            let texture = crate::track_view::body::track_patch_image(&entry.track).map(|image| {
+            let texture = crate::track_view::body::track_patch_image(track).map(|image| {
                 ctx.load_texture(
                     format!("recent_item_patch_{:?}_{}", entry.node, entry.label),
                     image,
                     egui::TextureOptions::NEAREST,
                 )
             });
-            self.patches
-                .insert(key, (Arc::clone(&entry.track), texture));
+            self.patches.insert(key, (Arc::clone(track), texture));
         }
         self.patches
             .get(&key)
@@ -196,7 +197,7 @@ fn entries(state: &AppState) -> Vec<Entry> {
                 node: recent.node,
                 item: recent.item,
                 label: label.to_string(),
-                track: Arc::clone(bench.track(label)?),
+                value: bench.get(label)?.clone(),
             })
         })
         .take(MAX_CHIPS)
@@ -247,7 +248,6 @@ pub(crate) const CLICK_TO_EDIT: &str = "Click to edit";
 
 /// The lines of a chip's hover text between the patch and [`CLICK_TO_EDIT`].
 fn hover_lines(state: &AppState, entry: &Entry) -> Vec<String> {
-    let track = &entry.track;
     let mut lines = vec![entry.label.clone()];
     let node = state.node(entry.node);
     if state.scene.len() > 1 {
@@ -255,6 +255,13 @@ fn hover_lines(state: &AppState, entry: &Entry) -> Vec<String> {
             lines.push(format!("On {}", node.label));
         }
     }
+    let track = match &entry.value {
+        BenchItem::Track(track) => track,
+        BenchItem::Measurement(measurement) => {
+            lines.extend(measurement_lines(state, entry.node, measurement));
+            return lines;
+        }
+    };
     lines.push(format!("The {} stage", track.stage_kind()));
     let (kept, out) = track.verdict_counts();
     let pinned = track.observations.iter().filter(|o| o.pinned).count();
@@ -281,5 +288,28 @@ fn hover_lines(state: &AppState, entry: &Entry) -> Vec<String> {
             Evaluation::Refused(why) | Evaluation::Failed(why) => why,
         },
     );
+    lines
+}
+
+/// The hover lines of a measurement item's chip: what it is, and where its
+/// endpoints are.
+fn measurement_lines(
+    state: &AppState,
+    node: ReconId,
+    measurement: &EditableMeasurement,
+) -> Vec<String> {
+    let mut lines = vec![format!("A {} measurement", measurement.kind())];
+    let endpoints = measurement
+        .as_distance()
+        .map_or([None, None], |d| d.endpoints);
+    for (endpoint, side) in endpoints.iter().zip(["A", "B"]) {
+        lines.push(match (endpoint, state.node(node)) {
+            (Some(e), Some(node)) => format!(
+                "Endpoint {side}: {}",
+                crate::measurements::image_name(node.recon(), e.image)
+            ),
+            _ => format!("Endpoint {side}: not placed"),
+        });
+    }
     lines
 }

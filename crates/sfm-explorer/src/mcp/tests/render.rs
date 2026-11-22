@@ -2305,7 +2305,7 @@ fn set_reconstruction_transform_from_patch_frames_the_scene_on_the_active_patch(
         json!({ "reconstruction_label": "run_a", "mode": "set_to_origin" }),
     );
     assert!(
-        error.0.contains("no item on its bench is being edited"),
+        error.0.contains("no track on its bench is being edited"),
         "{error}"
     );
 

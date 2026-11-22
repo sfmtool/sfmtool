@@ -58,6 +58,7 @@ use crate::spatial::kdf::PyLazyKdForest;
 
 mod far_field;
 mod layers;
+mod measurement;
 mod nearby;
 mod nearby_tracks;
 mod normal;
@@ -819,21 +820,48 @@ impl PyBench {
         self.inner.id(label).map(|id| id.get())
     }
 
-    /// The track called `label`, or ``None`` when nothing is.
+    /// The track called `label`, or ``None`` when nothing is or the item is a
+    /// measurement.
     fn track(&self, label: &str) -> Option<PyEditableTrack> {
         self.inner.track(label).map(|t| PyEditableTrack {
             inner: Arc::clone(t),
         })
     }
 
-    /// Put `track` back in the place of the item called `label`, leaving the
-    /// order, the label and the ID as they were.
-    ///
-    /// How a step on one track is installed: the step gives back a value, and
-    /// this is what puts that value on the bench.
-    fn replace(&self, label: &str, track: &PyEditableTrack) -> PyResult<Self> {
+    /// The measurement called `label`, or ``None`` when nothing is or the
+    /// item is a track.
+    fn measurement(&self, label: &str) -> Option<measurement::PyEditableMeasurement> {
         self.inner
-            .replace(label, BenchItem::Track(Arc::clone(&track.inner)))
+            .measurement(label)
+            .map(|m| measurement::PyEditableMeasurement {
+                inner: Arc::clone(m),
+            })
+    }
+
+    /// The kind of the item called `label`, ``"track"`` or
+    /// ``"measurement"``, or ``None`` when nothing is called that.
+    fn kind(&self, label: &str) -> Option<String> {
+        self.inner.get(label).map(|item| item.kind().to_string())
+    }
+
+    /// Put `item`, an :class:`EditableTrack` or an
+    /// :class:`EditableMeasurement`, back in the place of the item called
+    /// `label`, leaving the order, the label and the ID as they were.
+    ///
+    /// How a step on one item is installed: the step gives back a value, and
+    /// this is what puts that value on the bench.
+    fn replace(&self, label: &str, item: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let item = if let Ok(track) = item.extract::<PyRef<'_, PyEditableTrack>>() {
+            BenchItem::Track(Arc::clone(&track.inner))
+        } else if let Ok(m) = item.extract::<PyRef<'_, measurement::PyEditableMeasurement>>() {
+            BenchItem::Measurement(Arc::clone(&m.inner))
+        } else {
+            return Err(PyValueError::new_err(
+                "an item on the bench is an EditableTrack or an EditableMeasurement",
+            ));
+        };
+        self.inner
+            .replace(label, item)
             .map(Self::wrap)
             .map_err(refused)
     }
@@ -2489,6 +2517,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(commit, m)?)?;
     far_field::register(m)?;
     layers::register(m)?;
+    measurement::register(m)?;
     nearby::register(m)?;
     nearby_tracks::register(m)?;
     normal::register(m)?;

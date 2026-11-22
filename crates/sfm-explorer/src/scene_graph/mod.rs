@@ -60,7 +60,7 @@
 //! such a list would misbehave mechanically as well as ergonomically.
 
 use eframe::egui;
-use sfmtool_core::bench::{BenchEntry, StageKind};
+use sfmtool_core::bench::{BenchEntry, BenchItem, StageKind};
 
 use crate::action_log::{
     interactive_text, point_style_text, visibility_text, ActionLog, Kind, Layer,
@@ -243,7 +243,7 @@ pub(crate) struct SceneGraphResponse {
     /// `Close` chosen from a reconstruction's context menu.
     pub(crate) close_node: Option<ReconId>,
     /// A Bench row was double-clicked: focus that item, select its node,
-    /// raise Track View on it and move the 3D viewport onto a track's point
+    /// raise the panel that edits it and move the 3D viewport onto a track's point
     /// (`app::apply_bench_edit`). The item is named by its position
     /// on the bench rather than by its label, so this response stays a `Copy`
     /// value. The raise is a layout operation, so the panel also keeps the
@@ -267,13 +267,16 @@ pub(crate) struct SceneGraphResponse {
     /// A Measurements row was clicked: select that measurement and nothing
     /// else.
     pub(crate) select_measurement: Option<MeasurementRef>,
-    /// A Measurements row was double-clicked: select the measurement, raise
-    /// Measurement View and frame the measurement in the 3D view
+    /// A Measurements row was double-clicked, or *Edit on Bench* chosen in its
+    /// menu: put the measurement on the bench and focus it, raise Measurement
+    /// View and frame the measurement in the 3D view
     /// (`app::apply_measurement_open`). The raise is a layout operation, so
     /// the panel also keeps the request for
     /// [`SceneGraphPanel::take_measurement_open`], which `app.rs` drains once
     /// the dock is back in the state.
     pub(crate) open_measurement: Option<MeasurementRef>,
+    /// *Delete* chosen in a Measurements row's menu.
+    pub(crate) delete_measurement: Option<MeasurementRef>,
 }
 
 /// Scene Graph panel state.
@@ -1123,25 +1126,108 @@ fn show_node_header(
 /// bench ([`crate::state::AppState::clear_bench`]).
 pub(crate) const CLEAR_THE_BENCH_LABEL: &str = "Clear the Bench";
 
-/// The bench, as two groups: `[▸] Bench Points (2)` and
-/// `[▸] Bench Clusters (1)`.
+/// The bench, as three groups: `[▸] Bench Points (2)`, `[▸] Bench Clusters (1)`
+/// and `[▸] Bench Measurements (1)`.
 ///
-/// Split by stage because the stages are two different things -- a track-stage
-/// item stands at a position and a cluster-stage one is a set of image patches
-/// with no geometry behind them (`specs/gui/bench.md`) -- and one mixed list
-/// said which only in a row's hover text. An item that is taken up or down
-/// moves between the groups, which is the whole of what the split is for.
+/// Tracks are split by stage because the stages are two different things -- a
+/// track-stage item stands at a position and a cluster-stage one is a set of
+/// image patches with no geometry behind them (`specs/gui/bench.md`) -- and one
+/// mixed list said which only in a row's hover text. An item that is taken up
+/// or down moves between the two. Measurements are a third kind of item and
+/// have a group of their own.
 ///
 /// A group with nothing in it is not drawn, which is what the one bench group
-/// did when the bench was empty. The two are one bench all the same: the
+/// did when the bench was empty. The three are one bench all the same: the
 /// focused item is drawn selected in whichever group holds it.
 fn show_bench_groups(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
-    show_bench_stage_group(ui, node, out, StageKind::Track, "bench_points");
-    show_bench_stage_group(ui, node, out, StageKind::Cluster, "bench_clusters");
+    show_bench_stage_group(ui, node, out, BenchGroup::Points);
+    show_bench_stage_group(ui, node, out, BenchGroup::Clusters);
+    show_bench_stage_group(ui, node, out, BenchGroup::Measurements);
 }
 
-/// One of the two bench groups: the items at `stage`, in the bench's own order,
-/// the focused one marked.
+/// One of the Scene tree's Bench groups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BenchGroup {
+    /// Track-stage tracks.
+    Points,
+    /// Cluster-stage tracks.
+    Clusters,
+    /// Measurements.
+    Measurements,
+}
+
+impl BenchGroup {
+    /// The group's title.
+    fn title(self) -> &'static str {
+        match self {
+            BenchGroup::Points => "Bench Points",
+            BenchGroup::Clusters => "Bench Clusters",
+            BenchGroup::Measurements => "Bench Measurements",
+        }
+    }
+
+    /// The key its rows' ids are made from.
+    fn key(self) -> &'static str {
+        match self {
+            BenchGroup::Points => "bench_points",
+            BenchGroup::Clusters => "bench_clusters",
+            BenchGroup::Measurements => "bench_measurements",
+        }
+    }
+
+    /// Whether `item` is drawn in this group.
+    fn holds(self, item: &BenchItem) -> bool {
+        match (self, item) {
+            (BenchGroup::Points, BenchItem::Track(track)) => track.stage_kind() == StageKind::Track,
+            (BenchGroup::Clusters, BenchItem::Track(track)) => {
+                track.stage_kind() == StageKind::Cluster
+            }
+            (BenchGroup::Measurements, BenchItem::Measurement(_)) => true,
+            _ => false,
+        }
+    }
+}
+
+/// A Bench row's text and its hover text.
+fn bench_row_text(node: &SceneNode, entry: &BenchEntry) -> (String, String) {
+    match &entry.item {
+        BenchItem::Track(track) => {
+            let (kept, out_count) = track.verdict_counts();
+            (
+                format!("{}  {kept} in", entry.label),
+                format!(
+                    "{} · the {} stage · {kept} in, {out_count} out",
+                    entry.label,
+                    track.stage_kind()
+                ),
+            )
+        }
+        BenchItem::Measurement(measurement) => {
+            let endpoints = measurement
+                .as_distance()
+                .map(|d| d.endpoints)
+                .unwrap_or([None, None]);
+            let images: Vec<String> = endpoints
+                .iter()
+                .zip(["A", "B"])
+                .map(|(endpoint, side)| match endpoint {
+                    Some(e) => format!(
+                        "endpoint {side} in {}",
+                        crate::measurements::image_name(node.recon(), e.image)
+                    ),
+                    None => format!("endpoint {side} not placed"),
+                })
+                .collect();
+            (
+                entry.label.clone(),
+                format!("{} · {}", entry.label, images.join(", ")),
+            )
+        }
+    }
+}
+
+/// One of the bench groups: the items it holds, in the bench's own order, the
+/// focused one marked.
 ///
 /// No eye: nothing on the bench is drawn from this row, and an item is not part
 /// of the reconstruction. The groups are here because the tree is where a
@@ -1150,30 +1236,26 @@ fn show_bench_groups(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) 
 ///
 /// A click on a row selects the node it is under and does nothing to the
 /// bench, the way a click on the node's own row selects it; a double-click
-/// focuses the item and raises [`crate::track_view`] on it, and a
-/// secondary click offers *Discard*. A secondary click on the group's own
-/// header offers *Clear the Bench*, which takes off every item of both groups,
-/// since they are one bench. An item is named by its **position on the
-/// bench**, which is the position it holds in the whole list rather than in the
-/// group it is drawn under, so both groups' rows reach the same item.
+/// focuses the item and raises the panel that edits it on it, Track View for a
+/// track and Measurement View for a measurement, and a secondary click offers
+/// *Discard*. A secondary click on the group's own header offers *Clear the
+/// Bench*, which takes off every item of every group, since they are one
+/// bench. An item is named by its **position on the bench**, which is the
+/// position it holds in the whole list rather than in the group it is drawn
+/// under, so every group's rows reach the same item.
 fn show_bench_stage_group(
     ui: &mut egui::Ui,
     node: &SceneNode,
     out: &mut TreeOutput,
-    stage: StageKind,
-    key: &str,
+    group: BenchGroup,
 ) {
+    let key = group.key();
     let bench = node.history.current_bench();
     let items: Vec<(usize, &BenchEntry)> = bench
         .entries()
         .iter()
         .enumerate()
-        .filter(|(_, entry)| {
-            entry
-                .item
-                .as_track()
-                .is_some_and(|track| track.stage_kind() == stage)
-        })
+        .filter(|(_, entry)| group.holds(&entry.item))
         .collect();
     if items.is_empty() {
         return;
@@ -1188,10 +1270,7 @@ fn show_bench_stage_group(
         row_id(id, key),
         true,
     );
-    let title = match stage {
-        StageKind::Track => "Bench Points",
-        StageKind::Cluster => "Bench Clusters",
-    };
+    let title = group.title();
     let header = state.show_header(ui, |ui| {
         ui.set_height(ROW_HEIGHT);
         let title = ui.add(
@@ -1213,20 +1292,14 @@ fn show_bench_stage_group(
     });
     header.body(|ui| {
         for (position, entry) in items {
-            let track = entry.item.as_track().expect("filtered to tracks above");
             let selected = focused == Some(entry.id);
-            let (kept, out_count) = track.verdict_counts();
-            let text = format!("{}  {kept} in", entry.label);
+            let (text, hover) = bench_row_text(node, entry);
             let row = ui
                 .push_id(("bench_item", entry.label.as_str()), |ui| {
                     ui.add(egui::Button::selectable(selected, text))
                 })
                 .inner
-                .on_hover_text(format!(
-                    "{} · the {} stage · {kept} in, {out_count} out",
-                    entry.label,
-                    track.stage_kind()
-                ));
+                .on_hover_text(hover);
             let row = out.hit(row_id(id, &format!("bench_item_{}", entry.label)), row);
             if row.clicked() {
                 out.response.select_recon = Some(id);

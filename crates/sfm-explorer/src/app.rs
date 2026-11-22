@@ -1433,7 +1433,7 @@ fn turn_and_move_onto(
 }
 
 /// A Scene tree double-click on the Bench row at `position` on `id`'s bench:
-/// focus the item and raise Track View on it
+/// focus the item and raise the panel that edits it beside the tree
 /// ([`crate::state::AppState::edit_bench_item_at`]), and move the 3D viewport
 /// onto the item's own point ([`crate::scene::bench_world_point`]). A
 /// cluster-stage item has no point, so for one the viewport stays where it is.
@@ -1453,11 +1453,15 @@ fn apply_bench_edit(
     turn_and_move_onto(viewer_3d, target, current_time);
 }
 
-/// A Scene tree double-click on a Measurements row: select the measurement,
+/// A Scene tree double-click on a Measurements row, or *Edit on Bench* in its
+/// menu: put the measurement on the bench and focus it, or focus its item
+/// where it is on the bench already
+/// ([`crate::state::AppState::put_measurement_on_bench`], which selects it),
 /// raise Measurement View beside the tree, and frame the measurement's finite
 /// endpoints in the 3D view, keeping its orientation
 /// ([`crate::viewer_3d::Viewer3D::frame_keeping_orientation`]). A measurement
-/// with no finite endpoint leaves the view where it is.
+/// with no finite endpoint leaves the view where it is. A refused put (a busy
+/// node) is one failed row, and nothing is raised or framed.
 ///
 /// Applied by the frame once the dock is back in the state, since the raise is
 /// a layout operation.
@@ -1467,7 +1471,10 @@ pub(crate) fn apply_measurement_open(
     measurement: crate::measurements::MeasurementRef,
     current_time: f64,
 ) {
-    state.select_measurement(measurement);
+    if let Err(why) = state.put_measurement_on_bench(measurement) {
+        state.action_log.fail(crate::action_log::Kind::Bench, why);
+        return;
+    }
     state.show_panel_beside(
         crate::dock::Tab::MeasurementView,
         crate::dock::Tab::SceneGraph,

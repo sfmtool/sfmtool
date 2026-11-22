@@ -881,14 +881,23 @@ fn subset_rig_frame_data(rf: &RigFrameData, image_indices: &[u32]) -> RigFrameDa
 /// Keeps every measurement whose two endpoints both lie in surviving images
 /// (`old_to_new[img]` is `Some(new_idx)`), remaps both image indexes, and
 /// returns `None` when no measurement survives.
+///
+/// Every column is read through `.get`, so a value built by hand whose
+/// columns disagree in length does not panic: a row with no image index
+/// names no surviving image and is dropped, and a kept row's missing distance
+/// or pixel reads as not a number, its missing unit as metres and its missing
+/// label as empty. A load refuses such a value, so a row read from a file is
+/// carried exactly.
 fn subset_distance_measurements(
     m: &DistanceMeasurementsData,
     old_to_new: &[Option<u32>],
 ) -> Option<DistanceMeasurementsData> {
     let mut kept_rows: Vec<(usize, u32, u32)> = Vec::new();
     for i in 0..m.len() {
-        let img0 = m.image_indexes[[i, 0]] as usize;
-        let img1 = m.image_indexes[[i, 1]] as usize;
+        let image = |k: usize| m.image_indexes.get((i, k)).map(|&img| img as usize);
+        let (Some(img0), Some(img1)) = (image(0), image(1)) else {
+            continue;
+        };
         if let (Some(new0), Some(new1)) = (
             old_to_new.get(img0).copied().flatten(),
             old_to_new.get(img1).copied().flatten(),
@@ -906,15 +915,24 @@ fn subset_distance_measurements(
     let mut endpoints_xy = ndarray::Array3::<f32>::zeros((n, 2, 2));
     let mut labels = Vec::with_capacity(n);
     for (new_i, (old_i, new0, new1)) in kept_rows.into_iter().enumerate() {
-        distances[new_i] = m.distances[old_i];
-        units[new_i] = m.units[old_i];
+        distances[new_i] = m.distances.get(old_i).copied().unwrap_or(f32::NAN);
+        units[new_i] = m
+            .units
+            .get(old_i)
+            .copied()
+            .unwrap_or(crate::LengthUnit::Metre.code());
         image_indexes[[new_i, 0]] = new0;
         image_indexes[[new_i, 1]] = new1;
         for k in 0..2 {
-            endpoints_xy[[new_i, k, 0]] = m.endpoints_xy[[old_i, k, 0]];
-            endpoints_xy[[new_i, k, 1]] = m.endpoints_xy[[old_i, k, 1]];
+            for c in 0..2 {
+                endpoints_xy[[new_i, k, c]] = m
+                    .endpoints_xy
+                    .get((old_i, k, c))
+                    .copied()
+                    .unwrap_or(f32::NAN);
+            }
         }
-        labels.push(m.labels[old_i].clone());
+        labels.push(m.labels.get(old_i).cloned().unwrap_or_default());
     }
     Some(DistanceMeasurementsData {
         distances,

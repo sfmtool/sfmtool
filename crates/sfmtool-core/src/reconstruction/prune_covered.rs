@@ -277,7 +277,7 @@ pub fn prune_covered_observations(
 
     // Fold the overlay only when there is one: an empty overlay materialises to
     // its own base, and the measurement can read that directly.
-    let folded = !(edited.deleted_points.is_empty() && edited.added.points.is_empty());
+    let folded = edited.has_edits();
     let (materialised, mat_map) = if folded {
         let _phase = p_fold.phase("materialise");
         let (value, map) = edited.materialize();

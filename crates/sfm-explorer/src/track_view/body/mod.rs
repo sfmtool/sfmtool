@@ -549,7 +549,7 @@ impl TrackBody {
             return response;
         };
         let id = node.id;
-        if let Some(label) = state.focused_item_label(id).map(str::to_string) {
+        if let Some(label) = state.focused_track_label(id).map(str::to_string) {
             let track = Arc::clone(
                 node.history
                     .current_bench()

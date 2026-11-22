@@ -50,8 +50,9 @@ first.** It is the click, then one action chosen by what the target denotes:
 | An image (a thumbnail, an image row, a frustum) | Enter camera view through it. |
 | A pixel of an image (a Track View observation row, a Measurement View endpoint block) | Enter camera view through its image, turned until the pixel is inside the middle 1/2 of the viewport (`Viewer3D::look_through_toward_feature`). |
 | A point (a dot in the 3D view, a feature in Image Detail) | Put its track on the bench when it is not there already, which pushes a version, raise Track View on it, and move the 3D view onto it under G4. |
-| An item on the bench (a Bench row) | Focus it, raise Track View on it, and move the 3D view onto its point under G4. |
-| A set of things (a reconstruction, a camera's images, a measurement's endpoints) | Frame the set in the 3D view. |
+| An item on the bench (a Bench row) | Focus it, raise the panel that edits it on it (Track View for a track, Measurement View for a measurement), and move the 3D view onto a track's point under G4. |
+| A stored measurement (a Measurements row) | Put it on the bench when it is not there already, which pushes a version, raise Measurement View on it, and frame its endpoints in the 3D view. |
+| A set of things (a reconstruction, a camera's images) | Frame the set in the 3D view. |
 | A position inside a picture with nothing on it (empty photograph in Image Detail) | Zoom the picture about the pointer. |
 
 A double-click raises a panel only through `AppState::show_panel_beside`, so

@@ -156,11 +156,13 @@ pub(crate) enum Command {
         reconstruction_label: Option<String>,
     },
     /// One measurement whole: its endpoints with their resolutions, and the
-    /// result.
+    /// result. `item` names a measurement item on the bench instead of a
+    /// stored row, which is then read live.
     GetMeasurement {
         reconstruction_label: Option<String>,
         measurement_kind: crate::measurements::MeasurementKind,
-        measurement_index: usize,
+        measurement_index: Option<usize>,
+        item: Option<String>,
     },
     /// The Action Log from a revision onward: what happened while the agent
     /// was not looking, whoever did it.
@@ -342,6 +344,25 @@ pub(crate) enum Command {
     DeletePoint {
         reconstruction_label: String,
         point: crate::goto_point::PointQuery,
+    },
+    /// Delete a stored measurement: a direct edit of the reconstruction.
+    DeleteMeasurement {
+        reconstruction_label: String,
+        measurement_kind: crate::measurements::MeasurementKind,
+        measurement_index: usize,
+    },
+    /// Put a stored measurement on the bench and focus it, or focus its item
+    /// where it is on the bench already.
+    PutMeasurementOnBench {
+        reconstruction_label: String,
+        measurement_kind: crate::measurements::MeasurementKind,
+        measurement_index: usize,
+    },
+    /// Write a measurement item into the node's reconstruction. `None` is the
+    /// focused item.
+    CommitBenchMeasurement {
+        reconstruction_label: String,
+        item: Option<String>,
     },
     /// Delete many points of one reconstruction as one version.
     DeletePoints {
@@ -1489,11 +1510,13 @@ pub(crate) fn apply_with_window(
             reconstruction_label,
             measurement_kind,
             measurement_index,
+            item,
         } => done(measurements::get_measurement(
             state,
             reconstruction_label.as_deref(),
             measurement_kind,
             measurement_index,
+            item.as_deref(),
         )),
         Command::FindPoints { request } => find_points::find_points(state, request),
         Command::GetActionLog {
@@ -1647,6 +1670,34 @@ pub(crate) fn apply_with_window(
             reconstruction_label,
             point,
         } => done(edit::delete_point(state, &reconstruction_label, &point)),
+        Command::DeleteMeasurement {
+            reconstruction_label,
+            measurement_kind,
+            measurement_index,
+        } => done(measurements::delete_measurement(
+            state,
+            &reconstruction_label,
+            measurement_kind,
+            measurement_index,
+        )),
+        Command::PutMeasurementOnBench {
+            reconstruction_label,
+            measurement_kind,
+            measurement_index,
+        } => done(measurements::put_measurement_on_bench(
+            state,
+            &reconstruction_label,
+            measurement_kind,
+            measurement_index,
+        )),
+        Command::CommitBenchMeasurement {
+            reconstruction_label,
+            item,
+        } => done(measurements::commit_bench_measurement(
+            state,
+            &reconstruction_label,
+            item.as_deref(),
+        )),
         Command::DeletePoints {
             reconstruction_label,
             points,

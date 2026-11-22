@@ -50,7 +50,7 @@ use crate::helpers::value_err;
 pub(super) fn materialised(
     edited: &EditedReconstruction,
 ) -> std::borrow::Cow<'_, SfmrReconstruction> {
-    if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
+    if !edited.has_edits() {
         std::borrow::Cow::Borrowed(&edited.base)
     } else {
         std::borrow::Cow::Owned(edited.materialize().0)

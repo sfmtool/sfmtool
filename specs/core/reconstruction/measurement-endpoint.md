@@ -118,7 +118,21 @@ pub fn resolve_distance_measurements(
     edited: &EditedReconstruction,
     options: &MeasurementEndpointOptions,
 ) -> Vec<ResolvedDistanceMeasurement>;
+/// One distance's two endpoints, each an image and a pixel, resolved as
+/// `resolve_distance_measurements` resolves each stored row.
+pub fn resolve_distance_endpoints(
+    edited: &EditedReconstruction,
+    endpoints: [(u32, [f64; 2]); 2],
+    options: &MeasurementEndpointOptions,
+) -> ResolvedDistanceMeasurement;
 ```
+
+`resolve_distance_measurements` reads the value's measurements
+(`EditedReconstruction::measurements`), which are its own where an edit set
+them. `resolve_distance_endpoints` is the same reading of a distance that is not
+stored, such as a measurement item on the bench
+([../bench/editable-measurement.md](../bench/editable-measurement.md)), so an
+item and the row it came from read alike until one of them changes.
 
 **Why the whole-file call names the distance kind.** A file's measurements
 come in kinds ([`MeasurementsData`](../../formats/sfmr-file-format.md#10-measurements-optional-version-17)),

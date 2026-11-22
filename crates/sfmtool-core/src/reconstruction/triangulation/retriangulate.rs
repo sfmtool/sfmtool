@@ -541,7 +541,7 @@ pub fn retriangulate_points(
     // overlay and leaves the base alone, which is what keeps every other index
     // meaning what it meant.
     let in_place = !matches!(which, RetriangulateWhich::These(_));
-    let fold = in_place && !(edited.deleted_points.is_empty() && edited.added.points.is_empty());
+    let fold = in_place && edited.has_edits();
     let (work, folded) = if fold {
         let _phase = p_gather.phase("materialise");
         let (value, map) = edited.materialize();

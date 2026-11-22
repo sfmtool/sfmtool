@@ -1,13 +1,15 @@
 # The bench in the viewer
 
 Beside each loaded reconstruction the viewer keeps a **bench**: a place where
-things that are not settled yet are held and worked on. Today the one kind of
-thing put on it is an **editable track** -- a track taken out of the
-reconstruction, or started from a pixel, with the measurements that judge each
-sighting and the person's verdict on each -- and the one step that crosses back
-is the commit. The bench is a value beside the reconstruction rather than part
-of it: a save does not write it, the point count does not include it, and no
-panel that reads the reconstruction sees it.
+things that are not settled yet are held and worked on. Two kinds of thing are
+put on it: an **editable track** -- a track taken out of the reconstruction, or
+started from a pixel, with the measurements that judge each sighting and the
+person's verdict on each -- and an **editable measurement**, a stored
+measurement taken out to have its endpoints worked on (§ "Measurement items").
+For each, the one step that crosses back is its commit. The bench is a value
+beside the reconstruction rather than part of it: a save does not write it, the
+point count does not include it, and no panel that reads the reconstruction
+sees it.
 
 What makes it the viewer's rather than core's is the **history**. A version of a
 node is a pair, the reconstruction value and the bench as it stood, so one Undo
@@ -21,8 +23,9 @@ and pure functions with no window in them.
 Related specs: [`track-view.md`](track-view.md) (the panel that edits the focused
 item with its *Edit* box ticked), [`multi-panel-image-browser.md`](multi-panel-image-browser.md) (the Image
 Detail panel, which carries the three steps that name a pixel and draws the focused
-item as its bench layer), [`edits/commit-track.md`](edits/commit-track.md) (the one step that writes
-the reconstruction), [`document-model.md`](document-model.md) (the version the
+item as its bench layer), [`measurement-view.md`](measurement-view.md) (the
+panel that edits a focused measurement), [`edits/commit-track.md`](edits/commit-track.md) (the step that writes
+a track into the reconstruction), [`document-model.md`](document-model.md) (the version the
 bench is a half of), [`edit-history.md`](edit-history.md) (the cursor that walks
 it), [`scene-graph.md`](scene-graph.md) (the tree the two Bench groups are
 children of), [`background-tasks.md`](background-tasks.md) (where a fit and a
@@ -277,9 +280,44 @@ impl AppState {
     pub(crate) fn unfocus_bench_item(&mut self);
     /// The focused item's origin followed to the cursor.
     pub(crate) fn focused_origin(&self) -> Option<PointRef>;
-    /// The first entry of `AppState::recent_items` on its node's bench at
-    /// the cursor, as its node and label.
-    pub(crate) fn most_recent_item(&self) -> Option<(ReconId, String)>;
+    /// The first entry of `AppState::recent_items` of `kind` on its node's
+    /// bench at the cursor, as its node and label.
+    pub(crate) fn most_recent_item_of(&self, kind: ItemKind) -> Option<(ReconId, String)>;
+    /// The kind of the focused item at its node's cursor.
+    pub(crate) fn focused_item_kind(&self) -> Option<ItemKind>;
+    /// The focused item's label on `id`'s bench when it is a track: what
+    /// Track View and every track gesture act on.
+    pub(crate) fn focused_track_label(&self, id: ReconId) -> Option<&str>;
+    /// The focused item's label on `id`'s bench when it is a measurement:
+    /// what Measurement View's edited mode shows.
+    pub(crate) fn focused_measurement_label(&self, id: ReconId) -> Option<&str>;
+}
+
+// Measurement items, in
+// [bench/measurement.rs](../../crates/sfm-explorer/src/bench/measurement.rs)
+// (§ "Measurement items").
+impl AppState {
+    /// The row a measurement item's origin names at the cursor.
+    pub(crate) fn resolved_measurement_origin(&self, node: &SceneNode,
+                                              item: &EditableMeasurement) -> Option<u32>;
+    /// The item that came from a stored measurement, by its label.
+    pub(crate) fn bench_item_from_measurement(&self, measurement: MeasurementRef)
+        -> Option<String>;
+    /// Put a stored measurement on the bench and focus it, or focus the item
+    /// already there.
+    pub(crate) fn put_measurement_on_bench(&mut self, measurement: MeasurementRef)
+        -> Result<PutMeasurement, String>;
+    /// Measurement View's Edit box.
+    pub(crate) fn set_measurement_editing(&mut self, id: ReconId, on: bool)
+        -> Result<(), String>;
+    /// What greys Measurement View's Commit.
+    pub(crate) fn measurement_commit_refusal(&self, id: ReconId, label: &str)
+        -> Option<String>;
+    pub(crate) fn commit_bench_measurement(&mut self, id: ReconId, label: &str)
+        -> Result<MeasurementCommitted, String>;
+    /// A direct edit of the reconstruction, not a bench step.
+    pub(crate) fn delete_measurement(&mut self, measurement: MeasurementRef)
+        -> Result<(), String>;
 }
 
 // The selected observations, held in `AppState::bench_rows`
@@ -484,15 +522,21 @@ So the bench goes through core's `Bench::delete_image`
   when committed;
 - the selected observations of the focused item follow their observations to
   their new indexes, and one in the deleted image is deselected
-  (§ "The selected observations").
+  (§ "The selected observations");
+- a measurement item's endpoint in the deleted image is cleared, one in a later
+  image moves down by one, and an item left with neither endpoint is discarded
+  as a track with no observation left is; a measurement item's origin is
+  followed through the delete's measurement row map (§ "Measurement items").
 
 The changed items get a new `Arc` and the version a new document serial, so
 the live evaluation reads them again on the next frame. The delete's Action Log
 row says what it did to the bench when any bench observation was in the image:
 `Deleted image IMG_0007.jpg from run_a; dropped 3 bench observations in it and
-discarded IMG_0007@142,198, which had no other observations`. A delete that
-reaches no bench observation says nothing about the bench, and a delete no
-item observes an image at or after leaves the bench the same `Arc`.
+discarded IMG_0007@142,198, which had no other observations`, and names the
+measurement endpoints it cleared the same way (`cleared 1 bench measurement
+endpoint in it`). A delete that reaches no bench observation or endpoint says
+nothing about the bench, and a delete no item reaches an image at or after
+leaves the bench the same `Arc`.
 
 ---
 
@@ -639,6 +683,12 @@ that is not busy. The same sentence is given everywhere:
   with it (`BenchMenu::view_only`), and its bench layer draws the focused item
   with no handle on it. The 3D viewer's bench figure offers no handle either.
 
+A measurement item on a view-only bench is the same: it goes on the bench
+(`put_measurement_on_bench`, a double-click on a Measurements row) and is
+viewed, and its commit is refused with the sentence, which greys Measurement
+View's *Commit*. Deleting a stored measurement is not a bench step and is not
+refused.
+
 **Not refused**: putting a point on the bench (`create_bench_track`,
 `create_bench_tracks`, *Edit on Bench*, a double-click), focusing and
 unfocusing, selecting rows, renaming, discarding and clearing the bench, none of which edits a track, and *Find
@@ -672,13 +722,17 @@ view-only again.
 
 ## The focused item
 
-The item Track View edits while its *Edit* box is ticked, and the item a bench
-panel's gesture or a wire call means when it names none, is the **focused
-item**: `AppState::focused_item`, a `FocusedItem` naming a node and an item on
-that node's bench by its `ItemId`. There is **at most one for the whole
-viewer**, not one per bench. A track and a cluster are focused alike, and an
-item with no point in the reconstruction is focused like any other, since a
-`FocusedItem` names an item and never a point.
+The item Track View or Measurement View edits while its *Edit* box is ticked,
+and the item a bench panel's gesture or a wire call means when it names none,
+is the **focused item**: `AppState::focused_item`, a `FocusedItem` naming a node
+and an item on that node's bench by its `ItemId`. There is **at most one for
+the whole viewer**, not one per bench and not one per kind: focusing a
+measurement unfocuses a track, and the reverse. A track, a cluster and a
+measurement are focused alike, and an item with no point in the reconstruction
+is focused like any other, since a `FocusedItem` names an item and never a
+point. Track View's *Edit* box is ticked only for a track
+(`focused_track_label`), and Measurement View's only for a measurement
+(`focused_measurement_label`).
 
 **It is not part of any version.** It is held beside the selection, and
 focusing and unfocusing are not bench steps: they push no version and write one
@@ -697,10 +751,15 @@ the item's value ([`../core/bench/bench.md`](../core/bench/bench.md)), so a
 rename leaves the item focused under its new label.
 
 **It keeps the selection with it.** While an item is focused, the selected node
-is its node and the selected point is its origin followed to the cursor
-(`AppState::focused_origin`), or no point. Focusing and unfocusing move the
-selection to keep that true, and a selection that would break it unfocuses the
-item ([`track-view.md`](track-view.md) § "Transitions").
+is its node. While a track is focused, the selected point is its origin followed
+to the cursor (`AppState::focused_origin`), or no point. While a measurement is
+focused, the selected measurement is its origin followed to the cursor
+(`AppState::focused_measurement_origin`), or none, and the selected point is
+left alone. Focusing and unfocusing move the selection to keep that true, and a
+selection that would break it unfocuses the item
+([`track-view.md`](track-view.md) § "Transitions"): for a measurement, a
+selection on another node, or `select_measurement` of any measurement but its
+origin.
 
 What changes it:
 
@@ -715,9 +774,11 @@ What changes it:
   selection rule below sees the origin as the focused item's. These selection
   changes write no rows of their own;
 - **unfocusing**: clearing *Edit* and the wire's `unfocus_bench_item`.
-  **Unfocusing selects**: the item's origin when it resolves at the cursor, or
-  else the point selection is cleared; the node stays selected. No rows beyond
-  the `Stopped editing` one;
+  **Unfocusing selects**: a track's origin when it resolves at the cursor, or
+  else the point selection is cleared; the node stays selected. Unfocusing a
+  measurement leaves the selection as it is: its origin, or none where the
+  origin's row is gone or the person cleared the selection. No rows beyond the
+  `Stopped editing` one;
 - **a selection that leaves the item**: `AppState::select_point` of any point
   but the focused item's origin, and `select_point`, `select_image`,
   `select_camera` or `select_recon` naming another node, unfocus it with its
@@ -728,8 +789,9 @@ What changes it:
   unfocus;
 - **a step that puts an item on the bench** focuses the item it put on, and
   selects as focusing does, with no row of its own beside the step's: a put from
-  a point, *Start cluster*, *Create Track Here*, *Find Nearby Tracks* (its
-  `1a`), *Duplicate* and *Split*. A cluster, a duplicate and a split have no
+  a point, a put of a stored measurement, *Start cluster*, *Create Track Here*,
+  *Find Nearby Tracks* (its `1a`), *Duplicate* and *Split*. A cluster, a
+  duplicate and a split have no
   origin, so the point selection is cleared. *Create Track Here* then commits
   the item, and a commit re-seats the item's origin on the point it wrote
   before selecting it, so the item stays focused;
@@ -749,12 +811,15 @@ session, most recently focused first and each once: `set_focused_item`, the
 one place the focused item changes, moves a newly focused item to the front.
 An entry is dropped when its node is closed and the list emptied by *Close
 All*; an entry whose item is not on its node's bench at the cursor is skipped
-by `most_recent_item` rather than dropped, so an undo of a discard brings it
-back. It is session state, outside every version. Ticking *Edit* with no point
-selected focuses its first resolving entry ([`track-view.md`](track-view.md)
-§ "Transitions"), and Track View's recent items strip draws the first eight
-resolving entries other than the focused item
-([`track-view.md`](track-view.md) § "The recent items strip").
+by `most_recent_item_of` rather than dropped, so an undo of a discard brings it
+back. It is session state, outside every version, and it holds measurement
+items beside tracks. Ticking Track View's *Edit* with no point selected focuses
+its first resolving track ([`track-view.md`](track-view.md) § "Transitions"),
+and ticking Measurement View's with no measurement selected its first resolving
+measurement ([`measurement-view.md`](measurement-view.md) § "The Edit box").
+Track View's recent items strip draws the first eight resolving entries other
+than the focused item, of either kind ([`track-view.md`](track-view.md) § "The
+recent items strip").
 
 ---
 
@@ -1422,34 +1487,88 @@ do not match the reconstruction) is one failed row in core's words.
 
 ---
 
+## Measurement items
+
+A stored measurement goes on the bench as an `EditableMeasurement`
+([`../core/bench/editable-measurement.md`](../core/bench/editable-measurement.md)),
+which holds the row's endpoints, stated distance, unit and label and nothing
+derived from them. `AppState::put_measurement_on_bench` is the one call behind
+every way in: a double-click on a Measurements row, *Edit on Bench* in its
+menu, ticking Measurement View's *Edit* box with the measurement selected, and
+the wire's `put_measurement_on_bench`
+([`measurement-view.md`](measurement-view.md)). It selects the measurement,
+then puts it on in one version (`Put distance #2 on the bench`), labelled by its
+kind and row, and focuses it. **Putting a measurement on the bench twice focuses
+the item it already made**, with no version: the test is the item's origin
+followed to the cursor (`bench_item_from_measurement`).
+
+**Following the origin.** The origin names a row at the version the item was
+read from. The viewer follows it with `History::follow_measurement`, a walk of
+the version graph over each step's measurement row map, as it follows a track's
+origin over the point maps ([`document-model.md`](document-model.md)). Two
+edits renumber rows and push a map: deleting an image drops the measurements
+with an endpoint in it, and deleting a measurement drops one row. An origin
+whose row was dropped resolves to none, and the item's commit then appends.
+
+**The commit** (`AppState::commit_bench_measurement`) writes the focused item,
+or the one named, into the reconstruction. It follows the origin to a row,
+calls core's `commit_measurement`, and pushes the value and the bench in one
+version, as a track's commit does: one `Edit` row (`Committed distance #2 in
+dino`, or `Added distance #4 in dino` for an appended row), the node marked
+dirty, undone like any other edit. The value shares its base with the version
+before it, so no point index moves and the point maps are the identity. The
+item stays on the bench and focused, its origin re-seated on the row written,
+which is selected. A commit of what the row already holds pushes no version
+and writes the no-effect row. It is refused while a background task or a
+camera model proposal holds the node, on a view-only bench, and with core's
+refusals (an endpoint not placed, no stated distance, an image past the image
+set, a pixel outside its image), each in one sentence
+(`measurement_commit_refusal`, which greys Measurement View's *Commit*).
+
+**Deleting a stored measurement** (`AppState::delete_measurement`) is a direct
+edit of the reconstruction, not a bench step: one version (`Deleted distance #2
+in dino`), one `Edit` row, refused while a task or a proposal holds the node.
+The selected measurement follows the row map, and every item's origin follows
+it through the version graph; an item whose origin was the deleted row stays on
+the bench with none.
+
+The steps that edit a measurement item, and an item started from a pixel with
+no stored row, are proposed in
+[`../drafts/measurement-view.md`](../drafts/measurement-view.md).
+
+---
+
 ## The Bench groups in the Scene tree
 
-Each node gains two **Bench** children beside its Camera Intrinsics, Camera
-Images and Points groups ([`scene-graph.md`](scene-graph.md)), one per stage:
-`Bench Points (2)` for the track-stage items and `Bench Clusters (1)` for the
-cluster-stage ones. The tree says which of the two an item is because the two
-are different things -- a track stands at a position and a cluster is a set of
+Each node gains up to three **Bench** children beside its Camera Intrinsics,
+Camera Images, Points and Measurements groups ([`scene-graph.md`](scene-graph.md)):
+`Bench Points (2)` for the track-stage items, `Bench Clusters (1)` for the
+cluster-stage ones and `Bench Measurements (1)` for the measurement items. The
+tree says which of the two track stages an item is at because the two are
+different things -- a track stands at a position and a cluster is a set of
 image patches with no geometry behind them -- and an item taken up or down moves
 between the groups. A group with nothing in it is not drawn, so an empty bench
 adds no row and a bench of tracks alone shows one group; each remembers its own
 expansion.
 
-Inside each is one row per item of that stage, in the bench's own order, by
-label, with its `in` count, the focused item marked as a selected row. There is no
-eye: nothing on the bench is drawn from these rows, and an item is not part of
-the reconstruction.
+Inside each is one row per item of that group, in the bench's own order, by
+label, the focused item marked as a selected row: a track's row gives its `in`
+count, and a measurement's hover text says which image each endpoint is in. There
+is no eye: nothing on the bench is drawn from these rows, and an item is not
+part of the reconstruction.
 
 A click on a row (G1 of the interaction rules,
 [interaction-rules.md](interaction-rules.md)) selects the node it is under and
 does nothing to the bench, as a click on the node's own row selects it, so a
 pass of clicks down the tree pushes no versions. A **double-click** focuses the item, selects the node and
-raises Track View on it (`AppState::edit_bench_item_at`), with no version and
+raises the panel that edits it on it, Track View for a track and Measurement
+View for a measurement (`AppState::edit_bench_item_at`), with no version and
 the one `Selection` row a focus writes; on the item that is focused already it
 writes no row, since the gesture asked for the panel. On a track-stage item the
 double-click also moves the 3D viewport onto the track's own point
 ([scene-graph.md](scene-graph.md) § "Tree rows"). A secondary click (G3) offers
-*Discard*, and one on either group's header offers *Clear the Bench*, which
-takes off every item of both groups in one version (`AppState::clear_bench`).
+*Discard*, and one on any group's header offers *Clear the Bench*, which
+takes off every item of every group in one version (`AppState::clear_bench`).
 The bench is in the tree
 because the tree is where a node's parts are listed, and it is per node because
 an item names that node's images and poses.
@@ -1461,13 +1580,13 @@ in a raise, which is a layout operation, so the panel keeps it for
 `SceneGraphPanel::take_bench_edit` and `app.rs` applies it once the dock is back
 in the state, the path Image Detail's *Edit on Bench* takes.
 The position is the item's place in the **whole** bench and not in the group it
-is drawn under, so the two groups' rows reach one list.
+is drawn under, so every group's rows reach one list.
 
 ---
 
 ## The wire
 
-An agent gets the same bench a human does, through thirty-eight MCP tools
+An agent gets the same bench a human does, through forty MCP tools
 ([mcp-server.md](mcp-server.md) § "The bench family"), in
 [mcp/bench.rs](../../crates/sfm-explorer/src/mcp/bench.rs). **Each one is one of
 the `AppState` methods above**, which is the whole of what makes an agent's
@@ -2088,12 +2207,24 @@ takes back by id; a pixel every member refuses is a tool error whose lines are
 each member's stage in the order tried; and a pixel off the photograph is
 refused in the call with no task.
 
+[bench/measurement/tests.rs](../../crates/sfm-explorer/src/bench/measurement/tests.rs),
+headless, over the measurement fixture of
+[measurement-view.md](measurement-view.md) § "Artificial measurements", covers
+measurement items: a put and a second put of the same row, the selection a
+focused measurement keeps and the one that unfocuses it, each panel's label
+naming its own kind, the origin following a measurement delete and an image
+delete with their undo and redo, the endpoints following an image delete, a
+commit that replaces its row sharing the base and its undo, a commit that
+appends, one that changes nothing, the refusals and the view-only bench.
+`mcp/tests/measurements.rs` covers `put_measurement_on_bench`,
+`commit_bench_measurement` and `delete_measurement`, `get_bench` listing a
+measurement item, and a track tool refusing one.
+
 ---
 
 ## Non-goals
 
-- **A second kind of item.** The bench is shaped so one can be added; the
-  editable track is the only kind there is.
+- **A third kind of item.** The bench holds tracks and measurements.
 - **Persisting the bench.** A save writes the document half; a commit is how
   bench work reaches the file.
 - **A bench across nodes.** An item names one node's images.
@@ -2113,5 +2244,5 @@ refused in the call with no task.
   ([`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md)).
 - **Wire tools for the searches.** The three tools that would drive a descriptor
   search, a view sweep and a pull-in wait on the core steps behind them, and are
-  proposed in the same draft. The thirty-eight tools for the steps that exist
+  proposed in the same draft. The forty tools for the steps that exist
   are § "The wire".

@@ -529,24 +529,36 @@ fn prune_covered_summary(report: &PruneCoveredReport) -> String {
 /// sentence ends with: empty when no bench observation was in the image, since
 /// moving the later ones down by one is bookkeeping a reader need not be told.
 fn bench_deletion_text(deletion: &ImageDeletion) -> String {
-    if deletion.dropped == 0 {
+    let plural = |n: usize, one: &'static str, many: &'static str| if n == 1 { one } else { many };
+    let mut parts = Vec::new();
+    if deletion.dropped > 0 {
+        parts.push(format!(
+            "dropped {} bench {} in it",
+            deletion.dropped,
+            plural(deletion.dropped, "observation", "observations")
+        ));
+    }
+    if deletion.endpoints_cleared > 0 {
+        parts.push(format!(
+            "cleared {} bench measurement {} in it",
+            deletion.endpoints_cleared,
+            plural(deletion.endpoints_cleared, "endpoint", "endpoints")
+        ));
+    }
+    if parts.is_empty() {
         return String::new();
     }
-    let observations = if deletion.dropped == 1 {
-        "observation"
-    } else {
-        "observations"
+    let mut text = format!("; {}", parts.join(" and "));
+    let left = match (deletion.dropped > 0, deletion.endpoints_cleared > 0) {
+        (true, false) => "no other observations",
+        (false, true) => "no other endpoint",
+        _ => "nothing in another image",
     };
-    let mut text = format!("; dropped {} bench {observations} in it", deletion.dropped);
-    match deletion.discarded.as_slice() {
-        [] => {}
-        [one] => text.push_str(&format!(
-            " and discarded {one}, which had no other observations"
-        )),
-        many => text.push_str(&format!(
-            " and discarded {}, which had no other observations",
-            many.join(", ")
-        )),
+    if !deletion.discarded.is_empty() {
+        text.push_str(&format!(
+            " and discarded {}, which had {left}",
+            deletion.discarded.join(", ")
+        ));
     }
     text
 }
@@ -1368,14 +1380,13 @@ impl AppState {
 
         // Materialise only when there is an overlay to fold in; an empty one
         // materialises to its own base, and the subset can read that directly.
-        let (materialised, mat_map) =
-            if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
-                (None, None)
-            } else {
-                let _phase = collector.phase("materialise");
-                let (value, map) = edited.materialize();
-                (Some(value), Some(PointMap::Rows(map)))
-            };
+        let (materialised, mat_map) = if !edited.has_edits() {
+            (None, None)
+        } else {
+            let _phase = collector.phase("materialise");
+            let (value, map) = edited.materialize();
+            (Some(value), Some(PointMap::Rows(map)))
+        };
         let source: &SfmrReconstruction = match materialised.as_ref() {
             Some(value) => value,
             None => &edited.base,
@@ -1437,11 +1448,15 @@ impl AppState {
         let node = &mut self.scene[index];
         let serial = {
             let _phase = collector.phase("push version");
-            node.history.push_pair(
+            node.history.push_renumbering(
                 Some(EditedReconstruction::new(Arc::new(subset))),
                 bench,
                 None,
                 map,
+                crate::document::MeasurementMap::of(
+                    crate::measurements::MeasurementKind::Distance,
+                    measurement_rows.clone(),
+                ),
                 text.clone(),
                 None,
             )
@@ -1563,14 +1578,13 @@ impl AppState {
         // Materialise only when there is an overlay to fold in; an empty one
         // materialises to its own base, which the resection can read directly.
         let edited = self.scene[index].history.current();
-        let (materialised, mat_map) =
-            if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
-                (None, None)
-            } else {
-                let _phase = collector.phase("materialise");
-                let (value, map) = edited.materialize();
-                (Some(value), Some(PointMap::Rows(map)))
-            };
+        let (materialised, mat_map) = if !edited.has_edits() {
+            (None, None)
+        } else {
+            let _phase = collector.phase("materialise");
+            let (value, map) = edited.materialize();
+            (Some(value), Some(PointMap::Rows(map)))
+        };
         let source_value: &SfmrReconstruction = match materialised.as_ref() {
             Some(value) => value,
             None => &self.scene[index].history.current().base,
@@ -1700,14 +1714,13 @@ impl AppState {
         // Materialise only when there is an overlay to fold in; an empty one
         // materialises to its own base, which the move can read directly.
         let edited = self.scene[index].history.current();
-        let (materialised, mat_map) =
-            if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
-                (None, None)
-            } else {
-                let _phase = collector.phase("materialise");
-                let (value, map) = edited.materialize();
-                (Some(value), Some(PointMap::Rows(map)))
-            };
+        let (materialised, mat_map) = if !edited.has_edits() {
+            (None, None)
+        } else {
+            let _phase = collector.phase("materialise");
+            let (value, map) = edited.materialize();
+            (Some(value), Some(PointMap::Rows(map)))
+        };
         let source: &SfmrReconstruction = match materialised.as_ref() {
             Some(value) => value,
             None => &self.scene[index].history.current().base,
@@ -1841,14 +1854,13 @@ impl AppState {
             // Materialise only when there is an overlay to fold in; an empty
             // one materialises to its own base, which the solve can read
             // directly.
-            let (materialised, mat_map) =
-                if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
-                    (None, None)
-                } else {
-                    let _phase = progress.phase("materialise");
-                    let (value, map) = edited.materialize();
-                    (Some(value), Some(PointMap::Rows(map)))
-                };
+            let (materialised, mat_map) = if !edited.has_edits() {
+                (None, None)
+            } else {
+                let _phase = progress.phase("materialise");
+                let (value, map) = edited.materialize();
+                (Some(value), Some(PointMap::Rows(map)))
+            };
             let source: &SfmrReconstruction = match materialised.as_ref() {
                 Some(value) => value,
                 None => &edited.base,
@@ -1997,14 +2009,13 @@ impl AppState {
             // Materialise only when there is an overlay to fold in; an empty
             // one materialises to its own base, which the conversion can read
             // directly.
-            let (materialised, mat_map) =
-                if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
-                    (None, None)
-                } else {
-                    let _phase = progress.phase("materialise");
-                    let (value, map) = edited.materialize();
-                    (Some(value), Some(PointMap::Rows(map)))
-                };
+            let (materialised, mat_map) = if !edited.has_edits() {
+                (None, None)
+            } else {
+                let _phase = progress.phase("materialise");
+                let (value, map) = edited.materialize();
+                (Some(value), Some(PointMap::Rows(map)))
+            };
             let source: &SfmrReconstruction = match materialised.as_ref() {
                 Some(value) => value,
                 None => &edited.base,
@@ -2188,6 +2199,13 @@ impl AppState {
         // cursor is leaving, and what it is for is finding that photograph
         // again in the one it lands on.
         let carried = self.selected_image_name(id);
+        // Whether the selected measurement is a focused measurement item's
+        // origin before the move (both `None` where its row is gone counts):
+        // only then does the move keep it so. A selection the person cleared
+        // while the item stayed focused stays cleared.
+        let tracks_origin = self.focused_item().is_some_and(|f| f.node == id)
+            && self.focused_item_kind() == Some(sfmtool_core::bench::ItemKind::Measurement)
+            && self.selected_measurement == self.focused_measurement_origin();
         let step = collector.phase(kind.phase());
         while self.scene[index].history.cursor() != target {
             let node = &mut self.scene[index];
@@ -2202,8 +2220,11 @@ impl AppState {
             let _phase = step.phase("selection follow");
             if stepping_back {
                 self.follow_selection_backward(id, left);
+                self.follow_measurement_step(id, left, true);
             } else {
                 self.follow_selection_forward(id);
+                let landed = self.scene[index].history.current_version().serial;
+                self.follow_measurement_step(id, landed, false);
             }
             // Per step rather than once at the end, so the stage's row counts
             // the steps like every other stage's. The name is the one the move
@@ -2219,6 +2240,26 @@ impl AppState {
         // it, and is unfocused otherwise; the move's own row says what
         // happened.
         self.settle_focused_item(id);
+        // While a measurement item is focused and its origin was the
+        // selection, the selected measurement is its origin at the cursor, or
+        // none where that row is gone: an undo that brings the row back
+        // selects it again. Assigned directly, so no row is written beside
+        // the move's own.
+        let focused_here = self.focused_item().is_some_and(|f| f.node == id);
+        if tracks_origin
+            && focused_here
+            && self.focused_item_kind() == Some(sfmtool_core::bench::ItemKind::Measurement)
+        {
+            let origin = self.focused_measurement_origin();
+            if self.selected_measurement != origin {
+                self.selected_measurement = origin;
+                self.selected_endpoint = None;
+            }
+        }
+        // A selection on a row the version landed on does not hold (one an
+        // undone commit had appended) is cleared now, so a reply to the move
+        // never names it.
+        self.prune_measurement_selection();
         let landed = self.scene[index].history.current_version();
         let (to, text) = (landed.serial, kind.text(&left_label, &landed.label));
         {

@@ -896,8 +896,10 @@ pub(crate) struct AppState {
     pub(crate) focused_item: Option<crate::bench::FocusedItem>,
 
     /// Every item focused this session, most recently focused first, each
-    /// once: what ticking Track View's *Edit* box with no point selected
-    /// focuses the first of ([`AppState::most_recent_item`]).
+    /// once, tracks and measurements alike: what ticking Track View's *Edit*
+    /// box with no point selected, or Measurement View's with no measurement
+    /// selected, focuses the first of its kind from
+    /// ([`AppState::most_recent_item_of`]).
     ///
     /// Session state, not part of any version. An entry is moved to the front
     /// whenever its item is focused, and dropped when its node is closed. It
@@ -1534,9 +1536,18 @@ impl AppState {
     /// keeps them. A measurement the version on screen does not hold selects
     /// nothing. Selecting the measurement already selected changes nothing
     /// and writes no row.
+    ///
+    /// **Selecting any measurement but a focused measurement item's origin
+    /// unfocuses the item**, with its `Stopped editing` row before the
+    /// selection's own, as selecting a point does for a focused track.
     pub(crate) fn select_measurement(&mut self, measurement: MeasurementRef) {
         if self.distance_row(measurement).is_none() {
             return;
+        }
+        if self.focused_item_kind() == Some(sfmtool_core::bench::ItemKind::Measurement)
+            && self.focused_measurement_origin() != Some(measurement)
+        {
+            self.leave_focused_item();
         }
         self.select_recon(measurement.recon);
         if self.selected_measurement == Some(measurement) {
@@ -1598,7 +1609,7 @@ impl AppState {
         let node = self.node(measurement.recon)?;
         match measurement.kind {
             crate::measurements::MeasurementKind::Distance => {
-                crate::measurements::distance_rows(node.recon())
+                crate::measurements::distance_rows(node.edited().measurements())
                     .into_iter()
                     .nth(measurement.index())
             }
@@ -1626,21 +1637,71 @@ impl AppState {
         }
     }
 
-    /// Clear the measurement selection where the version on screen no longer
-    /// holds its row, and keep it on the same row otherwise.
+    /// Carry the selected measurement of node `id` across one step of an undo
+    /// or a redo: through the measurement map of the step that made version
+    /// `step` ([`crate::document::MeasurementMap`]), forward on a redo onto
+    /// `step`, and inverted on an undo of `step`. A row the step dropped
+    /// clears the selection. A row an appending commit added keeps its index
+    /// here, since that commit's map is the identity; the move that walks
+    /// these steps then calls [`Self::prune_measurement_selection`], which
+    /// clears it where the version landed on holds no such row.
     ///
-    /// Measurements are never renumbered by a point edit, so a row that is
-    /// still there is the same measurement. A bulk edit that drops images can
-    /// drop measurements, and an undo or a redo can arrive at a version with
-    /// fewer of them; the selection is cleared there rather than left naming a
-    /// row that is gone, and stays cleared when a later step brings the row
-    /// back. Called once a frame, before the panels draw.
+    /// What keeps an undo of a measurement delete or an image delete on the
+    /// measurement that was selected, rather than on whatever row now has its
+    /// index.
+    pub(crate) fn follow_measurement_step(
+        &mut self,
+        id: ReconId,
+        step: crate::document::VersionSerial,
+        undo: bool,
+    ) {
+        let Some(measurement) = self.selected_measurement.filter(|m| m.recon == id) else {
+            return;
+        };
+        let Some(map) = self
+            .node(id)
+            .and_then(|node| node.history.measurement_map_of(step))
+        else {
+            return;
+        };
+        let moved = if undo {
+            map.inverse(measurement.kind, measurement.index)
+        } else {
+            map.forward(measurement.kind, measurement.index)
+        };
+        match moved {
+            Some(index) => {
+                self.selected_measurement = Some(MeasurementRef {
+                    index,
+                    ..measurement
+                });
+            }
+            None => {
+                self.selected_measurement = None;
+                self.selected_endpoint = None;
+            }
+        }
+    }
+
+    /// Clear the measurement selection where the version on screen no longer
+    /// holds its row.
+    ///
+    /// The edits that renumber rows (deleting an image, deleting a
+    /// measurement) carry the selection with them
+    /// ([`Self::follow_measurement_rows`]), and an undo or a redo across them
+    /// carries it back ([`Self::follow_measurement_step`]), so a row that is
+    /// still there is the measurement that was selected. This catches what
+    /// neither reaches: a version arrived at that holds fewer rows than the
+    /// index, such as an undo past a commit that appended the selected row.
+    /// The selection is cleared there, and stays cleared when a later step
+    /// brings the row back. Called once a frame, before the panels draw.
     pub(crate) fn prune_measurement_selection(&mut self) {
         let Some(measurement) = self.selected_measurement else {
             return;
         };
         let held = self.node(measurement.recon).is_some_and(|node| {
-            measurement.index() < crate::measurements::measurement_count(node.recon())
+            measurement.index()
+                < crate::measurements::measurement_count(node.edited().measurements())
         });
         if !held {
             self.selected_measurement = None;
@@ -1691,8 +1752,19 @@ impl AppState {
     /// point it wrote before selecting it and so keeps the item focused. The
     /// selection that follows the point maps after an edit assigns
     /// `selected_point` directly, and does not unfocus.
+    ///
+    /// A focused **measurement** item has no point for its origin, so a point
+    /// selection leaves it focused unless the point is on another node: the
+    /// selected point is the measurement item's to leave alone.
     pub(crate) fn select_point(&mut self, point: PointRef) {
-        if self.focused_item().is_some() && self.focused_origin() != Some(point) {
+        let leaves = match self.focused_item_kind() {
+            Some(sfmtool_core::bench::ItemKind::Track) => self.focused_origin() != Some(point),
+            Some(sfmtool_core::bench::ItemKind::Measurement) => self
+                .focused_item()
+                .is_some_and(|focused| focused.node != point.recon),
+            None => self.focused_item().is_some(),
+        };
+        if leaves {
             self.leave_focused_item();
         }
         let moved = self.selected_point != Some(point);

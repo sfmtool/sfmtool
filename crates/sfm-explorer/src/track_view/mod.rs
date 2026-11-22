@@ -6,7 +6,7 @@
 //! See `specs/gui/track-view.md`. The panel's first row is the **Edit**
 //! checkbox, and it is a reading of the focused item rather than a setting: it
 //! is ticked exactly while the focused item is on the selected node's bench
-//! ([`AppState::focused_item_label`]). To its right on the same row is the
+//! ([`AppState::focused_track_label`]). To its right on the same row is the
 //! recent items strip ([`recent`]), the items most recently focused, each one
 //! click from being focused again. Below them the panel draws one body
 //! ([`body`]) in one of two modes:
@@ -146,7 +146,7 @@ impl TrackView {
         };
         let id = node.id;
         let bench = node.history.current_bench();
-        let focused = state.focused_item_label(id);
+        let focused = state.focused_track_label(id);
         let editing = focused.is_some();
         // A selection the version no longer holds is no selection, so the box
         // and the body agree.
@@ -158,7 +158,7 @@ impl TrackView {
         // unfocusing push no version. With no point selected the tick focuses
         // the most recent item still on a bench, and only with none is the
         // box greyed, saying what the ways in are.
-        let recent = state.most_recent_item();
+        let recent = state.most_recent_item_of(sfmtool_core::bench::ItemKind::Track);
         let refusal = if editing {
             None
         } else {

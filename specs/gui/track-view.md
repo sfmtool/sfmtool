@@ -147,14 +147,16 @@ impl AppState {
     /// Leave no item focused, every item staying on its bench, and select the
     /// item's origin or clear the point selection. No version.
     pub(crate) fn unfocus_bench_item(&mut self);
-    /// The focused item's label on `id`'s bench, which the box reads.
-    pub(crate) fn focused_item_label(&self, id: ReconId) -> Option<&str>;
+    /// The focused item's label on `id`'s bench when it is a track, which the
+    /// box reads.
+    pub(crate) fn focused_track_label(&self, id: ReconId) -> Option<&str>;
     /// The focused item's origin followed to the cursor, which is the one
     /// point a selection may name while the item stays focused.
     pub(crate) fn focused_origin(&self) -> Option<PointRef>;
-    /// The first entry of `recent_items` on its node's bench at the cursor:
-    /// what a tick with no point selected focuses.
-    pub(crate) fn most_recent_item(&self) -> Option<(ReconId, String)>;
+    /// The first entry of `recent_items` of `kind` on its node's bench at the
+    /// cursor: with `ItemKind::Track`, what a tick with no point selected
+    /// focuses.
+    pub(crate) fn most_recent_item_of(&self, kind: ItemKind) -> Option<(ReconId, String)>;
     /// Build or take from its cache the viewed track for the selected point,
     /// which Viewed mode draws ([`bench.md`](bench.md) § "The viewed track").
     pub(crate) fn refresh_viewed_track(&mut self);
@@ -267,8 +269,11 @@ to its right on the same row (§ "The recent items strip"), and nothing else is
 drawn above it in either mode.
 
 **The box shows the focused item, not an independent setting.** It is checked
-if and only if the focused item is on the selected node's bench
-(`AppState::focused_item_label`, [`bench.md`](bench.md) § "The focused item").
+if and only if the focused item is a track on the selected node's bench
+(`AppState::focused_track_label`, [`bench.md`](bench.md) § "The focused item").
+A focused measurement leaves it clear: Measurement View's own *Edit* box is
+ticked for that ([measurement-view.md](measurement-view.md) § "The Edit box"),
+and focusing either kind unfocuses the other, there being one focused item.
 Every way the focused item can change therefore moves the box on the next frame
 with no code keeping the two in step: a Scene tree double-click, a step that
 puts an item on the bench, a wire call, and an Undo or Redo that lands on a
@@ -317,9 +322,9 @@ selected and clicking a chip push no version and are never greyed for a busy
 node.
 
 **Ticking Edit with no point selected** focuses the first entry of the recent
-list whose item is on its node's bench at the cursor
-(`AppState::most_recent_item`), on any loaded node, and selects that node. That
-is the strip's first chip when the row has room for one. The box's hover text
+list whose item is a track on its node's bench at the cursor
+(`AppState::most_recent_item_of`), on any loaded node, and selects that node. That
+is the strip's first track chip when the row has room for one. The box's hover text
 names it, so a panel too narrow to draw the chip still says what the tick does:
 *"Tick to edit pt3d_a1b2c3d4_1207 again"* (`track_view::again_hint`). It is
 greyed only when no entry is on a bench, and
@@ -429,13 +434,15 @@ To the right of the *Edit* box, on the same row, the panel draws the items most
 recently focused, most recent first, leaving out the focused item
 ([recent.rs](../../crates/sfm-explorer/src/track_view/recent.rs)). They are the
 entries of the recent list (§ "Transitions") whose item is on its node's bench
-at the cursor, from any loaded node. The strip is drawn in both modes and in the
-empty state, so after the box is cleared its first chip is the item just left.
+at the cursor, from any loaded node, measurement items beside tracks. The strip
+is drawn in both modes and in the empty state, so after the box is cleared its
+first chip is the item just left.
 
 **What a chip shows.** The item's patch at 24 points square, the same picture
 the header's patch slot draws for that item (the patch bitmap at the track
 stage, the template at the cluster stage, an empty frame when there is neither,
-through `body::track_patch_image`), drawn with nearest filtering, and the label
+through `body::track_patch_image`, and an empty frame for a measurement item),
+drawn with nearest filtering, and the label
 beside it, shortened by a cut out of the middle so that the start and the end
 both survive (`pt3d_…_1207`, `IMG_0…@142,198`), by the same middle elision the
 table's *Name* column uses (`crate::elide::middle`), to at most 72 points.
@@ -453,13 +460,16 @@ gone` when it does not, `New: read from no point` for an item that never had
 one); at the track stage `Position (x, y, z)` or `Bearing (x, y, z), at
 infinity`, as the Edited headline writes them (`body::position_text`); where the
 item's evaluation stands (*Evaluated*, *Evaluating…*, or the refusal or failure
-sentence); and *Click to edit*.
+sentence); and *Click to edit*. A measurement item's hover gives, after its
+label and node, `A distance measurement` and the image of each endpoint
+(`Endpoint A: IMG_0004.jpg`, or `not placed`).
 
 **Click** reports the item in `TrackViewResponse::focus_item`, and the dock
 focuses it through `AppState::focus_bench_item`, which selects the item's node
 first when it is on another one, then its origin, or clears the point selection
-for an item with no origin. A focus is no version, so a chip is never greyed
-while a background task holds the node.
+for an item with no origin. A measurement item focused from its chip is shown
+in Measurement View, and Track View's box is then clear. A focus is no
+version, so a chip is never greyed while a background task holds the node.
 
 **The patches are uploaded once.** Each chip's texture is cached against the
 item and the track's `Arc`, so a chip does not upload its patch again every

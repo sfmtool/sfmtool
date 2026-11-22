@@ -409,7 +409,7 @@ pub(super) fn shortcuts(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>) {
         // being edited the key is left to whatever else wants it.
         let focused = app_state
             .selected_recon
-            .and_then(|id| Some((id, app_state.focused_item_label(id)?.to_string())));
+            .and_then(|id| Some((id, app_state.focused_track_label(id)?.to_string())));
         if let Some((id, label)) = focused {
             if root_ui.input_mut(|i| i.consume_shortcut(&DUPLICATE_TRACK_SHORTCUT)) {
                 // In Surface Tiling Mode the shortcut is the mode's duplicate,

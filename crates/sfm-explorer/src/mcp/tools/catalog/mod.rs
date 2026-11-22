@@ -106,7 +106,7 @@ fn reconstruction_label_schema() -> Value {
 fn measurement_kind_schema() -> Value {
     json!({
         "type": "string",
-        "enum": crate::measurements::MeasurementKind::ALL.map(|kind| kind.wire_name()),
+        "enum": crate::measurements::MeasurementKind::ALL.map(|kind| kind.name()),
         "description": "The kind of measurement, the subsection of the file's measurements \
                         its index counts in. Defaults to distance, the one kind.",
     })

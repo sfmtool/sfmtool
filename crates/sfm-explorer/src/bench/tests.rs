@@ -80,6 +80,7 @@ fn versions(state: &AppState, id: ReconId) -> usize {
 fn item_address(state: &AppState, id: ReconId, position: usize) -> usize {
     match &bench(state, id).entries()[position].item {
         BenchItem::Track(track) => Arc::as_ptr(track) as usize,
+        BenchItem::Measurement(measurement) => Arc::as_ptr(measurement) as usize,
     }
 }
 
@@ -857,23 +858,38 @@ fn the_recent_items_are_most_recent_first_once_each_and_pruned_on_close() {
             .collect()
     };
     assert_eq!(labels(&state), [point.clone(), cluster.clone()]);
-    assert_eq!(state.most_recent_item(), Some((a, point.clone())));
+    assert_eq!(
+        state.most_recent_item_of(sfmtool_core::bench::ItemKind::Track),
+        Some((a, point.clone()))
+    );
 
     // Not on the bench at the cursor: passed over, and back after the undo.
     state
         .discard_bench_item(a, &point)
         .expect("on the bench of a");
-    assert_eq!(state.most_recent_item(), Some((a, cluster.clone())));
+    assert_eq!(
+        state.most_recent_item_of(sfmtool_core::bench::ItemKind::Track),
+        Some((a, cluster.clone()))
+    );
     state.undo(a).expect("the discard");
-    assert_eq!(state.most_recent_item(), Some((a, point.clone())));
+    assert_eq!(
+        state.most_recent_item_of(sfmtool_core::bench::ItemKind::Track),
+        Some((a, point.clone()))
+    );
 
     // An item on a second node goes first; closing its node drops it.
     let b = second_node(&mut state);
     let on_b = put_on_bench(&mut state, b);
-    assert_eq!(state.most_recent_item(), Some((b, on_b)));
+    assert_eq!(
+        state.most_recent_item_of(sfmtool_core::bench::ItemKind::Track),
+        Some((b, on_b))
+    );
     state.close_node(b).expect("nothing is running");
     assert_eq!(state.recent_items.len(), 2);
-    assert_eq!(state.most_recent_item(), Some((a, point)));
+    assert_eq!(
+        state.most_recent_item_of(sfmtool_core::bench::ItemKind::Track),
+        Some((a, point))
+    );
 
     state.close_all().expect("nothing is running");
     assert!(state.recent_items.is_empty());

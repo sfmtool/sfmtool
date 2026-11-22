@@ -708,3 +708,52 @@ fn a_created_point_survives_the_save_and_keeps_its_id() {
     let (hash, _) = rest.split_once('_').expect("hash and index");
     assert_eq!(crate::point_ids::resolve(node, hash, 0), Ok(row));
 }
+
+/// A save writes the measurements a version holds of its own: a deleted
+/// measurement is gone from the file and a committed one is in it, and the
+/// version the save leaves at the cursor holds them in its base.
+#[test]
+fn a_save_writes_the_value_s_own_measurements() {
+    let dir = temp_dir("measurements");
+    let path = dir.join("measured.sfmr");
+    let mut state = AppState::new();
+    // The fixture's images carry no readings, which a save must write; the
+    // demo's are taken for each, since they are not what is tested here.
+    let mut recon = crate::measurements::fixture::measured_reconstruction(Some("m"));
+    let demo = SfmrReconstruction::demo(1);
+    recon.image_set.image_to_gray = demo.image_set.image_to_gray.clone();
+    for image in &mut recon.image_set.images {
+        image.readings = demo.image_set.images[0].readings;
+    }
+    let id = state.append_node(SceneNode::from_path(&path, recon));
+    let first = crate::measurements::MeasurementRef::distance(id, 0);
+    let put = state.put_measurement_on_bench(first).expect("a stored row");
+    state.delete_measurement(first).expect("a stored row");
+    let committed = state
+        .commit_bench_measurement(id, &put.label)
+        .expect("a whole item");
+    assert!(committed.changed && !committed.replaced);
+    state.save_node(id).expect("a writable path");
+
+    let written = sfmtool_sfmr_format::read_sfmr(&path).expect("a written file");
+    let m = written
+        .measurements
+        .distance
+        .as_ref()
+        .expect("distance rows");
+    // Rows 1..5 moved down, and row 0 came back last.
+    assert_eq!(
+        m.labels,
+        ["nose to tail", "", "to the sky", "paw width", "ear to ear"]
+    );
+    assert_eq!(written.metadata.distance_measurement_count, Some(5));
+    let node = &state.scene[0];
+    assert!(!node.edited().has_edits());
+    assert_eq!(
+        node.recon()
+            .image_set
+            .measurements
+            .distance_measurement_count(),
+        5
+    );
+}

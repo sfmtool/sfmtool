@@ -170,14 +170,13 @@ impl AppState {
 
             // Materialise only when there is an overlay to fold in, as the
             // other bulk edits do.
-            let (materialised, mat_map) =
-                if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
-                    (None, None)
-                } else {
-                    let _phase = work.phase("materialise");
-                    let (value, map) = edited.materialize();
-                    (Some(value), Some(PointMap::Rows(map)))
-                };
+            let (materialised, mat_map) = if !edited.has_edits() {
+                (None, None)
+            } else {
+                let _phase = work.phase("materialise");
+                let (value, map) = edited.materialize();
+                (Some(value), Some(PointMap::Rows(map)))
+            };
             let source: &SfmrReconstruction = match materialised.as_ref() {
                 Some(value) => value,
                 None => &edited.base,

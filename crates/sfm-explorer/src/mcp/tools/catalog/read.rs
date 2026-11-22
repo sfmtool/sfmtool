@@ -328,14 +328,22 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           its refusal (the sentence naming the remedy, and its short form), \
                           and median, the header's line comparing this measurement's implied \
                           scale with the median of every measurement of its kind with a \
-                          reading (null with fewer than two).",
+                          reading (null with fewer than two). Name item instead of \
+                          measurement_index for a measurement item on the bench, read live \
+                          from the item as Measurement View's edited mode reads it: the same \
+                          fields, plus item, focused and origin (the row its commit would \
+                          replace, null where it would append one); an endpoint not placed is \
+                          null, and then so is the result; median leaves out the item's \
+                          origin.",
             kind: Read,
             schema: object(
                 &[
                     ("reconstruction_label", reconstruction_label_schema()),
                     ("measurement_kind", measurement_kind_schema()),
+                    ("measurement_index", measurement_index_schema()),
+                    ("item", bench_item_schema()),
                 ],
-                &[("measurement_index", measurement_index_schema())],
+                &[],
             ),
         },
         ToolSpec {
