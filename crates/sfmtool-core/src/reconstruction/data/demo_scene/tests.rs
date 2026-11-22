@@ -4,7 +4,10 @@
 use std::sync::{Mutex, OnceLock};
 
 use super::render::{camera_rotation, dot, pixel_ray, BACKGROUND, CAMERA_CENTRES};
-use super::texture::{value_noise, Surface, CUBE_A, CUBE_B};
+use super::texture::{
+    octave_seed, octave_shift, perlin_fbm, perlin_noise, value_noise, FbmOptions, Surface, CUBE_A,
+    CUBE_B, PERLIN_BOUND, TEXTURE_FBM, TEXTURE_PEAK,
+};
 use super::*;
 use crate::features::sift::ImageToGray;
 use crate::progress::Event;
@@ -154,11 +157,11 @@ fn rendered_photographs_are_the_same_on_two_runs_and_across_thread_counts() {
 /// encodes it, which it takes on an x86 CPU with AVX2: computed on x86-64
 /// Windows, and checked by CI's Linux and Windows runners.
 const JPEG_XXH128_AVX2: [&str; 5] = [
-    "ba1dd74285d8d4e980061b524e746b7e",
-    "15471365f506c26fab65dc146b070f40",
-    "1f5d3a9c92f23492eefc392d266832b8",
-    "52074f24bb191c8060f9303b0b4017c2",
-    "92dd6c1ff3587be2836db161f5f95ac4",
+    "2676ff94935814d7a9c791473689514b",
+    "fb9c6357421a4f7857f052e3c7c8e288",
+    "7b8a4e749c4706b3ad2954c9d40d7ed7",
+    "60b576f9c973c4a0b7f09e600d991f9b",
+    "06738cd2d67578ffa0b9e95ed0248f50",
 ];
 
 /// The same as `jpeg-encoder`'s scalar path encodes it, which it takes on
@@ -167,11 +170,11 @@ const JPEG_XXH128_AVX2: [&str; 5] = [
 /// coefficients than the AVX2 one for some blocks, so these differ from
 /// [`JPEG_XXH128_AVX2`].
 const JPEG_XXH128_SCALAR: [&str; 5] = [
-    "cca68745cdd03b4311943212823c2205",
-    "c18ce3f86301b083567dcfb2a9d7e8dd",
-    "d62d9cb4ffb02cfb2d5a19bbdaa2e108",
-    "5bf1b5849db770f3f7c4b63e95e7592f",
-    "54298b443cb536e56c6b2ab56976cee8",
+    "9ffaa8da80968aa67ee7fea0b81cc22c",
+    "80e84e3aeb6b5037099f2f97048103bd",
+    "02229b128c970781c69eaa6cb265e079",
+    "7e1b45aa571c988b43828f05506bc85a",
+    "e9f00c15962f49793383dad543609e20",
 ];
 
 /// Whether `jpeg-encoder` takes its AVX2 path here, by the test it makes.
@@ -639,4 +642,227 @@ fn render_counts_rows_then_images_and_stops_when_cancelled() {
         DemoScene::render(&options, &Progress::none().cancelled_by(&cancelled)),
         Err(DemoSceneError::Cancelled)
     ));
+}
+
+#[test]
+fn perlin_noise_is_zero_on_the_lattice_continuous_and_bounded() {
+    // 0 at every lattice node, negative indices among them; a spacing of a
+    // power of 2 puts the nodes exactly where the coordinates say.
+    for (i, j) in [(0, 0), (3, -7), (-12, 5), (40, 40)] {
+        let (x, y) = (f64::from(i) * 0.125, f64::from(j) * 0.125);
+        assert_eq!(perlin_noise(x, y, 0.125, 9), 0.0, "node ({i}, {j})");
+    }
+    let spacing = 0.1;
+    // Over 200 × 200 cells, the noise at a cell's centre reaches the bound
+    // where all four gradients point at the centre, and never passes it.
+    let mut largest = 0f64;
+    for i in -100..100 {
+        for j in -100..100 {
+            let x = (f64::from(i) + 0.5) * spacing;
+            let y = (f64::from(j) + 0.5) * spacing;
+            largest = largest.max(perlin_noise(x, y, spacing, 9).abs());
+        }
+    }
+    assert!(
+        (largest - PERLIN_BOUND).abs() < 1e-12,
+        "largest {largest} at a cell centre"
+    );
+    let mut differs = 0;
+    for k in 0..400 {
+        let x = -1.0 + 0.0137 * f64::from(k);
+        let y = 0.5 - 0.0071 * f64::from(k);
+        let n = perlin_noise(x, y, spacing, 3);
+        assert!(n.abs() <= PERLIN_BOUND, "{n} at ({x}, {y})");
+        // Across a lattice line neither the value nor its slope jumps.
+        let edge = (x / spacing).floor() * spacing;
+        let h = 1e-6;
+        let at = |x: f64| perlin_noise(x, y, spacing, 3);
+        assert!((at(edge - h) - at(edge + h)).abs() < 1e-4);
+        let slope_left = (at(edge - h) - at(edge - 2.0 * h)) / h;
+        let slope_right = (at(edge + 2.0 * h) - at(edge + h)) / h;
+        assert!(
+            (slope_left - slope_right).abs() < 1e-3,
+            "slope {slope_left} then {slope_right} at x = {edge}"
+        );
+        if (perlin_noise(x, y, spacing, 4) - n).abs() > 0.05 {
+            differs += 1;
+        }
+    }
+    assert!(
+        differs > 300,
+        "another seed changed {differs} of 400 values"
+    );
+}
+
+#[test]
+fn perlin_noise_and_its_fbm_give_the_stored_bits() {
+    // Computed on x86-64 Windows. The functions use only `+`, `−`, `×`, `÷`
+    // and `floor`, so every platform gives these bits.
+    let fbm = FbmOptions {
+        spacing: 0.3,
+        octaves: 4,
+        lacunarity: 2.0,
+        gain: 0.6,
+    };
+    let values = || {
+        [
+            perlin_noise(0.37, -1.23, 0.1, 5),
+            perlin_noise(-4.019, 2.5, 0.02, 0),
+            perlin_fbm(0.37, -1.23, &fbm, 5),
+            perlin_fbm(-4.019, 2.5, &TEXTURE_FBM, 0),
+        ]
+        .map(f64::to_bits)
+    };
+    let stored = [
+        0xbfc9_78f3_8ada_0152,
+        0xbfa2_7ab2_d12a_398e,
+        0x3fcf_25d6_cd8d_ae52,
+        0x3fa0_e9d8_bd56_163e,
+    ];
+    assert_eq!(values(), stored);
+}
+
+#[test]
+fn perlin_fbm_adds_octaves_at_falling_amplitudes_and_is_bounded() {
+    let options = |octaves| FbmOptions {
+        spacing: 0.3,
+        octaves,
+        lacunarity: 2.0,
+        gain: 0.6,
+    };
+    assert!((options(3).amplitude_sum() - (1.0 + 0.6 + 0.36)).abs() < 1e-15);
+    for k in 0..100 {
+        let x = -2.0 + 0.0413 * f64::from(k);
+        let y = 1.0 - 0.0297 * f64::from(k);
+        // One octave is the Perlin noise of the first octave's seed.
+        let one = perlin_fbm(x, y, &options(1), 7);
+        assert_eq!(one, perlin_noise(x, y, 0.3, octave_seed(7, 0)));
+        // Each further octave adds the noise at half the last spacing, on its
+        // shifted lattice with its own seed, at 0.6 of the last amplitude.
+        for n in 2..=4u32 {
+            let (with, without) = (options(n), options(n - 1));
+            let added = perlin_fbm(x, y, &with, 7) * with.amplitude_sum()
+                - perlin_fbm(x, y, &without, 7) * without.amplitude_sum();
+            let spacing = 0.3 / 2f64.powi(n as i32 - 1);
+            let shift = octave_shift(n - 1) * spacing;
+            let octave = perlin_noise(x + shift, y + shift, spacing, octave_seed(7, n - 1));
+            assert!(
+                (added - 0.6f64.powi(n as i32 - 1) * octave).abs() < 1e-12,
+                "octave {n} at ({x}, {y})"
+            );
+        }
+        assert!(perlin_fbm(x, y, &options(4), 7).abs() <= PERLIN_BOUND);
+    }
+    // The octaves draw different gradients and sit on shifted lattices.
+    assert_ne!(octave_seed(7, 0), octave_seed(7, 1));
+    assert_ne!(octave_shift(1), octave_shift(2));
+    assert!((0.0..1.0).contains(&octave_shift(3)));
+}
+
+#[test]
+fn the_texture_fills_most_of_its_grey_range_and_never_leaves_it() {
+    // The fBm's largest magnitude over every surface of four scenes stays
+    // under the peak the texture maps to the range's ends, and comes within
+    // 10% of it, so the range is neither passed nor left unused.
+    let mut largest = 0f64;
+    for seed in 0..4u64 {
+        for surface in Surface::ALL {
+            let (origin, extent) = if surface == Surface::Ground {
+                (-5.0, 10.0)
+            } else {
+                (0.0, 1.0)
+            };
+            for a in 0..=150 {
+                for b in 0..=150 {
+                    let s = origin + extent * f64::from(a) / 150.0;
+                    let t = origin + extent * f64::from(b) / 150.0;
+                    let seed = seed * 7 + surface as u64;
+                    largest = largest.max(perlin_fbm(s, t, &TEXTURE_FBM, seed).abs());
+                }
+            }
+        }
+    }
+    assert!(
+        (0.9..1.0).contains(&(largest / TEXTURE_PEAK)),
+        "largest {largest}, peak {TEXTURE_PEAK}"
+    );
+}
+
+/// The contrast of the grey in each 24 × 24 pixel window of the default
+/// scene's renders, the side of a patch bitmap, that lies wholly on one
+/// surface, by surface: the window's standard deviation, and its pixel-scale
+/// contrast, the RMS difference between horizontally or vertically
+/// neighbouring pixels over `√2`, which equals the standard deviation for
+/// independent pixels.
+fn window_contrasts() -> std::collections::BTreeMap<u8, Vec<(f64, f64)>> {
+    const SIDE: u32 = 24;
+    let mut contrasts = std::collections::BTreeMap::new();
+    for (image, photograph) in scene().rendered_photographs().iter().enumerate() {
+        for row0 in (0..=480 - SIDE).step_by(SIDE as usize) {
+            'window: for col0 in (0..=640 - SIDE).step_by(SIDE as usize) {
+                let mut surface = None;
+                let mut grey = Vec::with_capacity((SIDE * SIDE) as usize);
+                for row in row0..row0 + SIDE {
+                    for col in col0..col0 + SIDE {
+                        let Some((Some(s), _)) = uniform_pixel(image, col, row) else {
+                            continue 'window;
+                        };
+                        if *surface.get_or_insert(s) != s {
+                            continue 'window;
+                        }
+                        grey.push(f64::from(luma(pixel(photograph, col, row).map(f32::from))));
+                    }
+                }
+                let n = grey.len() as f64;
+                let mean = grey.iter().sum::<f64>() / n;
+                let sd = (grey.iter().map(|g| (g - mean).powi(2)).sum::<f64>() / n).sqrt();
+                let side = SIDE as usize;
+                let (mut squares, mut pairs) = (0f64, 0f64);
+                for r in 0..side {
+                    for c in 0..side - 1 {
+                        squares += (grey[r * side + c + 1] - grey[r * side + c]).powi(2);
+                        squares += (grey[(c + 1) * side + r] - grey[c * side + r]).powi(2);
+                        pairs += 2.0;
+                    }
+                }
+                let fine = (squares / pairs / 2.0).sqrt();
+                contrasts
+                    .entry(surface.unwrap() as u8)
+                    .or_insert_with(Vec::new)
+                    .push((sd, fine));
+            }
+        }
+    }
+    contrasts
+}
+
+#[test]
+fn every_patch_sized_window_has_texture_to_match() {
+    // Measured on the default scene: the 10th percentile of the windows'
+    // standard deviations is 9.0 to 11.5 levels across the four surfaces
+    // seen, and of their pixel-scale contrasts 2.9 to 4.6. Without the
+    // finest octave the pixel-scale contrast's falls to 2.2 on the ground and
+    // both side faces.
+    let contrasts = window_contrasts();
+    for surface in [
+        Surface::Ground,
+        Surface::Top,
+        Surface::MinusA,
+        Surface::MinusB,
+    ] {
+        let windows = &contrasts[&(surface as u8)];
+        assert!(
+            windows.len() >= 10,
+            "{surface:?}: {} windows",
+            windows.len()
+        );
+        let tenth = |key: fn(&(f64, f64)) -> f64| {
+            let mut values: Vec<f64> = windows.iter().map(key).collect();
+            values.sort_by(f64::total_cmp);
+            values[values.len() / 10]
+        };
+        let (sd, fine) = (tenth(|w| w.0), tenth(|w| w.1));
+        assert!(sd >= 8.0, "{surface:?}: standard deviation {sd}");
+        assert!(fine >= 2.6, "{surface:?}: pixel-scale contrast {fine}");
+    }
 }

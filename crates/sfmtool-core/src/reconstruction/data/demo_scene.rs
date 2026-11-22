@@ -10,7 +10,8 @@
 //! scene's geometry, its cameras and its texture are fixed, and are described
 //! in `specs/drafts/demo-scene.md`; the options are the parts a caller has a
 //! reason to change. The children are [`texture`], the surfaces and their
-//! tinted value noise, and [`render`], the camera poses and the ray tracer.
+//! tinted Perlin-noise texture, and [`render`], the camera poses and the ray
+//! tracer.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

@@ -1,29 +1,37 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The demo scene's surfaces and their textures: [`value_noise`], the value
-//! noise the bench tests' synthetic planes also carry, and the tinted colour
-//! of each [`Surface`] built from it.
+//! The demo scene's surfaces and their textures: the noise functions, and the
+//! tinted colour of each [`Surface`] built from them. [`perlin_fbm`], a sum of
+//! octaves of [`perlin_noise`], is the surfaces' texture; `value_noise`, built
+//! only for tests, is the noise the bench tests' synthetic planes carry.
+//!
+//! Every noise function here is computed in `f64` from `+`, `−`, `×`, `÷` and
+//! `floor`, with its lattice's values drawn from [`lattice_hash`] rather than
+//! a random number generator, so the same arguments give the same bits on
+//! every platform. A coordinate divided by a lattice spacing must fit an
+//! `i64` lattice index; a coordinate beyond that saturates to the last node.
+
+/// A hash of the lattice node `(i, j)` and `seed`, from which each noise
+/// function draws the node's level or gradient.
+fn lattice_hash(i: i64, j: i64, seed: u64) -> u64 {
+    let mut h = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (j as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+        ^ seed.wrapping_mul(0xD6E8_FEB8_6659_FD93);
+    h ^= h >> 29;
+    h = h.wrapping_mul(0x1656_67B1_9E37_79F9);
+    h ^= h >> 32;
+    h
+}
 
 /// Value noise: pseudo-random levels on a square lattice `spacing` apart,
 /// blended between lattice nodes with the smoothstep `3t² − 2t³`, so that no
-/// shift of it resembles another. The levels come from a hash of the lattice
-/// node and `seed`, with no random number generator, and the value is in
-/// `[-1, 1]`; each caller maps it to its own range.
-///
-/// It is computed in `f64` from `+`, `−`, `×`, `÷` and `floor`, so the same
-/// arguments give the same bits on every platform. `x / spacing` must fit an
-/// `i64` lattice index; a coordinate beyond that saturates to the last node.
+/// shift of it resembles another. The levels come from [`lattice_hash`] of
+/// the node and `seed`, and the value is in `[-1, 1]`; each caller maps it to
+/// its own range.
+#[cfg(test)]
 pub(crate) fn value_noise(x: f64, y: f64, spacing: f64, seed: u64) -> f64 {
-    let level = |i: i64, j: i64| {
-        let mut h = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
-            ^ (j as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
-            ^ seed.wrapping_mul(0xD6E8_FEB8_6659_FD93);
-        h ^= h >> 29;
-        h = h.wrapping_mul(0x1656_67B1_9E37_79F9);
-        h ^= h >> 32;
-        (h % 1024) as f64 / 1023.0 * 2.0 - 1.0
-    };
+    let level = |i: i64, j: i64| (lattice_hash(i, j, seed) % 1024) as f64 / 1023.0 * 2.0 - 1.0;
     let (u, v) = (x / spacing, y / spacing);
     let (i, j) = (u.floor() as i64, v.floor() as i64);
     let smooth = |t: f64| t * t * (3.0 - 2.0 * t);
@@ -34,9 +42,137 @@ pub(crate) fn value_noise(x: f64, y: f64, spacing: f64, seed: u64) -> f64 {
     top * (1.0 - t) + bottom * t
 }
 
-/// The lattice spacing of every surface's noise, in metres: about 2.8 px a
-/// cell on a surface 4 m from a camera of focal length 560 px that faces it.
-pub(super) const NOISE_SPACING: f64 = 0.02;
+/// `1 / √2`, the components of the diagonal gradients.
+const H: f64 = std::f64::consts::FRAC_1_SQRT_2;
+
+/// The gradients [`perlin_noise`] picks from: the eight unit vectors 45°
+/// apart, written as constants rather than computed with `sin` and `cos`.
+const GRADIENTS: [[f64; 2]; 8] = [
+    [1.0, 0.0],
+    [H, H],
+    [0.0, 1.0],
+    [-H, H],
+    [-1.0, 0.0],
+    [-H, -H],
+    [0.0, -1.0],
+    [H, -H],
+];
+
+/// The largest magnitude [`perlin_noise`] takes, `1 / √2`. At a cell's
+/// centre each corner is `1 / √2` cells away and the fades are `1/2`, so the
+/// noise is the mean of the four gradients' dot products with those offsets,
+/// `1 / √2` when all four gradients point at the centre; a search over every
+/// choice of the four gradients at 41 × 41 points of the cell finds no larger
+/// magnitude elsewhere.
+pub(super) const PERLIN_BOUND: f64 = H;
+
+/// Perlin's gradient noise in 2D: a pseudo-random unit gradient at each node
+/// of a square lattice `spacing` apart, and between nodes the four corners'
+/// linear ramps `g · (p − node)` blended with Perlin's quintic fade
+/// `6t⁵ − 15t⁴ + 10t³`. It is 0 at every lattice node and has no level of
+/// its own there, so unlike value noise its features sit between the nodes
+/// rather than on them. Each gradient is one of eight unit vectors 45° apart,
+/// picked by [`lattice_hash`] of the node and `seed`. The value is in
+/// `[-PERLIN_BOUND, PERLIN_BOUND]`, and is continuous with a continuous first
+/// and second derivative.
+pub(super) fn perlin_noise(x: f64, y: f64, spacing: f64, seed: u64) -> f64 {
+    let (u, v) = (x / spacing, y / spacing);
+    let (fi, fj) = (u.floor(), v.floor());
+    let (i, j) = (fi as i64, fj as i64);
+    let (du, dv) = (u - fi, v - fj);
+    let ramp = |i: i64, j: i64, du: f64, dv: f64| {
+        let g = GRADIENTS[(lattice_hash(i, j, seed) >> 61) as usize];
+        g[0] * du + g[1] * dv
+    };
+    let (i1, j1) = (i.wrapping_add(1), j.wrapping_add(1));
+    let fade = |t: f64| t * t * t * (t * (6.0 * t - 15.0) + 10.0);
+    let (s, t) = (fade(du), fade(dv));
+    let top = ramp(i, j, du, dv) * (1.0 - s) + ramp(i1, j, du - 1.0, dv) * s;
+    let bottom = ramp(i, j1, du, dv - 1.0) * (1.0 - s) + ramp(i1, j1, du - 1.0, dv - 1.0) * s;
+    top * (1.0 - t) + bottom * t
+}
+
+/// The octaves of a [`perlin_fbm`]: `octaves` layers of [`perlin_noise`],
+/// the first with lattice spacing `spacing`, each next one's spacing the
+/// last one's divided by `lacunarity` and its amplitude the last one's times
+/// `gain`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct FbmOptions {
+    /// The coarsest octave's lattice spacing, in the caller's units.
+    pub(super) spacing: f64,
+    /// The number of octaves.
+    pub(super) octaves: u32,
+    /// The ratio of one octave's lattice frequency to the last one's.
+    pub(super) lacunarity: f64,
+    /// The ratio of one octave's amplitude to the last one's.
+    pub(super) gain: f64,
+}
+
+impl FbmOptions {
+    /// The sum of the octaves' amplitudes, `1 + gain + … + gainⁿ⁻¹`.
+    pub(super) fn amplitude_sum(&self) -> f64 {
+        let mut sum = 0.0;
+        let mut amplitude = 1.0;
+        for _ in 0..self.octaves {
+            sum += amplitude;
+            amplitude *= self.gain;
+        }
+        sum
+    }
+}
+
+/// The seed of octave `k` of a [`perlin_fbm`] under `seed`.
+pub(super) fn octave_seed(seed: u64, k: u32) -> u64 {
+    lattice_hash(i64::from(k), -1, seed)
+}
+
+/// The shift of octave `k`'s lattice in a [`perlin_fbm`], in its own cells
+/// along both axes: the fractional part of `k · 0.618034`.
+pub(super) fn octave_shift(k: u32) -> f64 {
+    (f64::from(k) * 0.618034).fract()
+}
+
+/// Fractional Brownian motion (fBm) of [`perlin_noise`]: the sum of the
+/// octaves `options` describes, octave `k` with amplitude `gainᵏ`, divided by
+/// the sum of the amplitudes, so the value is in `[-PERLIN_BOUND,
+/// PERLIN_BOUND]` like one octave's.
+///
+/// Octave `k` takes its own seed, [`octave_seed`], a hash of `seed` and `k`,
+/// and its lattice is shifted by [`octave_shift`] of its own cell along both
+/// axes. Without the
+/// seeds, every octave would draw the same gradients at the same node
+/// indices, a pattern repeated at each scale about the origin; without the
+/// shift, with an integer lacunarity every node of a coarse octave would be a
+/// node of every finer one, where all of them are 0.
+pub(super) fn perlin_fbm(x: f64, y: f64, options: &FbmOptions, seed: u64) -> f64 {
+    let mut sum = 0.0;
+    let mut spacing = options.spacing;
+    let mut amplitude = 1.0;
+    for k in 0..options.octaves {
+        let shift = octave_shift(k) * spacing;
+        sum += amplitude * perlin_noise(x + shift, y + shift, spacing, octave_seed(seed, k));
+        spacing /= options.lacunarity;
+        amplitude *= options.gain;
+    }
+    sum / options.amplitude_sum()
+}
+
+/// The surfaces' texture, a [`perlin_fbm`] of five octaves from a lattice
+/// spacing of 0.32 m down to 0.02 m, each octave's amplitude 0.8 of the last
+/// one's.
+pub(super) const TEXTURE_FBM: FbmOptions = FbmOptions {
+    spacing: 0.32,
+    octaves: 5,
+    lacunarity: 2.0,
+    gain: 0.8,
+};
+
+/// The magnitude of [`TEXTURE_FBM`] that the texture maps to the ends of its
+/// grey range, 0.665 of [`PERLIN_BOUND`]: a little above the largest
+/// magnitude the fBm takes on any surface of the scenes of seeds 0 to 15,
+/// 0.654 of the bound, measured at every 2 cm on the ground and every 2 mm on
+/// the faces.
+pub(super) const TEXTURE_PEAK: f64 = 0.665 * PERLIN_BOUND;
 
 /// The cube's first horizontal axis: the cube is turned about `+z` so that
 /// its faces are not square to the camera arc, by a turn of about 36.9°
@@ -122,12 +258,13 @@ impl Surface {
     }
 
     /// The noise factor of the world point `x` on the surface, under the
-    /// scene's `seed`: `0.5 + 0.4 · noise`, in `[0.1, 0.9]`, so the largest
-    /// tint channel, 250, stays below 255.
+    /// scene's `seed`: `0.5 + 0.4 · fbm / TEXTURE_PEAK`, in `[0.1, 0.9]`
+    /// wherever the fBm is under [`TEXTURE_PEAK`], so the largest tint
+    /// channel, 250, stays below 255.
     pub(super) fn noise_factor(self, x: [f64; 3], seed: u64) -> f32 {
         let (s, t) = self.coordinates(x);
-        let noise = value_noise(s, t, NOISE_SPACING, self.noise_seed(seed));
-        0.5 + 0.4 * noise as f32
+        let fbm = perlin_fbm(s, t, &TEXTURE_FBM, self.noise_seed(seed));
+        0.5 + (0.4 / TEXTURE_PEAK * fbm) as f32
     }
 
     /// The surface's colour at the world point `x`, RGB on `[0, 255]`
