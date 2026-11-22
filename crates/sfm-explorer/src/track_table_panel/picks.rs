@@ -197,7 +197,7 @@ pub(super) fn pick_reference(
             let image = recon.image_set.images.get(index)?;
             let camera = crate::scene::image_intrinsics(&recon.image_set, index)?;
             let pyramid = photographs
-                .get(&crate::state::photograph_path(recon, index)?)
+                .get(&crate::state::photograph_path(recon, index)?, &decode)
                 .ok()?;
             let level = pyramid.level(0);
             (level.width() == camera.width && level.height() == camera.height).then_some((
@@ -210,6 +210,11 @@ pub(super) fn pick_reference(
         })();
         found.extend(read);
         decode.count(k as u64 + 1, Some(observations.len() as u64), "photographs");
+    }
+    // A `get` cancelled while it waited on another caller's decode left its
+    // view out; that is no answer, not a point without a pick.
+    if decode.is_cancelled() {
+        return None;
     }
     if found.len() < 2 {
         return Some(None);

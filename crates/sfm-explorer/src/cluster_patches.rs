@@ -22,7 +22,7 @@ use std::sync::Arc;
 use ndarray::{Array1, Array2, Array3, ArrayView2, ArrayView3};
 use rayon::prelude::*;
 use sfmtool_core::camera::sampler::RegionPool;
-use sfmtool_core::camera::{PhotographCache, PhotographReadError, TiledPhotograph};
+use sfmtool_core::camera::{GetError, PhotographCache, PhotographReadError, TiledPhotograph};
 use sfmtool_core::features::cluster_match::{
     background_floor_clusters_lazy, BackgroundFloorParams, Clusters, LazyClusterError,
 };
@@ -802,9 +802,10 @@ fn read_photographs(
                 // `get_many` drops the reason; `get` answers it from the
                 // failure the cache remembered, and decodes again only when
                 // the file changed since or the cache keeps nothing.
-                None => cache
-                    .get(path)
-                    .map_err(|e| Stopped::Failed(format!("Cannot read a photograph: {e}")))?,
+                None => cache.get(path, &phase).map_err(|e| match e {
+                    GetError::Cancelled => Stopped::Cancelled,
+                    e => Stopped::Failed(format!("Cannot read a photograph: {e}")),
+                })?,
             };
             Ok(TiledPhotograph::from_pyramid(pyramid))
         })

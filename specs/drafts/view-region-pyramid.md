@@ -528,9 +528,11 @@ requesting the missing ones: one tile task per missing tile out of core, and
 one decode task per in-core photograph with all the tiles it is missing
 (`try_decode_tiles`), which ends at once when another caller holds the
 photograph's slot or the build budget refuses its reservation, the panel
-peeking again on a later frame. The GUI thread never decodes and never waits,
-no task a panel starts waits on a slot or the build budget, and no panel
-makes a mipmap.
+peeking again on a later frame. The view renders from a source that holds,
+pinned, exactly the tiles the panel peeked, so a tile evicted from the cache
+between the peek and the render cannot be read (open question 7). The GUI
+thread never decodes and never waits, no task a panel starts waits on a slot
+or the build budget, and no panel makes a mipmap.
 
 ## Memory
 
@@ -582,7 +584,12 @@ while the cache still hands out whole pyramids:
 each moved reader wraps the pyramid it gets in a `TiledPhotograph`
 (`from_pyramid`), so every reader works at every step. Once all have moved,
 the main draft's step 13 makes the cache hand out tiled photographs only, and
-there is no whole pyramid for any reader to fall back on.
+there is no whole pyramid for any reader to fall back on. That step is five
+pull requests: 13a makes the cache's slot cancellable (built), 13b bounds the
+decodes in progress by the build budget, 13c and 13d move the panels to the
+cache's layout and tile requests while it still holds whole pyramids, and
+13e replaces the pyramids with tiles, which is where the tests of this
+draft's step 5 that count decodes run.
 
 1. **Regions in the pyramid and the samplers.** Built, as the main draft's
    step 7a: `PyramidLevel`, `ImageU8Pyramid::from_regions`, the origin
@@ -600,10 +607,10 @@ there is no whole pyramid for any reader to fall back on.
    `source_clipped_share` over tiles, on photographs cut into tiles in memory
    (`from_image` and `from_pyramid`); specified with its tests in
    [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md).
-   The cache's `view_region_pyramid` comes with the main draft's step 13.
+   The cache's `view_region_pyramid` comes with the main draft's step 13c.
 3. **Track View and the Track Table** on region pyramids, peeking the
    cache's whole pyramids as today and reading them through `from_pyramid`;
-   they peek tiles once the main draft's step 13 adds `peek_tile`. Track
+   they peek tiles from the main draft's step 13d, once 13c adds `peek_tile`. Track
    View's tiles and track-stage hover contexts call `render_tile`, and its
    cluster-stage tiles and contexts `sample_member_grid`, on the region
    pyramid they assembled, so no kernel signature changes here; the crops
@@ -694,10 +701,10 @@ there is no whole pyramid for any reader to fall back on.
    the caller made. Each bulk kernel's phase note counts the renders that
    took the tile path, and the pull request reports that count for each
    kernel on the test data and on a real capture. The callers fetch tiled
-   photographs once the main draft's step 13 makes `get_many` answer them;
+   photographs once the main draft's step 13e makes `get_many` answer them;
    until then they wrap the whole pyramids it answers, so the tests that
    count decodes and the one of a budget smaller than a level 0 come with
-   step 13. The rest is split into three pull requests, as the main draft's
+   step 13e. The rest is split into three pull requests, as the main draft's
    step 11 says. **The first, 11a, is built**: the display bitmaps' kernels
    return the photograph error rather than leave out a photograph whose
    pyramid is not whole, the open, the conversion and `sfm web-export`
@@ -761,3 +768,11 @@ decisions.
    past it is `not_evaluated`, and an evaluation past it scores as out of
    frame (§ "The members' elongation limit"). The limit is the main
    draft's step 8, which is built.
+7. **What a panel renders from.** *Decided by the user:* Track View and the
+   Track Table render from a source that holds, pinned, exactly the tiles
+   the panel peeked, so a tile evicted from the cache between the peek and
+   the render cannot be read, and the GUI thread never decodes. The options
+   considered were that source; a peek-only view of the photograph, whose
+   missing tile is answered as not ready and drawn as loading; and
+   accepting a rare decode on the GUI thread for a tile evicted between the
+   peek and the render. It is the main draft's step 13d.
