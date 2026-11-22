@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Decoded photographs as image pyramids, keyed by file path, shared across
-//! threads and bounded by a byte budget.
+//! threads and bounded by a byte budget, with the whole decodes in progress
+//! bounded by a build budget.
 //!
 //! Decoding a photograph and building the pyramid the patch samplers read is
 //! the expensive part of every operation that reads a reconstruction's pixels.
@@ -16,8 +17,10 @@
 //! [`PhotographCache::get`] waits while another thread decodes the same path,
 //! and stops waiting when its caller is cancelled;
 //! [`PhotographCache::peek`] never reads a file and never waits, which is what a
-//! caller that draws every frame wants. The design is in the spec
-//! `specs/core/camera/photograph-cache.md`.
+//! caller that draws every frame wants. Every whole decode is reserved on the
+//! cache's build count first ([`PhotographCache::reserve_builds`]), so the
+//! decodes in progress on one cache stay within its build budget. The design
+//! is in the spec `specs/core/camera/photograph-cache.md`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -28,7 +31,7 @@ use std::time::{Duration, SystemTime};
 use rayon::prelude::*;
 
 use crate::camera::image::{image_dimensions, ImageU8, ImageU8Pyramid};
-use crate::camera::mipmap::MAX_JPEG_SIDE;
+use crate::camera::mipmap::{MAX_JPEG_SIDE, PHOTOGRAPH_TILE_SIZE};
 use crate::progress::{Cancelled, Progress};
 
 /// How long a caller waiting for another caller's decode of the same path
@@ -39,6 +42,10 @@ pub const SLOT_WAIT_POLL: Duration = Duration::from_millis(50);
 /// The environment variable that overrides [`default_budget_bytes`], in
 /// megabytes (10^6 bytes), written as a decimal integer.
 pub const BUDGET_ENV_VAR: &str = "SFM_EXPLORER_PHOTOGRAPH_CACHE_MB";
+
+/// The environment variable that overrides [`default_build_budget_bytes`], in
+/// megabytes (10^6 bytes), written as a decimal integer.
+pub const BUILD_BUDGET_ENV_VAR: &str = "SFM_EXPLORER_BUILD_BUDGET_MB";
 
 const GIB: u64 = 1 << 30;
 
@@ -57,8 +64,8 @@ pub fn default_budget_bytes() -> u64 {
     budget_from(env.as_deref(), crate::machine::physical_memory_bytes())
 }
 
-/// [`default_budget_bytes`] with its two inputs passed in, so it can be tested
-/// without touching the environment.
+/// [`default_budget_bytes`] and [`default_build_budget_bytes`] with their two
+/// inputs passed in, so they can be tested without touching the environment.
 fn budget_from(env_megabytes: Option<&str>, physical_bytes: Option<u64>) -> u64 {
     if let Some(mb) = env_megabytes.and_then(|v| v.trim().parse::<u64>().ok()) {
         return mb.saturating_mul(1_000_000);
@@ -66,6 +73,162 @@ fn budget_from(env_megabytes: Option<&str>, physical_bytes: Option<u64>) -> u64 
     match physical_bytes {
         Some(bytes) => (bytes / 4).clamp(GIB, 16 * GIB),
         None => 4 * GIB,
+    }
+}
+
+/// The build budget a cache gets by default, worked out as
+/// [`default_budget_bytes`] is: a quarter of physical memory, clamped to
+/// between 1 GiB and 16 GiB, or 4 GiB where physical memory cannot be read.
+/// It keeps no state.
+///
+/// The environment variable [`BUILD_BUDGET_ENV_VAR`] overrides it with a
+/// number of megabytes (10^6 bytes). `0` there lets each caller decode one
+/// photograph at a time, since [`PhotographCache::reserve_builds`] grants one
+/// decode when none fits, and refuses every decode
+/// [`PhotographCache::try_reserve_build`] asks for. A value that does not
+/// parse as a whole number is ignored.
+pub fn default_build_budget_bytes() -> u64 {
+    let env = std::env::var(BUILD_BUDGET_ENV_VAR).ok();
+    budget_from(env.as_deref(), crate::machine::physical_memory_bytes())
+}
+
+/// The bytes a whole decode of a photograph is estimated to hold while it
+/// runs, per pixel of the photograph: its RGB pixels (3) and the pyramid
+/// levels built from them (about 1), with the decoder's own buffers on top.
+const WHOLE_DECODE_BYTES_PER_PIXEL: u64 = 5;
+
+/// The estimated bytes of a whole decode of a `width x height` photograph,
+/// what its decode reserves on the build count. Saturates, since `get_many`
+/// sizes a miss from a header it has not yet checked against
+/// [`MAX_JPEG_SIDE`].
+fn whole_decode_bytes(width: u32, height: u32) -> u64 {
+    (u64::from(width) * u64::from(height)).saturating_mul(WHOLE_DECODE_BYTES_PER_PIXEL)
+}
+
+/// The settings a [`PhotographCache`] is made with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PhotographCacheOptions {
+    /// Bytes of decoded photographs held before the least recently used are
+    /// dropped; 0 keeps nothing. By default [`default_budget_bytes`].
+    pub budget_bytes: u64,
+    /// Estimated bytes of the whole decodes in progress on this cache at
+    /// once, what [`PhotographCache::reserve_builds`] and
+    /// [`PhotographCache::try_reserve_build`] reserve against. By default
+    /// [`default_build_budget_bytes`].
+    pub build_budget_bytes: u64,
+    /// The side of a photograph tile, by default [`PHOTOGRAPH_TILE_SIZE`];
+    /// only tests change it. The cache holds whole pyramids and does not read
+    /// it yet.
+    pub tile_size: u32,
+}
+
+impl Default for PhotographCacheOptions {
+    /// [`default_budget_bytes`], [`default_build_budget_bytes`] and
+    /// [`PHOTOGRAPH_TILE_SIZE`].
+    fn default() -> Self {
+        Self {
+            budget_bytes: default_budget_bytes(),
+            build_budget_bytes: default_build_budget_bytes(),
+            tile_size: PHOTOGRAPH_TILE_SIZE,
+        }
+    }
+}
+
+/// Whole decodes reserved on one cache's build count, each of the same
+/// estimated bytes. [`Self::release_one`] gives one decode's bytes back as it
+/// ends, and dropping the reservation gives back the rest, so a caller that
+/// stops early, a panic included, leaves nothing reserved. Made by
+/// [`PhotographCache::reserve_builds`] and
+/// [`PhotographCache::try_reserve_build`].
+#[derive(Debug)]
+pub struct BuildReservation<'a> {
+    count: &'a AtomicU64,
+    bytes_per_build: u64,
+    granted: usize,
+    released: AtomicU64,
+}
+
+impl BuildReservation<'_> {
+    /// How many decodes were granted.
+    pub fn granted(&self) -> usize {
+        self.granted
+    }
+
+    /// Give back one granted decode's bytes, as that decode ends. Does nothing
+    /// once every granted decode has been given back.
+    pub fn release_one(&self) {
+        let granted = self.granted as u64;
+        let took = update(&self.released, |released| {
+            (released < granted).then_some(released + 1)
+        });
+        if took.is_some() {
+            give_back(self.count, self.bytes_per_build);
+        }
+    }
+}
+
+impl Drop for BuildReservation<'_> {
+    fn drop(&mut self) {
+        let granted = self.granted as u64;
+        let released = self.released.get_mut();
+        let left = granted.saturating_sub(*released);
+        *released = granted;
+        give_back(self.count, self.bytes_per_build.saturating_mul(left));
+    }
+}
+
+/// Set `atomic` to `next(value)` with a compare-exchange loop, unless `next`
+/// answers `None`; the value it replaced, or `None` when it changed nothing.
+fn update(atomic: &AtomicU64, next: impl Fn(u64) -> Option<u64>) -> Option<u64> {
+    let mut value = atomic.load(Ordering::Acquire);
+    loop {
+        let new = next(value)?;
+        match atomic.compare_exchange_weak(value, new, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(old) => return Some(old),
+            Err(now) => value = now,
+        }
+    }
+}
+
+/// Take `bytes` off a build count, stopping at 0. Only a reservation whose
+/// bytes saturated the count could otherwise take it below 0.
+fn give_back(count: &AtomicU64, bytes: u64) {
+    if bytes != 0 {
+        update(count, |n| Some(n.saturating_sub(bytes)));
+    }
+}
+
+/// The build count's share for one caller's decode, given back when it is
+/// dropped or released.
+enum Share<'r> {
+    /// Nothing reserved: a `get` reserves its one decode once it has read the
+    /// photograph's size from its header.
+    None,
+    /// A `get`'s own reservation of its one decode.
+    Own(BuildReservation<'r>),
+    /// One decode of a `get_many` group's reservation, reserved when the
+    /// group was decided.
+    Group(GroupShare<'r>),
+}
+
+impl Share<'_> {
+    /// Give the share back, at most once.
+    fn release(&mut self) {
+        match std::mem::replace(self, Share::None) {
+            Share::None => {}
+            Share::Own(reservation) => drop(reservation),
+            Share::Group(share) => drop(share),
+        }
+    }
+}
+
+/// One member's decode of a `get_many` group's reservation, given back when
+/// the member ends, a panic included.
+struct GroupShare<'r>(&'r BuildReservation<'r>);
+
+impl Drop for GroupShare<'_> {
+    fn drop(&mut self) {
+        self.0.release_one();
     }
 }
 
@@ -130,6 +293,16 @@ pub struct PhotographCacheStats {
     pub hits: u64,
     /// Decodes started, whether they succeeded, failed or were cancelled.
     pub misses: u64,
+    /// Photographs decoded whole: every decode that read a photograph's
+    /// pixels, including one whose caller was cancelled before its pyramid
+    /// was built. A file whose header cannot be read, or that is refused as
+    /// too large, is a miss but not a decode.
+    pub decodes: u64,
+    /// The build budget the cache was made with.
+    pub build_budget_bytes: u64,
+    /// The estimated bytes reserved on the build count now, for whole decodes
+    /// in progress or granted to a `get_many` group.
+    pub build_reserved_bytes: u64,
 }
 
 /// How a [`PhotographCache::get_many`] call's photographs were found. The three
@@ -228,26 +401,32 @@ impl Slot {
     }
 }
 
-/// The decoding caller's hold on a slot it marked [`SlotState::Making`]. A
-/// hold dropped without [`Self::finish`] (the caller was cancelled, or it
-/// unwinds from a panic) empties the slot and wakes its waiters, so no slot is
-/// left marked as being made by a caller that has stopped, and the first
-/// waiter to take the lock decodes in its place.
-struct Making<'s> {
+/// The decoding caller's hold on a slot it marked [`SlotState::Making`], with
+/// its share of the build count. The share goes back before the slot changes
+/// state, so a waiter that decodes next never finds this decode still
+/// counted. A hold dropped without [`Self::finish`] (the caller was
+/// cancelled, or it unwinds from a panic) gives the share back, empties the
+/// slot and wakes its waiters, so no slot is left marked as being made by a
+/// caller that has stopped, and the first waiter to take the lock decodes in
+/// its place.
+struct Making<'s, 'r> {
     slot: &'s Slot,
+    share: Share<'r>,
     finished: bool,
 }
 
-impl Making<'_> {
+impl Making<'_, '_> {
     fn finish(mut self, value: Result<Arc<ImageU8Pyramid>, GetError>) {
         self.finished = true;
+        self.share.release();
         self.slot.set(SlotState::Made(value));
     }
 }
 
-impl Drop for Making<'_> {
+impl Drop for Making<'_, '_> {
     fn drop(&mut self) {
         if !self.finished {
+            self.share.release();
             self.slot.set(SlotState::Empty);
         }
     }
@@ -292,19 +471,35 @@ impl Inner {
 /// to its maker. A maker that is cancelled between the decode and building
 /// the pyramid, or that unwinds, empties the slot, and a waiter decodes in its
 /// place.
+///
+/// Every whole decode is first reserved on the cache's build count, an atomic
+/// that belongs to this cache alone, against
+/// [`PhotographCacheOptions::build_budget_bytes`]. Nothing waits on the
+/// count: [`Self::reserve_builds`] grants at least one decode, so a caller
+/// always makes progress, and [`Self::try_reserve_build`] is refused when its
+/// decode does not fit.
 pub struct PhotographCache {
-    budget_bytes: u64,
+    options: PhotographCacheOptions,
     inner: Mutex<Inner>,
     tick: AtomicU64,
     hits: AtomicU64,
     misses: AtomicU64,
-    /// Called as a decode starts, before the file is read, and as a caller
-    /// starts to wait on a slot being made: what lets a test hold a decode in
-    /// progress, cancel a caller in the middle of a decode or a wait, or make
-    /// a decode panic.
+    decodes: AtomicU64,
+    /// Estimated bytes of the whole decodes reserved now.
+    build_reserved: AtomicU64,
+    /// Called as a decode starts, once its header is read and the decode is
+    /// reserved and before the pixels are read, and as a caller starts to
+    /// wait on a slot being made: what lets a test hold a decode in progress,
+    /// cancel a caller in the middle of a decode or a wait, make a decode
+    /// panic, or read the build count at those moments.
     #[cfg(test)]
-    on_slot_event: Option<Box<dyn Fn(SlotEvent) + Send + Sync>>,
+    on_slot_event: Option<Box<SlotHook>>,
 }
+
+/// The test build's hook on a cache's slot events, told the cache too so it
+/// can read the build count.
+#[cfg(test)]
+type SlotHook = dyn Fn(&PhotographCache, SlotEvent) + Send + Sync;
 
 /// What [`PhotographCache::on_slot_event`] is told.
 #[cfg(test)]
@@ -329,14 +524,19 @@ enum Found {
     Reused,
 }
 
+/// One path's answer inside `get_many`.
+type Answer = (Result<Arc<ImageU8Pyramid>, GetError>, Found);
+
 impl PhotographCache {
-    /// A cache holding up to `budget_bytes` of pyramids, each of
-    /// [`ImageU8Pyramid::full_levels`] depth for its photograph's size.
-    /// A budget of 0 keeps nothing: every call decodes and hands back a
-    /// pyramid no one else will see.
-    pub fn new(budget_bytes: u64) -> Self {
+    /// A cache holding up to `options.budget_bytes` of pyramids, each of
+    /// [`ImageU8Pyramid::full_levels`] depth for its photograph's size, with
+    /// the whole decodes in progress on it bounded by
+    /// `options.build_budget_bytes`. A budget of 0 keeps nothing: every call
+    /// decodes and hands back a pyramid no one else will see. A build budget
+    /// of 0 lets each caller decode one photograph at a time.
+    pub fn new(options: PhotographCacheOptions) -> Self {
         Self {
-            budget_bytes,
+            options,
             inner: Mutex::new(Inner {
                 map: HashMap::new(),
                 bytes: 0,
@@ -344,6 +544,8 @@ impl PhotographCache {
             tick: AtomicU64::new(0),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
+            decodes: AtomicU64::new(0),
+            build_reserved: AtomicU64::new(0),
             #[cfg(test)]
             on_slot_event: None,
         }
@@ -352,7 +554,59 @@ impl PhotographCache {
     /// The budget the cache was made with. At 0 it keeps nothing, so a decode
     /// that one caller starts is never there for another to [`Self::peek`].
     pub fn budget_bytes(&self) -> u64 {
-        self.budget_bytes
+        self.options.budget_bytes
+    }
+
+    /// Reserve up to `wanted` whole decodes of `bytes_per_build` estimated
+    /// bytes each against this cache's build budget, at the moment the caller
+    /// decides, with one compare-exchange loop on its count; never waits.
+    /// Grants as many as fit under the budget beside what other callers have
+    /// reserved, and one when none fit (a decode larger than the whole budget
+    /// included), so a caller always makes progress; that one decode is the
+    /// only way the count goes past the budget. Grants none only when
+    /// `wanted` is 0.
+    pub fn reserve_builds(&self, bytes_per_build: u64, wanted: usize) -> BuildReservation<'_> {
+        let budget = self.options.build_budget_bytes;
+        // How many to grant when `reserved` bytes are reserved already.
+        let grant = |reserved: u64| {
+            let free = budget.saturating_sub(reserved);
+            let fit = match free.checked_div(bytes_per_build) {
+                Some(fit) => usize::try_from(fit).unwrap_or(usize::MAX).min(wanted),
+                // Decodes of no bytes all fit.
+                None => wanted,
+            };
+            fit.max(wanted.min(1))
+        };
+        let before = update(&self.build_reserved, |reserved| {
+            let bytes = bytes_per_build.saturating_mul(grant(reserved) as u64);
+            Some(reserved.saturating_add(bytes))
+        });
+        // `update` always sets the count here, since the closure never
+        // answers `None`; the grant is the one made from the count it found.
+        let granted = before.map_or(0, grant);
+        BuildReservation {
+            count: &self.build_reserved,
+            bytes_per_build,
+            granted,
+            released: AtomicU64::new(0),
+        }
+    }
+
+    /// Reserve one whole decode of `bytes` estimated bytes only if it fits
+    /// under this cache's build budget beside what other callers have
+    /// reserved: `None` when it does not, so it never takes the count past the
+    /// budget. Never waits; a caller that is refused asks again later.
+    pub fn try_reserve_build(&self, bytes: u64) -> Option<BuildReservation<'_>> {
+        let budget = self.options.build_budget_bytes;
+        update(&self.build_reserved, |reserved| {
+            reserved.checked_add(bytes).filter(|&after| after <= budget)
+        })?;
+        Some(BuildReservation {
+            count: &self.build_reserved,
+            bytes_per_build: bytes,
+            granted: 1,
+            released: AtomicU64::new(0),
+        })
     }
 
     /// The pyramid for `path`, decoding on a miss. Waits while another thread
@@ -369,6 +623,11 @@ impl PhotographCache {
     /// remembering nothing. It reports nothing through `progress`; a caller
     /// with nothing to cancel passes `&Progress::none()`.
     ///
+    /// A decode it makes is reserved with [`Self::reserve_builds`] when it has
+    /// marked the slot as being made, whether the slot was empty or a stopped
+    /// maker has just emptied it, and given back when the decode ends, is
+    /// cancelled or unwinds. It holds no share while it waits.
+    ///
     /// A caller already inside a rayon parallel loop calls this rather than
     /// [`Self::get_many`].
     pub fn get(
@@ -376,7 +635,7 @@ impl PhotographCache {
         path: &Path,
         progress: &Progress<'_>,
     ) -> Result<Arc<ImageU8Pyramid>, GetError> {
-        self.get_found(path, progress).0
+        self.get_found(path, progress, Share::None).0
     }
 
     /// The pyramid for `path` if it is decoded, without reading anything and
@@ -418,6 +677,15 @@ impl PhotographCache {
     /// pool. Returns one entry per path, in order, and the tally the caller's
     /// phase note reports.
     ///
+    /// It first looks for each path in the cache and reads the header of each
+    /// one it does not find there made, to know its misses and their sizes.
+    /// It then decodes the misses in groups, one parallel loop a group and the
+    /// groups one after another, each group as many as
+    /// [`Self::reserve_builds`] grants when it is decided, at most the rayon
+    /// pool's size and at least one. A member that finds its path being
+    /// decoded by another caller keeps its share while it waits, since it may
+    /// take the decode over, and gives it back when it ends.
+    ///
     /// Counts `images` through `progress` as each path is answered, and polls
     /// it for cancellation before each path and as [`Self::get`] polls it. It
     /// opens no phase of its own:
@@ -438,18 +706,64 @@ impl PhotographCache {
     ) -> Result<(Vec<Option<Arc<ImageU8Pyramid>>>, GetManyTally), Cancelled> {
         let total = paths.len();
         let answered = AtomicUsize::new(0);
-        let found: Vec<Option<(Result<Arc<ImageU8Pyramid>, GetError>, Found)>> = paths
+        let answer = |found| {
+            let n = answered.fetch_add(1, Ordering::Relaxed) + 1;
+            progress.count(n as u64, Some(total as u64), "images");
+            Some(found)
+        };
+        // A path made from the file as it is now is answered here; any other
+        // is a miss, with the estimated bytes of its decode, 0 when its header
+        // cannot be read (its `get` then stops at the header too, decoding
+        // nothing).
+        let looked: Vec<Result<Option<Answer>, u64>> = paths
             .par_iter()
             .map(|path| {
                 if progress.is_cancelled() {
-                    return None;
+                    return Ok(None);
                 }
-                let found = self.get_found(path, progress);
-                let n = answered.fetch_add(1, Ordering::Relaxed) + 1;
-                progress.count(n as u64, Some(total as u64), "images");
-                Some(found)
+                match self.made_now(path) {
+                    Some(value) => Ok(answer((value, Found::Reused))),
+                    None => Err(image_dimensions(path)
+                        .map_or(0, |(width, height)| whole_decode_bytes(width, height))),
+                }
             })
             .collect();
+        let mut found = Vec::with_capacity(total);
+        let mut misses = Vec::new();
+        for (i, looked) in looked.into_iter().enumerate() {
+            match looked {
+                Ok(value) => found.push(value),
+                Err(bytes) => {
+                    found.push(None);
+                    misses.push((i, bytes));
+                }
+            }
+        }
+        // The misses in groups, each reserved as it is decided. The group's
+        // bytes per decode are its largest photograph's, so the count never
+        // holds less than the group's decodes.
+        let pool = rayon::current_num_threads().max(1);
+        let mut rest = &misses[..];
+        while !rest.is_empty() && !progress.is_cancelled() {
+            let candidates = &rest[..rest.len().min(pool)];
+            let bytes_per_build = candidates.iter().map(|&(_, bytes)| bytes).max();
+            let reservation = self.reserve_builds(bytes_per_build.unwrap_or(0), candidates.len());
+            let (group, after) = rest.split_at(reservation.granted());
+            rest = after;
+            let made: Vec<(usize, Option<Answer>)> = group
+                .par_iter()
+                .map(|&(i, _)| {
+                    let share = Share::Group(GroupShare(&reservation));
+                    if progress.is_cancelled() {
+                        return (i, None);
+                    }
+                    (i, answer(self.get_found(paths[i], progress, share)))
+                })
+                .collect();
+            for (i, value) in made {
+                found[i] = value;
+            }
+        }
         progress.check_cancel()?;
         let mut tally = GetManyTally::default();
         let pyramids = found
@@ -483,7 +797,7 @@ impl PhotographCache {
     /// [`ImageU8Pyramid::full_levels`] levels for its size, as a decoded one
     /// would.
     pub fn insert(&self, path: &Path, pyramid: Arc<ImageU8Pyramid>) {
-        if self.budget_bytes == 0 {
+        if self.options.budget_bytes == 0 {
             return;
         }
         let bytes = pyramid.byte_len() as u64;
@@ -509,7 +823,8 @@ impl PhotographCache {
         inner.bytes = 0;
     }
 
-    /// Entries, bytes held, the budget, and the hit and miss counters.
+    /// Entries, bytes held, the budget, the hit, miss and decode counters, the
+    /// build budget and the bytes reserved on the build count.
     pub fn stats(&self) -> PhotographCacheStats {
         let inner = self.lock();
         let entries = inner
@@ -520,9 +835,12 @@ impl PhotographCache {
         PhotographCacheStats {
             entries,
             bytes: inner.bytes,
-            budget_bytes: self.budget_bytes,
+            budget_bytes: self.options.budget_bytes,
             hits: self.hits.load(Ordering::Relaxed),
             misses: self.misses.load(Ordering::Relaxed),
+            decodes: self.decodes.load(Ordering::Relaxed),
+            build_budget_bytes: self.options.build_budget_bytes,
+            build_reserved_bytes: self.build_reserved.load(Ordering::Acquire),
         }
     }
 
@@ -535,7 +853,7 @@ impl PhotographCache {
     #[cfg(test)]
     fn slot_event(&self, event: SlotEvent) {
         if let Some(on_slot_event) = &self.on_slot_event {
-            on_slot_event(event);
+            on_slot_event(self, event);
         }
     }
 
@@ -546,6 +864,8 @@ impl PhotographCache {
 
     /// Decode `path` and build its pyramid, polling `progress` between the
     /// two: [`GetError::Cancelled`] when it was cancelled during the decode.
+    /// Reads the header first and, when `share` holds nothing, reserves the
+    /// decode with [`Self::reserve_builds`] before reading the pixels.
     ///
     /// Must not use rayon. It runs while its slot is marked as being made, and
     /// a rayon worker waiting in a nested join may steal another `get_many`
@@ -555,13 +875,12 @@ impl PhotographCache {
     /// start threads of its own (one per colour component in `jpeg-decoder`,
     /// a private pool in `exr`), which take no work from the global pool; see
     /// the photograph-cache spec.
-    fn decode(
-        &self,
+    fn decode<'r>(
+        &'r self,
         path: &Path,
         progress: &Progress<'_>,
+        share: &mut Share<'r>,
     ) -> Result<Arc<ImageU8Pyramid>, GetError> {
-        #[cfg(test)]
-        self.slot_event(SlotEvent::DecodeStarted);
         let unreadable = |e: ::image::ImageError| match e {
             ::image::ImageError::IoError(io) if io.kind() == std::io::ErrorKind::NotFound => {
                 GetError::NotFound(path.to_path_buf())
@@ -578,7 +897,13 @@ impl PhotographCache {
                 height,
             });
         }
+        if let Share::None = share {
+            *share = Share::Own(self.reserve_builds(whole_decode_bytes(width, height), 1));
+        }
+        #[cfg(test)]
+        self.slot_event(SlotEvent::DecodeStarted);
         let image = ImageU8::read_rgb(path).map_err(unreadable)?;
+        self.decodes.fetch_add(1, Ordering::Relaxed);
         if progress.is_cancelled() {
             return Err(GetError::Cancelled);
         }
@@ -586,14 +911,37 @@ impl PhotographCache {
         Ok(Arc::new(ImageU8Pyramid::from_image(image, levels)))
     }
 
-    fn get_found(
-        &self,
+    /// The value of `path`'s slot when it is made from the file as it is now,
+    /// counted as a hit; `None` otherwise. Reads nothing but the file's stamp
+    /// and never waits on a decode.
+    fn made_now(&self, path: &Path) -> Option<Result<Arc<ImageU8Pyramid>, GetError>> {
+        if self.options.budget_bytes == 0 {
+            return None;
+        }
+        let stamp = file_stamp(path);
+        let slot = match self.lock().map.get(path) {
+            Some(slot) if slot.stamp == stamp => Arc::clone(slot),
+            _ => return None,
+        };
+        let value = slot.made()?;
+        self.touch(&slot);
+        self.hits.fetch_add(1, Ordering::Relaxed);
+        Some(value)
+    }
+
+    /// `get`, telling whether it decoded. `share` is the caller's share of
+    /// the build count when it already holds one (a `get_many` member's), or
+    /// [`Share::None`] for a `get`, which reserves when it decodes. Whatever
+    /// the outcome, the share has been given back when this returns.
+    fn get_found<'r>(
+        &'r self,
         path: &Path,
         progress: &Progress<'_>,
+        mut share: Share<'r>,
     ) -> (Result<Arc<ImageU8Pyramid>, GetError>, Found) {
-        if self.budget_bytes == 0 {
+        if self.options.budget_bytes == 0 {
             self.misses.fetch_add(1, Ordering::Relaxed);
-            return (self.decode(path, progress), Found::Decoded);
+            return (self.decode(path, progress, &mut share), Found::Decoded);
         }
         // Stat with the lock released; it is a system call.
         let stamp = file_stamp(path);
@@ -616,7 +964,7 @@ impl PhotographCache {
         // stopped.
         #[cfg(test)]
         let mut told_waiting = false;
-        let making = {
+        let mut making = {
             let mut state = slot.lock();
             loop {
                 match &*state {
@@ -642,6 +990,7 @@ impl PhotographCache {
                         *state = SlotState::Making;
                         break Making {
                             slot: &slot,
+                            share,
                             finished: false,
                         };
                     }
@@ -649,7 +998,7 @@ impl PhotographCache {
             }
         };
         self.misses.fetch_add(1, Ordering::Relaxed);
-        let value = self.decode(path, progress);
+        let value = self.decode(path, progress, &mut making.share);
         if let Err(GetError::Cancelled) = value {
             // Dropping the hold empties the slot and wakes its waiters.
             drop(making);
@@ -677,7 +1026,7 @@ impl PhotographCache {
         }
         slot.charged.store(bytes, Ordering::Relaxed);
         inner.bytes += bytes;
-        if inner.bytes <= self.budget_bytes {
+        if inner.bytes <= self.options.budget_bytes {
             return;
         }
         // Oldest first. Slots that hold no bytes (failures, decodes in flight)
@@ -692,7 +1041,7 @@ impl PhotographCache {
             .collect();
         candidates.sort_unstable_by_key(|(tick, _)| *tick);
         for (_, victim) in candidates {
-            if inner.bytes <= self.budget_bytes {
+            if inner.bytes <= self.options.budget_bytes {
                 break;
             }
             inner.remove(&victim);

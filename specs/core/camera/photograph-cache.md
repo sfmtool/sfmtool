@@ -10,7 +10,9 @@ the expensive part of all of them. The photograph cache holds those pyramids
 once decoded, so that whichever part of the program asks next, on whichever
 thread, gets the same pixels without reading the file again, and so that
 memory stays under a set budget however many photographs the reconstruction
-has.
+has. A second budget, the build budget, bounds the whole decodes in progress
+on one cache at once, so a caller asking for hundreds of photographs does not
+hold hundreds of decodes in memory together.
 
 ## Why it exists
 
@@ -41,9 +43,11 @@ The cache lives in
 [photograph_cache.rs](../../../crates/sfmtool-core/src/camera/photograph_cache.rs),
 beside `ImageU8Pyramid` in [image.rs](../../../crates/sfmtool-core/src/camera/image.rs),
 exported as `sfmtool_core::camera::PhotographCache` together with
-`GetError`, `PeekedPhotograph`, `GetManyTally` and `PhotographCacheStats`.
-`default_budget_bytes`, `BUDGET_ENV_VAR` and `SLOT_WAIT_POLL` are reached
-through `sfmtool_core::camera::photograph_cache`. It is in `sfmtool-core` rather than
+`PhotographCacheOptions`, `BuildReservation`, `GetError`, `PeekedPhotograph`,
+`GetManyTally` and `PhotographCacheStats`. `default_budget_bytes`,
+`default_build_budget_bytes`, `BUDGET_ENV_VAR`, `BUILD_BUDGET_ENV_VAR` and
+`SLOT_WAIT_POLL` are
+reached through `sfmtool_core::camera::photograph_cache`. It is in `sfmtool-core` rather than
 the viewer so that `render_display_patch_bitmaps`, which `sfm web-export` also
 calls, can take one.
 
@@ -51,20 +55,40 @@ calls, can take one.
 /// Decoded photographs as pyramids, keyed by path, shared across threads.
 pub struct PhotographCache { /* … */ }
 
+/// The settings a cache is made with. `Default` gives `default_budget_bytes()`,
+/// `default_build_budget_bytes()` and `PHOTOGRAPH_TILE_SIZE`.
+pub struct PhotographCacheOptions {
+    pub budget_bytes: u64,       // pyramids held; 0 keeps nothing
+    pub build_budget_bytes: u64, // whole decodes in progress on this cache
+    pub tile_size: u32,          // not read while the cache holds whole pyramids
+}
+
 impl PhotographCache {
-    /// A cache holding up to `budget_bytes` of pyramids, each of
-    /// `ImageU8Pyramid::full_levels` depth for its photograph's size.
-    /// A budget of 0 keeps nothing: every call decodes and hands back a
-    /// pyramid no one else will see.
-    pub fn new(budget_bytes: u64) -> Self;
+    /// A cache holding up to `options.budget_bytes` of pyramids, each of
+    /// `ImageU8Pyramid::full_levels` depth for its photograph's size, with
+    /// the whole decodes in progress on it bounded by
+    /// `options.build_budget_bytes`. A budget of 0 keeps nothing: every call
+    /// decodes and hands back a pyramid no one else will see.
+    pub fn new(options: PhotographCacheOptions) -> Self;
     pub fn budget_bytes(&self) -> u64;
+
+    /// Reserve up to `wanted` whole decodes of `bytes_per_build` estimated
+    /// bytes each against the build budget, with one compare-exchange loop
+    /// on the cache's count; never waits. Grants as many as fit, and one when
+    /// none fit, so a caller always makes progress.
+    pub fn reserve_builds(&self, bytes_per_build: u64, wanted: usize) -> BuildReservation<'_>;
+
+    /// One decode, only if it fits under the build budget: `None` otherwise,
+    /// so it never takes the count past the budget. Never waits.
+    pub fn try_reserve_build(&self, bytes: u64) -> Option<BuildReservation<'_>>;
 
     /// The pyramid for `path`, decoding on a miss. Waits while another thread
     /// is decoding the same path, and then returns its result rather than
     /// decoding a second time, or decodes in its place if that thread stops.
-    /// An error when the file does not exist, cannot be read, or has a side
-    /// over `MAX_JPEG_SIDE` (65535), and `Cancelled` when `progress` is
-    /// cancelled while it waits or decodes.
+    /// A decode it makes is reserved with `reserve_builds`. An error when the
+    /// file does not exist, cannot be read, or has a side over
+    /// `MAX_JPEG_SIDE` (65535), and `Cancelled` when `progress` is cancelled
+    /// while it waits or decodes.
     pub fn get(&self, path: &Path, progress: &Progress<'_>)
         -> Result<Arc<ImageU8Pyramid>, GetError>;
 
@@ -92,8 +116,18 @@ impl PhotographCache {
     pub fn forget(&self, path: &Path);
     pub fn clear(&self);
 
-    /// Entries, bytes held, the budget, and the hit and miss counters.
+    /// Entries, bytes held, the budget, the hit, miss and decode counters,
+    /// the build budget and the bytes reserved on the build count.
     pub fn stats(&self) -> PhotographCacheStats;
+}
+
+/// Decodes reserved on one cache's build count, each of the same estimated
+/// bytes: `release_one` gives one back as it ends, and dropping it gives back
+/// the rest, a panic included.
+pub struct BuildReservation<'a> { /* … */ }
+impl BuildReservation<'_> {
+    pub fn granted(&self) -> usize;
+    pub fn release_one(&self);
 }
 
 pub enum GetError { NotFound(PathBuf), Unreadable(String),
@@ -105,14 +139,23 @@ pub struct GetManyTally { pub read: usize, pub reused: usize, pub unreadable: us
 
 pub struct PhotographCacheStats {
     pub entries: usize, pub bytes: u64, pub budget_bytes: u64, pub hits: u64, pub misses: u64,
+    pub decodes: u64, pub build_budget_bytes: u64, pub build_reserved_bytes: u64,
 }
 
 /// A quarter of physical memory, clamped to 1-16 GiB; 4 GiB when it cannot
 /// be read. `BUDGET_ENV_VAR` overrides it.
 pub fn default_budget_bytes() -> u64;
 
+/// The same rule as `default_budget_bytes`: a quarter of physical memory,
+/// clamped to 1-16 GiB; 4 GiB when it cannot be read.
+/// `BUILD_BUDGET_ENV_VAR` overrides it.
+pub fn default_build_budget_bytes() -> u64;
+
 /// "SFM_EXPLORER_PHOTOGRAPH_CACHE_MB": a whole number of megabytes (10^6 bytes).
 pub const BUDGET_ENV_VAR: &str;
+
+/// "SFM_EXPLORER_BUILD_BUDGET_MB": a whole number of megabytes (10^6 bytes).
+pub const BUILD_BUDGET_ENV_VAR: &str;
 
 /// 50 ms: how often a caller waiting on another caller's decode looks at its
 /// own `Progress` for cancellation.
@@ -159,6 +202,14 @@ Why it is shaped this way:
   parameter, so the key need not hold it and two depths of one photograph never
   both occupy the budget. The levels past the sixth cost under 0.1% of a
   pyramid's bytes.
+- **The build count is the cache's, and nothing waits on it.** Every caller
+  that shares a cache shares its count, and two caches in one process do not
+  coordinate, so how many caches a program makes decides how many such bounds
+  it has: SfM Explorer holds one, `sfm web-export` makes one for its run. A
+  count that blocked, like a semaphore, would make a rayon worker wait for
+  another caller's permit, so `reserve_builds` grants what fits and always at
+  least one decode, and `try_reserve_build`, for a caller that can ask again
+  later, is refused instead.
 - **`insert`** exists for pixels that are not a decode of the file on disk,
   such as a test fixture standing in for a photograph. The entry records the
   file's stamp as it is now, so `get` answers with those pixels until the file
@@ -230,6 +281,45 @@ whole number of megabytes of 10^6 bytes; `0` gives a cache that keeps nothing,
 and a value that does not parse is ignored. On the 64 GB test machine the
 default is 16 GiB, about 490 pyramids at 3840×2160.
 
+## The build budget
+
+A whole decode holds the photograph's pixels and the pyramid built from them
+while it runs, estimated at 5 bytes per pixel of the photograph: about 41 MB
+at 3840×2160 and 1 GB at 200 megapixels. Each decode reserves that estimate on
+the cache's build count before it reads the pixels, and gives it back when it
+ends, whatever the cache's budget, 0 included. The count is an atomic in the
+cache, checked against `PhotographCacheOptions::build_budget_bytes`, by
+default `default_build_budget_bytes()`, worked out as the cache's budget
+is: a quarter of physical memory clamped to between 1 GiB and 16 GiB, 16 GiB
+on the 64 GB test machine, or 4 GiB where physical memory cannot be read. The
+environment variable `SFM_EXPLORER_BUILD_BUDGET_MB` overrides it with a whole
+number of megabytes of 10^6 bytes, and a value that does not parse is
+ignored. A build budget of 0 lets each caller decode one photograph at a
+time, since `reserve_builds` grants one decode when none fits, and
+`try_reserve_build` refuses every decode.
+
+- **`get`** reads the photograph's header once it has marked the slot as
+  being made, whether the slot was empty or a maker that stopped has just
+  emptied it, and reserves its one decode with `reserve_builds`. It holds
+  nothing while it waits on another caller's decode.
+- **`get_many`** first answers every path whose slot is made from the file as
+  it is now, and reads the header of each other path to know its misses and
+  their sizes. It then decodes the misses in groups, one `par_iter` a group,
+  the groups one after another. A group is as many of the next misses as
+  `reserve_builds` grants, at most the rayon pool's size and at least one,
+  each reserved at its group's largest size. A member that finds its slot
+  being made by another caller keeps its share while it waits, since it may
+  take the decode over, and gives it back when it ends.
+- **A maker that stops** (cancelled, failed or unwinding) gives its share
+  back before its slot changes state, so the waiter that decodes in its place
+  never finds that decode still counted, and reserves for its own decode.
+
+Since a caller that finds the budget used up is still granted one decode, the
+count goes past the budget only by one decode per caller reserving at that
+moment: the bound is the build budget plus one whole decode per caller. A
+caller that wants several photographs asks for them with one `get_many`, never
+with `get` from many workers of one parallel loop.
+
 ## A changed file and remembered failures
 
 Before decoding, the cache reads the photograph's size from its header and
@@ -252,7 +342,7 @@ file has changed. `forget` and `clear` are the other ways to retry.
 
 SfM Explorer holds one cache, `AppState::photographs` in
 [state.rs](../../../crates/sfm-explorer/src/state.rs), made with
-`default_budget_bytes()`. Every reader of the
+`PhotographCacheOptions::default()`. Every reader of the
 reconstruction's photographs goes through it except the ones under
 "Non-goals":
 
@@ -356,7 +446,9 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   counts as one `get`. Every decode started is a miss, whether it succeeded,
   failed or was cancelled, and a `get` that stopped waiting because it was
   cancelled is neither. `peek` counts as a use for the eviction order but not
-  as a hit.
+  as a hit. A decode is a miss that read the photograph's pixels, so a file
+  whose header cannot be read, or that is refused as too large, is a miss
+  but not a decode; a maker cancelled after reading the pixels counts one.
 
 ## Parameters
 
@@ -364,6 +456,9 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 |-----------|---------|---------|
 | budget | `default_budget_bytes()`: physical memory / 4, clamped to 1-16 GiB; 4 GiB when unknown | bytes of pyramids held before the least recently used are dropped; [photograph_cache.rs](../../../crates/sfmtool-core/src/camera/photograph_cache.rs) |
 | `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB` | unset | overrides the budget, in megabytes of 10^6 bytes (`BUDGET_ENV_VAR`) |
+| build budget | `default_build_budget_bytes()`: physical memory / 4, clamped to 1-16 GiB; 4 GiB when unknown | estimated bytes of the whole decodes in progress on one cache at once (`PhotographCacheOptions::build_budget_bytes`) |
+| `SFM_EXPLORER_BUILD_BUDGET_MB` | unset | overrides the build budget, in megabytes of 10^6 bytes (`BUILD_BUDGET_ENV_VAR`) |
+| bytes per decode | 5 per pixel of the photograph | what a whole decode reserves on the build count (`WHOLE_DECODE_BYTES_PER_PIXEL`) |
 | levels | `ImageU8Pyramid::full_levels(width, height)` = `floor(log2(min(width, height))) + 1`, at least 2 | pyramid depth of each entry, from its photograph's size; [image.rs](../../../crates/sfmtool-core/src/camera/image.rs) |
 | footprint samples | 9 × 9 | grid `view_could_see_patch` projects over the patch (`FOOTPRINT_SAMPLES` in [view_selection.rs](../../../crates/sfmtool-core/src/patch/view_selection.rs)) |
 
@@ -377,8 +472,9 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   eviction, remembered failures, a file that appears or is rewritten being
   decoded again, `forget` and `clear` releasing bytes, `get_many` order, tally
   and cancellation, budget 0 keeping nothing, `peek_state` telling a failure
-  from no answer and not waiting on a decode in flight, `insert`, and the
-  default budget from physical memory and the environment variable. The
+  from no answer and not waiting on a decode in flight, `insert`, the
+  rule both default budgets share, from physical memory and each one's
+  environment variable. The
   slot's tests hold a decode in progress through a hook the test build
   calls as a decode starts and as a caller starts to wait, and wait for
   every thread they start with a time limit, so a caller that never returns
@@ -386,8 +482,21 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   answers `Cancelled` and a caller waiting on it decodes in its place; a
   `get` and a `get_many` waiting on a held decode stop when they are
   cancelled, and the decode goes on for its maker; a maker that panics leaves
-  the slot empty for the next caller; and a cancelled decode is not
-  remembered, with a budget or without one.
+  the slot empty for the next caller, with its decode's share given back; and
+  a cancelled decode is not remembered, with a budget or without one. The
+  build budget's tests read the count through the same hook: `reserve_builds`
+  grants what fits and one when none does, a decode larger than the whole
+  budget and absurd sizes included; `try_reserve_build` never takes the count
+  past the budget, from one thread or eight; a `get_many` over 20
+  photographs decodes them in groups that never pass a build budget of three
+  decodes, every decode reserved as it starts, with a budget and without one;
+  four `get_many` callers started together on the same 20 photographs never
+  reserve more than the build budget plus one decode each, an invariant that
+  holds whatever order their threads run in; two caches keep separate counts,
+  and a decode adds only its own reservation; and a maker cancelled
+  mid-decode gives its share back, and the `get` or `get_many` that decodes in
+  its place reserves, the `get` holding nothing while it waits and the
+  `get_many` member keeping its share.
 - [view_selection/tests.rs](../../../crates/sfmtool-core/src/patch/view_selection/tests.rs):
   the cull on a camera behind the patch, one the patch faces away from, a
   footprint off frame or partly in frame, a point at infinity, a footprint that
@@ -421,7 +530,8 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md),
   and a pyramid holding only the region of each level one render reads in
   [view-region-pyramid.md](../../drafts/view-region-pyramid.md).
-- **The budget is set only by the environment variable**, not in the viewer's
+- **The budget and the build budget are set only by their environment
+  variables** (or a caller's `PhotographCacheOptions`), not in the viewer's
   UI.
 
 ## Open questions

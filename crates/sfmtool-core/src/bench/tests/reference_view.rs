@@ -20,7 +20,7 @@ use crate::bench::{
 use crate::camera::sampler::render_tile;
 use crate::camera::sampler::RegionPool;
 use crate::camera::warp_map::patch_grid_jacobian;
-use crate::camera::{PhotographCache, TiledPhotograph, WarpMap};
+use crate::camera::{PhotographCache, PhotographCacheOptions, TiledPhotograph, WarpMap};
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocalizeParams};
@@ -62,9 +62,12 @@ impl GroundTruth {
         let images = &recon.image_set.images;
         let paths: Vec<PathBuf> = images.iter().map(|i| dir.join(&i.name)).collect();
         let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-        let (pyramids, _) = PhotographCache::new(0)
-            .get_many(&refs, &Progress::none())
-            .expect("nothing cancels the decode");
+        let (pyramids, _) = PhotographCache::new(PhotographCacheOptions {
+            budget_bytes: 0,
+            ..Default::default()
+        })
+        .get_many(&refs, &Progress::none())
+        .expect("nothing cancels the decode");
         let sources = pyramids
             .into_iter()
             .map(|p| TiledPhotograph::from_pyramid(p.expect("every photograph is checked in")))

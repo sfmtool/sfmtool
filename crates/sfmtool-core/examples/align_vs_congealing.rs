@@ -54,7 +54,9 @@ use sfmtool_core::camera::image::ImageU8Pyramid;
 use sfmtool_core::camera::sampler::RegionPool;
 #[cfg(not(congeal))]
 use sfmtool_core::camera::sampler::ViewRegions;
-use sfmtool_core::camera::{CameraIntrinsics, PhotographCache, TiledPhotograph};
+use sfmtool_core::camera::{
+    CameraIntrinsics, PhotographCache, PhotographCacheOptions, TiledPhotograph,
+};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
 #[cfg(not(congeal))]
@@ -442,7 +444,10 @@ fn main() {
         .collect();
     let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
     let td = Instant::now();
-    let cache = PhotographCache::new(0);
+    let cache = PhotographCache::new(PhotographCacheOptions {
+        budget_bytes: 0,
+        ..Default::default()
+    });
     let (pyramids, _) = cache.get_many(&refs, &Progress::none()).expect("decode");
     let pyramids: Vec<Option<Arc<ImageU8Pyramid>>> = pyramids;
     let sources: Vec<Option<TiledPhotograph>> = pyramids

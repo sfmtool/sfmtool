@@ -17,8 +17,7 @@ use crate::scene_renderer::{
     DEFAULT_TARGET_FOG_MULTIPLIER, DEFAULT_TARGET_SIZE_MULTIPLIER,
 };
 use sfmtool_core::camera::image::ImageU8Pyramid;
-use sfmtool_core::camera::photograph_cache::default_budget_bytes;
-use sfmtool_core::camera::PhotographCache;
+use sfmtool_core::camera::{PhotographCache, PhotographCacheOptions};
 use sfmtool_core::progress::Progress;
 use sfmtool_core::progress_note;
 use sfmtool_core::SfmrReconstruction;
@@ -712,8 +711,11 @@ pub(crate) struct AppState {
     /// node's images leaves its photographs where they are, and two nodes over
     /// one workspace share them. Closing a node or the whole scene does **not**
     /// clear it: reopening the same file then reuses the pixels, and the byte
-    /// budget the cache was made with ([`default_budget_bytes`]) bounds the
-    /// memory, dropping the least recently used photographs first.
+    /// budget the cache was made with ([`PhotographCacheOptions::default`],
+    /// whose budget is [`default_budget_bytes`]) bounds the memory, dropping
+    /// the least recently used photographs first.
+    ///
+    /// [`default_budget_bytes`]: sfmtool_core::camera::photograph_cache::default_budget_bytes
     pub(crate) photographs: Arc<PhotographCache>,
 
     /// The photographs a panel has asked to have decoded on the rayon pool and
@@ -1052,7 +1054,7 @@ impl AppState {
             sift_cache: HashMap::new(),
             sift_indexes: HashMap::new(),
             cluster_patches: HashMap::new(),
-            photographs: Arc::new(PhotographCache::new(default_budget_bytes())),
+            photographs: Arc::new(PhotographCache::new(PhotographCacheOptions::default())),
             photograph_requests: PhotographRequests::default(),
             show_demo_dialog: false,
             demo_num_points: 1000,

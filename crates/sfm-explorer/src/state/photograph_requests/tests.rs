@@ -38,7 +38,12 @@ fn wait_for(requests: &PhotographRequests, path: &Path) {
 fn a_miss_is_decoded_off_the_calling_thread_and_found_on_a_later_look() {
     let dir = tempfile::tempdir().unwrap();
     let recon = demo_in(dir.path());
-    let cache = Arc::new(PhotographCache::new(1 << 30));
+    let cache = Arc::new(PhotographCache::new(
+        sfmtool_core::camera::PhotographCacheOptions {
+            budget_bytes: 1 << 30,
+            ..Default::default()
+        },
+    ));
     let requests = PhotographRequests::default();
     let ctx = egui::Context::default();
     let path = photograph_path(&recon, 0).unwrap();
@@ -65,7 +70,12 @@ fn a_miss_is_decoded_off_the_calling_thread_and_found_on_a_later_look() {
 fn a_file_that_cannot_be_read_ends_as_unreadable_rather_than_decoding_forever() {
     let dir = tempfile::tempdir().unwrap();
     let recon = demo_in(dir.path());
-    let cache = Arc::new(PhotographCache::new(1 << 30));
+    let cache = Arc::new(PhotographCache::new(
+        sfmtool_core::camera::PhotographCacheOptions {
+            budget_bytes: 1 << 30,
+            ..Default::default()
+        },
+    ));
     let requests = PhotographRequests::default();
     let ctx = egui::Context::default();
     let path = photograph_path(&recon, 1).unwrap();
@@ -93,7 +103,12 @@ fn a_file_that_cannot_be_read_ends_as_unreadable_rather_than_decoding_forever() 
 fn a_cached_photograph_is_answered_without_a_request() {
     let dir = tempfile::tempdir().unwrap();
     let recon = demo_in(dir.path());
-    let cache = Arc::new(PhotographCache::new(1 << 30));
+    let cache = Arc::new(PhotographCache::new(
+        sfmtool_core::camera::PhotographCacheOptions {
+            budget_bytes: 1 << 30,
+            ..Default::default()
+        },
+    ));
     let path = photograph_path(&recon, 1).unwrap();
     let pyramid = Arc::new(ImageU8Pyramid::from_image(
         ImageU8::new(2, 2, 3, vec![9; 12]),
@@ -114,7 +129,12 @@ fn a_cached_photograph_is_answered_without_a_request() {
 fn a_cache_that_keeps_nothing_decodes_on_the_calling_thread() {
     let dir = tempfile::tempdir().unwrap();
     let recon = demo_in(dir.path());
-    let cache = Arc::new(PhotographCache::new(0));
+    let cache = Arc::new(PhotographCache::new(
+        sfmtool_core::camera::PhotographCacheOptions {
+            budget_bytes: 0,
+            ..Default::default()
+        },
+    ));
     let requests = PhotographRequests::default();
     let ctx = egui::Context::default();
     assert!(matches!(

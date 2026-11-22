@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::camera::{PhotographCache, TiledPhotograph};
+use crate::camera::{PhotographCache, PhotographCacheOptions, TiledPhotograph};
 use crate::progress::Progress;
 use crate::SfmrReconstruction;
 
@@ -26,7 +26,10 @@ fn a_second_render_reads_its_photographs_from_the_cache() {
     let recon = seoul_bull();
     assert!(recon.point_set.patch_bitmaps_y_x_rgba.is_none());
     let n = recon.image_count();
-    let cache = PhotographCache::new(1 << 30);
+    let cache = PhotographCache::new(PhotographCacheOptions {
+        budget_bytes: 1 << 30,
+        ..Default::default()
+    });
 
     let first = render_display_patch_bitmaps(
         &recon,
@@ -56,7 +59,10 @@ fn a_second_render_reads_its_photographs_from_the_cache() {
     );
     assert_eq!(first, second, "the same pixels, the same column");
 
-    let uncached = PhotographCache::new(0);
+    let uncached = PhotographCache::new(PhotographCacheOptions {
+        budget_bytes: 0,
+        ..Default::default()
+    });
     let third = render_display_patch_bitmaps(
         &recon,
         &uncached,
@@ -78,7 +84,10 @@ fn a_second_render_reads_its_photographs_from_the_cache() {
 fn a_render_with_no_usable_photograph_draws_nothing() {
     let mut recon = seoul_bull();
     recon.workspace_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("no-such-workspace");
-    let cache = PhotographCache::new(1 << 30);
+    let cache = PhotographCache::new(PhotographCacheOptions {
+        budget_bytes: 1 << 30,
+        ..Default::default()
+    });
     let rendered = render_display_patch_bitmaps(
         &recon,
         &cache,
@@ -111,7 +120,10 @@ fn a_render_with_no_usable_photograph_draws_nothing() {
 #[test]
 fn the_column_names_each_rows_reference_observation() {
     let recon = seoul_bull();
-    let cache = PhotographCache::new(1 << 30);
+    let cache = PhotographCache::new(PhotographCacheOptions {
+        budget_bytes: 1 << 30,
+        ..Default::default()
+    });
     let column = render_patch_bitmap_column(
         &recon,
         &cache,
@@ -165,7 +177,10 @@ fn a_missing_view_leaves_each_reference_naming_its_own_observation() {
         .map(|i| recon.workspace_dir.join(&i.name))
         .collect();
     let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-    let cache = PhotographCache::new(1 << 30);
+    let cache = PhotographCache::new(PhotographCacheOptions {
+        budget_bytes: 1 << 30,
+        ..Default::default()
+    });
     let (found, _) = cache
         .get_many(&refs, &Progress::none())
         .expect("not cancelled");
@@ -281,7 +296,10 @@ fn a_stored_reference_is_rendered_from_and_kept() {
     let count = recon.point_count();
     recon.point_set.reference_observations =
         Some(vec![sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION; count]);
-    let cache = PhotographCache::new(1 << 30);
+    let cache = PhotographCache::new(PhotographCacheOptions {
+        budget_bytes: 1 << 30,
+        ..Default::default()
+    });
     let render = |recon: &SfmrReconstruction| {
         render_patch_bitmap_column(
             recon,
@@ -351,7 +369,10 @@ fn a_point_with_no_eligible_view_gets_a_zero_row_and_no_reference() {
     let mut recon = seoul_bull();
     let count = recon.point_count();
     recon.point_set.reference_observations = Some(vec![NO_REFERENCE; count]);
-    let cache = PhotographCache::new(1 << 30);
+    let cache = PhotographCache::new(PhotographCacheOptions {
+        budget_bytes: 1 << 30,
+        ..Default::default()
+    });
     let render = |recon: &SfmrReconstruction| {
         render_patch_bitmap_column(
             recon,
@@ -423,7 +444,10 @@ fn stored_references_survive_missing_views_skipped_points_and_zero_frames() {
         .map(|i| recon.workspace_dir.join(&i.name))
         .collect();
     let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-    let cache = PhotographCache::new(1 << 30);
+    let cache = PhotographCache::new(PhotographCacheOptions {
+        budget_bytes: 1 << 30,
+        ..Default::default()
+    });
     let (found, _) = cache
         .get_many(&refs, &Progress::none())
         .expect("not cancelled");
@@ -535,7 +559,10 @@ fn a_photograph_that_lacks_pixels_a_render_reads_fails_the_render() {
     use std::sync::Arc;
 
     let recon = seoul_bull();
-    let cache = PhotographCache::new(1 << 30);
+    let cache = PhotographCache::new(PhotographCacheOptions {
+        budget_bytes: 1 << 30,
+        ..Default::default()
+    });
     for image in &recon.image_set.images {
         let path = recon.workspace_dir.join(&image.name);
         let (width, height) = image::image_dimensions(&path).expect("checked in");

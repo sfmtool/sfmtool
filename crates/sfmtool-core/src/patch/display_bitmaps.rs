@@ -43,7 +43,8 @@ use crate::{progress_note, SfmrReconstruction};
 ///
 /// SfM Explorer passes its own cache, so the photographs this decodes stay
 /// for its panels and later operations; a caller with no cache to share, such
-/// as `sfm web-export`, passes `PhotographCache::new(0)`, which keeps nothing.
+/// as `sfm web-export`, passes a cache whose `budget_bytes` is 0, which keeps
+/// nothing.
 /// The render reads the photographs through `pool`, the region pool the
 /// caller made for this call, and a third stage, `read regions`, notes the
 /// pool's counts: the region pyramids the reads assembled and reused, and the

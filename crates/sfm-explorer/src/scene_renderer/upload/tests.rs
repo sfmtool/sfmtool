@@ -38,7 +38,7 @@ use crate::scene::{ImageRef, NodeTint, PointRef, ReconId, TINT_PALETTE};
 use crate::state::CachedSiftFeatures;
 use crate::state::{display_photograph, photograph_path, DisplayPhotograph, PhotographRequests};
 use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
-use sfmtool_core::camera::PhotographCache;
+use sfmtool_core::camera::{PhotographCache, PhotographCacheOptions};
 
 // ── Fixtures ────────────────────────────────────────────────────────────
 
@@ -1752,7 +1752,10 @@ fn a_photograph_wider_than_the_texture_limit_never_makes_a_texture_over_it() {
 fn a_photograph_is_decoded_off_the_calling_thread_and_drawn_once_it_lands() {
     let (device, queue) = device();
     let (recon, dir) = recon_with_real_bg_image("load");
-    let cache = Arc::new(PhotographCache::new(1 << 30));
+    let cache = Arc::new(PhotographCache::new(PhotographCacheOptions {
+        budget_bytes: 1 << 30,
+        ..Default::default()
+    }));
     let requests = PhotographRequests::default();
     let ctx = egui::Context::default();
     let mut r = renderer_at(64, 64);
@@ -1799,7 +1802,10 @@ fn an_unreadable_photograph_is_read_once_and_draws_nothing() {
     let (device, queue) = device();
     // demo's workspace_dir is empty and its image names don't exist on disk.
     let recon = demo(4);
-    let cache = Arc::new(PhotographCache::new(1 << 30));
+    let cache = Arc::new(PhotographCache::new(PhotographCacheOptions {
+        budget_bytes: 1 << 30,
+        ..Default::default()
+    }));
     let requests = PhotographRequests::default();
     let ctx = egui::Context::default();
     let mut r = renderer_at(64, 64);
