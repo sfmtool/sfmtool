@@ -42,8 +42,8 @@ The cache lives in
 beside `ImageU8Pyramid` in [image.rs](../../../crates/sfmtool-core/src/camera/image.rs),
 exported as `sfmtool_core::camera::PhotographCache` together with
 `GetError`, `PeekedPhotograph`, `GetManyTally` and `PhotographCacheStats`.
-`default_budget_bytes`, `BUDGET_ENV_VAR` and `SLOT_WAIT_POLL` are reached through
-`sfmtool_core::camera::photograph_cache`. It is in `sfmtool-core` rather than
+`default_budget_bytes`, `BUDGET_ENV_VAR` and `SLOT_WAIT_POLL` are reached
+through `sfmtool_core::camera::photograph_cache`. It is in `sfmtool-core` rather than
 the viewer so that `render_display_patch_bitmaps`, which `sfm web-export` also
 calls, can take one.
 
@@ -338,9 +338,10 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 - **The decode must not use rayon.** It runs while its slot is marked as
   being made. If it used rayon, a rayon worker waiting in a nested join could
   steal another `get_many` item for the same path, find that slot being made
-  by its own thread, and wait on itself for ever. So the decode is `ImageU8::read_rgb` followed by
-  `ImageU8Pyramid::from_image(image, levels)`, neither of which uses rayon's
-  global pool, and the rayon parallelism is across paths in `get_many`.
+  by its own thread, and wait on itself for ever. So the decode is
+  `ImageU8::read_rgb` followed by `ImageU8Pyramid::from_image(image, levels)`,
+  neither of which uses rayon's global pool, and the rayon parallelism is
+  across paths in `get_many`.
   `read_rgb` is not always single-threaded, but nothing it starts takes work
   from the global pool, so nothing can re-enter a slot. For a JPEG wider than
   128 px, `jpeg-decoder` (built without its `rayon` feature) starts one plain

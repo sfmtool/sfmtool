@@ -2157,11 +2157,11 @@ in core. Step 17 turns the tier on.
       the viewer's `peek_full_res_pyramid` goes. A render reads from a source
       that holds exactly the tiles the panel peeked, pinned for the render,
       so a tile evicted between the peek and the render cannot be read and
-      the GUI thread never decodes (the companion's open question 7). `peek` and `peek_state` stay
-      for the callers that only ask whether a photograph is decoded (the
-      image menu's *Add image to tracks* check), and answer tiled
-      photographs from 13e. Tests: the panels' tests of their pictures, which
-      compare them with the whole pyramid's, pass unchanged; a cell whose
+      the GUI thread never decodes (the companion's open question 7).
+      `peek` and `peek_state` stay for the callers that only ask whether a
+      photograph is decoded (the image menu's *Add image to tracks* check),
+      and answer tiled photographs from 13e. Tests: the panels' tests of
+      their pictures, which compare them with the whole pyramid's, pass unchanged; a cell whose
       tiles are not all there draws its loading state and asks for them
       once; no panel decodes on the GUI thread.
     - **13e, tiles in the cache.** The cache keeps photograph tiles in place

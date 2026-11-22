@@ -528,9 +528,11 @@ requesting the missing ones: one tile task per missing tile out of core, and
 one decode task per in-core photograph with all the tiles it is missing
 (`try_decode_tiles`), which ends at once when another caller holds the
 photograph's slot or the build budget refuses its reservation, the panel
-peeking again on a later frame. The GUI thread never decodes and never waits,
-no task a panel starts waits on a slot or the build budget, and no panel
-makes a mipmap.
+peeking again on a later frame. The view renders from a source that holds,
+pinned, exactly the tiles the panel peeked, so a tile evicted from the cache
+between the peek and the render cannot be read (open question 7). The GUI
+thread never decodes and never waits, no task a panel starts waits on a slot
+or the build budget, and no panel makes a mipmap.
 
 ## Memory
 
