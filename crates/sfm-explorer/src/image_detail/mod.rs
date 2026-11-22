@@ -726,14 +726,14 @@ impl ImageDetail {
                 };
                 // The view the panel carries over to the new image, from the
                 // one it holds over the image it showed last.
-                let view = match (shown, self.last_display_size) {
+                let carried = match (shown, self.last_display_size) {
                     (Some((image, [w, h])), Some(_)) => {
                         geometry(image, [w as f32, h as f32]).carried_to(requested, size)
                     }
                     _ => geometry(requested, size).carried_to(requested, size),
                 };
-                let view = look.map_or(view, |look| look_at(view, &look));
-                self.tiles.fetch(ctx, &view, requested, known, source)
+                let carried = look.map_or(carried, |look| view::look_at(carried, &look));
+                self.tiles.fetch(ctx, &carried, requested, known, source)
             }
             (Some(DisplayLayout::Loading), Some(_)) => false,
             _ => true,
