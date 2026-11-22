@@ -44,7 +44,8 @@ The cache lives in
 beside `ImageU8Pyramid` in [image.rs](../../../crates/sfmtool-core/src/camera/image.rs),
 exported as `sfmtool_core::camera::PhotographCache` together with
 `PhotographCacheOptions`, `BuildReservation`, `GetError`, `PeekedPhotograph`,
-`GetManyTally` and `PhotographCacheStats`. `default_budget_bytes`,
+`GetManyTally` and `PhotographCacheStats`, and the layout and tile requests'
+`PeekedLayout`, `PeekedTile`, `TileError` and `TryDecode`. `default_budget_bytes`,
 `default_build_budget_bytes`, `BUDGET_ENV_VAR`, `BUILD_BUDGET_ENV_VAR` and
 `SLOT_WAIT_POLL` are
 reached through `sfmtool_core::camera::photograph_cache`. It is in `sfmtool-core` rather than
@@ -60,7 +61,7 @@ pub struct PhotographCache { /* … */ }
 pub struct PhotographCacheOptions {
     pub budget_bytes: u64,       // pyramids held; 0 keeps nothing
     pub build_budget_bytes: u64, // whole decodes in progress on this cache
-    pub tile_size: u32,          // not read while the cache holds whole pyramids
+    pub tile_size: u32,          // the side of the tiles the tile requests cut
 }
 
 impl PhotographCache {
@@ -109,10 +110,25 @@ impl PhotographCache {
         progress: &Progress<'_>,
     ) -> Result<(Vec<Option<Arc<ImageU8Pyramid>>>, GetManyTally), Cancelled>;
 
+    /// The layout and tile requests of § "Layouts and tiles". `layout` and
+    /// `peek_tile` read nothing and never wait; `request_layout` reads the
+    /// header; `try_decode_tiles` is a panel's decode, which never waits;
+    /// `get_tile`, `view_region_pyramid` and `get_level` decode on a miss as
+    /// `get` does.
+    pub fn layout(&self, path: &Path) -> PeekedLayout;
+    pub fn request_layout(&self, path: &Path);
+    pub fn peek_tile(&self, path: &Path, key: TileKey) -> PeekedTile;
+    pub fn try_decode_tiles(&self, path: &Path, keys: &[TileKey])
+        -> Result<TryDecode, TileError>;
+    pub fn get_tile(&self, path: &Path, key: TileKey) -> Result<Arc<PhotographTile>, TileError>;
+    pub fn view_region_pyramid(&self, path: &Path, regions: &LevelRegions)
+        -> Result<ImageU8Pyramid, TileError>;
+    pub fn get_level(&self, path: &Path, level: usize) -> Result<Arc<ImageU8>, TileError>;
+
     /// Put pixels that did not come from this cache's decode in as `path`'s.
     pub fn insert(&self, path: &Path, pyramid: Arc<ImageU8Pyramid>);
 
-    /// Drop one path's entry, or every entry.
+    /// Drop one path's entry and layout, or every entry and layout.
     pub fn forget(&self, path: &Path);
     pub fn clear(&self);
 
@@ -136,6 +152,12 @@ pub enum GetError { NotFound(PathBuf), Unreadable(String),
 pub enum PeekedPhotograph { Decoded(Arc<ImageU8Pyramid>), Unreadable, NotDecoded }
 
 pub struct GetManyTally { pub read: usize, pub reused: usize, pub unreadable: usize }
+
+pub enum PeekedLayout { Known(Arc<PyramidLayout>), Unreadable(String), NotKnown }
+pub enum PeekedTile { Ready(Arc<PhotographTile>), Unreadable, NotReady }
+pub enum TileError { Unreadable { path: PathBuf, why: String },
+                     OutOfRange { path: PathBuf, why: String } }
+pub enum TryDecode { Decoded(Vec<Arc<PhotographTile>>), Busy }
 
 pub struct PhotographCacheStats {
     pub entries: usize, pub bytes: u64, pub budget_bytes: u64, pub hits: u64, pub misses: u64,
@@ -320,6 +342,53 @@ moment: the bound is the build budget plus one whole decode per caller. A
 caller that wants several photographs asks for them with one `get_many`, never
 with `get` from many workers of one parallel loop.
 
+## Layouts and tiles
+
+The panels draw photograph tiles (`TileKey`, `PhotographTile` in
+[tiled_photograph.rs](../../../crates/sfmtool-core/src/camera/tiled_photograph.rs)),
+and a kernel can read a tile, a view-region pyramid or a level whole. The
+cache answers each from the whole pyramid it holds, cutting the tile, region
+or level when it is asked for, in
+[photograph_cache/tiles.rs](../../../crates/sfmtool-core/src/camera/photograph_cache/tiles.rs).
+A tile is `tile_size` px a side (512 by default), clipped to its level, with a
+one-pixel border of its neighbours' pixels, or the edge pixel repeated at the
+level's edge, so tiles drawn side by side with linear filtering show no seam.
+
+- **`layout`** answers `Known` with the photograph's `PyramidLayout` (its
+  level sizes and tile grid, in core, of `full_levels` depth) once the
+  photograph is held or its header has been read, `Unreadable` with the
+  message once a read has failed, and `NotKnown` otherwise. It reads
+  nothing, waits on nothing and does not stat the file. The layout of a
+  photograph the cache holds is the held pyramid's; otherwise it is what
+  `request_layout` last read.
+- **`request_layout`** reads the header and keeps the layout, or why it
+  could not be read. Layouts are kept whatever the budget, a budget of 0
+  included, and are not counted against it, since each is a few dozen
+  bytes; `forget` and `clear` drop them.
+- **`peek_tile`** cuts a tile from the pyramid held, without reading a file
+  or waiting, and counts as a use for the eviction order but not as a hit.
+  It answers `NotReady` while the photograph is not decoded and
+  `Unreadable` for a remembered failure or a tile the photograph does not
+  have.
+- **`try_decode_tiles`** is a panel's decode. It answers the tiles asked
+  for at once, as a hit, when the photograph is held. Otherwise it reads the
+  header, refuses a key the photograph does not have as
+  `TileError::OutOfRange` before it reserves anything, and reserves the
+  decode with `try_reserve_build`; then it claims the slot only when no other
+  caller is decoding in it, giving the reservation back if one is, and
+  decodes in the slot as `get` does. It answers `Busy`, decoding nothing,
+  when the reservation is refused or another caller holds the slot, so it
+  never waits on a slot or on the build count, and panel decodes never take
+  the count past the build budget. The tiles it answers are the caller's
+  under a budget of 0, where the cache keeps nothing. A file whose header
+  cannot be read is remembered as its failure, as `get` remembers it.
+- **`get_tile`, `view_region_pyramid` and `get_level`** are a kernel's
+  reads: on a miss they decode as `get` does, reserving with
+  `reserve_builds` and waiting while another caller decodes the photograph.
+  A level, tile or rectangle the photograph does not have, or an empty
+  set of regions, is `TileError::OutOfRange`; a photograph that cannot be
+  read is `TileError::Unreadable`, with `GetError`'s message.
+
 ## A changed file and remembered failures
 
 Before decoding, the cache reads the photograph's size from its header and
@@ -497,6 +566,24 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   mid-decode gives its share back, and the `get` or `get_many` that decodes in
   its place reserves, the `get` holding nothing while it waits and the
   `get_many` member keeping its share.
+- [photograph_cache/tiles/tests.rs](../../../crates/sfmtool-core/src/camera/photograph_cache/tiles/tests.rs):
+  a layout read from the header with nothing decoded, and every tile of
+  every level, a region and every level equal to the held pyramid's pixels,
+  each tile with its border as Image Detail cut it, through a panel's
+  decode, a peek and a kernel's read; a key, level or region the photograph
+  does not have refused with `OutOfRange`, a panel's decode refusing it
+  before it reserves or decodes; an unreadable photograph answered and
+  remembered, and `forget` and `clear` dropping a layout; the layout of a
+  held photograph following the held pyramid, and a cache of budget 0
+  keeping layouts; a panel's decode refused by `try_reserve_build` decoding
+  and reserving nothing and decoding once the other reservation is given
+  back, with a budget and without one, and every panel decode refused under
+  a build budget of 0; a panel's decode answering `Busy` at once, with no
+  wait and no reservation, while another caller's decode of the same path is
+  held in progress (the test bounds that thread with a time limit); one that
+  loses the slot after it reserved giving the reservation back; and panel
+  decodes from eight threads over 20 photographs never taking the count past
+  a build budget of three decodes, with a budget and without one.
 - [view_selection/tests.rs](../../../crates/sfmtool-core/src/patch/view_selection/tests.rs):
   the cull on a camera behind the patch, one the patch faces away from, a
   footprint off frame or partly in frame, a point at infinity, a footprint that

@@ -181,7 +181,7 @@ fn read_regions<R>(
 }
 
 /// A region pyramid of `regions`, each assembled from `source`'s tiles.
-fn copy_regions(
+pub(crate) fn copy_regions(
     source: &TiledPhotograph,
     regions: &LevelRegions,
 ) -> Result<ImageU8Pyramid, PhotographReadError> {

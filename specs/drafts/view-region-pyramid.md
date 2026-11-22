@@ -584,10 +584,11 @@ while the cache still hands out whole pyramids:
 each moved reader wraps the pyramid it gets in a `TiledPhotograph`
 (`from_pyramid`), so every reader works at every step. Once all have moved,
 the main draft's step 13 makes the cache hand out tiled photographs only, and
-there is no whole pyramid for any reader to fall back on. That step is five
+there is no whole pyramid for any reader to fall back on. That step is seven
 pull requests: 13a makes the cache's slot cancellable (built), 13b bounds the
-decodes in progress by the build budget (built), 13c and 13d move the panels to the
-cache's layout and tile requests while it still holds whole pyramids, and
+decodes in progress by the build budget (built), 13c1 adds the cache's layout
+and tile requests (built), 13c2, 13c3 and 13d move the panels to them while
+the cache still holds whole pyramids, and
 13e replaces the pyramids with tiles, which is where the tests of this
 draft's step 5 that count decodes run.
 
@@ -607,10 +608,10 @@ draft's step 5 that count decodes run.
    `source_clipped_share` over tiles, on photographs cut into tiles in memory
    (`from_image` and `from_pyramid`); specified with its tests in
    [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md).
-   The cache's `view_region_pyramid` comes with the main draft's step 13c.
+   The cache's `view_region_pyramid` is built, as the main draft's step 13c1.
 3. **Track View and the Track Table** on region pyramids, peeking the
    cache's whole pyramids as today and reading them through `from_pyramid`;
-   they peek tiles from the main draft's step 13d, once 13c adds `peek_tile`. Track
+   they peek tiles from the main draft's step 13d, now that 13c1 has added `peek_tile`. Track
    View's tiles and track-stage hover contexts call `render_tile`, and its
    cluster-stage tiles and contexts `sample_member_grid`, on the region
    pyramid they assembled, so no kernel signature changes here; the crops

@@ -492,7 +492,7 @@ pub(crate) use grid::{sample_support_affine, sample_support_affine_aniso};
 pub use grid::{GridEdge, GridPoints};
 pub use pool::{RegionPool, RegionPoolStats, REGION_POOL_BYTES_PER_THREAD};
 pub use regions::{required_regions, LevelRect, LevelRegions, REGION_REUSE_MARGIN};
-pub(crate) use source::check_source;
+pub(crate) use source::{check_source, copy_regions};
 pub use source::{
     read_source_rect, read_source_samples, render_source_affine, render_source_tile,
     render_source_tile_with_grad_into, sample_source_grid, SourceRect, SourceSamples, ViewRegions,
