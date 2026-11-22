@@ -24,7 +24,7 @@ draft [view-region-pyramid.md](view-region-pyramid.md), which this design
 requires: without it no kernel can read a large photograph within a bounded
 memory, so it is a numbered step here (§ "Implementation steps"), not a later
 optimization. The user has decided every open question of this draft
-(§ "Open questions", 1 to 13) and every one of the companion draft's six.
+(§ "Open questions", 1 to 13) and every one of the companion draft's seven.
 
 Amends [core/camera/photograph-cache.md](../core/camera/photograph-cache.md)
 (the cache hands out photograph tiles for every photograph instead of whole
@@ -2102,7 +2102,10 @@ in core. Step 17 turns the tier on.
       not remembered, with a budget or without one. The tests do not time
       the 50 ms, since a time measured across threads depends on how they
       are scheduled; they hold the decode a waiter waits on until the waiter
-      has stopped, so only its own polling can stop it.
+      has stopped, so only its own polling can stop it. A test in
+      [track_table_panel/tests.rs](../../crates/sfm-explorer/src/track_table_panel/tests.rs)
+      cancels a reference pick as it reports fetching its last photograph,
+      and the pick gives no answer rather than a point without a pick.
     - **13b, the build budget.** `PhotographCacheOptions` (`budget_bytes`,
       `build_budget_bytes`, and `tile_size`, which only 13e reads),
       `PhotographCache::new(options)`, `default_build_budget_bytes`,
@@ -2151,7 +2154,10 @@ in core. Step 17 turns the tier on.
       their hover views, act on the layout state and peek tiles, asking for
       the missing ones with `try_decode_tiles`, and render only once every
       tile they need is there, so no panel reads a whole pyramid any more and
-      the viewer's `peek_full_res_pyramid` goes. `peek` and `peek_state` stay
+      the viewer's `peek_full_res_pyramid` goes. A render reads from a source
+      that holds exactly the tiles the panel peeked, pinned for the render,
+      so a tile evicted between the peek and the render cannot be read and
+      the GUI thread never decodes (the companion's open question 7). `peek` and `peek_state` stay
       for the callers that only ask whether a photograph is decoded (the
       image menu's *Add image to tracks* check), and answer tiled
       photographs from 13e. Tests: the panels' tests of their pictures, which

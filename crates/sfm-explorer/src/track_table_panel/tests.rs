@@ -472,6 +472,48 @@ fn the_job_stops_when_cancelled() {
     assert!(super::job::job_stops_when_cancelled());
 }
 
+/// A pick cancelled while it fetched its last view's photograph, as a `get`
+/// that stops waiting on another caller's decode leaves it, gives no answer
+/// rather than a point without a pick. The cancel flag is set when the
+/// fetch reports its last count, so only the check after the loop sees it.
+#[test]
+fn a_pick_cancelled_at_its_last_photograph_gives_no_answer() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    use sfmtool_core::camera::PhotographCache;
+    use sfmtool_core::progress::Event;
+
+    let edited = sfmtool_core::EditedReconstruction::new(Arc::new(
+        crate::state::edits::tests::projected_embedded_demo(12),
+    ));
+    // Point 2 is seen in three images and has a patch frame.
+    let point = 2;
+    let view = edited.point(point).unwrap();
+    assert!(view.patch_frame().is_some());
+    assert_eq!(view.observations().len(), 3);
+    let photographs = PhotographCache::new(0);
+    let cancel = AtomicBool::new(false);
+    let sink = |event: Event<'_>| {
+        if let Event::Count {
+            done,
+            total: Some(total),
+            unit: "photographs",
+        } = event
+        {
+            if done == total {
+                cancel.store(true, Ordering::SeqCst);
+            }
+        }
+    };
+    let progress = Progress::to(&sink).cancelled_by(&cancel);
+    assert_eq!(
+        super::picks::pick_reference(&edited, &photographs, point, &progress),
+        None
+    );
+    assert!(cancel.load(Ordering::SeqCst));
+}
+
 // -- The row list -------------------------------------------------------------
 
 /// A bound keeps the rows inside it, both ends inclusive, and a row with no

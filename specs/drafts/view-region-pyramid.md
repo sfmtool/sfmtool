@@ -766,3 +766,11 @@ decisions.
    past it is `not_evaluated`, and an evaluation past it scores as out of
    frame (§ "The members' elongation limit"). The limit is the main
    draft's step 8, which is built.
+7. **What a panel renders from.** *Decided by the user:* Track View and the
+   Track Table render from a source that holds, pinned, exactly the tiles
+   the panel peeked, so a tile evicted from the cache between the peek and
+   the render cannot be read, and the GUI thread never decodes. The options
+   considered were that source; a peek-only view of the photograph, whose
+   missing tile is answered as not ready and drawn as loading; and
+   accepting a rare decode on the GUI thread for a tile evicted between the
+   peek and the render. It is the main draft's step 13d.

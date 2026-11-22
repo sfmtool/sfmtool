@@ -455,10 +455,11 @@ impl PhotographCache {
         let pyramids = found
             .into_iter()
             .map(|entry| {
-                // Every entry is `Some` when the call was not cancelled.
+                // Every entry is `Some`, and none is `GetError::Cancelled`,
+                // which only a cancelled `progress` gives, when the call was
+                // not cancelled.
                 let (pyramid, how) = entry.ok_or(Cancelled)?;
                 match (&pyramid, how) {
-                    (Err(GetError::Cancelled), _) => return Err(Cancelled),
                     (Err(_), _) => tally.unreadable += 1,
                     (Ok(_), Found::Decoded) => tally.read += 1,
                     (Ok(_), Found::Reused) => tally.reused += 1,
