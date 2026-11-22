@@ -121,6 +121,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             "get_measurement_endpoint_views",
             json!({ "reconstruction_label": "alpha", "endpoint": "a" }),
         ),
+        (
+            "get_point_reference_pixel",
+            json!({ "reconstruction_label": "alpha", "point": 0 }),
+        ),
         ("clear_selection", json!({ "scope": "all" })),
         (
             "set_reconstruction_display",
@@ -1312,6 +1316,7 @@ fn only_the_reads_are_annotated_read_only() {
             "list_measurements",
             "get_measurement",
             "get_measurement_endpoint_views",
+            "get_point_reference_pixel",
             "get_action_log",
             "get_timing_detail",
             "get_window_layout",
@@ -1327,10 +1332,10 @@ fn only_the_reads_are_annotated_read_only() {
             "get_widgets",
         ]
     );
-    // Twenty-two JSON reads, the one read that hands back a picture,
+    // Twenty-three JSON reads, the one read that hands back a picture,
     // eighty-four writes, six input tools, the one that writes a file, and the
     // one that quits.
-    assert_eq!(catalog.len(), 115, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 116, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()

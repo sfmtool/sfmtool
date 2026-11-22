@@ -433,3 +433,71 @@ fn deleting_an_image_of_mismatched_measurement_columns_does_not_panic() {
         Some(MeasurementRef::distance(id, 3))
     );
 }
+
+// ── A point's reference pixel ───────────────────────────────────────────
+
+/// A point's reference pixel is the keypoint of its reference observation in
+/// that observation's image, and an endpoint placed there resolves alone to
+/// texel `(0, 0)` of the point's own patch, the point itself.
+#[test]
+fn a_reference_pixel_resolves_to_the_centre_of_the_point_s_own_patch() {
+    use sfmtool_core::reconstruction::measurement_endpoint::{
+        resolve_measurement_endpoint, CandidateStanding, MeasurementEndpointOptions,
+    };
+    let recon = super::fixture::referenced_reconstruction(Some("m"));
+    let edited = EditedReconstruction::new(Arc::new(recon));
+    // Point 0's reference is its observation in image 1, so the pixel is in
+    // image 1, not in image 0, where its track starts.
+    let reference = reference_pixel(&edited, 0).expect("point 0 has a reference");
+    assert_eq!(reference.observation, 1);
+    assert_eq!(reference.image, 1);
+    let keypoint = edited.point(0).unwrap().keypoint_xy(1).unwrap();
+    assert_eq!(
+        reference.pixel,
+        [f64::from(keypoint[0]), f64::from(keypoint[1])]
+    );
+    let resolved = resolve_measurement_endpoint(
+        &edited,
+        reference.image,
+        reference.pixel,
+        &MeasurementEndpointOptions::default(),
+    )
+    .expect("the pixel resolves");
+    let chosen = resolved.chosen();
+    assert_eq!(chosen.point, 0);
+    assert_eq!(chosen.standing, CandidateStanding::Alone);
+    let [s, t] = chosen.patch_coords;
+    assert!(s.abs() < 1e-4 && t.abs() < 1e-4, "texel ({s}, {t})");
+
+    let reference = reference_pixel(&edited, 2).expect("point 2 has a reference");
+    assert_eq!((reference.observation, reference.image), (0, 0));
+}
+
+/// The three refusals, each in its own sentence: no patch frame, no reference
+/// observation (`-1`, or no column at all), and a point at infinity.
+#[test]
+fn a_point_without_a_reference_pixel_says_why() {
+    let referenced = EditedReconstruction::new(Arc::new(
+        super::fixture::referenced_reconstruction(Some("m")),
+    ));
+    assert_eq!(
+        reference_pixel(&referenced, 1),
+        Err(NO_REFERENCE_FOR_PIXEL.to_string())
+    );
+    assert_eq!(
+        reference_pixel(&referenced, SKY),
+        Err(AT_INFINITY_FOR_PIXEL.to_string())
+    );
+    // The fixture without the column has frames and no reference to read.
+    let unreferenced = EditedReconstruction::new(Arc::new(measured_reconstruction(Some("m"))));
+    assert_eq!(
+        reference_pixel(&unreferenced, 0),
+        Err(NO_REFERENCE_FOR_PIXEL.to_string())
+    );
+    // The demo reconstruction stores no patch frames at all.
+    let demo = EditedReconstruction::new(Arc::new(SfmrReconstruction::demo(10)));
+    assert_eq!(
+        reference_pixel(&demo, 0),
+        Err(NO_PATCH_FOR_PIXEL.to_string())
+    );
+}

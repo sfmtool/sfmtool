@@ -239,3 +239,32 @@ pub(crate) fn measured_state(
     let id = state.append_node(node);
     (state, id)
 }
+
+/// The reference observation of each point of
+/// [`referenced_reconstruction`], as indexes into its track: point 0's is its
+/// observation in image 1, point 1 has none, and point 2's and the point at
+/// infinity's are their observations in image 0.
+pub(crate) const REFERENCES: [i32; 4] = [1, -1, 0, 0];
+
+/// The fixture with a reference observation per point
+/// ([`REFERENCES`]), as a file with patch frames stores them, for the tests
+/// of a point's reference pixel.
+pub(crate) fn referenced_reconstruction(world_space_unit: Option<&str>) -> SfmrReconstruction {
+    let mut recon = measured_reconstruction(world_space_unit);
+    recon.point_set.reference_observations = Some(REFERENCES.to_vec());
+    recon
+}
+
+/// [`referenced_reconstruction`] in a fresh viewer state, as its one node,
+/// with its id.
+pub(crate) fn referenced_state(
+    world_space_unit: Option<&str>,
+) -> (crate::state::AppState, crate::scene::ReconId) {
+    let mut state = crate::state::AppState::new();
+    let node = crate::scene::SceneNode::from_path(
+        std::path::Path::new("measured.sfmr"),
+        referenced_reconstruction(world_space_unit),
+    );
+    let id = state.append_node(node);
+    (state, id)
+}

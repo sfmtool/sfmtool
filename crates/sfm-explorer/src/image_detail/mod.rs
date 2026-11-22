@@ -235,6 +235,11 @@ pub(crate) struct ImageDetailResponse {
     /// The pixel the context menu's `Add observation to bench track here` was
     /// clicked for: a candidate joins the focused item there.
     pub(crate) add_bench_observation: Option<[f32; 2]>,
+    /// The endpoint the context menu's `Set Endpoint A Here` or `Set Endpoint
+    /// B Here` was clicked for, with the pixel the menu was opened at: that
+    /// endpoint of the focused measurement item is set to the image shown and
+    /// that pixel. Applied by the dock, since the step raises no panel.
+    pub(crate) set_endpoint_here: Option<(crate::measurements::EndpointSide, [f32; 2])>,
     /// The pixel *Create Track Here* was asked for at, in source-image
     /// coordinates: the context menu's entry, at the pixel the menu was opened
     /// at, or a Control+Shift click, at the pixel clicked. A track is built
@@ -800,6 +805,7 @@ impl ImageDetail {
             context_menu_pixel: None,
             start_bench_cluster: None,
             add_bench_observation: None,
+            set_endpoint_here: None,
             create_track_here: None,
             edit_on_bench: None,
             find_nearby_tracks: None,

@@ -246,6 +246,9 @@ impl TabContext<'_> {
                 proposal.banner_lines(selected)
             })
             .unwrap_or_default();
+        // The focused measurement item, which the point menu's Set Endpoint
+        // entries set an endpoint of.
+        self.viewer_3d.endpoint_target = self.state.endpoint_target();
         // Fetched only after `show_hud` has handed back its `&mut
         // AppState`: the node borrows `state.scene`, and the two cannot
         // overlap.
@@ -742,6 +745,11 @@ impl TabContext<'_> {
             // `String`, the track its own `Arc`), because the panel is handed
             // `&mut` into the state further down the same call.
             let bench_busy = self.state.busy_refusal(id);
+            // The focused measurement item, which the menu's Set Endpoint
+            // entries set an endpoint of, and why they are greyed on this
+            // node, if they are.
+            let endpoint_target = self.state.endpoint_target();
+            let endpoint_refusal = endpoint_target.as_ref().map(|target| target.refusal_on(id));
             let bench_view_only = self.state.bench_view_only_refusal(id);
             // Why *Create Track Here* and *Find Nearby Tracks* are greyed on the
             // image shown, if they are.
@@ -848,6 +856,7 @@ impl TabContext<'_> {
                     focused_track: bench_track.as_deref(),
                     lock: self.track_view.lock(),
                     create_track: create_track_refusal.as_deref(),
+                    set_endpoint: endpoint_refusal.as_ref().map(|why| why.as_deref()),
                 },
                 self.gesture_events,
                 self.scroll_input,
@@ -917,6 +926,23 @@ impl TabContext<'_> {
                             .fail(crate::action_log::Kind::Bench, why);
                     }
                 }
+            }
+            // Set Endpoint A Here or B Here: that endpoint of the focused
+            // measurement item set to the image shown and the pixel the menu
+            // was opened at, one bench step; a refusal is one failed row.
+            if let (Some((side, [x, y])), Some(image), Some(target)) = (
+                detail_response.set_endpoint_here,
+                selected_image,
+                &endpoint_target,
+            ) {
+                self.state
+                    .set_endpoint(&crate::bench::measurement::EndpointSet {
+                        node: target.node,
+                        item: target.item.clone(),
+                        side,
+                        image: image as u32,
+                        pixel: [f64::from(x), f64::from(y)],
+                    });
             }
             // Create Track Here, from the menu entry or a Control+Shift click:
             // the run starts on a worker, and its refusal, in front of the
@@ -1086,6 +1112,14 @@ impl TabContext<'_> {
             if let Err(why) = self.state.set_bench_measurement_distance(id, &label, &text) {
                 self.state.action_log.fail(Kind::Bench, why);
             }
+        }
+        // An endpoint block's image drop-down or pixel field: one step that
+        // sets the image and the pixel, or a refused number in one failed row.
+        if let Some(set) = &response.set_endpoint {
+            self.state.set_endpoint(set);
+        }
+        if let Some(why) = response.endpoint_refused {
+            self.state.action_log.fail(Kind::Bench, why);
         }
         if let Some(switch) = response.switch_endpoint {
             if let Err(why) = self.state.set_bench_measurement_endpoint(

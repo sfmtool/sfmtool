@@ -377,6 +377,29 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "get_point_reference_pixel",
+            description: "A 3D point's reference pixel: the camera image and keypoint of its \
+                          reference observation (tracks/reference_observations, the observation \
+                          its patch bitmap is rendered from), which is what Set Endpoint A Here \
+                          and Set Endpoint B Here in the 3D view's point menu set a measurement \
+                          endpoint to. The keypoint is the centre of that observation's square, \
+                          so an endpoint there resolves to texel (0, 0) of the point's own patch \
+                          wherever no other square holding the pixel wins. Replies with point \
+                          and point_id, observation (the reference observation's index in the \
+                          point's track), camera_image, camera_image_name and pixel. Refused, \
+                          in the menu entries' words, for a point with no patch frame, with no \
+                          reference observation, or at infinity. Pass camera_image and pixel to \
+                          set_bench_measurement_endpoint to place an endpoint there.",
+            kind: Read,
+            schema: object(
+                &[],
+                &[
+                    ("reconstruction_label", reconstruction_label_schema()),
+                    ("point", point_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "get_action_log",
             description: "What has happened in the viewer, oldest first — the human's selections \
                           and file loads, the agent's own calls, and every refusal, each with the \

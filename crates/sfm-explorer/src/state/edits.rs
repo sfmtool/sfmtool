@@ -914,6 +914,10 @@ pub(crate) enum PointGesture {
     /// `Retriangulate Point` was chosen: re-solve this point from its own
     /// observations.
     Retriangulate(PointRef),
+    /// `Set Endpoint A Here` or `Set Endpoint B Here` was chosen: set that
+    /// endpoint of the focused measurement item to this point's reference
+    /// pixel.
+    SetEndpointHere(PointRef, crate::measurements::EndpointSide),
 }
 
 impl AppState {
@@ -1005,7 +1009,8 @@ impl AppState {
         let point = match request {
             PointGesture::Opened(point)
             | PointGesture::EditOnBench(point)
-            | PointGesture::Retriangulate(point) => point,
+            | PointGesture::Retriangulate(point)
+            | PointGesture::SetEndpointHere(point, _) => point,
         };
         self.select_point(point);
         match request {
@@ -1023,6 +1028,10 @@ impl AppState {
             PointGesture::Retriangulate(point) => {
                 let _ = self.retriangulate_point(point);
             }
+            // After the selection: a point on the item's node keeps the item
+            // focused, and one on another node has unfocused it, so the step
+            // then refuses, since no measurement is being edited.
+            PointGesture::SetEndpointHere(point, side) => self.set_endpoint_at_point(point, side),
         }
     }
 

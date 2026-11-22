@@ -274,7 +274,8 @@ follow from them through the resolver, so there is nothing else to set, and a
 pixel no square holds is still an endpoint, as it is in the file. SfM
 Explorer's *Switch image…* popup makes it with a pixel from `endpoint_views`
 ([`../reconstruction/measurement-endpoint.md`](../reconstruction/measurement-endpoint.md)
-§ "The views of an endpoint"), and its wire tool with any pixel.
+§ "The views of an endpoint"), and its endpoint fields, its two menus' *Set
+Endpoint … Here* and its wire tool with any pixel.
 
 It asks of the endpoint what the commit asks of each one, through the same
 check, so a step and a commit cannot disagree: an image past the image set,

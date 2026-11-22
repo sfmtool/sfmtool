@@ -18,12 +18,13 @@ A measurement is edited on the bench, as a track is ([bench.md](bench.md)): a
 double-click on its row puts it on the bench as an item and focuses it, the
 panel's **Edit** box shows that item with its readings taken live from it, and
 *Commit* writes it back into the file in one step. The edited mode's header
-sets the item's label and its stated distance, and each endpoint block
-switches its endpoint to another photograph that shows the same place, each a
-bench step. Deleting a stored measurement is a direct edit from its row's
-menu. Setting an endpoint by hand in the panel and from Image Detail and the
-3D view, creating a measurement, and drawing measurements in the 3D view and
-Image Detail are proposed in
+sets the item's label and its stated distance, and each endpoint block sets
+its endpoint's image and pixel in fields or switches it to another photograph
+that shows the same place. Image Detail's context menu and the 3D view's point
+menu set an endpoint too, to a pixel of the photograph shown or to a point's
+reference pixel. Each is a bench step. Deleting a stored measurement is a
+direct edit from its row's menu. Creating a measurement, and drawing
+measurements in the 3D view and Image Detail, are proposed in
 [drafts/measurement-view.md](../drafts/measurement-view.md).
 
 Related specs: [track-view.md](track-view.md) (the panel this one is modelled
@@ -86,12 +87,21 @@ impl AppState {
                                                  text: &str)
         -> Result<StatedDistanceSet, String>;
     /// A row of the Switch image… popup (`EndpointMove::Switch`), and the
-    /// wire's set_bench_measurement_endpoint (`EndpointMove::Set`)
-    /// (§ "Switching an endpoint's image").
+    /// fields, the menus and the wire's set_bench_measurement_endpoint
+    /// (`EndpointMove::Set`) (§ "Switching an endpoint's image", § "Setting an
+    /// endpoint by hand").
     pub(crate) fn set_bench_measurement_endpoint(&mut self, id: ReconId, label: &str,
                                                  side: EndpointSide, image: u32,
                                                  pixel: [f64; 2], how: EndpointMove)
         -> Result<bool, String>;
+    /// The fields and Image Detail's Set Endpoint … Here: the step with
+    /// `EndpointMove::Set`, a refusal one failed row.
+    pub(crate) fn set_endpoint(&mut self, set: &EndpointSet);
+    /// The 3D view's Set Endpoint … Here: the same, at the point's reference
+    /// pixel.
+    pub(crate) fn set_endpoint_at_point(&mut self, point: PointRef, side: EndpointSide);
+    /// The focused measurement item as the two menus see it, or `None`.
+    pub(crate) fn endpoint_target(&self) -> Option<EndpointTarget>;
     pub(crate) fn delete_measurement(&mut self, measurement: MeasurementRef)
         -> Result<(), String>;
     /// A click on an endpoint block of the focused item.
@@ -110,7 +120,37 @@ pub(crate) fn distance_rows(measurements: &MeasurementsData) -> Vec<DistanceRow>
 /// A measurement item's live readings against a version.
 pub(crate) fn item_reading(edited: &EditedReconstruction,
                            item: &EditableMeasurement) -> ItemReading;
+/// A point's reference pixel (§ "A point's reference pixel"), or the
+/// sentence saying why it has none.
+pub(crate) fn reference_pixel(edited: &EditedReconstruction, point: u32)
+    -> Result<ReferencePixel, String>;
+
+// bench/measurement.rs
+/// What a gesture that sets an endpoint outright asks for.
+pub(crate) struct EndpointSet {
+    pub(crate) node: ReconId,
+    pub(crate) item: String, // the item's label on the bench
+    pub(crate) side: EndpointSide,
+    pub(crate) image: u32,
+    pub(crate) pixel: [f64; 2],
+}
+/// The focused measurement item, as the two menus see it.
+pub(crate) struct EndpointTarget { pub(crate) node: ReconId, pub(crate) item: String, .. }
+impl EndpointTarget {
+    /// Why the entries are greyed on `node`, or `None`.
+    pub(crate) fn refusal_on(&self, node: ReconId) -> Option<String>;
+    /// The 3D view's entries: `point`'s reference pixel, or why not.
+    pub(crate) fn at_point(&self, scene: &[SceneNode], point: PointRef)
+        -> Result<ReferencePixel, String>;
+}
 ```
+
+The reference pixel is in
+[measurements.rs](../../crates/sfm-explorer/src/measurements.rs) rather than
+beside the 3D view's menu because three things read it: the menu's entries, the
+wire's `get_point_reference_pixel`, and *New Measurement from Here*, which
+[drafts/measurement-view.md](../drafts/measurement-view.md) proposes on the same
+menu.
 
 The reference carries the kind because each kind's rows are numbered within
 their own subsection of the file, and a later kind would otherwise reuse the
@@ -361,7 +401,9 @@ These are Track View's row gestures ([track-view.md](track-view.md)), applied
 to an endpoint, and they follow rules G1, G2 (a pixel of an image), G3, G5 and
 G6 of [interaction-rules.md](interaction-rules.md).
 The block's buttons keep their clicks; the name, the pixel, the crop and the
-patch are one target.
+patch are one target. In the edited mode the name and the pixel are fields
+(§ "Setting an endpoint by hand"), which keep their own clicks, and the
+endpoint's letter beside the image drop-down takes their place in the target.
 
 - **Click** (G1, G5): select the endpoint and its image, and reveal the
   endpoint's pixel: Image Detail pans, never zooms, to show it when its view
@@ -432,10 +474,14 @@ With the box ticked the panel shows the focused item:
   own label and its stated distance, each in a field (§ "The label and the
   stated distance"); and the median line (§ "Live readings").
 - **The endpoint blocks**, as for a stored measurement, read from the item's
-  endpoints, each with *Switch image…* under its pixel and a right-click menu
-  holding *Switch Image…* (§ "Switching an endpoint's image"). An endpoint
-  that is not placed, which deleting the image it was in leaves, is a block
-  saying `Endpoint B is not placed.`, its *Switch image…* greyed.
+  endpoints, with the image name as a drop-down of the reconstruction's images
+  and the pixel as two number fields (§ "Setting an endpoint by hand"), then
+  *Switch image…* under the pixel, and a right-click menu holding *Switch
+  Image…* (§ "Switching an endpoint's image"). The 3D position stays
+  read-only, in the resolution, since it follows from the image and the pixel.
+  An endpoint that is not placed, which deleting the image it was in leaves,
+  is a block saying `Endpoint B is not placed.`, its *Switch image…* greyed;
+  Image Detail's and the 3D view's *Set Endpoint B Here* place it.
 - **The result block**, from the live readings, or `No distance: endpoint B is
   not placed.` where an endpoint is missing.
 
@@ -546,7 +592,7 @@ texel the endpoint resolves to there are the row's, unless the row is marked.
 | Step | Label in the Edit History |
 |---|---|
 | Switch an endpoint's image (a popup row) | `Moved endpoint A of distance #2 from IMG_0004.jpg to IMG_0011.jpg` |
-| Set an endpoint's image and pixel (the wire's `set_bench_measurement_endpoint`) | `Moved endpoint A of distance #2 to IMG_0004.jpg (412.3, 230.5)` |
+| Set an endpoint's image and pixel (the block's fields, *Set Endpoint A Here* and *Set Endpoint B Here*, and the wire's `set_bench_measurement_endpoint`; § "Setting an endpoint by hand") | `Moved endpoint A of distance #2 to IMG_0004.jpg (412.3, 230.5)` |
 | The same, for an endpoint not placed | `Set endpoint B of distance #2 to IMG_0050.jpg (88.0, 301.5)` |
 
 An endpoint at that image and pixel already, as the file would store the
@@ -556,6 +602,99 @@ an endpoint not placed, and for an image past the image set or a pixel outside
 `[0, width) × [0, height)` of its image, in the commit's sentence (*Cannot
 move endpoint A of distance #2: endpoint A's pixel (640, 3) is outside image
 0, which is [0, 640) x [0, 480).*).
+
+### Setting an endpoint by hand
+
+The image and the pixel are the endpoint; everything else a block shows is
+derived from them. So both can be set directly, in three places, each the step
+of § "Switching an endpoint's image" with `EndpointMove::Set` on the focused
+item, which the wire's `set_bench_measurement_endpoint` also makes: one
+version, labelled by the pixel, with a refusal written as one failed `Bench`
+row in the step's words. None of them sets the 3D position, the point or the
+texel: they follow from the image and the pixel through the resolver every
+time, and a setting that disagreed with them could not be kept.
+
+**In the endpoint block.** In the edited mode the block's first line is the
+endpoint's letter beside a drop-down of the reconstruction's images, named
+`endpoint A image` in the widget listing, and the next is the pixel as two
+number fields, `x` and `y` (`endpoint A pixel x`, `endpoint A pixel y`). A
+field shows its coordinate as the shortest text that reads back as the same
+`float32`, which is how the file stores it (`148.00723`), so a field left as it
+is commits nothing.
+
+- **Picking another image** in the drop-down is one step that sets that image
+  and the pixel the endpoint holds; picking the image it holds asks for
+  nothing.
+- **A pixel field** commits as the header's fields do (§ "The label and the
+  stated distance"): on Enter or when it loses focus, with text other than what
+  it held when it took focus, and Escape puts it back and commits nothing. Each
+  field keeps its own draft, so moving straight from `x` to `y` commits the `x`
+  once. A commit is one step that sets the image the endpoint holds and the
+  pixel with the coordinate typed.
+- **Text that is not a finite number** asks for no step and writes one failed
+  row: *Cannot move endpoint A of distance #2: "abc" is not a number.* A pixel
+  outside the image is refused by the step, in the format's sentence above,
+  whether a field or the drop-down named it.
+- The drop-down and the fields are **greyed** while a step on the item would be
+  refused (`AppState::bench_edit_refusal`: a task holding the node, or a
+  view-only bench), with that sentence as their hover text.
+
+An endpoint that is not placed has no fields, since it has no image or pixel to
+start from; the menus below place it.
+
+**In Image Detail.** With a measurement item focused, Image Detail's context
+menu gains `Set Endpoint A Here` and `Set Endpoint B Here` after its bench
+entries, which set that endpoint of the focused item to the image shown and the
+pixel the menu was opened at
+([multi-panel-image-browser.md](multi-panel-image-browser.md) § "Image Detail:
+the context menu"). The context menu is the viewer's way to name a pixel, so
+this is where a person zoomed in on a photograph places an endpoint precisely.
+Any pixel of the photograph is taken; the endpoint does not have to resolve,
+since the pixel is what the file stores.
+
+**In the 3D view.** With a measurement item focused, a right-click on a point,
+which selects it (G3) and keeps the item focused since the point is on the
+item's node, offers the same two entries after the point's own, which set the
+endpoint to the point's **reference pixel** (§ "A point's reference pixel")
+([viewport-navigation.md](viewport-navigation.md) § "The point context menu").
+
+The entries of both menus are offered only while a measurement item is
+focused, and either menu places an endpoint that is not placed (`Set endpoint B
+of distance #2 to ...`). They are greyed with the reason as hover text
+(`EndpointTarget::refusal_on`) while a step on the item would be refused, and
+on a node other than the item's, naming the item's node (*The measurement
+being edited, distance #2, is on dino, so its endpoints are set from that
+reconstruction's images and points.*). A selection on another node unfocuses
+the item ([bench.md](bench.md) § "The focused item") and Image Detail shows a
+photograph of the selected node, so the menus meet this last case only on the
+frame a right-click in the 3D view lands on a point of another node; once that
+point is selected no measurement item is focused, and the entries are gone.
+
+#### A point's reference pixel
+
+A point in the 3D view is not a pixel, and a measurement's endpoint must be
+one. The pixel is taken from the point's **reference observation**
+(`tracks/reference_observations`): the image of that observation, and its
+keypoint (`measurements::reference_pixel`). The keypoint is where the
+reference observation's square is centred, so the endpoint resolves to texel
+`(0, 0)` of the point's own patch, which is the point itself, through the
+observation its bitmap was rendered from. The reference is the one the point
+holds in the version on screen, a pick only the display render made included,
+since that is the observation the bitmap on screen was rendered from.
+
+The 3D view's entries are greyed, with hover text saying why, where the point
+has no reference pixel, asked in this order:
+
+- it has no patch frame (a `sift_files` reconstruction, or a point the patch
+  pass left without one): "This point has no patch, so no pixel stands for it.";
+- it has no reference observation (`-1`, or no column): "This point has no
+  reference observation to take a pixel from.";
+- it is a point at infinity: "This point is at infinity, so no distance can be
+  measured to it."
+
+The entry does not check that the pixel resolves back to the same point: a
+neighbouring square can hold the same pixel and win the ranking. The endpoint
+block then shows which point it resolved to, as for any endpoint.
 
 ### Live readings
 
@@ -629,7 +768,12 @@ The panel's content is reachable over MCP ([mcp-server.md](mcp-server.md)):
   image…* popup, refused in the button's words, and
   `set_bench_measurement_endpoint` moves an endpoint to any pixel inside an
   image, not only an offered one, refusing a pixel outside it in the commit's
-  sentence (§ "Switching an endpoint's image").
+  sentence (§ "Switching an endpoint's image"); it is the step the block's
+  fields and the two menus' *Set Endpoint … Here* make.
+- `get_point_reference_pixel` gives a point's reference pixel, refused in the
+  3D view's entries' words (§ "A point's reference pixel"), so an agent places
+  an endpoint from a point as that menu does, passing its `camera_image` and
+  `pixel` to `set_bench_measurement_endpoint`.
 - `get_measurement` naming an `item` gives a measurement item on the bench
   with its live readings and its `origin`, and `get_bench` lists measurement
   items beside tracks. `focus_bench_item`, `unfocus_bench_item`,
@@ -772,13 +916,42 @@ at-infinity case is covered by the Rust tests.
   `commit_bench_measurement`'s no-effect and appending commits; a track tool
   naming a measurement item saying what it is;
   `get_measurement_endpoint_views`' offers and `set_bench_measurement_endpoint`
-  moving the endpoint to one, onto the same point, with their refusals.
+  moving the endpoint to one, onto the same point, with their refusals;
+  `get_point_reference_pixel` by index and by id, the endpoint set there
+  resolving to the point, and its two refusals.
+- **Setting an endpoint by hand** (`measurement_view/tests.rs`): a pixel field
+  committing on Enter as one step that sets the image and the pixel, and once;
+  a field committing when it loses focus; Escape putting it back; moving from
+  `x` to `y` committing the `x` once; text that is not a number refused; the
+  drop-down listing the images, picking another setting it with the pixel kept
+  and picking the one held asking for nothing; the drop-down and the fields
+  greyed while a task holds the node. (`dock/tests.rs`): a set reaching its
+  step, a pixel outside the image a failed row in the format's sentence, and a
+  refused number a failed row. (`image_detail/tests.rs`): *Set Endpoint A
+  Here* and *Set Endpoint B Here* absent with no measurement item focused,
+  drawn after the bench entries with one, and greyed with the dock's sentence.
+  (`viewer_3d/tests.rs`): the right-click on a point asking for it to be
+  selected and offering the two entries after the point's own with a
+  measurement item focused, and not without; an entry reporting its endpoint
+  and point; both greyed, asking for nothing, on a point with no reference
+  pixel. (`bench/measurement/tests.rs`): the point menu's selection keeping
+  the item focused; *Set Endpoint B Here* moving B to the reference pixel in
+  one step that leaves the node clean; *Set Endpoint A Here* placing an
+  endpoint not placed; a point with no reference pixel a failed row; the
+  target absent with nothing or a track focused, and its refusals on another
+  node, while busy and on a view-only bench.
+- **The reference pixel** (`measurements/tests.rs`): the keypoint of the
+  reference observation in its own image, which resolves alone to texel
+  `(0, 0)` of the point's patch; and the three refusals, with no column at all
+  counted as no reference observation.
 - **`ui_basic`**: the panel opens from the Panels menu; a double-click on a
   Measurements row puts the measurement on the bench and raises Measurement
-  View on the item, and after its row is deleted a click on *Commit* adds it
-  back as a new row, on a measured copy of the seoul bull ground truth; and an
-  endpoint switched to another photograph through *Switch image…* and its
-  popup, then committed into its row.
+  View on the item, with its image drop-down and pixel fields, and after its
+  row is deleted a click on *Commit* adds it back as a new row, on a measured
+  copy of the seoul bull ground truth; an endpoint switched to another
+  photograph through *Switch image…* and its popup, then committed into its
+  row; and *Set Endpoint B Here* chosen from a right-click on the photograph in
+  Image Detail, moving endpoint B to that photograph at the pixel clicked.
 - **The script** (`tests/test_add_artificial_measurements.py`): every case
   with its known scale read back through the resolver, the copy without a
   unit, the recorded workspace, and a path under `test-data/` refused with
@@ -786,9 +959,8 @@ at-infinity case is covered by the Rust tests.
 
 ## Non-goals
 
-The panel has no fields for an endpoint's image and pixel, and Image Detail
-and the 3D view no entries that set one: setting an endpoint by hand, as well
-as creating a measurement and drawing measurements in the 3D view and Image
+Creating a measurement, and drawing measurements in the 3D view and Image
 Detail, are proposed in
 [drafts/measurement-view.md](../drafts/measurement-view.md). An endpoint's 3D
-position is never set directly: it always follows from its image and pixel.
+position, point and texel are never set directly: they always follow from its
+image and pixel.

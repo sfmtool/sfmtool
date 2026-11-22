@@ -124,7 +124,7 @@ told to check only the tool name.
 
 ## The tool surface
 
-One hundred and fifteen tools. Twenty-three read -- twenty-two that answer with JSON, and
+One hundred and sixteen tools. Twenty-four read -- twenty-three that answer with JSON, and
 `screenshot`, which closes the loop by handing back a picture -- eighty-four
 write, six send input, one writes a file, and one quits the viewer. `get_widgets`
 and the six input tools, `click`, `hover`, `drag`, `scroll`, `press_key` and
@@ -145,6 +145,7 @@ Quit does (§ "`quit`").
 | `list_measurements` | read | Every measurement one reconstruction stores, each with the reading its Scene tree row shows |
 | `get_measurement` | read | One measurement whole, as Measurement View shows it: each endpoint's resolution with every candidate or its refusal, the result, and the median line; or a measurement item on the bench, read live |
 | `get_measurement_endpoint_views` | read | The other images that show the place one endpoint of a measurement item names, as Measurement View's *Switch image…* popup lists them |
+| `get_point_reference_pixel` | read | A 3D point's reference pixel, the image and keypoint of its reference observation, which the 3D view's *Set Endpoint A Here* and *Set Endpoint B Here* set a measurement endpoint to |
 | `get_action_log` | read | What has happened in the viewer, from a revision onward, filtered by who did it, optionally with each row's stages |
 | `get_timing_detail` | read | Whether the detailed stages of an operation are being recorded |
 | `set_timing_detail` | write | Record the detailed stages of an operation, or stop |
@@ -250,7 +251,7 @@ Quit does (§ "`quit`").
 | `press_key` | input | Press and release one key, with modifiers, optionally with the pointer moved over a panel first |
 | `type_text` | input | Type a string into the focused text input or number box, or into one named by its widget id |
 
-Every tool is annotated: the twenty-two reads and `screenshot` carry
+Every tool is annotated: the twenty-three reads and `screenshot` carry
 `readOnlyHint: true`, the eighty-four writes `destructiveHint: false` (none of
 them deletes or overwrites a file the person made: `close_reconstruction`
 unloads, it does not delete; `set_window_layout` changes the window and the
@@ -1580,6 +1581,33 @@ placed or the resolver refuses it. It changes nothing, so it is not refused on
 a view-only bench or while a task holds the node. Passing a view's
 `camera_image` and `pixel` to `set_bench_measurement_endpoint` makes the
 switch.
+
+### `get_point_reference_pixel`
+
+```jsonc
+{ "reconstruction_label": "seoul_bull", "point": 812 }  // or a pt3d_<hash>_<index> id
+```
+
+A 3D point's **reference pixel**: the image and keypoint of its reference
+observation (`tracks/reference_observations`), which *Set Endpoint A Here* and
+*Set Endpoint B Here* in the 3D view's point menu set an endpoint of the
+focused measurement item to ([measurement-view.md](measurement-view.md) §
+"A point's reference pixel"), so an agent can place an endpoint from a point
+as the menu does. The point is named in the reconstruction named, as
+`retriangulate_point` names one. The reply:
+
+```jsonc
+{ "reconstruction_label": "seoul_bull", "point": 812,
+  "point_id": "pt3d_9f2c41d0_812", "observation": 0, "camera_image": 3,
+  "camera_image_name": "IMG_0004.jpg", "pixel": [412.3, 230.5] }
+```
+
+`observation` is the reference observation's index in the point's track.
+Refused, in the menu entries' words, for a point with no patch frame, with no
+reference observation, or at infinity. It changes nothing, so it is not refused
+on a view-only bench or while a task holds the node. Passing `camera_image`
+and `pixel` to `set_bench_measurement_endpoint` places the endpoint there, as
+the menu entry does.
 
 ### `delete_measurement`
 
@@ -7188,7 +7216,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is one hundred and fifteen tools**, twenty-three of them reads, six of the
+- **The catalog is one hundred and sixteen tools**, twenty-four of them reads, six of the
   `Input` kind, one of the `Save` kind and one of the `Quit` kind, those eight
   carrying `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and

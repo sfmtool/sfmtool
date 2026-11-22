@@ -576,6 +576,7 @@ fn starting_a_cluster_needs_only_a_pixel_and_a_node_that_is_not_busy() {
             focused_track: None,
             lock: true,
             create_track: None,
+            set_endpoint: None,
         }),
         Err(BUSY.to_string()),
     );
@@ -602,6 +603,7 @@ fn adding_to_the_bench_track_is_greyed_until_a_track_is_on_the_bench() {
             focused_track: Some(&track),
             lock: true,
             create_track: None,
+            set_endpoint: None,
         }),
         Ok(()),
     );
@@ -612,6 +614,7 @@ fn adding_to_the_bench_track_is_greyed_until_a_track_is_on_the_bench() {
             focused_track: Some(&track),
             lock: true,
             create_track: None,
+            set_endpoint: None,
         }),
         Err(BUSY.to_string()),
     );
@@ -631,6 +634,7 @@ fn a_view_only_bench_greys_the_entries_that_edit_it() {
         focused_track: Some(&track),
         lock: true,
         create_track: None,
+        set_endpoint: None,
     };
     assert_eq!(start_cluster_entry(menu), Err(VIEW_ONLY.to_string()));
     assert_eq!(
@@ -653,6 +657,7 @@ fn the_context_menu_offers_the_two_bench_entries() {
         focused_track: Some(&track),
         lock: true,
         create_track: None,
+        set_endpoint: None,
     });
     for label in [START_CLUSTER_LABEL, ADD_BENCH_OBSERVATION_LABEL] {
         assert!(
@@ -1026,6 +1031,7 @@ fn edit_on_bench_needs_a_feature_with_a_point_behind_it() {
                 focused_track: None,
                 lock: true,
                 create_track: None,
+                set_endpoint: None,
             },
             Some(FeatureHit::Point(7)),
         ),
@@ -1430,6 +1436,7 @@ fn the_bench_layer_outlines_the_patch_where_its_corners_project() {
             focused_track: Some(&track),
             lock: true,
             create_track: None,
+            set_endpoint: None,
         },
     );
     assert!(!paths.is_empty(), "the layer drew nothing");
@@ -1557,6 +1564,7 @@ fn the_bench_layer_draws_the_projection_offset_for_every_verdict() {
                 focused_track: Some(&judged),
                 lock: true,
                 create_track: None,
+                set_endpoint: None,
             },
         );
         assert_eq!(
@@ -1606,6 +1614,7 @@ fn the_bench_layer_draws_nothing_without_a_track_and_no_mark_outside_it() {
                 focused_track: Some(&track),
                 lock: true,
                 create_track: None,
+                set_endpoint: None,
             },
         )
         .is_empty(),
@@ -1700,6 +1709,7 @@ fn the_bench_layer_ghosts_the_patch_in_an_image_the_track_does_not_observe() {
         focused_track: Some(&track),
         lock: true,
         create_track: None,
+        set_endpoint: None,
     };
     let ghosts = ghost_shapes(&node, unseen, bench);
     assert_eq!(ghosts.len(), 1, "one ghost outline, got {}", ghosts.len());
@@ -1762,6 +1772,7 @@ fn a_member_image_draws_its_outline_and_no_ghost_whatever_the_verdict() {
             focused_track: Some(&judged),
             lock: true,
             create_track: None,
+            set_endpoint: None,
         };
         for image in judged.observations.iter().map(|o| o.image as usize) {
             assert!(
@@ -1795,6 +1806,7 @@ fn the_cluster_stage_draws_no_ghost() {
         focused_track: Some(&track),
         lock: true,
         create_track: None,
+        set_endpoint: None,
     };
     for image in 1..node.edited().image_count() {
         assert!(
@@ -1820,6 +1832,7 @@ fn no_ghost_is_drawn_without_a_patch_frame_or_for_a_patch_it_cannot_see() {
         focused_track: Some(track),
         lock: true,
         create_track: None,
+        set_endpoint: None,
     };
     assert!(
         !ghost_shapes(&node, unseen, menu(&track)).is_empty(),
@@ -1837,6 +1850,7 @@ fn no_ghost_is_drawn_without_a_patch_frame_or_for_a_patch_it_cannot_see() {
                 focused_track: Some(&unplaced),
                 lock: true,
                 create_track: None,
+                set_endpoint: None,
             },
         )
         .is_empty(),
@@ -1859,6 +1873,7 @@ fn no_ghost_is_drawn_without_a_patch_frame_or_for_a_patch_it_cannot_see() {
                 focused_track: Some(&turned),
                 lock: true,
                 create_track: None,
+                set_endpoint: None,
             },
         )
         .is_empty(),
@@ -1949,6 +1964,7 @@ fn the_bench_layer_draws_a_pixel_cluster_at_the_radius_it_was_started_with() {
             focused_track: Some(&track),
             lock: true,
             create_track: None,
+            set_endpoint: None,
         },
     );
     let outline = paths
@@ -2279,6 +2295,7 @@ fn gesture(
                         focused_track: Some(track),
                         lock,
                         create_track: None,
+                        set_endpoint: None,
                     },
                     &[],
                     &crate::platform::ScrollInput::default(),
@@ -3448,6 +3465,7 @@ fn the_locked_ghost_draws_a_centre_mark_at_the_ghost_opacity() {
                 focused_track: Some(&track),
                 lock,
                 create_track: None,
+                set_endpoint: None,
             },
         )
         .iter()
@@ -3465,6 +3483,7 @@ fn the_locked_ghost_draws_a_centre_mark_at_the_ghost_opacity() {
             focused_track: Some(&track),
             lock,
             create_track: None,
+            set_endpoint: None,
         };
         assert!(
             ghost_shapes(node, unseen, menu)
@@ -3625,6 +3644,7 @@ fn the_normal_is_drawn_in_member_images_and_in_the_locked_ghost() {
         focused_track: Some(&track),
         lock,
         create_track: None,
+        set_endpoint: None,
     };
     // The segment is the one two-point path the layer draws.
     let segments = |image, lock, color: egui::Color32| -> Vec<Vec<egui::Pos2>> {
@@ -3723,6 +3743,7 @@ fn the_normal_is_hidden_end_on_absent_at_the_cluster_stage_and_not_offered_unloc
                 focused_track: Some(track),
                 lock: true,
                 create_track: None,
+                set_endpoint: None,
             },
         );
         paths.into_iter().filter(|path| path.len() == 2).count()
@@ -4164,6 +4185,7 @@ fn drawn_paths(
             focused_track: Some(track),
             lock: true,
             create_track: None,
+            set_endpoint: None,
         },
     )
 }
@@ -4522,4 +4544,50 @@ fn a_kept_previous_image_takes_no_click_but_still_hovers() {
         1,
     );
     assert_eq!(clicked.select_point, Some(selected_point));
+}
+
+// ── The focused measurement item's two entries ──────────────────────────
+
+/// *Set Endpoint A Here* and *Set Endpoint B Here* are offered only while a
+/// measurement item is focused, after the bench's two entries, and are
+/// greyed with the reason the dock hands in: the item on another node, a
+/// busy node or a view-only bench.
+#[test]
+fn the_set_endpoint_entries_follow_the_focused_measurement_item() {
+    use super::overlay::set_endpoint_here_entry;
+    use crate::bench::measurement::set_endpoint_here_label;
+    use crate::measurements::EndpointSide;
+    let labels = EndpointSide::BOTH.map(set_endpoint_here_label);
+    let after_bench = |texts: &[String]| -> Vec<String> {
+        let from = texts
+            .iter()
+            .position(|t| t == ADD_BENCH_OBSERVATION_LABEL)
+            .expect("the bench entry is in the menu");
+        texts[from + 1..]
+            .iter()
+            .filter(|t| labels.contains(&t.as_str()))
+            .cloned()
+            .collect()
+    };
+
+    assert_eq!(set_endpoint_here_entry(BenchMenu::default()), None);
+    let texts = context_menu_texts(BenchMenu::default());
+    assert!(after_bench(&texts).is_empty(), "{texts:?}");
+
+    let offered = BenchMenu {
+        set_endpoint: Some(None),
+        ..BenchMenu::default()
+    };
+    assert_eq!(set_endpoint_here_entry(offered), Some(Ok(())));
+    let texts = context_menu_texts(offered);
+    assert_eq!(after_bench(&texts), labels, "{texts:?}");
+
+    // Greyed, and still drawn, with the dock's sentence.
+    let greyed = BenchMenu {
+        set_endpoint: Some(Some(BUSY)),
+        ..BenchMenu::default()
+    };
+    assert_eq!(set_endpoint_here_entry(greyed), Some(Err(BUSY.to_string())));
+    let texts = context_menu_texts(greyed);
+    assert_eq!(after_bench(&texts), labels, "{texts:?}");
 }

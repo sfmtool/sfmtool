@@ -101,6 +101,21 @@ Two entries, in this order:
 | `Edit on Bench` | Puts the point's track on the bench as a track-stage track and raises Track View on it ([track-view.md](track-view.md)) |
 | `Retriangulate Point` | Re-solves the point from its own observations at these poses and these lenses, as one version ([edits/retriangulate-point.md](edits/retriangulate-point.md)) |
 
+With a measurement item focused, two more follow them, after a separator:
+`Set Endpoint A Here` and `Set Endpoint B Here`, which set that endpoint of the
+focused item to the point's **reference pixel**, the image and keypoint of its
+reference observation, as one bench step
+([measurement-view.md](measurement-view.md) § "Setting an endpoint by hand"
+and § "A point's reference pixel"). Selecting the point keeps the item focused,
+since the point is on the item's node, so the menu keeps the two entries while
+it stands open. They are greyed with the reason as hover text while a step on
+the item would be refused, on a node other than the item's, and where the point
+has no reference pixel: no patch frame, no reference observation, or a point at
+infinity (`EndpointTarget::at_point`). The dock hands the viewport the focused
+item each frame (`Viewer3D::endpoint_target`), and the entry reports
+`PointGesture::SetEndpointHere`, which `AppState::set_endpoint_at_point`
+carries out after the point is selected.
+
 `Edit on Bench` is what ticking Track View's *Edit* box over the selected
 point does, reached from the viewport: `AppState::put_point_on_bench`, which
 focuses the item already there when one came from that point. It raises that

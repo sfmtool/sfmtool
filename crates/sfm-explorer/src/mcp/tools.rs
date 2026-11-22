@@ -210,6 +210,10 @@ pub(crate) fn parse(
             item: args.optional_string("item")?,
             endpoint: args.endpoint_side(&args.required_string("endpoint")?)?,
         },
+        "get_point_reference_pixel" => Command::GetPointReferencePixel {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            point: args.point("point")?,
+        },
         "set_bench_measurement_endpoint" => Command::SetBenchMeasurementEndpoint {
             reconstruction_label: args.required_string("reconstruction_label")?,
             item: args.optional_string("item")?,

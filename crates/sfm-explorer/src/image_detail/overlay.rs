@@ -80,11 +80,19 @@ pub(crate) struct BenchMenu<'a> {
     /// *Find Nearby Tracks* is greyed by the same answer, since it ends in the
     /// same commit.
     pub(crate) create_track: Option<&'a str>,
+    /// *Set Endpoint A Here* and *Set Endpoint B Here*: `None` with no
+    /// measurement item focused, which leaves them out; `Some(None)` where
+    /// they can set an endpoint of the focused item on this node; and
+    /// `Some(Some(why))` where they are greyed: the item on another node, a
+    /// task holding the node, or a view-only bench
+    /// ([`crate::bench::measurement::EndpointTarget::refusal_on`]).
+    pub(crate) set_endpoint: Option<Option<&'a str>>,
 }
 
 impl Default for BenchMenu<'_> {
     /// Nothing busy, nothing on the bench, the lock on, which is what the box
-    /// starts ticked at, and *Create Track Here* offered.
+    /// starts ticked at, *Create Track Here* offered, and no measurement item
+    /// focused.
     fn default() -> Self {
         Self {
             busy: None,
@@ -92,8 +100,24 @@ impl Default for BenchMenu<'_> {
             focused_track: None,
             lock: true,
             create_track: None,
+            set_endpoint: None,
         }
     }
+}
+
+/// Whether the menu's *Set Endpoint A Here* and *Set Endpoint B Here* are
+/// offered (`None` when no measurement item is focused), and whether they
+/// can run, with why not when they are greyed.
+///
+/// The pixel is the whole of what they take from the gesture, and any pixel
+/// of the photograph will do, since the pixel is what the endpoint stores: the
+/// step itself refuses one outside the image, which a menu opened over the
+/// photograph cannot name.
+pub(crate) fn set_endpoint_here_entry(bench: BenchMenu<'_>) -> Option<Result<(), String>> {
+    Some(match bench.set_endpoint? {
+        Some(why) => Err(why.to_string()),
+        None => Ok(()),
+    })
 }
 
 /// Whether the menu's *Create Track Here* entry can run, and why not when it
@@ -527,6 +551,37 @@ impl ImageDetail {
             if clicked {
                 response.add_bench_observation = pixel;
                 ui.close();
+            }
+
+            // ── The focused measurement item's two entries ──
+            //
+            // Offered only while a measurement item is focused, and set that
+            // endpoint to the image shown at the pixel the menu was opened
+            // at: a bench step, like the two entries above.
+            if let Some(entry) = set_endpoint_here_entry(bench) {
+                ui.separator();
+                for side in crate::measurements::EndpointSide::BOTH {
+                    let button =
+                        egui::Button::new(crate::bench::measurement::set_endpoint_here_label(side));
+                    let clicked = match &entry {
+                        Ok(()) => ui
+                            .add(button)
+                            .on_hover_text(format!(
+                                "Set endpoint {} of the measurement being edited to this pixel \
+                                 of this photograph.",
+                                side.letter()
+                            ))
+                            .clicked(),
+                        Err(why) => {
+                            ui.add_enabled(false, button).on_disabled_hover_text(why);
+                            false
+                        }
+                    };
+                    if clicked {
+                        response.set_endpoint_here = pixel.map(|pixel| (side, pixel));
+                        ui.close();
+                    }
+                }
             }
         });
 

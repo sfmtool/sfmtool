@@ -35,6 +35,7 @@ impl Command {
             Command::ListMeasurements { .. } => "list_measurements",
             Command::GetMeasurement { .. } => "get_measurement",
             Command::GetMeasurementEndpointViews { .. } => "get_measurement_endpoint_views",
+            Command::GetPointReferencePixel { .. } => "get_point_reference_pixel",
             Command::FindPoints { .. } => "find_points",
             Command::GetActionLog { .. } => "get_action_log",
             Command::OpenReconstruction { .. } => "open_reconstruction",
@@ -385,6 +386,7 @@ impl Command {
             | Command::ListMeasurements { .. }
             | Command::GetMeasurement { .. }
             | Command::GetMeasurementEndpointViews { .. }
+            | Command::GetPointReferencePixel { .. }
             | Command::FindPoints { .. }
             | Command::GetActionLog { .. }
             | Command::GetWindowLayout
@@ -607,6 +609,13 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
             "get_measurement_endpoint_views {reconstruction_label} {} endpoint {}",
             item.as_deref().unwrap_or("(focused item)"),
             endpoint.letter()
+        ),
+        Command::GetPointReferencePixel {
+            reconstruction_label,
+            point,
+        } => format!(
+            "get_point_reference_pixel {reconstruction_label} {}",
+            point_text(point)
         ),
         Command::FindPoints { request } => format!(
             "find_points {} {}..{}",
