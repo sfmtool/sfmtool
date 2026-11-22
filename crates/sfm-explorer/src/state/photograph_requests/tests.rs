@@ -479,9 +479,13 @@ fn level_of(answer: DisplayLevel) -> Arc<ImageU8> {
 }
 
 /// Every level of the photograph is read off the calling thread by one task
-/// however often it is asked for while the task runs, with a budget and with
-/// a cache that keeps nothing, and is the level of the pyramid the background
-/// drew before, which `display_photograph` handed it.
+/// however often it is asked for while the task runs, built from the tiles
+/// `try_decode_tiles` answers with a budget and with a cache that keeps
+/// nothing, and is the level of the pyramid the background drew before,
+/// which `display_photograph` handed it. The task makes one call to the
+/// cache, `try_decode_tiles`: with a budget, a level read of a photograph the
+/// cache holds counts one hit, which a second read of the cache, such as a
+/// `get_level` that could wait on the slot, would make two.
 #[test]
 fn the_level_is_read_once_off_the_calling_thread_and_is_the_pyramid_s_level() {
     let dir = tempfile::tempdir().unwrap();
@@ -512,7 +516,7 @@ fn the_level_is_read_once_off_the_calling_thread_and_is_the_pyramid_s_level() {
                 ));
             }
             assert_eq!(queue.len(), 1, "one task however often it is asked");
-            let decodes = cache.stats().decodes;
+            let (decodes, hits) = (cache.stats().decodes, cache.stats().hits);
             assert_eq!(queue.run_off_this_thread(), 1);
             assert!(requests.keeps_a_level());
             let pixels = level_of(display_level(source, &layout, level, &ctx));
@@ -535,6 +539,16 @@ fn the_level_is_read_once_off_the_calling_thread_and_is_the_pyramid_s_level() {
                 decodes
             };
             assert_eq!(cache.stats().decodes, expected_decodes);
+            let expected_hits = if budget == 0 || level == 0 {
+                hits
+            } else {
+                hits + 1
+            };
+            assert_eq!(
+                cache.stats().hits,
+                expected_hits,
+                "one read of the cache, level {level}, budget {budget}"
+            );
         }
     }
 }
@@ -633,14 +647,15 @@ fn a_level_read_waits_its_turn_behind_a_tile_decode_of_the_photograph() {
 }
 
 /// A level read of a photograph whose file has changed size since its layout
-/// was read, or of a level the layout does not have, reads the layout again
-/// rather than ask for the same level on every frame: with a budget, where
-/// the level read is checked against the layout, and with a cache that keeps
-/// nothing, where the level is built from tiles that would not fit it.
+/// was read, wider by two pixels, so a tile no longer fits the level, or
+/// narrower by one, so the tiles fit but would leave the last column unset,
+/// or of a level the layout does not have, reads the layout again rather than
+/// ask for the same level on every frame, with a budget and with a cache that
+/// keeps nothing.
 #[test]
 fn a_level_read_against_a_stale_layout_reads_the_layout_again() {
     for budget in [1 << 30, 0] {
-        for (grow, level) in [(true, 0), (false, 9)] {
+        for (width, level) in [(Some(39), 0), (Some(36), 0), (None, 9)] {
             let dir = tempfile::tempdir().unwrap();
             let path = level_photo(dir.path(), "changed.png");
             let cache = small_tile_cache(budget, 1 << 30);
@@ -652,17 +667,21 @@ fn a_level_read_against_a_stale_layout_reads_the_layout_again() {
             };
             let ctx = egui::Context::default();
             let layout = known_layout(source, &queue);
-            if grow {
-                image::RgbImage::from_fn(39, 23, |x, _| image::Rgb([x as u8, 0, 0]))
+            if let Some(width) = width {
+                image::RgbImage::from_fn(width, 23, |x, _| image::Rgb([x as u8, 0, 0]))
                     .save(&path)
                     .unwrap();
+                assert_eq!(layout.tiles(0), (5, 3), "the same tiles asked for");
             }
             assert!(matches!(
                 display_level(source, &layout, level, &ctx),
                 DisplayLevel::Loading
             ));
             assert_eq!(queue.run_off_this_thread(), 1);
-            assert!(!requests.keeps_a_level(), "budget {budget}, level {level}");
+            assert!(
+                !requests.keeps_a_level(),
+                "budget {budget}, width {width:?}, level {level}"
+            );
             assert!(matches!(
                 display_layout(source, &ctx),
                 DisplayLayout::Loading

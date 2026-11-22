@@ -709,16 +709,16 @@ photograph cache
 The first answers the layout the cache knows, and while it is not known
 starts one read of the photograph's header on the rayon pool. The second
 starts one task on the rayon pool that asks for the level's tiles with the
-cache's `try_decode_tiles` and then reads the level whole with `get_level`,
-or, under a cache with a budget of 0, which keeps nothing for `get_level` to
-find, builds the level from the tiles that call answers. When the decode
+cache's `try_decode_tiles` and builds the level from the tiles that call
+answers, at every budget; the task makes no other call to the cache, and
+never calls `get_level`, which could wait on the photograph's slot. When the decode
 does not fit under the build budget beside other decodes, or another caller
 is decoding the photograph, `try_decode_tiles` answers `Busy` without
 waiting, and the background asks again 50 ms later. Each task asks for a
 repaint when it ends, and the level it read is kept until the next frame takes
-it. So no frame of the background waits on a decode, at any budget, and a
-read of a photograph shares the limit of one task per photograph with Image
-Detail's tile decodes. The decode is the cache's
+it. So no frame and no task of the background waits on a slot or on the
+build count, at any budget, and a read of a photograph shares the limit of
+one task per photograph with Image Detail's tile decodes. The decode is the cache's
 `ImageU8::read_rgb` (the file's contents choose the decoder and the EXIF
 orientation is ignored, as in
 [reading-and-writing-images.md](../core/camera/reading-and-writing-images.md))
@@ -794,9 +794,10 @@ frame copies it into the texture, and one level at most: asking for another
 photograph or level drops it. It is the level the background draws, as RGB,
 so 37 MB for level 2 (4080 x 3060) of a 200-megapixel photograph in a 3840 px
 viewport, and at most 8192 x 6144 x 3 bytes, 151 MB, for a 4:3 photograph
-under the texture limit of 8192. While it runs, the task also holds the
-level's tiles that `try_decode_tiles` answered, each with its one-pixel
-border, about as many bytes again.
+under the texture limit of 8192. While it builds the level, the task also
+holds the level's tiles that `try_decode_tiles` answered, each with its
+one-pixel border, about as many bytes again (38 MB for those 48 tiles of 514
+x 514), and drops them once the level is built.
 
 #### Rendering the background image
 

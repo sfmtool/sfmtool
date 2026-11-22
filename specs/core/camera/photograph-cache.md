@@ -488,9 +488,10 @@ reconstruction's photographs goes through it except the ones under
   recorded in `PhotographRequests` with the tile decodes, so one task at most
   runs for a photograph whichever panel started it. The task asks for the
   level's tiles with `try_decode_tiles`, answering `Busy` as Image Detail's
-  decode does and asked again 50 ms later, and then reads the level with
-  `get_level`; under a budget of 0, where `get_level` would find nothing
-  held, it builds the level from the tiles `try_decode_tiles` answered. The
+  decode does and asked again 50 ms later, and builds the level from the
+  tiles `try_decode_tiles` answered, at every budget. It makes no other call
+  to the cache, and never calls `get_level`, so no task of the background
+  waits on a slot or on the build count. The
   level is kept in `PhotographRequests` until the background takes it, one
   level at most, and a failure is kept and a key or level the photograph
   does not have handled as for Image Detail's decodes. The background keeps
@@ -662,8 +663,8 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   a view that moved on dropped; a key the photograph does not have reading the
   layout again; tiles asked for ahead handed over with no second decode; the
   3D background's level read once, off the calling thread, with a budget and
-  with a budget of 0, and equal to the level of the pyramid the cache
-  decodes; a level read answering `Busy` asked again on a later frame and
+  with a budget of 0, built from the tiles with one call to the cache and
+  equal to the level of the pyramid the cache decodes; a level read answering `Busy` asked again on a later frame and
   read once the reservation is given back; a level read waiting behind a
   tile decode of the same photograph, and a level not taken dropped when
   another is asked for; a level read against a layout the file no longer

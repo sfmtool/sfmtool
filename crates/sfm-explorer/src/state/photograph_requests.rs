@@ -23,9 +23,9 @@
 //!   that animation shows next.
 //! - The 3D view's camera-view background draws one level whole.
 //!   [`display_level`] answers it, starting one task that asks for the
-//!   level's tiles with [`PhotographCache::try_decode_tiles`] and then reads
-//!   the level with [`PhotographCache::get_level`], or under a cache of
-//!   budget 0 builds it from the tiles that call answers. It shares the tile
+//!   level's tiles with [`PhotographCache::try_decode_tiles`] and builds the
+//!   level from the tiles that call answers, at every budget, so the task
+//!   never waits on a slot or on the build count. It shares the tile
 //!   decodes' limit of one task per photograph and their remembered
 //!   failures, and keeps the one level it last answered until the background
 //!   asks for it.
@@ -400,11 +400,9 @@ impl PhotographRequests {
 
     /// Start one task that reads level `level` of `path`, whose layout is
     /// `layout`, unless a decode is already running for `path`: it asks for
-    /// the level's tiles with [`PhotographCache::try_decode_tiles`], then
-    /// reads the level with [`PhotographCache::get_level`], or under a cache
-    /// of budget 0, which keeps nothing for `get_level` to find, builds it
-    /// from the tiles that call answers. The level is kept for
-    /// [`display_level`], and `ctx` repainted when the task ends: at once, or
+    /// the level's tiles with [`PhotographCache::try_decode_tiles`] and
+    /// builds the level from the tiles that call answers. The level is kept
+    /// for [`display_level`], and `ctx` repainted when the task ends: at once, or
     /// after [`BUSY_RETRY`] when the decode answered `Busy`.
     fn decode_level(
         &self,
@@ -690,8 +688,8 @@ pub(crate) fn prefetch_tiles(source: PhotographSource<'_>, keys: &[TileKey], ctx
 
 /// Level `level` of `path`, whose layout is `layout`, as a background task
 /// reads it: its tiles asked for with [`PhotographCache::try_decode_tiles`],
-/// then the level read with [`PhotographCache::get_level`], or under a cache
-/// of budget 0 built from the tiles that call answers. `None` when the
+/// which never waits, and the level built from the tiles that call answers,
+/// at every budget, the tiles dropped once it is built. `None` when the
 /// decode answered `Busy`.
 fn read_level(
     cache: &PhotographCache,
@@ -709,27 +707,18 @@ fn read_level(
             })
         })
         .collect();
-    let progress = Progress::none();
-    let tiles = match cache.try_decode_tiles(path, &keys, &progress)? {
-        TryDecode::Busy => return Ok(None),
-        TryDecode::Decoded(tiles) => tiles,
-    };
-    let pixels = if cache.budget_bytes() == 0 {
-        level_from_tiles(path, layout, level, &tiles)?
-    } else {
-        // A hit: the decode has just made the photograph, or found it held.
-        // The tiles are not needed for it, so they are not held meanwhile.
-        drop(tiles);
-        cache.get_level(path, level, &progress)?
-    };
-    check_level_size(path, layout, level, pixels).map(Some)
+    match cache.try_decode_tiles(path, &keys, &Progress::none())? {
+        TryDecode::Busy => Ok(None),
+        TryDecode::Decoded(tiles) => level_from_tiles(path, layout, level, &tiles).map(Some),
+    }
 }
 
 /// Level `level` of `layout`'s photograph, at `path`, built from `tiles`, the
-/// level's tiles with their borders, as a cache of budget 0 answers them:
-/// each tile's core copied to its place. A level the layout does not have, or
-/// a tile that does not fit inside the level, which only a file that changed
-/// size since its layout was read can give, is [`TileError::OutOfRange`].
+/// level's tiles with their borders as [`PhotographCache::try_decode_tiles`]
+/// answers them: each tile's core copied to its place. A level the layout
+/// does not have, or a tile whose place and size are not the ones the layout
+/// gives it, which only a file that changed size since its layout was read
+/// can give, is [`TileError::OutOfRange`].
 fn level_from_tiles(
     path: &Path,
     layout: &PyramidLayout,
@@ -747,25 +736,40 @@ fn level_from_tiles(
         )));
     }
     let (width, height) = layout.level_size(level);
+    let ts = layout.tile_size();
     let channels = tiles.first().map_or(3, |tile| tile.pixels.channels());
     let c = channels as usize;
     let row_len = width as usize * c;
     let mut data = vec![0; row_len * height as usize];
     for tile in tiles {
-        let [x0, y0] = tile.origin;
-        let [w, h] = tile.size;
-        let fits = u64::from(x0) + u64::from(w) <= u64::from(width)
-            && u64::from(y0) + u64::from(h) <= u64::from(height)
+        // The core the layout gives the tile, so a file whose size changed
+        // since the layout was read cannot leave a part of the level unset.
+        let place = |index: u32, side: u32| {
+            let origin = u64::from(index) * u64::from(ts);
+            (
+                origin,
+                (u64::from(side).saturating_sub(origin)).min(u64::from(ts)),
+            )
+        };
+        let (x0, w) = place(tile.key.col, width);
+        let (y0, h) = place(tile.key.row, height);
+        let fits = usize::from(tile.key.level) == level
+            && [u64::from(tile.origin[0]), u64::from(tile.origin[1])] == [x0, y0]
+            && [u64::from(tile.size[0]), u64::from(tile.size[1])] == [w, h]
+            && w > 0
+            && h > 0
             && tile.pixels.channels() == channels
-            && tile.pixels.width() == w + 2
-            && tile.pixels.height() == h + 2;
+            && u64::from(tile.pixels.width()) == w + 2
+            && u64::from(tile.pixels.height()) == h + 2;
         if !fits {
             return Err(out_of_range(format!(
-                "the tile at column {}, row {} of level {level} does not fit its \
-                 {width} x {height}",
+                "the tile at column {}, row {} of level {level} is not the one \
+                 the layout's {width} x {height} gives",
                 tile.key.col, tile.key.row
             )));
         }
+        let [x0, y0] = tile.origin;
+        let [w, h] = tile.size;
         let stride = tile.pixels.width() as usize * c;
         let span = w as usize * c;
         for y in 0..h as usize {
@@ -776,29 +780,6 @@ fn level_from_tiles(
         }
     }
     Ok(Arc::new(ImageU8::new(width, height, channels, data)))
-}
-
-/// `pixels`, level `level` of the photograph at `path`, once it is known to be
-/// the size `layout` gives that level: a file that changed size since its
-/// layout was read gives another, which is [`TileError::OutOfRange`].
-fn check_level_size(
-    path: &Path,
-    layout: &PyramidLayout,
-    level: usize,
-    pixels: Arc<ImageU8>,
-) -> Result<Arc<ImageU8>, TileError> {
-    let (width, height) = layout.level_size(level);
-    if (pixels.width(), pixels.height()) == (width, height) {
-        return Ok(pixels);
-    }
-    Err(TileError::OutOfRange {
-        path: path.to_path_buf(),
-        why: format!(
-            "level {level} is {} x {}, not the layout's {width} x {height}",
-            pixels.width(),
-            pixels.height()
-        ),
-    })
 }
 
 /// Level `level` of `source`'s photograph, whose layout is `layout`, for the

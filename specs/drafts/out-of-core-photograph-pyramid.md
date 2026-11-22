@@ -875,7 +875,7 @@ rayon task a panel starts waits.
 |--------|------------|------------|---------|
 | Image Detail | asks for the layout once (a header read, the region test and a record check, on the rayon pool) and draws *Loading image…* | queues the photograph, draws the coarsest level if the build has published it and the spinner with *Building mipmap…* otherwise | peeks the visible tiles and asks for the missing ones |
 | Track View's patch tiles, cluster-stage tiles, context and crops; the Track Table's crop column and hover | the same layout request; the cell draws its loading state | queues the photograph; the cell draws the spinner with *Building mipmap…* | computes the render's regions, peeks their tiles, asks for the missing ones, and renders when all are present |
-| The 3D background | the same layout request; nothing drawn | queues the photograph; draws the coarsest level if published | asks for its level's tiles with `try_decode_tiles` on the rayon pool, then reads the level with `get_level` once they are present (under a budget of 0, builds it from the tiles that call returns), and draws the coarsest until it lands |
+| The 3D background | the same layout request; nothing drawn | queues the photograph; draws the coarsest level if published | asks for its level's tiles with `try_decode_tiles` on the rayon pool and builds the level from the tiles that call returns, at every budget, and draws the coarsest until it lands |
 | Display thumbnails | built in the open job, off the GUI thread: a photograph whose coarsest mip level file is not current gets the grey placeholder row | the row stays the placeholder | a placeholder row whose photograph has become `Known` is filled, on the rayon pool, from the coarsest mip level file |
 
 A build publishes each reduced level to the slot's `Building` state as it is
@@ -963,9 +963,9 @@ for with `display_photograph`; the level rule, the texture coordinates, the
 alpha and the remembered failure are as below. Until a photograph lands, the
 previous image's photograph stays on its own mesh (nothing is drawn before
 any has landed), since there is no coarsest level to draw before the tiled
-cache. Step 13c3 (built) swapped the source for the level's tiles and
-`get_level`, through two closures the app passes to `upload_bg_image`,
-`display_layout` and `display_level`, as
+cache. Step 13c3 (built) swapped the source for the level built from the
+photograph's tiles, through two closures the app passes to
+`upload_bg_image`, `display_layout` and `display_level`, as
 [gui/camera-views.md](../gui/camera-views.md) § "Photograph background"
 describes:
 
@@ -976,12 +976,12 @@ describes:
   level 3.
 - **Source.** The level assembled from the photograph's tiles, once the
   photograph is `Known`, for every photograph. On the rayon pool the
-  background first asks for the level's tiles with `try_decode_tiles`,
-  asking again on a later frame when the answer is `Busy`, then reads the
-  level with `get_level` once they are present; under a cache budget of 0 it
-  builds the level from the tiles that call returns. So no panel task waits
-  on a slot or on the build count, and that rule has no exception (decided by
-  the user, the companion's open question 9). The coarsest level is drawn
+  background asks for the level's tiles with `try_decode_tiles`, asking
+  again on a later frame when the answer is `Busy`, and builds the level from
+  the tiles that call returns, at every cache budget, never calling
+  `get_level`. So no panel task waits on a slot or on the build count, and
+  that rule has no exception (decided by the user, the companion's open
+  question 9). The coarsest level is drawn
   until it lands once the tiled cache can hold it apart from the level
   (steps 13e and 14); until then the coarsest level comes from the same
   decode as the level drawn, so the previous photograph stays meanwhile, as
@@ -2321,11 +2321,16 @@ in core. Step 17 turns the tier on.
       sizes, and asks for the level with `display_level`, which starts one
       task on the rayon pool. The task first asks for the level's tiles with
       `try_decode_tiles`, ending at once when the answer is `Busy`, after
-      which the background asks again 50 ms later, then reads the level with
-      `get_level`; under a cache budget of 0 it builds the level from the
-      tiles that call returns. So no panel task waits on a slot or the count
-      while it asks for the tiles (decided by the user, the companion's open
-      question 9). The background draws the same pixels as before: the level,
+      which the background asks again 50 ms later, and builds the level from
+      the tiles that call returns, at every cache budget, never calling
+      `get_level`. So no panel task waits on a slot or the count, and the
+      rule has no exception (decided by the user, the companion's open
+      question 9). The plan first read the level with `get_level` once the
+      tiles were present, under a budget other than 0; that call could find
+      the photograph evicted by another decode since the tiles were cut and
+      wait on its slot while another caller decoded it, so the user decided,
+      once building it found that gap, that the level is built from the
+      tiles at every budget. The background draws the same pixels as before: the level,
       its size, the texture coordinates' scale and the RGBA bytes it uploads,
       for one photograph of each of the four test-data sets in viewports from
       16 to 3840 px wide, with a budget and with a budget of 0, were compared
@@ -2342,9 +2347,9 @@ in core. Step 17 turns the tier on.
       a level is many tiles (48 for level 2 of a 200-megapixel photograph,
       37 MB as RGB, and at most 151 MB under the texture limit of 8192) and
       would break the bound of 16 kept tiles a photograph; a level read
-      against a layout the file no longer has, whose `get_level` answers
-      another size or whose tiles do not fit the level, makes the task
-      `forget` the path, as a tile key the photograph does not have does; and
+      against a layout the file no longer has, whose tiles are not the ones
+      the layout places, makes the task `forget` the path, as a tile key the
+      photograph does not have does; and
       while the level loads the previous photograph stays on its own mesh,
       as before, since until the tiled cache the coarsest level comes from
       the same decode as the level drawn. What the user can see change is
@@ -2365,21 +2370,25 @@ in core. Step 17 turns the tier on.
       whose tasks wait in a queue the test runs on a thread of its own,
       bounded by a time limit: every level of a photograph whose levels cross
       several tiles is read by one task however often it is asked for, none
-      decoded on the GUI thread, and equals the level of the pyramid the
-      background drew before, with a budget and with a budget of 0; a level
+      decoded on the GUI thread, and built from the tiles equals the level
+      of the pyramid the background drew before, with a budget and with a
+      budget of 0, the task making one call to the cache, so a level read of
+      a photograph the cache holds counts one hit, where a `get_level` after
+      the tiles would count two; a level
       read whose `try_reserve_build` is refused answers `Busy`, decodes
       nothing, is asked again on a later frame and is read once the
       reservation is given back, with a budget and with a budget of 0; a
       level read waits behind Image Detail's decode of the same photograph,
       and a level not taken is dropped when another is asked for; a level
-      read against a layout the file no longer has, or of a level the layout
-      does not have, reads the layout again; a failed level read is answered
+      read against a layout the file no longer has, wider so a tile does not
+      fit or narrower so the tiles would leave a column unset, or of a level
+      the layout does not have, reads the layout again; a failed level read is answered
       as unreadable and not decoded again; and the background, drawn through
       `display_layout` and `display_level`, asks for the header and the level
       once each, decodes nothing on the GUI thread and draws the photograph
       once it lands, keeps the previous photograph while the layout or the
       level loads, and clears it for an unreadable layout or level. Each of
-      these tests takes 0.02 s or less.
+      these tests takes 0.03 s or less.
     - **13d, Track View and the Track Table.** Track View's patch tiles,
       cluster-stage tiles and hover views, and the crops of both panels and
       their hover views, act on the layout state and peek tiles, asking for
