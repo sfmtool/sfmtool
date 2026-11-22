@@ -606,23 +606,23 @@ photograph's mipmap works exactly like decoding a photograph in today's
   the count. No panel decodes on the GUI thread either.
 
 `get_tile`, `view_region_pyramid` and `get_level` never make a mipmap. For an
-out-of-core photograph they are asked only once its layout is `Known` (its
-files current), and decode only tiles of current files, milliseconds each
-(`get_level` at most a few hundred milliseconds for a level of 48 tiles). For
-an in-core photograph a miss decodes the whole photograph, up to 0.8 to 1.7 s
-at 200 MP, so they and `try_decode_tiles` take the caller's `&Progress`, which
-they poll for cancellation as `get` does, answering `TileError::Cancelled`,
-never remembered, with the reservation given back. For an in-core photograph, `get_tile` called from a render
-entry point on a kernel's behalf is a kernel's read: a
-miss decodes the photograph into tiles, as above, about 0.05 s at 3840 x 2160,
-reserving with `reserve_builds` and waiting on the slot if another caller
-holds it; inside a kernel this happens only for a tile evicted after the read
-phase decoded its photograph. Panels read an in-core photograph's missing
-tiles with `try_decode_tiles` instead. A kernel whose files go stale
-after its read phase found them current (another process rebuilt them, or the
-original changed) gets `TileError::Changed` from its next tile read and fails
-as § "Files that change while a kernel runs" says, rather than rebuilding
-inside a render and going on with levels of two versions.
+out-of-core photograph they are asked only once its layout is `Known` (its files
+current), and decode only tiles of current files, milliseconds each (`get_level`
+at most a few hundred milliseconds for a level of 48 tiles). For an in-core
+photograph a miss decodes the whole photograph, up to 0.8 to 1.7 s at 200 MP, so
+they and `try_decode_tiles` take the caller's `&Progress`, which they poll for
+cancellation as `get` does, answering `TileError::Cancelled`, never remembered,
+with the reservation given back. For an in-core photograph, `get_tile` called
+from a render entry point on a kernel's behalf is a kernel's read: a miss
+decodes the photograph into tiles, as above, about 0.05 s at 3840 x 2160,
+reserving with `reserve_builds` and waiting on the slot if another caller holds
+it; inside a kernel this happens only for a tile evicted after the read phase
+decoded its photograph. Panels read an in-core photograph's missing tiles with
+`try_decode_tiles` instead. A kernel whose files go stale after its read phase
+found them current (another process rebuilt them, or the original changed) gets
+`TileError::Changed` from its next tile read and fails as § "Files that change
+while a kernel runs" says, rather than rebuilding inside a render and going on
+with levels of two versions.
 
 **Files that change while a kernel runs.** A tiled source records, for each
 file it has read, the file's record (for an in-core photograph, the
