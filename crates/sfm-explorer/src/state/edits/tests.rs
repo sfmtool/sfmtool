@@ -35,9 +35,9 @@ fn state() -> AppState {
 /// keypoints.
 fn keypointless_state() -> AppState {
     let mut state = AppState::new();
-    state.append_node(SceneNode::demo(SfmrReconstruction::demo_without_keypoints(
-        64,
-    )));
+    state.append_node(SceneNode::demo(
+        crate::test_support::without_inline_keypoints(SfmrReconstruction::demo(64)),
+    ));
     state
 }
 
@@ -1810,7 +1810,7 @@ fn a_cursor_move_across_a_deleted_image_follows_the_photograph() {
 /// `FeatureSize` sizing needs, and the detections it copies as keypoints --
 /// and the workspace metadata saying where they are.
 pub(crate) fn convertible_state(dir: &std::path::Path) -> (AppState, ReconId) {
-    let mut recon = SfmrReconstruction::demo_without_keypoints(24);
+    let mut recon = crate::test_support::without_inline_keypoints(SfmrReconstruction::demo(24));
     recon.workspace_dir = dir.to_path_buf();
     recon.metadata.workspace.absolute_path = dir.display().to_string();
     recon.metadata.workspace.relative_path = ".".into();

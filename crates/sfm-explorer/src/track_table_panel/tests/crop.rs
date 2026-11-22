@@ -234,7 +234,7 @@ fn the_crop_column_shows_only_with_patch_frames_and_keypoints() {
     assert!(!texts.iter().any(|t| t == "Crop"), "{texts:?}");
 
     // Patch frames and no keypoints.
-    let mut framed = SfmrReconstruction::demo_without_keypoints(20);
+    let mut framed = crate::test_support::without_inline_keypoints(SfmrReconstruction::demo(20));
     let frames = projected_embedded_demo(20).point_set;
     framed.point_set.patch_u_halfvec_xyz = frames.patch_u_halfvec_xyz;
     framed.point_set.patch_v_halfvec_xyz = frames.patch_v_halfvec_xyz;

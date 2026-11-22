@@ -78,7 +78,10 @@ The command then runs these phases in order.
    one the current reader refuses. A file the file system will not give up
    (locked, or it cannot be opened or read) **fails**; one whose content the
    current reader refuses is left as it is ([What is not
-   converted](#what-is-not-converted)).
+   converted](#what-is-not-converted)). A version 16 `sift_files` `.sfmr`
+   file without `tracks/keypoints_xy` whose `.sift` files cannot supply the
+   column, as phase 3 describes, **fails** here with the reason phase 3's
+   save would give, so a dry run reports it as a run does.
 3. **Rewrite the files**, each atomically at its own path (a temporary file
    beside the target, renamed over it):
    - a `.sfmr` file below version 17 (version 16) is loaded and saved as

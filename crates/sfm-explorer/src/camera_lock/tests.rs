@@ -272,8 +272,9 @@ fn the_readout_equals_a_direct_computation_and_rises_as_the_camera_moves() {
 
 #[test]
 fn a_value_with_no_keypoints_reads_n_a() {
-    let (mut state, mut viewer, _id) =
-        looking_through(SfmrReconstruction::demo_without_keypoints(64));
+    let (mut state, mut viewer, _id) = looking_through(
+        crate::test_support::without_inline_keypoints(SfmrReconstruction::demo(64)),
+    );
     enter(&mut viewer, &mut state).expect("camera view of a posed image");
     let lock = viewer.camera_lock.as_ref().expect("a held lock");
     let (now, stored) = residuals(lock, &stored_pose(&state));

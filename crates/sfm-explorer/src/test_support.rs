@@ -494,3 +494,59 @@ pub(crate) fn insert_corners_only(
         photographs.insert(path, std::sync::Arc::new(pyramid));
     }
 }
+
+/// `recon` without its inline keypoints: the value an open gives for a version
+/// 16 `sift_files` file written without `tracks/keypoints_xy` whose `.sift`
+/// files cannot be read, which states no pixel for any observation.
+pub(crate) fn without_inline_keypoints(
+    mut recon: sfmtool_core::SfmrReconstruction,
+) -> sfmtool_core::SfmrReconstruction {
+    if let sfmtool_core::ObservationSource::SiftFiles { keypoints_xy, .. } =
+        &mut recon.point_set.observations
+    {
+        *keypoints_xy = None;
+    }
+    recon
+}
+
+/// Rewrite the version 17 `sift_files` `.sfmr` at `path` in place as a version
+/// 16 file written without `tracks/keypoints_xy`, which version 16 allowed:
+/// the entry left out, `has_keypoints_xy` false and `metadata.json` at version
+/// 16. The readers do not check the content hashes, so they are left as they
+/// are.
+pub(crate) fn rewrite_as_version_16_without_keypoints(path: &std::path::Path) {
+    use std::io::{Read, Write};
+
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+    let mut entries = Vec::new();
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).unwrap();
+        let name = entry.name().unwrap().to_string();
+        let mut compressed = Vec::new();
+        entry.read_to_end(&mut compressed).unwrap();
+        entries.push((name, compressed));
+    }
+    drop(archive);
+    let edit_json = |compressed: &[u8], key: &str, value: serde_json::Value| {
+        let raw = zstd::stream::decode_all(compressed).unwrap();
+        let mut json: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        json[key] = value;
+        zstd::bulk::compress(&serde_json::to_vec(&json).unwrap(), 3).unwrap()
+    };
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, compressed) in entries {
+        let bytes = match name.as_str() {
+            n if n.starts_with("tracks/keypoints_xy.") => continue,
+            "metadata.json.zst" => edit_json(&compressed, "version", serde_json::json!(16)),
+            "tracks/metadata.json.zst" => {
+                edit_json(&compressed, "has_keypoints_xy", serde_json::json!(false))
+            }
+            _ => compressed,
+        };
+        zip.start_file(&name, stored).unwrap();
+        zip.write_all(&bytes).unwrap();
+    }
+    zip.finish().unwrap();
+}

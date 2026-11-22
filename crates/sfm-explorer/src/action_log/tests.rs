@@ -1400,6 +1400,9 @@ fn every_operation_names_at_least_one_stage() {
 fn opening_a_file_names_the_loads_stages_and_the_append() {
     let dir = temp_dir("open_stages");
     let path = openable_file(&dir);
+    // A version 16 `sift_files` file written without the inline keypoints, with
+    // no `.sift` beside it.
+    crate::test_support::rewrite_as_version_16_without_keypoints(&path);
     let mut state = AppState::new();
     state.open_now(&path).expect("the fixture file");
 
@@ -1421,14 +1424,20 @@ fn opening_a_file_names_the_loads_stages_and_the_append() {
             ("open", 0, 1),
             ("read", 1, 1),
             ("derive", 1, 1),
+            ("keypoints", 1, 1),
             ("thumbnails", 1, 1),
             ("append nodes", 0, 1)
         ],
         "{:?}",
         entry.detail,
     );
-    // The fixture carries its inline keypoints, so the load has none to fill
-    // and records no `keypoints` stage.
+    // No `.sift` lies beside it, so the load records why it left the inline
+    // keypoint column out.
+    let keypoints = phase_note(&entry.detail, "keypoints").expect("a keypoints note");
+    assert!(
+        keypoints.starts_with("not filled: ") && keypoints.ends_with("no such file"),
+        "{keypoints}"
+    );
     assert_eq!(
         phase_note(&entry.detail, "read"),
         Some(read),

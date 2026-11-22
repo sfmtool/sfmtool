@@ -48,7 +48,7 @@ use std::time::Instant;
 use sfmtool_core::progress::Progress;
 use sfmtool_core::progress_note;
 use sfmtool_core::reconstruction::minimal::SaveStamp;
-use sfmtool_core::EditedReconstruction;
+use sfmtool_core::{EditedReconstruction, SiftKeypointFill};
 
 use crate::action_log::Kind;
 use crate::document::PointMap;
@@ -396,8 +396,9 @@ impl AppState {
     }
 
     /// Fold `index`'s overlay into a base of its own and push it as a version,
-    /// when there is an overlay to fold, a workspace path to state, or image
-    /// readings to gather.
+    /// when there is an overlay to fold, a workspace path to state, image
+    /// readings to gather, or a `sift_files` value's inline keypoints to read
+    /// from its `.sift` files.
     ///
     /// The pushed value carries the provenance the file will, so its hash, which
     /// is what every id minted afterwards is built on, is the hash of the file
@@ -426,7 +427,11 @@ impl AppState {
         // them; it is folded like an edit, so the version pushed holds them
         // and its content hash is the written file's.
         let has_readings = edited.base.image_set.has_image_readings();
-        if deleted == 0 && added == 0 && workspace_path.is_none() && has_readings {
+        // So is a `sift_files` base without its inline keypoints (one read
+        // from a version 16 file whose `.sift` files were missing then), whose
+        // save reads them from the `.sift` files.
+        let has_keypoints = edited.base.keypoints_xy().is_some();
+        if deleted == 0 && added == 0 && workspace_path.is_none() && has_readings && has_keypoints {
             progress_note!(phase, "nothing to fold");
             return Ok(());
         }
@@ -443,6 +448,26 @@ impl AppState {
             let readings = phase.phase("image readings");
             base.fill_image_readings(&readings)
                 .map_err(|e| format!("Cannot write {}: {e}", path.display()))?;
+        }
+        if base.keypoints_xy().is_none() {
+            let keypoints = phase.phase("keypoints");
+            match base.fill_keypoints_from_sift(&keypoints) {
+                SiftKeypointFill::Unavailable { reason, .. } => {
+                    return Err(format!(
+                        "Cannot write {}: a .sfmr file stores every observation's pixel, and \
+                         this reconstruction's .sift files could not supply them: {reason}. \
+                         Restore the .sift files this reconstruction was made with, then save \
+                         it again",
+                        path.display()
+                    ));
+                }
+                SiftKeypointFill::Cancelled => {
+                    return Err(format!("Cannot write {}: cancelled", path.display()));
+                }
+                SiftKeypointFill::Filled
+                | SiftKeypointFill::AlreadyPresent
+                | SiftKeypointFill::NotSiftFiles => {}
+            }
         }
 
         let label = format!(

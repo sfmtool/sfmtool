@@ -1206,11 +1206,22 @@ fn load_bits(recon: &SfmrReconstruction) -> Vec<u64> {
 #[test]
 fn a_recorded_load_names_the_read_and_the_derive() {
     let path = saved_demo("load_phases", 32);
+    // A version 16 file written without the inline keypoints, and no `.sift`
+    // files behind it, so `keypoints` runs and says why it left the column out.
+    super::demo::rewrite_as_version_16_without_keypoints(&path);
     let (recon, phases) = load_recording(&path);
 
-    // The demo carries its inline keypoints, so `keypoints` has nothing to
-    // fill and records nothing.
-    assert_eq!(phase_names(&phases), ["read", "derive"], "{phases:?}");
+    assert_eq!(
+        phase_names(&phases),
+        ["read", "derive", "keypoints"],
+        "{phases:?}"
+    );
+    let keypoints = phase_note(&phases, "keypoints").expect("a keypoints note");
+    assert!(
+        keypoints.starts_with("not filled: ") && keypoints.ends_with("no such file"),
+        "{keypoints}"
+    );
+    assert!(recon.keypoints_xy().is_none());
     assert!(
         phases.iter().all(|(_, depth, _)| *depth == 0),
         "a load's stages sit at the top of whatever it was called inside: {phases:?}"

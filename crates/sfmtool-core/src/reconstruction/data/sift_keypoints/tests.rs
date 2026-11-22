@@ -1,8 +1,9 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Filling the inline keypoint column from `.sift` files, and the save doing
-//! it for a value that lacks the column.
+//! Filling the inline keypoint column from `.sift` files: the load doing it
+//! for a version 16 file that lacks the column, and the save for a value that
+//! lacks it.
 
 use ndarray::{Array2, Array3};
 use tempfile::TempDir;
@@ -149,14 +150,40 @@ fn an_embedded_patches_value_is_not_touched() {
     );
 }
 
+/// The last count a run reported: how many done, out of how many.
+type LastCount = Option<(u64, Option<u64>)>;
+
+/// The phases `run` closed, in order, and the last count reported, given the
+/// `Progress` to report through.
+fn recording<T>(run: impl FnOnce(&Progress<'_>) -> T) -> (T, Vec<&'static str>, LastCount) {
+    let left = std::sync::Mutex::new(Vec::new());
+    let count = std::sync::Mutex::new(None);
+    let sink = |event: crate::progress::Event<'_>| match event {
+        crate::progress::Event::Leave { phase, .. } => left.lock().unwrap().push(phase),
+        crate::progress::Event::Count { done, total, .. } => {
+            *count.lock().unwrap() = Some((done, total));
+        }
+        _ => {}
+    };
+    let out = run(&Progress::to(&sink));
+    let phases = left.lock().unwrap().clone();
+    let last = *count.lock().unwrap();
+    (out, phases, last)
+}
+
 /// A save of a value without the column writes it, read from the `.sift`
-/// files, and leaves the value as it was.
+/// files in a `keypoints` stage that counts the images, and leaves the value
+/// as it was.
 #[test]
 fn save_writes_the_column_from_the_sift_files() {
     let dir = tempfile::tempdir().unwrap();
     let recon = fixture(&dir);
     let path = dir.path().join("saved.sfmr");
-    recon.save(&path, &Progress::none()).unwrap();
+    let (saved, phases, count) = recording(|progress| recon.save(&path, progress));
+    saved.unwrap();
+    assert_eq!(phases, ["keypoints"]);
+    let images = recon.image_set.images.len() as u64;
+    assert_eq!(count, Some((images, Some(images))));
     assert!(recon.keypoints_xy().is_none());
 
     let mut written = recon.clone();
@@ -164,6 +191,47 @@ fn save_writes_the_column_from_the_sift_files() {
         *keypoints_xy = sfmtool_sfmr_format::read_sfmr(&path).unwrap().keypoints_xy;
     }
     assert_rows_match_features(&written);
+
+    // A value that carries the column reads no `.sift` file on a save.
+    let (saved, phases, count) = recording(|progress| written.save(&path, progress));
+    saved.unwrap();
+    assert!(phases.is_empty(), "{phases:?}");
+    assert_eq!(count, None);
+}
+
+/// A version 16 `sift_files` file written without the column loads with it,
+/// in a `keypoints` stage, and a save of the loaded value writes it.
+#[test]
+fn load_fills_a_version_16_file_without_the_column() {
+    let dir = tempfile::tempdir().unwrap();
+    let recon = fixture(&dir);
+    // The marker is how the load finds the workspace the `.sift` files are in.
+    std::fs::write(dir.path().join(".sfm-workspace.json"), "{}").unwrap();
+    let path = dir.path().join("no-keypoints.sfmr");
+    recon.save(&path, &Progress::none()).unwrap();
+    super::super::demo::rewrite_as_version_16_without_keypoints(&path);
+    let data = sfmtool_sfmr_format::read_sfmr(&path).unwrap();
+    assert_eq!(data.metadata.version, 16);
+    assert!(data.keypoints_xy.is_none());
+
+    let (loaded, phases, _) = recording(|progress| SfmrReconstruction::load(&path, progress));
+    let loaded = loaded.unwrap();
+    assert_eq!(phases, ["read", "derive", "keypoints"]);
+    assert_rows_match_features(&loaded);
+    // The value still names the file it was read from.
+    assert_eq!(
+        loaded.content_hash.content_xxh128,
+        data.content_hash.content_xxh128
+    );
+
+    let resaved = dir.path().join("with-keypoints.sfmr");
+    loaded.save(&resaved, &Progress::none()).unwrap();
+    let written = sfmtool_sfmr_format::read_sfmr(&resaved).unwrap();
+    assert_eq!(
+        written.metadata.version,
+        sfmtool_sfmr_format::SFMR_FORMAT_VERSION
+    );
+    assert_eq!(written.keypoints_xy.as_ref(), loaded.keypoints_xy());
 }
 
 /// When the `.sift` files cannot supply the column, a save writes nothing and

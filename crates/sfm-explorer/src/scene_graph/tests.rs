@@ -75,12 +75,7 @@ pub(crate) fn shared_shoot(n: usize) -> AppState {
 /// without inline keypoints, as a load gives for a version 16 file whose
 /// `.sift` files cannot be read.
 fn keypointless_shoot() -> AppState {
-    let mut recon = recon_named(32, 8, "IMG");
-    if let sfmtool_core::ObservationSource::SiftFiles { keypoints_xy, .. } =
-        &mut recon.point_set.observations
-    {
-        *keypoints_xy = None;
-    }
+    let recon = crate::test_support::without_inline_keypoints(recon_named(32, 8, "IMG"));
     let mut state = AppState::new();
     state.append_node(SceneNode::from_path(
         std::path::Path::new("/runs/run_0.sfmr"),

@@ -881,7 +881,7 @@ of the bar. Each file's stages sit under a phase `open` of its own:
 
 | Stage | Runs when | Reports |
 |-------|-----------|---------|
-| `read`, `derive`, `keypoints` | always | `SfmrReconstruction::load`'s own stages and notes; `keypoints` reads a `sift_files` file's `.sift` positions when it carries no inline keypoint column, with a count of `images`, and notes `not filled: {reason}` when a `.sift` is missing or does not match |
+| `read`, `derive`, `keypoints` | always | `SfmrReconstruction::load`'s own stages and notes; `keypoints` reads a `sift_files` file's `.sift` positions when it carries no inline keypoint column (a version 16 file written without it), with a count of `images`, and notes `not filled: {reason}` when a `.sift` is missing or does not match |
 | `thumbnails` | the file carries no thumbnail column | a count of `images`; note `{a} from .sift files, {b} from photographs, {c} placeholders` |
 | `patch bitmaps` > `decode photographs` | the file has patch frames and inline keypoints but no bitmaps | a count of `images`; note `{k} of {n} read`, with `, {r} reused from the cache` when the cache already held any |
 | `patch bitmaps` > `render` | the same | a count of `patches`; note `{P} patches at {R} px` |
