@@ -413,15 +413,6 @@ struct EndpointPictures {
     patch: Option<egui::TextureHandle>,
 }
 
-/// The live readings of the focused item, kept against the item value and
-/// the document serial they were read at, so a step on the item, or an edit
-/// of the reconstruction under it, reads them again on the next frame.
-struct HeldReading {
-    item: Arc<EditableMeasurement>,
-    document: VersionSerial,
-    reading: ItemReading,
-}
-
 /// Measurement View panel state: the pictures of the shown measurement's
 /// endpoints, the focused item's readings, a rename in progress, and the
 /// region pool its crops are read through.
@@ -429,7 +420,9 @@ struct HeldReading {
 pub(crate) struct MeasurementView {
     regions: PanelRegionPool,
     pictures: HashMap<PictureKey, EndpointPictures>,
-    reading: Option<HeldReading>,
+    /// The focused item's live readings, as the node's cache gave them on the
+    /// last frame ([`SceneNode::item_reading`]).
+    reading: Option<Arc<ItemReading>>,
     /// A rename in progress: the item, and the text typed so far.
     renaming: Option<(String, String)>,
     /// Each header field's typing in progress, indexed by
@@ -571,7 +564,7 @@ impl MeasurementView {
     /// The focused item's readings, as the last frame read them.
     #[cfg(test)]
     pub(crate) fn item_reading(&self) -> Option<&ItemReading> {
-        self.reading.as_ref().map(|held| &held.reading)
+        self.reading.as_deref()
     }
 
     /// Draw the panel and report what the person did with it.
@@ -684,23 +677,8 @@ impl MeasurementView {
         let Some(item) = state.bench_measurement(node.id, label).cloned() else {
             return;
         };
-        let document = node.history.current_version().document_serial;
-        let stale = self
-            .reading
-            .as_ref()
-            .is_none_or(|held| !Arc::ptr_eq(&held.item, &item) || held.document != document);
-        if stale {
-            self.reading = Some(HeldReading {
-                item: Arc::clone(&item),
-                document,
-                reading: measurements::item_reading(node.edited(), &item),
-            });
-        }
-        let reading = self
-            .reading
-            .as_ref()
-            .map(|held| held.reading.clone())
-            .expect("just read");
+        let reading = node.item_reading(&item);
+        self.reading = Some(Arc::clone(&reading));
         let origin = state.resolved_measurement_origin(node, &item);
         let unit = node.recon().metadata.world_space_unit.as_deref();
         let endpoints = item.as_distance().map_or([None, None], |d| d.endpoints);

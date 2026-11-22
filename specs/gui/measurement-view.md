@@ -778,9 +778,12 @@ The focused item's readings are computed from the item, not read from the
 stored row: each placed endpoint is resolved against the version at the cursor
 with the resolver's default options (`measurements::item_reading`, which calls
 core's `resolve_distance_endpoints`), and the result block and the median line
-are computed from those. The panel keeps them against the item's `Arc` and the
-version's document serial, so a step on the item, or an edit of the
-reconstruction under it, reads them again on the next frame. The median line
+are computed from those. The node keeps them against the item's `Arc` and the
+version's document serial (`SceneNode::item_reading`, beside
+`SceneNode::measurement_readings`), so a step on the item, or an edit of the
+reconstruction under it, reads them again on the next frame, and the panel and
+every view drawing the focused item (§ "Drawing measurements") read one
+resolution between them. The median line
 compares the item with the stored measurements other than its origin, so a
 person sees whether a change brings it into line before committing it.
 
@@ -1238,16 +1241,21 @@ at-infinity case is covered by the Rust tests.
   the indicator absent while the endpoints or only the line are in view, and
   pointing right, left, down, up and, for a midpoint behind the eye, the way to
   turn; a click on it framing both endpoints inside the view with the
-  orientation kept; the option and a hidden node. (`image_detail/measurements/tests.rs`):
+  orientation kept; the option and a hidden node; a line with one end behind
+  the eye clipped, the end in front keeping its mark. (`image_detail/measurements/tests.rs`):
   the marks at the endpoint pixels, a line only where both are in the image,
   the refused endpoint's warning colour; the hover, a click selecting no
   feature's point under the mark while the same click with nothing drawn does,
   a double-click and a click on the line; a handle drag asking once for the
   pixel under the release, which the step makes one version, without a pan;
+  Escape abandoning a held handle with no step; a measurement with
+  mismatched columns and a pixel that is not a number drawn without a panic;
   no handle on a view-only bench; the indicator pointing to the endpoints
   outside the view and a click centring them at the same zoom.
   (`mcp/tests/display.rs`): each view's `show_all_measurements` over its own
-  tool, recording its own row.
+  tool, recording its own row. (`measurement_view/tests.rs`): the panel and the
+  drawing reading one cached resolution of the focused item, and a step on it
+  one more.
 - **`ui_basic`, drawing**: on the measured copy, endpoint A of the focused item
   dragged in Image Detail moves to the pixel under the release in one version,
   and Image Detail's *Show all measurements* checkbox turns its option on.

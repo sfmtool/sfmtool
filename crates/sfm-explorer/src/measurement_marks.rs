@@ -170,7 +170,8 @@ impl AppState {
     /// and the focused measurement item, which the bench layers draw whatever
     /// the node's eye says. A stored measurement's endpoints are read from the
     /// node's cached readings ([`measurements::readings`]) and an item's live
-    /// ([`measurements::item_reading`]), each finite position put through the
+    /// ([`crate::scene::SceneNode::item_reading`], shared with Measurement
+    /// View), each finite position put through the
     /// node's display transform.
     pub(crate) fn measurement_layer(&self, show_all: bool) -> MeasurementLayer {
         let item_focused = self
@@ -254,7 +255,7 @@ impl AppState {
         let item = self.bench_measurement(id, label)?;
         let node = self.node(id)?;
         let distance = item.as_distance()?;
-        let reading = measurements::item_reading(node.edited(), item);
+        let reading = node.item_reading(item);
         let endpoints = EndpointSide::BOTH
             .into_iter()
             .filter_map(|side| {

@@ -1406,3 +1406,35 @@ fn an_unplaced_endpoint_s_instruction_is_not_justified() {
         }
     }
 }
+
+/// Measurement View and the drawing of the focused item read one cached
+/// resolution: frames of both resolve the item once, and a step on it once
+/// more.
+#[test]
+fn the_panel_and_the_drawing_share_one_item_reading() {
+    let (mut state, id) = measured_state(Some("m"));
+    let put = state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    // The drawing alone resolves it once, however many frames and views.
+    for show_all in [false, true, false] {
+        assert!(state.measurement_layer(show_all).drawn.len() > 1);
+    }
+    assert_eq!(state.scene[0].item_resolutions(), 1);
+    // The panel's frames read the same value, not one of their own.
+    let (mut panel, ctx) = settled(&state);
+    run_frame(&mut panel, &ctx, &state, Vec::new());
+    assert_eq!(state.scene[0].item_resolutions(), 1);
+    let item = state.bench_measurement(id, &put.label).unwrap().clone();
+    let cached = state.scene[0].item_reading(&item);
+    assert!(
+        std::ptr::eq(panel.item_reading().expect("shown"), &*cached),
+        "the panel holds the cached reading"
+    );
+    state
+        .set_bench_measurement_label(id, &put.label, "door")
+        .unwrap();
+    state.measurement_layer(false);
+    run_frame(&mut panel, &ctx, &state, Vec::new());
+    assert_eq!(state.scene[0].item_resolutions(), 2);
+}

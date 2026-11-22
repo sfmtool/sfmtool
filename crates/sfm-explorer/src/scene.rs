@@ -395,6 +395,15 @@ pub(crate) struct SceneNode {
     /// reading taken once holds for as long as the cursor stays on a version
     /// sharing that document half.
     measurement_readings: MeasurementReadingsCache,
+    /// The live readings of the last measurement item they were asked for,
+    /// keyed by the item value and the version's document serial
+    /// ([`SceneNode::item_reading`]), which Measurement View and the drawing of
+    /// the focused item share.
+    item_reading: ItemReadingCache,
+    /// How many times [`SceneNode::item_reading`] has resolved, for the tests
+    /// that the cache is shared.
+    #[cfg(test)]
+    item_resolutions: std::sync::atomic::AtomicUsize,
 }
 
 /// [`SceneNode`]'s cache of the measurement readings of one version.
@@ -402,6 +411,15 @@ type MeasurementReadingsCache = std::sync::Mutex<
     Option<(
         crate::document::VersionSerial,
         Arc<crate::measurements::MeasurementReadings>,
+    )>,
+>;
+
+/// [`SceneNode`]'s cache of one measurement item's live readings.
+type ItemReadingCache = std::sync::Mutex<
+    Option<(
+        Arc<sfmtool_core::bench::EditableMeasurement>,
+        crate::document::VersionSerial,
+        Arc<crate::measurements::ItemReading>,
     )>,
 >;
 
@@ -425,6 +443,9 @@ impl SceneNode {
             tint: NodeTint::Original,
             display_thumbnails,
             measurement_readings: std::sync::Mutex::new(None),
+            item_reading: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            item_resolutions: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -446,6 +467,42 @@ impl SceneNode {
         let readings = Arc::new(crate::measurements::MeasurementReadings::of(self.edited()));
         *cache = Some((serial, Arc::clone(&readings)));
         readings
+    }
+
+    /// The live readings of measurement item `item` against the version this
+    /// node shows ([`crate::measurements::item_reading`]), resolved when the
+    /// item value or the version's document serial differs from the last ones
+    /// asked for and kept after that, so Measurement View's edited mode and
+    /// every view drawing the focused item share one resolution. A step on the
+    /// item replaces its `Arc`, and an edit of the reconstruction moves the
+    /// serial, so either reads it again.
+    pub(crate) fn item_reading(
+        &self,
+        item: &Arc<sfmtool_core::bench::EditableMeasurement>,
+    ) -> Arc<crate::measurements::ItemReading> {
+        let serial = self.history.current_version().document_serial;
+        let mut cache = self
+            .item_reading
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((held, at, reading)) = cache.as_ref() {
+            if Arc::ptr_eq(held, item) && *at == serial {
+                return Arc::clone(reading);
+            }
+        }
+        #[cfg(test)]
+        self.item_resolutions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let reading = Arc::new(crate::measurements::item_reading(self.edited(), item));
+        *cache = Some((Arc::clone(item), serial, Arc::clone(&reading)));
+        reading
+    }
+
+    /// How many times [`SceneNode::item_reading`] has resolved an item.
+    #[cfg(test)]
+    pub(crate) fn item_resolutions(&self) -> usize {
+        self.item_resolutions
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// A node for a reconstruction read from `path`, labeled with its file stem.

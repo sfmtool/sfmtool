@@ -487,3 +487,105 @@ fn the_indicator_points_to_an_endpoint_outside_the_view_and_centres_it() {
     );
     assert!(screen(&detail, &ctx, &state).indicator.is_none());
 }
+
+/// Escape while a handle is held abandons the drag: the release asks for no
+/// step, and the photograph does not pan.
+#[test]
+fn escape_abandons_a_handle_drag() {
+    let (mut state, id) = crate::measurements::fixture::measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    let photograph = pyramid();
+    let (mut detail, ctx) = settled(&state, &photograph);
+    let a = at_pixel(&state, &detail, 0, EndpointSide::A);
+    let pan = detail.pan;
+    let by = egui::vec2(42.0, 21.0);
+    let escape = egui::Event::Key {
+        key: egui::Key::Escape,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let mut responses = vec![
+        frame(
+            &mut detail,
+            &ctx,
+            &state,
+            &photograph,
+            vec![egui::Event::PointerMoved(a)],
+        )
+        .response,
+        frame(&mut detail, &ctx, &state, &photograph, vec![press(a, true)]).response,
+        frame(
+            &mut detail,
+            &ctx,
+            &state,
+            &photograph,
+            vec![egui::Event::PointerMoved(a + by * 0.5)],
+        )
+        .response,
+        frame(
+            &mut detail,
+            &ctx,
+            &state,
+            &photograph,
+            vec![egui::Event::PointerMoved(a + by), escape],
+        )
+        .response,
+    ];
+    responses.push(
+        frame(
+            &mut detail,
+            &ctx,
+            &state,
+            &photograph,
+            vec![press(a + by, false)],
+        )
+        .response,
+    );
+    assert_eq!(gestures(responses), Vec::new(), "Escape abandoned the drag");
+    assert_eq!(detail.pan, pan);
+    // Without the Escape, the same drag asks for the step.
+    let responses = drag(&mut detail, &ctx, &state, &photograph, a, by);
+    assert_eq!(gestures(responses).len(), 1);
+}
+
+/// A stored measurement whose columns disagree in length, one of whose
+/// pixels is not a number, is drawn by a whole frame without a panic, and the
+/// other measurements are drawn where their pixels are.
+#[test]
+fn a_measurement_with_mismatched_columns_and_a_nan_pixel_draws() {
+    let mut recon = crate::measurements::fixture::measured_reconstruction(Some("m"));
+    let m = recon.image_set.measurements.distance.as_mut().unwrap();
+    m.image_indexes = m.image_indexes.slice(ndarray::s![..4, ..]).to_owned();
+    m.units = m.units.slice(ndarray::s![..4]).to_owned();
+    m.endpoints_xy[[0, 0, 0]] = f32::NAN;
+    let mut state = AppState::new();
+    let id = state.append_node(crate::scene::SceneNode::from_path(
+        std::path::Path::new("measured.sfmr"),
+        recon,
+    ));
+    state.feature_display.show_all_measurements = true;
+    state.select_measurement(MeasurementRef::distance(id, 0));
+    let photograph = pyramid();
+    let (mut detail, ctx) = settled(&state, &photograph);
+    let shown = frame(&mut detail, &ctx, &state, &photograph, Vec::new());
+    assert!(!shown.texts.is_empty(), "the frame drew");
+    let screen = screen(&detail, &ctx, &state);
+    assert!(
+        !screen.measurements.is_empty(),
+        "the other measurements are drawn"
+    );
+    let nan_row = DrawnId::Stored(MeasurementRef::distance(id, 0));
+    let others = screen
+        .measurements
+        .iter()
+        .filter(|m| detail.measurements.drawn[m.index].id != nan_row);
+    for m in others {
+        for mark in &m.marks {
+            assert!(mark.pos.x.is_finite() && mark.pos.y.is_finite(), "{mark:?}");
+        }
+    }
+}

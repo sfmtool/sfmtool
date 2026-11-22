@@ -493,3 +493,46 @@ fn the_option_draws_every_measurement_and_a_hidden_node_none() {
     state.scene[0].visible = false;
     assert_eq!(count(&mut viewer, &mut state), 0);
 }
+
+/// A line with one end behind the eye is clipped at the near plane: the end
+/// in front keeps its mark and the line runs from it, and the end behind has
+/// no mark.
+#[test]
+fn a_line_with_one_end_behind_the_eye_is_clipped() {
+    let (mut state, id) = measured_state(Some("m"));
+    select(&mut state, id, 0);
+    // Between the two points, looking along +X: B ahead, A behind.
+    let eye = Point3::new(0.75, -0.2, 0.0);
+    let mut viewer = Viewer3D::new();
+    viewer.view_initialized = true;
+    viewer.maintain_z_up = false;
+    viewer.camera.camera = Camera::look_at(eye, eye + Vector3::x(), Vector3::z());
+    let ctx = egui::Context::default();
+    for _ in 0..2 {
+        frame(
+            &mut viewer,
+            &ctx,
+            &mut state,
+            Vec::new(),
+            egui::pos2(5.0, 5.0),
+        );
+    }
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, VIEWPORT);
+    let mut screen = None;
+    crate::test_support::run_frame_headless(&ctx, egui::RawInput::default(), |ui| {
+        screen = Some(viewer.measurement_screen(ui.painter(), rect));
+    });
+    let drawn = &screen.unwrap().measurements[0];
+    let sides: Vec<EndpointSide> = drawn.marks.iter().map(|m| m.side).collect();
+    assert_eq!(sides, vec![EndpointSide::B], "A is behind the eye");
+    let [a, b] = drawn.line.expect("the line is clipped, not dropped");
+    assert!(a.x.is_finite() && a.y.is_finite());
+    assert!(b.distance(projected(&viewer, rect, Point3::from(POINTS[1]))) < 1e-3);
+    assert!(
+        viewer
+            .camera
+            .project_homogeneous(Point3::from(POINTS[0]).coords, 1.0, rect)
+            .is_none(),
+        "A projects nowhere"
+    );
+}
