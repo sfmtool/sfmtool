@@ -4,10 +4,11 @@
 //! The layer's toolbar controls: one checkbox and, behind it, a settings popup.
 //!
 //! The Image Detail toolbar row is already the widest thing in the panel, and
-//! four more inline controls would wrap it at any reasonable panel width. So the
-//! layer contributes exactly two widgets to that row — a checkbox and a gear —
-//! and the sub-toggles live in a popup the gear opens, enabled only while the
-//! checkbox is ticked.
+//! four more inline controls would push it onto another row at any reasonable
+//! panel width. So the layer contributes exactly two widgets to that row — a
+//! checkbox and a gear, which the toolbar keeps together on one row — and the
+//! sub-toggles live in a popup the gear opens, enabled only while the checkbox
+//! is ticked.
 
 use super::{CameraLayer, ChangeLayer};
 use crate::state::{FieldMode, IntrinsicsDisplaySettings};
@@ -36,7 +37,6 @@ pub(crate) fn show_intrinsics_controls(
     layer: Option<&CameraLayer>,
     change: Option<&ChangeLayer>,
 ) {
-    ui.separator();
     ui.checkbox(&mut settings.enabled, "Intrinsics");
     ui.add_enabled_ui(settings.enabled, |ui| {
         let gear = ui.menu_button(GEAR, |ui| {

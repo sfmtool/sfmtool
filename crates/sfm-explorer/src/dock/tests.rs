@@ -16,6 +16,12 @@ fn demo_node() -> SceneNode {
 /// The width the Image Detail panel is left believing it has, after its overlay
 /// toolbar has been drawn into a dock cell `cell_width` wide.
 fn available_after_toolbar(cell_width: f32, overlay_mode: OverlayMode) -> egui::Rect {
+    toolbar_in_cell(cell_width, overlay_mode).0
+}
+
+/// Draw the overlay toolbar into a dock cell `cell_width` wide, in one frame,
+/// and return the rect the panel is left with below it and the frame's output.
+fn toolbar_in_cell(cell_width: f32, overlay_mode: OverlayMode) -> (egui::Rect, egui::FullOutput) {
     let node = demo_node();
     let camera_ref =
         crate::image_detail::ImageIntrinsicsKey::of_image(node.id, &node.recon().image_set, 0)
@@ -29,6 +35,7 @@ fn available_after_toolbar(cell_width: f32, overlay_mode: OverlayMode) -> egui::
     let mut detail = ImageDetail::new();
 
     let ctx = egui::Context::default();
+    ctx.enable_accesskit();
     let input = egui::RawInput {
         // Room to the right of the cell for the toolbar to spill into, the way
         // a neighbouring dock cell would offer it.
@@ -39,7 +46,7 @@ fn available_after_toolbar(cell_width: f32, overlay_mode: OverlayMode) -> egui::
         ..Default::default()
     };
     let mut available = egui::Rect::NOTHING;
-    crate::test_support::run_frame_headless(&ctx, input, |ui| {
+    let mut output = ctx.run_ui(input, |ui| {
         let cell = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(cell_width, 700.0));
         let mut cell_ui = ui.new_child(egui::UiBuilder::new().max_rect(cell));
         show_overlay_toolbar(
@@ -52,22 +59,66 @@ fn available_after_toolbar(cell_width: f32, overlay_mode: OverlayMode) -> egui::
         );
         available = cell_ui.available_rect_before_wrap();
     });
-    available
+    output.textures_delta.clear();
+    (available, output)
 }
 
-/// The bug this exists for. The toolbar is one unwrapped row of controls, so in
-/// a narrow dock cell it does not fit — and egui grows a `Ui`'s `max_rect` to
-/// include any widget that overflowed it. Uncontained, a 400 px cell left the
-/// panel below believing it had 726 px, reaching well into the dock cell next
-/// door. `ImageDetail::show` lays the image out in that rect *and* asks whether
-/// the pointer is inside it to decide whether a trackpad gesture is addressed to
+/// The toolbar's controls as the frame's AccessKit tree states them: each
+/// one's role, its name and the rectangle it was drawn in.
+fn toolbar_controls(output: &egui::FullOutput) -> Vec<(egui::accesskit::Role, String, egui::Rect)> {
+    use egui::accesskit::Role;
+    let update = output
+        .platform_output
+        .accesskit_update
+        .as_ref()
+        .expect("AccessKit is enabled");
+    let nodes: std::collections::HashMap<_, _> = update.nodes.iter().cloned().collect();
+    // A dropdown's name is the label it is `labelled_by`.
+    let name = |node: &egui::accesskit::Node| match node.label() {
+        Some(label) => label.to_owned(),
+        None => node
+            .labelled_by()
+            .iter()
+            .filter_map(|id| nodes.get(id))
+            .filter_map(|label| label.label().or(label.value()))
+            .collect::<Vec<_>>()
+            .join(" "),
+    };
+    update
+        .nodes
+        .iter()
+        .map(|(_, node)| node)
+        .filter(|node| {
+            matches!(
+                node.role(),
+                Role::CheckBox | Role::ComboBox | Role::SpinButton | Role::Button
+            )
+        })
+        .map(|node| {
+            let b = node.bounds().expect("a control has a rectangle");
+            let rect = egui::Rect::from_min_max(
+                egui::pos2(b.x0 as f32, b.y0 as f32),
+                egui::pos2(b.x1 as f32, b.y1 as f32),
+            );
+            (node.role(), name(node), rect)
+        })
+        .collect()
+}
+
+/// The bug this exists for. The toolbar was once one unwrapped row of
+/// controls, and a group of controls it keeps together can still be wider than
+/// a very narrow dock cell — and egui grows a `Ui`'s `max_rect` to include any
+/// widget that overflowed it. Uncontained, a 400 px cell left the panel below
+/// believing it had 726 px, reaching well into the dock cell next door.
+/// `ImageDetail::show` lays the image out in that rect *and* asks whether the
+/// pointer is inside it to decide whether a trackpad gesture is addressed to
 /// it, so scrolling the Camera Intrinsics panel beside it panned the image — for
 /// exactly as far into that panel as the overhang reached, which is why widening
 /// the Image Detail panel made the symptom go away.
 #[test]
 fn the_overlay_toolbar_never_widens_the_panel_it_is_drawn_in() {
     for mode in OverlayMode::ALL {
-        for cell_width in [300.0, 400.0, 700.0, 1400.0] {
+        for cell_width in [150.0, 300.0, 400.0, 700.0, 1400.0] {
             let available = available_after_toolbar(cell_width, mode);
             assert!(
                 available.right() <= cell_width + 0.5,
@@ -90,6 +141,85 @@ fn the_overlay_toolbar_leaves_the_rest_of_the_cell_below_it() {
         available.bottom() >= 690.0 && available.left() <= 0.5,
         "the rest of the cell is not left to the image: {available:?}",
     );
+}
+
+/// In a panel narrower than the toolbar's one row, the controls go on as many
+/// rows as they need: every one of them is drawn inside the panel, each
+/// dropdown on the row of the label that names it, and the image area starts
+/// below the last row. Before the row wrapped, *Show all measurements* and the
+/// intrinsics controls lay past the right edge of a 553 px panel, where nobody
+/// could reach them.
+#[test]
+fn the_overlay_toolbar_wraps_every_control_into_a_narrow_panel() {
+    use egui::accesskit::Role;
+    let cell_width = 360.0;
+    for mode in OverlayMode::ALL {
+        let (available, output) = toolbar_in_cell(cell_width, mode);
+        let controls = toolbar_controls(&output);
+        let mut expected = vec![
+            (Role::ComboBox, "Overlay:"),
+            (
+                Role::CheckBox,
+                crate::viewer_3d::display::SHOW_ALL_MEASUREMENTS_LABEL,
+            ),
+            (Role::CheckBox, "Intrinsics"),
+            (Role::Button, "⚙ Intrinsics settings"),
+        ];
+        if mode != OverlayMode::None {
+            expected.extend([
+                (Role::ComboBox, "Max:"),
+                (Role::CheckBox, "Min/max size:"),
+                (Role::SpinButton, "minimum size (px)"),
+                (Role::SpinButton, "maximum size (px)"),
+            ]);
+        }
+        if mode == OverlayMode::Features {
+            expected.push((Role::CheckBox, "Tracked only"));
+        }
+        for (role, name) in &expected {
+            assert!(
+                controls.iter().any(|(r, n, _)| r == role && n == name),
+                "{mode:?}: no {role:?} named {name:?} in {controls:#?}",
+            );
+        }
+        assert_eq!(controls.len(), expected.len(), "{mode:?}: {controls:#?}");
+        for (role, name, rect) in &controls {
+            assert!(
+                rect.left() >= -0.5 && rect.right() <= cell_width + 0.5,
+                "{mode:?}: {role:?} {name:?} at {rect:?} is outside the {cell_width}px panel",
+            );
+            assert!(
+                rect.bottom() <= available.top() + 0.5,
+                "{mode:?}: {role:?} {name:?} at {rect:?} reaches into the image area \
+                 {available:?}",
+            );
+        }
+        // Each dropdown is named by the label drawn just before it, on its row.
+        for name in ["Overlay:", "Max:"] {
+            let Some((_, _, combo)) = controls.iter().find(|(_, n, _)| n == name) else {
+                continue;
+            };
+            let label = crate::test_support::output_text_rects(&output)
+                .into_iter()
+                .find(|t| t.text == name)
+                .expect("the label is painted");
+            assert!(
+                label.rect.right() <= combo.left()
+                    && label.rect.center().y > combo.top()
+                    && label.rect.center().y < combo.bottom(),
+                "{mode:?}: label {name:?} at {:?} is not beside its dropdown at {combo:?}",
+                label.rect,
+            );
+        }
+        if mode != OverlayMode::None {
+            // Otherwise the test would pass with the row unwrapped.
+            let rows = controls
+                .iter()
+                .map(|(_, _, rect)| rect.center().y.round() as i32)
+                .collect::<std::collections::BTreeSet<_>>();
+            assert!(rows.len() > 1, "{mode:?}: one row: {controls:#?}");
+        }
+    }
 }
 
 // ── Track View's Surface Tiling Mode, as the dock applies it ────────────

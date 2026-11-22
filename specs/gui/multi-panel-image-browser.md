@@ -1062,8 +1062,19 @@ requires reading affine shapes to check, but since features are sorted, only
 mode selector:
 
 ```
-[Overlay: Features ▾]  [Max: All ▾]  [☐ Min/max size: 0.0  50.0]  [☑ Tracked only]  [☐ Show all measurements]
+[Overlay: Features ▾]  [Max: All ▾]  [☐ Min/max size: 0.0  50.0]  [☑ Tracked only]  [☐ Show all measurements]  [☐ Intrinsics] [⚙]
 ```
+
+The row wraps: in a panel narrower than it, the controls go on as many rows as
+they need, so every control is drawn and reachable at any panel width that
+fits the widest group below. A control moves to the next row whole, and a
+group of controls moves together: a dropdown with the label that names it
+(`Overlay:`, `Max:`), the *Min/max size* checkbox with its two values, and the
+*Intrinsics* checkbox with its gear. egui decides whether to wrap from the size
+an item asks for before it is drawn, so each group asks for the width it
+measured on the previous pass and discards the pass when that width changes
+(`toolbar_group` in [`dock.rs`](../../crates/sfm-explorer/src/dock.rs)). The
+image area starts below the last row.
 
 - **Max features**: dropdown with common presets (100, 500, 1000, 5000, All). Changing
   this may trigger a re-read of SIFT data if the new value is larger than what was
@@ -1431,11 +1442,11 @@ made in ([panel-layout.md](panel-layout.md) § "A raise from a gesture").
 ### The toolbar may not widen the panel
 
 egui grows a `Ui`'s `max_rect` to include any widget that overflowed it
-(`Placer::advance_after_rects`). The overlay toolbar is a single unwrapped row
-of controls — roughly 730 px with a feature mode active — so in a dock cell
-narrower than that it overflows, and the `available_rect_before_wrap()` the
-panel reads below it then describes a rectangle reaching into the
-**neighbouring** dock cell. A 400 px cell reported 726 px.
+(`Placer::advance_after_rects`). The overlay toolbar wraps, but a group of
+controls it keeps together, such as the *Min/max size* checkbox with its two
+values, can be wider than a very narrow dock cell. In such a cell it overflows,
+and the `available_rect_before_wrap()` the panel reads below it then describes
+a rectangle reaching into the **neighbouring** dock cell.
 
 That rect is load-bearing twice over: the image is fitted and centred in it, and
 `platform::pointer_in_rect` tests it to decide whether a trackpad gesture is
@@ -1446,8 +1457,9 @@ whatever sits to the right — scrolling the Camera Intrinsics panel beside it
 panned the image, for exactly as far into that panel as the overhang reached,
 which is why widening the Image Detail panel made the symptom disappear.
 
-So `show_overlay_toolbar` draws its row into a child `Ui` and allocates back only
-the space it was *offered*, leaving the parent's `max_rect` alone. What does not
+So `show_overlay_toolbar` draws its rows into a child `Ui` and allocates back
+only the width it was *offered*, with the height the rows took, leaving the
+parent's `max_rect` alone. What does not
 fit stays clipped by the `ScrollArea` egui_dock wraps every tab body in. The
 panel is the only one that reads its rect *after* drawing something — every other
 tab takes `available_rect_before_wrap()` as its first act, which is pristine by

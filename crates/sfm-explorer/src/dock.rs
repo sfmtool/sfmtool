@@ -1675,10 +1675,11 @@ impl TabContext<'_> {
 
 /// Draw the overlay mode toolbar at the top of the image detail panel.
 ///
-/// Two layers' controls on one row: the feature filters, which keep their
-/// show-when-a-mode-is-active rule, and the intrinsics layer's checkbox and
-/// gear, which are always shown because that layer composes with every mode
-/// including `None`.
+/// Two layers' controls in one wrapping row: the feature filters, which keep
+/// their show-when-a-mode-is-active rule, and the intrinsics layer's checkbox
+/// and gear, which are always shown because that layer composes with every
+/// mode including `None`. In a panel narrower than the row the controls go on
+/// as many rows as they need, so every one of them is drawn.
 pub(crate) fn show_overlay_toolbar(
     ui: &mut egui::Ui,
     settings: &mut FeatureDisplaySettings,
@@ -1690,18 +1691,19 @@ pub(crate) fn show_overlay_toolbar(
     )>,
     proposal: Option<&crate::camera_model_proposal::CameraModelProposal>,
 ) {
-    // One unwrapped row of controls, so in a narrow dock cell it is wider than
-    // the panel — and egui grows a `Ui`'s `max_rect` to include any widget that
-    // overflowed it (`Placer::advance_after_rects`). Left to do that, the
-    // toolbar would leave the `available_rect_before_wrap` that
-    // `ImageDetail::show` reads below reporting a panel that reaches into the
-    // *neighbouring* dock cell: the image would be laid out in the wrong
-    // rectangle, and — since that same rect decides whether a gesture is
-    // addressed to this panel (`platform::pointer_in_rect`) — a trackpad scroll
-    // over the panel next door would pan the image. So the row is drawn in a
-    // child `Ui` and only the space it was *offered* is allocated back. What
-    // overflows stays clipped by the `ScrollArea` egui_dock wraps every tab
-    // body in, exactly as it is today.
+    // The row wraps, but a group of controls kept together (the size checkbox
+    // and its two values, say) can still be wider than a very narrow panel —
+    // and egui grows a `Ui`'s `max_rect` to include any widget that overflowed
+    // it (`Placer::advance_after_rects`). Left to do that, the toolbar would
+    // leave the `available_rect_before_wrap` that `ImageDetail::show` reads
+    // below reporting a panel that reaches into the *neighbouring* dock cell:
+    // the image would be laid out in the wrong rectangle, and — since that
+    // same rect decides whether a gesture is addressed to this panel
+    // (`platform::pointer_in_rect`) — a trackpad scroll over the panel next
+    // door would pan the image. So the rows are drawn in a child `Ui`, and
+    // only the width it was *offered*, with the height the rows took, is
+    // allocated back. What overflows stays clipped by the `ScrollArea`
+    // egui_dock wraps every tab body in.
     let offered = ui.available_rect_before_wrap();
     let mut row = ui.new_child(egui::UiBuilder::new().max_rect(offered));
     show_overlay_toolbar_row(&mut row, settings, intrinsics, detail, camera, proposal);
@@ -1725,70 +1727,80 @@ fn show_overlay_toolbar_row(
     )>,
     proposal: Option<&crate::camera_model_proposal::CameraModelProposal>,
 ) {
-    ui.horizontal(|ui| {
-        // Each dropdown is `labelled_by` the label before it, which names it
-        // for a screen reader and in `get_widgets`.
-        let label = ui.label("Overlay:");
-        egui::ComboBox::from_id_salt("overlay_mode")
-            .selected_text(settings.overlay_mode.label())
-            .width(100.0)
-            .show_ui(ui, |ui| {
-                for mode in OverlayMode::ALL {
-                    ui.selectable_value(&mut settings.overlay_mode, mode, mode.label());
-                }
-            })
-            .response
-            .labelled_by(label.id);
+    ui.horizontal_wrapped(|ui| {
+        // A wrapping layout would otherwise break a checkbox's text across two
+        // rows; a control moves to the next row whole instead.
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
 
-        if settings.overlay_mode != OverlayMode::None {
-            ui.separator();
-            let label = ui.label("Max:");
-            egui::ComboBox::from_id_salt("max_features")
-                .selected_text(match settings.max_features {
-                    Some(n) => format!("{n}"),
-                    None => "All".to_string(),
-                })
-                .width(60.0)
+        // Each dropdown is `labelled_by` the label before it, which names it
+        // for a screen reader and in `get_widgets`, and is kept on its row.
+        toolbar_group(ui, "overlay", |ui| {
+            let label = ui.label("Overlay:");
+            egui::ComboBox::from_id_salt("overlay_mode")
+                .selected_text(settings.overlay_mode.label())
+                .width(100.0)
                 .show_ui(ui, |ui| {
-                    for &preset in &[100usize, 500, 1000, 5000] {
-                        ui.selectable_value(
-                            &mut settings.max_features,
-                            Some(preset),
-                            format!("{preset}"),
-                        );
+                    for mode in OverlayMode::ALL {
+                        ui.selectable_value(&mut settings.overlay_mode, mode, mode.label());
                     }
-                    ui.selectable_value(&mut settings.max_features, None, "All");
                 })
                 .response
                 .labelled_by(label.id);
+        });
+
+        if settings.overlay_mode != OverlayMode::None {
+            ui.separator();
+            toolbar_group(ui, "max_features", |ui| {
+                let label = ui.label("Max:");
+                egui::ComboBox::from_id_salt("max_features")
+                    .selected_text(match settings.max_features {
+                        Some(n) => format!("{n}"),
+                        None => "All".to_string(),
+                    })
+                    .width(60.0)
+                    .show_ui(ui, |ui| {
+                        for &preset in &[100usize, 500, 1000, 5000] {
+                            ui.selectable_value(
+                                &mut settings.max_features,
+                                Some(preset),
+                                format!("{preset}"),
+                            );
+                        }
+                        ui.selectable_value(&mut settings.max_features, None, "All");
+                    })
+                    .response
+                    .labelled_by(label.id);
+            });
 
             ui.separator();
-            let mut has_size_filter =
-                settings.min_feature_size.is_some() || settings.max_feature_size.is_some();
-            ui.checkbox(&mut has_size_filter, "Min/max size:");
-            // The checkbox's text names the pair, so each box has a name of
-            // its own that says which bound it is.
-            let min = ui.add(
-                egui::DragValue::new(&mut settings.min_feature_size_value)
-                    .range(0.0..=1000.0)
-                    .speed(0.2)
-                    .suffix("px"),
-            );
-            set_widget_name(&min, "minimum size (px)");
-            let max = ui.add(
-                egui::DragValue::new(&mut settings.max_feature_size_value)
-                    .range(0.5..=1000.0)
-                    .speed(0.5)
-                    .suffix("px"),
-            );
-            set_widget_name(&max, "maximum size (px)");
-            if has_size_filter {
-                settings.min_feature_size = Some(settings.min_feature_size_value);
-                settings.max_feature_size = Some(settings.max_feature_size_value);
-            } else {
-                settings.min_feature_size = None;
-                settings.max_feature_size = None;
-            };
+            toolbar_group(ui, "feature_size", |ui| {
+                let mut has_size_filter =
+                    settings.min_feature_size.is_some() || settings.max_feature_size.is_some();
+                ui.checkbox(&mut has_size_filter, "Min/max size:");
+                // The checkbox's text names the pair, so each box has a name of
+                // its own that says which bound it is.
+                let min = ui.add(
+                    egui::DragValue::new(&mut settings.min_feature_size_value)
+                        .range(0.0..=1000.0)
+                        .speed(0.2)
+                        .suffix("px"),
+                );
+                set_widget_name(&min, "minimum size (px)");
+                let max = ui.add(
+                    egui::DragValue::new(&mut settings.max_feature_size_value)
+                        .range(0.5..=1000.0)
+                        .speed(0.5)
+                        .suffix("px"),
+                );
+                set_widget_name(&max, "maximum size (px)");
+                if has_size_filter {
+                    settings.min_feature_size = Some(settings.min_feature_size_value);
+                    settings.max_feature_size = Some(settings.max_feature_size_value);
+                } else {
+                    settings.min_feature_size = None;
+                    settings.max_feature_size = None;
+                };
+            });
 
             if settings.overlay_mode == OverlayMode::Features {
                 ui.separator();
@@ -1812,15 +1824,49 @@ fn show_overlay_toolbar_row(
         // on-image legend read one computation rather than two.
         let grid_cols = intrinsics.grid_cols;
         let (layer, change) = detail.popup_layers(camera, proposal, grid_cols);
-        crate::image_detail::show_intrinsics_controls(
-            ui,
-            intrinsics,
-            camera.map(|(_, camera)| camera),
-            layer,
-            change,
-        );
+        ui.separator();
+        toolbar_group(ui, "intrinsics", |ui| {
+            crate::image_detail::show_intrinsics_controls(
+                ui,
+                intrinsics,
+                camera.map(|(_, camera)| camera),
+                layer,
+                change,
+            );
+        });
     });
     ui.separator();
+}
+
+/// Draw `add_contents` left to right as one piece of the wrapping toolbar row,
+/// so that it moves to the next row whole when it does not fit on this one.
+///
+/// egui decides whether to wrap from the size a widget asks for *before* it is
+/// drawn, and a nested layout does not know its own width until its contents
+/// are drawn. So the group asks for the width it measured on the last pass,
+/// kept under `name` in egui's memory, and when that width changes it asks
+/// egui to discard the pass, so that the next pass lays the row out with the
+/// new width.
+fn toolbar_group<R>(
+    ui: &mut egui::Ui,
+    name: &str,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let id = ui.id().with(("toolbar_group", name));
+    let known = ui.data(|data| data.get_temp::<f32>(id));
+    let desired = egui::vec2(known.unwrap_or(0.0), ui.spacing().interact_size.y);
+    let group = ui.allocate_ui_with_layout(
+        desired,
+        egui::Layout::left_to_right(egui::Align::Center),
+        add_contents,
+    );
+    let width = group.response.rect.width();
+    if known.is_none_or(|known| (known - width).abs() > 0.5) {
+        ui.data_mut(|data| data.insert_temp(id, width));
+        ui.ctx()
+            .request_discard("an Image Detail toolbar group changed width");
+    }
+    group.inner
 }
 
 /// Return the image indices in the selected point's track, or empty if none.
