@@ -1495,7 +1495,7 @@ Measurements rows and Measurement View read them
 (`distance`, the default and the one kind), and `measurement_index`, its row
 there. An index past the rows is refused with the count.
 
-`list_measurements` answers the reconstruction's `label`, its
+`list_measurements` answers the reconstruction's `reconstruction_label`, its
 `world_space_unit`, its `measurement_counts` (as `get_scene` gives them, one
 count per kind) and one entry per measurement:
 
@@ -1505,7 +1505,8 @@ count per kind) and one entry per measurement:
   "row_text": "Distance #0  ear to ear  12 cm  → 11.94 cm  −0.5%",
   "result": { "state": "with_unit", "reconstructed_distance": 11.94,
               "error": -0.06, "error_percent": -0.5, "implied_scale": 1.005 },
-  "endpoints": [ { "endpoint": "a", "camera_image": 3, "name": "IMG_0004.jpg",
+  "endpoints": [ { "endpoint": "a", "camera_image": 3,
+                   "camera_image_name": "IMG_0004.jpg",
                    "pixel": [412.3, 230.5], "resolved": true }, ... ] }
 ```
 

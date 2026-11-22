@@ -89,10 +89,10 @@ state.select_endpoint(MeasurementRef::distance(id, 2), EndpointSide::A);
 A measurement is selected the way a point is: one selected measurement in the
 whole viewer, inside the selected reconstruction.
 
-**Selecting a measurement selects nothing else.** It selects the
-measurement's reconstruction, which keeps the other selections inside that
-reconstruction as selecting the reconstruction does, and does not select either
-endpoint's image or point, so the 3D view and Image Detail stay where they are.
+**Selecting a measurement selects it and its reconstruction, and nothing
+more.** Selecting the reconstruction keeps the other selections inside it, as
+selecting a reconstruction does. Neither endpoint's image nor its point is
+selected, so the 3D view and Image Detail stay where they are.
 It clears `selected_endpoint`. A measurement the version on screen does not
 hold selects nothing.
 

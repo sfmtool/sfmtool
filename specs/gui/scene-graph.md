@@ -684,12 +684,13 @@ Distance #3  8 cm  → 0.317 su
 
 Each row names its kind and index, its label where it has one, its stated
 distance, and the reconstruction's reading of it, from the node's cached
-readings (`crate::measurements::readings`). A **click** selects the measurement
-and nothing else, as a click on a Bench row selects only the node. A
-**double-click** selects it, raises Measurement View beside the tree, and
-frames the measurement's finite endpoints in the 3D view, keeping its
-orientation. The selected measurement's row is drawn selected. A secondary
-click opens no menu and selects nothing. The double-click travels in the
+readings (`crate::measurements::readings`). A **click** (G1) selects the
+measurement and nothing else, as a click on a Bench row selects only the node.
+A **double-click** (G2, a set of things) selects it, raises Measurement View
+beside the tree through `show_panel_beside` (G9), and frames the measurement's
+finite endpoints in the 3D view, keeping its orientation. The selected
+measurement's row is drawn selected. A secondary click (G3) opens no menu and
+selects nothing. The double-click travels in the
 response as `open_measurement`, which the panel keeps for
 `SceneGraphPanel::take_measurement_open` and `app.rs` applies once the dock is
 back in the state, for the reason the Bench rows' double-click is applied there
