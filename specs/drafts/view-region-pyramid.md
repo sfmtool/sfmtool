@@ -784,12 +784,13 @@ decisions.
    `SFM_EXPLORER_BUILD_BUDGET_MB` in megabytes (10^6 bytes), parsed as
    `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB` is, a value that does not parse being
    ignored. A build budget of 0 lets each kernel caller decode one
-   photograph at a time, and each panel too. The user first decided that it
+   photograph at a time, and the panels one photograph at a time, when no
+   other decode is reserved. The user first decided that it
    refuses every panel decode, and revised that while step 13c2 was built:
    refused, Image Detail could never draw under a build budget of 0, and a
    photograph larger than the whole budget would answer `Busy` for ever. So
    `try_reserve_build` grants a decode that does not fit when nothing at all
-   is reserved, and "0" means one decode at a time everywhere. Built in the
+   is reserved, and under "0" no caller waits for ever. Built in the
    main draft's step 13b, and the revision in its step 13c2.
 9. **How the 3D background reads its level.** *Decided by the user:* the
    background first asks for its level's tiles with `try_decode_tiles`,

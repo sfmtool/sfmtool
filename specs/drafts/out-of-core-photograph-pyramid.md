@@ -2248,7 +2248,7 @@ in core. Step 17 turns the tier on.
       draws the same pixels as before: the textures it uploads and the meshes
       it paints, over test-data photographs at the fit and zoomed in, were
       compared with those of the panel before this step and are identical.
-      Five things the plan did not say, found while building it: the
+      Six things the plan did not say, found while building it: the
       functions are named `display_layout` and `display_tiles`, since the
       layout and the tiles are two questions and a frame asks for its tiles
       together, which is what lets one task decode them; `layout` keeps a
