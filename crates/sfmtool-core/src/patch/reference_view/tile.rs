@@ -258,7 +258,10 @@ pub fn clipped_share(pyramid: &ImageU8Pyramid, outline: &[[f64; 2]]) -> Option<f
 /// whole level's. A footprint of `F` level-0 pixels covers about
 /// `(ceil(F / T) + 1)²` tiles of side `T`; this is the one read whose cost
 /// grows with the footprint rather than with the patch resolution. Refuses a
-/// photograph with no pixels, and passes up a tile read that fails.
+/// photograph with no pixels, and passes up a tile read that fails. A
+/// photograph made of tiles that does not hold every tile the read needs is
+/// refused with [`PhotographReadError::NeedsTiles`], naming them all,
+/// before any pixel is read.
 pub fn source_clipped_share(
     source: &TiledPhotograph,
     outline: &[[f64; 2]],
@@ -295,6 +298,39 @@ pub fn source_clipped_share(
         x1 = x1.max(p[0]);
     }
     let cols = (x0.floor() as i64).max(0)..=(x1.ceil() as i64).min(w - 1);
+    // A photograph made of tiles is refused, naming every tile the read
+    // needs, before any pixel is read: the tiles under the outline's box
+    // and, when no centre lies inside the outline, which the geometry alone
+    // decides, those under its corners.
+    if source.is_made_of_tiles() {
+        let mut keys = Vec::new();
+        let mut geometry = ClippedCount::default();
+        if !rows.is_empty() && !cols.is_empty() {
+            for row in rows.start() / ts..=rows.end() / ts {
+                for col in cols.start() / ts..=cols.end() / ts {
+                    keys.push(tile_of(col * ts, row * ts));
+                }
+            }
+            geometry.add_spans(
+                outline,
+                rows.clone(),
+                *cols.start()..*cols.end() + 1,
+                |_, _| false,
+            );
+        }
+        if geometry.total == 0 {
+            for p in outline {
+                let (x, y) = pixel_under(p, w, h);
+                let key = tile_of(x, y);
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+        }
+        if source.missing_keys(&keys) {
+            return Err(PhotographReadError::NeedsTiles { keys });
+        }
+    }
     let mut count = ClippedCount::default();
     if !rows.is_empty() && !cols.is_empty() {
         for row in rows.start() / ts..=rows.end() / ts {

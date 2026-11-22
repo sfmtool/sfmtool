@@ -4,6 +4,7 @@
 use std::time::{Duration, Instant};
 
 use sfmtool_core::camera::image::ImageU8;
+use sfmtool_core::camera::sampler::{read_source_rect, LevelRect, RegionPool};
 
 use super::super::TaskQueue;
 
@@ -732,4 +733,277 @@ fn a_failed_level_read_is_answered_as_unreadable_and_not_decoded_again() {
         assert_eq!(queue.run_off_this_thread(), 1);
     }
     assert_eq!(cache.stats().misses, 1, "not decoded again");
+}
+
+// ── Track View's renders from peeked tiles ──────────────────────────────
+
+/// `rect` of level 0 of the photograph `src`, read through `pool`.
+fn read_rect(
+    src: &TiledPhotograph,
+    pool: &RegionPool,
+    rect: LevelRect,
+) -> Result<Vec<u8>, PhotographReadError> {
+    read_source_rect(src, pool, 0, rect).map(|read| read.image().data().to_vec())
+}
+
+/// The pixels of `rect` of the photograph at `path`, decoded here.
+fn decoded_rect(path: &Path, rect: LevelRect) -> Vec<u8> {
+    let image = ImageU8::read_rgb(path).unwrap();
+    let mut data = Vec::new();
+    for y in rect.y0..rect.y1 {
+        let row = (y * image.width()) as usize * 3;
+        data.extend_from_slice(
+            &image.data()[row + rect.x0 as usize * 3..row + rect.x1 as usize * 3],
+        );
+    }
+    data
+}
+
+/// A rectangle of level 0 of [`level_photo`] that covers 12 of its 8 px
+/// tiles.
+const LEFT: LevelRect = LevelRect {
+    x0: 3,
+    y0: 2,
+    x1: 30,
+    y1: 20,
+};
+
+/// A render through `read_peeked` waits, drawing nothing, while the layout
+/// and then the tiles it needs are read off the calling thread, each asked
+/// for once however often it is looked at, and runs once every tile is
+/// there, on a photograph made of them, giving the photograph's own pixels.
+/// Nothing is decoded on the calling thread, with a budget and with a cache
+/// that keeps nothing.
+#[test]
+fn a_render_from_peeked_tiles_runs_once_they_are_all_there() {
+    for budget in [1 << 30, 0] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = level_photo(dir.path(), "photo.png");
+        let cache = small_tile_cache(budget, 1 << 30);
+        let (requests, queue) = PhotographRequests::queued();
+        let source = PhotographSource {
+            cache: &cache,
+            requests: &requests,
+            path: &path,
+        };
+        let ctx = egui::Context::default();
+        let pool = RegionPool::with_capacity(u64::MAX);
+        let mut needs = Vec::new();
+        let renders = std::cell::Cell::new(0);
+        let look = |needs: &mut Vec<TileKey>| {
+            read_peeked(source, needs, &ctx, |src| {
+                renders.set(renders.get() + 1);
+                read_rect(src, &pool, LEFT)
+            })
+        };
+        // The header, then the coarsest level's first tile.
+        for tasks in ["a header read", "a decode of the first tile"] {
+            for _ in 0..3 {
+                assert!(matches!(look(&mut needs), PeekedRead::Loading));
+            }
+            assert_eq!(queue.len(), 1, "{tasks}, once, budget {budget}");
+            assert_eq!(cache.stats().decodes, 0, "nothing decoded on this thread");
+            assert_eq!(queue.run_off_this_thread(), 1);
+        }
+        assert_eq!(renders.get(), 0, "nothing rendered before a tile is there");
+        assert_eq!(cache.stats().decodes, 1);
+        let read = if budget > 0 {
+            // The cache holds the photograph: the frame that learns the
+            // tiles has them.
+            look(&mut needs)
+        } else {
+            // Only the decode's answer holds them: the frame that learns
+            // them asks for them, once.
+            for _ in 0..3 {
+                assert!(matches!(look(&mut needs), PeekedRead::Loading));
+            }
+            assert_eq!(needs.len(), 12, "the twelve tiles under the rectangle");
+            assert_eq!(renders.get(), 1, "the render that learned them");
+            assert_eq!(queue.len(), 1, "one decode of the tiles");
+            assert_eq!(cache.stats().decodes, 1, "nothing decoded on this thread");
+            assert_eq!(queue.run_off_this_thread(), 1);
+            look(&mut needs)
+        };
+        let PeekedRead::Read(Ok(pixels)) = read else {
+            panic!("the render ran, budget {budget}");
+        };
+        assert_eq!(pixels, decoded_rect(&path, LEFT));
+        assert_eq!(needs.len(), 12);
+        // One render on the first tile alone learned the tiles; the next ran.
+        assert_eq!(renders.get(), 2, "budget {budget}");
+        assert_eq!(queue.len(), 0);
+        assert_eq!(cache.stats().decodes, if budget > 0 { 1 } else { 2 });
+    }
+}
+
+/// A photograph that cannot be read is answered as unreadable, its render
+/// never run.
+#[test]
+fn a_render_of_a_photograph_that_cannot_be_read_is_answered_as_unreadable() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("missing.png");
+    let cache = small_tile_cache(1 << 30, 1 << 30);
+    let (requests, queue) = PhotographRequests::queued();
+    let source = PhotographSource {
+        cache: &cache,
+        requests: &requests,
+        path: &path,
+    };
+    let ctx = egui::Context::default();
+    let mut needs = Vec::new();
+    let render = |_: &TiledPhotograph| -> Result<(), PhotographReadError> {
+        panic!("rendered a photograph that cannot be read")
+    };
+    assert!(matches!(
+        read_peeked(source, &mut needs, &ctx, render),
+        PeekedRead::Loading
+    ));
+    assert_eq!(queue.run_off_this_thread(), 1);
+    assert!(matches!(
+        read_peeked(source, &mut needs, &ctx, render),
+        PeekedRead::Unreadable
+    ));
+}
+
+/// Two renders of one photograph that need different tiles, and Image
+/// Detail asking for others of its tiles until it has them, drawn before
+/// both on every frame, all finish under a cache that keeps nothing, where
+/// only the decodes' answers hold the tiles: no ask drops tiles another
+/// render is waiting for so that it never gets them.
+#[test]
+fn two_renders_and_image_detail_on_one_photograph_all_get_their_tiles() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = level_photo(dir.path(), "photo.png");
+    let cache = small_tile_cache(0, 1 << 30);
+    let (requests, queue) = PhotographRequests::queued();
+    let source = PhotographSource {
+        cache: &cache,
+        requests: &requests,
+        path: &path,
+    };
+    let ctx = egui::Context::default();
+    let pool = RegionPool::with_capacity(u64::MAX);
+    let right = LevelRect {
+        x0: 20,
+        y0: 9,
+        x1: 37,
+        y1: 23,
+    };
+    let detail_keys: Vec<TileKey> = (0..3)
+        .map(|col| TileKey {
+            level: 0,
+            col,
+            row: 2,
+        })
+        .collect();
+    let (mut left_needs, mut right_needs) = (Vec::new(), Vec::new());
+    let (mut left_read, mut right_read, mut detail) = (None, None, false);
+    for _ in 0..12 {
+        if !detail {
+            detail = is_ready(&display_tiles(source, &detail_keys, &ctx));
+        }
+        for (needs, rect, done) in [
+            (&mut left_needs, LEFT, &mut left_read),
+            (&mut right_needs, right, &mut right_read),
+        ] {
+            if done.is_none() {
+                if let PeekedRead::Read(read) =
+                    read_peeked(source, needs, &ctx, |src| read_rect(src, &pool, rect))
+                {
+                    *done = Some(read.expect("the tiles it needs"));
+                }
+            }
+        }
+        if detail && left_read.is_some() && right_read.is_some() {
+            break;
+        }
+        queue.run_off_this_thread();
+    }
+    assert!(detail, "Image Detail got its tiles");
+    assert_eq!(left_read, Some(decoded_rect(&path, LEFT)));
+    assert_eq!(right_read, Some(decoded_rect(&path, right)));
+    assert_eq!(requests.kept_tiles(), 0, "every answer was taken");
+}
+
+/// A photograph's answered tiles are bounded: an answer that would take
+/// them past `MAX_KEPT_TILES` replaces them, and one that would not is
+/// added to them.
+#[test]
+fn a_photograph_keeps_at_most_max_kept_tiles_answered_tiles() {
+    let path = PathBuf::from("/kept/photograph.png");
+    let key = |col| TileKey {
+        level: 0,
+        col,
+        row: 0,
+    };
+    let answer = |cols: std::ops::Range<u32>| {
+        Answered::Tiles(
+            cols.map(|col| {
+                let tile = PhotographTile {
+                    key: key(col),
+                    origin: [col, 0],
+                    size: [1, 1],
+                    pixels: ImageU8::new(3, 3, 3, vec![0; 27]),
+                };
+                (key(col), Arc::new(tile))
+            })
+            .collect(),
+        )
+    };
+    let mut tiles = TileRequests::default();
+    tiles.keep(path.clone(), answer(0..20));
+    tiles.keep(path.clone(), answer(20..30));
+    assert_eq!(tiles.kept_tiles(), 30, "added");
+    tiles.keep(path.clone(), answer(30..40));
+    assert_eq!(tiles.kept_tiles(), 10, "replaced");
+    assert!(tiles.holds(&path, key(35)));
+    assert!(!tiles.holds(&path, key(5)));
+    // One answer past the bound is kept whole.
+    tiles.keep(path.clone(), answer(40..80));
+    assert_eq!(tiles.kept_tiles(), 40);
+    assert!((30..40).contains(&MAX_KEPT_TILES));
+}
+
+/// A render's tiles are handed over together or not at all: under a cache
+/// that keeps nothing, a set whose tiles are partly answered takes none of
+/// them, so the answered ones stay kept while the rest are decoded, and the
+/// look after that decode hands over the whole set with no third decode.
+#[test]
+fn a_tile_set_takes_nothing_until_every_tile_is_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = level_photo(dir.path(), "photo.png");
+    let cache = small_tile_cache(0, 1 << 30);
+    let (requests, queue) = PhotographRequests::queued();
+    let source = PhotographSource {
+        cache: &cache,
+        requests: &requests,
+        path: &path,
+    };
+    let ctx = egui::Context::default();
+    let tile = |col| TileKey {
+        level: 0,
+        col,
+        row: 0,
+    };
+    // Another render's answer holds the first tile.
+    assert!(matches!(
+        display_tile_set(source, &[tile(0)], &ctx),
+        DisplayTileSet::Loading
+    ));
+    assert_eq!(queue.run_off_this_thread(), 1);
+    assert_eq!(requests.kept_tiles(), 1);
+    // This render needs it and a second.
+    let set = [tile(0), tile(1)];
+    assert!(matches!(
+        display_tile_set(source, &set, &ctx),
+        DisplayTileSet::Loading
+    ));
+    assert_eq!(requests.kept_tiles(), 1, "the first tile is left kept");
+    assert_eq!(queue.run_off_this_thread(), 1, "a decode of the second");
+    let DisplayTileSet::Ready(tiles) = display_tile_set(source, &set, &ctx) else {
+        panic!("both tiles are answered");
+    };
+    assert_eq!(tiles.iter().map(|t| t.key).collect::<Vec<_>>(), set);
+    assert_eq!(requests.kept_tiles(), 0, "taken together");
+    assert_eq!(cache.stats().decodes, 2);
 }

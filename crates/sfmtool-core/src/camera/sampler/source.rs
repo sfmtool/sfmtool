@@ -155,9 +155,15 @@ fn read_regions<R>(
                 ReadPath::Reused { bytes },
             ));
         }
+        let grown = regions.grown(REGION_REUSE_MARGIN);
+        // A photograph made of tiles is read only through the tiles it
+        // holds, which the grown regions name for the copy and the tile path
+        // alike, since the tile path reads inside the regions.
+        if let Some(keys) = source.missing_tiles(&grown) {
+            return Err(PhotographReadError::NeedsTiles { keys });
+        }
         // Give the kept regions back before reserving their replacement.
         view.kept = None;
-        let grown = regions.grown(REGION_REUSE_MARGIN);
         let bytes = grown.byte_len(source.channels());
         if let Some(reservation) = pool.try_reserve(bytes) {
             let pyramid = copy_regions(source, &grown)?;
@@ -594,6 +600,9 @@ pub fn read_source_rect<'p>(
     rect: LevelRect,
 ) -> Result<SourceRect<'p>, PhotographReadError> {
     check_rect(source.layout(), level, rect)?;
+    if let Some(keys) = source.missing_rect_tiles(level, rect) {
+        return Err(PhotographReadError::NeedsTiles { keys });
+    }
     let bytes = u64::from(rect.width()) * u64::from(rect.height()) * u64::from(source.channels());
     if let Some(reservation) = pool.try_reserve(bytes) {
         pool.count_copied();
@@ -623,3 +632,6 @@ mod tests;
 
 #[cfg(test)]
 mod kept_tests;
+
+#[cfg(test)]
+mod held_tiles_tests;

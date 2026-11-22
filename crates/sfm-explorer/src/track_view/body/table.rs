@@ -1823,6 +1823,10 @@ impl TrackBody {
                     None => {
                         ui.label(match self.read_failure(observation) {
                             Some(why) => read_failure_text(why),
+                            // Not drawn yet: its photograph tiles are loading.
+                            None if !self.contexts.contains_key(&observation) => {
+                                HOVER_LOADING.to_string()
+                            }
                             None => "Nothing around this patch could be rendered.".to_string(),
                         });
                     }
@@ -1872,6 +1876,10 @@ impl TrackBody {
                     None => {
                         ui.label(match self.read_failure(observation) {
                             Some(why) => read_failure_text(why),
+                            // Not drawn yet: its photograph tiles are loading.
+                            None if !self.crop_contexts.contains_key(&observation) => {
+                                HOVER_LOADING.to_string()
+                            }
                             None => "Nothing around this crop could be rendered.".to_string(),
                         });
                     }
@@ -2189,6 +2197,10 @@ pub(super) const SELF_SIMILARITY_ELLIPSE_CAPTION: &str = "Where a match could la
 /// What a tile or crop cell says in its place when the read of its row's
 /// photograph failed.
 pub(super) const READ_FAILURE_CELL: &str = "unreadable";
+
+/// What the hover of a tile or a crop says while the photograph tiles of its
+/// hover view are loading.
+pub(super) const HOVER_LOADING: &str = "Loading the photograph…";
 
 /// The hover text of a tile or crop cell whose photograph read failed: `why`.
 pub(super) fn read_failure_text(why: &str) -> String {

@@ -1876,21 +1876,32 @@ decoded more than once while the cache holds it. An entry is the
 `ImageU8Pyramid` built when the image was decoded, whose level 0 is the
 photograph: the tiles, their hover views and the photometric readers sample the
 lower levels where a warp shrinks the photograph. A failed decode is
-remembered so a missing file is not reopened every frame. Before the body
-draws, the dock asks for every image the drawn track observes: the focused
-item's in Edited mode, and in Viewed mode the selected point's, when the
-reconstruction carries patch frames, with the SIFT cache filled for them on a
-`sift_files` reconstruction. Asking (`state::display_photograph`) starts a
-decode on the rayon pool for each photograph the cache does not hold, and
-repaints when it lands; the body only peeks at the cache, and a row whose
-photograph is not decoded yet keeps no tile or crop, rather than a remembered
-empty one, so they appear on the frame after the decode's repaint. The cache is
-bounded by its byte budget, which drops the least recently used photographs
-first.
+remembered so a missing file is not reopened every frame. Each picture asks
+for what it reads itself, as it is drawn (`state::read_peeked`): the
+photograph's layout, and then the photograph tiles its render needs, all of
+them together, from the cache or, for those it does not hold, from one decode
+of them on the rayon pool (`try_decode_tiles`), which repaints when it lands
+([core/camera/photograph-cache.md](../core/camera/photograph-cache.md) § "In
+the viewer"). The GUI thread never decodes, at any budget, and a row whose
+tiles are not all there yet keeps no tile or crop, rather than a remembered
+empty one, and draws the empty cell, its loading state, so they appear on the
+frame after the read's repaint. A hover view whose tiles are not all there yet
+says *Loading the photograph…* in its place. A picture learns the tiles it needs from a
+render on the coarsest level's first tile alone, which is refused naming
+them, so a photograph the cache holds is drawn on the frame that asks for it
+and one it does not hold on the frame after its tiles land. The pictures of
+the rows drawn are the ones asked for, so a row drawn for the first time asks
+for its photograph then. In Viewed mode the dock fills the SIFT cache for the
+selected point's images on a `sift_files` reconstruction before the body
+draws. The cache is bounded by its byte budget, which drops the least
+recently used photographs first.
 
 **Each picture reads only the region of the photograph it samples.** The body
-reads the cache's whole pyramid through `TiledPhotograph::from_pyramid`
-([view-region-pyramids.md](../core/camera/view-region-pyramids.md)), and every
+renders each picture from a photograph made of exactly the photograph tiles
+it peeked, `TiledPhotograph::from_tiles`, which holds them for the render, so
+a tile the cache evicts after the peek is still read and the render never
+decodes ([view-region-pyramids.md](../core/camera/view-region-pyramids.md)),
+and every
 tile, crop and hover view it draws reserves its region from one region pool
 the panel owns, `patch_pictures::PanelRegionPool`, of 3.1 MB
 (`REGION_POOL_BYTES_PER_THREAD`). A track-stage tile and its hover view render
@@ -1904,10 +1915,11 @@ photograph (`read_source_samples`). Each picture gives its region back to the
 pool once it is cut, since the body keeps the picture and not the region, and
 a region the pool cannot hold is read through the photograph's tiles. The
 pixels are the whole pyramid's either way, so the pictures are those the whole
-pyramids gave. A read that fails is cached as a picture that could not be
-drawn, with why (`TrackBody::read_failures`): the tile or crop cell says
-*unreadable* in place of its picture (`table::READ_FAILURE_CELL`), and its
-hover, and the hover of a hover view that failed, says why. Each picture
+pyramids gave. A read that fails, or a photograph that cannot be read or
+decoded, is cached as a picture that could not be drawn, with why
+(`TrackBody::read_failures`): the tile or crop cell says *unreadable* in
+place of its picture (`table::READ_FAILURE_CELL`), and its hover, and the
+hover of a hover view that failed, says why. Each picture
 is read once and kept, so its `ViewRegions` keeps nothing past the read: a
 view is not read again until the track moves, which moves its regions. A
 tile read so costs little more than one from the whole pyramid: on a
@@ -2008,8 +2020,8 @@ behind them, and the index given is the observation's place in the point's
 track. A row a search, the view sweep or a hand placed has no feature index,
 and the line says which of them placed it. The
 crop and its hover view are cached per row beside the tiles and dropped with
-them; like a tile, a crop whose photograph is not decoded yet is not cached,
-so it appears once the decode ends. The hover view is rendered the first time the pointer rests on the
+them; like a tile, a crop whose photograph tiles are not all there yet is not
+cached, so it appears once they land. The hover view is rendered the first time the pointer rests on the
 crop. Its hover region takes no click, so a click on the crop is the row's.
 
 **The crop is drawn from values, not from the track.** The functions that cut
@@ -2536,9 +2548,17 @@ texels, so their geometry is checked without reading pixels off the screen.
     read takes the photograph's tiles, equal the pictures `render_tile`,
     `sample_member_grid` and `sample_bilinear_u8` give from the whole
     pyramid, byte for byte, with four reads a row by the path the pool allows
-    and nothing left in the pool; and a row whose cached pyramid holds one
+    and nothing left in the pool; a row whose cached pyramid holds one
     pixel of its photograph draws *unreadable* in its tile and crop cells, with
-    why on hover, while the other rows draw their pictures. The crops
+    why on hover, while the other rows draw their pictures; a row whose
+    photograph the cache does not hold draws its cells empty, with no failure,
+    over three frames that ask for its layout once and decode nothing, and
+    draws its pictures on the frame after the photograph lands, asking for
+    nothing more; and a row whose photograph file cannot be read draws
+    *unreadable* once its header read has run; and the hover views of a row
+    whose photograph the cache has dropped since its tile and crop were drawn
+    say *Loading the photograph…*, ask for its layout once, and are drawn
+    once it is back. Each of these three takes about 0.2 s. The crops
     themselves are held to the whole pyramid's in `patch_pictures/tests.rs`,
     at 1, 3 and 40 photograph pixels per texel, over outlines across photograph
     tile edges and the image's edges and corners, through the pool and through

@@ -467,9 +467,11 @@ reconstruction's photographs goes through it except the ones under
   repaint when it ends (50 ms later when the decode answered `Busy`, so the
   panel asks again then). The tiles a decode answers are kept in
   `PhotographRequests` until the panel asks for them, which is how a cache of
-  budget 0, which keeps nothing, hands them over; each ask for a photograph
-  drops its kept tiles the ask does not name, so a photograph keeps at most
-  one decode's answer, and only the four photographs answered last are kept.
+  budget 0, which keeps nothing, hands them over; each ask of Image Detail's
+  for a photograph drops its kept tiles the ask does not name, a
+  photograph's kept tiles are at most 32, or one decode's answer when that
+  is more, an answer that would take them past 32 replacing them, and only
+  the four photographs answered last are kept.
   A decode's failure is kept there too, with the file's length and
   modification time, so under a budget of 0 the panel says "Failed to load
   image" rather than decode again, until a check of the file on the rayon
@@ -498,15 +500,33 @@ reconstruction's photographs goes through it except the ones under
   the level sizes, so a resize chooses the level again without asking the
   cache ([camera-views.md](../../gui/camera-views.md) § "Photograph
   background").
-- **Track View's patch tiles and the Track Table's crops** never decode on the
-  GUI thread either. They call `display_photograph` in the same file, which
-  calls `peek_state`; on a miss it starts one `get` of that path on the rayon
-  pool, records the path in `PhotographRequests` so later frames do not start
-  a second, and asks egui for a repaint when the decode ends. Under a budget
-  of 0 nothing would be kept for the next frame to find, so there the
-  photograph is decoded where it is asked for
-  ([track-view.md](../../gui/track-view.md),
-  [track-table.md](../../gui/track-table.md)).
+- **Track View's pictures**, its patch tiles, crops and their hover views,
+  never read or decode on the GUI thread either, at any budget. Each is
+  rendered through `read_peeked` in the same file, which calls
+  `display_layout` and then asks for the photograph tiles the render needs
+  with `display_tile_set`: every one of them handed over together, from
+  the answers kept in `PhotographRequests` or `peek_tile`, or none, while
+  one `try_decode_tiles` of the missing ones runs as Image Detail's does.
+  It drops no kept tile it does not ask for, since several of the panel's
+  pictures read one photograph. Once all are there the render runs on the
+  GUI thread on `TiledPhotograph::from_tiles` of exactly those tiles, which
+  holds them for the render, so a tile the cache evicts after the peek is
+  still read and the render never decodes; a render that needs tiles the
+  photograph does not hold is refused with
+  `PhotographReadError::NeedsTiles`, which names them, so the tiles a
+  picture needs are learned from a render on the coarsest level's first
+  tile, which gives the photograph's channels, and asked for together
+  ([view-region-pyramids.md](view-region-pyramids.md),
+  [track-view.md](../../gui/track-view.md)).
+- **The Track Table's crops and Measurement View's endpoint crops** decode
+  on the GUI thread only under a budget of 0. They call
+  `display_photograph` in the same file, which calls `peek_state`; on a miss
+  it starts one `get` of that path on the rayon pool, records the path in
+  `PhotographRequests` so later frames do not start a second, and asks egui
+  for a repaint when the decode ends. Under a budget of 0 nothing would be
+  kept for the next frame to find, so there the photograph is decoded where
+  it is asked for ([track-table.md](../../gui/track-table.md),
+  [measurement-view.md](../../gui/measurement-view.md)).
 
 Because the key is a path, the cache is not touched when an edit renumbers a
 node's images, and it is not cleared when a node or the whole scene is closed:

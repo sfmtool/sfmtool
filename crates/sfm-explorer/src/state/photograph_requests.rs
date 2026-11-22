@@ -29,9 +29,16 @@
 //!   decodes' limit of one task per photograph and their remembered
 //!   failures, and keeps the one level it last answered until the background
 //!   asks for it.
-//! - Track View and the Track Table still take the whole pyramid from
-//!   [`display_photograph`] ([`PhotographCache::peek_state`], and
-//!   [`PhotographCache::get`] on the rayon pool on a miss).
+//! - Track View renders its pictures from photograph tiles. [`read_peeked`]
+//!   runs a render on a photograph made of exactly the tiles it needs
+//!   ([`TiledPhotograph::from_tiles`]), held for the render, once
+//!   [`display_tile_set`] has every one of them, which it asks for together:
+//!   all of them handed over at once or none, the missing ones decoded by
+//!   one [`PhotographCache::try_decode_tiles`] as Image Detail's are.
+//! - The Track Table and Measurement View's endpoint crops still take the
+//!   whole pyramid from [`display_photograph`]
+//!   ([`PhotographCache::peek_state`], and [`PhotographCache::get`] on the
+//!   rayon pool on a miss).
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -40,8 +47,8 @@ use std::time::Duration;
 
 use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::camera::{
-    PeekedLayout, PeekedPhotograph, PeekedTile, PhotographCache, PhotographTile, PyramidLayout,
-    TileError, TileKey, TryDecode,
+    PeekedLayout, PeekedPhotograph, PeekedTile, PhotographCache, PhotographReadError,
+    PhotographTile, PyramidLayout, TileError, TileKey, TiledPhotograph, TryDecode,
 };
 use sfmtool_core::progress::Progress;
 use sfmtool_core::SfmrReconstruction;
@@ -88,6 +95,28 @@ pub(crate) enum DisplayTile {
     Unreadable,
 }
 
+/// What a panel has of the photograph tiles one render needs on this frame.
+pub(crate) enum DisplayTileSet {
+    /// Every tile asked for, in the order of the keys.
+    Ready(Vec<Arc<PhotographTile>>),
+    /// Some of them are being decoded on a worker, or wait to be asked for
+    /// again because the decode could not start. A repaint follows either.
+    Loading,
+    /// The photograph could not be read or decoded.
+    Unreadable,
+}
+
+/// What a panel's render from its photograph's tiles gave on this frame.
+pub(crate) enum PeekedRead<T> {
+    /// The render ran on a photograph made of the tiles it needs.
+    Read(Result<T, PhotographReadError>),
+    /// The layout or some of the tiles are being read on a worker. A repaint
+    /// follows.
+    Loading,
+    /// The photograph could not be read or decoded.
+    Unreadable,
+}
+
 /// What the 3D view's camera-view background has for one level of a
 /// photograph on this frame.
 #[derive(Clone)]
@@ -119,11 +148,21 @@ const BUSY_RETRY: Duration = Duration::from_millis(50);
 /// The most photographs whose answers are kept for the panels to take, the
 /// oldest dropped first, so the answers of photographs no panel shows any
 /// more are not kept for the session. A photograph's kept tiles are at most
-/// what one decode answered, which a panel asks for at most 16 of
-/// (`image_detail::photograph_tiles`'s upload cap), since every ask for the
-/// photograph drops the kept tiles it does not ask for: at most 64 tiles of
-/// 514 x 514 RGB, about 51 MB, in all.
+/// [`MAX_KEPT_TILES`], or one decode's answer when that is more: at most 128
+/// tiles of 514 x 514 RGB, about 101 MB, in all, when no one render needs
+/// more than 32.
 const MAX_ANSWERED_PHOTOGRAPHS: usize = 4;
+
+/// The most answered tiles kept for one photograph: an answer that would
+/// take the photograph's kept tiles past it replaces them. Image Detail asks
+/// for at most 16 tiles of a photograph at once (`image_detail::photograph_tiles`'s
+/// upload cap) and every ask of its drops the kept tiles it does not ask for,
+/// so its own answers, the kept and the new, are at most 32. Track View's
+/// pictures ask for the tiles of one render together ([`display_tile_set`])
+/// and drop no other ask's, since several of its pictures read one
+/// photograph, so their answers for the photograph build up until the
+/// renders take them; this bounds them.
+const MAX_KEPT_TILES: usize = 32;
 
 /// A file's length and modification time, which tell a file that changed
 /// since a decode of it failed: `None` when it cannot be read.
@@ -241,6 +280,14 @@ impl TileRequests {
         matches!(self.answered(path), Some(Answered::Tiles(tiles)) if tiles.contains_key(&key))
     }
 
+    /// `key` of `path` if a task answered it, left kept.
+    fn kept(&mut self, path: &Path, key: TileKey) -> Option<Arc<PhotographTile>> {
+        match self.answered(path) {
+            Some(Answered::Tiles(tiles)) => tiles.get(&key).cloned(),
+            _ => None,
+        }
+    }
+
     /// Take `key` of `path` if a task answered it.
     fn take(&mut self, path: &Path, key: TileKey) -> Option<Arc<PhotographTile>> {
         let index = self.answered.iter().position(|(p, _)| p == path)?;
@@ -255,12 +302,17 @@ impl TileRequests {
     }
 
     /// Keep what a task answered for `path` as its newest answer, dropping
-    /// the oldest past [`MAX_ANSWERED_PHOTOGRAPHS`].
+    /// the oldest past [`MAX_ANSWERED_PHOTOGRAPHS`], and in place of the
+    /// tiles kept before it when the two would be more than
+    /// [`MAX_KEPT_TILES`].
     fn keep(&mut self, path: PathBuf, answer: Answered) {
         let answer = match (self.answered.iter().position(|(p, _)| *p == path), answer) {
             (Some(index), Answered::Tiles(more)) => match self.answered.remove(index).1 {
                 Answered::Tiles(mut tiles) => {
-                    tiles.extend(more);
+                    tiles.extend(more.iter().map(|(&key, tile)| (key, Arc::clone(tile))));
+                    if tiles.len() > MAX_KEPT_TILES {
+                        tiles = more;
+                    }
                     Answered::Tiles(tiles)
                 }
                 Answered::Failed(_) => Answered::Tiles(more),
@@ -683,6 +735,118 @@ pub(crate) fn prefetch_tiles(source: PhotographSource<'_>, keys: &[TileKey], ctx
         source
             .requests
             .decode_tiles(source.cache, source.path, missing, ctx);
+    }
+}
+
+/// The tiles `keys` of `source`'s photograph that one render needs, handed
+/// over together: every one of them, in the order of the keys, once a task
+/// has answered it or the cache holds it, or none. While any is missing,
+/// starts one decode on the rayon pool for the missing ones, unless one is
+/// already running for the photograph, and takes nothing, so the tiles
+/// answered before stay kept for the frame that finds them all. Never
+/// decodes on this thread, at any budget.
+///
+/// Unlike [`display_tiles`] it drops no kept tile it does not ask for, since
+/// several renders of one panel read one photograph and ask for different
+/// tiles; [`MAX_KEPT_TILES`] bounds what a photograph keeps instead.
+pub(crate) fn display_tile_set(
+    source: PhotographSource<'_>,
+    keys: &[TileKey],
+    ctx: &egui::Context,
+) -> DisplayTileSet {
+    if source.requests.failed(source.path, ctx) {
+        return DisplayTileSet::Unreadable;
+    }
+    let missing = {
+        let mut kept = lock(&source.requests.tiles);
+        let mut ready = Vec::with_capacity(keys.len());
+        let mut missing = Vec::new();
+        for &key in keys {
+            if let Some(tile) = kept.kept(source.path, key) {
+                ready.push(tile);
+                continue;
+            }
+            match source.cache.peek_tile(source.path, key) {
+                PeekedTile::Ready(tile) => ready.push(tile),
+                PeekedTile::Unreadable => return DisplayTileSet::Unreadable,
+                PeekedTile::NotReady => missing.push(key),
+            }
+        }
+        if missing.is_empty() {
+            for &key in keys {
+                kept.take(source.path, key);
+            }
+            return DisplayTileSet::Ready(ready);
+        }
+        missing
+    };
+    source
+        .requests
+        .decode_tiles(source.cache, source.path, missing, ctx);
+    DisplayTileSet::Loading
+}
+
+/// `render` of `source`'s photograph, run on the GUI thread once every
+/// photograph tile it needs is there, on a photograph made of exactly those
+/// tiles ([`TiledPhotograph::from_tiles`]), which holds them for the render:
+/// a tile the cache evicts after the peek is still read, and the render
+/// never decodes.
+///
+/// `needs` are the tiles the render needed when it was last tried, which
+/// the caller keeps for the picture until it is drawn, empty at first. With
+/// the coarsest level's first tile, which gives the photograph's channels
+/// before anything the render needs is there, they are asked for together
+/// with [`display_tile_set`]; once all are there `render` runs, and a
+/// render refused with [`PhotographReadError::NeedsTiles`] for tiles not
+/// among `needs` adds them and asks again, on this frame. So a picture's
+/// first frames ask for the layout and then the first tile, the frame that
+/// has it learns the tiles the render needs, and the frame that has those
+/// renders.
+pub(crate) fn read_peeked<T>(
+    source: PhotographSource<'_>,
+    needs: &mut Vec<TileKey>,
+    ctx: &egui::Context,
+    mut render: impl FnMut(&TiledPhotograph) -> Result<T, PhotographReadError>,
+) -> PeekedRead<T> {
+    let layout = match display_layout(source, ctx) {
+        DisplayLayout::Known(layout) => layout,
+        DisplayLayout::Loading => return PeekedRead::Loading,
+        DisplayLayout::Unreadable => return PeekedRead::Unreadable,
+    };
+    let Some(coarsest) = layout.levels().checked_sub(1) else {
+        return PeekedRead::Unreadable;
+    };
+    let first = TileKey {
+        level: coarsest as u8,
+        col: 0,
+        row: 0,
+    };
+    // Each pass either answers or adds to `needs`, which only the layout's
+    // tiles can be named in, so the loop ends.
+    loop {
+        let mut keys = vec![first];
+        keys.extend(needs.iter().copied().filter(|&key| key != first));
+        let tiles = match display_tile_set(source, &keys, ctx) {
+            DisplayTileSet::Ready(tiles) => tiles,
+            DisplayTileSet::Loading => return PeekedRead::Loading,
+            DisplayTileSet::Unreadable => return PeekedRead::Unreadable,
+        };
+        let photograph = match TiledPhotograph::from_tiles((*layout).clone(), tiles) {
+            Ok(photograph) => photograph,
+            Err(e) => return PeekedRead::Read(Err(e)),
+        };
+        match render(&photograph) {
+            Err(PhotographReadError::NeedsTiles { keys })
+                if keys.iter().any(|k| !needs.contains(k)) =>
+            {
+                for key in keys {
+                    if !needs.contains(&key) {
+                        needs.push(key);
+                    }
+                }
+            }
+            answer => return PeekedRead::Read(answer),
+        }
     }
 }
 
