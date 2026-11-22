@@ -9,7 +9,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use sfmtool_core::camera::PhotographCache;
+use sfmtool_core::camera::{PhotographCache, PhotographCacheOptions};
 use sfmtool_core::progress::{Event, Progress};
 
 use super::{IndexFileState, BUILD_INDEX_FILES, REBUILD_INDEX_FILES};
@@ -269,7 +269,10 @@ fn the_cluster_half_reads_its_photographs_through_the_cache() {
     let dir = tempfile::tempdir().unwrap();
     let (mut state, id) = unbuilt(dir.path());
     // A budget of its own, so the test does not depend on the environment's.
-    state.photographs = std::sync::Arc::new(PhotographCache::new(1 << 30));
+    state.photographs = std::sync::Arc::new(PhotographCache::new(PhotographCacheOptions {
+        budget_bytes: 1 << 30,
+        ..Default::default()
+    }));
     let paths: Vec<std::path::PathBuf> = {
         let recon = state.node(id).expect("loaded").recon();
         recon

@@ -28,7 +28,9 @@ use sfmtool_core::bench::{
     PairwiseFlowNormalOptions, PairwiseFlowOutcome,
 };
 use sfmtool_core::camera::sampler::RegionPool;
-use sfmtool_core::camera::{CameraIntrinsics, PhotographCache, TiledPhotograph};
+use sfmtool_core::camera::{
+    CameraIntrinsics, PhotographCache, PhotographCacheOptions, TiledPhotograph,
+};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::numeric::median;
 use sfmtool_core::patch::normal_refine::ProjectedImage;
@@ -79,7 +81,10 @@ fn main() {
         .collect();
     let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
     let decode = Instant::now();
-    let cache = PhotographCache::new(0);
+    let cache = PhotographCache::new(PhotographCacheOptions {
+        budget_bytes: 0,
+        ..Default::default()
+    });
     let (pyramids, _) = cache.get_many(&refs, &Progress::none()).expect("decode");
     let sources: Vec<TiledPhotograph> = pyramids
         .into_iter()

@@ -15,7 +15,7 @@ use super::file::encode_mip_level;
 use super::test_support::{encode_jpeg, encode_png, synthetic_rgb, JpegOptions};
 use super::*;
 use crate::camera::image::ImageU8;
-use crate::camera::photograph_cache::{GetError, PhotographCache};
+use crate::camera::photograph_cache::{GetError, PhotographCache, PhotographCacheOptions};
 use crate::progress::Progress;
 use crate::workspace::WORKSPACE_FILE_NAME;
 
@@ -457,7 +457,10 @@ fn a_photograph_in_core_writes_nothing() {
         Err(MipmapError::NotOutOfCore { .. })
     ));
     for path in [&photograph, &alone] {
-        let cache = PhotographCache::new(1 << 30);
+        let cache = PhotographCache::new(PhotographCacheOptions {
+            budget_bytes: 1 << 30,
+            ..Default::default()
+        });
         assert!(cache.get(path, &Progress::none()).is_ok());
     }
     assert!(!ws.mipmaps().exists());
@@ -521,7 +524,10 @@ fn a_side_of_65536_is_refused_from_the_header_in_every_workspace_kind() {
             p
         },
     ];
-    let cache = PhotographCache::new(1 << 30);
+    let cache = PhotographCache::new(PhotographCacheOptions {
+        budget_bytes: 1 << 30,
+        ..Default::default()
+    });
     for path in &paths {
         let message = format!(
             "{} is 65536 x 100, and a photograph with a side over 65535 px cannot be read",

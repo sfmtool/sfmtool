@@ -481,7 +481,7 @@ fn a_pick_cancelled_at_its_last_photograph_gives_no_answer() {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
-    use sfmtool_core::camera::PhotographCache;
+    use sfmtool_core::camera::{PhotographCache, PhotographCacheOptions};
     use sfmtool_core::progress::Event;
 
     let edited = sfmtool_core::EditedReconstruction::new(Arc::new(
@@ -492,7 +492,10 @@ fn a_pick_cancelled_at_its_last_photograph_gives_no_answer() {
     let view = edited.point(point).unwrap();
     assert!(view.patch_frame().is_some());
     assert_eq!(view.observations().len(), 3);
-    let photographs = PhotographCache::new(0);
+    let photographs = PhotographCache::new(PhotographCacheOptions {
+        budget_bytes: 0,
+        ..Default::default()
+    });
     let cancel = AtomicBool::new(false);
     let sink = |event: Event<'_>| {
         if let Event::Count {

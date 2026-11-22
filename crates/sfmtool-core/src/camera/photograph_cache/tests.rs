@@ -31,6 +31,14 @@ fn write_png(dir: &Path, name: &str, w: u32, h: u32) -> PathBuf {
     path
 }
 
+/// Options with the default build budget and `budget_bytes`.
+fn with_budget(budget_bytes: u64) -> PhotographCacheOptions {
+    PhotographCacheOptions {
+        budget_bytes,
+        ..Default::default()
+    }
+}
+
 fn width(pyramid: &Option<Arc<ImageU8Pyramid>>) -> u32 {
     pyramid.as_ref().unwrap().level(0).width()
 }
@@ -57,6 +65,19 @@ fn budget_from_physical_memory_and_env() {
 }
 
 #[test]
+fn build_budget_from_physical_memory() {
+    assert_eq!(build_budget_from(Some(64 * GIB)), 16 * GIB);
+    assert_eq!(build_budget_from(Some(16 * GIB)), 4 * GIB);
+    assert_eq!(build_budget_from(None), 4 * GIB);
+    // A header claiming any size gives an estimate rather than an overflow.
+    assert_eq!(whole_decode_bytes(4, 2), 40);
+    assert_eq!(whole_decode_bytes(u32::MAX, u32::MAX), u64::MAX);
+    let options = PhotographCacheOptions::default();
+    assert_eq!(options.build_budget_bytes, default_build_budget_bytes());
+    assert_eq!(options.tile_size, PHOTOGRAPH_TILE_SIZE);
+}
+
+#[test]
 fn default_budget_is_in_range_or_overridden() {
     let budget = default_budget_bytes();
     if std::env::var(BUDGET_ENV_VAR).is_err() {
@@ -72,7 +93,7 @@ fn each_entry_has_the_depth_of_its_own_size() {
     let dir = tempfile::tempdir().unwrap();
     let small = write_png(dir.path(), "small.png", 64, 48);
     let tall = write_png(dir.path(), "tall.png", 270, 480);
-    let cache = PhotographCache::new(GIB);
+    let cache = PhotographCache::new(with_budget(GIB));
     let small = cache.get(&small, &Progress::none()).unwrap();
     let tall = cache.get(&tall, &Progress::none()).unwrap();
     assert_eq!(small.num_levels(), 6);
@@ -106,7 +127,7 @@ fn a_view_shrunk_64_times_reads_level_6() {
     })
     .save(&path)
     .unwrap();
-    let pyramid = PhotographCache::new(0)
+    let pyramid = PhotographCache::new(with_budget(0))
         .get(&path, &Progress::none())
         .unwrap();
     assert!(pyramid.num_levels() > 6);
@@ -142,7 +163,7 @@ fn a_view_shrunk_64_times_reads_level_6() {
 fn one_decode_per_path_under_contention() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_png(dir.path(), "a.png", 64, 48);
-    let cache = PhotographCache::new(GIB);
+    let cache = PhotographCache::new(with_budget(GIB));
     let threads = 16;
     let barrier = Barrier::new(threads);
     let results: Vec<_> = std::thread::scope(|scope| {
@@ -173,7 +194,7 @@ fn evicts_least_recently_used_within_budget() {
     let b = write_png(dir.path(), "b.png", 8, 8);
     let c = write_png(dir.path(), "c.png", 8, 8);
     let one = bytes_of(8, 8);
-    let cache = PhotographCache::new(2 * one + one / 2);
+    let cache = PhotographCache::new(with_budget(2 * one + one / 2));
 
     cache.get(&a, &Progress::none()).unwrap();
     cache.get(&b, &Progress::none()).unwrap();
@@ -197,7 +218,7 @@ fn keeps_the_entry_just_decoded_even_over_budget() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_png(dir.path(), "a.png", 8, 8);
     let b = write_png(dir.path(), "b.png", 8, 8);
-    let cache = PhotographCache::new(bytes_of(8, 8) / 2);
+    let cache = PhotographCache::new(with_budget(bytes_of(8, 8) / 2));
     cache.get(&a, &Progress::none()).unwrap();
     assert!(cache.peek(&a).is_some());
     // The next decode pushes the older one out.
@@ -212,7 +233,7 @@ fn a_held_pyramid_survives_eviction() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_png(dir.path(), "a.png", 8, 8);
     let b = write_png(dir.path(), "b.png", 8, 8);
-    let cache = PhotographCache::new(bytes_of(8, 8));
+    let cache = PhotographCache::new(with_budget(bytes_of(8, 8)));
     let held = cache.get(&a, &Progress::none()).unwrap();
     cache.get(&b, &Progress::none()).unwrap();
     assert!(cache.peek(&a).is_none());
@@ -227,7 +248,7 @@ fn remembers_a_failure_until_forgotten() {
     let missing = dir.path().join("missing.png");
     let corrupt = dir.path().join("corrupt.png");
     std::fs::write(&corrupt, b"not a png").unwrap();
-    let cache = PhotographCache::new(GIB);
+    let cache = PhotographCache::new(with_budget(GIB));
 
     assert_eq!(
         cache.get(&missing, &Progress::none()).err().unwrap(),
@@ -237,7 +258,9 @@ fn remembers_a_failure_until_forgotten() {
         cache.get(&corrupt, &Progress::none()).err().unwrap(),
         GetError::Unreadable(why) if why.contains("corrupt.png")
     ));
-    assert_eq!(cache.stats().misses, 2);
+    let stats = cache.stats();
+    // Neither header can be read, so neither is decoded.
+    assert_eq!((stats.misses, stats.decodes), (2, 0));
     assert!(cache.get(&missing, &Progress::none()).is_err());
     assert!(cache.get(&corrupt, &Progress::none()).is_err());
     let stats = cache.stats();
@@ -256,7 +279,7 @@ fn remembers_a_failure_until_forgotten() {
 fn a_file_that_appears_is_read() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("late.png");
-    let cache = PhotographCache::new(GIB);
+    let cache = PhotographCache::new(with_budget(GIB));
     assert!(cache.get(&path, &Progress::none()).is_err());
     write_png(dir.path(), "late.png", 8, 8);
     assert_eq!(width(&cache.get(&path, &Progress::none()).ok()), 8);
@@ -266,7 +289,7 @@ fn a_file_that_appears_is_read() {
 fn a_rewritten_file_is_decoded_again() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_png(dir.path(), "a.png", 8, 8);
-    let cache = PhotographCache::new(GIB);
+    let cache = PhotographCache::new(with_budget(GIB));
     let first = cache.get(&path, &Progress::none()).ok();
     assert_eq!(width(&first), 8);
     write_png(dir.path(), "a.png", 16, 8);
@@ -284,7 +307,7 @@ fn forget_and_clear_release_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_png(dir.path(), "a.png", 8, 8);
     let b = write_png(dir.path(), "b.png", 4, 4);
-    let cache = PhotographCache::new(GIB);
+    let cache = PhotographCache::new(with_budget(GIB));
     cache.get(&a, &Progress::none()).unwrap();
     cache.get(&b, &Progress::none()).unwrap();
     assert_eq!(cache.stats().bytes, bytes_of(8, 8) + bytes_of(4, 4));
@@ -303,7 +326,7 @@ fn get_many_keeps_order_and_reports_the_tally() {
     let b = write_png(dir.path(), "b.png", 12, 4);
     let c = write_png(dir.path(), "c.png", 16, 4);
     let missing = dir.path().join("missing.png");
-    let cache = PhotographCache::new(GIB);
+    let cache = PhotographCache::new(with_budget(GIB));
     cache.get(&b, &Progress::none()).unwrap();
 
     let counts = Mutex::new(Vec::new());
@@ -356,7 +379,7 @@ fn get_many_keeps_order_and_reports_the_tally() {
 fn get_many_of_one_path_twice_decodes_it_once() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_png(dir.path(), "a.png", 8, 4);
-    let cache = PhotographCache::new(GIB);
+    let cache = PhotographCache::new(with_budget(GIB));
     let paths: Vec<&Path> = vec![&a, &a];
     let (pyramids, tally) = cache.get_many(&paths, &Progress::none()).unwrap();
     assert!(Arc::ptr_eq(
@@ -371,7 +394,7 @@ fn get_many_of_one_path_twice_decodes_it_once() {
 fn get_many_returns_cancelled() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_png(dir.path(), "a.png", 8, 4);
-    let cache = PhotographCache::new(GIB);
+    let cache = PhotographCache::new(with_budget(GIB));
     let flag = AtomicBool::new(true);
     let paths: Vec<&Path> = vec![&a, &a, &a];
     let result = cache.get_many(&paths, &Progress::none().cancelled_by(&flag));
@@ -397,11 +420,12 @@ fn on_a_thread<T: Send + 'static>(
 }
 
 /// A cache whose first decode, once started, waits until the test sends on
-/// `release`. `events` receives every [`SlotEvent`] as it happens, and
-/// `decodes` counts the decodes started.
+/// `release`. `events` receives every [`SlotEvent`] as it happens, with the
+/// bytes reserved on the build count at that moment, and `decodes` counts the
+/// decodes started.
 struct HeldDecode {
     cache: Arc<PhotographCache>,
-    events: std::sync::mpsc::Receiver<SlotEvent>,
+    events: std::sync::mpsc::Receiver<(SlotEvent, u64)>,
     release: std::sync::mpsc::Sender<()>,
     decodes: Arc<AtomicUsize>,
 }
@@ -412,11 +436,11 @@ fn cache_holding_its_first_decode() -> HeldDecode {
     let release_rx = Mutex::new(release_rx);
     let decodes = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&decodes);
-    let mut cache = PhotographCache::new(GIB);
-    cache.on_slot_event = Some(Box::new(move |event| {
+    let mut cache = PhotographCache::new(with_budget(GIB));
+    cache.on_slot_event = Some(Box::new(move |cache, event| {
         let first =
             event == SlotEvent::DecodeStarted && counted.fetch_add(1, Ordering::SeqCst) == 0;
-        let _ = event_tx.send(event);
+        let _ = event_tx.send((event, cache.build_reserved.load(Ordering::SeqCst)));
         if first {
             let _ = release_rx.lock().unwrap().recv_timeout(HANG);
         }
@@ -430,10 +454,12 @@ fn cache_holding_its_first_decode() -> HeldDecode {
 }
 
 impl HeldDecode {
-    /// Wait for the next event, which must be `expected`.
-    fn expect(&self, expected: SlotEvent) {
-        let event = self.events.recv_timeout(HANG).expect("no slot event came");
+    /// Wait for the next event, which must be `expected`, and answer the
+    /// bytes reserved on the build count when it happened.
+    fn expect(&self, expected: SlotEvent) -> u64 {
+        let (event, reserved) = self.events.recv_timeout(HANG).expect("no slot event came");
         assert_eq!(event, expected);
+        reserved
     }
 }
 
@@ -536,10 +562,10 @@ fn a_maker_that_panics_empties_its_slot() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_png(dir.path(), "a.png", 8, 4);
     let decodes = Arc::new(AtomicUsize::new(0));
-    let mut cache = PhotographCache::new(GIB);
+    let mut cache = PhotographCache::new(with_budget(GIB));
     cache.on_slot_event = Some(Box::new({
         let decodes = Arc::clone(&decodes);
-        move |event| {
+        move |_, event| {
             if event == SlotEvent::DecodeStarted && decodes.fetch_add(1, Ordering::SeqCst) == 0 {
                 panic!("a decode that unwinds, as the test asks");
             }
@@ -553,6 +579,9 @@ fn a_maker_that_panics_empties_its_slot() {
     })
     .join();
     assert!(unwound.is_err());
+    // The decode was reserved before it unwound, and the unwinding gave its
+    // share back.
+    assert_eq!(cache.stats().build_reserved_bytes, 0);
     let next = on_a_thread({
         let (cache, a) = (Arc::clone(&cache), a.clone());
         move || cache.get(&a, &Progress::none())
@@ -573,8 +602,9 @@ fn a_cancelled_decode_is_not_remembered() {
     let cancel = AtomicBool::new(true);
     let cancelled = Progress::none().cancelled_by(&cancel);
     for budget in [GIB, 0] {
-        let cache = Arc::new(PhotographCache::new(budget));
+        let cache = Arc::new(PhotographCache::new(with_budget(budget)));
         assert_eq!(cache.get(&a, &cancelled).err(), Some(GetError::Cancelled));
+        assert_eq!(cache.stats().build_reserved_bytes, 0);
         assert!(matches!(cache.peek_state(&a), PeekedPhotograph::NotDecoded));
         assert_eq!(cache.stats().entries, 0);
         // On a thread of its own, since a slot left as being made would make
@@ -595,7 +625,7 @@ fn a_cancelled_decode_is_not_remembered() {
 fn budget_zero_keeps_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_png(dir.path(), "a.png", 8, 4);
-    let cache = PhotographCache::new(0);
+    let cache = PhotographCache::new(with_budget(0));
     let first = cache.get(&a, &Progress::none()).unwrap();
     let second = cache.get(&a, &Progress::none()).unwrap();
     assert!(!Arc::ptr_eq(&first, &second));
@@ -611,7 +641,7 @@ fn peek_state_tells_a_failure_from_no_answer_yet() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_png(dir.path(), "a.png", 8, 4);
     let missing = dir.path().join("missing.png");
-    let cache = PhotographCache::new(GIB);
+    let cache = PhotographCache::new(with_budget(GIB));
     assert!(matches!(cache.peek_state(&a), PeekedPhotograph::NotDecoded));
     assert!(matches!(
         cache.peek_state(&missing),
@@ -638,7 +668,7 @@ fn peek_state_tells_a_failure_from_no_answer_yet() {
         PeekedPhotograph::NotDecoded
     ));
     // A cache that keeps nothing never has an answer to peek at.
-    let none = PhotographCache::new(0);
+    let none = PhotographCache::new(with_budget(0));
     assert_eq!(none.budget_bytes(), 0);
     none.get(&a, &Progress::none()).unwrap();
     assert!(matches!(none.peek_state(&a), PeekedPhotograph::NotDecoded));
@@ -648,7 +678,7 @@ fn peek_state_tells_a_failure_from_no_answer_yet() {
 fn peek_state_does_not_wait_on_a_decode_in_flight() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_png(dir.path(), "a.png", 8, 4);
-    let cache = PhotographCache::new(GIB);
+    let cache = PhotographCache::new(with_budget(GIB));
     // A slot whose decode has not finished, as `get_found` leaves it while the
     // decoding thread runs.
     cache.lock().map.insert(
@@ -662,7 +692,7 @@ fn peek_state_does_not_wait_on_a_decode_in_flight() {
 fn peek_does_not_decode() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_png(dir.path(), "a.png", 8, 4);
-    let cache = PhotographCache::new(GIB);
+    let cache = PhotographCache::new(with_budget(GIB));
     assert!(cache.peek(&a).is_none());
     let stats = cache.stats();
     assert_eq!((stats.entries, stats.hits, stats.misses), (0, 0, 0));
@@ -677,7 +707,7 @@ fn decode_into_a_forgotten_slot_still_returns_and_charges_nothing() {
     // pyramid, and the byte count stays at what the map holds.
     let dir = tempfile::tempdir().unwrap();
     let a = write_png(dir.path(), "a.png", 8, 8);
-    let cache = PhotographCache::new(GIB);
+    let cache = PhotographCache::new(with_budget(GIB));
     let slot = Arc::new(Slot::new(SlotState::Making, file_stamp(&a)));
     // Not in the map, as after a `forget` during the decode.
     cache.charge(&a, &slot, 192);
@@ -695,7 +725,7 @@ fn an_inserted_pyramid_is_what_get_answers() {
     let dir = tempfile::tempdir().unwrap();
     // No file at this path: the entry stands in for one.
     let absent = dir.path().join("absent.png");
-    let cache = PhotographCache::new(GIB);
+    let cache = PhotographCache::new(with_budget(GIB));
     let pyramid = Arc::new(ImageU8Pyramid::from_image(
         ImageU8::from_channels(8, 4, 3),
         1,
@@ -720,7 +750,7 @@ fn an_inserted_pyramid_is_what_get_answers() {
     assert_eq!(cache.stats().bytes, other.byte_len() as u64);
 
     // Over the budget, the older entry goes, as with a decode.
-    let small = PhotographCache::new(bytes_of(8, 4));
+    let small = PhotographCache::new(with_budget(bytes_of(8, 4)));
     let b = dir.path().join("b.png");
     small.insert(&absent, Arc::clone(&pyramid));
     small.insert(&b, Arc::clone(&pyramid));
@@ -728,7 +758,298 @@ fn an_inserted_pyramid_is_what_get_answers() {
     assert!(small.peek(&b).is_some());
 
     // A budget of 0 keeps nothing.
-    let none = PhotographCache::new(0);
+    let none = PhotographCache::new(with_budget(0));
     none.insert(&absent, pyramid);
     assert!(none.peek(&absent).is_none());
+}
+
+/// The bytes a 16 x 16 photograph's decode reserves.
+const SMALL: u64 = 16 * 16 * WHOLE_DECODE_BYTES_PER_PIXEL;
+
+/// Write `n` 16 x 16 PNGs into `dir`.
+fn small_photographs(dir: &Path, n: usize) -> Vec<PathBuf> {
+    (0..n)
+        .map(|i| write_png(dir, &format!("p{i:02}.png"), 16, 16))
+        .collect()
+}
+
+/// The least bytes reserved on a build count as any decode started, and the
+/// most as any decode started or any caller started to wait.
+type Seen = Arc<(AtomicU64, AtomicU64)>;
+
+fn unseen() -> Seen {
+    Arc::new((AtomicU64::new(u64::MAX), AtomicU64::new(0)))
+}
+
+/// A cache made with `options` whose hook keeps in `seen` what its build count
+/// held at each decode's start and each wait's.
+fn cache_watching_its_count(options: PhotographCacheOptions, seen: &Seen) -> PhotographCache {
+    let mut cache = PhotographCache::new(options);
+    let seen = Arc::clone(seen);
+    cache.on_slot_event = Some(Box::new(move |cache, event| {
+        let reserved = cache.build_reserved.load(Ordering::SeqCst);
+        if event == SlotEvent::DecodeStarted {
+            seen.0.fetch_min(reserved, Ordering::SeqCst);
+        }
+        seen.1.fetch_max(reserved, Ordering::SeqCst);
+    }));
+    cache
+}
+
+/// `reserve_builds` grants as many decodes as fit beside what is reserved,
+/// and one when none fit, a decode larger than the whole budget included;
+/// each is given back as it ends and the rest when the reservation drops.
+/// No size or budget, however absurd, panics.
+#[test]
+fn reserve_builds_grants_what_fits_and_one_when_none_does() {
+    let cache = PhotographCache::new(PhotographCacheOptions {
+        build_budget_bytes: 10_000,
+        ..with_budget(0)
+    });
+    let reserved = || cache.stats().build_reserved_bytes;
+    let three = cache.reserve_builds(3_000, 5);
+    assert_eq!((three.granted(), reserved()), (3, 9_000));
+    // None fits, so one is granted past the budget.
+    let past = cache.reserve_builds(3_000, 5);
+    assert_eq!((past.granted(), reserved()), (1, 12_000));
+    three.release_one();
+    assert_eq!(reserved(), 9_000);
+    drop(three);
+    assert_eq!(reserved(), 3_000);
+    drop(past);
+    assert_eq!(reserved(), 0);
+    // Each decode goes back once, however often it is released.
+    let two = cache.reserve_builds(1_000, 2);
+    for _ in 0..4 {
+        two.release_one();
+    }
+    assert_eq!(reserved(), 0);
+    drop(two);
+    assert_eq!(reserved(), 0);
+    // One decode larger than the whole budget is let through alone.
+    let large = cache.reserve_builds(50_000, 2);
+    assert_eq!((large.granted(), reserved()), (1, 50_000));
+    drop(large);
+    assert_eq!(cache.reserve_builds(1_000, 0).granted(), 0);
+    assert_eq!(cache.reserve_builds(0, 7).granted(), 7);
+    let absurd = cache.reserve_builds(u64::MAX, usize::MAX);
+    assert_eq!(absurd.granted(), 1);
+    drop(absurd);
+    assert_eq!(reserved(), 0);
+}
+
+/// `try_reserve_build` is refused whenever the decode would take the count
+/// past the build budget, from one thread and from eight at once.
+#[test]
+fn try_reserve_build_never_takes_the_count_past_the_build_budget() {
+    let cache = PhotographCache::new(PhotographCacheOptions {
+        build_budget_bytes: 10_000,
+        ..with_budget(0)
+    });
+    let reserved = || cache.stats().build_reserved_bytes;
+    let held = cache.reserve_builds(6_000, 1);
+    assert!(cache.try_reserve_build(4_001).is_none());
+    let fits = cache.try_reserve_build(4_000).unwrap();
+    assert_eq!(reserved(), 10_000);
+    assert!(cache.try_reserve_build(1).is_none());
+    assert!(cache.try_reserve_build(u64::MAX).is_none());
+    drop((held, fits));
+    assert_eq!(reserved(), 0);
+    assert!(cache.try_reserve_build(10_001).is_none());
+
+    let threads = 8;
+    let barrier = Barrier::new(threads);
+    let most = AtomicU64::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| {
+                barrier.wait();
+                for _ in 0..200 {
+                    if let Some(granted) = cache.try_reserve_build(3_000) {
+                        most.fetch_max(reserved(), Ordering::SeqCst);
+                        drop(granted);
+                    }
+                }
+            });
+        }
+    });
+    assert!(most.load(Ordering::SeqCst) <= 10_000);
+    assert_eq!(reserved(), 0);
+
+    // A build budget of 0 refuses every decode that has a size.
+    let none = PhotographCache::new(PhotographCacheOptions {
+        build_budget_bytes: 0,
+        ..with_budget(0)
+    });
+    assert!(none.try_reserve_build(1).is_none());
+}
+
+/// A `get_many` over 20 photographs decodes them in groups whose reservations
+/// never pass the build budget, set to three decodes, and every decode is
+/// reserved when it starts; with a budget and with a cache that keeps
+/// nothing.
+#[test]
+fn get_many_decodes_in_groups_within_the_build_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let photographs = small_photographs(dir.path(), 20);
+    let paths: Vec<&Path> = photographs.iter().map(PathBuf::as_path).collect();
+    for budget in [GIB, 0] {
+        let seen = unseen();
+        let cache = cache_watching_its_count(
+            PhotographCacheOptions {
+                build_budget_bytes: 3 * SMALL,
+                ..with_budget(budget)
+            },
+            &seen,
+        );
+        let (found, tally) = cache.get_many(&paths, &Progress::none()).unwrap();
+        assert!(found.iter().all(Option::is_some));
+        assert_eq!(tally.read, 20);
+        let (least, most) = (seen.0.load(Ordering::SeqCst), seen.1.load(Ordering::SeqCst));
+        assert!(
+            least >= SMALL,
+            "a decode started with {least} bytes reserved"
+        );
+        assert!(
+            most <= 3 * SMALL,
+            "{most} bytes reserved, past the build budget"
+        );
+        let stats = cache.stats();
+        assert_eq!((stats.decodes, stats.build_reserved_bytes), (20, 0));
+        assert_eq!(stats.build_budget_bytes, 3 * SMALL);
+    }
+}
+
+/// Four `get_many` callers on one cache, started together on threads of their
+/// own over the same 20 photographs, never reserve more than the build budget
+/// plus one decode each, whatever order their reservations and decodes run in;
+/// each photograph is decoded once, and nothing stays reserved.
+#[test]
+fn get_many_callers_together_reserve_at_most_the_budget_plus_one_decode_each() {
+    let dir = tempfile::tempdir().unwrap();
+    let photographs = Arc::new(small_photographs(dir.path(), 20));
+    let seen = unseen();
+    let cache = Arc::new(cache_watching_its_count(
+        PhotographCacheOptions {
+            build_budget_bytes: 2 * SMALL,
+            ..with_budget(GIB)
+        },
+        &seen,
+    ));
+    let callers = 4;
+    let barrier = Arc::new(Barrier::new(callers));
+    let answers: Vec<_> = (0..callers)
+        .map(|_| {
+            let (cache, photographs, barrier) = (
+                Arc::clone(&cache),
+                Arc::clone(&photographs),
+                Arc::clone(&barrier),
+            );
+            on_a_thread(move || {
+                let paths: Vec<&Path> = photographs.iter().map(PathBuf::as_path).collect();
+                barrier.wait();
+                let (found, _) = cache.get_many(&paths, &Progress::none()).unwrap();
+                found.iter().all(Option::is_some)
+            })
+        })
+        .collect();
+    for answer in answers {
+        assert!(answer
+            .recv_timeout(HANG)
+            .expect("a get_many never returned"));
+    }
+    let most = seen.1.load(Ordering::SeqCst);
+    let bound = 2 * SMALL + callers as u64 * SMALL;
+    assert!(most <= bound, "{most} bytes reserved, past {bound}");
+    assert!(seen.0.load(Ordering::SeqCst) >= SMALL);
+    let stats = cache.stats();
+    assert_eq!((stats.misses, stats.decodes), (20, 20));
+    assert_eq!(stats.build_reserved_bytes, 0);
+}
+
+/// Two caches in one process count separately: one whose build budget is
+/// used up does not refuse the other's decodes. A decode adds only its own
+/// reservation to its cache's count, and gives it back when it ends.
+#[test]
+fn two_caches_keep_separate_counts() {
+    let dir = tempfile::tempdir().unwrap();
+    let photographs = small_photographs(dir.path(), 6);
+    let paths: Vec<&Path> = photographs.iter().map(PathBuf::as_path).collect();
+    let options = PhotographCacheOptions {
+        build_budget_bytes: 4 * SMALL,
+        ..with_budget(GIB)
+    };
+    let (seen_a, seen_b) = (unseen(), unseen());
+    let a = cache_watching_its_count(options, &seen_a);
+    let b = cache_watching_its_count(options, &seen_b);
+
+    let full = a.reserve_builds(SMALL, 4);
+    assert_eq!(full.granted(), 4);
+    assert!(a.try_reserve_build(SMALL).is_none());
+    assert!(b.try_reserve_build(SMALL).is_some());
+    // A's decode is granted past its full budget and counts only itself.
+    a.get(paths[0], &Progress::none()).unwrap();
+    assert_eq!(seen_a.0.load(Ordering::SeqCst), 5 * SMALL);
+    assert_eq!(seen_a.1.load(Ordering::SeqCst), 5 * SMALL);
+    assert_eq!(a.stats().build_reserved_bytes, 4 * SMALL);
+    // B decodes within its own budget, unaffected by A's.
+    b.get_many(&paths, &Progress::none()).unwrap();
+    assert!(seen_b.0.load(Ordering::SeqCst) >= SMALL);
+    assert!(seen_b.1.load(Ordering::SeqCst) <= 4 * SMALL);
+    assert_eq!(b.stats().build_reserved_bytes, 0);
+    assert_eq!(a.stats().build_reserved_bytes, 4 * SMALL);
+    drop(full);
+    assert_eq!(a.stats().build_reserved_bytes, 0);
+}
+
+/// A maker cancelled during its decode gives its share back before its slot
+/// empties, and the waiter that decodes in its place reserves: a `get` when
+/// it takes the decode over, holding nothing while it waits, and a `get_many`
+/// member with the share it kept while it waited.
+#[test]
+fn a_cancelled_maker_gives_its_share_back_and_its_successor_reserves() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_png(dir.path(), "a.png", 8, 4);
+    let one = 8 * 4 * WHOLE_DECODE_BYTES_PER_PIXEL;
+    for many in [false, true] {
+        let held = cache_holding_its_first_decode();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let maker = on_a_thread({
+            let (cache, a, cancel) = (Arc::clone(&held.cache), a.clone(), Arc::clone(&cancel));
+            move || cache.get(&a, &Progress::none().cancelled_by(&cancel))
+        });
+        assert_eq!(held.expect(SlotEvent::DecodeStarted), one);
+        let waiter = on_a_thread({
+            let (cache, a) = (Arc::clone(&held.cache), a.clone());
+            move || {
+                if many {
+                    let (found, _) = cache.get_many(&[a.as_path()], &Progress::none()).unwrap();
+                    found[0].clone().ok_or(GetError::NotFound(a))
+                } else {
+                    cache.get(&a, &Progress::none())
+                }
+            }
+        });
+        let waiting = held.expect(SlotEvent::WaitStarted);
+        assert_eq!(waiting, if many { 2 * one } else { one }, "many: {many}");
+
+        cancel.store(true, Ordering::SeqCst);
+        held.release.send(()).unwrap();
+        // The successor's decode, with the maker's share given back.
+        assert_eq!(held.expect(SlotEvent::DecodeStarted), one, "many: {many}");
+        assert_eq!(
+            maker
+                .recv_timeout(HANG)
+                .expect("the maker never returned")
+                .err(),
+            Some(GetError::Cancelled)
+        );
+        let pyramid = waiter
+            .recv_timeout(HANG)
+            .expect("the waiter never took the decode over")
+            .unwrap();
+        assert_eq!(pyramid.level(0).width(), 8);
+        let stats = held.cache.stats();
+        assert_eq!((stats.decodes, stats.build_reserved_bytes), (2, 0));
+    }
 }

@@ -247,7 +247,10 @@ fn the_panels_read_the_pyramid_the_cache_holds_for_the_path() {
         sfmtool_core::camera::image::ImageU8::new(8, 8, 3, vec![42u8; 8 * 8 * 3]),
         ImageU8Pyramid::full_levels(8, 8),
     ));
-    let cache = PhotographCache::new(1 << 30);
+    let cache = PhotographCache::new(sfmtool_core::camera::PhotographCacheOptions {
+        budget_bytes: 1 << 30,
+        ..Default::default()
+    });
     let path = photograph_path(&recon, 0).expect("the demo has an image 0");
     cache.insert(&path, Arc::clone(&pyramid));
 

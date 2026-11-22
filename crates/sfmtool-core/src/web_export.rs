@@ -43,7 +43,7 @@ use crate::analysis::scene_scale::{
     compute_auto_point_size, compute_camera_nn_scale, compute_scene_bounds, length_scale,
 };
 use crate::camera::frustum::compute_distorted_frustum_grid;
-use crate::camera::{PhotographCache, PhotographReadError};
+use crate::camera::{PhotographCache, PhotographCacheOptions, PhotographReadError};
 use crate::numeric::quantile_in_place;
 use crate::patch::display_bitmaps::render_display_patch_bitmaps;
 use crate::progress::{Cancelled, Progress};
@@ -362,7 +362,10 @@ pub fn build_web_export(
         let mut phase = bitmap_progress.phase("patch bitmaps");
         // Nothing else in the export reads a photograph, so a cache that
         // keeps nothing: each pyramid is dropped once the render is done.
-        let photographs = PhotographCache::new(0);
+        let photographs = PhotographCache::new(PhotographCacheOptions {
+            budget_bytes: 0,
+            ..Default::default()
+        });
         rendered_bitmaps = render_display_patch_bitmaps(
             recon,
             &photographs,

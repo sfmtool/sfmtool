@@ -1984,7 +1984,10 @@ fn converting_renders_and_persists_patch_bitmaps_when_photographs_are_available(
         .expect("a value with patch frames carries the reference column");
     let rendered = sfmtool_core::patch::display_bitmaps::render_patch_bitmap_column(
         recon,
-        &sfmtool_core::camera::PhotographCache::new(0),
+        &sfmtool_core::camera::PhotographCache::new(sfmtool_core::camera::PhotographCacheOptions {
+            budget_bytes: 0,
+            ..Default::default()
+        }),
         &sfmtool_core::camera::sampler::RegionPool::for_kernel_call(),
         &sfmtool_core::progress::Progress::none(),
     )
