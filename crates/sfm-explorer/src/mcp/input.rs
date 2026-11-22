@@ -185,14 +185,7 @@ impl InputCommand {
     fn steps(&self) -> VecDeque<Step> {
         use Step::*;
         match self {
-            InputCommand::Click { count, .. } => {
-                let mut steps = vec![Look, Move, Press];
-                if *count == 2 {
-                    steps.push(PressAgain);
-                }
-                steps.push(Settle);
-                steps.into()
-            }
+            InputCommand::Click { .. } => [Look, Move, Press, Settle].into(),
             InputCommand::Hover { .. } => [Look, Move, Settle].into(),
             // Nothing to aim at, so no frame to aim against.
             InputCommand::Leave => [Gone, Settle].into(),
@@ -327,10 +320,10 @@ enum Step {
     Move,
     /// Take the pointer out of the window.
     Gone,
-    /// Press and release the button, in one frame.
+    /// Press and release the button, in one frame: twice for a double click,
+    /// so egui finds no time between the two clicks however long the frames
+    /// take, and always counts the second as a double click.
     Press,
-    /// The second press and release of a double click.
-    PressAgain,
     /// Press the button of a drag at the first point of its path, and hold it.
     Down,
     /// Move the held pointer to this point of the drag's path.
@@ -506,41 +499,47 @@ impl PendingInput {
                 crate::platform::move_tracked_pointer(OFF_WINDOW, [OFF_WINDOW.x, OFF_WINDOW.y]);
                 Ok(vec![egui::Event::PointerGone])
             }
-            Step::Press | Step::PressAgain => {
+            Step::Press => {
                 let aim = self.aim.expect("a move precedes every press");
                 let (button, count) = match &self.command {
                     InputCommand::Click { button, count, .. } => (*button, *count),
                     _ => (egui::PointerButton::Primary, 1),
                 };
                 let mut events = Vec::new();
-                if step == Step::Press {
-                    // The press is resolved against the frame the pointer
-                    // arrived in, so that is the frame the hit is read from.
-                    let frame = self.frame.clone().expect("a move precedes every press");
-                    self.hit = frame.hit_block(frame.topmost_at(aim.window_px));
-                    if let InputCommand::Click { modifiers, .. } = &self.command {
-                        let mut text = String::from("click");
-                        text.push_str(button_text(button));
-                        if count == 2 {
-                            text.push_str(" twice");
-                        }
-                        text.push(' ');
-                        text.push_str(&self.where_text(aim));
-                        if !modifiers.is_empty() {
-                            text.push_str(&format!(" with {}", modifiers.text()));
-                        }
-                        text.push_str(&on_text(frame.name_at(aim.window_px)));
-                        state.action_log.record_as(Actor::Mcp, Kind::Input, text);
+                // The press is resolved against the frame the pointer arrived
+                // in, so that is the frame the hit is read from.
+                let frame = self.frame.clone().expect("a move precedes every press");
+                self.hit = frame.hit_block(frame.topmost_at(aim.window_px));
+                if let InputCommand::Click { modifiers, .. } = &self.command {
+                    let mut text = String::from("click");
+                    text.push_str(button_text(button));
+                    if count == 2 {
+                        text.push_str(" twice");
                     }
-                    events.extend(self.hold(held.modifiers));
+                    text.push(' ');
+                    text.push_str(&self.where_text(aim));
+                    if !modifiers.is_empty() {
+                        text.push_str(&format!(" with {}", modifiers.text()));
+                    }
+                    text.push_str(&on_text(frame.name_at(aim.window_px)));
+                    state.action_log.record_as(Actor::Mcp, Kind::Input, text);
                 }
-                for pressed in [true, false] {
-                    events.push(egui::Event::PointerButton {
-                        pos: aim.pos,
-                        button,
-                        pressed,
-                        modifiers,
-                    });
+                events.extend(self.hold(held.modifiers));
+                // Both clicks of a double click in this one frame. egui counts
+                // a click as a double click when it comes within
+                // `max_double_click_delay` (0.3 s) of the frame time of the
+                // one before, so in two frames a frame that took that long,
+                // as one waiting on an occluded macOS window's drawable can,
+                // would make the two clicks two single clicks.
+                for _ in 0..count {
+                    for pressed in [true, false] {
+                        events.push(egui::Event::PointerButton {
+                            pos: aim.pos,
+                            button,
+                            pressed,
+                            modifiers,
+                        });
+                    }
                 }
                 Ok(events)
             }
