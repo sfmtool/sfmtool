@@ -210,7 +210,7 @@ fn signed_values_use_the_minus_sign_and_never_print_minus_zero() {
 #[test]
 fn the_median_line_flags_the_bad_measurement_among_good_ones() {
     let (rows, readings) = read(Some("m"));
-    let good = median_line(&rows, &readings.distance, 0).expect("three readings");
+    let good = scale_comparison(&rows, &readings.distance, 0).expect("three readings");
     assert_eq!(good.count, 3);
     assert_close(
         good.median_unit_per_scene_unit,
@@ -219,7 +219,7 @@ fn the_median_line_flags_the_bad_measurement_among_good_ones() {
         "cm per su",
     );
     assert_close(good.deviation_percent.unwrap(), 0.0, 1e-4, "good deviation");
-    let bad = median_line(&rows, &readings.distance, 4).expect("three readings");
+    let bad = scale_comparison(&rows, &readings.distance, 4).expect("three readings");
     assert_close(
         bad.deviation_percent.unwrap(),
         100.0 * (BAD_SCALE / GOOD_SCALE - 1.0),
@@ -227,11 +227,11 @@ fn the_median_line_flags_the_bad_measurement_among_good_ones() {
         "bad deviation",
     );
     assert_eq!(
-        median_text(&bad, rows[4].unit),
+        scale_comparison_text(&bad, rows[4].unit),
         "Median over 3: 1 su = 1.02 m; this one +17.6%"
     );
     // A measurement with no reading still gets the line, saying so.
-    let refused = median_line(&rows, &readings.distance, 2).expect("three readings");
+    let refused = scale_comparison(&rows, &readings.distance, 2).expect("three readings");
     assert_eq!(refused.deviation_percent, None);
 }
 
@@ -245,7 +245,7 @@ fn the_median_line_is_absent_with_one_reading() {
         readings.distance[2].clone(),
         readings.distance[3].clone(),
     ];
-    assert_eq!(median_line(&one_rows, &one, 0), None);
+    assert_eq!(scale_comparison(&one_rows, &one, 0), None);
 }
 
 // ── The cache ────────────────────────────────────────────────────────────

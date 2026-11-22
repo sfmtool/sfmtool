@@ -429,7 +429,7 @@ pub(crate) fn row_text(
 /// What the header's comparison line says: the median scale the measurements
 /// of one kind with a reading imply, and how far this one's is from it.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct MedianLine {
+pub(crate) struct ScaleComparison {
     /// How many measurements have a reading.
     pub(crate) count: usize,
     /// The median implied length of one scene unit, in this measurement's
@@ -448,11 +448,11 @@ pub(crate) struct MedianLine {
 /// in metres; the line gives the median of those (`sfmtool_core::numeric`)
 /// in `rows[index]`'s unit. It does not read the file's unit, so it is the
 /// same check with one and without one.
-pub(crate) fn median_line(
+pub(crate) fn scale_comparison(
     rows: &[DistanceRow],
     resolved: &[ResolvedDistanceMeasurement],
     index: usize,
-) -> Option<MedianLine> {
+) -> Option<ScaleComparison> {
     let implied = |i: usize| -> Option<f64> {
         let d = resolved.get(i)?.scene_distance?;
         let row = rows.get(i)?;
@@ -464,7 +464,7 @@ pub(crate) fn median_line(
     }
     let median = sfmtool_core::numeric::median(&metres_per_scene_unit);
     let unit = rows.get(index)?.unit;
-    Some(MedianLine {
+    Some(ScaleComparison {
         count: metres_per_scene_unit.len(),
         median_unit_per_scene_unit: median / unit.in_metres(),
         deviation_percent: implied(index).map(|mine| 100.0 * (mine / median - 1.0)),
@@ -472,7 +472,7 @@ pub(crate) fn median_line(
 }
 
 /// `Median over 4: 1 su = 37.8 cm; this one +0.4%`.
-pub(crate) fn median_text(line: &MedianLine, unit: LengthUnit) -> String {
+pub(crate) fn scale_comparison_text(line: &ScaleComparison, unit: LengthUnit) -> String {
     let mine = match line.deviation_percent {
         Some(percent) => format!("this one {}%", signed(percent, 1)),
         None => "this one has no reading".to_string(),

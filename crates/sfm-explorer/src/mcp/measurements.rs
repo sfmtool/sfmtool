@@ -79,12 +79,12 @@ pub(super) fn get_measurement(
         .collect();
     object.insert("endpoints".into(), Value::Array(endpoints));
     // The header's comparison line, null with fewer than two readings.
-    let median = measurements::median_line(&rows, &readings.distance, index).map(|line| {
+    let median = measurements::scale_comparison(&rows, &readings.distance, index).map(|line| {
         json!({
             "count": line.count,
             "median_unit_per_scene_unit": line.median_unit_per_scene_unit,
             "deviation_percent": line.deviation_percent,
-            "text": measurements::median_text(&line, row.unit),
+            "text": measurements::scale_comparison_text(&line, row.unit),
         })
     });
     object.insert("median".into(), median.unwrap_or(Value::Null));

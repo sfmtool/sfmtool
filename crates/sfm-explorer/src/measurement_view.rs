@@ -299,8 +299,8 @@ fn show_header(
         ui.label(format!("Label: {}", row.label));
     }
     ui.label(format!("Stated distance: {}", row.stated_text()));
-    if let Some(line) = measurements::median_line(rows, resolved, measurement.index()) {
-        ui.label(measurements::median_text(&line, row.unit))
+    if let Some(line) = measurements::scale_comparison(rows, resolved, measurement.index()) {
+        ui.label(measurements::scale_comparison_text(&line, row.unit))
             .on_hover_text(
                 "The median of the scales the measurements with a reading imply, and how far \
              this one's is from it. su: one unit of the reconstruction's own coordinates.",
