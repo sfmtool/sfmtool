@@ -244,12 +244,14 @@ and hosts the pictures:
    checked out as `../sfmtool.github.io`; screenshot it from
    `pixi run docs-serve` run there, and put the pictures in that repository's
    PR.
-5. **Hosting.** Put the images (screenshots and renders alike) in one orphan
-   commit "Screenshots for <branch>" on a `pr-<branch>-screenshots` branch of
-   the fork, built without touching the checkout:
+5. **Hosting.** Put the PNG and JPEG images (screenshots and renders alike)
+   in one orphan commit "Screenshots for <branch>" on a
+   `pr-<branch>-screenshots` branch of the fork, built without touching the
+   checkout:
 
    ```bash
-   tree=$(for f in <dir>/*; do
+   tree=$(for f in <dir>/*.png <dir>/*.jpg <dir>/*.jpeg; do
+     [ -f "$f" ] || continue
      printf '100644 blob %s\t%s\n' "$(git hash-object -w "$f")" "$(basename "$f")"
    done | git mktree)
    sha=$(git commit-tree "$tree" -m "Screenshots for <branch>" \
@@ -267,8 +269,10 @@ and hosts the pictures:
 An image the code renders or writes outside the viewer (the output image of
 a CLI command, or the output of a helper or library function that renders or
 encodes an image) goes in the PR's "Screenshots and Renders" section too.
-PR #1367, which changed the demo scene's renderer (`DemoScene::render`), shows
-the photographs it writes and a before/after contact sheet there.
+PR #1367, which added the demo scene's renderer (`DemoScene::render`), shows
+there the five photographs it renders, captioned with the options used, and a
+contact sheet comparing them with the same photographs rendered with the
+PR's earlier texture.
 
 - **After.** Produce the images from the branch, on the scratchpad copy of the
   data. For a CLI command, run the command and use its output. For a helper

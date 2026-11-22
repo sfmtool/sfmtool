@@ -126,7 +126,8 @@ or patch bitmap builder, an image encoder). Show a before/after pair when
 something that already existed changed. No visible change is too small to
 need them: a new menu entry or a renamed label counts. When no CLI command
 writes a library renderer's images, render them with a throwaway program or
-a test that is not committed, and host them as screenshots are hosted. Write
+a test that is not committed, and host them as screenshots are hosted. Give
+each rendered image a caption saying what was rendered with which options. Write
 `n/a` only when nothing visible and no rendered image changes, and say what
 was checked ("n/a: Rust core only, no viewer, docs or rendered image
 change"). `skills/implement-change/SKILL.md` § "Screenshots and renders" says
