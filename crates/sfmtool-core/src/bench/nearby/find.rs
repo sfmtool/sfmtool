@@ -18,7 +18,7 @@ use crate::bench::track::{EditableTrack, Thresholds, Verdict};
 use crate::bench::track_at_pixel::{
     seed_cluster_with, upgrade_sightings, MatchesClusters, SiftIndexSource, ViewCamera,
 };
-use crate::bench::{check_label, BenchError};
+use crate::bench::{check_label, image_stem, BenchError};
 use crate::camera::sampler::RegionPool;
 use crate::camera::PhotographReadError;
 use crate::patch::normal_refine::ProjectedImage;
@@ -656,14 +656,6 @@ pub fn nearby_track_label(group: &str, rank: usize, order: usize, point: Option<
         Some(point) => format!("{group} {rank}{letters} pt {point}"),
         None => format!("{group} {rank}{letters}"),
     }
-}
-
-/// The stem of image `image`'s name.
-fn image_stem(edited: &EditedReconstruction, image: u32) -> String {
-    let name = &edited.base.image_set.images[image as usize].name;
-    std::path::Path::new(name)
-        .file_stem()
-        .map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned())
 }
 
 /// Find the tracks near `pixel` in `image`: 3D points that several of the

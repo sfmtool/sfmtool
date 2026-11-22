@@ -1191,6 +1191,13 @@ impl App {
                 if let Some((image, pixel)) = image_detail.take_cluster_start() {
                     app_state.start_cluster_here(image, pixel);
                 }
+                if let Some((image, [x, y])) = image_detail.take_measurement_start() {
+                    app_state.start_measurement_here(
+                        image,
+                        [f64::from(x), f64::from(y)],
+                        dock::Tab::ImageDetail,
+                    );
+                }
                 if let Some((id, position)) = scene_graph.take_bench_edit() {
                     let current_time = ui.input(|i| i.time);
                     apply_bench_edit(app_state, viewer_3d, id, position, current_time);

@@ -900,6 +900,34 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "create_bench_measurement",
+            description: "Start a new distance measurement on the bench and focus it, as New \
+                          Measurement from Here in Image Detail's context menu does, without \
+                          raising Measurement View: one version labelled like \"Put distance \
+                          from IMG_0042@142,198 on the bench\", the item holding endpoint A at \
+                          the pixel of the camera image named and nothing else, and labelled \
+                          distance from <image stem>@<rounded pixel> (with a suffix where \
+                          another item holds that). It has no stored row behind it, so its \
+                          commit appends one; place endpoint B with \
+                          set_bench_measurement_endpoint and give the stated distance with \
+                          set_bench_measurement_distance before commit_bench_measurement. To \
+                          start from a 3D point, as the 3D view's point menu does, pass the \
+                          camera_image and pixel get_point_reference_pixel gives. Refused, in \
+                          the commit's words, for a pixel outside [0, width) x [0, height) of \
+                          the image, on a sift_files reconstruction (view-only bench) and while \
+                          a background task holds the node. The reply names the item and \
+                          carries camera_image and pixel.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("camera_image", camera_image_schema()),
+                    ("pixel", pixel_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "commit_bench_measurement",
             description: "Write a measurement item into the reconstruction as one version, as \
                           Measurement View's Commit does: the row its origin names at the \

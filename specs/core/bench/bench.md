@@ -210,6 +210,7 @@ uniqueness.
 | A `.sift` feature | the image stem and the feature index, `IMG_0042#847` | `ClusterSeed::label` |
 | A split | the parent's label with `-split` appended | `split` |
 | A stored measurement | its kind and row, `distance #2` | `put_measurement` |
+| A new measurement at a pixel | `distance from ` and the pixel's label, `distance from IMG_0042@142,198` | `start_measurement` |
 
 A collision takes ` (2)`, ` (3)`, the same disambiguation a scene node's label
 takes, so a reader who knows one knows the other. A label is stable until

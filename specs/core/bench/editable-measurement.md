@@ -6,8 +6,8 @@ pixels, each in one image. Placing those pixels well is work that takes
 several steps: a person moves an endpoint, compares the result with the other
 measurements, and only then wants it written into the file. The **editable
 measurement** is a stored measurement taken out of the reconstruction onto the
-bench to be worked on that way, and the **commit** is the one step that writes
-it back. It holds only what the file stores of a measurement, so whatever is
+bench to be worked on that way, or a new one started from one pixel, and the
+**commit** is the one step that writes it back. It holds only what the file stores of a measurement, so whatever is
 derived from it, such as the 3D position an endpoint lands on, is read again
 against whichever version of the reconstruction the caller stands at.
 
@@ -21,7 +21,8 @@ is [`../../gui/measurement-view.md`](../../gui/measurement-view.md) and
 [`../../gui/bench.md`](../../gui/bench.md). Three steps edit an item: setting
 its label and setting its stated distance (§ "The label and the stated
 distance"), and setting an endpoint's image and pixel (§ "Setting an
-endpoint").
+endpoint"); `start_measurement` starts a new item from one pixel (§ "Starting a
+measurement").
 
 ## Rust API
 
@@ -29,6 +30,7 @@ The item and its steps live in
 [bench/measurement.rs](../../../crates/sfmtool-core/src/bench/measurement.rs),
 re-exported from `sfmtool_core::bench`, and bound as
 `sfmtool.bench.EditableMeasurement`, `sfmtool.bench.put_measurement`,
+`sfmtool.bench.start_measurement`,
 `sfmtool.bench.set_measurement_label`, `sfmtool.bench.set_stated_distance`,
 `sfmtool.bench.set_measurement_endpoint`,
 `sfmtool.bench.parse_stated_distance` and `sfmtool.bench.commit_measurement`.
@@ -98,6 +100,14 @@ pub fn put_measurement(
     index: u32,
     version: u64,
 ) -> Result<(Bench, String), NoSuchMeasurement>;
+
+/// A new distance with endpoint A at `endpoint` and nothing else, labelled
+/// `distance from IMG_0042@142,198`.
+pub fn start_measurement(
+    bench: &Bench,
+    edited: &EditedReconstruction,
+    endpoint: MeasurementEndpoint,
+) -> Result<(Bench, String), EndpointPlacementRefusal>;
 
 pub fn set_measurement_label(item: &EditableMeasurement, label: &str) -> EditableMeasurement;
 
@@ -190,10 +200,11 @@ item. A caller reads them when it needs them, with
 `resolve_measurement_endpoint` for one
 ([`../reconstruction/measurement-endpoint.md`](../reconstruction/measurement-endpoint.md)).
 
-**An endpoint can be absent.** A stored measurement always has both, but
+**An endpoint can be absent.** A stored measurement always has both, but a
+new measurement starts with endpoint A alone (§ "Starting a measurement"), and
 deleting the image an endpoint was in clears it (§ "When an image is
-deleted"), and an item with one endpoint is still worth keeping: the person
-who placed it can place the other again.
+deleted"). An item with one endpoint is still worth keeping: the person who
+placed it can place the other.
 
 **The origin is a row at a version.** A measurement has no portable id, so its
 row is the only name it has, and rows are renumbered by the edits that drop
@@ -207,7 +218,8 @@ history.
 file stores for the measurement; it may be empty and need not be unique. The
 item's name on the bench is the bench's, minted by `put_measurement` from the
 kind and the row: `distance #2`, with the bench's collision suffix where
-another item holds that ([bench.md](bench.md) § "Labels").
+another item holds that ([bench.md](bench.md) § "Labels"). One started from a
+pixel is minted by `start_measurement` from where it starts.
 
 **The commit takes the row, not the origin.** `origin_row` is the row the
 caller resolved the origin to, or `None` where it resolved to none, which
@@ -238,6 +250,30 @@ let item = bench.measurement(&label).expect("just put on");
 // The caller follows the origin to the version it stands at; here it is the same.
 let commit = commit_measurement(&edited, item, Some(2))?;
 assert!(!commit.wrote); // nothing changed, so nothing is written
+```
+
+## Starting a measurement
+
+`start_measurement` puts a new distance measurement on the bench with endpoint
+A at an image and a pixel and nothing else: no origin, so its commit appends a
+row; no endpoint B and no stated distance, which `set_measurement_endpoint`
+and `set_stated_distance` give it; and an empty label of its own. Its bench
+label is minted from where it starts, `distance from ` and the form a cluster
+seeded at the pixel is labelled with (`ClusterSeed::label`): the image's stem
+and the pixel rounded to whole pixels, `distance from IMG_0042@142,198`, with
+the bench's collision suffix, ` (2)`, where another item holds that
+([bench.md](bench.md) § "Labels"). The endpoint is asked what
+`set_measurement_endpoint` asks of one, through the same check, so an image
+past the image set and a pixel outside the image are refused in the commit's
+sentence. SfM Explorer's *New Measurement from Here* and its wire tool
+`create_bench_measurement` make it.
+
+```rust
+use sfmtool_core::bench::{start_measurement, Bench, MeasurementEndpoint};
+
+let at = MeasurementEndpoint { image: 41, pixel: [141.6, 198.4] };
+let (bench, label) = start_measurement(&Bench::new(), &edited, at)?;
+assert_eq!(label, "distance from IMG_0042@142,198"); // image 41 is IMG_0042.jpg
 ```
 
 ## The label and the stated distance
@@ -355,7 +391,8 @@ edited, report = bench_module.commit_measurement(edited, item, 2, node="dino")
 assert report["wrote"] is False
 ```
 
-`put_measurement(bench, edited, kind, index, *, version=0)` returns
+`put_measurement(bench, edited, kind, index, *, version=0)` and
+`start_measurement(bench, edited, image, xy)` return
 `(Bench, EditableMeasurement)`. `set_measurement_label(measurement, label)`,
 `set_stated_distance(measurement, distance, unit)`, the unit a name (`"cm"`),
 and `set_measurement_endpoint(edited, measurement, side, image, xy)`, `side`
@@ -371,7 +408,11 @@ origin_row=None, *, node="the reconstruction")` returns
 [bench/tests/measurement.rs](../../../crates/sfmtool-core/src/bench/tests/measurement.rs)
 covers putting a stored measurement on the bench (its endpoints, distance,
 unit and label copied as stored, its origin, its label and the collision
-suffix, a row past the rows refused with the count), the kind's names, deleting
+suffix, a row past the rows refused with the count), starting one from a pixel
+(endpoint A alone, no origin, distance or label, its label and the collision
+suffix, its commit refused until B and the distance are given and then
+appending a row, an image past the image set and a pixel outside the image
+refused in the commit's sentence), the kind's names, deleting
 an image (an endpoint cleared, one moved down, an item left with none
 discarded, an item the delete does not reach keeping its `Arc` and every item
 its ID), the commit (a replaced row and the rows around it, an appended row, a
@@ -391,9 +432,6 @@ covers the same through the bindings.
 
 ## Non-goals
 
-- **An item started from one pixel** with no stored row behind it, which is
-  proposed in
-  [`../../drafts/measurement-view.md`](../../drafts/measurement-view.md).
 - **An endpoint's 3D position as part of the item.** It always follows from
   the image and the pixel.
 - **A kind other than distance.** `MeasurementKind` has one variant, as the

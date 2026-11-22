@@ -1175,3 +1175,121 @@ fn the_endpoint_fields_are_greyed_while_a_step_would_be_refused() {
     assert!(sets(&responses).is_empty());
     assert!(panel.image_choices(EndpointSide::A).is_empty());
 }
+
+// ── A new measurement ───────────────────────────────────────────────────
+
+/// A measurement started from a pixel shows endpoint B's block with the
+/// instructions that place it, both header fields empty with their grey
+/// text, the result saying B is missing, and *Commit* greyed with the
+/// refusal, until B and the distance are given.
+#[test]
+fn a_new_measurement_says_how_to_finish_it() {
+    let (mut state, id) = measured_state(Some("m"));
+    let label = state
+        .start_measurement(ImageRef::new(id, 0), [100.0, 50.0])
+        .unwrap();
+    let (mut panel, ctx) = settled(&state);
+    let texts = painted(&mut panel, &ctx, &state);
+    let instruction = place_instruction(EndpointSide::B);
+    assert_eq!(
+        instruction,
+        "Right-click a pixel in Image Detail, or a point in the 3D view, and choose Set \
+         Endpoint B Here."
+    );
+    for expected in [
+        "Endpoint B is not placed.",
+        instruction.as_str(),
+        "No label",
+        "No stated distance",
+        "No distance: endpoint B is not placed.",
+        "From no stored row: Commit adds it as a new row",
+    ] {
+        assert!(
+            texts.iter().any(|t| t == expected),
+            "{expected:?} not in {texts:?}"
+        );
+    }
+    assert!(panel.field_rect(HeaderField::Distance).is_some());
+    let commit = &panel.toolbar()[0];
+    assert_eq!(
+        commit.1.as_deref(),
+        Some(
+            format!(
+                "Cannot commit {label}: endpoint B is not placed, and a distance needs both \
+                 endpoints."
+            )
+            .as_str()
+        )
+    );
+
+    // B placed: its block has fields and no instructions, and Commit asks for
+    // the distance.
+    state.set_endpoint(&crate::bench::measurement::EndpointSet {
+        node: id,
+        item: label.clone(),
+        side: EndpointSide::B,
+        image: 1,
+        pixel: [300.0, 200.5],
+    });
+    let texts = painted(&mut panel, &ctx, &state);
+    assert!(!texts.contains(&instruction), "{texts:?}");
+    run_frame(&mut panel, &ctx, &state, Vec::new());
+    assert!(panel
+        .pixel_field_rect(EndpointSide::B, PixelAxis::X)
+        .is_some());
+    assert_eq!(
+        panel.toolbar()[0].1.as_deref(),
+        Some(format!("Cannot commit {label}: no stated distance is given.").as_str())
+    );
+    state
+        .set_bench_measurement_distance(id, &label, "42 cm")
+        .unwrap();
+    run_frame(&mut panel, &ctx, &state, Vec::new());
+    assert_eq!(panel.toolbar()[0].1, None);
+}
+
+/// A pixel field is wide enough for the shortest text that reads back as the
+/// `float32` it holds, so a ten-character coordinate is not cut off.
+#[test]
+fn a_pixel_field_fits_its_coordinate() {
+    let (mut state, id) = measured_state(Some("m"));
+    let (_, ctx) = editing(&mut state, id);
+    let (image, [_, y]) = held(&state, id, EndpointSide::A);
+    state
+        .set_bench_measurement_endpoint(
+            id,
+            "distance #0",
+            EndpointSide::A,
+            image,
+            [117.847664, y],
+            crate::bench::measurement::EndpointMove::Set,
+        )
+        .unwrap();
+    let value = pixel_text(117.847664);
+    assert_eq!(value, "117.847664");
+    let (mut panel, ctx) = (MeasurementView::new(), ctx);
+    for _ in 0..2 {
+        run_frame(&mut panel, &ctx, &state, Vec::new());
+    }
+    let field = panel
+        .pixel_field_rect(EndpointSide::A, PixelAxis::X)
+        .expect("the field was drawn");
+    let mut text_width = 0.0;
+    crate::test_support::run_frame_headless(&ctx, input(Vec::new()), |ui| {
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        text_width = ui.fonts_mut(|fonts| {
+            fonts
+                .layout_no_wrap(value.clone(), font, egui::Color32::WHITE)
+                .size()
+                .x
+        });
+    });
+    // The text, inside the field's margin of 4 points on each side.
+    assert!(
+        field.width() >= text_width + 8.0,
+        "the field is {} wide for {text_width} of text",
+        field.width()
+    );
+    let texts = painted(&mut panel, &ctx, &state);
+    assert!(texts.contains(&value), "{texts:?}");
+}

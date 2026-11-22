@@ -17,6 +17,7 @@ from sfmtool.bench import (
     set_measurement_endpoint,
     set_measurement_label,
     set_stated_distance,
+    start_measurement,
 )
 from sfmtool.fileio import LENGTH_UNIT_NAMES
 from sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
@@ -182,3 +183,19 @@ def test_setting_an_endpoint_gives_a_new_item_or_refuses(edited):
         set_measurement_endpoint(edited, item, 0, 999, (1.0, 1.0))
     with pytest.raises(ValueError, match="there is no endpoint 2"):
         set_measurement_endpoint(edited, item, 2, 0, (1.0, 1.0))
+
+
+def test_a_measurement_started_from_a_pixel_holds_endpoint_a_alone(measured, edited):
+    bench, item = start_measurement(Bench(), edited, 3, (141.6, 198.4))
+    stem = measured.image_names[3].rsplit(".", 1)[0]
+    assert bench.labels == [f"distance from {stem}@142,198"]
+    assert bench.kind(bench.labels[0]) == "measurement"
+    assert item.origin is None
+    assert item.label == ""
+    assert item.distance is None
+    assert item.endpoints[0] == (3, pytest.approx((141.6, 198.4)))
+    assert item.endpoints[1] is None
+    again, _ = start_measurement(bench, edited, 3, (142.4, 197.6))
+    assert again.labels[1] == f"distance from {stem}@142,198 (2)"
+    with pytest.raises(ValueError, match="is outside image 3"):
+        start_measurement(Bench(), edited, 3, (-1.0, 5.0))

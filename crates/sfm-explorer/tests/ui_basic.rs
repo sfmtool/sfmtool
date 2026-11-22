@@ -2799,3 +2799,172 @@ fn an_endpoint_is_set_from_image_detail_s_menu() {
         "the stored row moved: {stored}"
     );
 }
+
+/// Right-click the middle of Image Detail showing photograph `image` with
+/// `pixel` at the middle of the panel, magnified, and choose `entry` from
+/// the menu, which must be enabled. The photograph's name comes back.
+fn choose_in_image_detail(
+    viewer: &McpViewer,
+    label: &str,
+    image: u64,
+    pixel: [f64; 2],
+    entry: &str,
+) -> String {
+    let view = viewer.ok(
+        "set_image_detail_view",
+        json!({
+            "reconstruction_label": label,
+            "camera_image": image,
+            "pixel": pixel,
+            "zoom": 16.0,
+        }),
+    );
+    let image_name = view["image_detail_view"]["camera_image_name"]
+        .as_str()
+        .expect("the view names its photograph")
+        .to_string();
+    let size = viewer.wait_for(
+        json!({ "panel_name": "image_detail" }),
+        "Image Detail never drew the photograph",
+        |listing| {
+            let drawn = viewer.ok("get_image_detail_view", json!({}));
+            (drawn["image_detail_view"]["camera_image"] == image)
+                .then(|| listing["target"]["size_px"].clone())
+        },
+    );
+    let n = |i: usize| size[i].as_i64().expect("a whole number of pixels");
+    let reply = viewer.click(json!({
+        "panel_name": "image_detail",
+        "at_px": [n(0) / 2, n(1) / 2],
+        "mouse_button": "right",
+    }));
+    let menu = reply["menus"]
+        .as_array()
+        .and_then(|menus| menus.iter().find(|menu| menu["kind"] == "context_menu"))
+        .unwrap_or_else(|| panic!("the right-click opened no menu: {reply}"));
+    let item = menu_item(menu, entry).unwrap_or_else(|| panic!("no {entry} in {menu}"));
+    assert_eq!(item["enabled"], true, "{entry} is greyed: {menu}");
+    viewer.click(json!({ "widget": item["widget"] }));
+    image_name
+}
+
+/// A measurement made from Image Detail's menu: *New Measurement from Here*
+/// puts a measurement item with endpoint A on the bench and raises
+/// Measurement View on it, whose block for B says how to place it; *Set
+/// Endpoint B Here* on another photograph places B; a distance typed into the
+/// header's field is set; and *Commit* adds the measurement as a new row.
+#[test]
+fn a_measurement_is_made_from_image_detail_s_menu_and_committed() {
+    let (_dir, path) = measured_copy();
+    let viewer = McpViewer::launched(ui_test_lock(), None, &["--no-default-layout", &path]);
+    let label = wait_for_measurements(&viewer, 2);
+    let layout = viewer.ok("get_window_layout", json!({}));
+    assert_eq!(
+        layout["panels"]["measurement_view"]["active"], false,
+        "Measurement View starts behind Track View: {layout}"
+    );
+
+    let a_at = [135.0, 240.0];
+    let a_image = choose_in_image_detail(&viewer, &label, 3, a_at, "New Measurement from Here");
+    let bench = viewer.ok("get_bench", json!({ "reconstruction_label": label }));
+    let item = bench["focused_item"]
+        .as_str()
+        .unwrap_or_else(|| panic!("nothing is focused: {bench}"))
+        .to_string();
+    let stem = a_image
+        .rsplit_once('.')
+        .map_or(a_image.as_str(), |(s, _)| s);
+    assert!(
+        item.starts_with(&format!("distance from {stem}@")),
+        "{item}"
+    );
+    let layout = viewer.ok("get_window_layout", json!({}));
+    assert_eq!(
+        layout["panels"]["measurement_view"],
+        json!({ "open": true, "active": true }),
+        "{layout}"
+    );
+    assert_eq!(layout["panels"]["image_detail"]["active"], true, "{layout}");
+    let history = viewer.ok(
+        "get_reconstruction_history",
+        json!({ "reconstruction_label": label }),
+    );
+    assert!(
+        history
+            .to_string()
+            .contains(&format!("Put {item} on the bench")),
+        "{history}"
+    );
+    viewer.wait_for(
+        json!({ "panel_name": "measurement_view" }),
+        "Measurement View never drew the new item's unplaced endpoint B",
+        |listing| {
+            find_widget(
+                listing,
+                "label",
+                "Right-click a pixel in Image Detail, or a point in the 3D view, and choose Set \
+                 Endpoint B Here.",
+            )
+            .map(|_| ())
+        },
+    );
+
+    let b_at = [100.0, 300.0];
+    let b_image = choose_in_image_detail(&viewer, &label, 5, b_at, "Set Endpoint B Here");
+    let got = viewer.ok(
+        "get_measurement",
+        json!({ "reconstruction_label": label, "item": item }),
+    );
+    for (side, image, at) in [(0, 3, a_at), (1, 5, b_at)] {
+        let endpoint = &got["endpoints"][side];
+        assert_eq!(endpoint["camera_image"], image, "{got}");
+        for (c, want) in at.iter().enumerate() {
+            let pixel = endpoint["pixel"][c].as_f64().expect("a pixel");
+            assert!((pixel - want).abs() < 4.0, "{endpoint} for {at:?}");
+        }
+    }
+    let history = viewer.ok(
+        "get_reconstruction_history",
+        json!({ "reconstruction_label": label }),
+    );
+    assert!(
+        history
+            .to_string()
+            .contains(&format!("Set endpoint B of {item} to {b_image} (")),
+        "{history}"
+    );
+
+    let field = viewer.wait_for(
+        json!({ "panel_name": "measurement_view" }),
+        "Measurement View never drew the stated distance field",
+        |listing| find_widget(listing, "text_input", "measurement stated distance").cloned(),
+    );
+    viewer.ok(
+        "type_text",
+        json!({ "widget": field["widget"], "text": "42 cm" }),
+    );
+    viewer.ok("press_key", json!({ "key": "Enter" }));
+    let got = viewer.ok(
+        "get_measurement",
+        json!({ "reconstruction_label": label, "item": item }),
+    );
+    assert_eq!(got["stated_distance"], 42.0, "{got}");
+
+    let commit = viewer.wait_for(
+        json!({ "panel_name": "measurement_view" }),
+        "Measurement View never offered Commit",
+        |listing| {
+            find_widget(listing, "button", "Commit")
+                .filter(|button| button["enabled"] == true)
+                .cloned()
+        },
+    );
+    viewer.click(json!({ "widget": commit["widget"] }));
+    wait_for_measurements(&viewer, 3);
+    let stored = viewer.ok(
+        "get_measurement",
+        json!({ "reconstruction_label": label, "measurement_index": 2 }),
+    );
+    assert_eq!(stored["endpoints"][0]["camera_image"], 3, "{stored}");
+    assert_eq!(stored["endpoints"][1]["camera_image"], 5, "{stored}");
+}

@@ -179,6 +179,11 @@ pub(crate) struct ImageDetail {
     /// opened on, drained by `app.rs` after the frame for the same reason: it
     /// raises Track View on the cluster. See [`ImageDetail::take_cluster_start`].
     cluster_start: Option<(ImageRef, [f32; 2])>,
+    /// *New Measurement from Here*, at the image and pixel the menu was opened
+    /// on, drained by `app.rs` after the frame for the same reason: it raises
+    /// Measurement View on the new item. See
+    /// [`ImageDetail::take_measurement_start`].
+    measurement_start: Option<(ImageRef, [f32; 2])>,
 }
 
 /// A feature to draw on the image detail panel.
@@ -240,6 +245,14 @@ pub(crate) struct ImageDetailResponse {
     /// endpoint of the focused measurement item is set to the image shown and
     /// that pixel. Applied by the dock, since the step raises no panel.
     pub(crate) set_endpoint_here: Option<(crate::measurements::EndpointSide, [f32; 2])>,
+    /// The pixel the context menu's `New Measurement from Here` was clicked
+    /// for: a measurement item starts there, on the node's bench, with
+    /// endpoint A at that pixel of the image shown.
+    ///
+    /// Read by the panel itself, like `start_bench_cluster`: the gesture
+    /// raises Measurement View, so `show` keeps it for
+    /// [`ImageDetail::take_measurement_start`].
+    pub(crate) new_measurement: Option<[f32; 2]>,
     /// The pixel *Create Track Here* was asked for at, in source-image
     /// coordinates: the context menu's entry, at the pixel the menu was opened
     /// at, or a Control+Shift click, at the pixel clicked. A track is built
@@ -306,6 +319,7 @@ impl ImageDetail {
             point_gesture: None,
             target_point: None,
             cluster_start: None,
+            measurement_start: None,
         }
     }
 
@@ -331,6 +345,13 @@ impl ImageDetail {
     /// [`ImageDetail::take_point_gesture`], and for the same reason.
     pub(crate) fn take_cluster_start(&mut self) -> Option<(ImageRef, [f32; 2])> {
         self.cluster_start.take()
+    }
+
+    /// Take the *New Measurement from Here* the last frame chose, if any: the
+    /// image and the pixel in it. Drained by `app.rs` with
+    /// [`ImageDetail::take_point_gesture`], and for the same reason.
+    pub(crate) fn take_measurement_start(&mut self) -> Option<(ImageRef, [f32; 2])> {
+        self.measurement_start.take()
     }
 
     /// Drop everything cached for a reconstruction that has left the scene.
@@ -806,6 +827,7 @@ impl ImageDetail {
             start_bench_cluster: None,
             add_bench_observation: None,
             set_endpoint_here: None,
+            new_measurement: None,
             create_track_here: None,
             edit_on_bench: None,
             find_nearby_tracks: None,
@@ -1165,6 +1187,10 @@ impl ImageDetail {
         // The other one: a cluster started here raises Track View on it.
         if let (Some(pixel), Some(image)) = (response.start_bench_cluster, selected_image) {
             self.cluster_start = Some((ImageRef::new(recon_id, image), pixel));
+        }
+        // And a measurement started here raises Measurement View on it.
+        if let (Some(pixel), Some(image)) = (response.new_measurement, selected_image) {
+            self.measurement_start = Some((ImageRef::new(recon_id, image), pixel));
         }
 
         // The one mark that draws over the features rather than under them.

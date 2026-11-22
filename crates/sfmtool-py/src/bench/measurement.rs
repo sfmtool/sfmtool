@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Python bindings for the editable measurement: the item, putting a stored
-//! measurement on the bench, the steps that set its label, its stated
-//! distance and an endpoint, the parser of a typed distance, and the commit
-//! that writes it back.
+//! measurement on the bench or starting a new one from a pixel, the steps
+//! that set its label, its stated distance and an endpoint, the parser of a
+//! typed distance, and the commit that writes it back.
 //!
 //! `specs/core/bench/editable-measurement.md` is the design. The item is a
 //! plain value like the track, and each step gives back the next value and
@@ -21,8 +21,8 @@ use sfmtool_core::bench::{
     parse_stated_distance as core_parse_stated_distance, put_measurement as core_put_measurement,
     set_measurement_endpoint as core_set_measurement_endpoint,
     set_measurement_label as core_set_measurement_label,
-    set_stated_distance as core_set_stated_distance, EditableMeasurement, EditableMeasurementBody,
-    MeasurementEndpoint, MeasurementKind,
+    set_stated_distance as core_set_stated_distance, start_measurement as core_start_measurement,
+    EditableMeasurement, EditableMeasurementBody, MeasurementEndpoint, MeasurementKind,
 };
 use sfmtool_core::LengthUnit;
 
@@ -145,6 +145,37 @@ fn put_measurement(
     let kind = kind_named(kind)?;
     let (next, label) =
         core_put_measurement(&bench.inner, &edited.inner, kind, index, version).map_err(refused)?;
+    let measurement = PyEditableMeasurement {
+        inner: Arc::clone(next.measurement(&label).expect("just put on")),
+    };
+    Ok((PyBench { inner: next }, measurement))
+}
+
+/// Put a new distance measurement on the bench with endpoint A at pixel `xy`
+/// of image `image`, and nothing else.
+///
+/// The measurement has no origin, so its commit appends a row, and no
+/// endpoint B, stated distance or label of its own until the other steps give
+/// them. Its label on the bench is minted from where it starts,
+/// ``"distance from IMG_0042@142,198"`` (the image stem and the rounded
+/// pixel), with a collision suffix where another item holds it. An image past
+/// `edited`'s images, and a pixel outside ``[0, width) x [0, height)`` of its
+/// image, are each a ``ValueError`` in the commit's words.
+///
+/// Returns ``(Bench, EditableMeasurement)``.
+#[pyfunction]
+fn start_measurement(
+    bench: &PyBench,
+    edited: &PyEditedReconstruction,
+    image: u32,
+    xy: (f64, f64),
+) -> PyResult<(PyBench, PyEditableMeasurement)> {
+    let endpoint = MeasurementEndpoint {
+        image,
+        pixel: [xy.0, xy.1],
+    };
+    let (next, label) =
+        core_start_measurement(&bench.inner, &edited.inner, endpoint).map_err(refused)?;
     let measurement = PyEditableMeasurement {
         inner: Arc::clone(next.measurement(&label).expect("just put on")),
     };
@@ -285,6 +316,7 @@ fn parse_stated_distance(text: &str, bare_unit: &str) -> PyResult<(f64, &'static
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyEditableMeasurement>()?;
     m.add_function(wrap_pyfunction!(put_measurement, m)?)?;
+    m.add_function(wrap_pyfunction!(start_measurement, m)?)?;
     m.add_function(wrap_pyfunction!(commit_measurement, m)?)?;
     m.add_function(wrap_pyfunction!(set_measurement_label, m)?)?;
     m.add_function(wrap_pyfunction!(set_stated_distance, m)?)?;

@@ -5,7 +5,8 @@
 //! read what the Scene tree's Measurements rows and Measurement View show;
 //! `select_measurement`, which selects a measurement, or one of its
 //! endpoints, as a click on its row or its block does; and the ones that
-//! edit, `put_measurement_on_bench`, `set_bench_measurement_label`,
+//! edit, `put_measurement_on_bench`, `create_bench_measurement`,
+//! `set_bench_measurement_label`,
 //! `set_bench_measurement_distance`, `set_bench_measurement_endpoint`,
 //! `commit_bench_measurement` and `delete_measurement`, each one `AppState`
 //! call the panel's gesture makes; `get_measurement_endpoint_views`, the
@@ -261,6 +262,34 @@ pub(super) fn put_measurement_on_bench(
         );
     }
     object.insert("item".into(), json!(put.label));
+    Ok(reply)
+}
+
+/// `create_bench_measurement`: *New Measurement from Here* without the raise
+/// ([`AppState::start_measurement`]): a measurement item on the node's bench
+/// with endpoint A at `pixel` of the camera image named, focused. The reply
+/// names the item and carries the endpoint's image and pixel.
+pub(super) fn create_bench_measurement(
+    state: &mut AppState,
+    reconstruction_label: &str,
+    selector: &super::CameraImageSel,
+    pixel: [f64; 2],
+) -> JsonReply {
+    let id = resolve_reconstruction(state, Some(reconstruction_label))?;
+    let image = super::resolve_camera_image(state, id, selector)?;
+    let mut label = None;
+    let mut reply = edit::edited(state, id, |state| {
+        state
+            .start_measurement(image, pixel)
+            .map(|made| label = Some(made))
+    })?;
+    let object = reply.as_object_mut().expect("an edit reply is an object");
+    object.insert(
+        "item".into(),
+        json!(label.expect("a start that succeeded named its item")),
+    );
+    object.insert("camera_image".into(), json!(image.index()));
+    object.insert("pixel".into(), json!(pixel));
     Ok(reply)
 }
 

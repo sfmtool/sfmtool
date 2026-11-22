@@ -767,3 +767,82 @@ fn an_endpoint_outside_the_images_is_refused_in_the_commits_words() {
         "a distance has endpoints 0 (A) and 1 (B), so there is no endpoint 2"
     );
 }
+
+#[test]
+fn a_measurement_started_from_a_pixel_holds_endpoint_a_alone() {
+    let value = measured();
+    let at = MeasurementEndpoint {
+        image: 3,
+        pixel: [141.6, 198.4],
+    };
+    let (bench, label) = start_measurement(&Bench::new(), &value, at).unwrap();
+    assert_eq!(label, "distance from image_003@142,198");
+    let item = bench.measurement(&label).expect("put on");
+    assert_eq!(item.kind(), MeasurementKind::Distance);
+    assert_eq!(item.origin, None);
+    assert_eq!(item.label, "");
+    assert_eq!(distance(item).endpoints, [Some(at), None]);
+    assert_eq!(distance(item).distance, None);
+    assert_eq!(item.placed_endpoints(), 1);
+
+    // A second start at the same rounded pixel takes the collision suffix,
+    // and the first item is left as it was.
+    let near = MeasurementEndpoint {
+        pixel: [142.4, 197.6],
+        ..at
+    };
+    let (both, second) = start_measurement(&bench, &value, near).unwrap();
+    assert_eq!(second, "distance from image_003@142,198 (2)");
+    assert_eq!(both.labels().collect::<Vec<_>>(), [&*label, &*second]);
+    assert_eq!(
+        distance(both.measurement(&label).unwrap()).endpoints[0],
+        Some(at)
+    );
+
+    // Its commit is refused until endpoint B and the distance are given, then
+    // appends a row, since it has no origin.
+    assert_eq!(
+        commit_measurement_preconditions(&value, item, None)
+            .unwrap_err()
+            .to_string(),
+        "endpoint B is not placed, and a distance needs both endpoints"
+    );
+    let b = MeasurementEndpoint {
+        image: 5,
+        pixel: [10.0, 20.0],
+    };
+    let placed = set_measurement_endpoint(&value, item, 1, b).unwrap();
+    assert_eq!(
+        commit_measurement_preconditions(&value, &placed, None),
+        Err(MeasurementCommitRefusal::NoStatedDistance)
+    );
+    let stated = set_stated_distance(&placed, 30.0, LengthUnit::Centimetre).unwrap();
+    let commit = commit_measurement(&value, &stated, None).unwrap();
+    assert_eq!(
+        (commit.index, commit.replaced, commit.wrote),
+        (3, false, true)
+    );
+    let (d, _, images, pixels, text) = row(&commit.value, 3);
+    assert_eq!((d, images, text), (30.0, [3, 5], String::new()));
+    assert_eq!(pixels, [141.6, 198.4, 10.0, 20.0]);
+}
+
+#[test]
+fn a_measurement_is_not_started_outside_the_images() {
+    let value = measured();
+    let at = |image: u32, pixel: [f64; 2]| MeasurementEndpoint { image, pixel };
+    let bench = Bench::new();
+    assert_eq!(
+        start_measurement(&bench, &value, at(8, [1.0, 1.0])).unwrap_err(),
+        EndpointPlacementRefusal::Outside(MeasurementCommitRefusal::NoSuchImage {
+            side: 0,
+            image: 8,
+            image_count: 8,
+        })
+    );
+    let refused = start_measurement(&bench, &value, at(2, [1920.0, 5.0])).unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "endpoint A's pixel (1920, 5) is outside image 2, which is [0, 1920) x [0, 1080)"
+    );
+}

@@ -22,10 +22,11 @@ sets the item's label and its stated distance, and each endpoint block sets
 its endpoint's image and pixel in fields or switches it to another photograph
 that shows the same place. Image Detail's context menu and the 3D view's point
 menu set an endpoint too, to a pixel of the photograph shown or to a point's
-reference pixel. Each is a bench step. Deleting a stored measurement is a
-direct edit from its row's menu. Creating a measurement, and drawing
-measurements in the 3D view and Image Detail, are proposed in
-[drafts/measurement-view.md](../drafts/measurement-view.md).
+reference pixel. Each is a bench step. A new measurement starts from the same
+two menus, with its first endpoint at the pixel or point they were opened on,
+and is finished with the same steps. Deleting a stored measurement is a direct
+edit from its row's menu. Drawing measurements in the 3D view and Image Detail
+is proposed in [drafts/measurement-view.md](../drafts/measurement-view.md).
 
 Related specs: [track-view.md](track-view.md) (the panel this one is modelled
 on, and the crops it reuses), [bench.md](bench.md) § "Measurement items" (the
@@ -76,6 +77,18 @@ impl AppState {
     // The bench (bench.md § "Measurement items").
     pub(crate) fn put_measurement_on_bench(&mut self, measurement: MeasurementRef)
         -> Result<PutMeasurement, String>;
+    /// A new item with endpoint A at `pixel` of `image`, focused
+    /// (§ "Creating a measurement"); its label comes back.
+    pub(crate) fn start_measurement(&mut self, image: ImageRef, pixel: [f64; 2])
+        -> Result<String, String>;
+    /// Image Detail's New Measurement from Here: the start, then Measurement
+    /// View raised beside `from`; a refusal one failed row.
+    pub(crate) fn start_measurement_here(&mut self, image: ImageRef, pixel: [f64; 2],
+                                         from: Tab);
+    /// The 3D view's: the same, at the point's reference pixel.
+    pub(crate) fn start_measurement_at_point(&mut self, point: PointRef, from: Tab);
+    /// Why the 3D view's entry is greyed, by node.
+    pub(crate) fn measurement_start(&self) -> MeasurementStart;
     pub(crate) fn set_measurement_editing(&mut self, id: ReconId, on: bool)
         -> Result<(), String>;
     pub(crate) fn commit_bench_measurement(&mut self, id: ReconId, label: &str)
@@ -143,14 +156,23 @@ impl EndpointTarget {
     pub(crate) fn at_point(&self, scene: &[SceneNode], point: PointRef)
         -> Result<ReferencePixel, String>;
 }
+/// "New Measurement from Here", in both menus.
+pub(crate) const NEW_MEASUREMENT_HERE_LABEL: &str;
+/// Why a step on each node's bench is refused, as the 3D view's New
+/// Measurement from Here sees it.
+pub(crate) struct MeasurementStart { .. }
+impl MeasurementStart {
+    /// `point`'s reference pixel, or why the entry is greyed.
+    pub(crate) fn at_point(&self, scene: &[SceneNode], point: PointRef)
+        -> Result<ReferencePixel, String>;
+}
 ```
 
 The reference pixel is in
 [measurements.rs](../../crates/sfm-explorer/src/measurements.rs) rather than
-beside the 3D view's menu because three things read it: the menu's entries, the
-wire's `get_point_reference_pixel`, and *New Measurement from Here*, which
-[drafts/measurement-view.md](../drafts/measurement-view.md) proposes on the same
-menu.
+beside the 3D view's menu because three things read it: the menu's *Set
+Endpoint … Here* entries, its *New Measurement from Here*, and the wire's
+`get_point_reference_pixel`.
 
 The reference carries the kind because each kind's rows are numbered within
 their own subsection of the file, and a later kind would otherwise reuse the
@@ -479,9 +501,11 @@ With the box ticked the panel shows the focused item:
   *Switch image…* under the pixel, and a right-click menu holding *Switch
   Image…* (§ "Switching an endpoint's image"). The 3D position stays
   read-only, in the resolution, since it follows from the image and the pixel.
-  An endpoint that is not placed, which deleting the image it was in leaves,
-  is a block saying `Endpoint B is not placed.`, its *Switch image…* greyed;
-  Image Detail's and the 3D view's *Set Endpoint B Here* place it.
+  An endpoint that is not placed, which a new measurement's endpoint B is and
+  deleting the image an endpoint was in leaves, is a block saying `Endpoint B
+  is not placed.` and how to place it, "Right-click a pixel in Image Detail, or
+  a point in the 3D view, and choose Set Endpoint B Here."
+  (`measurement_view::place_instruction`), with its *Switch image…* greyed.
 - **The result block**, from the live readings, or `No distance: endpoint B is
   not placed.` where an endpoint is missing.
 
@@ -620,7 +644,10 @@ endpoint's letter beside a drop-down of the reconstruction's images, named
 number fields, `x` and `y` (`endpoint A pixel x`, `endpoint A pixel y`). A
 field shows its coordinate as the shortest text that reads back as the same
 `float32`, which is how the file stores it (`148.00723`), so a field left as it
-is commits nothing.
+is commits nothing. Each field is wide enough for that text: for eleven
+characters of digits and a decimal point, which hold any such coordinate of a
+photograph under 100,000 pixels across (`117.847664`, `0.123456789`), or for
+the text it holds where that is wider (`measurement_view::pixel_field_width`).
 
 - **Picking another image** in the drop-down is one step that sets that image
   and the pixel the endpoint holds; picking the image it holds asks for
@@ -732,6 +759,63 @@ distance, an endpoint's image past the image set, a pixel outside its image
 § "The commit"). An endpoint the resolver refuses does not stop a commit, since
 the pixel is what the file stores.
 
+## Creating a measurement
+
+A new measurement is started where its first endpoint is named, in the two
+menus that set an endpoint, and finished with the steps above.
+
+**Starting it.** `New Measurement from Here` is in Image Detail's context menu,
+at the pixel the menu was opened at of the photograph shown
+([multi-panel-image-browser.md](multi-panel-image-browser.md) § "Image Detail:
+the context menu"), and in the 3D view's point menu, at the point's reference
+pixel (§ "A point's reference pixel",
+[viewport-navigation.md](viewport-navigation.md) § "The point context menu"),
+whose right-click selects the point first (G3). Any pixel of the photograph is
+taken; it does not have to resolve, since the pixel is the stored measurement.
+Both entries are offered whether or not an item is focused, after a separator
+and before *Set Endpoint A Here* and *Set Endpoint B Here*.
+
+Either one, in one version (`Put distance from IMG_0042@142,198 on the
+bench`), puts a new measurement item on the node's bench with endpoint A at
+that pixel and nothing else (`AppState::start_measurement`, which calls core's
+`start_measurement`), focuses it, and raises Measurement View beside the panel
+the gesture was made in, through `show_panel_beside` (G9): where Measurement
+View is a tab behind that panel, it stays behind. The item has no origin, so
+focusing it clears the selected measurement, and the header says `From no
+stored row: Commit adds it as a new row`. Its bench label is minted in core
+from where it started, the image stem and the rounded pixel after `distance
+from `, `distance from IMG_0042@142,198`, with the bench's collision suffix
+(`distance from IMG_0042@142,198 (2)`) where another item holds that
+([core/bench/bench.md](../core/bench/bench.md) § "Labels"). Its own label and
+stated distance are empty, and the header's two fields show *No label* and *No
+stated distance* in grey, the second's hover text naming the unit a bare
+number is in.
+
+**Refused**, with the sentence as the entries' hover text and as one failed
+`Bench` row: while a background task holds the node, and on a view-only bench
+(`AppState::bench_edit_refusal`), since every step that would finish the item
+is refused there and it could never be committed; in the 3D view, where the
+point has no reference pixel, with that section's three sentences, asked after
+the node's; and for a pixel outside the image, in the commit's sentence
+(*Cannot start a measurement there: endpoint A's pixel (640, 3) is outside
+image 0, which is [0, 640) x [0, 480).*), which a menu opened over the
+photograph does not name. A refused start pushes no version and raises
+nothing. The 3D view's entry is greyed by `MeasurementStart::at_point`, which
+the dock reads each frame for every node, so the entry on a point of any node
+says what the step would.
+
+**Finishing it.** Endpoint B's block says how to place it (§ "The edited
+mode"), and *Set Endpoint B Here* in either menu places it (`Set endpoint B of
+distance from IMG_0042@142,198 to IMG_0050.jpg (88.0, 301.5)`). The stated
+distance and the label are typed into the header's fields. Each is a bench
+step, so a mistake is undone like any other, and a half-made measurement waits
+on the bench, in the Scene tree's Bench Measurements group, until it is
+finished or discarded. *Commit* is greyed with the refusal naming what is
+missing, first endpoint B and then the stated distance, until both endpoints
+and the distance are given, and then appends the measurement as a new row
+(`Added distance #5 in dino`), as it does for any item whose origin resolves to
+none (§ "The commit").
+
 ## Deleting a measurement
 
 *Delete* in a Measurements row's menu deletes the stored measurement
@@ -773,7 +857,11 @@ The panel's content is reachable over MCP ([mcp-server.md](mcp-server.md)):
 - `get_point_reference_pixel` gives a point's reference pixel, refused in the
   3D view's entries' words (§ "A point's reference pixel"), so an agent places
   an endpoint from a point as that menu does, passing its `camera_image` and
-  `pixel` to `set_bench_measurement_endpoint`.
+  `pixel` to `set_bench_measurement_endpoint`, or starts a measurement there,
+  passing them to `create_bench_measurement`.
+- `create_bench_measurement` is *New Measurement from Here* without the raise:
+  the item with endpoint A at a pixel of a camera image, put on the bench and
+  focused, refused in the panel's words (§ "Creating a measurement").
 - `get_measurement` naming an `item` gives a measurement item on the bench
   with its live readings and its `origin`, and `get_bench` lists measurement
   items beside tracks. `focus_bench_item`, `unfocus_bench_item`,
@@ -940,6 +1028,28 @@ at-infinity case is covered by the Rust tests.
   endpoint not placed; a point with no reference pixel a failed row; the
   target absent with nothing or a track focused, and its refusals on another
   node, while busy and on a view-only bench.
+- **Creating a measurement** (`bench/measurement/tests.rs`): *New Measurement
+  from Here* in Image Detail as one version labelled by where it starts,
+  endpoint A alone, the item focused with no origin, the selected measurement
+  cleared, the node clean, Measurement View raised, a second at the same
+  rounded pixel taking the collision suffix with a track focused, and its
+  undo; the raise never over Image Detail or the 3D view where the panel is a
+  tab behind it; the 3D view's start at a point's reference pixel, and a point
+  with none a failed row with no version; the refusals while busy, on a
+  view-only bench and of a pixel outside the image, the node's before the
+  point's; and *Commit* refused until endpoint B and then the distance are
+  given, then appending a row, with its undo. (`image_detail/tests.rs`): the
+  entry after the bench entries and before *Set Endpoint A Here*, offered
+  with nothing focused and greyed while busy and on a view-only bench.
+  (`viewer_3d/tests.rs`): the entry after the point's own, a click reporting
+  the gesture, and greyed, asking for nothing, on a point with no reference
+  pixel and on a busy node. (`measurement_view/tests.rs`): the new item's
+  unplaced block with its instructions, the empty header fields, the result's
+  line and *Commit*'s refusal following B and the distance; and a pixel field
+  wide enough for `117.847664`. (`mcp/tests/measurements.rs`):
+  `create_bench_measurement` starting an item, focused with no panel raised,
+  that the other tools finish and commit as a new row, and its refusal of a
+  pixel outside the image.
 - **The reference pixel** (`measurements/tests.rs`): the keypoint of the
   reference observation in its own image, which resolves alone to texel
   `(0, 0)` of the point's patch; and the three refusals, with no column at all
@@ -950,8 +1060,12 @@ at-infinity case is covered by the Rust tests.
   row is deleted a click on *Commit* adds it back as a new row, on a measured
   copy of the seoul bull ground truth; an endpoint switched to another
   photograph through *Switch image…* and its popup, then committed into its
-  row; and *Set Endpoint B Here* chosen from a right-click on the photograph in
-  Image Detail, moving endpoint B to that photograph at the pixel clicked.
+  row; *Set Endpoint B Here* chosen from a right-click on the photograph in
+  Image Detail, moving endpoint B to that photograph at the pixel clicked; and
+  a measurement made from Image Detail's menu, *New Measurement from Here*
+  raising Measurement View on an item whose block for B says how to place it,
+  *Set Endpoint B Here* on another photograph, a distance typed into its field
+  and Enter, and *Commit* adding a third row.
 - **The script** (`tests/test_add_artificial_measurements.py`): every case
   with its known scale read back through the resolver, the copy without a
   unit, the recorded workspace, and a path under `test-data/` refused with
@@ -959,8 +1073,7 @@ at-infinity case is covered by the Rust tests.
 
 ## Non-goals
 
-Creating a measurement, and drawing measurements in the 3D view and Image
-Detail, are proposed in
+Drawing measurements in the 3D view and Image Detail is proposed in
 [drafts/measurement-view.md](../drafts/measurement-view.md). An endpoint's 3D
 position, point and texel are never set directly: they always follow from its
 image and pixel.

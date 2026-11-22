@@ -124,8 +124,8 @@ told to check only the tool name.
 
 ## The tool surface
 
-One hundred and sixteen tools. Twenty-four read -- twenty-three that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- eighty-four
+One hundred and seventeen tools. Twenty-four read -- twenty-three that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- eighty-five
 write, six send input, one writes a file, and one quits the viewer. `get_widgets`
 and the six input tools, `click`, `hover`, `drag`, `scroll`, `press_key` and
 `type_text`, read and press the viewer's widgets the way a person's eyes, mouse
@@ -145,7 +145,7 @@ Quit does (§ "`quit`").
 | `list_measurements` | read | Every measurement one reconstruction stores, each with the reading its Scene tree row shows |
 | `get_measurement` | read | One measurement whole, as Measurement View shows it: each endpoint's resolution with every candidate or its refusal, the result, and the median line; or a measurement item on the bench, read live |
 | `get_measurement_endpoint_views` | read | The other images that show the place one endpoint of a measurement item names, as Measurement View's *Switch image…* popup lists them |
-| `get_point_reference_pixel` | read | A 3D point's reference pixel, the image and keypoint of its reference observation, which the 3D view's *Set Endpoint A Here* and *Set Endpoint B Here* set a measurement endpoint to |
+| `get_point_reference_pixel` | read | A 3D point's reference pixel, the image and keypoint of its reference observation, which the 3D view's *New Measurement from Here* starts a measurement at and its *Set Endpoint A Here* and *Set Endpoint B Here* set a measurement endpoint to |
 | `get_action_log` | read | What has happened in the viewer, from a revision onward, filtered by who did it, optionally with each row's stages |
 | `get_timing_detail` | read | Whether the detailed stages of an operation are being recorded |
 | `set_timing_detail` | write | Record the detailed stages of an operation, or stop |
@@ -228,6 +228,7 @@ Quit does (§ "`quit`").
 | `select_bench_observations` | write | Replace the selected observations of the focused item: Track View's highlighted rows |
 | `commit_bench_track` | write | Write a bench track into the reconstruction |
 | `put_measurement_on_bench` | write | Put a stored measurement on the bench and focus it, or focus the item already there |
+| `create_bench_measurement` | write | Start a new measurement item on the bench with endpoint A at a pixel of a camera image, and focus it |
 | `commit_bench_measurement` | write | Write a measurement item into the reconstruction, replacing its row or appending one |
 | `set_bench_measurement_label` | write | Set a measurement item's own label, as a bench step |
 | `set_bench_measurement_distance` | write | Set a measurement item's stated distance from a number with an optional unit, as a bench step |
@@ -252,7 +253,7 @@ Quit does (§ "`quit`").
 | `type_text` | input | Type a string into the focused text input or number box, or into one named by its widget id |
 
 Every tool is annotated: the twenty-three reads and `screenshot` carry
-`readOnlyHint: true`, the eighty-four writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the eighty-five writes `destructiveHint: false` (none of
 them deletes or overwrites a file the person made: `close_reconstruction`
 unloads, it does not delete; `set_window_layout` changes the window and the
 dock, not the layout file the menu saves; an **edit** makes a new version of a
@@ -1607,7 +1608,8 @@ Refused, in the menu entries' words, for a point with no patch frame, with no
 reference observation, or at infinity. It changes nothing, so it is not refused
 on a view-only bench or while a task holds the node. Passing `camera_image`
 and `pixel` to `set_bench_measurement_endpoint` places the endpoint there, as
-the menu entry does.
+the menu entry does, and passing them to `create_bench_measurement` starts a
+measurement there, as *New Measurement from Here* in the same menu does.
 
 ### `delete_measurement`
 
@@ -5273,7 +5275,7 @@ image of which carries a pose projects nothing.
 
 ### The bench family
 
-Forty-three tools that read and work the **bench** beside a node
+Forty-four tools that read and work the **bench** beside a node
 ([bench.md](bench.md)): the place where a track or a measurement is held and
 judged before it is written into the reconstruction. Every one of them is one `AppState` call from
 `crate::bench` -- the same call a Track View gesture or the Image
@@ -5299,7 +5301,7 @@ names nothing on the bench is refused naming it, and a track tool given a
 measurement item is refused saying so (*"distance #3 is a measurement, not a
 track."*).
 
-**Five tools are a measurement item's.** `put_measurement_on_bench` takes
+**Six tools are a measurement item's.** `put_measurement_on_bench` takes
 `reconstruction_label`, `measurement_kind` and `measurement_index` and is a
 Measurements row's double-click without the raise and the framing
 (`AppState::put_measurement_on_bench`): the measurement selected, put on the
@@ -5309,6 +5311,20 @@ where the item was there already (`changed: false`) it carries a `report`
 saying so, *Put distance #2 on the bench: no effect, it is on the bench
 already as distance #2, now the focused item*, as `create_bench_track`'s does,
 since its `label` is then the label of a version an earlier step pushed.
+`create_bench_measurement` takes `reconstruction_label`, `camera_image` (an
+index or a name) and `pixel`, and is *New Measurement from Here* without the
+raise (`AppState::start_measurement`): a new measurement item with endpoint A
+at that pixel and nothing else, labelled by where it starts, `distance from
+IMG_0042@142,198` (the image stem and the rounded pixel, with the bench's
+collision suffix), put on the bench and focused in one version, `Put distance
+from IMG_0042@142,198 on the bench`. It has no origin, so its commit appends a
+row once `set_bench_measurement_endpoint` has placed endpoint B and
+`set_bench_measurement_distance` has given the distance. An agent starts one
+from a 3D point, as the 3D view's point menu does, by passing the
+`camera_image` and `pixel` `get_point_reference_pixel` gives. It is refused
+while a background task holds the node, on a view-only bench, and for a pixel
+outside `[0, width) x [0, height)` of the image, in the commit's sentence. The
+reply names the `item` and carries `camera_image` and `pixel`.
 `set_bench_measurement_label` takes `reconstruction_label`, `item` (the
 focused item where it names none) and `label`, and is Measurement View's label
 field: one bench version, `Set the label of distance #2 to "paw width"`,
@@ -5927,7 +5943,7 @@ walk is accepted with `sight_bench_observation`**, passing `walked_to` as the
 the observation and drops the measurements read at the seed. No tool of its own
 carries it, because what it writes is exactly what that tool writes.
 
-**Eight of the forty-three are the patch a track is**, and they are the
+**Eight of the forty-four are the patch a track is**, and they are the
 wire's half of the handles the two panels offer
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "The bench
 layer"). **Each is named for the part it acts on** -- the patch, one sighting,
@@ -6039,7 +6055,7 @@ creates one, which is what it must do; otherwise the second commit would delete
 what the first wrote. The copy is the focused item and the reply names it, as a
 split's does.
 
-**Four of the forty-three are about the index files**, the node's SIFT index and
+**Four of the forty-four are about the index files**, the node's SIFT index and
 its cluster patches, which are the node's rather than any track's:
 `open_index_files` opens both, from the node's own paths or from a
 `sift_index_path` and a `cluster_patches_path` of the caller's;
@@ -7224,7 +7240,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is one hundred and sixteen tools**, twenty-four of them reads, six of the
+- **The catalog is one hundred and seventeen tools**, twenty-four of them reads, six of the
   `Input` kind, one of the `Save` kind and one of the `Quit` kind, those eight
   carrying `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and

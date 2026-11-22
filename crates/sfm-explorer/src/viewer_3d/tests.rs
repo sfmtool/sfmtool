@@ -29,6 +29,7 @@ use super::{
     SET_TO_ORIGIN_LABEL, TRANSLATE_TO_ORIGIN_LABEL, TRANSLATE_TO_XY_PLANE_LABEL,
 };
 use crate::bench::geometry::{self, PatchEdit};
+use crate::bench::measurement::NEW_MEASUREMENT_HERE_LABEL;
 use crate::platform::ScrollInput;
 use crate::scene::{PointRef, ReconId, SceneNode};
 use crate::scene_renderer::PickTarget;
@@ -255,7 +256,14 @@ fn a_right_click_on_a_point_opens_its_menu_and_names_the_point() {
         .iter()
         .map(|(text, _)| *text)
         .collect();
-    assert_eq!(offered, [EDIT_ON_BENCH_LABEL, RETRIANGULATE_POINT_LABEL]);
+    assert_eq!(
+        offered,
+        [
+            EDIT_ON_BENCH_LABEL,
+            RETRIANGULATE_POINT_LABEL,
+            NEW_MEASUREMENT_HERE_LABEL
+        ]
+    );
 }
 
 /// The hover label names what is under the pointer only while the pointer is
@@ -854,7 +862,14 @@ fn a_busy_node_greys_both_entries() {
         .iter()
         .map(|(text, _)| *text)
         .collect();
-    assert_eq!(offered, [EDIT_ON_BENCH_LABEL, RETRIANGULATE_POINT_LABEL]);
+    assert_eq!(
+        offered,
+        [
+            EDIT_ON_BENCH_LABEL,
+            RETRIANGULATE_POINT_LABEL,
+            NEW_MEASUREMENT_HERE_LABEL
+        ]
+    );
     viewer.point_menu = None;
     click_entry(
         &mut viewer,
@@ -2380,7 +2395,11 @@ fn a_right_click_on_a_point_away_from_the_square_opens_the_point_menu() {
     assert_eq!(staged.viewer.menu_target, Some(MenuTarget::Point(point)));
     assert_eq!(
         offered(&staged.viewer),
-        [EDIT_ON_BENCH_LABEL, RETRIANGULATE_POINT_LABEL]
+        [
+            EDIT_ON_BENCH_LABEL,
+            RETRIANGULATE_POINT_LABEL,
+            NEW_MEASUREMENT_HERE_LABEL
+        ]
     );
 }
 
@@ -2567,6 +2586,7 @@ fn a_focused_measurement_adds_the_set_endpoint_entries_to_the_point_menu() {
         [
             EDIT_ON_BENCH_LABEL,
             RETRIANGULATE_POINT_LABEL,
+            NEW_MEASUREMENT_HERE_LABEL,
             set_endpoint_here_label(EndpointSide::A),
             set_endpoint_here_label(EndpointSide::B),
         ]
@@ -2592,7 +2612,14 @@ fn a_focused_measurement_adds_the_set_endpoint_entries_to_the_point_menu() {
     right_click(&mut viewer, &ctx, &mut state, pick, None);
     assert_eq!(viewer.point_menu, Some(PointGesture::Opened(point)));
     let offered: Vec<&str> = viewer.menu_entry_rects.iter().map(|(t, _)| *t).collect();
-    assert_eq!(offered, [EDIT_ON_BENCH_LABEL, RETRIANGULATE_POINT_LABEL]);
+    assert_eq!(
+        offered,
+        [
+            EDIT_ON_BENCH_LABEL,
+            RETRIANGULATE_POINT_LABEL,
+            NEW_MEASUREMENT_HERE_LABEL
+        ]
+    );
 }
 
 /// The two entries are greyed, and a click on one asks for nothing, on a
@@ -2611,7 +2638,7 @@ fn the_set_endpoint_entries_are_greyed_on_a_point_with_no_reference_pixel() {
     let point = PointRef::new(id, 1);
     let pick = Some(PickTarget::Point(point));
     right_click(&mut viewer, &ctx, &mut state, pick, None);
-    assert_eq!(viewer.menu_entry_rects.len(), 4);
+    assert_eq!(viewer.menu_entry_rects.len(), 5);
     viewer.point_menu = None;
     click_entry(
         &mut viewer,
@@ -2635,4 +2662,86 @@ fn the_set_endpoint_entries_are_greyed_on_a_point_with_no_reference_pixel() {
         RETRIANGULATE_POINT_LABEL,
     );
     assert_eq!(viewer.point_menu, Some(PointGesture::Retriangulate(point)));
+}
+
+// ── New Measurement from Here ───────────────────────────────────────────
+
+/// *New Measurement from Here* is offered on a point whether or not an item is
+/// focused, after the point's own two entries, and choosing it asks for the
+/// gesture on that point.
+#[test]
+fn the_point_menu_offers_new_measurement_from_here() {
+    let (state, id) = crate::measurements::fixture::referenced_state(Some("m"));
+    let (mut viewer, ctx, mut state) = settled_over(state);
+    viewer.measurement_start = state.measurement_start();
+    let point = PointRef::new(id, 0);
+    let pick = Some(PickTarget::Point(point));
+    right_click(&mut viewer, &ctx, &mut state, pick, None);
+    let offered: Vec<&str> = viewer.menu_entry_rects.iter().map(|(t, _)| *t).collect();
+    assert_eq!(
+        offered,
+        [
+            EDIT_ON_BENCH_LABEL,
+            RETRIANGULATE_POINT_LABEL,
+            NEW_MEASUREMENT_HERE_LABEL,
+        ]
+    );
+    viewer.point_menu = None;
+    click_entry(
+        &mut viewer,
+        &ctx,
+        &mut state,
+        pick,
+        None,
+        NEW_MEASUREMENT_HERE_LABEL,
+    );
+    assert_eq!(
+        viewer.point_menu,
+        Some(PointGesture::NewMeasurementHere(point))
+    );
+}
+
+/// The entry is greyed, and a click on it asks for nothing, on a point with
+/// no reference pixel and on a node whose bench refuses a step.
+#[test]
+fn new_measurement_from_here_is_greyed_where_it_cannot_start() {
+    use crate::background::{Finished, Operation};
+    let (state, id) = crate::measurements::fixture::referenced_state(Some("m"));
+    let (mut viewer, ctx, mut state) = settled_over(state);
+    viewer.measurement_start = state.measurement_start();
+    // Point 1 has no reference observation.
+    let pick = Some(PickTarget::Point(PointRef::new(id, 1)));
+    right_click(&mut viewer, &ctx, &mut state, pick, None);
+    viewer.point_menu = None;
+    click_entry(
+        &mut viewer,
+        &ctx,
+        &mut state,
+        pick,
+        None,
+        NEW_MEASUREMENT_HERE_LABEL,
+    );
+    assert_eq!(viewer.point_menu, None, "a greyed entry asked for its step");
+
+    // Point 0 has one, and a task holding the node greys it.
+    state
+        .start_background_task(
+            Operation::BENCH_FIT,
+            id,
+            Box::new(move |_| Finished::Cancelled),
+        )
+        .expect("nothing else is running");
+    viewer.measurement_start = state.measurement_start();
+    let pick = Some(PickTarget::Point(PointRef::new(id, 0)));
+    right_click(&mut viewer, &ctx, &mut state, pick, None);
+    viewer.point_menu = None;
+    click_entry(
+        &mut viewer,
+        &ctx,
+        &mut state,
+        pick,
+        None,
+        NEW_MEASUREMENT_HERE_LABEL,
+    );
+    assert_eq!(viewer.point_menu, None, "a greyed entry asked for its step");
 }
