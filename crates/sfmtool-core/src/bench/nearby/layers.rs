@@ -8,11 +8,12 @@
 //! `specs/core/bench/depth-layers.md` is the design, and where the ranking's
 //! constants came from.
 
+use crate::camera::sampler::RegionPool;
+use crate::camera::PhotographReadError;
 use crate::patch::normal_refine::ProjectedImage;
 
 use super::candidate::NearbyCandidate;
 use super::far_field::FarFieldReading;
-use super::grey::GreyImages;
 use super::patch_read::{read_checked, RayPatch};
 use super::range::RangeClass;
 use super::NearbySource;
@@ -275,13 +276,6 @@ pub enum DepthLayerError {
         /// How many images the views hold.
         image_count: usize,
     },
-    /// The grey-image cache is not for the views' images.
-    GreyMismatch {
-        /// How many images the cache is for.
-        grey: usize,
-        /// How many views there are.
-        image_count: usize,
-    },
     /// A candidate's [`LayerCandidate::distance_px`] is not a finite distance
     /// of at least zero, which no finder gives.
     BadDistance {
@@ -298,6 +292,8 @@ pub enum DepthLayerError {
         /// Its range.
         range: [f64; 2],
     },
+    /// A photograph could not be read.
+    Photograph(PhotographReadError),
 }
 
 impl std::fmt::Display for DepthLayerError {
@@ -306,10 +302,6 @@ impl std::fmt::Display for DepthLayerError {
             Self::NoSuchImage { image, image_count } => write!(
                 f,
                 "image {image} is not one of the reconstruction's {image_count} images"
-            ),
-            Self::GreyMismatch { grey, image_count } => write!(
-                f,
-                "the grey images are for {grey} images, but there are {image_count} views"
             ),
             Self::BadDistance {
                 candidate,
@@ -323,6 +315,7 @@ impl std::fmt::Display for DepthLayerError {
                 "candidate {candidate} is usable but its range [{}, {}] has a NaN end",
                 range[0], range[1]
             ),
+            Self::Photograph(e) => write!(f, "a photograph could not be read: {e}"),
         }
     }
 }
@@ -360,12 +353,14 @@ fn is_subset(a: &[u32], b: &[u32]) -> bool {
 /// From those and the members come the [`LayerEvidence`], the score, the key,
 /// the rank and the confidence.
 ///
-/// `views` and `grey` hold one entry per image of the reconstruction. A
-/// candidate whose `distance_px` is not finite and at least zero, or a usable
-/// one with a `NaN` in its range, is refused: no finder gives one.
+/// `views` holds one entry per image of the reconstruction, and the patch
+/// reads read their photographs through `pool`. A candidate whose
+/// `distance_px` is not finite and at least zero, or a usable one with a
+/// `NaN` in its range, is refused: no finder gives one; a read of a
+/// photograph that fails is [`DepthLayerError::Photograph`].
 pub fn depth_layers(
     views: &[ProjectedImage<'_>],
-    grey: &GreyImages,
+    pool: &RegionPool,
     image: u32,
     pixel: [f64; 2],
     candidates: &[LayerCandidate<'_>],
@@ -374,12 +369,6 @@ pub fn depth_layers(
     let image_count = views.len();
     if image as usize >= image_count {
         return Err(DepthLayerError::NoSuchImage { image, image_count });
-    }
-    if grey.len() != image_count {
-        return Err(DepthLayerError::GreyMismatch {
-            grey: grey.len(),
-            image_count,
-        });
     }
     for (candidate, c) in candidates.iter().enumerate() {
         if !(c.distance_px.is_finite() && c.distance_px >= 0.0) {
@@ -399,7 +388,8 @@ pub fn depth_layers(
     let support = support_counts(candidates, &images);
     let mut layers = group_layers(candidates);
     if options.evidence && !layers.is_empty() {
-        let reads = layer_reads(views, grey, image, pixel, &layers, options);
+        let reads = layer_reads(views, pool, image, pixel, &layers, options)
+            .map_err(DepthLayerError::Photograph)?;
         let evidence: Vec<LayerEvidence> = (0..layers.len())
             .map(|n| layer_evidence(candidates, &images, &layers[n], &reads, n))
             .collect();
@@ -520,12 +510,12 @@ pub(super) fn layer_distances(range: [f64; 2], samples: usize) -> Vec<f64> {
 
 fn layer_reads(
     views: &[ProjectedImage<'_>],
-    grey: &GreyImages,
+    pool: &RegionPool,
     image: u32,
     pixel: [f64; 2],
     layers: &[DepthLayer],
     options: &DepthLayerOptions,
-) -> LayerReads {
+) -> Result<LayerReads, PhotographReadError> {
     let others: Vec<u32> = (0..views.len() as u32).filter(|&i| i != image).collect();
     let mut distances = Vec::new();
     let mut owner = Vec::new();
@@ -542,9 +532,9 @@ fn layer_reads(
         pixel,
         radius_px: options.radius_px,
     };
-    // `depth_layers` checked the queried image and the grey cache against the
-    // views, and `others` are the views' own indexes.
-    if let Some(read) = read_checked(views, grey, &patch, &distances, &others, false) {
+    // `depth_layers` checked the queried image against the views, and
+    // `others` are the views' own indexes.
+    if let Some(read) = read_checked(views, pool, &patch, &distances, &others, false)? {
         for (k, &n) in owner.iter().enumerate() {
             for v in 0..others.len() {
                 let w = read.whole[[k, v]];
@@ -555,7 +545,7 @@ fn layer_reads(
             }
         }
     }
-    LayerReads { whole, middle }
+    Ok(LayerReads { whole, middle })
 }
 
 /// The mean of the three largest of `values`, `-1` when there are none.

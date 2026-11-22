@@ -64,15 +64,17 @@ The rules for every sampler, the affine fast path and the cluster grids, and
 ([core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md)
 § "Theory"), and so is the clipped share's read over tiles,
 `source_clipped_share`, which the reference view's tile readings call from
-step 4 [10] on. One read keeps a rule of its own, still proposed:
+step 4 [10] on. One read keeps a rule of its own, built in step 6 [12]:
 
-- **The grey reads of *Find Nearby Tracks*** (`GreyImages` in
+- **The grey reads of *Find Nearby Tracks*** (`read_grey` in
   [bench/nearby/grey.rs](../../crates/sfmtool-core/src/bench/nearby/grey.rs))
   blur level 0 with a nine-tap Gaussian, reflecting at the image's edges: a
-  read asks `read_source_rect` for the bounding box of its samples plus 4 px
-  for the blur and 1 px for the bilinear tap, clipped to the image, and the
-  blur reflects only at the image's edges, never at an inner edge of the
-  rectangle.
+  read asks `read_source_rect` for the bounding box of the pixels its
+  bilinear samples take, each sample's pixel and the one past it in each
+  direction, plus 4 px for the blur, clipped to the image, and the blur
+  reflects only at the image's edges, never at an inner edge of the
+  rectangle
+  ([core/bench/far-field-sweep.md](../core/bench/far-field-sweep.md)).
 
 Only the entry points and the panels call `required_regions` and
 `LevelRegions::for_samples`, never a kernel (§ "Where the pixels come from").
@@ -110,7 +112,8 @@ the region pool and the tile path:
   through `sample_member_grid`, at 3 times the radius and resolution for the
   context; the bench's tile self-similarity; the piecewise refinement's
   working patch of side `R + 2 · margin`), the affine fast path, and
-  `GreyImages`, as their rules above say.
+  the grey reads of *Find Nearby Tracks* (`read_grey`), as their rules above
+  say.
 
 Track View's *Zoom* cell reads only the warp's Jacobian, and its *ZNCC*
 hover (`track_view/body/zncc_hover.rs`) draws the stored patch bitmap and the
@@ -566,9 +569,9 @@ makes a mipmap.
   consecutive points, so the workers are in at most as many reference
   images at once as there are workers. Each kernel's phase note reports the
   tiles decoded and reused.
-- **`GreyImages`** today holds a blurred `f32` grey copy of each view's
-  level 0, 800 MB for a 200-megapixel view. With regions it holds a few
-  kilobytes per read.
+- **The grey reads** held a blurred `f32` grey copy of each view's level 0
+  in `GreyImages` until step 6 [12], 800 MB for a 200-megapixel view. By
+  region, a read holds a few kilobytes.
 
 ## Implementation steps
 
@@ -712,7 +715,13 @@ there is no whole pyramid for any reader to fall back on.
    no reconstruction point or reference observation, so the order does not
    apply to it and it keeps its cluster order.
 6. **`GreyImages` by region.** Tests: the nearby-track search's results are
-   identical.
+   identical. **Built**, as the main draft's step 12: each grey read reads
+   the rectangle its samples need through `read_source_rect` and blurs only
+   that, so `GreyImages` is gone and the search's results are identical bit
+   for bit; specified in
+   [core/bench/far-field-sweep.md](../core/bench/far-field-sweep.md), with
+   tests in
+   [bench/nearby/region_read_tests.rs](../../crates/sfmtool-core/src/bench/nearby/region_read_tests.rs).
 
 ## Open questions
 

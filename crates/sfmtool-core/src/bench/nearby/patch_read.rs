@@ -9,9 +9,11 @@ use nalgebra::Vector3;
 use ndarray::{Array2, Array3};
 
 use crate::bench::track_at_pixel::ViewCamera;
+use crate::camera::sampler::RegionPool;
+use crate::camera::PhotographReadError;
 use crate::patch::normal_refine::ProjectedImage;
 
-use super::grey::{sample_grey, GreyImages};
+use super::grey::read_grey;
 
 /// The samples along each side of a read's square grid. The grid's middle
 /// sample, at index `PATCH_GRID * PATCH_GRID / 2`, is the pixel itself.
@@ -45,13 +47,8 @@ pub enum PatchReadError {
         /// How many images `views` holds.
         image_count: usize,
     },
-    /// The grey cache is not for one image per view.
-    GreyMismatch {
-        /// How many images the grey cache is for.
-        grey: usize,
-        /// How many views there are.
-        image_count: usize,
-    },
+    /// A photograph could not be read.
+    Photograph(PhotographReadError),
 }
 
 impl std::fmt::Display for PatchReadError {
@@ -61,10 +58,7 @@ impl std::fmt::Display for PatchReadError {
                 f,
                 "image {image} is not one of the reconstruction's {image_count} images"
             ),
-            Self::GreyMismatch { grey, image_count } => write!(
-                f,
-                "the grey cache is for {grey} images, but there are {image_count} views"
-            ),
+            Self::Photograph(e) => write!(f, "a photograph could not be read: {e}"),
         }
     }
 }
@@ -170,7 +164,8 @@ pub(super) fn middle_mask() -> Vec<bool> {
 /// A read is skipped, and scores `-1`, when any grid point is behind the other
 /// camera, when the pixel lands less than half the radius inside the other
 /// photograph's frame, or when any sample is off it. Every photograph is read
-/// in grey and blurred ([`GreyImages`]).
+/// in grey and blurred ([`blurred_grey`](super::blurred_grey)), each read
+/// making grey only the rectangle of level 0 it samples, read through `pool`.
 ///
 /// Returns `None` when the queried patch runs off its photograph or is flat,
 /// with nothing to correlate. `keep_samples` keeps the samples in
@@ -178,51 +173,38 @@ pub(super) fn middle_mask() -> Vec<bool> {
 ///
 /// # Errors
 ///
-/// [`PatchReadError::GreyMismatch`] when `grey` is not for one image per
-/// view, and [`PatchReadError::NoSuchImage`] when `patch.image` or an entry
-/// of `images` is not one of `views`.
+/// [`PatchReadError::NoSuchImage`] when `patch.image` or an entry of `images`
+/// is not one of `views`, and [`PatchReadError::Photograph`] when a read of a
+/// photograph fails.
 pub fn read_patch_along_ray(
     views: &[ProjectedImage<'_>],
-    grey: &GreyImages,
+    pool: &RegionPool,
     patch: &RayPatch,
     distances: &[f64],
     images: &[u32],
     keep_samples: bool,
 ) -> Result<Option<PatchRead>, PatchReadError> {
     let image_count = views.len();
-    if grey.len() != image_count {
-        return Err(PatchReadError::GreyMismatch {
-            grey: grey.len(),
-            image_count,
-        });
-    }
     if let Some(&image) = std::iter::once(&patch.image)
         .chain(images)
         .find(|&&i| i as usize >= image_count)
     {
         return Err(PatchReadError::NoSuchImage { image, image_count });
     }
-    Ok(read_checked(
-        views,
-        grey,
-        patch,
-        distances,
-        images,
-        keep_samples,
-    ))
+    read_checked(views, pool, patch, distances, images, keep_samples)
+        .map_err(PatchReadError::Photograph)
 }
 
 /// [`read_patch_along_ray`] for inputs the caller has already checked:
-/// `grey` is for one image per view, and `patch.image` and every entry of
-/// `images` are indexes into `views`.
+/// `patch.image` and every entry of `images` are indexes into `views`.
 pub(super) fn read_checked(
     views: &[ProjectedImage<'_>],
-    grey: &GreyImages,
+    pool: &RegionPool,
     patch: &RayPatch,
     distances: &[f64],
     images: &[u32],
     keep_samples: bool,
-) -> Option<PatchRead> {
+) -> Result<Option<PatchRead>, PhotographReadError> {
     let n = PATCH_GRID;
     let centre = (n * n) / 2;
     let q = patch.image as usize;
@@ -241,15 +223,13 @@ pub(super) fn read_checked(
         })
         .collect();
 
-    let query_grey = grey.checked(views, q);
-    let template: Vec<f32> = grid
-        .iter()
-        .map(|p| sample_grey(query_grey, p[0], p[1]))
-        .collect::<Option<_>>()?;
+    let Some(template) = read_grey(views[q].source, pool, &grid)? else {
+        return Ok(None);
+    };
     let as_f64 = |v: &[f32]| v.iter().map(|&x| f64::from(x)).collect::<Vec<_>>();
     let template64 = as_f64(&template);
     if std_dev(template64.iter().copied()) < 1e-3 {
-        return None;
+        return Ok(None);
     }
     let middle = middle_mask();
     let middle_std = std_dev(
@@ -276,7 +256,6 @@ pub(super) fn read_checked(
 
     let mut points = vec![Vector3::zeros(); n * n];
     let mut pixels: Vec<Option<[f64; 2]>> = vec![None; n * n];
-    let mut sampled = vec![0.0f32; n * n];
     for (di, &t) in distances.iter().enumerate() {
         for (vi, oc) in others.iter().enumerate() {
             for (k, ray) in rays.iter().enumerate() {
@@ -296,19 +275,13 @@ pub(super) fn read_checked(
             if !oc.in_frame(c, r * 0.5) {
                 continue;
             }
-            let other_grey = grey.checked(views, images[vi] as usize);
-            let all = pixels.iter().zip(sampled.iter_mut()).all(|(p, s)| {
-                match p.and_then(|p| sample_grey(other_grey, p[0], p[1])) {
-                    Some(v) => {
-                        *s = v;
-                        true
-                    }
-                    None => false,
-                }
-            });
-            if !all {
+            let Some(positions) = pixels.iter().copied().collect::<Option<Vec<_>>>() else {
                 continue;
-            }
+            };
+            let Some(sampled) = read_grey(views[images[vi] as usize].source, pool, &positions)?
+            else {
+                continue;
+            };
             let vals = as_f64(&sampled);
             whole[[di, vi]] = zncc(template64.iter().copied(), vals.iter().copied());
             let pick = |x: &[f64]| {
@@ -329,7 +302,7 @@ pub(super) fn read_checked(
             }
         }
     }
-    Some(PatchRead {
+    Ok(Some(PatchRead {
         images: images.to_vec(),
         distances: distances.to_vec(),
         whole,
@@ -341,5 +314,5 @@ pub(super) fn read_checked(
             values,
             middle,
         }),
-    })
+    }))
 }

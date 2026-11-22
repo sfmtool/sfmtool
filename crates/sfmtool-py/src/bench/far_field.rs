@@ -19,7 +19,7 @@ use sfmtool_core::progress::Progress;
 
 use super::views_of;
 use crate::helpers::kernel_err;
-use crate::patches::views::{resolve_grey, resolve_pyramids, PosedViews};
+use crate::patches::views::{resolve_pyramids, PosedViews};
 use crate::reconstruction::edited::PyEditedReconstruction;
 
 /// Set one field of `options` from a Python value.
@@ -70,8 +70,7 @@ pub(super) fn set_option(
 /// Args:
 ///     edited: The reconstruction; only the refit's fit reads it.
 ///     images: One decoded image per image of ``edited``, or a prebuilt
-///         :class:`ImagePyramidSet`, as :func:`evaluate` takes them. A set
-///         also keeps the grey images between calls.
+///         :class:`ImagePyramidSet`, as :func:`evaluate` takes them.
 ///     image: The queried image's index.
 ///     pixel: ``(x, y)`` in that image.
 ///     options: Overrides of the sweep's parameters, keyed by the field of the
@@ -116,7 +115,6 @@ pub(super) fn far_field_sweep(
     }
     let posed = PosedViews::from_reconstruction(&edited.inner.base);
     let pyramids = resolve_pyramids(&posed, images)?;
-    let grey = resolve_grey(images, posed.cameras.len());
     let views = views_of(&posed, &pyramids);
     let sweep = py
         .detach(|| {
@@ -124,7 +122,6 @@ pub(super) fn far_field_sweep(
                 &edited.inner,
                 &views,
                 &RegionPool::for_kernel_call(),
-                &grey,
                 image,
                 pixel,
                 &options,

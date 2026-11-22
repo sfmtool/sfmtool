@@ -16,9 +16,9 @@
 //! reads the photographs and fits bench tracks, the sources read the
 //! reconstruction and its index files, and each returns what it found.
 //!
-//! The photographs are read in grey, blurred, through a [`GreyImages`] cache
-//! the caller builds once per set of views and keeps, since the same images
-//! are read by every query.
+//! The photographs are read in grey, blurred ([`blurred_grey`]), each patch
+//! read making grey only the rectangle of level 0 it samples, read through
+//! the region pool the caller made for the call.
 
 mod candidate;
 mod clusters;
@@ -38,6 +38,8 @@ mod find_tests;
 #[cfg(test)]
 mod layer_tests;
 #[cfg(test)]
+mod region_read_tests;
+#[cfg(test)]
 mod source_tests;
 #[cfg(test)]
 mod tests;
@@ -55,7 +57,7 @@ pub use find::{
     NearbyTrackSources, NearbyTracks, NearbyTracksError, NearbyTracksReport, SourceReport,
     StopRule,
 };
-pub use grey::{blurred_grey, sample_grey, GreyImage, GreyImageError, GreyImages, GREY_BLUR_SIGMA};
+pub use grey::{blurred_grey, sample_grey, GreyImage, GreyImageError, GREY_BLUR_SIGMA};
 pub use guided::{
     guided_matches, DescriptorRowsError, GuidedOptions, GuidedSource, ImageDescriptors,
     KeypointRays,

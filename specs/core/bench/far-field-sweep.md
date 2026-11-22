@@ -31,7 +31,7 @@ The pieces live in
 in [`far_field.rs`](../../../crates/sfmtool-core/src/bench/nearby/far_field.rs),
 the patch read in
 [`patch_read.rs`](../../../crates/sfmtool-core/src/bench/nearby/patch_read.rs)
-and the grey images it samples in
+and its grey reads in
 [`grey.rs`](../../../crates/sfmtool-core/src/bench/nearby/grey.rs), all
 re-exported from `sfmtool_core::bench`. The direction projection is
 `ViewCamera::project_direction` in
@@ -46,7 +46,6 @@ pub fn far_field_sweep(
     edited: &EditedReconstruction,
     views: &[ProjectedImage<'_>],
     pool: &RegionPool,
-    grey: &GreyImages,
     image: u32,
     pixel: [f64; 2],
     options: &FarFieldOptions,
@@ -79,7 +78,7 @@ pub struct FarFieldReading {
 
 pub fn read_patch_along_ray(
     views: &[ProjectedImage<'_>],
-    grey: &GreyImages,
+    pool: &RegionPool,
     patch: &RayPatch,        // image, pixel, radius_px
     distances: &[f64],       // f64::INFINITY allowed
     images: &[u32],
@@ -87,8 +86,8 @@ pub fn read_patch_along_ray(
 ) -> Result<Option<PatchRead>, PatchReadError>;
 // Ok(None): the queried patch is flat or off its photograph.
 // Err: NoSuchImage { image, image_count } for `patch.image` or an entry of
-// `images` that is not one of `views`, GreyMismatch { grey, image_count } for a
-// grey cache not made for one image per view.
+// `images` that is not one of `views`, Photograph(PhotographReadError) for a
+// read of a photograph that failed.
 
 pub struct PatchRead {
     pub images: Vec<u32>,
@@ -101,15 +100,18 @@ pub struct PatchRead {
 }
 ```
 
-**Why the grey images are an argument.** Every read samples the photographs in
-grey, blurred by a Gaussian of one pixel, and converting a photograph costs far
-more than a query reads of it. `GreyImages` is a cache of one lazily built grey
-image per view, filled through a shared reference, which the caller builds once
-per set of views and passes to every query, the same way the decoded views are
-the caller's. The Python binding keeps one inside each `ImagePyramidSet`.
-`GreyImages::get(views, image)` refuses an image that is not an index into both
-the cache and `views` (`GreyImageError::NoSuchImage`), and `GreyImage::new`
-refuses values that do not fill its width and height
+**Why each read makes its own grey.** Every read samples the photographs in
+grey, blurred by a Gaussian of one pixel. A read takes the rectangle of level 0
+its samples need, plus the blur's 4 px, through `read_source_rect` from the
+caller's region pool, and makes only that rectangle grey and blurred, so it
+holds a few kilobytes where a grey copy of a whole photograph holds four bytes
+a pixel, 800 MB for one of 200 megapixels. The blur reflects only at the
+photograph's edges, never at an edge of the rectangle, so every sample is the
+one the whole photograph's blurred grey gives, bit for bit (§ "Implementation
+notes"). The pool is the one the sweep's fits read through, so a caller passes
+one pool for the whole call. `blurred_grey` and `sample_grey` make and sample a
+whole image's grey, the reference the reads are tested against, and
+`GreyImage::new` refuses values that do not fill its width and height
 (`GreyImageError::DataSize`).
 
 **Why the result keeps the dropped peaks.** The harness returns only the kept
@@ -125,11 +127,12 @@ is absent once moved, because the moved point's range is its sightings' to
 compute.
 
 ```rust
-use sfmtool_core::bench::{far_field_sweep, FarFieldOptions, GreyImages};
+use sfmtool_core::bench::{far_field_sweep, FarFieldOptions};
+use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::progress::Progress;
 
-let grey = GreyImages::new(views.len()); // once, kept beside the views
-let found = far_field_sweep(&edited, &views, &grey, image, pixel,
+let pool = RegionPool::for_kernel_call(); // one per call
+let found = far_field_sweep(&edited, &views, &pool, image, pixel,
                             &FarFieldOptions::default(), &Progress::none())?;
 for r in &found.readings {
     println!("{} px: {:?} {:?}", r.disparity, r.range, r.refit);
@@ -236,6 +239,17 @@ blur and the interpolation add their terms; the ZNCCs are computed in `f64`
 where the harness used `f32`. Over every far-field query of both ground truths
 the two implementations return the same readings.
 
+**A read's rectangle.** A read first works out, from the photograph's size
+alone, the four pixels each of its samples takes, and reads nothing when any
+is off the photograph, since that read has no value. Otherwise it reads the
+bounding box of those pixels grown by the blur's 4 px, clipped to the
+photograph, makes it grey and blurs only the bounding box. A tap of the blur
+reflected at the photograph's edge lands no further from its pixel than the
+tap itself, so every tap lies inside the rectangle, and each blurred value adds
+the same terms in the same order as a blur of the whole photograph, which
+makes the samples equal bit for bit. The queried patch is read once per call
+of the read, and each image at each distance once.
+
 **Two reads per sweep.** The first read, at infinity, over every other image,
 only finds the images the pixel lands in; the second reads those at every
 disparity, keeping the samples for the pairwise grouping. The queried patch is
@@ -290,7 +304,7 @@ readings = bench.far_field_sweep(edited, images, image, (x, y),
 ```
 
 `images` is a list of decoded images or an `ImagePyramidSet`, as every bench
-step takes them; a set also keeps its grey images between calls. `options`
+step takes them. `options`
 overrides `FarFieldOptions` fields by name (`wide_among` as `"matching"` or
 `"all"`); an unknown key is a `ValueError`, as is an image or pixel that names
 no place. A read of a photograph that fails, which a photograph in memory never
@@ -312,7 +326,8 @@ read = bench.read_patch_along_ray(edited, images, image, (x, y), 8.0,
 
 `read_patch_along_ray` reads in every image but the queried one when
 `read_images` is left out, raises `ValueError` from the core's `PatchReadError`
-for an image that is not one of the reconstruction's, and returns `None` for a
+for an image that is not one of the reconstruction's and `RuntimeError` for a
+read of a photograph that fails, as the sweep does, and returns `None` for a
 flat or off-photograph patch, or a dict with `images`, `distances`, `whole` and `middle`
 (`(distances, images)` arrays, `-1` where unread), `centres`, `middle_std`
 and, with `samples`, `template`, `values` and `middle_mask`.
@@ -326,12 +341,22 @@ plane at the distance of disparity 6 reading there and nowhere at infinity; a
 plane too near for the sweep giving no far reading; the patch reading best at
 the plane's distance and landing where the scene projects; a flat or
 off-photograph patch not read; an image with no view, as the queried image or
-one to read in, and a grey cache for another number of images refused, as is
-an image past the grey cache's end and values that do not fill a grey image; the grey conversion against the matchers'
-8-bit BT.601 grey and the blur against OpenCV's numbers; best-three, prominence and average linkage on small cases; and a
-reading whose sightings are within a pixel of a kept one's, in the same images,
-dropped as repeating it, where one a pixel and a half off or seen by one
-image fewer is kept.
+one to read in, refused, as are values that do not fill a grey image; the grey
+conversion against the matchers' 8-bit BT.601 grey and the blur against
+OpenCV's numbers; best-three, prominence and average linkage on small cases;
+and a reading whose sightings are within a pixel of a kept one's, in the same
+images, dropped as repeating it, where one a pixel and a half off or seen by
+one image fewer is kept.
+[`bench/nearby/region_read_tests.rs`](../../../crates/sfmtool-core/src/bench/nearby/region_read_tests.rs)
+checks the reads by rectangle: a read's samples equal those of the whole
+photograph's blurred grey, bit for bit, in the middle and in each corner,
+with every read copied and with every read through 32 px tiles; the patch
+read, the depth layers, the sweep and the nearby-track search give the same
+result with every read copied, with every read through the tiles, and
+through a pool of half the first run's peak, where some reads copy and
+others go through the tiles; and a photograph that lacks the pixels a read
+needs fails each of them with the read's error, whether it is the queried
+photograph or one read in the loop over the images.
 [`tests/rust_bindings/bench/test_far_field_sweep_rust_bindings.py`](../../../tests/rust_bindings/bench/test_far_field_sweep_rust_bindings.py)
 checks the binding's keys, that an image list and a pyramid set read alike,
 the overrides and the refusals. Parity with the harness's Python

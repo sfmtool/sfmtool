@@ -36,12 +36,10 @@ const PIXEL: [f64; 2] = [64.0, 64.0];
 fn sweep(scene: &Scene, depth: f64, options: &FarFieldOptions) -> FarFieldSweep {
     let edited = edited(scene, Point3::new(0.0, 0.0, depth));
     let views = scene.views();
-    let grey = GreyImages::new(views.len());
     far_field_sweep(
         &edited,
         &views,
         &RegionPool::for_kernel_call(),
-        &grey,
         0,
         PIXEL,
         options,
@@ -158,7 +156,6 @@ fn the_patch_reads_best_at_the_planes_distance() {
     let depth = 4.0;
     let scene = Scene::from_centers(&CENTERS, depth);
     let views = scene.views();
-    let grey = GreyImages::new(views.len());
     let camera = ViewCamera::new(&views[0]);
     let ray = camera.ray(PIXEL).normalize();
     // The plane z = depth, along the pixel's ray.
@@ -169,9 +166,16 @@ fn the_patch_reads_best_at_the_planes_distance() {
         radius_px: 8.0,
     };
     let distances = [t * 0.8, t, t * 1.25, f64::INFINITY];
-    let read = read_patch_along_ray(&views, &grey, &patch, &distances, &[1, 2, 3], true)
-        .expect("every image is a view")
-        .expect("the patch is textured and inside the photograph");
+    let read = read_patch_along_ray(
+        &views,
+        &RegionPool::for_kernel_call(),
+        &patch,
+        &distances,
+        &[1, 2, 3],
+        true,
+    )
+    .expect("every image is a view")
+    .expect("the patch is textured and inside the photograph");
     let point = camera.center + ray * t;
     for v in 0..3 {
         assert!(read.whole[[1, v]] > 0.99, "{}", read.whole[[1, v]]);
@@ -194,14 +198,14 @@ fn the_patch_reads_best_at_the_planes_distance() {
 fn a_patch_off_the_photograph_or_flat_is_not_read() {
     let scene = Scene::from_centers(&CENTERS, 4.0);
     let views = scene.views();
-    let grey = GreyImages::new(views.len());
+    let pool = RegionPool::for_kernel_call();
     let off = RayPatch {
         image: 0,
         pixel: [3.0, 64.0],
         radius_px: 8.0,
     };
     assert_eq!(
-        read_patch_along_ray(&views, &grey, &off, &[f64::INFINITY], &[1], false),
+        read_patch_along_ray(&views, &pool, &off, &[f64::INFINITY], &[1], false),
         Ok(None)
     );
 
@@ -234,58 +238,39 @@ fn a_patch_off_the_photograph_or_flat_is_not_read() {
         pixel: PIXEL,
         radius_px: 8.0,
     };
-    let grey = GreyImages::new(2);
     assert_eq!(
-        read_patch_along_ray(&flat, &grey, &patch, &[f64::INFINITY], &[1], false),
+        read_patch_along_ray(&flat, &pool, &patch, &[f64::INFINITY], &[1], false),
         Ok(None)
     );
 }
 
-/// An image that is not a view, as the queried image or one to read in, and a
-/// grey cache for another number of images are refused, not indexed.
+/// An image that is not a view, as the queried image or one to read in, is
+/// refused, not indexed.
 #[test]
-fn a_patch_read_refuses_an_image_with_no_view_and_a_mismatched_grey_cache() {
+fn a_patch_read_refuses_an_image_with_no_view() {
     let scene = Scene::from_centers(&CENTERS, 4.0);
     let views = scene.views();
-    let grey = GreyImages::new(views.len());
-    let read = |image, images: &[u32], grey: &GreyImages| {
+    let read = |image, images: &[u32]| {
         let patch = RayPatch {
             image,
             pixel: PIXEL,
             radius_px: 8.0,
         };
-        read_patch_along_ray(&views, grey, &patch, &[f64::INFINITY], images, false)
+        read_patch_along_ray(
+            &views,
+            &RegionPool::for_kernel_call(),
+            &patch,
+            &[f64::INFINITY],
+            images,
+            false,
+        )
     };
     let no_view = Err(PatchReadError::NoSuchImage {
         image: 9,
         image_count: views.len(),
     });
-    assert_eq!(read(9, &[1], &grey), no_view);
-    assert_eq!(read(0, &[1, 9], &grey), no_view);
-    assert_eq!(
-        read(0, &[1], &GreyImages::new(2)),
-        Err(PatchReadError::GreyMismatch {
-            grey: 2,
-            image_count: views.len()
-        })
-    );
-    // The grey cache refuses an image past its own end or past the views'.
-    let no_grey = |image| {
-        Err(GreyImageError::NoSuchImage {
-            image,
-            cache_len: 2,
-            view_count: views.len(),
-        })
-    };
-    assert_eq!(GreyImages::new(2).get(&views, 2), no_grey(2));
-    assert_eq!(GreyImages::new(2).get(&views, 9), no_grey(9));
-    assert_eq!(
-        no_grey(9).unwrap_err().to_string(),
-        format!(
-            "image 9 is not one of the grey cache's 2 images and the {} views",
-            views.len()
-        )
-    );
+    assert_eq!(read(9, &[1]), no_view);
+    assert_eq!(read(0, &[1, 9]), no_view);
 }
 
 // ---- The far-field sweep -----------------------------------------------------
@@ -415,13 +400,11 @@ fn the_sweep_refuses_a_query_that_names_no_place() {
     let scene = Scene::from_centers(&CENTERS, 4.0);
     let edited = edited(&scene, Point3::new(0.0, 0.0, 4.0));
     let views = scene.views();
-    let grey = GreyImages::new(views.len());
-    let run = |image, pixel, grey: &GreyImages| {
+    let run = |image, pixel, views: &[ProjectedImage<'_>]| {
         far_field_sweep(
             &edited,
-            &views,
+            views,
             &RegionPool::for_kernel_call(),
-            grey,
             image,
             pixel,
             &FarFieldOptions::default(),
@@ -429,16 +412,20 @@ fn the_sweep_refuses_a_query_that_names_no_place() {
         )
     };
     assert!(matches!(
-        run(9, PIXEL, &grey),
+        run(9, PIXEL, &views),
         Err(FarFieldError::NoSuchImage { .. })
     ));
     assert!(matches!(
-        run(0, [-1.0, 3.0], &grey),
+        run(0, [-1.0, 3.0], &views),
         Err(FarFieldError::PixelOffImage { .. })
     ));
     assert!(matches!(
-        run(0, PIXEL, &GreyImages::new(2)),
-        Err(FarFieldError::InputMismatch { input: "grey", .. })
+        run(0, PIXEL, &views[..2]),
+        Err(FarFieldError::InputMismatch {
+            input: "views",
+            got: 2,
+            ..
+        })
     ));
 }
 

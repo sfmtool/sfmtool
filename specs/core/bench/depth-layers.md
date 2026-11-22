@@ -34,14 +34,15 @@ re-exported from `sfmtool_core::bench`, and bound as
 ```rust
 pub fn depth_layers(
     views: &[ProjectedImage<'_>],
-    grey: &GreyImages,               // the blurred grey images, cached across queries
+    pool: &RegionPool,               // the region pool the patch reads read through
     image: u32,                      // the queried image
     pixel: [f64; 2],                 // the queried pixel
     candidates: &[LayerCandidate<'_>],
     options: &DepthLayerOptions,
 ) -> Result<DepthLayers, DepthLayerError>;
-// NoSuchImage | GreyMismatch | BadDistance (a distance_px that is not finite
-// and at least 0) | NanRange (a usable candidate with a NaN range end)
+// NoSuchImage | BadDistance (a distance_px that is not finite and at least 0)
+// | NanRange (a usable candidate with a NaN range end) | Photograph (a read of
+// a photograph that failed)
 
 pub struct LayerCandidate<'a> {
     pub source: NearbySource,               // Points | Clusters | Guided | Constellation | FarField
@@ -127,9 +128,10 @@ and confidence arrive together or not at all.
 
 ```rust
 use sfmtool_core::bench::{
-    camera_spread, classify_range, depth_layers, DepthLayerOptions, GreyImages,
-    LayerCandidate, RangeOptions,
+    camera_spread, classify_range, depth_layers, DepthLayerOptions, LayerCandidate,
+    RangeOptions,
 };
+use sfmtool_core::camera::sampler::RegionPool;
 
 let spread = camera_spread(&views);
 // `found`: the Vec<NearbyCandidate> the matching sources returned.
@@ -145,8 +147,8 @@ let candidates: Vec<LayerCandidate<'_>> = found
         LayerCandidate::from_candidate(c, range, class)
     })
     .collect();
-let grey = GreyImages::new(views.len());
-let layers = depth_layers(&views, &grey, image, pixel, &candidates, &DepthLayerOptions::default())?;
+let pool = RegionPool::for_kernel_call();
+let layers = depth_layers(&views, &pool, image, pixel, &candidates, &DepthLayerOptions::default())?;
 let first = layers.layers.iter().find(|l| l.ranking.as_ref().unwrap().rank == 1);
 ```
 
@@ -285,11 +287,13 @@ takes the harness's anchor dicts, reading `source` (`"tracks"`,
 `"clusters"`, `"guided"`, `"constellation"` or `"farfield"`), `views`
 (`[image, x, y]` rows), `n_views`, `distance_px`, `max_ray_angle_deg`,
 `range`, `bounded` and `far`, and writes nothing to them. `images` is a list of
-photographs or an `ImagePyramidSet`, which also keeps the grey images between
-calls. `options` overrides `evidence`, `rank_by` (`"evidence"` or `"score"`),
-`radius_px` and `samples`; an unknown key, an unknown source, an anchor
-whose `n_views` is not its number of views, and an anchor that core
-`depth_layers` refuses (`BadDistance`, `NanRange`) are a `ValueError`.
+photographs or an `ImagePyramidSet`. `options` overrides `evidence`,
+`rank_by` (`"evidence"` or `"score"`), `radius_px` and `samples`; an unknown
+key, an unknown source, an anchor whose `n_views` is not its number of views,
+and an anchor that core `depth_layers` refuses (`BadDistance`, `NanRange`) are
+a `ValueError`. A read of a photograph that fails, which a photograph in memory
+never does, raises `RuntimeError` with the layers' sentence, which names the
+photograph, or says it is one in memory and carries the read's message.
 
 It returns `{"support": [...], "layers": [...]}` with each layer a dict of the
 harness's keys: `range`, `anchors`, `nearest_px`, `views` (the most views of a
@@ -317,7 +321,9 @@ for it; overlapping ranges merge into one layer with the union of their
 ranges; support needs different photographs and a usable, overlapping range;
 equal near ends keep the order given; a far layer is read from infinity in; a
 clear winner is more confident than a close one, and the key and confidence
-follow their constants; and the refusals.
+follow their constants; and the refusals. The reads by rectangle, and a read
+that fails, are tested with the far-field sweep's
+([far-field-sweep.md](far-field-sweep.md) § "Testing").
 [`tests/rust_bindings/bench/test_depth_layers_rust_bindings.py`](../../../tests/rust_bindings/bench/test_depth_layers_rust_bindings.py)
 checks the binding's support, grouping, evidence and ranking against the
 harness's own Python on the seoul_bull fixture, the evidence from reads made

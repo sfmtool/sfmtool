@@ -1023,7 +1023,7 @@ tiled photographs only (step 13), so no step leaves a reader without pixels.
 | 10 | Track Table reference picks (`track_table_panel/picks.rs` → `render_reference` → `render_view_tile`, `clipped_share`) | `get`, whole pyramid; level 0 inside the outline; `level(0)` for the size check | regions, and `clipped_share` walks the level-0 tiles under the outline; each pick still fetches its views with one `get` per observation, and makes one region pool for its one `render_reference` call over all of them, so a point's views share one pool; the size check from the layout | the stored levels, and `clipped_share` reads `-mip0` for an original that is not region-readable |
 | 11–13 | Display patch bitmaps at open, conversion to embedded patches, `sfm web-export` (`display_bitmaps.rs`, `state/edits.rs` `convert_to_embedded_patches_job`, `web_export.rs`) | `get_many`, full depth, every photograph held at once; web-export with budget 0 | `get_many` answers tiled photographs; regions; web-export makes missing mipmaps in the workspace | the stored levels |
 | 14–18 | The bench's steps and searches, live evaluation, *Find Nearby Tracks*, *Create Track Here*, *Add image to tracks*, *Refine all normals*, *Refit all points* (`bench.rs`, `state/edits.rs` `fetch`, `bench/nearby_tracks.rs`, `bench/track_at_pixel.rs`, `add_image_to_tracks.rs`, `state/edits/refine_all_normals.rs`, `refit_all_points.rs`) | `get_many`, levels per sample or per grid, `clipped_share` on level 0; the normal kernels' renders, the grown plane's own sampler and the cluster refinement's `LevelTile` copies | regions, `clipped_share` as in row 10; the grown plane's reads through `read_source_samples` and `LevelTile` through `read_source_rect` (the companion's § "Readers that sample through their own code") | the stored levels |
-| 16a | *Find Nearby Tracks*' grey reads (`GreyImages`, `bench/nearby/grey.rs`) | level 0 of each view, blurred grey `f32`, whole: 800 MB per 200-megapixel view | each read blurs the level-0 region it samples, plus the blur's 4 px | level 0 from `-mip0` for an original that is not region-readable |
+| 16a | *Find Nearby Tracks*' grey reads (`read_grey`, `bench/nearby/grey.rs`) | each read blurs the level-0 rectangle it samples, plus the blur's 4 px, through `read_source_rect` over the whole pyramid `from_pyramid` wraps (built, step 12); before step 12, level 0 of each view, blurred grey `f32`, whole: 800 MB per 200-megapixel view | the same rectangles, from the cache's tiles | level 0 from `-mip0` for an original that is not region-readable |
 | 19 | The viewer's cluster-patches build (`cluster_patches.rs` `read_photographs`) | `get_many` through the cache (built, 11b), full depth, every photograph held at once | `get_many` answers tiled photographs; regions | the stored levels |
 | 20 | Display thumbnails when none is stored (`display_thumbnails.rs` → `display_thumbnail_row`) | whole decode, resized to 128 | in core unchanged; out of core from the coarsest mip level file | display only |
 | 21 | `.sift` building (`features/sift/files.rs` `build_sift_file`) | whole decode | whole decode of the original, then the mipmap from it | no |
@@ -1389,7 +1389,7 @@ each in the step that moves its readers:
 | 9 | Track View's and the Track Table's renders, which draw a cell's error state instead of the tile (built) |
 | 10 | `ViewSources::fetch` in [state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs), which returns `PhotographReadError` instead of `Cancelled` (`get_many` still returns `Cancelled`, which converts), and the bench kernels (`bench::evaluate`, `evaluate_rendering_bitmap`, `score_bitmap`, `fit`, `render_bitmap_in_place`, `search_geometry`, `set_stage`, `build_track_at_pixel`, `classify`) and the patch kernels they and the reference picks share (`view_selection::select_patch_views`, `select_patch_cloud_views`, `reference_view::render_view_tile`, `read_track`, `stored_bitmap::render_reference`, `keypoint_localize`'s and `keypoint_subpixel`'s entry points, `member_coherence`'s, `observation_reading::read_cloud_observations`, `spawn::spawn_candidate_tracks`), and every kernel that calls one of them or that the bench runs, since a kernel passes its caller's pool down and its errors up: the normal kernels the bench's normal steps run (`pairwise_flow_normal`, `grown_plane_normal`, `grid_plane_normal`, `finite_difference_normal`) and `refine_normals`, which runs them; the cluster refinement's entry points (`refine_cluster_patches`, `refine_cluster_patches_borrowed`), which the bench's evaluation of a cluster-stage track runs, and the bench's member-grid reads, which move to `sample_source_member_grid`, the source form of `sample_member_grid` that step 9 added beside it; `stored_bitmap::render_patch_bitmap`, `render_patch_cloud_bitmaps` and `refit_points`. Their callers that step 11 moves keep their fetch: each wraps the whole pyramids it holds with `from_pyramid` (the cluster-patches build, until 11b, its decoded images with `from_image`), makes the region pool for its call, and reports the error as its step's failure |
 | 11 | the public `render_patch_bitmap_column` / `render_display_patch_bitmaps` in [display_bitmaps.rs](../../crates/sfmtool-core/src/patch/display_bitmaps.rs), which return `PhotographReadError` instead of `Cancelled`, and `WebExportError`, which gains `Photograph` (built, 11a); the viewer's bulk jobs (the conversion to embedded patches, *Refine all normals*, *Refit all points*, the cluster-patches build) and `sfm web-export` take tiled photographs from `get_many` once step 13 makes it answer them, wrapping its whole pyramids with `from_pyramid` until then, and the cluster-patches build fetches through the cache from 11b (built) |
-| 12 | `find_nearby_tracks` and the reads under it (`GreyImages::get`, `read_patch_along_ray`, `far_field_sweep`, `depth_layers`, `guided_matches`, `nearby_cluster_tracks`, `constellation_seeds`, `nearby_points`, `distance_range`) |
+| 12 | `read_patch_along_ray` and `depth_layers`, which take the caller's `&RegionPool` in place of the `&GreyImages` cache, and `far_field_sweep` and `find_nearby_tracks`, which took the pool in 10a and drop the cache; `PatchReadError` and `DepthLayerError` gain `Photograph(PhotographReadError)` in place of `GreyMismatch`, and `GreyImages`, with its `get` and `GreyImageError::NoSuchImage`, is gone (built). The plan also listed `guided_matches`, `nearby_cluster_tracks`, `constellation_seeds`, `nearby_points` and `distance_range`, which read the reconstruction, its index files and the cameras but no photograph, so their signatures do not change |
 | 16 | `ImagePyramidSet.read`, the first binding whose photographs come from the cache. The bindings over the kernels above change with their kernels in steps 10 to 12, build their tiled photographs from arrays with `from_image`, and raise the error from then on, though tiles cut from arrays cannot fail |
 
 The viewer's side, in
@@ -1998,7 +1998,41 @@ in core. Step 17 turns the tier on.
     changes, the count of renders that took the tile path on the test data
     and on a real capture, as the companion's step 5 asks.
 12. **The nearby-track grey reads by region** (companion step 6), with the
-    step-12 signature changes and their bindings.
+    step-12 signature changes and their bindings. **Built.** Each grey read
+    of the patch read along a ray, under the far-field sweep and the depth
+    layers, works out from the photograph's size the four pixels each of its
+    samples takes, reads nothing when one is off the photograph, and
+    otherwise reads the bounding box of those pixels, grown by the blur's
+    4 px and clipped to the photograph, with `read_source_rect` from the
+    caller's pool, and makes grey and blurs only the bounding box. The blur
+    reflects at the photograph's edges alone, so every sample equals the one
+    the whole photograph's blurred grey gives, bit for bit, and the search's
+    results are identical. `GreyImages`, the per-view cache of a blurred grey
+    copy of each photograph, and the copy each Python `ImagePyramidSet` kept
+    are gone; a read holds its rectangle and the grey of it, a few kilobytes,
+    and makes each rectangle again when a later read needs it, since the
+    grey reads use no `ViewRegions`. The signatures change as the table in
+    § "Errors from reading pixels" says. The bindings of
+    `read_patch_along_ray` and `depth_layers` make a pool for the call and
+    raise a read that fails as `RuntimeError` in place of the interim
+    `ValueError`, as those of the sweep and the search already did; the
+    bindings in `bench/nearby.rs` keep `ValueError`, since the sources they
+    run read no photograph. `held_pyramid` is left only to the tests that
+    compare a read with the whole pyramid's. The viewer's *Find Nearby
+    Tracks* `read regions` note, written since 10a, now counts the grey
+    reads too. Specified in
+    [core/bench/far-field-sweep.md](../core/bench/far-field-sweep.md),
+    [core/bench/depth-layers.md](../core/bench/depth-layers.md),
+    [core/bench/nearby-tracks.md](../core/bench/nearby-tracks.md) and
+    [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md),
+    with tests in
+    [bench/nearby/region_read_tests.rs](../../crates/sfmtool-core/src/bench/nearby/region_read_tests.rs)
+    (a read's samples equal the whole photograph's blurred grey's in the
+    middle and at each corner, on either path; the patch read, the depth
+    layers, the sweep and the search identical with every read copied, every
+    read through 32 px tiles and a pool of half the first run's peak; and a
+    photograph missing pixels making each return its photograph error, read
+    for the template and in the loop over the images).
 13. **The tiled photograph cache.** The cache hands out `Arc<TiledPhotograph>`
     for every photograph and keeps no whole pyramid: an in-core photograph is
     decoded whole into tiles, the requested tiles kept as used and the rest

@@ -4,14 +4,15 @@
 //! Python binding for reading a pixel's patch along its ray.
 
 use numpy::IntoPyArray;
-use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use sfmtool_core::bench::{read_patch_along_ray as core_read_patch_along_ray, RayPatch};
+use sfmtool_core::camera::sampler::RegionPool;
 
 use super::views_of;
-use crate::patches::views::{resolve_grey, resolve_pyramids, PosedViews};
+use crate::helpers::kernel_err;
+use crate::patches::views::{resolve_pyramids, PosedViews};
 use crate::reconstruction::edited::PyEditedReconstruction;
 
 /// Read ``pixel``'s patch in ``image`` at each of ``distances`` along its
@@ -28,7 +29,7 @@ use crate::reconstruction::edited::PyEditedReconstruction;
 /// Args:
 ///     edited: The reconstruction whose cameras and poses are read.
 ///     images: One decoded image per image of ``edited``, or a prebuilt
-///         :class:`ImagePyramidSet`, which also keeps the grey images.
+///         :class:`ImagePyramidSet`.
 ///     image: The queried image's index.
 ///     pixel: ``(x, y)`` in that image.
 ///     radius_px: From the pixel to the grid's edge, in px.
@@ -65,7 +66,6 @@ pub(super) fn read_patch_along_ray(
 ) -> PyResult<Option<Py<PyDict>>> {
     let posed = PosedViews::from_reconstruction(&edited.inner.base);
     let pyramids = resolve_pyramids(&posed, images)?;
-    let grey = resolve_grey(images, posed.cameras.len());
     let views = views_of(&posed, &pyramids);
     let count = views.len() as u32;
     let read_images = read_images.unwrap_or_else(|| (0..count).filter(|&i| i != image).collect());
@@ -76,9 +76,16 @@ pub(super) fn read_patch_along_ray(
     };
     let Some(read) = py
         .detach(|| {
-            core_read_patch_along_ray(&views, &grey, &patch, &distances, &read_images, samples)
+            core_read_patch_along_ray(
+                &views,
+                &RegionPool::for_kernel_call(),
+                &patch,
+                &distances,
+                &read_images,
+                samples,
+            )
         })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?
+        .map_err(kernel_err)?
     else {
         return Ok(None);
     };

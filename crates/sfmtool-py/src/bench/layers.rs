@@ -16,10 +16,12 @@ use sfmtool_core::bench::{
     depth_layers as core_depth_layers, DepthLayer, DepthLayerOptions, LayerCandidate, LayerRankBy,
     NearbySource, RangeClass,
 };
+use sfmtool_core::camera::sampler::RegionPool;
 
 use super::nearby::harness_name;
-use super::{refused, views_of};
-use crate::patches::views::{resolve_grey, resolve_pyramids, PosedViews};
+use super::views_of;
+use crate::helpers::kernel_err;
+use crate::patches::views::{resolve_pyramids, PosedViews};
 use crate::reconstruction::edited::PyEditedReconstruction;
 
 /// The source the harness's name `word` names.
@@ -118,8 +120,7 @@ impl Anchor {
 /// Args:
 ///     edited: The reconstruction whose cameras and poses are read.
 ///     images: One decoded image per image of ``edited``, or a prebuilt
-///         :class:`ImagePyramidSet`, as :func:`far_field_sweep` takes them. A
-///         set also keeps the grey images between calls.
+///         :class:`ImagePyramidSet`, as :func:`far_field_sweep` takes them.
 ///     image: The queried image's index.
 ///     pixel: ``(x, y)`` in that image.
 ///     anchors: The harness's anchor dicts. Each is read for ``source``
@@ -184,14 +185,14 @@ pub(super) fn depth_layers(
         .collect::<PyResult<Vec<_>>>()?;
     let posed = PosedViews::from_reconstruction(&edited.inner.base);
     let pyramids = resolve_pyramids(&posed, images)?;
-    let grey = resolve_grey(images, posed.cameras.len());
     let views = views_of(&posed, &pyramids);
     let found = py
         .detach(|| {
             let candidates: Vec<LayerCandidate<'_>> = owned.iter().map(Anchor::candidate).collect();
-            core_depth_layers(&views, &grey, image, pixel, &candidates, &options)
+            let pool = RegionPool::for_kernel_call();
+            core_depth_layers(&views, &pool, image, pixel, &candidates, &options)
         })
-        .map_err(refused)?;
+        .map_err(kernel_err)?;
     let out = PyDict::new(py);
     out.set_item("support", &found.support)?;
     let layers = PyList::empty(py);

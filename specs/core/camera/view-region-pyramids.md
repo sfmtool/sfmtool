@@ -39,10 +39,11 @@ reference view and every kernel that reads through it, the tile through
 `render_source_tile` and its clipped share through `source_clipped_share`
 ([patch/reference-view.md](../patch/reference-view.md)): member coherence,
 the stored bitmap, the observation readings, the keypoint localizer and
-sub-pixel refiner, the candidate spawn and *Add image to tracks*. Only the
-grey images of the nearby-track search still read the whole pyramid a tiled
-photograph holds
-([bench/nearby-tracks.md](../bench/nearby-tracks.md)).
+sub-pixel refiner, the candidate spawn and *Add image to tracks*. The grey
+reads of the nearby-track search read the rectangle each samples through
+`read_source_rect`
+([bench/far-field-sweep.md](../bench/far-field-sweep.md)), so no kernel reads
+the whole pyramid a tiled photograph holds.
 
 ## Rust API
 
