@@ -689,3 +689,81 @@ fn a_distance_that_does_not_read_is_refused_with_why() {
         Err(StatedDistanceRefusal::NotPositive { .. })
     ));
 }
+
+// ---- Setting an endpoint --------------------------------------------------
+
+#[test]
+fn setting_an_endpoint_changes_that_endpoint_and_nothing_else() {
+    let value = measured();
+    let item = item_of(&value, 0);
+    let moved = MeasurementEndpoint {
+        image: 6,
+        pixel: [1919.5, 0.0],
+    };
+    let next = set_measurement_endpoint(&value, &item, 0, moved).unwrap();
+    assert_eq!(distance(&next).endpoints[0], Some(moved));
+    assert_eq!(distance(&next).endpoints[1], distance(&item).endpoints[1]);
+    assert_eq!(distance(&next).distance, distance(&item).distance);
+    assert_eq!((&next.label, next.origin), (&item.label, item.origin));
+    assert_eq!(
+        distance(&item).endpoints[0].unwrap().image,
+        0,
+        "the step changed its input"
+    );
+    // An endpoint not placed is placed.
+    let half = with_distance(&item, |d| d.endpoints[1] = None);
+    let placed = set_measurement_endpoint(&value, &half, 1, moved).unwrap();
+    assert_eq!(distance(&placed).endpoints[1], Some(moved));
+    // A commit writes the new endpoint into the row.
+    let commit = commit_measurement(&value, &next, Some(0)).unwrap();
+    let (_, _, images, pixels, _) = row(&commit.value, 0);
+    assert_eq!(images, [6, 3]);
+    assert_eq!(&pixels[..2], &[1919.5, 0.0]);
+}
+
+#[test]
+fn an_endpoint_outside_the_images_is_refused_in_the_commits_words() {
+    let value = measured();
+    let item = item_of(&value, 0);
+    let at = |image: u32, pixel: [f64; 2]| MeasurementEndpoint { image, pixel };
+    let refused = set_measurement_endpoint(&value, &item, 1, at(8, [1.0, 1.0])).unwrap_err();
+    assert_eq!(
+        refused,
+        EndpointPlacementRefusal::Outside(MeasurementCommitRefusal::NoSuchImage {
+            side: 1,
+            image: 8,
+            image_count: 8,
+        })
+    );
+    // The commit of an item holding that endpoint says the same.
+    let held = with_distance(&item, |d| d.endpoints[1] = Some(at(8, [1.0, 1.0])));
+    let commit_says = commit_measurement(&value, &held, Some(0)).unwrap_err();
+    assert_eq!(refused.to_string(), commit_says.to_string());
+
+    for pixel in [[1920.0, 5.0], [5.0, -0.5], [f64::NAN, 5.0], [5.0, 1080.0]] {
+        let refused = set_measurement_endpoint(&value, &item, 0, at(2, pixel)).unwrap_err();
+        assert!(
+            matches!(
+                refused,
+                EndpointPlacementRefusal::Outside(MeasurementCommitRefusal::PixelOutsideImage {
+                    side: 0,
+                    image: 2,
+                    width: 1920,
+                    height: 1080,
+                    ..
+                })
+            ),
+            "{pixel:?}: {refused:?}"
+        );
+        assert!(refused.to_string().starts_with("endpoint A's pixel ("));
+    }
+    let refused = set_measurement_endpoint(&value, &item, 2, at(0, [1.0, 1.0])).unwrap_err();
+    assert_eq!(
+        refused,
+        EndpointPlacementRefusal::NoSuchEndpoint { side: 2 }
+    );
+    assert_eq!(
+        refused.to_string(),
+        "a distance has endpoints 0 (A) and 1 (B), so there is no endpoint 2"
+    );
+}

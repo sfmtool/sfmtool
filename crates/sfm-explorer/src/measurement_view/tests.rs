@@ -631,3 +631,272 @@ fn moving_from_the_label_field_to_the_distance_field_commits_the_label() {
     );
     assert_eq!(any_distance(&moved), None);
 }
+
+// ── The endpoint blocks' layout ─────────────────────────────────────────
+
+/// One frame of the panel in a viewport `width` points wide.
+fn run_narrow(panel: &mut MeasurementView, ctx: &egui::Context, state: &AppState, width: f32) {
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(width, 900.0),
+        )),
+        ..Default::default()
+    };
+    crate::test_support::run_frame_headless(ctx, raw, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
+            panel.show(ui, state);
+        });
+    });
+}
+
+/// At the width Measurement View has in the default layout of a 1280 x 720
+/// window, about 340 points, the two endpoint blocks are drawn one above the
+/// other, each inside the panel, and neither over the other; wide enough for
+/// two, they are side by side. In both modes.
+#[test]
+fn the_endpoint_blocks_never_overlap() {
+    let (mut state, id) = measured_state(Some("m"));
+    state.select_measurement(MeasurementRef::distance(id, 1));
+    for editing in [false, true] {
+        if editing {
+            state
+                .put_measurement_on_bench(MeasurementRef::distance(id, 1))
+                .unwrap();
+        }
+        let mut panel = MeasurementView::new();
+        let ctx = egui::Context::default();
+        for _ in 0..2 {
+            run_narrow(&mut panel, &ctx, &state, 340.0);
+        }
+        let a = panel.block_rect(EndpointSide::A).expect("A was drawn");
+        let b = panel.block_rect(EndpointSide::B).expect("B was drawn");
+        assert!(
+            !a.intersects(b),
+            "editing {editing}: {a:?} and {b:?} overlap"
+        );
+        assert!(a.max.x <= 340.0 && b.max.x <= 340.0, "{a:?} {b:?}");
+        assert!(a.max.y <= b.min.y, "editing {editing}: A is not above B");
+
+        for _ in 0..2 {
+            run_narrow(&mut panel, &ctx, &state, 1000.0);
+        }
+        let a = panel.block_rect(EndpointSide::A).unwrap();
+        let b = panel.block_rect(EndpointSide::B).unwrap();
+        assert!(a.max.x <= b.min.x, "editing {editing}: not side by side");
+        assert_eq!(a.min.y, b.min.y);
+    }
+}
+
+// ── Switching an endpoint's image ───────────────────────────────────────
+
+/// The stored mode has no *Switch image…*; the edited mode has one in each
+/// block, enabled for an endpoint that resolves and greyed, with the
+/// refusal as its hover text, for one refused or not placed, and for both
+/// while a task holds the node.
+#[test]
+fn switch_image_is_greyed_where_there_is_nothing_to_offer() {
+    let (mut state, id) = measured_state(Some("m"));
+    state.select_measurement(MeasurementRef::distance(id, 2));
+    let (panel, _ctx) = settled(&state);
+    assert!(panel.switch_button(EndpointSide::A).is_none());
+
+    // Distance #2's B is a pixel no square holds.
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 2))
+        .unwrap();
+    let (panel, _ctx) = settled(&state);
+    assert_eq!(panel.switch_button(EndpointSide::A).unwrap().1, None);
+    let refused = panel
+        .switch_button(EndpointSide::B)
+        .unwrap()
+        .1
+        .clone()
+        .unwrap();
+    assert!(
+        refused.starts_with(
+            "Endpoint B has no position, so no other image can be offered: no observation's \
+             square in image 0 holds pixel"
+        ),
+        "{refused}"
+    );
+
+    // Deleting image 1 clears distance #1's B.
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 1))
+        .unwrap();
+    state.delete_image(ImageRef::new(id, 1)).unwrap();
+    let (panel, _ctx) = settled(&state);
+    assert_eq!(
+        panel.switch_button(EndpointSide::B).unwrap().1.as_deref(),
+        Some("Endpoint B is not placed, so it has no image to switch from.")
+    );
+
+    use crate::background::{Finished, Operation};
+    state
+        .start_background_task(
+            Operation::BENCH_FIT,
+            id,
+            Box::new(move |_| Finished::Cancelled),
+        )
+        .expect("nothing else is running");
+    let busy = state.busy_refusal(id).unwrap();
+    let (panel, _ctx) = settled(&state);
+    assert_eq!(panel.switch_button(EndpointSide::A).unwrap().1, Some(busy));
+}
+
+/// A right-click on an endpoint block of the item selects nothing and opens
+/// its menu, whose *Switch Image…* opens the popup; a click on the popup's
+/// row asks for the switch to that image and pixel, once, and closes it.
+#[test]
+fn the_switch_popup_opens_from_the_menu_and_a_row_asks_for_the_switch() {
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 1))
+        .unwrap();
+    let (mut panel, ctx) = settled(&state);
+    let at = panel.name_rect(EndpointSide::A).unwrap().center();
+    let right = clicks(
+        &mut panel,
+        &ctx,
+        &state,
+        at,
+        egui::PointerButton::Secondary,
+        1,
+    );
+    assert!(
+        right
+            .iter()
+            .all(|r| r.select_item_endpoint.is_none() && r.look_through_item.is_none()),
+        "a right click selected something"
+    );
+    let texts = painted(&mut panel, &ctx, &state);
+    assert!(texts.iter().any(|t| t == SWITCH_ENTRY), "{texts:?}");
+    assert!(panel.offer_rows().is_empty(), "the popup opened by itself");
+    let entry = panel.menu_entry(EndpointSide::A).expect("the menu is open");
+    clicks(
+        &mut panel,
+        &ctx,
+        &state,
+        entry.center(),
+        egui::PointerButton::Primary,
+        1,
+    );
+    run_frame(&mut panel, &ctx, &state, Vec::new());
+    let rows = panel.offer_rows().to_vec();
+    assert_eq!(rows.len(), 1, "point 1 has one other observation");
+    let (row, image, pixel) = rows[0];
+    assert_eq!(image, 1);
+    let texts = painted(&mut panel, &ctx, &state);
+    for expected in ["Switch endpoint A to another image", "image_001.jpg"] {
+        assert!(
+            texts.iter().any(|t| t == expected),
+            "{expected:?} not in {texts:?}"
+        );
+    }
+
+    let picked = clicks(
+        &mut panel,
+        &ctx,
+        &state,
+        row.center(),
+        egui::PointerButton::Primary,
+        1,
+    );
+    let asked: Vec<_> = picked
+        .iter()
+        .filter_map(|r| r.switch_endpoint.clone())
+        .collect();
+    assert_eq!(
+        asked,
+        [EndpointSwitch {
+            node: id,
+            item: "distance #1".to_string(),
+            side: EndpointSide::A,
+            image,
+            pixel,
+        }]
+    );
+    run_frame(&mut panel, &ctx, &state, Vec::new());
+    assert!(panel.offer_rows().is_empty(), "the popup stayed open");
+}
+
+/// The button opens the popup too, with the point's heading and each row's
+/// readings, and no mark where the endpoint lands on the row's own point.
+#[test]
+fn the_switch_button_opens_the_popup_with_its_readings() {
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    let (mut panel, ctx) = settled(&state);
+    let button = panel.switch_button(EndpointSide::B).unwrap().0;
+    clicks(
+        &mut panel,
+        &ctx,
+        &state,
+        button.center(),
+        egui::PointerButton::Primary,
+        1,
+    );
+    run_frame(&mut panel, &ctx, &state, Vec::new());
+    let rows = panel.offer_rows();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].1, 1);
+    let texts = painted(&mut panel, &ctx, &state);
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.starts_with("Point ") && t.ends_with("the point the endpoint resolves to")),
+        "{texts:?}"
+    );
+    // The fixture stores no readings.
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.starts_with("\u{2113} not read  \u{03b8} ")),
+        "{texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|t| t.starts_with('\u{26a0}')),
+        "{texts:?}"
+    );
+}
+
+/// The readings line of a row and its mark, as the popup draws them.
+#[test]
+fn an_offer_reads_its_length_angle_and_mark() {
+    use sfmtool_core::reconstruction::measurement_endpoint::EndpointView;
+    let (state, id) = measured_state(Some("m"));
+    let node = state.node(id).unwrap();
+    let mut view = EndpointView {
+        point: 1,
+        observation: 1,
+        image: 1,
+        pixel: [10.0, 20.0],
+        patch_coords: [0.0, 0.0],
+        localization: Some(0.0123),
+        viewing_angle_deg: Some(12.34),
+        resolves_to: Some(1),
+    };
+    assert_eq!(
+        offer_readings_text(&view, false, Some("m")),
+        "\u{2113} 0.0123 m  \u{03b8} 12.3\u{00b0}"
+    );
+    assert_eq!(
+        offer_readings_text(&view, true, Some("m")),
+        "\u{2113} 0.0123\u{00b0}  \u{03b8} 12.3\u{00b0}"
+    );
+    assert_eq!(offer_mark(node, &view), None);
+    view.resolves_to = Some(2);
+    let other = crate::scene::point_id(node, 2);
+    assert_eq!(
+        offer_mark(node, &view),
+        Some(format!("\u{26a0} resolves to point {other} there"))
+    );
+    view.resolves_to = None;
+    assert_eq!(
+        offer_mark(node, &view).as_deref(),
+        Some("\u{26a0} no position there")
+    );
+}

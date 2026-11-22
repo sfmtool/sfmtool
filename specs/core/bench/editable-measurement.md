@@ -18,10 +18,10 @@ stores is [`../../formats/sfmr-file-format.md`](../../formats/sfmr-file-format.m
 [`../reconstruction/measurement-endpoint.md`](../reconstruction/measurement-endpoint.md).
 The viewer's half (the versions, Measurement View's edited mode and the wire)
 is [`../../gui/measurement-view.md`](../../gui/measurement-view.md) and
-[`../../gui/bench.md`](../../gui/bench.md). Two steps edit an item: setting its
-label and setting its stated distance (§ "The label and the stated distance").
-The steps that move an endpoint are proposed in
-[`../../drafts/measurement-view.md`](../../drafts/measurement-view.md).
+[`../../gui/bench.md`](../../gui/bench.md). Three steps edit an item: setting
+its label and setting its stated distance (§ "The label and the stated
+distance"), and setting an endpoint's image and pixel (§ "Setting an
+endpoint").
 
 ## Rust API
 
@@ -30,6 +30,7 @@ The item and its steps live in
 re-exported from `sfmtool_core::bench`, and bound as
 `sfmtool.bench.EditableMeasurement`, `sfmtool.bench.put_measurement`,
 `sfmtool.bench.set_measurement_label`, `sfmtool.bench.set_stated_distance`,
+`sfmtool.bench.set_measurement_endpoint`,
 `sfmtool.bench.parse_stated_distance` and `sfmtool.bench.commit_measurement`.
 
 ```rust
@@ -116,6 +117,20 @@ pub enum StatedDistanceRefusal {
     Unreadable { text: String },
     UnknownUnit { unit: String },
     NotPositive { distance: f64 },
+}
+
+/// `side` 0 for A, 1 for B.
+pub fn set_measurement_endpoint(
+    edited: &EditedReconstruction,
+    item: &EditableMeasurement,
+    side: usize,
+    endpoint: MeasurementEndpoint,
+) -> Result<EditableMeasurement, EndpointPlacementRefusal>;
+
+pub enum EndpointPlacementRefusal {
+    NoSuchEndpoint { side: usize },
+    /// The commit's `NoSuchImage` or `PixelOutsideImage`.
+    Outside(MeasurementCommitRefusal),
 }
 
 pub fn commit_measurement(
@@ -228,8 +243,8 @@ assert!(!commit.wrote); // nothing changed, so nothing is written
 ## The label and the stated distance
 
 `set_measurement_label` and `set_stated_distance` are the steps that edit an
-item, each from one `EditableMeasurement` to the next, with nothing else
-changed. A caller that keeps versions replaces the item's `Arc` under the same
+item's label and stated distance, each from one `EditableMeasurement` to the
+next, with nothing else changed. A caller that keeps versions replaces the item's `Arc` under the same
 `ItemId` with the result. Any text is a label, the empty one included. A stated
 distance is refused where it is not finite and strictly positive as the
 `float32` the file will hold, in the commit's sentence: *"the stated distance
@@ -248,6 +263,26 @@ so the panel and the command read a distance the same way. Text that is not
 such a number (`inf` and `nan` among it), a suffix that names no unit, and a
 value that is not finite and strictly positive are each refused with a
 sentence saying which.
+
+## Setting an endpoint
+
+`set_measurement_endpoint` is the step that moves an endpoint to another image
+and pixel, or places one that is not placed, from one `EditableMeasurement`
+to the next with nothing else changed. It sets the image and the pixel and
+nothing more: the point the endpoint lands on, its texel and its 3D position
+follow from them through the resolver, so there is nothing else to set, and a
+pixel no square holds is still an endpoint, as it is in the file. SfM
+Explorer's *Switch image…* popup makes it with a pixel from `endpoint_views`
+([`../reconstruction/measurement-endpoint.md`](../reconstruction/measurement-endpoint.md)
+§ "The views of an endpoint"), and its wire tool with any pixel.
+
+It asks of the endpoint what the commit asks of each one, through the same
+check, so a step and a commit cannot disagree: an image past the image set,
+and a pixel that is not inside `[0, width) × [0, height)` of that image's
+camera as the `float32` the file will hold, are each refused in the commit's
+sentence (*"endpoint A's pixel (640, 3) is outside image 0, which is [0, 640)
+x [0, 480)"*), wrapped as `EndpointPlacementRefusal::Outside`. A side other
+than 0 and 1 is `NoSuchEndpoint`.
 
 ## The commit
 
@@ -320,10 +355,11 @@ assert report["wrote"] is False
 ```
 
 `put_measurement(bench, edited, kind, index, *, version=0)` returns
-`(Bench, EditableMeasurement)`. `set_measurement_label(measurement, label)`
-and `set_stated_distance(measurement, distance, unit)`, the unit a name
-(`"cm"`), each return the next `EditableMeasurement` and leave their input
-as it was. `parse_stated_distance(text, bare_unit="m")` returns
+`(Bench, EditableMeasurement)`. `set_measurement_label(measurement, label)`,
+`set_stated_distance(measurement, distance, unit)`, the unit a name (`"cm"`),
+and `set_measurement_endpoint(edited, measurement, side, image, xy)`, `side`
+0 for A and 1 for B, each return the next `EditableMeasurement` and leave
+their input as it was. `parse_stated_distance(text, bare_unit="m")` returns
 `(value, unit_name)`. `commit_measurement(edited, measurement,
 origin_row=None, *, node="the reconstruction")` returns
 `(EditedReconstruction, report)`, the report carrying `index`, `replaced`,
@@ -342,20 +378,21 @@ first row of a kind, the no-effect case, each refusal with the preconditions
 giving the same sentence, a re-seated item committing to no effect), the
 pointer equality of the shared base and point column, the direct delete and
 its row map, the last row leaving the kind absent, a value with
-measurements of its own materializing them, the two steps changing their field
-and nothing else, a stated distance that is not finite and positive refused in
-the commit's sentence, and the parser: each unit suffix with and without a
-space, a bare number in the unit given, the number's other spellings, and each
-refusal.
+measurements of its own materializing them, the three steps changing their
+field and nothing else (an endpoint placed where none was, and a moved one
+written by the commit), a stated distance that is not finite and positive
+refused in the commit's sentence, an endpoint outside the images refused in
+the commit's sentence and a side past B refused, and the parser: each unit
+suffix with and without a space, a bare number in the unit given, the number's
+other spellings, and each refusal.
 [tests/rust_bindings/bench/test_bench_measurement_rust_bindings.py](../../../tests/rust_bindings/bench/test_bench_measurement_rust_bindings.py)
 covers the same through the bindings.
 
 ## Non-goals
 
-- **Steps that move an endpoint.** Switching an endpoint to another
-  photograph and setting an endpoint's image and pixel are proposed in
-  [`../../drafts/measurement-view.md`](../../drafts/measurement-view.md), as is
-  an item started from one pixel with no stored row behind it.
+- **An item started from one pixel** with no stored row behind it, which is
+  proposed in
+  [`../../drafts/measurement-view.md`](../../drafts/measurement-view.md).
 - **An endpoint's 3D position as part of the item.** It always follows from
   the image and the pixel.
 - **A kind other than distance.** `MeasurementKind` has one variant, as the

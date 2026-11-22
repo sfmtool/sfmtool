@@ -632,3 +632,274 @@ fn a_similarity_transform_keeps_texels_and_scales_lengths() {
         }
     }
 }
+
+// ─── the views of an endpoint ─────────────────────────────────────────────
+
+fn views(
+    value: &EditedReconstruction,
+    image: u32,
+    pixel: [f64; 2],
+) -> Result<Vec<EndpointView>, EndpointRefusal> {
+    endpoint_views(value, image, pixel, &MeasurementEndpointOptions::default())
+}
+
+/// The offers of an endpoint on a known texel land at the pixels where the
+/// other observations' squares hold that texel, the square slid onto each
+/// keypoint rather than the patch itself; the resolver at an offered pixel
+/// finds the same point and the same texel, so a switch keeps both.
+#[test]
+fn views_land_where_the_other_squares_hold_the_texel() {
+    let mut p = pt(0.1, -0.2, 0.0, 0.25);
+    p.images = vec![0, 1, 2];
+    let mut recon = scene(&[p]);
+    // Move image 1's keypoint (observation 1) off the projection, so its
+    // square slides off the point.
+    let keypoints_xy = recon
+        .point_set
+        .keypoints_xy
+        .as_mut()
+        .expect("the scene carries keypoints");
+    keypoints_xy[[1, 0]] += 3.0;
+    keypoints_xy[[1, 1]] -= 2.0;
+    let recon = with_readings(recon, vec![reading(0.6, 0.9); 3]);
+    let value = edited(recon.clone());
+    let (s, t) = (0.4, -0.3);
+    let pixel = pixel_of_texel(&recon, 0, 0, s, t);
+
+    let texel = resolve(&value, 0, pixel).unwrap().chosen().patch_coords;
+    let offered = views(&value, 0, pixel).unwrap();
+    let images: Vec<u32> = offered.iter().map(|v| v.image).collect();
+    assert_eq!(images, [1, 2]);
+    for view in &offered {
+        assert_eq!(view.point, 0);
+        assert_eq!(view.observation, view.image as usize);
+        assert_eq!(view.patch_coords, texel);
+        let expected = pixel_of_texel(&recon, 0, view.image as usize, s, t);
+        assert_close(view.pixel[0], expected[0], 1e-6, "x");
+        assert_close(view.pixel[1], expected[1], 1e-6, "y");
+        assert_eq!(view.resolves_to, Some(0));
+        assert!(!view.resolves_elsewhere());
+        // 0.6 grid px of a 24 px grid across the patch's 0.5 width.
+        assert_close(view.localization.unwrap(), 0.6 * 0.5 / 24.0, 1e-6, "l");
+        let angle = view.viewing_angle_deg.unwrap();
+        assert!(angle > 0.0 && angle < 15.0, "{angle}");
+
+        let moved = resolve(&value, view.image, view.pixel).unwrap();
+        assert_eq!(moved.chosen().point, 0);
+        let [ms, mt] = moved.chosen().patch_coords;
+        assert_close(ms, s, 1e-6, "s after the switch");
+        assert_close(mt, t, 1e-6, "t after the switch");
+    }
+    // The slid square puts the texel elsewhere than the patch itself would.
+    let unslid = {
+        let patch = value.point(0).unwrap().patch_frame().unwrap();
+        let (xyz, w) = patch.corner_homogeneous(s, t);
+        project(&recon, 1, xyz, w)
+    };
+    assert!((offered[0].pixel[0] - unslid[0]).hypot(offered[0].pixel[1] - unslid[1]) > 1.0);
+}
+
+/// A view whose texel projects outside its image, and one whose square faces
+/// away from its camera, are dropped; the others are offered.
+#[test]
+fn a_view_off_the_image_or_seen_from_behind_is_dropped() {
+    // Far to the side, inside image 0 and outside image 1.
+    let mut side = pt(5.0, 0.0, 0.0, 0.2);
+    side.images = vec![0, 1, 2];
+    let recon = scene(&[side]);
+    let at = pixel_of_texel(&recon, 0, 0, 0.0, 0.0);
+    let inside = |x: f64| (0.0..f64::from(IMG_W)).contains(&x);
+    assert!(inside(at[0]), "the point is inside image 0: {at:?}");
+    let off = pixel_of_texel(&recon, 0, 1, 0.0, 0.0);
+    assert!(!inside(off[0]), "the point is outside image 1: {off:?}");
+    let images: Vec<u32> = views(&edited(recon), 0, at)
+        .unwrap()
+        .iter()
+        .map(|v| v.image)
+        .collect();
+    assert_eq!(images, [2], "the view in image 1 is off the image");
+
+    // A patch nearly edge on, its normal `(-1, 0, 0.05)`: image 0 and image 2
+    // (the same pose) see its front, image 1 its back.
+    let h = 0.2;
+    let u = Vector3::new(0.05, 0.0, 1.0).normalize() * h;
+    let tilted = Pt {
+        pos: [0.0, 0.0, 0.0],
+        w: 1.0,
+        u: [u.x, u.y, u.z],
+        v: [0.0, h, 0.0],
+        images: vec![0, 1, 2],
+    };
+    let recon = scene(&[tilted]);
+    let at = pixel_of_texel(&recon, 0, 0, 0.0, 0.0);
+    let value = edited(recon);
+    assert!(resolve(&value, 0, at).is_ok());
+    let images: Vec<u32> = views(&value, 0, at)
+        .unwrap()
+        .iter()
+        .map(|v| v.image)
+        .collect();
+    assert_eq!(images, [2], "the view in image 1 sees the square's back");
+}
+
+/// Where another square holds an offered pixel and wins the ranking there,
+/// the view says the endpoint would resolve to that other point.
+#[test]
+fn a_view_another_square_wins_resolves_elsewhere() {
+    let mut a = pt(0.0, 0.0, 0.0, 0.2);
+    a.images = vec![0, 1, 2];
+    // A smaller patch observed only in image 1, centred where A's texel
+    // (0.5, 0) lies.
+    let mut b = pt(0.1, 0.0, 0.0, 0.1);
+    b.images = vec![1];
+    let recon = scene(&[a, b]);
+    let value = edited(recon.clone());
+    let at = pixel_of_texel(&recon, 0, 0, 0.5, 0.0);
+    assert_eq!(resolve(&value, 0, at).unwrap().chosen().point, 0);
+
+    let offered = views(&value, 0, at).unwrap();
+    assert_eq!(offered.len(), 2);
+    let in_1 = offered.iter().find(|v| v.image == 1).unwrap();
+    assert_eq!(in_1.point, 0);
+    assert_eq!(in_1.resolves_to, Some(1));
+    assert!(in_1.resolves_elsewhere());
+    let in_2 = offered.iter().find(|v| v.image == 2).unwrap();
+    assert_eq!(in_2.resolves_to, Some(0));
+    assert!(!in_2.resolves_elsewhere());
+}
+
+/// Every candidate is offered, chosen or not: the chosen point's views come
+/// first, each at its own candidate's texel.
+#[test]
+fn the_chosen_points_views_come_first() {
+    let recon = scene(&[pt(0.0, 0.0, 0.0, 0.2), pt(0.25, 0.0, 0.0, 0.2)]);
+    let value = edited(recon.clone());
+    let pixel = pixel_of_texel(&recon, 0, 0, 0.85, 0.0);
+    let res = resolve(&value, 0, pixel).unwrap();
+    assert_eq!(res.chosen().point, 1);
+
+    let offered = views(&value, 0, pixel).unwrap();
+    let points: Vec<u32> = offered.iter().map(|v| v.point).collect();
+    assert_eq!(points, [1, 0]);
+    for view in &offered {
+        let own = res
+            .candidates
+            .iter()
+            .find(|c| c.point == view.point)
+            .unwrap();
+        assert_eq!(view.patch_coords, own.patch_coords);
+        assert_eq!(view.image, 1);
+    }
+}
+
+/// The views share the resolver's refusals, sentence and all.
+#[test]
+fn the_views_refuse_as_the_resolver_does() {
+    let recon = scene(&[pt(0.0, 0.0, 0.0, 0.2)]);
+    let value = edited(recon.clone());
+    let centre = project(&recon, 0, Vector3::zeros(), 1.0);
+    for (image, pixel) in [(0, [5.0, 5.0]), (2, centre), (3, centre), (0, [-1.0, 3.0])] {
+        let refused = views(&value, image, pixel).unwrap_err();
+        assert_eq!(Err(refused), resolve(&value, image, pixel));
+    }
+    let mut behind = pt(0.0, 0.0, 0.0, 0.2);
+    std::mem::swap(&mut behind.u, &mut behind.v);
+    let value = edited(scene(&[behind]));
+    assert!(matches!(
+        views(&value, 0, centre),
+        Err(EndpointRefusal::AllExcluded { .. })
+    ));
+}
+
+/// The views of an endpoint on a point at infinity, seen in three images:
+/// each view is the pixel where that observation's square holds the texel's
+/// direction, the resolver there finds the same point and texel at infinity,
+/// and `ℓ` reads in degrees.
+#[test]
+fn the_views_of_a_point_at_infinity_carry_its_direction() {
+    let d = Vector3::new(0.0, 0.0, -1.0);
+    let sky = Pt {
+        pos: [d.x, d.y, d.z],
+        w: 0.0,
+        u: [0.02, 0.0, 0.0],
+        v: [0.0, -0.02, 0.0],
+        images: vec![0, 1, 2],
+    };
+    let recon = with_readings(scene(&[sky]), vec![reading(0.6, 0.9); 3]);
+    let value = edited(recon.clone());
+    let at = pixel_of_texel(&recon, 0, 0, 0.3, 0.2);
+    let texel = resolve(&value, 0, at).unwrap().chosen().patch_coords;
+
+    let offered = views(&value, 0, at).unwrap();
+    let images: Vec<u32> = offered.iter().map(|v| v.image).collect();
+    assert_eq!(images, [1, 2]);
+    // 0.6 grid px of a 24 px grid across 0.04 of the direction sphere.
+    let expected_l = (0.6 * 0.04 / 24.0_f64).to_degrees();
+    for view in &offered {
+        assert_eq!(view.patch_coords, texel);
+        let expected = pixel_of_texel(&recon, 0, view.image as usize, 0.3, 0.2);
+        assert_close(view.pixel[0], expected[0], 1e-6, "x");
+        assert_close(view.pixel[1], expected[1], 1e-6, "y");
+        assert_eq!(view.resolves_to, Some(0));
+        let l = view.localization.unwrap();
+        assert!(
+            (l - expected_l).abs() < 0.01 * expected_l,
+            "{l} against {expected_l}"
+        );
+
+        let moved = resolve(&value, view.image, view.pixel).unwrap();
+        assert_eq!(moved.chosen().point, 0);
+        assert_eq!(moved.chosen().depth, f64::INFINITY);
+        assert!(matches!(
+            moved.position(),
+            EndpointPosition::AtInfinity { .. }
+        ));
+        let [s, t] = moved.chosen().patch_coords;
+        assert_close(s, 0.3, 1e-6, "s after the switch");
+        assert_close(t, 0.2, 1e-6, "t after the switch");
+    }
+}
+
+/// The views resolve through the observations gathered for every image at
+/// once, and that reading is the resolver's own: over a grid of pixels of
+/// each image, a resolution against an image's entry of the gathered lists
+/// is the resolver's answer exactly, and each view's `resolves_to` is the
+/// resolver's pick at its pixel.
+#[test]
+fn the_gathered_observations_resolve_as_the_resolver_does() {
+    let mut far = pt(0.05, 0.02, -0.3, 0.25);
+    far.images = vec![0, 1, 2];
+    let mut lone = pt(-1.5, 0.3, 0.0, 0.2);
+    lone.images = vec![1];
+    let recon = scene(&[pt(0.0, 0.0, 0.0, 0.2), pt(0.25, 0.0, 0.0, 0.2), far, lone]);
+    let rows: Vec<_> = (0..recon.point_set.tracks.len())
+        .map(|j| reading(0.4 + 0.1 * j as f32, 0.7 + 0.03 * j as f32))
+        .collect();
+    let recon = with_readings(recon, rows);
+    let value = edited(recon.clone());
+    let opts = MeasurementEndpointOptions::default();
+    let by_image = observations_by_image(&value, None);
+    let mut resolved = 0;
+    for image in 0..IMAGES as u32 {
+        for gx in 0..60 {
+            for gy in 0..60 {
+                let pixel = [200.5 + f64::from(gx) * 4.0, 120.25 + f64::from(gy) * 4.0];
+                let one = resolve_measurement_endpoint(&value, image, pixel, &opts);
+                let all = resolve_among(&value, image, pixel, &opts, &by_image[image as usize]);
+                assert_eq!(one, all, "image {image} pixel {pixel:?}");
+                resolved += usize::from(one.is_ok());
+            }
+        }
+    }
+    assert!(resolved > 200, "the grid hit {resolved} squares");
+
+    let at = pixel_of_texel(&recon, 0, 0, 0.85, 0.0);
+    let offered = views(&value, 0, at).unwrap();
+    assert!(offered.len() >= 3, "{offered:?}");
+    for view in &offered {
+        let pick = resolve_measurement_endpoint(&value, view.image, view.pixel, &opts)
+            .ok()
+            .map(|r| r.chosen().point);
+        assert_eq!(view.resolves_to, pick);
+    }
+}

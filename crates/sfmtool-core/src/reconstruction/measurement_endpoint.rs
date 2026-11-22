@@ -15,6 +15,10 @@
 //! candidate's own stored readings, in the manner of the reference-view rule
 //! ([`crate::patch::reference_view`]).
 //!
+//! [`endpoint_views`] runs the mapping backwards: for each candidate, the
+//! pixels in the point's other observations that hold the same texel, where
+//! the endpoint can move to without moving on the surface.
+//!
 //! `specs/core/reconstruction/measurement-endpoint.md` is the design.
 
 use nalgebra::{Matrix3, Point3, Vector3};
@@ -430,6 +434,49 @@ pub fn resolve_measurement_endpoint(
     pixel: [f64; 2],
     options: &MeasurementEndpointOptions,
 ) -> Result<EndpointResolution, EndpointRefusal> {
+    let observations = observations_by_image(edited, Some(image));
+    let in_image = observations
+        .get(image as usize)
+        .map_or(&[][..], Vec::as_slice);
+    resolve_among(edited, image, pixel, options, in_image)
+}
+
+/// Every observation of a live point, as `(point, k)` with `k` its index in
+/// the point's track, gathered by image in one pass over the live points:
+/// entry `i` holds image `i`'s, in ascending order of point and then of `k`.
+/// With `only` set, the other images' entries are left empty.
+fn observations_by_image(
+    edited: &EditedReconstruction,
+    only: Option<u32>,
+) -> Vec<Vec<(u32, usize)>> {
+    let mut by_image: Vec<Vec<(u32, usize)>> = vec![Vec::new(); edited.base.image_set.images.len()];
+    for index in edited.live_indexes() {
+        let Some(view) = edited.point(index) else {
+            continue;
+        };
+        for (k, obs) in view.observations().iter().enumerate() {
+            if only.is_some_and(|image| image != obs.image_index) {
+                continue;
+            }
+            if let Some(list) = by_image.get_mut(obs.image_index as usize) {
+                list.push((index, k));
+            }
+        }
+    }
+    by_image
+}
+
+/// [`resolve_measurement_endpoint`] with the observations in `image` given:
+/// `observed`, image `image`'s entry of [`observations_by_image`]. Both the
+/// resolver and [`endpoint_views`] resolve through this, so a view's
+/// `resolves_to` is exactly what the resolver answers at its pixel.
+fn resolve_among(
+    edited: &EditedReconstruction,
+    image: u32,
+    pixel: [f64; 2],
+    options: &MeasurementEndpointOptions,
+    observed: &[(u32, usize)],
+) -> Result<EndpointResolution, EndpointRefusal> {
     let image_set = &edited.base.image_set;
     let i = image as usize;
     let Some(posed) = image_set.images.get(i) else {
@@ -461,19 +508,21 @@ pub fn resolve_measurement_endpoint(
         posed.translation_xyz,
     );
     let intrinsics = image_set.image_intrinsics(i);
-    let mut observed = false;
     let mut hits: Vec<Hit> = Vec::new();
-    for index in edited.live_indexes() {
-        let Some(view) = edited.point(index) else {
-            continue;
-        };
-        let mut patch: Option<Option<OrientedPatch>> = None;
-        for (k, obs) in view.observations().iter().enumerate() {
-            if obs.image_index != image {
+    // The list is in ascending point order, so a point's observations in the
+    // image are consecutive and its patch frame is read once for them.
+    let mut current: Option<(u32, PointView<'_>, Option<OrientedPatch>)> = None;
+    for &(index, k) in observed {
+        if current.as_ref().is_none_or(|(point, _, _)| *point != index) {
+            let Some(view) = edited.point(index) else {
                 continue;
-            }
-            observed = true;
-            let Some(patch) = patch.get_or_insert_with(|| view.patch_frame()).as_ref() else {
+            };
+            let patch = view.patch_frame();
+            current = Some((index, view, patch));
+        }
+        let (_, view, patch) = current.as_ref().expect("just read");
+        {
+            let Some(patch) = patch.as_ref() else {
                 continue;
             };
             let keypoint = view
@@ -518,7 +567,7 @@ pub fn resolve_measurement_endpoint(
             });
         }
     }
-    if !observed {
+    if observed.is_empty() {
         return Err(EndpointRefusal::NoObservations { image });
     }
     match hits.len() {
@@ -696,6 +745,204 @@ fn cost_of(
         agreement,
         cost: localization * capped_radius * offset * angle * agreement,
     }
+}
+
+/// Another observation of a candidate's point, at which an endpoint could sit
+/// instead without moving on the surface: the pixel of that observation's
+/// image that its square holds the candidate's texel at.
+///
+/// What [`endpoint_views`] offers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EndpointView {
+    /// The candidate's point, its live index.
+    pub point: u32,
+    /// The observation's index within the point's own track.
+    pub observation: usize,
+    /// The observation's image.
+    pub image: u32,
+    /// The pixel of [`Self::image`] where the observation's square holds the
+    /// texel.
+    pub pixel: [f64; 2],
+    /// The texel `(s, t)`: the candidate's.
+    pub patch_coords: [f64; 2],
+    /// `ℓ`, the semi-major axis of the observation's own stored
+    /// self-similarity ellipse on the patch, as the resolver's cost reads it
+    /// ([`EndpointCost::localization`]): scene units for a finite point,
+    /// degrees for a point at infinity. `None` where the observation has no
+    /// stored reading.
+    pub localization: Option<f64>,
+    /// The viewing angle of the observation's square from its camera, in
+    /// degrees; `None` where the camera sits on the square's centre.
+    pub viewing_angle_deg: Option<f64>,
+    /// The point the endpoint resolves to at [`Self::image`] and
+    /// [`Self::pixel`], or `None` where the resolver refuses it there.
+    pub resolves_to: Option<u32>,
+}
+
+impl EndpointView {
+    /// Whether moving the endpoint here makes it resolve to a point other
+    /// than [`Self::point`], or to none: another square holds the pixel and
+    /// wins the ranking, or none is eligible.
+    pub fn resolves_elsewhere(&self) -> bool {
+        self.resolves_to != Some(self.point)
+    }
+}
+
+/// The pixels in other images that hold the same texel of each candidate's
+/// patch as `(image, pixel)` does: where an endpoint can move to without
+/// moving on the surface.
+///
+/// The candidates are the resolver's at `(image, pixel)`
+/// ([`resolve_measurement_endpoint`]), chosen or not, excluded or not. For
+/// each, every other observation of its point gives one view: the pixel where
+/// that observation's square, the patch slid onto its keypoint and seen
+/// through its image's own intrinsics, holds the candidate's texel `(s, t)`.
+/// This is the resolver's mapping from a pixel to a texel run backwards, so
+/// the resolver at a view's pixel finds that observation's square holding the
+/// same texel. A view is dropped where its image has no pose, where the
+/// texel's place projects outside `[0, width) × [0, height)` of the image or
+/// behind its camera, or where the square faces away from that camera, the
+/// resolver's back-facing test.
+///
+/// The views of the chosen candidate's point come first, then the others'
+/// in the resolver's order of candidates, each in the order of the point's
+/// track. Each carries the observation's stored `ℓ` and its viewing angle,
+/// and the point the resolver picks at its pixel ([`EndpointView::resolves_to`]),
+/// which differs from the view's own point where another square holds the
+/// pixel there and wins.
+///
+/// One pass over the live points gathers each image's observations, and each
+/// view is then resolved against its own image's alone, in parallel, so a
+/// call costs about one pass over the reconstruction plus, for each view, a
+/// pass over the observations in its image.
+///
+/// # Errors
+///
+/// The resolver's refusal at `(image, pixel)`, so a caller shows the same
+/// sentence as for the endpoint itself.
+///
+/// ```
+/// use std::sync::Arc;
+/// use sfmtool_core::reconstruction::measurement_endpoint::{
+///     endpoint_views, EndpointRefusal, MeasurementEndpointOptions,
+/// };
+/// use sfmtool_core::reconstruction::EditedReconstruction;
+/// use sfmtool_core::SfmrReconstruction;
+///
+/// let edited = EditedReconstruction::new(Arc::new(SfmrReconstruction::demo(10)));
+/// let refused = endpoint_views(&edited, 0, [960.0, 540.0], &MeasurementEndpointOptions::default());
+/// assert_eq!(refused, Err(EndpointRefusal::NoPatchFrames));
+/// ```
+pub fn endpoint_views(
+    edited: &EditedReconstruction,
+    image: u32,
+    pixel: [f64; 2],
+    options: &MeasurementEndpointOptions,
+) -> Result<Vec<EndpointView>, EndpointRefusal> {
+    use rayon::prelude::*;
+
+    // One pass over the reconstruction gathers every image's observations,
+    // and each resolution below reads only its own image's.
+    let by_image = observations_by_image(edited, None);
+    let in_image = |image: u32| by_image.get(image as usize).map_or(&[][..], Vec::as_slice);
+    let resolution = resolve_among(edited, image, pixel, options, in_image(image))?;
+    let chosen = resolution.chosen;
+    let order =
+        std::iter::once(chosen).chain((0..resolution.candidates.len()).filter(|&i| i != chosen));
+    let grid = grid_resolution(edited);
+    let mut views = Vec::new();
+    for index in order {
+        let candidate = &resolution.candidates[index];
+        let Some(view) = edited.point(candidate.point) else {
+            continue;
+        };
+        let Some(patch) = view.patch_frame() else {
+            continue;
+        };
+        for (k, obs) in view.observations().iter().enumerate() {
+            if k == candidate.observation {
+                continue;
+            }
+            if let Some(offer) = view_at(edited, &view, &patch, k, obs.image_index, candidate, grid)
+            {
+                views.push(offer);
+            }
+        }
+    }
+    views.par_iter_mut().for_each(|offer| {
+        offer.resolves_to = resolve_among(
+            edited,
+            offer.image,
+            offer.pixel,
+            options,
+            in_image(offer.image),
+        )
+        .ok()
+        .map(|r| r.chosen().point);
+    });
+    Ok(views)
+}
+
+/// Observation `k` of `view`, in image `image`, as a view of `candidate`'s
+/// texel, or `None` where it is dropped ([`endpoint_views`]). Its
+/// `resolves_to` is left for the caller.
+fn view_at(
+    edited: &EditedReconstruction,
+    view: &PointView<'_>,
+    patch: &OrientedPatch,
+    k: usize,
+    image: u32,
+    candidate: &EndpointCandidate,
+    grid: usize,
+) -> Option<EndpointView> {
+    let image_set = &edited.base.image_set;
+    let i = image as usize;
+    let posed = image_set.images.get(i)?;
+    if !posed.is_posed() {
+        return None;
+    }
+    let camera = image_set.cameras.get(posed.camera_index as usize)?;
+    let cam_from_world = RigidTransform::new(
+        RotQuaternion::from_nalgebra(posed.quaternion_wxyz),
+        posed.translation_xyz,
+    );
+    let intrinsics = image_set.image_intrinsics(i);
+    let keypoint = view
+        .keypoint_xy(k)
+        .map(|xy| [f64::from(xy[0]), f64::from(xy[1])]);
+    let square = patch.seen_at_keypoint(&intrinsics, &cam_from_world, keypoint);
+    let [s, t] = candidate.patch_coords;
+    let (xyz, w) = square.corner_homogeneous(s, t);
+    if w != 0.0 {
+        // The resolver's back-facing test, along this camera's ray to the
+        // texel's place.
+        let sight = (Point3::from(xyz) - posed.camera_center()).try_normalize(0.0)?;
+        if square.normal().dot(&sight) >= 0.0 {
+            return None;
+        }
+    }
+    let local = cam_from_world.transform_point_homogeneous(xyz, w);
+    let (x, y) = intrinsics.ray_to_pixel([local.x, local.y, local.z])?;
+    let inside = |v: f64, size: u32| v.is_finite() && v >= 0.0 && v < f64::from(size);
+    if !(inside(x, camera.width) && inside(y, camera.height)) {
+        return None;
+    }
+    let localization = view
+        .observation_readings()
+        .and_then(|rows| rows.get(k))
+        .and_then(stored_ellipse)
+        .and_then(|ellipse| ellipse.on_patch(patch, grid))
+        .map(|e| e.ellipse().axes[0]);
+    Some(EndpointView {
+        point: candidate.point,
+        observation: k,
+        image,
+        pixel: [x, y],
+        patch_coords: candidate.patch_coords,
+        localization,
+        viewing_angle_deg: viewing_angle(&square, &cam_from_world).map(|a| a.angle_deg),
+        resolves_to: None,
+    })
 }
 
 /// Resolve both endpoints of every distance measurement the reconstruction

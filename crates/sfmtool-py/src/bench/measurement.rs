@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Python bindings for the editable measurement: the item, putting a stored
-//! measurement on the bench, the steps that set its label and its stated
-//! distance, the parser of a typed distance, and the commit that writes it
-//! back.
+//! measurement on the bench, the steps that set its label, its stated
+//! distance and an endpoint, the parser of a typed distance, and the commit
+//! that writes it back.
 //!
 //! `specs/core/bench/editable-measurement.md` is the design. The item is a
-//! plain value like the track, and both steps give back the next value and
-//! leave their inputs as they were.
+//! plain value like the track, and each step gives back the next value and
+//! leaves its inputs as they were.
 
 use std::sync::Arc;
 
@@ -19,9 +19,10 @@ use pyo3::types::{PyDict, PyDictMethods};
 use sfmtool_core::bench::{
     commit_measurement as core_commit_measurement,
     parse_stated_distance as core_parse_stated_distance, put_measurement as core_put_measurement,
+    set_measurement_endpoint as core_set_measurement_endpoint,
     set_measurement_label as core_set_measurement_label,
     set_stated_distance as core_set_stated_distance, EditableMeasurement, EditableMeasurementBody,
-    MeasurementKind,
+    MeasurementEndpoint, MeasurementKind,
 };
 use sfmtool_core::LengthUnit;
 
@@ -236,6 +237,35 @@ fn set_stated_distance(
     })
 }
 
+/// `measurement` with endpoint `side` (``0`` for A, ``1`` for B) moved to pixel
+/// `xy` of image `image`, and nothing else changed: the step that switches an
+/// endpoint to another image, or places one that is not placed.
+///
+/// Only the image and the pixel are set; the point, texel and position follow
+/// from them through :meth:`SfmrReconstruction.resolve_measurement_endpoint`.
+/// A side other than 0 and 1, an image past `edited`'s images, and a pixel
+/// outside ``[0, width) x [0, height)`` of its image are each a ``ValueError``
+/// in the commit's words. Returns the new :class:`EditableMeasurement` and
+/// leaves `measurement` as it was.
+#[pyfunction]
+fn set_measurement_endpoint(
+    edited: &PyEditedReconstruction,
+    measurement: &PyEditableMeasurement,
+    side: usize,
+    image: u32,
+    xy: (f64, f64),
+) -> PyResult<PyEditableMeasurement> {
+    let endpoint = MeasurementEndpoint {
+        image,
+        pixel: [xy.0, xy.1],
+    };
+    let next = core_set_measurement_endpoint(&edited.inner, &measurement.inner, side, endpoint)
+        .map_err(refused)?;
+    Ok(PyEditableMeasurement {
+        inner: Arc::new(next),
+    })
+}
+
 /// Read a distance written as a number with an optional unit suffix,
 /// ``"12in"``, ``"30.48 cm"`` or ``"304.8"``, into ``(value, unit_name)``.
 ///
@@ -258,6 +288,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(commit_measurement, m)?)?;
     m.add_function(wrap_pyfunction!(set_measurement_label, m)?)?;
     m.add_function(wrap_pyfunction!(set_stated_distance, m)?)?;
+    m.add_function(wrap_pyfunction!(set_measurement_endpoint, m)?)?;
     m.add_function(wrap_pyfunction!(parse_stated_distance, m)?)?;
     Ok(())
 }

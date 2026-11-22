@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Measurements on the bench: putting a stored measurement on, following its
-//! origin, the steps that set an item's label and stated distance, the
-//! commit that writes it back, and the direct delete of a stored one.
+//! origin, the steps that set an item's label, its stated distance and an
+//! endpoint, the commit that writes it back, and the direct delete of a
+//! stored one.
 //!
 //! See `specs/gui/bench.md` and `specs/gui/measurement-view.md`. The item and
 //! its pure steps are core's (`sfmtool_core::bench::measurement`,
@@ -19,7 +20,7 @@ use sfmtool_core::LengthUnit;
 
 use crate::action_log::{version_step_text, Kind};
 use crate::document::MeasurementMap;
-use crate::measurements::MeasurementRef;
+use crate::measurements::{EndpointSide, MeasurementRef};
 use crate::scene::{ReconId, SceneNode};
 use crate::state::edits::version_before;
 use crate::state::AppState;
@@ -58,6 +59,19 @@ pub(crate) struct StatedDistanceSet {
     pub(crate) distance: (f64, LengthUnit),
     /// Whether a version was pushed.
     pub(crate) changed: bool,
+}
+
+/// How a step that moves an endpoint was asked for, which says how its
+/// Edit History label reads ([`AppState::set_bench_measurement_endpoint`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EndpointMove {
+    /// A row of the *Switch image…* popup: to the same place on the surface
+    /// in another photograph, named by the two images.
+    Switch,
+    /// An image and a pixel given outright, named by the pixel: the wire's
+    /// `set_bench_measurement_endpoint`.
+    #[cfg(any(test, feature = "mcp"))]
+    Set,
 }
 
 /// The unit a bare number typed as a stated distance is in: the
@@ -413,6 +427,74 @@ impl AppState {
             distance: (distance, unit),
             changed: true,
         })
+    }
+
+    /// Move endpoint `side` of the item `label` on `id`'s bench to pixel
+    /// `pixel` of image `image`: a row of Measurement View's *Switch image…*
+    /// popup (`EndpointMove::Switch`), and the wire's
+    /// `set_bench_measurement_endpoint` (`EndpointMove::Set`).
+    ///
+    /// One bench step, made by core's `set_measurement_endpoint`, which leaves
+    /// the reconstruction alone: `Moved endpoint A of distance #2 from
+    /// IMG_0004.jpg to IMG_0011.jpg` for a switch, `Moved endpoint A of
+    /// distance #2 to IMG_0004.jpg (412.3, 230.5)` for a set, and `Set
+    /// endpoint B of distance #2 to IMG_0050.jpg (88.0, 301.5)` for a set of
+    /// an endpoint not placed. An endpoint at that image and pixel already,
+    /// as the file would store the pixel, pushes no version and writes the
+    /// no-effect row. Refused while a background task holds the node, on a
+    /// view-only bench, for a switch of an endpoint not placed, and for an
+    /// image past the image set or a pixel outside its image, in core's
+    /// sentence. Whether a version was pushed comes back.
+    pub(crate) fn set_bench_measurement_endpoint(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        side: EndpointSide,
+        image: u32,
+        pixel: [f64; 2],
+        how: EndpointMove,
+    ) -> Result<bool, String> {
+        let (index, bench, item) = self.measurement_step_target(id, label)?;
+        let letter = side.letter();
+        let held = item.as_distance().and_then(|d| d.endpoints[side.index()]);
+        let recon = self.scene[index].recon();
+        let name = |image: u32| crate::measurements::image_name(recon, image);
+        #[cfg(any(test, feature = "mcp"))]
+        let place = format!("{} ({:.1}, {:.1})", name(image), pixel[0], pixel[1]);
+        let text = match (how, held) {
+            (EndpointMove::Switch, None) => {
+                return Err(format!(
+                    "Cannot switch endpoint {letter} of {label}: it is not placed, so it has \
+                     no image to switch from."
+                ))
+            }
+            (EndpointMove::Switch, Some(from)) => format!(
+                "Moved endpoint {letter} of {label} from {} to {}",
+                name(from.image),
+                name(image)
+            ),
+            #[cfg(any(test, feature = "mcp"))]
+            (EndpointMove::Set, Some(_)) => {
+                format!("Moved endpoint {letter} of {label} to {place}")
+            }
+            #[cfg(any(test, feature = "mcp"))]
+            (EndpointMove::Set, None) => format!("Set endpoint {letter} of {label} to {place}"),
+        };
+        let as_stored = |p: [f64; 2]| [p[0] as f32, p[1] as f32];
+        if held.is_some_and(|e| e.image == image && as_stored(e.pixel) == as_stored(pixel)) {
+            self.no_effect(format!("{text}: no effect, the endpoint is there already"));
+            return Ok(false);
+        }
+        let endpoint = bench::MeasurementEndpoint { image, pixel };
+        let next = bench::set_measurement_endpoint(
+            self.scene[index].edited(),
+            &item,
+            side.index(),
+            endpoint,
+        )
+        .map_err(|e| format!("Cannot move endpoint {letter} of {label}: {e}."))?;
+        self.push_measurement_step(index, &bench, label, next, text)?;
+        Ok(true)
     }
 
     /// Tick (`true`) or clear Measurement View's *Edit* box on `id`.

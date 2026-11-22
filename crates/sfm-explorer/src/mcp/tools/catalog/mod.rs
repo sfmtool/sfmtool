@@ -253,6 +253,15 @@ fn pixel_view_schema() -> Value {
     })
 }
 
+/// One endpoint of a distance measurement, by its letter.
+fn endpoint_schema() -> Value {
+    json!({
+        "type": "string",
+        "enum": ["a", "b"],
+        "description": "Which endpoint: a is the format's endpoint 0, b its endpoint 1.",
+    })
+}
+
 /// An item on the bench, by its label.
 ///
 /// A label and not an index: an item is named by its label everywhere -- in the

@@ -18,10 +18,12 @@ A measurement is edited on the bench, as a track is ([bench.md](bench.md)): a
 double-click on its row puts it on the bench as an item and focuses it, the
 panel's **Edit** box shows that item with its readings taken live from it, and
 *Commit* writes it back into the file in one step. The edited mode's header
-sets the item's label and its stated distance, each a bench step. Deleting a
-stored measurement is a direct edit from its row's menu. Switching an endpoint
-to another photograph, setting one by hand, creating a measurement, and drawing
-measurements in the 3D view and Image Detail are proposed in
+sets the item's label and its stated distance, and each endpoint block
+switches its endpoint to another photograph that shows the same place, each a
+bench step. Deleting a stored measurement is a direct edit from its row's
+menu. Setting an endpoint by hand in the panel and from Image Detail and the
+3D view, creating a measurement, and drawing measurements in the 3D view and
+Image Detail are proposed in
 [drafts/measurement-view.md](../drafts/measurement-view.md).
 
 Related specs: [track-view.md](track-view.md) (the panel this one is modelled
@@ -83,6 +85,13 @@ impl AppState {
     pub(crate) fn set_bench_measurement_distance(&mut self, id: ReconId, label: &str,
                                                  text: &str)
         -> Result<StatedDistanceSet, String>;
+    /// A row of the Switch image… popup (`EndpointMove::Switch`), and the
+    /// wire's set_bench_measurement_endpoint (`EndpointMove::Set`)
+    /// (§ "Switching an endpoint's image").
+    pub(crate) fn set_bench_measurement_endpoint(&mut self, id: ReconId, label: &str,
+                                                 side: EndpointSide, image: u32,
+                                                 pixel: [f64; 2], how: EndpointMove)
+        -> Result<bool, String>;
     pub(crate) fn delete_measurement(&mut self, measurement: MeasurementRef)
         -> Result<(), String>;
     /// A click on an endpoint block of the focused item.
@@ -291,8 +300,12 @@ link that selects it, so the panel is usable without the tree.
 
 ### The distance body
 
-Two endpoint blocks side by side, **A** and **B** (endpoint 0 and 1 of the
-format), then the result block. Each block shows:
+Two endpoint blocks, **A** and **B** (endpoint 0 and 1 of the format), then
+the result block. The blocks are side by side where the panel is wide enough
+for two (`BLOCK_MIN_WIDTH` each, a crop and a patch with the frame's margins,
+232 points), and one above the other where it is not, as at the panel's width
+in the default layout of a 1280 x 720 window. Every line of a block wraps
+inside it, so neither block draws over the other. Each block shows:
 
 - **The photograph's name** and the endpoint's pixel, `(412.3, 230.5)`.
 - **The crop.** The photograph around the endpoint, 128 points square. Where
@@ -361,7 +374,9 @@ patch are one target.
 - **Hover** (G6): the panel owns the hover while the pointer is over it; an
   endpoint block sets the hovered image to the endpoint's, which brightens its
   frustum and outlines its thumbnail, and clears the hovered point.
-- **Right-click** (G3): opens no menu, and selects nothing.
+- **Right-click** (G3): selects nothing. On a stored measurement it opens no
+  menu; in the edited mode it opens the block's menu, *Switch Image…*
+  (§ "Switching an endpoint's image").
 
 In the edited mode a click on a block selects the endpoint and its image with a
 reveal of the item's pixel (`AppState::select_item_endpoint`), and a
@@ -417,9 +432,10 @@ With the box ticked the panel shows the focused item:
   own label and its stated distance, each in a field (§ "The label and the
   stated distance"); and the median line (§ "Live readings").
 - **The endpoint blocks**, as for a stored measurement, read from the item's
-  endpoints. They show the endpoints read-only. An endpoint that is not placed,
-  which deleting the image it was in leaves, is a block saying `Endpoint B is
-  not placed.`
+  endpoints, each with *Switch image…* under its pixel and a right-click menu
+  holding *Switch Image…* (§ "Switching an endpoint's image"). An endpoint
+  that is not placed, which deleting the image it was in leaves, is a block
+  saying `Endpoint B is not placed.`, its *Switch image…* greyed.
 - **The result block**, from the live readings, or `No distance: endpoint B is
   not placed.` where an endpoint is missing.
 
@@ -466,6 +482,80 @@ item is committed.
 - **Both are refused** while a background task holds the node and on a
   view-only bench, with the shared sentence (`AppState::bench_edit_refusal`).
   The fields are then greyed, with that sentence as their hover text.
+
+### Switching an endpoint's image
+
+An endpoint sits on one texel `(s, t)` of a point's patch, and every other
+observation of that point holds the same texel at a pixel of its own image,
+in its own square. So the endpoint can move to any of those photographs
+without moving on the surface, and a person picks the one that shows the
+endpoint best. Core's `endpoint_views` finds them
+([core/reconstruction/measurement-endpoint.md](../core/reconstruction/measurement-endpoint.md)
+§ "The views of an endpoint"): for each candidate the resolver finds at the
+endpoint's image and pixel, chosen or not, every other observation of its
+point, at the pixel where that observation's square holds the candidate's
+texel, dropped where that pixel is outside its image or the square faces away
+from that camera.
+
+**The button and the menu.** Each endpoint block of the edited mode has
+*Switch image…*, and a right-click on the block (G3: it selects nothing)
+opens a menu with *Switch Image…*; both open the popup, anchored on the
+button. Both are greyed, with the refusal as their hover text
+(`measurement_view::switch_refusal`), while a step on the item would be
+refused (a background task holding the node, or a view-only bench, in
+`AppState::bench_edit_refusal`'s sentence), where the endpoint is not placed
+(*Endpoint B is not placed, so it has no image to switch from.*), and where
+the resolver refuses it (*Endpoint B has no position, so no other image can be
+offered:* and the resolver's sentence), since then no square names a place for
+another photograph to show.
+
+**The popup** lists the offers, read when it opens and again after a step on
+the item or an edit of the reconstruction. They are grouped by point, the
+chosen candidate's point first (`Point pt3d_9f2c41d0_812: the point the
+endpoint resolves to`), then the others' in the resolver's order (`another
+square holding the pixel`). Each row is drawn as an endpoint block draws its
+pictures:
+
+- a crop of that photograph, 96 points square, cut around that observation's
+  square as Track View cuts a row's crop, with the square's outline and a
+  cross at the offered pixel, and the endpoint crop's hover view;
+- the image name and the offered pixel;
+- the observation's `ℓ`, in the file's unit, in `su` without one, or in
+  degrees for a point at infinity (`ℓ not read` where it has no stored
+  reading), and its viewing angle `θ`: the readings the resolver's cost reads,
+  so the sharper and less oblique views stand out;
+- a warning mark where the endpoint would resolve elsewhere there, because
+  another square holds the offered pixel in that photograph and wins (`⚠
+  resolves to point pt3d_9f2c41d0_915 there`), or where it would have no
+  position there (`⚠ no position there`).
+
+A click on a row's crop, name, pixel, readings or mark is the step, and closes
+the popup; a click outside closes it with no step. The panel reports the row
+and the dock makes the step, so a refusal is a failed Action Log row in the
+step's words.
+
+**The step** (`AppState::set_bench_measurement_endpoint` with
+`EndpointMove::Switch`) is made by core's `set_measurement_endpoint`
+([core/bench/editable-measurement.md](../core/bench/editable-measurement.md) §
+"Setting an endpoint"): one version through `History::push_bench`, which
+replaces the item's `Arc` under the same `ItemId`, listed in the Edit History
+and undone by `Ctrl+Z`, with one `Bench` row, leaving the reconstruction alone
+and the node clean. It sets the image and the pixel only; the point and the
+texel the endpoint resolves to there are the row's, unless the row is marked.
+
+| Step | Label in the Edit History |
+|---|---|
+| Switch an endpoint's image (a popup row) | `Moved endpoint A of distance #2 from IMG_0004.jpg to IMG_0011.jpg` |
+| Set an endpoint's image and pixel (the wire's `set_bench_measurement_endpoint`) | `Moved endpoint A of distance #2 to IMG_0004.jpg (412.3, 230.5)` |
+| The same, for an endpoint not placed | `Set endpoint B of distance #2 to IMG_0050.jpg (88.0, 301.5)` |
+
+An endpoint at that image and pixel already, as the file would store the
+pixel, pushes no version and writes the no-effect row. The step is refused
+while a background task holds the node, on a view-only bench, for a switch of
+an endpoint not placed, and for an image past the image set or a pixel outside
+`[0, width) × [0, height)` of its image, in the commit's sentence (*Cannot
+move endpoint A of distance #2: endpoint A's pixel (640, 3) is outside image
+0, which is [0, 640) x [0, 480).*).
 
 ### Live readings
 
@@ -535,6 +625,11 @@ The panel's content is reachable over MCP ([mcp-server.md](mcp-server.md)):
   `set_bench_measurement_distance` are the header's two fields, and
   `commit_bench_measurement` is *Commit*, each on the item named or the focused
   one; `delete_measurement` is *Delete*.
+- `get_measurement_endpoint_views` gives the offers of an endpoint's *Switch
+  image…* popup, refused in the button's words, and
+  `set_bench_measurement_endpoint` moves an endpoint to any pixel inside an
+  image, not only an offered one, refusing a pixel outside it in the commit's
+  sentence (§ "Switching an endpoint's image").
 - `get_measurement` naming an `item` gives a measurement item on the bench
   with its live readings and its `origin`, and `get_bench` lists measurement
   items beside tracks. `focus_bench_item`, `unfocus_bench_item`,
@@ -647,6 +742,21 @@ at-infinity case is covered by the Rust tests.
   putting a field back, a field left unchanged asking for nothing, and the
   fields greyed while a task holds the node. (`dock/tests.rs`): a committed
   field reaching its step, and a refused one writing a failed row.
+- **The layout** (`measurement_view/tests.rs`): at the width the panel has in
+  the default layout of a 1280 x 720 window the blocks are one above the
+  other, inside the panel and not overlapping, in both modes, and side by side
+  where the panel is wide.
+- **Switching an endpoint's image** (`measurement_view/tests.rs`): no button
+  on a stored measurement; the button enabled for an endpoint that resolves
+  and greyed with its sentence for one refused, one not placed, and while a
+  task holds the node; a right-click selecting nothing and opening the menu,
+  whose entry opens the popup; the button opening it too; a row's heading,
+  readings and mark; a click on a row asking for the switch once and closing
+  the popup. (`dock/tests.rs`): a row reaching its step.
+  (`bench/measurement/tests.rs`): the step's label, its undo and redo, the
+  point and texel kept, the stored row and the dirty flag left alone, the
+  no-effect row, the labels of a pixel set outright and of an endpoint placed,
+  and the refusals.
 - **The label and the stated distance** (`bench/measurement/tests.rs`): each
   step's label in the Edit History, the stored row and the dirty flag left
   alone, the item's ID kept, undo and redo; a bare number in the file's unit,
@@ -660,11 +770,15 @@ at-infinity case is covered by the Rust tests.
   and a refused value;
   `get_measurement` with an item; `delete_measurement` and
   `commit_bench_measurement`'s no-effect and appending commits; a track tool
-  naming a measurement item saying what it is.
+  naming a measurement item saying what it is;
+  `get_measurement_endpoint_views`' offers and `set_bench_measurement_endpoint`
+  moving the endpoint to one, onto the same point, with their refusals.
 - **`ui_basic`**: the panel opens from the Panels menu; a double-click on a
   Measurements row puts the measurement on the bench and raises Measurement
   View on the item, and after its row is deleted a click on *Commit* adds it
-  back as a new row, on a measured copy of the seoul bull ground truth.
+  back as a new row, on a measured copy of the seoul bull ground truth; and an
+  endpoint switched to another photograph through *Switch image…* and its
+  popup, then committed into its row.
 - **The script** (`tests/test_add_artificial_measurements.py`): every case
   with its known scale read back through the resolver, the copy without a
   unit, the recorded workspace, and a path under `test-data/` refused with
@@ -672,9 +786,9 @@ at-infinity case is covered by the Rust tests.
 
 ## Non-goals
 
-The panel has no step that moves a measurement item's endpoint: switching an
-endpoint to another photograph and setting an endpoint's image and pixel, as
-well as creating a measurement and drawing measurements in the 3D view and
-Image Detail, are proposed in
+The panel has no fields for an endpoint's image and pixel, and Image Detail
+and the 3D view no entries that set one: setting an endpoint by hand, as well
+as creating a measurement and drawing measurements in the 3D view and Image
+Detail, are proposed in
 [drafts/measurement-view.md](../drafts/measurement-view.md). An endpoint's 3D
 position is never set directly: it always follows from its image and pixel.

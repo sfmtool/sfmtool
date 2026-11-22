@@ -982,6 +982,33 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "set_bench_measurement_endpoint",
+            description: "Move one endpoint of a measurement item to a pixel of a camera \
+                          image: one bench version labelled like \"Moved endpoint A of \
+                          distance #2 to IMG_0004.jpg (412.3, 230.5)\" (\"Set endpoint B of \
+                          ...\" for an endpoint not placed), which leaves the reconstruction \
+                          alone until the item is committed. Any pixel inside the image is \
+                          taken, not only one get_measurement_endpoint_views offers; the \
+                          endpoint's point, texel and position follow from the image and \
+                          pixel, so none of them is set. Refused, in the commit's words, for \
+                          a pixel outside [0, width) x [0, height) of the image, on a \
+                          sift_files reconstruction (view-only bench) and while a background \
+                          task holds the node. An endpoint at that image and pixel already \
+                          pushes no version (changed: false). Naming no item moves the focused \
+                          one's. The reply names the item and carries endpoint, camera_image \
+                          and pixel.",
+            kind: Write,
+            schema: object(
+                &[("item", bench_item_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("endpoint", endpoint_schema()),
+                    ("camera_image", camera_image_schema()),
+                    ("pixel", pixel_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "fit_bench_track",
             description: "Fit a bench track at the stage it is in — the step that MOVES it. At \
                           the track stage it localizes every sighting against the patch, \

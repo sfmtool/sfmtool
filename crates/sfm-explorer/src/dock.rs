@@ -1087,6 +1087,18 @@ impl TabContext<'_> {
                 self.state.action_log.fail(Kind::Bench, why);
             }
         }
+        if let Some(switch) = response.switch_endpoint {
+            if let Err(why) = self.state.set_bench_measurement_endpoint(
+                switch.node,
+                &switch.item,
+                switch.side,
+                switch.image,
+                switch.pixel,
+                crate::bench::measurement::EndpointMove::Switch,
+            ) {
+                self.state.action_log.fail(Kind::Bench, why);
+            }
+        }
         if let Some((id, side)) = response.look_through_item {
             self.state.select_item_endpoint(id, side);
             if let Some((image, [x, y])) = self.state.focused_item_endpoint(id, side) {

@@ -21,7 +21,12 @@
 //! endpoint and its image and reveals its pixel in Image Detail, a
 //! double-click enters camera view through its image turned toward the pixel,
 //! and a hover sets the cross-panel hover to its image. The block's own
-//! buttons keep their clicks.
+//! buttons keep their clicks. In the edited mode each block also has *Switch
+//! image…*, and a right-click menu holding *Switch Image…*, which open a
+//! popup of the other photographs that show the endpoint's place (core's
+//! `endpoint_views`); a click on one of its rows asks for the step that moves
+//! the endpoint there. The blocks stand side by side where the panel is wide
+//! enough for two, and one above the other where it is not.
 //!
 //! The panel decides nothing. What a person does lands in
 //! [`MeasurementViewResponse`], and the dock applies it through `AppState`.
@@ -36,8 +41,8 @@ use egui::{Color32, Pos2, Rect, Stroke};
 use sfmtool_core::bench::EditableMeasurement;
 use sfmtool_core::camera::TiledPhotograph;
 use sfmtool_core::reconstruction::measurement_endpoint::{
-    CandidateStanding, EndpointPosition, EndpointRefusal, EndpointResolution,
-    ResolvedDistanceMeasurement,
+    endpoint_views, CandidateStanding, EndpointPosition, EndpointRefusal, EndpointResolution,
+    EndpointView, MeasurementEndpointOptions, ResolvedDistanceMeasurement,
 };
 use sfmtool_core::LengthUnit;
 
@@ -109,7 +114,34 @@ pub(crate) struct MeasurementViewResponse {
     pub(crate) set_label: Option<(ReconId, String, String)>,
     /// The stated distance field was committed: the item, and the text typed.
     pub(crate) set_distance: Option<(ReconId, String, String)>,
+    /// A row of an endpoint's *Switch image…* popup was clicked.
+    pub(crate) switch_endpoint: Option<EndpointSwitch>,
 }
+
+/// A row of the *Switch image…* popup that was clicked: move endpoint `side`
+/// of the item `item` on `node`'s bench to `pixel` of `image`.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct EndpointSwitch {
+    pub(crate) node: ReconId,
+    pub(crate) item: String,
+    pub(crate) side: EndpointSide,
+    pub(crate) image: u32,
+    pub(crate) pixel: [f64; 2],
+}
+
+/// The text of each endpoint block's button that opens the popup.
+pub(crate) const SWITCH_LABEL: &str = "Switch image\u{2026}";
+
+/// The entry of an endpoint block's right-click menu that opens the popup.
+pub(crate) const SWITCH_ENTRY: &str = "Switch Image\u{2026}";
+
+/// The side of a crop in the *Switch image…* popup, in points.
+const OFFER_CROP_SIDE: f32 = 96.0;
+
+/// The narrowest an endpoint block is drawn, in points: its crop and its
+/// patch side by side, with the frame's margins. Narrower than two of these,
+/// the panel stacks the blocks rather than putting them side by side.
+const BLOCK_MIN_WIDTH: f32 = CROP_SIDE + PATCH_SIDE + 40.0;
 
 /// One of the edited mode header's fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,6 +268,42 @@ pub(crate) struct MeasurementView {
     links: Vec<Rect>,
     /// What the toolbar drew on the last frame, for the tests that read it.
     toolbar: Vec<(String, Option<String>)>,
+    /// Where each endpoint block was drawn on the last frame, its frame and
+    /// everything in it.
+    blocks: [Option<Rect>; 2],
+    /// Each endpoint block's *Switch image…* button as the last frame drew
+    /// it, with the refusal it was greyed with, if any.
+    switches: [Option<(Rect, Option<String>)>; 2],
+    /// Where each block's right-click menu drew *Switch Image…* on the last
+    /// frame, while the menu is open.
+    menu_entries: [Option<Rect>; 2],
+    /// The offers of the endpoint whose popup is open.
+    offers: Option<HeldOffers>,
+    /// The crops of the popup's rows, cut once each photograph is decoded.
+    offer_crops: HashMap<OfferKey, Crop>,
+    /// The popup's rows as the last frame drew them: where each row's image
+    /// name was drawn, and the image and pixel the row moves the endpoint to.
+    offer_rows: Vec<(Rect, u32, [f64; 2])>,
+}
+
+/// The offers of one endpoint of the focused item, read once per item value,
+/// document and side ([`sfmtool_core::reconstruction::measurement_endpoint::endpoint_views`]).
+struct HeldOffers {
+    item: Arc<EditableMeasurement>,
+    document: VersionSerial,
+    side: EndpointSide,
+    views: Result<Vec<EndpointView>, EndpointRefusal>,
+}
+
+/// Which row's crop a cached offer crop is: the observation it is cut
+/// around and the pixel it marks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct OfferKey {
+    node: ReconId,
+    document: VersionSerial,
+    point: u32,
+    observation: usize,
+    pixel: [u64; 2],
 }
 
 impl MeasurementView {
@@ -269,6 +337,34 @@ impl MeasurementView {
         &self.toolbar
     }
 
+    /// Where the endpoint block on `side` was drawn on the last frame.
+    #[cfg(test)]
+    pub(crate) fn block_rect(&self, side: EndpointSide) -> Option<Rect> {
+        self.blocks[side.index()]
+    }
+
+    /// The *Switch image…* button of the block on `side` as the last frame
+    /// drew it: where, and the refusal it was greyed with.
+    #[cfg(test)]
+    pub(crate) fn switch_button(&self, side: EndpointSide) -> Option<&(Rect, Option<String>)> {
+        self.switches[side.index()].as_ref()
+    }
+
+    /// Where the right-click menu of the block on `side` drew *Switch
+    /// Image…* on the last frame, while the menu is open.
+    #[cfg(test)]
+    pub(crate) fn menu_entry(&self, side: EndpointSide) -> Option<Rect> {
+        self.menu_entries[side.index()]
+    }
+
+    /// The rows of the open *Switch image…* popup as the last frame drew
+    /// them: where each row's image name was drawn, and the image and pixel
+    /// the row moves the endpoint to.
+    #[cfg(test)]
+    pub(crate) fn offer_rows(&self) -> &[(Rect, u32, [f64; 2])] {
+        &self.offer_rows
+    }
+
     /// The focused item's readings, as the last frame read them.
     #[cfg(test)]
     pub(crate) fn item_reading(&self) -> Option<&ItemReading> {
@@ -285,6 +381,10 @@ impl MeasurementView {
         self.fields = [None, None];
         self.links.clear();
         self.toolbar.clear();
+        self.blocks = [None, None];
+        self.switches = [None, None];
+        self.menu_entries = [None, None];
+        self.offer_rows.clear();
         let Some(node) = crate::scene::selected_node(&state.scene, state.selected_recon) else {
             self.pictures.clear();
             self.reading = None;
@@ -323,6 +423,8 @@ impl MeasurementView {
         self.reading = None;
         self.renaming = None;
         self.drafts = [None, None];
+        self.offers = None;
+        self.offer_crops.clear();
         let Some(measurement) = selected else {
             self.pictures.clear();
             self.show_empty_state(ui, node, &rows, &readings.distance, &mut response);
@@ -347,7 +449,7 @@ impl MeasurementView {
             .show(ui, |ui| {
                 show_header(ui, node, measurement, row, &rows, &readings.distance);
                 ui.separator();
-                self.show_blocks(ui, state, node, target, &blocks, &mut response);
+                self.show_blocks(ui, state, node, target, &blocks, None, &mut response);
                 ui.separator();
                 show_result(ui, row, resolved, unit);
             });
@@ -416,7 +518,20 @@ impl MeasurementView {
                     measurements::item_scale_comparison(rows, resolved, origin, row, reading)
                 });
                 ui.separator();
-                self.show_blocks(ui, state, node, Target::Item(node.id), &blocks, response);
+                let edit = ItemEdit {
+                    label,
+                    item: &item,
+                    refusal: state.bench_edit_refusal(node.id),
+                };
+                self.show_blocks(
+                    ui,
+                    state,
+                    node,
+                    Target::Item(node.id),
+                    &blocks,
+                    Some(&edit),
+                    response,
+                );
                 ui.separator();
                 match (&row, &reading.resolved) {
                     (Some(row), Some(resolved)) => show_result(ui, row, resolved, unit),
@@ -607,8 +722,15 @@ impl MeasurementView {
         });
     }
 
-    /// The two endpoint blocks side by side, each with its pictures cut on
-    /// the first frame that shows it.
+    /// The two endpoint blocks, each with its pictures cut on the first frame
+    /// that shows it: side by side where the panel is wide enough for two,
+    /// and one above the other where it is not, so neither draws over the
+    /// other. In the edited mode (`edit`) each block carries *Switch image…*
+    /// and its right-click menu, and the popup the two open.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the frame's inputs, read once by show"
+    )]
     fn show_blocks(
         &mut self,
         ui: &mut egui::Ui,
@@ -616,6 +738,7 @@ impl MeasurementView {
         node: &SceneNode,
         target: Target,
         blocks: &[Option<Endpoint>; 2],
+        edit: Option<&ItemEdit<'_>>,
         response: &mut MeasurementViewResponse,
     ) {
         let document = node.history.current_version().document_serial;
@@ -634,29 +757,295 @@ impl MeasurementView {
             })
             .collect();
         self.pictures.retain(|key, _| keys.contains(key));
-        ui.columns(2, |columns| {
-            for side in EndpointSide::BOTH {
-                let ui = &mut columns[side.index()];
-                let Some(endpoint) = &blocks[side.index()] else {
-                    show_unplaced(ui, side);
-                    continue;
-                };
-                let key = PictureKey::new(node.id, document, side, endpoint.image, endpoint.pixel);
-                let block = EndpointBlock {
-                    node,
-                    target,
-                    image: endpoint.image,
-                    pixel: endpoint.pixel,
+        let mut show_one = |this: &mut Self, ui: &mut egui::Ui, side: EndpointSide| {
+            let switch = edit.map(|edit| {
+                switch_refusal(
+                    edit.refusal.as_deref(),
                     side,
-                    resolution: &endpoint.resolution,
-                    selected: state.selected_endpoint == Some(side),
-                    unit,
-                };
-                self.ensure_pictures(ui.ctx(), state, &block, key);
-                let pictures = self.pictures.get(&key);
-                self.names[side.index()] = block.show(ui, pictures, response);
+                    blocks[side.index()].as_ref().map(|e| &e.resolution),
+                )
+            });
+            let Some(endpoint) = &blocks[side.index()] else {
+                let drawn = show_unplaced(ui, side, switch);
+                this.note_block(side, &drawn);
+                return;
+            };
+            let key = PictureKey::new(node.id, document, side, endpoint.image, endpoint.pixel);
+            let block = EndpointBlock {
+                node,
+                target,
+                image: endpoint.image,
+                pixel: endpoint.pixel,
+                side,
+                resolution: &endpoint.resolution,
+                selected: state.selected_endpoint == Some(side),
+                unit,
+                switch,
+            };
+            this.ensure_pictures(ui.ctx(), state, &block, key);
+            let pictures = this.pictures.get(&key);
+            let drawn = block.show(ui, pictures, response);
+            this.names[side.index()] = Some(drawn.name);
+            this.note_block(side, &drawn);
+            if let (Some(edit), Some(button)) = (edit, &drawn.switch_button) {
+                this.show_switch_popup(
+                    ui,
+                    state,
+                    node,
+                    edit,
+                    endpoint,
+                    side,
+                    button,
+                    drawn.open_switch,
+                    response,
+                );
             }
+        };
+        if ui.available_width() >= 2.0 * BLOCK_MIN_WIDTH {
+            ui.columns(2, |columns| {
+                for side in EndpointSide::BOTH {
+                    show_one(self, &mut columns[side.index()], side);
+                }
+            });
+        } else {
+            for side in EndpointSide::BOTH {
+                show_one(self, ui, side);
+            }
+        }
+    }
+
+    /// Keep where an endpoint block and its *Switch image…* button were
+    /// drawn, for the tests that read them.
+    fn note_block(&mut self, side: EndpointSide, drawn: &BlockDrawn) {
+        self.blocks[side.index()] = Some(drawn.rect);
+        self.switches[side.index()] = drawn
+            .switch_button
+            .as_ref()
+            .map(|button| (button.rect, drawn.switch_refusal.clone()));
+        self.menu_entries[side.index()] = drawn.menu_entry;
+    }
+
+    /// The *Switch image…* popup of endpoint `side`, anchored on its button:
+    /// opened by the button or by the block's right-click menu
+    /// (`open_from_menu`), and closed by a click outside it or on a row.
+    ///
+    /// It lists the offers of core's `endpoint_views`, grouped by point, the
+    /// chosen candidate's point first. Each row is the image name, a crop of
+    /// that image around the observation's square with a cross at the offered
+    /// pixel and the endpoint crop's hover view, the observation's `ℓ` and
+    /// viewing angle, and a mark where the endpoint would resolve to another
+    /// point there, or to none. A click on a row asks for the switch.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the block's inputs, each read once"
+    )]
+    fn show_switch_popup(
+        &mut self,
+        ui: &egui::Ui,
+        state: &AppState,
+        node: &SceneNode,
+        edit: &ItemEdit<'_>,
+        endpoint: &Endpoint,
+        side: EndpointSide,
+        button: &egui::Response,
+        open_from_menu: bool,
+        response: &mut MeasurementViewResponse,
+    ) {
+        let popup = egui::Popup::from_toggle_button_response(button)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+        let popup_id = popup.get_id();
+        if open_from_menu {
+            egui::Popup::open_id(ui.ctx(), popup_id);
+        }
+        if !button.enabled() {
+            egui::Popup::close_id(ui.ctx(), popup_id);
+            return;
+        }
+        let document = node.history.current_version().document_serial;
+        let held = self.offers.as_ref().is_some_and(|held| {
+            Arc::ptr_eq(&held.item, edit.item) && held.document == document && held.side == side
         });
+        let is_open = egui::Popup::is_id_open(ui.ctx(), popup_id) || button.clicked();
+        if is_open && !held {
+            self.offer_crops.clear();
+            self.offers = Some(HeldOffers {
+                item: Arc::clone(edit.item),
+                document,
+                side,
+                views: endpoint_views(
+                    node.edited(),
+                    endpoint.image,
+                    endpoint.pixel,
+                    &MeasurementEndpointOptions::default(),
+                ),
+            });
+        }
+        let mut clicked = None;
+        let shown = popup.show(|ui| {
+            let Some(held) = self.offers.as_ref().filter(|held| held.side == side) else {
+                return;
+            };
+            ui.set_max_width(OFFER_CROP_SIDE + 260.0);
+            ui.label(
+                egui::RichText::new(format!(
+                    "Switch endpoint {} to another image",
+                    side.letter()
+                ))
+                .strong(),
+            );
+            ui.weak(
+                "Each row is the same place on the surface, seen in another photograph. \
+                 Click one to move the endpoint there.",
+            );
+            let views = match &held.views {
+                Ok(views) => views.clone(),
+                Err(refusal) => {
+                    ui.colored_label(ui.visuals().warn_fg_color, format!("{refusal}."));
+                    return;
+                }
+            };
+            if views.is_empty() {
+                ui.weak("No other observation of these points shows this place.");
+                return;
+            }
+            let chosen = endpoint.resolution.as_ref().ok().map(|r| r.chosen().point);
+            egui::ScrollArea::vertical()
+                .id_salt(("measurement_switch", side.index()))
+                .max_height(420.0)
+                .show(ui, |ui| {
+                    let mut last_point = None;
+                    for view in &views {
+                        if last_point != Some(view.point) {
+                            last_point = Some(view.point);
+                            ui.separator();
+                            let id = crate::scene::point_id(node, view.point as usize);
+                            let which = if Some(view.point) == chosen {
+                                "the point the endpoint resolves to"
+                            } else {
+                                "another square holding the pixel"
+                            };
+                            ui.label(egui::RichText::new(format!("Point {id}: {which}")).strong());
+                        }
+                        if self.show_offer(ui, state, node, document, view) {
+                            clicked = Some(view.clone());
+                        }
+                    }
+                });
+        });
+        // A closed popup lets go of its offers and their crops; the other
+        // endpoint's popup, if open, keeps its own.
+        if shown.is_none() && self.offers.as_ref().is_some_and(|held| held.side == side) {
+            self.offers = None;
+            self.offer_crops.clear();
+        }
+        if let Some(view) = clicked {
+            egui::Popup::close_id(ui.ctx(), popup_id);
+            response.switch_endpoint = Some(EndpointSwitch {
+                node: node.id,
+                item: edit.label.to_string(),
+                side,
+                image: view.image,
+                pixel: view.pixel,
+            });
+        }
+    }
+
+    /// One row of the *Switch image…* popup. Whether it was clicked.
+    fn show_offer(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &AppState,
+        node: &SceneNode,
+        document: VersionSerial,
+        view: &EndpointView,
+    ) -> bool {
+        let key = OfferKey {
+            node: node.id,
+            document,
+            point: view.point,
+            observation: view.observation,
+            pixel: view.pixel.map(f64::to_bits),
+        };
+        if !self.offer_crops.contains_key(&key) {
+            let name = format!(
+                "measurement_offer_{:?}_{}_{}_{:.3}_{:.3}",
+                node.id, view.point, view.observation, view.pixel[0], view.pixel[1]
+            );
+            let square = Some((view.point, view.observation));
+            if let Some(crop) = endpoint_crop(
+                ui.ctx(),
+                state,
+                node,
+                view.image,
+                view.pixel,
+                square,
+                name,
+                &self.regions,
+            ) {
+                self.offer_crops.insert(key, crop);
+            }
+        }
+        let recon = node.recon();
+        let mut targets: Vec<egui::Response> = Vec::new();
+        ui.horizontal(|ui| {
+            targets.push(show_crop(
+                ui,
+                recon,
+                view.image,
+                self.offer_crops.get(&key),
+                OFFER_CROP_SIDE,
+            ));
+            ui.vertical(|ui| {
+                targets.push(
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(measurements::image_name(recon, view.image))
+                                .strong(),
+                        )
+                        .sense(egui::Sense::click())
+                        .truncate(),
+                    ),
+                );
+                targets.push(
+                    ui.add(
+                        egui::Label::new(format!("({:.1}, {:.1})", view.pixel[0], view.pixel[1]))
+                            .sense(egui::Sense::click()),
+                    ),
+                );
+                let at_infinity = node
+                    .edited()
+                    .point(view.point)
+                    .is_some_and(|p| p.point().w == 0.0);
+                targets.push(
+                    ui.add(
+                        egui::Label::new(offer_readings_text(view, at_infinity, unit_of(node)))
+                            .sense(egui::Sense::click()),
+                    )
+                    .on_hover_text(
+                        "\u{2113}: how closely this observation fixes its square on the \
+                         surface, its self-similarity length on the patch. \u{03b8}: the angle \
+                         it sees the square at, 0\u{00b0} facing it. Smaller is sharper on both.",
+                    ),
+                );
+                if let Some(mark) = offer_mark(node, view) {
+                    targets.push(
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(mark).color(ui.visuals().warn_fg_color),
+                            )
+                            .sense(egui::Sense::click()),
+                        )
+                        .on_hover_text(
+                            "Another square holds this pixel in that photograph, so the \
+                             endpoint would land on a different point there, or on none.",
+                        ),
+                    );
+                }
+            });
+        });
+        self.offer_rows
+            .push((targets[1].rect, view.image, view.pixel));
+        targets.iter().any(egui::Response::clicked)
     }
 
     /// No measurement selected: one line saying so, then, where the
@@ -707,7 +1096,26 @@ impl MeasurementView {
         if self.pictures.contains_key(&key) {
             return;
         }
-        let Some(crop) = endpoint_crop(ctx, state, block, &self.regions) else {
+        let square = block.resolution.as_ref().ok().map(|resolution| {
+            let chosen = resolution.chosen();
+            (chosen.point, chosen.observation)
+        });
+        let name = format!(
+            "measurement_crop_{:?}_{}_{}",
+            block.node.id,
+            block.texture_stem(),
+            block.side.letter()
+        );
+        let Some(crop) = endpoint_crop(
+            ctx,
+            state,
+            block.node,
+            block.image,
+            block.pixel,
+            square,
+            name,
+            &self.regions,
+        ) else {
             return;
         };
         let patch = block.resolution.as_ref().ok().and_then(|resolution| {
@@ -813,13 +1221,180 @@ fn entry(ui: &mut egui::Ui, text: &str, refusal: Option<String>, hint: &str) -> 
     }
 }
 
-/// An endpoint that is not placed: a block saying so.
-fn show_unplaced(ui: &mut egui::Ui, side: EndpointSide) {
-    egui::Frame::group(ui.style()).show(ui, |ui| {
+/// An endpoint that is not placed: a block saying so, with *Switch image…*
+/// greyed in the edited mode (`switch`).
+fn show_unplaced(
+    ui: &mut egui::Ui,
+    side: EndpointSide,
+    switch: Option<Option<String>>,
+) -> BlockDrawn {
+    let mut button = None;
+    let mut targets = Vec::new();
+    let frame = egui::Frame::group(ui.style()).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.label(egui::RichText::new(side.letter()).strong());
-        ui.weak(format!("Endpoint {} is not placed.", side.letter()));
+        targets.push(
+            ui.add(
+                egui::Label::new(egui::RichText::new(side.letter()).strong())
+                    .sense(egui::Sense::click()),
+            ),
+        );
+        targets.push(
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(format!("Endpoint {} is not placed.", side.letter()))
+                        .color(ui.visuals().weak_text_color()),
+                )
+                .sense(egui::Sense::click()),
+            ),
+        );
+        if let Some(refusal) = &switch {
+            button = Some(switch_button(ui, refusal.clone()));
+        }
     });
+    let refusal = switch.flatten();
+    let mut menu_entry = None;
+    if button.is_some() {
+        for target in &targets {
+            switch_menu(target, refusal.clone(), &mut menu_entry);
+        }
+    }
+    BlockDrawn {
+        rect: frame.response.rect,
+        name: targets[0].rect,
+        switch_button: button,
+        switch_refusal: refusal,
+        open_switch: false,
+        menu_entry,
+    }
+}
+
+/// What the edited mode adds to the endpoint blocks: the item they show, its
+/// label on the bench, and why a step on it would be refused
+/// (`AppState::bench_edit_refusal`).
+struct ItemEdit<'a> {
+    label: &'a str,
+    item: &'a Arc<EditableMeasurement>,
+    refusal: Option<String>,
+}
+
+/// What drawing one endpoint block left: where it and its name line were
+/// drawn, its *Switch image…* button in the edited mode with the refusal it
+/// was greyed with, and whether its right-click menu asked for the popup.
+struct BlockDrawn {
+    rect: Rect,
+    name: Rect,
+    switch_button: Option<egui::Response>,
+    switch_refusal: Option<String>,
+    open_switch: bool,
+    /// Where the right-click menu's *Switch Image…* was drawn, while it is
+    /// open.
+    menu_entry: Option<Rect>,
+}
+
+/// Why *Switch image…* is greyed for endpoint `side`, or `None`: a step on
+/// the item refused (`bench_refusal`, a task holding the node or a view-only
+/// bench), the endpoint not placed (`resolution` is `None`), or the endpoint
+/// refused by the resolver, in which case no square names a place for other
+/// images to show.
+pub(crate) fn switch_refusal(
+    bench_refusal: Option<&str>,
+    side: EndpointSide,
+    resolution: Option<&Result<EndpointResolution, EndpointRefusal>>,
+) -> Option<String> {
+    if let Some(why) = bench_refusal {
+        return Some(why.to_string());
+    }
+    let letter = side.letter();
+    match resolution {
+        None => Some(format!(
+            "Endpoint {letter} is not placed, so it has no image to switch from."
+        )),
+        Some(Err(refusal)) => Some(format!(
+            "Endpoint {letter} has no position, so no other image can be offered: {refusal}."
+        )),
+        Some(Ok(_)) => None,
+    }
+}
+
+/// An endpoint block's *Switch image…* button, greyed with `refusal` as its
+/// hover text where there is one.
+fn switch_button(ui: &mut egui::Ui, refusal: Option<String>) -> egui::Response {
+    let enabled = refusal.is_none();
+    let button = ui.add_enabled(enabled, egui::Button::new(SWITCH_LABEL).small());
+    match refusal {
+        Some(why) => button.on_disabled_hover_text(why),
+        None => button.on_hover_text(
+            "Move this endpoint to the same place on the surface in another photograph",
+        ),
+    }
+}
+
+/// The right-click menu of an endpoint block's `target`, which selects
+/// nothing (G3): *Switch Image…*, greyed with `refusal`. Whether the entry was
+/// clicked; where it was drawn, while the menu is open, goes in `drawn`.
+fn switch_menu(target: &egui::Response, refusal: Option<String>, drawn: &mut Option<Rect>) -> bool {
+    let mut asked = false;
+    crate::context_menu::on_secondary_click(target).show(|ui| {
+        let entry = ui.add_enabled(refusal.is_none(), egui::Button::new(SWITCH_ENTRY));
+        *drawn = Some(entry.rect);
+        let entry = match &refusal {
+            Some(why) => entry.on_disabled_hover_text(why),
+            None => entry,
+        };
+        if entry.clicked() {
+            asked = true;
+            ui.close();
+        }
+    });
+    asked
+}
+
+/// The readings line of a popup row: `ℓ` in the file's unit, scene units, or
+/// degrees for a point at infinity, and the viewing angle.
+pub(crate) fn offer_readings_text(
+    view: &EndpointView,
+    at_infinity: bool,
+    unit: Option<&str>,
+) -> String {
+    let length = match view.localization {
+        None => "\u{2113} not read".to_string(),
+        Some(l) if at_infinity => format!("\u{2113} {}\u{00b0}", measurements::significant(l, 3)),
+        Some(l) => format!(
+            "\u{2113} {} {}",
+            measurements::significant(l, 3),
+            unit.unwrap_or("su")
+        ),
+    };
+    let angle = view
+        .viewing_angle_deg
+        .map_or("\u{03b8} unknown".to_string(), |a| {
+            format!("\u{03b8} {a:.1}\u{00b0}")
+        });
+    format!("{length}  {angle}")
+}
+
+/// The mark of a popup row whose pixel resolves elsewhere: the point the
+/// endpoint would land on there, or that it would have no position.
+pub(crate) fn offer_mark(node: &SceneNode, view: &EndpointView) -> Option<String> {
+    if !view.resolves_elsewhere() {
+        return None;
+    }
+    Some(match view.resolves_to {
+        Some(point) => format!(
+            "\u{26a0} resolves to point {} there",
+            crate::scene::point_id(node, point as usize)
+        ),
+        None => "\u{26a0} no position there".to_string(),
+    })
+}
+
+/// The file's unit as a length unit name, or `None` for scene units.
+fn unit_of(node: &SceneNode) -> Option<&str> {
+    node.recon()
+        .metadata
+        .world_space_unit
+        .as_deref()
+        .filter(|u| LengthUnit::from_name(u).is_some())
 }
 
 /// The result block's line for an item that has no result: what it lacks.
@@ -1055,6 +1630,9 @@ struct EndpointBlock<'a> {
     resolution: &'a Result<EndpointResolution, EndpointRefusal>,
     selected: bool,
     unit: Option<&'a str>,
+    /// In the edited mode, *Switch image…* with the refusal it is greyed
+    /// with, if any; `None` for a stored measurement, which has no steps.
+    switch: Option<Option<String>>,
 }
 
 impl EndpointBlock<'_> {
@@ -1064,14 +1642,16 @@ impl EndpointBlock<'_> {
         format!("{}_{:.3}_{:.3}", self.image, self.pixel[0], self.pixel[1])
     }
 
-    /// Draw the block and report its gestures into `response`, returning
-    /// where its name line was drawn.
+    /// Draw the block and report its gestures into `response`.
+    ///
+    /// Every line wraps inside the block's width, so a long one, such as the
+    /// position, never reaches into the block beside it.
     fn show(
         &self,
         ui: &mut egui::Ui,
         pictures: Option<&EndpointPictures>,
         response: &mut MeasurementViewResponse,
-    ) -> Option<Rect> {
+    ) -> BlockDrawn {
         let visuals = ui.visuals().clone();
         let frame = if self.selected {
             egui::Frame::group(ui.style())
@@ -1084,9 +1664,12 @@ impl EndpointBlock<'_> {
         let image = self.image;
         let [x, y] = self.pixel;
         let mut targets: Vec<egui::Response> = Vec::new();
-        let mut name_rect = None;
-        frame.show(ui, |ui| {
-            ui.set_width(ui.available_width());
+        let mut name_rect = Rect::NOTHING;
+        let mut button = None;
+        let drawn = frame.show(ui, |ui| {
+            let width = ui.available_width();
+            ui.set_width(width);
+            ui.set_max_width(width);
             let name = ui.add(
                 egui::Label::new(
                     egui::RichText::new(format!(
@@ -1099,19 +1682,36 @@ impl EndpointBlock<'_> {
                 .sense(egui::Sense::click())
                 .truncate(),
             );
-            name_rect = Some(name.rect);
+            name_rect = name.rect;
             targets.push(name);
             targets.push(
                 ui.add(egui::Label::new(format!("({x:.1}, {y:.1})")).sense(egui::Sense::click())),
             );
-            ui.horizontal(|ui| {
-                targets.push(self.show_crop(ui, pictures));
+            if let Some(refusal) = &self.switch {
+                button = Some(switch_button(ui, refusal.clone()));
+            }
+            ui.horizontal_wrapped(|ui| {
+                targets.push(show_crop(
+                    ui,
+                    recon,
+                    image,
+                    pictures.map(|p| &p.crop),
+                    CROP_SIDE,
+                ));
                 if let Some(patch) = pictures.and_then(|p| p.patch.as_ref()) {
                     targets.push(self.show_patch(ui, patch));
                 }
             });
             self.show_resolution(ui, response);
         });
+        let refusal = self.switch.clone().flatten();
+        let mut open_switch = false;
+        let mut menu_entry = None;
+        if button.is_some() {
+            for target in &targets {
+                open_switch |= switch_menu(target, refusal.clone(), &mut menu_entry);
+            }
+        }
         let hovered = targets.iter().any(egui::Response::hovered);
         if hovered {
             response.hovered_image = Some(ImageRef::new(self.node.id, image as usize));
@@ -1132,73 +1732,88 @@ impl EndpointBlock<'_> {
                 Target::Item(id) => response.look_through_item = Some((id, self.side)),
             }
         }
-        name_rect
-    }
-
-    /// The crop cell, with its hover view.
-    fn show_crop(&self, ui: &mut egui::Ui, pictures: Option<&EndpointPictures>) -> egui::Response {
-        let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(CROP_SIDE, CROP_SIDE), egui::Sense::click());
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
-        let full_name = measurements::image_name(self.node.recon(), self.image);
-        match pictures.map(|p| &p.crop) {
-            Some(Crop::Ready {
-                cell,
-                context,
-                caption,
-            }) => {
-                cell.paint_cell(&painter, rect);
-                paint_cross(&painter, cell.keypoint_in(rect));
-                let context = context.as_ref();
-                response.on_hover_ui(|ui| {
-                    ui.label(egui::RichText::new(&full_name).strong());
-                    if let Some(context) = context {
-                        let bounds = Rect::from_min_size(
-                            Pos2::ZERO,
-                            egui::vec2(CONTEXT_HOVER_SIDE, CONTEXT_HOVER_SIDE),
-                        );
-                        let (view, _) = ui.allocate_exact_size(
-                            context.fitted(bounds).size(),
-                            egui::Sense::hover(),
-                        );
-                        let painter = ui.painter_at(view);
-                        let halo = Stroke::new(3.0, Color32::from_black_alpha(170));
-                        context.paint_cell_with(
-                            &painter,
-                            view,
-                            Color32::WHITE,
-                            &[halo, Stroke::new(1.5, outline_color())],
-                        );
-                        paint_cross(&painter, context.keypoint_in(view));
-                    }
-                    ui.set_max_width(CONTEXT_HOVER_SIDE);
-                    ui.label(caption);
-                })
-            }
-            Some(Crop::Absent(why)) => {
-                painter.text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "no crop",
-                    egui::FontId::proportional(11.0),
-                    ui.visuals().weak_text_color(),
-                );
-                response.on_hover_text(format!("{full_name}\n{why}"))
-            }
-            None => {
-                painter.text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "loading…",
-                    egui::FontId::proportional(11.0),
-                    ui.visuals().weak_text_color(),
-                );
-                response.on_hover_text(format!("{full_name}\nThe photograph is being read"))
-            }
+        BlockDrawn {
+            rect: drawn.response.rect,
+            name: name_rect,
+            switch_button: button,
+            switch_refusal: refusal,
+            open_switch,
+            menu_entry,
         }
     }
+}
 
+/// A crop cell `side` points square of image `image`, with its hover view: the
+/// photograph's full name, the crop in context with the square's outline and
+/// the cross, and the caption. Used by an endpoint block and by each row of
+/// the *Switch image…* popup.
+fn show_crop(
+    ui: &mut egui::Ui,
+    recon: &sfmtool_core::SfmrReconstruction,
+    image: u32,
+    crop: Option<&Crop>,
+    side: f32,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
+    let full_name = measurements::image_name(recon, image);
+    match crop {
+        Some(Crop::Ready {
+            cell,
+            context,
+            caption,
+        }) => {
+            cell.paint_cell(&painter, rect);
+            paint_cross(&painter, cell.keypoint_in(rect));
+            let context = context.as_ref();
+            response.on_hover_ui(|ui| {
+                ui.label(egui::RichText::new(&full_name).strong());
+                if let Some(context) = context {
+                    let bounds = Rect::from_min_size(
+                        Pos2::ZERO,
+                        egui::vec2(CONTEXT_HOVER_SIDE, CONTEXT_HOVER_SIDE),
+                    );
+                    let (view, _) =
+                        ui.allocate_exact_size(context.fitted(bounds).size(), egui::Sense::hover());
+                    let painter = ui.painter_at(view);
+                    let halo = Stroke::new(3.0, Color32::from_black_alpha(170));
+                    context.paint_cell_with(
+                        &painter,
+                        view,
+                        Color32::WHITE,
+                        &[halo, Stroke::new(1.5, outline_color())],
+                    );
+                    paint_cross(&painter, context.keypoint_in(view));
+                }
+                ui.set_max_width(CONTEXT_HOVER_SIDE);
+                ui.label(caption);
+            })
+        }
+        Some(Crop::Absent(why)) => {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "no crop",
+                egui::FontId::proportional(11.0),
+                ui.visuals().weak_text_color(),
+            );
+            response.on_hover_text(format!("{full_name}\n{why}"))
+        }
+        None => {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "loading…",
+                egui::FontId::proportional(11.0),
+                ui.visuals().weak_text_color(),
+            );
+            response.on_hover_text(format!("{full_name}\nThe photograph is being read"))
+        }
+    }
+}
+
+impl EndpointBlock<'_> {
     /// The chosen point's stored patch, with a cross at the endpoint's texel.
     fn show_patch(&self, ui: &mut egui::Ui, patch: &egui::TextureHandle) -> egui::Response {
         let (rect, response) =
@@ -1352,30 +1967,38 @@ fn painter_cross_at_texel(painter: &egui::Painter, rect: Rect, [s, t]: [f64; 2])
     paint_cross(painter, Pos2::new(x, y));
 }
 
-/// The crop of the endpoint `block` shows, or `None` while its photograph is
-/// decoding.
+/// The crop around pixel `pixel` of image `image`, or `None` while its
+/// photograph is decoding: an endpoint's, or a *Switch image…* row's.
 ///
-/// Where the endpoint resolves, the crop is cut around the chosen candidate's
-/// square in that image, as Track View's crop is cut around a row's square.
-/// Where it does not, it is a [`UNRESOLVED_CROP_PX`] square of the photograph
-/// centred on the pixel, with no outline.
+/// Where `square` names an observation (a point and its index in the
+/// point's track), the crop is cut around that observation's square in the
+/// image, as Track View's crop is cut around a row's square, with a cross at
+/// the pixel. Where it is `None`, the endpoint does not resolve, and the crop
+/// is a [`UNRESOLVED_CROP_PX`] square of the photograph centred on the pixel,
+/// with no outline. `name` names its textures.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "what the crop is cut from, each read once"
+)]
 fn endpoint_crop(
     ctx: &egui::Context,
     state: &AppState,
-    block: &EndpointBlock<'_>,
+    node: &SceneNode,
+    image: u32,
+    pixel: [f64; 2],
+    square: Option<(u32, usize)>,
+    name: String,
     regions: &PanelRegionPool,
 ) -> Option<Crop> {
-    let recon = block.node.recon();
-    let image = block.image as usize;
+    let recon = node.recon();
+    let image = image as usize;
     if image >= recon.image_set.images.len() {
         return Some(Crop::Absent("The image is not in the reconstruction"));
     }
-    let pixel = block.pixel;
-    let square = block.resolution.as_ref().ok().and_then(|resolution| {
-        let chosen = resolution.chosen();
-        let view = block.node.edited().point(chosen.point)?;
+    let square = square.and_then(|(point, observation)| {
+        let view = node.edited().point(point)?;
         let patch_frame = view.patch_frame()?;
-        let keypoint = view.keypoint_xy(chosen.observation)?;
+        let keypoint = view.keypoint_xy(observation)?;
         let (camera, pose) = crate::bench::geometry::view_of(&recon.image_set, image)?;
         let mut outline = crop::patch_outline(
             &patch_frame,
@@ -1451,12 +2074,6 @@ fn endpoint_crop(
             pixel[0], pixel[1],
         )
     };
-    let name = format!(
-        "measurement_crop_{:?}_{}_{}",
-        block.node.id,
-        block.texture_stem(),
-        block.side.letter()
-    );
     let cell = Box::new(DrawnCrop::new(
         ctx,
         picture,

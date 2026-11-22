@@ -3,19 +3,23 @@
 **Status:** Draft
 
 Amends [gui/measurement-view.md](../gui/measurement-view.md), which describes
-what is built (steps 1 to 3 of § "Steps"): the selected measurement, the
+what is built (steps 1 to 4 of § "Steps"): the selected measurement, the
 per-version readings, the Scene tree's Measurements group with its row
 gestures and menu, the Measurement View panel with its header, the distance
 body and the endpoint gestures, its *Edit* box and edited mode with the live
 readings, *Commit*, *Discard* and *Rename*, the header's label and stated
-distance fields with their steps, deleting a stored measurement, the *Bench
-Measurements* group, and their tools. The measurement item itself, its origin,
-the steps that set its label and stated distance, its commit and the direct
-delete are
+distance fields with their steps, each endpoint block's *Switch image…* with
+its popup and step, deleting a stored measurement, the *Bench Measurements*
+group, and their tools. The measurement item itself, its origin, the steps
+that set its label, its stated distance and an endpoint's image and pixel, its
+commit and the direct delete are
 [core/bench/editable-measurement.md](../core/bench/editable-measurement.md) and
-[gui/bench.md](../gui/bench.md) § "Measurement items". This draft keeps the
-rest: the steps that move an item's endpoints, creating a measurement, and
-drawing measurements in the 3D view and Image Detail. It also amends
+[gui/bench.md](../gui/bench.md) § "Measurement items", and the offers of the
+popup are `endpoint_views` in
+[core/reconstruction/measurement-endpoint.md](../core/reconstruction/measurement-endpoint.md)
+§ "The views of an endpoint". This draft keeps the rest: setting an endpoint
+by hand in the panel and from Image Detail and the 3D view, creating a
+measurement, and drawing measurements in the 3D view and Image Detail. It also amends
 [gui/bench.md](../gui/bench.md), [gui/scene-graph.md](../gui/scene-graph.md),
 [gui/multi-panel-image-browser.md](../gui/multi-panel-image-browser.md) and the
 3D view's specs, as § "What changes in the standing specs" lists.
@@ -63,19 +67,17 @@ whose toolbar and fields Measurement View follows),
 
 The edited mode is built: the toolbar, the header with its label and stated
 distance fields ([gui/measurement-view.md](../gui/measurement-view.md) § "The
-label and the stated distance"), the endpoint blocks shown read-only, and the
-live readings. The steps add these controls to it:
+label and the stated distance"), the endpoint blocks with *Switch image…* and
+the right-click menu holding *Switch Image…* (§ "Switching an endpoint's
+image" there), and the live readings. The remaining steps add these controls
+to it:
 
-- in each endpoint block, *Switch image…*, and the image and pixel as fields
-  (§ "Switching an endpoint's image", § "Setting an endpoint by hand"), with
-  the 3D position beside them read-only;
+- in each endpoint block, the image and pixel as fields (§ "Setting an
+  endpoint by hand"), with the 3D position beside them read-only;
 - an endpoint not yet placed is a block saying how to place it: "Right-click a
   pixel in Image Detail, or a point in the 3D view, and choose Set Endpoint B
   Here." (Built, the block says only `Endpoint B is not placed.`, since the
   entries it names are not.)
-
-A right-click on an endpoint block opens a menu with *Switch Image…* and
-selects nothing.
 
 ## Steps on an item
 
@@ -84,82 +86,31 @@ Edit History and undone by `Ctrl+Z`, with an Action Log row, refused while a
 background task holds the node and on a view-only bench. None changes the
 reconstruction or marks the node dirty. Each is a pure core function from one
 `EditableMeasurement` to the next, which replaces the item's `Arc` under the
-same `ItemId`. The two steps built so far, setting the label and the stated
-distance, are made this way
+same `ItemId`. The steps built so far, setting the label, the stated distance
+and an endpoint's image and pixel, are made this way
 ([gui/measurement-view.md](../gui/measurement-view.md) § "The label and the
-stated distance").
+stated distance" and § "Switching an endpoint's image").
 
 | Step | Label in the Edit History |
 |---|---|
-| Switch an endpoint's image | `Moved endpoint A of distance #2 from IMG_0004.jpg to IMG_0011.jpg` |
-| Set an endpoint's image and pixel | `Moved endpoint A of distance #2 to IMG_0004.jpg (412.3, 230.5)` |
+| Switch an endpoint's image | `Moved endpoint A of distance #2 from IMG_0004.jpg to IMG_0011.jpg` (built) |
+| Set an endpoint's image and pixel | `Moved endpoint A of distance #2 to IMG_0004.jpg (412.3, 230.5)` (built, reached by the wire's `set_bench_measurement_endpoint`) |
 | Place an endpoint not yet placed | `Set endpoint B of distance from IMG_0042@142,198 to IMG_0050.jpg (88.0, 301.5)` |
 
 A pixel outside its image (`[0, width) × [0, height)` of that image's camera) is
-refused with the format's sentence.
-
-## Switching an endpoint's image
-
-An endpoint sits on one texel `(s, t)` of a point's patch. Every other
-observation of that point holds the same texel at a pixel of its own image, in
-the observation's square (`OrientedPatch::seen_at_keypoint` projected through
-that image's own intrinsics), which is exactly how the resolver read the texel
-in the first place, run backwards. So the endpoint can move to any of those
-images without moving on the surface.
-
-**Which observations are offered.** The resolver's candidates for the endpoint
-as it stands: every observation in the endpoint's image whose square holds the
-pixel, chosen or not, excluded or not. For each candidate's point, every other
-observation of it, at the candidate's texel. An offer is dropped where the
-texel's place projects outside its image or the square faces away from that
-camera. Where the endpoint is refused, nothing can be offered, and the button
-says why in its hover text.
-
-**The list.** A popup grouped by point, the chosen candidate's point first,
-then the others in the resolver's order. Each offer is a row:
-
-- the image name;
-- a crop of that image around that observation's square with the cross at the
-  offered pixel, with the same hover view as the endpoint's crop;
-- the observation's self-similarity length `ℓ` and viewing angle, the readings
-  the resolver's cost reads, so the sharper and less oblique views stand out;
-- a mark where moving there would make the endpoint resolve to a different
-  point than it does now, or to none, because another square holds the new
-  pixel there.
-
-A click on a row is the step that moves the endpoint to that image and pixel.
-The point the endpoint resolves to, and the texel, are those of the row's
-point, unless the mark above says otherwise.
-
-**Core support.** A new function beside the resolver:
-
-```rust
-/// The pixels in other images that hold the same texel of each candidate's
-/// patch as `(image, pixel)` does.
-pub fn endpoint_views(
-    edited: &EditedReconstruction,
-    image: u32,
-    pixel: [f64; 2],
-    options: &MeasurementEndpointOptions,
-) -> Result<Vec<EndpointView>, EndpointRefusal>;
-
-pub struct EndpointView {
-    pub point: u32,
-    pub observation: usize,  // within the point's track
-    pub image: u32,
-    pub pixel: [f64; 2],
-    pub patch_coords: [f64; 2],
-}
-```
-
-It shares the resolver's refusals, so a person sees the same sentence in both
-places.
+refused with the format's sentence; the built step already does
+(`set_measurement_endpoint`,
+[core/bench/editable-measurement.md](../core/bench/editable-measurement.md) §
+"Setting an endpoint"). Placing an endpoint not yet placed is that step too,
+labelled `Set endpoint B of distance #2 to ...`; what step 6 adds is the item
+with one endpoint that it starts from, and its label.
 
 ## Setting an endpoint by hand
 
 The image and the pixel are the endpoint; everything else the block shows is
-derived from them. So both can be set directly, each a step on the focused
-item:
+derived from them. So both can be set directly, each the step
+`AppState::set_bench_measurement_endpoint` with `EndpointMove::Set` on the
+focused item, which the wire's `set_bench_measurement_endpoint` already makes:
 
 - **In the endpoint block.** The image name is a drop-down of the
   reconstruction's images, and the pixel is two number fields. A change is one
@@ -290,17 +241,14 @@ New tools name the remaining steps, each refused in the panel's words:
 - `create_bench_measurement(reconstruction_label, camera_image, pixel)` and
   `get_point_reference_pixel(reconstruction_label, point)`, so an agent can
   start from a point as the 3D view's menu does.
-- `get_measurement_endpoint_views(reconstruction_label, item, endpoint)`: the
-  offers of § "Switching an endpoint's image".
-- `set_bench_measurement_endpoint(reconstruction_label, item, endpoint,
-  camera_image, pixel)`, taking any pixel inside the image, not only an
-  offered one, as the panel's fields do. No tool sets an endpoint's 3D
-  position.
 
 The built tools (`put_measurement_on_bench`, `set_bench_measurement_label`,
-`set_bench_measurement_distance`, `commit_bench_measurement`,
-`delete_measurement`, `get_measurement` naming an item, and the bench tools on
-a measurement item) are in [gui/mcp-server.md](../gui/mcp-server.md).
+`set_bench_measurement_distance`, `get_measurement_endpoint_views`,
+`set_bench_measurement_endpoint`, which takes any pixel inside the image as the
+panel's fields will, `commit_bench_measurement`, `delete_measurement`,
+`get_measurement` naming an item, and the bench tools on a measurement item)
+are in [gui/mcp-server.md](../gui/mcp-server.md). No tool sets an endpoint's
+3D position.
 
 ## Real measurements
 
@@ -312,14 +260,10 @@ measurements changes none of those.
 
 ## What changes in the standing specs
 
-- [core/bench/editable-measurement.md](../core/bench/editable-measurement.md):
-  the endpoint steps and `endpoint_views`'s caller.
-- [core/reconstruction/measurement-endpoint.md](../core/reconstruction/measurement-endpoint.md):
-  `endpoint_views`.
 - [gui/measurement-view.md](../gui/measurement-view.md): the endpoint blocks'
-  controls and menu, the endpoint steps, creating, drawing, and the tools.
-- [gui/bench.md](../gui/bench.md): the measurement steps on the wire, and a new
-  measurement item's label.
+  image and pixel fields, setting an endpoint by hand, creating, drawing, and
+  the tools.
+- [gui/bench.md](../gui/bench.md): a new measurement item's label.
 - [gui/multi-panel-image-browser.md](../gui/multi-panel-image-browser.md) and
   the 3D view's specs: the menu entries, the marks, the handles, the indicator
   and the *Show all measurements* option.
@@ -351,9 +295,22 @@ Each step is one PR through `implement-change`, with its MCP tools, its
    between the number and the unit and an exponent, so the field reads back
    the `153 cm` it shows; and the fields commit only text other than what
    they held when they took focus.
-4. **Switching an endpoint's image.** `endpoint_views` in core with its
-   binding, the switch popup, `get_measurement_endpoint_views` and
-   `set_bench_measurement_endpoint`.
+4. **Switching an endpoint's image.** Built; see
+   [gui/measurement-view.md](../gui/measurement-view.md) § "Switching an
+   endpoint's image",
+   [core/reconstruction/measurement-endpoint.md](../core/reconstruction/measurement-endpoint.md)
+   § "The views of an endpoint" and
+   [core/bench/editable-measurement.md](../core/bench/editable-measurement.md)
+   § "Setting an endpoint". Fitted to the code: each view carries the
+   observation's `ℓ`, its viewing angle and the point the resolver picks at
+   its pixel (`resolves_to`), so the popup's readings and its mark come from
+   core in one call rather than from the panel; the step that sets an
+   endpoint's image and pixel, its `Set` label and
+   `set_bench_measurement_endpoint` are built with the switch, since the wire
+   tool belongs to this step, leaving step 5 the panel's fields and the menus;
+   and the endpoint blocks stack one above the other where the panel is too
+   narrow for two side by side, which also stops a block's lines drawing over
+   the other's at the default layout's width.
 5. **Setting an endpoint by hand.** The endpoint block's image and pixel
    fields, `Set Endpoint A Here` and `Set Endpoint B Here` in Image Detail's
    menu and the 3D view's point menu, the reference pixel and
@@ -369,10 +326,6 @@ Each step is one PR through `implement-change`, with its MCP tools, its
 
 ## Testing
 
-- Switching: the offers of an endpoint on a known texel land at the pixels the
-  other observations' squares put that texel at; a switch keeps the resolved
-  point and texel; the "resolves elsewhere" mark appears where another square
-  holds the offered pixel.
 - Each step's label, undo, and refusal, including on a view-only bench; a step
   on the item changes its live readings and not the stored measurement's.
 - Creating: starting from a pixel and from a point; the entry greyed, with its
@@ -388,5 +341,4 @@ Each step is one PR through `implement-change`, with its MCP tools, its
   view; pointing the right way for a midpoint to each side of the view and
   behind the camera; a click framing the measurement so both endpoints project
   inside the view.
-- `ui_basic`: an endpoint switched and the commit; a measurement made with the
-  two menus and the panel's fields.
+- `ui_basic`: a measurement made with the two menus and the panel's fields.
