@@ -254,11 +254,15 @@ format), then the result block. Each block shows:
   (`marks::CONTEXT_FACTOR`, `CONTEXT_HOVER_SIDE`), with the outline and the
   cross, then bullets giving the pixel, the crop's size in photograph pixels and
   the square's two axes in photograph pixels.
-- **The patch.** The chosen point's stored patch bitmap, 64 points square,
-  with a cross at the endpoint's texel `(s, t)` (`s` across, `t` up, since a
-  bitmap's rows step along `−v`), so the person sees which place on the
-  surface the endpoint names. Absent where the endpoint does not resolve or the
-  point stores no bitmap.
+- **The patch.** The chosen point's patch bitmap (`PointView::patch_bitmap`),
+  64 points square, with a cross at the endpoint's texel `(s, t)` (`s`
+  across, `t` up, since a bitmap's rows step along `−v`), so the person sees
+  which place on the surface the endpoint names. For a file that stores
+  bitmaps it is the point's stored one; for a file that stores none it is the
+  display bitmap the open rendered into the same column
+  (`PointSet::patch_bitmaps_for_display`). Absent where the endpoint does not
+  resolve or the point's row is all zero, as Track View and the Track Table
+  treat a row with no patch.
 - **The resolution.** Where the endpoint resolves: the chosen point's ID with
   Track View's *Copy Point ID* button and its *Go to Point* button, which
   opens the Go to Point dialog holding that ID; the texel `(s, t)`; and the 3D
@@ -380,13 +384,14 @@ at-infinity case is covered by the Rust tests.
 - **The Scene tree** (`scene_graph/tests.rs`): the group absent on a node
   with no measurements and present with one row per measurement; a row's click
   selects it and asks for nothing else; a double-click asks for it to be
-  opened, which the panel keeps once.
+  opened, which the panel keeps once; a right-click selects nothing.
 - **The double-click's effect** (`app/tests.rs`): it selects the measurement,
   opens the panel, and frames the finite endpoints without turning, both inside
   the middle half; one finite endpoint keeps the orbit distance; a row past
   the rows moves nothing. The framing itself (`viewer_3d/framing/tests.rs`):
   every point inside the middle fraction, one on its edge, the orientation
-  kept.
+  kept; and nothing moves while a camera is held for Move Camera
+  (`camera_lock/tests.rs`).
 - **The panel** (`measurement_view/tests.rs`, whole headless egui frames): the
   empty state and its links; the header, both blocks and the result's numbers;
   the result block's scene-unit, at-infinity and refused cases; a refused

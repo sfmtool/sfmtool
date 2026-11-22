@@ -67,9 +67,6 @@ mark selects that observation's row, and a double-click on it does what a
 double-click on its block does. The marks are drawn only for the measurements
 § "Drawing measurements" draws.
 
-**An endpoint's patch picture** shows the chosen point's stored bitmap; where
-the point stores none, its display bitmap is to be shown instead.
-
 ## Switching an endpoint's image
 
 An endpoint sits on one texel `(s, t)` of a point's patch. Every other

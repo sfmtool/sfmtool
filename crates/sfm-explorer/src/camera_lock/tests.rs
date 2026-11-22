@@ -652,3 +652,24 @@ fn the_readout_measures_through_the_image_s_lens_corrections() {
         assert!(shared[0] > 1.0, "the corrections moved nothing: {shared:?}");
     }
 }
+
+/// Framing a measurement's endpoints moves nothing while a camera is held for
+/// Move Camera (rule G4): every viewport motion would move the held camera,
+/// and a double-click on a Measurements row is not a request to move it.
+#[test]
+fn framing_keeping_orientation_moves_nothing_while_a_camera_is_held() {
+    let (mut state, mut viewer, _id) = plain();
+    enter(&mut viewer, &mut state).expect("camera view of a posed image");
+    let position = viewer.camera.camera.position;
+    let orientation = viewer.camera.camera.orientation;
+    let points = [Point3::new(1.0, 0.0, 0.0), Point3::new(-1.0, 2.0, 0.5)];
+
+    assert!(!viewer.frame_keeping_orientation(&points, 0.0));
+    assert!(
+        viewer.transition_end().is_none(),
+        "a transition was started"
+    );
+    assert_eq!(viewer.camera.camera.position, position);
+    assert_eq!(viewer.camera.camera.orientation, orientation);
+    assert!(viewer.camera_lock.is_some(), "the held camera was let go");
+}

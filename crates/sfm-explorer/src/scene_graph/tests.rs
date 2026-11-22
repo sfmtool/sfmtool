@@ -4491,3 +4491,39 @@ fn a_measurement_rows_click_selects_it_and_its_double_click_opens_it() {
     assert_eq!(panel.take_measurement_open(), Some(measurement));
     assert_eq!(panel.take_measurement_open(), None, "taken twice");
 }
+
+/// A right-click on a Measurements row selects nothing (rule G3): no frame of
+/// it reports a selection or an open, and the panel keeps nothing for
+/// `app.rs`.
+#[test]
+fn a_right_click_on_a_measurement_row_selects_nothing() {
+    let (mut state, id) = crate::measurements::fixture::measured_state(Some("m"));
+    let (mut panel, ctx) = settled(&mut state);
+    let pos = panel
+        .hit_rect(row_id(id, "measurement_distance_1"))
+        .expect("the row was drawn")
+        .center();
+    let mut responses = vec![run_frame(
+        &mut panel,
+        &ctx,
+        &mut state,
+        vec![egui::Event::PointerMoved(pos)],
+    )];
+    for pressed in [true, false] {
+        responses.push(run_frame(
+            &mut panel,
+            &ctx,
+            &mut state,
+            vec![button(pos, egui::PointerButton::Secondary, pressed)],
+        ));
+    }
+    responses.push(run_frame(&mut panel, &ctx, &mut state, Vec::new()));
+    for response in &responses {
+        assert_eq!(response.select_measurement, None);
+        assert_eq!(response.open_measurement, None);
+        assert_eq!(response.select_recon, None);
+        assert_eq!(response.select_image, None);
+        assert_eq!(response.select_point, None);
+    }
+    assert_eq!(panel.take_measurement_open(), None);
+}
