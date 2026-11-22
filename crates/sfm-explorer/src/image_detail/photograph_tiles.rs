@@ -164,13 +164,14 @@ impl Layout {
     }
 
     /// The tiles a frame drawing `level` over `visible` (level-0 pixels)
-    /// uploads, in order, at most [`MAX_UPLOADS_PER_FRAME`]: the overview
-    /// level's first when it is coarser than `level`, then `level`'s, each
-    /// left out when `uploaded` says it already is.
+    /// uploads, in order, at most `cap`: the overview level's first when it is
+    /// coarser than `level`, then `level`'s, each left out when `uploaded`
+    /// says it already is.
     fn to_upload(
         &self,
         level: usize,
         visible: [f32; 4],
+        cap: usize,
         uploaded: impl Fn(usize, (u32, u32)) -> bool,
     ) -> Vec<(usize, (u32, u32))> {
         let overview = self.overview_level();
@@ -183,8 +184,16 @@ impl Layout {
             .iter()
             .flat_map(|&l| self.tiles_in(l, visible).into_iter().map(move |t| (l, t)))
             .filter(|&(l, tile)| !uploaded(l, tile))
-            .take(MAX_UPLOADS_PER_FRAME)
+            .take(cap)
             .collect()
+    }
+
+    /// The level a frame drawing `level` over `visible` uploads first, the
+    /// overview's or `level` when that is coarser, and its tiles there: what
+    /// has to be uploaded before the frame draws the photograph at all.
+    fn first_upload(&self, level: usize, visible: [f32; 4]) -> (usize, Vec<(u32, u32)>) {
+        let first = self.overview_level().max(level);
+        (first, self.tiles_in(first, visible))
     }
 }
 
@@ -254,6 +263,10 @@ pub(super) struct PhotographTiles {
     resident: HashMap<PhotographTileKey, Resident>,
     /// Counts [`Self::draw`] calls, the clock the eviction reads.
     frame: u64,
+    /// Tiles [`Self::fetch`] uploaded on this frame before [`Self::draw`],
+    /// which uploads only as many more as keep the frame within
+    /// [`MAX_UPLOADS_PER_FRAME`].
+    uploaded_early: usize,
 }
 
 impl PhotographTiles {
@@ -262,7 +275,20 @@ impl PhotographTiles {
             layout: None,
             resident: HashMap::new(),
             frame: 0,
+            uploaded_early: 0,
         }
+    }
+
+    /// The image whose layout is kept, the one drawn last, with that layout.
+    pub(super) fn shown(&self) -> Option<(ImageRef, &Layout)> {
+        self.layout
+            .as_ref()
+            .map(|(image, _, layout)| (*image, layout))
+    }
+
+    /// Whether any tile of `image` is uploaded.
+    pub(super) fn has_resident(&self, image: ImageRef) -> bool {
+        self.resident.keys().any(|key| key.image == image)
     }
 
     /// The layout of `image`: `known` when the cache knows it, otherwise the
@@ -348,9 +374,11 @@ impl PhotographTiles {
             row,
         };
 
-        let mut uploads = 0;
+        let early = std::mem::take(&mut self.uploaded_early);
+        let mut uploads = early;
         if let Some(source) = source {
-            let wanted = layout.to_upload(level, visible, |l, tile| {
+            let cap = MAX_UPLOADS_PER_FRAME.saturating_sub(early);
+            let wanted = layout.to_upload(level, visible, cap, |l, tile| {
                 self.resident.contains_key(&key(l, tile))
             });
             if !wanted.is_empty() {
@@ -403,26 +431,85 @@ impl PhotographTiles {
         let layout = Layout::of(&known);
         let [w, h] = layout.size();
         let next = view.carried_to(image, [w as f32, h as f32]);
-        let scale = next.scale();
-        if scale.is_nan() || scale <= 0.0 {
+        let Some(level) = Self::level_of(ctx, &next, &layout) else {
             return;
-        }
-        let level = level_for_scale(scale * ctx.pixels_per_point(), layout.num_levels());
+        };
         let keys: Vec<TileKey> = layout
-            .to_upload(level, next.visible_rect(), |l, (col, row)| {
-                self.resident.contains_key(&PhotographTileKey {
-                    image,
-                    level: l,
-                    col,
-                    row,
-                })
-            })
+            .to_upload(
+                level,
+                next.visible_rect(),
+                MAX_UPLOADS_PER_FRAME,
+                |l, tile| self.is_resident(image, l, tile),
+            )
             .into_iter()
             .map(|(l, t)| cache_key(l, t))
             .collect();
         if !keys.is_empty() {
             prefetch_tiles(source, &keys, ctx);
         }
+    }
+
+    /// Upload the tiles of `image`, of layout `known`, that a frame drawing it
+    /// in `view` uploads first, asking `source` for them as [`Self::draw`]
+    /// does, and answer whether the level it uploads first is all uploaded
+    /// now, so a frame can draw the photograph rather than hold the image it
+    /// showed before. Counts what it uploads against the frame's
+    /// [`MAX_UPLOADS_PER_FRAME`].
+    pub(super) fn fetch(
+        &mut self,
+        ctx: &egui::Context,
+        view: &ViewGeometry,
+        image: ImageRef,
+        known: &PyramidLayout,
+        source: PhotographSource<'_>,
+    ) -> bool {
+        self.uploaded_early = 0;
+        let layout = Layout::of(known);
+        let Some(level) = Self::level_of(ctx, view, &layout) else {
+            return false;
+        };
+        let visible = view.visible_rect();
+        let (first, tiles) = layout.first_upload(level, visible);
+        let landed = |tiles_of: &Self| {
+            !tiles.is_empty() && tiles.iter().all(|&t| tiles_of.is_resident(image, first, t))
+        };
+        if landed(self) {
+            return true;
+        }
+        let wanted = layout.to_upload(level, visible, MAX_UPLOADS_PER_FRAME, |l, tile| {
+            self.is_resident(image, l, tile)
+        });
+        let keys: Vec<TileKey> = wanted.iter().map(|&(l, t)| cache_key(l, t)).collect();
+        for (&(l, (col, row)), answer) in wanted.iter().zip(display_tiles(source, &keys, ctx)) {
+            if let DisplayTile::Ready(tile) = answer {
+                let key = PhotographTileKey {
+                    image,
+                    level: l,
+                    col,
+                    row,
+                };
+                self.upload(ctx, key, &tile);
+                self.uploaded_early += 1;
+            }
+        }
+        landed(self)
+    }
+
+    /// The level a frame drawing `view` draws `layout` at, or `None` for a
+    /// view whose scale is not a positive number.
+    fn level_of(ctx: &egui::Context, view: &ViewGeometry, layout: &Layout) -> Option<usize> {
+        let scale = view.scale();
+        (scale > 0.0).then(|| level_for_scale(scale * ctx.pixels_per_point(), layout.num_levels()))
+    }
+
+    /// Whether tile `(col, row)` of `level` of `image` is uploaded.
+    fn is_resident(&self, image: ImageRef, level: usize, (col, row): (u32, u32)) -> bool {
+        self.resident.contains_key(&PhotographTileKey {
+            image,
+            level,
+            col,
+            row,
+        })
     }
 
     /// Upload `tile` as `key`'s texture, evicting the least recently drawn

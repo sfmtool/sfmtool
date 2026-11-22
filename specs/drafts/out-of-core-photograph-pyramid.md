@@ -553,10 +553,14 @@ photograph's mipmap works exactly like decoding a photograph in today's
   reserved. Nothing waits on the count; it is not a semaphore. A kernel
   caller, reserving with `reserve_builds`, that finds the budget used up is
   still granted one decode, so that it makes progress, and that one decode is
-  the only way the count goes past the budget: by at most one whole decode per
+  one way the count goes past the budget: by at most one whole decode per
   kernel caller reserving at that moment. A panel's decode reserves with
-  `try_reserve_build`, which is refused when the decode does not fit, so it
-  never takes the count past the budget.
+  `try_reserve_build`, which is refused when the decode does not fit while
+  anything else is reserved; with nothing reserved it is granted alone, so a
+  panel decodes one photograph at a time under a build budget of 0 and a
+  photograph larger than the whole budget is decoded when the count is idle
+  (decided by the user, revising the companion's open question 8). That is
+  the other way the count goes past the budget, by the one decode.
 - **What bounds builds and decodes from independent callers.** The bound is
   per cache. Every build and every whole decode is reserved on the cache's
   count before it starts, so the count is always complete. Kernel callers
@@ -926,7 +930,9 @@ state, which comes with step 14:
   frames instead of stalling one.
 - **Switching images** (`,` / `.`, the strip, animation). The new image's
   coarsest resident level is drawn at once if its mipmap or tiles have been
-  read this session, then its tiles at the current view. While animation plays,
+  read this session, then its tiles at the current view. Until the new
+  image's overview tiles have landed, the panel keeps drawing the image it
+  showed before (built in step 13c2, decided by the user). While animation plays,
   the next image's tiles for the current view are asked for one frame ahead.
   The view persistence rule (§ "View persistence across image, reconstruction
   and panel changes") is unchanged; it computes `display_size` from the
@@ -2169,8 +2175,10 @@ in core. Step 17 turns the tier on.
       budget and with a budget of 0; four `get_many` callers on one cache
       started together on separate threads never reserve more than the build
       budget plus one decode each; `reserve_builds` grants what fits and one
-      when none fits, and `try_reserve_build` never takes the count past the
-      build budget, from one thread or eight; two caches in one process keep
+      when none fits, and `try_reserve_build` takes the count past the
+      build budget only alone, from one thread or eight (restated by step
+      13c2's revision, which grants a decode that does not fit when nothing
+      is reserved); two caches in one process keep
       separate counts, and their decodes never add to the count beyond what
       was reserved; a caller cancelled mid-decode gives its share back, and
       the waiter that decodes in its place reserves, a `get` holding nothing
@@ -2248,15 +2256,21 @@ in core. Step 17 turns the tier on.
       answers the same `Arc` while its size stays the same, so a panel asking
       every frame allocates nothing; a decode that answers `Busy` repaints
       50 ms later, so the panel asks again then rather than on every frame;
-      a decode's failure is kept beside the answered tiles, so under a budget
-      of 0, which remembers no failure, the panel says *Failed to load image*
-      rather than ask again, and the answers are kept for the four
-      photographs answered last; and a key the photograph does not have,
+      a decode's failure is kept beside the answered tiles, with the file's
+      length and modification time, so under a budget of 0, which remembers
+      no failure, the panel says *Failed to load image* rather than decode
+      again until a check of the file on the rayon pool finds it changed; each
+      ask for a photograph drops its kept tiles the ask does not name, so a
+      photograph keeps at most one decode's answer (16 tiles), and the
+      answers are kept for the four photographs answered last, about 51 MB at
+      most; and a key the photograph does not have,
       which only a layout read before the file changed size names, makes the
       task `forget` the path, so the next frame reads the header again.
-      Image Detail says *Loading image…* until the layout is known, then
-      draws the view and its overlays with the photograph's pixels following
-      as its tiles land. `display_photograph` stays for the 3D background
+      A newly selected image is drawn once its overview level's tiles have
+      landed; until then Image Detail keeps drawing the image it showed
+      before, its tiles, overlays and view, taking no click, drag or menu,
+      and says *Loading image…* only where it has no such image (decided by
+      the user). `display_photograph` stays for the 3D background
       (13c3), Track View's and the Track Table's renders and the dock's
       pre-caching of the viewed and bench tracks' photographs (13d).
       Specified in
@@ -2273,18 +2287,24 @@ in core. Step 17 turns the tier on.
       scheduled: two panels needing eleven tiles of one photograph (ten of
       level 0 and the overview) start one header read and one decode, the
       second panel starting none while the first's waits, and the frames
-      before it lands report the ten pending; a decode whose
+      before it lands draw no image; a decode whose
       `try_reserve_build` is refused (the build budget held by another
       reservation) decodes nothing, ends within the time limit while the
       other reservation is still held, so no rayon worker waits on the count,
       is asked again on the next look and decodes once the reservation is
       given back; no panel decodes on the GUI thread, the decode count
       staying 0 until the queued tasks run, with a budget and with a budget
-      of 0; a failed decode is answered as unreadable and not asked for
-      again; a key the photograph does not have reads the layout again; and
-      the tiles asked for ahead of an image switch, zoomed in and panned,
-      are the ones the next image's first frame draws, with no task started
-      on the switch. The core's
+      of 0; a failed decode is answered as unreadable and not decoded again
+      until its file changes, a check of the file finding the change; tiles
+      answered for a view that moved on are dropped, so a panel panning
+      while its decodes run keeps at most one decode's answer; a key the
+      photograph does not have reads the layout again; the tiles asked for
+      ahead of an image switch, zoomed in and panned, are the ones the next
+      image's first frame draws, with no task started on the switch; a
+      switch keeps drawing the previous image, its tiles and view and no
+      *Loading image…*, until the new image's overview has landed, then
+      draws the new image with the look asked for on the switch; and the
+      first image says *Loading image…* until its tiles land. The core's
       [photograph_cache/tiles/tests.rs](../../crates/sfmtool-core/src/camera/photograph_cache/tiles/tests.rs)
       test the kept layout, and
       [mcp/tests/render.rs](../../crates/sfm-explorer/src/mcp/tests/render.rs)

@@ -392,16 +392,24 @@ fn a_refused_panel_decode_decodes_nothing_until_the_budget_has_room() {
         assert_eq!((stats.misses, stats.decodes), (1, 1), "{budget_bytes}");
         assert_eq!(stats.build_reserved_bytes, 0);
     }
-    // A build budget of 0 refuses every panel decode.
-    let refused = PhotographCache::new(PhotographCacheOptions {
+    // A build budget of 0 refuses a panel decode while another decode is
+    // reserved, and grants it alone once the count is idle.
+    let one_at_a_time = PhotographCache::new(PhotographCacheOptions {
         build_budget_bytes: 0,
         ..PhotographCacheOptions::default()
     });
+    let other = one_at_a_time.reserve_builds(1, 1);
     assert!(matches!(
-        refused.try_decode_tiles(&path, &[], &Progress::none()),
+        one_at_a_time.try_decode_tiles(&path, &[], &Progress::none()),
         Ok(TryDecode::Busy)
     ));
-    assert_eq!(refused.stats().decodes, 0);
+    assert_eq!(one_at_a_time.stats().decodes, 0);
+    drop(other);
+    assert!(matches!(
+        one_at_a_time.try_decode_tiles(&path, &[], &Progress::none()),
+        Ok(TryDecode::Decoded(_))
+    ));
+    assert_eq!(one_at_a_time.stats().decodes, 1);
 }
 
 /// A panel's decode of a photograph another caller is decoding answers

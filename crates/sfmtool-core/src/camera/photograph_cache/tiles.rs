@@ -343,8 +343,9 @@ impl PhotographCache {
     /// reservation back if one is, and decodes in the slot as [`Self::get`]
     /// does. It answers [`TryDecode::Busy`], decoding nothing, when the
     /// reservation is refused or another caller holds the slot. So it never
-    /// waits on a slot or on the build count, and never takes the count past
-    /// the build budget.
+    /// waits on a slot or on the build count, and takes the count past the
+    /// build budget only by one decode that runs alone, as
+    /// [`Self::try_reserve_build`] grants it.
     ///
     /// Polls `progress` for cancellation after its decode, as `get` does, and
     /// answers [`TileError::Cancelled`] when it is cancelled: the slot is left

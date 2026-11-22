@@ -79,8 +79,9 @@ impl PhotographCache {
     /// none fit, so a caller always makes progress.
     pub fn reserve_builds(&self, bytes_per_build: u64, wanted: usize) -> BuildReservation<'_>;
 
-    /// One decode, only if it fits under the build budget: `None` otherwise,
-    /// so it never takes the count past the budget. Never waits.
+    /// One decode, if it fits under the build budget or nothing at all is
+    /// reserved: `None` otherwise, so the count passes the budget only by one
+    /// decode that runs alone. Never waits.
     pub fn try_reserve_build(&self, bytes: u64) -> Option<BuildReservation<'_>>;
 
     /// The pyramid for `path`, decoding on a miss. Waits while another thread
@@ -321,7 +322,11 @@ environment variable `SFM_EXPLORER_BUILD_BUDGET_MB` overrides it with a whole
 number of megabytes of 10^6 bytes, and a value that does not parse is
 ignored. A build budget of 0 lets each caller decode one photograph at a
 time, since `reserve_builds` grants one decode when none fits, and
-`try_reserve_build` refuses every decode.
+`try_reserve_build` grants a decode that does not fit when nothing at all is
+reserved, so panels decode one photograph at a time too. The same rule lets a
+decode larger than the whole budget, a photograph over about 214 megapixels at
+the 1 GiB minimum, run alone when the count is idle rather than be refused for
+ever.
 
 - **`get`** reads the photograph's header once it has marked the slot as
   being made, whether the slot was empty or a maker that stopped has just
@@ -383,8 +388,8 @@ level's edge, so tiles drawn side by side with linear filtering show no seam.
   caller is decoding in it, giving the reservation back if one is, and
   decodes in the slot as `get` does. It answers `Busy`, decoding nothing,
   when the reservation is refused or another caller holds the slot, so it
-  never waits on a slot or on the build count, and panel decodes never take
-  the count past the build budget. The tiles it answers are the caller's
+  never waits on a slot or on the build count, and panel decodes take the
+  count past the build budget only by one decode that runs alone. The tiles it answers are the caller's
   under a budget of 0, where the cache keeps nothing. A file whose header
   cannot be read is remembered as its failure, as `get` remembers it.
 - **`get_tile`, `view_region_pyramid` and `get_level`** are a kernel's
@@ -462,9 +467,13 @@ reconstruction's photographs goes through it except the ones under
   repaint when it ends (50 ms later when the decode answered `Busy`, so the
   panel asks again then). The tiles a decode answers are kept in
   `PhotographRequests` until the panel asks for them, which is how a cache of
-  budget 0, which keeps nothing, hands them over, and a decode's failure is
-  kept there too, so under a budget of 0 the panel says "Failed to load
-  image" rather than ask again. A key the photograph does not have, which
+  budget 0, which keeps nothing, hands them over; each ask for a photograph
+  drops its kept tiles the ask does not name, so a photograph keeps at most
+  one decode's answer, and only the four photographs answered last are kept.
+  A decode's failure is kept there too, with the file's length and
+  modification time, so under a budget of 0 the panel says "Failed to load
+  image" rather than decode again, until a check of the file on the rayon
+  pool, started by a frame that asks for it, finds that the file changed. A key the photograph does not have, which
   only a layout read before the file changed size names, makes the decode
   `forget` the path, so the next frame reads the header again. While
   animation plays the panel asks for the next image's tiles a frame ahead
@@ -606,8 +615,9 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   held photograph following the held pyramid, and a cache of budget 0
   keeping layouts; a panel's decode refused by `try_reserve_build` decoding
   and reserving nothing and decoding once the other reservation is given
-  back, with a budget and without one, and every panel decode refused under
-  a build budget of 0; a panel's decode answering `Busy` at once, with no
+  back, with a budget and without one, and under a build budget of 0 a panel
+  decode refused while another decode is reserved and granted when the
+  count is idle; a panel's decode answering `Busy` at once, with no
   wait and no reservation, while another caller's decode of the same path is
   held in progress (the test bounds that thread with a time limit); one that
   loses the slot after it reserved giving the reservation back; and panel
@@ -638,13 +648,15 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   of its own bounded by a time limit; a decode refused by the build budget
   ending at once while the other reservation is held, asked again on the next
   look and decoding once it is given back; a failed decode answered as
-  unreadable and not asked for again; a key the photograph does not have
-  reading the layout again; and tiles asked for ahead handed over with no
-  second decode),
+  unreadable and not decoded again until its file changes; tiles answered for
+  a view that moved on dropped; a key the photograph does not have reading the
+  layout again; and tiles asked for ahead handed over with no second decode),
   [image_detail/photograph_tiles/tests.rs](../../../crates/sfm-explorer/src/image_detail/photograph_tiles/tests.rs)
   (two panels showing one photograph ask for its layout and its tiles once,
   neither decoding as it draws, with a budget and with a budget of 0; the tiles
-  asked for ahead of an image switch are the ones the next image draws),
+  asked for ahead of an image switch are the ones the next image draws; a
+  switch keeps drawing the previous image until the new one's overview has
+  landed, and the first image says it is loading until then),
   [scene_renderer/upload/tests.rs](../../../crates/sfm-explorer/src/scene_renderer/upload/tests.rs)
   (the camera-view background's photograph decoded off the calling thread and
   drawn once it lands, an unreadable one read once), and

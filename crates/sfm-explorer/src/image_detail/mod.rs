@@ -96,6 +96,16 @@ struct FeatureOverlayState {
     tree: PointCloud2<f32>,
 }
 
+/// Which image a frame of the panel draws. See [`ImageDetail::what_to_show`].
+enum Shown {
+    /// The selected image.
+    Requested,
+    /// The image shown before, while the selected one's first tiles load.
+    Previous(ImageRef),
+    /// Nothing yet: the panel says the image is loading.
+    Nothing,
+}
+
 /// Image detail panel state.
 pub(crate) struct ImageDetail {
     /// The photograph tiles uploaded for the images shown, and the layout of
@@ -142,6 +152,9 @@ pub(crate) struct ImageDetail {
     /// frame has drawn, and again after a view reset. See
     /// [`ImageDetail::rescale_view`].
     last_display_size: Option<egui::Vec2>,
+    /// A look asked for an image while the panel still drew the one before it
+    /// (or nothing), applied on the frame that first draws that image.
+    held_look: Option<(ImageRef, Look)>,
     /// The bench layer's handle the pointer has hold of, while it has one.
     ///
     /// Held on the panel rather than derived each frame because a drag is a
@@ -283,6 +296,7 @@ impl ImageDetail {
             zoom: 1.0,
             zoom_limit: ZOOM_LIMIT_FLOOR,
             last_display_size: None,
+            held_look: None,
             bench_drag: None,
             point_gesture: None,
             target_point: None,
@@ -321,6 +335,7 @@ impl ImageDetail {
     /// correctness.
     pub(crate) fn forget_recon(&mut self, id: ReconId) {
         self.tiles.forget_recon(id);
+        self.held_look = self.held_look.filter(|(image, _)| image.recon != id);
         if self
             .feature_overlay
             .as_ref()
@@ -668,6 +683,74 @@ impl ImageDetail {
         self.pan.y = self.pan.y.clamp(-max_pan_y, max_pan_y);
     }
 
+    /// Which image this frame draws when `requested` is selected, whose
+    /// layout is `layout` as the cache answered it and whose photograph is
+    /// `photograph`.
+    ///
+    /// `requested` itself once the level its first frame uploads first (the
+    /// overview's) is uploaded, which this asks the cache for and uploads, at
+    /// the view the panel will carry over to it with `look` applied; also when it is the image
+    /// shown already, when the cache cannot read it, so the panel says so,
+    /// and when it is not in the image set. Until then the image the panel
+    /// showed before, when it is of the same reconstruction and has tiles
+    /// uploaded, so stepping or animating never flashes an empty image area;
+    /// and nothing, which the panel draws as "Loading image…", when there is
+    /// no such image.
+    fn what_to_show(
+        &mut self,
+        ctx: &egui::Context,
+        requested: ImageRef,
+        layout: Option<&DisplayLayout>,
+        photograph: Option<PhotographSource<'_>>,
+        panel_size: egui::Vec2,
+        look: Option<Look>,
+    ) -> Shown {
+        let shown = self
+            .tiles
+            .shown()
+            .map(|(image, layout)| (image, layout.size()));
+        if shown.is_some_and(|(image, _)| image == requested) {
+            return Shown::Requested;
+        }
+        let landed = match (layout, photograph) {
+            (Some(DisplayLayout::Known(known)), Some(source)) => {
+                let size = known.level_size(0);
+                let size = [size.0 as f32, size.1 as f32];
+                let panel_size = [panel_size.x, panel_size.y];
+                let geometry = |image, image_size| ViewGeometry {
+                    image,
+                    image_size,
+                    panel_size,
+                    pan: [self.pan.x, self.pan.y],
+                    zoom: self.zoom,
+                };
+                // The view the panel carries over to the new image, from the
+                // one it holds over the image it showed last.
+                let view = match (shown, self.last_display_size) {
+                    (Some((image, [w, h])), Some(_)) => {
+                        geometry(image, [w as f32, h as f32]).carried_to(requested, size)
+                    }
+                    _ => geometry(requested, size).carried_to(requested, size),
+                };
+                let view = look.map_or(view, |look| look_at(view, &look));
+                self.tiles.fetch(ctx, &view, requested, known, source)
+            }
+            (Some(DisplayLayout::Loading), Some(_)) => false,
+            _ => true,
+        };
+        if landed {
+            return Shown::Requested;
+        }
+        match shown {
+            Some((previous, _))
+                if previous.recon == requested.recon && self.tiles.has_resident(previous) =>
+            {
+                Shown::Previous(previous)
+            }
+            _ => Shown::Nothing,
+        }
+    }
+
     /// Ask the photograph cache, a frame ahead, for the tiles of `image` that
     /// the panel would upload on the frame it shows `image` in place of the
     /// image of `view`, the view it ended this frame on: what animation
@@ -735,16 +818,60 @@ impl ImageDetail {
             return response;
         };
 
-        let image_ref = ImageRef::new(recon_id, img_idx);
+        let requested = ImageRef::new(recon_id, img_idx);
 
         // The layout and the tiles come from the shared photograph cache, read
-        // and decoded on the rayon pool, never here. Until the layout is known
-        // the panel has none for a new image and says so below; an image it
-        // has drawn keeps its layout and its uploaded tiles, so a photograph
-        // the cache has since dropped still draws what was uploaded.
+        // and decoded on the rayon pool, never here. An image the panel has
+        // drawn keeps its layout and its uploaded tiles, so a photograph the
+        // cache has since dropped still draws what was uploaded. A newly
+        // selected image is drawn once the tiles it uploads first have
+        // landed; until then the panel keeps drawing the image it showed
+        // before, or says it is loading when it showed none.
         let layout = photograph.map(|source| crate::state::display_layout(source, ui.ctx()));
+        let panel_size = ui.available_rect_before_wrap().size();
+        let pending_look = look.or_else(|| {
+            self.held_look
+                .filter(|(image, _)| *image == requested)
+                .map(|(_, look)| look)
+        });
+        let shown = self.what_to_show(
+            ui.ctx(),
+            requested,
+            layout.as_ref(),
+            photograph,
+            panel_size,
+            pending_look,
+        );
+        let (image_ref, photograph, look, sift_features, holding) = match shown {
+            Shown::Requested => {
+                // A look asked for while the previous image was held is for
+                // this one, and is applied on the frame that first draws it.
+                let held = self
+                    .held_look
+                    .take()
+                    .filter(|(image, _)| *image == requested)
+                    .map(|(_, look)| look);
+                (requested, photograph, look.or(held), sift_features, false)
+            }
+            Shown::Previous(previous) => {
+                if let Some(look) = look {
+                    self.held_look = Some((requested, look));
+                }
+                (previous, None, None, None, true)
+            }
+            Shown::Nothing => {
+                if let Some(look) = look {
+                    self.held_look = Some((requested, look));
+                }
+                ui.centered_and_justified(|ui| {
+                    ui.label(DECODING_LABEL);
+                });
+                return response;
+            }
+        };
+        let img_idx = image_ref.index();
         let known = match &layout {
-            Some(DisplayLayout::Known(known)) => Some(known),
+            Some(DisplayLayout::Known(known)) if !holding => Some(known),
             _ => None,
         };
         let layout_size = self.tiles.layout(image_ref, known).map(|l| l.size());
@@ -846,8 +973,15 @@ impl ImageDetail {
         // so we can handle scroll/drag even when the image is smaller than the panel.
         let interact_rect = panel_rect;
         let interact_id = ui.id().with("image_detail_interact");
-        let interact_response =
-            ui.interact(interact_rect, interact_id, egui::Sense::click_and_drag());
+        // While the previous image is held, what is drawn is not the selected
+        // image, so no click, drag or menu acts on it; hover and the view's
+        // own wheel and keys still work on what is drawn.
+        let sense = if holding {
+            egui::Sense::hover()
+        } else {
+            egui::Sense::click_and_drag()
+        };
+        let interact_response = ui.interact(interact_rect, interact_id, sense);
         response.has_pointer = interact_response.hovered();
 
         // Draw the image (clipped to panel) from the photograph tiles of the
@@ -1308,6 +1442,7 @@ impl ImageDetail {
     #[allow(dead_code)]
     pub(crate) fn clear(&mut self) {
         self.tiles.clear();
+        self.held_look = None;
         self.feature_overlay = None;
         self.intrinsics.clear();
         self.change_layer = None;

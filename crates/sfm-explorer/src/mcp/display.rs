@@ -467,11 +467,12 @@ pub(super) fn pending_view_reply(state: &AppState, pending: &super::PendingView)
 
 /// How long a view request waits for the panel to draw the photograph.
 ///
-/// The panel draws the view on the first frame that knows the photograph's
-/// layout: the frame the call is applied in when the cache knows it, since
-/// the drain runs before the egui pass, and otherwise the frame after a read
-/// of the file's header on the rayon pool, milliseconds later. So this is not
-/// a budget for the work but a bound on a frame that is never coming: a closed
+/// The panel draws the photograph on the first frame its overview tiles are
+/// uploaded: the frame the call is applied in when the cache holds it, since
+/// the drain runs before the egui pass, and otherwise the frame after its
+/// decode on the rayon pool, tens of milliseconds later for most photographs.
+/// So this is not a budget for the work but a bound on a frame that is never
+/// coming: a closed
 /// window, or a photograph that cannot be read. Half a second is a dozen frames
 /// of slack and still short of a wait anyone would sit through.
 const DRAWS_WITHIN: std::time::Duration = std::time::Duration::from_millis(500);

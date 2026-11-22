@@ -287,10 +287,12 @@ fn a_refused_decode_is_asked_again_and_decodes_once_the_budget_has_room() {
 
 /// A photograph whose header reads but whose pixels do not is answered as
 /// unreadable once its decode has failed, layout and tiles alike, and is not
-/// asked for again, under a cache that keeps nothing and so remembers no
-/// failure itself.
+/// decoded again while its file stays the same, under a cache that keeps
+/// nothing and so remembers no failure itself; a look starts only a check of
+/// the file, off the calling thread. Once the file is fixed, the check drops
+/// the failure and the photograph is decoded.
 #[test]
-fn a_failed_decode_is_answered_as_unreadable_and_not_asked_again() {
+fn a_failed_decode_is_answered_as_unreadable_until_the_file_changes() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("cut_short.png");
     image::RgbImage::from_fn(64, 64, |x, y| image::Rgb([x as u8, y as u8, 3]))
@@ -316,7 +318,70 @@ fn a_failed_decode_is_answered_as_unreadable_and_not_asked_again() {
     let tiles = display_tiles(source, &keys, &ctx);
     assert!(tiles.iter().all(|t| matches!(t, DisplayTile::Unreadable)));
     prefetch_tiles(source, &keys, &ctx);
-    assert_eq!(queue.len(), 0, "a failure is not asked for again");
+    assert_eq!(queue.len(), 1, "one check of the file, however often asked");
+    let misses = cache.stats().misses;
+    assert_eq!(queue.run_off_this_thread(), 1);
+    assert!(matches!(
+        display_layout(source, &ctx),
+        DisplayLayout::Unreadable
+    ));
+    assert_eq!(queue.run_off_this_thread(), 1, "the file is checked again");
+    assert_eq!(cache.stats().misses, misses, "not decoded again");
+
+    std::fs::write(&path, &bytes).unwrap();
+    assert!(matches!(
+        display_layout(source, &ctx),
+        DisplayLayout::Unreadable
+    ));
+    assert_eq!(queue.run_off_this_thread(), 1, "the check finds it changed");
+    assert!(matches!(
+        display_layout(source, &ctx),
+        DisplayLayout::Known(_)
+    ));
+    assert!(is_loading(&display_tiles(source, &keys, &ctx)));
+    assert_eq!(queue.run_off_this_thread(), 1);
+    assert!(is_ready(&display_tiles(source, &keys, &ctx)));
+}
+
+/// Tiles a decode answered for a view that has moved on are not kept: each
+/// ask for the photograph drops its kept tiles it does not ask for, so a
+/// panel that pans while its decodes run holds at most one decode's answer,
+/// under a cache that keeps nothing, where nothing else bounds them.
+#[test]
+fn tiles_answered_for_a_view_that_moved_on_are_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("long.png");
+    image::RgbImage::from_fn(1600, 8, |x, y| image::Rgb([x as u8, y as u8, 3]))
+        .save(&path)
+        .unwrap();
+    let cache = tile_cache(0, 1 << 30);
+    let (requests, queue) = PhotographRequests::queued();
+    let source = PhotographSource {
+        cache: &cache,
+        requests: &requests,
+        path: &path,
+    };
+    let ctx = egui::Context::default();
+    known_layout(source, &queue);
+    let tile = |col| TileKey {
+        level: 0,
+        col,
+        row: 0,
+    };
+    for col in 0..4 {
+        // The view has moved on to the next tile before the last decode's
+        // answer was asked for.
+        assert!(is_loading(&display_tiles(source, &[tile(col)], &ctx)));
+        assert_eq!(queue.run_off_this_thread(), 1);
+        assert_eq!(requests.kept_tiles(), 1, "column {col}");
+    }
+    assert!(is_ready(&display_tiles(source, &[tile(3)], &ctx)));
+    assert_eq!(requests.kept_tiles(), 0);
+    // Asking ahead drops what it no longer asks for too.
+    prefetch_tiles(source, &[tile(0)], &ctx);
+    assert_eq!(queue.run_off_this_thread(), 1);
+    prefetch_tiles(source, &[tile(1)], &ctx);
+    assert_eq!(requests.kept_tiles(), 0);
 }
 
 /// A decode refused because it asked for a tile the photograph does not have,

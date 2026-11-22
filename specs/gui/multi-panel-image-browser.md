@@ -536,22 +536,41 @@ tiles"):
 
 - **The layout.** Each frame asks `state::display_layout`, which answers the cache's
   `layout` and, while it is not known, starts one `request_layout` on the rayon pool, a
-  read of the file's header, and repaints when it ends. Until the layout is known the
-  panel shows "Loading image…", and "Failed to load image" for a file that cannot be read
-  or decoded. Once it is known the panel lays the view out at the photograph's size and
-  draws its overlays, and the photograph's own pixels follow as its tiles land.
+  read of the file's header, and repaints when it ends. A file that cannot be read or
+  decoded shows "Failed to load image".
+- **Switching images.** A newly selected image is drawn once the tiles its first frame
+  uploads first, the overview level's (§ "Uploads" below), have landed: each frame asks
+  for them and uploads them at the view the panel will carry over to the image, with any
+  look asked for on the switch applied. Until then the panel keeps drawing the image it
+  showed before, its tiles, its overlays and its view, so stepping, the strip and
+  animation never flash an empty image area; a look asked for meanwhile is kept and
+  applied on the frame that first draws the new image, and `get_image_detail_view`
+  reports the image still drawn. Only where there is no such image (the first image the
+  panel shows, an image of another reconstruction, or a previous image with no tile
+  uploaded) the panel shows "Loading image…" instead. While the previous image is kept,
+  what is drawn is not the selected image, so a click, a double-click, a drag and a
+  right-click on the panel do nothing: they would act on a pixel or a point of an image
+  that is no longer selected. Hover highlights the point under the pointer, which is a
+  point of the reconstruction like any other (G6), and the wheel and `Z` move the view,
+  which carries over to the new image.
 - **The tiles.** Each frame asks `state::display_tiles` for the tiles it would upload
   this frame (§ "Uploads" below), and for no tile it has uploaded already. Those the cache
   holds are handed over at once; for the rest it starts one `try_decode_tiles` on the
   rayon pool per photograph, at most one in flight per photograph however many frames or
   panels ask, and repaints when it ends. That decode never waits: when the build budget
   has no room for it or another caller is decoding the photograph it ends at once, decoding
-  nothing, and the panel asks again on a frame 50 ms later. Under a build budget of 0
-  (`SFM_EXPLORER_BUILD_BUDGET_MB=0`) every such decode is refused, so the panel draws
-  only the photographs another reader has decoded. The tiles a decode answers are
+  nothing, and the panel asks again on a frame 50 ms later. A decode that does not fit
+  under the build budget is granted when nothing else is reserved, so under a build
+  budget of 0 (`SFM_EXPLORER_BUILD_BUDGET_MB=0`) the panel decodes one photograph at a
+  time, and a photograph larger than the whole budget is decoded when no other decode
+  runs. The tiles a decode answers are
   kept for the panel until it asks for them, so a cache of budget 0, which keeps nothing,
-  still hands them over, and a photograph whose decode fails is answered as unreadable.
-  These answers are kept for the four photographs answered last.
+  still hands them over; each ask for a photograph drops the kept tiles of it that it does
+  not ask for, answered for a view that has moved on, so a photograph keeps at most one
+  decode's answer, 16 tiles, and the answers of the four photographs answered last are
+  kept, about 51 MB at most. A photograph whose decode fails is answered as unreadable
+  until its file's length or modification time changes, which each frame that asks for
+  it checks with one stat of the file on the rayon pool; then it is decoded again.
 
 **Display: photograph tiles.** The panel never makes a texture of the whole photograph.
 It draws **photograph tiles**: 512 x 512 blocks of one pyramid level, each uploaded as

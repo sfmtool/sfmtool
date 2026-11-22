@@ -140,6 +140,8 @@ struct Frame {
     view: Option<ViewGeometry>,
     /// The level it drew and its tiles still to draw.
     tiles: Option<super::DrawnTiles>,
+    /// Every text it painted.
+    texts: Vec<String>,
 }
 
 /// The textures a run of frames has handed egui, by id, as egui would hold
@@ -241,6 +243,7 @@ fn frame_of(
         }
     }
     output.textures_delta.clear();
+    let texts = crate::test_support::output_texts(&output);
     let mut meshes = Vec::new();
     for clipped in &output.shapes {
         collect_meshes(&clipped.shape, &mut meshes);
@@ -254,6 +257,7 @@ fn frame_of(
         repaint,
         view,
         tiles,
+        texts,
     }
 }
 
@@ -832,8 +836,8 @@ fn jpeg_in(dir: &std::path::Path, name: &str, width: u32, height: u32) -> std::p
 /// read and for its eleven tiles with one decode, the second panel starting
 /// none while the first's runs, and neither decodes on the thread that draws
 /// it: the decode count stays 0 until the queued tasks run on a thread of
-/// their own. The frames before the tiles land report them pending. With a
-/// budget and with a cache that keeps nothing.
+/// their own. The frames before its first tiles land draw no image, since the
+/// panel had none to keep. With a budget and with a cache that keeps nothing.
 #[test]
 fn panels_ask_for_a_photographs_tiles_in_one_decode_and_never_decode_themselves() {
     let dir = tempfile::tempdir().unwrap();
@@ -861,13 +865,7 @@ fn panels_ask_for_a_photographs_tiles_in_one_decode_and_never_decode_themselves(
         assert_eq!(queue.run_off_this_thread(), 1);
 
         let waiting = frame(&mut a, &ctx_a, &node, source, panel, None, &mut gpu_a);
-        assert_eq!(
-            waiting.tiles,
-            Some(super::DrawnTiles {
-                level: 0,
-                tiles_pending: 10
-            })
-        );
+        assert_eq!(waiting.view, None, "nothing drawn before the first tiles");
         frame(&mut b, &ctx_b, &node, source, panel, None, &mut gpu_b);
         frame(&mut a, &ctx_a, &node, source, panel, None, &mut gpu_a);
         assert_eq!(queue.len(), 1, "one decode for both panels");
@@ -971,4 +969,120 @@ fn the_tiles_asked_for_ahead_are_the_ones_the_next_image_draws() {
     assert!(gpu.made.len() > made + 1, "its tiles were uploaded");
     assert_eq!(queue.len(), 0, "nothing was asked for on the switch");
     assert_eq!(cache.stats().decodes, 1);
+}
+
+/// Stepping to an image whose tiles are not uploaded keeps drawing the image
+/// shown before, its tiles and its view, until the tiles the new image
+/// uploads first (its overview) have landed, and then draws the new image,
+/// with the look asked for on the switch applied: no frame between draws an
+/// empty image area or says it is loading. The decodes are stepped by hand,
+/// so the frames that hold are the ones before each lands.
+#[test]
+fn a_switch_keeps_the_previous_image_until_the_new_ones_overview_lands() {
+    let dir = tempfile::tempdir().unwrap();
+    let next_path = jpeg_in(dir.path(), "next.jpg", 1200, 900);
+    let node = node();
+    let panel = egui::vec2(600.0, 450.0);
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+    let mut gpu = Gpu::default();
+    let shown = HeldPhotograph::new(pyramid_of(synthetic(800, 600)));
+    let before = frame(
+        &mut detail,
+        &ctx,
+        &node,
+        Some(shown.source()),
+        panel,
+        None,
+        &mut gpu,
+    );
+    let before_view = before.view.expect("the first image is drawn");
+    let before_textures: HashSet<egui::TextureId> =
+        before.meshes.iter().map(|(id, ..)| *id).collect();
+    assert!(!before_textures.is_empty());
+
+    let cache = cache_of(0);
+    let (requests, queue) = PhotographRequests::queued();
+    let next = Some(PhotographSource {
+        cache: &cache,
+        requests: &requests,
+        path: &next_path,
+    });
+    let look = Some(Look::Pixel {
+        pixel: [300.0, 200.0],
+        zoom: Some(2.0),
+    });
+    // The header read, then the decode, each held over until it has run.
+    for (step, look) in [look, None].into_iter().enumerate() {
+        let held = frame_of(&mut detail, &ctx, &node, 1, next, panel, look, &mut gpu);
+        assert_eq!(
+            held.view,
+            Some(before_view),
+            "step {step}: the previous view"
+        );
+        let textures: HashSet<egui::TextureId> = held.meshes.iter().map(|(id, ..)| *id).collect();
+        assert_eq!(textures, before_textures, "step {step}: the previous tiles");
+        assert!(
+            !held.texts.iter().any(|t| t == super::super::DECODING_LABEL),
+            "step {step}: {:?}",
+            held.texts
+        );
+        assert_eq!(queue.run_off_this_thread(), 1, "step {step}");
+    }
+
+    let switched = frame_of(&mut detail, &ctx, &node, 1, next, panel, None, &mut gpu);
+    let view = switched.view.expect("the new image is drawn");
+    assert_eq!(view.image, crate::scene::ImageRef::new(node.id, 1));
+    assert_eq!(view.image_size, [1200.0, 900.0]);
+    assert_eq!(view.zoom, 2.0, "the look asked for on the switch");
+    let rect = view.visible_rect();
+    let centre = [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0];
+    assert!((centre[0] - 300.0).abs() < 1e-2 && (centre[1] - 200.0).abs() < 1e-2);
+    assert!(
+        !switched.meshes.is_empty()
+            && switched
+                .meshes
+                .iter()
+                .all(|(id, ..)| !before_textures.contains(id)),
+        "the new image's own tiles"
+    );
+}
+
+/// With no image shown before, a photograph whose first tiles have not landed
+/// is "Loading image…", and is drawn once they have.
+#[test]
+fn the_first_image_says_it_is_loading_until_its_tiles_land() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = jpeg_in(dir.path(), "first.jpg", 1200, 900);
+    let node = node();
+    let panel = egui::vec2(600.0, 450.0);
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+    let mut gpu = Gpu::default();
+    let cache = cache_of(0);
+    let (requests, queue) = PhotographRequests::queued();
+    let source = Some(PhotographSource {
+        cache: &cache,
+        requests: &requests,
+        path: &path,
+    });
+    for step in 0..2 {
+        let loading = frame(&mut detail, &ctx, &node, source, panel, None, &mut gpu);
+        assert_eq!(loading.view, None, "step {step}");
+        assert!(
+            loading
+                .texts
+                .iter()
+                .any(|t| t == super::super::DECODING_LABEL),
+            "step {step}: {:?}",
+            loading.texts
+        );
+        assert_eq!(queue.run_off_this_thread(), 1, "step {step}");
+    }
+    let drawn = frame(&mut detail, &ctx, &node, source, panel, None, &mut gpu);
+    assert!(drawn.view.is_some() && !drawn.meshes.is_empty());
+    assert!(!drawn
+        .texts
+        .iter()
+        .any(|t| t == super::super::DECODING_LABEL));
 }

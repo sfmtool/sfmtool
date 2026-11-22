@@ -96,10 +96,25 @@ pub(crate) struct PhotographSource<'a> {
 /// lasts.
 const BUSY_RETRY: Duration = Duration::from_millis(50);
 
-/// The most photographs whose answered tiles are kept for the panels to take,
-/// the oldest answer dropped first, so tiles no panel comes back for (a view
-/// that moved on before its decode ended) are not kept for the session.
+/// The most photographs whose answers are kept for the panels to take, the
+/// oldest dropped first, so the answers of photographs no panel shows any
+/// more are not kept for the session. A photograph's kept tiles are at most
+/// what one decode answered, which a panel asks for at most 16 of
+/// (`image_detail::photograph_tiles`'s upload cap), since every ask for the
+/// photograph drops the kept tiles it does not ask for: at most 64 tiles of
+/// 514 x 514 RGB, about 51 MB, in all.
 const MAX_ANSWERED_PHOTOGRAPHS: usize = 4;
+
+/// A file's length and modification time, which tell a file that changed
+/// since a decode of it failed: `None` when it cannot be read.
+type FileStamp = Option<(u64, Option<std::time::SystemTime>)>;
+
+/// `path`'s [`FileStamp`] now.
+fn file_stamp(path: &Path) -> FileStamp {
+    std::fs::metadata(path)
+        .ok()
+        .map(|m| (m.len(), m.modified().ok()))
+}
 
 /// A task to run off the GUI thread.
 type Task = Box<dyn FnOnce() + Send>;
@@ -112,8 +127,9 @@ type Spawner = Arc<dyn Fn(Task) + Send + Sync>;
 enum Answered {
     /// The tiles no panel has taken yet.
     Tiles(HashMap<TileKey, Arc<PhotographTile>>),
-    /// The photograph could not be read or decoded.
-    Failed,
+    /// The photograph could not be read or decoded, when the file had this
+    /// stamp. A file whose stamp has changed since is asked for again.
+    Failed(FileStamp),
 }
 
 /// The tile decodes in flight and what they answered.
@@ -134,8 +150,43 @@ impl TileRequests {
             .map(|(_, answered)| answered)
     }
 
-    fn failed(&mut self, path: &Path) -> bool {
-        matches!(self.answered(path), Some(Answered::Failed))
+    /// The stamp `path`'s file had when its decode failed, if it failed.
+    fn failed(&mut self, path: &Path) -> Option<FileStamp> {
+        match self.answered(path) {
+            Some(Answered::Failed(stamp)) => Some(*stamp),
+            _ => None,
+        }
+    }
+
+    /// Drop `path`'s answer.
+    fn forget(&mut self, path: &Path) {
+        self.answered.retain(|(p, _)| p != path);
+    }
+
+    /// Drop `path`'s kept tiles that are not among `keys`, the ones a panel
+    /// asks for now: tiles a decode answered for a view that has moved on.
+    fn keep_only(&mut self, path: &Path, keys: &[TileKey]) {
+        let Some(index) = self.answered.iter().position(|(p, _)| p == path) else {
+            return;
+        };
+        if let Answered::Tiles(tiles) = &mut self.answered[index].1 {
+            tiles.retain(|key, _| keys.contains(key));
+            if tiles.is_empty() {
+                self.answered.remove(index);
+            }
+        }
+    }
+
+    /// How many answered tiles are kept, of every photograph.
+    #[cfg(test)]
+    fn kept_tiles(&self) -> usize {
+        self.answered
+            .iter()
+            .map(|(_, answered)| match answered {
+                Answered::Tiles(tiles) => tiles.len(),
+                Answered::Failed(_) => 0,
+            })
+            .sum()
     }
 
     /// Whether `key` of `path` has been answered and not yet taken.
@@ -165,11 +216,11 @@ impl TileRequests {
                     tiles.extend(more);
                     Answered::Tiles(tiles)
                 }
-                Answered::Failed => Answered::Tiles(more),
+                Answered::Failed(_) => Answered::Tiles(more),
             },
-            (Some(index), Answered::Failed) => {
+            (Some(index), failed @ Answered::Failed(_)) => {
                 self.answered.remove(index);
-                Answered::Failed
+                failed
             }
             (None, answer) => answer,
         };
@@ -289,7 +340,7 @@ impl PhotographRequests {
                     // Nothing was decoded, and the next frame asks again.
                     Ok(TryDecode::Busy) | Err(TileError::Cancelled) => {}
                     Err(TileError::Unreadable { .. }) => {
-                        tiles.keep(path.clone(), Answered::Failed);
+                        tiles.keep(path.clone(), Answered::Failed(file_stamp(&path)));
                     }
                     // A key the photograph does not have comes from a layout
                     // read before the file changed size: drop it, so the next
@@ -305,6 +356,46 @@ impl PhotographRequests {
                 ctx.request_repaint();
             }
         }));
+    }
+
+    /// Answer whether `path`'s decode failed, and if it did, start one check
+    /// on the rayon pool of whether the file has changed since, which drops
+    /// the failure and repaints when it has, so a file that is fixed loads
+    /// again. The check stats the file, off this thread.
+    fn failed(&self, path: &Path, ctx: &egui::Context) -> bool {
+        let stamp = {
+            let mut tiles = lock(&self.tiles);
+            let Some(stamp) = tiles.failed(path) else {
+                return false;
+            };
+            if !tiles.in_flight.insert(path.to_path_buf()) {
+                return true;
+            }
+            stamp
+        };
+        let tiles = Arc::clone(&self.tiles);
+        let path = path.to_path_buf();
+        let ctx = ctx.clone();
+        (self.spawn)(Box::new(move || {
+            let changed = file_stamp(&path) != stamp;
+            {
+                let mut tiles = lock(&tiles);
+                if changed {
+                    tiles.forget(&path);
+                }
+                tiles.in_flight.remove(&path);
+            }
+            if changed {
+                ctx.request_repaint();
+            }
+        }));
+        true
+    }
+
+    /// How many answered tiles are kept, of every photograph.
+    #[cfg(test)]
+    pub(crate) fn kept_tiles(&self) -> usize {
+        lock(&self.tiles).kept_tiles()
     }
 
     /// Whether a decode of `path` is running.
@@ -400,9 +491,9 @@ pub(crate) fn display_photograph(
 ///
 /// A photograph whose last decode task failed is answered as unreadable,
 /// which is what a cache of budget 0, which remembers no failure, would
-/// otherwise never say.
+/// otherwise never say, until its file changes.
 pub(crate) fn display_layout(source: PhotographSource<'_>, ctx: &egui::Context) -> DisplayLayout {
-    if lock(&source.requests.tiles).failed(source.path) {
+    if source.requests.failed(source.path, ctx) {
         return DisplayLayout::Unreadable;
     }
     match source.cache.layout(source.path) {
@@ -426,19 +517,24 @@ pub(crate) fn display_layout(source: PhotographSource<'_>, ctx: &egui::Context) 
 /// as Image Detail keeps it in a texture, and asks for it again only after
 /// dropping it. So a caller asks only for what it will use this frame, since
 /// under a cache of budget 0 a tile it is handed and drops is decoded again.
+/// The photograph's kept tiles the call does not ask for are dropped, since
+/// they were answered for a view that has moved on.
 pub(crate) fn display_tiles(
     source: PhotographSource<'_>,
     keys: &[TileKey],
     ctx: &egui::Context,
 ) -> Vec<DisplayTile> {
+    if source.requests.failed(source.path, ctx) {
+        return vec![DisplayTile::Unreadable; keys.len()];
+    }
     let taken: Vec<Option<Arc<PhotographTile>>> = {
         let mut tiles = lock(&source.requests.tiles);
-        if tiles.failed(source.path) {
-            return vec![DisplayTile::Unreadable; keys.len()];
-        }
-        keys.iter()
+        let taken = keys
+            .iter()
             .map(|&key| tiles.take(source.path, key))
-            .collect()
+            .collect();
+        tiles.keep_only(source.path, keys);
+        taken
     };
     let mut missing = Vec::new();
     let answers = keys
@@ -468,13 +564,18 @@ pub(crate) fn display_tiles(
 /// draws them: one decode on the rayon pool for the ones no task has answered,
 /// unless one is already running for the photograph, its tiles kept for
 /// [`display_tiles`] to hand over. Peeks at nothing, so it copies no pixels on
-/// this thread, and once every key is answered it starts nothing.
+/// this thread, and once every key is answered it starts nothing. The
+/// photograph's kept tiles it does not ask for are dropped.
 pub(crate) fn prefetch_tiles(source: PhotographSource<'_>, keys: &[TileKey], ctx: &egui::Context) {
+    if source.requests.failed(source.path, ctx) {
+        return;
+    }
     let missing: Vec<TileKey> = {
         let mut tiles = lock(&source.requests.tiles);
-        if tiles.failed(source.path) || tiles.in_flight.contains(source.path) {
+        if tiles.in_flight.contains(source.path) {
             return;
         }
+        tiles.keep_only(source.path, keys);
         keys.iter()
             .copied()
             .filter(|&key| !tiles.holds(source.path, key))
