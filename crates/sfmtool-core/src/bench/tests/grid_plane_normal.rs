@@ -12,6 +12,7 @@ use super::*;
 use crate::bench::{GridPlaneAcceptance, GridPlaneOutcome};
 use crate::patch::cell_plane_normals::{CellPlaneStatus, NormalDeterminacy};
 use crate::patch::cluster_refine::{CellStatus, LoopStop};
+use crate::reconstruction::data::value_noise;
 
 /// A half-length that projects to about 16 px in the scene's views, so each
 /// of the nine cells covers about 11 px of texture.
@@ -66,25 +67,10 @@ fn hit(center: [f64; 3], dir: [f64; 3], depth: f64) -> (f64, f64) {
 }
 
 /// A second texture for a surface that must not be mistaken for the plane's:
-/// value noise, smoothly interpolated between pseudo-random levels on a
-/// lattice `SPACING` apart, so that no shift of it resembles another.
+/// the shared value noise on a lattice 0.12 apart, in `30` to `225`, so that
+/// no shift of it resembles another.
 fn other_texture(x: f64, y: f64) -> f64 {
-    const SPACING: f64 = 0.12;
-    let level = |i: i64, j: i64| {
-        let mut h = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
-            ^ (j as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
-        h ^= h >> 29;
-        h = h.wrapping_mul(0x1656_67B1_9E37_79F9);
-        h ^= h >> 32;
-        30.0 + 195.0 * (h % 1024) as f64 / 1023.0
-    };
-    let (u, v) = (x / SPACING, y / SPACING);
-    let (i, j) = (u.floor() as i64, v.floor() as i64);
-    let smooth = |t: f64| t * t * (3.0 - 2.0 * t);
-    let (s, t) = (smooth(u - u.floor()), smooth(v - v.floor()));
-    let top = level(i, j) * (1.0 - s) + level(i + 1, j) * s;
-    let bottom = level(i, j + 1) * (1.0 - s) + level(i + 1, j + 1) * s;
-    top * (1.0 - t) + bottom * t
+    127.5 + 97.5 * value_noise(x, y, 0.12, 0)
 }
 
 /// The step's cells, from its report.

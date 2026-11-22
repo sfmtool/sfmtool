@@ -6,7 +6,7 @@
 //! [`SfmrReconstruction`] holds all data from a `.sfmr` file using nalgebra
 //! geometric types — the in-memory side of the format's I/O boundary, described
 //! in `specs/formats/sfmr-file-format.md`. This file owns the type definitions
-//! and their accessors; the rest of the type's surface lives in six children:
+//! and their accessors; the rest of the type's surface lives in seven children:
 //!
 //! - [`conversion`] — the `.sfmr` boundary: the [`sfmtool_sfmr_format::SfmrData`] round
 //!   trip (the raw columnar I/O representation) plus the `load`/`save` wrappers.
@@ -15,6 +15,8 @@
 //! - [`affine_shape`] — an observation's keypoint affine shape, projected out of
 //!   the point's patch frame.
 //! - [`demo`] — a synthetic reconstruction with no files behind it.
+//! - [`demo_scene`] — the demo scene: a textured ground and cube rendered
+//!   into five photographs, for a reconstruction with ground truth.
 //! - [`sift_keypoints`] — a `sift_files` reconstruction's inline keypoint
 //!   column, filled from its `.sift` files.
 //! - [`select_rows`] — the value with some observation rows and points taken
@@ -44,6 +46,7 @@ use crate::features::sift::ImageReadings;
 mod affine_shape;
 mod conversion;
 mod demo;
+mod demo_scene;
 mod image_set;
 mod point_set;
 mod readings;
@@ -54,6 +57,9 @@ mod sift_keypoints;
 pub use affine_shape::patch_affine_shape;
 #[cfg(test)]
 pub(crate) use demo::rewrite_as_version_16_without_keypoints;
+#[cfg(test)]
+pub(crate) use demo_scene::value_noise;
+pub use demo_scene::{DemoScene, DemoSceneError, DemoSceneOptions};
 pub use image_set::{ImageSet, PerImageAdjustments};
 pub(crate) use point_set::observation_confidence_byte;
 pub use point_set::{patch_bitmap_is_stored, ObservationSource, PointSet};
