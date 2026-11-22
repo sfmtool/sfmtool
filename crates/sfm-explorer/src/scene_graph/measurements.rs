@@ -23,8 +23,9 @@ use crate::scene::SceneNode;
 
 /// `[▸] Measurements (4)` and, expanded, one row per measurement.
 ///
-/// Absent on a node that stores none. No eye: a measurement is drawn only
-/// while it is selected, which is a later step's.
+/// Absent on a node that stores none. No eye: a measurement is drawn while it
+/// is selected, or while a view's *Show all measurements* is on, and the
+/// node's own eye hides them all.
 ///
 /// A click on a row selects the measurement and nothing else, as a click on a
 /// Bench row does. A double-click puts it on the bench and focuses it (or

@@ -1784,6 +1784,7 @@ whichever mode the human last picked; these two tools let the agent pick.
     "max_features": null,             // an integer ≥ 1, or null for all of them
     "feature_size_px": null,          // { "min": 0.0, "max": 50.0 }, or null for no size filter
     "tracked_only": true,             // only features with a 3D point behind them
+    "show_all_measurements": false,   // every measurement with an endpoint in the image
     "intrinsics": {
       "enabled": true,                // the layer at all; on by default
       "axes": true,                   // angular axes through the principal point
@@ -1883,6 +1884,7 @@ dragging the size filter — folds into one line. The texts:
 | `max_features` | `Max features {n}` / `Max features all` |
 | `feature_size_px` | `Feature size {min:.1}–{max:.1} px` / `Feature size filter off` |
 | `tracked_only` | `Tracked only {on|off}` |
+| `show_all_measurements` | `Show all measurements in Image Detail {on|off}`, a run of its own, apart from the 3D view's checkbox of the same name |
 | `intrinsics.enabled` | `Intrinsics {on|off}` |
 | `intrinsics.axes` / `rings` / `distortion` | `Intrinsics axes {on|off}` / `Intrinsics rings {on|off}` / `Intrinsics distortion {on|off}` |
 | `intrinsics.distortion_scale` | `Distortion scale ×{n}` / `Distortion scale auto` |
@@ -2078,6 +2080,7 @@ patches are a way of drawing points, so `show_points` governs them, and
     "show_grid": true,
     "show_points_at_infinity": true,
     "show_target_indicator": false,
+    "show_all_measurements": false,   // every stored measurement, not only the selected one
     "point_size_log2": 0.0,           // Size: -3 to 3, 1 decimal
     "infinity_point_px": 3.0,         //       1 to 16 px, 1 decimal
     "length_scale": 0.655,            //       0.001 to 100, 3 decimals; set from the points at load
@@ -2201,6 +2204,7 @@ the HUD's widgets record through too, so the texts are one definition:
 |-------|------|
 | `show_points` / `show_camera_images` / `show_grid` | `Points {on|off}` / `Camera Images {on|off}` / `Grid {on|off}` |
 | `show_points_at_infinity` / `show_target_indicator` | `Points at ∞ {on|off}` / `Target indicator {on|off}` |
+| `show_all_measurements` | `Show all measurements {on|off}` |
 | `point_size_log2` / `infinity_point_px` / `length_scale` | `Point size {v:.1}` / `∞ point size {v:.1} px` / `Scene scale {v:.3}` |
 | `patch_opacity` / `patch_size_log2` / `patch_alpha_cutoff` | `Patch opacity {v:.2}` / `Patch size {v:.1}` / `Patch edge cutoff {v:.2}` |
 | `maintain_z_up` | `Maintain Z-up {on|off}` |

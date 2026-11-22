@@ -21,6 +21,7 @@
 mod bench_track;
 mod input;
 mod intrinsics;
+mod measurements;
 mod overlay;
 mod photograph_tiles;
 #[cfg(test)]
@@ -184,6 +185,15 @@ pub(crate) struct ImageDetail {
     /// Measurement View on the new item. See
     /// [`ImageDetail::take_measurement_start`].
     measurement_start: Option<(ImageRef, [f32; 2])>,
+    /// The measurements this panel draws, set by the dock each frame with the
+    /// toolbar's *Show all measurements* ([`crate::measurement_marks`]).
+    pub(crate) measurements: crate::measurement_marks::MeasurementLayer,
+    /// A press a measurement's mark, line or the off-screen indicator holds,
+    /// from the press until the button comes up, for the reason
+    /// [`ImageDetail::bench_drag`] is held.
+    measurement_press: Option<crate::measurement_marks::Press>,
+    /// What the pointer is over among the measurements, for the hover text.
+    measurement_hover: Option<crate::measurement_marks::Target>,
 }
 
 /// A feature to draw on the image detail panel.
@@ -286,6 +296,10 @@ pub(crate) struct ImageDetailResponse {
     /// `AppState::edit_bench_patch`, which is the call the wire's eight patch
     /// tools make: one version, one Action Log row, one undo.
     pub(crate) bench_edit: Option<crate::bench::PatchEdit>,
+    /// What a click, a double-click or a handle drag on a drawn measurement
+    /// asked for, applied by the dock. The marks are on top, so a press they
+    /// take selects no feature's point and pans nothing.
+    pub(crate) measurement_gesture: Option<crate::measurement_marks::MeasurementGesture>,
     /// What the panel ended this frame looking at, or `None` on a frame that
     /// drew no image.
     ///
@@ -320,6 +334,9 @@ impl ImageDetail {
             target_point: None,
             cluster_start: None,
             measurement_start: None,
+            measurements: Default::default(),
+            measurement_press: None,
+            measurement_hover: None,
         }
     }
 
@@ -833,6 +850,7 @@ impl ImageDetail {
             find_nearby_tracks: None,
             select_bench_row: None,
             bench_edit: None,
+            measurement_gesture: None,
             view: None,
             tiles: None,
         };
@@ -1068,6 +1086,27 @@ impl ImageDetail {
             &mut handle_released,
         );
 
+        // --- The measurements' marks, lines and indicator, under the handles ---
+        //
+        // A press on a mark or a line is theirs (G7): it pans nothing and
+        // selects no feature under it. The focused measurement item's marks
+        // are handles, whose drag sets the endpoint's pixel on release.
+        let measured = self.update_measurement_press(
+            ui,
+            &interact_response,
+            &painter,
+            &measurements::Placement {
+                image: image_ref,
+                image_size,
+                image_rect,
+                scale: effective_scale,
+                panel_rect,
+            },
+            self.bench_drag.is_some() || handle_released || chord,
+            &mut response,
+        );
+        let handle_released = handle_released || measured;
+
         // What a double-click means, settled before the view input runs and
         // against the geometry the gesture was made on: on a feature that
         // observes a point it is Edit on Bench, and anywhere else it is the
@@ -1087,7 +1126,7 @@ impl ImageDetail {
             display_size,
             scroll_input,
             gesture_events,
-            self.bench_drag.is_some(),
+            self.bench_drag.is_some() || self.measurement_press.is_some(),
             // A Control+Shift double-click is two requests for a track, the
             // second refused while the first runs; it is not also a zoom.
             double_click_point.is_some() || chord || handle_released,
@@ -1219,6 +1258,20 @@ impl ImageDetail {
                 &mut response,
             );
         }
+        // The measurements, over everything, for the reason the bench layer
+        // is: the focused measurement item is the bench's layer here.
+        self.draw_measurements(
+            ui,
+            &painter,
+            &interact_response,
+            &measurements::Placement {
+                image: image_ref,
+                image_size,
+                image_rect,
+                scale: effective_scale,
+                panel_rect,
+            },
+        );
 
         response
     }

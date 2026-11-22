@@ -155,6 +155,11 @@ const FRACTION: SliderRange = SliderRange::linear(0.0, 1.0, 2);
 /// Frustum and target size, as multiples of the scene scale.
 const MULTIPLIER: SliderRange = SliderRange::logarithmic(0.05, 5.0, 2);
 
+/// What the checkbox that draws every stored measurement is called, in the 3D
+/// view's HUD and in Image Detail's toolbar, and the word their Action Log
+/// entries open with.
+pub(crate) const SHOW_ALL_MEASUREMENTS_LABEL: &str = "Show all measurements";
+
 /// One display control of the 3D viewport.
 ///
 /// [`Field::ALL`] is the document's order: the Layers toggles, the Size
@@ -167,6 +172,7 @@ pub(crate) enum Field {
     ShowGrid,
     ShowPointsAtInfinity,
     ShowTargetIndicator,
+    ShowAllMeasurements,
     PointSizeLog2,
     InfinityPointPx,
     LengthScale,
@@ -185,12 +191,13 @@ pub(crate) enum Field {
 
 impl Field {
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
-    pub(crate) const ALL: [Field; 19] = [
+    pub(crate) const ALL: [Field; 20] = [
         Field::ShowPoints,
         Field::ShowCameraImages,
         Field::ShowGrid,
         Field::ShowPointsAtInfinity,
         Field::ShowTargetIndicator,
+        Field::ShowAllMeasurements,
         Field::PointSizeLog2,
         Field::InfinityPointPx,
         Field::LengthScale,
@@ -215,6 +222,7 @@ impl Field {
             Field::ShowGrid => "show_grid",
             Field::ShowPointsAtInfinity => "show_points_at_infinity",
             Field::ShowTargetIndicator => "show_target_indicator",
+            Field::ShowAllMeasurements => "show_all_measurements",
             Field::PointSizeLog2 => "point_size_log2",
             Field::InfinityPointPx => "infinity_point_px",
             Field::LengthScale => "length_scale",
@@ -242,6 +250,7 @@ impl Field {
             Field::ShowGrid => "Grid",
             Field::ShowPointsAtInfinity => "Points at ∞",
             Field::ShowTargetIndicator => "Target indicator",
+            Field::ShowAllMeasurements => SHOW_ALL_MEASUREMENTS_LABEL,
             Field::PointSizeLog2 => "Point size",
             Field::InfinityPointPx => "∞ point size",
             Field::LengthScale => "Scene scale",
@@ -267,6 +276,7 @@ impl Field {
             | Field::ShowGrid
             | Field::ShowPointsAtInfinity
             | Field::ShowTargetIndicator
+            | Field::ShowAllMeasurements
             | Field::MaintainZUp
             | Field::ShowControlsHelp
             | Field::ShowFps
@@ -346,6 +356,7 @@ impl Field {
             Field::ShowGrid => Flag(state.show_grid),
             Field::ShowPointsAtInfinity => Flag(state.show_points_at_infinity),
             Field::ShowTargetIndicator => Flag(state.show_target_indicator),
+            Field::ShowAllMeasurements => Flag(state.show_all_measurements),
             Field::PointSizeLog2 => Number(state.point_size_log2),
             Field::InfinityPointPx => Number(state.infinity_point_px),
             Field::LengthScale => Number(state.length_scale),
@@ -375,6 +386,7 @@ impl Field {
                     Field::ShowGrid => &mut state.show_grid,
                     Field::ShowPointsAtInfinity => &mut state.show_points_at_infinity,
                     Field::ShowTargetIndicator => &mut state.show_target_indicator,
+                    Field::ShowAllMeasurements => &mut state.show_all_measurements,
                     Field::MaintainZUp => &mut viewer.maintain_z_up,
                     Field::ShowControlsHelp => &mut state.show_controls_help,
                     Field::ShowFps => &mut state.show_fps,

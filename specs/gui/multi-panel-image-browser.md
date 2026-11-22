@@ -971,6 +971,28 @@ the focused item and Track View's *Lock*, which both this layer and the menu's
 two bench entries read, so what is offered and what is drawn cannot disagree
 about which track is focused or what its dot does.
 
+#### The measurements
+
+The selected measurement, the focused measurement item and, with the toolbar's
+*Show all measurements* on, every stored measurement of the reconstruction are
+drawn over everything, after the bench layer: a mark at each endpoint pixel in
+the image shown, whether or not the endpoint resolves, a refused one in the
+warning colour, and a line where both endpoints are in that image. The focused
+item is drawn in the bench's violet, and its marks are **handles**: a drag of
+one sets that endpoint to the image shown and the pixel under the release, held
+inside the image, as one bench step when the button comes up, and draws the
+mark under the pointer while it is held. A view-only or busy bench offers no
+handle. Hovering a mark or a line shows the measurement's row text; a click on
+a mark selects the measurement and that endpoint, a double-click looks through
+it, and a click on a stored measurement's line selects it. A press on a mark or
+a line is theirs (G7): it pans nothing and selects no feature's point under
+it. When the selected measurement has an endpoint in the image but no part of
+it is inside the panel, an arrow at the panel's edge points to that pixel,
+labelled `Distance #2`, and a click on it centres the panel on the pixel at the
+current zoom. See [measurement-view.md](measurement-view.md) § "Drawing
+measurements"; the code is
+[image_detail/measurements.rs](../../crates/sfm-explorer/src/image_detail/measurements.rs).
+
 #### Feature Filtering
 
 Extracted `.sift` files list features by decreasing size (largest first); a derived file,
@@ -1001,11 +1023,16 @@ struct FeatureDisplaySettings {
     /// If true, only show features that participate in a track (have an
     /// associated 3D point). Equivalent to CLI `--filter-sfm`.
     tracked_only: bool,
+    /// The panel's *Show all measurements*: draw every stored measurement
+    /// with an endpoint in the image shown, not only the selected one and the
+    /// focused measurement item.
+    show_all_measurements: bool,
 }
 ```
 
 **Defaults**: `overlay_mode: Features`, `max_features: None` (all), `tracked_only: true`,
-size filters disabled with persisted slider values (min: 0.0, max: 50.0).
+size filters disabled with persisted slider values (min: 0.0, max: 50.0),
+`show_all_measurements: false`.
 
 These settings, together with the intrinsics layer's, are also readable and
 writable over MCP as one `image_detail_display` document
@@ -1035,7 +1062,7 @@ requires reading affine shapes to check, but since features are sorted, only
 mode selector:
 
 ```
-[Overlay: Features ▾]  [Max: All ▾]  [☐ Min/max size: 0.0  50.0]  [☑ Tracked only]
+[Overlay: Features ▾]  [Max: All ▾]  [☐ Min/max size: 0.0  50.0]  [☑ Tracked only]  [☐ Show all measurements]
 ```
 
 - **Max features**: dropdown with common presets (100, 500, 1000, 5000, All). Changing
@@ -1051,6 +1078,12 @@ mode selector:
   drawn. In Features mode, untracked features are hidden. In heatmap modes, untracked
   features are always hidden (they have no metric). This is independent of the size
   filters — applied after the size-based prefix truncation.
+- **Show all measurements**: checkbox, shown in every mode, since the
+  measurements are a layer of their own. Off, the panel draws the selected
+  measurement and the focused measurement item; on, every stored measurement of
+  the reconstruction with an endpoint in the image shown as well (§ "The
+  measurements"). It records as `Show all measurements in Image Detail on`, so
+  its row is told from the 3D view's checkbox of the same name.
 
 #### Data Loading
 

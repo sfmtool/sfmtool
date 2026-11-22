@@ -374,6 +374,14 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                              --filter-sfm.",
                         ),
                     ),
+                    (
+                        "show_all_measurements",
+                        flag(
+                            "Draw every measurement with an endpoint in the image shown (the \
+                             toolbar's Show all measurements). Off, only the selected \
+                             measurement and the focused measurement item are drawn.",
+                        ),
+                    ),
                     ("intrinsics", crate::mcp::display::intrinsics_schema()),
                 ],
                 &[],

@@ -1611,6 +1611,14 @@ view-only bench, where the item could take no further step and never be
 committed, and for a pixel outside its image, in the commit's sentence
 ([`measurement-view.md`](measurement-view.md) § "Creating a measurement").
 
+**The focused measurement item is drawn as the bench's layer** in the 3D view
+and Image Detail, in the bench's `in` violet and the layers' 2.5-point stroke,
+over the stored measurement it came from: a mark at each placed endpoint and a
+line between the two. In Image Detail its marks are handles, and a drag of one
+is the step that sets that endpoint's pixel, one version on release; a
+view-only or busy bench draws them and offers no handle
+([`measurement-view.md`](measurement-view.md) § "Drawing measurements").
+
 ---
 
 ## The Bench groups in the Scene tree

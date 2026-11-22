@@ -224,7 +224,7 @@ Debug closed.
 
 | Section | Contents |
 |---------|----------|
-| **Layers** | Show Points, Show Camera Images, Show Grid, Show Points at Infinity, Target indicator ([viewport-navigation.md](viewport-navigation.md#the-target-indicator-checkbox)) |
+| **Layers** | Show Points, Show Camera Images, Show Grid, Show Points at Infinity, Target indicator ([viewport-navigation.md](viewport-navigation.md#the-target-indicator-checkbox)), Show all measurements ([measurement-view.md](measurement-view.md#drawing-measurements)) |
 | **Size** | Point Size (log₂, −3…+3) + reset, Infinity Point Size (1–16 px), Length Scale (0.001–100, log) |
 | **Patches** | Patch Opacity, Patch Size, Patch Edge Cutoff; drawn while some node draws patches |
 | **Camera** | Maintain Z-up ([viewport-navigation.md](viewport-navigation.md#maintain-z-up)), Field of View (10°–120°) + reset |

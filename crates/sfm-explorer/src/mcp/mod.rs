@@ -918,6 +918,7 @@ pub(crate) struct ImageDetailDisplayChange {
     pub(crate) max_features: Option<Option<usize>>,
     pub(crate) feature_size_px: Option<display::FeatureSize>,
     pub(crate) tracked_only: Option<bool>,
+    pub(crate) show_all_measurements: Option<bool>,
     pub(crate) intrinsics: IntrinsicsChange,
 }
 

@@ -265,6 +265,16 @@ impl Viewer3D {
             .on_hover_text(
                 "Draw the orbit target all the time. Holding Alt shows it while Alt is held.",
             );
+            checkbox(
+                ui,
+                log,
+                &mut state.show_all_measurements,
+                Field::ShowAllMeasurements,
+            )
+            .on_hover_text(
+                "Draw every measurement of every visible reconstruction. Off, only the \
+                 selected measurement and the one being edited are drawn.",
+            );
         });
 
         section(ui, "size", "Size", true, |ui| {

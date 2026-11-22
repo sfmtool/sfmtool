@@ -20,6 +20,7 @@ pub(crate) mod display;
 mod framing;
 mod hud;
 mod input;
+mod measurements;
 /// Crate-visible so the overlay text builders can be asserted on directly —
 /// they are the user-facing wording of the scene stats and hover lines.
 pub(crate) mod overlay;
@@ -390,6 +391,18 @@ pub(crate) struct Viewer3D {
     /// Why the point menu's *New Measurement from Here* is refused on each
     /// node where it is, set by the dock each frame.
     pub(crate) measurement_start: crate::bench::measurement::MeasurementStart,
+    /// The measurements this view draws, set by the dock each frame with the
+    /// HUD's *Show all measurements* ([`crate::measurement_marks`]).
+    pub(crate) measurements: crate::measurement_marks::MeasurementLayer,
+    /// A press a measurement's mark, line or the off-screen indicator holds,
+    /// from the press until the button comes up. Held here for the reason
+    /// [`Self::bench_drag`] is.
+    pub(crate) measurement_press: Option<crate::measurement_marks::Press>,
+    /// What the pointer is over among the measurements, for the hover text.
+    measurement_hover: Option<crate::measurement_marks::Target>,
+    /// What a click on a measurement asked of the app, drained by `dock.rs`
+    /// after the frame for the reason [`Self::bench_gesture`] is.
+    pub(crate) measurement_gesture: Option<crate::measurement_marks::MeasurementGesture>,
     /// The bench figure's handle the pointer has hold of, while it has one.
     ///
     /// Held here rather than derived each frame for the reason the Image Detail
@@ -525,6 +538,10 @@ impl Viewer3D {
             proposal_banner: Vec::new(),
             endpoint_target: None,
             measurement_start: Default::default(),
+            measurements: Default::default(),
+            measurement_press: None,
+            measurement_hover: None,
+            measurement_gesture: None,
             bench_drag: None,
             bench_gesture: None,
             menu_entry_rects: Vec::new(),
@@ -863,6 +880,17 @@ impl Viewer3D {
             .filter(|_| self.tool == brush::Tool::Navigate);
         let owns_pointer =
             self.update_bench_drag(ui, &response, rect, handles) || brush_owns_pointer;
+        // The measurements' marks, lines and off-screen indicator own a press
+        // that lands on them (G7), under the bench figure and the brush,
+        // which are drawn above them and take the press first.
+        let owns_pointer = self.update_measurement_press(
+            ui,
+            &response,
+            &painter,
+            rect,
+            owns_pointer || self.tool != brush::Tool::Navigate,
+            current_time,
+        ) || owns_pointer;
 
         // Handle all input.
         //
@@ -954,6 +982,10 @@ impl Viewer3D {
 
         // Update target indicator state for GPU rendering
         self.update_target_indicator_state(ui, show_target_indicator);
+
+        // The measurements, over the cloud: a measurement is something a
+        // person looks for, so the scene never hides it.
+        self.draw_measurements(ui, &painter, &response, rect);
 
         // The focused item, as the scene geometry the next frame's
         // upload draws. After the camera has been moved by this frame's input,

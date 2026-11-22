@@ -251,6 +251,10 @@ impl TabContext<'_> {
         self.viewer_3d.endpoint_target = self.state.endpoint_target();
         // Why the point menu's New Measurement from Here is refused, by node.
         self.viewer_3d.measurement_start = self.state.measurement_start();
+        // The measurements it draws, with its own Show all measurements.
+        self.viewer_3d.measurements = self
+            .state
+            .measurement_layer(self.state.show_all_measurements);
         // Fetched only after `show_hud` has handed back its `&mut
         // AppState`: the node borrows `state.scene`, and the two cannot
         // overlap.
@@ -298,6 +302,11 @@ impl TabContext<'_> {
             // deleted as one version, applied here for the same reason.
             if let Some(gesture) = self.viewer_3d.brush_gesture.take() {
                 gesture.apply(self.state);
+            }
+            // A click on a measurement's mark or line, applied here for the
+            // same reason.
+            if let Some(gesture) = self.viewer_3d.measurement_gesture.take() {
+                self.apply_measurement_gesture(ui, gesture);
             }
         } else {
             // Nothing selected is nothing on a bench: the figure would
@@ -712,6 +721,10 @@ impl TabContext<'_> {
             let endpoint_target = self.state.endpoint_target();
             let endpoint_refusal = endpoint_target.as_ref().map(|target| target.refusal_on(id));
             let bench_view_only = self.state.bench_view_only_refusal(id);
+            // The measurements it draws, with its own Show all measurements.
+            self.image_detail.measurements = self
+                .state
+                .measurement_layer(self.state.feature_display.show_all_measurements);
             // Why *Create Track Here* and *Find Nearby Tracks* are greyed on the
             // image shown, if they are.
             let create_track_refusal = selected_image
@@ -939,6 +952,10 @@ impl TabContext<'_> {
                         .pick_bench_observation(id, label, observation, false);
                 }
             }
+            // A click, a double-click or a handle drag on a drawn measurement.
+            if let Some(gesture) = detail_response.measurement_gesture {
+                self.apply_measurement_gesture(ui, gesture);
+            }
             if detail_response.has_pointer {
                 // Detail owns hover state when it has the pointer.
                 self.state.hovered_point =
@@ -1095,27 +1112,92 @@ impl TabContext<'_> {
             }
         }
         if let Some((id, side)) = response.look_through_item {
-            self.state.select_item_endpoint(id, side);
-            if let Some((image, [x, y])) = self.state.focused_item_endpoint(id, side) {
-                self.look_through_toward(ui, image, Some([x as f32, y as f32]));
-            }
+            let label = self
+                .state
+                .focused_item_label(id)
+                .unwrap_or_default()
+                .to_string();
+            self.look_through_endpoint(
+                ui,
+                crate::measurement_marks::DrawnId::Item { node: id, label },
+                side,
+            );
         }
         // Last, because ending a held camera move needs the state mutably.
         if let Some((measurement, side)) = response.look_through {
-            self.state.select_endpoint(measurement, side);
-            if let Some(row) = self.state.distance_row(measurement) {
-                let image = row.image(side) as usize;
-                let held = crate::scene::node_by_id(&self.state.scene, measurement.recon)
-                    .is_some_and(|node| image < node.recon().image_set.images.len());
-                if held {
-                    let [x, y] = row.pixel(side);
-                    self.look_through_toward(
-                        ui,
-                        ImageRef::new(measurement.recon, image),
-                        Some([x as f32, y as f32]),
-                    );
-                }
+            self.look_through_endpoint(
+                ui,
+                crate::measurement_marks::DrawnId::Stored(measurement),
+                side,
+            );
+        }
+    }
+
+    /// A double-click on an endpoint, on its block in Measurement View or on
+    /// its mark in the 3D view or Image Detail: select the endpoint as a click
+    /// does, then enter camera view through its image turned toward its pixel,
+    /// as a double-click on a Track View row does. An endpoint whose image is
+    /// past the image set selects and moves nothing more.
+    pub(crate) fn look_through_endpoint(
+        &mut self,
+        ui: &egui::Ui,
+        id: crate::measurement_marks::DrawnId,
+        side: crate::measurements::EndpointSide,
+    ) {
+        let target = match id {
+            crate::measurement_marks::DrawnId::Item { node, .. } => {
+                self.state.select_item_endpoint(node, side);
+                self.state.focused_item_endpoint(node, side)
             }
+            crate::measurement_marks::DrawnId::Stored(measurement) => {
+                self.state.select_endpoint(measurement, side);
+                self.state.distance_row(measurement).map(|row| {
+                    (
+                        ImageRef::new(measurement.recon, row.image(side) as usize),
+                        row.pixel(side),
+                    )
+                })
+            }
+        };
+        let Some((image, [x, y])) = target else {
+            return;
+        };
+        let held = crate::scene::node_by_id(&self.state.scene, image.recon)
+            .is_some_and(|node| image.index() < node.recon().image_set.images.len());
+        if held {
+            self.look_through_toward(ui, image, Some([x as f32, y as f32]));
+        }
+    }
+
+    /// Apply what a click, a double-click or a handle drag on a drawn
+    /// measurement asked for, in the 3D view or Image Detail.
+    ///
+    /// A click on a stored measurement's line selects it, and one on its mark
+    /// selects it and that endpoint, as a click on the endpoint block does; on
+    /// the focused item a mark's click selects that endpoint of the item, and
+    /// its line's asks for nothing, the item being focused already. A
+    /// double-click on a mark is [`Self::look_through_endpoint`]. A released
+    /// handle drag is the *Set an endpoint's image and pixel* step, a refusal
+    /// one failed row.
+    pub(crate) fn apply_measurement_gesture(
+        &mut self,
+        ui: &egui::Ui,
+        gesture: crate::measurement_marks::MeasurementGesture,
+    ) {
+        use crate::measurement_marks::{DrawnId, MeasurementGesture};
+        match gesture {
+            MeasurementGesture::Select(DrawnId::Stored(measurement)) => {
+                self.state.select_measurement(measurement);
+            }
+            MeasurementGesture::Select(DrawnId::Item { .. }) => {}
+            MeasurementGesture::SelectEndpoint(DrawnId::Stored(measurement), side) => {
+                self.state.select_endpoint(measurement, side);
+            }
+            MeasurementGesture::SelectEndpoint(DrawnId::Item { node, .. }, side) => {
+                self.state.select_item_endpoint(node, side);
+            }
+            MeasurementGesture::LookThrough(id, side) => self.look_through_endpoint(ui, id, side),
+            MeasurementGesture::SetEndpoint(set) => self.state.set_endpoint(&set),
         }
     }
 
@@ -1713,6 +1795,18 @@ fn show_overlay_toolbar_row(
                 ui.checkbox(&mut settings.tracked_only, "Tracked only");
             }
         }
+
+        // Shown in every mode: the measurements are a layer of their own, as
+        // the intrinsics layer is, and compose with each.
+        ui.separator();
+        ui.checkbox(
+            &mut settings.show_all_measurements,
+            crate::viewer_3d::display::SHOW_ALL_MEASUREMENTS_LABEL,
+        )
+        .on_hover_text(
+            "Draw every measurement with an endpoint in this image. Off, only the selected \
+             measurement and the one being edited are drawn.",
+        );
 
         // The layer's own report, built here so that the popup's footer and the
         // on-image legend read one computation rather than two.

@@ -51,6 +51,7 @@ mod intrinsics_detail;
 mod layout;
 #[cfg(feature = "mcp")]
 mod mcp;
+mod measurement_marks;
 mod measurement_view;
 mod measurements;
 mod metrics;
