@@ -884,7 +884,8 @@ pub(crate) struct BackgroundTask {
     /// happened to the node in the meantime.
     pub(crate) label: String,
     /// When it started, which is what the Action Log entry's cost is measured
-    /// from.
+    /// from: taken before its worker thread was spawned, so no stage the
+    /// worker times begins before it.
     pub(crate) started: Instant,
     /// Who asked for it. The entry the operation writes is theirs, however
     /// many minutes later it lands: an agent that started a solve is the actor
@@ -1679,7 +1680,9 @@ impl AppState {
     /// Spawn the worker for `task` and make it its queue's running task.
     ///
     /// The queue must be idle. `started`, which the Action Log row's cost is
-    /// measured from, is now, however long the task waited.
+    /// measured from, is now, however long the task waited, and is taken
+    /// before the worker thread is spawned, so every stage the worker times
+    /// lies inside it.
     fn run_task(&mut self, task: WaitingTask) -> Result<(), String> {
         let quiet_source = task.quiet_source();
         let WaitingTask {
@@ -1731,6 +1734,10 @@ impl AppState {
             reports,
             wake: self.wake.clone(),
         };
+        // Before the spawn, not after it: the worker may run its first stage
+        // before `spawn` returns, and a cost measured from an instant after
+        // that stage began would be shorter than the stages it names.
+        let started = Instant::now();
         std::thread::Builder::new()
             .name(format!("sfm-explorer {}", operation.name))
             .spawn(move || worker.run())
@@ -1747,7 +1754,7 @@ impl AppState {
             quiet_source,
             node,
             label,
-            started: Instant::now(),
+            started,
             actor,
             collector,
             cancel,

@@ -812,7 +812,10 @@ behind it is started.
 **The cost runs from when the task started, not from when it was queued.** A
 task that waited a minute behind a bundle adjustment and then ran for a second
 costs a second in its row: the row is the cost of the work, and the wait was
-the other task's.
+the other task's. `started` is taken before the task's worker thread is
+spawned, not after: a worker can begin its first stage before the spawn
+returns, and a cost measured from an instant after that would be shorter than
+the stages its own breakdown names.
 
 Both are timed from `started` like a successful one, and both keep what the
 operation reported before it stopped. A solve cancelled seventeen seconds in
