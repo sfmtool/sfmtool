@@ -292,7 +292,7 @@ giving the same sentence, a re-seated item committing to no effect), the
 pointer equality of the shared base and point column, the direct delete and
 its row map, the last row leaving the kind absent, and a value with
 measurements of its own materializing them.
-[tests/rust_bindings/bench/test_bench_rust_bindings.py](../../../tests/rust_bindings/bench/test_bench_rust_bindings.py)
+[tests/rust_bindings/bench/test_bench_measurement_rust_bindings.py](../../../tests/rust_bindings/bench/test_bench_measurement_rust_bindings.py)
 covers the same through the bindings.
 
 ## Non-goals
