@@ -809,3 +809,96 @@ fn the_views_refuse_as_the_resolver_does() {
         Err(EndpointRefusal::AllExcluded { .. })
     ));
 }
+
+/// The views of an endpoint on a point at infinity, seen in three images:
+/// each view is the pixel where that observation's square holds the texel's
+/// direction, the resolver there finds the same point and texel at infinity,
+/// and `ℓ` reads in degrees.
+#[test]
+fn the_views_of_a_point_at_infinity_carry_its_direction() {
+    let d = Vector3::new(0.0, 0.0, -1.0);
+    let sky = Pt {
+        pos: [d.x, d.y, d.z],
+        w: 0.0,
+        u: [0.02, 0.0, 0.0],
+        v: [0.0, -0.02, 0.0],
+        images: vec![0, 1, 2],
+    };
+    let recon = with_readings(scene(&[sky]), vec![reading(0.6, 0.9); 3]);
+    let value = edited(recon.clone());
+    let at = pixel_of_texel(&recon, 0, 0, 0.3, 0.2);
+    let texel = resolve(&value, 0, at).unwrap().chosen().patch_coords;
+
+    let offered = views(&value, 0, at).unwrap();
+    let images: Vec<u32> = offered.iter().map(|v| v.image).collect();
+    assert_eq!(images, [1, 2]);
+    // 0.6 grid px of a 24 px grid across 0.04 of the direction sphere.
+    let expected_l = (0.6 * 0.04 / 24.0_f64).to_degrees();
+    for view in &offered {
+        assert_eq!(view.patch_coords, texel);
+        let expected = pixel_of_texel(&recon, 0, view.image as usize, 0.3, 0.2);
+        assert_close(view.pixel[0], expected[0], 1e-6, "x");
+        assert_close(view.pixel[1], expected[1], 1e-6, "y");
+        assert_eq!(view.resolves_to, Some(0));
+        let l = view.localization.unwrap();
+        assert!(
+            (l - expected_l).abs() < 0.01 * expected_l,
+            "{l} against {expected_l}"
+        );
+
+        let moved = resolve(&value, view.image, view.pixel).unwrap();
+        assert_eq!(moved.chosen().point, 0);
+        assert_eq!(moved.chosen().depth, f64::INFINITY);
+        assert!(matches!(
+            moved.position(),
+            EndpointPosition::AtInfinity { .. }
+        ));
+        let [s, t] = moved.chosen().patch_coords;
+        assert_close(s, 0.3, 1e-6, "s after the switch");
+        assert_close(t, 0.2, 1e-6, "t after the switch");
+    }
+}
+
+/// The views resolve through the observations gathered for every image at
+/// once, and that reading is the resolver's own: over a grid of pixels of
+/// each image, a resolution against an image's entry of the gathered lists
+/// is the resolver's answer exactly, and each view's `resolves_to` is the
+/// resolver's pick at its pixel.
+#[test]
+fn the_gathered_observations_resolve_as_the_resolver_does() {
+    let mut far = pt(0.05, 0.02, -0.3, 0.25);
+    far.images = vec![0, 1, 2];
+    let mut lone = pt(-1.5, 0.3, 0.0, 0.2);
+    lone.images = vec![1];
+    let recon = scene(&[pt(0.0, 0.0, 0.0, 0.2), pt(0.25, 0.0, 0.0, 0.2), far, lone]);
+    let rows: Vec<_> = (0..recon.point_set.tracks.len())
+        .map(|j| reading(0.4 + 0.1 * j as f32, 0.7 + 0.03 * j as f32))
+        .collect();
+    let recon = with_readings(recon, rows);
+    let value = edited(recon.clone());
+    let opts = MeasurementEndpointOptions::default();
+    let by_image = observations_by_image(&value, None);
+    let mut resolved = 0;
+    for image in 0..IMAGES as u32 {
+        for gx in 0..60 {
+            for gy in 0..60 {
+                let pixel = [200.5 + f64::from(gx) * 4.0, 120.25 + f64::from(gy) * 4.0];
+                let one = resolve_measurement_endpoint(&value, image, pixel, &opts);
+                let all = resolve_among(&value, image, pixel, &opts, &by_image[image as usize]);
+                assert_eq!(one, all, "image {image} pixel {pixel:?}");
+                resolved += usize::from(one.is_ok());
+            }
+        }
+    }
+    assert!(resolved > 200, "the grid hit {resolved} squares");
+
+    let at = pixel_of_texel(&recon, 0, 0, 0.85, 0.0);
+    let offered = views(&value, 0, at).unwrap();
+    assert!(offered.len() >= 3, "{offered:?}");
+    for view in &offered {
+        let pick = resolve_measurement_endpoint(&value, view.image, view.pixel, &opts)
+            .ok()
+            .map(|r| r.chosen().point);
+        assert_eq!(view.resolves_to, pick);
+    }
+}

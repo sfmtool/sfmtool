@@ -434,6 +434,49 @@ pub fn resolve_measurement_endpoint(
     pixel: [f64; 2],
     options: &MeasurementEndpointOptions,
 ) -> Result<EndpointResolution, EndpointRefusal> {
+    let observations = observations_by_image(edited, Some(image));
+    let in_image = observations
+        .get(image as usize)
+        .map_or(&[][..], Vec::as_slice);
+    resolve_among(edited, image, pixel, options, in_image)
+}
+
+/// Every observation of a live point, as `(point, k)` with `k` its index in
+/// the point's track, gathered by image in one pass over the live points:
+/// entry `i` holds image `i`'s, in ascending order of point and then of `k`.
+/// With `only` set, the other images' entries are left empty.
+fn observations_by_image(
+    edited: &EditedReconstruction,
+    only: Option<u32>,
+) -> Vec<Vec<(u32, usize)>> {
+    let mut by_image: Vec<Vec<(u32, usize)>> = vec![Vec::new(); edited.base.image_set.images.len()];
+    for index in edited.live_indexes() {
+        let Some(view) = edited.point(index) else {
+            continue;
+        };
+        for (k, obs) in view.observations().iter().enumerate() {
+            if only.is_some_and(|image| image != obs.image_index) {
+                continue;
+            }
+            if let Some(list) = by_image.get_mut(obs.image_index as usize) {
+                list.push((index, k));
+            }
+        }
+    }
+    by_image
+}
+
+/// [`resolve_measurement_endpoint`] with the observations in `image` given:
+/// `observed`, image `image`'s entry of [`observations_by_image`]. Both the
+/// resolver and [`endpoint_views`] resolve through this, so a view's
+/// `resolves_to` is exactly what the resolver answers at its pixel.
+fn resolve_among(
+    edited: &EditedReconstruction,
+    image: u32,
+    pixel: [f64; 2],
+    options: &MeasurementEndpointOptions,
+    observed: &[(u32, usize)],
+) -> Result<EndpointResolution, EndpointRefusal> {
     let image_set = &edited.base.image_set;
     let i = image as usize;
     let Some(posed) = image_set.images.get(i) else {
@@ -465,19 +508,21 @@ pub fn resolve_measurement_endpoint(
         posed.translation_xyz,
     );
     let intrinsics = image_set.image_intrinsics(i);
-    let mut observed = false;
     let mut hits: Vec<Hit> = Vec::new();
-    for index in edited.live_indexes() {
-        let Some(view) = edited.point(index) else {
-            continue;
-        };
-        let mut patch: Option<Option<OrientedPatch>> = None;
-        for (k, obs) in view.observations().iter().enumerate() {
-            if obs.image_index != image {
+    // The list is in ascending point order, so a point's observations in the
+    // image are consecutive and its patch frame is read once for them.
+    let mut current: Option<(u32, PointView<'_>, Option<OrientedPatch>)> = None;
+    for &(index, k) in observed {
+        if current.as_ref().is_none_or(|(point, _, _)| *point != index) {
+            let Some(view) = edited.point(index) else {
                 continue;
-            }
-            observed = true;
-            let Some(patch) = patch.get_or_insert_with(|| view.patch_frame()).as_ref() else {
+            };
+            let patch = view.patch_frame();
+            current = Some((index, view, patch));
+        }
+        let (_, view, patch) = current.as_ref().expect("just read");
+        {
+            let Some(patch) = patch.as_ref() else {
                 continue;
             };
             let keypoint = view
@@ -522,7 +567,7 @@ pub fn resolve_measurement_endpoint(
             });
         }
     }
-    if !observed {
+    if observed.is_empty() {
         return Err(EndpointRefusal::NoObservations { image });
     }
     match hits.len() {
@@ -766,8 +811,10 @@ impl EndpointView {
 /// which differs from the view's own point where another square holds the
 /// pixel there and wins.
 ///
-/// One resolver call per view, run in parallel, so a call costs about as many
-/// resolutions as the candidates' tracks have observations.
+/// One pass over the live points gathers each image's observations, and each
+/// view is then resolved against its own image's alone, in parallel, so a
+/// call costs about one pass over the reconstruction plus, for each view, a
+/// pass over the observations in its image.
 ///
 /// # Errors
 ///
@@ -794,7 +841,11 @@ pub fn endpoint_views(
 ) -> Result<Vec<EndpointView>, EndpointRefusal> {
     use rayon::prelude::*;
 
-    let resolution = resolve_measurement_endpoint(edited, image, pixel, options)?;
+    // One pass over the reconstruction gathers every image's observations,
+    // and each resolution below reads only its own image's.
+    let by_image = observations_by_image(edited, None);
+    let in_image = |image: u32| by_image.get(image as usize).map_or(&[][..], Vec::as_slice);
+    let resolution = resolve_among(edited, image, pixel, options, in_image(image))?;
     let chosen = resolution.chosen;
     let order =
         std::iter::once(chosen).chain((0..resolution.candidates.len()).filter(|&i| i != chosen));
@@ -819,9 +870,15 @@ pub fn endpoint_views(
         }
     }
     views.par_iter_mut().for_each(|offer| {
-        offer.resolves_to = resolve_measurement_endpoint(edited, offer.image, offer.pixel, options)
-            .ok()
-            .map(|r| r.chosen().point);
+        offer.resolves_to = resolve_among(
+            edited,
+            offer.image,
+            offer.pixel,
+            options,
+            in_image(offer.image),
+        )
+        .ok()
+        .map(|r| r.chosen().point);
     });
     Ok(views)
 }

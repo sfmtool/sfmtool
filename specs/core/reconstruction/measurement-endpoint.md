@@ -402,9 +402,17 @@ point's track.
 there is no texel to carry anywhere, and the caller shows the same sentence
 for both.
 
-**Cost of a call.** One resolver call per view, run in parallel, so a call
-costs about as many resolutions as the candidates' tracks have observations.
-A caller computes the views when they are asked for, not every frame.
+**Cost of a call.** One pass over the live points gathers every image's
+observations, as `(point, k)` lists in the order the resolver visits them.
+The endpoint and each view are then resolved against their own image's list
+alone, through the same private function the resolver calls with its one
+image's list, so a view's `resolves_to` is exactly the resolver's answer at its
+pixel. A call is therefore about one pass over the reconstruction plus, for
+each view, a pass over the observations in its image, with the views resolved
+in parallel: 4 ms on `dino_dog_toy`'s ground truth for an endpoint on its
+longest track (54 views), well under a second on the largest reconstructions
+in `test-data`, so it takes no `&Progress`. A caller computes the views when
+they are asked for, not every frame.
 
 ## Python bindings
 
@@ -457,6 +465,13 @@ on synthetic reconstructions of two posed cameras and a few patches:
 - A view whose pixel another square holds and wins there resolves elsewhere.
 - Every candidate is offered, the chosen one's views first; the views refuse as
   the resolver does.
+- The views of a point at infinity seen in three images land where each
+  square holds the texel's direction, resolve back to the same point and
+  texel at infinity, and read `ℓ` in degrees.
+- Over a grid of pixels of every image, a resolution against an image's entry
+  of the observations gathered for all images at once is the resolver's own
+  answer exactly, and each view's `resolves_to` is the resolver's pick at its
+  pixel.
 
 [`tests/rust_bindings/reconstruction/test_measurement_endpoint_rust_bindings.py`](../../../tests/rust_bindings/reconstruction/test_measurement_endpoint_rust_bindings.py)
 checks the bindings on the seoul_bull ground truth, the views of an
