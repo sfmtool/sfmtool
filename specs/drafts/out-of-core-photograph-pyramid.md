@@ -2268,7 +2268,7 @@ in core. Step 17 turns the tier on.
       task `forget` the path, so the next frame reads the header again.
       A newly selected image is drawn once its overview level's tiles have
       landed; until then Image Detail keeps drawing the image it showed
-      before, its tiles, overlays and view, taking no click, drag or menu,
+      before, its tiles, overlays and view, taking no click, drag or menu (G13),
       and says *Loading image…* only where it has no such image (decided by
       the user). `display_photograph` stays for the 3D background
       (13c3), Track View's and the Track Table's renders and the dock's

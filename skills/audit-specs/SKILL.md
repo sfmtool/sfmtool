@@ -227,7 +227,7 @@ matches the code.
 
 ### Gesture sentences in `specs/gui/`, against the interaction rules
 
-Every viewer gesture follows the rules G1 to G12 in
+Every viewer gesture follows the rules G1 to G13 in
 [`specs/gui/interaction-rules.md`](../../specs/gui/interaction-rules.md)
 (STANDARDS.md § "A viewer gesture follows the interaction rules"), and a
 panel's spec cites the rule a gesture follows rather than restating it. So for

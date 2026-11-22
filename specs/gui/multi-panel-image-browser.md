@@ -548,11 +548,10 @@ tiles"):
   reports the image still drawn. Only where there is no such image (the first image the
   panel shows, an image of another reconstruction, or a previous image with no tile
   uploaded) the panel shows "Loading image…" instead. While the previous image is kept,
-  what is drawn is not the selected image, so a click, a double-click, a drag and a
-  right-click on the panel do nothing: they would act on a pixel or a point of an image
-  that is no longer selected. Hover highlights the point under the pointer, which is a
-  point of the reconstruction like any other (G6), and the wheel and `Z` move the view,
-  which carries over to the new image.
+  its gestures follow G13 ([interaction-rules.md](interaction-rules.md)): a click,
+  double-click, drag or right-click on it does nothing, hover highlights the point under
+  the pointer (G6), and the wheel and `Z` move the view, which carries over to the new
+  image.
 - **The tiles.** Each frame asks `state::display_tiles` for the tiles it would upload
   this frame (§ "Uploads" below), and for no tile it has uploaded already. Those the cache
   holds are handed over at once; for the rest it starts one `try_decode_tiles` on the

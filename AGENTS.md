@@ -66,7 +66,7 @@ being read, as `specs/formats/format-versions.md` says; an `sfm-explorer`
 item is private or `pub(crate)` unless the crate's public interface exports
 it, which the `unreachable_pub` lint checks
 for every item but struct fields; a viewer gesture follows the interaction
-rules G1–G12 in `specs/gui/interaction-rules.md`, which a panel's spec cites
+rules G1–G13 in `specs/gui/interaction-rules.md`, which a panel's spec cites
 rather than restates; a convention has no documented exceptions; a
 test asserts something that can fail; a test takes only the time its
 assertions need, made faster by a cheaper input or shared work, never by

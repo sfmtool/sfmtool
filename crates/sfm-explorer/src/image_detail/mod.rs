@@ -974,8 +974,9 @@ impl ImageDetail {
         let interact_rect = panel_rect;
         let interact_id = ui.id().with("image_detail_interact");
         // While the previous image is held, what is drawn is not the selected
-        // image, so no click, drag or menu acts on it; hover and the view's
-        // own wheel and keys still work on what is drawn.
+        // image, so no click, drag or menu acts on it (G13 in
+        // specs/gui/interaction-rules.md); hover and the view's own wheel and
+        // keys still work on what is drawn.
         let sense = if holding {
             egui::Sense::hover()
         } else {

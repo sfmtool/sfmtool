@@ -4353,3 +4353,173 @@ fn with_a_gap_a_turned_corner_lands_under_the_pointer_on_the_redrawn_outline() {
         "the fixture should tell the two squares apart",
     );
 }
+
+/// The keypoint cache of image `index` of a `sift_files` node, its features
+/// on [`feature_pixel`]'s grid.
+fn sift_of(node: &SceneNode, index: usize) -> crate::state::CachedSiftFeatures {
+    let count = node.recon().point_set.max_track_feature_index[index] as usize + 1;
+    crate::state::CachedSiftFeatures {
+        positions_xy: (0..count).map(feature_pixel).collect(),
+        affine_shapes: vec![[[6.0, 0.0], [0.0, 6.0]]; count],
+        read_count: count,
+    }
+}
+
+/// One frame showing image `index` of `node` with the pointer at `at` and
+/// `clicks` press/release pairs of the primary button, answering what the
+/// panel reported.
+#[allow(clippy::too_many_arguments)]
+fn pointer_frame(
+    detail: &mut ImageDetail,
+    ctx: &egui::Context,
+    node: &SceneNode,
+    index: usize,
+    sift: &crate::state::CachedSiftFeatures,
+    photograph: crate::state::PhotographSource<'_>,
+    at: egui::Pos2,
+    clicks: usize,
+) -> super::ImageDetailResponse {
+    let display = FeatureDisplaySettings::default();
+    let mut intrinsics_display = IntrinsicsDisplaySettings::default();
+    let mut events = vec![egui::Event::PointerMoved(at)];
+    for _ in 0..clicks {
+        for pressed in [true, false] {
+            events.push(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            });
+        }
+    }
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, PANEL)),
+        events,
+        ..Default::default()
+    };
+    crate::platform::set_test_pointer_pos(Some(at));
+    let mut response = None;
+    crate::test_support::run_frame_headless(ctx, input, |ui| {
+        response = Some(detail.show(
+            ui,
+            node.edited(),
+            node.id,
+            node.history.current_version().serial,
+            Some(index),
+            None,
+            None,
+            None,
+            BenchMenu::default(),
+            &[],
+            &crate::platform::ScrollInput::default(),
+            Some(sift),
+            Some(photograph),
+            &display,
+            &mut intrinsics_display,
+            None,
+        ));
+    });
+    crate::platform::set_test_pointer_pos(None);
+    response.expect("the frame ran")
+}
+
+/// G13: while the panel keeps drawing the previous image as the selected one
+/// loads, a click on a feature of the drawn image selects nothing and a
+/// double-click off every feature does not zoom, while hovering a feature
+/// still names its point; once the selected image is drawn, a click on one of
+/// its features selects that feature's point again. The selected image's
+/// reads are stepped by hand, so the frames that hold are the ones before
+/// each read has run.
+#[test]
+fn a_kept_previous_image_takes_no_click_but_still_hovers() {
+    let node = demo_node("/runs/held.sfmr");
+    let image = pixels(1920, 1080);
+    let tracked = |index: usize| {
+        let (&feature, &point) = node.recon().point_set.image_feature_to_point[index]
+            .iter()
+            .next()
+            .expect("the demo's images track features");
+        let [x, y] = feature_pixel(feature as usize);
+        (
+            to_panel(&image, [f64::from(x), f64::from(y)]),
+            point as usize,
+        )
+    };
+    let (sift_0, sift_1) = (sift_of(&node, 0), sift_of(&node, 1));
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+
+    // Image 1 is drawn first, with the photograph held in its cache.
+    let shown = crate::test_support::HeldPhotograph::new(
+        sfmtool_core::camera::image::ImageU8Pyramid::build(&image, 1),
+    );
+    let (on_shown, shown_point) = tracked(1);
+    for _ in 0..2 {
+        pointer_frame(
+            &mut detail,
+            &ctx,
+            &node,
+            1,
+            &sift_1,
+            shown.source(),
+            on_shown,
+            0,
+        );
+    }
+
+    // Image 0 is selected, its photograph on disk and not yet read.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("selected.png");
+    image::RgbImage::new(1920, 1080).save(&path).unwrap();
+    let cache = std::sync::Arc::new(sfmtool_core::camera::PhotographCache::new(
+        sfmtool_core::camera::PhotographCacheOptions {
+            budget_bytes: 0,
+            ..Default::default()
+        },
+    ));
+    let (requests, queue) = crate::state::PhotographRequests::queued();
+    let selected = crate::state::PhotographSource {
+        cache: &cache,
+        requests: &requests,
+        path: &path,
+    };
+    let empty = egui::pos2(20.0, PANEL.y - 20.0);
+    // The header read, then the decode, each held over until it has run.
+    for step in 0..2 {
+        let held = pointer_frame(&mut detail, &ctx, &node, 0, &sift_0, selected, on_shown, 1);
+        assert_eq!(held.view.map(|v| v.image.index()), Some(1), "step {step}");
+        assert_eq!(held.select_point, None, "step {step}: a click selected");
+        assert_eq!(
+            held.hovered_point,
+            Some(shown_point),
+            "step {step}: the hover is the drawn feature's"
+        );
+        pointer_frame(&mut detail, &ctx, &node, 0, &sift_0, selected, empty, 2);
+        assert_eq!(detail.zoom, 1.0, "step {step}: a double-click zoomed");
+        assert_eq!(queue.run_off_this_thread(), 1, "step {step}");
+    }
+
+    let (on_selected, selected_point) = tracked(0);
+    let drawn = pointer_frame(
+        &mut detail,
+        &ctx,
+        &node,
+        0,
+        &sift_0,
+        selected,
+        on_selected,
+        0,
+    );
+    assert_eq!(drawn.view.map(|v| v.image.index()), Some(0));
+    let clicked = pointer_frame(
+        &mut detail,
+        &ctx,
+        &node,
+        0,
+        &sift_0,
+        selected,
+        on_selected,
+        1,
+    );
+    assert_eq!(clicked.select_point, Some(selected_point));
+}
