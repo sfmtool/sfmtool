@@ -573,8 +573,8 @@ pub(crate) fn chunk_spans<S: KdfScalar>(nodes: usize, features: usize) -> ChunkS
 /// Name of the descriptor corpus container.
 ///
 /// `.frames` rather than `.zst`: the entry holds one independent zstd frame per
-/// descriptor block, not a single frame, so the extension says so instead of
-/// implying a whole-entry decompression that would fail.
+/// descriptor block, not a single frame, so a tool that decodes each `.zst`
+/// entry as one frame does not take it for one and return only its first block.
 pub(crate) fn corpus_entry_name<S: KdfScalar>(features: usize, dimension: usize) -> String {
     format!(
         "features/corpus.{features}.{dimension}.{}.frames",
