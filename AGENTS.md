@@ -108,24 +108,30 @@ the work directly and do not invoke it again.
 ### Opening a pull request
 
 **Every PR body follows `.github/PULL_REQUEST_TEMPLATE.md`** — read it before
-writing the description, not after. Its sections (Summary / Changes / Testing /
-Screenshots / Checklist / License) are what reviewers look for, and
-`gh pr create --body` bypasses the template silently: GitHub only prefills it
-in the web editor, so a PR opened from the CLI gets whatever body you hand it
-and no warning that a template existed. Keep the checklist items and the
+writing the description, not after. Its sections (Summary / Changes / Testing
+/ Screenshots and Renders / Checklist / License) are what reviewers look for,
+and `gh pr create --body` bypasses the template silently: GitHub only
+prefills it in the web editor, so a PR opened from the CLI gets whatever body
+you hand it and no warning that a template existed. Keep the checklist items and the
 License block verbatim, ticking what applies and marking the rest `n/a` with
 the reason, rather than deleting the lines.
 
-**A visible change needs screenshots in the PR.** That is any change to what
-the viewer draws (a menu entry, a label, a tooltip, a panel, a layout, a
-colour, the 3D view's rendering), to an image a CLI command writes, or to a
-docs page, with a before/after pair when something that already existed
-changed. No visible change is too small to need them: a new menu entry or a
-renamed label counts. Write `n/a` only for a change with nothing visible, and
-say what was checked ("n/a: Rust core only, no viewer, CLI image or docs
-change"). `skills/implement-change/SKILL.md` § "Screenshots" says how to take
-them on copies of `test-data`, crop out local paths and usernames, and host
-them on the fork.
+**A visible change needs screenshots or renders in the PR**, in its
+"Screenshots and Renders" section. That is any change to what the viewer
+draws (a menu entry, a label, a tooltip, a panel, a layout, a colour, the 3D
+view's rendering), to a docs page, or to an image the code renders or writes:
+the output image of a CLI command, or the output of a helper or library
+function that renders or encodes an image (a renderer, a texture, a thumbnail
+or patch bitmap builder, an image encoder). Show a before/after pair when
+something that already existed changed. No visible change is too small to
+need them: a new menu entry or a renamed label counts. When no CLI command
+writes a library renderer's images, render them with a throwaway program or
+a test that is not committed, and host them as screenshots are hosted. Write
+`n/a` only when nothing visible and no rendered image changes, and say what
+was checked ("n/a: Rust core only, no viewer, docs or rendered image
+change"). `skills/implement-change/SKILL.md` § "Screenshots and renders" says
+how to take them on copies of `test-data`, crop out local paths and
+usernames, and host them on the fork.
 
 **The docs site is in another repository.** Its pages, their screenshots and
 its build live in

@@ -29,17 +29,22 @@ reporting it, since whole-suite times vary between runs. For a test that
 takes more than 5 seconds, say why it needs its input (see `specs/STANDARDS.md#tests-cost-what-their-assertions-need`).
 -->
 
-## Screenshots
+## Screenshots and Renders
 
 <!--
-Screenshots are required when the change is something you can see: in the
-SfM Explorer viewer, in an image a CLI command writes, or on a docs page. Small
-changes count, such as a new menu entry, a changed label or tooltip. When the
-change alters something that already existed, show a before/after pair. Write
-"n/a" only when there is nothing to see, and say what you checked, for example
-"n/a: Rust core only, no viewer, CLI image or docs change".
+Screenshots and rendered images are required when the change alters something
+you can see, in the SfM Explorer viewer or on a docs page, or any image the
+code renders or writes: the output image of a CLI command, or the output of a
+helper or library function that renders or encodes an image (a renderer, a
+texture, a thumbnail or patch bitmap builder, an image encoder). Small changes
+count, such as a new menu entry, a changed label or tooltip. When the change
+alters an image that already existed, show a before/after pair. Give each
+rendered image a caption saying what was rendered with which options. Write
+"n/a" only when nothing visible and no rendered image changes, and say what
+you checked, for example "n/a: Rust core only, no viewer, docs or rendered
+image change".
 
-Check that a screenshot shows no sensitive data. Prefer screenshots of the
+Check that a screenshot or render shows no sensitive data. Prefer pictures of the
 checked-in test data under `test-data/images/`, such as
 `seoul_bull_sculpture_ground_truth_v01.sfmr`,
 `seoul_bull_sculpture_ground_truth_v02.sfmr`,
