@@ -1293,9 +1293,10 @@ afterwards in Track View ([`track-view.md`](track-view.md)), and the commit
 there is what reaches the reconstruction. `Create Track Here` and `Find Nearby
 Tracks` are the two that commit by themselves, and what they commit stays on
 the bench afterwards, seated on the points it wrote, for Track View to work on
-if it needs it. Every entry but `Edit on Bench` names
-a pixel, and this menu is the viewer's way to name one by pointing at it (Measurement View's endpoint fields take one typed), so this is where
-every gesture that needs one pointed at lives.
+if it needs it. Every entry but `Edit on Bench` names a pixel, and this menu
+is the viewer's way to name one by pointing at it (Measurement View's endpoint
+fields take one typed), so this is where every gesture that needs one pointed
+at lives.
 
 On a `sift_files` node the bench is view-only ([`bench.md`](bench.md) § "A
 view-only bench"): `Start cluster on the bench here` and `Add observation to
