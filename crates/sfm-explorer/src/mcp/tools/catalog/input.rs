@@ -43,8 +43,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                             "type": "integer",
                             "enum": [1, 2],
                             "description":
-                                "2 for a double click: a second press and release in the frame \
-                                 after the first. Omit for 1.",
+                                "2 for a double click: a second press and release in the same \
+                                 frame as the first. Omit for 1.",
                         }),
                     ),
                     ("modifiers", modifiers_schema("during the click")),

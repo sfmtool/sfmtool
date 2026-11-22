@@ -850,24 +850,32 @@ impl App {
                     // pose -- is turned by the model matrix instead of rebuilt.
                     let transform = crate::camera_lock::background_transform(&self.viewer_3d, node)
                         .unwrap_or_else(|| node.transform().clone());
-                    // The photograph comes from the photograph cache, decoded
-                    // on the rayon pool on a miss (on this thread only under a
-                    // cache budget of 0).
-                    let (photographs, requests, ctx) = (
-                        &self.state.photographs,
-                        &self.state.photograph_requests,
-                        &self.egui_ctx,
+                    // The photograph's layout and level come from the
+                    // photograph cache, read on the rayon pool on a miss and
+                    // never on this thread, at any budget.
+                    let path = crate::state::photograph_path(node.recon(), image.index());
+                    let source = path.as_deref().map(|path| crate::state::PhotographSource {
+                        cache: &self.state.photographs,
+                        requests: &self.state.photograph_requests,
+                        path,
+                    });
+                    let ctx = &self.egui_ctx;
+                    self.scene_renderer.upload_bg_image(
+                        device,
+                        queue,
+                        node.recon(),
+                        image,
+                        || {
+                            source.map_or(crate::state::DisplayLayout::Unreadable, |source| {
+                                crate::state::display_layout(source, ctx)
+                            })
+                        },
+                        |layout, level| {
+                            source.map_or(crate::state::DisplayLevel::Unreadable, |source| {
+                                crate::state::display_level(source, layout, level, ctx)
+                            })
+                        },
                     );
-                    self.scene_renderer
-                        .upload_bg_image(device, queue, node.recon(), image, || {
-                            crate::state::display_photograph(
-                                photographs,
-                                requests,
-                                node.recon(),
-                                image.index(),
-                                ctx,
-                            )
-                        });
                     Some(transform)
                 }
                 None => {

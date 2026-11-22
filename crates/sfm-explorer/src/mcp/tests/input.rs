@@ -116,6 +116,9 @@ struct Harness {
     /// The value of the test number box beside Count.
     number: f64,
     names: WidgetNames,
+    /// The time of the next frame and the seconds each frame takes, when a
+    /// test sets them; `None` leaves egui to assume 1/60 s a frame.
+    clock: Option<(f64, f64)>,
 }
 
 /// The tab bodies: the real Scene and Image Detail panels; a button that
@@ -269,6 +272,7 @@ impl Harness {
             list: List::default(),
             number: 5.0,
             names: WidgetNames::default(),
+            clock: None,
         };
         harness.settle();
         harness
@@ -284,9 +288,15 @@ impl Harness {
     /// Draw one frame with `events` delivered, and capture it as the viewer
     /// does.
     fn frame(&mut self, events: Vec<egui::Event>) -> Arc<WidgetFrame> {
+        let time = self.clock.as_mut().map(|(time, seconds)| {
+            let now = *time;
+            *time += *seconds;
+            now
+        });
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
             events,
+            time,
             ..Default::default()
         };
         let Self {
@@ -909,8 +919,34 @@ fn a_scroll_outside_its_target_is_refused_before_it_is_delivered() {
     assert_eq!(rows[0].text, format!("scroll failed: {error}"));
 }
 
-/// `count: 2` is one double click: egui reports a click for each press, and
-/// the second press, one frame after the first, as the one double click.
+/// `count: 2` is one double click however long the viewer's frames take:
+/// here each takes half a second, longer than egui's 0.3 s double-click
+/// interval, as a frame waiting on an occluded macOS window's drawable can.
+/// [`Clicks`] counts the frames in which the button answered each question.
+#[test]
+fn count_two_is_one_double_click_when_every_frame_is_slow() {
+    let mut harness = Harness::new();
+    let panel = harness.listing(Some(Tab::BackgroundTasks));
+    let count = the(&panel["widgets"], "Count").clone();
+    harness.clock = Some((100.0, 0.5));
+    harness.settle();
+    harness.clicks = Clicks::default();
+    harness.ok("click", json!({ "widget": count["widget"], "count": 2 }));
+    assert_eq!(
+        harness.clicks,
+        Clicks {
+            clicked: 1,
+            double_clicked: 1,
+            triple_clicked: 0
+        },
+        "one frame with a click and a double click"
+    );
+}
+
+/// `count: 2` is one double click: both presses go into one frame, in which
+/// egui reports a click for each press and the second as the one double
+/// click. [`Clicks`] counts the frames in which the button answered each
+/// question.
 #[test]
 fn count_two_is_one_double_click() {
     let mut harness = Harness::new();
@@ -935,11 +971,11 @@ fn count_two_is_one_double_click() {
     assert_eq!(
         harness.clicks,
         Clicks {
-            clicked: 2,
+            clicked: 1,
             double_clicked: 1,
             triple_clicked: 0
         },
-        "one double click, and no click past the second press"
+        "one frame with a click and a double click, and no triple click"
     );
     let last = harness.state.action_log.entries().last().unwrap();
     assert!(

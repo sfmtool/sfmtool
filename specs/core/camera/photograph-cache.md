@@ -480,6 +480,24 @@ reconstruction's photographs goes through it except the ones under
   with `prefetch_tiles`, which starts the same decode and peeks at nothing
   ([multi-panel-image-browser.md](../../gui/multi-panel-image-browser.md)
   § "Image Detail").
+- **The 3D view's camera-view background** never reads or decodes on the GUI
+  thread either, at any budget, and asks only when the level it wants is not
+  the one its texture holds. It calls `display_layout`, and then
+  `display_level` for the coarsest level that covers the viewport within the
+  GPU's texture limit. `display_level` starts one task on the rayon pool,
+  recorded in `PhotographRequests` with the tile decodes, so one task at most
+  runs for a photograph whichever panel started it. The task asks for the
+  level's tiles with `try_decode_tiles`, answering `Busy` as Image Detail's
+  decode does and asked again 50 ms later, and builds the level from the
+  tiles `try_decode_tiles` answered, at every budget. It makes no other call
+  to the cache, and never calls `get_level`, so no task of the background
+  waits on a slot or on the build count. The
+  level is kept in `PhotographRequests` until the background takes it, one
+  level at most, and a failure is kept and a key or level the photograph
+  does not have handled as for Image Detail's decodes. The background keeps
+  the level sizes, so a resize chooses the level again without asking the
+  cache ([camera-views.md](../../gui/camera-views.md) § "Photograph
+  background").
 - **Track View's patch tiles and the Track Table's crops** never decode on the
   GUI thread either. They call `display_photograph` in the same file, which
   calls `peek_state`; on a miss it starts one `get` of that path on the rayon
@@ -489,13 +507,6 @@ reconstruction's photographs goes through it except the ones under
   photograph is decoded where it is asked for
   ([track-view.md](../../gui/track-view.md),
   [track-table.md](../../gui/track-table.md)).
-
-- **The 3D view's camera-view background** takes its pixels through
-  `display_photograph` too, and only when the level it wants is not the one
-  its texture holds. It copies one level of the pyramid into its texture, the
-  coarsest that covers the viewport within the GPU's texture limit, and keeps
-  the level sizes, so a resize chooses the level again without the pyramid
-  ([camera-views.md](../../gui/camera-views.md) § "Photograph background").
 
 Because the key is a path, the cache is not touched when an edit renumbers a
 node's images, and it is not cleared when a node or the whole scene is closed:
@@ -650,7 +661,15 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   look and decoding once it is given back; a failed decode answered as
   unreadable and not decoded again until its file changes; tiles answered for
   a view that moved on dropped; a key the photograph does not have reading the
-  layout again; and tiles asked for ahead handed over with no second decode),
+  layout again; tiles asked for ahead handed over with no second decode; the
+  3D background's level read once, off the calling thread, with a budget and
+  with a budget of 0, built from the tiles with one call to the cache and
+  equal to the level of the pyramid the cache decodes; a level read
+  answering `Busy` asked again on a later frame and read once the
+  reservation is given back; a level read waiting behind a
+  tile decode of the same photograph, and a level not taken dropped when
+  another is asked for; a level read against a layout the file no longer
+  has reading the layout again; and a failed level read not decoded again),
   [image_detail/photograph_tiles/tests.rs](../../../crates/sfm-explorer/src/image_detail/photograph_tiles/tests.rs)
   (two panels showing one photograph ask for its layout and its tiles once,
   neither decoding as it draws, with a budget and with a budget of 0; the tiles
@@ -658,8 +677,9 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   switch keeps drawing the previous image until the new one's overview has
   landed, and the first image says it is loading until then),
   [scene_renderer/upload/tests.rs](../../../crates/sfm-explorer/src/scene_renderer/upload/tests.rs)
-  (the camera-view background's photograph decoded off the calling thread and
-  drawn once it lands, an unreadable one read once), and
+  (the camera-view background's photograph read off the calling thread and
+  drawn once it lands, with a budget and with a budget of 0, and an
+  unreadable one's header read once), and
   [scene_graph/tests.rs](../../../crates/sfm-explorer/src/scene_graph/tests.rs)
   (closing everything keeps the photographs).
 

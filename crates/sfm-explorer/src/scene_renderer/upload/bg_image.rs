@@ -6,10 +6,10 @@
 //! The background is one texture of one level of the photograph's pyramid:
 //! the coarsest level that still covers the viewport, and no finer than the
 //! GPU's texture limit allows ([`background_level`]). The pixels come from the
-//! viewer's photograph cache through a closure the caller passes,
-//! `state::display_photograph`, which decodes on the rayon pool on a miss
-//! (on the calling thread only under a cache budget of 0); the renderer calls
-//! it only when the level it wants is not the one it holds.
+//! viewer's photograph cache through two closures the caller passes,
+//! `state::display_layout` and `state::display_level`, which read the layout
+//! and the level on the rayon pool and never on the calling thread; the
+//! renderer calls them only when the level it wants is not the one it holds.
 
 use super::super::distorted_mesh::generate_bg_distorted_mesh;
 use super::super::gpu_types::{
@@ -17,10 +17,11 @@ use super::super::gpu_types::{
 };
 use super::super::SceneRenderer;
 use crate::scene::ImageRef;
-use crate::state::DisplayPhotograph;
+use crate::state::{DisplayLayout, DisplayLevel};
 use sfmtool_core::camera::image::ImageU8;
-use sfmtool_core::camera::CameraIntrinsics;
+use sfmtool_core::camera::{CameraIntrinsics, PyramidLayout};
 use sfmtool_core::SfmrReconstruction;
+use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 /// The background photograph's mesh for image `image_index`: a tessellated
@@ -106,8 +107,8 @@ pub(super) fn level_uv_scale(size: (u32, u32), level_size: (u32, u32), level: us
 
 /// The level of a photograph the background texture holds, with the sizes of
 /// every level of that photograph, kept so the level can be chosen again when
-/// the viewport changes without asking the cache, whose pyramid may have been
-/// evicted since.
+/// the viewport changes without asking the cache, which may have dropped the
+/// photograph since.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct LoadedBgLevel {
     pub(crate) image: ImageRef,
@@ -165,24 +166,25 @@ fn rgba_of(level: &ImageU8) -> Vec<u8> {
 impl SceneRenderer {
     /// Show `image`'s photograph behind the 3D view in camera view mode.
     ///
-    /// Chooses the level with [`background_level`] from the viewport's size
-    /// (`current_size`, in physical pixels) and the device's texture limit,
-    /// and calls `photograph` for the pixels only when that level is not the
-    /// one the texture already holds for this image: on a change of image, or
-    /// a change of viewport size that changes the level. The app passes
-    /// `state::display_photograph`, which decodes on the rayon pool on a miss
-    /// (on the calling thread only under a cache budget of 0).
-    /// What it answers decides what is drawn:
+    /// Only when the texture does not already hold this image at the level
+    /// the viewport needs, on a change of image or a change of viewport size
+    /// that changes the level, it calls `layout` for the photograph's layout,
+    /// chooses the level with [`background_level`] from its level sizes, the
+    /// viewport's size (`current_size`, in physical pixels) and the device's
+    /// texture limit, and calls `level` for that level's pixels. The app
+    /// passes `state::display_layout` and `state::display_level`, which read
+    /// on the rayon pool and never on the calling thread. What they answer
+    /// decides what is drawn:
     ///
-    /// - **Decoded**: the chosen level is copied into a new texture, and the
-    ///   bind group rebuilt around it.
-    /// - **Decoding**: the texture keeps what it holds, so while the next
-    ///   image of a camera switch or an animation decodes, the previous one
-    ///   stays on its own mesh. A background of another node is cleared, since
-    ///   the frame's node transform is not its node's. Nothing is drawn when
-    ///   nothing was shown.
-    /// - **Unreadable**: nothing is drawn. The cache remembers the failure, so
-    ///   later frames ask again without reading the file.
+    /// - **Ready**: the level is copied into a new texture, and the bind group
+    ///   rebuilt around it.
+    /// - **Loading**, the layout's or the level's: the texture keeps what it
+    ///   holds, so while the next image of a camera switch or an animation
+    ///   loads, the previous one stays on its own mesh. A background of
+    ///   another node is cleared, since the frame's node transform is not its
+    ///   node's. Nothing is drawn when nothing was shown.
+    /// - **Unreadable**: nothing is drawn. The failure is remembered, so later
+    ///   frames ask again without decoding the file.
     ///
     /// The mesh is then rebuilt, for the image whose photograph the texture
     /// holds, whenever what it is built from changed, so a version that gives
@@ -194,7 +196,8 @@ impl SceneRenderer {
         queue: &wgpu::Queue,
         recon: &SfmrReconstruction,
         image: ImageRef,
-        photograph: impl FnOnce() -> DisplayPhotograph,
+        layout: impl FnOnce() -> DisplayLayout,
+        level: impl FnOnce(&Arc<PyramidLayout>, usize) -> DisplayLevel,
     ) {
         if image.index() >= recon.image_set.images.len() {
             self.clear_bg_image();
@@ -208,38 +211,46 @@ impl SceneRenderer {
                     == Some(loaded.level)
         });
         if !held {
-            match photograph() {
-                DisplayPhotograph::Decoded(pyramid) => {
-                    let level_sizes: Vec<(u32, u32)> = (0..pyramid.num_levels())
-                        .map(|l| (pyramid.level(l).width(), pyramid.level(l).height()))
-                        .collect();
+            match layout() {
+                DisplayLayout::Known(layout) => {
+                    let level_sizes: Vec<(u32, u32)> =
+                        (0..layout.levels()).map(|l| layout.level_size(l)).collect();
                     match background_level(&level_sizes, viewport_long_px, max_dimension) {
-                        Some(level) => self.load_bg_texture(
-                            device,
-                            queue,
-                            LoadedBgLevel {
-                                image,
-                                level,
-                                level_sizes,
-                            },
-                            pyramid.level(level),
-                        ),
+                        Some(chosen) => match level(&layout, chosen) {
+                            DisplayLevel::Ready(pixels) => self.load_bg_texture(
+                                device,
+                                queue,
+                                LoadedBgLevel {
+                                    image,
+                                    level: chosen,
+                                    level_sizes,
+                                },
+                                &pixels,
+                            ),
+                            DisplayLevel::Loading => self.keep_bg_image_while_loading(image),
+                            DisplayLevel::Unreadable => self.clear_bg_image(),
+                        },
                         None => self.clear_bg_image(),
                     }
                 }
-                DisplayPhotograph::Decoding => {
-                    if self
-                        .bg_image_loaded
-                        .as_ref()
-                        .is_some_and(|loaded| loaded.image.recon != image.recon)
-                    {
-                        self.clear_bg_image();
-                    }
-                }
-                DisplayPhotograph::Unreadable => self.clear_bg_image(),
+                DisplayLayout::Loading => self.keep_bg_image_while_loading(image),
+                DisplayLayout::Unreadable => self.clear_bg_image(),
             }
         }
         self.update_bg_mesh(device, recon);
+    }
+
+    /// While `image`'s photograph loads, keep the one the texture holds, on
+    /// its own mesh, unless it is of another node, whose transform is not the
+    /// frame's.
+    fn keep_bg_image_while_loading(&mut self, image: ImageRef) {
+        if self
+            .bg_image_loaded
+            .as_ref()
+            .is_some_and(|loaded| loaded.image.recon != image.recon)
+        {
+            self.clear_bg_image();
+        }
     }
 
     /// Rebuild the background mesh for the image whose photograph the texture

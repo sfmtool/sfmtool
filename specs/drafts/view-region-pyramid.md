@@ -587,9 +587,9 @@ the main draft's step 13 makes the cache hand out tiled photographs only, and
 there is no whole pyramid for any reader to fall back on. That step is seven
 pull requests: 13a makes the cache's slot cancellable (built), 13b bounds the
 decodes in progress by the build budget (built), 13c1 adds the cache's layout
-and tile requests (built), 13c2 moves Image Detail to them (built), and 13c3
-and 13d move the other panels to them, while the cache still holds whole
-pyramids, and
+and tile requests (built), 13c2 moves Image Detail to them (built), 13c3
+moves the 3D background to them (built), and 13d moves Track View and the
+Track Table to them, while the cache still holds whole pyramids, and
 13e replaces the pyramids with tiles, which is where the tests of this
 draft's step 5 that count decodes run.
 
@@ -793,12 +793,17 @@ decisions.
    is reserved, and under "0" no caller waits for ever. Built in the
    main draft's step 13b, and the revision in its step 13c2.
 9. **How the 3D background reads its level.** *Decided by the user:* the
-   background first asks for its level's tiles with `try_decode_tiles`,
-   asking again on a later frame when the answer is `Busy`, then reads the
-   level with `get_level` once they are present; under a cache budget of 0
-   it builds the level from the tiles that call returns. So no panel task
-   waits on a slot or on the build count, and the rule has no exception. The
-   options considered were that; accepting the background as an exception,
+   background asks for its level's tiles with `try_decode_tiles`, asking
+   again on a later frame when the answer is `Busy`, and builds the level
+   from the tiles that call returns, at every cache budget, never calling
+   `get_level`. So no panel task waits on a slot or on the build count, and
+   the rule has no exception. The options first considered were reading the
+   level with `get_level` once the tiles were present, building it from the
+   tiles only under a budget of 0; accepting the background as an exception,
    whose `get_level` would reserve with `reserve_builds` and wait on the slot
-   on a miss; and a variant of `get_level` that never waits. It is the main
-   draft's step 13c3.
+   on a miss; and a variant of `get_level` that never waits. The user chose
+   the first, and building it found a gap in it: another decode could evict
+   the photograph between the tiles and `get_level`, which would then wait
+   on the slot while another caller decoded the photograph. So the user
+   decided that the level is built from the tiles at every budget. Built in
+   the main draft's step 13c3.

@@ -21,17 +21,24 @@
 //!   cache of budget 0, which keeps nothing, hands them over.
 //!   [`prefetch_tiles`] starts the same decode a frame ahead, for the image
 //!   that animation shows next.
-//! - The 3D view's camera-view background, Track View and the Track Table
-//!   still take the whole pyramid from [`display_photograph`]
-//!   ([`PhotographCache::peek_state`], and [`PhotographCache::get`] on the
-//!   rayon pool on a miss).
+//! - The 3D view's camera-view background draws one level whole.
+//!   [`display_level`] answers it, starting one task that asks for the
+//!   level's tiles with [`PhotographCache::try_decode_tiles`] and builds the
+//!   level from the tiles that call answers, at every budget, so the task
+//!   never waits on a slot or on the build count. It shares the tile
+//!   decodes' limit of one task per photograph and their remembered
+//!   failures, and keeps the one level it last answered until the background
+//!   asks for it.
+//! - Track View and the Track Table still take the whole pyramid from
+//!   [`display_photograph`] ([`PhotographCache::peek_state`], and
+//!   [`PhotographCache::get`] on the rayon pool on a miss).
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use sfmtool_core::camera::image::ImageU8Pyramid;
+use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::camera::{
     PeekedLayout, PeekedPhotograph, PeekedTile, PhotographCache, PhotographTile, PyramidLayout,
     TileError, TileKey, TryDecode,
@@ -76,6 +83,19 @@ pub(crate) enum DisplayTile {
     Ready(Arc<PhotographTile>),
     /// Being decoded on a worker, or waiting to be asked for again because
     /// the decode could not start. A repaint follows either.
+    Loading,
+    /// The photograph could not be read or decoded.
+    Unreadable,
+}
+
+/// What the 3D view's camera-view background has for one level of a
+/// photograph on this frame.
+#[derive(Clone)]
+pub(crate) enum DisplayLevel {
+    /// The level whole, of the size the layout gives it.
+    Ready(Arc<ImageU8>),
+    /// Being read on a worker, or waiting to be asked for again because the
+    /// decode could not start. A repaint follows either.
     Loading,
     /// The photograph could not be read or decoded.
     Unreadable,
@@ -132,14 +152,25 @@ enum Answered {
     Failed(FileStamp),
 }
 
-/// The tile decodes in flight and what they answered.
+/// The level a background task answered, kept until the background asks for
+/// it.
+struct AnsweredLevel {
+    path: PathBuf,
+    level: usize,
+    pixels: Arc<ImageU8>,
+}
+
+/// The tile and level decodes in flight and what they answered.
 #[derive(Default)]
 struct TileRequests {
-    /// The paths a decode task is running for.
+    /// The paths a decode task is running for, a tile decode's or a level's.
     in_flight: HashSet<PathBuf>,
-    /// What the tasks answered, oldest first, at most
-    /// [`MAX_ANSWERED_PHOTOGRAPHS`] paths.
+    /// What the tile decodes answered, and every decode's failure, oldest
+    /// first, at most [`MAX_ANSWERED_PHOTOGRAPHS`] paths.
     answered: Vec<(PathBuf, Answered)>,
+    /// The level the last level task answered and the background has not
+    /// taken: one level, since one background is drawn.
+    level: Option<AnsweredLevel>,
 }
 
 impl TileRequests {
@@ -155,6 +186,22 @@ impl TileRequests {
         match self.answered(path) {
             Some(Answered::Failed(stamp)) => Some(*stamp),
             _ => None,
+        }
+    }
+
+    /// Keep what a decode of `path` that failed with `e` tells later frames.
+    /// A cancelled decode tells nothing, and the next frame asks again. An
+    /// unreadable photograph is remembered with its file's stamp. A key or a
+    /// level the photograph does not have comes from a layout read before the
+    /// file changed size: the cache forgets the path, so the next frame reads
+    /// the header again rather than ask for the same pixels on every frame.
+    fn failed_with(&mut self, cache: &PhotographCache, path: &Path, e: TileError) {
+        match e {
+            TileError::Cancelled => {}
+            TileError::Unreadable { .. } => {
+                self.keep(path.to_path_buf(), Answered::Failed(file_stamp(path)));
+            }
+            TileError::OutOfRange { .. } => cache.forget(path),
         }
     }
 
@@ -338,15 +385,60 @@ impl PhotographRequests {
                         tiles.keep(path.clone(), Answered::Tiles(found));
                     }
                     // Nothing was decoded, and the next frame asks again.
-                    Ok(TryDecode::Busy) | Err(TileError::Cancelled) => {}
-                    Err(TileError::Unreadable { .. }) => {
-                        tiles.keep(path.clone(), Answered::Failed(file_stamp(&path)));
+                    Ok(TryDecode::Busy) => {}
+                    Err(e) => tiles.failed_with(&cache, &path, e),
+                }
+                tiles.in_flight.remove(&path);
+            }
+            if busy {
+                ctx.request_repaint_after(BUSY_RETRY);
+            } else {
+                ctx.request_repaint();
+            }
+        }));
+    }
+
+    /// Start one task that reads level `level` of `path`, whose layout is
+    /// `layout`, unless a decode is already running for `path`: it asks for
+    /// the level's tiles with [`PhotographCache::try_decode_tiles`] and
+    /// builds the level from the tiles that call answers. The level is kept
+    /// for [`display_level`], and `ctx` repainted when the task ends: at once, or
+    /// after [`BUSY_RETRY`] when the decode answered `Busy`.
+    fn decode_level(
+        &self,
+        cache: &Arc<PhotographCache>,
+        path: &Path,
+        layout: &Arc<PyramidLayout>,
+        level: usize,
+        ctx: &egui::Context,
+    ) {
+        if !lock(&self.tiles).in_flight.insert(path.to_path_buf()) {
+            return;
+        }
+        let cache = Arc::clone(cache);
+        let tiles = Arc::clone(&self.tiles);
+        let path = path.to_path_buf();
+        let layout = Arc::clone(layout);
+        let ctx = ctx.clone();
+        (self.spawn)(Box::new(move || {
+            let answer = read_level(&cache, &path, &layout, level);
+            let busy = matches!(answer, Ok(None));
+            {
+                // One lock for the answer and the end of the flight, so a
+                // frame that finds the path no longer in flight finds its
+                // answer.
+                let mut tiles = lock(&tiles);
+                match answer {
+                    Ok(Some(pixels)) => {
+                        tiles.level = Some(AnsweredLevel {
+                            path: path.clone(),
+                            level,
+                            pixels,
+                        });
                     }
-                    // A key the photograph does not have comes from a layout
-                    // read before the file changed size: drop it, so the next
-                    // frame reads the header again rather than ask for the
-                    // same tiles on every frame.
-                    Err(TileError::OutOfRange { .. }) => cache.forget(&path),
+                    // Nothing was decoded, and the next frame asks again.
+                    Ok(None) => {}
+                    Err(e) => tiles.failed_with(&cache, &path, e),
                 }
                 tiles.in_flight.remove(&path);
             }
@@ -396,6 +488,12 @@ impl PhotographRequests {
     #[cfg(test)]
     pub(crate) fn kept_tiles(&self) -> usize {
         lock(&self.tiles).kept_tiles()
+    }
+
+    /// Whether an answered level is kept.
+    #[cfg(test)]
+    pub(crate) fn keeps_a_level(&self) -> bool {
+        lock(&self.tiles).level.is_some()
     }
 
     /// Whether a decode of `path` is running.
@@ -586,4 +684,130 @@ pub(crate) fn prefetch_tiles(source: PhotographSource<'_>, keys: &[TileKey], ctx
             .requests
             .decode_tiles(source.cache, source.path, missing, ctx);
     }
+}
+
+/// Level `level` of `path`, whose layout is `layout`, as a background task
+/// reads it: its tiles asked for with [`PhotographCache::try_decode_tiles`],
+/// which never waits, and the level built from the tiles that call answers,
+/// at every budget, the tiles dropped once it is built. `None` when the
+/// decode answered `Busy`.
+fn read_level(
+    cache: &PhotographCache,
+    path: &Path,
+    layout: &PyramidLayout,
+    level: usize,
+) -> Result<Option<Arc<ImageU8>>, TileError> {
+    let (cols, rows) = layout.tiles(level);
+    let keys: Vec<TileKey> = (0..rows)
+        .flat_map(|row| {
+            (0..cols).map(move |col| TileKey {
+                level: level as u8,
+                col,
+                row,
+            })
+        })
+        .collect();
+    match cache.try_decode_tiles(path, &keys, &Progress::none())? {
+        TryDecode::Busy => Ok(None),
+        TryDecode::Decoded(tiles) => level_from_tiles(path, layout, level, &tiles).map(Some),
+    }
+}
+
+/// Level `level` of `layout`'s photograph, at `path`, built from `tiles`, the
+/// level's tiles with their borders as [`PhotographCache::try_decode_tiles`]
+/// answers them: each tile's core copied to its place. A level the layout
+/// does not have, or a tile whose place and size are not the ones the layout
+/// gives it, which only a file that changed size since its layout was read
+/// can give, is [`TileError::OutOfRange`].
+fn level_from_tiles(
+    path: &Path,
+    layout: &PyramidLayout,
+    level: usize,
+    tiles: &[Arc<PhotographTile>],
+) -> Result<Arc<ImageU8>, TileError> {
+    let out_of_range = |why: String| TileError::OutOfRange {
+        path: path.to_path_buf(),
+        why,
+    };
+    if level >= layout.levels() {
+        return Err(out_of_range(format!(
+            "the layout has no level {level}, only {}",
+            layout.levels()
+        )));
+    }
+    let (width, height) = layout.level_size(level);
+    let ts = layout.tile_size();
+    let channels = tiles.first().map_or(3, |tile| tile.pixels.channels());
+    let c = channels as usize;
+    let row_len = width as usize * c;
+    let mut data = vec![0; row_len * height as usize];
+    for tile in tiles {
+        // The core the layout gives the tile, so a file whose size changed
+        // since the layout was read cannot leave a part of the level unset.
+        let place = |index: u32, side: u32| {
+            let origin = u64::from(index) * u64::from(ts);
+            (
+                origin,
+                (u64::from(side).saturating_sub(origin)).min(u64::from(ts)),
+            )
+        };
+        let (x0, w) = place(tile.key.col, width);
+        let (y0, h) = place(tile.key.row, height);
+        let fits = usize::from(tile.key.level) == level
+            && [u64::from(tile.origin[0]), u64::from(tile.origin[1])] == [x0, y0]
+            && [u64::from(tile.size[0]), u64::from(tile.size[1])] == [w, h]
+            && w > 0
+            && h > 0
+            && tile.pixels.channels() == channels
+            && u64::from(tile.pixels.width()) == w + 2
+            && u64::from(tile.pixels.height()) == h + 2;
+        if !fits {
+            return Err(out_of_range(format!(
+                "the tile at column {}, row {} of level {level} is not the one \
+                 the layout's {width} x {height} gives",
+                tile.key.col, tile.key.row
+            )));
+        }
+        let [x0, y0] = tile.origin;
+        let [w, h] = tile.size;
+        let stride = tile.pixels.width() as usize * c;
+        let span = w as usize * c;
+        for y in 0..h as usize {
+            // The core starts one row and one column inside the border.
+            let from = (y + 1) * stride + c;
+            let to = (y0 as usize + y) * row_len + x0 as usize * c;
+            data[to..to + span].copy_from_slice(&tile.pixels.data()[from..from + span]);
+        }
+    }
+    Ok(Arc::new(ImageU8::new(width, height, channels, data)))
+}
+
+/// Level `level` of `source`'s photograph, whose layout is `layout`, for the
+/// 3D view's camera-view background, starting one task on the rayon pool that
+/// reads it unless a decode is already running for the photograph. Never
+/// decodes on this thread, at any budget.
+///
+/// The level a task answered is handed over once, as the background copies it
+/// into its texture. Asking for another photograph or level drops it, since it
+/// was answered for a background that has moved on, so at most one level is
+/// kept.
+pub(crate) fn display_level(
+    source: PhotographSource<'_>,
+    layout: &Arc<PyramidLayout>,
+    level: usize,
+    ctx: &egui::Context,
+) -> DisplayLevel {
+    if source.requests.failed(source.path, ctx) {
+        return DisplayLevel::Unreadable;
+    }
+    let kept = lock(&source.requests.tiles).level.take();
+    if let Some(kept) = kept {
+        if kept.path == source.path && kept.level == level {
+            return DisplayLevel::Ready(kept.pixels);
+        }
+    }
+    source
+        .requests
+        .decode_level(source.cache, source.path, layout, level, ctx);
+    DisplayLevel::Loading
 }

@@ -212,6 +212,7 @@ is prepended the same way rather than declaring those values again. See
 |--------|---------------|
 | `main.rs` | Thin entry-point shim (~6 lines) that calls into `lib::run`. |
 | `lib.rs` | Window creation, wgpu device/surface, DirectManipulation init, `winit` event loop, Windows DPI awareness, `egui_dock` `DockState` initialization from `Layout::default()` ([panel-layout.md](panel-layout.md)). |
+| `repaint.rs` | egui's repaint callback: a redraw when egui calls it on the GUI thread, and a `UserEvent::Repaint` sent through the event loop's proxy when it calls it on any other, such as a rayon task that has just read a photograph. See § "macOS" below for why a task must not call `Window::request_redraw`. |
 | `app_icon.rs` | The application icon's PNG sizes, embedded per platform and decoded into the window icons `lib.rs` creates the window with ([application-icon.md](application-icon.md)). |
 | `app.rs` | The per-frame pipeline (`App::run_ui_and_paint`): per-frame uploads (points, frustums, frustum colors, thumbnails, track rays, bg image, clip planes), camera-uniform updates, scene encoder + render passes, egui pass with the dock UI, AccessKit propagation, surface acquire/present, pick-result dispatch. |
 | `app/menu.rs`, `app/modals.rs`, `app/save.rs` | The menu bar and keyboard shortcuts, modal answers and deferred closes, and File-menu save handling, respectively. The egui pass calls them in that order before drawing the dock. |
@@ -669,6 +670,15 @@ eviction.
 - **Event loop**: `winit` creates its event loop only on the process's main
   thread on macOS, which is one reason `sfm explorer` runs the viewer in a child
   process of its own.
+- **Repaints from other threads**: `winit`'s `Window::request_redraw`, called
+  from a thread other than the main one, runs on the main thread and waits
+  until it has run there. egui calls its repaint callback with its context's
+  lock held, so a rayon task whose `request_repaint` called it while the GUI
+  thread was in a frame held that lock while it waited, and the GUI thread's
+  next read of the context waited for the lock: the viewer stopped answering.
+  The callback (`repaint.rs`) therefore calls `request_redraw` only on the GUI
+  thread, and from any other thread sends a `UserEvent::Repaint` through the
+  event loop's proxy, which does not wait.
 - **Testing**: the windowed `ui_basic` suite runs on macOS in the
   `ui-test-macos` CI job, the same way as on Windows and Linux; see "Testing"
   below. It needs no Accessibility (TCC) grant.

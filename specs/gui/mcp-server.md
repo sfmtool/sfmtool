@@ -3364,9 +3364,17 @@ frames, the same `egui::Event`s `egui_winit` makes from a real mouse:
    viewport's pick read-back also needs a frame over the point, so a press
    without this frame would miss.
 3. Press and release, in one frame. For `count: 2`, a second press and release
-   follows in the next frame, well inside egui's double-click interval. egui
-   reports a click for each press and a double click on the second, so a
-   widget sees two clicks and one double click, and no triple click.
+   follows in the same frame. egui counts a click as a double click when it
+   comes within its double-click interval (0.3 s) of the frame time of the
+   click before, so two clicks in one frame are a double click however long
+   the viewer's frames take. In two frames they would not be: a frame of
+   0.3 s or more between them, as one waiting on an occluded macOS window's
+   drawable can take, would make them two single clicks. egui reports a click
+   for each press and a double click on the second, so in that frame a
+   widget's `clicked()` and `double_clicked()` both answer true and its
+   `triple_clicked()` does not. A person's double click reaches egui the same
+   way when it lands during a long frame, since `egui_winit` stamps the input
+   with the frame's time, not the event's.
 4. One more frame is drawn, and the reply is built after it. That frame is the
    one in which a menu or dialog opened by the click appears, so the reply's
    `dialogs` and `menus` include it.
@@ -7229,8 +7237,8 @@ where a test hands no host over.
   `submenu` owned by it with no `panel_name` on the owner; a menu bar button
   opens its menu and a click on its `Go to Point...` item runs it, the reply
   listing the dialog and no menu; a click on a widget under an open menu is
-  refused naming the menu; `count: 2` is two clicks and one double click and no
-  triple click; `command` + `Z` undoes through the menu bar's shortcut, the MCP
+  refused naming the menu; `count: 2` is one frame with a click and a double click
+  and no triple click, also when every frame takes half a second; `command` + `Z` undoes through the menu bar's shortcut, the MCP
   row before the person's `Undo:` row; Escape closes Go to Point and the reply
   no longer lists it; `I` over Image Detail toggles its intrinsics layer and
   elsewhere does not; `type_text` fills the Go to Point field's `value`, a

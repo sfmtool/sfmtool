@@ -30,8 +30,9 @@ pub(crate) mod open;
 #[cfg(test)]
 pub(crate) use photograph_requests::TaskQueue;
 pub(crate) use photograph_requests::{
-    display_layout, display_photograph, display_tiles, prefetch_tiles, DisplayLayout,
-    DisplayPhotograph, DisplayTile, PhotographRequests, PhotographSource,
+    display_layout, display_level, display_photograph, display_tiles, prefetch_tiles,
+    DisplayLayout, DisplayLevel, DisplayPhotograph, DisplayTile, PhotographRequests,
+    PhotographSource,
 };
 mod ops;
 mod photograph_requests;
@@ -731,12 +732,13 @@ pub(crate) struct AppState {
     /// [`default_budget_bytes`]: sfmtool_core::camera::photograph_cache::default_budget_bytes
     pub(crate) photographs: Arc<PhotographCache>,
 
-    /// The photographs, layouts and tiles a panel has asked to have read on the
-    /// rayon pool and that are still being read, so each is asked for once,
-    /// and the tiles those reads answered. The panels read through
-    /// [`display_layout`] and [`display_tiles`] (Image Detail), which never
-    /// decode on the GUI thread, and [`display_photograph`] (the others),
-    /// which does only under a cache of budget 0.
+    /// The photographs, layouts, tiles and levels a panel has asked to have
+    /// read on the rayon pool and that are still being read, so each is asked
+    /// for once, and the tiles and the level those reads answered. The panels
+    /// read through [`display_layout`] with [`display_tiles`] (Image Detail)
+    /// or [`display_level`] (the 3D view's camera-view background), which
+    /// never decode on the GUI thread, and [`display_photograph`] (Track View
+    /// and the Track Table), which does only under a cache of budget 0.
     pub(crate) photograph_requests: PhotographRequests,
 
     /// Whether the "Load Demo Data" dialog is currently open.
