@@ -553,8 +553,9 @@ fn escape_abandons_a_handle_drag() {
 }
 
 /// A stored measurement whose columns disagree in length, one of whose
-/// pixels is not a number, is drawn by a whole frame without a panic, and the
-/// other measurements are drawn where their pixels are.
+/// pixels is not a number, is drawn by a whole frame without a panic: that
+/// pixel draws no mark and no line, and every mark drawn is at a finite
+/// position.
 #[test]
 fn a_measurement_with_mismatched_columns_and_a_nan_pixel_draws() {
     let mut recon = crate::measurements::fixture::measured_reconstruction(Some("m"));
@@ -579,11 +580,13 @@ fn a_measurement_with_mismatched_columns_and_a_nan_pixel_draws() {
         "the other measurements are drawn"
     );
     let nan_row = DrawnId::Stored(MeasurementRef::distance(id, 0));
-    let others = screen
-        .measurements
-        .iter()
-        .filter(|m| detail.measurements.drawn[m.index].id != nan_row);
-    for m in others {
+    let nan = screen
+        .of(&detail.measurements, &nan_row)
+        .expect("its other endpoint is in the image");
+    let sides: Vec<EndpointSide> = nan.marks.iter().map(|m| m.side).collect();
+    assert_eq!(sides, vec![EndpointSide::B], "A's pixel is not a number");
+    assert!(nan.line.is_none());
+    for m in &screen.measurements {
         for mark in &m.marks {
             assert!(mark.pos.x.is_finite() && mark.pos.y.is_finite(), "{mark:?}");
         }

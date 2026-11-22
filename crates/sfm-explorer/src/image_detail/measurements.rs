@@ -67,7 +67,8 @@ impl ImageDetail {
     ///
     /// A mark is drawn whether or not its endpoint resolves, since the pixel
     /// is what the measurement stores; a refused endpoint's is in the
-    /// warning colour.
+    /// warning colour. A pixel that is not finite draws no mark, and so no
+    /// line, hover target or indicator.
     pub(super) fn measurement_screen(&self, painter: &egui::Painter, at: &Placement) -> Screen {
         let layer = &self.measurements;
         let mut screen = Screen::default();
@@ -79,6 +80,7 @@ impl ImageDetail {
                 .endpoints
                 .iter()
                 .filter(|e| e.image as usize == at.image.index())
+                .filter(|e| e.pixel.iter().all(|v| v.is_finite()))
                 .map(|e| ScreenMark {
                     side: e.side,
                     pos: at.to_panel(e.pixel),

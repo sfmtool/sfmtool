@@ -919,8 +919,9 @@ plane.
 puts a mark at that endpoint's pixel, and a line between the two where both are
 in that image. The mark is drawn whether or not the endpoint resolves, since the
 pixel is the stored measurement; a refused endpoint's mark is in the warning
-colour. An item with one endpoint placed, such as a new one, draws that mark
-alone.
+colour. A pixel that is not finite, which the file reader refuses but an
+in-memory reconstruction can hold, draws no mark and so no line. An item with
+one endpoint placed, such as a new one, draws that mark alone.
 
 **Hover and click.** Hovering a mark or a line in either view shows the
 measurement's row text beside the pointer, the Scene tree row's for a stored
@@ -1249,7 +1250,8 @@ at-infinity case is covered by the Rust tests.
   a double-click and a click on the line; a handle drag asking once for the
   pixel under the release, which the step makes one version, without a pan;
   Escape abandoning a held handle with no step; a measurement with
-  mismatched columns and a pixel that is not a number drawn without a panic;
+  mismatched columns and a pixel that is not a number drawn without a panic,
+  that pixel with no mark and no line;
   no handle on a view-only bench; the indicator pointing to the endpoints
   outside the view and a click centring them at the same zoom.
   (`mcp/tests/display.rs`): each view's `show_all_measurements` over its own
