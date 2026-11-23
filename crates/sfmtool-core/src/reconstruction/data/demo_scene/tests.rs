@@ -13,7 +13,7 @@ use crate::features::sift::ImageToGray;
 use crate::progress::Event;
 
 /// The default scene, rendered once for the tests that only read it.
-fn scene() -> &'static DemoScene {
+pub(super) fn scene() -> &'static DemoScene {
     static SCENE: OnceLock<DemoScene> = OnceLock::new();
     SCENE
         .get_or_init(|| DemoScene::render(&DemoSceneOptions::default(), &Progress::none()).unwrap())
@@ -22,7 +22,7 @@ fn scene() -> &'static DemoScene {
 /// Where a ray from `o` along `d` first meets a surface, found without the
 /// slab test: each face's plane is intersected and the hit kept when it lies
 /// on the face, and the nearest hit of the faces and the ground wins.
-fn reference_trace(o: [f64; 3], d: [f64; 3]) -> Option<(Surface, f64)> {
+pub(super) fn reference_trace(o: [f64; 3], d: [f64; 3]) -> Option<(Surface, f64)> {
     const Z: [f64; 3] = [0.0, 0.0, 1.0];
     let neg = |v: [f64; 3]| v.map(|c| -c);
     let faces = [
@@ -178,7 +178,7 @@ const JPEG_XXH128_SCALAR: [&str; 5] = [
 ];
 
 /// Whether `jpeg-encoder` takes its AVX2 path here, by the test it makes.
-fn encoder_takes_avx2() -> bool {
+pub(super) fn encoder_takes_avx2() -> bool {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
         std::is_x86_feature_detected!("avx2")
@@ -506,14 +506,17 @@ fn for_point_count_scales_both_spacings() {
         DemoSceneOptions::for_point_count(DemoSceneOptions::DEFAULT_POINT_COUNT).unwrap(),
         default
     );
-    let quarter =
-        DemoSceneOptions::for_point_count(DemoSceneOptions::DEFAULT_POINT_COUNT / 4).unwrap();
+    let four_times =
+        DemoSceneOptions::for_point_count(4 * DemoSceneOptions::DEFAULT_POINT_COUNT).unwrap();
     assert_eq!(
-        quarter.ground_point_spacing,
-        2.0 * default.ground_point_spacing
+        four_times.ground_point_spacing,
+        0.5 * default.ground_point_spacing
     );
-    assert_eq!(quarter.face_point_spacing, 2.0 * default.face_point_spacing);
-    assert_eq!(quarter.image_width, default.image_width);
+    assert_eq!(
+        four_times.face_point_spacing,
+        0.5 * default.face_point_spacing
+    );
+    assert_eq!(four_times.image_width, default.image_width);
     assert!(matches!(
         DemoSceneOptions::for_point_count(0),
         Err(DemoSceneError::Options(m)) if m.contains("point_count")
