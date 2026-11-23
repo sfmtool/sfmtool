@@ -596,8 +596,10 @@ draft's step 5 that count decodes run: 13e1 answers tiled photographs
 (built), 13e2 has `from_image` hold its tiles (built), 13e3 has the cache
 keep tiles in place of pyramids, the tiles a request asked for as used and
 the rest of a decode as unused, evicted first (built), 13e4a has every
-render entry point take the caller's `&Progress` (built), and 13e4b and 13e5
-follow.
+render entry point take the caller's `&Progress` (built), 13e4b has the
+answers read through the cache (built), and 13e5 tests the bulk kernels under
+a small budget and keeps a render's decode whole while its photograph is
+under half the budget (built, open question 12).
 
 1. **Regions in the pyramid and the samplers.** Built, as the main draft's
    step 7a: `PyramidLevel`, `ImageU8Pyramid::from_regions`, the origin
@@ -713,7 +715,13 @@ follow.
    tiled photographs `get_many` answers since the main draft's step 13e1,
    having wrapped the whole pyramids it answered before it, and the tests
    that count decodes and the one of a budget smaller than a level 0 need
-   the cache to keep tiles, so they come with step 13e5. The rest is split
+   the cache to keep tiles, so they come with step 13e5, **built**: on one
+   thread the decodes stay within that bound only when the budget also holds
+   one more photograph than one reference image's points are seen in, since
+   the unused tiles of a decode go before the used tiles of the photograph
+   the previous reference image's points left, so the test's budget holds
+   four of its six photographs, three of which one reference image's points
+   are seen in. The rest is split
    into three pull requests, as the main draft's step 11 says. **The first, 11a, is built**: the display bitmaps' kernels
    return the photograph error rather than leave out a photograph whose
    pyramid is not whole, the open, the conversion and `sfm web-export`
@@ -836,3 +844,43 @@ decisions.
     rather than once per render. The options considered were `sfm
     web-export` using a cache with the default budget, and accepting a
     decode on every render. Built in the main draft's step 13e4b.
+12. **What a render's decode keeps.** A render that reads a tile its
+    kernel's photograph lost decodes the photograph again. As step 13e4b
+    built it, that decode kept the tiles the render asked for as used and
+    the rest as unused, and the unused go before the used, so once the used
+    tiles of photographs the kernel had finished with filled the budget the
+    rest of the decode was dropped at once and each further tile of the same
+    photograph cost another decode. The bulk kernels already took their
+    points by reference image (`BulkPointOrder`, built in the main draft's
+    step 11c), so the order was not the cause. The options measured, in a
+    release build on `dino_dog_toy` (85 photographs at 2040 x 1536, about
+    12.6 MB of tiles each), with identical answers in every case:
+
+    - (A) keep eviction as built. The display bitmaps under a 50 MB budget
+      decode 539 to 556 times in 1.39 to 1.54 s on 32 threads and 429 times
+      in 8.3 s on one; *Refine all normals* over every tenth point decodes
+      618 to 658 times under 600 MB, 2,379 to 2,518 under 300 MB and 6,745
+      under 50 MB on 32 threads; *Refit all points* decodes 1,898 to 2,103
+      times under 600 MB and 63,160 under 100 MB.
+    - (B) keep every tile of a render's decode until the next decode, as
+      `get` keeps its photograph's: the display bitmaps decode 244 to 305
+      times in 0.73 to 0.96 s on 32 threads and 160 times in 3.0 s on one;
+      the normals 566 to 611, 1,746 to 1,869 and 4,369 times; the refit
+      1,856 to 1,987 and 42,460 times. On six 128 x 128 photographs with
+      16 px tiles and a budget of one photograph, the refit's renders
+      decode 554 times rather than 133 (178 rather than 29 with three
+      points to each reference image), since keeping one view's decode
+      whole pushes out the few tiles the point's other views need.
+    - (C) B only while the photograph's tiles, all levels, the bytes the
+      cache would charge for its whole decode, are under half the budget,
+      and A otherwise.
+    - (D) something that adapts, such as a probationary share of the cache
+      or a kernel that holds its current reference image's photograph.
+
+    *Decided by the user:* (C). Half keeps B's gains where the budget holds
+    several photographs, as at 50 MB on `dino_dog_toy`, about four, and
+    keeps A's behaviour where it holds about one or fewer, where B decodes
+    several times as often; on the six-photograph scene B first wins at
+    about two photographs. Built in the main draft's step 13e5, as
+    `READ_SPARING_SHARE` in
+    [photograph_cache.rs](../../crates/sfmtool-core/src/camera/photograph_cache.rs).

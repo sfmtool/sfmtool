@@ -668,8 +668,11 @@ variable the pyramids had. Eviction is least recently used, with two rules:
 the unused tiles of an in-core decode go first, and the coarsest level of every
 out-of-core photograph whose mip level files have been read, with the levels
 below it (at most one tile, 0.78 MB for this photograph), goes only after every
-other entry. A tile or region held by a running render stays alive until the
-render drops it, as a pyramid does today. A budget of 0 keeps nothing: each
+other entry. The decode that made a request's tiles drops none of them before
+the next decode when the request is `get`'s, or a render's read through a
+photograph `get` answered of a photograph under half the budget (step 13e5,
+the companion's open question 12). A tile or region held by a running render
+stays alive until the render drops it, as a pyramid does today. A budget of 0 keeps nothing: each
 request is decoded and handed to its asker, whose texture or render keeps it.
 
 **States, and what a caller on the GUI thread may do.** `peek_tile` and
@@ -2922,9 +2925,13 @@ in core. Step 17 turns the tier on.
           a 4 GB budget the cache holds every tile, 1,074 MB, either way. The
           display bitmaps of that reconstruction under the 50 MB budget peak
           566 MB over the start rather than 1,195 MB, but decode 526 times
-          rather than 85 and take 1.50 s rather than 0.28 s, since the
-          renders visit the photographs in an order the budget does not hold;
-          the point order of step 13e5 is what keeps those decodes rare. Under
+          rather than 85 and take 1.50 s rather than 0.28 s. The renders
+          already take their points by reference image (step 11c); the extra
+          decodes come from a render's decode keeping only the tiles it asked
+          for as used, the rest of the decode going before the used tiles of
+          photographs the kernel had finished with, and from 32 workers
+          being in as many reference images at once. Step 13e5 keeps such a
+          decode whole while the photograph is under half the budget. Under
           the default budget and under a budget of 0 the decodes, the time
           and the peak are as before. A single `get` of an 8000 x 6000 JPEG
           raises the process's peak private bytes over its private bytes before
@@ -2947,16 +2954,75 @@ in core. Step 17 turns the tier on.
           (the files removed as the render phase starts, under a cache that
           keeps only the photograph it decoded last) and
           [tests/test_web_export.py](../../tests/test_web_export.py).
-      - **13e5, the bulk kernels under a small budget.** Tests: a bulk kernel
-        whose photographs' tiles do not fit a small budget still completes,
-        with its decodes counted, and so does one with a budget smaller than
-        one photograph's level 0; the companion's step-5 test of the point
-        order: on a rayon pool of one thread, with a budget smaller than the
-        reconstruction's tiles but holding the tiles of every photograph one
-        reference image's points are seen in, each in-core photograph is
-        decoded at most once in the read phase and once more for each
-        reference image whose points it sees, and the same points in
-        shuffled order decode more.
+      - **13e5, the bulk kernels under a small budget.** **Built**, so step
+        13e, and with it step 13, is complete. The bulk kernels' point order
+        was already built, in step 11c (`BulkPointOrder`: by reference image,
+        then the reference keypoint's row and `x`). What 13e5 changes is what
+        a render's decode keeps (the companion's open question 12): a read
+        through a photograph `get` or `get_many` answered, which decodes the
+        photograph again for a tile it lost, keeps the tiles it asked for as
+        used and the rest as unused, as before, and, while the photograph's
+        tiles of every level are under half the cache's budget
+        (`READ_SPARING_SHARE`), its eviction drops none of the photograph's
+        tiles, as a `get`'s keeps its photograph whole until the next decode;
+        over half, it is evicted as a tile request's is. A bulk kernel that
+        reads each reference image's tiles one after another then finds the
+        rest of the decode for its next renders, where before the rest went
+        before the used tiles of photographs the kernel had finished with;
+        under a budget of about one photograph or less, keeping one view's
+        decode whole would push out the tiles the point's other views need.
+        Nothing a kernel answers changes.
+
+        Measured in a release build on `dino_dog_toy_ground_truth_v01`
+        (85 photographs at 2040 x 1536, about 12.6 MB of tiles each), on
+        32 threads unless stated, before and after this step, with the
+        answers the same bit for bit (the display bitmaps and their
+        reference observations, and every point's position and normal after
+        *Refine all normals* over every tenth point and after *Refit all
+        points*): the display bitmaps under 50 MB decode 539 to 556 times in
+        1.39 to 1.54 s before and 259 to 288 times in 0.78 to 0.89 s after,
+        and on one thread 429 times in 8.3 s before and 160 times in 2.9 s
+        after (85 in the read phase and 75 in the renders, within the 170 of
+        once in the read phase and once per reference image); under 4 GB and
+        under 0 they decode 85 times in 0.21 s and 0.27 s, as before. The
+        normals decode 618 to 658 times in 2.0 to 2.6 s under 600 MB before
+        and 559 in 1.9 s after, 2,379 to 2,518 in 6.0 to 6.3 s under 300 MB
+        before and 1,734 in 4.5 s after, and 6,745 in 14.8 s under 50 MB
+        before and 4,656 in 10.5 s after. The refit decodes 1,898 to 2,103
+        times in 5.6 to 6.0 s under 600 MB before and 1,704 in 5.1 s after,
+        and 63,160 in 131 s under 100 MB before and 41,691 in 88 s after.
+        The process's peak private bytes are as before: 528 to 557 MB for
+        the display bitmaps under 50 MB (556 to 588 MB before), 934 MB and
+        820 MB for the normals under 600 MB and 300 MB (927 MB and 827 MB
+        before), and 949 MB for the refit under 600 MB (965 MB before). On
+        the six photographs of the tests under a budget of one photograph,
+        the refit's renders decode 133 times, as before, where keeping every
+        decode whole decoded 554 times.
+
+        Specified in
+        [core/camera/photograph-cache.md](../core/camera/photograph-cache.md)
+        § "Budget and eviction", with the tests in
+        [bench/tests/bulk_budget.rs](../../crates/sfmtool-core/src/bench/tests/bulk_budget.rs),
+        on six 128 x 128 photographs in a row written to a temporary
+        directory, cut into 16 px tiles, nine points to each reference image,
+        each seen by its reference image and that image's neighbours, read on
+        a rayon pool of one thread: *Refit all points* under a budget of one
+        photograph and under one smaller than a photograph's level 0
+        completes with the answer it gives when every tile fits, the cache
+        counting every decode; under a budget of four photographs, three of
+        which one reference image's points are seen in, each photograph is
+        decoded once in the read phase and at most once more for each
+        reference image whose points it sees, and the same points by index,
+        which take the reference images in turn, decode more; and the stored
+        bitmaps' whole-cloud render under a budget of two and a half
+        photographs decodes each photograph at most once in its renders,
+        while the refit under a budget of one photograph decodes fewer times
+        than there are observations. The budget of the point-order test
+        holds one photograph more than one reference image's points are seen
+        in, since the unused tiles of a decode go before the used tiles of
+        the photograph the previous reference image's points left. The three
+        take 0.32 s (the run that completes), 0.14 s (the point order) and
+        0.13 s (the decode kept whole).
 14. **The out-of-core tier, off.** Photographs of a workspace with
     `mipmap_options` read through their mip level files: tiles from the
     files, mipmaps made in the slot when missing or stale (the misses of a

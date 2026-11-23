@@ -8,6 +8,7 @@
 //! `embedded_patches` reconstruction whose stored keypoints are the exact
 //! projections, so what a step should have written is known to the pixel.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use nalgebra::{Point3, Quaternion, UnitQuaternion, Vector3};
@@ -300,6 +301,44 @@ impl Scene {
             .ray_to_pixel([cam.x, cam.y, cam.z])
             .expect("the point is in front of every camera of this scene");
         [u, v]
+    }
+
+    /// Write each photograph's level 0 to `dir` as a grey PNG, `image_{i}.png`,
+    /// for a test that reads the photographs through a
+    /// [`PhotographCache`](crate::camera::PhotographCache); answers the paths,
+    /// in image order.
+    pub(in crate::bench) fn write_photographs(&self, dir: &std::path::Path) -> Vec<PathBuf> {
+        self.pyramids
+            .iter()
+            .enumerate()
+            .map(|(i, pyramid)| {
+                let level = pyramid.level(0);
+                let path = dir.join(format!("image_{i}.png"));
+                image::GrayImage::from_raw(level.width(), level.height(), level.data().to_vec())
+                    .expect("a grey level 0")
+                    .save(&path)
+                    .expect("the photograph is written");
+                path
+            })
+            .collect()
+    }
+
+    /// The scene's views read from `sources`, one per image in image order,
+    /// in place of the scene's own photographs.
+    pub(in crate::bench) fn views_of<'a>(
+        &'a self,
+        sources: &'a [Arc<TiledPhotograph>],
+    ) -> Vec<ProjectedImage<'a>> {
+        self.cameras
+            .iter()
+            .zip(&self.poses)
+            .zip(sources)
+            .map(|((camera, cam_from_world), source)| ProjectedImage {
+                camera,
+                cam_from_world,
+                source,
+            })
+            .collect()
     }
 
     /// How many images the scene holds.

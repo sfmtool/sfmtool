@@ -574,7 +574,7 @@ pub(super) fn cache_holding_its_first_decode() -> HeldDecode {
     let decodes = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&decodes);
     let mut cache = PhotographCache::new(with_budget(GIB));
-    cache.set_slot_hook(Box::new(move |cache, event| {
+    cache.set_slot_hook(Box::new(move |cache, event, _| {
         let first =
             event == SlotEvent::DecodeStarted && counted.fetch_add(1, Ordering::SeqCst) == 0;
         let _ = event_tx.send((event, cache.shared.build_reserved.load(Ordering::SeqCst)));
@@ -702,7 +702,7 @@ fn a_maker_that_panics_empties_its_slot() {
     let mut cache = PhotographCache::new(with_budget(GIB));
     cache.set_slot_hook(Box::new({
         let decodes = Arc::clone(&decodes);
-        move |_, event| {
+        move |_, event, _| {
             if event == SlotEvent::DecodeStarted && decodes.fetch_add(1, Ordering::SeqCst) == 0 {
                 panic!("a decode that unwinds, as the test asks");
             }
@@ -934,7 +934,7 @@ pub(super) fn cache_watching_its_count(
 ) -> PhotographCache {
     let mut cache = PhotographCache::new(options);
     let seen = Arc::clone(seen);
-    cache.set_slot_hook(Box::new(move |cache, event| {
+    cache.set_slot_hook(Box::new(move |cache, event, _| {
         let reserved = cache.shared.build_reserved.load(Ordering::SeqCst);
         if event == SlotEvent::DecodeStarted {
             seen.0.fetch_min(reserved, Ordering::SeqCst);

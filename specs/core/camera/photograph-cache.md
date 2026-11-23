@@ -349,7 +349,20 @@ the least recently asked for first, and among tiles asked for together the
 finer levels first. It never drops a tile the request that made the decode
 asked for, which for `get`, `get_many` and `insert` is every tile, so the
 photograph just decoded stays whole even over the budget until the next
-decode, since its caller is about to read it. A photograph that lost a tile
+decode, since its caller is about to read it. A render's read through a
+photograph `get` answered (§ "Reads through the cache") that decodes it again
+keeps the tiles it asked for as used and the rest as unused, and, while the
+photograph's tiles of every level, the bytes the decode adds, are under half
+the budget (`READ_SPARING_SHARE`), drops none of the photograph's tiles
+either, as a `get` does; over half, it drops tiles as a tile request does. A
+bulk kernel takes its points by reference image, so its next renders read the
+rest of that decode, which would otherwise go before the used tiles of the
+photographs it has finished with and cost a decode for each further tile.
+Under a budget of about one photograph or less, keeping one view's decode
+whole would push out the few tiles the other views of the same point need,
+which decodes several times as often; half is the line between the two
+([view-region-pyramid.md](../../drafts/view-region-pyramid.md) open question
+12). A photograph that lost a tile
 keeps its layout and the tiles left, which `peek_tile` still answers and a
 `get` answers it from, but `peek` no longer answers it, and a read of a tile
 it lost decodes it again. The cache drops only its own `Arc`, so a render
@@ -364,11 +377,15 @@ the decodes in progress, not every photograph: over the 85 photographs of
 `dino_dog_toy` (2040×1536) under a 50 MB budget, the answers hold 77 MB
 after the call where whole photographs held 1,125 MB, and the call peaks
 606 MB over its start, the decodes in progress, where it peaked at 1,187 MB.
-A kernel that renders photographs whose tiles went decodes them again: the
-display bitmaps of that reconstruction under the 50 MB budget decode 526
-times rather than 85 and take 1.50 s rather than 0.28 s, peaking 566 MB over
-the start rather than 1,195 MB, with the same bitmaps. How the bulk kernels'
-point order keeps those decodes rare is in
+A kernel that renders photographs whose tiles went decodes them again: on 32
+threads, the display bitmaps of that reconstruction under the 50 MB budget
+decode 259 to 288 times rather than 85 and take 0.78 to 0.89 s rather than
+0.21 s, peaking at 528 to 557 MB of private bytes rather than 1,147 MB, with
+the same bitmaps; on one thread they decode 160 times, once in the read phase
+and at most once more in the renders for each photograph. The 32 workers are
+in as many reference images at once, which a budget of four photographs
+cannot hold. The measurements, with those of *Refine all normals* and
+*Refit all points*, are in
 [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md)
 step 13e5. After the cull, a geometry search on the test reconstruction reads 143
 to 335 photographs, 5 to 11 GB, so the budget has to hold a few hundred
@@ -456,7 +473,8 @@ once:
   pixels of two versions of one photograph. Otherwise the read is a
   `get_tile` of the keys: it decodes the photograph, reserving with
   `reserve_builds`, keeps the tiles asked for as used and the rest as unused,
-  or waits on the slot while another caller decodes it, polling the render's
+  and, unlike `get_tile`, drops none of them before the next decode when the
+  photograph is under half the budget (§ "Budget and eviction"), or waits on the slot while another caller decodes it, polling the render's
   `Progress` as `get` polls the caller's, so a cancelled kernel stops in a
   render that decodes. A decode whose layout is not the recorded one is
   `Changed` too. A file that is gone fails the read with
@@ -804,6 +822,18 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   tile stopping with `Cancelled` and the next render reading it; and under a
   budget of 0 an answer holding every tile, two renders of it decoding the
   photograph once.
+- [bench/tests/bulk_budget.rs](../../../crates/sfmtool-core/src/bench/tests/bulk_budget.rs),
+  bulk kernels on one thread over six photographs written to a temporary
+  directory: *Refit all points* under a budget of one photograph and under
+  one smaller than a photograph's level 0 completing with the answer of a
+  budget every tile fits in, the cache counting every decode; under a budget
+  of four photographs, each photograph decoded once in the read phase and at
+  most once more for each reference image whose points it sees, the points by
+  index decoding more; and a render's decode kept whole only under half the
+  budget: the stored bitmaps' whole-cloud render under a budget of two and a
+  half photographs decoding each photograph at most once in its renders, and
+  the refit under a budget of one decoding fewer times than there are
+  observations.
 - [photograph_cache/tiles/tests.rs](../../../crates/sfmtool-core/src/camera/photograph_cache/tiles/tests.rs):
   a layout read from the header with nothing decoded, and every tile of
   every level, a region and every level equal to the pixels of the pyramid
