@@ -434,9 +434,10 @@ cuts a row's crop with,
   ([view-region-pyramids.md](../core/camera/view-region-pyramids.md),
   [photograph-cache.md](../core/camera/photograph-cache.md) § "In the
   viewer"), so no photograph is decoded on the GUI thread and no whole
-  pyramid is read. The crop reads one level, the one whose pixel is the largest not wider than its
-  texel step, and of it the bounding box of the bilinear tap pairs of the
-  texel centres that fall on the photograph (`read_source_samples`), and
+  pyramid is read. The crop reads one level, the one whose pixel is the
+  largest not wider than its texel step, and of it the bounding box of the
+  bilinear tap pairs of the texel centres that fall on the photograph
+  (`read_source_samples`), and
   blends each texel's four pixels as `sample_bilinear_u8` does, so it draws
   the whole level's values. The panel owns one region pool of 3.1 MB
   (`patch_pictures::PanelRegionPool`) that the crops and their hover views
@@ -560,7 +561,8 @@ cache and the answered decodes already hold
 empty frame, and asks for no pick; a crop's hover view waits the same way.
 The panel asks for a repaint at the moment the rows will count as stopped.
 The first frame that draws rows counts as stopped, so a table opened or
-sorted asks for its crops at once. A new row count after an edit moves the rows like a scroll does.
+sorted asks for its crops at once. A new row count after an edit moves the
+rows like a scroll does.
 
 The delay was measured on `dino_dog_toy` (85 photographs at 2040×1536, with its
 bitmaps stored and half its references cleared so every second point needs a

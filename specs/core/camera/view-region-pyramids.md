@@ -24,9 +24,10 @@ tiles they peeked in the photograph cache, through
 through the entry points
 ([gui/track-view.md](../../gui/track-view.md),
 [gui/track-table.md](../../gui/track-table.md),
-[gui/measurement-view.md](../../gui/measurement-view.md)). Every patch kernel reads a
-`TiledPhotograph` through its `ProjectedImage`, and the bench's own reads go
-through the entry points: the cluster stage's member grids, the grid-plane
+[gui/measurement-view.md](../../gui/measurement-view.md)). Every patch
+kernel reads a `TiledPhotograph` through its `ProjectedImage`, and the
+bench's own reads go through the entry points: the cluster stage's member
+grids, the grid-plane
 normal's context renders, the pairwise-flow crops and the grown plane's value
 and Sobel reads, each bench step making the region pool for its kernel call
 ([core/bench/editable-track.md](../bench/editable-track.md) § "Each step reads

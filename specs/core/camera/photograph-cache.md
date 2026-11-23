@@ -675,11 +675,12 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   [state/open/tests.rs](../../../crates/sfm-explorer/src/state/open/tests.rs)
   (a second open reads the photographs from the cache),
   [state/photograph_requests/tests.rs](../../../crates/sfm-explorer/src/state/photograph_requests/tests.rs)
-  (Image Detail's layout and tiles each read once, off the calling thread, with a budget and
-  with a budget of 0, their tasks run from a queue the test steps on a thread
-  of its own bounded by a time limit; a decode refused by the build budget
-  ending at once while the other reservation is held, asked again on the next
-  look and decoding once it is given back; a failed decode answered as
+  (Image Detail's layout and tiles each read once, off the calling thread,
+  with a budget and with a budget of 0, their tasks run from a queue the
+  test steps on a thread of its own bounded by a time limit; a decode
+  refused by the build budget ending at once while the other reservation is
+  held, asked again on the next look and decoding once it is given back; a
+  failed decode answered as
   unreadable and not decoded again until its file changes; tiles answered for
   a view that moved on dropped; a key the photograph does not have reading the
   layout again; tiles asked for ahead handed over with no second decode; the
