@@ -12,10 +12,11 @@ answers each photograph as a tiled photograph that reads its tiles through
 the cache (`TiledPhotograph`,
 [view-region-pyramids.md](view-region-pyramids.md)), so that whichever part
 of the program asks next, on whichever thread, gets the same pixels without
-reading the file again, and so that memory stays under a set budget however
-many photographs the reconstruction has or a caller asks for at once. A second budget, the build budget,
-bounds the whole decodes in progress on one cache at once, so a caller asking for hundreds of photographs does not
-hold hundreds of decodes in memory together.
+reading the file again, and so that memory stays under a set budget however many
+photographs the reconstruction has or a caller asks for at once. A second
+budget, the build budget, bounds the whole decodes in progress on one cache at
+once, so a caller asking for hundreds of photographs does not hold hundreds of
+decodes in memory together.
 
 ## Why it exists
 
@@ -730,14 +731,14 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   already inside a rayon parallel loop calls `get` rather than `get_many`.
 - **Counters.** A `get` that decoded nothing is a hit, whether a tile of the
   photograph was kept, the failure was remembered, or another thread's decode
-  was waited on; each path of a `get_many`
-  counts as one `get`. A read through a photograph `get` answered that finds
-  its tiles kept is not counted; one that decodes is a miss and a decode. Every decode started is a miss, whether it succeeded,
-  failed or was cancelled, and a `get` that stopped waiting because it was
-  cancelled is neither. `peek` counts as a use for the eviction order but not
-  as a hit. A decode is a miss that read the photograph's pixels, so a file
-  whose header cannot be read, or that is refused as too large, is a miss
-  but not a decode; a maker cancelled after reading the pixels counts one.
+  was waited on; each path of a `get_many` counts as one `get`. A read through a
+  photograph `get` answered that finds its tiles kept is not counted; one that
+  decodes is a miss and a decode. Every decode started is a miss, whether it
+  succeeded, failed or was cancelled, and a `get` that stopped waiting because
+  it was cancelled is neither. `peek` counts as a use for the eviction order but
+  not as a hit. A decode is a miss that read the photograph's pixels, so a file
+  whose header cannot be read, or that is refused as too large, is a miss but
+  not a decode; a maker cancelled after reading the pixels counts one.
 
 ## Parameters
 
@@ -755,14 +756,14 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 
 - [photograph_cache/tests.rs](../../../crates/sfmtool-core/src/camera/photograph_cache/tests.rs):
   each entry at the `full_levels` depth of its own size, a view shrunk 64 times
-  read at level 6 by `BilinearMip` and `Anisotropic`, one decode per path
-  under contention, every caller sharing its tiles, least-recently-used
-  eviction within the budget of only the tiles the budget needs, finest
-  level first, and a photograph that lost one answered by `get` without a
-  decode and decoded again by a read of the tile it lost, the
-  photograph just decoded kept whole over budget, a photograph whose tiles
-  were evicted decoded again when read, remembered failures, a file that appears or is
-  rewritten being decoded again, `forget` and `clear` releasing bytes,
+  read at level 6 by `BilinearMip` and `Anisotropic`, one decode per path under
+  contention, every caller sharing its tiles, least-recently-used eviction
+  within the budget of only the tiles the budget needs, finest level first, and
+  a photograph that lost one answered by `get` without a decode and decoded
+  again by a read of the tile it lost, the photograph just decoded kept whole
+  over budget, a photograph whose tiles were evicted decoded again when read,
+  remembered failures, a file that appears or is rewritten being decoded again,
+  `forget` and `clear` releasing bytes,
   `get_many` order, tally and cancellation, budget 0 keeping nothing,
   `peek_state` telling a failure from no answer and not waiting on a decode
   in flight, `keeps_every_tile` answering before and after an eviction takes

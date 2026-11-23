@@ -2851,32 +2851,31 @@ in core. Step 17 turns the tier on.
           uncancelled run's answer, never a track or a sweep made of part of
           the work.
         - **13e4b, the answers read through the cache.** **Built.** `get` and
-          `get_many` answer a photograph that holds its layout and the cache's handle on
-          its tiles and no pixel, each tile read going through `get_tile` with
-          the `Progress` the render was given; under a budget of 0 an answer
-          holds the tiles of the decode that made it. `PhotographReadError`
-          gains `Changed`, `NotFound`, `TooLarge` and `Unreadable`, with
-          `From<TileError>` and `From<GetError>`, and every caller reports
-          them as its failure; `sfm web-export` reports the `RuntimeError` of
-          a failed read as its failure. No function's signature changes, since
-          13e4a gave every read its caller's `Progress`; only
-          `PhotographReadError` gains its variants. Tests: a kernel's
-          `get_many` over 20 in-core photographs decodes them all into tiles
-          in its read phase, so its renders decode nothing when the tiles fit
-          the budget; a `get_many` over 20 photographs holds no pyramid (the
+          `get_many` answer a photograph that holds its layout and the cache's
+          handle on its tiles and no pixel, each tile read going through
+          `get_tile` with the `Progress` the render was given; under a budget of
+          0 an answer holds the tiles of the decode that made it.
+          `PhotographReadError` gains `Changed`, `NotFound`, `TooLarge` and
+          `Unreadable`, with `From<TileError>` and `From<GetError>`, and every
+          caller reports them as its failure; `sfm web-export` reports the
+          `RuntimeError` of a failed read as its failure. No function's
+          signature changes, since 13e4a gave every read its caller's
+          `Progress`; only `PhotographReadError` gains its variants. Tests: a
+          kernel's `get_many` over 20 in-core photographs decodes them all into
+          tiles in its read phase, so its renders decode nothing when the tiles
+          fit the budget; a `get_many` over 20 photographs holds no pyramid (the
           cache's stats show only tiles, within a small budget); a read of a
           photograph whose file was removed after its tiles were evicted fails
-          with `NotFound` naming it; `sfm web-export` given a
-          `write_web_export` that raises `RuntimeError` reports it as its
-          failure; a render cancelled while it decodes an evicted tile stops
-          with the cancellation, and so does a bulk kernel cancelled while a
-          nested call it hands `progress.silenced()` decodes one; under a
-          budget of 0 two renders from one answer decode its photograph once;
-          and the three tests step 13e3 removed come back, each with a
-          photograph whose file was removed after its tiles were evicted: the
-          display bitmaps' render, the viewer's open and its conversion to
-          embedded patches each fail with the read's error, naming it, the
-          conversion pushing no version.
+          with `NotFound` naming it; `sfm web-export` given a `write_web_export`
+          that raises `RuntimeError` reports it as its failure; a render
+          cancelled while it decodes an evicted tile stops with the
+          cancellation, and so does a bulk kernel cancelled while a nested call
+          it hands `progress.silenced()` decodes one; under a budget of 0 two
+          renders from one answer decode its photograph once; and the three
+          tests step 13e3 removed come back, each with a photograph whose file
+          was removed after its tiles were evicted: the display bitmaps' render,
+          the viewer's open and its conversion to embedded patches each fail
+          with the read's error, naming it, the conversion pushing no version.
 
           As built, the cache is a handle on its state, which sits in an
           `Arc` (`Shared`), and each photograph `get` answers holds another
@@ -2928,9 +2927,9 @@ in core. Step 17 turns the tier on.
           the point order of step 13e5 is what keeps those decodes rare. Under
           the default budget and under a budget of 0 the decodes, the time
           and the peak are as before. A single `get` of an 8000 x 6000 JPEG
-          raises the process's peak private bytes over its private bytes
-          before the call by 2.24 times the image's bytes, 2.25 times before
-          this step by the same measure, and the cache keeps 1.34 times. No result
+          raises the process's peak private bytes over its private bytes before
+          the call by 2.24 times the image's bytes, 2.25 times before this step
+          by the same measure, and the cache keeps 1.34 times. No result
           changes: the display bitmaps and their reference observations, at
           a budget of 4 GB, 0 and 50 MB, on
           `seoul_bull_sculpture_ground_truth_v02`,

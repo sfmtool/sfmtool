@@ -12,14 +12,14 @@
 //! the values a whole pyramid gives, bit for bit.
 //!
 //! Each takes the caller's [`Progress`] and hands it to every tile read. A
-//! photograph the photograph cache answered reads its tiles through the
-//! cache, decoding the photograph again for a tile evicted while the kernel
-//! ran, and that decode polls it for cancellation; a photograph that holds
-//! its tiles decodes nothing and never polls it. A read through the cache
-//! can fail as a read of the file can (the file gone, changed or
-//! unreadable), and the render then answers that error. A render reports nothing through it,
-//! and a caller with nothing to cancel, such as a panel rendering tiles it
-//! holds on the GUI thread, passes `&Progress::none()`.
+//! photograph the photograph cache answered reads its tiles through the cache,
+//! decoding the photograph again for a tile evicted while the kernel ran, and
+//! that decode polls it for cancellation; a photograph that holds its tiles
+//! decodes nothing and never polls it. A read through the cache can fail as a
+//! read of the file can (the file gone, changed or unreadable), and the render
+//! then answers that error. A render reports nothing through it, and a caller
+//! with nothing to cancel, such as a panel rendering tiles it holds on the GUI
+//! thread, passes `&Progress::none()`.
 
 use crate::camera::image::{ImageF32WithGrad, ImageU8, ImageU8Pyramid, PyramidLevel};
 use crate::camera::remap::{

@@ -16,10 +16,10 @@
 //! Its callers hold it in an `Arc` and call it through `&self`: a worker thread
 //! puts what it decodes where the next worker and the GUI thread find it.
 //! [`PhotographCache::get`] answers a [`TiledPhotograph`] that holds no tile
-//! and reads each through the cache, decoding the photograph only when none
-//! of its tiles is kept, and again for a read of a tile the cache evicted
-//! since; it waits while another thread decodes the same path, and stops
-//! waiting when its caller is cancelled. [`PhotographCache::peek`] never reads a file and
+//! and reads each through the cache, decoding the photograph only when none of
+//! its tiles is kept, and again for a read of a tile the cache evicted since;
+//! it waits while another thread decodes the same path, and stops waiting when
+//! its caller is cancelled. [`PhotographCache::peek`] never reads a file and
 //! never waits, which is what a caller that draws every frame wants. Every
 //! whole decode is reserved on the cache's build count first
 //! ([`PhotographCache::reserve_builds`]), so the decodes in progress on one
@@ -734,17 +734,18 @@ impl Inner {
 /// photograph's depth is set by its image; the pyramid is never held whole,
 /// and only the tiles are kept. The tiles a request asked for are kept as
 /// used and the rest of the decode as unused. [`Self::get`] and
-/// [`Self::get_many`] answer a [`TiledPhotograph`] that holds no tile and
-/// reads each through the cache, which decodes the photograph again for a
-/// tile it no longer keeps; they decode only a photograph none of whose tiles
-/// is kept. Under a budget of 0 the cache keeps nothing, and the photograph
-/// they answer holds every tile of the decode that made it. A photograph
-/// with a side over [`MAX_JPEG_SIDE`] is refused from its header, before any
-/// decode, as [`GetError::TooLarge`]. A file that cannot be read or is
-/// refused is remembered as its error and costs nothing against the budget. An entry records the file's length and modification
-/// time when it is made; `get` and `get_many` compare them with the file on
-/// disk and decode again when they differ, so a remembered failure is also
-/// retried once the file appears or changes.
+/// [`Self::get_many`] answer a [`TiledPhotograph`] that holds no tile and reads
+/// each through the cache, which decodes the photograph again for a tile it no
+/// longer keeps; they decode only a photograph none of whose tiles is kept.
+/// Under a budget of 0 the cache keeps nothing, and the photograph they answer
+/// holds every tile of the decode that made it. A photograph with a side over
+/// [`MAX_JPEG_SIDE`] is refused from its header, before any decode, as
+/// [`GetError::TooLarge`]. A file that cannot be read or is refused is
+/// remembered as its error and costs nothing against the budget. An entry
+/// records the file's length and modification time when it is made; `get` and
+/// `get_many` compare them with the file on disk and decode again when they
+/// differ, so a remembered failure is also retried once the file appears or
+/// changes.
 ///
 /// When a decode takes the bytes kept over the budget, tiles are dropped
 /// until the total is back under it: the unused before the used, the least
