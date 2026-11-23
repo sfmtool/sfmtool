@@ -14,8 +14,8 @@ one undistorted pinhole camera; the temporary workspace lives in the system
 temporary directory and is deleted at exit; the demo node saves as any other
 node does; the first version holds a 1 m distance measurement along a cube
 edge; the demo scene is bound to Python; and decoded JPEG pixels may differ
-by one level between x86 and arm64, which the tests tolerate. Steps 1 and 2
-of the [step plan](#step-plan) are built; step 1 found that the JPEG encoder's
+by one level between x86 and arm64, which the tests tolerate. Steps 1, 2 and
+3 of the [step plan](#step-plan) are built; step 1 found that the JPEG encoder's
 two paths give different bytes, and step 2 that the reference-view rule's pick
 of a point's bitmap view can change with a one-level change in the pixels
 ([The reconstruction's columns](#the-reconstructions-columns)), which the
@@ -245,10 +245,10 @@ let sfmr_path = scene.write_workspace(&temp_dir, &progress)?;
 ## Python binding
 
 The binding is `DemoScene` in `sfmtool.reconstruction`, the module that holds
-`SfmrReconstruction`, in a new source file
-`crates/sfmtool-py/src/reconstruction/demo_scene.rs` with its row in
-[python-bindings.md](../python-bindings.md) § "Submodules". Its methods call
-the Rust ones and hold no logic of their own
+`SfmrReconstruction`, in
+[reconstruction/demo_scene.rs](../../crates/sfmtool-py/src/reconstruction/demo_scene.rs)
+with its row in [python-bindings.md](../python-bindings.md) § "Submodules".
+Its methods call the Rust ones and hold no logic of their own
 ([STANDARDS.md](../STANDARDS.md) § "Logic lives in Rust, not in Python
 wrappers"), with the GIL released while they run.
 
@@ -258,33 +258,52 @@ from sfmtool.reconstruction import DemoScene
 
 scene = DemoScene.render(
     *, image_width=640, image_height=480, focal_length_px=560.0,
-    supersampling=2, ground_point_spacing=0.25, face_point_spacing=0.125,
+    supersampling=2, ground_point_spacing=None, face_point_spacing=None,
     patch_half_extent=0.09, patch_bitmap_resolution=24,
     max_obliquity_deg=80.0, seed=0, point_count=None, progress=None,
 )                                     # -> DemoScene
 scene.image_names                     # list[str]
-scene.rendered_photographs            # list of read-only (H, W, 3) uint8 arrays
+scene.rendered_photographs            # list of read-only (H, W, 3) uint8 views
 scene.photographs                     # the decoded JPEGs, the same shape
 scene.encoded_photographs             # list[bytes], the JPEG files
 scene.reconstruction(progress=None)   # -> SfmrReconstruction
 scene.write_workspace(dir, progress=None)  # -> pathlib.Path of demo.sfmr
 ```
 
-The keywords are the fields of `DemoSceneOptions` with their defaults.
-`point_count` calls `for_point_count` and cannot be given with either spacing.
-`progress`, an optional `ProgressCounter`, counts what the Rust call's phases
-count: rows rendered and images encoded for `render`, points sampled and
-bitmaps rendered for `reconstruction`, and those followed by files written for
-`write_workspace`; [STANDARDS.md](../STANDARDS.md) § "Long-running functions
-take a Progress" asks a binding of a long call to take one. An option out of
-range, a `point_count` given with a spacing, or a `dir` that holds files or
-lies inside a workspace raises `ValueError` with the Rust error's message; a
-failed encode or write raises `OSError`.
+The keywords are the fields of `DemoSceneOptions` with their defaults. The two
+spacings default to `None`, which is their `Default` value, 0.25 and 0.125, so
+that the binding can tell a spacing given from one left out: `point_count`
+calls `for_point_count`, whose spacings then stand for the two, and cannot be
+given with either. The other keywords apply on top of it. There is no
+settings class: no binding exposes an `*Options` struct as a class, and the
+options are keyword arguments, as the other bindings' settings are. The
+photographs are read-only views of the scene's own pixels, whose base is the
+`DemoScene`, so a read copies nothing and an array keeps its scene alive; the class is frozen and has no method that changes the scene.
+`progress`, an optional `ProgressCounter`, is set to the count of the phase
+that is running, as `upgrade_workspace`'s is: rows rendered and then images
+encoded for `render`, points sampled and then bitmaps rendered for
+`reconstruction`, and those followed by files written for `write_workspace`;
+[STANDARDS.md](../STANDARDS.md) § "Long-running functions take a Progress"
+asks a binding of a long call to take one. At the end of a call it holds its
+last phase's count: 5 images, the point count (one bitmap per point), or 7
+files (five JPEGs, the marker and the `.sfmr`). An option out of range, a
+`point_count` of 0 or given with a spacing, or a `dir` that is not a
+directory, holds files or lies inside a workspace raises `ValueError` with the
+Rust error's message; a failed encode or decode, or a failed write of a
+photograph, a directory, the marker or the `.sfmr`, raises `OSError` (the
+subclass for its `io::ErrorKind` for a directory or the marker). Python's
+signal handlers run while a call goes, as in `upgrade_workspace`: Ctrl+C
+cancels the call's `Progress` and raises `KeyboardInterrupt`, and a cancel by
+other means raises `InterruptedError`.
 
 **Cost in a test session.** Rendering and building the value take well under a
-second ([Cost](#cost)), so a session-scoped pytest fixture that renders once
-and writes one workspace for the session's tests costs less than one solve of
-seoul_bull.
+second ([Cost](#cost)): through the binding, on the 32-thread x86-64 Windows
+machine, `render` takes about 0.1 s, `reconstruction` 0.1 to 0.2 s and
+`write_workspace` about 0.15 s. A fixture that renders once and writes one
+workspace costs less than one solve of seoul_bull. The binding's tests share
+one render, one value and one written workspace through module-scoped
+fixtures, since only their module uses them; a later test module that needs
+the scene moves them to a session-scoped fixture in `conftest.py`.
 
 ## The scene
 
@@ -1145,9 +1164,26 @@ Each step is one change on its own branch, with its tests.
    the `reconstruction` submodule's registration test. Tests: the binding's value
    equals the Rust one's on the same options; `write_workspace` writes a
    workspace that `sfm inspect` reads; `ProgressCounter` climbs; each error
-   raises the stated exception; then the Python tests listed above, one area
-   at a time, each kept only where the scene makes an assertion possible or
-   exact.
+   raises the stated exception.
+
+   *Built.* The binding is
+   [reconstruction/demo_scene.rs](../../crates/sfmtool-py/src/reconstruction/demo_scene.rs),
+   tested by
+   [test_demo_scene_rust_bindings.py](../../tests/rust_bindings/reconstruction/test_demo_scene_rust_bindings.py).
+   The binding's value is checked against the Rust one by the values the Rust
+   tests store: the five JPEGs' XXH128 equal one of the two encoder paths'
+   stored sets, the defaults keep 513 points and 1,712 observations, and
+   `point_count=1000` keeps 994, the count step 2 measured for
+   `for_point_count(1000)`, here on 64 × 48 photographs with the default's
+   field of view. Building it settled the
+   [Python binding](#python-binding) section's details: the spacings default to `None` so that `point_count` can
+   refuse one given beside it, the options are keyword arguments rather than a
+   settings object, the photographs are views of the scene's pixels, the
+   counter holds the running phase's count, and the exceptions are those the
+   section lists, with `InterruptedError` and Ctrl+C added. The migration of
+   the Python tests listed above, which this step first held, moved to step 5,
+   so that this step adds the binding alone. The binding's tests take 0.7 s
+   on one worker.
 4. **Load Demo Data.** The menu entry and `--demo` load the scene from a
    temporary workspace, with the *Number of points* box mapped through
    `for_point_count`; the lock file, the deletion at exit and the sweep at
@@ -1157,5 +1193,6 @@ Each step is one change on its own branch, with its tests.
    tests follow. Tests: a directory whose lock file no process holds is
    removed at start, and one whose lock a live process holds is kept. This
    step changes what the viewer shows, so its PR carries screenshots.
-5. **Test migration.** The Rust tests listed above, one area at a time, each
-   kept only where real pixels make an assertion possible or exact.
+5. **Test migration.** The Rust tests and the Python tests listed above, one
+   area at a time, each kept only where real pixels make an assertion possible
+   or exact.

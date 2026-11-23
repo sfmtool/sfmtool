@@ -13,7 +13,7 @@ import sfmtool._sfmtool.geometry as geometry
 import sfmtool._sfmtool.patches as patches
 import sfmtool._sfmtool.reconstruction as reconstruction
 
-_RECONSTRUCTION_CLASSES = ("SfmrReconstruction", "RangeExpr")
+_RECONSTRUCTION_CLASSES = ("SfmrReconstruction", "RangeExpr", "DemoScene")
 _RECONSTRUCTION_FUNCTIONS = (
     "triangulate_points",
     "focal_is_releasable",
@@ -127,6 +127,7 @@ def test_root_surface_is_deliberate_and_minimal():
         "refine_photometric_ransac",
         "render_consensus_atlas",
         "image_dimensions",
+        "DemoScene",
     ):
         assert not hasattr(_sfmtool, stale), f"{stale} still registered flat"
         assert not hasattr(sfmtool, stale), f"sfmtool.{stale} still re-exported flat"
