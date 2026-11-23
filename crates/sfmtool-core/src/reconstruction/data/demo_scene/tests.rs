@@ -12,8 +12,9 @@ use super::*;
 use crate::features::sift::ImageToGray;
 use crate::progress::Event;
 
-/// The default scene, rendered once for the tests that only read it.
-pub(super) fn scene() -> &'static DemoScene {
+/// The default scene, rendered once for the tests across the crate that only
+/// read it.
+pub(crate) fn default_demo_scene() -> &'static DemoScene {
     static SCENE: OnceLock<DemoScene> = OnceLock::new();
     SCENE
         .get_or_init(|| DemoScene::render(&DemoSceneOptions::default(), &Progress::none()).unwrap())
@@ -191,7 +192,7 @@ pub(super) fn encoder_takes_avx2() -> bool {
 
 #[test]
 fn the_jpegs_match_the_hashes_stored_for_the_encoders_path() {
-    let hashes: Vec<String> = scene()
+    let hashes: Vec<String> = default_demo_scene()
         .encoded_photographs()
         .iter()
         .map(|bytes| format!("{:032x}", xxhash_rust::xxh3::xxh3_128(bytes)))
@@ -206,7 +207,7 @@ fn the_jpegs_match_the_hashes_stored_for_the_encoders_path() {
 
 #[test]
 fn photographs_are_the_decoded_jpegs_and_differ_a_little_from_the_render() {
-    let scene = scene();
+    let scene = default_demo_scene();
     assert_eq!(scene.photographs().len(), 5);
     for (i, ((decoded, encoded), rendered)) in scene
         .photographs()
@@ -251,7 +252,7 @@ fn a_facing_pixel_is_the_texture_at_its_centre_ray_hit_within_the_blur() {
     )
     .unwrap();
     let sharp = &one_ray.rendered_photographs()[image];
-    let blurred = &scene().rendered_photographs()[image];
+    let blurred = &default_demo_scene().rendered_photographs()[image];
     let centre = CAMERA_CENTRES[image];
     let (mut count, mut total_error) = (0usize, 0f64);
     for row in 0..480 {
@@ -321,7 +322,11 @@ fn each_surface_grey_is_its_tint_luma_times_the_noise_factor() {
 
     let seed = DemoSceneOptions::default().seed;
     let mut seen = std::collections::BTreeMap::new();
-    for (image, photograph) in scene().rendered_photographs().iter().enumerate() {
+    for (image, photograph) in default_demo_scene()
+        .rendered_photographs()
+        .iter()
+        .enumerate()
+    {
         // Every third pixel each way: each surface's pixels number thousands.
         for row in (0..480).step_by(3) {
             for col in (0..640).step_by(3) {
@@ -360,7 +365,11 @@ fn each_surface_grey_is_its_tint_luma_times_the_noise_factor() {
 #[test]
 fn the_cube_silhouette_is_where_the_slab_test_puts_it() {
     let is_cube = |s: Option<Surface>| s.is_some_and(|s| s != Surface::Ground);
-    for (image, photograph) in scene().rendered_photographs().iter().enumerate() {
+    for (image, photograph) in default_demo_scene()
+        .rendered_photographs()
+        .iter()
+        .enumerate()
+    {
         let mut kinds = vec![None; 640 * 480];
         for row in 0..480 {
             for col in 0..640 {
@@ -800,7 +809,11 @@ fn the_texture_fills_most_of_its_grey_range_and_never_leaves_it() {
 fn window_contrasts() -> std::collections::BTreeMap<u8, Vec<(f64, f64)>> {
     const SIDE: u32 = 24;
     let mut contrasts = std::collections::BTreeMap::new();
-    for (image, photograph) in scene().rendered_photographs().iter().enumerate() {
+    for (image, photograph) in default_demo_scene()
+        .rendered_photographs()
+        .iter()
+        .enumerate()
+    {
         for row0 in (0..=480 - SIDE).step_by(SIDE as usize) {
             'window: for col0 in (0..=640 - SIDE).step_by(SIDE as usize) {
                 let mut surface = None;

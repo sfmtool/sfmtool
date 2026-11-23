@@ -26,6 +26,8 @@ values once for each encoder path
 ([Determinism of the JPEG encoder and decoder](#determinism-of-the-jpeg-encoder-and-decoder)). Step 4 is
 built too: *Load Demo Data* and `--demo` load the scene from a temporary
 workspace ([Load Demo Data](#load-demo-data)).
+The `sfmtool-core` half of step 5 is built too, so all of step 5 is: one web export test on the
+scene, with the bench kernel tests' fixture kept as it is.
 
 ## Purpose
 
@@ -1363,3 +1365,48 @@ Each step is one change on its own branch, with its tests.
    mirrors the one core's track-at-pixel tests are decided against.
    `web_export`'s `far_demo` and core's bench `fixture_of` are not viewer
    tests and are left for another change.
+
+   *The `sfmtool-core` half is built.* No test moved; one was added on the
+   scene, and both candidates' fixtures stay:
+   - [web_export/tests.rs](../../crates/sfmtool-core/src/web_export/tests.rs)
+     gains a test that writes the scene's workspace to a temporary directory
+     and exports its file at JPEG quality 100. Each point's tile, decoded from
+     its page, is its stored bitmap without the alpha channel to a mean of
+     1.25 levels (0.64 measured), and at a `patch_size` of 12 the stored
+     bitmap's area resample (0.75 measured); and the same file with its
+     bitmap and thumbnail columns dropped exports the same files byte for
+     byte, its bitmaps rendered from the photographs at the stored frames,
+     keypoints and references and its thumbnails read from the photographs.
+     `far_demo`'s bitmaps are one grey each, the same in every channel and
+     texel, so no test could see the alpha channel kept in place of red, a
+     tile drawn from the next point's bitmap or a nearest-texel resample;
+     each of those fails the new test (by 76.8, 22.7 and 2.2 levels at point
+     0) and passes every other test of the module. A render at a pose 1 mm
+     off fails it on `patches-0.jpg`, and one thumbnail texel a level off on
+     `thumbs-0.jpg`. The scene's render is shared with its own tests
+     through `default_demo_scene`; the test takes 0.3 to 0.4 s alone, with
+     the render, and 0.34 s for the whole module.
+   - `far_demo` stays for the tests that use it: they rely on what the scene
+     does not hold, points 4,000 km from the origin, whose position shifts
+     back through the f64 centre, a last point with no frame or bitmap, eight
+     images, a `sift_files` value whose per-image hashes a case shortens,
+     points made directions, and 8 × 8 bitmaps whose count sets the page
+     arithmetic of the spill test. The offsets test keeps the Seoul bull
+     ground truth, which it reads in place in under 0.01 s, where the scene
+     would add a workspace write for the same assertions.
+   - The bench kernel tests' `fixture_of`
+     ([bench/tests/scene.rs](../../crates/sfmtool-core/src/bench/tests/scene.rs))
+     stays as it is. The value noise is shared already, since step 1. What
+     the fixture and the scene's value build alike, tracks, keypoints,
+     observation counts and patch frame rows, is 25 to 30 lines on each
+     side, and they differ in everything around it: the fixture takes one
+     point at a chosen place or direction (a zero normal for `w = 0`), a
+     chosen patch and observing images, grey photographs with invented
+     readings and zero hashes, and the sphere demo's metadata and depth
+     statistics; the scene takes sampled points on its surfaces, readings,
+     thumbnails and hashes from its photographs, a workspace's metadata and
+     bitmaps by the reference-view rule. A builder shared between them would
+     take a parameter for each difference and be no shorter than the two,
+     and would bend the scene's library code to fit a test fixture.
+
+   With the Python and SfM Explorer halves, step 5 is built.

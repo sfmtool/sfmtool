@@ -58,7 +58,7 @@ pub use affine_shape::patch_affine_shape;
 #[cfg(test)]
 pub(crate) use demo::rewrite_as_version_16_without_keypoints;
 #[cfg(test)]
-pub(crate) use demo_scene::value_noise;
+pub(crate) use demo_scene::{default_demo_scene, value_noise};
 pub use demo_scene::{DemoScene, DemoSceneError, DemoSceneOptions};
 pub use image_set::{ImageSet, PerImageAdjustments};
 pub(crate) use point_set::observation_confidence_byte;

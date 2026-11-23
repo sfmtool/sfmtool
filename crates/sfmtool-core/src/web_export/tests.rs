@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use super::atlas::AtlasLayout;
 use super::*;
+use crate::camera::image::ImageU8;
 use crate::camera::CameraModel;
 use crate::CameraIntrinsics;
 
@@ -730,5 +731,119 @@ fn observation_offsets_that_do_not_fit_the_tracks_are_refused_naming_them() {
             }
             other => panic!("{what}: {:?}", other.map(|e| e.report)),
         }
+    }
+}
+
+/// The RGB texels of the tile of the point whose `patch_cell` is `cell`,
+/// without its border, read from the decoded pages of `patches`, the
+/// `atlases.patches` entry of `scene.json`.
+fn tile_rgb(patches: &Value, pages: &[ImageU8], cell: u32) -> Vec<u8> {
+    let size = patches["size"].as_u64().unwrap() as usize;
+    let tile = patches["tile"].as_u64().unwrap() as usize;
+    let cols = patches["cols"].as_u64().unwrap() as usize;
+    let page = &pages[(cell >> 24) as usize];
+    let cell = (cell & 0x00ff_ffff) as usize;
+    let (x0, y0) = ((cell % cols) * tile + 1, (cell / cols) * tile + 1);
+    let width = page.width() as usize;
+    (0..size)
+        .flat_map(|y| {
+            let start = ((y0 + y) * width + x0) * 3;
+            page.data()[start..start + size * 3].to_vec()
+        })
+        .collect()
+}
+
+/// The mean absolute difference of two byte runs of one length.
+fn mean_abs_difference(a: &[u8], b: &[u8]) -> f64 {
+    assert_eq!(a.len(), b.len());
+    let sum: u64 = a.iter().zip(b).map(|(&x, &y)| x.abs_diff(y) as u64).sum();
+    sum as f64 / a.len() as f64
+}
+
+/// On the demo scene, whose bitmaps are textured and whose photographs are in
+/// its workspace: each point's tile is its stored bitmap without the alpha
+/// channel, or that bitmap resampled at a `patch_size`; and the same file
+/// without its bitmap and thumbnail columns exports the same files, its
+/// bitmaps rendered at the stored frames, keypoints and references and its
+/// thumbnails read from the photographs. [`far_demo`]'s bitmaps are one grey
+/// each, the same in every channel and texel, so they cannot show a channel,
+/// a texel or a resample out of place.
+#[test]
+fn patch_tiles_are_the_stored_bitmaps_and_a_file_without_them_renders_the_same() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = crate::reconstruction::data::default_demo_scene()
+        .write_workspace(&tmp.path().join("demo"), &Progress::none())
+        .unwrap();
+    let recon = SfmrReconstruction::load(&path, &Progress::none()).unwrap();
+    let bitmaps = recon.point_set.patch_bitmaps_y_x_rgba.as_ref().unwrap();
+    let side = bitmaps.shape()[1];
+    let stored_rgb = |p: usize| -> Vec<u8> {
+        bitmaps
+            .index_axis(ndarray::Axis(0), p)
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| i % 4 != 3)
+            .map(|(_, &b)| b)
+            .collect()
+    };
+    let options = WebExportOptions {
+        jpeg_quality: 100,
+        ..WebExportOptions::default()
+    };
+
+    let stored = build_web_export(&recon, &options, &Progress::none()).unwrap();
+    let half = Some(side / 2);
+    let resampled = WebExportOptions {
+        patch_size: half,
+        ..options.clone()
+    };
+    let resampled = build_web_export(&recon, &resampled, &Progress::none()).unwrap();
+    for (patch_size, export) in [(None, &stored), (half, &resampled)] {
+        let scene = scene_of(export);
+        let patches = &scene["atlases"]["patches"];
+        let pages: Vec<ImageU8> = patches["pages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|page| {
+                let name = page["file"].as_str().unwrap();
+                let file = export.files.iter().find(|f| f.name == name).unwrap();
+                ImageU8::decode_rgb(&file.bytes).unwrap()
+            })
+            .collect();
+        let cells = patch_cells(export);
+        assert_eq!(cells.len(), recon.point_count());
+        for (p, &cell) in cells.iter().enumerate() {
+            assert_ne!(cell, u32::MAX, "point {p} has a patch");
+            let expected = match patch_size {
+                None => stored_rgb(p),
+                Some(size) => resize_area(&stored_rgb(p), side, side, 3, size, size),
+            };
+            // The page's JPEG at quality 100 moves a tile by under one level
+            // on average (at most 0.64 measured at 24 texels, 0.75 at 12);
+            // another point's bitmap is 6.7 or more away, and the 12-texel
+            // tile taken as every other texel rather than the area mean 2.2.
+            let difference = mean_abs_difference(&tile_rgb(patches, &pages, cell), &expected);
+            assert!(
+                difference < 1.25,
+                "point {p} at {patch_size:?}: {difference}"
+            );
+        }
+    }
+
+    let mut bare = recon.clone();
+    bare.point_set.patch_bitmaps_y_x_rgba = None;
+    bare.image_set.thumbnails_y_x_rgb = None;
+    let rendered = build_web_export(&bare, &options, &Progress::none()).unwrap();
+    assert!(!stored.report.patch_bitmaps_rendered);
+    assert!(rendered.report.patch_bitmaps_rendered);
+    assert_eq!(stored.report.thumbnails.file, 5);
+    assert_eq!(rendered.report.thumbnails.photographs, 5);
+    assert_eq!(rendered.report.patches, recon.point_count());
+    assert_eq!(stored.files.len(), rendered.files.len());
+    for (a, b) in stored.files.iter().zip(&rendered.files) {
+        assert_eq!(a.name, b.name);
+        // Not `assert_eq!`, which would print every byte of a page.
+        assert!(a.bytes == b.bytes, "{} differs", a.name);
     }
 }

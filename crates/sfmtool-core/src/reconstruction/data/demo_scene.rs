@@ -32,6 +32,8 @@ mod texture;
 mod value;
 
 #[cfg(test)]
+pub(crate) use tests::default_demo_scene;
+#[cfg(test)]
 pub(crate) use texture::value_noise;
 
 /// How the demo scene is rendered and sampled. `Default` is the scene
