@@ -139,7 +139,8 @@ fn a_photograph_from_an_image_holds_every_tile_of_its_pyramid() {
 /// `from_image`, which cuts one level at a time and makes the next from it,
 /// holds the tiles `cut` holds of the whole pyramid `ImageU8Pyramid::from_image`
 /// builds, bit for bit, and the same levels, for sizes whose pyramid stops
-/// short of the full depth (a side of 1 or 3) and odd sizes over many tiles.
+/// short of the full depth (a side of 1), sides of 2 and 3, and odd sizes
+/// over many tiles.
 #[test]
 fn from_image_cuts_the_tiles_of_the_whole_pyramid_level_by_level() {
     for (w, h) in [
