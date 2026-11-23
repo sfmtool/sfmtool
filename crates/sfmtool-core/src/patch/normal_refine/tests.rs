@@ -13,9 +13,9 @@ use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::OrientedPatch;
 
-/// `pyramid` as the tiled photograph a kernel reads.
+/// Every tile of `pyramid`, held as the tiled photograph a kernel reads.
 fn in_memory(pyramid: ImageU8Pyramid) -> TiledPhotograph {
-    TiledPhotograph::from_pyramid(std::sync::Arc::new(pyramid))
+    TiledPhotograph::cut(&pyramid, crate::camera::PHOTOGRAPH_TILE_SIZE)
 }
 
 /// Helper: build a simple pinhole camera.

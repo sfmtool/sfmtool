@@ -22,7 +22,7 @@ const TILE: u32 = 32;
 fn sources(image: &ImageU8) -> (Arc<ImageU8Pyramid>, TiledPhotograph) {
     let levels = ImageU8Pyramid::full_levels(image.width(), image.height());
     let pyramid = Arc::new(ImageU8Pyramid::build(image, levels));
-    let source = TiledPhotograph::from_pyramid(pyramid.clone()).with_tile_size(TILE);
+    let source = TiledPhotograph::cut(&pyramid, TILE);
     (pyramid, source)
 }
 

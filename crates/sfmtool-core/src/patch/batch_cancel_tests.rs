@@ -7,7 +7,6 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
 
 use nalgebra::{Point3, Vector3};
 
@@ -110,7 +109,7 @@ fn a_batch_cancelled_before_it_starts_does_no_work() {
         .iter()
         .map(|&x| RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [-x, 0.0, 0.0]))
         .collect();
-    let source = TiledPhotograph::from_pyramid(Arc::new(pyramid()));
+    let source = TiledPhotograph::cut(&pyramid(), crate::camera::PHOTOGRAPH_TILE_SIZE);
     let views: Vec<ProjectedImage<'_>> = cams
         .iter()
         .zip(&poses)

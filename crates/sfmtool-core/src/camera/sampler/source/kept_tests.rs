@@ -19,7 +19,7 @@ fn sources() -> (Arc<ImageU8Pyramid>, TiledPhotograph) {
     let image = photograph(200, 150);
     let levels = ImageU8Pyramid::full_levels(200, 150);
     let pyramid = Arc::new(ImageU8Pyramid::build(&image, levels));
-    let source = TiledPhotograph::from_pyramid(pyramid.clone()).with_tile_size(TILE);
+    let source = TiledPhotograph::cut(&pyramid, TILE);
     (pyramid, source)
 }
 

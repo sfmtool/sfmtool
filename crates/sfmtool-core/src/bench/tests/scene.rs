@@ -14,7 +14,7 @@ use nalgebra::{Point3, Quaternion, UnitQuaternion, Vector3};
 use ndarray::{Array2, Array4};
 
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
-use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
+use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph, PHOTOGRAPH_TILE_SIZE};
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_subpixel::KeypointSubpixelParams;
@@ -36,9 +36,13 @@ const HALF_EXTENT: f64 = 0.12;
 pub(in crate::bench) const CENTERS: [[f64; 3]; 3] =
     [[-0.5, -0.3, 0.0], [0.45, 0.25, 0.0], [0.1, -0.55, 0.0]];
 
-/// `pyramid` as the tiled photograph a kernel reads.
-fn in_memory(pyramid: ImageU8Pyramid) -> TiledPhotograph {
-    TiledPhotograph::from_pyramid(Arc::new(pyramid))
+/// The pyramid of four levels of `image`, which the tests that compare a
+/// read with the whole pyramid read, and the tiled photograph a kernel reads,
+/// cut from it.
+fn in_memory(image: &ImageU8) -> (ImageU8Pyramid, TiledPhotograph) {
+    let pyramid = ImageU8Pyramid::build(image, 4);
+    let source = TiledPhotograph::cut(&pyramid, PHOTOGRAPH_TILE_SIZE);
+    (pyramid, source)
 }
 
 fn pinhole() -> CameraIntrinsics {
@@ -123,6 +127,7 @@ pub(in crate::bench) struct Scene {
     centers: Vec<[f64; 3]>,
     cameras: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
+    pyramids: Vec<ImageU8Pyramid>,
     sources: Vec<TiledPhotograph>,
 }
 
@@ -140,14 +145,16 @@ impl Scene {
     /// depth, and one whose cameras step by centimetres at a plane hundreds of
     /// units out resolves only a bearing.
     pub(in crate::bench) fn from_centers(centers: &[[f64; 3]], depth: f64) -> Self {
+        let (pyramids, sources) = centers
+            .iter()
+            .map(|&c| in_memory(&render_plane_view(c, depth)))
+            .unzip();
         Self {
             centers: centers.to_vec(),
             cameras: centers.iter().map(|_| pinhole()).collect(),
             poses: centers.iter().map(|&c| pose(c)).collect(),
-            sources: centers
-                .iter()
-                .map(|&c| in_memory(ImageU8Pyramid::build(&render_plane_view(c, depth), 4)))
-                .collect(),
+            pyramids,
+            sources,
         }
     }
 
@@ -175,14 +182,13 @@ impl Scene {
             }
             ImageU8::new(IMG_W, IMG_H, 1, data)
         };
+        let (pyramids, sources) = centers.iter().map(|&c| in_memory(&render(c))).unzip();
         Self {
             centers: centers.to_vec(),
             cameras: centers.iter().map(|_| pinhole()).collect(),
             poses: centers.iter().map(|&c| pose(c)).collect(),
-            sources: centers
-                .iter()
-                .map(|&c| in_memory(ImageU8Pyramid::build(&render(c), 4)))
-                .collect(),
+            pyramids,
+            sources,
         }
     }
 
@@ -200,7 +206,7 @@ impl Scene {
         surface: impl Fn([f64; 3], [f64; 3]) -> f64,
     ) -> Self {
         let poses: Vec<RigidTransform> = centers.iter().map(|&c| look_at(c, target)).collect();
-        let sources = centers
+        let (pyramids, sources) = centers
             .iter()
             .zip(&poses)
             .map(|(&c, pose)| {
@@ -215,13 +221,14 @@ impl Scene {
                     }
                 }
                 let image = ImageU8::new(camera.width, camera.height, 1, data);
-                in_memory(ImageU8Pyramid::build(&image, 4))
+                in_memory(&image)
             })
-            .collect();
+            .unzip();
         Self {
             centers: centers.to_vec(),
             cameras: centers.iter().map(|_| camera.clone()).collect(),
             poses,
+            pyramids,
             sources,
         }
     }
@@ -254,6 +261,12 @@ impl Scene {
             .map(|source| source.with_tile_size(tile_size))
             .collect();
         self
+    }
+
+    /// The whole pyramid photograph `i` is cut from, for the tests that
+    /// compare a read with it.
+    pub(in crate::bench) fn pyramid(&self, i: usize) -> &ImageU8Pyramid {
+        &self.pyramids[i]
     }
 
     pub(in crate::bench) fn views(&self) -> Vec<ProjectedImage<'_>> {

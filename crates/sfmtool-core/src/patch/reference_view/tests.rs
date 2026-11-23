@@ -228,7 +228,7 @@ fn the_clipped_share_over_tiles_equals_it_over_the_whole_level() {
     ];
     for pyramid in [grey(100, 70, value), colour] {
         let pyramid = Arc::new(pyramid);
-        let source = TiledPhotograph::from_pyramid(pyramid.clone()).with_tile_size(32);
+        let source = TiledPhotograph::cut(&pyramid, 32);
         for outline in &outlines {
             let whole = clipped_share(&pyramid, outline).unwrap();
             let tiles = source_clipped_share(&source, outline).unwrap().unwrap();
@@ -269,9 +269,10 @@ fn a_tile_inside_the_photograph_is_fully_covered_and_one_over_its_edge_is_not() 
     // canonical -z axis along +z), and a patch at z = 4 facing it.
     let camera = pinhole(64, 64);
     let pose = RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
-    let source = TiledPhotograph::from_pyramid(Arc::new(grey(64, 64, |x, y| {
-        ((x * 7 + y * 3) % 200 + 20) as u8
-    })));
+    let source = TiledPhotograph::cut(
+        &grey(64, 64, |x, y| ((x * 7 + y * 3) % 200 + 20) as u8),
+        crate::camera::PHOTOGRAPH_TILE_SIZE,
+    );
     let view = ProjectedImage {
         camera: &camera,
         cam_from_world: &pose,
@@ -331,14 +332,14 @@ fn a_grey_and_alpha_photograph_renders_grey_and_opaque_alpha() {
     let camera = pinhole(64, 64);
     let pose = RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
     let value = |x: u32, y: u32| ((x * 7 + y * 3) % 200 + 20) as u8;
-    let one = TiledPhotograph::from_pyramid(Arc::new(grey(64, 64, value)));
+    let one = TiledPhotograph::cut(&grey(64, 64, value), crate::camera::PHOTOGRAPH_TILE_SIZE);
     let data = (0..64u32)
         .flat_map(|y| (0..64u32).flat_map(move |x| [value(x, y), 7]))
         .collect();
-    let two = TiledPhotograph::from_pyramid(Arc::new(ImageU8Pyramid::build(
-        &ImageU8::new(64, 64, 2, data),
-        1,
-    )));
+    let two = TiledPhotograph::cut(
+        &ImageU8Pyramid::build(&ImageU8::new(64, 64, 2, data), 1),
+        crate::camera::PHOTOGRAPH_TILE_SIZE,
+    );
     let mut patch = OrientedPatch::from_center_normal(
         Point3::new(0.0, 0.0, 4.0),
         -Vector3::z(),
@@ -444,7 +445,7 @@ fn the_clipped_share_of_a_fisheye_tile_is_read_inside_its_distorted_outline() {
         rolling_shutter: None,
     };
     let pyramid = Arc::new(grey(160, 160, |x, _| if x < 110 { 255 } else { 100 }));
-    let source = TiledPhotograph::from_pyramid(pyramid.clone());
+    let source = TiledPhotograph::cut(&pyramid, crate::camera::PHOTOGRAPH_TILE_SIZE);
     let (pose, patch) = facing_patch(0.0, 3.0);
     let view = ProjectedImage {
         camera: &camera,
@@ -501,7 +502,7 @@ fn the_clipped_share_of_a_tile_cut_by_the_photograph_s_edge_is_read_inside_the_p
     // samples on the photograph.
     let camera = pinhole(64, 64);
     let pyramid = Arc::new(grey(64, 64, |x, _| if x >= 60 { 255 } else { 100 }));
-    let source = TiledPhotograph::from_pyramid(pyramid.clone());
+    let source = TiledPhotograph::cut(&pyramid, crate::camera::PHOTOGRAPH_TILE_SIZE);
     let (pose, patch) = facing_patch(1.2, 0.2);
     let view = ProjectedImage {
         camera: &camera,

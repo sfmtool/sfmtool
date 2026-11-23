@@ -19,9 +19,9 @@ use crate::geometry::RigidTransform;
 // shift the kernel must recover for view k is `o_k / wpp` patch-grid px
 // (`wpp = 2·half_extent / R`).
 
-/// `pyramid` as the tiled photograph a kernel reads.
+/// Every tile of `pyramid`, held as the tiled photograph a kernel reads.
 fn in_memory(pyramid: ImageU8Pyramid) -> TiledPhotograph {
-    TiledPhotograph::from_pyramid(std::sync::Arc::new(pyramid))
+    TiledPhotograph::cut(&pyramid, crate::camera::PHOTOGRAPH_TILE_SIZE)
 }
 
 const PLANE_Z: f64 = 4.0;

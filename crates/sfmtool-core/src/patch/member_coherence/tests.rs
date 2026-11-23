@@ -11,9 +11,9 @@ use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::geometry::RigidTransform;
 use nalgebra::{Point3, Vector3};
 
-/// `pyramid` as the tiled photograph a kernel reads.
+/// Every tile of `pyramid`, held as the tiled photograph a kernel reads.
 fn in_memory(pyramid: ImageU8Pyramid) -> TiledPhotograph {
-    TiledPhotograph::from_pyramid(std::sync::Arc::new(pyramid))
+    TiledPhotograph::cut(&pyramid, crate::camera::PHOTOGRAPH_TILE_SIZE)
 }
 
 /// Build a matrix from a k×k table of pairwise ZNCC (diagonal ignored).
@@ -1617,7 +1617,7 @@ fn blur_matching_lifts_a_blurred_member_and_leaves_the_plain_tables_alone() {
         &[surface_round, surface_round, surface_round, surface_round],
     );
     scene.sources[3] = in_memory(ImageU8Pyramid::build(
-        &blurred_image(scene.sources[3].held_pyramid().level(0), 5.0),
+        &blurred_image(&scene.sources[3].whole_level(0).expect("level 0"), 5.0),
         5,
     ));
     let views = scene.views();

@@ -6,7 +6,6 @@
 //! `specs/core/patch/cluster-patch-refinement.md`).
 
 use std::borrow::Cow;
-use std::sync::Arc;
 
 use ndarray::{ArrayView2, ArrayView3};
 use numpy::{
@@ -26,7 +25,7 @@ use sfmtool_core::patch::cluster_refine::{
 };
 
 use crate::patches::args::parse_patch_window;
-use crate::patches::views::build_pyramids_from_image_list;
+use crate::patches::views::build_photographs_from_image_list;
 use crate::py_progress::ProgressCounter;
 use crate::spatial::kdforest::{extract_u8_2d, resolve_forest_params};
 
@@ -650,14 +649,11 @@ pub fn refine_cluster_patches<'py>(
         ..ClusterRefineParams::default()
     };
 
-    // Decode images and build the pyramids (rayon, GIL-free); the cluster
-    // path has no reconstruction, so there is no camera-dimension check. Each
-    // is read as a tiled photograph, the pixels `TiledPhotograph::from_image`
-    // builds.
-    let sources: Vec<TiledPhotograph> = build_pyramids_from_image_list(py, &images, |_, _| Ok(()))?
-        .into_iter()
-        .map(|pyramid| TiledPhotograph::from_pyramid(Arc::new(pyramid)))
-        .collect();
+    // Decode the images and make their tiled photographs (rayon, GIL-free);
+    // the cluster path has no reconstruction, so there is no camera-dimension
+    // check.
+    let sources: Vec<TiledPhotograph> =
+        build_photographs_from_image_list(py, &images, |_, _| Ok(()))?;
 
     let progress_handle = progress.as_ref().map(|p| p.handle());
     let (result, consistency) = py.detach(|| -> PyResult<_> {

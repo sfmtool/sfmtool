@@ -111,7 +111,13 @@ fn tiled_crop_photograph() -> Arc<ImageU8Pyramid> {
 #[test]
 fn crops_read_through_regions_equal_the_whole_pyramid_crops() {
     let pyramid = tiled_crop_photograph();
-    let source = TiledPhotograph::from_pyramid(pyramid.clone());
+    let level0 = pyramid.level(0);
+    let source = TiledPhotograph::from_image(ImageU8::new(
+        level0.width(),
+        level0.height(),
+        level0.channels(),
+        level0.data().to_vec(),
+    ));
     let identity = [[1.0, 0.0], [0.0, 1.0]];
     let sheared = [[1.0, 0.35], [-0.2, 0.9]];
     let keypoints = [

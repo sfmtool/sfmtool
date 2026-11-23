@@ -1235,10 +1235,10 @@ pub fn default_build_budget_bytes() -> u64;
 /// cache's handle to its tiles, or tiles the source owns.
 pub struct TiledPhotograph { /* … */ }
 impl TiledPhotograph {
-    /// Tiles cut from the image's pyramid of `full_levels` depth, built by
-    /// `ImageU8Pyramid::build` as the bindings build it today, so the same
-    /// pixels; owned by the source, outside any cache: the Python bindings
-    /// given arrays, and tests.
+    /// Every tile of the image's pyramid of `full_levels` depth, built by
+    /// `ImageU8Pyramid::from_image` as the bindings built it before, so the
+    /// same pixels; held by the source, outside any cache: the Python
+    /// bindings given arrays, and tests (built in step 13e2).
     pub fn from_image(image: ImageU8) -> Self;
     /// A whole pyramid the cache handed out, read in place: a tile or region
     /// read copies only the pixels it asks for from the pyramid's levels, and
@@ -1427,7 +1427,7 @@ each in the step that moves its readers:
 | 10 | `ViewSources::fetch` in [state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs), which returns `PhotographReadError` instead of `Cancelled` (`get_many` still returns `Cancelled`, which converts), and the bench kernels (`bench::evaluate`, `evaluate_rendering_bitmap`, `score_bitmap`, `fit`, `render_bitmap_in_place`, `search_geometry`, `set_stage`, `build_track_at_pixel`, `classify`) and the patch kernels they and the reference picks share (`view_selection::select_patch_views`, `select_patch_cloud_views`, `reference_view::render_view_tile`, `read_track`, `stored_bitmap::render_reference`, `keypoint_localize`'s and `keypoint_subpixel`'s entry points, `member_coherence`'s, `observation_reading::read_cloud_observations`, `spawn::spawn_candidate_tracks`), and every kernel that calls one of them or that the bench runs, since a kernel passes its caller's pool down and its errors up: the normal kernels the bench's normal steps run (`pairwise_flow_normal`, `grown_plane_normal`, `grid_plane_normal`, `finite_difference_normal`) and `refine_normals`, which runs them; the cluster refinement's entry points (`refine_cluster_patches`, `refine_cluster_patches_borrowed`), which the bench's evaluation of a cluster-stage track runs, and the bench's member-grid reads, which move to `sample_source_member_grid`, the source form of `sample_member_grid` that step 9 added beside it; `stored_bitmap::render_patch_bitmap`, `render_patch_cloud_bitmaps` and `refit_points`. Their callers that step 11 moves keep their fetch: each wraps the whole pyramids it holds with `from_pyramid` (the cluster-patches build, until 11b, its decoded images with `from_image`), makes the region pool for its call, and reports the error as its step's failure |
 | 11 | the public `render_patch_bitmap_column` / `render_display_patch_bitmaps` in [display_bitmaps.rs](../../crates/sfmtool-core/src/patch/display_bitmaps.rs), which return `PhotographReadError` instead of `Cancelled`, and `WebExportError`, which gains `Photograph` (built, 11a); the viewer's bulk jobs (the conversion to embedded patches, *Refine all normals*, *Refit all points*, the cluster-patches build) and `sfm web-export` take the tiled photographs `get_many` answers since step 13e1, having wrapped its whole pyramids with `from_pyramid` before it, and the cluster-patches build fetches through the cache from 11b (built) |
 | 12 | `read_patch_along_ray` and `depth_layers`, which take the caller's `&RegionPool` in place of the `&GreyImages` cache, and `far_field_sweep` and `find_nearby_tracks`, which took the pool in 10a and drop the cache; `PatchReadError` and `DepthLayerError` gain `Photograph(PhotographReadError)` in place of `GreyMismatch`, and `GreyImages`, with its `get` and `GreyImageError::NoSuchImage`, is gone (built). The plan also listed `guided_matches`, `nearby_cluster_tracks`, `constellation_seeds`, `nearby_points` and `distance_range`, which read the reconstruction, its index files and the cameras but no photograph, so their signatures do not change |
-| 13 | `PhotographCache::get`, which takes the caller's `&Progress`, and `GetError`, which gains `Cancelled` (built, 13a); `PhotographCache::new`, which takes `PhotographCacheOptions` (built, 13b); the layout and tile requests, `TileError` and `TryDecode`, the four that can decode a whole photograph taking the caller's `&Progress` (built, 13c1); `display_photograph`, which gives way to `display_layout`, `display_tiles` and `display_level` (built for Image Detail, 13c2, the 3D background, 13c3, Track View, 13d1, and the Track Table and Measurement View's endpoint crops, 13d2, which deletes it); `get`, `get_many`, `peek` and `peek_state`, which answer `Arc<TiledPhotograph>`, `insert`, which takes an `ImageU8`, `PhotographReadError`, which gains `Changed`, `NotFound`, `TooLarge` and `Unreadable` with the conversions from `TileError` and `GetError`, and `from_pyramid`, which is deleted (13e: the answers' type built in 13e1, `insert` in 13e3, `from_pyramid` deleted in 13e3, the errors in 13e4) |
+| 13 | `PhotographCache::get`, which takes the caller's `&Progress`, and `GetError`, which gains `Cancelled` (built, 13a); `PhotographCache::new`, which takes `PhotographCacheOptions` (built, 13b); the layout and tile requests, `TileError` and `TryDecode`, the four that can decode a whole photograph taking the caller's `&Progress` (built, 13c1); `display_photograph`, which gives way to `display_layout`, `display_tiles` and `display_level` (built for Image Detail, 13c2, the 3D background, 13c3, Track View, 13d1, and the Track Table and Measurement View's endpoint crops, 13d2, which deletes it); `get`, `get_many`, `peek` and `peek_state`, which answer `Arc<TiledPhotograph>`, `insert`, which takes an `ImageU8`, `PhotographReadError`, which gains `Changed`, `NotFound`, `TooLarge` and `Unreadable` with the conversions from `TileError` and `GetError`, and `from_pyramid`, which is deleted (13e: the answers' type built in 13e1, `from_image` holding its tiles in 13e2, `insert` in 13e3, `from_pyramid` deleted in 13e3, the errors in 13e4) |
 | 16 | `ImagePyramidSet.read`, the first binding whose photographs come from the cache. The bindings over the kernels above change with their kernels in steps 10 to 12, build their tiled photographs from arrays with `from_image`, and raise the error from then on, though tiles cut from arrays cannot fail |
 
 The viewer's side, in
@@ -2608,21 +2608,49 @@ in core. Step 17 turns the tier on.
         a read with the whole pyramid read it through `held_pyramid` in the
         core and, in the viewer, through `AppState::cached_pyramid`, which
         reads each level whole with `get_level`.
-      - **13e2, tiles the source owns.** `from_image` cuts the pyramid
-        `ImageU8Pyramid::from_image` builds into every tile of its layout,
-        held by the photograph as `from_tiles` holds them, and
-        `with_tile_size` cuts them again at another size. The bindings
-        (`ImagePyramidSet`'s photographs in
-        [patches/views.rs](../../crates/sfmtool-py/src/patches/views.rs)
-        and the cluster refinement's in
-        [matching/cluster.rs](../../crates/sfmtool-py/src/matching/cluster.rs)),
-        the pairwise-flow scene and the tests that built a whole pyramid
-        only to read it through `from_pyramid` take `from_image`, and a test
-        that compares a read with that pyramid builds the pyramid itself. Only
-        the cache and the tests of reading a pyramid in place still call
-        `from_pyramid`. Tests: a photograph `from_image` makes gives every
-        tile, region and level of the pyramid bit for bit, cut at 512 px and
-        at a small tile size; the bindings' tests pass unchanged.
+      - **13e2, tiles the source owns.** **Built.** `from_image` cuts the
+        pyramid `ImageU8Pyramid::from_image` builds into every tile of its
+        layout, each with its border, held by the photograph as `from_tiles`
+        holds them, and drops the pyramid; a tile is cut by the same clamped
+        copy `from_pyramid`'s tile read makes, so its pixels are the same.
+        The crate-private `TiledPhotograph::cut` cuts a pyramid of whole
+        levels so, and `from_image` is `cut` of the image's full-depth
+        pyramid at 512 px. A photograph that holds every tile of its layout
+        (`from_image`'s, or `from_tiles` handed all of them) skips the check
+        for tiles it lacks before a read. `with_tile_size` puts each level
+        together from the tiles and cuts it again at another size. The
+        bindings (`ImagePyramidSet`'s photographs in
+        [patches/views.rs](../../crates/sfmtool-py/src/patches/views.rs),
+        `build_photographs_from_image_list` in place of
+        `build_pyramids_from_image_list`, and the cluster refinement's in
+        [matching/cluster.rs](../../crates/sfmtool-py/src/matching/cluster.rs))
+        take `from_image`. The pairwise-flow scene and the tests that built
+        a whole pyramid only to read it through `from_pyramid` take
+        `from_image` where the pyramid is the image's full depth, and in the
+        core `cut` of the pyramid they build where it has fewer levels (the
+        four of the pairwise-flow and bench scenes, the five of the patch
+        kernels' scenes), so no test's input changes. A test that compares a
+        read with that pyramid builds the pyramid itself: the bench scene
+        keeps the pyramids it cuts (`Scene::pyramid`), and a test that only
+        needs a level's pixels reads it with the crate-private
+        `whole_level`. Only the cache and the tests of reading a pyramid in
+        place (a pyramid made by `from_regions` that lacks pixels, and the
+        whole-pyramid reads `held_tiles_tests` compares with) still call
+        `from_pyramid`. No result changes: `sfm embed-patches` and
+        `sfm cluster-patches` on the seoul_bull workspace the
+        `seoul_bull_workspace` fixture builds, and `refine_cluster_patches`
+        on the binding tests' synthetic clusters with and without
+        `piecewise`, give every output array the same bit for bit before and
+        after this step. Specified in
+        [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md),
+        with a test in
+        [tiled_photograph/tests.rs](../../crates/sfmtool-core/src/camera/tiled_photograph/tests.rs):
+        a photograph `from_image` makes holds every tile of the image's
+        pyramid, each tile with its border the pyramid's pixels bit for bit,
+        and reads each whole level and rectangles across tile edges and at
+        the far corner as the pyramid holds them, cut at 512 px over a
+        photograph two tiles wide and high, and cut again at 16 px (0.02 s);
+        the bindings' tests pass unchanged.
       - **13e3, the cache keeps tiles.** A decoded photograph's slot keeps
         its layout, and the cache keeps its tiles, cut from the decode's
         pyramid, which is then dropped: the tiles a request asked for

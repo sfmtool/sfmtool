@@ -105,7 +105,10 @@ struct Fixture {
 
 /// A 6-level pyramid of `img`, read in place as a tiled photograph.
 fn photograph(img: &ImageU8) -> TiledPhotograph {
-    TiledPhotograph::from_pyramid(std::sync::Arc::new(ImageU8Pyramid::build(img, 6)))
+    TiledPhotograph::cut(
+        &ImageU8Pyramid::build(img, 6),
+        crate::camera::PHOTOGRAPH_TILE_SIZE,
+    )
 }
 
 /// The default piecewise settings, which run the shape-moving loop.

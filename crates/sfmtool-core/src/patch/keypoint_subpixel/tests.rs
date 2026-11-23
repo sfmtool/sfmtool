@@ -24,9 +24,9 @@ use crate::patch::normal_refine::Sampler;
 // patch-grid px — the kind of fractional offset the continuous refiner exists to
 // resolve and a discrete grid cannot reach.
 
-/// `pyramid` as the tiled photograph a kernel reads.
+/// Every tile of `pyramid`, held as the tiled photograph a kernel reads.
 fn in_memory(pyramid: ImageU8Pyramid) -> TiledPhotograph {
-    TiledPhotograph::from_pyramid(std::sync::Arc::new(pyramid))
+    TiledPhotograph::cut(&pyramid, crate::camera::PHOTOGRAPH_TILE_SIZE)
 }
 
 const PLANE_Z: f64 = 4.0;
@@ -253,7 +253,8 @@ fn consensus_sharpness(
             views[i as usize].cam_from_world,
             p.resolution,
         );
-        let img = remap_bilinear(views[i as usize].source.held_pyramid().level(0), &map);
+        let level0 = views[i as usize].source.whole_level(0).expect("level 0");
+        let img = remap_bilinear(&level0, &map);
         let mut all_valid = true;
         for row in 0..p.resolution {
             for col in 0..p.resolution {

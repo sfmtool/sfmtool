@@ -7,8 +7,6 @@
 //! The crops are then rendered from these photographs by the real code path,
 //! through each camera's model.
 
-use std::sync::Arc;
-
 use nalgebra::{Matrix3, Point3, Vector3};
 
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
@@ -171,9 +169,10 @@ impl Scene {
                 }
             }
             let image = ImageU8::new(IMAGE_SIDE, IMAGE_SIDE, 1, data);
-            sources.push(TiledPhotograph::from_pyramid(Arc::new(
-                ImageU8Pyramid::build(&image, 4),
-            )));
+            sources.push(TiledPhotograph::cut(
+                &ImageU8Pyramid::build(&image, 4),
+                crate::camera::PHOTOGRAPH_TILE_SIZE,
+            ));
             poses.push(pose);
         }
         Self {

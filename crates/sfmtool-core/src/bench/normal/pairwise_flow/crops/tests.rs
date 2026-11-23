@@ -3,7 +3,7 @@
 
 //! The crops' grid, sights, renders, pyramids and pair levels.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use nalgebra::{Point3, Vector3};
 
@@ -46,10 +46,10 @@ impl Facing {
         Self {
             cameras: focals.iter().map(|&f| pinhole(f)).collect(),
             poses: vec![pose; focals.len()],
-            source: TiledPhotograph::from_pyramid(Arc::new(ImageU8Pyramid::build(
-                &ImageU8::new(8, 8, 1, vec![128; 64]),
-                1,
-            ))),
+            source: TiledPhotograph::cut(
+                &ImageU8Pyramid::build(&ImageU8::new(8, 8, 1, vec![128; 64]), 1),
+                crate::camera::PHOTOGRAPH_TILE_SIZE,
+            ),
         }
     }
 
@@ -119,10 +119,10 @@ fn the_crop_cap_coarsens_the_grid_and_keeps_the_extent() {
 #[test]
 fn views_too_oblique_or_at_the_point_are_left_out() {
     let camera = pinhole(100.0);
-    let source = TiledPhotograph::from_pyramid(Arc::new(ImageU8Pyramid::build(
-        &ImageU8::new(8, 8, 1, vec![128; 64]),
-        1,
-    )));
+    let source = TiledPhotograph::cut(
+        &ImageU8Pyramid::build(&ImageU8::new(8, 8, 1, vec![128; 64]), 1),
+        crate::camera::PHOTOGRAPH_TILE_SIZE,
+    );
     let at = |deg: f64| {
         let r = deg.to_radians();
         Vector3::new(4.0 * r.sin(), 0.0, 4.0 * r.cos())

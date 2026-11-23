@@ -403,9 +403,10 @@ fn the_sampler_gradient_is_the_derivative_of_its_value_at_the_edge() {
         })
         .collect();
     let image = ImageU8::new(w, h, 2, data);
-    let source = crate::camera::TiledPhotograph::from_pyramid(std::sync::Arc::new(
-        crate::camera::image::ImageU8Pyramid::build(&image, 2),
-    ));
+    let source = crate::camera::TiledPhotograph::cut(
+        &crate::camera::image::ImageU8Pyramid::build(&image, 2),
+        crate::camera::PHOTOGRAPH_TILE_SIZE,
+    );
     let camera = camera("pinhole");
     let pose = crate::geometry::RigidTransform::identity();
     let view = crate::patch::normal_refine::ProjectedImage {
@@ -542,9 +543,10 @@ fn the_sobel_read_is_a_bilinear_read_of_the_sobel_images() {
         }
     }
     // The ramp, channel 1: 3 per px in x and 7 in y.
-    let source = crate::camera::TiledPhotograph::from_pyramid(std::sync::Arc::new(
-        crate::camera::image::ImageU8Pyramid::build(&image, 1),
-    ));
+    let source = crate::camera::TiledPhotograph::cut(
+        &crate::camera::image::ImageU8Pyramid::build(&image, 1),
+        crate::camera::PHOTOGRAPH_TILE_SIZE,
+    );
     let camera = camera("pinhole");
     let pose = crate::geometry::RigidTransform::identity();
     let view = crate::patch::normal_refine::ProjectedImage {

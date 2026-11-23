@@ -56,7 +56,7 @@ fn pyramid(img: &ImageU8) -> ImageU8Pyramid {
 
 /// [`pyramid`] of `img`, read in place as a tiled photograph.
 fn photograph(img: &ImageU8) -> TiledPhotograph {
-    TiledPhotograph::from_pyramid(Arc::new(pyramid(img)))
+    TiledPhotograph::cut(&pyramid(img), crate::camera::PHOTOGRAPH_TILE_SIZE)
 }
 
 /// [`refine_cluster_patches`] over photographs in memory, which always read,
@@ -1626,7 +1626,7 @@ fn a_member_grid_read_through_a_tiled_photograph_equals_the_whole_pyramid() {
     use crate::camera::TiledPhotograph;
     let img = make_image(150, 110, texture);
     let pyr = std::sync::Arc::new(pyramid(&img));
-    let source = TiledPhotograph::from_pyramid(pyr.clone()).with_tile_size(32);
+    let source = TiledPhotograph::cut(&pyr, 32);
     let params = ClusterRefineParams::default();
     let wide = ClusterRefineParams {
         radius: params.radius * 3.0,
@@ -1978,7 +1978,10 @@ fn a_tile_read_that_fails_in_the_cascade_fails_the_call() {
     // reads level 0, so the cascade's evaluations reach it.
     let boundary = level_one_scale(&ClusterRefineParams::default());
     let whole = cascade_across_levels(|p| {
-        TiledPhotograph::from_pyramid(Arc::new(ImageU8Pyramid::build(p.level(0), 6)))
+        TiledPhotograph::cut(
+            &ImageU8Pyramid::build(p.level(0), 6),
+            crate::camera::PHOTOGRAPH_TILE_SIZE,
+        )
     });
     let whole = whole.expect("photographs in memory read");
     assert_eq!(whole.reference_members[0], 0);
