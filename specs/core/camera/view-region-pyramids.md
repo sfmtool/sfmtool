@@ -379,10 +379,11 @@ border, at `PHOTOGRAPH_TILE_SIZE`, of the image's pyramid of
 `ImageU8Pyramid::full_levels` depth, the pyramid `ImageU8Pyramid::from_image`
 builds, so a read gives the pyramid's values bit for bit; the Python bindings
 make every photograph they are handed this way. It never holds the pyramid
-whole: it cuts a level, makes the next from it with `downsample_2x`, stopping
-where `ImageU8Pyramid::from_image` stops, and drops the level, so at its peak
-it holds the tiles of level 0, level 0 and level 1, about 2.25 times the
-image's bytes. Building the pyramid and then cutting it would hold the
+whole: it cuts a level, drops it and makes the next from the tiles just
+cut, with the 2×2 box filter of `downsample_2x`, which reads a tile's core and
+its one-pixel border and so gives the level's pixels bit for bit at any tile
+size, stopping where `ImageU8Pyramid::from_image` stops, so at its peak it
+holds the image and its level-0 tiles, about 2.0 times the image's bytes. Building the pyramid and then cutting it would hold the
 pyramid and all its tiles, about 2.67 times; the bindings make the
 photographs of many images at once on the rayon pool, so the difference
 decides their peak memory. The photograph cache cuts each decode the same
@@ -439,9 +440,10 @@ pyramid, each tile, with its border, the pyramid's pixels bit for bit, and
 reads each whole level and rectangles across tile edges and at the level's
 far corner as the pyramid holds them, cut at 512 px over a photograph three
 tiles wide and two high, and a smaller photograph cut again at 16 px; and
-that the tiles `from_image` cuts level by level equal `cut` of the whole
-pyramid bit for bit, with the same levels, for sizes whose pyramid stops short
-of the full depth and odd sizes over many tiles.
+that the tiles `from_image` cuts level by level, each level made from the
+tiles of the one before, equal `cut` of the whole pyramid bit for bit, with
+the same levels, for sizes whose pyramid stops short of the full depth and odd
+sizes over many tiles, and at tile sizes of 1, 2, 7 and 16 px.
 [regions/tests.rs](../../../crates/sfmtool-core/src/camera/sampler/regions/tests.rs)
 checks that a region pyramid of the required regions equals the whole
 pyramid, that one a pixel smaller on any inner edge does not, and that a map

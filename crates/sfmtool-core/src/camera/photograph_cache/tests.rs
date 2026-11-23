@@ -290,6 +290,45 @@ fn evicts_least_recently_used_within_budget() {
 
 /// A decode keeps every tile a `get` answers, even over the budget, and
 /// drops the older photograph's tiles instead.
+/// `keeps_every_tile` answers whether the cache keeps every tile of a
+/// photograph, before and after an eviction takes one of them, and is no use
+/// for the eviction order: asked about the older of two photographs, it
+/// leaves that one the photograph whose tiles go next, where a `peek` makes
+/// it the newer.
+#[test]
+fn keeps_every_tile_answers_without_counting_as_a_use() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_png(dir.path(), "a.png", 8, 8);
+    let b = write_png(dir.path(), "b.png", 8, 8);
+    let c = write_png(dir.path(), "c.png", 8, 8);
+    let missing = dir.path().join("missing.png");
+    let one = bytes_of(8, 8);
+    for peeked in [false, true] {
+        let cache = PhotographCache::new(with_budget(2 * one + one / 2));
+        cache.get(&a, &Progress::none()).unwrap();
+        cache.get(&b, &Progress::none()).unwrap();
+        assert!(!cache.keeps_every_tile(&c), "never decoded");
+        assert!(cache.get(&missing, &Progress::none()).is_err());
+        assert!(!cache.keeps_every_tile(&missing), "unreadable");
+        let stats = cache.stats();
+        // Asked about `a`, the older.
+        assert!(cache.keeps_every_tile(&a));
+        if peeked {
+            assert!(cache.peek(&a).is_some());
+        }
+        assert_eq!(cache.stats(), stats, "neither counts as a hit or a miss");
+        cache.get(&c, &Progress::none()).unwrap();
+        // The decode of `c` took one tile of the least recently used.
+        let (older, newer) = if peeked { (&b, &a) } else { (&a, &b) };
+        assert!(!cache.keeps_every_tile(older), "peeked: {peeked}");
+        assert!(cache.keeps_every_tile(newer), "peeked: {peeked}");
+        assert!(cache.keeps_every_tile(&c));
+    }
+    let none = PhotographCache::new(with_budget(0));
+    none.get(&a, &Progress::none()).unwrap();
+    assert!(!none.keeps_every_tile(&a), "a budget of 0 keeps nothing");
+}
+
 #[test]
 fn keeps_the_entry_just_decoded_even_over_budget() {
     let dir = tempfile::tempdir().unwrap();

@@ -134,11 +134,13 @@ fn a_photograph_from_an_image_holds_every_tile_of_its_pyramid() {
     assert_holds_the_pyramid(&cut_again, &small_pyramid, 16);
 }
 
-/// `from_image`, which cuts one level at a time and makes the next from it,
-/// holds the tiles `cut` holds of the whole pyramid `ImageU8Pyramid::from_image`
-/// builds, bit for bit, and the same levels, for sizes whose pyramid stops
-/// short of the full depth (a side of 1), sides of 2 and 3, and odd sizes
-/// over many tiles.
+/// `from_image`, which cuts one level at a time and makes the next from its
+/// tiles, holds the tiles `cut` holds of the whole pyramid
+/// `ImageU8Pyramid::from_image` builds, bit for bit, and the same levels, for
+/// sizes whose pyramid stops short of the full depth (a side of 1), sides of
+/// 2 and 3, and odd sizes over many tiles; and so does `cut_image` at tile
+/// sizes of 1, 2, 7 and 16 px, odd ones putting a 2 x 2 block of a level
+/// across two tiles.
 #[test]
 fn from_image_cuts_the_tiles_of_the_whole_pyramid_level_by_level() {
     for (w, h) in [
@@ -164,6 +166,28 @@ fn from_image_cuts_the_tiles_of_the_whole_pyramid_level_by_level() {
             assert_eq!((got.origin, got.size), (tile.origin, tile.size), "{key:?}");
             assert_eq!(got.pixels.width(), tile.pixels.width(), "{key:?}");
             assert_eq!(got.pixels.data(), tile.pixels.data(), "{w} x {h} {key:?}");
+        }
+    }
+    for (w, h) in [(37, 23), (64, 48), (3, 9)] {
+        let image = photograph(w, h);
+        let pyramid = ImageU8Pyramid::build(&image, ImageU8Pyramid::full_levels(w, h));
+        for ts in [1, 2, 7, 16] {
+            let whole = TiledPhotograph::cut(&pyramid, ts);
+            let copy = ImageU8::new(w, h, 3, image.data().to_vec());
+            let cut = cut_image(copy, ts);
+            assert_eq!(
+                cut.layout.levels(),
+                pyramid.num_levels(),
+                "{w} x {h} at {ts}"
+            );
+            assert_eq!(cut.tiles.len(), whole.held.len(), "{w} x {h} at {ts}");
+            for (key, tile) in &whole.held {
+                assert_eq!(
+                    cut.tiles[key].pixels.data(),
+                    tile.pixels.data(),
+                    "{w} x {h} at {ts} px, {key:?}"
+                );
+            }
         }
     }
 }

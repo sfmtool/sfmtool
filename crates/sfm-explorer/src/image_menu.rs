@@ -171,7 +171,7 @@ impl AppState {
             .iter()
             .map(|image| {
                 let path = recon.workspace_dir.join(&image.name);
-                if self.photographs.peek(&path).is_some() {
+                if self.photographs.keeps_every_tile(&path) {
                     Photograph::Cached
                 } else {
                     Photograph::File(path)

@@ -107,6 +107,11 @@ impl PhotographCache {
     /// `peek`, telling a remembered failure apart from no answer yet.
     pub fn peek_state(&self, path: &Path) -> PeekedPhotograph;
 
+    /// Whether every tile of the photograph at `path` is kept, so `peek`
+    /// would answer it: reads, waits on and allocates nothing, and is no use
+    /// for the eviction order.
+    pub fn keeps_every_tile(&self, path: &Path) -> bool;
+
     /// `get` for every path, the misses decoded in parallel on the rayon
     /// pool. One entry per path, in order, and a tally. Counts `images`
     /// through `progress` and polls it for cancellation before each path and
@@ -340,15 +345,17 @@ default is 16 GiB, the tiles of about 490 photographs at 3840×2160.
 
 A whole decode holds the photograph's pixels and the tiles it cuts from them
 while it runs, estimated at 5 bytes per pixel of the photograph: about 41 MB
-at 3840×2160 and 1 GB at 200 megapixels. It cuts one level at a time, makes
-the next from it and drops it, so it never holds the whole pyramid beside its
-tiles: at its peak it holds the image, its level-0 tiles and level 1, about
-2.25 times the image's bytes, and once it is cut the tiles alone, about 1.34
-times. Measured in a release build on an 8000×6000 JPEG (144 MB of pixels),
-`get` raises the process's peak private bytes by 2.27 times the image's bytes
-and keeps 1.34 times, where the decode into a whole pyramid the cache kept
-before raised its peak by 2.13 times and kept 1.33 times, the decoder's own
-buffers included in both. Each decode reserves that estimate on
+at 3840×2160 and 1 GB at 200 megapixels. It cuts level 0's tiles, drops
+the image, and makes each next level from the tiles of the one before, with
+the 2×2 box filter `ImageU8::downsample_2x` applies, bit for bit, so it never
+holds the whole pyramid beside its tiles: the cutting peaks at the image and
+its level-0 tiles, about 2.0 times the image's bytes, and once it is cut the
+tiles alone are about 1.34 times. The decoder's own peak inside `read_rgb` is
+higher. Measured in a release build on an 8000×6000 JPEG (144 MB of pixels),
+`get` raises the process's peak private bytes by 2.13 times the image's bytes
+and keeps 1.34 times, as the decode into a whole pyramid the cache kept
+before did (2.13 times, keeping 1.33), the decoder's own buffers included in
+both. Each decode reserves that estimate on
 the cache's build count before it reads the pixels, and gives it back when it
 ends, whatever the cache's budget, 0 included. The count is an atomic in the
 cache, checked against `PhotographCacheOptions::build_budget_bytes`, by
@@ -570,7 +577,10 @@ reconstruction's photographs goes through it except the ones under
   hover view in one render, so the tiles both need are asked for together
   ([measurement-view.md](../../gui/measurement-view.md)).
 - **The image menu** asks only whether each photograph is decoded, with
-  `peek`, and reads no pixel: *Add image to tracks* is offered for an image
+  `keeps_every_tile`, and reads no pixel. The scene graph lays the menu out
+  for every node on every frame, so the question allocates nothing and is no
+  use for the eviction order, where `peek` would build a photograph of every
+  tile and refresh every photograph's place in that order each frame: *Add image to tracks* is offered for an image
   whose photograph the cache holds, or whose file exists
   ([image_menu.rs](../../../crates/sfm-explorer/src/image_menu.rs)).
 
@@ -669,7 +679,8 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   rewritten being decoded again, `forget` and `clear` releasing bytes,
   `get_many` order, tally and cancellation, budget 0 keeping nothing,
   `peek_state` telling a failure from no answer and not waiting on a decode
-  in flight, a decode into a slot that left the map answered and not
+  in flight, `keeps_every_tile` answering before and after an eviction takes
+  a tile and leaving the eviction order as it was, where `peek` changes it, a decode into a slot that left the map answered and not
   charged, `insert` cut as a decode is, the rule both default budgets share,
   from physical memory and each one's environment variable. The
   slot's tests hold a decode in progress through a hook the test build

@@ -121,11 +121,12 @@ pub(crate) struct CutImage {
 /// keeps of a decode. A read of the tiles gives the values the whole pyramid
 /// gives, bit for bit.
 ///
-/// The pyramid is never held whole: each level is cut, the next made from it
-/// with [`ImageU8::downsample_2x`] as the pyramid makes it, and the level
-/// dropped, so the call holds at most the tiles cut so far, one level and the
-/// one below it, about 2.25 times the image's bytes at its peak, less than
-/// the pyramid and its tiles together.
+/// The pyramid is never held whole: each level is cut and dropped, and the
+/// next is made from the tiles just cut, with the 2 x 2 box filter of
+/// [`ImageU8::downsample_2x`], so the call holds at most the tiles cut so far
+/// and one level, about 2.0 times the image's bytes at its peak, as it cuts
+/// level 0 (the image and its tiles), less than the pyramid and its tiles
+/// together.
 pub(crate) fn cut_image(image: ImageU8, tile_size: u32) -> CutImage {
     let full = ImageU8Pyramid::full_levels(image.width(), image.height());
     // The levels `ImageU8Pyramid::from_image` builds: it stops before a
@@ -135,18 +136,78 @@ pub(crate) fn cut_image(image: ImageU8, tile_size: u32) -> CutImage {
         (w, h, levels) = (w / 2, h / 2, levels + 1);
     }
     let layout = PyramidLayout::in_memory(image.width(), image.height(), levels, tile_size);
-    // One level at a time: cut it, make the next from it as the pyramid
-    // does, and drop it, so no more than one level and the one below it are
-    // held beside the tiles.
+    // One level at a time: cut it and drop it, then make the next from its
+    // tiles, so no more than one level is held beside the tiles.
     let mut tiles = HashMap::new();
     let mut current = image;
     for level in 0..levels {
         cut_level(&layout, level, &current, &mut tiles);
         if level + 1 < levels {
-            current = current.downsample_2x();
+            let channels = current.channels();
+            drop(current);
+            current = downsample_tiles(&layout, level, channels, &tiles);
         }
     }
     CutImage { layout, tiles }
+}
+
+/// Level `level + 1` of `layout`'s pyramid, made from the tiles of level
+/// `level` in `tiles` as [`ImageU8::downsample_2x`] makes it from the whole
+/// level, bit for bit: each output pixel is the rounded mean of the 2 x 2
+/// block at twice its position. The block's top-left pixel lies in one tile's
+/// core, and the rest of it in that core or the tile's one-pixel border,
+/// which holds the neighbouring tiles' pixels; it never reaches past the
+/// level, since `downsample_2x` drops an odd last row and column. So any
+/// tile size, odd ones included, gives the same pixels.
+fn downsample_tiles(
+    layout: &PyramidLayout,
+    level: usize,
+    channels: u32,
+    tiles: &HashMap<TileKey, Arc<PhotographTile>>,
+) -> ImageU8 {
+    let (w, h) = layout.level_size(level);
+    let (out_w, out_h) = (w / 2, h / 2);
+    let c = channels as usize;
+    let out_stride = out_w as usize * c;
+    let mut data = vec![0u8; out_stride * out_h as usize];
+    let (cols, rows) = layout.tiles(level);
+    for row in 0..rows {
+        for col in 0..cols {
+            let key = TileKey {
+                level: level as u8,
+                col,
+                row,
+            };
+            let Some(tile) = tiles.get(&key) else {
+                continue;
+            };
+            let [x0, y0] = tile.origin;
+            let [sw, sh] = tile.size;
+            // The output pixels whose block starts in this tile's core.
+            let (ox0, ox1) = (x0.div_ceil(2), ((x0 + sw).div_ceil(2)).min(out_w));
+            let (oy0, oy1) = (y0.div_ceil(2), ((y0 + sh).div_ceil(2)).min(out_h));
+            let stride = tile.pixels.width() as usize * c;
+            let src = tile.pixels.data();
+            for oy in oy0..oy1 {
+                // One row and one column of border before the core.
+                let ly = (2 * oy - y0 + 1) as usize;
+                let row0 = &src[ly * stride..][..stride];
+                let row1 = &src[(ly + 1) * stride..][..stride];
+                let out_row = &mut data[oy as usize * out_stride..][..out_stride];
+                for ox in ox0..ox1 {
+                    let lx = (2 * ox - x0 + 1) as usize;
+                    for ch in 0..c {
+                        let v00 = u16::from(row0[lx * c + ch]);
+                        let v10 = u16::from(row0[(lx + 1) * c + ch]);
+                        let v01 = u16::from(row1[lx * c + ch]);
+                        let v11 = u16::from(row1[(lx + 1) * c + ch]);
+                        out_row[ox as usize * c + ch] = ((v00 + v10 + v01 + v11 + 2) / 4) as u8;
+                    }
+                }
+            }
+        }
+    }
+    ImageU8::new(out_w, out_h, channels, data)
 }
 
 impl TiledPhotograph {
@@ -156,11 +217,11 @@ impl TiledPhotograph {
     /// and held. A read gives the values the whole pyramid gives, bit for
     /// bit.
     ///
-    /// The pyramid is never held whole: each level is cut, the next made
-    /// from it with [`ImageU8::downsample_2x`] as the pyramid makes it, and
-    /// the level dropped, so the call holds at most the tiles cut so far, one
-    /// level and the one below it, about 2.25 times the image's bytes at its
-    /// peak, less than the pyramid and its tiles together.
+    /// The pyramid is never held whole: each level is cut and dropped, and
+    /// the next made from its tiles as [`ImageU8::downsample_2x`] makes it
+    /// from the level, so the call holds at most the tiles cut so far and one
+    /// level, about 2.0 times the image's bytes at its peak, less than the
+    /// pyramid and its tiles together.
     pub fn from_image(image: ImageU8) -> Self {
         let channels = image.channels();
         let CutImage { layout, tiles } = cut_image(image, PHOTOGRAPH_TILE_SIZE);

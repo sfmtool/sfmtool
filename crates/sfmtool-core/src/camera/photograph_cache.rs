@@ -106,8 +106,10 @@ pub fn default_build_budget_bytes() -> u64 {
 }
 
 /// The bytes a whole decode of a photograph is estimated to hold while it
-/// runs, per pixel of the photograph: its RGB pixels (3) and the pyramid
-/// levels built from them (about 1), with the decoder's own buffers on top.
+/// runs, per pixel of the photograph: its RGB pixels (3) and the tiles cut
+/// from them, which grow to about as many bytes again while level 0 is cut
+/// and the image is still held. Measured, a decode with the decoder's own
+/// buffers peaks at about 6.4 bytes per pixel.
 const WHOLE_DECODE_BYTES_PER_PIXEL: u64 = 5;
 
 /// The estimated bytes of a whole decode of a `width x height` photograph,
@@ -807,8 +809,9 @@ impl PhotographCache {
     }
 
     /// The photograph at `path` if every tile of it is kept, without reading
-    /// anything and without waiting on a decode in flight. What the image
-    /// menu asks to tell a photograph the cache holds from one only on disk.
+    /// anything and without waiting on a decode in flight. A caller that only
+    /// asks whether it is held calls [`Self::keeps_every_tile`], which builds
+    /// no photograph.
     ///
     /// It does not compare the entry with the file on disk, and counts as a
     /// use of every tile for the eviction order but not as a hit.
@@ -843,6 +846,23 @@ impl PhotographCache {
             Ok(photograph) => PeekedPhotograph::Decoded(photograph),
             Err(_) => PeekedPhotograph::NotDecoded,
         }
+    }
+
+    /// Whether the cache keeps every tile of the photograph at `path`, so
+    /// [`Self::peek`] would answer it: what a caller that only asks whether
+    /// a photograph is held, such as the image menu on every frame, calls.
+    ///
+    /// It reads nothing, waits on nothing and does not stat the file, and
+    /// unlike `peek` it allocates nothing and is no use for the eviction
+    /// order: it leaves every tile's place in that order as it was. It
+    /// compares the number of tiles kept with the layout's, a few
+    /// arithmetic steps a level.
+    pub fn keeps_every_tile(&self, path: &Path) -> bool {
+        let Some(slot) = self.mapped(path) else {
+            return false;
+        };
+        let data = slot.lock();
+        matches!(&data.made, Some(Ok(layout)) if data.tiles.len() == tile_count(layout))
     }
 
     /// `get` for every path, the misses decoded in parallel on the rayon
@@ -1045,10 +1065,11 @@ impl PhotographCache {
     /// Reads the header first and, when `share` holds nothing, reserves the
     /// decode with [`Self::reserve_builds`] before reading the pixels.
     ///
-    /// The image is dropped once its tiles are cut, level by level, so the
-    /// decode holds at its peak the image, its level-0 tiles and level 1,
-    /// about 2.25 times the image's bytes, and never the whole pyramid with
-    /// its tiles.
+    /// The image is dropped once its level-0 tiles are cut, and each next
+    /// level is made from the tiles of the one before, so the cutting holds
+    /// at its peak the image and its level-0 tiles, about 2.0 times the
+    /// image's bytes, and never the whole pyramid with its tiles; the
+    /// decoder's own peak, inside `read_rgb`, is higher.
     ///
     /// Must not use rayon. It runs while its slot is marked as being made, and
     /// a rayon worker waiting in a nested join may steal another `get_many`

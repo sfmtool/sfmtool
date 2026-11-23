@@ -1427,7 +1427,7 @@ each in the step that moves its readers:
 | 10 | `ViewSources::fetch` in [state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs), which returns `PhotographReadError` instead of `Cancelled` (`get_many` still returns `Cancelled`, which converts), and the bench kernels (`bench::evaluate`, `evaluate_rendering_bitmap`, `score_bitmap`, `fit`, `render_bitmap_in_place`, `search_geometry`, `set_stage`, `build_track_at_pixel`, `classify`) and the patch kernels they and the reference picks share (`view_selection::select_patch_views`, `select_patch_cloud_views`, `reference_view::render_view_tile`, `read_track`, `stored_bitmap::render_reference`, `keypoint_localize`'s and `keypoint_subpixel`'s entry points, `member_coherence`'s, `observation_reading::read_cloud_observations`, `spawn::spawn_candidate_tracks`), and every kernel that calls one of them or that the bench runs, since a kernel passes its caller's pool down and its errors up: the normal kernels the bench's normal steps run (`pairwise_flow_normal`, `grown_plane_normal`, `grid_plane_normal`, `finite_difference_normal`) and `refine_normals`, which runs them; the cluster refinement's entry points (`refine_cluster_patches`, `refine_cluster_patches_borrowed`), which the bench's evaluation of a cluster-stage track runs, and the bench's member-grid reads, which move to `sample_source_member_grid`, the source form of `sample_member_grid` that step 9 added beside it; `stored_bitmap::render_patch_bitmap`, `render_patch_cloud_bitmaps` and `refit_points`. Their callers that step 11 moves keep their fetch: each wraps the whole pyramids it holds with `from_pyramid` (the cluster-patches build, until 11b, its decoded images with `from_image`), makes the region pool for its call, and reports the error as its step's failure |
 | 11 | the public `render_patch_bitmap_column` / `render_display_patch_bitmaps` in [display_bitmaps.rs](../../crates/sfmtool-core/src/patch/display_bitmaps.rs), which return `PhotographReadError` instead of `Cancelled`, and `WebExportError`, which gains `Photograph` (built, 11a); the viewer's bulk jobs (the conversion to embedded patches, *Refine all normals*, *Refit all points*, the cluster-patches build) and `sfm web-export` take the tiled photographs `get_many` answers since step 13e1, having wrapped its whole pyramids with `from_pyramid` before it, and the cluster-patches build fetches through the cache from 11b (built) |
 | 12 | `read_patch_along_ray` and `depth_layers`, which take the caller's `&RegionPool` in place of the `&GreyImages` cache, and `far_field_sweep` and `find_nearby_tracks`, which took the pool in 10a and drop the cache; `PatchReadError` and `DepthLayerError` gain `Photograph(PhotographReadError)` in place of `GreyMismatch`, and `GreyImages`, with its `get` and `GreyImageError::NoSuchImage`, is gone (built). The plan also listed `guided_matches`, `nearby_cluster_tracks`, `constellation_seeds`, `nearby_points` and `distance_range`, which read the reconstruction, its index files and the cameras but no photograph, so their signatures do not change |
-| 13 | `PhotographCache::get`, which takes the caller's `&Progress`, and `GetError`, which gains `Cancelled` (built, 13a); `PhotographCache::new`, which takes `PhotographCacheOptions` (built, 13b); the layout and tile requests, `TileError` and `TryDecode`, the four that can decode a whole photograph taking the caller's `&Progress` (built, 13c1); `display_photograph`, which gives way to `display_layout`, `display_tiles` and `display_level` (built for Image Detail, 13c2, the 3D background, 13c3, Track View, 13d1, and the Track Table and Measurement View's endpoint crops, 13d2, which deletes it); `get`, `get_many`, `peek` and `peek_state`, which answer `Arc<TiledPhotograph>`, `insert`, which takes an `ImageU8`, `PhotographReadError`, which gains `Changed`, `NotFound`, `TooLarge` and `Unreadable` with the conversions from `TileError` and `GetError`, and `from_pyramid`, which is deleted (13e: the answers' type built in 13e1, `from_image` holding its tiles in 13e2, `insert` taking an `ImageU8` and `from_pyramid` deleted in 13e3, built, the errors in 13e4) |
+| 13 | `PhotographCache::get`, which takes the caller's `&Progress`, and `GetError`, which gains `Cancelled` (built, 13a); `PhotographCache::new`, which takes `PhotographCacheOptions` (built, 13b); the layout and tile requests, `TileError` and `TryDecode`, the four that can decode a whole photograph taking the caller's `&Progress` (built, 13c1); `display_photograph`, which gives way to `display_layout`, `display_tiles` and `display_level` (built for Image Detail, 13c2, the 3D background, 13c3, Track View, 13d1, and the Track Table and Measurement View's endpoint crops, 13d2, which deletes it); `get`, `get_many`, `peek` and `peek_state`, which answer `Arc<TiledPhotograph>`, `insert`, which takes an `ImageU8`, `PhotographReadError`, which gains `Changed`, `NotFound`, `TooLarge` and `Unreadable` with the conversions from `TileError` and `GetError`, and `from_pyramid`, which is deleted (13e: the answers' type built in 13e1, `from_image` holding its tiles in 13e2, `insert` taking an `ImageU8`, `keeps_every_tile`, which the image menu asks in place of `peek`, and `from_pyramid` deleted in 13e3, built, the errors in 13e4) |
 | 16 | `ImagePyramidSet.read`, the first binding whose photographs come from the cache. The bindings over the kernels above change with their kernels in steps 10 to 12, build their tiled photographs from arrays with `from_image`, and raise the error from then on, though tiles cut from arrays cannot fail |
 
 The viewer's side, in
@@ -2615,7 +2615,9 @@ in core. Step 17 turns the tier on.
         its pixels are the same. It never holds that pyramid whole: it cuts
         one level at a time, makes the next from it with `downsample_2x` and
         the pyramid's stop rule, and drops it, so an image being cut peaks at
-        about 2.25 times its bytes (its level-0 tiles, level 0 and level 1).
+        about 2.25 times its bytes (its level-0 tiles, level 0 and level 1);
+        step 13e3 makes each next level from the tiles just cut, which
+        brings the peak to about 2.0 times.
         The bindings built a copy of each image and its pyramid, about 2.33
         times, so their peak memory is no higher for any thread count;
         building the pyramid and then cutting it would have held the pyramid
@@ -2687,9 +2689,11 @@ in core. Step 17 turns the tier on.
         them.
 
         As built, a decode is `ImageU8::read_rgb` and the crate-private
-        `cut_image`, which `from_image` uses too: it cuts one level at a time
-        at the cache's tile size and drops the level, so the cache never
-        holds a pyramid and its tiles together, and only the tiles are kept.
+        `cut_image`, which `from_image` uses too: it cuts level 0 at the
+        cache's tile size, drops the image and makes each next level from
+        the tiles of the one before, bit for bit as `downsample_2x` makes it,
+        so the cache never holds a pyramid and its tiles together, and only
+        the tiles are kept.
         A slot keeps, behind its mutex, whether a caller is making it, the
         layout or the remembered failure, and its tiles, each with whether
         it is used and its tick; a decode into a slot that keeps some tiles
@@ -2717,9 +2721,14 @@ in core. Step 17 turns the tier on.
         read take one whose header read finds no file.
 
         Memory: in a release build, `get` of an 8000 x 6000 JPEG (144 MB of
-        pixels) raises the process's peak private bytes by 2.27 times the
-        image's bytes and keeps 1.34 times; before this step the decode into
-        a whole pyramid raised it by 2.13 times and kept 1.33 times. The
+        pixels) raises the process's peak private bytes by 2.13 times the
+        image's bytes and keeps 1.34 times, as the decode into a whole
+        pyramid did before this step (2.13 times, keeping 1.33): the cutting
+        peaks at about 2.0 times, the image and its level-0 tiles, under the
+        decoder's own peak. The image menu asks `keeps_every_tile`, which
+        allocates nothing and is no use for the eviction order, in place of
+        `peek`, since the scene graph lays the menu out for every node on
+        every frame. The
         estimate a decode reserves on the build count stays 5 bytes per
         pixel. No result changes: the display bitmaps and their reference
         observations, with a budget and with a budget of 0, and the
