@@ -110,7 +110,7 @@ const HOVERED_COLOR: vec3<f32> = vec3<f32>(0.0, 1.0, 1.0);
 // the part of it behind the scene still shows where it is: the bench figure's
 // the moment it passes behind (bench_track.wgsl, which then fades it with
 // distance), a measurement's mark or line wherever it is hidden (the same
-// shader, with no fade, in a pass that blends on sRGB-encoded values), and a
+// shader, with no fade, into a layer egui composites), and a
 // highlighted surfel's outline wherever it is hidden (fs_hidden_outline in
 // patch.wgsl).
 const BEHIND_OPACITY: f32 = 0.45;

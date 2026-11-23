@@ -137,27 +137,27 @@ fn the_pass_pipelines_agree_with_the_buffers_the_upload_writes() {
     let errors = device.push_error_scope(wgpu::ErrorFilter::Validation);
 
     let resources = super::super::pipelines::bench_track::create(&device);
-    let output_texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("edl output"),
-        size: wgpu::Extent3d {
-            width: 64,
-            height: 64,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: super::super::gpu_types::EDL_OUTPUT_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[super::super::gpu_types::MEASUREMENT_TARGET_FORMAT],
-    });
-    let output = output_texture.create_view(&Default::default());
-    // The measurements draw into the same texture read as encoded values,
-    // as `SceneRenderer::render_bench_track` does.
-    let encoded = output_texture.create_view(&wgpu::TextureViewDescriptor {
-        format: Some(super::super::gpu_types::MEASUREMENT_TARGET_FORMAT),
-        ..Default::default()
-    });
+    let output = device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("edl output"),
+            size: wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: super::super::gpu_types::EDL_OUTPUT_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+        .create_view(&Default::default());
+    // The measurements draw into a layer of their own, made as
+    // `SceneRenderer::ensure_size` makes it.
+    let encoded = device
+        .create_texture(&super::super::sizing::measurement_layer_descriptor(64, 64))
+        .create_view(&Default::default());
     let depth = device
         .create_texture(&wgpu::TextureDescriptor {
             label: Some("hw depth"),
@@ -351,58 +351,107 @@ fn an_upload_of_measurements_holds_one_instance_per_ribbon_and_nothing_for_none(
     device.poll(wgpu::PollType::Poll).expect("device poll");
 }
 
-/// A translucent measurement colour, composited over a background by the blend
-/// the measurements' pipeline does on the target it draws into, gives what
-/// egui's own painting of the same colour gives, to within one level in 255:
-/// the dimmed others of *Show all measurements* and the halo, over black, a
-/// dark grey, a mid grey and white. The linear-light blend of an sRGB target
-/// would draw the dimmed grey over the dark background some 50 levels lighter.
+/// The measurements' layer, as the pass fills it and egui paints it, gives
+/// what egui's own painting of the same pieces gave, to within one level in
+/// 255: a translucent line over its halo, the dimmed others of *Show all
+/// measurements* and a dimmed tint, over black, dark greys, a mid grey and
+/// white, on a window surface in sRGB and on one in encoded values.
+///
+/// The layer is a texture of its own in an encoded format with no second view
+/// format, opened cleared to transparent: drawing the measurements into an
+/// `Rgba8Unorm` view of the `Rgba8UnormSrgb` scene texture instead read the
+/// scene back decoded to linear light on a real GPU, and a background of 35
+/// came back as 4 in every tile a ribbon touched. The pass's blend is straight
+/// alpha for colour and `One, OneMinusSrcAlpha` for alpha, which over a
+/// transparent layer leaves egui's premultiplied colour in it. egui then
+/// composites the layer exactly as it composites a colour it paints itself:
+/// `p + dst · (1 − a)` on encoded values onto an encoded surface, and
+/// `linear(p) + dst · (1 − a)` in linear light onto an sRGB one. Blending the
+/// colour in linear light onto the scene texture, as the pass first did, drew
+/// the dimmed grey over black at 188 where egui painted 135.
 #[test]
 fn a_translucent_measurement_composites_as_egui_painted_it() {
+    use super::super::gpu_types::{EDL_OUTPUT_FORMAT, MEASUREMENT_TARGET_FORMAT};
     use crate::measurement_marks::{HALO, OTHER_OPACITY, STORED_RGB};
     use crate::viewer_3d::measurements::encoded_rgba;
+    use egui::ecolor::{gamma_u8_from_linear_f32, linear_f32_from_gamma_u8};
     use egui::Color32;
 
-    // The target holds encoded values and does no conversion, and the blend
-    // is straight alpha: out = src · a + dst · (1 − a).
-    assert!(!super::super::gpu_types::MEASUREMENT_TARGET_FORMAT.is_srgb());
-    let blend = wgpu::BlendState::ALPHA_BLENDING.color;
-    assert_eq!(blend.src_factor, wgpu::BlendFactor::SrcAlpha);
-    assert_eq!(blend.dst_factor, wgpu::BlendFactor::OneMinusSrcAlpha);
-    assert_eq!(blend.operation, wgpu::BlendOperation::Add);
-    let pipeline = |src: [f32; 4], dst: f32| src[0] * src[3] + dst * (1.0 - src[3]);
-    // egui: premultiplied bytes, `p + dst · (1 − a)`, on encoded values.
-    let egui = |color: Color32, dst: f32| {
-        let [r, _, _, a] = color.to_array().map(|v| f32::from(v) / 255.0);
-        r + dst * (1.0 - a)
+    let layer = super::super::sizing::measurement_layer_descriptor(8, 8);
+    assert_eq!(layer.format, MEASUREMENT_TARGET_FORMAT);
+    assert!(!layer.format.is_srgb(), "the layer holds encoded values");
+    assert!(layer.view_formats.is_empty(), "the layer has one format");
+    assert_ne!(layer.format, EDL_OUTPUT_FORMAT, "it is not the scene's");
+    assert_eq!(
+        super::MEASUREMENT_LAYER_LOAD,
+        wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+    );
+    let blend = wgpu::BlendState::ALPHA_BLENDING;
+    assert_eq!(blend.color.src_factor, wgpu::BlendFactor::SrcAlpha);
+    assert_eq!(blend.color.dst_factor, wgpu::BlendFactor::OneMinusSrcAlpha);
+    assert_eq!(blend.color.operation, wgpu::BlendOperation::Add);
+    assert_eq!(blend.alpha.src_factor, wgpu::BlendFactor::One);
+    assert_eq!(blend.alpha.dst_factor, wgpu::BlendFactor::OneMinusSrcAlpha);
+    assert_eq!(blend.alpha.operation, wgpu::BlendOperation::Add);
+
+    let level = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+    // One channel and the alpha of the layer, as the pass leaves it in 8 bits.
+    let fill = |pieces: &[Color32]| {
+        let (mut c, mut a) = (0.0_f32, 0.0_f32);
+        for piece in pieces {
+            let src = encoded_rgba(*piece);
+            c = f32::from(level(src[0] * src[3] + c * (1.0 - src[3]))) / 255.0;
+            a = f32::from(level(src[3] + a * (1.0 - src[3]))) / 255.0;
+        }
+        (c, a)
     };
-    // What an sRGB target's blend in linear light gives for the same colour.
-    let to_linear = |v: f32| egui::ecolor::linear_f32_from_gamma_u8((v * 255.0).round() as u8);
-    let to_encoded = |v: f32| egui::ecolor::gamma_u8_from_linear_f32(v) as f32 / 255.0;
-    let linear = |color: Color32, dst: f32| {
-        let [r, _, _, a] = color.to_srgba_unmultiplied().map(|v| f32::from(v) / 255.0);
-        to_encoded(to_linear(r) * a + to_linear(dst) * (1.0 - a))
+    // egui compositing one premultiplied colour `p` of alpha `a` over the
+    // surface, which holds `dst` as the screen shows it, on either surface.
+    let composite = |srgb_surface: bool, p: f32, a: f32, dst: f32| {
+        if srgb_surface {
+            let lin = |v: f32| linear_f32_from_gamma_u8(level(v));
+            f32::from(gamma_u8_from_linear_f32(lin(p) + lin(dst) * (1.0 - a))) / 255.0
+        } else {
+            p + dst * (1.0 - a)
+        }
+    };
+    // egui painting the pieces one after another, as it did before.
+    let painted = |srgb_surface: bool, pieces: &[Color32], dst: f32| {
+        pieces.iter().fold(dst, |dst, piece| {
+            let [p, _, _, a] = piece.to_array().map(|v| f32::from(v) / 255.0);
+            composite(srgb_surface, p, a, dst)
+        })
     };
 
     let grey = Color32::from_rgb(STORED_RGB[0], STORED_RGB[1], STORED_RGB[2]);
     let dimmed = grey.gamma_multiply(OTHER_OPACITY);
     let tint = Color32::from_rgb(220, 120, 40).gamma_multiply(OTHER_OPACITY);
-    for color in [dimmed, HALO, tint] {
-        for background in [0u8, 30, 128, 255] {
-            let dst = f32::from(background) / 255.0;
-            let drawn = pipeline(encoded_rgba(color), dst);
-            let painted = egui(color, dst);
-            assert!(
-                (drawn - painted).abs() <= 1.0 / 255.0,
-                "{color:?} over {background}: {} != {}",
-                drawn * 255.0,
-                painted * 255.0
-            );
+    for srgb_surface in [true, false] {
+        for pieces in [
+            &[HALO, grey][..],
+            &[HALO, dimmed],
+            &[dimmed],
+            &[HALO],
+            &[tint],
+        ] {
+            for background in [0u8, 30, 35, 128, 255] {
+                let dst = f32::from(background) / 255.0;
+                let (c, a) = fill(pieces);
+                let drawn = composite(srgb_surface, c, a, dst);
+                let expected = painted(srgb_surface, pieces, dst);
+                assert!(
+                    (drawn - expected).abs() <= 1.0 / 255.0,
+                    "{pieces:?} over {background}, sRGB surface {srgb_surface}: {} != {}",
+                    drawn * 255.0,
+                    expected * 255.0
+                );
+            }
         }
     }
-    let dark = 30.0 / 255.0;
-    assert!(
-        (linear(dimmed, dark) - egui(dimmed, dark)) * 255.0 > 40.0,
-        "the linear blend is the one that drew it lighter"
-    );
+    // The first pass: the colour in linear light, blended onto the sRGB scene
+    // texture with straight alpha, over black.
+    let [r, _, _, a] = dimmed.to_srgba_unmultiplied();
+    let first = gamma_u8_from_linear_f32(linear_f32_from_gamma_u8(r) * f32::from(a) / 255.0);
+    let before = level(painted(true, &[dimmed], 0.0));
+    assert!(first > before + 40, "{first} against {before}");
 }

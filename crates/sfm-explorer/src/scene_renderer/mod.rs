@@ -82,10 +82,12 @@ pub(crate) struct SceneRenderer {
     /// can be a `copy_texture_to_buffer` source, which is what `capture` needs.
     #[cfg(feature = "mcp")]
     edl_output_texture: Option<wgpu::Texture>,
-    /// The same texture read as sRGB-encoded values
-    /// (`MEASUREMENT_TARGET_FORMAT`): what egui displays, and what the
-    /// measurements are drawn into so they blend as egui does.
-    edl_output_encoded_view: Option<wgpu::TextureView>,
+    /// The measurements' layer: a texture of its own, the panel's size, that
+    /// the measurements' pass clears and draws into every frame and egui
+    /// paints over the scene texture (`measurement_layer_descriptor`).
+    measurement_layer_view: Option<wgpu::TextureView>,
+    /// The layer as egui paints it.
+    measurement_texture_id: Option<egui::TextureId>,
 
     // ── egui integration ──
     egui_texture_id: Option<egui::TextureId>,
@@ -244,7 +246,8 @@ impl SceneRenderer {
             edl_output_view: None,
             #[cfg(feature = "mcp")]
             edl_output_texture: None,
-            edl_output_encoded_view: None,
+            measurement_layer_view: None,
+            measurement_texture_id: None,
             egui_texture_id: None,
             current_size: (0, 0),
             point_pipeline: None,
@@ -328,6 +331,12 @@ impl SceneRenderer {
     /// Returns the egui texture ID for the rendered scene, if available.
     pub(crate) fn texture_id(&self) -> Option<egui::TextureId> {
         self.egui_texture_id
+    }
+
+    /// The egui texture ID of the measurements' layer, which the 3D view
+    /// paints over the scene texture, if it has been created.
+    pub(crate) fn measurement_texture_id(&self) -> Option<egui::TextureId> {
+        self.measurement_texture_id
     }
 
     /// The `length_scale` the loaded reconstructions suggest: the smallest

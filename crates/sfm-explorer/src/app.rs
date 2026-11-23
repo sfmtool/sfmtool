@@ -1026,6 +1026,7 @@ impl App {
         // frame's `Arc<Window>`, which is what `WindowHost` is implemented for.
         let mut window_host = window.clone();
         let scene_texture_id = self.scene_renderer.texture_id();
+        self.viewer_3d.measurement_texture = self.scene_renderer.measurement_texture_id();
         let hover_depth = self.scene_renderer.hover_depth();
         let hover_pick = self.scene_renderer.hover_pick();
 

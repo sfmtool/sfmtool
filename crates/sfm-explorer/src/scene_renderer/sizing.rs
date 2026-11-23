@@ -141,7 +141,7 @@ impl SceneRenderer {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[MEASUREMENT_TARGET_FORMAT],
+            view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
         });
         let edl_output_view = edl_output.create_view(&Default::default());
 
@@ -149,11 +149,9 @@ impl SceneRenderer {
         // creates its own managed textures as Rgba8Unorm and its shader
         // assumes texture samples are already in gamma space (no hardware
         // sRGB decoding). Using Rgba8Unorm here prevents a double
-        // linearization that would darken the image. The measurements are
-        // drawn into the same view, so they blend on encoded values as egui
-        // does.
+        // linearization that would darken the image.
         let edl_output_egui_view = edl_output.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(MEASUREMENT_TARGET_FORMAT),
+            format: Some(wgpu::TextureFormat::Rgba8Unorm),
             ..Default::default()
         });
 
@@ -176,6 +174,27 @@ impl SceneRenderer {
                 self.egui_texture_id = Some(id);
             }
         }
+
+        // The measurements' layer, a texture of its own and in one format:
+        // see `measurement_layer_descriptor`.
+        let measurement_layer = device.create_texture(&measurement_layer_descriptor(width, height));
+        let measurement_layer_view = measurement_layer.create_view(&Default::default());
+        match self.measurement_texture_id {
+            Some(id) => egui_renderer.update_egui_texture_from_wgpu_texture(
+                device,
+                &measurement_layer_view,
+                wgpu::FilterMode::Linear,
+                id,
+            ),
+            None => {
+                self.measurement_texture_id = Some(egui_renderer.register_native_texture(
+                    device,
+                    &measurement_layer_view,
+                    wgpu::FilterMode::Linear,
+                ));
+            }
+        }
+        self.measurement_layer_view = Some(measurement_layer_view);
 
         // Recreate EDL bind group (references the new textures)
         if let (Some(layout), Some(sampler), Some(uniform_buf)) = (
@@ -280,7 +299,6 @@ impl SceneRenderer {
         self.pick_texture = Some(pick_texture);
         self.pick_texture_view = Some(pick_texture_view);
         self.edl_output_view = Some(edl_output_view);
-        self.edl_output_encoded_view = Some(edl_output_egui_view);
         // The texture itself, not only its view: a copy source is a texture.
         #[cfg(feature = "mcp")]
         {
@@ -289,5 +307,34 @@ impl SceneRenderer {
         self.current_size = (width, height);
 
         log::debug!("Scene textures resized to {}x{}", width, height);
+    }
+}
+
+/// The measurements' layer at `width` × `height`.
+///
+/// A texture of its own, in `MEASUREMENT_TARGET_FORMAT` and with no other view
+/// format, that egui paints over the scene texture as it paints its own
+/// premultiplied textures. The measurements are not drawn into a second view
+/// of the scene texture: a render pass through an `Rgba8Unorm` view of the
+/// `Rgba8UnormSrgb` texture the earlier passes wrote read those passes' pixels
+/// back decoded to linear light on a real GPU, so every tile a ribbon touched
+/// went dark, background 35 coming back as 4.
+pub(super) fn measurement_layer_descriptor(
+    width: u32,
+    height: u32,
+) -> wgpu::TextureDescriptor<'static> {
+    wgpu::TextureDescriptor {
+        label: Some("measurement layer"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: MEASUREMENT_TARGET_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
     }
 }

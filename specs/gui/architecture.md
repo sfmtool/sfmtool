@@ -319,15 +319,14 @@ Pass 5:  Measurements, then the bench figure (while the 3D viewer draws a
          measurement or the focused item)
   Input:  Measurement edge instances, then figure edge instances + centre
           disc mesh + hw depth (sampled)
-  Output: EDL output color (alpha blending, reads depth for occlusion; no
-          pick ID, no depth). The measurements are a render pass of their
-          own onto the output's Rgba8Unorm view, so they blend on encoded
-          values as egui does.
+  Output: The measurement layer, a Rgba8Unorm texture of its own cleared
+          to transparent every frame; then EDL output color (alpha blending,
+          reads depth for occlusion; neither writes a pick ID or depth)
 ```
 
-The measurements are drawn over the target indicator and the track rays, as
-the egui overlay they replaced was, and under the bench figure, whose handles
-take a press before theirs do
+The 3D view paints the measurement layer over the scene texture, the grid and
+the axes, where the egui overlay it replaced was painted, so egui composites a
+translucent mark or line exactly as it composited the overlay's
 ([measurement-view.md](measurement-view.md) § "Drawing measurements").
 
 For detailed specifications of each pass, see:

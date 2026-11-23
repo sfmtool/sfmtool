@@ -9,15 +9,16 @@
 //! the shader projects through, and the pass that draws them onto the EDL
 //! output.
 //!
-//! The measurements the 3D view shows are drawn just before the figure, with
+//! The measurements the 3D view shows are drawn in the same call, with
 //! the same shader and bind group: their marks and lines are ribbons
 //! ([`crate::viewer_3d::measurements::Ribbon`]) built on the CPU each frame
 //! and uploaded as edges of the figure's own kind. They differ from the
 //! figure's in two things the instance carries, their width and that the
 //! part behind the scene holds at `BEHIND_OPACITY` rather than fading, and
-//! in one the pass does not: they are a render pass of their own onto the
-//! output's sRGB-encoded view (`MEASUREMENT_TARGET_FORMAT`), so a
-//! translucent colour blends on encoded values, as egui painted them.
+//! in one the pass does not: they are a render pass of their own into a layer
+//! texture of their own (`MEASUREMENT_TARGET_FORMAT`), which egui paints over
+//! the scene texture, so a translucent colour composites on encoded values,
+//! as egui painted them.
 //!
 //! It runs **after** the EDL resolve, and after the target indicator and the
 //! track rays, so the figure sits on top of everything the frame has drawn --
@@ -71,6 +72,11 @@ pub(super) fn measurement_instances(ribbons: &[Ribbon]) -> Vec<BenchEdgeInstance
         })
         .collect()
 }
+
+/// How the measurements' pass opens their layer: cleared to transparent, so the
+/// layer holds this frame's measurements and nothing else, premultiplied.
+pub(super) const MEASUREMENT_LAYER_LOAD: wgpu::LoadOp<wgpu::Color> =
+    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
 
 impl SceneRenderer {
     /// Upload the marks and lines of the measurements the 3D view draws, or
@@ -169,15 +175,18 @@ impl SceneRenderer {
         queue.write_buffer(buf, 0, bytemuck::bytes_of(&uniforms));
     }
 
-    /// Draw the measurements and the figure onto the EDL output texture.
+    /// Draw the measurements into their layer, and the figure onto the EDL
+    /// output texture.
     ///
-    /// The measurements first, so the figure is over them, as its handles take
-    /// a press before theirs do. They are a render pass of their own, onto the
-    /// texture's sRGB-encoded view, so a translucent mark or line blends on
-    /// encoded values as egui painted it before; the figure is drawn onto the
-    /// sRGB view as it always was. Then the disc and the edges over it, as the
-    /// target indicator draws its star under its wireframe: the outline is
-    /// what says where the frame's boundary is, so nothing fills over it.
+    /// The measurements' layer is cleared to transparent every frame, whether
+    /// or not there is a measurement to draw, and the ribbons are drawn into it
+    /// with straight-alpha blending, which over a transparent layer keeps the
+    /// layer premultiplied. egui paints it over the scene texture as it paints
+    /// its own textures, so a translucent mark or line composites on encoded
+    /// values as egui painted it before. The figure is drawn onto the scene
+    /// texture: the disc first and the edges over it, as the target indicator
+    /// draws its star under its wireframe, since the outline is what says
+    /// where the frame's boundary is, so nothing fills over it.
     pub(crate) fn render_bench_track(&self, encoder: &mut wgpu::CommandEncoder) {
         let Some(bind_group) = &self.bench_track_bind_group else {
             return;
@@ -186,6 +195,7 @@ impl SceneRenderer {
             encoder: &'e mut wgpu::CommandEncoder,
             label: &str,
             view: &wgpu::TextureView,
+            load: wgpu::LoadOp<wgpu::Color>,
         ) -> wgpu::RenderPass<'e> {
             encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label),
@@ -193,7 +203,7 @@ impl SceneRenderer {
                     view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load, // preserve EDL + the passes over it
+                        load,
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
@@ -203,18 +213,19 @@ impl SceneRenderer {
             })
         }
 
-        if let (Some(view), Some(pipeline), Some(quad_vb), Some(edge_buf)) = (
-            &self.edl_output_encoded_view,
-            &self.measurement_pipeline,
-            &self.quad_vertex_buffer,
-            &self.measurement_edge_buffer,
-        ) {
-            let mut pass = begin(encoder, "measurement pass", view);
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, bind_group, &[]);
-            pass.set_vertex_buffer(0, quad_vb.slice(..));
-            pass.set_vertex_buffer(1, edge_buf.slice(..));
-            pass.draw(0..4, 0..self.measurement_edge_count);
+        if let Some(view) = &self.measurement_layer_view {
+            let mut pass = begin(encoder, "measurement pass", view, MEASUREMENT_LAYER_LOAD);
+            if let (Some(pipeline), Some(quad_vb), Some(edge_buf)) = (
+                &self.measurement_pipeline,
+                &self.quad_vertex_buffer,
+                &self.measurement_edge_buffer,
+            ) {
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, bind_group, &[]);
+                pass.set_vertex_buffer(0, quad_vb.slice(..));
+                pass.set_vertex_buffer(1, edge_buf.slice(..));
+                pass.draw(0..4, 0..self.measurement_edge_count);
+            }
         }
 
         if self.bench_track_edge_count + self.bench_track_disc_count == 0 {
@@ -223,7 +234,13 @@ impl SceneRenderer {
         let Some(edl_output_view) = &self.edl_output_view else {
             return;
         };
-        let mut pass = begin(encoder, "bench track pass", edl_output_view);
+        // Preserve the EDL output and the passes over it.
+        let mut pass = begin(
+            encoder,
+            "bench track pass",
+            edl_output_view,
+            wgpu::LoadOp::Load,
+        );
 
         if let (Some(pipeline), Some(disc_buf)) = (
             &self.bench_track_disc_pipeline,

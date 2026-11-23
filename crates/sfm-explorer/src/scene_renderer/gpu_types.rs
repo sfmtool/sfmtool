@@ -446,10 +446,11 @@ pub(super) const GBUFFER_COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat
 /// of these same bytes, not a different texture; the comment there says why.
 pub(super) const EDL_OUTPUT_FORMAT: wgpu::TextureFormat = GBUFFER_COLOR_FORMAT;
 
-/// The second view of the EDL output: the same bytes read as sRGB-encoded
-/// values with no conversion. egui is handed this view, and the measurements'
-/// pipeline draws into it, so a translucent mark or line blends on encoded
-/// values as egui's own painting does and shows as egui would have painted it.
+/// The format of the measurements' layer: sRGB-encoded values with no
+/// conversion, as egui's own textures hold them. The measurements' pipeline
+/// draws into the layer and egui paints it over the scene texture, so a
+/// translucent mark or line composites on encoded values as egui's own
+/// painting does and shows as egui would have painted it.
 pub(super) const MEASUREMENT_TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// `@location(1)` — positive view-space depth, read by the EDL pass for its

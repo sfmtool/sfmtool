@@ -82,7 +82,7 @@ pub(crate) struct Ribbon {
     /// The other.
     pub(crate) b: [f32; 4],
     /// Its colour as sRGB-encoded values, not premultiplied ([`encoded_rgba`]),
-    /// as the pass blends it onto the scene texture's encoded view.
+    /// as the pass blends it into the measurements' layer.
     pub(crate) color: [f32; 4],
     /// Half its width, in physical pixels.
     pub(crate) half_width: f32,
@@ -183,12 +183,13 @@ fn homogeneous(p: &Point3<f64>) -> [f32; 4] {
 /// `color` as sRGB-encoded values, not premultiplied, as the measurements'
 /// pipeline takes it.
 ///
-/// That pipeline draws onto the scene texture's encoded view
-/// (`MEASUREMENT_TARGET_FORMAT`) with straight alpha, so the result is
-/// `c·a + dst·(1 − a)` on encoded values. egui paints its premultiplied bytes
-/// `p` as `p + dst·(1 − a)` on encoded values too, so dividing `p` by `a`
-/// here, without rounding, makes the two the same blend: a translucent colour
-/// shows as egui would have painted it, not only an opaque one.
+/// That pipeline draws into the measurements' layer
+/// (`MEASUREMENT_TARGET_FORMAT`), cleared to transparent, with straight alpha,
+/// so one piece leaves `c·a` there with alpha `a`. Dividing egui's
+/// premultiplied bytes `p` by `a` here, without rounding, leaves `p` itself,
+/// and egui composites the layer over the scene as it composited `p` when it
+/// painted the measurement: a translucent colour shows as egui painted it, not
+/// only an opaque one.
 pub(crate) fn encoded_rgba(color: Color32) -> [f32; 4] {
     let [r, g, b, a] = color.to_array().map(f32::from);
     if a == 0.0 {

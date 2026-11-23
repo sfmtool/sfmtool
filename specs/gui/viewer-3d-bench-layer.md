@@ -206,8 +206,7 @@ and re-uploaded every frame it is drawn, since the barbs turn to face the eye
 and there is no state to key it on that a camera move does not invalidate. It is
 a few hundred instances.
 
-**The same shader draws the 3D view's measurements**, just before the
-figure, so the figure is over them as its handles take a press before theirs do
+**The same shader draws the 3D view's measurements**, in the same call
 ([`measurement-view.md`](measurement-view.md) § "Drawing measurements"). Their
 marks and lines are edges of the same kind, rebuilt on the CPU each frame
 (`viewer_3d::measurements::ribbons`), and each edge instance carries the two
@@ -218,15 +217,20 @@ fades**: the figure's does, as the table above says, and a measurement's
 holds at `BEHIND_OPACITY` however far behind it is, as a highlighted surfel's
 hidden outline does ([`patch-rendering.md`](patch-rendering.md)), since a
 measurement far behind the cloud has to stay findable and has no size of its
-own to fade over. And they are **a render pass of their own**, with the same
-shader and bind group, onto the EDL output's second view
-(`MEASUREMENT_TARGET_FORMAT`, `Rgba8Unorm`), the one egui displays: there the
-blend works on sRGB-encoded values, as egui's painting does, so a translucent
-colour (the dimmed others of *Show all measurements*, the halo) shows as egui
-would have painted it. That holds for `BEHIND_OPACITY` too: a hidden piece's
-0.45 scales encoded values, where the figure's, drawn onto the sRGB view as
-the hidden outlines and the target indicator are, scales linear light. Each
-pass has one colour target and no depth attachment, so it writes no pick ID
+own to fade over. And they are drawn **into a layer of their own**, with the
+same shader and bind group: a `MEASUREMENT_TARGET_FORMAT` (`Rgba8Unorm`)
+texture the panel's size, cleared to transparent every frame, which the 3D
+view paints over the scene texture, the grid and the axes, where the egui
+overlay they replaced was painted. The straight-alpha blend over a
+transparent layer leaves egui's premultiplied colour in it, and egui
+composites the layer as it composited the overlay, so a translucent colour
+(the dimmed others of *Show all measurements*, the halo) shows as egui painted
+it, whatever the window surface's format. The layer is not a second view of
+the scene texture: a pass through an `Rgba8Unorm` view of the
+`Rgba8UnormSrgb` scene texture read the earlier passes' pixels back decoded
+to linear light on a real GPU, and darkened every tile a ribbon touched. The
+measurements are over the figure, as the overlay was. Each pass has one
+colour target and no depth attachment, so it writes no pick ID
 and no depth, and a click is decided by the measurements' and the handles'
 own hit tests on the CPU and otherwise by the scene under
 them.

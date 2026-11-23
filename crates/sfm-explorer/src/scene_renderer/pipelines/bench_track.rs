@@ -10,12 +10,12 @@ const SHADER: &str = concat!(
 
 /// Resources created by the bench track pipelines.
 pub(in crate::scene_renderer) struct BenchTrackPipelineResources {
-    /// Instanced ribbon-quad edges: the frame, the normal, the barbs and the
-    /// marks, and the drawn measurements' marks and lines.
+    /// Instanced ribbon-quad edges of the figure: the frame, the normal, the
+    /// barbs and the marks.
     pub(crate) edge_pipeline: wgpu::RenderPipeline,
-    /// The same edges onto the EDL output's sRGB-encoded view
+    /// The same edges into the measurements' layer
     /// ([`MEASUREMENT_TARGET_FORMAT`]): the drawn measurements' marks and
-    /// lines, which blend on encoded values as egui does.
+    /// lines, which egui composites as it composites its own painting.
     pub(crate) measurement_pipeline: wgpu::RenderPipeline,
     /// The filled centre disc, a triangle list.
     pub(crate) disc_pipeline: wgpu::RenderPipeline,
@@ -76,7 +76,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> BenchTrackPipe
     let color_target = target(EDL_OUTPUT_FORMAT);
 
     // One edge pipeline per target format: the figure's onto the sRGB view of
-    // the EDL output, the measurements' onto its sRGB-encoded view.
+    // the EDL output, the measurements' into their encoded layer.
     let edge = |label, targets: &[Option<wgpu::ColorTargetState>]| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),

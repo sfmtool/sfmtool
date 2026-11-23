@@ -414,6 +414,10 @@ pub(crate) struct Viewer3D {
     /// panel was shown, for the reason [`Self::bench_figure`] is built here.
     /// `app.rs` uploads them.
     pub(crate) measurement_ribbons: Vec<measurements::Ribbon>,
+    /// The texture the scene pass draws those ribbons into, which this panel
+    /// paints over the scene texture; set by `app.rs` each frame, `None`
+    /// before the renderer has made it.
+    pub(crate) measurement_texture: Option<egui::TextureId>,
     /// The bench figure's handle the pointer has hold of, while it has one.
     ///
     /// Held here rather than derived each frame for the reason the Image Detail
@@ -556,6 +560,7 @@ impl Viewer3D {
             measurement_hover: None,
             measurement_gesture: None,
             measurement_ribbons: Vec::new(),
+            measurement_texture: None,
             bench_drag: None,
             bench_gesture: None,
             menu_entry_rects: Vec::new(),
@@ -1054,9 +1059,17 @@ impl Viewer3D {
         // Update target indicator state for GPU rendering
         self.update_target_indicator_state(ui, show_target_indicator);
 
-        // The measurements, as scene geometry the next frame's upload draws,
-        // after this frame's input has moved the camera; the indicator and
-        // the hover text over the view.
+        // The measurements: the layer the scene pass drew them into, painted
+        // over the scene, the grid and the axes as egui painted them before,
+        // then the indicator and the hover text. The ribbons for the next
+        // frame's upload are built after this frame's input has moved the
+        // camera.
+        if let Some(tex_id) = self.measurement_texture {
+            let uv = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
+            let mut mesh = egui::Mesh::with_texture(tex_id);
+            mesh.add_rect_with_uv(rect, uv, Color32::WHITE);
+            painter.add(egui::Shape::mesh(mesh));
+        }
         self.measurement_ribbons = measurements::ribbons(
             &self.measurements,
             &self.camera,
