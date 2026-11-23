@@ -146,27 +146,28 @@ def _without_readings(path: Path) -> dict:
 
 
 class TestWithoutReadings:
-    def test_a_reconstruction_built_without_readings_has_none(
-        self, seoul_bull_ground_truth_sfmr
-    ):
+    """On the demo scene's workspace: an embedded_patches reconstruction whose
+    five photographs are the scene's, so the readings a save gathers from them
+    can be checked against those the scene computed from its own decoded
+    photographs."""
+
+    def test_a_reconstruction_built_without_readings_has_none(self, demo_workspace):
         recon = SfmrReconstruction.from_data(
-            seoul_bull_ground_truth_sfmr.parent,
-            _without_readings(seoul_bull_ground_truth_sfmr),
+            demo_workspace.parent, _without_readings(demo_workspace)
         )
         assert recon.sharpness is None
         assert recon.gradient_structure_tensors_xx_yy_xy is None
         assert recon.image_to_gray is None
 
     def test_an_embedded_patches_reconstruction_is_saved_with_readings_from_its_images(
-        self, seoul_bull_ground_truth_sfmr
+        self, demo_workspace, demo_scene
     ):
         recon = SfmrReconstruction.from_data(
-            seoul_bull_ground_truth_sfmr.parent,
-            _without_readings(seoul_bull_ground_truth_sfmr),
+            demo_workspace.parent, _without_readings(demo_workspace)
         )
         from sfmtool import ProgressCounter
 
-        out = seoul_bull_ground_truth_sfmr.parent / "resaved.sfmr"
+        out = demo_workspace.parent / "resaved.sfmr"
         counter = ProgressCounter()
         recon.save(out, progress=counter)
         # The gather counts every image it read.
@@ -179,32 +180,53 @@ class TestWithoutReadings:
         sharpness, tensors = _image_readings(saved, saved.image_to_gray)
         _assert_bits_equal(saved.sharpness, sharpness)
         _assert_bits_equal(saved.gradient_structure_tensors_xx_yy_xy, tensors)
-
-    def test_a_reconstruction_without_its_images_is_not_saved(
-        self, seoul_bull_ground_truth_sfmr
-    ):
-        workspace = seoul_bull_ground_truth_sfmr.parent
-        recon = SfmrReconstruction.from_data(
-            workspace, _without_readings(seoul_bull_ground_truth_sfmr)
+        # They are the readings of the photographs the scene rendered and
+        # decoded, which the demo's own file holds too.
+        conversion = ImageToGray.from_json(saved.image_to_gray)
+        rows = [
+            image_readings_from_rgb(np.ascontiguousarray(photograph), conversion)
+            for photograph in demo_scene.photographs
+        ]
+        _assert_bits_equal(
+            saved.sharpness,
+            _as_stored(np.asarray([r.sharpness for r in rows], dtype=np.float32)),
         )
-        missing = recon.image_names[3]
+        _assert_bits_equal(
+            saved.gradient_structure_tensors_xx_yy_xy,
+            np.asarray(
+                [list(r.gradient_structure_tensor_xx_yy_xy) for r in rows],
+                dtype=np.float32,
+            ),
+        )
+        demo = SfmrReconstruction.load(demo_workspace)
+        assert saved.image_to_gray == demo.image_to_gray
+        _assert_bits_equal(saved.sharpness, demo.sharpness)
+        _assert_bits_equal(
+            saved.gradient_structure_tensors_xx_yy_xy,
+            demo.gradient_structure_tensors_xx_yy_xy,
+        )
+
+    def test_a_reconstruction_without_its_images_is_not_saved(self, demo_workspace):
+        workspace = demo_workspace.parent
+        recon = SfmrReconstruction.from_data(
+            workspace, _without_readings(demo_workspace)
+        )
+        missing = recon.image_names[1]
         (workspace / missing).unlink()
-        changed = recon.image_names[5]
+        changed = recon.image_names[3]
         (workspace / changed).write_bytes(b"not the photograph")
         out = workspace / "resaved.sfmr"
         with pytest.raises(ValueError) as error:
             recon.save(out)
         message = str(error.value)
-        assert "2 of 17 images" in message
+        assert "2 of 5 images" in message
         assert missing in message and changed in message
         assert "do not hash" in message and "no such file" in message
         assert not out.exists()
 
-    def test_write_sfmr_refuses_a_dict_without_readings(
-        self, seoul_bull_ground_truth_sfmr
-    ):
-        data = _without_readings(seoul_bull_ground_truth_sfmr)
-        out = seoul_bull_ground_truth_sfmr.parent / "rewritten.sfmr"
+    def test_write_sfmr_refuses_a_dict_without_readings(self, demo_workspace):
+        data = _without_readings(demo_workspace)
+        out = demo_workspace.parent / "rewritten.sfmr"
         with pytest.raises(ValueError, match="has none"):
             write_sfmr(out, data)
         assert not out.exists()
