@@ -955,9 +955,9 @@ the same name and the lock file: their owner has ended. A
 since an owner creates the lock file first and deletes it last, and is deleted
 too. The process ID in the name only keeps two running viewers' names apart; it
 does not decide whether the owner is alive, since the operating system reuses
-process IDs. Nothing in the viewer or core does this today: no Rust code checks
-whether another process is alive or takes a file lock, so the lock file and
-the sweep at start are new.
+process IDs. Before step 4 no Rust code in the viewer or core checked whether
+another process was alive or took a file lock, so the lock file and the sweep
+at start were new with it.
 
 A lock file exists unlocked for a moment between its creation and the
 `try_lock`, and a sweep in another viewer that starts in that moment could take
