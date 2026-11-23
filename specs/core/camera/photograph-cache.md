@@ -8,12 +8,12 @@ patch samplers read (the photograph plus successively halved copies, down to
 one or two pixels on the short side) is
 the expensive part of all of them. The photograph cache cuts each decoded
 pyramid into photograph tiles, keeps the tiles and drops the pyramid, and
-answers each photograph as a tiled photograph made of its tiles
-(`TiledPhotograph`,
+answers each photograph as a tiled photograph that reads its tiles through
+the cache (`TiledPhotograph`,
 [view-region-pyramids.md](view-region-pyramids.md)), so that whichever part
 of the program asks next, on whichever thread, gets the same pixels without
 reading the file again, and so that memory stays under a set budget however
-many photographs the reconstruction has. A second budget, the build budget,
+many photographs the reconstruction has or a caller asks for at once. A second budget, the build budget,
 bounds the whole decodes in progress on one cache at once, so a caller asking for hundreds of photographs does not
 hold hundreds of decodes in memory together.
 
@@ -58,7 +58,8 @@ calls, can take one.
 
 ```rust
 /// Decoded photographs as photograph tiles, keyed by path, shared across
-/// threads, each answered as a tiled photograph made of every one of its tiles.
+/// threads, each answered as a tiled photograph that reads its tiles through
+/// the cache. A handle on state shared with the photographs it answers.
 pub struct PhotographCache { /* … */ }
 
 /// The settings a cache is made with. `Default` gives `default_budget_bytes()`,
@@ -89,14 +90,15 @@ impl PhotographCache {
     /// decode that runs alone. Never waits.
     pub fn try_reserve_build(&self, bytes: u64) -> Option<BuildReservation<'_>>;
 
-    /// The photograph at `path`, made of every one of its tiles, decoding it
-    /// when a tile of it is not kept. Waits while another thread is decoding
-    /// the same path, and then answers from its decode rather than decoding
-    /// a second time, or decodes in its place if that thread stops. A decode
-    /// it makes is reserved with `reserve_builds`. An error
-    /// when the file does not exist, cannot be read, or has a side over
-    /// `MAX_JPEG_SIDE` (65535), and `Cancelled` when `progress` is cancelled
-    /// while it waits or decodes.
+    /// The photograph at `path`, holding its layout and the cache's handle on
+    /// its tiles and no pixel, decoding it into tiles only when none of them
+    /// is kept. Waits while another thread is decoding the same path, and
+    /// then answers from its decode rather than decoding a second time, or
+    /// decodes in its place if that thread stops. A decode it makes is
+    /// reserved with `reserve_builds`. An error when the file does not exist,
+    /// cannot be read, or has a side over `MAX_JPEG_SIDE` (65535), and
+    /// `Cancelled` when `progress` is cancelled while it waits or decodes.
+    /// Under a budget of 0 the photograph holds every tile of its decode.
     pub fn get(&self, path: &Path, progress: &Progress<'_>)
         -> Result<Arc<TiledPhotograph>, GetError>;
 
@@ -115,7 +117,7 @@ impl PhotographCache {
     /// `get` for every path, the misses decoded in parallel on the rayon
     /// pool. One entry per path, in order, and a tally. Counts `images`
     /// through `progress` and polls it for cancellation before each path and
-    /// as `get` does.
+    /// as `get` does. The answers hold no tile, so the call holds no pyramid.
     pub fn get_many(
         &self,
         paths: &[&Path],
@@ -229,13 +231,39 @@ Why it is shaped this way:
   the tiles are kept: the tiles a request asked for (`try_decode_tiles`'
   keys, `get_tile`'s key) as used and the rest of the decode as unused, an
   unused tile becoming used when a request reads it (`peek_tile`,
-  `get_tile`). `get`, `get_many`, `peek` and `peek_state` answer a
-  `TiledPhotograph` made of every tile of the photograph (`from_tiles`),
-  the `Arc`s the cache keeps, so two callers of one photograph share its
-  tiles and a caller holds every pixel of it while it holds the answer.
-  `get` and `get_many` decode the photograph again when a tile of it is not
-  kept, and `peek` and `peek_state` answer it only when every tile is. A
-  kernel takes the answer as its source with no wrapping of its own.
+  `get_tile`). `peek` and `peek_state` answer a `TiledPhotograph` made of
+  every tile of the photograph (`from_tiles`), the `Arc`s the cache keeps,
+  and only when every tile is kept, so a caller on the GUI thread never
+  decodes through it.
+- **`get` and `get_many` answer photographs that hold no pixel.** The
+  photograph they answer holds its layout, its channels and the cache's
+  handle on its tiles (§ "Reads through the cache"), so a caller that asks
+  for hundreds of photographs holds what the cache's budget holds and no
+  more, rather than every tile of every photograph while it holds the
+  answers. They decode only a photograph none of whose tiles is kept; one
+  that keeps some is answered at once and its renders decode it again for a
+  tile that is gone. A kernel takes the answer as its source with no
+  wrapping of its own.
+- **The cache is a handle on state its answers share.** The cache holds its
+  slots, counters and build count in an `Arc`, and each photograph `get`
+  answers holds another handle on it, so a photograph read after the cache
+  that answered it was dropped still reads: it keeps the cache's tiles alive
+  until it is dropped, and decodes again what was evicted. `get` and
+  `get_many` keep their `&self` signatures, so the viewer's
+  `Arc<PhotographCache>`, the web export's cache on its stack and the
+  examples' caches call them as before, and a photograph can never find its
+  cache gone. The other ways considered were `get` taking `self: &Arc<Self>`,
+  which changes every caller's signature and forces the web export and the
+  examples to hold the cache in an `Arc`, and a `Weak` handle, which would
+  make a read fail once the cache is dropped, a failure no caller could
+  prevent.
+- **Under a budget of 0 an answer holds its decode's tiles.** A cache that
+  keeps nothing cannot answer a later tile read without decoding the whole
+  photograph again, so `get` and `get_many` hand back every tile of the
+  decode that made the answer, held until the answer is dropped, as
+  `TryDecode::Decoded` does for a panel. `sfm web-export` and the viewer with
+  `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB=0` then decode a photograph once per
+  answer rather than once per render.
 - **`get_many` returns one entry per path, in order, and opens no phase.** The
   patch kernels index their view slice by image index, and the caller builds
   that slice from the entries; a `None` entry is an unreadable file. The
@@ -267,7 +295,8 @@ Why it is shaped this way:
   such as a test fixture standing in for a photograph. It cuts the image into
   tiles as a decode does and keeps them as unused. The entry records the
   file's stamp as it is now, so `get` answers with those pixels until the file
-  changes, or until one of the tiles is evicted, when it decodes the file.
+  changes, or until every tile is evicted, when it decodes the file; a read
+  of a tile evicted before then decodes the file too.
 
 Example, a background step in the viewer:
 
@@ -318,17 +347,29 @@ tiles until the total is back under: the unused before the used, among each
 the least recently asked for first, and among tiles asked for together the
 finer levels first. It never drops a tile the request that made the decode
 asked for, which for `get`, `get_many` and `insert` is every tile, so the
-photograph just decoded stays whole even over the budget, as its caller holds
-it anyway. A photograph that lost a tile keeps its layout and the tiles left,
-which `peek_tile` still answers, but `peek` no longer answers it and the next
-`get` decodes it again. The cache drops only its own `Arc`, so a job holding a
-photograph keeps its tiles alive until the job ends. Eviction is therefore
+photograph just decoded stays whole even over the budget until the next
+decode, since its caller is about to read it. A photograph that lost a tile
+keeps its layout and the tiles left, which `peek_tile` still answers and a
+`get` answers it from, but `peek` no longer answers it, and a read of a tile
+it lost decodes it again. The cache drops only its own `Arc`, so a render
+holding a tile keeps it alive until the render ends. Eviction is therefore
 safe during any read. The cost is that memory can briefly exceed the budget by
-what running jobs hold, which they would have held anyway.
+what running renders hold.
 
 A `get_many` over more photographs than the budget holds evicts its own
 earlier photographs' tiles as it goes, and the next call finds only the tail
-whole. After the cull, a geometry search on the test reconstruction reads 143
+whole. Its answers hold none of those tiles, so the call holds the budget and
+the decodes in progress, not every photograph: over the 85 photographs of
+`dino_dog_toy` (2040×1536) under a 50 MB budget, the answers hold 77 MB
+after the call where whole photographs held 1,125 MB, and the call peaks
+606 MB over its start, the decodes in progress, where it peaked at 1,187 MB.
+A kernel that renders photographs whose tiles went decodes them again: the
+display bitmaps of that reconstruction under the 50 MB budget decode 526
+times rather than 85 and take 1.50 s rather than 0.28 s, peaking 566 MB over
+the start rather than 1,195 MB, with the same bitmaps. How the bulk kernels'
+point order keeps those decodes rare is in
+[out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md)
+step 13e5. After the cull, a geometry search on the test reconstruction reads 143
 to 335 photographs, 5 to 11 GB, so the budget has to hold a few hundred
 photographs' tiles for a repeated search to reuse them. The first run's cost
 is dominated by how fast the misses decode, which is why `get_many` decodes
@@ -394,6 +435,40 @@ count goes past the budget only by one decode per caller reserving at that
 moment: the bound is the build budget plus one whole decode per caller. A
 caller that wants several photographs asks for them with one `get_many`, never
 with `get` from many workers of one parallel loop.
+
+## Reads through the cache
+
+A photograph `get` or `get_many` answers (with a budget over 0) holds the
+path, the slot it was answered from and the layout of the decode that made
+it, and reads each tile through the cache
+([`CachedTiles`](../../../crates/sfmtool-core/src/camera/photograph_cache.rs)).
+A render's read of several tiles, such as the regions of every level a
+view-region pyramid copies, asks for them all at once, so it decodes at most
+once:
+
+- **The tiles kept.** When the slot still keeps every tile the read asks for,
+  the read takes them, marking them used, under the slot's lock and with no
+  stat of the file, and is not counted as a hit.
+- **A tile evicted.** Otherwise the read stats the file. A file whose length
+  or modification time is not the slot's fails the read with
+  `PhotographReadError::Changed`, naming it, so a kernel never goes on with
+  pixels of two versions of one photograph. Otherwise the read is a
+  `get_tile` of the keys: it decodes the photograph, reserving with
+  `reserve_builds`, keeps the tiles asked for as used and the rest as unused,
+  or waits on the slot while another caller decodes it, polling the render's
+  `Progress` as `get` polls the caller's, so a cancelled kernel stops in a
+  render that decodes. A decode whose layout is not the recorded one is
+  `Changed` too. A file that is gone fails the read with
+  `PhotographReadError::NotFound`, a file too large with `TooLarge`, and one
+  that cannot be decoded with `Unreadable`, each naming the file.
+
+The errors reach the kernel's caller through the render entry points
+([view-region-pyramids.md](view-region-pyramids.md)), as every read error
+does: the viewer's operations report them as their failure, and `sfm
+web-export` raises them as a `RuntimeError` through `write_web_export`, which
+the command reports as its failure. `PhotographReadError` converts from
+`TileError` and `GetError` with `From`, keeping the path where the error
+has one.
 
 ## Layouts and tiles
 
@@ -494,6 +569,13 @@ reconstruction's photographs goes through it except the ones under
   so the panels and later steps find them decoded
   ([open.rs](../../../crates/sfm-explorer/src/state/open.rs)). `sfm web-export`
   calls the same function with a cache of budget 0.
+- **Each of these renders** reads its photographs' tiles through the cache
+  (§ "Reads through the cache"), so a photograph whose tiles were evicted
+  while the operation ran is decoded again, and one whose file is gone or
+  changed by then fails the operation with that read's error, naming the
+  file: the open, the conversion to embedded patches, which then pushes no
+  version, and the bench's steps each report it as their failure, as they
+  report the read errors before it.
 - **The cluster-patches build**, the second half of *Build Index Files*,
   reads every photograph with `get_many` in its `read photographs` phase, on
   a clone of the cache its job carries, and fails naming the first
@@ -646,10 +728,11 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   of its own for the decompression and waits on it through a channel, not a
   rayon join. For the same reason a caller
   already inside a rayon parallel loop calls `get` rather than `get_many`.
-- **Counters.** A `get` that decoded nothing is a hit, whether every tile it
-  asked for was kept, the failure was remembered, or another thread's decode
+- **Counters.** A `get` that decoded nothing is a hit, whether a tile of the
+  photograph was kept, the failure was remembered, or another thread's decode
   was waited on; each path of a `get_many`
-  counts as one `get`. Every decode started is a miss, whether it succeeded,
+  counts as one `get`. A read through a photograph `get` answered that finds
+  its tiles kept is not counted; one that decodes is a miss and a decode. Every decode started is a miss, whether it succeeded,
   failed or was cancelled, and a `get` that stopped waiting because it was
   cancelled is neither. `peek` counts as a use for the eviction order but not
   as a hit. A decode is a miss that read the photograph's pixels, so a file
@@ -675,9 +758,10 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   read at level 6 by `BilinearMip` and `Anisotropic`, one decode per path
   under contention, every caller sharing its tiles, least-recently-used
   eviction within the budget of only the tiles the budget needs, finest
-  level first, and a photograph that lost one decoded again by `get`, the
-  photograph just decoded kept whole over budget, a held photograph
-  surviving eviction, remembered failures, a file that appears or is
+  level first, and a photograph that lost one answered by `get` without a
+  decode and decoded again by a read of the tile it lost, the
+  photograph just decoded kept whole over budget, a photograph whose tiles
+  were evicted decoded again when read, remembered failures, a file that appears or is
   rewritten being decoded again, `forget` and `clear` releasing bytes,
   `get_many` order, tally and cancellation, budget 0 keeping nothing,
   `peek_state` telling a failure from no answer and not waiting on a decode
@@ -707,13 +791,26 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   mid-decode gives its share back, and the `get` or `get_many` that decodes in
   its place reserves, the `get` holding nothing while it waits and the
   `get_many` member keeping its share.
+- [photograph_cache/read_tests.rs](../../../crates/sfmtool-core/src/camera/photograph_cache/read_tests.rs):
+  a `get_many` over 20 photographs decoding each once in the read phase,
+  every answer holding no tile, and reads of every answer decoding nothing
+  more when the tiles fit the budget; a `get_many` over 20 photographs under
+  a budget of three holding no tile, the cache within its budget, and reads
+  of the photographs whose tiles went decoding them again with the same
+  pixels; a read after eviction of a photograph whose file was removed
+  failing with `NotFound` and of one whose file was rewritten failing with
+  `Changed`, each naming it; a render cancelled while it decodes an evicted
+  tile stopping with `Cancelled` and the next render reading it; and under a
+  budget of 0 an answer holding every tile, two renders of it decoding the
+  photograph once.
 - [photograph_cache/tiles/tests.rs](../../../crates/sfmtool-core/src/camera/photograph_cache/tiles/tests.rs):
   a layout read from the header with nothing decoded, and every tile of
   every level, a region and every level equal to the pixels of the pyramid
   the cache decoded the photograph into before it kept tiles, each tile with
   its border as Image Detail cut it, through a panel's decode, a peek and a
-  kernel's read, the photograph `peek` and `get` answer being made of the
-  tiles the cache keeps, with the cache's layout and tile size; a request
+  kernel's read, the photograph `peek` answers being made of the tiles the
+  cache keeps and the one `get` answers reading them, with the cache's
+  layout and tile size; a request
   for one tile decoding the photograph once and keeping its other tiles as
   unused, which a kernel's read of another tile is answered from and which
   go first when the budget needs room, before tiles asked for earlier; a
@@ -750,9 +847,14 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   (the geometry search reads only the images that could see the patch),
   [state/edits/tests.rs](../../../crates/sfm-explorer/src/state/edits/tests.rs)
   (a second step reads nothing from disk, an unreadable photograph refuses the
-  step, deleting an image keeps the decoded photographs),
+  step, deleting an image keeps the decoded photographs, and the conversion to
+  embedded patches failing with the read's error, naming the file, and
+  pushing no version when a photograph is removed after its tiles were
+  evicted),
   [state/open/tests.rs](../../../crates/sfm-explorer/src/state/open/tests.rs)
-  (a second open reads the photographs from the cache),
+  (a second open reads the photographs from the cache, and an open fails
+  with the read's error, naming the file, when a photograph is removed after
+  its tiles were evicted),
   [state/photograph_requests/tests.rs](../../../crates/sfm-explorer/src/state/photograph_requests/tests.rs)
   (Image Detail's layout and tiles each read once, off the calling thread,
   with a budget and with a budget of 0, their tasks run from a queue the
@@ -797,15 +899,11 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 
 - **Display thumbnails** keep their own decodes. They make small images once
   per open.
-- **No cache on disk.** Tiles are cut from the JPEGs in each session, and
-  every answer of `get` and `get_many` holds every tile of its photograph. A
+- **No cache on disk.** Tiles are cut from the JPEGs in each session. A
   large photograph's reduced levels can be stored as
-  [mip level files](mipmaps.md), but the cache does not read them. Answers
-  that read their tiles through the cache rather than hold them, and reading
-  the stored levels of large ones, are proposed in
-  [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md),
-  and a pyramid holding only the region of each level one render reads in
-  [view-region-pyramid.md](../../drafts/view-region-pyramid.md).
+  [mip level files](mipmaps.md), but the cache does not read them. Reading
+  the stored levels of large ones is proposed in
+  [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md).
 - **The budget and the build budget are set only by their environment
   variables** (or a caller's `PhotographCacheOptions`), not in the viewer's
   UI.

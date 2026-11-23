@@ -128,8 +128,10 @@ def export_reconstruction(
         WebExportError: ``out_dir`` is not empty and ``overwrite`` is off, or a
             single-file page would pass :data:`SINGLE_FILE_LIMIT`, or an option
             does not fit the reconstruction.
+        RuntimeError: A read of a photograph the patch bitmaps are rendered
+            from failed; the message names the photograph.
     """
-    from .._sfmtool.fileio import write_web_export
+    from ..fileio import write_web_export
 
     out_dir = Path(out_dir)
     options = dict(

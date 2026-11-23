@@ -40,7 +40,8 @@ use crate::{progress_note, SfmrReconstruction};
 /// out of every patch's views rather than failing the operation; a point whose
 /// reference observation's photograph is left out, or a point at `-1` that two
 /// readable views do not see, gets a zero row. A read of a photograph that
-/// was handed back but lacks the pixels the read asks for fails the call.
+/// was handed back and then fails fails the call: one whose tiles the cache
+/// evicted during the render and whose file is then gone or changed.
 ///
 /// SfM Explorer passes its own cache, so the photographs this decodes stay
 /// for its panels and later operations; a caller with no cache to share, such

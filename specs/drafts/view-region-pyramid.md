@@ -827,7 +827,7 @@ decisions.
     flag carried by `RegionPool::for_kernel_call` or `ViewRegions`, which
     changes no kernel signature, and a decode inside a render that cannot be
     cancelled. The `Progress` parameters are built in the main draft's step
-    13e4a, and the decode that polls them in 13e4b.
+    13e4a, and the decode that polls them in 13e4b (built).
 11. **Answers under a cache budget of 0.** *Decided by the user:* under a
     budget of 0, an answer of `get` or `get_many` holds the tiles of the
     decode that made it, as `TryDecode::Decoded` does, until the answer is
@@ -835,4 +835,4 @@ decisions.
     `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB=0` decode a photograph once per answer
     rather than once per render. The options considered were `sfm
     web-export` using a cache with the default budget, and accepting a
-    decode on every render. To be built in the main draft's step 13e4b.
+    decode on every render. Built in the main draft's step 13e4b.

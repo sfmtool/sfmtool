@@ -265,7 +265,8 @@ fn one_decode_per_path_under_contention() {
 
 /// Over the budget the least recently used tiles go, the finest level first,
 /// only as many as the budget needs; a photograph that lost a tile is not
-/// answered by `peek`, and `get` decodes it again.
+/// answered by `peek`, and `get` answers it without a decode, which a read of
+/// the lost tile then makes.
 #[test]
 fn evicts_least_recently_used_within_budget() {
     let dir = tempfile::tempdir().unwrap();
@@ -291,8 +292,13 @@ fn evicts_least_recently_used_within_budget() {
     assert_eq!((stats.tiles, stats.bytes), (11, 3 * one - level_0));
     assert!(stats.bytes <= stats.budget_bytes);
     assert_eq!((stats.misses, stats.hits), (3, 1));
-    // `b` lacks a tile, so a `get` decodes it again.
-    cache.get(&b, &Progress::none()).unwrap();
+    // `b` keeps some of its tiles, so a `get` answers it without a decode,
+    // and a read of the tile it lacks decodes it again.
+    let b = cache.get(&b, &Progress::none()).unwrap();
+    assert_eq!(cache.stats().misses, 3);
+    assert_eq!(b.whole_level(1).unwrap().width(), 4);
+    assert_eq!(cache.stats().misses, 3, "level 1 is kept");
+    assert_eq!(b.whole_level(0).unwrap().width(), 8);
     assert_eq!(cache.stats().misses, 4);
 }
 
@@ -352,8 +358,10 @@ fn keeps_the_entry_just_decoded_even_over_budget() {
     assert_eq!(cache.stats().bytes, bytes_of(8, 8));
 }
 
+/// A photograph `get` answered holds no tile: once its tiles are evicted, a
+/// read of it decodes it again and gives the same pixels.
 #[test]
-fn a_held_photograph_survives_eviction() {
+fn a_photograph_whose_tiles_were_evicted_is_decoded_again_when_read() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_png(dir.path(), "a.png", 8, 8);
     let b = write_png(dir.path(), "b.png", 8, 8);
@@ -362,7 +370,10 @@ fn a_held_photograph_survives_eviction() {
     cache.get(&b, &Progress::none()).unwrap();
     assert!(cache.peek(&a).is_none());
     assert_eq!(cache.stats().tiles, 4, "only b's");
+    assert_eq!(held.held_tiles(), 0);
+    assert_eq!(cache.stats().decodes, 2);
     let level = held.whole_level(0).unwrap();
+    assert_eq!(cache.stats().decodes, 3);
     assert_eq!(level.width(), 8);
     assert_eq!(level.get_pixel(3, 5, 0), 3);
     assert_eq!(level.get_pixel(3, 5, 1), 5);
@@ -563,10 +574,10 @@ pub(super) fn cache_holding_its_first_decode() -> HeldDecode {
     let decodes = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&decodes);
     let mut cache = PhotographCache::new(with_budget(GIB));
-    cache.on_slot_event = Some(Box::new(move |cache, event| {
+    cache.set_slot_hook(Box::new(move |cache, event| {
         let first =
             event == SlotEvent::DecodeStarted && counted.fetch_add(1, Ordering::SeqCst) == 0;
-        let _ = event_tx.send((event, cache.build_reserved.load(Ordering::SeqCst)));
+        let _ = event_tx.send((event, cache.shared.build_reserved.load(Ordering::SeqCst)));
         if first {
             let _ = release_rx.lock().unwrap().recv_timeout(HANG);
         }
@@ -689,7 +700,7 @@ fn a_maker_that_panics_empties_its_slot() {
     let a = write_png(dir.path(), "a.png", 8, 4);
     let decodes = Arc::new(AtomicUsize::new(0));
     let mut cache = PhotographCache::new(with_budget(GIB));
-    cache.on_slot_event = Some(Box::new({
+    cache.set_slot_hook(Box::new({
         let decodes = Arc::clone(&decodes);
         move |_, event| {
             if event == SlotEvent::DecodeStarted && decodes.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -923,8 +934,8 @@ pub(super) fn cache_watching_its_count(
 ) -> PhotographCache {
     let mut cache = PhotographCache::new(options);
     let seen = Arc::clone(seen);
-    cache.on_slot_event = Some(Box::new(move |cache, event| {
-        let reserved = cache.build_reserved.load(Ordering::SeqCst);
+    cache.set_slot_hook(Box::new(move |cache, event| {
+        let reserved = cache.shared.build_reserved.load(Ordering::SeqCst);
         if event == SlotEvent::DecodeStarted {
             seen.0.fetch_min(reserved, Ordering::SeqCst);
         }

@@ -467,6 +467,41 @@ pub(crate) fn image_on_own_camera(
     out
 }
 
+/// `job` with the files `paths` removed as its `render` phase starts, after
+/// its read phase has decoded them; with a photograph cache whose budget is
+/// smaller than one photograph, a render then needs a photograph whose tiles
+/// were evicted and whose file is gone.
+pub(crate) fn removing_on_render(
+    job: crate::background::Job,
+    paths: Vec<std::path::PathBuf>,
+) -> crate::background::Job {
+    Box::new(move |progress| {
+        let remove = |event: sfmtool_core::progress::Event<'_>| {
+            if let sfmtool_core::progress::Event::Enter {
+                phase: "render", ..
+            } = event
+            {
+                for path in &paths {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+            progress.forward(event);
+        };
+        job(&progress.tapped(&remove))
+    })
+}
+
+/// A photograph cache that keeps the tiles of only the photograph it decoded
+/// last.
+pub(crate) fn one_photograph_cache() -> std::sync::Arc<sfmtool_core::camera::PhotographCache> {
+    std::sync::Arc::new(sfmtool_core::camera::PhotographCache::new(
+        sfmtool_core::camera::PhotographCacheOptions {
+            budget_bytes: 1,
+            ..Default::default()
+        },
+    ))
+}
+
 /// Every pixel of level 0 of `photograph`, read from its tiles.
 pub(crate) fn level_0_pixels(photograph: &sfmtool_core::camera::TiledPhotograph) -> Vec<u8> {
     let (x1, y1) = photograph.layout().level_size(0);

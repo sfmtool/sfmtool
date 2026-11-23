@@ -119,15 +119,23 @@ fn unreadable(path: &Path, e: GetError) -> TileError {
     }
 }
 
-/// [`TileError::OutOfRange`] for a read of a photograph the cache answered.
-fn out_of_range(path: &Path, e: PhotographReadError) -> TileError {
-    let why = match e {
-        PhotographReadError::OutOfRange { why, .. } => why,
-        other => other.to_string(),
-    };
-    TileError::OutOfRange {
-        path: path.to_path_buf(),
-        why,
+/// The [`TileError`] for a failed read of a photograph the cache answered:
+/// [`TileError::Cancelled`] for a cancelled read, [`TileError::OutOfRange`]
+/// for a level or region the photograph does not have, and
+/// [`TileError::Unreadable`] for a read of its file again that failed.
+fn read_failed(path: &Path, e: PhotographReadError) -> TileError {
+    let path = path.to_path_buf();
+    match e {
+        PhotographReadError::Cancelled => TileError::Cancelled,
+        PhotographReadError::OutOfRange { why, .. } => TileError::OutOfRange { path, why },
+        PhotographReadError::NeedsTiles { .. } => TileError::OutOfRange {
+            path,
+            why: e.to_string(),
+        },
+        e => TileError::Unreadable {
+            path,
+            why: e.to_string(),
+        },
     }
 }
 
@@ -155,7 +163,7 @@ impl PhotographCache {
             width,
             height,
             ImageU8Pyramid::full_levels(width, height),
-            self.options.tile_size,
+            self.shared.options.tile_size,
         )
     }
 
@@ -174,7 +182,7 @@ impl PhotographCache {
         if let Some(Err(e)) = &data.made {
             return Claim::Made(Err(e.clone()));
         }
-        if let Some(got) = data.kept(Asked::Keys(keys), self.next_tick()) {
+        if let Some(got) = data.kept(Asked::Keys(keys), self.next_tick(), slot) {
             return Claim::Made(Ok(got));
         }
         data.making = true;
@@ -290,7 +298,7 @@ impl PhotographCache {
         progress: &Progress<'_>,
     ) -> Result<ImageU8Pyramid, TileError> {
         let photograph = self.get(path, progress).map_err(|e| unreadable(path, e))?;
-        copy_regions(&photograph, regions, progress).map_err(|e| out_of_range(path, e))
+        copy_regions(&photograph, regions, progress).map_err(|e| read_failed(path, e))
     }
 
     /// Level `level` of `path` whole, decoded on a miss as
@@ -313,7 +321,7 @@ impl PhotographCache {
         tiled
             .region(level, rect, progress)
             .map(Arc::new)
-            .map_err(|e| out_of_range(path, e))
+            .map_err(|e| read_failed(path, e))
     }
 
     /// A panel's decode of `path`, answering the tiles `keys` names.
@@ -345,7 +353,7 @@ impl PhotographCache {
         progress: &Progress<'_>,
     ) -> Result<TryDecode, TileError> {
         let asked = Asked::Keys(keys);
-        let slot = (self.options.budget_bytes > 0).then(|| self.slot_for(path));
+        let slot = (self.shared.options.budget_bytes > 0).then(|| self.slot_for(path));
         if let Some(slot) = &slot {
             let tick = self.next_tick();
             let mut data = slot.lock();
@@ -356,14 +364,14 @@ impl PhotographCache {
                 Some(Err(e)) => {
                     let e = e.clone();
                     drop(data);
-                    self.hits.fetch_add(1, Ordering::Relaxed);
+                    self.shared.hits.fetch_add(1, Ordering::Relaxed);
                     return Err(unreadable(path, e));
                 }
                 Some(Ok(layout)) => {
                     check_keys(path, layout, keys)?;
-                    if let Some(got) = data.kept(asked, tick) {
+                    if let Some(got) = data.kept(asked, tick, slot) {
                         drop(data);
-                        self.hits.fetch_add(1, Ordering::Relaxed);
+                        self.shared.hits.fetch_add(1, Ordering::Relaxed);
                         return Ok(TryDecode::Decoded(got.tiles));
                     }
                 }
@@ -385,7 +393,7 @@ impl PhotographCache {
         self.slot_event(super::SlotEvent::PanelReserved);
         let value = match &slot {
             None => {
-                self.misses.fetch_add(1, Ordering::Relaxed);
+                self.shared.misses.fetch_add(1, Ordering::Relaxed);
                 // The reservation is given back when `share` drops, whatever
                 // the outcome.
                 size.and_then(|_| self.decode(path, progress, &mut share))
@@ -394,14 +402,14 @@ impl PhotographCache {
             Some(slot) => {
                 let mut making = match self.claim(slot, share, keys) {
                     Claim::Made(value) => {
-                        self.hits.fetch_add(1, Ordering::Relaxed);
+                        self.shared.hits.fetch_add(1, Ordering::Relaxed);
                         return answer(path, value);
                     }
                     // Dropping the share gives the reservation back.
                     Claim::Busy => return Ok(TryDecode::Busy),
                     Claim::Making(making) => making,
                 };
-                self.misses.fetch_add(1, Ordering::Relaxed);
+                self.shared.misses.fetch_add(1, Ordering::Relaxed);
                 let value = size.and_then(|_| self.decode(path, progress, &mut making.share));
                 if let Err(GetError::Cancelled) = value {
                     // Dropping the hold gives the share back, leaves the slot

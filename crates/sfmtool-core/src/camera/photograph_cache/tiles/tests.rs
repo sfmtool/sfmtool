@@ -473,10 +473,10 @@ fn a_panel_decode_that_loses_the_slot_gives_its_reservation_back() {
         let seen = Arc::clone(&reserved_then);
         let watched = path.clone();
         let taken = AtomicBool::new(false);
-        cache.on_slot_event = Some(Box::new(move |cache, event| {
+        cache.set_slot_hook(Box::new(move |cache, event| {
             if event == SlotEvent::PanelReserved && !taken.swap(true, Ordering::SeqCst) {
                 seen.store(
-                    cache.build_reserved.load(Ordering::SeqCst),
+                    cache.shared.build_reserved.load(Ordering::SeqCst),
                     Ordering::SeqCst,
                 );
                 let slot = cache.lock().map.get(&watched).map(Arc::clone).unwrap();
@@ -576,7 +576,7 @@ fn panel_decodes_never_take_the_count_past_the_build_budget() {
 fn cache_cancelling(budget_bytes: u64, flag: &Arc<AtomicBool>) -> PhotographCache {
     let mut cache = cache_of(budget_bytes, 16);
     let flag = Arc::clone(flag);
-    cache.on_slot_event = Some(Box::new(move |_, event| {
+    cache.set_slot_hook(Box::new(move |_, event| {
         if event == SlotEvent::DecodeStarted {
             flag.store(true, Ordering::SeqCst);
         }

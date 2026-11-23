@@ -536,3 +536,96 @@ fn a_cancelled_progress_stops_the_spawn() {
         SpawnError::Photograph(crate::camera::PhotographReadError::Cancelled)
     );
 }
+
+/// The scene's photographs written to `dir` and answered by `cache`, a cache
+/// that keeps the tiles of only the photograph it decoded last, so the spawn's
+/// renders decode the others again.
+fn cached_sources(
+    dir: &std::path::Path,
+    cache: &crate::camera::PhotographCache,
+) -> Vec<std::sync::Arc<TiledPhotograph>> {
+    let scene = scene();
+    let paths: Vec<std::path::PathBuf> = (0..scene.sources.len())
+        .map(|i| {
+            let image = scene.sources[i].whole_level(0).unwrap();
+            let path = dir.join(format!("{i}.png"));
+            image::GrayImage::from_raw(image.width(), image.height(), image.data().to_vec())
+                .unwrap()
+                .save(&path)
+                .unwrap();
+            path
+        })
+        .collect();
+    let refs: Vec<&std::path::Path> = paths.iter().map(|p| p.as_path()).collect();
+    let (found, _) = cache.get_many(&refs, &Progress::none()).unwrap();
+    found.into_iter().map(|p| p.expect("readable")).collect()
+}
+
+/// A spawn over photographs whose tiles the cache evicted decodes them again
+/// inside the localization, a nested call it hands `progress.silenced()`;
+/// cancelled while such a decode runs, the spawn answers `Cancelled`, not a
+/// result made of part of the work, and uncancelled it spawns the candidate.
+#[test]
+fn a_spawn_cancelled_while_a_nested_render_decodes_answers_cancelled() {
+    use crate::camera::photograph_cache::SlotEvent;
+    use crate::camera::{PhotographCache, PhotographCacheOptions};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let cloud = parent_cloud();
+    let spawn = |cache: &PhotographCache, dir: &std::path::Path, progress: &Progress<'_>| {
+        let sources = cached_sources(dir, cache);
+        let scene = scene();
+        let views: Vec<ProjectedImage<'_>> = scene
+            .cams
+            .iter()
+            .zip(&scene.poses)
+            .zip(&sources)
+            .map(|((camera, cam_from_world), source)| ProjectedImage {
+                camera,
+                cam_from_world,
+                source,
+            })
+            .collect();
+        spawn_candidate_tracks(
+            &views,
+            crate::camera::sampler::test_pool(),
+            &cloud,
+            &[0],
+            &[[2.0, 0.0]],
+            &all_views(1),
+            &params(),
+            progress,
+        )
+    };
+    let options = PhotographCacheOptions {
+        budget_bytes: 1,
+        ..Default::default()
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let cache = PhotographCache::new(options);
+    let out = spawn(&cache, dir.path(), &Progress::none()).expect("not cancelled");
+    assert_eq!(out.status[0], SpawnStatus::Spawned as u8);
+    assert!(cache.stats().decodes > 4, "the renders decoded again");
+
+    // The first four decodes are the read phase's; the cancel arrives during
+    // the first decode a render makes.
+    let flag = Arc::new(AtomicBool::new(false));
+    let mut cache = PhotographCache::new(options);
+    let started = AtomicUsize::new(0);
+    let set = Arc::clone(&flag);
+    cache.set_slot_hook(Box::new(move |_, event| {
+        if event == SlotEvent::DecodeStarted && started.fetch_add(1, Ordering::SeqCst) >= 4 {
+            set.store(true, Ordering::SeqCst);
+        }
+    }));
+    let dir = tempfile::tempdir().unwrap();
+    let error = spawn(&cache, dir.path(), &Progress::none().cancelled_by(&flag))
+        .expect_err("a cancelled spawn");
+    assert!(flag.load(Ordering::SeqCst), "a render decoded");
+    assert_eq!(
+        error,
+        SpawnError::Photograph(crate::camera::PhotographReadError::Cancelled)
+    );
+}

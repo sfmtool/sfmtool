@@ -11,10 +11,13 @@
 //! fails it reads through photograph tiles ([`TileWindow`]). Every way gives
 //! the values a whole pyramid gives, bit for bit.
 //!
-//! Each takes the caller's [`Progress`] and hands it to every tile read, the
-//! reads that would decode a photograph again for a tile evicted while the
-//! kernel ran polling it for cancellation; a photograph that holds its tiles
-//! decodes nothing and never polls it. A render reports nothing through it,
+//! Each takes the caller's [`Progress`] and hands it to every tile read. A
+//! photograph the photograph cache answered reads its tiles through the
+//! cache, decoding the photograph again for a tile evicted while the kernel
+//! ran, and that decode polls it for cancellation; a photograph that holds
+//! its tiles decodes nothing and never polls it. A read through the cache
+//! can fail as a read of the file can (the file gone, changed or
+//! unreadable), and the render then answers that error. A render reports nothing through it,
 //! and a caller with nothing to cancel, such as a panel rendering tiles it
 //! holds on the GUI thread, passes `&Progress::none()`.
 
@@ -25,7 +28,7 @@ use crate::camera::remap::{
     PyramidTexels,
 };
 use crate::camera::tiled_photograph::{
-    check_rect, out_of_range, PhotographReadError, TiledPhotograph,
+    check_rect, covering, out_of_range, PhotographReadError, TileKey, TiledPhotograph,
 };
 use crate::camera::WarpMap;
 use crate::progress::Progress;
@@ -195,21 +198,36 @@ fn read_regions<R>(
     Ok((result, ReadPath::Tiles(stats)))
 }
 
-/// A region pyramid of `regions`, each assembled from `source`'s tiles, each
-/// tile read taking the caller's `progress`.
+/// A region pyramid of `regions`, each assembled from `source`'s tiles. The
+/// tiles of every level are read together, taking the caller's `progress`,
+/// so a photograph that reads through the cache decodes at most once for the
+/// whole pyramid.
 pub(crate) fn copy_regions(
     source: &TiledPhotograph,
     regions: &LevelRegions,
     progress: &Progress<'_>,
 ) -> Result<ImageU8Pyramid, PhotographReadError> {
     let layout = source.layout();
+    for level in 0..regions.levels() {
+        if let Some(rect) = regions.region(level) {
+            check_rect(layout, level, rect)?;
+        }
+    }
+    if let Some(keys) = source.missing_tiles(regions) {
+        return Err(PhotographReadError::NeedsTiles { keys });
+    }
+    let keys: Vec<TileKey> = (0..regions.levels())
+        .filter_map(|level| Some((level, regions.region(level)?)))
+        .flat_map(|(level, rect)| covering(layout, level, rect))
+        .collect();
+    let tiles = source.tiles(&keys, progress)?;
     let mut levels = Vec::with_capacity(regions.levels());
     for level in 0..regions.levels() {
         levels.push(match regions.region(level) {
             Some(rect) => {
                 let (w, h) = layout.level_size(level);
                 Some(PyramidLevel {
-                    image: source.region(level, rect, progress)?,
+                    image: source.region_of(level, rect, &tiles),
                     origin: [rect.x0, rect.y0],
                     full_size: [w, h],
                 })
