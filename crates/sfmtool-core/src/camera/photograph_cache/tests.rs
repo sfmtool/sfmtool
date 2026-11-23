@@ -288,8 +288,6 @@ fn evicts_least_recently_used_within_budget() {
     assert_eq!(cache.stats().misses, 4);
 }
 
-/// A decode keeps every tile a `get` answers, even over the budget, and
-/// drops the older photograph's tiles instead.
 /// `keeps_every_tile` answers whether the cache keeps every tile of a
 /// photograph, before and after an eviction takes one of them, and is no use
 /// for the eviction order: asked about the older of two photographs, it
@@ -329,6 +327,8 @@ fn keeps_every_tile_answers_without_counting_as_a_use() {
     assert!(!none.keeps_every_tile(&a), "a budget of 0 keeps nothing");
 }
 
+/// A decode keeps every tile a `get` answers, even over the budget, and
+/// drops the older photograph's tiles instead.
 #[test]
 fn keeps_the_entry_just_decoded_even_over_budget() {
     let dir = tempfile::tempdir().unwrap();

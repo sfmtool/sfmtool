@@ -330,8 +330,9 @@ A `get_many` over more photographs than the budget holds evicts its own
 earlier photographs' tiles as it goes, and the next call finds only the tail
 whole. After the cull, a geometry search on the test reconstruction reads 143
 to 335 photographs, 5 to 11 GB, so the budget has to hold a few hundred
-photographs' tiles for a repeated search to reuse them. The first run's cost is dominated by how fast
-the misses decode, which is why `get_many` decodes in parallel.
+photographs' tiles for a repeated search to reuse them. The first run's cost
+is dominated by how fast the misses decode, which is why `get_many` decodes
+in parallel.
 
 The default budget is a quarter of physical memory, clamped to between 1 GiB
 and 16 GiB, or 4 GiB where physical memory cannot be read (it is read with
@@ -580,8 +581,9 @@ reconstruction's photographs goes through it except the ones under
   `keeps_every_tile`, and reads no pixel. The scene graph lays the menu out
   for every node on every frame, so the question allocates nothing and is no
   use for the eviction order, where `peek` would build a photograph of every
-  tile and refresh every photograph's place in that order each frame: *Add image to tracks* is offered for an image
-  whose photograph the cache holds, or whose file exists
+  tile and refresh every photograph's place in that order each frame:
+  *Add image to tracks* is offered for an image whose photograph the cache
+  holds, or whose file exists
   ([image_menu.rs](../../../crates/sfm-explorer/src/image_menu.rs)).
 
 Because the key is a path, the cache is not touched when an edit renumbers a
@@ -680,10 +682,10 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   `get_many` order, tally and cancellation, budget 0 keeping nothing,
   `peek_state` telling a failure from no answer and not waiting on a decode
   in flight, `keeps_every_tile` answering before and after an eviction takes
-  a tile and leaving the eviction order as it was, where `peek` changes it, a decode into a slot that left the map answered and not
-  charged, `insert` cut as a decode is, the rule both default budgets share,
-  from physical memory and each one's environment variable. The
-  slot's tests hold a decode in progress through a hook the test build
+  a tile and leaving the eviction order as it was, where `peek` changes it,
+  a decode into a slot that left the map answered and not charged, `insert`
+  cut as a decode is, the rule both default budgets share, from physical
+  memory and each one's environment variable. The slot's tests hold a decode in progress through a hook the test build
   calls as a decode starts and as a caller starts to wait, and wait for
   every thread they start with a time limit, so a caller that never returns
   fails the test rather than hang it: a maker cancelled during its decode

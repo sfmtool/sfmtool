@@ -383,12 +383,12 @@ whole: it cuts a level, drops it and makes the next from the tiles just
 cut, with the 2×2 box filter of `downsample_2x`, which reads a tile's core and
 its one-pixel border and so gives the level's pixels bit for bit at any tile
 size, stopping where `ImageU8Pyramid::from_image` stops, so at its peak it
-holds the image and its level-0 tiles, about 2.0 times the image's bytes. Building the pyramid and then cutting it would hold the
-pyramid and all its tiles, about 2.67 times; the bindings make the
-photographs of many images at once on the rayon pool, so the difference
-decides their peak memory. The photograph cache cuts each decode the same
-way, at its own tile size, keeps the tiles, and answers a photograph made of
-them with `from_tiles`
+holds the image and its level-0 tiles, about 2.0 times the image's bytes.
+Building the pyramid and then cutting it would hold the pyramid and all its
+tiles, about 2.67 times; the bindings make the photographs of many images at
+once on the rayon pool, so the difference decides their peak memory. The
+photograph cache cuts each decode the same way, at its own tile size, keeps
+the tiles, and answers a photograph made of them with `from_tiles`
 ([photograph-cache.md](photograph-cache.md)). A tile is cut with its border
 by one clamped copy, the columns that need no clamping copied as one span a
 row. The layout has the pyramid's own levels, each level 0's size halved,

@@ -2741,8 +2741,8 @@ in core. Step 17 turns the tier on.
         in [core/camera/photograph-cache.md](../core/camera/photograph-cache.md),
         with the tests in
         [photograph_cache/tiles/tests.rs](../../crates/sfmtool-core/src/camera/photograph_cache/tiles/tests.rs)
-        (the four 13e3 tests take 0.01 s or less each), and a budget smaller than the photograph's level 0 added to
-        the viewer's test that Image Detail's layout and tiles are read once
+        (the four 13e3 tests take 0.01 s or less each), and a budget smaller
+        than the photograph's level 0 added to the viewer's test that Image Detail's layout and tiles are read once
         in
         [state/photograph_requests/tests.rs](../../crates/sfm-explorer/src/state/photograph_requests/tests.rs).
       - **13e4, photographs read through the cache.** `get` and `get_many`
