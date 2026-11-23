@@ -2513,7 +2513,12 @@ in core. Step 17 turns the tier on.
       is not wider than its step, under 258 pixels of 512-pixel tiles, so at
       most four tiles and the first, and a hover view three times as wide at
       most nine, which hold the crop's, so a Measurement View render needs
-      at most ten.
+      at most ten. A photograph that cannot be read is the one answer no
+      panel keeps: Track View, the Track Table and Measurement View ask
+      again for it on every frame, so a picture is drawn once a header read
+      that ended mid-frame has landed, and the failed decodes are kept apart
+      from the answered tiles, for every photograph, so asking again decodes
+      nothing until the file changes.
       Specified in [gui/track-table.md](../gui/track-table.md),
       [gui/measurement-view.md](../gui/measurement-view.md) and
       [core/camera/photograph-cache.md](../core/camera/photograph-cache.md)

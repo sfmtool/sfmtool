@@ -748,7 +748,8 @@ pub(crate) struct AppState {
     /// decodes what is missing into it in parallel, and leaves what it decoded
     /// for the next job and the panels. Level 0 of a pyramid **is** the decoded
     /// photograph, so a consumer that wants the plain image reads
-    /// [`ImageU8Pyramid::level`](sfmtool_core::camera::image::ImageU8Pyramid::level) 0 rather than holding a second copy.
+    /// [`ImageU8Pyramid::level`](sfmtool_core::camera::image::ImageU8Pyramid::level)
+    /// 0 rather than holding a second copy.
     ///
     /// Keyed by path rather than by [`ImageRef`], so an edit that renumbers a
     /// node's images leaves its photographs where they are, and two nodes over

@@ -385,8 +385,9 @@ impl PictureTextures {
     /// `recon`, read through `pool`, and kept while the pointer rests on that
     /// cell; one whose read failed is cut again on every call. `None` while
     /// those tiles are loading: they are asked for when `ask` is set
-    /// ([`crate::state::read_peeked`]) and only looked for otherwise. `Ok(None)` when no crop is held for `key` or its hover view
-    /// cut nothing, and why when the read of the photograph failed.
+    /// ([`crate::state::read_peeked`]) and only looked for otherwise.
+    /// `Ok(None)` when no crop is held for `key` or its hover view cut
+    /// nothing, and why when the read of the photograph failed.
     pub(super) fn crop_context(
         &mut self,
         ctx: &egui::Context,
