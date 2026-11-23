@@ -34,6 +34,7 @@ mod close_prompt;
 mod cluster_patches;
 mod colormap;
 mod context_menu;
+mod demo_data;
 mod display_thumbnails;
 mod display_transform;
 mod dock;
@@ -281,6 +282,9 @@ pub fn run_with_args(args: impl IntoIterator<Item = String>) -> Result<(), RunEr
     // — next to an agent's transcript, or in a bug report — should say what it
     // was and when it started.
     let mut state = AppState::new();
+    // The demo loads write in the system temporary directory, after a sweep
+    // there of what ended viewers left behind.
+    demo_data::start_in_temp_dir(&mut state);
     state.action_log.record_as(
         action_log::Actor::Viewer,
         action_log::Kind::Session,
@@ -338,10 +342,10 @@ pub fn run_with_args(args: impl IntoIterator<Item = String>) -> Result<(), RunEr
         state.open_files(args.paths.clone());
     }
 
-    // `--demo`, after starting the files, and made on the spot: it goes through
-    // the same call the dialog's Load button makes, at the point count the
-    // dialog offers, so the node is indistinguishable from the menu's. The
-    // files land a few frames later and are appended after it.
+    // `--demo`, after starting the files: the same background load the
+    // dialog's Load button starts, at the point count the dialog offers, so
+    // the node is indistinguishable from the menu's. It runs from the fast
+    // queue behind the open, so its node is appended after the files'.
     if args.demo {
         state.load_demo(state.demo_num_points);
     }

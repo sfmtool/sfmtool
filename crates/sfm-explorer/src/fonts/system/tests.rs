@@ -15,6 +15,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use super::*;
+use crate::scene::SceneNode;
+use sfmtool_core::SfmrReconstruction;
 
 // ── Fonts built for the tests ──
 
@@ -682,7 +684,7 @@ fn ascii_reconstructions_never_start_a_search() {
     let mut fallback = counting(&runs, Found::default);
     let ctx = egui::Context::default();
     let mut state = AppState::new();
-    state.load_demo(10);
+    state.append_node(SceneNode::demo(SfmrReconstruction::demo(10)));
     state.scene[0].recon_mut().image_set.images[0].name = "café_01.jpg".to_owned();
     for _ in 0..3 {
         fallback.update(&ctx, &mut state);
@@ -698,17 +700,17 @@ fn a_hangul_image_name_starts_one_search_and_no_more() {
     let ctx = egui::Context::default();
     super::super::install(&ctx);
     let mut state = AppState::new();
-    state.load_demo(10);
+    state.append_node(SceneNode::demo(SfmrReconstruction::demo(10)));
     fallback.update(&ctx, &mut state);
     assert!(matches!(fallback.stage, Stage::Watching { .. }));
 
-    state.load_demo(10);
+    state.append_node(SceneNode::demo(SfmrReconstruction::demo(10)));
     state.scene[1].recon_mut().image_set.images[3].name = "서울_황소_04.jpg".to_owned();
     fallback.update(&ctx, &mut state);
     assert!(matches!(fallback.stage, Stage::Searching(_)));
     until_done(&mut fallback, &ctx, &mut state);
 
-    state.load_demo(10);
+    state.append_node(SceneNode::demo(SfmrReconstruction::demo(10)));
     state.scene[2].recon_mut().image_set.images[0].name = "東京.jpg".to_owned();
     state.action_log.record(Kind::File, "Opened 서울.sfmr");
     for _ in 0..3 {

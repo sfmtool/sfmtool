@@ -29,8 +29,10 @@ reconstruction file's sibling and takes its name from it, so two
 reconstructions saved in one directory have two indexes, and a reconstruction
 whose images span several image directories has one index in one obvious place.
 
-A node with no path on disk -- the demo scene, a value never saved -- has
-nowhere to put one. Every entry that would build its index files is greyed
+A node with no path on disk -- a value built in memory and never saved, which
+only a test makes -- has nowhere to put one. Demo data has a path, its
+`demo.sfmr` in a temporary workspace, so its index files are written there and
+deleted with it. Every entry that would build its index files is greyed
 with *"Save ‹label› first: the index files are written beside the .sfmr
 file."*
 

@@ -173,6 +173,7 @@ pub(crate) struct Operation {
 | Build SIFT files | slow | yes | no |
 | Build index files | slow | yes | no |
 | Open | fast | no (it makes a new node) | no |
+| Load demo data | fast | no (it makes a new node) | no |
 | Fit track, Set track stage, Finite difference normal, Grid plane normal, Grown plane normal, Pairwise flow normal, Search descriptors, Geometry search, Create track at pixel, Find nearby tracks | fast | yes | no |
 | Find points | fast | no; it pushes no version (it fills the track table cache) | no |
 | Live evaluation | fast | no; it does not start on a locked node (§ "Quiet tasks") | yes |
@@ -932,6 +933,90 @@ thread appends them as nodes in order (`AppState::append_opened`) under a phase
 files joined with `; `, under the actor who asked. A file that could not be read
 is a failed row of its own; an open of one file that could not be read ends as
 the task's failed entry, so one failure is one row.
+
+## Loading demo data
+
+*File > Load Demo Data...* and the viewer's `--demo` start one
+[`Operation::LOAD_DEMO_DATA`](../../crates/sfm-explorer/src/background/mod.rs)
+task, through `AppState::start_load_demo` in
+[demo_data.rs](../../crates/sfm-explorer/src/demo_data.rs). It writes the demo
+scene ([../drafts/demo-scene.md](../drafts/demo-scene.md)) as a
+workspace in a temporary directory and opens it from there, so the node is an
+opened file like any other: it has a path, a workspace and photographs, and it
+saves as any node with a file does ([saving.md](saving.md)).
+
+**The number of points.** The dialog's *Number of points* box takes 300 to
+10,000 and starts at `DemoSceneOptions::DEFAULT_POINT_COUNT`, 513, the default
+scene's count; `--demo` loads at the box's value. The number is mapped through
+`DemoSceneOptions::for_point_count`, which scales the scene's two point
+spacings, so the scene keeps a count near the number and not equal to it.
+Below about 250 the face spacing passes twice the patch half-extent and the
+scene's measurement is left out, and 10,000 points keep the patch bitmap render
+to about a second.
+
+**The task.** Like an open it makes a new node, so it locks none and runs from
+the fast queue, behind an open started before it; its label is `demo`. Its bar
+splits 1 : 2 : 1 between the render, the write and the open, with the phases
+the calls it makes report: `render` (rows) and `encode` (images) from
+`DemoScene::render`, `points`, `patch bitmaps` and `write` (files) from
+`DemoScene::write_workspace`, and the phase `open` of § "Opening a file", whose
+`thumbnails` and `patch bitmaps` stages do not run, since the written file
+carries both columns. It is cancellable: each of those calls polls the flag,
+and a cancelled load appends no node. It ends with `Finished::DemoLoaded`,
+which the GUI thread appends as an open's file under a phase `append nodes`,
+with the row `Loaded demo data: {kept} points, for {asked} asked for, from
+{path}`: the counts before the path, which in the temporary directory is long
+enough to push anything after it out of view, and the path last, as the open's
+`Opened {label} from {path}` ends with it. A render or write that fails ends the task with `Failed to load demo
+data: {why}`.
+
+**Where the workspace goes.** Each load writes its own directory in the system
+temporary directory (`std::env::temp_dir()`), `sfmtool-demo-<process id>-<n>`,
+with `n` counting this viewer's names from 0; a second load does not reuse the
+first's directory, since the first node may still be open. The directory is
+claimed on the GUI thread before the task starts (`DemoWorkspaces::claim`):
+
+1. the lock file beside it, `sfmtool-demo-<process id>-<n>.lock`, is created
+   (or opened, when an ended viewer of the same process id left it) and locked
+   with `std::fs::File::try_lock`, and the viewer holds that lock while it
+   runs. The operating system releases a lock when its process ends, however it
+   ends;
+2. a `try_lock` that fails, because another viewer's sweep holds the lock for
+   the moment it looks at the file, moves on to the next `n`;
+3. a lock file that is gone once the lock is taken, because a sweep deleted it
+   between its creation and the `try_lock`, moves on to the next `n`, since a
+   lock on a deleted file guards nothing;
+4. a directory already under the name, left by an ended viewer of the same
+   process id, is deleted.
+
+The task then writes the directory. **At exit** the viewer deletes each of its
+directories and then each lock file, deleting a lock file while it still holds
+its lock (`DemoWorkspaces`'s `Drop`, as the viewer drops its state). A file
+saved inside a temporary workspace is deleted with it. A directory that cannot
+be deleted, such as one a task still writing at exit holds open, is left for
+the next sweep.
+
+**The sweep at start.** Before anything is loaded, the viewer looks in the
+temporary directory for names of the form `sfmtool-demo-<digits>-<digits>`,
+with and without `.lock` (`demo_data::sweep`, which takes the directory as a
+parameter):
+
+- a lock file whose lock the sweep can take belongs to an ended viewer: the
+  sweep deletes the directory of the same name and then the lock file, while
+  it holds the lock;
+- a lock file whose lock the sweep can take and that has no directory beside
+  it may be one a viewer has just created and not yet locked, so the sweep
+  deletes it only when it was last modified before the sweep started, and
+  otherwise leaves it to a later sweep;
+- a lock file whose lock is held, by a running viewer, is left with its
+  directory;
+- a directory with no lock file beside it has no owner, since an owner creates
+  its lock file first and deletes it last, and is deleted.
+
+The process id in a name only keeps two running viewers' names apart; it does
+not decide whether the owner is alive, since the operating system reuses
+process ids. Nothing the sweep cannot open, lock or delete is an error; it is
+left for a later sweep.
 
 ## Reporting progress
 

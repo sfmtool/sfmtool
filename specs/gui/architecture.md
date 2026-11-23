@@ -148,7 +148,8 @@ sfmtool/
 │   │       │       └── track_ray.rs    # Track ray pipeline
 │   │       ├── state.rs              # Shared application state (AppState)
 │   │       └── state/
-│   │           └── ops.rs        # AppState's reconstruction operations (load, align)
+│   │           └── ops.rs        # AppState's reconstruction operations (align)
+│   │       ├── demo_data.rs          # Load Demo Data: the temporary workspaces, their locks, the sweep at start
 │   │       ├── layout.rs             # The layout document: window placement + panel arrangement
 │   │       ├── window.rs             # WindowHost, the window snapshot, and the `window` section
 │   │       ├── image_browser.rs      # Thumbnail strip with horizontal scrolling
@@ -220,7 +221,8 @@ is prepended the same way rather than declaring those values again. See
 | `viewer_3d/` | `ViewportCamera` (wraps `Camera` from sfmtool-core with FOV/clip planes), orbit/pan/zoom math, WASD fly navigation with Q/E tilt, input handling (mouse/trackpad/keyboard), Alt-mode target control, camera view mode, grid drawing. `mod.rs` orchestrates; `camera.rs`/`input.rs`/`overlay.rs` own the sub-concerns; `display.rs` lists the HUD's display fields, which the HUD and the MCP `viewer_3d_display` tools share. |
 | `scene_renderer/` | All GPU pipeline management across ~14 modules: texture creation/resize, point upload, frustum upload (pinhole + distorted), thumbnail texture array atlas loading, uniform updates, multi-pass rendering, GPU readback, per-pass pipeline creation (`pipelines/` subdirectory). |
 | `state.rs` | `AppState` struct: reconstruction data, visibility toggles, selected image/points, hover state, rendering parameters, the dock, and the window snapshot — plus the small selection and lookup accessors the panels call every frame. |
-| `state/ops.rs` | `AppState`'s reconstruction *operations*, as a second `impl` block: `load_demo` and `align_node`. These are the methods that make demo data or run a fit, build a `SceneNode` out of the answer or move one, and write the sentence the user reads about it. |
+| `state/ops.rs` | `AppState`'s reconstruction *operations*, as a second `impl` block: `align_node`, which runs a fit, moves the node by its answer, and writes the sentence the user reads about it. |
+| `demo_data.rs` | *File > Load Demo Data* and `--demo` as a background task: `start_load_demo` and `load_demo`, the worker's `load_demo_job` (render the demo scene, write it as a workspace, open its `demo.sfmr`), the temporary workspaces it writes and their lock files (`DemoWorkspaces`, whose `Drop` deletes them at exit), and the `sweep` at start that deletes those of ended viewers. See [background-tasks.md](background-tasks.md) § "Loading demo data". |
 | `state/open.rs` | Opening a file as a background task: `start_open` and `open_files`, the worker's `open_job` (the read, then the thumbnails and patch bitmaps a file lacks, built for display), and `append_opened`, which makes the nodes when the task lands. See [background-tasks.md](background-tasks.md) § "Opening a file". |
 | `layout.rs` | The layout document — the window's placement and the panel arrangement, its JSON, and the `AppState` operations the Panels menu and the MCP tools share. See [panel-layout.md](panel-layout.md). |
 | `window.rs` | What the window is (`WindowInfo`, `WindowState`, `MonitorInfo`), the `window` section of a layout document (`WindowChange`, `MonitorRect`, `fit_to_monitor`), and the `WindowHost` seam every `winit` window call goes through — five primitives and the provided `apply` that orders them. |
@@ -814,9 +816,14 @@ is inside the label it aimed at, and checks a few of the menu's entries. Its
 MCP twin, `the_reconstruction_rows_context_menu_lists_every_entry`, runs on all
 three platforms and asserts everything the menu holds.
 
-Setup goes through the **command line** rather than the UI: `--demo` appends
-the node File > Load Demo Data… makes, at the dialog's default point count and
-with the same `None` path, after any files named on the line. Exactly one test
+Setup goes through the **command line** rather than the UI: `--demo` starts
+the background load File > Load Demo Data… starts, at the dialog's default
+point count, after any files named on the line, and the suite's `launch_demo`
+waits until `get_scene` lists the `demo` node it makes, as a test waits on a
+file named on the line. Each viewer the suite launches has `TMP`, `TEMP` and
+`TMPDIR` pointed at a temporary directory of the test's own, so the demo
+workspace is written there and deleted with it once the test has killed the
+viewer, and the system temporary directory is never touched. Exactly one test
 drives the route that shortcut replaces —
 `the_scene_panel_lists_the_loaded_reconstruction` clicks through the menu and
 the dialog, then asserts on what arrived — so the route stays covered. Two

@@ -22,7 +22,9 @@ of a point's bitmap view can change with a one-level change in the pixels
 tests tolerate, as the maintainer decided (2026-11-22). Decided by the
 maintainer (2026-11-22): the encoder keeps its AVX2 path, and the tests store the JPEG hashes and the photograph-derived
 values once for each encoder path
-([Determinism of the JPEG encoder and decoder](#determinism-of-the-jpeg-encoder-and-decoder)).
+([Determinism of the JPEG encoder and decoder](#determinism-of-the-jpeg-encoder-and-decoder)). Step 4 is
+built too: *Load Demo Data* and `--demo` load the scene from a temporary
+workspace ([Load Demo Data](#load-demo-data)).
 
 ## Purpose
 
@@ -912,11 +914,11 @@ marker's file name is defined three times in Rust (`WORKSPACE_MARKER` in
 
 ## Load Demo Data
 
-Today *File > Load Demo Data...* opens a dialog asking for a number of points
-and appends a node holding `SfmrReconstruction::demo(n)` with no path
-(`AppState::load_demo` in [ops.rs](../../crates/sfm-explorer/src/state/ops.rs),
-the dialog in [modals.rs](../../crates/sfm-explorer/src/app/modals.rs)). With
-this proposal the dialog keeps its *Number of points* box, which now sets the
+Before step 4, *File > Load Demo Data...* opened a dialog asking for a number
+of points and appended a node holding `SfmrReconstruction::demo(n)` with no
+path. The dialog
+([modals.rs](../../crates/sfm-explorer/src/app/modals.rs)) keeps its *Number
+of points* box, which now sets the
 scene's point spacings through `DemoSceneOptions::for_point_count`. The box
 starts at `DEFAULT_POINT_COUNT`, 513, and takes 300 to 10,000: below
 about 250 the face spacing passes twice the patch half-extent and the
@@ -924,13 +926,14 @@ measurement's corners are no longer covered, and 10,000 points keep the bitmap
 render to about a second. The count kept is near the number asked for, and the
 Action Log line names it. *Load* then:
 
-1. starts a background task, as *File > Open* does, that renders the scene,
-   creates a new directory for it in the system temporary directory
+1. starts a background task, *Load demo data*, that renders the scene,
+   claims a new directory for it in the system temporary directory
    (`std::env::temp_dir()`), and calls `write_workspace` into it, reporting
    through the task's `Progress`;
-2. opens the written `demo.sfmr` by the same open as *File > Open*
-   (`AppState::start_open` in
-   [open.rs](../../crates/sfm-explorer/src/state/open.rs)), so the node is
+2. opens the written `demo.sfmr`, in the same task, by the read *File >
+   Open* runs (`load_for_display` in
+   [open.rs](../../crates/sfm-explorer/src/state/open.rs)), and appends it
+   as an open's file is appended, so the node is
    labelled `demo` from the file's stem and its workspace, photographs and
    photograph cache are those of any opened file;
 3. deletes the directory when the viewer exits.
@@ -952,9 +955,9 @@ the same name and the lock file: their owner has ended. A
 since an owner creates the lock file first and deletes it last, and is deleted
 too. The process ID in the name only keeps two running viewers' names apart; it
 does not decide whether the owner is alive, since the operating system reuses
-process IDs. Nothing in the viewer or core does this today: no Rust code checks
-whether another process is alive or takes a file lock, so the lock file and
-the sweep at start are new.
+process IDs. Before step 4 no Rust code in the viewer or core checked whether
+another process was alive or took a file lock, so the lock file and the sweep
+at start were new with it.
 
 A lock file exists unlocked for a moment between its creation and the
 `try_lock`, and a sweep in another viewer that starts in that moment could take
@@ -1200,6 +1203,71 @@ Each step is one change on its own branch, with its tests.
    tests follow. Tests: a directory whose lock file no process holds is
    removed at start, and one whose lock a live process holds is kept. This
    step changes what the viewer shows, so its PR carries screenshots.
+
+   *Built.* The load is
+   [demo_data.rs](../../crates/sfm-explorer/src/demo_data.rs), described in
+   [background-tasks.md § Loading demo data](../gui/background-tasks.md#loading-demo-data).
+   What building it settled:
+
+   - **One task, not two.** The load is a background operation of its own,
+     *Load demo data* (fast queue, no lock, cancellable), whose job renders,
+     writes and then opens the file with the open's own `load_for_display`,
+     rather than a write task whose landing starts an *Open* task. One task
+     gives one row, `Loaded demo data: {kept} points, for {asked} asked for,
+     from {path}`, which names the count kept before the long temporary path,
+     as other rows that name a file end with it, and one entry in the Background
+     Tasks panel; the node is still made by `append_opened`, as an open's is.
+     The bar splits 1 : 2 : 1 between the render, the write and the open.
+   - **`--demo` is asynchronous too.** It starts the same task; `ui_basic`'s
+     `launch_demo` waits until `get_scene` lists the `demo` node, and the
+     tests that polled for it themselves no longer need to. No synchronous
+     path was kept.
+   - **The box takes 300 to 10,000 and starts at 513**, and
+     `demo_scene_options` clamps to that range before `for_point_count`, as
+     the box clamps what is typed.
+   - **The claim happens on the GUI thread**, before the task starts, so a
+     refusal is known at once and the task is handed a name. The claim
+     creates the lock file (opening one an ended viewer of the same process id
+     left), `try_lock`s it and moves on to the next `n` when that fails; it
+     also moves on when the lock file is gone once the lock is taken, which a
+     sweep that deleted it in the moment before the `try_lock` causes; and it
+     deletes a directory left under the name it now holds. The sweep deletes
+     a lock file only while it holds the lock, and a lone lock file only when
+     it was modified before the sweep started, so between them no viewer
+     writes a directory whose lock file is gone.
+   - **The root is a parameter.** The workspaces' directory is held by
+     `DemoWorkspaces`, which `AppState` holds as its last field so that its
+     `Drop`, the deletion at exit, runs after the scene's; a state that was
+     never given a root, as in every test that does not set one, refuses to
+     load. The viewer sets it to `std::env::temp_dir()` after the sweep at
+     start. `ui_basic` points each viewer's `TMP`, `TEMP` and `TMPDIR` at a
+     directory of the test's own, so a viewer the test kills leaves nothing in
+     the system temporary directory.
+   - **Every node the viewer makes now has a path.** `SceneNode::demo`, a
+     node of a value with no file, is kept for the tests only; the viewer's
+     handling of a node with no path (Save greyed, `path: null`, no index
+     files) stays, reachable only from such tests.
+
+   Tests (in [demo_data/tests.rs](../../crates/sfm-explorer/src/demo_data/tests.rs)):
+   a directory whose lock file no process holds is deleted with its lock
+   file; one whose lock this test process holds through another handle is
+   kept; a directory with no lock file is deleted; a lone lock file is kept
+   by a sweep that started before it was modified and deleted by one that
+   started after, and kept while its lock is held; names not of the form are
+   untouched; a claim whose `try_lock` fails takes the next `n`; a claim
+   deletes a leftover directory under its name; dropping the workspaces
+   deletes the directories and then the lock files; the box's number maps
+   through `for_point_count` and is clamped to the range; and a load of 300
+   points writes the workspace, opens `demo.sfmr` as a node labelled `demo`
+   with that path and 285 to 315 points, writes its row, and leaves nothing
+   once the state is dropped. The MCP `type_text` test types 900 into the box
+   and then 100, which the box holds to 300. The `ui_basic` tests that load
+   the demo now load the scene: five cameras, `demo_0.jpg`, Save enabled, a
+   `disk_serial` on the first version, and the context menu's entries for an
+   `embedded_patches` file in a workspace. The tests that only need a node
+   with no file (the font fallback tests, the window title's nameless first
+   node, and every test that builds `SceneNode::demo`) stay on
+   `SfmrReconstruction::demo`.
 5. **Test migration.** The Rust tests and the Python tests listed above, one
    area at a time, each kept only where real pixels make an assertion possible
    or exact.

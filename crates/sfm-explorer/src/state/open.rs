@@ -74,7 +74,7 @@ pub(crate) struct Loaded {
 }
 
 /// Why a file's open stopped short of a value.
-enum Stop {
+pub(crate) enum Stop {
     /// The task was asked to stop.
     Cancelled,
     /// The file could not be read, in the words the Action Log shows.
@@ -248,7 +248,7 @@ pub(crate) fn open_job(paths: Vec<PathBuf>, photographs: Arc<PhotographCache>) -
 }
 
 /// Read `path` and fill in what it does not carry for display.
-fn load_for_display(
+pub(crate) fn load_for_display(
     path: &Path,
     photographs: &PhotographCache,
     progress: &Progress<'_>,

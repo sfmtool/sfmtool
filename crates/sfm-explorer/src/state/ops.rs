@@ -1,16 +1,15 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! [`AppState`]'s reconstruction operations: the methods that make demo data
-//! or run a fit, build a [`SceneNode`] out of the answer or move one, and write
-//! the sentence the user reads about it. Opening a file is a background task of
-//! its own, in [`super::open`].
+//! [`AppState`]'s reconstruction operations: the methods that run a fit, move
+//! a node by the answer, and write the sentence the user reads about it.
+//! Opening a file is a background task of its own, in [`super::open`], and so
+//! is loading demo data, in [`crate::demo_data`].
 //!
 //! They are a second `impl AppState` rather than a second type, because every
-//! one of them ends by editing the scene and the selection that `state.rs`'s
-//! accessors describe: demo data that lands a node also selects it, and closing
-//! one has to re-point the solo. Splitting them into their own struct would
-//! mean handing that struct a `&mut AppState` and gaining nothing but a hop.
+//! one of them ends by editing the scene that `state.rs`'s accessors describe.
+//! Splitting them into their own struct would mean handing that struct a
+//! `&mut AppState` and gaining nothing but a hop.
 //!
 //! What the split buys is that `state.rs` reads as what it is: the struct, its
 //! defaults, and the small selection and lookup accessors the panels call
@@ -20,18 +19,12 @@
 
 use crate::action_log::Kind;
 use crate::align::{self, AlignOptions};
-use crate::scene::{ReconId, SceneNode};
+use crate::scene::ReconId;
 use sfmtool_core::progress::Progress;
-use sfmtool_core::SfmrReconstruction;
 
 use super::AppState;
 
 impl AppState {
-    /// Append a node of generated demo data.
-    pub(crate) fn load_demo(&mut self, num_points: usize) {
-        self.append_node(SceneNode::demo(SfmrReconstruction::demo(num_points)));
-        self.action_log.record(Kind::File, "Loaded demo data");
-    }
     /// Fit `source`'s transform so it lands on top of `target`, and report the
     /// outcome in the status message.
     ///

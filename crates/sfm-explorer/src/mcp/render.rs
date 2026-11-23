@@ -65,7 +65,8 @@ pub(super) fn scene(state: &AppState, viewer: &Viewer3D) -> Value {
 /// One scene entry: what a reconstruction is, how much of it there is, and how
 /// it is being drawn.
 ///
-/// `path` is `null` for a node that came from no file, which is demo data.
+/// `path` is `null` for a node that came from no file, which only a test
+/// makes: demo data is opened from the `demo.sfmr` its load wrote.
 ///
 /// `index_files` is handed in rather than read here, because the files live
 /// on `AppState` and one caller holds the node mutably while it builds this

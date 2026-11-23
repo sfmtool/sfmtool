@@ -700,6 +700,7 @@ fn each_operation_declares_the_spec_s_queue_lock_and_quiet_value() {
         ("Build SIFT files", Slow, true, false),
         ("Build index files", Slow, true, false),
         ("Open", Fast, false, false),
+        ("Load demo data", Fast, false, false),
         ("Fit track", Fast, true, false),
         ("Set track stage", Fast, true, false),
         ("Grown plane normal", Fast, true, false),
@@ -926,6 +927,30 @@ fn real_task(operation: Operation) -> RealTask {
             let id = state.scene[0].id;
             let job =
                 crate::state::open::open_job(vec![path], std::sync::Arc::clone(&state.photographs));
+            RealTask {
+                state,
+                id,
+                job: Some(job),
+                _workspace: Some(workspace),
+            }
+        }
+        // The demo load, into a claimed directory in a temporary root: its
+        // job renders, writes and opens the scene. Started on the fixture's
+        // node, which a real load does not lock, as the open is above.
+        "Load demo data" => {
+            let workspace = tempfile::tempdir().expect("a temporary directory");
+            let mut state = AppState::new();
+            state.demo_workspaces =
+                crate::demo_data::DemoWorkspaces::in_dir(workspace.path().to_path_buf());
+            state.append_node(SceneNode::demo(SfmrReconstruction::demo(16)));
+            let id = state.scene[0].id;
+            let dir = state.demo_workspaces.claim().expect("a free name");
+            let job = crate::demo_data::load_demo_job(
+                crate::demo_data::demo_scene_options(300),
+                300,
+                dir,
+                std::sync::Arc::clone(&state.photographs),
+            );
             RealTask {
                 state,
                 id,

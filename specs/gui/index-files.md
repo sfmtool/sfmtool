@@ -241,8 +241,9 @@ records (`metadata.workspace.contents`), not from the workspace's
 `.sfm-workspace.json`, so the files land where this node looks for them.
 
 **Only the `sfmtool` feature tool can build here.** On a node whose definition
-names another tool (`colmap`, `opencv`, or the demo's `none`), the entry reads
-*Switch SIFT Extraction to sfmtool and Build SIFT Files*, and the build first
+names another tool (`colmap`, `opencv`, or `none`, which
+`SfmrReconstruction::demo`'s sphere records), the entry reads *Switch SIFT
+Extraction to sfmtool and Build SIFT Files*, and the build first
 switches the definition the viewer holds to `feature_tool: "sfmtool"`,
 `feature_type: "sift-sfmtool"`, the tool's default `feature_options`, and the
 `feature_prefix_dir` that `sfm ws init --feature-tool sfmtool` derives from

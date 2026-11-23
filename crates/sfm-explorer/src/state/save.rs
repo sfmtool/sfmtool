@@ -502,8 +502,8 @@ impl AppState {
 /// measures it for every other save. `None` when it equals the recorded path,
 /// so a Save As that leaves the path as it was writes the value as it stands
 /// and mints no version, and when there is nothing to measure (a value with no
-/// workspace directory, such as demo data, or two paths with no common root),
-/// where the recorded path is all there is.
+/// workspace directory, such as `SfmrReconstruction::demo`'s sphere, or two
+/// paths with no common root), where the recorded path is all there is.
 fn remeasured_workspace_path(node: &SceneNode, path: &Path) -> Option<String> {
     let base = &node.history.current().base;
     base.measured_workspace_path(path)

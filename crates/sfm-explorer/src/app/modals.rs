@@ -135,7 +135,7 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
                     let label = ui.label("Number of points:");
                     ui.add(
                         egui::DragValue::new(&mut app_state.demo_num_points)
-                            .range(1..=100_000)
+                            .range(crate::demo_data::POINT_COUNT_RANGE)
                             .speed(10.0),
                     )
                     .labelled_by(label.id);
@@ -154,8 +154,8 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
             app_state.show_demo_dialog = false;
         }
         if load_clicked {
-            // Same node-creation path as File > Open, so the demo load
-            // resets the caches and selection too.
+            // A background task that writes the scene and opens it as File >
+            // Open does, so the node arrives through the same path.
             app_state.load_demo(app_state.demo_num_points);
             app_state.show_demo_dialog = false;
         }
