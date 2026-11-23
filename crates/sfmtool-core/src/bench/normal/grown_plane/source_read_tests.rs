@@ -22,7 +22,7 @@ fn sobel_and_value_reads_through_a_source_equal_the_whole_level() {
     let image = ImageU8::new(width, height, 3, data);
     let levels = ImageU8Pyramid::full_levels(width, height);
     let pyramid = Arc::new(ImageU8Pyramid::build(&image, levels));
-    let source = TiledPhotograph::from_pyramid(pyramid.clone()).with_tile_size(32);
+    let source = TiledPhotograph::cut(&pyramid, 32);
     // Windows that straddle a tile corner (32, 64 at level 0; 32 at level
     // 1), the image's corners, and positions off the image.
     let positions = [

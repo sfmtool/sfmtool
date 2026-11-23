@@ -209,10 +209,10 @@ fn photograph(x: f64, paint: impl Fn(f64, f64) -> f64) -> TiledPhotograph {
             paint(wx, wy).clamp(0.0, 255.0) as u8
         })
         .collect();
-    TiledPhotograph::from_pyramid(std::sync::Arc::new(ImageU8Pyramid::build(
-        &ImageU8::new(128, 128, 1, data),
-        4,
-    )))
+    TiledPhotograph::cut(
+        &ImageU8Pyramid::build(&ImageU8::new(128, 128, 1, data), 4),
+        crate::camera::PHOTOGRAPH_TILE_SIZE,
+    )
 }
 
 /// Fine and coarse sinusoids on the plane; `fine` scales the fine ones, so a

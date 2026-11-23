@@ -163,8 +163,7 @@ fn a_grey_read_samples_the_whole_photographs_blurred_grey() {
         grid(w - 30.51, h - 30.52),
     ];
     for image in 0..CENTERS.len() {
-        let views = whole.views();
-        let reference = blurred_grey(views[image].source.held_pyramid().level(0));
+        let reference = blurred_grey(whole.pyramid(image).level(0));
         for (scene, capacity) in [(&whole, u64::MAX), (&tiled, 0)] {
             let pool = RegionPool::with_capacity(capacity);
             let views = scene.views();

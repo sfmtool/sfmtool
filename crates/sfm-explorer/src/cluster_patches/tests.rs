@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ndarray::{Array2, Array3, ArrayView2, ArrayView3};
-use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::image::ImageU8;
 use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::camera::TiledPhotograph;
 use sfmtool_core::features::cluster_match::{
@@ -239,9 +239,7 @@ fn the_file_holds_what_the_two_cli_steps_make_from_the_same_index() {
         .iter()
         .map(|image| {
             let src = ImageU8::read_rgb(&recon.workspace_dir.join(&image.name)).unwrap();
-            let (w, h) = (src.width(), src.height());
-            let pyramid = ImageU8Pyramid::build(&src, ImageU8Pyramid::full_levels(w, h));
-            TiledPhotograph::from_pyramid(Arc::new(pyramid))
+            TiledPhotograph::from_image(src)
         })
         .collect();
     let mut positions: Vec<Array2<f32>> = counts

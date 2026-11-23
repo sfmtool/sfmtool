@@ -98,7 +98,7 @@ impl Truth {
             .collect();
         let whole = pyramids
             .iter()
-            .map(|p| TiledPhotograph::from_pyramid(p.clone()))
+            .map(|p| TiledPhotograph::cut(p, crate::camera::PHOTOGRAPH_TILE_SIZE))
             .collect();
         let tiled = tiled(&pyramids);
         let poses = images
@@ -154,7 +154,7 @@ impl Truth {
 fn tiled(pyramids: &[Arc<ImageU8Pyramid>]) -> Vec<TiledPhotograph> {
     pyramids
         .iter()
-        .map(|p| TiledPhotograph::from_pyramid(p.clone()).with_tile_size(TILE))
+        .map(|p| TiledPhotograph::cut(p, TILE))
         .collect()
 }
 

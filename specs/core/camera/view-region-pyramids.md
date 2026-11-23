@@ -82,7 +82,7 @@ impl ImageU8Pyramid {
 /// pixel read, and its pixels a photograph tile or a rectangle at a time.
 pub struct TiledPhotograph { /* … */ }
 impl TiledPhotograph {
-    pub fn from_image(image: ImageU8) -> Self;              // its full-depth pyramid
+    pub fn from_image(image: ImageU8) -> Self;              // every tile of its full-depth pyramid
     pub fn from_pyramid(pyramid: Arc<ImageU8Pyramid>) -> Self; // a whole pyramid, read in place
     /// The photograph tiles `tiles` of `layout`'s photograph, held, and no
     /// other pixel; refuses no tiles, tiles of different channels and a tile
@@ -354,7 +354,11 @@ fails is remembered, its taps read as 0, and the entry point returns the error
 instead of the result.
 
 **Photographs made of tiles.** `from_tiles` keeps its tiles by key and
-answers a tile read with the tile it holds. Every entry point that goes
+answers a tile read with the tile it holds; so does `from_image`, which
+holds every tile of its layout. A photograph that holds every tile of its
+layout, as `from_image`'s does and as one `from_tiles` is handed all of them
+does, needs no tile worked out before a read, so its reads skip the checks
+below. Every entry point that goes
 through the kept regions works out, before its reservation, the tiles under
 its regions grown by `REGION_REUSE_MARGIN`, the tiles a copied read
 assembles them from, and refuses with `NeedsTiles` when the photograph does
@@ -371,17 +375,31 @@ again of those and the read runs; a photograph of no tiles is refused, since
 its channels are its tiles', so a caller that does not know the tiles a read
 needs yet makes one of the coarsest level's first tile.
 
-**Photographs in memory.** `from_image` builds the image's pyramid of
-`ImageU8Pyramid::full_levels` depth; `from_pyramid` reads a whole pyramid in
-place. Both cut a tile, with its border, only when the tile path asks for
-it, copying the columns that need no clamping as one span a row, and keep
-none; a rectangle is copied row by row straight from the level, with no tile
-cut. `from_pyramid` refuses with `OutOfRange`
+**Photographs in memory.** `from_image` holds every tile, each with its
+border, at `PHOTOGRAPH_TILE_SIZE`, of the image's pyramid of
+`ImageU8Pyramid::full_levels` depth, the pyramid `ImageU8Pyramid::from_image`
+builds, so a read gives the pyramid's values bit for bit; the Python bindings
+make every photograph they are handed this way. It never holds the pyramid
+whole: it cuts a level, makes the next from it with `downsample_2x`, stopping
+where `ImageU8Pyramid::from_image` stops, and drops the level, so at its peak
+it holds the tiles of level 0, level 0 and level 1, about 2.25 times the
+image's bytes. Building the pyramid and then cutting it would hold the
+pyramid and all its tiles, about 2.67 times; the bindings make the
+photographs of many images at once on the rayon pool, so the difference
+decides their peak memory. `from_pyramid` reads a whole pyramid in
+place, and only the photograph cache still makes one so: it cuts a tile,
+with its border, only when the tile path asks for it, copying the columns
+that need no clamping as one span a row, and keeps none, and a rectangle is
+copied row by row straight from the level, with no tile cut. Cutting a tile
+for `from_image` and for `from_pyramid` is the same copy.
+`from_pyramid` refuses with `OutOfRange`
 a tile with pixels that a pyramid made by `from_regions` does not hold, rather
 than read the black of a level it does not hold, and so refuses a rectangle
 whose tiles it does not wholly hold. Their layout has the pyramid's own
 levels, each level 0's size halved, and no stored level. The tests cut tiles
-of 32 px.
+of 32 px, cutting a photograph again at that size, and cut a pyramid of
+fewer levels than the full depth that a test builds with the test-only
+`TiledPhotograph::cut`, which cuts the tiles of a pyramid already built.
 
 **What a read costs.** `required_regions` walks a map of more than 2048
 texels on the rayon pool, row by row, as the render does, and on the
@@ -418,6 +436,15 @@ and that kept regions are counted in the pool, given back before a reassembly
 reserves, and released when their view is dropped, and that a view whose
 render finds the pool full of another view's kept regions takes the tile path
 and copies again once they are released.
+[tiled_photograph/tests.rs](../../../crates/sfmtool-core/src/camera/tiled_photograph/tests.rs)
+checks that a photograph `from_image` makes holds every tile of the image's
+pyramid, each tile, with its border, the pyramid's pixels bit for bit, and
+reads each whole level and rectangles across tile edges and at the level's
+far corner as the pyramid holds them, cut at 512 px over a photograph three
+tiles wide and two high, and a smaller photograph cut again at 16 px; and
+that the tiles `from_image` cuts level by level equal `cut` of the whole
+pyramid bit for bit, with the same levels, for sizes whose pyramid stops short
+of the full depth and odd sizes over many tiles.
 [regions/tests.rs](../../../crates/sfmtool-core/src/camera/sampler/regions/tests.rs)
 checks that a region pyramid of the required regions equals the whole
 pyramid, that one a pixel smaller on any inner edge does not, and that a map

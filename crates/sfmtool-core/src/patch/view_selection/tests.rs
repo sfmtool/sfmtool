@@ -20,9 +20,9 @@ use crate::patch::normal_refine::normalized_source_stack;
 // z = PLANE_Z. The patch sits on that plane with a normal pointing back toward
 // the cameras (-z), so a camera in front (z < PLANE_Z) is front-facing.
 
-/// `pyramid` as the tiled photograph a kernel reads.
+/// Every tile of `pyramid`, held as the tiled photograph a kernel reads.
 fn in_memory(pyramid: ImageU8Pyramid) -> TiledPhotograph {
-    TiledPhotograph::from_pyramid(std::sync::Arc::new(pyramid))
+    TiledPhotograph::cut(&pyramid, crate::camera::PHOTOGRAPH_TILE_SIZE)
 }
 
 const PLANE_Z: f64 = 4.0;
@@ -827,7 +827,7 @@ fn affine_sampling_matches_exact_render_on_mild_distortion() {
     let cam = radial_cam(0.03);
     let img = render_plane_view([0.3, 0.1, 0.0], texture);
     let pyr = Arc::new(ImageU8Pyramid::build(&img, 5));
-    let source = TiledPhotograph::from_pyramid(pyr.clone());
+    let source = TiledPhotograph::cut(&pyr, crate::camera::PHOTOGRAPH_TILE_SIZE);
     let pose = RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-0.3, 0.1, 0.0]);
     let view = ProjectedImage {
         camera: &cam,
@@ -1003,6 +1003,8 @@ fn affine_mip_sampling_matches_exact_mip_render() {
     // `remap_bilinear_mip` reads, so the support values track the exact warp
     // within the same (gradient × residual) band the level-0 pair holds to.
     let scene = Scene::new(&[[0.3, 0.1, 0.0]], &[texture as fn(f64, f64) -> f64]);
+    // The whole pyramid the scene's photograph is cut from.
+    let pyramid = ImageU8Pyramid::build(&render_plane_view([0.3, 0.1, 0.0], texture), 5);
     let views = scene.views();
     let patch = plane_patch();
     let resolution = 15u32;
@@ -1017,7 +1019,7 @@ fn affine_mip_sampling_matches_exact_mip_render() {
     );
     let mut aff = vec![0f32; n];
     sample_support_affine(
-        views[0].source.held_pyramid().level(level),
+        pyramid.level(level),
         &map,
         &ctx.pixels,
         resolution as usize,
@@ -1379,7 +1381,7 @@ fn affine_aniso_sampling_matches_exact_render_on_an_oblique_view() {
     let pose = RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [0.0, 0.0, -192.0]);
     let img = render_plane_view([0.2, -0.1, 0.0], texture);
     let pyr = Arc::new(ImageU8Pyramid::build(&img, 6));
-    let source = TiledPhotograph::from_pyramid(pyr.clone());
+    let source = TiledPhotograph::cut(&pyr, crate::camera::PHOTOGRAPH_TILE_SIZE);
     let view = ProjectedImage {
         camera: &cam,
         cam_from_world: &pose,

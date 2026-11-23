@@ -24,7 +24,7 @@ use sfmtool_sfmr_format::{
     FEATURE_SOURCE_EMBEDDED_PATCHES, LENGTH_UNIT_M,
 };
 
-use crate::camera::image::ImageU8Pyramid;
+use crate::camera::image::ImageU8;
 use crate::camera::sampler::RegionPool;
 use crate::camera::TiledPhotograph;
 use crate::features::sift::{image_readings_from_rgb, ImageToGray};
@@ -83,16 +83,19 @@ fn half_vector(v: [f64; 3], h: f64) -> [f32; 3] {
 
 impl DemoScene {
     /// The decoded photographs as the tiled sources the patch kernels read,
-    /// in image order: each of [`photographs`](Self::photographs) through
-    /// a full pyramid ([`ImageU8Pyramid::build`] to
-    /// [`ImageU8Pyramid::full_levels`]), as [`TiledPhotograph::from_image`]
-    /// builds it.
+    /// in image order: each of [`photographs`](Self::photographs) made by
+    /// [`TiledPhotograph::from_image`], which holds every tile of its
+    /// full-depth pyramid.
     pub fn tiled_photographs(&self) -> Vec<TiledPhotograph> {
         self.photographs
             .iter()
             .map(|image| {
-                let levels = ImageU8Pyramid::full_levels(image.width(), image.height());
-                TiledPhotograph::from_pyramid(Arc::new(ImageU8Pyramid::build(image, levels)))
+                TiledPhotograph::from_image(ImageU8::new(
+                    image.width(),
+                    image.height(),
+                    image.channels(),
+                    image.data().to_vec(),
+                ))
             })
             .collect()
     }

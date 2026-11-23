@@ -1348,9 +1348,10 @@ swept once, so moving them changes results rather than only cost.
 Argument names match the Rust ones. Parallel-list lengths, per-image array
 shapes, CSR self-consistency and the `member_images` range raise `ValueError`
 before the GIL is released; out-of-range `member_features` and degenerate shapes
-are data, not errors, and reach the caller as `not_evaluated`. Pyramids are built
-through `patches::views::build_pyramids_from_image_list` and each read in place
-as a tiled photograph, the pixels `TiledPhotograph::from_image` builds; the
+are data, not errors, and reach the caller as `not_evaluated`. Each image is
+made a tiled photograph by `TiledPhotograph::from_image`, through
+`patches::views::build_photographs_from_image_list`, which holds every tile of
+its full-depth pyramid; the
 kernel runs under `py.detach` with a region pool made for the call, and a
 photograph read that fails, which arrays in memory never do, raises
 `RuntimeError` saying it is a photograph in memory and carrying the read's

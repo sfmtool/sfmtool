@@ -665,6 +665,16 @@ impl<'a> ViewImage<'a> {
             GradientRead::Bilinear => None,
             GradientRead::Sobel => self.read(&positions, 1),
         };
+        // The bilinear read's level, put together once from the photograph's
+        // tiles.
+        #[cfg(test)]
+        let whole = (read == GradientRead::Bilinear).then(|| {
+            let regions = self.regions.borrow();
+            regions
+                .source()
+                .whole_level(self.level)
+                .expect("a photograph in memory holds its levels")
+        });
         // The level gradient of each channel at one sample.
         let mut level = vec![(0.0f32, 0.0f32); ch];
         let mut n = 0;
@@ -676,9 +686,8 @@ impl<'a> ViewImage<'a> {
             match read {
                 #[cfg(test)]
                 GradientRead::Bilinear => {
-                    let regions = self.regions.borrow();
                     let [x, y] = positions[n];
-                    let image = regions.source().held_pyramid().level(self.level);
+                    let image = whole.as_ref().expect("the bilinear read's level");
                     for (c, slot) in level.iter_mut().enumerate() {
                         let (_, dx, dy) = sample_bilinear_with_grad_u8(image, x, y, c as u32);
                         *slot = (dx, dy);

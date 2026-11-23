@@ -13,7 +13,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyList;
 use rayon::prelude::*;
 
-use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::image::ImageU8;
 use sfmtool_core::camera::TiledPhotograph;
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::PatchCloud;
@@ -21,14 +21,6 @@ use sfmtool_core::CameraIntrinsics;
 
 use crate::flow::warp::extract_image_u8;
 use crate::PySfmrReconstruction;
-
-/// Full pyramid depth for a source image: down to ~1 px on the short side
-/// ([`ImageU8Pyramid::full_levels`]). Shared by the list path and
-/// [`PyImagePyramidSet`] so a prebuilt set is level-for-level identical to a
-/// per-call build.
-pub(super) fn pyramid_levels(src: &ImageU8) -> usize {
-    ImageU8Pyramid::full_levels(src.width(), src.height())
-}
 
 /// Validate that image `i` (dimensions `w × h`) matches its camera's resolution.
 pub(super) fn check_image_matches_camera(
@@ -47,17 +39,20 @@ pub(super) fn check_image_matches_camera(
     Ok(())
 }
 
-/// Extract each numpy image and build its full pyramid, running `check` on
-/// every decoded image (index, decoded source). The extraction runs under the
-/// GIL; the pyramid build (the expensive part) runs GIL-free and
-/// rayon-parallel. Shared by the recon-coupled [`build_pyramids_from_cameras`]
-/// (camera-dimension check) and the recon-free cluster-refinement binding
-/// (`matching::cluster`, no check).
-pub(crate) fn build_pyramids_from_image_list(
+/// Extract each numpy image and make the tiled photograph a kernel reads of
+/// it, [`TiledPhotograph::from_image`]: every tile of its full-depth pyramid
+/// (`ImageU8Pyramid::full_levels`), so a prebuilt [`PyImagePyramidSet`] is
+/// tile for tile what a per-call build makes. `check` runs on every decoded
+/// image (index, decoded source). The extraction runs under the GIL; the
+/// pyramid build and the cutting of its tiles (the expensive part) run
+/// GIL-free and rayon-parallel. Shared by the recon-coupled
+/// [`build_photographs_from_cameras`] (camera-dimension check) and the
+/// recon-free cluster-refinement binding (`matching::cluster`, no check).
+pub(crate) fn build_photographs_from_image_list(
     py: Python<'_>,
     images: &[Bound<'_, PyAny>],
     mut check: impl FnMut(usize, &ImageU8) -> PyResult<()>,
-) -> PyResult<Vec<ImageU8Pyramid>> {
+) -> PyResult<Vec<TiledPhotograph>> {
     let srcs: Vec<ImageU8> = images
         .iter()
         .enumerate()
@@ -68,17 +63,16 @@ pub(crate) fn build_pyramids_from_image_list(
         })
         .collect::<PyResult<_>>()?;
     Ok(py.detach(|| {
-        srcs.par_iter()
-            .map(|src| ImageU8Pyramid::build(src, pyramid_levels(src)))
+        srcs.into_par_iter()
+            .map(TiledPhotograph::from_image)
             .collect()
     }))
 }
 
-/// Extract each numpy image and build its full pyramid, validating dimensions
-/// against the per-view cameras (one camera per image, parallel to `images`),
-/// as the tiled photograph a kernel reads: the pixels
-/// [`TiledPhotograph::from_image`] builds, with the pyramid built GIL-free.
-pub(super) fn build_pyramids_from_cameras(
+/// Extract each numpy image and make its tiled photograph, validating
+/// dimensions against the per-view cameras (one camera per image, parallel
+/// to `images`), as [`build_photographs_from_image_list`] makes them.
+pub(super) fn build_photographs_from_cameras(
     py: Python<'_>,
     cameras: &[CameraIntrinsics],
     images: &[Bound<'_, PyAny>],
@@ -90,13 +84,9 @@ pub(super) fn build_pyramids_from_cameras(
             images.len()
         )));
     }
-    let pyramids = build_pyramids_from_image_list(py, images, |i, src| {
+    build_photographs_from_image_list(py, images, |i, src| {
         check_image_matches_camera(&cameras[i], i, src.width(), src.height())
-    })?;
-    Ok(pyramids
-        .into_iter()
-        .map(|pyramid| TiledPhotograph::from_pyramid(Arc::new(pyramid)))
-        .collect())
+    })
 }
 
 /// The per-image photographs a kernel call reads: either owned (built from a numpy
@@ -271,7 +261,7 @@ pub(crate) fn resolve_pyramids(
         }
         Ok(PyramidSet::Shared(Arc::clone(&set.pyramids)))
     } else if let Ok(list) = images.extract::<Vec<Bound<'_, PyAny>>>() {
-        Ok(PyramidSet::Owned(build_pyramids_from_cameras(
+        Ok(PyramidSet::Owned(build_photographs_from_cameras(
             images.py(),
             &posed.cameras,
             &list,
@@ -468,7 +458,7 @@ impl PyImagePyramidSet {
         images: Vec<Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let (posed, _recon) = resolve_scene(views_or_recon)?;
-        let pyramids = build_pyramids_from_cameras(py, &posed.cameras, &images)?;
+        let pyramids = build_photographs_from_cameras(py, &posed.cameras, &images)?;
         Ok(Self {
             pyramids: Arc::new(pyramids),
         })

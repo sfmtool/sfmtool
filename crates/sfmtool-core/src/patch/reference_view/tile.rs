@@ -298,11 +298,11 @@ pub fn source_clipped_share(
         x1 = x1.max(p[0]);
     }
     let cols = (x0.floor() as i64).max(0)..=(x1.ceil() as i64).min(w - 1);
-    // A photograph made of tiles is refused, naming every tile the read
+    // A photograph that may lack a tile is refused, naming every tile the read
     // needs, before any pixel is read: the tiles under the outline's box
     // and, when no centre lies inside the outline, which the geometry alone
     // decides, those under its corners.
-    if source.is_made_of_tiles() {
+    if source.may_lack_tiles() {
         let mut keys = Vec::new();
         let mut geometry = ClippedCount::default();
         if !rows.is_empty() && !cols.is_empty() {

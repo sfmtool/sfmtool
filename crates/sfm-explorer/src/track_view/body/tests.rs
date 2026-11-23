@@ -28,9 +28,16 @@ const POINT: u32 = 2;
 
 const VIEWPORT: egui::Vec2 = egui::vec2(1400.0, 900.0);
 
-/// A pyramid made in the test, read in place as a tiled photograph.
+/// The tiled photograph of the image a pyramid made in the test is built
+/// from, which holds every tile of that pyramid.
 fn tiled(src: &Arc<ImageU8Pyramid>) -> TiledPhotograph {
-    TiledPhotograph::from_pyramid(src.clone())
+    let level0 = src.level(0);
+    TiledPhotograph::from_image(ImageU8::new(
+        level0.width(),
+        level0.height(),
+        level0.channels(),
+        level0.data().to_vec(),
+    ))
 }
 
 /// A region pool the size of a panel's.

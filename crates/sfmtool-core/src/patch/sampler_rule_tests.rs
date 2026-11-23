@@ -6,8 +6,6 @@
 //! `bilinear_mip` renders the same tile as under `Fixed(BilinearMip)`, bit for
 //! bit, and a moved view renders a different one.
 
-use std::sync::Arc;
-
 use nalgebra::{Point3, Vector3};
 
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
@@ -107,7 +105,7 @@ fn bench_choice(patch: &OrientedPatch, view: &ProjectedImage<'_>, kp: [f64; 2]) 
 fn unmoved_views_render_the_same_tiles_and_moved_views_do_not() {
     let cams = [camera(500.0), camera(100.0), camera(500.0)];
     let poses = [pose(-0.2), pose(0.0), pose(0.2)];
-    let source = TiledPhotograph::from_pyramid(Arc::new(pyramid()));
+    let source = TiledPhotograph::cut(&pyramid(), crate::camera::PHOTOGRAPH_TILE_SIZE);
     let views: Vec<ProjectedImage<'_>> = cams
         .iter()
         .zip(&poses)
@@ -190,7 +188,7 @@ fn unmoved_views_render_the_same_tiles_and_moved_views_do_not() {
 fn the_stored_bitmap_changes_only_where_a_view_moves() {
     let cams = [camera(500.0), camera(500.0), camera(500.0)];
     let poses = [pose(-0.2), pose(0.0), pose(0.2)];
-    let source = TiledPhotograph::from_pyramid(Arc::new(pyramid()));
+    let source = TiledPhotograph::cut(&pyramid(), crate::camera::PHOTOGRAPH_TILE_SIZE);
     let views: Vec<ProjectedImage<'_>> = cams
         .iter()
         .zip(&poses)
@@ -295,7 +293,10 @@ fn the_kernels_choose_the_sampler_the_bench_reads() {
             .iter()
             .zip(&poses)
             .map(|(camera, pose)| {
-                TiledPhotograph::from_pyramid(Arc::new(plane_photograph(&patch, camera, pose)))
+                TiledPhotograph::cut(
+                    &plane_photograph(&patch, camera, pose),
+                    crate::camera::PHOTOGRAPH_TILE_SIZE,
+                )
             })
             .collect();
         let views: Vec<ProjectedImage<'_>> = cams
@@ -431,7 +432,7 @@ fn the_kernels_choose_the_sampler_the_bench_reads() {
 fn every_kernel_reads_the_rule_from_the_stored_frame() {
     let cams = [camera(500.0), camera(500.0)];
     let poses = [pose(-0.1), pose(0.1)];
-    let source = TiledPhotograph::from_pyramid(Arc::new(pyramid()));
+    let source = TiledPhotograph::cut(&pyramid(), crate::camera::PHOTOGRAPH_TILE_SIZE);
     let views: Vec<ProjectedImage<'_>> = cams
         .iter()
         .zip(&poses)
