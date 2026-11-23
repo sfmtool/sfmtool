@@ -980,7 +980,11 @@ its own colour and width (`viewer_3d::measurements::ribbons`): the line and
 its halo, and per mark a ring of 24 chords, its halo and the dot. A mark keeps
 its size on screen, its ring built facing the eye at the endpoint's depth with
 its radius in points unprojected there, and the widths are the points above
-in physical pixels. Every piece is drawn toward the eye by `PULL_POINTS`
+in physical pixels. The colours are passed as sRGB-encoded values and blended
+onto the scene texture's encoded view, the one egui displays, which is the
+blend egui paints with, so a translucent colour (the dimmed others, the halo)
+shows as it did when egui painted it, to within one level in 255. Every piece
+is drawn toward the eye by `PULL_POINTS`
 (10.75: the selected ring's radius and its halo) as a world length at its own
 depth, since an endpoint lies on the surface it was read from and a mark
 exactly there would be half in front of that surface and half behind it.
@@ -1360,7 +1364,9 @@ at-infinity case is covered by the Rust tests.
   at infinity, and a line with one end behind the eye handed to the pass whole.
   (`scene_renderer/bench_track/tests.rs`): the measurements' instances holding
   at `BEHIND_OPACITY` while the figure's fade, their upload, and the pass with
-  both drawn validated on a headless device. (`image_detail/measurements/tests.rs`):
+  both drawn validated on a headless device, each onto its own view of the
+  output; a translucent colour composited as egui painted it.
+  (`image_detail/measurements/tests.rs`):
   the marks at the endpoint pixels, a line only where both are in the image,
   the refused endpoint's warning colour; the hover, a click selecting no
   feature's point under the mark while the same click with nothing drawn does,

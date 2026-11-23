@@ -3,7 +3,7 @@
 
 use super::gpu_types::{
     EDL_OUTPUT_FORMAT, GBUFFER_COLOR_FORMAT, GBUFFER_LINEAR_DEPTH_FORMAT, GBUFFER_PICK_FORMAT,
-    HW_DEPTH_FORMAT,
+    HW_DEPTH_FORMAT, MEASUREMENT_TARGET_FORMAT,
 };
 use super::SceneRenderer;
 
@@ -141,7 +141,7 @@ impl SceneRenderer {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+            view_formats: &[MEASUREMENT_TARGET_FORMAT],
         });
         let edl_output_view = edl_output.create_view(&Default::default());
 
@@ -149,9 +149,11 @@ impl SceneRenderer {
         // creates its own managed textures as Rgba8Unorm and its shader
         // assumes texture samples are already in gamma space (no hardware
         // sRGB decoding). Using Rgba8Unorm here prevents a double
-        // linearization that would darken the image.
+        // linearization that would darken the image. The measurements are
+        // drawn into the same view, so they blend on encoded values as egui
+        // does.
         let edl_output_egui_view = edl_output.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(wgpu::TextureFormat::Rgba8Unorm),
+            format: Some(MEASUREMENT_TARGET_FORMAT),
             ..Default::default()
         });
 
@@ -278,6 +280,7 @@ impl SceneRenderer {
         self.pick_texture = Some(pick_texture);
         self.pick_texture_view = Some(pick_texture_view);
         self.edl_output_view = Some(edl_output_view);
+        self.edl_output_encoded_view = Some(edl_output_egui_view);
         // The texture itself, not only its view: a copy source is a texture.
         #[cfg(feature = "mcp")]
         {

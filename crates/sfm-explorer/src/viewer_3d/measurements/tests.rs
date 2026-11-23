@@ -597,16 +597,22 @@ fn a_measurement_draws_its_line_and_marks_as_ribbons() {
     let ppp = 2.0;
     let ribbons = super::ribbons(&viewer.measurements, &viewer.camera, rect, ppp);
     assert_eq!(ribbons.len(), 2 + 2 * MARK_RIBBONS);
-    let grey = super::linear_rgba(egui::Color32::from_rgb(
+    let grey = super::encoded_rgba(egui::Color32::from_rgb(
         STORED_RGB[0],
         STORED_RGB[1],
         STORED_RGB[2],
     ));
-    let halo = super::linear_rgba(HALO);
+    let halo = super::encoded_rgba(HALO);
     assert!((halo[3] - 170.0 / 255.0).abs() < 1e-6 && halo[..3] == [0.0; 3]);
-    assert!(
-        grey[3] == 1.0 && grey[0] > 0.9 && grey[0] < 0.92,
-        "{grey:?}"
+    let level = |v: u8| f32::from(v) / 255.0;
+    assert_eq!(
+        grey,
+        [
+            level(STORED_RGB[0]),
+            level(STORED_RGB[1]),
+            level(STORED_RGB[2]),
+            1.0
+        ]
     );
 
     let (a, b) = (Point3::from(POINTS[0]), Point3::from(POINTS[1]));
@@ -697,7 +703,7 @@ fn show_all_emphasises_the_selected_measurement_and_the_item_is_violet() {
         // A measurement with no finite endpoint draws nothing.
         let Some(stroke) = ribbons
             .iter()
-            .find(|r| r.color != super::linear_rgba(crate::measurement_marks::HALO))
+            .find(|r| r.color != super::encoded_rgba(crate::measurement_marks::HALO))
         else {
             continue;
         };
@@ -727,7 +733,7 @@ fn show_all_emphasises_the_selected_measurement_and_the_item_is_violet() {
         rect,
         1.0,
     );
-    let violet = super::linear_rgba(crate::bench::verdict_color(
+    let violet = super::encoded_rgba(crate::bench::verdict_color(
         sfmtool_core::bench::Verdict::In,
     ));
     assert_eq!(ribbons[1].color, violet);

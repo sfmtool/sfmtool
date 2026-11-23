@@ -320,7 +320,9 @@ Pass 5:  Measurements, then the bench figure (while the 3D viewer draws a
   Input:  Measurement edge instances, then figure edge instances + centre
           disc mesh + hw depth (sampled)
   Output: EDL output color (alpha blending, reads depth for occlusion; no
-          pick ID, no depth)
+          pick ID, no depth). The measurements are a render pass of their
+          own onto the output's Rgba8Unorm view, so they blend on encoded
+          values as egui does.
 ```
 
 The measurements are drawn over the target indicator and the track rays, as

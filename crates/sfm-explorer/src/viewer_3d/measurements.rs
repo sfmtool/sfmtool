@@ -81,8 +81,8 @@ pub(crate) struct Ribbon {
     pub(crate) a: [f32; 4],
     /// The other.
     pub(crate) b: [f32; 4],
-    /// Its colour in linear light, not premultiplied, as the pass blends it
-    /// onto the sRGB scene texture.
+    /// Its colour as sRGB-encoded values, not premultiplied ([`encoded_rgba`]),
+    /// as the pass blends it onto the scene texture's encoded view.
     pub(crate) color: [f32; 4],
     /// Half its width, in physical pixels.
     pub(crate) half_width: f32,
@@ -114,10 +114,10 @@ pub(crate) fn ribbons(
     let keep = 1.0 - toward_eye_fraction(camera, rect);
     let toward_eye = |p: &Point3<f64>| eye + (p - eye) * keep;
     let half = |width: f32| width * 0.5 * pixels_per_point;
-    let halo = linear_rgba(measurement_marks::HALO);
+    let halo = encoded_rgba(measurement_marks::HALO);
     let mut out = Vec::new();
     for drawn in &layer.drawn {
-        let color = linear_rgba(drawn.color);
+        let color = encoded_rgba(drawn.color);
         let halo_width = drawn.width + measurement_marks::HALO_EXTRA_WIDTH;
         let finite: Vec<_> = drawn
             .endpoints
@@ -180,11 +180,21 @@ fn homogeneous(p: &Point3<f64>) -> [f32; 4] {
     [p.x as f32, p.y as f32, p.z as f32, 1.0]
 }
 
-/// `color` in linear light and not premultiplied, as the pass draws it onto
-/// the sRGB scene texture, so it shows as the colour egui paints.
-pub(crate) fn linear_rgba(color: Color32) -> [f32; 4] {
-    let [r, g, b, a] = color.to_srgba_unmultiplied();
-    egui::Rgba::from_srgba_unmultiplied(r, g, b, a).to_rgba_unmultiplied()
+/// `color` as sRGB-encoded values, not premultiplied, as the measurements'
+/// pipeline takes it.
+///
+/// That pipeline draws onto the scene texture's encoded view
+/// (`MEASUREMENT_TARGET_FORMAT`) with straight alpha, so the result is
+/// `c·a + dst·(1 − a)` on encoded values. egui paints its premultiplied bytes
+/// `p` as `p + dst·(1 − a)` on encoded values too, so dividing `p` by `a`
+/// here, without rounding, makes the two the same blend: a translucent colour
+/// shows as egui would have painted it, not only an opaque one.
+pub(crate) fn encoded_rgba(color: Color32) -> [f32; 4] {
+    let [r, g, b, a] = color.to_array().map(f32::from);
+    if a == 0.0 {
+        return [0.0; 4];
+    }
+    [r / a, g / a, b / a, a / 255.0]
 }
 
 impl Viewer3D {

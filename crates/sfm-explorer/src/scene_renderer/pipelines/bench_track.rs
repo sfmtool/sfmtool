@@ -13,6 +13,10 @@ pub(in crate::scene_renderer) struct BenchTrackPipelineResources {
     /// Instanced ribbon-quad edges: the frame, the normal, the barbs and the
     /// marks, and the drawn measurements' marks and lines.
     pub(crate) edge_pipeline: wgpu::RenderPipeline,
+    /// The same edges onto the EDL output's sRGB-encoded view
+    /// ([`MEASUREMENT_TARGET_FORMAT`]): the drawn measurements' marks and
+    /// lines, which blend on encoded values as egui does.
+    pub(crate) measurement_pipeline: wgpu::RenderPipeline,
     /// The filled centre disc, a triangle list.
     pub(crate) disc_pipeline: wgpu::RenderPipeline,
     pub(crate) uniform_buffer: wgpu::Buffer,
@@ -62,74 +66,86 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> BenchTrackPipe
     // Ordinary alpha rather than the compass's additive blend: the three
     // violets carry meaning, and additive light over a bright point cloud
     // washes them all to white.
-    let color_target = [Some(wgpu::ColorTargetState {
-        format: EDL_OUTPUT_FORMAT,
-        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-        write_mask: wgpu::ColorWrites::ALL,
-    })];
+    let target = |format| {
+        [Some(wgpu::ColorTargetState {
+            format,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write_mask: wgpu::ColorWrites::ALL,
+        })]
+    };
+    let color_target = target(EDL_OUTPUT_FORMAT);
 
-    let edge_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("bench track edge pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_edge"),
-            buffers: &[
-                // Slot 0: quad corners (per-vertex), reuses the point quad buffer
-                Some(QUAD_VERTEX_LAYOUT),
-                // Slot 1: one edge of the figure or a measurement (per-instance)
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<BenchEdgeInstance>() as u64,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x4,
-                            offset: 0,
-                            shader_location: 1, // endpoint_a (xyz + w)
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x4,
-                            offset: 16,
-                            shader_location: 2, // endpoint_b (xyz + w)
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x4,
-                            offset: 32,
-                            shader_location: 3, // color
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32,
-                            offset: 48,
-                            shader_location: 4, // half_width
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32,
-                            offset: 52,
-                            shader_location: 5, // fade
-                        },
-                    ],
-                }),
-            ],
-            compilation_options: Default::default(),
-        },
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleStrip,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
-            ..Default::default()
-        },
-        depth_stencil: None, // depth occlusion is done in the fragment shader
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            targets: &color_target,
-            compilation_options: Default::default(),
-        }),
-        multiview_mask: None,
-        cache: None,
-    });
+    // One edge pipeline per target format: the figure's onto the sRGB view of
+    // the EDL output, the measurements' onto its sRGB-encoded view.
+    let edge = |label, targets: &[Option<wgpu::ColorTargetState>]| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_edge"),
+                buffers: &[
+                    // Slot 0: quad corners (per-vertex), reuses the point quad buffer
+                    Some(QUAD_VERTEX_LAYOUT),
+                    // Slot 1: one edge of the figure or a measurement (per-instance)
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<BenchEdgeInstance>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &[
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x4,
+                                offset: 0,
+                                shader_location: 1, // endpoint_a (xyz + w)
+                            },
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x4,
+                                offset: 16,
+                                shader_location: 2, // endpoint_b (xyz + w)
+                            },
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x4,
+                                offset: 32,
+                                shader_location: 3, // color
+                            },
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32,
+                                offset: 48,
+                                shader_location: 4, // half_width
+                            },
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32,
+                                offset: 52,
+                                shader_location: 5, // fade
+                            },
+                        ],
+                    }),
+                ],
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: None, // depth occlusion is done in the fragment shader
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets,
+                compilation_options: Default::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    let edge_pipeline = edge("bench track edge pipeline", &color_target);
+    let measurement_pipeline = edge(
+        "measurement edge pipeline",
+        &target(MEASUREMENT_TARGET_FORMAT),
+    );
 
     let disc_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("bench track disc pipeline"),
@@ -182,6 +198,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> BenchTrackPipe
 
     BenchTrackPipelineResources {
         edge_pipeline,
+        measurement_pipeline,
         disc_pipeline,
         uniform_buffer,
         bind_group_layout,

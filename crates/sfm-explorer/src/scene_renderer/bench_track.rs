@@ -9,21 +9,24 @@
 //! the shader projects through, and the pass that draws them onto the EDL
 //! output.
 //!
-//! The same pass draws the measurements the 3D view shows, before the figure:
-//! their marks and lines are ribbons
+//! The measurements the 3D view shows are drawn just before the figure, with
+//! the same shader and bind group: their marks and lines are ribbons
 //! ([`crate::viewer_3d::measurements::Ribbon`]) built on the CPU each frame
 //! and uploaded as edges of the figure's own kind. They differ from the
 //! figure's in two things the instance carries, their width and that the
-//! part behind the scene holds at `BEHIND_OPACITY` rather than fading.
+//! part behind the scene holds at `BEHIND_OPACITY` rather than fading, and
+//! in one the pass does not: they are a render pass of their own onto the
+//! output's sRGB-encoded view (`MEASUREMENT_TARGET_FORMAT`), so a
+//! translucent colour blends on encoded values, as egui painted them.
 //!
 //! It runs **after** the EDL resolve, and after the target indicator and the
 //! track rays, so the figure sits on top of everything the frame has drawn --
 //! it is the thing being worked on. Like both of those it samples the shared
 //! hardware depth buffer rather than testing against it, which is what lets a
 //! fragment behind the scene still be drawn, dimmed, instead of discarded
-//! (`specs/gui/point-cloud-rendering.md` § "Depth-Aware Transparency"). It has
-//! one colour target and no depth attachment, so it writes no pick id and no
-//! depth: what a click picks is the scene under it.
+//! (`specs/gui/point-cloud-rendering.md` § "Depth-Aware Transparency"). Each
+//! pass has one colour target and no depth attachment, so it writes no pick id
+//! and no depth: what a click picks is the scene under it.
 //!
 //! The figure is rebuilt and re-uploaded every frame it is drawn, because the
 //! arrowhead's barbs turn to face the eye: there is no state it could be keyed
@@ -168,46 +171,58 @@ impl SceneRenderer {
     /// Draw the measurements and the figure onto the EDL output texture.
     ///
     /// The measurements first, so the figure is over them, as its handles take
-    /// a press before theirs do. Then the disc and the edges over it, as the
+    /// a press before theirs do. They are a render pass of their own, onto the
+    /// texture's sRGB-encoded view, so a translucent mark or line blends on
+    /// encoded values as egui painted it before; the figure is drawn onto the
+    /// sRGB view as it always was. Then the disc and the edges over it, as the
     /// target indicator draws its star under its wireframe: the outline is
     /// what says where the frame's boundary is, so nothing fills over it.
     pub(crate) fn render_bench_track(&self, encoder: &mut wgpu::CommandEncoder) {
-        if self.bench_pass_count() == 0 {
-            return;
-        }
-        let Some(edl_output_view) = &self.edl_output_view else {
-            return;
-        };
         let Some(bind_group) = &self.bench_track_bind_group else {
             return;
         };
+        fn begin<'e>(
+            encoder: &'e mut wgpu::CommandEncoder,
+            label: &str,
+            view: &wgpu::TextureView,
+        ) -> wgpu::RenderPass<'e> {
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(label),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load, // preserve EDL + the passes over it
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
+            })
+        }
 
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("bench track pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: edl_output_view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load, // preserve EDL + the two passes over it
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
-
-        if let (Some(pipeline), Some(quad_vb), Some(edge_buf)) = (
-            &self.bench_track_edge_pipeline,
+        if let (Some(view), Some(pipeline), Some(quad_vb), Some(edge_buf)) = (
+            &self.edl_output_encoded_view,
+            &self.measurement_pipeline,
             &self.quad_vertex_buffer,
             &self.measurement_edge_buffer,
         ) {
+            let mut pass = begin(encoder, "measurement pass", view);
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, bind_group, &[]);
             pass.set_vertex_buffer(0, quad_vb.slice(..));
             pass.set_vertex_buffer(1, edge_buf.slice(..));
             pass.draw(0..4, 0..self.measurement_edge_count);
         }
+
+        if self.bench_track_edge_count + self.bench_track_disc_count == 0 {
+            return;
+        }
+        let Some(edl_output_view) = &self.edl_output_view else {
+            return;
+        };
+        let mut pass = begin(encoder, "bench track pass", edl_output_view);
 
         if let (Some(pipeline), Some(disc_buf)) = (
             &self.bench_track_disc_pipeline,

@@ -218,8 +218,14 @@ fades**: the figure's does, as the table above says, and a measurement's
 holds at `BEHIND_OPACITY` however far behind it is, as a highlighted surfel's
 hidden outline does ([`patch-rendering.md`](patch-rendering.md)), since a
 measurement far behind the cloud has to stay findable and has no size of its
-own to fade over. The pass has one colour target and no depth attachment, so
-it writes no pick ID and no depth, and a click is decided by the measurements'
+own to fade over. And they are **a render pass of their own**, with the same
+shader and bind group, onto the EDL output's second view
+(`MEASUREMENT_TARGET_FORMAT`, `Rgba8Unorm`), the one egui displays: there the
+blend works on sRGB-encoded values, as egui's painting does, so a translucent
+colour (the dimmed others of *Show all measurements*, the halo) shows as egui
+would have painted it. The figure's blend on the sRGB view, in linear light,
+is left as it was. Each pass has one colour target and no depth attachment,
+so it writes no pick ID and no depth, and a click is decided by the measurements'
 and the handles' own hit tests on the CPU and otherwise by the scene under
 them.
 

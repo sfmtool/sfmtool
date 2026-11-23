@@ -82,6 +82,10 @@ pub(crate) struct SceneRenderer {
     /// can be a `copy_texture_to_buffer` source, which is what `capture` needs.
     #[cfg(feature = "mcp")]
     edl_output_texture: Option<wgpu::Texture>,
+    /// The same texture read as sRGB-encoded values
+    /// (`MEASUREMENT_TARGET_FORMAT`): what egui displays, and what the
+    /// measurements are drawn into so they blend as egui does.
+    edl_output_encoded_view: Option<wgpu::TextureView>,
 
     // ── egui integration ──
     egui_texture_id: Option<egui::TextureId>,
@@ -127,6 +131,7 @@ pub(crate) struct SceneRenderer {
 
     // ── The focused item (post-EDL, depth-aware) ──
     bench_track_edge_pipeline: Option<wgpu::RenderPipeline>,
+    measurement_pipeline: Option<wgpu::RenderPipeline>,
     bench_track_disc_pipeline: Option<wgpu::RenderPipeline>,
     bench_track_edge_buffer: Option<wgpu::Buffer>,
     bench_track_edge_count: u32,
@@ -239,6 +244,7 @@ impl SceneRenderer {
             edl_output_view: None,
             #[cfg(feature = "mcp")]
             edl_output_texture: None,
+            edl_output_encoded_view: None,
             egui_texture_id: None,
             current_size: (0, 0),
             point_pipeline: None,
@@ -268,6 +274,7 @@ impl SceneRenderer {
             track_ray_bind_group: None,
             track_ray_count: 0,
             bench_track_edge_pipeline: None,
+            measurement_pipeline: None,
             bench_track_disc_pipeline: None,
             bench_track_edge_buffer: None,
             bench_track_edge_count: 0,
@@ -626,6 +633,7 @@ impl SceneRenderer {
         // ── Bench track pipelines (post-EDL, depth-aware) ──
         let bt = pipelines::bench_track::create(device);
         self.bench_track_edge_pipeline = Some(bt.edge_pipeline);
+        self.measurement_pipeline = Some(bt.measurement_pipeline);
         self.bench_track_disc_pipeline = Some(bt.disc_pipeline);
         self.bench_track_uniform_buffer = Some(bt.uniform_buffer);
         self.bench_track_bind_group_layout = Some(bt.bind_group_layout);

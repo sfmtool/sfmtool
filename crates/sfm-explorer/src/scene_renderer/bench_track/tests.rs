@@ -137,22 +137,27 @@ fn the_pass_pipelines_agree_with_the_buffers_the_upload_writes() {
     let errors = device.push_error_scope(wgpu::ErrorFilter::Validation);
 
     let resources = super::super::pipelines::bench_track::create(&device);
-    let output = device
-        .create_texture(&wgpu::TextureDescriptor {
-            label: Some("edl output"),
-            size: wgpu::Extent3d {
-                width: 64,
-                height: 64,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: super::super::gpu_types::EDL_OUTPUT_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        })
-        .create_view(&Default::default());
+    let output_texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("edl output"),
+        size: wgpu::Extent3d {
+            width: 64,
+            height: 64,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: super::super::gpu_types::EDL_OUTPUT_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[super::super::gpu_types::MEASUREMENT_TARGET_FORMAT],
+    });
+    let output = output_texture.create_view(&Default::default());
+    // The measurements draw into the same texture read as encoded values,
+    // as `SceneRenderer::render_bench_track` does.
+    let encoded = output_texture.create_view(&wgpu::TextureViewDescriptor {
+        format: Some(super::super::gpu_types::MEASUREMENT_TARGET_FORMAT),
+        ..Default::default()
+    });
     let depth = device
         .create_texture(&wgpu::TextureDescriptor {
             label: Some("hw depth"),
@@ -227,27 +232,34 @@ fn the_pass_pipelines_agree_with_the_buffers_the_upload_writes() {
     let measurement_buffer = buffer("measurement edges", bytemuck::cast_slice(&measurements));
 
     let mut encoder = device.create_command_encoder(&Default::default());
+    let begin = |encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView| {
+        encoder
+            .begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("bench track pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
+            })
+            .forget_lifetime()
+    };
     {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("bench track pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &output,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
-        pass.set_pipeline(&resources.edge_pipeline);
+        let mut pass = begin(&mut encoder, &encoded);
+        pass.set_pipeline(&resources.measurement_pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.set_vertex_buffer(0, quad.slice(..));
         pass.set_vertex_buffer(1, measurement_buffer.slice(..));
         pass.draw(0..4, 0..measurements.len() as u32);
-
+    }
+    {
+        let mut pass = begin(&mut encoder, &output);
         pass.set_pipeline(&resources.disc_pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.set_vertex_buffer(0, disc_buffer.slice(..));
@@ -337,4 +349,60 @@ fn an_upload_of_measurements_holds_one_instance_per_ribbon_and_nothing_for_none(
     assert!(r.measurement_edge_buffer.is_none());
     assert_eq!(r.bench_pass_count(), 0);
     device.poll(wgpu::PollType::Poll).expect("device poll");
+}
+
+/// A translucent measurement colour, composited over a background by the blend
+/// the measurements' pipeline does on the target it draws into, gives what
+/// egui's own painting of the same colour gives, to within one level in 255:
+/// the dimmed others of *Show all measurements* and the halo, over black, a
+/// dark grey, a mid grey and white. The linear-light blend of an sRGB target
+/// would draw the dimmed grey over the dark background some 50 levels lighter.
+#[test]
+fn a_translucent_measurement_composites_as_egui_painted_it() {
+    use crate::measurement_marks::{HALO, OTHER_OPACITY, STORED_RGB};
+    use crate::viewer_3d::measurements::encoded_rgba;
+    use egui::Color32;
+
+    // The target holds encoded values and does no conversion, and the blend
+    // is straight alpha: out = src · a + dst · (1 − a).
+    assert!(!super::super::gpu_types::MEASUREMENT_TARGET_FORMAT.is_srgb());
+    let blend = wgpu::BlendState::ALPHA_BLENDING.color;
+    assert_eq!(blend.src_factor, wgpu::BlendFactor::SrcAlpha);
+    assert_eq!(blend.dst_factor, wgpu::BlendFactor::OneMinusSrcAlpha);
+    assert_eq!(blend.operation, wgpu::BlendOperation::Add);
+    let pipeline = |src: [f32; 4], dst: f32| src[0] * src[3] + dst * (1.0 - src[3]);
+    // egui: premultiplied bytes, `p + dst · (1 − a)`, on encoded values.
+    let egui = |color: Color32, dst: f32| {
+        let [r, _, _, a] = color.to_array().map(|v| f32::from(v) / 255.0);
+        r + dst * (1.0 - a)
+    };
+    // What an sRGB target's blend in linear light gives for the same colour.
+    let to_linear = |v: f32| egui::ecolor::linear_f32_from_gamma_u8((v * 255.0).round() as u8);
+    let to_encoded = |v: f32| egui::ecolor::gamma_u8_from_linear_f32(v) as f32 / 255.0;
+    let linear = |color: Color32, dst: f32| {
+        let [r, _, _, a] = color.to_srgba_unmultiplied().map(|v| f32::from(v) / 255.0);
+        to_encoded(to_linear(r) * a + to_linear(dst) * (1.0 - a))
+    };
+
+    let grey = Color32::from_rgb(STORED_RGB[0], STORED_RGB[1], STORED_RGB[2]);
+    let dimmed = grey.gamma_multiply(OTHER_OPACITY);
+    let tint = Color32::from_rgb(220, 120, 40).gamma_multiply(OTHER_OPACITY);
+    for color in [dimmed, HALO, tint] {
+        for background in [0u8, 30, 128, 255] {
+            let dst = f32::from(background) / 255.0;
+            let drawn = pipeline(encoded_rgba(color), dst);
+            let painted = egui(color, dst);
+            assert!(
+                (drawn - painted).abs() <= 1.0 / 255.0,
+                "{color:?} over {background}: {} != {}",
+                drawn * 255.0,
+                painted * 255.0
+            );
+        }
+    }
+    let dark = 30.0 / 255.0;
+    assert!(
+        (linear(dimmed, dark) - egui(dimmed, dark)) * 255.0 > 40.0,
+        "the linear blend is the one that drew it lighter"
+    );
 }
