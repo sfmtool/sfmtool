@@ -315,21 +315,6 @@ fn the_figure_fades_behind_the_scene_and_the_measurements_do_not() {
         ],
         "a measurement holds at BEHIND_OPACITY behind the scene"
     );
-
-    // What the flag does: an edge that does not fade is drawn at the shared
-    // BEHIND_OPACITY wherever it is behind, before any fog is read.
-    let shader = include_str!("../../shaders/bench_track.wgsl");
-    let lines: Vec<&str> = shader.lines().map(str::trim).collect();
-    let flag = lines
-        .iter()
-        .position(|l| *l == "if fade == 0.0 {")
-        .expect("bench_track.wgsl tests the fade flag");
-    assert_eq!(lines[flag + 1], "return BEHIND_OPACITY;");
-    let fog = lines
-        .iter()
-        .position(|l| l.contains("exp(-behind / uniforms.fog_distance)"))
-        .expect("the figure still fades");
-    assert!(flag < fog, "the flag is read before the fog");
 }
 
 #[test]
@@ -352,23 +337,4 @@ fn an_upload_of_measurements_holds_one_instance_per_ribbon_and_nothing_for_none(
     assert!(r.measurement_edge_buffer.is_none());
     assert_eq!(r.bench_pass_count(), 0);
     device.poll(wgpu::PollType::Poll).expect("device poll");
-}
-
-#[test]
-fn the_pass_clips_a_finite_edge_at_the_near_plane() {
-    // A measurement's line with one end behind the eye is handed to the pass
-    // with that end as it is; the edge shader clips it at the near plane in
-    // view space before the divide, as it clips the figure's own segments.
-    let shader = include_str!("../../shaders/bench_track.wgsl");
-    for line in [
-        "let near_z = -uniforms.near;",
-        "if !a_in_front && !b_in_front {",
-        "world_a = mix(world_a, world_b, t);",
-        "world_b = mix(world_a, world_b, t);",
-    ] {
-        assert!(
-            shader.lines().any(|l| l.trim() == line),
-            "bench_track.wgsl does not declare `{line}`"
-        );
-    }
 }

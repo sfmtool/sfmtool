@@ -643,9 +643,11 @@ wgpu's `noop` backend, where wgpu-core still performs its full validation while
 wgpu-hal stubs the driver: a vertex layout that disagrees with the instance
 struct, or a uniform block whose Rust side has drifted from the WGSL, is a
 validation error there rather than a blank pass on a real GPU. The same tests
-check that the figure's edges fade and the measurements' do not, at the widths
-each carries, and that the measurements' upload holds one instance per ribbon.
-The depth-aware blend itself is checked by eye, with MCP screenshots of the viewport showing a
+check that the figure's edges carry the fade flag and the measurements' do
+not, at the widths each carries, and that the measurements' upload holds one
+instance per ribbon. What the shader does with them, the depth-aware blend with
+and without the fade and the clip at the near plane, runs on no `noop` device,
+so it is checked by eye, with MCP screenshots of the viewport showing a
 square lying on a surface, one in front of it and one behind it
 ([`mcp-server.md`](mcp-server.md)).
 
