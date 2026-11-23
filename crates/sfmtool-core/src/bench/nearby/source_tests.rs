@@ -691,7 +691,7 @@ fn the_constellation_carries_the_pixel_into_every_image_it_matches() {
         ..ConstellationSeedOptions::default()
     };
     assert!(
-        constellation_seeds(&edited, &views, &index, 0, pixel, &options,)
+        constellation_seeds(&edited, &views, &index, 0, pixel, &options)
             .expect("valid")
             .is_empty()
     );
