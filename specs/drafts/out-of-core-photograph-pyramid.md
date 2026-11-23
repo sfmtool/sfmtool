@@ -2608,14 +2608,22 @@ in core. Step 17 turns the tier on.
         a read with the whole pyramid read it through `held_pyramid` in the
         core and, in the viewer, through `AppState::cached_pyramid`, which
         reads each level whole with `get_level`.
-      - **13e2, tiles the source owns.** **Built.** `from_image` cuts the
-        pyramid `ImageU8Pyramid::from_image` builds into every tile of its
-        layout, each with its border, held by the photograph as `from_tiles`
-        holds them, and drops the pyramid; a tile is cut by the same clamped
-        copy `from_pyramid`'s tile read makes, so its pixels are the same.
-        The crate-private `TiledPhotograph::cut` cuts a pyramid of whole
-        levels so, and `from_image` is `cut` of the image's full-depth
-        pyramid at 512 px. A photograph that holds every tile of its layout
+      - **13e2, tiles the source owns.** **Built.** `from_image` holds
+        every tile of its layout of the pyramid `ImageU8Pyramid::from_image`
+        builds, each with its border, as `from_tiles` holds them; a tile is
+        cut by the same clamped copy `from_pyramid`'s tile read makes, so
+        its pixels are the same. It never holds that pyramid whole: it cuts
+        one level at a time, makes the next from it with `downsample_2x` and
+        the pyramid's stop rule, and drops it, so an image being cut peaks at
+        about 2.25 times its bytes (its level-0 tiles, level 0 and level 1).
+        The bindings built a copy of each image and its pyramid, about 2.33
+        times, so their peak memory is no higher for any thread count;
+        building the pyramid and then cutting it would have held the pyramid
+        and its tiles, about 2.67 times, more than before once the threads
+        number three quarters of the images. The test-only
+        `TiledPhotograph::cut` cuts a pyramid of whole levels already built,
+        for the tests that build a pyramid of fewer levels. A photograph
+        that holds every tile of its layout
         (`from_image`'s, or `from_tiles` handed all of them) skips the check
         for tiles it lacks before a read. `with_tile_size` puts each level
         together from the tiles and cuts it again at another size. The
@@ -2651,8 +2659,11 @@ in core. Step 17 turns the tier on.
         and reads each whole level and rectangles across tile edges and at
         the far corner as the pyramid holds them, cut at 512 px over a
         photograph three tiles wide and two high, and a smaller photograph cut
-        again at 16 px (0.02 s);
-        the bindings' tests pass unchanged.
+        again at 16 px; and `from_image`'s tiles, cut level by level, equal
+        `cut` of the whole pyramid bit for bit, with the same levels, for
+        sizes whose pyramid stops short of the full depth and odd sizes over
+        many tiles (the two 0.02 s together); the bindings' tests pass
+        unchanged.
       - **13e3, the cache keeps tiles.** A decoded photograph's slot keeps
         its layout, and the cache keeps its tiles, cut from the decode's
         pyramid, which is then dropped: the tiles a request asked for

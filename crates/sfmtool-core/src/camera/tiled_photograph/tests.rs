@@ -135,3 +135,39 @@ fn a_photograph_from_an_image_holds_every_tile_of_its_pyramid() {
     let cut_again = TiledPhotograph::from_image(small).with_tile_size(16);
     assert_holds_the_pyramid(&cut_again, &small_pyramid, 16);
 }
+
+/// `from_image`, which cuts one level at a time and makes the next from it,
+/// holds the tiles `cut` holds of the whole pyramid `ImageU8Pyramid::from_image`
+/// builds, bit for bit, and the same levels, for sizes whose pyramid stops
+/// short of the full depth (a side of 1 or 3) and odd sizes over many tiles.
+#[test]
+fn from_image_cuts_the_tiles_of_the_whole_pyramid_level_by_level() {
+    for (w, h) in [
+        (1037, 555),
+        (1, 1),
+        (1, 9),
+        (3, 1000),
+        (2, 2),
+        (515, 7),
+        (33, 1030),
+    ] {
+        let image = photograph(w, h);
+        let pyramid = ImageU8Pyramid::build(&image, ImageU8Pyramid::full_levels(w, h));
+        let whole = TiledPhotograph::cut(&pyramid, PHOTOGRAPH_TILE_SIZE);
+        let source = TiledPhotograph::from_image(image);
+        assert_eq!(source.layout().levels(), pyramid.num_levels(), "{w} x {h}");
+        assert_eq!(source.channels(), whole.channels());
+        let (Pixels::Tiles { held, every: true }, Pixels::Tiles { held: expected, .. }) =
+            (&source.pixels, &whole.pixels)
+        else {
+            panic!("both hold every tile");
+        };
+        assert_eq!(held.len(), expected.len(), "{w} x {h}");
+        for (key, tile) in expected {
+            let got = &held[key];
+            assert_eq!((got.origin, got.size), (tile.origin, tile.size), "{key:?}");
+            assert_eq!(got.pixels.width(), tile.pixels.width(), "{key:?}");
+            assert_eq!(got.pixels.data(), tile.pixels.data(), "{w} x {h} {key:?}");
+        }
+    }
+}

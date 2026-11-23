@@ -121,23 +121,52 @@ enum Pixels {
 
 impl TiledPhotograph {
     /// Every photograph tile of the image's pyramid of
-    /// [`ImageU8Pyramid::full_levels`] depth, built by
-    /// [`ImageU8Pyramid::from_image`], cut at [`PHOTOGRAPH_TILE_SIZE`] and
-    /// held, and the pyramid dropped. A read gives the values the whole
-    /// pyramid gives, bit for bit.
+    /// [`ImageU8Pyramid::full_levels`] depth, the pyramid
+    /// [`ImageU8Pyramid::from_image`] builds, cut at [`PHOTOGRAPH_TILE_SIZE`]
+    /// and held. A read gives the values the whole pyramid gives, bit for
+    /// bit.
+    ///
+    /// The pyramid is never held whole: each level is cut, the next made
+    /// from it with [`ImageU8::downsample_2x`] as the pyramid makes it, and
+    /// the level dropped, so the call holds at most the tiles cut so far, one
+    /// level and the one below it, about 2.25 times the image's bytes at its
+    /// peak, less than the pyramid and its tiles together.
     pub fn from_image(image: ImageU8) -> Self {
-        let levels = ImageU8Pyramid::full_levels(image.width(), image.height());
-        Self::cut(
-            &ImageU8Pyramid::from_image(image, levels),
-            PHOTOGRAPH_TILE_SIZE,
-        )
+        let full = ImageU8Pyramid::full_levels(image.width(), image.height());
+        // The levels `ImageU8Pyramid::from_image` builds: it stops before a
+        // level that would have a side of 0.
+        let (mut w, mut h, mut levels) = (image.width(), image.height(), 1);
+        while levels < full && w >= 2 && h >= 2 {
+            (w, h, levels) = (w / 2, h / 2, levels + 1);
+        }
+        let layout =
+            PyramidLayout::in_memory(image.width(), image.height(), levels, PHOTOGRAPH_TILE_SIZE);
+        let channels = image.channels();
+        // One level at a time: cut it, make the next from it as the pyramid
+        // does, and drop it, so no more than one level and the one below it
+        // are held beside the tiles.
+        let mut held = HashMap::new();
+        let mut current = image;
+        for level in 0..levels {
+            cut_level(&layout, level, &current, &mut held);
+            if level + 1 < levels {
+                current = current.downsample_2x();
+            }
+        }
+        Self {
+            pixels: Pixels::Tiles { held, every: true },
+            layout,
+            channels,
+        }
     }
 
     /// Every photograph tile of `pyramid`, a pyramid of whole levels such as
     /// [`ImageU8Pyramid::from_image`] builds, cut at `tile_size` px (a size
-    /// of 0 is taken as 1) and held, as [`Self::from_tiles`] holds them: what
-    /// [`Self::from_image`] holds, and in the tests the tiles of a pyramid of
-    /// fewer levels than the full depth.
+    /// of 0 is taken as 1) and held, as [`Self::from_tiles`] holds them: for
+    /// the tests that build a pyramid of fewer levels than the full depth,
+    /// and the test that holds [`Self::from_image`]'s tiles, cut level by
+    /// level, to the whole pyramid's.
+    #[cfg(test)]
     pub(crate) fn cut(pyramid: &ImageU8Pyramid, tile_size: u32) -> Self {
         debug_assert!(
             (0..pyramid.num_levels()).all(|l| pyramid.level_origin(l) == [0, 0]
@@ -157,35 +186,9 @@ impl TiledPhotograph {
         let (width, height) = (levels[0].width(), levels[0].height());
         let layout = PyramidLayout::in_memory(width, height, levels.len(), tile_size);
         let channels = levels[0].channels();
-        let ts = layout.tile_size();
         let mut held = HashMap::new();
         for (level, image) in levels.iter().enumerate() {
-            let (cols, rows) = layout.tiles(level);
-            let (w, h) = layout.level_size(level);
-            for row in 0..rows {
-                for col in 0..cols {
-                    let key = TileKey {
-                        level: level as u8,
-                        col,
-                        row,
-                    };
-                    let origin = [col * ts, row * ts];
-                    let size = [ts.min(w - origin[0]), ts.min(h - origin[1])];
-                    let pixels = copy_clamped(
-                        HeldLevel::whole(image),
-                        (w, h),
-                        [i64::from(origin[0]) - 1, i64::from(origin[1]) - 1],
-                        [size[0] + 2, size[1] + 2],
-                    );
-                    let tile = PhotographTile {
-                        key,
-                        origin,
-                        size,
-                        pixels,
-                    };
-                    held.insert(key, Arc::new(tile));
-                }
-            }
+            cut_level(&layout, level, image, &mut held);
         }
         Self {
             pixels: Pixels::Tiles { held, every: true },
@@ -575,6 +578,43 @@ fn copy_clamped(held: HeldLevel<'_>, full: (u32, u32), start: [i64; 2], size: [u
         }
     }
     ImageU8::new(size[0], size[1], img.channels(), data)
+}
+
+/// Every photograph tile of level `level` of `layout`, whose whole pixels are
+/// `image`, each with its border, into `held`.
+fn cut_level(
+    layout: &PyramidLayout,
+    level: usize,
+    image: &ImageU8,
+    held: &mut HashMap<TileKey, Arc<PhotographTile>>,
+) {
+    let ts = layout.tile_size();
+    let (cols, rows) = layout.tiles(level);
+    let (w, h) = layout.level_size(level);
+    for row in 0..rows {
+        for col in 0..cols {
+            let key = TileKey {
+                level: level as u8,
+                col,
+                row,
+            };
+            let origin = [col * ts, row * ts];
+            let size = [ts.min(w - origin[0]), ts.min(h - origin[1])];
+            let pixels = copy_clamped(
+                HeldLevel::whole(image),
+                (w, h),
+                [i64::from(origin[0]) - 1, i64::from(origin[1]) - 1],
+                [size[0] + 2, size[1] + 2],
+            );
+            let tile = PhotographTile {
+                key,
+                origin,
+                size,
+                pixels,
+            };
+            held.insert(key, Arc::new(tile));
+        }
+    }
 }
 
 /// The number of tiles of every level of `layout`.
