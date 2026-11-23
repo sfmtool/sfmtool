@@ -217,6 +217,80 @@ fn a_failed_decode_is_answered_as_unreadable_until_the_file_changes() {
     assert!(is_ready(&display_tiles(source, &keys, &ctx)));
 }
 
+/// Panels that show more photographs whose decode fails than the answers
+/// kept for the panels, here five under a cache that keeps nothing and so
+/// remembers no failure itself, and ask for each on every frame, do not
+/// decode them in turn: once each has failed, a look answers it as
+/// unreadable and starts only a check of its file, which finds it unchanged
+/// and asks for no repaint, so the frames end.
+#[test]
+fn more_failed_photographs_than_the_kept_answers_are_not_decoded_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths: Vec<PathBuf> = (0..MAX_ANSWERED_PHOTOGRAPHS + 1)
+        .map(|i| {
+            let path = dir.path().join(format!("cut_short_{i}.png"));
+            image::RgbImage::from_fn(64, 64, |x, y| image::Rgb([x as u8, y as u8, i as u8]))
+                .save(&path)
+                .unwrap();
+            let bytes = std::fs::read(&path).unwrap();
+            std::fs::write(&path, &bytes[..bytes.len() / 2]).unwrap();
+            path
+        })
+        .collect();
+    let cache = tile_cache(0, 1 << 30);
+    let (requests, queue) = PhotographRequests::queued();
+    let ctx = egui::Context::default();
+    let repaints = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&repaints);
+    ctx.set_request_repaint_callback(move |_| {
+        counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    });
+    let pool = RegionPool::with_capacity(u64::MAX);
+    let mut needs = vec![Vec::new(); paths.len()];
+    let mut look = || {
+        paths
+            .iter()
+            .zip(&mut needs)
+            .map(|(path, needs)| {
+                let source = PhotographSource {
+                    cache: &cache,
+                    requests: &requests,
+                    path,
+                };
+                matches!(
+                    read_peeked(source, needs, &ctx, |src| read_rect(src, &pool, LEFT)),
+                    PeekedRead::Unreadable
+                )
+            })
+            .collect::<Vec<bool>>()
+    };
+    // The headers, then the first tiles, whose decodes fail.
+    for tasks in ["the header reads", "the decodes"] {
+        assert!(look().iter().all(|unreadable| !unreadable), "{tasks}");
+        assert_eq!(queue.run_off_this_thread(), paths.len(), "{tasks}");
+    }
+    assert_eq!(cache.stats().misses, paths.len() as u64);
+    let repainted = repaints.load(std::sync::atomic::Ordering::Relaxed);
+    for round in 0..10 {
+        assert!(look().iter().all(|&unreadable| unreadable), "round {round}");
+        assert_eq!(
+            queue.run_off_this_thread(),
+            paths.len(),
+            "a check of each file, round {round}"
+        );
+        assert_eq!(
+            cache.stats().misses,
+            paths.len() as u64,
+            "decoded again, round {round}"
+        );
+    }
+    assert_eq!(
+        repaints.load(std::sync::atomic::Ordering::Relaxed),
+        repainted,
+        "a repaint asked for with nothing changed"
+    );
+}
+
 /// Tiles a decode answered for a view that has moved on are not kept: each
 /// ask for the photograph drops its kept tiles it does not ask for, so a
 /// panel that pans while its decodes run holds at most one decode's answer,
@@ -883,18 +957,16 @@ fn a_photograph_keeps_at_most_max_kept_tiles_answered_tiles() {
         row: 0,
     };
     let answer = |cols: std::ops::Range<u32>| {
-        Answered::Tiles(
-            cols.map(|col| {
-                let tile = PhotographTile {
-                    key: key(col),
-                    origin: [col, 0],
-                    size: [1, 1],
-                    pixels: ImageU8::new(3, 3, 3, vec![0; 27]),
-                };
-                (key(col), Arc::new(tile))
-            })
-            .collect(),
-        )
+        cols.map(|col| {
+            let tile = PhotographTile {
+                key: key(col),
+                origin: [col, 0],
+                size: [1, 1],
+                pixels: ImageU8::new(3, 3, 3, vec![0; 27]),
+            };
+            (key(col), Arc::new(tile))
+        })
+        .collect::<Answered>()
     };
     let mut tiles = TileRequests::default();
     tiles.keep(path.clone(), answer(0..20));

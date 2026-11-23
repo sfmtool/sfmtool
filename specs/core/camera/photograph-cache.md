@@ -472,10 +472,16 @@ reconstruction's photographs goes through it except the ones under
   photograph's kept tiles are at most 32, or one decode's answer when that
   is more, an answer that would take them past 32 replacing them, and only
   the four photographs answered last are kept.
-  A decode's failure is kept there too, with the file's length and
-  modification time, so under a budget of 0 the panel says "Failed to load
-  image" rather than decode again, until a check of the file on the rayon
-  pool, started by a frame that asks for it, finds that the file changed. A key the photograph does not have, which
+  A decode's failure is kept there too, apart from the answered tiles and
+  for every photograph, with the file's length and modification time, so
+  under a budget of 0 the panel says "Failed to load image" rather than
+  decode again, until a check of the file on the rayon pool, started by a
+  frame that asks for it, finds that the file changed; only then does the
+  check ask for a repaint. The failures are not bounded as the answers are,
+  since a failure dropped to make room would be decoded again by the next
+  frame that shows the photograph, and panels showing more such photographs
+  than the bound would decode them in turn and repaint without end. A key
+  the photograph does not have, which
   only a layout read before the file changed size names, makes the decode
   `forget` the path, so the next frame reads the header again. While
   animation plays the panel asks for the next image's tiles a frame ahead
@@ -680,9 +686,10 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   test steps on a thread of its own bounded by a time limit; a decode
   refused by the build budget ending at once while the other reservation is
   held, asked again on the next look and decoding once it is given back; a
-  failed decode answered as
-  unreadable and not decoded again until its file changes; tiles answered for
-  a view that moved on dropped; a key the photograph does not have reading the
+  failed decode answered as unreadable and not decoded again until its file
+  changes, five such photographs looked at in turn under a budget of 0
+  neither decoded again nor repainted for; tiles answered for a view that
+  moved on dropped; a key the photograph does not have reading the
   layout again; tiles asked for ahead handed over with no second decode; the
   3D background's level read once, off the calling thread, with a budget and
   with a budget of 0, built from the tiles with one call to the cache and
