@@ -67,7 +67,7 @@ fn refine_sources(
     member_images: &[u32],
     member_features: &[u32],
     params: &ClusterRefineParams,
-    progress: Option<&AtomicUsize>,
+    done: Option<&AtomicUsize>,
 ) -> ClusterRefineResult {
     refine_cluster_patches(
         sources,
@@ -77,7 +77,7 @@ fn refine_sources(
         member_images,
         member_features,
         params,
-        progress,
+        done,
         &Progress::none(),
     )
     .expect("photographs in memory read")
@@ -94,7 +94,7 @@ fn refine_sources_with_elongation_limit(
     member_features: &[u32],
     params: &ClusterRefineParams,
     max_elongation: f64,
-    progress: Option<&AtomicUsize>,
+    done: Option<&AtomicUsize>,
 ) -> ClusterRefineResult {
     refine_cluster_patches_with_elongation_limit(
         sources,
@@ -105,7 +105,7 @@ fn refine_sources_with_elongation_limit(
         member_features,
         params,
         max_elongation,
-        progress,
+        done,
         &Progress::none(),
     )
     .expect("photographs in memory read")
