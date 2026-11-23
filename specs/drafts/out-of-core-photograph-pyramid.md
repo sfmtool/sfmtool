@@ -2624,12 +2624,13 @@ in core. Step 17 turns the tier on.
         `build_photographs_from_image_list` in place of
         `build_pyramids_from_image_list`, and the cluster refinement's in
         [matching/cluster.rs](../../crates/sfmtool-py/src/matching/cluster.rs))
-        take `from_image`. The pairwise-flow scene and the tests that built
+        take `from_image`, and so does the demo scene's
+        `tiled_photographs`. The pairwise-flow scene and the tests that built
         a whole pyramid only to read it through `from_pyramid` take
-        `from_image` where the pyramid is the image's full depth, and in the
-        core `cut` of the pyramid they build where it has fewer levels (the
-        four of the pairwise-flow and bench scenes, the five of the patch
-        kernels' scenes), so no test's input changes. A test that compares a
+        `from_image` in the viewer, where the pyramid is the image's full
+        depth, and in the core `cut` of the pyramid they build, which often
+        has fewer levels than the full depth (four in the pairwise-flow and
+        bench scenes), so no test's input changes. A test that compares a
         read with that pyramid builds the pyramid itself: the bench scene
         keeps the pyramids it cuts (`Scene::pyramid`), and a test that only
         needs a level's pixels reads it with the crate-private
@@ -2649,7 +2650,8 @@ in core. Step 17 turns the tier on.
         pyramid, each tile with its border the pyramid's pixels bit for bit,
         and reads each whole level and rectangles across tile edges and at
         the far corner as the pyramid holds them, cut at 512 px over a
-        photograph two tiles wide and high, and cut again at 16 px (0.02 s);
+        photograph three tiles wide and two high, and a smaller photograph cut
+        again at 16 px (0.02 s);
         the bindings' tests pass unchanged.
       - **13e3, the cache keeps tiles.** A decoded photograph's slot keeps
         its layout, and the cache keeps its tiles, cut from the decode's

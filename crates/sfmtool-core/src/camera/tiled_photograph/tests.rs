@@ -122,8 +122,8 @@ fn assert_holds_the_pyramid(source: &TiledPhotograph, pyramid: &ImageU8Pyramid, 
 
 #[test]
 fn a_photograph_from_an_image_holds_every_tile_of_its_pyramid() {
-    // Over two 512 px tiles on each axis at level 0, with partial tiles at
-    // the right and bottom edges.
+    // Three 512 px tiles across and two down at level 0, the last of each
+    // partial at the right and bottom edges.
     let image = photograph(1037, 555);
     let pyramid = ImageU8Pyramid::build(&image, ImageU8Pyramid::full_levels(1037, 555));
     let source = TiledPhotograph::from_image(image);

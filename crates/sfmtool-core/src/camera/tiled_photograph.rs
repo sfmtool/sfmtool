@@ -9,8 +9,8 @@
 //! It reads them from the photograph tiles it holds and no others: every tile
 //! of an image's pyramid ([`TiledPhotograph::from_image`]), or the tiles it
 //! was made of ([`TiledPhotograph::from_tiles`]); or from a whole pyramid
-//! read in place, which only the photograph cache still makes. The render entry points of
-//! [`sampler`](crate::camera::sampler) are what read it; see
+//! read in place, which only the photograph cache still makes. The render
+//! entry points of [`sampler`](crate::camera::sampler) are what read it; see
 //! `specs/core/camera/view-region-pyramids.md`.
 
 use std::collections::HashMap;

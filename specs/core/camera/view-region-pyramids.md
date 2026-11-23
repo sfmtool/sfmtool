@@ -433,8 +433,8 @@ and copies again once they are released.
 checks that a photograph `from_image` makes holds every tile of the image's
 pyramid, each tile, with its border, the pyramid's pixels bit for bit, and
 reads each whole level and rectangles across tile edges and at the level's
-far corner as the pyramid holds them, cut at 512 px over a photograph two
-tiles wide and high and cut again at 16 px.
+far corner as the pyramid holds them, cut at 512 px over a photograph three
+tiles wide and two high, and a smaller photograph cut again at 16 px.
 [regions/tests.rs](../../../crates/sfmtool-core/src/camera/sampler/regions/tests.rs)
 checks that a region pyramid of the required regions equals the whole
 pyramid, that one a pixel smaller on any inner edge does not, and that a map
