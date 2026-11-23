@@ -936,9 +936,9 @@ pub fn projected_patch_frame(
 /// `progress` takes the phases, the view count and the cancellation;
 /// `renders` takes the detail phases that time the renders under each
 /// sampler, and is the `Progress` the renders' reads poll for cancellation,
-/// since it is the caller's own in both cases. A single selection passes one `Progress` as both, and the batch
-/// passes its own only as `renders`, since many patches counting views into
-/// one bar would overwrite each other.
+/// since it is the caller's own in both cases. A single selection passes one
+/// `Progress` as both, and the batch passes its own only as `renders`, since
+/// many patches counting views into one bar would overwrite each other.
 #[allow(clippy::too_many_arguments)]
 fn select_patch_views_impl(
     patch: &OrientedPatch,

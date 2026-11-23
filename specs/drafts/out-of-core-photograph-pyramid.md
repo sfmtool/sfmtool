@@ -1405,11 +1405,12 @@ reads of *Find Nearby Tracks*, and `clipped_share`. Each takes the source
 kernel's caller made for this kernel call (`RegionPool::for_kernel_call()`,
 whatever way the caller fetched its sources; a kernel that calls another
 passes its own pool down) and the caller's `&Progress`, which a read that
-decodes polls for cancellation (built in step 13e4a), and returns `Result<_, PhotographReadError>`:
-it works out the regions the read needs and copies them from the pool or
-reads through tiles, either of which can fail for a photograph the cache
-reads, and never fails for one built `from_image`. No kernel computes a
-region or touches a photograph tile.
+decodes polls for cancellation (the parameter built in step 13e4a, the
+decode that polls it in 13e4b), and returns
+`Result<_, PhotographReadError>`: it works out the regions the read needs
+and copies them from the pool or reads through tiles, either of which can
+fail for a photograph the cache reads, and never fails for one built
+`from_image`. No kernel computes a region or touches a photograph tile.
 
 **Kernels pass the error up.** Every kernel that reads from a
 `ProjectedImage` calls the render entry points and returns the error
@@ -2786,11 +2787,12 @@ in core. Step 17 turns the tier on.
           count of finished clusters is renamed `done`, gain `progress`
           after it; `depth_layers`, `read_patch_along_ray`,
           `refine_view_against_reference`, `render_bitmap_in_place` and
-          `spawn_candidate_tracks` gain it as their last argument; and so do the crate-private kernels on the way: the
-          cluster refinement's member, template and piecewise reads, the
-          sub-pixel refinement's renders, the keypoint localizer's last
-          alignment, `TrackReferences`' `build`, `search` and `score`, the
-          bench's grid-plane, pairwise-flow, evaluation, refit, far-field and
+          `spawn_candidate_tracks` gain it as their last argument; and so
+          do the crate-private kernels on the way: the cluster refinement's
+          member, template and piecewise reads, the sub-pixel refinement's
+          renders, the keypoint localizer's last alignment,
+          `TrackReferences`' `build`, `search` and `score`, the bench's
+          grid-plane, pairwise-flow, evaluation, refit, far-field and
           *Find Nearby Tracks* reads, the steps of `build_track_at_pixel`,
           and `add_image_to_tracks`' measurement and bitmap scores. Where a
           kernel handed a nested call `Progress::none()` so that its reports
@@ -2809,12 +2811,12 @@ in core. Step 17 turns the tier on.
           `TrackReferences`' `build` and `score` pass a cancelled render on
           as `Cancelled` rather than leaving the view out.
           `constellation_seeds` keeps its signature: it reads no photograph,
-          and its descriptor search is quick. The grown plane's step keeps the `Progress`
-          in its `StepReads`, beside the failure its renders keep, so its
-          objective's trait methods keep their signatures, and the view
-          selection passes its `renders` `Progress`, which is the caller's
-          in a single selection and in a batch. A panel on the GUI thread
-          (Track View's tiles and patches, the Track Table's pictures and
+          and its descriptor search is quick. The grown plane's step keeps
+          the `Progress` in its `StepReads`, beside the failure its renders
+          keep, so its objective's trait methods keep their signatures, and
+          the view selection passes its `renders` `Progress`, which is the
+          caller's in a single selection and in a batch. A panel on the GUI
+          thread (Track View's tiles and patches, the Track Table's pictures and
           Measurement View's crops), whose photograph holds the tiles it
           renders, and the bindings that have no cancel flag pass
           `&Progress::none()`, and so do the single-patch helpers
