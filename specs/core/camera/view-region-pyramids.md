@@ -184,8 +184,9 @@ whose renders keep their failure aside rather than return it, as the grown
 plane's step does, keeps the `Progress` beside the failure. The cancel flag
 could instead have been carried by the region pool or `ViewRegions`, which
 would have changed no kernel's signature; a `Progress` in each read is what
-the [standards](../../STANDARDS.md#long-running-functions-take-a-progress) ask of a call that can run longer than a
-second, as a decode of a large photograph can.
+the [standards](../../STANDARDS.md#long-running-functions-take-a-progress) ask
+of a call that can run longer than a second, as a decode of a large photograph
+can.
 
 The pool belongs to a kernel call, not to a thread or a view: the caller of a
 kernel makes one for the call and passes it in, so a call over 151 views shares
@@ -443,7 +444,8 @@ eight threads never hold more than a small pool, that each copied read
 reserves its grown regions, and that the tile path pins no more than its
 window; and that every entry point given a cancelled `Progress` reads a
 photograph that holds its tiles, through copied regions and through the tile
-path, as it reads it given `Progress::none()`. [source/kept_tests.rs](../../../crates/sfmtool-core/src/camera/sampler/source/kept_tests.rs)
+path, as it reads it given `Progress::none()`.
+[source/kept_tests.rs](../../../crates/sfmtool-core/src/camera/sampler/source/kept_tests.rs)
 checks that regions assembled from tiles equal the whole pyramid's pixels at
 every level, across tile edges and at the image's edges; that each kept region
 is its required region grown by the margin and clipped to the level, for sides

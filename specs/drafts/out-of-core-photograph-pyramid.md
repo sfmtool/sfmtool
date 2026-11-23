@@ -2566,12 +2566,12 @@ in core. Step 17 turns the tier on.
       through `write_web_export` as its failure, as it reports the
       `ValueError` of a refusal, since a read can fail from here on.
 
-      It is six pull requests, 13e1 to 13e5 with 13e4 in two, each leaving every result
-      identical. The answers' type comes first, while the cache still holds
-      whole pyramids, so every caller takes what the cache answers before
-      what the cache holds changes; then the tiles a source owns, so that
-      nothing but the cache reads a pyramid in place; then the cache's own
-      tiles, with each answer holding every tile of its photograph as a
+      It is six pull requests, 13e1 to 13e5 with 13e4 in two, each leaving
+      every result identical. The answers' type comes first, while the cache
+      still holds whole pyramids, so every caller takes what the cache answers
+      before what the cache holds changes; then the tiles a source owns, so
+      that nothing but the cache reads a pyramid in place; then the cache's
+      own tiles, with each answer holding every tile of its photograph as a
       caller holds a pyramid today; then the answers that hold no tile and
       read through the cache, which is the part a read can fail in, so the
       errors, and `sfm web-export`'s report of a failed read, come with it;
@@ -2831,35 +2831,35 @@ in core. Step 17 turns the tier on.
           path, as it reads it given `Progress::none()`; and in
           [patch/spawn/tests.rs](../../crates/sfmtool-core/src/patch/spawn/tests.rs),
           a cancelled `Progress` stops `spawn_candidate_tracks` with
-          `Cancelled`, its flag reaching the localization and the
-          refinement through `silenced`.
-        - **13e4b, the answers read through the cache.** `get` and
-          `get_many` answer a photograph that holds its layout and the
-          cache's handle on its tiles and no pixel, each tile read going
-          through `get_tile` with the `Progress` the render was given; under
-          a budget of 0 an answer holds the tiles of the decode that made
-          it. `PhotographReadError` gains `Changed`, `NotFound`, `TooLarge`
-          and `Unreadable`, with `From<TileError>` and `From<GetError>`, and
-          every caller reports them as its failure; `sfm web-export` reports
-          the `RuntimeError` of a failed read as its failure. No function's
-          signature changes, since 13e4a gave every read its caller's
-          `Progress`; only `PhotographReadError` gains its variants. Tests: a kernel's `get_many`
-          over 20 in-core photographs decodes them all into tiles in its
-          read phase, so its renders decode nothing when the tiles fit the
-          budget; a `get_many` over 20 photographs holds no pyramid (the
+          `Cancelled`, its flag reaching the localization through
+          `silenced`.
+        - **13e4b, the answers read through the cache.** `get` and `get_many`
+          answer a photograph that holds its layout and the cache's handle on
+          its tiles and no pixel, each tile read going through `get_tile` with
+          the `Progress` the render was given; under a budget of 0 an answer
+          holds the tiles of the decode that made it. `PhotographReadError`
+          gains `Changed`, `NotFound`, `TooLarge` and `Unreadable`, with
+          `From<TileError>` and `From<GetError>`, and every caller reports
+          them as its failure; `sfm web-export` reports the `RuntimeError` of
+          a failed read as its failure. No function's signature changes, since
+          13e4a gave every read its caller's `Progress`; only
+          `PhotographReadError` gains its variants. Tests: a kernel's
+          `get_many` over 20 in-core photographs decodes them all into tiles
+          in its read phase, so its renders decode nothing when the tiles fit
+          the budget; a `get_many` over 20 photographs holds no pyramid (the
           cache's stats show only tiles, within a small budget); a read of a
-          photograph whose file was removed after its tiles were evicted
-          fails with `NotFound` naming it; `sfm web-export` given a
+          photograph whose file was removed after its tiles were evicted fails
+          with `NotFound` naming it; `sfm web-export` given a
           `write_web_export` that raises `RuntimeError` reports it as its
           failure; a render cancelled while it decodes an evicted tile stops
           with the cancellation, and so does a bulk kernel cancelled while a
-          nested call it hands `progress.silenced()` decodes one; under a budget of 0 two renders from one
-          answer decode its photograph once; and the three tests step 13e3
-          removed come back, each with a photograph whose file was removed
-          after its tiles were evicted: the display bitmaps' render, the
-          viewer's open and its conversion to embedded patches each fail
-          with the read's error, naming it, the conversion pushing no
-          version.
+          nested call it hands `progress.silenced()` decodes one; under a
+          budget of 0 two renders from one answer decode its photograph once;
+          and the three tests step 13e3 removed come back, each with a
+          photograph whose file was removed after its tiles were evicted: the
+          display bitmaps' render, the viewer's open and its conversion to
+          embedded patches each fail with the read's error, naming it, the
+          conversion pushing no version.
       - **13e5, the bulk kernels under a small budget.** Tests: a bulk kernel
         whose photographs' tiles do not fit a small budget still completes,
         with its decodes counted, and so does one with a budget smaller than

@@ -982,10 +982,10 @@ A kernel that never asks is simply not cancellable, and says so by never
 touching the flag. A kernel that does not pass a nested call's reports on, as
 each item of a parallel loop does not, hands it `progress.silenced()`, which
 carries the flag and reports nothing, rather than `Progress::none()`, which
-would leave the nested call running after the kernel was cancelled. Which operations are cancellable, what the button does, and
-what a cancelled operation writes to the log are
-[background-tasks.md](background-tasks.md)'s, since they are
-about the worker rather than about the parameter.
+would leave the nested call running after the kernel was cancelled. Which
+operations are cancellable, what the button does, and what a cancelled
+operation writes to the log are [background-tasks.md](background-tasks.md)'s,
+since they are about the worker rather than about the parameter.
 
 ## The Action Log's side
 
