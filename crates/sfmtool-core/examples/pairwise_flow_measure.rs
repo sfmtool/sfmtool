@@ -85,10 +85,10 @@ fn main() {
         budget_bytes: 0,
         ..Default::default()
     });
-    let (pyramids, _) = cache.get_many(&refs, &Progress::none()).expect("decode");
-    let sources: Vec<TiledPhotograph> = pyramids
+    let (found, _) = cache.get_many(&refs, &Progress::none()).expect("decode");
+    let sources: Vec<Arc<TiledPhotograph>> = found
         .into_iter()
-        .map(|p| TiledPhotograph::from_pyramid(p.expect("every image decodes")))
+        .map(|p| p.expect("every image decodes"))
         .collect();
     eprintln!(
         "decoded {} images in {:.1}s",

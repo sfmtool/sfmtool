@@ -1301,9 +1301,8 @@ gesture can answer without doing the read. Beside those views the worker gets a
 clone of the value at the cursor and a clone of the track, so it holds no
 reference into the scene. The images it decodes are the ones the track's
 observations name; every other entry of the view slice is a one-pixel
-placeholder, which no kernel samples. Each photograph reaches the kernel as a
-tiled photograph over the pyramid the cache handed back
-(`TiledPhotograph::from_pyramid`), and the step makes one region pool for its
+placeholder, which no kernel samples. Each photograph reaches the kernel as the
+tiled photograph the cache handed back, and the step makes one region pool for its
 kernel call (`RegionPool::for_kernel_call`,
 [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md)).
 After the kernel the step writes a `read regions` phase whose note counts how

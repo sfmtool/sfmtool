@@ -7,10 +7,12 @@ each image. Decoding a photograph from JPEG and building the image pyramid the
 patch samplers read (the photograph plus successively halved copies, down to
 one or two pixels on the short side) is
 the expensive part of all of them. The photograph cache holds those pyramids
-once decoded, so that whichever part of the program asks next, on whichever
-thread, gets the same pixels without reading the file again, and so that
-memory stays under a set budget however many photographs the reconstruction
-has. A second budget, the build budget, bounds the whole decodes in progress
+once decoded, each read through the tiled photograph the cache answers for it
+(`TiledPhotograph`,
+[view-region-pyramids.md](view-region-pyramids.md)), so that whichever part
+of the program asks next, on whichever thread, gets the same pixels without
+reading the file again, and so that memory stays under a set budget however
+many photographs the reconstruction has. A second budget, the build budget, bounds the whole decodes in progress
 on one cache at once, so a caller asking for hundreds of photographs does not
 hold hundreds of decodes in memory together.
 
@@ -53,7 +55,8 @@ the viewer so that `render_display_patch_bitmaps`, which `sfm web-export` also
 calls, can take one.
 
 ```rust
-/// Decoded photographs as pyramids, keyed by path, shared across threads.
+/// Decoded photographs as pyramids, keyed by path, shared across threads,
+/// each answered as the one tiled photograph that reads it in place.
 pub struct PhotographCache { /* … */ }
 
 /// The settings a cache is made with. `Default` gives `default_budget_bytes()`,
@@ -69,7 +72,7 @@ impl PhotographCache {
     /// `ImageU8Pyramid::full_levels` depth for its photograph's size, with
     /// the whole decodes in progress on it bounded by
     /// `options.build_budget_bytes`. A budget of 0 keeps nothing: every call
-    /// decodes and hands back a pyramid no one else will see.
+    /// decodes and hands back a photograph no one else will see.
     pub fn new(options: PhotographCacheOptions) -> Self;
     pub fn budget_bytes(&self) -> u64;
 
@@ -84,19 +87,19 @@ impl PhotographCache {
     /// decode that runs alone. Never waits.
     pub fn try_reserve_build(&self, bytes: u64) -> Option<BuildReservation<'_>>;
 
-    /// The pyramid for `path`, decoding on a miss. Waits while another thread
-    /// is decoding the same path, and then returns its result rather than
-    /// decoding a second time, or decodes in its place if that thread stops.
-    /// A decode it makes is reserved with `reserve_builds`. An error when the
-    /// file does not exist, cannot be read, or has a side over
+    /// The photograph at `path`, decoding on a miss. Waits while another
+    /// thread is decoding the same path, and then returns its result rather
+    /// than decoding a second time, or decodes in its place if that thread
+    /// stops. A decode it makes is reserved with `reserve_builds`. An error
+    /// when the file does not exist, cannot be read, or has a side over
     /// `MAX_JPEG_SIDE` (65535), and `Cancelled` when `progress` is cancelled
     /// while it waits or decodes.
     pub fn get(&self, path: &Path, progress: &Progress<'_>)
-        -> Result<Arc<ImageU8Pyramid>, GetError>;
+        -> Result<Arc<TiledPhotograph>, GetError>;
 
-    /// The pyramid for `path` if it is decoded, without reading or stat'ing
-    /// anything and without waiting on a decode in flight.
-    pub fn peek(&self, path: &Path) -> Option<Arc<ImageU8Pyramid>>;
+    /// The photograph at `path` if it is decoded, without reading or
+    /// stat'ing anything and without waiting on a decode in flight.
+    pub fn peek(&self, path: &Path) -> Option<Arc<TiledPhotograph>>;
 
     /// `peek`, telling a remembered failure apart from no answer yet.
     pub fn peek_state(&self, path: &Path) -> PeekedPhotograph;
@@ -109,7 +112,7 @@ impl PhotographCache {
         &self,
         paths: &[&Path],
         progress: &Progress<'_>,
-    ) -> Result<(Vec<Option<Arc<ImageU8Pyramid>>>, GetManyTally), Cancelled>;
+    ) -> Result<(Vec<Option<Arc<TiledPhotograph>>>, GetManyTally), Cancelled>;
 
     /// The layout and tile requests of § "Layouts and tiles". `layout` and
     /// `peek_tile` read nothing and never wait; `request_layout` reads the
@@ -153,7 +156,7 @@ impl BuildReservation<'_> {
 pub enum GetError { NotFound(PathBuf), Unreadable(String),
                     TooLarge { path: PathBuf, width: u32, height: u32 }, Cancelled }
 
-pub enum PeekedPhotograph { Decoded(Arc<ImageU8Pyramid>), Unreadable, NotDecoded }
+pub enum PeekedPhotograph { Decoded(Arc<TiledPhotograph>), Unreadable, NotDecoded }
 
 pub struct GetManyTally { pub read: usize, pub reused: usize, pub unreadable: usize }
 
@@ -209,6 +212,13 @@ Why it is shaped this way:
   whether they are there. `peek_state` adds the one thing a caller that starts
   a decode on a miss needs: whether a decode was already tried and failed, so
   it does not start another for a file that cannot be read.
+- **One tiled photograph per decode.** The cache makes the
+  `TiledPhotograph` of a pyramid as it builds it, or as `insert` is handed
+  one, cut into tiles of `tile_size` and reading the pyramid in place, and
+  keeps it in the path's slot. Every `get`, `get_many`, `peek` and
+  `peek_state` answers that photograph, so two callers of one entry hold the
+  same `Arc`, and every tile request reads it; a kernel takes the answer
+  as its source with no wrapping of its own.
 - **`get_many` returns one entry per path, in order, and opens no phase.** The
   patch kernels index their view slice by image index, and the caller builds
   that slice from the entries; a `None` entry is an unreadable file. The
@@ -255,8 +265,8 @@ let paths: Vec<PathBuf> = needed
 let job = move |progress: &Progress<'_>| {
     let phase = progress.phase("decode images");
     let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-    let (pyramids, tally) = cache.get_many(&refs, &phase)?;
-    // … build ProjectedImage views from `pyramids` and run the kernel …
+    let (photographs, tally) = cache.get_many(&refs, &phase)?;
+    // … build ProjectedImage views from `photographs` and run the kernel …
 };
 ```
 
@@ -288,9 +298,10 @@ The cache counts the bytes of every decoded pyramid it holds
 (`ImageU8Pyramid::byte_len`, the sum over its levels). When a decode takes the
 total over the budget, it drops the least recently used entries until the total
 is back under, never the entry just decoded. It drops only the cache's own
-`Arc`, so a job holding a pyramid keeps it alive until the job ends. Eviction
-is therefore safe during any read. The cost is that memory can briefly exceed
-the budget by what running jobs hold, which they would have held anyway.
+`Arc`, so a job holding a photograph keeps its pyramid alive until the job
+ends. Eviction is therefore safe during any read. The cost is that memory can
+briefly exceed the budget by what running jobs hold, which they would have
+held anyway.
 
 A `get_many` over more photographs than the budget holds evicts its own
 earlier entries as it goes, and the next call finds only the tail. After the
@@ -356,7 +367,7 @@ The panels draw photograph tiles (`TileKey`, `PhotographTile` in
 [tiled_photograph.rs](../../../crates/sfmtool-core/src/camera/tiled_photograph.rs)),
 and a kernel can read a tile, a view-region pyramid or a level whole. The
 cache answers each from the whole pyramid it holds, cutting the tile, region
-or level when it is asked for, in
+or level through the tiled photograph that reads it when it is asked for, in
 [photograph_cache/tiles.rs](../../../crates/sfmtool-core/src/camera/photograph_cache/tiles.rs).
 A tile is `tile_size` px a side (512 by default), clipped to its level, with a
 one-pixel border of its neighbours' pixels, or the edge pixel repeated at the
@@ -367,10 +378,10 @@ level's edge, so tiles drawn side by side with linear filtering show no seam.
   photograph is held or its header has been read, `Unreadable` with the
   message once a read has failed, and `NotKnown` otherwise. It reads
   nothing, waits on nothing and does not stat the file. The layout of a
-  photograph the cache holds is the held pyramid's, kept beside the layouts
-  `request_layout` reads, so a panel that asks every frame is answered the
-  same `Arc` while the held pyramid's size stays the same and nothing is
-  allocated; otherwise it is what `request_layout` last read.
+  photograph the cache holds is the held photograph's, kept beside the
+  layouts `request_layout` reads, so a panel that asks every frame is
+  answered the same `Arc` while the held photograph's layout stays the same
+  and nothing is allocated; otherwise it is what `request_layout` last read.
 - **`request_layout`** reads the header and keeps the layout, or why it
   could not be read. Layouts are kept whatever the budget, a budget of 0
   included, and are not counted against it, since each is a few dozen
@@ -547,7 +558,7 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 
 - **Concurrency.** The map is a `Mutex<HashMap<PathBuf, Arc<Slot>>>`, where a
   slot holds its state behind a mutex of its own (empty, being made by one
-  caller, or made, with the pyramid or the remembered failure), a condition
+  caller, or made, with the photograph or the remembered failure), a condition
   variable, the file stamp and a last-used tick. `get` holds the map lock only
   to find or insert the slot, and stats the file with it released. A caller
   that finds the slot empty marks it as being made and decodes with no lock
@@ -559,8 +570,8 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   decode at the same time. The byte count and the eviction happen under the
   map lock after a slot is made, not inside the decode. A decode whose slot
   left the map meanwhile (forgotten, cleared, evicted or replaced by a newer
-  file) still returns its pyramid to the caller, but the cache neither keeps
-  nor counts it.
+  file) still returns its photograph to the caller, but the cache neither
+  keeps nor counts it.
 - **Cancellation, and a maker that stops.** The maker looks at its
   `Progress` once more after the decode, before it builds the pyramid; when
   it is cancelled it builds nothing, remembers nothing, sets the slot back to
@@ -648,7 +659,9 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   a layout read from the header with nothing decoded, and every tile of
   every level, a region and every level equal to the held pyramid's pixels,
   each tile with its border as Image Detail cut it, through a panel's
-  decode, a peek and a kernel's read; a key, level or region the photograph
+  decode, a peek and a kernel's read, the photograph `peek` and `get` answer
+  being the one the tiles are cut from, with the cache's layout and tile
+  size; a key, level or region the photograph
   does not have refused with `OutOfRange`, a panel's decode refusing it
   before it reserves or decodes; an unreadable photograph answered and
   remembered, and `forget` and `clear` dropping a layout; the layout of a

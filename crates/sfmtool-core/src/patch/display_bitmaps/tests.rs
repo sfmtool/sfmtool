@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::camera::{PhotographCache, PhotographCacheOptions, TiledPhotograph};
+use crate::camera::{PhotographCache, PhotographCacheOptions};
 use crate::progress::Progress;
 use crate::SfmrReconstruction;
 
@@ -186,7 +186,7 @@ fn a_missing_view_leaves_each_reference_naming_its_own_observation() {
         .expect("not cancelled");
     let sources: Vec<_> = found
         .into_iter()
-        .map(|p| TiledPhotograph::from_pyramid(p.expect("every photograph is checked in")))
+        .map(|p| p.expect("every photograph is checked in"))
         .collect();
     let poses: Vec<RigidTransform> = images
         .iter()
@@ -453,7 +453,7 @@ fn stored_references_survive_missing_views_skipped_points_and_zero_frames() {
         .expect("not cancelled");
     let sources: Vec<_> = found
         .into_iter()
-        .map(|p| TiledPhotograph::from_pyramid(p.expect("every photograph is checked in")))
+        .map(|p| p.expect("every photograph is checked in"))
         .collect();
     let poses: Vec<RigidTransform> = images
         .iter()

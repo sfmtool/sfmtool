@@ -72,7 +72,9 @@ fn assert_tile(pyramid: &ImageU8Pyramid, tile_size: u32, key: TileKey, tile: &Ph
 /// A photograph's layout is read from its header, and every tile, a region
 /// and every level the cache hands out are the pixels of the pyramid it holds,
 /// each tile with its border as Image Detail cut it: through a panel's
-/// decode, a peek and a kernel's read alike. A second ask decodes nothing.
+/// decode, a peek and a kernel's read alike. The photograph `peek` and `get`
+/// answer is the one the tiles are cut from, with the same layout. A second
+/// ask decodes nothing.
 #[test]
 fn tiles_regions_and_levels_are_the_held_pyramids_pixels() {
     let dir = tempfile::tempdir().unwrap();
@@ -109,17 +111,19 @@ fn tiles_regions_and_levels_are_the_held_pyramids_pixels() {
         stats.build_reserved_bytes, 0,
         "the decode gave its share back"
     );
-    let pyramid = cache.peek(&path).unwrap();
+    let photograph = cache.peek(&path).unwrap();
+    assert_eq!(photograph.layout(), &*layout);
+    let pyramid = photograph.held_pyramid();
     assert_eq!((stats.entries, stats.bytes), (1, pyramid.byte_len() as u64));
     assert_eq!(pyramid.num_levels(), layout.levels());
     for (&key, tile) in keys.iter().zip(&tiles) {
-        assert_tile(&pyramid, 16, key, tile);
+        assert_tile(pyramid, 16, key, tile);
         let PeekedTile::Ready(peeked) = cache.peek_tile(&path, key) else {
             panic!("{key:?} is held");
         };
-        assert_tile(&pyramid, 16, key, &peeked);
+        assert_tile(pyramid, 16, key, &peeked);
         assert_tile(
-            &pyramid,
+            pyramid,
             16,
             key,
             &cache.get_tile(&path, key, &Progress::none()).unwrap(),
@@ -160,14 +164,19 @@ fn tiles_regions_and_levels_are_the_held_pyramids_pixels() {
         }
     }
 
-    // A second panel's ask is answered from the pyramid held, as a hit.
+    // A second panel's ask is answered from the pyramid held, as a hit, and
+    // so is a kernel's `get`, with the photograph `peek` answered.
     let hits = cache.stats().hits;
+    assert!(Arc::ptr_eq(
+        &cache.get(&path, &Progress::none()).unwrap(),
+        &photograph
+    ));
     assert!(matches!(
         cache.try_decode_tiles(&path, &keys[..1], &Progress::none()),
         Ok(TryDecode::Decoded(_))
     ));
     let stats = cache.stats();
-    assert_eq!((stats.misses, stats.decodes, stats.hits), (1, 1, hits + 1));
+    assert_eq!((stats.misses, stats.decodes, stats.hits), (1, 1, hits + 2));
 }
 
 /// A level, tile or rectangle the photograph does not have is refused with
@@ -460,10 +469,12 @@ fn a_panel_decode_never_waits_on_a_slot_being_made() {
 fn a_panel_decode_that_loses_the_slot_gives_its_reservation_back() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_png(dir.path(), "p.png", 16, 16);
-    let made = Arc::new(ImageU8Pyramid::from_image(
-        ImageU8::new(16, 16, 3, vec![9; 16 * 16 * 3]),
-        ImageU8Pyramid::full_levels(16, 16),
-    ));
+    let made = Arc::new(TiledPhotograph::from_image(ImageU8::new(
+        16,
+        16,
+        3,
+        vec![9; 16 * 16 * 3],
+    )));
     for (taken, expect_busy) in [
         (SlotState::Making, true),
         (SlotState::Made(Ok(made)), false),

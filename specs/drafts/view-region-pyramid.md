@@ -704,11 +704,11 @@ draft's step 5 that count decodes run.
    regions of all the points in progress together never exceed the one pool
    the caller made. Each bulk kernel's phase note counts the renders that
    took the tile path, and the pull request reports that count for each
-   kernel on the test data and on a real capture. The callers fetch tiled
-   photographs once the main draft's step 13e makes `get_many` answer them;
-   until then they wrap the whole pyramids it answers, so the tests that
-   count decodes and the one of a budget smaller than a level 0 come with
-   step 13e. The rest is split into three pull requests, as the main draft's
+   kernel on the test data and on a real capture. The callers take the
+   tiled photographs `get_many` answers since the main draft's step 13e1,
+   having wrapped the whole pyramids it answered before it, and the tests
+   that count decodes and the one of a budget smaller than a level 0 need
+   the cache to keep tiles, so they come with step 13e5. The rest is split into three pull requests, as the main draft's
    step 11 says. **The first, 11a, is built**: the display bitmaps' kernels
    return the photograph error rather than leave out a photograph whose
    pyramid is not whole, the open, the conversion and `sfm web-export`

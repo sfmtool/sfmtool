@@ -746,10 +746,9 @@ pub(crate) struct AppState {
     ///
     /// Behind an [`Arc`] because the workers use it too: a job captures a clone,
     /// decodes what is missing into it in parallel, and leaves what it decoded
-    /// for the next job and the panels. Level 0 of a pyramid **is** the decoded
-    /// photograph, so a consumer that wants the plain image reads
-    /// [`ImageU8Pyramid::level`](sfmtool_core::camera::image::ImageU8Pyramid::level)
-    /// 0 rather than holding a second copy.
+    /// for the next job and the panels. A consumer reads a photograph's pixels
+    /// through the tiled photograph the cache answers, or through the cache's
+    /// layout and tile requests, rather than holding a copy of its own.
     ///
     /// Keyed by path rather than by [`ImageRef`], so an edit that renumbers a
     /// node's images leaves its photographs where they are, and two nodes over
@@ -2076,15 +2075,39 @@ impl AppState {
         );
     }
 
-    /// The photograph cache's pyramid for image `index` of node `id`, without
-    /// reading anything.
+    /// The photograph cache's photograph for image `index` of node `id`,
+    /// without reading anything.
     pub(crate) fn cached_photograph(
         &self,
         id: ReconId,
         index: usize,
-    ) -> Option<Arc<ImageU8Pyramid>> {
+    ) -> Option<Arc<sfmtool_core::camera::TiledPhotograph>> {
         let path = photograph_path(self.node(id)?.recon(), index)?;
         self.photographs.peek(&path)
+    }
+
+    /// The whole pyramid of the photograph the cache holds for image `index`
+    /// of node `id`, each level read whole from the cache, decoding nothing:
+    /// what a test compares a panel's pictures with.
+    pub(crate) fn cached_pyramid(&self, id: ReconId, index: usize) -> Option<Arc<ImageU8Pyramid>> {
+        use sfmtool_core::camera::image::{ImageU8, PyramidLevel};
+        let photograph = self.cached_photograph(id, index)?;
+        let path = photograph_path(self.node(id)?.recon(), index)?;
+        let levels = (0..photograph.layout().levels())
+            .map(|level| {
+                let image = self
+                    .photographs
+                    .get_level(&path, level, &Progress::none())
+                    .ok()?;
+                let (w, h) = (image.width(), image.height());
+                Some(Some(PyramidLevel {
+                    image: ImageU8::new(w, h, image.channels(), image.data().to_vec()),
+                    origin: [0, 0],
+                    full_size: [w, h],
+                }))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        ImageU8Pyramid::from_regions(levels).ok().map(Arc::new)
     }
 }
 

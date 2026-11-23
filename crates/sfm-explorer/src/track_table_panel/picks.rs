@@ -41,7 +41,7 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 
 use sfmtool_core::camera::sampler::{RegionPool, ViewRegions};
-use sfmtool_core::camera::{PhotographCache, TiledPhotograph};
+use sfmtool_core::camera::PhotographCache;
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::keypoint_subpixel::KeypointSubpixelParams;
 use sfmtool_core::patch::normal_refine::ProjectedImage;
@@ -184,8 +184,7 @@ pub(super) fn pick_reference(
     let recon = &edited.base;
     let [decode, rule] = progress.split(DECODE_AND_STEP);
     let observations = view.observations();
-    // The observation each view is, its keypoint, its pose and its photograph,
-    // its whole pyramid read in place until the picks read regions.
+    // The observation each view is, its keypoint, its pose and its photograph.
     let mut found = Vec::with_capacity(observations.len());
     for (k, observation) in observations.iter().enumerate() {
         if decode.is_cancelled() {
@@ -196,16 +195,15 @@ pub(super) fn pick_reference(
             let keypoint = view.keypoint_xy(k)?;
             let image = recon.image_set.images.get(index)?;
             let camera = crate::scene::image_intrinsics(&recon.image_set, index)?;
-            let pyramid = photographs
+            let source = photographs
                 .get(&crate::state::photograph_path(recon, index)?, &decode)
                 .ok()?;
-            let level = pyramid.level(0);
-            (level.width() == camera.width && level.height() == camera.height).then_some((
+            (source.layout().level_size(0) == (camera.width, camera.height)).then_some((
                 k,
                 camera,
                 crate::scene::cam_from_world(image),
                 [f64::from(keypoint[0]), f64::from(keypoint[1])],
-                TiledPhotograph::from_pyramid(pyramid),
+                source,
             ))
         })();
         found.extend(read);

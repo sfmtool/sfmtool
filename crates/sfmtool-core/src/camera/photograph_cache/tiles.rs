@@ -3,7 +3,8 @@
 
 //! The cache's layout and tile requests: a photograph's layout, its
 //! photograph tiles, a view-region pyramid or one level whole, each cut from
-//! the whole pyramid the cache holds when it is asked for.
+//! the whole pyramid the cache holds, through the tiled photograph that reads
+//! it, when it is asked for.
 //!
 //! A panel asks [`PhotographCache::layout`] and [`PhotographCache::peek_tile`]
 //! on the GUI thread, which never read a file or wait, and asks on the rayon
@@ -21,7 +22,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use super::{
-    header, whole_decode_bytes, GetError, Making, PhotographCache, Share, Slot, SlotState,
+    header, split_bytes, whole_decode_bytes, GetError, Making, PhotographCache, Share, Slot,
+    SlotState,
 };
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use crate::camera::mipmap::PyramidLayout;
@@ -96,13 +98,14 @@ pub enum TryDecode {
     Busy,
 }
 
-/// A made slot's value: the pyramid, or the failure remembered for the file.
-type Made = Result<Arc<ImageU8Pyramid>, GetError>;
+/// A made slot's value: the photograph, or the failure remembered for the
+/// file.
+type Made = Result<Arc<TiledPhotograph>, GetError>;
 
 /// What a panel's decode found its slot holding when it tried to claim it.
 enum Claim<'s, 'r> {
-    /// Made, with the pyramid or the remembered failure.
-    Made(Result<Arc<ImageU8Pyramid>, GetError>),
+    /// Made, with the photograph or the remembered failure.
+    Made(Made),
     /// Being made by another caller.
     Busy,
     /// Empty, and now marked as being made by this caller.
@@ -179,21 +182,20 @@ impl PhotographCache {
         )
     }
 
-    /// `pyramid` read in place, cut into the cache's tiles.
-    fn tiled(&self, pyramid: &Arc<ImageU8Pyramid>) -> TiledPhotograph {
-        TiledPhotograph::from_pyramid(Arc::clone(pyramid)).with_tile_size(self.options.tile_size)
+    /// `pyramid` read in place, cut into the cache's tiles: the photograph
+    /// the cache answers for it.
+    pub(super) fn tiled(&self, pyramid: Arc<ImageU8Pyramid>) -> TiledPhotograph {
+        TiledPhotograph::from_pyramid(pyramid).with_tile_size(self.options.tile_size)
     }
 
-    /// The tile `key` of `pyramid`, the photograph at `path`.
+    /// The tile `key` of `photograph`, the photograph at `path`.
     fn cut(
         &self,
         path: &Path,
-        pyramid: &Arc<ImageU8Pyramid>,
+        photograph: &TiledPhotograph,
         key: TileKey,
     ) -> Result<Arc<PhotographTile>, TileError> {
-        self.tiled(pyramid)
-            .tile(key)
-            .map_err(|e| out_of_range(path, e))
+        photograph.tile(key).map_err(|e| out_of_range(path, e))
     }
 
     /// `path`'s slot and its value when it is made, without a stat of the
@@ -214,25 +216,20 @@ impl PhotographCache {
     ///
     /// The layout of a held photograph is kept as `request_layout` keeps
     /// one, so a panel that asks every frame is answered the same `Arc`
-    /// while the held pyramid's size stays the same, with nothing allocated.
+    /// while the held photograph's layout stays the same, with nothing
+    /// allocated.
     pub fn layout(&self, path: &Path) -> PeekedLayout {
         if let Some((_, value)) = self.made_slot(path) {
             return match value {
-                Ok(pyramid) => {
-                    let [width, height] = pyramid.level_full_size(0);
-                    let held = PyramidLayout::in_memory(
-                        width,
-                        height,
-                        pyramid.num_levels(),
-                        self.options.tile_size,
-                    );
+                Ok(photograph) => {
+                    let held = photograph.layout();
                     let mut inner = self.lock();
                     if let Some(Ok(kept)) = inner.layouts.get(path) {
-                        if **kept == held {
+                        if **kept == *held {
                             return PeekedLayout::Known(Arc::clone(kept));
                         }
                     }
-                    let held = Arc::new(held);
+                    let held = Arc::new(held.clone());
                     inner
                         .layouts
                         .insert(path.to_path_buf(), Ok(Arc::clone(&held)));
@@ -270,7 +267,7 @@ impl PhotographCache {
             return PeekedTile::NotReady;
         };
         self.touch(&slot);
-        match value.map(|pyramid| self.cut(path, &pyramid, key)) {
+        match value.map(|photograph| self.cut(path, &photograph, key)) {
             Ok(Ok(tile)) => PeekedTile::Ready(tile),
             Ok(Err(_)) | Err(_) => PeekedTile::Unreadable,
         }
@@ -291,8 +288,8 @@ impl PhotographCache {
         key: TileKey,
         progress: &Progress<'_>,
     ) -> Result<Arc<PhotographTile>, TileError> {
-        let pyramid = self.get(path, progress).map_err(|e| unreadable(path, e))?;
-        self.cut(path, &pyramid, key)
+        let photograph = self.get(path, progress).map_err(|e| unreadable(path, e))?;
+        self.cut(path, &photograph, key)
     }
 
     /// A view-region pyramid of `path`: the region of each level `regions`
@@ -306,8 +303,8 @@ impl PhotographCache {
         regions: &LevelRegions,
         progress: &Progress<'_>,
     ) -> Result<ImageU8Pyramid, TileError> {
-        let pyramid = self.get(path, progress).map_err(|e| unreadable(path, e))?;
-        copy_regions(&self.tiled(&pyramid), regions).map_err(|e| out_of_range(path, e))
+        let photograph = self.get(path, progress).map_err(|e| unreadable(path, e))?;
+        copy_regions(&photograph, regions).map_err(|e| out_of_range(path, e))
     }
 
     /// Level `level` of `path` whole, decoded on a miss as
@@ -319,8 +316,7 @@ impl PhotographCache {
         level: usize,
         progress: &Progress<'_>,
     ) -> Result<Arc<ImageU8>, TileError> {
-        let pyramid = self.get(path, progress).map_err(|e| unreadable(path, e))?;
-        let tiled = self.tiled(&pyramid);
+        let tiled = self.get(path, progress).map_err(|e| unreadable(path, e))?;
         let (x1, y1) = tiled.layout().level_size(level);
         let rect = LevelRect {
             x0: 0,
@@ -392,7 +388,7 @@ impl PhotographCache {
                 self.misses.fetch_add(1, Ordering::Relaxed);
                 // The reservation is given back when `share` drops, whatever
                 // the outcome.
-                size.and_then(|_| self.decode(path, progress, &mut share))
+                split_bytes(size.and_then(|_| self.decode(path, progress, &mut share))).0
             }
             Some(slot) => {
                 let mut making = match claim(slot, share) {
@@ -405,7 +401,8 @@ impl PhotographCache {
                     Claim::Making(making) => making,
                 };
                 self.misses.fetch_add(1, Ordering::Relaxed);
-                let value = size.and_then(|_| self.decode(path, progress, &mut making.share));
+                let (value, bytes) =
+                    split_bytes(size.and_then(|_| self.decode(path, progress, &mut making.share)));
                 if let Err(GetError::Cancelled) = value {
                     // Dropping the hold gives the share back, empties the slot
                     // and wakes its waiters.
@@ -413,8 +410,8 @@ impl PhotographCache {
                     return Err(TileError::Cancelled);
                 }
                 making.finish(value.clone());
-                if let Ok(pyramid) = &value {
-                    self.charge(path, slot, pyramid.byte_len() as u64);
+                if value.is_ok() {
+                    self.charge(path, slot, bytes);
                 }
                 value
             }
@@ -423,15 +420,10 @@ impl PhotographCache {
     }
 
     /// The tiles `keys` of a made photograph, or its failure.
-    fn answer(
-        &self,
-        path: &Path,
-        value: Result<Arc<ImageU8Pyramid>, GetError>,
-        keys: &[TileKey],
-    ) -> Result<TryDecode, TileError> {
-        let pyramid = value.map_err(|e| unreadable(path, e))?;
+    fn answer(&self, path: &Path, value: Made, keys: &[TileKey]) -> Result<TryDecode, TileError> {
+        let photograph = value.map_err(|e| unreadable(path, e))?;
         keys.iter()
-            .map(|&key| self.cut(path, &pyramid, key))
+            .map(|&key| self.cut(path, &photograph, key))
             .collect::<Result<Vec<_>, _>>()
             .map(TryDecode::Decoded)
     }

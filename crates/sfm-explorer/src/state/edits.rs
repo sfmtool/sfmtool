@@ -29,7 +29,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use sfmtool_core::bench::ImageDeletion;
-use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::image::ImageU8;
 use sfmtool_core::camera::{
     CameraIntrinsics, PhotographCache, PhotographReadError, TiledPhotograph,
 };
@@ -642,8 +642,7 @@ fn retriangulate_summary(report: &RetriangulateReport) -> String {
 }
 
 /// Decoded images for one edit, owning what a [`ProjectedImage`] borrows: each
-/// photograph the cache handed back, read in place through
-/// [`TiledPhotograph::from_pyramid`] until the cache hands out tiles.
+/// photograph the cache handed back, as it handed it back.
 ///
 /// One entry per image of the node, because the patch kernels index their view
 /// slice by image index; the entries the call does not read are one-pixel
@@ -651,11 +650,9 @@ fn retriangulate_summary(report: &RetriangulateReport) -> String {
 pub(crate) struct DecodedViews {
     cameras: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
-    sources: Vec<TiledPhotograph>,
-    /// The pyramids `sources` read, which the tests compare with the cache's
-    /// own to show a photograph was taken from it rather than read again.
-    #[cfg(test)]
-    pub(crate) pyramids: Vec<Arc<ImageU8Pyramid>>,
+    /// The photographs, which the tests compare with the cache's own to show
+    /// a photograph was taken from it rather than read again.
+    sources: Vec<Arc<TiledPhotograph>>,
     /// Per image, whether its source is its photograph rather than the
     /// placeholder an unused or unreadable image gets.
     present: Vec<bool>,
@@ -686,7 +683,7 @@ pub(crate) struct ViewSources {
 /// What [`ViewSources::fetch`] found: per image, `None` for an image the step
 /// does not read, else what the cache answered for it (`None` inside for a
 /// file that cannot be read).
-type Fetched = Vec<Option<Option<Arc<ImageU8Pyramid>>>>;
+type Fetched = Vec<Option<Option<Arc<TiledPhotograph>>>>;
 
 /// How a step that reads photographs divides its bar between the decode
 /// ([`ViewSources::decode`] or [`ViewSources::decode_available`]) and the work
@@ -820,26 +817,23 @@ impl ViewSources {
     /// The views over what [`Self::fetch`] found, with the placeholder in every
     /// slot that has no photograph.
     fn into_views(self, fetched: Fetched) -> DecodedViews {
-        let placeholder = Arc::new(ImageU8Pyramid::from_image(
-            ImageU8::new(1, 1, 3, vec![0u8; 3]),
+        let placeholder = Arc::new(TiledPhotograph::from_image(ImageU8::new(
             1,
-        ));
-        let (pyramids, present): (Vec<_>, Vec<_>) = fetched
+            1,
+            3,
+            vec![0u8; 3],
+        )));
+        let (sources, present): (Vec<_>, Vec<_>) = fetched
             .into_iter()
             .map(|found| match found.flatten() {
-                Some(pyramid) => (pyramid, true),
+                Some(source) => (source, true),
                 None => (Arc::clone(&placeholder), false),
             })
             .unzip();
         DecodedViews {
             cameras: self.cameras,
             poses: self.poses,
-            sources: pyramids
-                .iter()
-                .map(|pyramid| TiledPhotograph::from_pyramid(Arc::clone(pyramid)))
-                .collect(),
-            #[cfg(test)]
-            pyramids,
+            sources,
             present,
         }
     }
@@ -853,7 +847,7 @@ impl DecodedViews {
         self.sources
             .iter()
             .zip(&self.present)
-            .map(|(source, &present)| present.then_some(source))
+            .map(|(source, &present)| present.then_some(&**source))
             .collect()
     }
 

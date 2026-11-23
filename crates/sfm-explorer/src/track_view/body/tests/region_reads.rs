@@ -106,7 +106,7 @@ fn whole_pyramid_tiles(
     let row = &track.observations[observation];
     let image = row.image as usize;
     let mut src = state
-        .cached_photograph(id, image)
+        .cached_pyramid(id, image)
         .expect("a cached photograph");
     if reading == Reading::LevelZero {
         let level = src.level(0);
@@ -226,7 +226,7 @@ fn drawn_pictures_equal_the_whole_pyramids(state: &AppState, id: ReconId, label:
             );
 
             let src = state
-                .cached_photograph(id, track.observations[observation].image as usize)
+                .cached_pyramid(id, track.observations[observation].image as usize)
                 .expect("a cached photograph");
             let recon = state.node(id).expect("loaded").recon();
             let outline = super::super::crop::outline(recon, &track, observation);
@@ -564,7 +564,7 @@ fn a_row_whose_tiles_are_not_there_draws_its_loading_state_and_asks_once() {
     let image = track.observations[0].image as usize;
     let recon = state.node(id).expect("loaded").recon();
     let path = crate::state::photograph_path(recon, image).expect("a path");
-    let pyramid = state.cached_photograph(id, image).expect("cached");
+    let pyramid = state.cached_pyramid(id, image).expect("cached");
     state.photographs.forget(&path);
     let decodes = state.photographs.stats().decodes;
 
@@ -641,7 +641,7 @@ fn a_hover_view_whose_tiles_are_not_there_says_it_is_loading() {
     let image = track.observations[0].image as usize;
     let recon = state.node(id).expect("loaded").recon();
     let path = crate::state::photograph_path(recon, image).expect("a path");
-    let pyramid = state.cached_photograph(id, image).expect("cached");
+    let pyramid = state.cached_pyramid(id, image).expect("cached");
 
     let mut panel = TrackBody::new();
     let ctx = egui::Context::default();

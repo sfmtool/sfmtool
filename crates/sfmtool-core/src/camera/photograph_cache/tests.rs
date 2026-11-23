@@ -39,8 +39,8 @@ pub(super) fn with_budget(budget_bytes: u64) -> PhotographCacheOptions {
     }
 }
 
-fn width(pyramid: &Option<Arc<ImageU8Pyramid>>) -> u32 {
-    pyramid.as_ref().unwrap().level(0).width()
+fn width(photograph: &Option<Arc<TiledPhotograph>>) -> u32 {
+    photograph.as_ref().unwrap().layout().level_size(0).0
 }
 
 #[test]
@@ -101,13 +101,13 @@ fn each_entry_has_the_depth_of_its_own_size() {
     let cache = PhotographCache::new(with_budget(GIB));
     let small = cache.get(&small, &Progress::none()).unwrap();
     let tall = cache.get(&tall, &Progress::none()).unwrap();
-    assert_eq!(small.num_levels(), 6);
-    assert_eq!(tall.num_levels(), 9);
+    assert_eq!(small.held_pyramid().num_levels(), 6);
+    assert_eq!(tall.held_pyramid().num_levels(), 9);
     // The top level of each is one or two pixels on the short side.
-    assert_eq!(small.level(5).width(), 2);
-    assert_eq!(small.level(5).height(), 1);
-    assert_eq!(tall.level(8).width(), 1);
-    assert_eq!(tall.level(8).height(), 1);
+    assert_eq!(small.held_pyramid().level(5).width(), 2);
+    assert_eq!(small.held_pyramid().level(5).height(), 1);
+    assert_eq!(tall.held_pyramid().level(8).width(), 1);
+    assert_eq!(tall.held_pyramid().level(8).height(), 1);
     let shown = format!("{cache:?}");
     assert!(shown.contains("entries: 2"), "{shown}");
 }
@@ -132,9 +132,10 @@ fn a_view_shrunk_64_times_reads_level_6() {
     })
     .save(&path)
     .unwrap();
-    let pyramid = PhotographCache::new(with_budget(0))
+    let photograph = PhotographCache::new(with_budget(0))
         .get(&path, &Progress::none())
         .unwrap();
+    let pyramid = photograph.held_pyramid();
     assert!(pyramid.num_levels() > 6);
 
     let side = 8u32;
@@ -149,8 +150,8 @@ fn a_view_shrunk_64_times_reads_level_6() {
     map.compute_svd();
 
     for (name, out) in [
-        ("BilinearMip", remap_bilinear_mip(&pyramid, &map)),
-        ("Anisotropic", remap_aniso_with_pyramid(&pyramid, &map, 16)),
+        ("BilinearMip", remap_bilinear_mip(pyramid, &map)),
+        ("Anisotropic", remap_aniso_with_pyramid(pyramid, &map, 16)),
     ] {
         for row in 0..side {
             for col in 0..side {
@@ -189,7 +190,7 @@ fn one_decode_per_path_under_contention() {
     assert_eq!(stats.misses, 1);
     assert_eq!(stats.hits, threads as u64 - 1);
     assert_eq!(stats.entries, 1);
-    assert_eq!(stats.bytes, results[0].byte_len() as u64);
+    assert_eq!(stats.bytes, results[0].held_pyramid().byte_len() as u64);
 }
 
 #[test]
@@ -242,9 +243,10 @@ fn a_held_pyramid_survives_eviction() {
     let held = cache.get(&a, &Progress::none()).unwrap();
     cache.get(&b, &Progress::none()).unwrap();
     assert!(cache.peek(&a).is_none());
-    assert_eq!(held.level(0).width(), 8);
-    assert_eq!(held.level(0).get_pixel(3, 5, 0), 3);
-    assert_eq!(held.level(0).get_pixel(3, 5, 1), 5);
+    let level = held.held_pyramid().level(0);
+    assert_eq!(level.width(), 8);
+    assert_eq!(level.get_pixel(3, 5, 0), 3);
+    assert_eq!(level.get_pixel(3, 5, 1), 5);
 }
 
 #[test]
@@ -502,7 +504,7 @@ fn a_cancelled_maker_empties_its_slot_and_a_waiter_decodes_in_its_place() {
         .recv_timeout(HANG)
         .expect("the waiter never took the decode over")
         .unwrap();
-    assert_eq!(pyramid.level(0).get_pixel(3, 2, 0), 3);
+    assert_eq!(pyramid.held_pyramid().level(0).get_pixel(3, 2, 0), 3);
     assert_eq!(held.decodes.load(Ordering::SeqCst), 2);
     let stats = held.cache.stats();
     assert_eq!((stats.misses, stats.hits, stats.entries), (2, 0, 1));
@@ -554,7 +556,7 @@ fn a_cancelled_waiter_stops_waiting_and_leaves_the_decode_to_its_maker() {
     );
     held.release.send(()).unwrap();
     let pyramid = maker.recv_timeout(HANG).expect("the maker never returned");
-    assert_eq!(pyramid.unwrap().level(0).width(), 8);
+    assert_eq!(width(&pyramid.ok()), 8);
     assert_eq!(held.decodes.load(Ordering::SeqCst), 1);
     let stats = held.cache.stats();
     assert_eq!((stats.misses, stats.hits, stats.entries), (1, 0, 1));
@@ -594,7 +596,7 @@ fn a_maker_that_panics_empties_its_slot() {
     let pyramid = next
         .recv_timeout(HANG)
         .expect("the slot was left as being made");
-    assert_eq!(pyramid.unwrap().level(0).width(), 8);
+    assert_eq!(width(&pyramid.ok()), 8);
     assert_eq!(decodes.load(Ordering::SeqCst), 2);
 }
 
@@ -621,7 +623,7 @@ fn a_cancelled_decode_is_not_remembered() {
         let pyramid = next
             .recv_timeout(HANG)
             .expect("the slot was left as being made");
-        assert_eq!(pyramid.unwrap().level(0).width(), 8);
+        assert_eq!(width(&pyramid.ok()), 8);
         assert_eq!(cache.stats().misses, 2);
     }
 }
@@ -736,11 +738,9 @@ fn an_inserted_pyramid_is_what_get_answers() {
         1,
     ));
     cache.insert(&absent, Arc::clone(&pyramid));
-    assert!(Arc::ptr_eq(
-        &cache.get(&absent, &Progress::none()).unwrap(),
-        &pyramid
-    ));
-    assert!(Arc::ptr_eq(&cache.peek(&absent).unwrap(), &pyramid));
+    let got = cache.get(&absent, &Progress::none()).unwrap();
+    assert!(std::ptr::eq(got.held_pyramid(), &*pyramid));
+    assert!(Arc::ptr_eq(&cache.peek(&absent).unwrap(), &got));
     let stats = cache.stats();
     assert_eq!((stats.entries, stats.bytes), (1, pyramid.byte_len() as u64));
     assert_eq!((stats.hits, stats.misses), (1, 0));
@@ -751,7 +751,10 @@ fn an_inserted_pyramid_is_what_get_answers() {
         1,
     ));
     cache.insert(&absent, Arc::clone(&other));
-    assert!(Arc::ptr_eq(&cache.peek(&absent).unwrap(), &other));
+    assert!(std::ptr::eq(
+        cache.peek(&absent).unwrap().held_pyramid(),
+        &*other
+    ));
     assert_eq!(cache.stats().bytes, other.byte_len() as u64);
 
     // Over the budget, the older entry goes, as with a decode.
@@ -1066,7 +1069,7 @@ fn a_cancelled_maker_gives_its_share_back_and_its_successor_reserves() {
             .recv_timeout(HANG)
             .expect("the waiter never took the decode over")
             .unwrap();
-        assert_eq!(pyramid.level(0).width(), 8);
+        assert_eq!(pyramid.layout().level_size(0).0, 8);
         let stats = held.cache.stats();
         assert_eq!((stats.decodes, stats.build_reserved_bytes), (2, 0));
     }

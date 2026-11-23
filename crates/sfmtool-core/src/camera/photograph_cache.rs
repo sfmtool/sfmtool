@@ -7,10 +7,11 @@
 //!
 //! Decoding a photograph and building the pyramid the patch samplers read is
 //! the expensive part of every operation that reads a reconstruction's pixels.
-//! A [`PhotographCache`] keeps those pyramids once decoded, so that whichever
-//! thread asks next for the same file gets the same pixels without reading it
-//! again, and drops the least recently used ones when the bytes it holds pass
-//! its budget.
+//! A [`PhotographCache`] keeps those pyramids once decoded, each read in place
+//! through the [`TiledPhotograph`] it answers, so that whichever thread asks
+//! next for the same file gets the same pixels without reading it again, and
+//! drops the least recently used ones when the bytes it holds pass its
+//! budget.
 //!
 //! Its callers hold it in an `Arc` and call it through `&self`: a worker thread
 //! puts what it decodes where the next worker and the GUI thread find it.
@@ -35,6 +36,7 @@ use rayon::prelude::*;
 
 use crate::camera::image::{image_dimensions, ImageU8, ImageU8Pyramid};
 use crate::camera::mipmap::{PyramidLayout, MAX_JPEG_SIDE, PHOTOGRAPH_TILE_SIZE};
+use crate::camera::tiled_photograph::TiledPhotograph;
 use crate::progress::{Cancelled, Progress};
 
 mod tiles;
@@ -240,7 +242,7 @@ impl Drop for GroupShare<'_> {
     }
 }
 
-/// Why [`PhotographCache::get`] has no pyramid for a path.
+/// Why [`PhotographCache::get`] has no photograph for a path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GetError {
     /// The file does not exist.
@@ -287,10 +289,11 @@ impl std::error::Error for GetError {}
 /// What [`PhotographCache::stats`] reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PhotographCacheStats {
-    /// Decoded pyramids held. Remembered failures and decodes still in flight
-    /// are not counted.
+    /// Decoded photographs held. Remembered failures and decodes still in
+    /// flight are not counted.
     pub entries: usize,
-    /// Pixel bytes of the pyramids held ([`ImageU8Pyramid::byte_len`]).
+    /// Pixel bytes of the pyramids the photographs held are read from
+    /// ([`ImageU8Pyramid::byte_len`]).
     pub bytes: u64,
     /// The budget the cache was made with.
     pub budget_bytes: u64,
@@ -330,8 +333,8 @@ pub struct GetManyTally {
 /// with a failure told apart from a photograph not yet decoded.
 #[derive(Clone)]
 pub enum PeekedPhotograph {
-    /// The decoded pyramid.
-    Decoded(Arc<ImageU8Pyramid>),
+    /// The decoded photograph.
+    Decoded(Arc<TiledPhotograph>),
     /// A decode was tried and the file could not be read or decoded. The
     /// answer `get` gives until the entry is forgotten or the file changes.
     Unreadable,
@@ -382,8 +385,8 @@ enum SlotState {
     Empty,
     /// One caller is decoding; the others wait on [`Slot::ready`].
     Making,
-    /// The pyramid, or the failure remembered for the file.
-    Made(Result<Arc<ImageU8Pyramid>, GetError>),
+    /// The photograph, or the failure remembered for the file.
+    Made(Result<Arc<TiledPhotograph>, GetError>),
 }
 
 /// One path's entry. Shared between the map and every thread using it, so a
@@ -418,9 +421,9 @@ impl Slot {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// The pyramid or the remembered failure, once made; `None` while the
+    /// The photograph or the remembered failure, once made; `None` while the
     /// slot is empty or being made.
-    fn made(&self) -> Option<Result<Arc<ImageU8Pyramid>, GetError>> {
+    fn made(&self) -> Option<Result<Arc<TiledPhotograph>, GetError>> {
         match &*self.lock() {
             SlotState::Made(value) => Some(value.clone()),
             SlotState::Empty | SlotState::Making => None,
@@ -449,7 +452,7 @@ struct Making<'s, 'r> {
 }
 
 impl Making<'_, '_> {
-    fn finish(mut self, value: Result<Arc<ImageU8Pyramid>, GetError>) {
+    fn finish(mut self, value: Result<Arc<TiledPhotograph>, GetError>) {
         self.finished = true;
         self.share.release();
         self.slot.set(SlotState::Made(value));
@@ -488,8 +491,10 @@ impl Inner {
 ///
 /// Every pyramid is `ImageU8::read_rgb` of the file followed by
 /// [`ImageU8Pyramid::from_image`] at [`ImageU8Pyramid::full_levels`] of the
-/// photograph's own size, so each entry's depth is set by its image. A
-/// photograph with a side over [`MAX_JPEG_SIDE`] is refused from its header,
+/// photograph's own size, so each entry's depth is set by its image. The
+/// cache answers each with one [`TiledPhotograph`], made with the pyramid,
+/// which reads it in place and is cut into tiles of
+/// [`PhotographCacheOptions::tile_size`]. A photograph with a side over [`MAX_JPEG_SIDE`] is refused from its header,
 /// before any decode, as [`GetError::TooLarge`]. A file that cannot be read
 /// or is refused is remembered as its error and costs nothing against the
 /// budget. An entry records the file's length and modification time when it
@@ -500,7 +505,7 @@ impl Inner {
 /// When a decode takes the bytes held over the budget, the least recently used
 /// pyramids are dropped until the total is back under it, never the one just
 /// decoded. Only the cache's `Arc` is dropped: a caller still holding a
-/// pyramid keeps it alive.
+/// photograph keeps its pyramid alive.
 ///
 /// Each path has one slot, empty, being made by one caller, or made. The
 /// caller that finds it empty marks it as being made and decodes; the others
@@ -568,14 +573,14 @@ enum Found {
 }
 
 /// One path's answer inside `get_many`.
-type Answer = (Result<Arc<ImageU8Pyramid>, GetError>, Found);
+type Answer = (Result<Arc<TiledPhotograph>, GetError>, Found);
 
 impl PhotographCache {
     /// A cache holding up to `options.budget_bytes` of pyramids, each of
     /// [`ImageU8Pyramid::full_levels`] depth for its photograph's size, with
     /// the whole decodes in progress on it bounded by
     /// `options.build_budget_bytes`. A budget of 0 keeps nothing: every call
-    /// decodes and hands back a pyramid no one else will see. A build budget
+    /// decodes and hands back a photograph no one else will see. A build budget
     /// of 0 lets each caller decode one photograph at a time.
     pub fn new(options: PhotographCacheOptions) -> Self {
         Self {
@@ -657,7 +662,7 @@ impl PhotographCache {
         })
     }
 
-    /// The pyramid for `path`, decoding on a miss. Waits while another thread
+    /// The photograph at `path`, decoding on a miss. Waits while another thread
     /// is decoding the same path, and then returns its result rather than
     /// decoding a second time; if that thread is cancelled or unwinds, the
     /// first waiter decodes in its place. An error when the file does not
@@ -682,18 +687,19 @@ impl PhotographCache {
         &self,
         path: &Path,
         progress: &Progress<'_>,
-    ) -> Result<Arc<ImageU8Pyramid>, GetError> {
+    ) -> Result<Arc<TiledPhotograph>, GetError> {
         self.get_found(path, progress, Share::None).0
     }
 
-    /// The pyramid for `path` if it is decoded, without reading anything and
-    /// without waiting on a decode in flight. What a panel calls every frame.
+    /// The photograph at `path` if it is decoded, without reading anything
+    /// and without waiting on a decode in flight. What a panel calls every
+    /// frame.
     ///
     /// It does not compare the entry with the file on disk, and counts as a
     /// use for the eviction order but not as a hit.
-    pub fn peek(&self, path: &Path) -> Option<Arc<ImageU8Pyramid>> {
+    pub fn peek(&self, path: &Path) -> Option<Arc<TiledPhotograph>> {
         match self.peek_state(path) {
-            PeekedPhotograph::Decoded(pyramid) => Some(pyramid),
+            PeekedPhotograph::Decoded(photograph) => Some(photograph),
             PeekedPhotograph::Unreadable | PeekedPhotograph::NotDecoded => None,
         }
     }
@@ -716,7 +722,7 @@ impl PhotographCache {
         };
         self.touch(&slot);
         match value {
-            Ok(pyramid) => PeekedPhotograph::Decoded(pyramid),
+            Ok(photograph) => PeekedPhotograph::Decoded(photograph),
             Err(_) => PeekedPhotograph::Unreadable,
         }
     }
@@ -751,7 +757,7 @@ impl PhotographCache {
         &self,
         paths: &[&Path],
         progress: &Progress<'_>,
-    ) -> Result<(Vec<Option<Arc<ImageU8Pyramid>>>, GetManyTally), Cancelled> {
+    ) -> Result<(Vec<Option<Arc<TiledPhotograph>>>, GetManyTally), Cancelled> {
         let total = paths.len();
         let answered = AtomicUsize::new(0);
         let answer = |found| {
@@ -814,22 +820,22 @@ impl PhotographCache {
         }
         progress.check_cancel()?;
         let mut tally = GetManyTally::default();
-        let pyramids = found
+        let photographs = found
             .into_iter()
             .map(|entry| {
                 // Every entry is `Some`, and none is `GetError::Cancelled`,
                 // which only a cancelled `progress` gives, when the call was
                 // not cancelled.
-                let (pyramid, how) = entry.ok_or(Cancelled)?;
-                match (&pyramid, how) {
+                let (photograph, how) = entry.ok_or(Cancelled)?;
+                match (&photograph, how) {
                     (Err(_), _) => tally.unreadable += 1,
                     (Ok(_), Found::Decoded) => tally.read += 1,
                     (Ok(_), Found::Reused) => tally.reused += 1,
                 }
-                Ok(pyramid.ok())
+                Ok(photograph.ok())
             })
             .collect::<Result<Vec<_>, Cancelled>>()?;
-        Ok((pyramids, tally))
+        Ok((photographs, tally))
     }
 
     /// Put `pyramid` in the cache as the decode of `path`, replacing any entry
@@ -840,16 +846,17 @@ impl PhotographCache {
     /// For a caller whose pixels for `path` did not come from this cache's
     /// decode, such as a test fixture standing in for a photograph that is not
     /// on disk. The entry records the file's length and modification time as
-    /// they are now (or that there is no file), so `get` answers with
-    /// `pyramid` until the file changes. The pyramid should have
-    /// [`ImageU8Pyramid::full_levels`] levels for its size, as a decoded one
-    /// would.
+    /// they are now (or that there is no file), so `get` answers with a
+    /// photograph read from `pyramid` until the file changes. The pyramid
+    /// should have [`ImageU8Pyramid::full_levels`] levels for its size, as a
+    /// decoded one would.
     pub fn insert(&self, path: &Path, pyramid: Arc<ImageU8Pyramid>) {
         if self.options.budget_bytes == 0 {
             return;
         }
         let bytes = pyramid.byte_len() as u64;
-        let slot = Arc::new(Slot::new(SlotState::Made(Ok(pyramid)), file_stamp(path)));
+        let photograph = Arc::new(self.tiled(pyramid));
+        let slot = Arc::new(Slot::new(SlotState::Made(Ok(photograph)), file_stamp(path)));
         {
             let mut inner = self.lock();
             inner.remove(path);
@@ -916,6 +923,8 @@ impl PhotographCache {
 
     /// Decode `path` and build its pyramid, polling `progress` between the
     /// two: [`GetError::Cancelled`] when it was cancelled during the decode.
+    /// Answers the photograph read from the pyramid, and the pyramid's bytes,
+    /// what its slot is charged.
     /// Reads the header first and, when `share` holds nothing, reserves the
     /// decode with [`Self::reserve_builds`] before reading the pixels.
     ///
@@ -932,7 +941,7 @@ impl PhotographCache {
         path: &Path,
         progress: &Progress<'_>,
         share: &mut Share<'r>,
-    ) -> Result<Arc<ImageU8Pyramid>, GetError> {
+    ) -> Result<(Arc<TiledPhotograph>, u64), GetError> {
         let (width, height) = header(path)?;
         if let Share::None = share {
             *share = Share::Own(self.reserve_builds(whole_decode_bytes(width, height), 1));
@@ -945,13 +954,15 @@ impl PhotographCache {
             return Err(GetError::Cancelled);
         }
         let levels = ImageU8Pyramid::full_levels(image.width, image.height);
-        Ok(Arc::new(ImageU8Pyramid::from_image(image, levels)))
+        let pyramid = ImageU8Pyramid::from_image(image, levels);
+        let bytes = pyramid.byte_len() as u64;
+        Ok((Arc::new(self.tiled(Arc::new(pyramid))), bytes))
     }
 
     /// The value of `path`'s slot when it is made from the file as it is now,
     /// counted as a hit; `None` otherwise. Reads nothing but the file's stamp
     /// and never waits on a decode.
-    fn made_now(&self, path: &Path) -> Option<Result<Arc<ImageU8Pyramid>, GetError>> {
+    fn made_now(&self, path: &Path) -> Option<Result<Arc<TiledPhotograph>, GetError>> {
         if self.options.budget_bytes == 0 {
             return None;
         }
@@ -997,10 +1008,11 @@ impl PhotographCache {
         path: &Path,
         progress: &Progress<'_>,
         mut share: Share<'r>,
-    ) -> (Result<Arc<ImageU8Pyramid>, GetError>, Found) {
+    ) -> (Result<Arc<TiledPhotograph>, GetError>, Found) {
         if self.options.budget_bytes == 0 {
             self.misses.fetch_add(1, Ordering::Relaxed);
-            return (self.decode(path, progress, &mut share), Found::Decoded);
+            let (value, _) = split_bytes(self.decode(path, progress, &mut share));
+            return (value, Found::Decoded);
         }
         let slot = self.slot_for(path);
 
@@ -1043,15 +1055,15 @@ impl PhotographCache {
             }
         };
         self.misses.fetch_add(1, Ordering::Relaxed);
-        let value = self.decode(path, progress, &mut making.share);
+        let (value, bytes) = split_bytes(self.decode(path, progress, &mut making.share));
         if let Err(GetError::Cancelled) = value {
             // Dropping the hold empties the slot and wakes its waiters.
             drop(making);
             return (value, Found::Decoded);
         }
         making.finish(value.clone());
-        if let Ok(pyramid) = &value {
-            self.charge(path, &slot, pyramid.byte_len() as u64);
+        if value.is_ok() {
+            self.charge(path, &slot, bytes);
         }
         (value, Found::Decoded)
     }
@@ -1059,7 +1071,7 @@ impl PhotographCache {
     /// Count `bytes` for the slot just decoded into, and evict down to the
     /// budget. Nothing is counted when the slot left the map while it was
     /// decoding (forgotten, cleared, evicted or replaced by a newer file):
-    /// its caller still gets the pyramid, but the cache does not keep it.
+    /// its caller still gets the photograph, but the cache does not keep it.
     fn charge(&self, path: &Path, slot: &Arc<Slot>, bytes: u64) {
         let mut inner = self.lock();
         let mapped = inner
@@ -1091,6 +1103,17 @@ impl PhotographCache {
             }
             inner.remove(&victim);
         }
+    }
+}
+
+/// A decode's answer, the photograph or its failure, and the bytes its slot
+/// is charged, 0 for a failure.
+fn split_bytes(
+    value: Result<(Arc<TiledPhotograph>, u64), GetError>,
+) -> (Result<Arc<TiledPhotograph>, GetError>, u64) {
+    match value {
+        Ok((photograph, bytes)) => (Ok(photograph), bytes),
+        Err(e) => (Err(e), 0),
     }
 }
 

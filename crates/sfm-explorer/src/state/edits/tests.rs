@@ -2564,7 +2564,7 @@ fn a_reconstruction_with_no_patch_frames_is_refused_in_the_menu_s_own_words() {
 
 /// A cached photograph is already a pyramid, so a step over nothing but cached
 /// photographs reads no file and builds no pyramid: what reaches the kernels is
-/// the very `Arc` the cache holds.
+/// the very `Arc` of the photograph the cache holds.
 ///
 /// Pointer equality rather than pixel equality, because a rebuilt pyramid would
 /// hold the same pixels and cost the seconds this cache exists to remove.
@@ -2575,7 +2575,7 @@ fn a_step_over_cached_photographs_takes_their_pyramids_as_they_are() {
     let images = state.scene[0].image_count();
     assert!(images > 1, "the demo node has images to read");
 
-    let cached: Vec<Arc<ImageU8Pyramid>> = (0..images)
+    let cached: Vec<_> = (0..images)
         .map(|index| {
             let pyramid = Arc::new(ImageU8Pyramid::from_image(
                 ImageU8::new(8, 8, 3, vec![index as u8; 8 * 8 * 3]),
@@ -2583,8 +2583,8 @@ fn a_step_over_cached_photographs_takes_their_pyramids_as_they_are() {
             ));
             let path = crate::state::photograph_path(state.scene[0].recon(), index)
                 .expect("an image of the node");
-            state.photographs.insert(&path, Arc::clone(&pyramid));
-            pyramid
+            state.photographs.insert(&path, pyramid);
+            state.photographs.peek(&path).expect("inserted")
         })
         .collect();
 
@@ -2595,9 +2595,9 @@ fn a_step_over_cached_photographs_takes_their_pyramids_as_they_are() {
         .decode(&collector.progress())
         .expect("every photograph was cached, so nothing was read");
 
-    for (index, pyramid) in cached.iter().enumerate() {
+    for (index, photograph) in cached.iter().enumerate() {
         assert!(
-            Arc::ptr_eq(&decoded.pyramids[index], pyramid),
+            Arc::ptr_eq(&decoded.sources[index], photograph),
             "image {index} was pyramided again rather than taken from the cache",
         );
     }
@@ -2629,7 +2629,7 @@ fn the_images_a_step_does_not_read_share_one_placeholder() {
 
     for index in 2..images {
         assert!(
-            Arc::ptr_eq(&decoded.pyramids[1], &decoded.pyramids[index]),
+            Arc::ptr_eq(&decoded.sources[1], &decoded.sources[index]),
             "unused image {index} carries a placeholder of its own",
         );
     }
@@ -2697,7 +2697,7 @@ fn a_second_step_over_the_same_images_reads_nothing_from_disk() {
         "a photograph was read twice"
     );
     for index in needed {
-        assert!(Arc::ptr_eq(&first.pyramids[index], &second.pyramids[index]));
+        assert!(Arc::ptr_eq(&first.sources[index], &second.sources[index]));
     }
 }
 
@@ -2751,7 +2751,7 @@ fn deleting_an_image_keeps_the_decoded_photographs() {
     for index in 0..images {
         state.insert_photograph(id, index, ImageU8::new(4, 4, 3, vec![index as u8; 48]));
     }
-    let before: Vec<Arc<ImageU8Pyramid>> = (0..images)
+    let before: Vec<_> = (0..images)
         .map(|index| state.cached_photograph(id, index).expect("inserted"))
         .collect();
 
