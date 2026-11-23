@@ -12,7 +12,7 @@
 
 use crate::test_support::HeldPhotograph;
 use eframe::egui;
-use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::image::ImageU8;
 
 use crate::measurement_marks::{DrawnId, MeasurementGesture};
 use crate::measurements::{EndpointSide, MeasurementRef};
@@ -33,7 +33,7 @@ struct Frame {
 
 fn pyramid() -> HeldPhotograph {
     let pixels = ImageU8::new(640, 480, 3, vec![90u8; 640 * 480 * 3]);
-    HeldPhotograph::new(ImageU8Pyramid::build(&pixels, 1))
+    HeldPhotograph::new(&pixels)
 }
 
 /// One frame of the panel on image 0 of the fixture's node, its layer built

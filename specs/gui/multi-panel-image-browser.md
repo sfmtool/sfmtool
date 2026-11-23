@@ -607,7 +607,7 @@ level 0. The code is
 - **Textures kept.** At most 256 tile textures (about 270 MB of GPU memory), of any of
   the images shown, the least recently drawn dropped first. The panel also keeps the
   level sizes of the image it showed last, so when the cache has dropped that image's
-  pyramid its uploaded tiles are still drawn while it is decoded again. The cache answers
+  tiles its uploaded tiles are still drawn while it is decoded again. The cache answers
   the same layout on every frame while the photograph's size stays the same, so a frame
   that changes nothing builds no layout.
 - **The next image while animation plays.** On every frame of animation playback the

@@ -12,14 +12,13 @@
 //! error.
 
 use std::fmt::Debug;
-use std::sync::Arc;
 
 use nalgebra::Point3;
 
 use crate::bench::tests::scene::{edited, Scene};
 use crate::bench::track_at_pixel::ViewCamera;
-use crate::camera::image::{ImageU8, ImageU8Pyramid, PyramidLevel};
 use crate::camera::sampler::RegionPool;
+use crate::camera::TileKey;
 use crate::camera::{PhotographReadError, TiledPhotograph};
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::Progress;
@@ -388,19 +387,19 @@ fn the_nearby_track_search_is_the_same_on_every_read_path() {
     });
 }
 
-/// `scene`'s photograph 0 replaced by one that holds only an 8 px square in
-/// the corner of its finest level and none of its coarser levels, so that a
-/// read anywhere near the queried pixel asks for pixels it does not hold.
+/// `scene`'s photograph 0 made of only the [`TILE`] px tile in the corner of
+/// its finest level, and none of its coarser levels, so that a read anywhere
+/// near the queried pixel asks for tiles it does not hold.
 fn without_pixels(scene: &Scene) -> TiledPhotograph {
-    let (width, height) = scene.views()[0].source.layout().level_size(0);
-    let corner = PyramidLevel {
-        image: ImageU8::new(8, 8, 1, vec![128; 64]),
-        origin: [0, 0],
-        full_size: [width, height],
-    };
-    let levels = vec![Some(corner), None, None, None];
-    let pyramid = ImageU8Pyramid::from_regions(levels).expect("a valid region pyramid");
-    TiledPhotograph::from_pyramid(Arc::new(pyramid)).with_tile_size(TILE)
+    let whole = TiledPhotograph::cut(scene.pyramid(0), TILE);
+    let corner = whole
+        .tile(TileKey {
+            level: 0,
+            col: 0,
+            row: 0,
+        })
+        .expect("a tile");
+    TiledPhotograph::from_tiles(whole.layout().clone(), [corner]).expect("the layout's tile")
 }
 
 /// A photograph that lacks the pixels a grey read needs fails each kernel
@@ -418,8 +417,7 @@ fn a_grey_read_of_pixels_a_photograph_lacks_fails_each_kernel() {
         pixel: PIXEL,
         radius_px: 8.0,
     };
-    let out_of_range =
-        |e: &PhotographReadError| matches!(e, PhotographReadError::OutOfRange { .. });
+    let needs_tiles = |e: &PhotographReadError| matches!(e, PhotographReadError::NeedsTiles { .. });
     for capacity in [u64::MAX, 0] {
         for broken_image in [0, 1] {
             let mut views = scene.views();
@@ -428,7 +426,7 @@ fn a_grey_read_of_pixels_a_photograph_lacks_fails_each_kernel() {
             let error = read_patch_along_ray(&views, &pool, &patch, &[t], &[1, 2, 3], false)
                 .expect_err("the broken photograph is read");
             assert!(
-                matches!(&error, PatchReadError::Photograph(e) if out_of_range(e)),
+                matches!(&error, PatchReadError::Photograph(e) if needs_tiles(e)),
                 "image {broken_image}, pool of {capacity}: {error}"
             );
             assert_eq!(pool.held_bytes(), 0);
@@ -441,7 +439,7 @@ fn a_grey_read_of_pixels_a_photograph_lacks_fails_each_kernel() {
         let pool = RegionPool::with_capacity(capacity);
         let error = layers(&scene, &views, &pool).expect_err("photograph 1 is read");
         assert!(
-            matches!(&error, DepthLayerError::Photograph(e) if out_of_range(e)),
+            matches!(&error, DepthLayerError::Photograph(e) if needs_tiles(e)),
             "pool of {capacity}: {error}"
         );
 
@@ -457,7 +455,7 @@ fn a_grey_read_of_pixels_a_photograph_lacks_fails_each_kernel() {
         )
         .expect_err("photograph 1 is read");
         assert!(
-            matches!(&error, FarFieldError::Photograph(e) if out_of_range(e)),
+            matches!(&error, FarFieldError::Photograph(e) if needs_tiles(e)),
             "pool of {capacity}: {error}"
         );
 
@@ -476,7 +474,7 @@ fn a_grey_read_of_pixels_a_photograph_lacks_fails_each_kernel() {
             )
             .expect_err("photograph 1 is read");
             assert!(
-                matches!(&error, NearbyTracksError::Photograph(e) if out_of_range(e)),
+                matches!(&error, NearbyTracksError::Photograph(e) if needs_tiles(e)),
                 "{far_field_when:?}, pool of {capacity}: {error}"
             );
         }

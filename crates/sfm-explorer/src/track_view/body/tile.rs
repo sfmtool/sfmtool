@@ -168,7 +168,7 @@ fn track_tile_geometry<'a>(
 ///
 /// Pure, so a headless test can ask what a row shows rather than only whether
 /// it showed something. `src` is the observation's own photograph, the
-/// photograph cache's pyramid read as a tiled photograph, whose level 0 is the
+/// photograph made of the photograph cache's tiles, whose level 0 is the
 /// photograph and whose lower levels are what the cluster sampler
 /// mip-selects over. The tile reads only the regions its samples take,
 /// reserved from `pool` (the panel's) and given back once it is drawn, or

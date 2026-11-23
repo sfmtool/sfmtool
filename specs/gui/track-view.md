@@ -2552,9 +2552,9 @@ texels, so their geometry is checked without reading pixels off the screen.
     read takes the photograph's tiles, equal the pictures `render_tile`,
     `sample_member_grid` and `sample_bilinear_u8` give from the whole
     pyramid, byte for byte, with four reads a row by the path the pool allows
-    and nothing left in the pool; a row whose cached pyramid holds one
-    pixel of its photograph draws *unreadable* in its tile and crop cells, with
-    why on hover, while the other rows draw their pictures; a row whose
+    and nothing left in the pool; a row whose photograph has left the cache
+    and whose header read finds no file draws *unreadable* in its tile and
+    crop cells, with why on hover, while the other rows draw their pictures; a row whose
     photograph the cache does not hold draws its cells empty, with no failure,
     over three frames that ask for its layout once and decode nothing, and
     draws its pictures on the frame after the photograph lands, asking for

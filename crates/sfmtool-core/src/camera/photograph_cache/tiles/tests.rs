@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
-use std::sync::Mutex;
 
 use super::super::tests::{
-    cache_holding_its_first_decode, cache_watching_its_count, on_a_thread, small_photographs,
-    unseen, write_png, HANG, SMALL,
+    cache_holding_its_first_decode, cache_watching_its_count, held_bytes, on_a_thread, pyramid_of,
+    same_tiles, small_photographs, unseen, write_png, HANG, SMALL,
 };
 use super::super::{PeekedPhotograph, PhotographCacheOptions, SlotEvent};
 use super::*;
+use crate::camera::tiled_photograph::cut_image;
 
 const GIB: u64 = 1 << 30;
 
@@ -70,13 +70,13 @@ fn assert_tile(pyramid: &ImageU8Pyramid, tile_size: u32, key: TileKey, tile: &Ph
 }
 
 /// A photograph's layout is read from its header, and every tile, a region
-/// and every level the cache hands out are the pixels of the pyramid it holds,
-/// each tile with its border as Image Detail cut it: through a panel's
-/// decode, a peek and a kernel's read alike. The photograph `peek` and `get`
-/// answer is the one the tiles are cut from, with the same layout. A second
-/// ask decodes nothing.
+/// and every level the cache hands out are the pixels of the pyramid the
+/// cache decoded the photograph into before it kept tiles, each tile with its
+/// border as Image Detail cut it: through a panel's decode, a peek and a
+/// kernel's read alike. The photograph `peek` and `get` answer is made of the
+/// tiles the cache keeps, with the same layout. A second ask decodes nothing.
 #[test]
-fn tiles_regions_and_levels_are_the_held_pyramids_pixels() {
+fn tiles_regions_and_levels_are_the_pixels_of_the_photographs_pyramid() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_png(dir.path(), "p.png", 70, 50);
     let cache = cache_of(GIB, 16);
@@ -113,8 +113,11 @@ fn tiles_regions_and_levels_are_the_held_pyramids_pixels() {
     );
     let photograph = cache.peek(&path).unwrap();
     assert_eq!(photograph.layout(), &*layout);
-    let pyramid = photograph.held_pyramid();
-    assert_eq!((stats.entries, stats.bytes), (1, pyramid.byte_len() as u64));
+    let pyramid = &pyramid_of(&path);
+    assert_eq!(
+        (stats.tiles, stats.bytes),
+        (keys.len(), held_bytes(&photograph))
+    );
     assert_eq!(pyramid.num_levels(), layout.levels());
     for (&key, tile) in keys.iter().zip(&tiles) {
         assert_tile(pyramid, 16, key, tile);
@@ -164,10 +167,11 @@ fn tiles_regions_and_levels_are_the_held_pyramids_pixels() {
         }
     }
 
-    // A second panel's ask is answered from the pyramid held, as a hit, and
-    // so is a kernel's `get`, with the photograph `peek` answered.
+    // A second panel's ask is answered from the tiles kept, as a hit, and
+    // so is a kernel's `get`, with the tiles of the photograph `peek`
+    // answered.
     let hits = cache.stats().hits;
-    assert!(Arc::ptr_eq(
+    assert!(same_tiles(
         &cache.get(&path, &Progress::none()).unwrap(),
         &photograph
     ));
@@ -314,7 +318,7 @@ fn an_unreadable_photograph_is_answered_and_remembered() {
     assert_eq!(cache.layout(&path), PeekedLayout::NotKnown);
 }
 
-/// The layout of a photograph the cache holds is the held pyramid's, so a
+/// The layout of a photograph the cache holds is its decode's, so a
 /// file replaced by one of another size after its header was read is laid
 /// out as the pixels drawn from it once it is decoded again. A cache of
 /// budget 0 keeps the layouts it reads.
@@ -341,20 +345,14 @@ fn the_layout_follows_the_photograph_held() {
 }
 
 /// A held photograph's layout is answered as the same `Arc` on every ask
-/// while the held pyramid's size stays the same, so a panel asking every
-/// frame allocates nothing, and as a new one once a pyramid of another size
-/// is held at the path.
+/// while the photograph held stays the same, so a panel asking every frame
+/// allocates nothing, and as a new one once a photograph of another size is
+/// held at the path.
 #[test]
 fn a_held_photographs_layout_is_kept_and_answered_again() {
     let path = std::path::PathBuf::from("/nowhere/held.png");
     let cache = cache_of(GIB, 16);
-    let pyramid = |w: u32| {
-        let image = ImageU8::new(w, 10, 3, vec![9; (w * 10 * 3) as usize]);
-        Arc::new(ImageU8Pyramid::from_image(
-            image,
-            ImageU8Pyramid::full_levels(w, 10),
-        ))
-    };
+    let pyramid = |w: u32| ImageU8::new(w, 10, 3, vec![9; (w * 10 * 3) as usize]);
     let known = |cache: &PhotographCache| match cache.layout(&path) {
         PeekedLayout::Known(layout) => layout,
         other => panic!("{other:?}"),
@@ -469,29 +467,29 @@ fn a_panel_decode_never_waits_on_a_slot_being_made() {
 fn a_panel_decode_that_loses_the_slot_gives_its_reservation_back() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_png(dir.path(), "p.png", 16, 16);
-    let made = Arc::new(TiledPhotograph::from_image(ImageU8::new(
-        16,
-        16,
-        3,
-        vec![9; 16 * 16 * 3],
-    )));
-    for (taken, expect_busy) in [
-        (SlotState::Making, true),
-        (SlotState::Made(Ok(made)), false),
-    ] {
+    for (made, expect_busy) in [(false, true), (true, false)] {
         let reserved_then = Arc::new(AtomicU64::new(0));
-        let taken = Mutex::new(Some(taken));
         let mut cache = cache_of(GIB, 16);
         let seen = Arc::clone(&reserved_then);
         let watched = path.clone();
+        let taken = AtomicBool::new(false);
         cache.on_slot_event = Some(Box::new(move |cache, event| {
-            if event == SlotEvent::PanelReserved {
+            if event == SlotEvent::PanelReserved && !taken.swap(true, Ordering::SeqCst) {
                 seen.store(
                     cache.build_reserved.load(Ordering::SeqCst),
                     Ordering::SeqCst,
                 );
                 let slot = cache.lock().map.get(&watched).map(Arc::clone).unwrap();
-                *slot.lock() = taken.lock().unwrap().take().unwrap();
+                if made {
+                    // Another caller's decode has kept every tile.
+                    let image = ImageU8::new(16, 16, 3, vec![9; 16 * 16 * 3]);
+                    let cut = cut_image(image, 16);
+                    let mut inner = cache.lock();
+                    let _ = cache.store(&mut inner, &watched, &slot, Ok(cut), Asked::Every);
+                } else {
+                    // Another caller is decoding it.
+                    slot.lock().making = true;
+                }
             }
         }));
         let answer = cache.try_decode_tiles(&path, &[key(0, 0, 0)], &Progress::none());
@@ -649,4 +647,168 @@ fn a_cancelled_decode_answers_cancelled_and_leaves_nothing_behind() {
         }
     }
     assert_eq!(TileError::Cancelled.to_string(), Cancelled.to_string());
+}
+
+/// The bytes of the tiles `keys` of the photograph at `path` cut at
+/// `tile_size` px, each with its border, as the cache keeps them.
+fn bytes_of_tiles(path: &Path, tile_size: u32, keys: &[TileKey]) -> u64 {
+    let cut = cut_image(ImageU8::read_rgb(path).unwrap(), tile_size);
+    keys.iter()
+        .map(|key| cut.tiles[key].pixels.data().len() as u64)
+        .sum()
+}
+
+/// A panel's request for one tile decodes the photograph once and keeps its
+/// other tiles as unused, so a kernel's read of another tile is answered
+/// without a decode. When the budget needs room the unused tiles go first,
+/// those of a photograph decoded later before a tile asked for earlier, and
+/// the tiles requests asked for stay.
+#[test]
+fn a_one_tile_request_decodes_once_and_its_other_tiles_go_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let [a, b, c] = ["a.png", "b.png", "c.png"].map(|name| write_png(dir.path(), name, 70, 50));
+    let layout = PyramidLayout::in_memory(70, 50, 6, 16);
+    let keys = every_key(&layout);
+    let whole = bytes_of_tiles(&a, 16, &keys);
+    let (ka, ka_read, kb) = (key(0, 0, 0), key(1, 1, 1), key(0, 4, 3));
+    let asked_a = bytes_of_tiles(&a, 16, &[ka, ka_read]);
+    let asked_b = bytes_of_tiles(&b, 16, &[kb]);
+    // Room for all of `a` and `b`, and for `c` once every unused tile of `a`
+    // and about half of `b`'s are gone.
+    let budget = 3 * whole - (whole - asked_a) - (whole - asked_b) / 2;
+    let cache = cache_of(budget, 16);
+
+    let TryDecode::Decoded(tiles) = cache
+        .try_decode_tiles(&a, &[ka], &Progress::none())
+        .unwrap()
+    else {
+        panic!("nothing else holds the slot or the build count");
+    };
+    assert_eq!(tiles.len(), 1);
+    let stats = cache.stats();
+    assert_eq!(
+        (stats.decodes, stats.tiles, stats.bytes),
+        (1, keys.len(), whole)
+    );
+    // Another tile of `a` is read from the decode's unused tiles.
+    let read = cache.get_tile(&a, ka_read, &Progress::none()).unwrap();
+    assert_eq!(read.key, ka_read);
+    assert_eq!(cache.stats().decodes, 1, "kept from the one decode");
+
+    assert!(matches!(
+        cache.try_decode_tiles(&b, &[kb], &Progress::none()),
+        Ok(TryDecode::Decoded(_))
+    ));
+    cache.get(&c, &Progress::none()).unwrap();
+    let stats = cache.stats();
+    assert_eq!(stats.decodes, 3);
+    assert!(stats.bytes <= budget, "{stats:?}");
+
+    let kept = |path: &Path| -> Vec<TileKey> {
+        keys.iter()
+            .copied()
+            .filter(|&k| matches!(cache.peek_tile(path, k), PeekedTile::Ready(_)))
+            .collect()
+    };
+    // `a`'s two tiles asked for stay, though asked for before `b` was
+    // decoded; every other tile of `a` is gone.
+    assert_eq!(kept(&a), vec![ka, ka_read]);
+    // `b` lost some of its unused tiles, and keeps the one asked for.
+    let of_b = kept(&b);
+    assert!(of_b.contains(&kb));
+    assert!(1 < of_b.len() && of_b.len() < keys.len(), "{}", of_b.len());
+    // `c`, the `get` that made the room, keeps every tile.
+    assert_eq!(kept(&c).len(), keys.len());
+}
+
+/// A tile evicted and asked for again decodes its photograph again, counted
+/// as a miss and a decode, and its pixels are the same; a tile still kept is
+/// answered with no decode, and once the decode has put the photograph's
+/// tiles back a `get` decodes nothing.
+#[test]
+fn a_tile_evicted_and_asked_for_again_decodes_the_photograph_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let [a, b] = ["a.png", "b.png"].map(|name| write_png(dir.path(), name, 70, 50));
+    let layout = PyramidLayout::in_memory(70, 50, 6, 16);
+    let whole = bytes_of_tiles(&a, 16, &every_key(&layout));
+    let cache = cache_of(whole + whole / 2, 16);
+    cache.get(&a, &Progress::none()).unwrap();
+    cache.get(&b, &Progress::none()).unwrap();
+    // `a`'s level 0 went first, and its coarsest level stays.
+    let (evicted, kept) = (key(0, 0, 0), key(5, 0, 0));
+    assert!(matches!(cache.peek_tile(&a, evicted), PeekedTile::NotReady));
+    assert!(matches!(cache.peek_tile(&a, kept), PeekedTile::Ready(_)));
+    assert!(cache.peek(&a).is_none());
+
+    let before = cache.stats();
+    cache.get_tile(&a, kept, &Progress::none()).unwrap();
+    assert_eq!(cache.stats().decodes, before.decodes, "kept, not decoded");
+    let tile = cache.get_tile(&a, evicted, &Progress::none()).unwrap();
+    let after = cache.stats();
+    assert_eq!(after.misses, before.misses + 1);
+    assert_eq!(after.decodes, before.decodes + 1);
+    let pyramid = pyramid_of(&a);
+    assert_eq!(
+        tile.pixels.get_pixel(1, 1, 0),
+        pyramid.level(0).get_pixel(0, 0, 0)
+    );
+    assert_eq!(
+        tile.pixels.get_pixel(5, 3, 1),
+        pyramid.level(0).get_pixel(4, 2, 1)
+    );
+    // The decode put every tile of `a` back, so a `get` decodes nothing.
+    cache.get(&a, &Progress::none()).unwrap();
+    assert_eq!(cache.stats().decodes, after.decodes);
+}
+
+/// Under a budget of 0, and one smaller than the photograph's level 0, a
+/// panel's request is answered its tiles, the pixels of the photograph's
+/// pyramid. With a budget they are kept, over the budget, as the tiles the
+/// request asked for, so asking again decodes nothing, while the tiles of
+/// the decode it did not ask for go; a budget of 0 keeps nothing, and the
+/// panel keeps the tiles it was answered.
+#[test]
+fn under_a_small_budget_a_panels_request_is_answered_its_tiles() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_png(dir.path(), "p.png", 70, 50);
+    let level_0 = 70 * 50 * 3;
+    let layout = PyramidLayout::in_memory(70, 50, 6, 16);
+    let keys: Vec<TileKey> = every_key(&layout)
+        .into_iter()
+        .filter(|k| k.level == 0)
+        .collect();
+    let pyramid = pyramid_of(&path);
+    for budget in [0, level_0 / 2] {
+        let cache = cache_of(budget, 16);
+        let TryDecode::Decoded(tiles) = cache
+            .try_decode_tiles(&path, &keys, &Progress::none())
+            .unwrap()
+        else {
+            panic!("nothing else holds the slot or the build count");
+        };
+        for (&key, tile) in keys.iter().zip(&tiles) {
+            assert_tile(&pyramid, 16, key, tile);
+        }
+        let stats = cache.stats();
+        assert_eq!(stats.decodes, 1);
+        if budget == 0 {
+            assert_eq!((stats.tiles, stats.bytes), (0, 0));
+            assert!(matches!(
+                cache.peek_tile(&path, keys[0]),
+                PeekedTile::NotReady
+            ));
+            continue;
+        }
+        assert_eq!(stats.tiles, keys.len(), "only the tiles asked for");
+        assert_eq!(stats.bytes, bytes_of_tiles(&path, 16, &keys));
+        assert!(stats.bytes > budget, "kept over the budget");
+        assert!(keys
+            .iter()
+            .all(|&k| matches!(cache.peek_tile(&path, k), PeekedTile::Ready(_))));
+        assert!(matches!(
+            cache.try_decode_tiles(&path, &keys, &Progress::none()),
+            Ok(TryDecode::Decoded(again)) if again.len() == keys.len()
+        ));
+        assert_eq!(cache.stats().decodes, 1, "asked again, decoded nothing");
+    }
 }

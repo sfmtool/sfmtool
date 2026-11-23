@@ -83,7 +83,6 @@ impl ImageU8Pyramid {
 pub struct TiledPhotograph { /* … */ }
 impl TiledPhotograph {
     pub fn from_image(image: ImageU8) -> Self;              // every tile of its full-depth pyramid
-    pub fn from_pyramid(pyramid: Arc<ImageU8Pyramid>) -> Self; // a whole pyramid, read in place
     /// The photograph tiles `tiles` of `layout`'s photograph, held, and no
     /// other pixel; refuses no tiles, tiles of different channels and a tile
     /// the layout does not have or place as the tile says.
@@ -386,20 +385,18 @@ it holds the tiles of level 0, level 0 and level 1, about 2.25 times the
 image's bytes. Building the pyramid and then cutting it would hold the
 pyramid and all its tiles, about 2.67 times; the bindings make the
 photographs of many images at once on the rayon pool, so the difference
-decides their peak memory. `from_pyramid` reads a whole pyramid in
-place, and only the photograph cache still makes one so: it cuts a tile,
-with its border, only when the tile path asks for it, copying the columns
-that need no clamping as one span a row, and keeps none, and a rectangle is
-copied row by row straight from the level, with no tile cut. Cutting a tile
-for `from_image` and for `from_pyramid` is the same copy.
-`from_pyramid` refuses with `OutOfRange`
-a tile with pixels that a pyramid made by `from_regions` does not hold, rather
-than read the black of a level it does not hold, and so refuses a rectangle
-whose tiles it does not wholly hold. Their layout has the pyramid's own
-levels, each level 0's size halved, and no stored level. The tests cut tiles
-of 32 px, cutting a photograph again at that size, and cut a pyramid of
-fewer levels than the full depth that a test builds with the test-only
-`TiledPhotograph::cut`, which cuts the tiles of a pyramid already built.
+decides their peak memory. The photograph cache cuts each decode the same
+way, at its own tile size, keeps the tiles, and answers a photograph made of
+them with `from_tiles`
+([photograph-cache.md](photograph-cache.md)). A tile is cut with its border
+by one clamped copy, the columns that need no clamping copied as one span a
+row. The layout has the pyramid's own levels, each level 0's size halved,
+and no stored level. The tests cut tiles of 32 px, cutting a photograph
+again at that size, and cut a pyramid of fewer levels than the full depth
+that a test builds with the test-only `TiledPhotograph::cut`, which cuts the
+tiles of a pyramid already built; a test of a read that lacks pixels makes
+the photograph of some of those tiles with `from_tiles`, which refuses the
+read with `NeedsTiles`.
 
 **What a read costs.** `required_regions` walks a map of more than 2048
 texels on the rayon pool, row by row, as the render does, and on the

@@ -17,6 +17,7 @@ use crate::bench::{
     CreateTrackOptions, EditableTrack, EvaluateOptions, FitOptions, Provenance, StageKind,
     TrackEditError, Unmeasured, Verdict,
 };
+use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use crate::camera::sampler::render_tile;
 use crate::camera::sampler::RegionPool;
 use crate::camera::warp_map::patch_grid_jacobian;
@@ -46,6 +47,8 @@ const MIN_TRACK: usize = 8;
 /// The seoul_bull ground truth with its decoded photographs and poses.
 pub(super) struct GroundTruth {
     pub(super) recon: SfmrReconstruction,
+    /// The path of each image's photograph.
+    paths: Vec<PathBuf>,
     sources: Vec<Arc<TiledPhotograph>>,
     poses: Vec<RigidTransform>,
 }
@@ -82,9 +85,19 @@ impl GroundTruth {
             .collect();
         Self {
             recon,
+            paths,
             sources,
             poses,
         }
+    }
+
+    /// The whole pyramid of image `i`'s photograph, as the photograph cache
+    /// decoded it before it kept tiles: for a test that renders from it
+    /// directly to compare with a render through the entry points.
+    fn pyramid(&self, i: usize) -> ImageU8Pyramid {
+        let image = ImageU8::read_rgb(&self.paths[i]).expect("every photograph is checked in");
+        let levels = ImageU8Pyramid::full_levels(image.width(), image.height());
+        ImageU8Pyramid::from_image(image, levels)
     }
 
     pub(super) fn views(&self) -> Vec<ProjectedImage<'_>> {
@@ -224,7 +237,8 @@ fn the_shared_tile_leaves_the_self_similarity_readings_as_a_direct_render_gives_
             view.cam_from_world,
             resolution as u32,
         );
-        let rendered = render_tile(view.source.held_pyramid(), &mut map, sampler);
+        let pyramid = truth.pyramid(observation.image as usize);
+        let rendered = render_tile(&pyramid, &mut map, sampler);
         let valid: Vec<bool> = (0..resolution * resolution)
             .map(|k| map.is_valid((k % resolution) as u32, (k / resolution) as u32))
             .collect();

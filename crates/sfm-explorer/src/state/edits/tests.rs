@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::image::ImageU8;
 use sfmtool_core::SfmrReconstruction;
 
 use crate::action_log::Entry;
@@ -1923,42 +1923,6 @@ fn converting_pushes_one_embedded_patches_version_over_the_same_rows() {
     assert!(!state.scene[0].has_patch_data());
 }
 
-/// A photograph the cache hands back that lacks pixels the bitmap render
-/// reads fails the conversion, naming the read, and pushes no version.
-#[test]
-fn converting_fails_when_a_photograph_lacks_pixels_its_render_reads() {
-    let dir = tempfile::tempdir().unwrap();
-    let (mut state, id) = convertible_state(dir.path());
-    let camera = &state.scene[0].recon().image_set.cameras[0];
-    let photograph =
-        image::RgbImage::from_pixel(camera.width, camera.height, image::Rgb([40, 80, 120]));
-    let paths: Vec<std::path::PathBuf> = state.scene[0].recon().image_set.images[..2]
-        .iter()
-        .map(|image| dir.path().join(&image.name))
-        .collect();
-    for path in &paths {
-        photograph.save(path).unwrap();
-    }
-    crate::test_support::insert_corners_only(&state.photographs, &paths);
-
-    state.start_convert_to_embedded_patches(id).unwrap();
-    state.finish_background_tasks();
-
-    let entry = newest(&state);
-    assert!(entry.failed, "{}", entry.text);
-    assert!(
-        entry
-            .text
-            .starts_with("Convert to embedded patches of run_a refused: ")
-            && entry
-                .text
-                .contains("a photograph could not be read: a photograph in memory: "),
-        "{}",
-        entry.text
-    );
-    assert_eq!(state.scene[0].history.versions().len(), 1);
-}
-
 #[test]
 fn converting_renders_and_persists_patch_bitmaps_when_photographs_are_available() {
     let dir = tempfile::tempdir().unwrap();
@@ -2562,31 +2526,25 @@ fn a_reconstruction_with_no_patch_frames_is_refused_in_the_menu_s_own_words() {
 
 // ── Where a step's photographs come from ────────────────────────────────
 
-/// A cached photograph is already a pyramid, so a step over nothing but cached
-/// photographs reads no file and builds no pyramid: what reaches the kernels is
-/// the very `Arc` of the photograph the cache holds.
+/// A cached photograph is already cut into tiles, so a step over nothing but
+/// cached photographs reads no file and decodes nothing: what reaches the
+/// kernels is made of the tiles the cache keeps.
 ///
-/// Pointer equality rather than pixel equality, because a rebuilt pyramid would
-/// hold the same pixels and cost the seconds this cache exists to remove.
+/// The cache's counters as well as the pixels, because a decode would give
+/// the same pixels and cost the seconds this cache exists to remove.
 #[test]
-fn a_step_over_cached_photographs_takes_their_pyramids_as_they_are() {
+fn a_step_over_cached_photographs_takes_their_tiles_as_they_are() {
     let state = state();
     let id = node(&state);
     let images = state.scene[0].image_count();
     assert!(images > 1, "the demo node has images to read");
 
-    let cached: Vec<_> = (0..images)
-        .map(|index| {
-            let pyramid = Arc::new(ImageU8Pyramid::from_image(
-                ImageU8::new(8, 8, 3, vec![index as u8; 8 * 8 * 3]),
-                ImageU8Pyramid::full_levels(8, 8),
-            ));
-            let path = crate::state::photograph_path(state.scene[0].recon(), index)
-                .expect("an image of the node");
-            state.photographs.insert(&path, pyramid);
-            state.photographs.peek(&path).expect("inserted")
-        })
-        .collect();
+    for index in 0..images {
+        let image = ImageU8::new(8, 8, 3, vec![index as u8; 8 * 8 * 3]);
+        let path = crate::state::photograph_path(state.scene[0].recon(), index)
+            .expect("an image of the node");
+        state.photographs.insert(&path, image);
+    }
 
     let needed: Vec<usize> = (0..images).collect();
     let sources = state.view_sources_for(id, &needed).expect("a loaded node");
@@ -2595,12 +2553,15 @@ fn a_step_over_cached_photographs_takes_their_pyramids_as_they_are() {
         .decode(&collector.progress())
         .expect("every photograph was cached, so nothing was read");
 
-    for (index, photograph) in cached.iter().enumerate() {
-        assert!(
-            Arc::ptr_eq(&decoded.sources[index], photograph),
-            "image {index} was pyramided again rather than taken from the cache",
+    for index in 0..images {
+        assert_eq!(
+            crate::test_support::level_0_pixels(&decoded.sources[index]),
+            vec![index as u8; 8 * 8 * 3],
+            "image {index} is not the photograph the cache holds",
         );
     }
+    let stats = state.photographs.stats();
+    assert_eq!((stats.misses, stats.decodes), (0, 0), "nothing was decoded");
     let note = crate::test_support::phase_note(&collector.take(), "decode images")
         .expect("a decode images note");
     assert!(
@@ -2697,7 +2658,10 @@ fn a_second_step_over_the_same_images_reads_nothing_from_disk() {
         "a photograph was read twice"
     );
     for index in needed {
-        assert!(Arc::ptr_eq(&first.sources[index], &second.sources[index]));
+        assert_eq!(
+            crate::test_support::level_0_pixels(&first.sources[index]),
+            crate::test_support::level_0_pixels(&second.sources[index]),
+        );
     }
 }
 
@@ -2751,25 +2715,25 @@ fn deleting_an_image_keeps_the_decoded_photographs() {
     for index in 0..images {
         state.insert_photograph(id, index, ImageU8::new(4, 4, 3, vec![index as u8; 48]));
     }
-    let before: Vec<_> = (0..images)
-        .map(|index| state.cached_photograph(id, index).expect("inserted"))
-        .collect();
+    let tiles = state.photographs.stats().tiles;
 
     state.delete_image(ImageRef::new(id, 1)).expect("an image");
 
     // Old image 2 is now image 1, and its photograph is still the one decoded.
     assert_eq!(state.scene[0].image_count(), images - 1);
-    for new in 1..images - 1 {
+    for (new, old) in (0..images - 1).map(|new| (new, if new == 0 { 0 } else { new + 1 })) {
         let now = state.cached_photograph(id, new).expect("still cached");
-        assert!(
-            Arc::ptr_eq(&now, &before[new + 1]),
+        assert_eq!(
+            crate::test_support::level_0_pixels(&now),
+            vec![old as u8; 48],
             "image {new} lost its photograph to the renumbering"
         );
     }
-    assert!(Arc::ptr_eq(
-        &state.cached_photograph(id, 0).expect("still cached"),
-        &before[0]
-    ));
+    assert_eq!(
+        state.photographs.stats().tiles,
+        tiles,
+        "no tile was dropped"
+    );
 }
 
 // ── The point gestures ──────────────────────────────────────────────────

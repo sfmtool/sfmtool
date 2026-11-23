@@ -466,33 +466,19 @@ pub(crate) fn image_on_own_camera(
     out
 }
 
-/// Put in `photographs`, for each of `paths`, a pyramid of the photograph's
-/// size that holds only an 8 px corner of each level, as one a caller made
-/// with `ImageU8Pyramid::from_regions` and inserted can be, so a read of any
-/// other pixel of it fails. The size is each file's own, read from its
-/// header, so the photograph passes a size check.
-pub(crate) fn insert_corners_only(
-    photographs: &sfmtool_core::camera::PhotographCache,
-    paths: &[std::path::PathBuf],
-) {
-    use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid, PyramidLevel};
-    for path in paths {
-        let (width, height) = image::image_dimensions(path).expect("a photograph on disk");
-        let levels = ImageU8Pyramid::full_levels(width, height);
-        let (mut w, mut h) = (width, height);
-        let mut corners = Vec::with_capacity(levels);
-        for _ in 0..levels {
-            let (cw, ch) = (w.min(8), h.min(8));
-            corners.push(Some(PyramidLevel {
-                image: ImageU8::new(cw, ch, 3, vec![128; (cw * ch * 3) as usize]),
-                origin: [0, 0],
-                full_size: [w, h],
-            }));
-            (w, h) = (w / 2, h / 2);
-        }
-        let pyramid = ImageU8Pyramid::from_regions(corners).expect("a valid region pyramid");
-        photographs.insert(path, std::sync::Arc::new(pyramid));
-    }
+/// Every pixel of level 0 of `photograph`, read from its tiles.
+pub(crate) fn level_0_pixels(photograph: &sfmtool_core::camera::TiledPhotograph) -> Vec<u8> {
+    let (x1, y1) = photograph.layout().level_size(0);
+    let rect = sfmtool_core::camera::sampler::LevelRect {
+        x0: 0,
+        y0: 0,
+        x1,
+        y1,
+    };
+    let pool = sfmtool_core::camera::sampler::RegionPool::with_capacity(u64::MAX);
+    let read = sfmtool_core::camera::sampler::read_source_rect(photograph, &pool, 0, rect)
+        .expect("a photograph holding every tile");
+    read.image().data().to_vec()
 }
 
 /// `recon` without its inline keypoints: the value an open gives for a version
@@ -551,7 +537,7 @@ pub(crate) fn rewrite_as_version_16_without_keypoints(path: &std::path::Path) {
 
 /// A photograph held in a photograph cache of its own, as a panel test hands
 /// it to Image Detail: the cache answers its layout and its tiles at once,
-/// cut from `pyramid`, so a frame draws it as the panel draws a photograph
+/// cut from `image`, so a frame draws it as the panel draws a photograph
 /// the session's cache holds, and starts no task.
 pub(crate) struct HeldPhotograph {
     cache: std::sync::Arc<sfmtool_core::camera::PhotographCache>,
@@ -560,7 +546,7 @@ pub(crate) struct HeldPhotograph {
 }
 
 impl HeldPhotograph {
-    pub(crate) fn new(pyramid: sfmtool_core::camera::image::ImageU8Pyramid) -> Self {
+    pub(crate) fn new(image: &sfmtool_core::camera::image::ImageU8) -> Self {
         let cache = sfmtool_core::camera::PhotographCache::new(
             sfmtool_core::camera::PhotographCacheOptions {
                 budget_bytes: 1 << 30,
@@ -568,7 +554,13 @@ impl HeldPhotograph {
             },
         );
         let path = std::path::PathBuf::from("/held/photograph.jpg");
-        cache.insert(&path, std::sync::Arc::new(pyramid));
+        let copy = sfmtool_core::camera::image::ImageU8::new(
+            image.width(),
+            image.height(),
+            image.channels(),
+            image.data().to_vec(),
+        );
+        cache.insert(&path, copy);
         Self {
             cache: std::sync::Arc::new(cache),
             requests: crate::state::PhotographRequests::default(),

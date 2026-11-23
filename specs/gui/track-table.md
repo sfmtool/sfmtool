@@ -1083,8 +1083,8 @@ camera and one at infinity:
 - each cell state: a crop, a crop of the point at infinity, *no patch*, *off
   image*, an empty frame while its photograph's header is read, then
   *unreadable* once the read of a missing file fails, and *unreadable* for a
-  crop whose read of its photograph fails, the cached pyramid holding one
-  pixel of it;
+  crop whose photograph has left the cache and whose header read finds no
+  file, while the crops of another photograph's points still read;
 - a crop whose photograph tiles are not there draws an empty frame, asks for
   the photograph's header once over three frames, decodes nothing on the GUI
   thread, and draws its crop on the frame after the photograph lands, with

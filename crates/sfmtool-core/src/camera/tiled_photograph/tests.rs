@@ -65,10 +65,8 @@ fn assert_holds_the_pyramid(source: &TiledPhotograph, pyramid: &ImageU8Pyramid, 
     assert_eq!(layout.levels(), pyramid.num_levels());
     assert_eq!(source.channels(), pyramid.level(0).channels());
     assert!(!source.may_lack_tiles());
-    let Pixels::Tiles { held, every: true } = &source.pixels else {
-        panic!("a photograph from an image holds every tile");
-    };
-    assert_eq!(held.len(), tile_count(layout));
+    assert!(source.every, "a photograph from an image holds every tile");
+    assert_eq!(source.held.len(), tile_count(layout));
     for level in 0..layout.levels() {
         let image = pyramid.level(level);
         let (w, h) = layout.level_size(level);
@@ -158,11 +156,8 @@ fn from_image_cuts_the_tiles_of_the_whole_pyramid_level_by_level() {
         let source = TiledPhotograph::from_image(image);
         assert_eq!(source.layout().levels(), pyramid.num_levels(), "{w} x {h}");
         assert_eq!(source.channels(), whole.channels());
-        let (Pixels::Tiles { held, every: true }, Pixels::Tiles { held: expected, .. }) =
-            (&source.pixels, &whole.pixels)
-        else {
-            panic!("both hold every tile");
-        };
+        assert!(source.every && whole.every, "both hold every tile");
+        let (held, expected) = (&source.held, &whole.held);
         assert_eq!(held.len(), expected.len(), "{w} x {h}");
         for (key, tile) in expected {
             let got = &held[key];

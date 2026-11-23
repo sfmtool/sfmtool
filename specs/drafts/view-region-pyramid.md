@@ -592,7 +592,11 @@ moves the 3D background to them (built), 13d1 moves Track View to them
 (built) and 13d2 the Track Table and Measurement View's endpoint crops
 (built), while the cache still holds whole pyramids, and
 13e replaces the pyramids with tiles, which is where the tests of this
-draft's step 5 that count decodes run.
+draft's step 5 that count decodes run: 13e1 answers tiled photographs
+(built), 13e2 has `from_image` hold its tiles (built), 13e3 has the cache
+keep tiles in place of pyramids, the tiles a request asked for as used and
+the rest of a decode as unused, evicted first (built), and 13e4 and 13e5
+follow.
 
 1. **Regions in the pyramid and the samplers.** Built, as the main draft's
    step 7a: `PyramidLevel`, `ImageU8Pyramid::from_regions`, the origin

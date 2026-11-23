@@ -15,7 +15,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::image::ImageU8;
 use sfmtool_core::camera::{
     PhotographCache, PhotographCacheOptions, PhotographTile, PHOTOGRAPH_TILE_SIZE as TILE_SIZE,
 };
@@ -159,12 +159,6 @@ fn node() -> SceneNode {
     )
 }
 
-/// The photograph's whole pyramid, as the photograph cache builds it.
-fn pyramid_of(image: ImageU8) -> ImageU8Pyramid {
-    let levels = ImageU8Pyramid::full_levels(image.width(), image.height());
-    ImageU8Pyramid::from_image(image, levels)
-}
-
 /// A photograph of `width x height` whose pixels say where they are.
 fn synthetic(width: u32, height: u32) -> ImageU8 {
     let data = (0..height)
@@ -306,7 +300,7 @@ fn resident_tiles(detail: &ImageDetail) -> HashSet<Tile> {
 #[test]
 fn a_view_uploads_the_tiles_it_shows_and_the_overview() {
     let node = node();
-    let pyramid = HeldPhotograph::new(pyramid_of(synthetic(2400, 1800)));
+    let pyramid = HeldPhotograph::new(&synthetic(2400, 1800));
     let ctx = egui::Context::default();
     let mut detail = ImageDetail::new();
     let mut gpu = Gpu::default();
@@ -329,7 +323,7 @@ fn a_view_uploads_the_tiles_it_shows_and_the_overview() {
 #[test]
 fn a_long_photograph_never_makes_a_texture_over_514_px() {
     let node = node();
-    let pyramid = HeldPhotograph::new(pyramid_of(synthetic(9000, 16)));
+    let pyramid = HeldPhotograph::new(&synthetic(9000, 16));
     let ctx = egui::Context::default();
     let mut detail = ImageDetail::new();
     let mut gpu = Gpu::default();
@@ -384,7 +378,7 @@ fn the_zoom_reaches_eight_points_a_pixel_on_a_large_photograph_and_32_on_a_small
     });
 
     // 9000 px across 900 points fits at 0.1, so the limit is 80.
-    let large = HeldPhotograph::new(pyramid_of(synthetic(9000, 16)));
+    let large = HeldPhotograph::new(&synthetic(9000, 16));
     let mut detail = ImageDetail::new();
     let mut gpu = Gpu::default();
     let view = frame(
@@ -405,7 +399,7 @@ fn the_zoom_reaches_eight_points_a_pixel_on_a_large_photograph_and_32_on_a_small
         view.zoom
     );
 
-    let small = HeldPhotograph::new(pyramid_of(synthetic(640, 480)));
+    let small = HeldPhotograph::new(&synthetic(640, 480));
     let mut detail = ImageDetail::new();
     let view = frame(
         &mut detail,
@@ -432,7 +426,7 @@ fn the_zoom_reaches_eight_points_a_pixel_on_a_large_photograph_and_32_on_a_small
         zoom_in,
         &mut gpu,
     );
-    let other = HeldPhotograph::new(ImageU8Pyramid::from_image(synthetic(640, 480), 1));
+    let other = HeldPhotograph::new(&synthetic(640, 480));
     let view = frame(
         &mut detail,
         &ctx,
@@ -459,7 +453,7 @@ fn level0_of_uv((level, col, row): Tile, size: [usize; 2], uv: egui::Rect) -> [f
 #[test]
 fn a_missing_tile_is_drawn_from_the_coarser_level_until_it_is_uploaded() {
     let node = node();
-    let pyramid = HeldPhotograph::new(pyramid_of(synthetic(2400, 1800)));
+    let pyramid = HeldPhotograph::new(&synthetic(2400, 1800));
     let ctx = egui::Context::default();
     ctx.set_pixels_per_point(2.0);
     let mut detail = ImageDetail::new();
@@ -708,10 +702,7 @@ fn a_test_data_photograph_looks_as_it_did_with_one_texture() {
     ));
     let image = ImageU8::read_rgb(path).expect("the test-data photograph reads");
     assert_eq!((image.width(), image.height()), (360, 640));
-    let pyramid = HeldPhotograph::new(ImageU8Pyramid::build(
-        &image,
-        ImageU8Pyramid::full_levels(image.width(), image.height()),
-    ));
+    let pyramid = HeldPhotograph::new(&image);
     let node = node();
     let ctx = egui::Context::default();
     let mut detail = ImageDetail::new();
@@ -911,7 +902,7 @@ fn the_tiles_asked_for_ahead_are_the_ones_the_next_image_draws() {
     let ctx = egui::Context::default();
     let mut detail = ImageDetail::new();
     let mut gpu = Gpu::default();
-    let shown = HeldPhotograph::new(pyramid_of(synthetic(2400, 1800)));
+    let shown = HeldPhotograph::new(&synthetic(2400, 1800));
     let view = frame(
         &mut detail,
         &ctx,
@@ -986,7 +977,7 @@ fn a_switch_keeps_the_previous_image_until_the_new_ones_overview_lands() {
     let ctx = egui::Context::default();
     let mut detail = ImageDetail::new();
     let mut gpu = Gpu::default();
-    let shown = HeldPhotograph::new(pyramid_of(synthetic(800, 600)));
+    let shown = HeldPhotograph::new(&synthetic(800, 600));
     let before = frame(
         &mut detail,
         &ctx,

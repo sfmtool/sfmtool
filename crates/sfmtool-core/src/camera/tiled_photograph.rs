@@ -8,9 +8,9 @@
 //! gives its pixels a photograph tile or a rectangle of one level at a time.
 //! It reads them from the photograph tiles it holds and no others: every tile
 //! of an image's pyramid ([`TiledPhotograph::from_image`]), or the tiles it
-//! was made of ([`TiledPhotograph::from_tiles`]); or from a whole pyramid
-//! read in place, which only the photograph cache still makes. The render
-//! entry points of [`sampler`](crate::camera::sampler) are what read it; see
+//! was made of ([`TiledPhotograph::from_tiles`]), as the photograph cache
+//! makes each photograph it answers. The render entry points of
+//! [`sampler`](crate::camera::sampler) are what read it; see
 //! `specs/core/camera/view-region-pyramids.md`.
 
 use std::collections::HashMap;
@@ -95,28 +95,58 @@ impl From<Cancelled> for PhotographReadError {
 /// It is made of photograph tiles, which it holds and reads, and holds no
 /// other pixel: every tile of an image's pyramid, cut when it is made
 /// ([`from_image`](Self::from_image)), or the tiles it is given
-/// ([`from_tiles`](Self::from_tiles)). Or it is made in memory from a whole
-/// pyramid already built, read in place ([`from_pyramid`](Self::from_pyramid)):
-/// a tile read copies the tile, with its border, from its level; a rectangle
-/// read copies the rectangle straight from its level, refused where a read of
-/// the tiles it covers would be; and the photograph keeps no tile.
+/// ([`from_tiles`](Self::from_tiles)).
 pub struct TiledPhotograph {
-    pixels: Pixels,
+    /// The photograph tiles held, by key.
+    held: HashMap<TileKey, Arc<PhotographTile>>,
+    /// The tiles held are every tile of the layout, so no read checks for a
+    /// tile the photograph lacks.
+    every: bool,
     layout: PyramidLayout,
     channels: u32,
 }
 
-/// Where a [`TiledPhotograph`]'s pixels are.
-enum Pixels {
-    /// A whole pyramid, read in place.
-    Pyramid(Arc<ImageU8Pyramid>),
-    /// The photograph tiles held, by key; no other pixel. `every` says that
-    /// they are every tile of the layout, so no read checks for a tile the
-    /// photograph lacks.
-    Tiles {
-        held: HashMap<TileKey, Arc<PhotographTile>>,
-        every: bool,
-    },
+/// Every photograph tile of an image's pyramid, as [`cut_image`] cuts them.
+pub(crate) struct CutImage {
+    /// The pyramid's layout: its own levels, and no stored level.
+    pub(crate) layout: PyramidLayout,
+    /// Every tile of the layout, each with its border.
+    pub(crate) tiles: HashMap<TileKey, Arc<PhotographTile>>,
+}
+
+/// Every photograph tile, each with its border, of the pyramid of
+/// [`ImageU8Pyramid::full_levels`] depth that [`ImageU8Pyramid::from_image`]
+/// builds of `image`, cut at `tile_size` px (a size of 0 is taken as 1):
+/// what [`TiledPhotograph::from_image`] holds, and what the photograph cache
+/// keeps of a decode. A read of the tiles gives the values the whole pyramid
+/// gives, bit for bit.
+///
+/// The pyramid is never held whole: each level is cut, the next made from it
+/// with [`ImageU8::downsample_2x`] as the pyramid makes it, and the level
+/// dropped, so the call holds at most the tiles cut so far, one level and the
+/// one below it, about 2.25 times the image's bytes at its peak, less than
+/// the pyramid and its tiles together.
+pub(crate) fn cut_image(image: ImageU8, tile_size: u32) -> CutImage {
+    let full = ImageU8Pyramid::full_levels(image.width(), image.height());
+    // The levels `ImageU8Pyramid::from_image` builds: it stops before a
+    // level that would have a side of 0.
+    let (mut w, mut h, mut levels) = (image.width(), image.height(), 1);
+    while levels < full && w >= 2 && h >= 2 {
+        (w, h, levels) = (w / 2, h / 2, levels + 1);
+    }
+    let layout = PyramidLayout::in_memory(image.width(), image.height(), levels, tile_size);
+    // One level at a time: cut it, make the next from it as the pyramid
+    // does, and drop it, so no more than one level and the one below it are
+    // held beside the tiles.
+    let mut tiles = HashMap::new();
+    let mut current = image;
+    for level in 0..levels {
+        cut_level(&layout, level, &current, &mut tiles);
+        if level + 1 < levels {
+            current = current.downsample_2x();
+        }
+    }
+    CutImage { layout, tiles }
 }
 
 impl TiledPhotograph {
@@ -132,29 +162,11 @@ impl TiledPhotograph {
     /// level and the one below it, about 2.25 times the image's bytes at its
     /// peak, less than the pyramid and its tiles together.
     pub fn from_image(image: ImageU8) -> Self {
-        let full = ImageU8Pyramid::full_levels(image.width(), image.height());
-        // The levels `ImageU8Pyramid::from_image` builds: it stops before a
-        // level that would have a side of 0.
-        let (mut w, mut h, mut levels) = (image.width(), image.height(), 1);
-        while levels < full && w >= 2 && h >= 2 {
-            (w, h, levels) = (w / 2, h / 2, levels + 1);
-        }
-        let layout =
-            PyramidLayout::in_memory(image.width(), image.height(), levels, PHOTOGRAPH_TILE_SIZE);
         let channels = image.channels();
-        // One level at a time: cut it, make the next from it as the pyramid
-        // does, and drop it, so no more than one level and the one below it
-        // are held beside the tiles.
-        let mut held = HashMap::new();
-        let mut current = image;
-        for level in 0..levels {
-            cut_level(&layout, level, &current, &mut held);
-            if level + 1 < levels {
-                current = current.downsample_2x();
-            }
-        }
+        let CutImage { layout, tiles } = cut_image(image, PHOTOGRAPH_TILE_SIZE);
         Self {
-            pixels: Pixels::Tiles { held, every: true },
+            held: tiles,
+            every: true,
             layout,
             channels,
         }
@@ -182,6 +194,7 @@ impl TiledPhotograph {
 
     /// Every photograph tile of the whole levels `levels`, each level 0's
     /// size halved, cut at `tile_size` px and held.
+    #[cfg(test)]
     fn cut_levels(levels: &[&ImageU8], tile_size: u32) -> Self {
         let (width, height) = (levels[0].width(), levels[0].height());
         let layout = PyramidLayout::in_memory(width, height, levels.len(), tile_size);
@@ -191,25 +204,8 @@ impl TiledPhotograph {
             cut_level(&layout, level, image, &mut held);
         }
         Self {
-            pixels: Pixels::Tiles { held, every: true },
-            layout,
-            channels,
-        }
-    }
-
-    /// A whole pyramid, read in place. Every read goes through its tiles, so
-    /// a read of a tile, with its border, whose pixels a pyramid made by
-    /// [`ImageU8Pyramid::from_regions`] does not hold is refused with
-    /// [`PhotographReadError::OutOfRange`]. Its levels are the layout's: level `l`
-    /// is level 0's size halved `l` times, as [`ImageU8::downsample_2x`]
-    /// halves it.
-    pub fn from_pyramid(pyramid: Arc<ImageU8Pyramid>) -> Self {
-        let [width, height] = pyramid.level_full_size(0);
-        let layout =
-            PyramidLayout::in_memory(width, height, pyramid.num_levels(), PHOTOGRAPH_TILE_SIZE);
-        let channels = pyramid.level(0).channels();
-        Self {
-            pixels: Pixels::Pyramid(pyramid),
+            held,
+            every: true,
             layout,
             channels,
         }
@@ -255,43 +251,38 @@ impl TiledPhotograph {
         };
         let every = held.len() == tile_count(&layout);
         Ok(Self {
-            pixels: Pixels::Tiles { held, every },
+            held,
+            every,
             layout,
             channels,
         })
     }
 
     /// The same photograph cut into tiles of `tile_size` px (a size of 0 is
-    /// taken as 1): the photograph cache's tile size, and in the tests small
-    /// tiles, so that a small image crosses many of them. A photograph that
+    /// taken as 1): for the tests, small tiles, so that a small image
+    /// crosses many of them. A photograph that
     /// holds every tile of its layout has its levels put together from its
     /// tiles and cut again; one made by [`Self::from_tiles`] that lacks a
     /// tile cannot have them put together, and is left as it is.
-    pub(crate) fn with_tile_size(mut self, tile_size: u32) -> Self {
-        match &self.pixels {
-            Pixels::Pyramid(pyramid) => {
-                let [width, height] = pyramid.level_full_size(0);
-                self.layout =
-                    PyramidLayout::in_memory(width, height, pyramid.num_levels(), tile_size);
-                self
-            }
-            Pixels::Tiles { every: false, .. } => self,
-            Pixels::Tiles { every: true, .. } => {
-                let Ok(levels) = (0..self.layout.levels())
-                    .map(|level| self.whole_level(level))
-                    .collect::<Result<Vec<_>, _>>()
-                else {
-                    // An empty photograph has no tile to cut again.
-                    return self;
-                };
-                Self::cut_levels(&levels.iter().collect::<Vec<_>>(), tile_size)
-            }
+    #[cfg(test)]
+    pub(crate) fn with_tile_size(self, tile_size: u32) -> Self {
+        if !self.every {
+            return self;
         }
+        let Ok(levels) = (0..self.layout.levels())
+            .map(|level| self.whole_level(level))
+            .collect::<Result<Vec<_>, _>>()
+        else {
+            // An empty photograph has no tile to cut again.
+            return self;
+        };
+        Self::cut_levels(&levels.iter().collect::<Vec<_>>(), tile_size)
     }
 
     /// The whole of level `level`, put together from the tiles that cover it:
     /// for [`Self::with_tile_size`], and for the tests that need a level's
     /// pixels and do not compare a read with them.
+    #[cfg(test)]
     pub(crate) fn whole_level(&self, level: usize) -> Result<ImageU8, PhotographReadError> {
         let (w, h) = self.layout.level_size(level);
         let rect = LevelRect {
@@ -313,29 +304,14 @@ impl TiledPhotograph {
         self.channels
     }
 
-    /// The pyramid the photograph is read from, for the tests that compare a
-    /// read with the whole pyramid's; every kernel reads through the render
-    /// entry points. A photograph made of tiles has none.
-    #[cfg(test)]
-    pub(crate) fn held_pyramid(&self) -> &ImageU8Pyramid {
-        match &self.pixels {
-            Pixels::Pyramid(pyramid) => pyramid,
-            Pixels::Tiles { .. } => panic!("a photograph made of tiles holds no pyramid"),
-        }
-    }
-
-    /// The tiles held, when the photograph is made of tiles and may lack one
-    /// a read needs; `None` when it can read every tile of its layout.
+    /// The tiles held, when the photograph may lack one a read needs; `None`
+    /// when it holds every tile of its layout.
     fn lacking(&self) -> Option<&HashMap<TileKey, Arc<PhotographTile>>> {
-        match &self.pixels {
-            Pixels::Tiles { held, every: false } => Some(held),
-            _ => None,
-        }
+        (!self.every).then_some(&self.held)
     }
 
-    /// All the tiles a read of `regions` needs, when the photograph is made of
-    /// tiles and does not hold every one of them; `None` when it can read
-    /// them.
+    /// All the tiles a read of `regions` needs, when the photograph does not
+    /// hold every one of them; `None` when it can read them.
     pub(crate) fn missing_tiles(&self, regions: &LevelRegions) -> Option<Vec<TileKey>> {
         let held = self.lacking()?;
         let keys: Vec<TileKey> = (0..regions.levels())
@@ -345,113 +321,47 @@ impl TiledPhotograph {
         (!keys.iter().all(|key| held.contains_key(key))).then_some(keys)
     }
 
-    /// Whether the photograph is made of tiles and does not hold every one of
-    /// `keys`.
+    /// Whether the photograph does not hold every one of `keys`.
     pub(crate) fn missing_keys(&self, keys: &[TileKey]) -> bool {
         self.lacking()
             .is_some_and(|held| !keys.iter().all(|key| held.contains_key(key)))
     }
 
-    /// Whether the photograph is made of tiles ([`Self::from_tiles`]) and may
-    /// lack one a read needs, so the read has to work out the tiles it needs
-    /// before it reads a pixel.
+    /// Whether the photograph may lack a tile a read needs, made by
+    /// [`Self::from_tiles`] of fewer than every tile, so the read has to work
+    /// out the tiles it needs before it reads a pixel.
     pub(crate) fn may_lack_tiles(&self) -> bool {
         self.lacking().is_some()
     }
 
     /// All the tiles a read of `rect` of level `level`, a rectangle inside its
-    /// level, needs, when the photograph is made of tiles and does not hold
-    /// every one of them; `None` when it can read them.
+    /// level, needs, when the photograph does not hold every one of them;
+    /// `None` when it can read them.
     pub(crate) fn missing_rect_tiles(&self, level: usize, rect: LevelRect) -> Option<Vec<TileKey>> {
         let held = self.lacking()?;
         let keys: Vec<TileKey> = covering(&self.layout, level, rect).collect();
         (!keys.iter().all(|key| held.contains_key(key))).then_some(keys)
     }
 
-    /// The tile `key`, with its border.
+    /// The tile `key`, with its border; [`PhotographReadError::NeedsTiles`]
+    /// naming it when the photograph does not hold it.
     pub(crate) fn tile(&self, key: TileKey) -> Result<Arc<PhotographTile>, PhotographReadError> {
-        if let Pixels::Tiles { held, .. } = &self.pixels {
-            return held
-                .get(&key)
-                .cloned()
-                .ok_or(PhotographReadError::NeedsTiles { keys: vec![key] });
-        }
-        let level = key.level as usize;
-        let (cols, rows) = self.layout.tiles(level);
-        if key.col >= cols || key.row >= rows {
-            return Err(out_of_range(format!(
-                "level {level} has no tile at column {}, row {}",
-                key.col, key.row
-            )));
-        }
-        let ts = self.layout.tile_size();
-        let (w, h) = self.layout.level_size(level);
-        let origin = [key.col * ts, key.row * ts];
-        let size = [ts.min(w - origin[0]), ts.min(h - origin[1])];
-        let pixels = self.copy(
-            level,
-            [i64::from(origin[0]) - 1, i64::from(origin[1]) - 1],
-            [size[0] + 2, size[1] + 2],
-        )?;
-        Ok(Arc::new(PhotographTile {
-            key,
-            origin,
-            size,
-            pixels,
-        }))
+        self.held
+            .get(&key)
+            .cloned()
+            .ok_or(PhotographReadError::NeedsTiles { keys: vec![key] })
     }
 
-    /// The pixels `x0..x1` by `y0..y1` of level `level`: the pixels of the
-    /// photograph tiles whose cores the rectangle covers, copied row by row
-    /// straight from the level the photograph holds, so no tile is cut. A
-    /// rectangle is refused where one of those tiles, with its border, would
-    /// be, so a region read and a tile read refuse the same pixels.
+    /// The pixels `x0..x1` by `y0..y1` of level `level`: the part of each
+    /// photograph tile's core inside the rectangle, copied to its place.
+    /// Refused with [`PhotographReadError::NeedsTiles`] when the photograph
+    /// does not hold every tile the rectangle covers.
     pub(crate) fn region(
         &self,
         level: usize,
         rect: LevelRect,
     ) -> Result<ImageU8, PhotographReadError> {
         check_rect(&self.layout, level, rect)?;
-        if let Pixels::Tiles { held, .. } = &self.pixels {
-            return self.region_of_tiles(held, level, rect);
-        }
-        // The tiles the rectangle covers, with their borders.
-        let ts = self.layout.tile_size();
-        let (w, h) = self.layout.level_size(level);
-        let span = |lo: u32, hi: u32, full: u32| {
-            let first = lo / ts * ts;
-            let end = ((hi - 1) / ts * ts + ts).min(full);
-            (i64::from(first) - 1, end - first + 2)
-        };
-        let (sx, nx) = span(rect.x0, rect.x1, w);
-        let (sy, ny) = span(rect.y0, rect.y1, h);
-        let held = self.held(level, [sx, sy], [nx, ny])?;
-        let img = held.image();
-        let [ox, oy] = held.origin().map(|o| o as u32);
-        let c = self.channels as usize;
-        let stride = img.width() as usize * c;
-        let row_len = rect.width() as usize * c;
-        let mut data = Vec::with_capacity(row_len * rect.height() as usize);
-        for y in rect.y0..rect.y1 {
-            let from = (y - oy) as usize * stride + (rect.x0 - ox) as usize * c;
-            data.extend_from_slice(&img.data()[from..from + row_len]);
-        }
-        Ok(ImageU8::new(
-            rect.width(),
-            rect.height(),
-            self.channels,
-            data,
-        ))
-    }
-
-    /// [`Self::region`] of a photograph made of tiles: the part of each held
-    /// tile's core inside `rect`, copied to its place.
-    fn region_of_tiles(
-        &self,
-        held: &HashMap<TileKey, Arc<PhotographTile>>,
-        level: usize,
-        rect: LevelRect,
-    ) -> Result<ImageU8, PhotographReadError> {
         if let Some(keys) = self.missing_rect_tiles(level, rect) {
             return Err(PhotographReadError::NeedsTiles { keys });
         }
@@ -459,7 +369,7 @@ impl TiledPhotograph {
         let row_len = rect.width() as usize * c;
         let mut data = vec![0; row_len * rect.height() as usize];
         for key in covering(&self.layout, level, rect) {
-            let tile = &held[&key];
+            let tile = &self.held[&key];
             let [ox, oy] = tile.origin;
             let (x0, x1) = (rect.x0.max(ox), rect.x1.min(ox + tile.size[0]));
             let (y0, y1) = (rect.y0.max(oy), rect.y1.min(oy + tile.size[1]));
@@ -479,68 +389,12 @@ impl TiledPhotograph {
             data,
         ))
     }
-
-    /// Level `level` as the pyramid holds it, once it is known to hold every
-    /// pixel the `size` pixels from `start` reach with each address clamped
-    /// to the level. Refuses pixels the pyramid does not hold, as for a
-    /// pyramid made by [`ImageU8Pyramid::from_regions`] handed to
-    /// [`from_pyramid`](Self::from_pyramid), rather than read other pixels.
-    fn held(
-        &self,
-        level: usize,
-        start: [i64; 2],
-        size: [u32; 2],
-    ) -> Result<HeldLevel<'_>, PhotographReadError> {
-        let Pixels::Pyramid(pyramid) = &self.pixels else {
-            return Err(out_of_range(
-                "a photograph made of tiles holds no pyramid".to_string(),
-            ));
-        };
-        let held = HeldLevel::of(pyramid, level);
-        let img = held.image();
-        let [ox, oy] = held.origin().map(i64::from);
-        let (w, h) = self.layout.level_size(level);
-        // The span of full-level pixels the clamped addresses reach on one
-        // axis lies inside the held rectangle.
-        let holds = |start: i64, size: u32, origin: i64, full: u32, held: u32| {
-            let last = i64::from(full) - 1;
-            let lo = start.clamp(0, last);
-            let hi = (start + i64::from(size) - 1).clamp(0, last);
-            origin <= lo && hi < origin + i64::from(held)
-        };
-        if pyramid.level_full_size(level) != [w, h]
-            || !holds(start[0], size[0], ox, w, img.width())
-            || !holds(start[1], size[1], oy, h, img.height())
-        {
-            return Err(out_of_range(format!(
-                "pixels of level {level} the pyramid does not hold"
-            )));
-        }
-        Ok(held)
-    }
-
-    /// The `size` pixels from `start` of level `level`, each address clamped
-    /// to the level, refused as [`Self::held`] refuses them.
-    fn copy(
-        &self,
-        level: usize,
-        start: [i64; 2],
-        size: [u32; 2],
-    ) -> Result<ImageU8, PhotographReadError> {
-        let held = self.held(level, start, size)?;
-        Ok(copy_clamped(
-            held,
-            self.layout.level_size(level),
-            start,
-            size,
-        ))
-    }
 }
 
 /// The `size` pixels from `start` of a level of size `full`, each address
 /// clamped to the level, of which `held` holds every pixel the clamped
-/// addresses reach. The columns that need no clamping are copied as one span
-/// a row.
+/// addresses reach: a tile with its border, as [`cut_level`] cuts it. The
+/// columns that need no clamping are copied as one span a row.
 fn copy_clamped(held: HeldLevel<'_>, full: (u32, u32), start: [i64; 2], size: [u32; 2]) -> ImageU8 {
     let img = held.image();
     let [ox, oy] = held.origin().map(i64::from);
@@ -618,7 +472,7 @@ fn cut_level(
 }
 
 /// The number of tiles of every level of `layout`.
-fn tile_count(layout: &PyramidLayout) -> usize {
+pub(crate) fn tile_count(layout: &PyramidLayout) -> usize {
     (0..layout.levels())
         .map(|level| {
             let (cols, rows) = layout.tiles(level);
