@@ -1213,8 +1213,9 @@ Each step is one change on its own branch, with its tests.
      *Load demo data* (fast queue, no lock, cancellable), whose job renders,
      writes and then opens the file with the open's own `load_for_display`,
      rather than a write task whose landing starts an *Open* task. One task
-     gives one row, `Loaded demo data from {path}: {kept} points, for {asked}
-     asked for`, which names the count kept, and one entry in the Background
+     gives one row, `Loaded demo data: {kept} points, for {asked} asked for,
+     from {path}`, which names the count kept before the long temporary path,
+     as other rows that name a file end with it, and one entry in the Background
      Tasks panel; the node is still made by `append_opened`, as an open's is.
      The bar splits 1 : 2 : 1 between the render, the write and the open.
    - **`--demo` is asynchronous too.** It starts the same task; `ui_basic`'s

@@ -352,8 +352,10 @@ pub(crate) fn load_demo_job(
 }
 
 /// The Action Log sentence of a load that made `node` for `asked` points: the
-/// file it opened and the number of points the scene kept, which is near the
-/// number asked for and not equal to it.
+/// number of points the scene kept, which is near the number asked for and not
+/// equal to it, and then the file it opened. The counts come first and the
+/// path last, as other rows that name a file put it, since the temporary
+/// workspace's path is long enough to push anything after it out of view.
 pub(crate) fn loaded_sentence(state: &AppState, node: ReconId, asked: u32) -> String {
     let Some(node) = state.node(node) else {
         return "Loaded demo data".to_string();
@@ -364,7 +366,7 @@ pub(crate) fn loaded_sentence(state: &AppState, node: ReconId, asked: u32) -> St
         .map(|path| path.display().to_string())
         .unwrap_or_default();
     format!(
-        "Loaded demo data from {path}: {} points, for {asked} asked for",
+        "Loaded demo data: {} points, for {asked} asked for, from {path}",
         node.recon().point_count()
     )
 }

@@ -964,8 +964,10 @@ the calls it makes report: `render` (rows) and `encode` (images) from
 carries both columns. It is cancellable: each of those calls polls the flag,
 and a cancelled load appends no node. It ends with `Finished::DemoLoaded`,
 which the GUI thread appends as an open's file under a phase `append nodes`,
-with the row `Loaded demo data from {path}: {kept} points, for {asked} asked
-for`. A render or write that fails ends the task with `Failed to load demo
+with the row `Loaded demo data: {kept} points, for {asked} asked for, from
+{path}`: the counts before the path, which in the temporary directory is long
+enough to push anything after it out of view, and the path last, as the open's
+`Opened {label} from {path}` ends with it. A render or write that fails ends the task with `Failed to load demo
 data: {why}`.
 
 **Where the workspace goes.** Each load writes its own directory in the system

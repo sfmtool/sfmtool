@@ -343,7 +343,7 @@ fn a_load_opens_the_written_scene_from_its_temporary_workspace() {
     assert_eq!(
         entry.text,
         format!(
-            "Loaded demo data from {}: {kept} points, for 300 asked for",
+            "Loaded demo data: {kept} points, for 300 asked for, from {}",
             dir.join("demo.sfmr").display()
         )
     );

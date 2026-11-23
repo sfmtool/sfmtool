@@ -188,7 +188,7 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | File | — | User / MCP | `Failed to load {path}: {error}` — **failed** |
 | File | — | User / MCP | `Closed {label}` |
 | File | — | User / MCP | `Closed all ({n})` — one entry, not one per node |
-| File | — | User | `Loaded demo data from {path}: {kept} points, for {asked} asked for` -- the row the *Load demo data* task lands with ([background-tasks.md](background-tasks.md) § "Loading demo data") |
+| File | — | User | `Loaded demo data: {kept} points, for {asked} asked for, from {path}` -- the row the *Load demo data* task lands with ([background-tasks.md](background-tasks.md) § "Loading demo data") |
 | File | — | User | `Failed to load demo data: {why}` -- **failed** |
 | File | — | User / MCP | `Saved {label} at {serial} to {path}` -- one entry per save, the serial being the version that reached the disk ([saving.md](saving.md)) |
 | File | — | User / MCP | the reason a save was refused -- **failed**: the node is not loaded, the node came from no file (Save), the version at the cursor was released to keep the node inside the history budget, or the write itself failed |
