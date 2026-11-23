@@ -127,8 +127,8 @@ reason to the user.
 Launch a fresh agent with the [auditor brief](#auditor-brief) below, the
 branch name, the base, the change and the same task-specific instructions.
 Tell it what the implementer said it changed and what it deliberately left
-out, whether it said the change is visible and what it said to screenshot,
-and name the claims most worth checking (a new code path, a moved
+out, whether it said the change is visible and what it said to screenshot
+or render, and name the claims most worth checking (a new code path, a moved
 section, numbers, anything the implementer says it inferred). For a decline,
 tell it the implementer's decision and stated reason, so it can check that the
 change really is wrong, or really needs a maintainer. Give it no other part of
@@ -181,22 +181,25 @@ Report to the user, or return to the calling skill:
   number of simple audit fixes, a second audit round);
 - the behaviour changes, separately from the spec and doc edits;
 - whether the change is visible, as the implementer and auditor agreed, and
-  the screenshot links once they are taken;
+  the links to the screenshots and renders once they are taken;
 - the checks run and their results;
 - anything the agents noticed outside the change.
 
 Do not open a pull request unless the user asks. When asked, write the body
 from `.github/PULL_REQUEST_TEMPLATE.md` as `AGENTS.md` § "Opening a pull
-request" describes. For a visible change, the screenshots come first: launch
+request" describes. For a visible change, the pictures come first: launch
 one more agent with the [screenshot brief](#screenshot-brief), after the
 audit and on its own like the others, and open the pull request only once it
 has returned the image links. A visible change is anything the viewer draws,
-an image a CLI command writes, or a docs page, however small: a new menu entry
-or a renamed label counts. The Screenshots section says `n/a` only when the
-implementer and auditor agree nothing is visible, and then says what was
-checked.
+a docs page, or an image the code renders or writes (the output image of a
+CLI command, or the output of a helper or library function that renders or
+encodes an image, such as a renderer, a texture, a thumbnail or patch bitmap
+builder, or an image encoder), however small: a new menu entry or a renamed
+label counts. The Screenshots and Renders section says `n/a` only when the
+implementer and auditor agree nothing visible and no rendered image changes,
+and then says what was checked.
 
-## Screenshots
+## Screenshots and renders
 
 How the screenshot agent, or anyone opening a PR for a visible change, takes
 and hosts the pictures:
@@ -232,22 +235,23 @@ and hosts the pictures:
    worktree afterwards.
 4. **Privacy.** Crop each picture to what changed: a panel (`panel_name`), and
    with `crop_px` the menu, row or widget inside it; for a menu that reaches
-   outside its panel, crop the window instead. Look at every PNG before using
-   it: no local path, username or personal data may show. The Background Tasks
-   and Action Log panels show full paths in their "Open" rows, so crop those
-   rows out or clear the panel first.
+   outside its panel, crop the window instead. Look at every picture before
+   using it: no local path, username or personal data may show. The
+   Background Tasks and Action Log panels show full paths in their "Open"
+   rows, so crop those rows out or clear the panel first.
 
-   For an image a CLI command writes, run the command on the scratchpad copy
-   and use its output. The same privacy check and hosting apply. A docs
-   page lives in the sfmtool/sfmtool.github.io repository, usually checked
-   out as `../sfmtool.github.io`; screenshot it from `pixi run docs-serve`
-   run there, and put the pictures in that repository's PR.
-5. **Hosting.** Put the PNGs in one orphan commit "Screenshots for <branch>"
-   on a `pr-<branch>-screenshots` branch of the fork, built without touching
-   the checkout:
+   A docs page lives in the sfmtool/sfmtool.github.io repository, usually
+   checked out as `../sfmtool.github.io`; screenshot it from
+   `pixi run docs-serve` run there, and put the pictures in that repository's
+   PR.
+5. **Hosting.** Put the PNG and JPEG images (screenshots and renders alike)
+   in one orphan commit "Screenshots for <branch>" on a
+   `pr-<branch>-screenshots` branch of the fork, built without touching the
+   checkout:
 
    ```bash
-   tree=$(for f in <dir>/*.png; do
+   tree=$(for f in <dir>/*.png <dir>/*.jpg <dir>/*.jpeg; do
+     [ -f "$f" ] || continue
      printf '100644 blob %s\t%s\n' "$(git hash-object -w "$f")" "$(basename "$f")"
    done | git mktree)
    sha=$(git commit-tree "$tree" -m "Screenshots for <branch>" \
@@ -256,9 +260,38 @@ and hosts the pictures:
    ```
 
    Link each one as
-   `https://raw.githubusercontent.com/<fork owner>/sfmtool/<sha>/<file>.png`.
+   `https://raw.githubusercontent.com/<fork owner>/sfmtool/<sha>/<file>`.
    The Screenshots sections of PRs #1038 and #1041 are examples.
 6. Stop every viewer started (`viewer.py stop --session <dir>`).
+
+### Renders
+
+An image the code renders or writes outside the viewer (the output image of
+a CLI command, or the output of a helper or library function that renders or
+encodes an image) goes in the PR's "Screenshots and Renders" section too.
+PR #1367, which added the demo scene's renderer (`DemoScene::render`), shows
+there the five photographs it renders, captioned with the options used, and a
+contact sheet comparing them with the same photographs rendered with the
+PR's earlier texture.
+
+- **After.** Produce the images from the branch, on the scratchpad copy of the
+  data. For a CLI command, run the command and use its output. For a helper
+  or library function that no command calls, write a throwaway program or
+  test in the scratchpad (or a temporary example, removed before you finish)
+  that calls it and writes the images; commit none of it.
+- **Before**, when an image that already existed changed. Produce the same
+  images with the same options from a worktree of `<base>/main`, as in step 3
+  above, and remove the worktree afterwards. A contact sheet that puts each
+  before beside its after is easier to compare than separate files.
+- **Check.** Look at each image before using it: that it shows what the
+  change is about, and that it shows no local path, username or personal
+  data.
+- **Hosting.** Host them on the fork's `pr-<branch>-screenshots` orphan
+  commit, exactly as step 5 hosts screenshots, converting to PNG or JPEG
+  where a format will not display in a browser.
+- **Caption.** Give each image a caption in the PR saying what was rendered
+  and with which options (the function or command, its input and its
+  settings).
 
 ## Practical notes
 
@@ -269,7 +302,8 @@ and hosts the pictures:
   Rust and report clippy warnings the project's toolchain does not.
 - **Sign-off.** Every commit carries a DCO `Signed-off-by:` trailer
   (`git commit -s`); see `CONTRIBUTING.md`. The implementer and auditor
-  briefs say so, and the screenshot commit in § "Screenshots" carries one.
+  briefs say so, and the screenshot commit in § "Screenshots and renders"
+  carries one.
 
 ## Implementer brief
 
@@ -362,9 +396,13 @@ and hosts the pictures:
 > **Final answer:** DECISION (DONE or DECLINE, and for a decline which kind),
 > a short rationale, VISIBLE (yes or no: does the change alter anything the
 > viewer draws, such as a menu entry, label, tooltip, panel, layout, colour or
-> 3D-view rendering, an image a CLI command writes, or a docs page; no change
-> is too small to count; for yes, what to screenshot, in what state, and
-> whether a before picture is needed; for no, what you checked), files
+> 3D-view rendering, a docs page, or an image the code renders or writes,
+> such as the output image of a CLI command or the output of a helper or
+> library function that renders or encodes an image (a renderer, a texture,
+> a thumbnail or patch bitmap builder, an image encoder); no change is too
+> small to count; for yes, what to screenshot or render, in what state or
+> with which options, and whether a before picture is needed; for no, what
+> you checked), files
 > changed, commits
 > (`git log --oneline <base>/main..HEAD`), checks run and their results, and
 > anything you noticed outside the change.
@@ -408,9 +446,10 @@ and hosts the pictures:
 >    dimension of its input that `specs/STANDARDS.md` § "Tests cost what their
 >    assertions need" lists, not only the count of items. Check the
 >    implementer's VISIBLE claim against the diff:
->    a change to anything the viewer draws, an image a CLI command writes, or
->    a docs page is visible however small, such as a new menu entry or a
->    renamed label.
+>    a change to anything the viewer draws, a docs page, or an image the code
+>    renders or writes (the output image of a CLI command, or the output of a
+>    helper or library function that renders or encodes an image) is visible
+>    however small, such as a new menu entry or a renamed label.
 > 4. Run the checks that the **Checks** list in the implementer brief
 >    (`skills/implement-change/SKILL.md`) requires for what the diff touches,
 >    in full, on the branch's last commit, after any "Audit fix:" commits of
@@ -442,16 +481,17 @@ and hosts the pictures:
 > Leave no background processes running. **Final answer:** VERDICT = CLEAN (no
 > issues, or only SIMPLE ones that you fixed) or NEEDS-FIX (one or more
 > SUBSTANTIVE issues, listed). Then VISIBLE (yes or no, and what to
-> screenshot, correcting the implementer's answer if it was wrong), the
-> issues, what you fixed, and the check results. Be concise.
+> screenshot or render, correcting the implementer's answer if it was wrong),
+> the issues, what you fixed, and the check results. Be concise.
 
 ## Screenshot brief
 
-> You are taking the screenshots for a visible change committed on the branch
-> checked out, for its pull request. You are the only agent running, so
-> building is allowed. Do not invoke the `implement-change` skill. Read
-> `AGENTS.md` § "Opening a pull request" and `skills/implement-change/SKILL.md`
-> § "Screenshots", and follow the latter.
+> You are taking the screenshots and renders for a visible change committed
+> on the branch checked out, for its pull request. You are the only agent
+> running, so building is allowed. Do not invoke the `implement-change` skill.
+> Read `AGENTS.md` § "Opening a pull request" and
+> `skills/implement-change/SKILL.md` § "Screenshots and renders", and follow
+> the latter.
 >
 > **The change:** <the change>
 >
@@ -461,5 +501,6 @@ and hosts the pictures:
 > on the branch and leave the checkout as you found it.
 >
 > **Final answer:** for each picture, its link and a one-sentence caption
-> saying what it shows and in what state, the dataset copied, and the
+> saying what it shows and in what state (for a render, what was rendered
+> with which options), the dataset copied, and the
 > `pr-<branch>-screenshots` commit. Leave no viewer or worktree behind.
