@@ -15,7 +15,8 @@ temporary directory and is deleted at exit; the demo node saves as any other
 node does; the first version holds a 1 m distance measurement along a cube
 edge; the demo scene is bound to Python; and decoded JPEG pixels may differ
 by one level between x86 and arm64, which the tests tolerate. Steps 1, 2 and
-3 of the [step plan](#step-plan) are built; step 1 found that the JPEG encoder's
+3 of the [step plan](#step-plan) are built, and the Python half of step 5;
+step 1 found that the JPEG encoder's
 two paths give different bytes, and step 2 that the reference-view rule's pick
 of a point's bitmap view can change with a one-level change in the pixels
 ([The reconstruction's columns](#the-reconstructions-columns)), which the
@@ -307,8 +308,12 @@ machine, `render` takes about 0.1 s, `reconstruction` 0.1 to 0.2 s and
 `write_workspace` about 0.15 s. A fixture that renders once and writes one
 workspace costs less than one solve of seoul_bull. The binding's tests share
 one render, one value and one written workspace through module-scoped
-fixtures, since only their module uses them; a later test module that needs
-the scene moves them to a session-scoped fixture in `conftest.py`.
+fixtures, since they assert on the `ProgressCounter` each of their calls
+reports to. The other test modules share one render and one written
+workspace per pytest worker through the session-scoped fixtures
+`demo_scene` and `demo_workspace_once` in
+[tests/conftest.py](../../tests/conftest.py), read-only, and `demo_workspace`,
+a copy of that workspace for a test that changes its files.
 
 ## The scene
 
@@ -1271,3 +1276,42 @@ Each step is one change on its own branch, with its tests.
 5. **Test migration.** The Rust tests and the Python tests listed above, one
    area at a time, each kept only where real pixels make an assertion possible
    or exact.
+
+   *The Python half is built.* Moved to the demo scene, through the fixtures
+   in [Python binding](#python-binding):
+   - in [test_measurement_endpoint_rust_bindings.py](../../tests/rust_bindings/reconstruction/test_measurement_endpoint_rust_bindings.py),
+     the distance measurement test: it places the measurement at the
+     projections of the cube edge's corners and checks that each endpoint
+     resolves to its corner within `10⁻⁶` m and the scene distance is 1 m,
+     where on seoul_bull it could only check the distance against its own
+     endpoints;
+   - in [test_scale_by_measurements.py](../../tests/xform/test_scale_by_measurements.py),
+     the two embedded-patches tests, which converted a copy of the seoul_bull
+     workspace: two unmoved top points stand 0.875 m apart, so 875 mm gives a
+     scale of exactly 1000;
+   - in [test_sfmr_image_readings.py](../../tests/test_sfmr_image_readings.py),
+     the four tests of a value without readings, which copied the seoul_bull
+     ground truth and its 17 images: the readings a save gathers from the
+     image files are also checked against those of the scene's decoded
+     photographs and those the demo's file holds;
+   - in [test_render_patches.py](../../tests/patch/test_render_patches.py),
+     every test that built a patch cloud on a copy of the seoul_bull
+     workspace: `collect_patches` returns each point's position, normal and
+     0.09 m half-extent vectors; a texture render reproduces the photograph
+     it is drawn on to a median of 8 levels (4 or 5 measured, 11 or 12 with
+     the bitmaps flipped); and the back-face cull drops the 64 patches of
+     the face each outer camera sees from behind.
+
+   Kept: the other measurement endpoint tests, on seoul_bull's points at
+   infinity and real keypoints, which the scene does not hold; the scale
+   tests that resolve Point IDs through feature indexes and the readings
+   tests of `.sift` files and `read_sfmr` dicts, which need a `sift_files`
+   value; the render-patches tests of a value with no patch cloud or a
+   `sift_files` one; and all of
+   [test_web_export.py](../../tests/test_web_export.py), which reads the
+   checked-in ground truth in place, so costs no copy, and checks its points
+   at infinity and the bitmaps rendered for a file that stores none, where
+   the scene has no such point and stores its bitmaps. The moved tests take
+   0.4 to 0.5 s less each where they converted or copied seoul_bull, and the
+   four modules 6 s where they took 9 to 10 s on one worker; the scene's
+   render and workspace cost 0.2 s once per worker.

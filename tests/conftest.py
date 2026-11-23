@@ -968,6 +968,44 @@ def seoul_bull_v16_without_keypoints(seoul_bull_sfmr_only: Path) -> Path:
     )
 
 
+@pytest.fixture(scope="session")
+def demo_scene():
+    """Session-scoped: the default demo scene, ``DemoScene.render()``.
+
+    A cube on a textured ground, photographed by five cameras of a known
+    pinhole, with no solve: its points, patch frames, keypoints and its one
+    distance measurement (the cube's 1 m edge) are exact, and its photographs
+    are the renders the value's bitmaps and readings were computed from. See
+    ``specs/drafts/demo-scene.md``. Read it; it has nothing to modify.
+    """
+    from sfmtool.reconstruction import DemoScene
+
+    return DemoScene.render()
+
+
+@pytest.fixture(scope="session")
+def demo_workspace_once(demo_scene, tmp_path_factory) -> Path:
+    """Session-scoped: :func:`demo_scene`'s workspace, written once.
+
+    Returns the ``demo.sfmr`` path at the workspace root, beside the marker and
+    ``images/demo_0.jpg`` ... ``images/demo_4.jpg``: an ``embedded_patches``
+    reconstruction in metres, with patch bitmaps, image readings and the
+    measurement. Read it; a test that writes into the workspace or changes its
+    files uses :func:`demo_workspace`.
+    """
+    return demo_scene.write_workspace(
+        tmp_path_factory.mktemp("demo_workspace") / "workspace"
+    )
+
+
+@pytest.fixture
+def demo_workspace(demo_workspace_once: Path, tmp_path_factory) -> Path:
+    """Per-test copy of :func:`demo_workspace_once`'s whole workspace."""
+    workspace_dir = tmp_path_factory.mktemp("demo_workspace")
+    shutil.copytree(demo_workspace_once.parent, workspace_dir, dirs_exist_ok=True)
+    return workspace_dir / demo_workspace_once.name
+
+
 # The step of :func:`every_nth_point`'s subset for the tests that run a whole
 # ``embed_patches`` or normal refinement on the seoul_bull workspace or ground
 # truth: the workspace's 792 points become 99 and the ground truth's 280 become
