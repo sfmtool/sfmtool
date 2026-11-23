@@ -151,6 +151,14 @@ const OFFER_CROP_SIDE: f32 = 96.0;
 /// the panel stacks the blocks rather than putting them side by side.
 const BLOCK_MIN_WIDTH: f32 = CROP_SIDE + PATCH_SIDE + 40.0;
 
+/// The width of each of the edited mode header's fields, in points, where
+/// the panel has room for it.
+const HEADER_FIELD_WIDTH: f32 = 180.0;
+
+/// The narrowest the edited mode header's fields shrink to in a narrow
+/// panel, in points.
+const HEADER_FIELD_MIN_WIDTH: f32 = 60.0;
+
 /// One of the edited mode header's fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HeaderField {
@@ -776,6 +784,19 @@ impl MeasurementView {
             .map_or(String::new(), |(distance, unit)| {
                 format!("{} {}", measurements::length_number(distance), unit.name())
             });
+        // The fields take what the panel has beside the wider name, up to
+        // their full width, so the grid is never wider than the panel.
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let names = ["Label", "Stated distance"].map(|name| {
+            ui.fonts_mut(|fonts| {
+                fonts
+                    .layout_no_wrap(name.to_string(), font.clone(), Color32::WHITE)
+                    .size()
+                    .x
+            })
+        });
+        let width = (ui.available_width() - names[0].max(names[1]) - ui.spacing().item_spacing.x)
+            .clamp(HEADER_FIELD_MIN_WIDTH, HEADER_FIELD_WIDTH);
         egui::Grid::new("measurement_view_header_fields")
             .num_columns(2)
             .show(ui, |ui| {
@@ -783,6 +804,7 @@ impl MeasurementView {
                 if let Some(to) = self.header_field(
                     ui,
                     label,
+                    width,
                     HeaderField::Label,
                     &item.label,
                     refusal.as_deref(),
@@ -802,6 +824,7 @@ impl MeasurementView {
                 if let Some(to) = self.header_field(
                     ui,
                     label,
+                    width,
                     HeaderField::Distance,
                     &stated,
                     refusal.as_deref(),
@@ -814,10 +837,11 @@ impl MeasurementView {
             });
     }
 
-    /// One header field of the item `item`, holding `value` while nobody is
-    /// typing in it. What it was set to, on the frame it is committed: Enter,
-    /// or the field losing focus, with text other than the text it held when
-    /// it took focus. Escape puts the field back and commits nothing.
+    /// One header field of the item `item`, `width` points wide, holding
+    /// `value` while nobody is typing in it. What it was set to, on the frame
+    /// it is committed: Enter, or the field losing focus, with text other than
+    /// the text it held when it took focus. Escape puts the field back and
+    /// commits nothing.
     #[allow(
         clippy::too_many_arguments,
         reason = "the field's own inputs, each one read once"
@@ -826,6 +850,7 @@ impl MeasurementView {
         &mut self,
         ui: &mut egui::Ui,
         item: &str,
+        width: f32,
         field: HeaderField,
         value: &str,
         refusal: Option<&str>,
@@ -841,7 +866,7 @@ impl MeasurementView {
                 refusal,
                 empty,
                 hint,
-                width: 180.0,
+                width,
                 name: field.widget_name(),
             },
         );
@@ -1648,7 +1673,7 @@ fn show_item_origin(
     item: &EditableMeasurement,
     origin: Option<u32>,
 ) {
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label(egui::RichText::new(label).strong());
         ui.weak("on the bench of");
         ui.label(&node.label);
@@ -1696,7 +1721,7 @@ fn show_header(
     rows: &[DistanceRow],
     resolved: &[ResolvedDistanceMeasurement],
 ) {
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label(egui::RichText::new(measurement.title()).strong());
         ui.weak("in");
         ui.label(&node.label);
@@ -1936,7 +1961,7 @@ impl EndpointBlock<'_> {
                     recon,
                     image,
                     pictures.map(|p| &p.crop),
-                    CROP_SIDE,
+                    CROP_SIDE.min(ui.available_width()),
                 ));
                 if let Some(patch) = pictures.and_then(|p| p.patch.as_ref()) {
                     targets.push(self.show_patch(ui, patch));
@@ -2141,28 +2166,34 @@ impl EndpointBlock<'_> {
                 letter
             })
             .inner;
-        ui.horizontal(|ui| {
+        // Each axis's letter and field stay together, and `y` goes under `x`
+        // where the block is too narrow for both on one line.
+        ui.horizontal_wrapped(|ui| {
             for axis in PixelAxis::BOTH {
-                ui.label(axis.letter());
                 let value = pixel_text(self.pixel[axis.index()]);
                 let hint = format!(
                     "The endpoint's {} pixel coordinate. Enter or clicking elsewhere sets it; \
                      Escape puts it back.",
                     axis.letter()
                 );
-                let (committed, rect) = draft_field(
-                    ui,
-                    &mut kept.drafts[axis.index()],
-                    DraftField {
-                        item,
-                        value: &value,
-                        refusal,
-                        empty: "",
-                        hint: &hint,
-                        width: pixel_field_width(ui, &value),
-                        name: pixel_field_name(side, axis),
-                    },
-                );
+                let (committed, rect) = ui
+                    .horizontal(|ui| {
+                        ui.label(axis.letter());
+                        draft_field(
+                            ui,
+                            &mut kept.drafts[axis.index()],
+                            DraftField {
+                                item,
+                                value: &value,
+                                refusal,
+                                empty: "",
+                                hint: &hint,
+                                width: pixel_field_width(ui, &value),
+                                name: pixel_field_name(side, axis),
+                            },
+                        )
+                    })
+                    .inner;
                 kept.pixel_rects[axis.index()] = Some(rect);
                 let Some(text) = committed else {
                     continue;
@@ -2219,7 +2250,7 @@ impl EndpointBlock<'_> {
         };
         let chosen = resolution.chosen();
         let id = crate::scene::point_id(self.node, chosen.point as usize);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(egui::RichText::new(&id).monospace());
             if crate::track_view::header_buttons::copy_button(ui, "Copy Point ID") {
                 ui.ctx().copy_text(id.clone());
