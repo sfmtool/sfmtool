@@ -536,3 +536,316 @@ fn a_line_with_one_end_behind_the_eye_is_clipped() {
         "A projects nowhere"
     );
 }
+
+/// Ribbons a mark draws: a ring and its halo, of `RING_SEGMENTS` chords each,
+/// and the dot.
+const MARK_RIBBONS: usize = 2 * super::RING_SEGMENTS + 1;
+
+/// `p` moved [`super::toward_eye_fraction`] of the way toward the viewer's eye
+/// in `rect`, as the
+/// pass takes it.
+fn toward_eye(viewer: &Viewer3D, rect: egui::Rect, p: Point3<f64>) -> [f32; 4] {
+    let eye = viewer.camera.position();
+    let q = eye + (p - eye) * (1.0 - super::toward_eye_fraction(&viewer.camera, rect));
+    [q.x as f32, q.y as f32, q.z as f32, 1.0]
+}
+
+/// Where the viewport projects a ribbon's endpoint.
+fn on_screen(viewer: &Viewer3D, rect: egui::Rect, p: [f32; 4]) -> egui::Pos2 {
+    projected(
+        viewer,
+        rect,
+        Point3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2])),
+    )
+}
+
+fn assert_close(a: [f32; 4], b: [f32; 4], what: &str) {
+    assert!(
+        a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-4),
+        "{what}: {a:?} != {b:?}"
+    );
+}
+
+/// The selected measurement's ribbons: the line and its halo between the two
+/// endpoints, then each mark's ring and halo at its radius on screen, the
+/// selected endpoint's larger, and its dot; in the node's colour and the
+/// halo's, at the stroke's width in physical pixels. The frame builds the
+/// same ribbons for the upload.
+#[test]
+fn a_measurement_draws_its_line_and_marks_as_ribbons() {
+    use crate::measurement_marks::{
+        HALO, LINE_WIDTH, MARK_DOT_RADIUS, MARK_RADIUS, SELECTED_MARK_SCALE, STORED_RGB,
+    };
+    let (mut state, id) = measured_state(Some("m"));
+    let m = select(&mut state, id, 0);
+    state.select_endpoint(m, EndpointSide::B);
+    let (mut viewer, ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
+    let shown = frame(
+        &mut viewer,
+        &ctx,
+        &mut state,
+        Vec::new(),
+        egui::pos2(5.0, 5.0),
+    );
+    let rect = shown.rect;
+    assert_eq!(
+        viewer.measurement_ribbons,
+        super::ribbons(&viewer.measurements, &viewer.camera, rect, 1.0),
+        "the frame builds the ribbons the upload draws"
+    );
+
+    let ppp = 2.0;
+    let ribbons = super::ribbons(&viewer.measurements, &viewer.camera, rect, ppp);
+    assert_eq!(ribbons.len(), 2 + 2 * MARK_RIBBONS);
+    let grey = super::encoded_rgba(egui::Color32::from_rgb(
+        STORED_RGB[0],
+        STORED_RGB[1],
+        STORED_RGB[2],
+    ));
+    let halo = super::encoded_rgba(HALO);
+    assert!((halo[3] - 170.0 / 255.0).abs() < 1e-6 && halo[..3] == [0.0; 3]);
+    let level = |v: u8| f32::from(v) / 255.0;
+    assert_eq!(
+        grey,
+        [
+            level(STORED_RGB[0]),
+            level(STORED_RGB[1]),
+            level(STORED_RGB[2]),
+            1.0
+        ]
+    );
+
+    let (a, b) = (Point3::from(POINTS[0]), Point3::from(POINTS[1]));
+    let [line_halo, line] = [ribbons[0], ribbons[1]];
+    for (ribbon, color, width) in [
+        (line_halo, halo, LINE_WIDTH + 2.0),
+        (line, grey, LINE_WIDTH),
+    ] {
+        assert_close(ribbon.a, toward_eye(&viewer, rect, a), "line end A");
+        assert_close(ribbon.b, toward_eye(&viewer, rect, b), "line end B");
+        assert_eq!(ribbon.color, color);
+        assert_eq!(ribbon.half_width, width / 2.0 * ppp);
+    }
+
+    for (k, (side, p)) in [(EndpointSide::A, a), (EndpointSide::B, b)]
+        .into_iter()
+        .enumerate()
+    {
+        let mark = &ribbons[2 + k * MARK_RIBBONS..2 + (k + 1) * MARK_RIBBONS];
+        let centre = projected(&viewer, rect, p);
+        let radius = if side == EndpointSide::B {
+            MARK_RADIUS * SELECTED_MARK_SCALE
+        } else {
+            MARK_RADIUS
+        };
+        let (rings, dot) = mark.split_at(2 * super::RING_SEGMENTS);
+        let (ring_halo, ring) = rings.split_at(super::RING_SEGMENTS);
+        for (chords, color, width) in [
+            (ring_halo, halo, LINE_WIDTH + 2.0),
+            (ring, grey, LINE_WIDTH),
+        ] {
+            for chord in chords {
+                for end in [chord.a, chord.b] {
+                    let r = on_screen(&viewer, rect, end).distance(centre);
+                    assert!((r - radius).abs() < 1e-2, "{side:?}: {r} != {radius}");
+                }
+                assert_eq!(chord.color, color);
+                assert_eq!(chord.half_width, width / 2.0 * ppp);
+            }
+        }
+        // The ring is closed: its last chord ends where its first begins.
+        assert_close(ring[0].a, ring[super::RING_SEGMENTS - 1].b, "closed ring");
+        let dot = dot[0];
+        assert_eq!(dot.color, grey);
+        assert_eq!(dot.half_width, MARK_DOT_RADIUS * ppp);
+        for end in [dot.a, dot.b] {
+            let r = on_screen(&viewer, rect, end).distance(centre);
+            assert!((r - MARK_DOT_RADIUS).abs() < 1e-2, "dot: {r}");
+        }
+        // The mark is drawn toward the eye, at the depth its line's end is.
+        let depth = |q: [f32; 4]| {
+            -viewer
+                .camera
+                .world_to_view(&Point3::new(
+                    f64::from(q[0]),
+                    f64::from(q[1]),
+                    f64::from(q[2]),
+                ))
+                .z
+        };
+        let expected = -viewer.camera.world_to_view(&p).z
+            * (1.0 - super::toward_eye_fraction(&viewer.camera, rect));
+        assert!((depth(ring[0].a) - expected).abs() < 1e-4);
+    }
+}
+
+/// With *Show all measurements* on, the selected measurement's line is the
+/// emphasised width and the others are at the plain width and 55% opacity;
+/// the focused item is the bench violet at the bench's stroke.
+#[test]
+fn show_all_emphasises_the_selected_measurement_and_the_item_is_violet() {
+    use crate::measurement_marks::{
+        Role, EMPHASISED_LINE_WIDTH, ITEM_LINE_WIDTH, LINE_WIDTH, OTHER_OPACITY,
+    };
+    let (mut state, id) = measured_state(Some("m"));
+    select(&mut state, id, 0);
+    state.show_all_measurements = true;
+    let (viewer, _ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, VIEWPORT);
+    let layer = &viewer.measurements;
+    assert!(layer.drawn.len() > 1, "every measurement is drawn");
+    let mut roles = Vec::new();
+    for drawn in &layer.drawn {
+        let one = crate::measurement_marks::MeasurementLayer {
+            drawn: vec![drawn.clone()],
+        };
+        let ribbons = super::ribbons(&one, &viewer.camera, rect, 1.0);
+        // A measurement with no finite endpoint draws nothing.
+        let Some(stroke) = ribbons
+            .iter()
+            .find(|r| r.color != super::encoded_rgba(crate::measurement_marks::HALO))
+        else {
+            continue;
+        };
+        roles.push(drawn.role);
+        match drawn.role {
+            Role::Selected => {
+                assert_eq!(stroke.half_width, EMPHASISED_LINE_WIDTH / 2.0);
+                assert_eq!(stroke.color[3], 1.0);
+            }
+            Role::Other => {
+                assert_eq!(stroke.half_width, LINE_WIDTH / 2.0);
+                assert!((stroke.color[3] - OTHER_OPACITY).abs() < 0.01, "{stroke:?}");
+            }
+            Role::Item => panic!("no item is focused"),
+        }
+    }
+    assert!(roles.contains(&Role::Selected) && roles.contains(&Role::Other));
+
+    // The item: the bench violet at the bench's stroke.
+    let mut item = layer.drawn[0].clone();
+    item.role = Role::Item;
+    item.color = crate::bench::verdict_color(sfmtool_core::bench::Verdict::In);
+    item.width = ITEM_LINE_WIDTH;
+    let ribbons = super::ribbons(
+        &crate::measurement_marks::MeasurementLayer { drawn: vec![item] },
+        &viewer.camera,
+        rect,
+        1.0,
+    );
+    let violet = super::encoded_rgba(crate::bench::verdict_color(
+        sfmtool_core::bench::Verdict::In,
+    ));
+    assert_eq!(ribbons[1].color, violet);
+    assert_eq!(ribbons[1].half_width, ITEM_LINE_WIDTH / 2.0);
+}
+
+/// A refused endpoint and one at infinity draw no ribbon, and the other
+/// endpoint still draws its mark, with no line.
+#[test]
+fn refused_and_infinite_endpoints_draw_no_ribbons() {
+    let (mut state, id) = measured_state(Some("m"));
+    for index in [2, 3] {
+        select(&mut state, id, index);
+        let (viewer, _ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, VIEWPORT);
+        let drawn = &viewer.measurements.drawn[0];
+        let crate::measurement_marks::Place::Finite(a) = drawn.endpoints[0].place else {
+            panic!("measurement {index}: A is finite");
+        };
+        assert!(
+            !matches!(
+                drawn.endpoints[1].place,
+                crate::measurement_marks::Place::Finite(_)
+            ),
+            "measurement {index}: B is not"
+        );
+        let ribbons = super::ribbons(&viewer.measurements, &viewer.camera, rect, 1.0);
+        assert_eq!(ribbons.len(), MARK_RIBBONS, "measurement {index}");
+        let centre = projected(&viewer, rect, a);
+        for ribbon in &ribbons {
+            for end in [ribbon.a, ribbon.b] {
+                assert!(
+                    on_screen(&viewer, rect, end).distance(centre) < 10.0,
+                    "measurement {index}: every piece is A's mark"
+                );
+            }
+        }
+    }
+}
+
+/// A line with one end behind the eye keeps that end, for the pass to clip
+/// at the near plane, and the end behind draws no mark.
+#[test]
+fn a_line_with_one_end_behind_the_eye_is_handed_to_the_pass_whole() {
+    let (mut state, id) = measured_state(Some("m"));
+    select(&mut state, id, 0);
+    // Between the two points, looking along +X: B ahead, A behind.
+    let eye = Point3::new(0.75, -0.2, 0.0);
+    let mut viewer = Viewer3D::new();
+    viewer.view_initialized = true;
+    viewer.maintain_z_up = false;
+    viewer.camera.camera = Camera::look_at(eye, eye + Vector3::x(), Vector3::z());
+    viewer.measurements = state.measurement_layer(false);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, VIEWPORT);
+
+    let ribbons = super::ribbons(&viewer.measurements, &viewer.camera, rect, 1.0);
+    assert_eq!(ribbons.len(), 2 + MARK_RIBBONS, "the line and B's mark");
+    let (a, b) = (Point3::from(POINTS[0]), Point3::from(POINTS[1]));
+    assert_close(
+        ribbons[1].a,
+        toward_eye(&viewer, rect, a),
+        "A, behind the eye",
+    );
+    assert_close(ribbons[1].b, toward_eye(&viewer, rect, b), "B");
+    assert!(
+        viewer.camera.world_to_view(&a).z > 0.0,
+        "A is behind the eye"
+    );
+    let centre = projected(&viewer, rect, b);
+    for ribbon in &ribbons[2..] {
+        assert!(on_screen(&viewer, rect, ribbon.a).distance(centre) < 10.0);
+    }
+}
+
+/// The pull toward the eye is `PULL_POINTS` panel points at each piece's
+/// depth, whatever the field of view and the panel's shape: measured against
+/// the world length of one point at that depth, it is the same number of
+/// points at 5, 45 and 160 degrees, in a short and a tall landscape panel and
+/// in a portrait one, which a fixed fraction of the distance is not. It is at
+/// most a quarter of the depth, and none in a panel with no height.
+#[test]
+fn the_pull_toward_the_eye_is_a_fixed_number_of_points_on_screen() {
+    let mut camera = crate::viewer_3d::ViewportCamera::default();
+    let depth = 7.0;
+    let mut fractions = Vec::new();
+    for fov_degrees in [5.0_f64, 45.0, 160.0] {
+        camera.fov = fov_degrees.to_radians();
+        for (width, height) in [(1200.0_f32, 800.0_f32), (2400.0, 1600.0), (1200.0, 1600.0)] {
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height));
+            let c = rect.center();
+            let point_length = (camera.unproject(c.x, c.y + 1.0, depth, rect)
+                - camera.unproject(c.x, c.y, depth, rect))
+            .norm();
+            let fraction = super::toward_eye_fraction(&camera, rect);
+            let points = fraction * depth / point_length;
+            assert!(
+                (points - super::PULL_POINTS).abs() < 1e-3,
+                "{fov_degrees} degrees, {width} by {height} points: {points} points"
+            );
+            assert!(fraction > 0.0 && fraction < 0.25);
+            fractions.push(fraction);
+        }
+    }
+    // Wider fields and shorter panels pull further, as a share of the depth.
+    assert!(fractions.windows(2).all(|w| w[0] != w[1]));
+    assert!(fractions[0] < fractions[3] && fractions[3] < fractions[6]);
+    assert!(fractions[1] < fractions[0], "a taller panel pulls less");
+
+    // At 160 degrees in a panel 100 points tall, PULL_POINTS would be more
+    // than a quarter of the depth.
+    let small = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(150.0, 100.0));
+    assert_eq!(super::toward_eye_fraction(&camera, small), 0.25);
+    let flat = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(150.0, 0.0));
+    assert_eq!(super::toward_eye_fraction(&camera, flat), 0.0);
+}

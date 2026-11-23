@@ -58,7 +58,7 @@ tools), and, for the drawing,
 (which measurements are drawn, the marks and lines on screen, their hit test,
 the press and the indicator, shared by both views),
 [viewer_3d/measurements.rs](../../crates/sfm-explorer/src/viewer_3d/measurements.rs)
-(where the 3D view puts them) and
+(where the 3D view puts them, and the ribbons its scene pass draws them with) and
 [image_detail/measurements.rs](../../crates/sfm-explorer/src/image_detail/measurements.rs)
 (where Image Detail puts them, and the handle drag).
 
@@ -967,12 +967,43 @@ and line has a dark halo so it reads over a bright photograph or cloud.
 **In the 3D view** a drawn measurement puts a mark, a ring with a dot at its
 centre, at each endpoint that resolves to a finite position, and a line between
 the two where both do. The positions are the resolved ones put through the
-node's display transform, as its points are, projected through the viewport
-camera, and drawn over the cloud rather than hidden by it, since a measurement
-is something a person looks for. An endpoint at infinity or refused draws
-nothing, and the other endpoint still draws its mark; a finite endpoint behind
-the eye draws no mark, and a line with one end behind it is clipped at the near
-plane.
+node's display transform, as its points are. **The marks and lines are drawn
+in the scene**, by the bench figure's shader into a layer of their own
+([viewer-3d-bench-layer.md](viewer-3d-bench-layer.md) § "Depth against the
+scene"), so a person sees how a measurement meets the geometry around it, as
+the hidden part of a highlighted surfel's outline shows
+([patch-rendering.md](patch-rendering.md)): a piece in front of the scene is
+drawn at full strength, and a piece behind it at `BEHIND_OPACITY` (0.45) with
+no fade with distance, so a measurement far behind the cloud is as findable as
+one just behind it. Each straight piece is one camera-facing ribbon carrying
+its own colour and width (`viewer_3d::measurements::ribbons`): the line and
+its halo, and per mark a ring of 24 chords, its halo and the dot. A mark keeps
+its size on screen, its ring built facing the eye at the endpoint's depth with
+its radius in points unprojected there, and the widths are the points above
+in physical pixels. The layer is a texture of its own, cleared to transparent
+every frame, that holds egui's premultiplied colours as egui's own textures
+hold them; the view paints it over the scene, the grid and the axes, where
+the overlay was painted, so egui composites a translucent colour (the dimmed
+others, the halo) as it composited the overlay's, to within one level in 255,
+on an sRGB window surface or an encoded one. Every piece
+is drawn toward the eye by `PULL_POINTS`
+(10.75: the selected ring's radius and its halo) as a world length at its own
+depth, since an endpoint lies on the surface it was read from and a mark
+exactly there would be half in front of that surface and half behind it.
+Sized in points, the pull keeps a mark and its halo in front of a surface
+turned up to 45 degrees from the view whatever the field of view and the
+panel's height. One panel point at view depth `d` is
+`d · 2·tan(vfov/2) / height` long, so the pull is the same fraction of every
+piece's depth (`toward_eye_fraction`, at most a quarter, and none for a panel
+with no height), a uniform scale toward the eye: each piece moves along its
+own line of sight, which leaves its projection where it was. An endpoint at
+infinity or refused draws nothing, and the other endpoint still draws its
+mark; a finite endpoint behind the eye draws no mark, and a line with one end
+behind it is clipped at the near plane, by the pass as it clips the bench
+figure's segments. The pass writes no pick id and no depth,
+and the hit test below reads the projected positions alone, so a measurement
+behind the scene is hovered and clicked as one in front of it is. The hover
+text and the off-screen indicator are drawn over the view.
 
 **In Image Detail** a drawn measurement with an endpoint in the image shown
 puts a mark at that endpoint's pixel, and a line between the two where both are
@@ -997,7 +1028,8 @@ own their press** (G7): the press is taken when it lands
 (`measurement_marks::follow`), so the 3D view neither orbits nor picks a point
 under it, and Image Detail neither pans nor selects a feature's point under it.
 Only an unmodified primary press is taken; the bench figure's handles and the
-eraser brush, which are drawn above, take a press first. The reach is 9 points
+eraser brush take a press first, although the 3D view draws the marks and
+lines over the figure. The reach is 9 points
 from a mark and 6 from a line, marks tried before lines and the topmost
 measurement first.
 
@@ -1326,7 +1358,19 @@ at-infinity case is covered by the Rust tests.
   pointing right, left, down, up and, for a midpoint behind the eye, the way to
   turn; a click on it framing both endpoints inside the view with the
   orientation kept; the option and a hidden node; a line with one end behind
-  the eye clipped, the end in front keeping its mark. (`image_detail/measurements/tests.rs`):
+  the eye clipped, the end in front keeping its mark; the ribbons the frame
+  builds for the pass: the line and its halo between the endpoints moved toward
+  the eye by a pull that is the same number of points at any field of view and
+  panel height, each ring at its radius on screen and the selected one 1.6 times
+  larger, the dot, the colours and widths in physical pixels, the emphasis and
+  dimming of *Show all*, the item's violet, none for a refused endpoint or one
+  at infinity, and a line with one end behind the eye handed to the pass whole.
+  (`scene_renderer/bench_track/tests.rs`): the measurements' instances holding
+  at `BEHIND_OPACITY` while the figure's fade, their upload, and the pass with
+  both drawn validated on a headless device, the measurements into their
+  own layer; the layer's one format and its clear, and a translucent colour
+  composited as egui painted it on an sRGB or an encoded surface.
+  (`image_detail/measurements/tests.rs`):
   the marks at the endpoint pixels, a line only where both are in the image,
   the refused endpoint's warning colour; the hover, a click selecting no
   feature's point under the mark while the same click with nothing drawn does,

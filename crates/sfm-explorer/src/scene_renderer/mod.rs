@@ -82,6 +82,12 @@ pub(crate) struct SceneRenderer {
     /// can be a `copy_texture_to_buffer` source, which is what `capture` needs.
     #[cfg(feature = "mcp")]
     edl_output_texture: Option<wgpu::Texture>,
+    /// The measurements' layer: a texture of its own, the panel's size, that
+    /// the measurements' pass clears and draws into every frame and egui
+    /// paints over the scene texture (`measurement_layer_descriptor`).
+    measurement_layer_view: Option<wgpu::TextureView>,
+    /// The layer as egui paints it.
+    measurement_texture_id: Option<egui::TextureId>,
 
     // ── egui integration ──
     egui_texture_id: Option<egui::TextureId>,
@@ -127,6 +133,7 @@ pub(crate) struct SceneRenderer {
 
     // ── The focused item (post-EDL, depth-aware) ──
     bench_track_edge_pipeline: Option<wgpu::RenderPipeline>,
+    measurement_pipeline: Option<wgpu::RenderPipeline>,
     bench_track_disc_pipeline: Option<wgpu::RenderPipeline>,
     bench_track_edge_buffer: Option<wgpu::Buffer>,
     bench_track_edge_count: u32,
@@ -138,6 +145,10 @@ pub(crate) struct SceneRenderer {
     /// The figure's own `4h`, kept from the upload so the frame's uniform write
     /// does not have to be handed the track again.
     bench_track_fog_distance: f32,
+    /// The drawn measurements' marks and lines, edges of the same pass drawn
+    /// before the figure ([`SceneRenderer::upload_measurements`]).
+    measurement_edge_buffer: Option<wgpu::Buffer>,
+    measurement_edge_count: u32,
 
     // ── Frustum rendering ──
     frustum_pipeline: Option<wgpu::RenderPipeline>,
@@ -235,6 +246,8 @@ impl SceneRenderer {
             edl_output_view: None,
             #[cfg(feature = "mcp")]
             edl_output_texture: None,
+            measurement_layer_view: None,
+            measurement_texture_id: None,
             egui_texture_id: None,
             current_size: (0, 0),
             point_pipeline: None,
@@ -264,6 +277,7 @@ impl SceneRenderer {
             track_ray_bind_group: None,
             track_ray_count: 0,
             bench_track_edge_pipeline: None,
+            measurement_pipeline: None,
             bench_track_disc_pipeline: None,
             bench_track_edge_buffer: None,
             bench_track_edge_count: 0,
@@ -273,6 +287,8 @@ impl SceneRenderer {
             bench_track_bind_group_layout: None,
             bench_track_bind_group: None,
             bench_track_fog_distance: 0.0,
+            measurement_edge_buffer: None,
+            measurement_edge_count: 0,
             frustum_pipeline: None,
             frustum_uniform_buffer: None,
             frustum_bind_group_layout: None,
@@ -315,6 +331,12 @@ impl SceneRenderer {
     /// Returns the egui texture ID for the rendered scene, if available.
     pub(crate) fn texture_id(&self) -> Option<egui::TextureId> {
         self.egui_texture_id
+    }
+
+    /// The egui texture ID of the measurements' layer, which the 3D view
+    /// paints over the scene texture, if it has been created.
+    pub(crate) fn measurement_texture_id(&self) -> Option<egui::TextureId> {
+        self.measurement_texture_id
     }
 
     /// The `length_scale` the loaded reconstructions suggest: the smallest
@@ -620,6 +642,7 @@ impl SceneRenderer {
         // ── Bench track pipelines (post-EDL, depth-aware) ──
         let bt = pipelines::bench_track::create(device);
         self.bench_track_edge_pipeline = Some(bt.edge_pipeline);
+        self.measurement_pipeline = Some(bt.measurement_pipeline);
         self.bench_track_disc_pipeline = Some(bt.disc_pipeline);
         self.bench_track_uniform_buffer = Some(bt.uniform_buffer);
         self.bench_track_bind_group_layout = Some(bt.bind_group_layout);

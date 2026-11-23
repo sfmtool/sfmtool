@@ -189,7 +189,7 @@ sfmtool/
 │   │           ├── bg_image_distorted.wgsl # Background image rendering (distorted)
 │   │           ├── patch.wgsl           # Patch/surfel rendering
 │   │           ├── target_indicator.wgsl # Rotating 3D compass / world-up indicator at target
-│   │           ├── bench_track.wgsl     # Bench's focused item in the world: frame, normal, observation marks (post-EDL)
+│   │           ├── bench_track.wgsl     # Bench's focused item in the world: frame, normal, observation marks; and the measurements (post-EDL)
 │   │           └── track_ray.wgsl       # Track ray visualization
 │   │
 │   ├── sfmtool-colmap/           # COLMAP format read/write
@@ -315,10 +315,19 @@ Pass 4:  Track rays (when a 3D point is selected)
   Input:  Edge instance buffer (camera center → nearest ray point) + hw depth
   Output: EDL output color (premultiplied alpha blending, reads depth for occlusion)
 
-Pass 5:  Bench figure (while the 3D viewer draws the focused item)
-  Input:  Figure edge instances + centre disc mesh + hw depth (sampled)
-  Output: EDL output color (alpha blending, reads depth for occlusion)
+Pass 5:  Measurements, then the bench figure (while the 3D viewer draws a
+         measurement or the focused item)
+  Input:  Measurement edge instances, then figure edge instances + centre
+          disc mesh + hw depth (sampled)
+  Output: The measurement layer, a Rgba8Unorm texture of its own cleared
+          to transparent every frame; then EDL output color (alpha blending,
+          reads depth for occlusion; neither writes a pick ID or depth)
 ```
+
+The 3D view paints the measurement layer over the scene texture, the grid and
+the axes, where the egui overlay it replaced was painted, so egui composites a
+translucent mark or line exactly as it composited the overlay's
+([measurement-view.md](measurement-view.md) § "Drawing measurements").
 
 For detailed specifications of each pass, see:
 - [point-cloud-rendering.md](point-cloud-rendering.md) — Points, the dimmed
@@ -329,7 +338,8 @@ For detailed specifications of each pass, see:
   outline
 - [scene-graph.md](scene-graph.md) § "Track rays and background image" —
   Track rays
-- [viewer-3d-bench-layer.md](viewer-3d-bench-layer.md) — The bench figure
+- [viewer-3d-bench-layer.md](viewer-3d-bench-layer.md) — The bench figure, and
+  the measurements' pass drawn just before it
 
 ### GPU Readback
 
