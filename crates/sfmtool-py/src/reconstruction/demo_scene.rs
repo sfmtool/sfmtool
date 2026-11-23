@@ -115,6 +115,8 @@ impl PyDemoScene {
     /// Raises:
     ///     ValueError: for an option out of its range, or ``point_count``
     ///         given with a spacing or as 0.
+    ///     OverflowError: for a negative integer, or one too large for its
+    ///         option's type.
     ///     OSError: when a photograph cannot be encoded or decoded.
     ///     The exception a signal handler raised while the call ran
     ///     (``KeyboardInterrupt`` for Ctrl+C), which stops it.

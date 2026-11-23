@@ -278,7 +278,8 @@ given with either. The other keywords apply on top of it. There is no
 settings class: no binding exposes an `*Options` struct as a class, and the
 options are keyword arguments, as the other bindings' settings are. The
 photographs are read-only views of the scene's own pixels, whose base is the
-`DemoScene`, so a read copies nothing and an array keeps its scene alive; the class is frozen and has no method that changes the scene.
+`DemoScene`, so a read copies nothing and an array keeps its scene alive;
+the class is frozen and has no method that changes the scene.
 `progress`, an optional `ProgressCounter`, is set to the count of the phase
 that is running, as `upgrade_workspace`'s is: rows rendered and then images
 encoded for `render`, points sampled and then bitmaps rendered for
@@ -289,9 +290,11 @@ last phase's count: 5 images, the point count (one bitmap per point), or 7
 files (five JPEGs, the marker and the `.sfmr`). An option out of range, a
 `point_count` of 0 or given with a spacing, or a `dir` that is not a
 directory, holds files or lies inside a workspace raises `ValueError` with the
-Rust error's message; a failed encode or decode, or a failed write of a
-photograph, a directory, the marker or the `.sfmr`, raises `OSError` (the
-subclass for its `io::ErrorKind` for a directory or the marker). Python's
+Rust error's message, and a negative integer, or one too large for its
+field's type, raises `OverflowError` from the argument's conversion; a
+failed encode or decode, or a failed write of a photograph, a directory,
+the marker or the `.sfmr`, raises `OSError` (the subclass for its
+`io::ErrorKind` for a directory or the marker). Python's
 signal handlers run while a call goes, as in `upgrade_workspace`: Ctrl+C
 cancels the call's `Progress` and raises `KeyboardInterrupt`, and a cancel by
 other means raises `InterruptedError`.
@@ -1175,14 +1178,18 @@ Each step is one change on its own branch, with its tests.
    stored sets, the defaults keep 513 points and 1,712 observations, and
    `point_count=1000` keeps 994, the count step 2 measured for
    `for_point_count(1000)`, here on 64 × 48 photographs with the default's
-   field of view. Building it settled the
+   field of view. Each other keyword is checked to reach its option: on
+   64 × 48 photographs a non-default `seed` or `supersampling` changes the
+   rendered pixels, each spacing changes the count of points on its own
+   surfaces alone, and the patch half-extent, the bitmap side and a smaller
+   largest obliquity show in the value. Building it settled the
    [Python binding](#python-binding) section's details: the spacings default to `None` so that `point_count` can
    refuse one given beside it, the options are keyword arguments rather than a
    settings object, the photographs are views of the scene's pixels, the
    counter holds the running phase's count, and the exceptions are those the
    section lists, with `InterruptedError` and Ctrl+C added. The migration of
    the Python tests listed above, which this step first held, moved to step 5,
-   so that this step adds the binding alone. The binding's tests take 0.7 s
+   so that this step adds the binding alone. The binding's tests take 0.9 s
    on one worker.
 4. **Load Demo Data.** The menu entry and `--demo` load the scene from a
    temporary workspace, with the *Number of points* box mapped through

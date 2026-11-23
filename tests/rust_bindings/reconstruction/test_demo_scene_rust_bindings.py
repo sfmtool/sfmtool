@@ -119,6 +119,51 @@ def test_point_count_sets_both_spacings_as_for_point_count_does():
     assert scene.reconstruction().point_count == 994
 
 
+# The options of a scene small enough to render many times in a test.
+_SMALL = {"image_width": 64, "image_height": 48, "focal_length_px": 56.0}
+
+
+@pytest.fixture(scope="module")
+def small_scene_and_recon():
+    """A 64 x 48 scene with the default field of view, and its value."""
+    scene = DemoScene.render(**_SMALL)
+    return scene, scene.reconstruction()
+
+
+def _ground_and_cube_counts(recon):
+    """The points on the ground (z = 0) and those above it, on the cube."""
+    xyzw = recon.positions_xyzw
+    z = xyzw[:, 2] / xyzw[:, 3]
+    return int((np.abs(z) < 1e-9).sum()), int((z > 1e-9).sum())
+
+
+def test_each_keyword_reaches_the_rust_options(small_scene_and_recon):
+    """Each keyword left at its default above changes what Rust renders or
+    builds in the way its option does, so a binding that dropped or swapped
+    one fails here."""
+    base_scene, base = small_scene_and_recon
+    assert _ground_and_cube_counts(base) == (321, 192)
+
+    for keyword in ({"seed": 1}, {"supersampling": 1}):
+        scene = DemoScene.render(**_SMALL, **keyword)
+        assert not all(
+            np.array_equal(a, b)
+            for a, b in zip(scene.rendered_photographs, base_scene.rendered_photographs)
+        ), keyword
+
+    recon = DemoScene.render(**_SMALL, ground_point_spacing=0.5).reconstruction()
+    assert _ground_and_cube_counts(recon) == (81, 192)
+    recon = DemoScene.render(**_SMALL, face_point_spacing=0.25).reconstruction()
+    assert _ground_and_cube_counts(recon) == (321, 48)
+
+    recon = DemoScene.render(**_SMALL, patch_half_extent=0.05).reconstruction()
+    assert recon.patches[0].half_extent == pytest.approx([0.05, 0.05])
+    recon = DemoScene.render(**_SMALL, patch_bitmap_resolution=16).reconstruction()
+    assert recon.patch_bitmap_resolution == 16
+    recon = DemoScene.render(**_SMALL, max_obliquity_deg=60.0).reconstruction()
+    assert recon.observation_count < base.observation_count
+
+
 def test_write_workspace_writes_a_workspace_sfm_inspect_reads(written):
     directory, path, _ = written
     assert path == directory / "demo.sfmr"
