@@ -444,8 +444,9 @@ Look for:
 
 - The gestures the code defines: `clicked`, `double_clicked`,
   `secondary_clicked`, `clicked_by`, `hovered` and `hover_pos` reads on a
-  panel's responses, its `context_menu::on_secondary_click` and
-  `on_secondary_click_where` handlers, and the 3D view's pick handling. Check
+  panel's responses, its `context_menu::on_secondary_click`,
+  `on_secondary_click_where` and `once_decided` handlers, and the 3D view's
+  pick handling. Check
   each against the rule for its target: what a click selects and whether it
   also moves a view, raises a panel or pushes a version (G1); what a
   double-click does for what the target denotes (G2); what a right-click

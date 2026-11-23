@@ -776,16 +776,20 @@ one. The pixel is taken in the image of the point's **reference observation**
 rendered from. The reference is the one the point holds in the version on
 screen, a pick only the display render made included.
 
-**The spot.** On the frame the right-click lands, the viewport reads where the
-pointer is on the point's drawn patch (`Viewer3D::texel_under_pointer`): its
-pick ray, taken back through the node's display transform as the bench
-handles' readings are, is met with the plane of the point's patch frame
-(`measurements::texel_under_ray`). The surfel is drawn at the HUD's patch size,
+**The spot.** The viewport reads where the right-click landed on the point's
+drawn patch (`Viewer3D::texel_under_pointer`): its pick ray, through the
+click's place with the camera of the frame the click landed on, taken back
+through the node's display transform as the bench handles' readings are, is met
+with the plane of the point's patch frame (`measurements::texel_under_ray`).
+The ray is kept from the click's frame because the point is known only once
+the pick at the click's pixel is read back, a frame or more later
+([viewport-navigation.md](viewport-navigation.md) § "The point context
+menu"). The surfel is drawn at the HUD's patch size,
 `2^patch_size_log2` times the stored patch, with its bitmap stretched over it,
 so the hit is divided by that scale: the texel `(s, t)` is the one the bitmap
 shows under the pointer, in the units the resolver and `OrientedPatch` use,
 each in `[-1, 1]`. The menu records the texel with the point
-(`measurements::PointSpot`) on that frame, as Image Detail records its
+(`measurements::PointSpot`) on the frame it opens, as Image Detail records its
 `context_menu_pixel`, because the entries are chosen on later frames, after
 the pointer has moved. An entry then maps the texel into the reference
 image (`measurements::spot_pixel`): the pixel where the reference
@@ -1309,7 +1313,9 @@ at-infinity case is covered by the Rust tests.
   pixel and on a busy node; the texel of the spot right-clicked recorded on
   the frame the menu opens, carried by the entry chosen after the pointer has
   moved, and the measurement started at the pixel that shows it, resolving
-  back to the point at that texel under a display transform; the point's
+  back to the point at that texel under a display transform; the texel read
+  where the right-click landed though the pointer moved on before the pick
+  at the click's pixel came back; the point's
   centre taken past the square's edge, in the Dots style and at zero patch
   opacity, and the texel read at the patch size drawn.
   (`measurement_view/tests.rs`): the new item's unplaced block with its

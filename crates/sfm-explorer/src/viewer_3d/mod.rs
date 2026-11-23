@@ -358,11 +358,19 @@ pub(crate) struct Viewer3D {
     /// that cannot rely on egui's layer arbitration (scroll, gestures, pinch)
     /// excludes it geometrically. `None` until the HUD has been built once.
     pub(crate) hud_rect: Option<Rect>,
-    /// What the viewport's context menu stands on, recorded on the frame the
-    /// secondary click landed and read on every later frame the menu is laid
-    /// out over -- by which time the pointer has moved off whatever the user
-    /// named, and whatever the pick reports under it is somebody else's.
+    /// What the viewport's context menu stands on, recorded when the target
+    /// of the secondary click is decided and read on every later frame the
+    /// menu is laid out over -- by which time the pointer has moved off
+    /// whatever the user named, and whatever the pick reports under it is
+    /// somebody else's.
     menu_target: Option<MenuTarget>,
+    /// A secondary click that landed off the bench figure's patch, waiting on
+    /// the GPU pick at its own pixel to say which point it named, if any
+    /// ([`Self::pick_read`]). `None` once that pick has been acted on.
+    menu_pick: Option<MenuPick>,
+    /// Where the viewport's context menu stands: the place of the secondary
+    /// click that opened it.
+    menu_at: Pos2,
     /// What the menu asked of the app about a point, drained by `app.rs` after
     /// the frame.
     ///
@@ -507,6 +515,36 @@ enum MenuTarget {
     Point(crate::measurements::PointSpot),
 }
 
+/// A secondary click waiting on the pick at its pixel.
+///
+/// The hover pick the panel is handed is the read of an earlier frame, taken
+/// where the pointer was then, so a click made straight after a move would
+/// name whatever was under the old place. The click is decided instead from
+/// the read copied at its own pixel, as a primary click is in
+/// `App::process_pick_readback`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MenuPick {
+    /// The click's pixel in the pick buffer, as [`Viewer3D::hover_pixel`]
+    /// counts them.
+    pixel: [u32; 2],
+    /// The click's place in the panel, in points: where the menu stands.
+    pos: Pos2,
+    /// The viewport's ray through `pos` with the camera of the click's frame,
+    /// which the texel under the pointer is read from
+    /// ([`Viewer3D::texel_under_pointer`]).
+    ray: (Point3<f64>, Vector3<f64>),
+    /// What the read at `pixel` reported, once it has arrived: the outer
+    /// `None` while it has not.
+    read: Option<Option<crate::scene_renderer::PickTarget>>,
+}
+
+/// A place in the panel as a pixel of the scene texture and the pick buffer.
+fn texture_pixel(pos: Pos2, rect: Rect, ppp: f32) -> [u32; 2] {
+    let px = ((pos.x - rect.left()) * ppp) as u32;
+    let py = ((pos.y - rect.top()) * ppp) as u32;
+    [px, py]
+}
+
 impl Default for Viewer3D {
     fn default() -> Self {
         Self::new()
@@ -548,6 +586,8 @@ impl Viewer3D {
             righting_speed: 0.0,
             hud_rect: None,
             menu_target: None,
+            menu_pick: None,
+            menu_at: Pos2::ZERO,
             point_menu: None,
             patch_menu: None,
             bench_figure: None,
@@ -585,61 +625,99 @@ impl Viewer3D {
     ///
     /// **One menu with two sets of entries**, never two popups: both would hang
     /// off the one response this panel produces, and a popup takes its identity
-    /// from that response. Which set is decided when the click lands, and **the
-    /// patch wins**: the figure is drawn on top of the cloud, so a right-click
-    /// the square covers ([`bench_track::Handles::covers`]) means the square,
-    /// for the reason a primary click one of its handles catches does not reach
-    /// the points under it. Otherwise the point the pick reported is the
-    /// target.
+    /// from that response. **The patch wins**: the figure is drawn on top of
+    /// the cloud, so a right-click the square covers
+    /// ([`bench_track::Handles::covers`]) means the square, for the reason a
+    /// primary click one of its handles catches does not reach the points
+    /// under it. That is read from the click's place, so the patch menu opens
+    /// on the frame the click lands.
+    ///
+    /// **Otherwise the point is the one the pick at the click's own pixel
+    /// reports**, which arrives through the GPU readback a frame or more after
+    /// the click ([`Self::pick_read`]), so the click waits for it in
+    /// [`Self::menu_pick`] and the menu opens on the frame after it arrives.
+    /// The hover pick this panel is handed would not do: it was read where the
+    /// pointer was on an earlier frame, and a pointer moved just before the
+    /// click would open the menu on whatever was there. With the eraser brush
+    /// on the viewport hovers no point, and a right-click names none.
     ///
     /// The target is latched in [`Self::menu_target`] because the entries are
     /// laid out on later frames by which time the pointer has moved. A
-    /// secondary click on anything else clears it, so no menu opens over empty
-    /// space.
+    /// secondary click clears it, so a menu is never left up over the last
+    /// target, and no menu opens over empty space.
     fn show_viewport_menu(
         &mut self,
+        ui: &egui::Ui,
         response: &egui::Response,
         rect: Rect,
-        hover_pick: Option<crate::scene_renderer::PickTarget>,
         busy: Option<&str>,
         bench: Option<&bench_track::BenchTrack<'_>>,
         scene: &[SceneNode],
     ) {
+        // Whether the menu opens on this frame, on the target just decided.
+        let mut open = false;
         if response.clicked_by(egui::PointerButton::Secondary) {
-            let on_patch = bench
-                .zip(self.bench_figure.as_ref())
-                .zip(response.interact_pointer_pos())
-                .filter(|((_, figure), pos)| {
-                    bench_track::Handles::project(figure, &self.camera, rect, None).covers(*pos)
-                })
-                .map(|((bench, _), _)| bench.node);
-            self.menu_target = match (on_patch, hover_pick) {
-                (Some(node), _) => Some(MenuTarget::Patch(node)),
-                (None, Some(crate::scene_renderer::PickTarget::Point(point))) => {
-                    // The texel is read from the pointer on this frame, the
-                    // one the click landed on: the entries are chosen on a
-                    // later one, after the pointer has moved.
-                    let texel = response
-                        .interact_pointer_pos()
-                        .and_then(|pos| self.texel_under_pointer(scene, point, pos, rect));
-                    Some(MenuTarget::Point(crate::measurements::PointSpot {
-                        point,
-                        texel,
-                    }))
+            self.menu_target = None;
+            self.menu_pick = None;
+            if let Some(pos) = response.interact_pointer_pos() {
+                let on_patch = bench
+                    .zip(self.bench_figure.as_ref())
+                    .filter(|(_, figure)| {
+                        bench_track::Handles::project(figure, &self.camera, rect, None).covers(pos)
+                    })
+                    .map(|(bench, _)| bench.node);
+                if let Some(node) = on_patch {
+                    self.menu_target = Some(MenuTarget::Patch(node));
+                    self.menu_at = pos;
+                    open = true;
+                } else if self.tool == brush::Tool::Navigate {
+                    self.menu_pick = Some(MenuPick {
+                        pixel: texture_pixel(pos, rect, ui.ctx().pixels_per_point()),
+                        pos,
+                        ray: self.camera.ray_through(pos, rect),
+                        read: None,
+                    });
+                    // An idle viewer draws nothing of its own accord, and the
+                    // read the click waits on is taken by a frame.
+                    ui.ctx().request_repaint();
                 }
-                _ => None,
-            };
-            // Selecting on open rather than on choice: the menu is about this
-            // point, and the panels beside the viewport should be saying so
-            // while it stands open.
-            if let Some(MenuTarget::Point(spot)) = self.menu_target {
-                self.point_menu = Some(PointGesture::Opened(spot.point));
+            }
+        } else if response.clicked() {
+            // A primary click is a new gesture, and the menu it would have
+            // opened is not wanted any more.
+            self.menu_pick = None;
+        }
+        if let Some(MenuPick {
+            read: Some(pick),
+            pos,
+            ray,
+            ..
+        }) = self.menu_pick
+        {
+            self.menu_pick = None;
+            if let Some(crate::scene_renderer::PickTarget::Point(point)) = pick {
+                // The texel is read along the click's own ray: the pointer
+                // may have moved since, and the entries are chosen later
+                // still.
+                let texel = self.texel_under_pointer(scene, point, ray);
+                self.menu_target = Some(MenuTarget::Point(crate::measurements::PointSpot {
+                    point,
+                    texel,
+                }));
+                self.menu_at = pos;
+                open = true;
+                // Selecting on open rather than on choice: the menu is about
+                // this point, and the panels beside the viewport should be
+                // saying so while it stands open.
+                self.point_menu = Some(PointGesture::Opened(point));
             }
         }
         self.menu_entry_rects.clear();
         match self.menu_target {
             None => {}
-            Some(MenuTarget::Point(spot)) => self.show_point_entries(response, spot, busy, scene),
+            Some(MenuTarget::Point(spot)) => {
+                self.show_point_entries(response, open, spot, busy, scene)
+            }
             Some(MenuTarget::Patch(node)) => {
                 // The patch as it stands now. A menu left up across an undo that
                 // took the patch away has nothing to stand on, and closes.
@@ -651,7 +729,7 @@ impl Viewer3D {
                         let refusal = busy.map(str::to_string).or_else(|| {
                             (patch_frame.w == 0.0).then(|| PATCH_AT_INFINITY_HINT.to_string())
                         });
-                        self.show_patch_entries(response, node, refusal.as_deref());
+                        self.show_patch_entries(response, open, node, refusal.as_deref());
                     }
                     None => self.menu_target = None,
                 }
@@ -659,10 +737,50 @@ impl Viewer3D {
         }
     }
 
-    /// The texel of `point`'s patch the pointer at `pos` is over, where the
-    /// point is drawn as its surfel: the viewport's ray at `pos`, taken back
-    /// through the node's display transform, met with the surfel's square at
-    /// [`Self::surfel_scale`] ([`crate::measurements::texel_under_ray`]).
+    /// The pixel the next frame's 5×5 depth and pick read is copied at: a
+    /// secondary click's while it waits on its pick ([`Self::menu_pick`]),
+    /// otherwise the pointer's ([`Self::hover_pixel`]).
+    ///
+    /// The click's pixel goes first so that the read it waits on is taken on
+    /// the next frame however the pointer has moved since.
+    pub(crate) fn readback_pixel(&self) -> Option<[u32; 2]> {
+        self.menu_pick
+            .filter(|waiting| waiting.read.is_none())
+            .map(|waiting| waiting.pixel)
+            .or(self.hover_pixel)
+    }
+
+    /// Whether a secondary click is waiting on its pick, or has it and has not
+    /// yet opened its menu on it. An agent's right `click` waits this out
+    /// before its reply, so the reply lists the menu the click opened.
+    pub(crate) fn awaits_menu_pick(&self) -> bool {
+        self.menu_pick.is_some()
+    }
+
+    /// The 5×5 read copied at `pixel` reported `pick`: the entity under it,
+    /// with a point this version deleted already taken out.
+    ///
+    /// A secondary click waiting on the read at its own pixel takes it, and
+    /// its menu opens on the next frame ([`Self::show_viewport_menu`]). A read
+    /// copied anywhere else is the hover's, and says nothing about the click.
+    pub(crate) fn pick_read(
+        &mut self,
+        pixel: [u32; 2],
+        pick: Option<crate::scene_renderer::PickTarget>,
+    ) {
+        if let Some(waiting) = self
+            .menu_pick
+            .as_mut()
+            .filter(|waiting| waiting.read.is_none() && waiting.pixel == pixel)
+        {
+            waiting.read = Some(pick);
+        }
+    }
+
+    /// The texel of `point`'s patch the pointer was over, where the point is
+    /// drawn as its surfel: the viewport's `ray` through the pointer, taken
+    /// back through the node's display transform, met with the surfel's square
+    /// at [`Self::surfel_scale`] ([`crate::measurements::texel_under_ray`]).
     ///
     /// `None` where the point is drawn as a dot (the node's style is Dots, it
     /// has no patch bitmaps to draw surfels with, its points are hidden, the
@@ -675,8 +793,7 @@ impl Viewer3D {
         &self,
         scene: &[SceneNode],
         point: PointRef,
-        pos: Pos2,
-        rect: Rect,
+        (origin, direction): (Point3<f64>, Vector3<f64>),
     ) -> Option<[f64; 2]> {
         let scale = self.surfel_scale?;
         let node = crate::scene::node_by_id(scene, point.recon)?;
@@ -695,7 +812,6 @@ impl Viewer3D {
         }
         let patch_frame = view.patch_frame()?;
         let into_recon = node.transform().inverse().ok()?;
-        let (origin, direction) = self.camera.ray_through(pos, rect);
         crate::measurements::texel_under_ray(
             &patch_frame,
             into_recon.apply_to_point(&origin),
@@ -712,12 +828,13 @@ impl Viewer3D {
     fn show_patch_entries(
         &mut self,
         response: &egui::Response,
+        open: bool,
         node: ReconId,
         refusal: Option<&str>,
     ) {
         use crate::display_transform::PatchReframe;
         let mut rects = Vec::with_capacity(PatchReframe::ALL.len());
-        crate::context_menu::on_secondary_click(response).show(|ui| {
+        crate::context_menu::once_decided(response, open, self.menu_at).show(|ui| {
             for mode in PatchReframe::ALL {
                 let button = egui::Button::new(mode.label());
                 let entry = match refusal {
@@ -748,6 +865,7 @@ impl Viewer3D {
     fn show_point_entries(
         &mut self,
         response: &egui::Response,
+        open: bool,
         spot: crate::measurements::PointSpot,
         busy: Option<&str>,
         scene: &[SceneNode],
@@ -759,7 +877,7 @@ impl Viewer3D {
             .map(|target| target.at_point(scene, spot).err());
         let start_refusal = self.measurement_start.at_point(scene, spot).err();
         let mut rects = Vec::with_capacity(5);
-        crate::context_menu::on_secondary_click(response).show(|ui| {
+        crate::context_menu::once_decided(response, open, self.menu_at).show(|ui| {
             let mut entry = |ui: &mut egui::Ui,
                              text: &'static str,
                              refusal: Option<&str>,
@@ -1006,7 +1124,7 @@ impl Viewer3D {
         if !owns_pointer {
             self.handle_click(ui, &response, rect);
         }
-        self.show_viewport_menu(&response, rect, hover_pick, busy, bench.as_ref(), scene);
+        self.show_viewport_menu(ui, &response, rect, busy, bench.as_ref(), scene);
 
         // After this frame's input, so the step starts from the view the input
         // left and the frame draws the result.
@@ -1016,11 +1134,9 @@ impl Viewer3D {
 
         // Record mouse position in texture pixels for GPU depth readback
         let ppp = ui.ctx().pixels_per_point();
-        self.hover_pixel = response.hover_pos().map(|pos| {
-            let px = ((pos.x - rect.left()) * ppp) as u32;
-            let py = ((pos.y - rect.top()) * ppp) as u32;
-            [px, py]
-        });
+        self.hover_pixel = response
+            .hover_pos()
+            .map(|pos| texture_pixel(pos, rect, ppp));
 
         // The brush's region request, after this frame's input has moved the
         // view, so that what it asks for is the picture the next frame draws.

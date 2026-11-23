@@ -73,5 +73,55 @@ pub(crate) fn on_secondary_click_where(
         .at_pointer_fixed()
 }
 
+/// [`on_secondary_click`] for a menu whose target is decided after the click
+/// lands: the 3D view's, whose point is the GPU pick at the click's pixel,
+/// read back a frame or more later.
+///
+/// `open` is true on the frame the target is decided, and the menu then stands
+/// at `at`, the place of the click, wherever the pointer has gone since. A
+/// secondary click closes a menu that is up, since the target of the new one
+/// is not known yet, and so does a primary click on the widget, as
+/// [`on_secondary_click`]'s does. The caller opens it only on a secondary
+/// click egui counted as a click, so a long press and a right drag open none.
+///
+/// egui keeps the place of a menu opened at the pointer in its memory, and
+/// offers no way to set it, so the place is kept beside it, where
+/// [`position_of_id`] reads it.
+pub(crate) fn once_decided(
+    response: &egui::Response,
+    open: bool,
+    at: egui::Pos2,
+) -> egui::Popup<'static> {
+    let set = if open {
+        Some(egui::SetOpenCommand::Bool(true))
+    } else if response.clicked_by(egui::PointerButton::Secondary) || response.clicked() {
+        Some(egui::SetOpenCommand::Bool(false))
+    } else {
+        None
+    };
+    let id = egui::Popup::default_response_id(response);
+    response
+        .ctx
+        .data_mut(|data| data.insert_temp(placed_id(id), at));
+    egui::Popup::menu(response).open_memory(set).at_position(at)
+}
+
+/// Where the context menu `popup_id` was opened, while it is open: egui's
+/// record for a menu opened at the pointer, or [`once_decided`]'s for one
+/// opened at the click once its target was decided. `None` for a popup
+/// opened against its button.
+pub(crate) fn position_of_id(ctx: &egui::Context, popup_id: egui::Id) -> Option<egui::Pos2> {
+    egui::Popup::position_of_id(ctx, popup_id).or_else(|| {
+        egui::Popup::is_id_open(ctx, popup_id)
+            .then(|| ctx.data(|data| data.get_temp(placed_id(popup_id))))
+            .flatten()
+    })
+}
+
+/// Where [`once_decided`] keeps the place of its menu.
+fn placed_id(popup_id: egui::Id) -> egui::Id {
+    popup_id.with("placed at")
+}
+
 #[cfg(test)]
 mod tests;

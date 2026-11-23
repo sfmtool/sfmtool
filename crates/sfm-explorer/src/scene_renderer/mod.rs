@@ -219,8 +219,9 @@ pub(crate) struct SceneRenderer {
     depth_staging: Option<wgpu::Buffer>,
     /// Staging buffer for 5x5 pick ID region readback.
     pick_staging: Option<wgpu::Buffer>,
-    /// Whether a readback copy was enqueued this frame.
-    readback_pending: bool,
+    /// The pixel a readback copy enqueued this frame and not yet read was
+    /// centred on, or `None` with none enqueued.
+    readback_pixel: Option<[u32; 2]>,
     /// Most recently read-back hover depth.
     hover_depth: Option<f32>,
     /// Most recently read-back hover pick, already decoded to a typed ref.
@@ -320,7 +321,7 @@ impl SceneRenderer {
             linear_depth_texture: None,
             depth_staging: None,
             pick_staging: None,
-            readback_pending: false,
+            readback_pixel: None,
             hover_depth: None,
             hover_pick: None,
             region_staging: None,

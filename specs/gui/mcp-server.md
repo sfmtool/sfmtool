@@ -3351,10 +3351,12 @@ Scene panel learns that a menu is over part of it.
 popup's area id: `egui::Popup` names its area `owner.with("popup")`, as
 `egui::ComboBox` does, and a submenu is named
 `SubMenu::id_from_widget_id(owner)`. Every context menu in the viewer goes
-through `crate::context_menu::on_secondary_click` or
-`on_secondary_click_where`, which build `Popup::menu(response)`, so each
-`Foreground` layer's owner is found over the frame's widgets with nothing added
-at the call sites. A popup egui placed at the pointer is a `context_menu`; one
+through `crate::context_menu::on_secondary_click`,
+`on_secondary_click_where` or `once_decided`, which build
+`Popup::menu(response)`, so each `Foreground` layer's owner is found over the
+frame's widgets with nothing added at the call sites. A popup egui placed at
+the pointer, or `once_decided` placed at the click
+(`context_menu::position_of_id`), is a `context_menu`; one
 hanging from a button is a `dropdown` when the button is in a panel body or a
 floating dock window and a `menu` otherwise. A foreground area no widget of the
 frame opened is not a popup, and its widgets stay in the main list. A menu that
@@ -3414,7 +3416,12 @@ frames, the same `egui::Event`s `egui_winit` makes from a real mouse:
    with the frame's time, not the event's.
 4. One more frame is drawn, and the reply is built after it. That frame is the
    one in which a menu or dialog opened by the click appears, so the reply's
-   `dialogs` and `menus` include it.
+   `dialogs` and `menus` include it. A right click first waits, drawing frames
+   with no input, while the 3D view's right-click waits on the pick at its
+   pixel and for one frame after its menu opens, at most 30 frames
+   (`Viewer3D::awaits_menu_pick`): that menu opens on the frame after the pick
+   is read back ([viewport-navigation.md](viewport-navigation.md) § "The point
+   context menu").
 
 The pointer stays at the point afterwards, as a person's does, so a submenu
 opened by hovering stays open and the next `click` inside it lands. `hover`

@@ -71,8 +71,9 @@ the target as it stands, and an entry that needs something the target lacks,
 or that cannot run for another reason, is drawn greyed with hover text that
 says why. Every menu is opened through `context_menu::on_secondary_click`, or
 its `context_menu::on_secondary_click_where` form for a widget only part of
-which carries the menu, so a long left press never opens one and a right drag
-is never a menu.
+which carries the menu, or its `context_menu::once_decided` form for the 3D
+view's, whose point is known only once the pick at the click's pixel is read
+back, so a long left press never opens one and a right drag is never a menu.
 
 **G4. Moving the 3D view onto a point named outside the viewport.** A point
 inside the middle 2/3 of the viewport on both axes is panned to; any other
@@ -136,8 +137,8 @@ The functions the rules name are the ones every panel calls, which is how a
 rule stays one code path (G8):
 
 - [context_menu.rs](../../crates/sfm-explorer/src/context_menu.rs):
-  `on_secondary_click` and `on_secondary_click_where`, which open a menu on a
-  right-click and on nothing else (G3).
+  `on_secondary_click`, `on_secondary_click_where` and `once_decided`, which
+  open a menu on a right-click and on nothing else (G3).
 - [layout.rs](../../crates/sfm-explorer/src/layout.rs):
   `AppState::show_panel_beside`, the raise that never covers the panel a
   gesture was made in (G2, G9); [panel-layout.md](panel-layout.md) § "A raise

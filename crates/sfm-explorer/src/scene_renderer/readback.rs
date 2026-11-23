@@ -13,6 +13,8 @@ pub(crate) struct ReadbackResult {
     /// The picked entity, already decoded to a typed ref, or `None` if
     /// background (or a stale id from a node that has since been released).
     pub(crate) pick: Option<PickTarget>,
+    /// The pixel the region was centred on, as the copy was asked for it.
+    pub(crate) pixel: [u32; 2],
 }
 
 /// Read a 5x5 grid of linear depths from a 256-byte-aligned staging buffer.
@@ -187,16 +189,13 @@ impl SceneRenderer {
             );
         }
 
-        self.readback_pending = true;
+        self.readback_pixel = Some([cx, cy]);
     }
 
     /// Map both staging buffers and read the 5×5 depth + pick results.
     /// Updates the cached hover result and returns the full result for click handling.
     pub(crate) fn read_readback_result(&mut self, device: &wgpu::Device) -> Option<ReadbackResult> {
-        if !self.readback_pending {
-            return None;
-        }
-        self.readback_pending = false;
+        let pixel = self.readback_pixel.take()?;
 
         let depth = self.read_5x5_depth(device);
         let pick = self
@@ -207,12 +206,12 @@ impl SceneRenderer {
         self.hover_depth = depth;
         self.hover_pick = pick;
 
-        Some(ReadbackResult { depth, pick })
+        Some(ReadbackResult { depth, pick, pixel })
     }
 
     /// Whether a 5×5 copy was enqueued this frame and not yet read.
     pub(crate) fn readback_pending(&self) -> bool {
-        self.readback_pending
+        self.readback_pixel.is_some()
     }
 
     /// Forget the last hover read, for a frame whose region read stood in for

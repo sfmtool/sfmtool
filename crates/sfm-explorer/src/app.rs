@@ -1004,9 +1004,13 @@ impl App {
             self.scene_renderer.copy_pick_region(device, encoder, rect);
         }
 
-        // Copy 5x5 depth + pick region under the mouse (shared by hover + click)
-        if region.is_none() || self.viewer_3d.pending_click.is_some() {
-            if let Some([px, py]) = self.viewer_3d.hover_pixel {
+        // Copy 5x5 depth + pick region under the mouse (shared by hover + click),
+        // or under a right-click that waits on its pick there.
+        if region.is_none()
+            || self.viewer_3d.pending_click.is_some()
+            || self.viewer_3d.awaits_menu_pick()
+        {
+            if let Some([px, py]) = self.viewer_3d.readback_pixel() {
                 self.scene_renderer.copy_readback_region(encoder, px, py);
             }
         }
@@ -1309,6 +1313,14 @@ impl App {
                 }
             }
         }
+
+        // A right-click waiting on the pick at its pixel takes this read when
+        // it was copied there, and opens its menu on the next frame.
+        let menu_pick = match readback.pick {
+            Some(PickTarget::Point(point)) if !point_is_live(&self.state, point) => None,
+            pick => pick,
+        };
+        self.viewer_3d.pick_read(readback.pixel, menu_pick);
 
         // Handle click using the same readback result
         if let Some(click_pixel) = self.viewer_3d.pending_click.take() {
