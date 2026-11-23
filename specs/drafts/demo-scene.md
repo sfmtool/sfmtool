@@ -14,9 +14,11 @@ one undistorted pinhole camera; the temporary workspace lives in the system
 temporary directory and is deleted at exit; the demo node saves as any other
 node does; the first version holds a 1 m distance measurement along a cube
 edge; the demo scene is bound to Python; and decoded JPEG pixels may differ
-by one level between x86 and arm64, which the tests tolerate. Step 1 of the
-[step plan](#step-plan) is built; it found that the JPEG encoder's two paths
-give different bytes. Decided by the maintainer (2026-11-22): the encoder keeps
+by one level between x86 and arm64, which the tests tolerate. Steps 1 and 2
+of the [step plan](#step-plan) are built; step 1 found that the JPEG encoder's
+two paths give different bytes, and step 2 that the reference-view rule's pick
+of a point's bitmap view can change with a one-level change in the pixels
+([The reconstruction's columns](#the-reconstructions-columns)). Decided by the maintainer (2026-11-22): the encoder keeps
 its AVX2 path, and the tests store the JPEG hashes and the photograph-derived
 values once for each encoder path
 ([Determinism of the JPEG encoder and decoder](#determinism-of-the-jpeg-encoder-and-decoder)).
@@ -65,7 +67,8 @@ that need pixels.
 The generator lives in
 `crates/sfmtool-core/src/reconstruction/data/demo_scene.rs`, beside
 [demo.rs](../../crates/sfmtool-core/src/reconstruction/data/demo.rs), with
-submodules for the renderer and the texture in `demo_scene/`.
+submodules in `demo_scene/`: the texture, the renderer, the points and their
+visibility (`points.rs`), and the reconstruction's columns (`value.rs`).
 `reconstruction::data` is private to the crate, so the types are re-exported
 from `sfmtool_core::reconstruction`, as `SfmrReconstruction` is.
 
@@ -593,7 +596,8 @@ background, both of which compress better than that frame, so each JPEG is
 under 0.2 MB and the five are under 1 MB: measured, 0.066 to 0.068 MB for
 each low camera's and 0.097 to 0.098 MB for each high camera's, 0.40 MB in
 all. The `.sfmr`'s largest column is the
-patch bitmaps, about 540 × 24 × 24 × 4 bytes, 1.2 MB before compression.
+patch bitmaps, 524 × 24 × 24 × 4 bytes, 1.2 MB before compression; the
+whole default `.sfmr` is 0.76 MB.
 
 ### Determinism of the JPEG encoder and decoder
 
@@ -666,19 +670,26 @@ position by a seeded offset of up to a quarter of the spacing along each axis,
 so the points do not line up into rows that a regular pattern in the
 photographs would echo:
 
-- On the ground, a grid at `ground_point_spacing` (0.25 m) over
-  `[-2.5, 2.5] × [-2.5, 2.5]`, leaving out the points inside the cube's
-  footprint: about 420 grid points, of which about 350 are observed by two
-  cameras or more. The rest lie near the cameras, below the views' lower
-  edges, or at the grid's corners outside the outer views.
+- On the ground, `m = round(5 / ground_point_spacing)` rows and columns over
+  `[-2.5, 2.5] × [-2.5, 2.5]`, at `−2.5 + (i + 0.5) · 5 / m` m along each
+  axis, leaving out the points that land inside the cube's footprint: at
+  0.25 m, `m = 20`, a grid of 400 of which 331 are observed by two cameras or
+  more. The rest lie inside the footprint, near the cameras below the views'
+  lower edges, or at the grid's corners outside the outer views.
 - On each cube face but the base, `k = round(1 / face_point_spacing)` rows and
   columns at `(i + 0.5) / k` m from one corner along each in-face axis, so the
   first row is half a spacing from the edge: at 0.125 m, `k = 8` and 64 points
-  a face. Only the top and the faces `-a` and `-b` keep points, about 190. The
-  four points nearest a face's corners are not moved, so that each cube corner
-  lies inside a patch ([The measurement](#the-measurement)).
+  a face. Only the top and the faces `-a` and `-b` keep points, 192: every
+  point of the top is observed by the two high cameras, of `-a` by three and
+  of `-b` by four. The four points nearest a face's corners are not moved, so
+  that each cube corner lies inside a patch ([The measurement](#the-measurement)).
 
-About 540 points at the defaults. With a patch half-extent of 0.09 m, the
+Both grids put each point at the centre of its cell, so the count on a
+surface is close to its area over the spacing squared and `for_point_count`
+scales it in proportion; a ground grid through the origin, `2n + 1` points a
+side, would not, since its extra row and column are a larger share of a coarse
+grid than of a fine one. 524 points at the defaults
+(`DEFAULT_POINT_COUNT`); a cut at 90° rather than 80° keeps the same 524. With a patch half-extent of 0.09 m, the
 patches of the outer row on each face cross the cube's edge, and those of the
 ground points next to the cube run into its side: those are the crease cases.
 The ground points behind the cube, seen past it by the outer cameras and hidden
@@ -749,6 +760,23 @@ check on the renderer: a test can compare a facing point's bitmap with the
 texture sampled over its patch, to within the supersampling's blur and the
 JPEG's error.
 
+**Two things the render settles that the geometry does not.** The bitmaps are
+the reference-view rule's renders at the stored keypoints, with
+`KeypointSubpixelParams::default()` at the options' bitmap side, as
+`--add-patch-bitmaps` renders them. At the defaults one point, a ground point
+near the lower edge of both views that observe it, gets no pick from the rule,
+so it keeps a reference of `-1` and a zero bitmap row, as the format allows.
+And the rule's pick depends on the pixels: it compares the views by their
+content, and for a point whose two best views score nearly alike a change of
+one level in the photographs changes the pick, and with it the whole bitmap.
+On the default scene one point of the 524 picks the other view under the
+scalar JPEG encoder, and one other point under `jpeg-decoder`'s scalar path
+(its `platform_independent` feature) on the same JPEG bytes; both are points
+of the top, which only the two high cameras observe. So a machine of another
+encoder or decoder path can store a few bitmaps of another view; the tests
+compare the bitmaps within a level only where the pick agrees, and allow one
+sampled point whose pick differs ([step plan](#step-plan), step 2).
+
 ### The measurement
 
 The value holds one distance measurement in the version 17 `measurements/`
@@ -792,7 +820,13 @@ corner, the top, or the ground at the base. So whichever candidate is picked,
 the texel names the corner itself: the endpoint's position is
 `X_p + s·u + t·v` on that point's own patch, which lies in the surface's
 plane. The resolved `scene_distance` is 1 m to within about `10⁻⁶` m, the
-rounding of the keypoints and endpoints to `f32` at about 7 mm a pixel. The
+rounding of the keypoints and endpoints to `f32` at about 7 mm a pixel. On the
+default scene the endpoints are `(303.803, 339.316)` in `demo_2` and
+`(353.795, 229.849)` in `demo_1`. The base corner's pixel lies in the squares
+of the corner points of `-a` and `-b`, and the rule picks `-b`'s, at texel
+`(−0.694, −0.694)`; the top corner's lies in those of the top, `-a` and `-b`,
+and the rule picks `-a`'s, at `(0.694, 0.694)`. The resolved `scene_distance`
+is `1 + 2.2 · 10⁻⁷` m. The
 corners stay covered while half the face spacing is below the patch
 half-extent, `k ≥ 6`; when an option set leaves an endpoint in no square, the
 generator leaves the measurement out, as it leaves out a point with too few
@@ -849,8 +883,8 @@ and appends a node holding `SfmrReconstruction::demo(n)` with no path
 the dialog in [modals.rs](../../crates/sfm-explorer/src/app/modals.rs)). With
 this proposal the dialog keeps its *Number of points* box, which now sets the
 scene's point spacings through `DemoSceneOptions::for_point_count`. The box
-starts at `DEFAULT_POINT_COUNT`, about 540, and takes 300 to 10,000: below
-about 260 the face spacing passes twice the patch half-extent and the
+starts at `DEFAULT_POINT_COUNT`, 524, and takes 300 to 10,000: below
+about 250 the face spacing passes twice the patch half-extent and the
 measurement's corners are no longer covered, and 10,000 points keep the bitmap
 render to about a second. The count kept is near the number asked for, and the
 Action Log line names it. *Load* then:
@@ -993,8 +1027,8 @@ Each step is one change on its own branch, with its tests.
    `image_names`, `rendered_photographs`, `photographs` and
    `encoded_photographs`; `tiled_photographs` comes with step 2, which is
    the first to read it, and so do `DemoSceneError`'s `Directory`, `Save`
-   and `Io`. `DEFAULT_POINT_COUNT` is 540, this draft's estimate, until step
-   2's test of the sampling fixes it. `render` checks every option, the
+   and `Io`. `DEFAULT_POINT_COUNT` was 540, this draft's estimate, until step
+   2's test of the sampling fixed it. `render` checks every option, the
    sampling's among them, and also refuses an image side over 65535, the
    most a JPEG holds. The JPEG hash test stores a set of hashes for each
    encoder path, since the two paths give different bytes
@@ -1024,6 +1058,62 @@ Each step is one change on its own branch, with its tests.
    decoded again; the photograph-derived columns match the values stored for
    the encoder path taken, within a tolerance of one level, on every CI
    platform.
+
+   *Built.* The points and visibility are
+   [demo_scene/points.rs](../../crates/sfmtool-core/src/reconstruction/data/demo_scene/points.rs)
+   and the columns, the measurement and `tiled_photographs`
+   [demo_scene/value.rs](../../crates/sfmtool-core/src/reconstruction/data/demo_scene/value.rs);
+   `write_workspace` and the `Directory`, `Save` and `Io` errors are in
+   [demo_scene.rs](../../crates/sfmtool-core/src/reconstruction/data/demo_scene.rs).
+   `DEFAULT_POINT_COUNT` is 524: 331 on the ground and 64 on each of the top,
+   `-a` and `-b`. One change from the sampling this draft first described:
+   the ground grid puts each point at the centre of its cell, as the faces'
+   grids do, rather than on a grid through the origin with `2n + 1` points a
+   side, whose count did not scale with the inverse square of the spacing
+   ([The points and who sees them](#the-points-and-who-sees-them)); with the
+   grid through the origin, `for_point_count(10_000)` kept 9,464 points.
+   Measured with the cell grid, `for_point_count` keeps 292 for 300, 1,010
+   for 1,000, 2,032 for 2,000, 2,998 for 3,000 and 9,938 for 10,000; the
+   largest miss between 300 and 10,000 is at 500, which gives the default
+   grids and so 524, 4.8% over, since a grid side is a whole number. Below
+   300 the misses grow (92 for 100). The test checks 300, 1,000, 3,000 and
+   10,000 to within 5%, by the sampling alone, with no render.
+
+   `render_patch_cloud_bitmaps` renders the bitmaps with the reference-view
+   rule; one ground point gets no pick and keeps a zero row, and the rule's
+   pick changes for one point under each other encoder or decoder path
+   ([Two things the render settles](#the-reconstructions-columns)). The
+   per-path values the last test stores are a digest rather than the
+   columns: three thumbnail texels of each image, each image's four readings,
+   and one texel and the reference of every 36th point's bitmap. Texels
+   compare within one level. The readings compare within 1% (`Exy`, which is
+   near 0, within 1% of `√(Exx · Eyy)`): a one-level change at every sample
+   would bound them only loosely, about half of `√Exx`, while the decoder's
+   scalar and SSSE3 paths, a one-level difference at some samples, gave
+   readings within `6.6 · 10⁻⁴` of each other and the two encoder paths
+   within `3 · 10⁻⁴`. The two paths' sampled texels and references are the
+   same; their readings differ in the fourth digit. A sampled point whose
+   pick differs from the stored one is skipped, and at most one may.
+
+   **The patch bitmaps' contrast.** Over the stored 24 × 24 bitmaps of the
+   default scene, with the grey and the two contrasts of
+   [Texture](#texture), the 10th percentile and median by surface, in grey
+   levels: the ground (330 bitmaps) 9.2 and 11.9 standard deviation, 2.19
+   and 2.77 pixel-scale; the top 8.7 and 10.8, 2.37 and 2.58; `-a` 10.1 and
+   12.4, 3.12 and 3.37; `-b` 9.0 and 10.9, 2.91 and 3.19. The least
+   textured bitmap has a standard deviation of 6.5 levels. These are near
+   the renders' windows (a standard deviation of 9 to 11.6 at the 10th
+   percentile), with the pixel-scale contrast of the ground and the top
+   somewhat lower, since a bitmap resamples its patch from a grazing or
+   oblique view. Every bitmap holds texture of several levels against the
+   JPEG's error of about one, so the texture was kept as it is; whether it is
+   enough for the photometric kernels is for the steps that run them on the
+   scene to show.
+
+   Measured in the test build on the 32-thread x86-64 Windows machine,
+   while the other tests of the module ran: `reconstruction` takes 0.10 to
+   0.15 s and `write_workspace`, which builds the value again, 0.12 to
+   0.15 s. The step 2 tests, with the scene's render, finish in 0.5 to 0.9 s.
 3. **Python binding.** `DemoScene` in `sfmtool.reconstruction`, its row in
    [python-bindings.md](../python-bindings.md) and its entry in
    [test_reconstruction_patches_registration.py](../../tests/rust_bindings/reconstruction/test_reconstruction_patches_registration.py),

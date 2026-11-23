@@ -13,8 +13,9 @@
 //! `i64` lattice index; a coordinate beyond that saturates to the last node.
 
 /// A hash of the lattice node `(i, j)` and `seed`, from which each noise
-/// function draws the node's level or gradient.
-fn lattice_hash(i: i64, j: i64, seed: u64) -> u64 {
+/// function draws the node's level or gradient, and the point sampling the
+/// offsets of its grid points.
+pub(super) fn lattice_hash(i: i64, j: i64, seed: u64) -> u64 {
     let mut h = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
         ^ (j as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
         ^ seed.wrapping_mul(0xD6E8_FEB8_6659_FD93);
@@ -231,7 +232,7 @@ impl Surface {
     /// The seed of the surface's noise under the scene's `seed`: a different
     /// one for every surface, so the cube does not blend into the ground and
     /// two faces meeting at an edge do not continue each other's pattern.
-    fn noise_seed(self, seed: u64) -> u64 {
+    pub(super) fn noise_seed(self, seed: u64) -> u64 {
         seed.wrapping_mul(Surface::ALL.len() as u64)
             .wrapping_add(self as u64)
     }
@@ -254,6 +255,43 @@ impl Surface {
             Surface::MinusB => (pa + 0.5, x[2]),
             Surface::PlusA => (pb + 0.5, x[2]),
             Surface::PlusB => (0.5 - pa, x[2]),
+        }
+    }
+
+    /// The surface's outward normal: `+z` on the ground and the top, `-z` on
+    /// the base, and on a side face the axis it is named by.
+    pub(super) fn normal(self) -> [f64; 3] {
+        let neg = |v: [f64; 3]| v.map(|c| -c);
+        match self {
+            Surface::Ground | Surface::Top => [0.0, 0.0, 1.0],
+            Surface::Base => [0.0, 0.0, -1.0],
+            Surface::MinusA => neg(CUBE_A),
+            Surface::MinusB => neg(CUBE_B),
+            Surface::PlusA => CUBE_A,
+            Surface::PlusB => CUBE_B,
+        }
+    }
+
+    /// The surface's frame, the inverse of
+    /// [`coordinates`](Self::coordinates): the world point where both
+    /// coordinates are 0 and the two in-face unit axes `(u, v)` they run
+    /// along, so the point at coordinates `(s, t)` is `origin + s·u + t·v`.
+    /// `u × v` is the outward normal.
+    pub(super) fn frame(self) -> ([f64; 3], [f64; 3], [f64; 3]) {
+        const Z: [f64; 3] = [0.0, 0.0, 1.0];
+        let neg = |v: [f64; 3]| v.map(|c| -c);
+        // The cube's corner at `α·a + β·b + γ·z`.
+        let corner = |alpha: f64, beta: f64, gamma: f64| {
+            [0, 1, 2].map(|k| alpha * CUBE_A[k] + beta * CUBE_B[k] + gamma * Z[k])
+        };
+        match self {
+            Surface::Ground => ([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+            Surface::Top => (corner(-0.5, -0.5, 1.0), CUBE_A, CUBE_B),
+            Surface::Base => (corner(-0.5, 0.5, 0.0), CUBE_A, neg(CUBE_B)),
+            Surface::MinusA => (corner(-0.5, 0.5, 0.0), neg(CUBE_B), Z),
+            Surface::MinusB => (corner(-0.5, -0.5, 0.0), CUBE_A, Z),
+            Surface::PlusA => (corner(0.5, -0.5, 0.0), CUBE_B, Z),
+            Surface::PlusB => (corner(0.5, 0.5, 0.0), neg(CUBE_A), Z),
         }
     }
 

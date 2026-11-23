@@ -6,13 +6,18 @@
 //! written down from a scene whose every number is known.
 //!
 //! [`DemoScene::render`] renders the five photographs from
-//! [`DemoSceneOptions`], encodes each as a JPEG and decodes it again. The
-//! scene's geometry, its cameras and its texture are fixed, and are described
-//! in `specs/drafts/demo-scene.md`; the options are the parts a caller has a
+//! [`DemoSceneOptions`], encodes each as a JPEG and decodes it again;
+//! [`DemoScene::reconstruction`] writes down the scene's `embedded_patches`
+//! reconstruction, and [`DemoScene::write_workspace`] writes the photographs,
+//! a workspace marker and that reconstruction to a directory. The scene's
+//! geometry, its cameras and its texture are fixed, and are described in
+//! `specs/drafts/demo-scene.md`; the options are the parts a caller has a
 //! reason to change. The children are [`texture`], the surfaces and their
-//! tinted Perlin-noise texture, and [`render`], the camera poses and the ray
-//! tracer.
+//! tinted Perlin-noise texture; [`render`], the camera rotations and the ray
+//! tracer; [`points`], the stored poses, the point sampling and the
+//! visibility test; and [`value`], the reconstruction's columns.
 
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rayon::prelude::*;
@@ -21,8 +26,10 @@ use crate::camera::image::{ImageU8, DEFAULT_JPEG_QUALITY};
 use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::progress::{Cancelled, Progress};
 
+mod points;
 mod render;
 mod texture;
+mod value;
 
 #[cfg(test)]
 pub(crate) use texture::value_noise;
@@ -45,9 +52,13 @@ pub struct DemoSceneOptions {
     /// Samples per pixel along each axis; the renderer takes the square of
     /// this many rays per pixel: 2 (4 rays).
     pub supersampling: u32,
-    /// The spacing of the point grid on the ground, in metres: 0.25.
+    /// The spacing of the point grid on the ground, in metres: 0.25. The
+    /// grid over the 5 m square the points are sampled on has
+    /// `round(5 / ground_point_spacing)` rows and columns.
     pub ground_point_spacing: f64,
     /// The spacing of the point grid on each cube face, in metres: 0.125.
+    /// The grid on a 1 m face has `round(1 / face_point_spacing)` rows and
+    /// columns.
     pub face_point_spacing: f64,
     /// Each point's patch half-extent, in metres: 0.09.
     pub patch_half_extent: f64,
@@ -78,10 +89,9 @@ impl Default for DemoSceneOptions {
 }
 
 impl DemoSceneOptions {
-    /// The number of points the default options keep: 540, the count
-    /// `specs/drafts/demo-scene.md` estimates for its sampling, which the
-    /// sampling's test fixes.
-    pub const DEFAULT_POINT_COUNT: u32 = 540;
+    /// The number of points [`DemoScene::reconstruction`] keeps under the
+    /// default options: 524.
+    pub const DEFAULT_POINT_COUNT: u32 = 524;
 
     /// The default options with both point spacings scaled by
     /// `sqrt(DEFAULT_POINT_COUNT / point_count)`, so the scene keeps about
@@ -294,6 +304,93 @@ impl DemoScene {
     pub fn encoded_photographs(&self) -> &[Vec<u8>] {
         &self.encoded_photographs
     }
+
+    /// Write the scene as a workspace in `dir`, which must be an empty
+    /// directory or not exist, and must not lie inside another workspace:
+    /// the JPEGs of [`encoded_photographs`](Self::encoded_photographs) under
+    /// `images/`, a `.sfm-workspace.json` for the `sfmtool` feature tool with
+    /// its default options, and [`reconstruction`](Self::reconstruction)'s
+    /// value as `demo.sfmr` at the workspace root, which records the
+    /// workspace as its own directory, `.`. Returns the `.sfmr` path.
+    ///
+    /// The value is built first, in the phases
+    /// [`reconstruction`](Self::reconstruction) reports, and then the files
+    /// are written in a phase `write` that counts them, so nothing is written
+    /// when the build is cancelled. The `.sfmr` needs nothing from disk: the
+    /// value carries every column the format stores.
+    ///
+    /// # Errors
+    ///
+    /// [`DemoSceneError::Directory`] when `dir` is not a directory, holds
+    /// files or lies inside another workspace; the errors of
+    /// [`reconstruction`](Self::reconstruction); [`DemoSceneError::Photograph`]
+    /// when a JPEG cannot be written, [`DemoSceneError::Io`] when a directory
+    /// or the workspace file cannot, and [`DemoSceneError::Save`] when the
+    /// `.sfmr` cannot.
+    pub fn write_workspace(
+        &self,
+        dir: &Path,
+        progress: &Progress<'_>,
+    ) -> Result<PathBuf, DemoSceneError> {
+        check_workspace_dir(dir)?;
+        let recon = self.reconstruction(progress)?;
+        let phase = progress.phase("write");
+        let total = self.encoded_photographs.len() as u64 + 2;
+        std::fs::create_dir_all(dir.join("images")).map_err(DemoSceneError::Io)?;
+        let mut written = 0u64;
+        for (name, bytes) in self.image_names.iter().zip(&self.encoded_photographs) {
+            phase.check_cancel()?;
+            std::fs::write(dir.join(name), bytes)
+                .map_err(|e| DemoSceneError::Photograph(::image::ImageError::IoError(e)))?;
+            written += 1;
+            phase.count(written, Some(total), "files");
+        }
+        phase.check_cancel()?;
+        crate::workspace::write_sfmtool_workspace_marker(
+            dir,
+            &crate::workspace::SfmtoolWorkspaceOptions::default(),
+        )
+        .map_err(DemoSceneError::Io)?;
+        written += 1;
+        phase.count(written, Some(total), "files");
+        phase.check_cancel()?;
+        let path = dir.join(DEMO_SFMR_FILE_NAME);
+        recon.save(&path, &phase).map_err(DemoSceneError::Save)?;
+        phase.count(total, Some(total), "files");
+        Ok(path)
+    }
+}
+
+/// The name of the `.sfmr` [`DemoScene::write_workspace`] writes at the
+/// workspace root.
+const DEMO_SFMR_FILE_NAME: &str = "demo.sfmr";
+
+/// `Ok` when `dir` does not exist or is an empty directory, and lies inside
+/// no workspace, as `sfm ws init` refuses to nest one.
+fn check_workspace_dir(dir: &Path) -> Result<(), DemoSceneError> {
+    if dir.exists() {
+        if !dir.is_dir() {
+            return Err(DemoSceneError::Directory(format!(
+                "{} is not a directory",
+                dir.display()
+            )));
+        }
+        let mut entries = std::fs::read_dir(dir).map_err(DemoSceneError::Io)?;
+        if entries.next().is_some() {
+            return Err(DemoSceneError::Directory(format!(
+                "{} holds files; give an empty directory or one that does not exist",
+                dir.display()
+            )));
+        }
+    }
+    if let Some(workspace) = crate::workspace::find_workspace_for_path(dir) {
+        return Err(DemoSceneError::Directory(format!(
+            "{} lies inside the workspace {}, and a workspace is not nested in another",
+            dir.display(),
+            workspace.display()
+        )));
+    }
+    Ok(())
 }
 
 /// The scene's one camera: an undistorted pinhole of the options' size and
@@ -312,15 +409,22 @@ fn demo_camera(options: &DemoSceneOptions) -> CameraIntrinsics {
     }
 }
 
-/// Why the demo scene could not be rendered.
+/// Why the demo scene could not be rendered, built or written.
 #[derive(Debug)]
 pub enum DemoSceneError {
     /// An option out of its range, naming it and the range.
     Options(String),
     /// `progress` was cancelled.
     Cancelled,
-    /// A photograph could not be encoded or decoded.
+    /// The directory [`DemoScene::write_workspace`] was given holds files, is
+    /// not a directory, or lies inside another workspace.
+    Directory(String),
+    /// A photograph could not be encoded, decoded, read or written.
     Photograph(::image::ImageError),
+    /// The `.sfmr` could not be written.
+    Save(sfmtool_sfmr_format::SfmrError),
+    /// A directory or file of the workspace could not be created or written.
+    Io(std::io::Error),
 }
 
 impl std::fmt::Display for DemoSceneError {
@@ -328,7 +432,12 @@ impl std::fmt::Display for DemoSceneError {
         match self {
             Self::Options(message) => write!(f, "invalid demo scene options: {message}"),
             Self::Cancelled => f.write_str("the demo scene was cancelled"),
+            Self::Directory(message) => {
+                write!(f, "cannot write the demo scene's workspace: {message}")
+            }
             Self::Photograph(e) => write!(f, "a demo scene photograph failed: {e}"),
+            Self::Save(e) => write!(f, "the demo scene's .sfmr could not be written: {e}"),
+            Self::Io(e) => write!(f, "the demo scene's workspace could not be written: {e}"),
         }
     }
 }
@@ -337,6 +446,8 @@ impl std::error::Error for DemoSceneError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Photograph(e) => Some(e),
+            Self::Save(e) => Some(e),
+            Self::Io(e) => Some(e),
             _ => None,
         }
     }
