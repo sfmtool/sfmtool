@@ -4,7 +4,8 @@
 """Reconstructions and the operations on them: `SfmrReconstruction`,
 `EditedReconstruction`, `PointMap`, `triangulate_points`, `RangeExpr`, and
 `focal_is_releasable` and `distortion_is_releasable`, which say per camera what
-`EditedReconstruction.bundle_adjust` can release.
+`EditedReconstruction.bundle_adjust` can release, and `DemoScene`, a rendered
+scene of known geometry with its reconstruction.
 
 This module is the public home of the `sfmtool._sfmtool.reconstruction`
 bindings.

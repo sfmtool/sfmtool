@@ -352,6 +352,7 @@ Paths in the *Source* column are relative to
 | [reconstruction/measurement_endpoint.rs](../crates/sfmtool-py/src/reconstruction/measurement_endpoint.rs) | `SfmrReconstruction.resolve_measurement_endpoint`, `SfmrReconstruction.resolve_distance_measurements` | [measurement-endpoint.md](core/reconstruction/measurement-endpoint.md) |
 | [reconstruction/drop_image_adjustments.rs](../crates/sfmtool-py/src/reconstruction/drop_image_adjustments.rs) | `SfmrReconstruction.drop_image_adjustments`, `SfmrReconstruction.varied_image_adjustments` | [drop-image-adjustments.md](core/reconstruction/drop-image-adjustments.md); `varied_image_adjustments` in [switch-camera-model.md](core/reconstruction/switch-camera-model.md) |
 | [reconstruction/triangulate_points.rs](../crates/sfmtool-py/src/reconstruction/triangulate_points.rs) | `triangulate_points`, `VERDICT_CODES` | [triangulation-rules.md](core/reconstruction/triangulation-rules.md) |
+| [reconstruction/demo_scene.rs](../crates/sfmtool-py/src/reconstruction/demo_scene.rs) | `DemoScene` | [demo-scene.md](drafts/demo-scene.md) § "Python binding" |
 | [reconstruction/range_expr.rs](../crates/sfmtool-py/src/reconstruction/range_expr.rs) | `RangeExpr` | none (its grammar is used in [inspect-command.md](cli/reconstruction/inspect-command.md) and [to-colmap-bin-command.md](cli/colmap-interop/to-colmap-bin-command.md)) |
 
 ### `patches`

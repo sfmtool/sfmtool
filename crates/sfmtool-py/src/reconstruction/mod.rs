@@ -6,13 +6,15 @@
 //! overlay of point edits on a shared base with the `PointMap` its edits report
 //! their index effect in, and the `RangeExpr` integer-range parser used for
 //! image/frame selection, plus the rule-carrying triangulation of a track set
-//! and the per-camera release checks of bundle adjustment.
+//! and the per-camera release checks of bundle adjustment, and the
+//! `DemoScene` that renders a known scene and writes down its reconstruction.
 
 use pyo3::prelude::*;
 
 pub mod add_image_to_tracks;
 pub mod bundle_adjust;
 pub mod clone;
+pub mod demo_scene;
 pub mod drop_image_adjustments;
 pub mod edited;
 pub mod measurement_endpoint;
@@ -26,6 +28,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<edited::PyEditedReconstruction>()?;
     m.add_class::<edited::PyPointMap>()?;
     m.add_class::<range_expr::PyRangeExpr>()?;
+    m.add_class::<demo_scene::PyDemoScene>()?;
     triangulate_points::register(m)?;
     bundle_adjust::register(m)?;
     Ok(())
