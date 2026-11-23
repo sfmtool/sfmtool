@@ -110,6 +110,7 @@ pub(crate) fn once_decided(
 /// record for a menu opened at the pointer, or [`once_decided`]'s for one
 /// opened at the click once its target was decided. `None` for a popup
 /// opened against its button.
+#[cfg(feature = "mcp")]
 pub(crate) fn position_of_id(ctx: &egui::Context, popup_id: egui::Id) -> Option<egui::Pos2> {
     egui::Popup::position_of_id(ctx, popup_id).or_else(|| {
         egui::Popup::is_id_open(ctx, popup_id)
