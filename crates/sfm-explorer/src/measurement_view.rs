@@ -41,7 +41,7 @@ use std::sync::Arc;
 
 use egui::{Color32, Pos2, Rect, Stroke};
 use sfmtool_core::bench::EditableMeasurement;
-use sfmtool_core::camera::TiledPhotograph;
+use sfmtool_core::camera::{PhotographReadError, TileKey};
 use sfmtool_core::reconstruction::measurement_endpoint::{
     endpoint_views, CandidateStanding, EndpointPosition, EndpointRefusal, EndpointResolution,
     EndpointView, MeasurementEndpointOptions, ResolvedDistanceMeasurement,
@@ -56,7 +56,7 @@ use crate::patch_pictures::crop::{self, DrawnCrop, Outline, CELL_TEXTURE_OPTIONS
 use crate::patch_pictures::marks::CONTEXT_HOVER_SIDE;
 use crate::patch_pictures::PanelRegionPool;
 use crate::scene::{ImageRef, ReconId, SceneNode};
-use crate::state::{AppState, DisplayPhotograph};
+use crate::state::{AppState, PeekedRead, PhotographSource};
 
 #[cfg(test)]
 mod tests;
@@ -392,7 +392,13 @@ impl PictureKey {
     }
 }
 
-/// An endpoint's crop, cut once its photograph is decoded.
+/// Why an endpoint has no crop when its photograph cannot be read. The one
+/// reason not kept: a crop absent for it is cut again on every frame
+/// ([`Crop::is_unreadable`]), so it is drawn once the photograph can be
+/// read, whatever made it readable.
+const UNREADABLE_CROP: &str = "The photograph could not be read";
+
+/// An endpoint's crop, cut once the photograph tiles it needs are there.
 enum Crop {
     /// The crop in its cell and in its hover view, with the caption the hover
     /// view gives.
@@ -403,6 +409,14 @@ enum Crop {
     },
     /// Why there is no crop.
     Absent(&'static str),
+}
+
+impl Crop {
+    /// Whether there is no crop because the photograph cannot be read, which
+    /// the panel asks again rather than keep.
+    fn is_unreadable(&self) -> bool {
+        matches!(self, Crop::Absent(why) if *why == UNREADABLE_CROP)
+    }
 }
 
 /// What the panel keeps of one endpoint's pictures between frames.
@@ -420,6 +434,10 @@ struct EndpointPictures {
 pub(crate) struct MeasurementView {
     regions: PanelRegionPool,
     pictures: HashMap<PictureKey, EndpointPictures>,
+    /// The photograph tiles each endpoint's crop not cut yet needed when it
+    /// was last tried ([`crate::state::read_peeked`]), kept and dropped with
+    /// [`MeasurementView::pictures`].
+    picture_needs: HashMap<PictureKey, Vec<TileKey>>,
     /// The focused item's live readings, as the node's cache gave them on the
     /// last frame ([`SceneNode::item_reading`]).
     reading: Option<Arc<ItemReading>>,
@@ -451,8 +469,12 @@ pub(crate) struct MeasurementView {
     menu_entries: [Option<Rect>; 2],
     /// The offers of the endpoint whose popup is open.
     offers: Option<HeldOffers>,
-    /// The crops of the popup's rows, cut once each photograph is decoded.
+    /// The crops of the popup's rows, cut once the photograph tiles each
+    /// needs are there.
     offer_crops: HashMap<OfferKey, Crop>,
+    /// The photograph tiles each popup row's crop not cut yet needed when it
+    /// was last tried, dropped with [`MeasurementView::offer_crops`].
+    offer_needs: HashMap<OfferKey, Vec<TileKey>>,
     /// The popup's rows as the last frame drew them: where each row's image
     /// name was drawn, and the image and pixel the row moves the endpoint to.
     offer_rows: Vec<(Rect, u32, [f64; 2])>,
@@ -588,6 +610,7 @@ impl MeasurementView {
         }
         let Some(node) = crate::scene::selected_node(&state.scene, state.selected_recon) else {
             self.pictures.clear();
+            self.picture_needs.clear();
             self.reading = None;
             ui.centered_and_justified(|ui| {
                 ui.label("No reconstruction loaded");
@@ -627,8 +650,10 @@ impl MeasurementView {
         self.endpoint_fields = Default::default();
         self.offers = None;
         self.offer_crops.clear();
+        self.offer_needs.clear();
         let Some(measurement) = selected else {
             self.pictures.clear();
+            self.picture_needs.clear();
             self.show_empty_state(ui, node, &rows, &readings.distance, &mut response);
             return response;
         };
@@ -917,6 +942,7 @@ impl MeasurementView {
             })
             .collect();
         self.pictures.retain(|key, _| keys.contains(key));
+        self.picture_needs.retain(|key, _| keys.contains(key));
         let mut show_one = |this: &mut Self, ui: &mut egui::Ui, side: EndpointSide| {
             let switch = edit.map(|edit| {
                 switch_refusal(
@@ -1033,6 +1059,7 @@ impl MeasurementView {
         let is_open = egui::Popup::is_id_open(ui.ctx(), popup_id) || button.clicked();
         if is_open && !held {
             self.offer_crops.clear();
+            self.offer_needs.clear();
             self.offers = Some(HeldOffers {
                 item: Arc::clone(edit.item),
                 document,
@@ -1102,6 +1129,7 @@ impl MeasurementView {
         if shown.is_none() && self.offers.as_ref().is_some_and(|held| held.side == side) {
             self.offers = None;
             self.offer_crops.clear();
+            self.offer_needs.clear();
         }
         if let Some(view) = clicked {
             egui::Popup::close_id(ui.ctx(), popup_id);
@@ -1131,7 +1159,7 @@ impl MeasurementView {
             observation: view.observation,
             pixel: view.pixel.map(f64::to_bits),
         };
-        if !self.offer_crops.contains_key(&key) {
+        if self.offer_crops.get(&key).is_none_or(Crop::is_unreadable) {
             let name = format!(
                 "measurement_offer_{:?}_{}_{}_{:.3}_{:.3}",
                 node.id, view.point, view.observation, view.pixel[0], view.pixel[1]
@@ -1146,7 +1174,9 @@ impl MeasurementView {
                 square,
                 name,
                 &self.regions,
+                self.offer_needs.entry(key).or_default(),
             ) {
+                self.offer_needs.remove(&key);
                 self.offer_crops.insert(key, crop);
             }
         }
@@ -1246,11 +1276,13 @@ impl MeasurementView {
     }
 
     /// Cut the pictures of the endpoint `block` shows when they are not held
-    /// for `key` yet: its crop once its photograph is decoded, and its point's
-    /// stored patch.
+    /// for `key` yet: its crop once the photograph tiles it needs are there,
+    /// and its point's stored patch.
     ///
-    /// A photograph still decoding leaves nothing held, so the next frame asks
-    /// again; [`crate::state::display_photograph`] repaints when it lands.
+    /// Tiles still loading leave nothing held, so the next frame asks again;
+    /// [`crate::state::read_peeked`] repaints when they land. A crop held as
+    /// unreadable is cut again on every frame ([`UNREADABLE_CROP`]), and
+    /// keeps what it shows until the new cut is done.
     fn ensure_pictures(
         &mut self,
         ctx: &egui::Context,
@@ -1258,7 +1290,11 @@ impl MeasurementView {
         block: &EndpointBlock<'_>,
         key: PictureKey,
     ) {
-        if self.pictures.contains_key(&key) {
+        if self
+            .pictures
+            .get(&key)
+            .is_some_and(|pictures| !pictures.crop.is_unreadable())
+        {
             return;
         }
         let square = block.resolution.as_ref().ok().map(|resolution| {
@@ -1280,9 +1316,17 @@ impl MeasurementView {
             square,
             name,
             &self.regions,
+            self.picture_needs.entry(key).or_default(),
         ) else {
             return;
         };
+        self.picture_needs.remove(&key);
+        if let Some(held) = self.pictures.get_mut(&key) {
+            // A crop asked again because its photograph could not be read:
+            // the patch is the one already uploaded.
+            held.crop = crop;
+            return;
+        }
         let patch = block.resolution.as_ref().ok().and_then(|resolution| {
             let view = block.node.edited().point(resolution.chosen().point)?;
             let image = crate::patch_pictures::stored_patch_image(view.patch_bitmap()?)?;
@@ -2294,8 +2338,13 @@ fn painter_cross_at_texel(painter: &egui::Painter, rect: Rect, [s, t]: [f64; 2])
     paint_cross(painter, Pos2::new(x, y));
 }
 
-/// The crop around pixel `pixel` of image `image`, or `None` while its
-/// photograph is decoding: an endpoint's, or a *Switch image…* row's.
+/// The crop around pixel `pixel` of image `image`, or `None` while the
+/// photograph tiles it needs are loading: an endpoint's, or a *Switch
+/// image…* row's.
+///
+/// The crop and its hover view are cut together, by one render on a
+/// photograph made of the tiles both need ([`crate::state::read_peeked`]),
+/// which `needs` keeps between frames until it has run.
 ///
 /// Where `square` names an observation (a point and its index in the
 /// point's track), the crop is cut around that observation's square in the
@@ -2316,63 +2365,60 @@ fn endpoint_crop(
     square: Option<(u32, usize)>,
     name: String,
     regions: &PanelRegionPool,
+    needs: &mut Vec<TileKey>,
 ) -> Option<Crop> {
     let recon = node.recon();
     let image = image as usize;
     if image >= recon.image_set.images.len() {
         return Some(Crop::Absent("The image is not in the reconstruction"));
     }
-    let square = square.and_then(|(point, observation)| {
-        let view = node.edited().point(point)?;
-        let patch_frame = view.patch_frame()?;
-        let keypoint = view.keypoint_xy(observation)?;
-        let (camera, pose) = crate::bench::geometry::view_of(&recon.image_set, image)?;
-        let mut outline = crop::patch_outline(
-            &patch_frame,
-            &camera,
-            &pose,
-            [f64::from(keypoint[0]), f64::from(keypoint[1])],
-            view.point().position,
-            crate::patch_pictures::marks::ProjectionOf::Point,
-        );
-        // The crop marks the endpoint's pixel, not the observation's keypoint
-        // or the point's projection.
-        outline.keypoint = pixel;
-        outline.projection = None;
-        outline.projection_of = None;
-        Some(outline)
-    });
-    let resolved = square.is_some();
-    let outline = square.unwrap_or_else(|| square_around(pixel));
-    let pyramid = match crate::state::display_photograph(
-        &state.photographs,
-        &state.photograph_requests,
-        recon,
-        image,
-        ctx,
-    ) {
-        DisplayPhotograph::Decoded(pyramid) => pyramid,
-        DisplayPhotograph::Decoding => return None,
-        DisplayPhotograph::Unreadable => {
-            return Some(Crop::Absent("The photograph could not be read"))
+    let (outline, resolved) = endpoint_outline(node, image, pixel, square);
+    let Some(path) = crate::state::photograph_path(recon, image) else {
+        return Some(Crop::Absent(UNREADABLE_CROP));
+    };
+    let source = PhotographSource {
+        cache: &state.photographs,
+        requests: &state.photograph_requests,
+        path: &path,
+    };
+    let pool = regions.pool();
+    // Both pictures in one render, so a read that needs tiles not there yet
+    // names the tiles of both and they are asked for together.
+    let render = |src: &_| {
+        let pictures = [
+            crop::image(&outline, src, pool),
+            crop::context(&outline, src, pool),
+        ];
+        let mut needed: Vec<TileKey> = Vec::new();
+        for picture in &pictures {
+            if let Err(PhotographReadError::NeedsTiles { keys }) = picture {
+                for key in keys {
+                    if !needed.contains(key) {
+                        needed.push(*key);
+                    }
+                }
+            }
+        }
+        if !needed.is_empty() {
+            return Err(PhotographReadError::NeedsTiles { keys: needed });
+        }
+        Ok(pictures.map(|picture| {
+            picture.ok().flatten().map(|mut picture| {
+                if !resolved {
+                    picture.outline.clear();
+                }
+                picture
+            })
+        }))
+    };
+    let [cell, context] = match crate::state::read_peeked(source, needs, ctx, render) {
+        PeekedRead::Loading => return None,
+        PeekedRead::Read(Ok(pictures)) => pictures,
+        PeekedRead::Read(Err(_)) | PeekedRead::Unreadable => {
+            return Some(Crop::Absent(UNREADABLE_CROP))
         }
     };
-    let source = TiledPhotograph::from_pyramid(pyramid);
-    let pool = regions.pool();
-    let cut = |context: bool| {
-        let picture = if context {
-            crop::context(&outline, &source, pool)
-        } else {
-            crop::image(&outline, &source, pool)
-        };
-        picture.ok().flatten().map(|mut picture| {
-            if !resolved {
-                picture.outline.clear();
-            }
-            picture
-        })
-    };
-    let Some(picture) = cut(false) else {
+    let Some(picture) = cell else {
         return Some(Crop::Absent(
             "The endpoint's place does not land in the photograph",
         ));
@@ -2408,7 +2454,7 @@ fn endpoint_crop(
         name.clone(),
         CELL_TEXTURE_OPTIONS,
     ));
-    let context = cut(true).map(|picture| {
+    let context = context.map(|picture| {
         Box::new(DrawnCrop::new(
             ctx,
             picture,
@@ -2422,6 +2468,42 @@ fn endpoint_crop(
         context,
         caption,
     })
+}
+
+/// The outline an endpoint's crop of image `image` is cut around, and
+/// whether the endpoint resolves: where `square` names an observation, that
+/// observation's square in the image with the endpoint's pixel `pixel` as its
+/// keypoint; where it does not, or the square cannot be made, a
+/// [`UNRESOLVED_CROP_PX`] square centred on the pixel.
+fn endpoint_outline(
+    node: &SceneNode,
+    image: usize,
+    pixel: [f64; 2],
+    square: Option<(u32, usize)>,
+) -> (Outline, bool) {
+    let recon = node.recon();
+    let square = square.and_then(|(point, observation)| {
+        let view = node.edited().point(point)?;
+        let patch_frame = view.patch_frame()?;
+        let keypoint = view.keypoint_xy(observation)?;
+        let (camera, pose) = crate::bench::geometry::view_of(&recon.image_set, image)?;
+        let mut outline = crop::patch_outline(
+            &patch_frame,
+            &camera,
+            &pose,
+            [f64::from(keypoint[0]), f64::from(keypoint[1])],
+            view.point().position,
+            crate::patch_pictures::marks::ProjectionOf::Point,
+        );
+        // The crop marks the endpoint's pixel, not the observation's keypoint
+        // or the point's projection.
+        outline.keypoint = pixel;
+        outline.projection = None;
+        outline.projection_of = None;
+        Some(outline)
+    });
+    let resolved = square.is_some();
+    (square.unwrap_or_else(|| square_around(pixel)), resolved)
 }
 
 /// A square of [`UNRESOLVED_CROP_PX`] photograph pixels centred on `pixel`, as

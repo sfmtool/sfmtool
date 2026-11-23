@@ -1122,3 +1122,183 @@ fn a_crop_whose_read_fails_says_unreadable() {
         Some(CellPicture::Texture(_))
     ));
 }
+
+/// A Crop cell whose photograph tiles are not there draws its loading state,
+/// an empty frame, asking for the photograph's layout once however many
+/// frames look and decoding nothing on the GUI thread, and draws its crop on
+/// the frame after the photograph lands, with nothing more asked for.
+#[test]
+fn a_crop_whose_tiles_are_not_there_draws_its_loading_state_and_asks_once() {
+    let mut clock = Clock(0.0);
+    let (mut state, id) = crop_state();
+    let (requests, queue) = crate::state::PhotographRequests::queued();
+    state.photograph_requests = requests;
+    let recon = state.node(id).expect("loaded").recon();
+    let path = crate::state::photograph_path(recon, 0).expect("a path");
+    let pyramid = state.cached_photograph(id, 0).expect("cached");
+    state.photographs.forget(&path);
+    let decodes = state.photographs.stats().decodes;
+    assert_eq!(stored_reference(0), 0);
+
+    let (ctx, mut panel) = shown(&mut state, 4800.0, &mut clock);
+    for _ in 0..3 {
+        frame(&ctx, &mut panel, &mut state, 4800.0, clock.tick());
+        assert_eq!(
+            cell(&panel, 0, PictureColumn::Crop),
+            Some(CellPicture::Waiting)
+        );
+    }
+    assert_eq!(queue.len(), 1, "one header read, asked for once");
+    assert_eq!(state.photographs.stats().decodes, decodes, "no decode here");
+
+    // The photograph lands, as the decode the next frames would ask for puts
+    // it in the cache.
+    state.photographs.insert(&path, pyramid);
+    frame(&ctx, &mut panel, &mut state, 4800.0, clock.tick());
+    assert!(matches!(
+        cell(&panel, 0, PictureColumn::Crop),
+        Some(CellPicture::Texture(_))
+    ));
+    assert_eq!(queue.len(), 1, "nothing more asked for");
+    assert_eq!(state.photographs.stats().decodes, decodes);
+}
+
+/// What the panel paints with the pointer resting on `point`'s Crop cell for
+/// three frames, the tooltips shown at once.
+fn crop_hover_texts(
+    ctx: &egui::Context,
+    panel: &mut TrackTablePanel,
+    state: &mut AppState,
+    clock: &mut Clock,
+    point: u32,
+) -> Vec<String> {
+    ctx.all_styles_mut(|style| {
+        style.interaction.tooltip_delay = 0.0;
+        style.interaction.tooltip_grace_time = 0.0;
+    });
+    let heading = painted_text_rects(ctx, at(4800.0, clock.tick()), |ui| panel.show(ui, state))
+        .into_iter()
+        .find(|t| t.text == "Crop")
+        .expect("the Crop heading")
+        .rect
+        .center();
+    let &(_, row) = panel.drawn().iter().find(|(p, _)| *p == point).unwrap();
+    let mut texts = Vec::new();
+    for _ in 0..3 {
+        let mut raw = at(4800.0, clock.tick());
+        raw.events = vec![egui::Event::PointerMoved(egui::pos2(
+            heading.x,
+            row.center().y,
+        ))];
+        texts = painted_texts(ctx, raw, |ui| panel.show(ui, state));
+    }
+    texts
+}
+
+/// The hover view of a crop drawn before its photograph left the cache says
+/// the photograph is loading, asks for its layout once, and is drawn once
+/// the photograph is back.
+#[test]
+fn a_crop_hover_view_whose_tiles_are_not_there_says_it_is_loading() {
+    let mut clock = Clock(0.0);
+    let (mut state, id) = crop_state();
+    let (requests, queue) = crate::state::PhotographRequests::queued();
+    state.photograph_requests = requests;
+    let (ctx, mut panel) = shown(&mut state, 4800.0, &mut clock);
+    let point = 1;
+    assert_eq!(stored_reference(point as usize), 0);
+    assert!(matches!(
+        cell(&panel, point, PictureColumn::Crop),
+        Some(CellPicture::Texture(_))
+    ));
+    let recon = state.node(id).expect("loaded").recon();
+    let path = crate::state::photograph_path(recon, 0).expect("a path");
+    let pyramid = state.cached_photograph(id, 0).expect("cached");
+    state.photographs.forget(&path);
+
+    let texts = crop_hover_texts(&ctx, &mut panel, &mut state, &mut clock, point);
+    let loading = crate::patch_pictures::HOVER_LOADING.to_string();
+    assert!(texts.contains(&loading), "{loading:?} not in {texts:?}");
+    assert!(panel.pictures.hover_crop().is_none());
+    assert_eq!(queue.len(), 1, "one header read, asked for once");
+
+    state.photographs.insert(&path, pyramid);
+    let texts = crop_hover_texts(&ctx, &mut panel, &mut state, &mut clock, point);
+    assert!(!texts.contains(&loading), "{texts:?}");
+    assert!(panel.pictures.hover_crop().is_some());
+    assert_eq!(queue.len(), 1, "nothing more asked for");
+}
+
+/// The hover view of a crop drawn before its photograph could no longer be
+/// read says why: the cached pyramid now holds one pixel of the photograph,
+/// so its tiles cannot be cut.
+#[test]
+fn a_crop_hover_view_whose_photograph_cannot_be_read_says_why() {
+    use sfmtool_core::camera::image::{ImageU8Pyramid, PyramidLevel};
+    let mut clock = Clock(0.0);
+    let (mut state, id) = crop_state();
+    let (ctx, mut panel) = shown(&mut state, 4800.0, &mut clock);
+    let point = 1;
+    assert_eq!(stored_reference(point as usize), 0);
+    assert!(matches!(
+        cell(&panel, point, PictureColumn::Crop),
+        Some(CellPicture::Texture(_))
+    ));
+    let recon = state.node(id).expect("loaded").recon();
+    let camera = &recon.image_set.cameras[0];
+    let one_pixel = ImageU8Pyramid::from_regions(vec![Some(PyramidLevel {
+        image: ImageU8::new(1, 1, 3, vec![0; 3]),
+        origin: [0, 0],
+        full_size: [camera.width, camera.height],
+    })])
+    .expect("a region pyramid");
+    let path = crate::state::photograph_path(recon, 0).expect("a path");
+    state.photographs.insert(&path, Arc::new(one_pixel));
+
+    let texts = crop_hover_texts(&ctx, &mut panel, &mut state, &mut clock, point);
+    let said = format!(
+        "The photograph of the point's reference observation could not be read: {}",
+        crate::state::UNREADABLE_PHOTOGRAPH
+    );
+    assert!(texts.contains(&said), "{said:?} not in {texts:?}");
+    assert!(panel.pictures.hover_crop().is_none());
+}
+
+/// A Crop cell drawn after the read of its photograph's header failed says
+/// *unreadable*, and that answer is asked again rather than kept, so the
+/// cell draws its crop once the photograph arrives, without the version
+/// moving. A frame meets this when the header read ends while it draws its
+/// rows: the rows drawn after it say *unreadable*.
+#[test]
+fn an_unreadable_crop_is_drawn_once_its_photograph_arrives() {
+    let mut clock = Clock(0.0);
+    let (mut state, id) = crop_state();
+    let (requests, queue) = crate::state::PhotographRequests::queued();
+    state.photograph_requests = requests;
+    let recon = state.node(id).expect("loaded").recon();
+    let path = crate::state::photograph_path(recon, 0).expect("a path");
+    let pyramid = state.cached_photograph(id, 0).expect("cached");
+    state.photographs.forget(&path);
+    assert_eq!(stored_reference(0), 0);
+
+    let (ctx, mut panel) = shown(&mut state, 4800.0, &mut clock);
+    assert_eq!(
+        cell(&panel, 0, PictureColumn::Crop),
+        Some(CellPicture::Waiting)
+    );
+    // The header read ends, finding no file: the fixture's photographs are
+    // only ever in the cache.
+    assert_eq!(queue.run_off_this_thread(), 1, "the header read");
+    frame(&ctx, &mut panel, &mut state, 4800.0, clock.tick());
+    assert_eq!(
+        cell(&panel, 0, PictureColumn::Crop),
+        Some(CellPicture::Absent(Absent::Unreadable))
+    );
+
+    state.photographs.insert(&path, pyramid);
+    frame(&ctx, &mut panel, &mut state, 4800.0, clock.tick());
+    assert!(matches!(
+        cell(&panel, 0, PictureColumn::Crop),
+        Some(CellPicture::Texture(_))
+    ));
+}

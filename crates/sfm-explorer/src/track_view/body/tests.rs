@@ -1142,10 +1142,16 @@ fn every_row_draws_a_tile_at_either_stage() {
 
 /// A row drawn before its photograph is decoded gets its tile and its crop on a
 /// later frame once the photograph arrives, without the track moving: a
-/// photograph not decoded yet is not remembered as a row with neither.
+/// photograph not decoded yet is not remembered as a row with neither. So
+/// does a row drawn after the read of its photograph's header failed, which
+/// a frame meets when that read ends while the frame draws its rows: the
+/// rows drawn after it say *unreadable*, and that answer is asked again
+/// rather than kept, so they too draw once the photograph arrives.
 #[test]
 fn a_tile_appears_when_its_photograph_arrives_after_the_first_frame() {
     let mut state = AppState::new();
+    let (requests, queue) = crate::state::PhotographRequests::queued();
+    state.photograph_requests = requests;
     state.append_node(SceneNode::demo(projected_embedded_demo(12)));
     let id = state.selected_recon.expect("a selected reconstruction");
     state
@@ -1159,6 +1165,17 @@ fn a_tile_appears_when_its_photograph_arrives_after_the_first_frame() {
         "a row drew a tile or a crop with no photograph decoded: {:?}",
         panel.rows(),
     );
+    // The header reads end, finding no file: the fixture's photographs are
+    // only ever in the cache.
+    assert!(queue.run_off_this_thread() > 0, "the header reads");
+    run_frame(&mut panel, &ctx, &state);
+    for observation in 0..panel.rows().len() {
+        assert_eq!(
+            panel.read_failure(observation),
+            Some(super::UNREADABLE_PHOTOGRAPH),
+            "row {observation}"
+        );
+    }
 
     cache_photographs(&mut state, id);
     run_frame(&mut panel, &ctx, &state);
@@ -1167,6 +1184,7 @@ fn a_tile_appears_when_its_photograph_arrives_after_the_first_frame() {
         "a row drawn before its photograph arrived stayed without a tile or a crop: {:?}",
         panel.rows(),
     );
+    assert!((0..panel.rows().len()).all(|o| panel.read_failure(o).is_none()));
 }
 
 /// A candidate a descriptor search has just added sits where the index's warp

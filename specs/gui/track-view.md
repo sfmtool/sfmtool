@@ -1919,7 +1919,11 @@ pyramids gave. A read that fails, or a photograph that cannot be read or
 decoded, is cached as a picture that could not be drawn, with why
 (`TrackBody::read_failures`): the tile or crop cell says *unreadable* in
 place of its picture (`table::READ_FAILURE_CELL`), and its hover, and the
-hover of a hover view that failed, says why. Each picture
+hover of a hover view that failed, says why. A photograph that cannot be
+read is the one answer not kept: the next frame drops the pictures it left
+empty and asks again (`TrackBody::unreadable`), so a row draws its pictures
+once its photograph can be read, as when the photograph lands in the cache
+after its header read found no file. Each picture
 is read once and kept, so its `ViewRegions` keeps nothing past the read: a
 view is not read again until the track moves, which moves its regions. A
 tile read so costs little more than one from the whole pyramid: on a
@@ -2558,7 +2562,10 @@ texels, so their geometry is checked without reading pixels off the screen.
     *unreadable* once its header read has run; and the hover views of a row
     whose photograph the cache has dropped since its tile and crop were drawn
     say *Loading the photograph…*, ask for its layout once, and are drawn
-    once it is back. Each of these three takes about 0.2 s. The crops
+    once it is back. Each of these three takes about 0.2 s. In `tests.rs`,
+    rows that say *unreadable* once their photograph's header read found no
+    file, the read stepped by hand, draw their tiles and crops on the frame
+    after the photograph lands (0.15 s). The crops
     themselves are held to the whole pyramid's in `patch_pictures/tests.rs`,
     at 1, 3 and 40 photograph pixels per texel, over outlines across photograph
     tile edges and the image's edges and corners, through the pool and through

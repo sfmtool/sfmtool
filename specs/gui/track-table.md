@@ -87,8 +87,8 @@ Panels menu opens it.
 └────────┴────────┴────────┴─────────┴─────────────┴────────────┴──────────┴───────────────┘
 ```
 
-The second row's crop is an empty frame because its photograph is still being
-decoded.
+The second row's crop is an empty frame because the photograph tiles it needs
+are still loading.
 
 - **It follows the selected reconstruction**, as Image Browser and Edit History
   do. The header names that reconstruction and counts the matched rows against
@@ -427,13 +427,17 @@ cuts a row's crop with,
   table builds no track per row. A point at infinity is cropped as any other:
   its patch frame carries `w = 0` and the outline and the projection are
   homogeneous.
-- **It reads only the pixels it draws.** The photograph cache hands out the
-  photograph's whole pyramid, and the cell reads it through
-  `TiledPhotograph::from_pyramid`
-  ([view-region-pyramids.md](../core/camera/view-region-pyramids.md)): the
-  crop reads one level, the one whose pixel is the largest not wider than its
-  texel step, and of it the bounding box of the bilinear tap pairs of the
-  texel centres that fall on the photograph (`read_source_samples`), and
+- **It reads only the pixels it draws.** The cell reads a photograph made of
+  the photograph tiles its crop needs, peeked in the photograph cache or
+  kept from the decode that answered them (`TiledPhotograph::from_tiles`,
+  through `state::read_peeked`), as Track View reads its crops
+  ([view-region-pyramids.md](../core/camera/view-region-pyramids.md),
+  [photograph-cache.md](../core/camera/photograph-cache.md) § "In the
+  viewer"), so no photograph is decoded on the GUI thread and no whole
+  pyramid is read. The crop reads one level, the one whose pixel is the
+  largest not wider than its texel step, and of it the bounding box of the
+  bilinear tap pairs of the texel centres that fall on the photograph
+  (`read_source_samples`), and
   blends each texel's four pixels as `sample_bilinear_u8` does, so it draws
   the whole level's values. The panel owns one region pool of 3.1 MB
   (`patch_pictures::PanelRegionPool`) that the crops and their hover views
@@ -455,10 +459,15 @@ cuts a row's crop with,
 - **Each cell says why it is empty.** A Crop cell is drawn from a
   `CellPicture`, as a Patch cell is, and is one of:
   - the crop;
-  - an empty frame while its photograph is decoding or its reference is being
-    picked, or while the scroll has not yet stopped over it (below);
-  - *unreadable*, when the photograph cannot be read
-    (`DisplayPhotograph::Unreadable`), or the crop's read of it fails;
+  - an empty frame while the photograph tiles it needs are loading or its
+    reference is being picked, or while the scroll has not yet stopped over
+    it (below);
+  - *unreadable*, when the photograph cannot be read or decoded, or the
+    crop's read of it fails. It is the one reason not kept: the cell asks
+    again on every frame it is drawn, so it draws its crop once the
+    photograph can be read, as when the photograph lands in the cache after
+    its header read found no file; a hover view whose read failed is asked
+    again the same way;
   - *no reference*, when the point stores no reference observation and the
     reference-view rule picks none;
   - *off image*, when no sample of the outline projects into the photograph
@@ -476,9 +485,12 @@ cuts a row's crop with,
   (`crop::point_context_caption`: the dot is the keypoint of the point's
   reference observation, the ring where the point projects, and the axes the
   patch's first and second), then the point's portable id. The wider picture is cut
-  the first time the pointer rests on the cell and kept while it stays there
-  (`PictureTextures::crop_context`). Over a cell with no crop the hover says
-  why, in a sentence, and a hover view whose read fails says why it failed.
+  the first time the pointer rests on the cell, from the photograph tiles it
+  needs, and kept while the pointer stays there
+  (`PictureTextures::crop_context`); while those tiles are loading the hover
+  says *Loading the photograph…*, as Track View's do. Over a cell with no
+  crop the hover says why, in a sentence, and a hover view whose read fails
+  says why it failed.
 
 ### The reference photograph
 
@@ -533,21 +545,24 @@ reference.
 
 ### Requests wait for the scroll to stop
 
-A crop needs its photograph decoded, and the table asks the shared photograph
-cache for it (`state::display_photograph`, which starts the decode on the rayon
-pool and repaints when it lands). Track View only looks in that cache, so the
-table is a source of decodes of its own. A sort by a number puts neighbouring
-rows in different photographs, so scrolling through a large table would queue a
+A crop needs the photograph tiles it reads, and the table asks the shared
+photograph cache for them (`state::read_peeked`, which reads the
+photograph's header and then decodes the missing tiles on the rayon pool and
+repaints when they land). A sort by a number puts neighbouring rows in
+different photographs, so scrolling through a large table would queue a
 decode, and a pick, for every row it passes.
 
 So the cells ask for photographs and picks only once the rows on screen have
 stopped changing: once the range of rows the frame draws has stayed the same
 for `SCROLL_SETTLE_S`, 0.15 s (`ScrollMotion`). While it is still changing, a
-cell draws the crop it already holds or an empty frame, looks in the photograph
-cache without starting a decode, and asks for no pick; the panel asks for a
-repaint at the moment the rows will count as stopped. The first frame that
-draws rows counts as stopped, so a table opened or sorted shows its crops at
-once. A new row count after an edit moves the rows like a scroll does.
+cell draws the crop it already holds, or cuts one from what the photograph
+cache and the answered decodes already hold
+(`state::read_peeked_without_asking`, which starts no read), or draws an
+empty frame, and asks for no pick; a crop's hover view waits the same way.
+The panel asks for a repaint at the moment the rows will count as stopped.
+The first frame that draws rows counts as stopped, so a table opened or
+sorted asks for its crops at once. A new row count after an edit moves the
+rows like a scroll does.
 
 The delay was measured on `dino_dog_toy` (85 photographs at 2040×1536, with its
 bitmaps stored and half its references cleared so every second point needs a
@@ -1066,9 +1081,18 @@ camera and one at infinity:
   observations keypoints, is shown by default and is drawn between Point and
   Patch; its heading does not sort;
 - each cell state: a crop, a crop of the point at infinity, *no patch*, *off
-  image*, an empty frame while its photograph decodes, then *unreadable* once
-  the decode of a missing file fails, and *unreadable* for a crop whose read
-  of its photograph fails, the cached pyramid holding one pixel of it;
+  image*, an empty frame while its photograph's header is read, then
+  *unreadable* once the read of a missing file fails, and *unreadable* for a
+  crop whose read of its photograph fails, the cached pyramid holding one
+  pixel of it;
+- a crop whose photograph tiles are not there draws an empty frame, asks for
+  the photograph's header once over three frames, decodes nothing on the GUI
+  thread, and draws its crop on the frame after the photograph lands, with
+  nothing more asked for; the hover view of a crop whose photograph has left
+  the cache says *Loading the photograph…*, asks once, and is drawn once the
+  photograph is back, and that of a crop whose photograph can no longer be
+  read says why; a cell that says *unreadable* after its photograph's header
+  read found no file draws its crop on the frame after the photograph lands;
 - a crop and its hover view drawn by whole frames, through the panel's region
   pool and through a pool that holds nothing so every read takes the
   photograph's tiles, equal the crop and hover view the whole pyramid gives,

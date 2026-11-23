@@ -472,10 +472,16 @@ reconstruction's photographs goes through it except the ones under
   photograph's kept tiles are at most 32, or one decode's answer when that
   is more, an answer that would take them past 32 replacing them, and only
   the four photographs answered last are kept.
-  A decode's failure is kept there too, with the file's length and
-  modification time, so under a budget of 0 the panel says "Failed to load
-  image" rather than decode again, until a check of the file on the rayon
-  pool, started by a frame that asks for it, finds that the file changed. A key the photograph does not have, which
+  A decode's failure is kept there too, apart from the answered tiles and
+  for every photograph, with the file's length and modification time, so
+  under a budget of 0 the panel says "Failed to load image" rather than
+  decode again, until a check of the file on the rayon pool, started by a
+  frame that asks for it, finds that the file changed; only then does the
+  check ask for a repaint. The failures are not bounded as the answers are,
+  since a failure dropped to make room would be decoded again by the next
+  frame that shows the photograph, and panels showing more such photographs
+  than the bound would decode them in turn and repaint without end. A key
+  the photograph does not have, which
   only a layout read before the file changed size names, makes the decode
   `forget` the path, so the next frame reads the header again. While
   animation plays the panel asks for the next image's tiles a frame ahead
@@ -501,7 +507,9 @@ reconstruction's photographs goes through it except the ones under
   cache ([camera-views.md](../../gui/camera-views.md) § "Photograph
   background").
 - **Track View's pictures**, its patch tiles, crops and their hover views,
-  never read or decode on the GUI thread either, at any budget. Each is
+  **the Track Table's crops** and their hover views, and **Measurement
+  View's endpoint crops** and their hover views, never read or decode on the
+  GUI thread either, at any budget, and no panel reads a whole pyramid. Each is
   rendered through `read_peeked` in the same file, which calls
   `display_layout` and then asks for the photograph tiles the render needs
   with `display_tile_set`: every one of them handed over together, from
@@ -517,16 +525,17 @@ reconstruction's photographs goes through it except the ones under
   picture needs are learned from a render on the coarsest level's first
   tile, which gives the photograph's channels, and asked for together
   ([view-region-pyramids.md](view-region-pyramids.md),
-  [track-view.md](../../gui/track-view.md)).
-- **The Track Table's crops and Measurement View's endpoint crops** decode
-  on the GUI thread only under a budget of 0. They call
-  `display_photograph` in the same file, which calls `peek_state`; on a miss
-  it starts one `get` of that path on the rayon pool, records the path in
-  `PhotographRequests` so later frames do not start a second, and asks egui
-  for a repaint when the decode ends. Under a budget of 0 nothing would be
-  kept for the next frame to find, so there the photograph is decoded where
-  it is asked for ([track-table.md](../../gui/track-table.md),
-  [measurement-view.md](../../gui/measurement-view.md)).
+  [track-view.md](../../gui/track-view.md)). While the Track Table's rows
+  scroll its crops read through `read_peeked_without_asking`, which runs the
+  same render on what the cache and the kept answers already hold and starts
+  no read ([track-table.md](../../gui/track-table.md) § "Requests wait for
+  the scroll to stop"). Measurement View cuts an endpoint's crop and its
+  hover view in one render, so the tiles both need are asked for together
+  ([measurement-view.md](../../gui/measurement-view.md)).
+- **The image menu** asks only whether each photograph is decoded, with
+  `peek`, and reads no pixel: *Add image to tracks* is offered for an image
+  whose photograph the cache holds, or whose file exists
+  ([image_menu.rs](../../../crates/sfm-explorer/src/image_menu.rs)).
 
 Because the key is a path, the cache is not touched when an edit renumbers a
 node's images, and it is not cleared when a node or the whole scene is closed:
@@ -672,15 +681,15 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   [state/open/tests.rs](../../../crates/sfm-explorer/src/state/open/tests.rs)
   (a second open reads the photographs from the cache),
   [state/photograph_requests/tests.rs](../../../crates/sfm-explorer/src/state/photograph_requests/tests.rs)
-  (a panel's miss is decoded off the calling thread, an unreadable file ends as
-  unreadable, a budget of 0 decodes on the calling thread; Image Detail's
-  layout and tiles each read once, off the calling thread, with a budget and
-  with a budget of 0, their tasks run from a queue the test steps on a thread
-  of its own bounded by a time limit; a decode refused by the build budget
-  ending at once while the other reservation is held, asked again on the next
-  look and decoding once it is given back; a failed decode answered as
-  unreadable and not decoded again until its file changes; tiles answered for
-  a view that moved on dropped; a key the photograph does not have reading the
+  (Image Detail's layout and tiles each read once, off the calling thread,
+  with a budget and with a budget of 0, their tasks run from a queue the
+  test steps on a thread of its own bounded by a time limit; a decode
+  refused by the build budget ending at once while the other reservation is
+  held, asked again on the next look and decoding once it is given back; a
+  failed decode answered as unreadable and not decoded again until its file
+  changes, five such photographs looked at in turn under a budget of 0
+  neither decoded again nor repainted for; tiles answered for a view that
+  moved on dropped; a key the photograph does not have reading the
   layout again; tiles asked for ahead handed over with no second decode; the
   3D background's level read once, off the calling thread, with a budget and
   with a budget of 0, built from the tiles with one call to the cache and
@@ -689,7 +698,10 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   reservation is given back; a level read waiting behind a
   tile decode of the same photograph, and a level not taken dropped when
   another is asked for; a level read against a layout the file no longer
-  has reading the layout again; and a failed level read not decoded again),
+  has reading the layout again; a failed level read not decoded again; a
+  render from peeked tiles run once they are all there, nothing decoded on
+  the calling thread, with a budget and with a budget of 0; and a render
+  that asks for nothing starting no read and no check of a failed file),
   [image_detail/photograph_tiles/tests.rs](../../../crates/sfm-explorer/src/image_detail/photograph_tiles/tests.rs)
   (two panels showing one photograph ask for its layout and its tiles once,
   neither decoding as it draws, with a budget and with a budget of 0; the tiles
@@ -699,7 +711,12 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   [scene_renderer/upload/tests.rs](../../../crates/sfm-explorer/src/scene_renderer/upload/tests.rs)
   (the camera-view background's photograph read off the calling thread and
   drawn once it lands, with a budget and with a budget of 0, and an
-  unreadable one's header read once), and
+  unreadable one's header read once),
+  [track_table_panel/tests/crop.rs](../../../crates/sfm-explorer/src/track_table_panel/tests/crop.rs)
+  and [measurement_view/tests/crops.rs](../../../crates/sfm-explorer/src/measurement_view/tests/crops.rs)
+  (a crop whose tiles are not there drawn as loading, its photograph asked
+  for once and nothing decoded as it draws, with a budget and with a budget
+  of 0 for Measurement View, and drawn once they land), and
   [scene_graph/tests.rs](../../../crates/sfm-explorer/src/scene_graph/tests.rs)
   (closing everything keeps the photographs).
 

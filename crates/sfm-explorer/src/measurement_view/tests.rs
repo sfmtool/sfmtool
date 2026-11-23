@@ -12,6 +12,8 @@ use super::*;
 use crate::measurements::fixture::measured_state;
 use crate::state::AppState;
 
+mod crops;
+
 const VIEWPORT: egui::Vec2 = egui::vec2(1000.0, 900.0);
 
 fn input(events: Vec<egui::Event>) -> egui::RawInput {
