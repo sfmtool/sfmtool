@@ -1330,7 +1330,7 @@ Each step is one change on its own branch, with its tests.
      (0.05 and 0.00 degrees measured), where on the pattern each could only
      be seen to push a version;
    - the fit's version label test: the point stored 5 cm off its place is
-     placed back within 1 mm (0.13 mm measured), and the label says finite,
+     placed back within 1 mm (0.16 mm measured), and the label says finite,
      where it could say either;
    - the geometry search test: a point of the `-b` face with its sighting in
      `demo_4` taken out of its track gets that sighting back as the one
@@ -1340,7 +1340,7 @@ Each step is one change on its own branch, with its tests.
    The old fixture paints one pattern into every image, so a viewer that
    handed each step another image's photograph passed every bench test; with
    each image's path taken from the next image, all four moved tests fail and
-   the rest of the module passes. Each moved test takes 0.1 to 0.7 s alone,
+   the rest of the module passes. Each moved test takes 0.1 to 1 s alone,
    the render included, and the module 1.6 s where it took 0.95 s.
 
    Kept on `embedded_demo` and `projected_embedded_demo`: the tests that need
@@ -1348,9 +1348,9 @@ Each step is one change on its own branch, with its tests.
    index (the re-triangulation's three outcomes, Refit All Points' refusal of
    a one-observation point, the open's unrendered one-view bitmap) or bars
    the pattern fails on some rows (`put_with_rows_the_bars_refuse`, which the
-   app, dock and surface tiling tests call); and the tests that assert what the viewer does with a
-   track rather than what a step finds, whose assertions no photograph
-   changes: the rest of the bench tests, the MCP bench tests (which say
+   app, dock and surface tiling tests call); and the tests that assert what
+   the viewer does with a track rather than what a step finds, whose
+   assertions no photograph changes: the rest of the bench tests, the MCP bench tests (which say
    they test the wire's boundary), Track View, the track table, Image
    Detail's bench layer, overlay and ghost tests, cluster patches, the camera
    model proposal, the scene graph, open and save tests. The display
