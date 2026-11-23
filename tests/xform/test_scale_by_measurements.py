@@ -17,7 +17,6 @@ import pytest
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.geometry import Se3Transform
 from sfmtool._workspace import find_sfmr_by_content_hash
-from sfmtool.xform import ToEmbeddedPatchesTransform
 from sfmtool.xform._scale_by_measurements import (
     ScaleByMeasurementsTransform,
     _SourceTracks,
@@ -204,48 +203,64 @@ class TestWorkspaceSearchFallback:
             transform.apply(SfmrReconstruction.load(input_path))
 
 
+# The demo cube's horizontal axes. Its top is z = 1, and the four top points
+# nearest its corners stand unmoved on the face's grid, 0.0625 m in from both
+# edges, so two of them along one edge are exactly 0.875 m apart.
+_CUBE_A = np.array([0.8, 0.6, 0.0])
+_CUBE_B = np.array([-0.6, 0.8, 0.0])
+_TOP_CORNER_POINTS = [
+    0.4375 * _CUBE_A + 0.4375 * _CUBE_B + [0.0, 0.0, 1.0],
+    -0.4375 * _CUBE_A + 0.4375 * _CUBE_B + [0.0, 0.0, 1.0],
+]
+
+
 class TestEmbeddedPatches:
-    """A reconstruction whose features are embedded patches has no feature indexes."""
+    """A reconstruction whose features are embedded patches has no feature
+    indexes: the demo scene, whose points stand at known positions."""
 
-    def _embedded(self, sfmr_path, tmp_path):
-        embedded = ToEmbeddedPatchesTransform().apply(
-            SfmrReconstruction.load(sfmr_path)
+    @pytest.fixture
+    def demo(self, demo_workspace_once):
+        demo = SfmrReconstruction.load(demo_workspace_once)
+        assert demo.track_feature_indexes is None
+        return demo
+
+    def test_point_ids_from_the_same_file_need_no_feature_indexes(self, demo, tmp_path):
+        prefix = demo.content_xxh128[:8].lower()
+        i, j = (
+            int(np.argmin(np.linalg.norm(demo.positions - corner, axis=1)))
+            for corner in _TOP_CORNER_POINTS
         )
-        path = tmp_path / "embedded.sfmr"
-        embedded.save(path, operation="test")
-        embedded = SfmrReconstruction.load(path)
-        assert embedded.track_feature_indexes is None
-        return embedded
-
-    def test_point_ids_from_the_same_file_need_no_feature_indexes(
-        self, seoul_bull_workspace, tmp_path
-    ):
-        recon = self._embedded(seoul_bull_workspace, tmp_path)
-        prefix = recon.content_xxh128[:8].lower()
-        i, j = _pick_separated_pair(recon.positions)
-        dist = float(np.linalg.norm(recon.positions[i] - recon.positions[j]))
+        np.testing.assert_allclose(
+            demo.positions[[i, j]], _TOP_CORNER_POINTS, rtol=0, atol=1e-12
+        )
         yaml_path = tmp_path / "measurements.yaml"
-        # The fixture is already in metres, so ask for millimetres to see the
-        # transform set the unit rather than inherit it.
-        assert recon.world_space_unit == "m"
+        # The demo is already in metres, so ask for millimetres to see the
+        # transform set the unit rather than inherit it; 875 mm is the points'
+        # true distance, so the scale is exactly 1000.
+        assert demo.world_space_unit == "m"
         yaml_path.write_text(
             "unit: mm\n"
             "measurements:\n"
             f"  - point_a: pt3d_{prefix}_{i}\n"
             f"    point_b: pt3d_{prefix}_{j}\n"
-            "    distance: 2.0\n"
+            "    distance: 875\n"
         )
 
         transform = ScaleByMeasurementsTransform(yaml_path)
-        out = transform.apply(recon)
+        out = transform.apply(demo)
 
-        assert transform._scale_factor == pytest.approx(2.0 / dist, rel=1e-6)
+        assert transform._scale_factor == pytest.approx(1000.0, rel=1e-12)
+        np.testing.assert_allclose(
+            out.positions[[i, j]],
+            np.multiply(_TOP_CORNER_POINTS, 1000.0),
+            rtol=0,
+            atol=1e-9,
+        )
         assert out.world_space_unit == "mm"
 
     def test_point_ids_from_another_file_say_why_they_cannot_resolve(
-        self, seoul_bull_workspace, tmp_path
+        self, demo, tmp_path
     ):
-        recon = self._embedded(seoul_bull_workspace, tmp_path)
         yaml_path = tmp_path / "measurements.yaml"
         yaml_path.write_text(
             "unit: m\n"
@@ -257,7 +272,7 @@ class TestEmbeddedPatches:
 
         transform = ScaleByMeasurementsTransform(yaml_path)
         with pytest.raises(ValueError, match="no feature indexes"):
-            transform.apply(recon)
+            transform.apply(demo)
 
 
 def test_a_measured_point_at_infinity_is_refused(seoul_bull_sfmr_only, tmp_path):
