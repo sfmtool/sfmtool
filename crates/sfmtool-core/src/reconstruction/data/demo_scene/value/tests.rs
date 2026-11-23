@@ -690,22 +690,51 @@ fn write_workspace_reports_its_phases_stops_when_cancelled_and_refuses_a_bad_dir
     assert!(events.iter().any(|e| e.ends_with(" points")), "{events:?}");
     assert_eq!(events.last().map(String::as_str), Some("7 files"));
 
-    // Cancelled, nothing is written.
-    let cancelled = std::sync::atomic::AtomicBool::new(true);
-    let dir = tmp.path().join("cancelled");
-    let result = scene().write_workspace(&dir, &Progress::none().cancelled_by(&cancelled));
-    assert!(
-        matches!(result, Err(DemoSceneError::Cancelled)),
-        "{result:?}"
-    );
-    assert!(!dir.exists());
+    // Cancelled while the value is built, after the points phase's work,
+    // nothing is written; cancelled once the write phase starts, the `.sfmr`
+    // is not written.
+    use std::sync::atomic::{AtomicBool, Ordering};
+    for (cancel_at, dir_name) in [
+        ("patch bitmaps", "cancelled_build"),
+        ("write", "cancelled_write"),
+    ] {
+        let cancelled = AtomicBool::new(false);
+        let sink = |event: Event<'_>| {
+            if let Event::Enter { phase, depth: 0 } = event {
+                if phase == cancel_at {
+                    cancelled.store(true, Ordering::Relaxed);
+                }
+            }
+        };
+        let dir = tmp.path().join(dir_name);
+        let result = scene().write_workspace(&dir, &Progress::to(&sink).cancelled_by(&cancelled));
+        assert!(
+            matches!(result, Err(DemoSceneError::Cancelled)),
+            "{cancel_at}: {result:?}"
+        );
+        if cancel_at == "write" {
+            assert!(!dir.join("demo.sfmr").exists());
+        } else {
+            assert!(!dir.exists());
+        }
+    }
+    let cancelled = AtomicBool::new(true);
     assert!(matches!(
         scene().reconstruction(&Progress::none().cancelled_by(&cancelled)),
         Err(DemoSceneError::Cancelled)
     ));
 
-    // A file at the path, a directory inside a workspace, and a path under a
-    // file are refused with an error.
+    // A directory that holds files, a file at the path, a path under a file
+    // and a directory inside a workspace are refused with an error.
+    let full = tmp.path().join("full");
+    std::fs::create_dir(&full).unwrap();
+    std::fs::write(full.join("x"), b"x").unwrap();
+    let result = scene().write_workspace(&full, &Progress::none());
+    assert!(
+        matches!(result, Err(DemoSceneError::Directory(_))),
+        "{result:?}"
+    );
+    assert!(!full.join("demo.sfmr").exists());
     let file = tmp.path().join("a_file");
     std::fs::write(&file, b"x").unwrap();
     let result = scene().write_workspace(&file, &Progress::none());
