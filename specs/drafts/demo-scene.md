@@ -1313,5 +1313,5 @@ Each step is one change on its own branch, with its tests.
    at infinity and the bitmaps rendered for a file that stores none, where
    the scene has no such point and stores its bitmaps. The moved tests take
    0.4 to 0.5 s less each where they converted or copied seoul_bull, and the
-   five modules 6 s where they took 9 to 10 s on one worker; the scene's
+   four modules 6 s where they took 9 to 10 s on one worker; the scene's
    render and workspace cost 0.2 s once per worker.

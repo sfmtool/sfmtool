@@ -151,9 +151,11 @@ class TestWithoutReadings:
     can be checked against those the scene computed from its own decoded
     photographs."""
 
-    def test_a_reconstruction_built_without_readings_has_none(self, demo_workspace):
+    def test_a_reconstruction_built_without_readings_has_none(
+        self, demo_workspace_once
+    ):
         recon = SfmrReconstruction.from_data(
-            demo_workspace.parent, _without_readings(demo_workspace)
+            demo_workspace_once.parent, _without_readings(demo_workspace_once)
         )
         assert recon.sharpness is None
         assert recon.gradient_structure_tensors_xx_yy_xy is None
