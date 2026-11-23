@@ -27,7 +27,7 @@
 //!   minting version is not an ancestor of the cursor's.
 //!
 //! Every hash here is computed from a value rather than read off a file, so a
-//! node that was never saved -- demo data -- has ids exactly like one that was.
+//! node built in memory and never saved has ids exactly like one that was.
 
 use sfmtool_core::EditedReconstruction;
 

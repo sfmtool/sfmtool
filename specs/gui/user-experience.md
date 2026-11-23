@@ -221,8 +221,13 @@ reachable from Track View too. See
 [goto-point.md](goto-point.md).
 
 The window title names the loaded file — `SfM Explorer - kerry_park.sfmr` —
-falling back to plain `SfM Explorer` before any load, and for demo data, which
-came from no file.
+falling back to plain `SfM Explorer` before any load. Demo data is a file too:
+*File > Load Demo Data...* writes the demo scene, a textured ground plane with
+a cube on it seen by five cameras, as a workspace in the system temporary
+directory and opens its `demo.sfmr`, so the title reads `SfM Explorer -
+demo.sfmr`, Image Detail shows the scene's photographs, and the workspace is
+deleted when the viewer exits ([background-tasks.md](background-tasks.md)
+§ "Loading demo data").
 
 ## Design Influences
 

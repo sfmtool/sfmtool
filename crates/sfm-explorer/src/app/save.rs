@@ -47,8 +47,8 @@ pub(super) fn save_as_with_dialog(
 /// Write everything the close prompt was standing in front of, and say whether
 /// the close may go ahead.
 ///
-/// A node with no file goes through the Save As dialog, so *Save* on demo data
-/// is a real offer rather than a refusal. A write that fails, or
+/// A node with no file goes through the Save As dialog, so *Save* on it is a
+/// real offer rather than a refusal. A write that fails, or
 /// a dialog that is dismissed, stops the close: the point of the prompt is that
 /// nothing is lost without an answer, and neither of those is one.
 pub(super) fn save_dirty_before_closing(

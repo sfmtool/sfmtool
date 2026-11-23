@@ -179,9 +179,18 @@ fn walked<T>(query: impl FnOnce() -> T) -> T {
 /// `--no-default-layout`: a developer who has saved a layout of their own to
 /// `~/.sfm-explorer-default-layout.json` must not have this suite's panel
 /// assertions fail on their machine.
-fn command(args: &[&str]) -> Command {
+///
+/// The viewer's temporary directory is `scratch`, a directory of the test's
+/// own, through the variables `std::env::temp_dir` reads on each platform: a
+/// demo load writes its workspace there, and a viewer the test kills leaves
+/// it there, to be deleted with the directory rather than left for the next
+/// viewer's sweep of the system temporary directory.
+fn command(args: &[&str], scratch: &std::path::Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_sfm-explorer"));
     cmd.args(args);
+    for variable in ["TMP", "TEMP", "TMPDIR"] {
+        cmd.env(variable, scratch);
+    }
     cmd
 }
 
@@ -204,6 +213,9 @@ struct Guard {
     started: Instant,
     launch: Cell<Option<Duration>>,
     child: Child,
+    /// The viewer's temporary directory ([`command`]), deleted once the
+    /// viewer is killed, with any demo workspace it wrote.
+    _temp_dir: tempfile::TempDir,
     /// The default layout file this test wrote, for the two tests that start
     /// the viewer on one. Held here so that it is restored *under* the lock:
     /// restored after the lock is released, it would race the next test's own
@@ -219,12 +231,14 @@ impl Guard {
     fn new() -> Self {
         let lock = ui_test_lock();
         let started = begin_accounting();
+        let temp_dir = tempfile::tempdir().expect("a temporary directory");
         Guard {
             started,
             launch: Cell::new(None),
-            child: command(&["--no-default-layout"])
+            child: command(&["--no-default-layout"], temp_dir.path())
                 .spawn()
                 .expect("failed to spawn sfm-explorer"),
+            _temp_dir: temp_dir,
             _layout_file: None,
             _lock: lock,
         }
@@ -915,11 +929,30 @@ impl McpViewer {
         McpViewer::launched(ui_test_lock(), None, &["--no-default-layout"])
     }
 
-    /// The same, with the demo reconstruction already loaded: the command-line
-    /// form of File > Load Demo Data…, which appends the same node at the
-    /// dialog's default point count.
+    /// The same, with the demo scene loaded: the command-line form of File >
+    /// Load Demo Data…, which starts the same background load at the
+    /// dialog's default point count. Returns once the load has landed and the
+    /// node is in the scene, as `get_scene` lists it.
     fn launch_demo() -> McpViewer {
-        McpViewer::launched(ui_test_lock(), None, &["--no-default-layout", "--demo"])
+        let viewer = McpViewer::launched(ui_test_lock(), None, &["--no-default-layout", "--demo"]);
+        viewer.wait_for_demo();
+        viewer
+    }
+
+    /// Wait until the `demo` node the `--demo` load makes is in the scene.
+    fn wait_for_demo(&self) {
+        let deadline = Instant::now() + CONTENT_TIMEOUT;
+        loop {
+            let scene = self.call("get_scene", json!({}));
+            if scene["structuredContent"]["scene"][0]["label"] == "demo" {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the demo node never appeared: {scene}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 
     /// Put `contents` at `~/.sfm-explorer-default-layout.json` and launch the
@@ -949,7 +982,8 @@ impl McpViewer {
         args: &[&str],
     ) -> McpViewer {
         let started = begin_accounting();
-        let mut cmd = command(&["--mcp", "0"]);
+        let temp_dir = tempfile::tempdir().expect("a temporary directory");
+        let mut cmd = command(&["--mcp", "0"], temp_dir.path());
         cmd.args(args);
         cmd.stdout(std::process::Stdio::piped());
         let mut child = cmd.spawn().expect("failed to spawn sfm-explorer");
@@ -960,6 +994,7 @@ impl McpViewer {
             started,
             launch: Cell::new(None),
             child,
+            _temp_dir: temp_dir,
             _layout_file: layout_file,
             _lock: lock,
         };
@@ -1411,20 +1446,19 @@ fn edit_menu_items() {
     );
 }
 
-/// The File menu's three save items, and which of them apply to demo data.
+/// The File menu's three save items all apply to demo data.
 ///
-/// Demo data came from no file — `--demo` appends a generated node, whose path
-/// is `None` exactly as the menu's is — so there is nothing for Save to write
-/// over, and it is greyed; Save As is the way out, and Save As Minimal writes a
-/// copy of any node, from a file or not. The demo node is selected when it is
-/// loaded, which is what those two act on. What each item does is covered
-/// headlessly in `state/save/tests.rs`.
+/// The demo node is opened from the `demo.sfmr` its load wrote in a temporary
+/// workspace, so it has a path as any opened file has: Save writes over that
+/// file, Save As writes where the user chooses, and Save As Minimal writes a
+/// copy. The demo node is selected when it is loaded, which is what the three
+/// act on. What each item does is covered headlessly in `state/save/tests.rs`.
 #[test]
-fn file_menu_save_items_apply_to_a_node_that_came_from_no_file() {
+fn file_menu_save_items_apply_to_the_demo_node() {
     let viewer = McpViewer::launch_demo();
     let menu = viewer.open_menu("File");
     for (label, enabled) in [
-        ("Save", false),
+        ("Save", true),
         ("Save As...", true),
         ("Save As Minimal...", true),
     ] {
@@ -1536,8 +1570,8 @@ fn the_scene_panel_lists_the_loaded_reconstruction() {
         "the demo dialog is still open after Load: {reply}"
     );
 
-    // The demo reconstruction is labeled "demo" and rings the scene with 8
-    // images, so both strings are fixed by the fixture. The third is the row's
+    // The demo scene is opened from its `demo.sfmr`, so it is labeled "demo",
+    // and it has five cameras, so both strings are fixed by the fixture. The third is the row's
     // solo toggle: its own behaviour is headless (`scene_graph` tests), and what
     // only a real window can show is that a *third* glyph button squeezed onto
     // the row is still laid out. The node may take more frames to arrive than
@@ -1547,7 +1581,7 @@ fn the_scene_panel_lists_the_loaded_reconstruction() {
         "the Scene panel never listed the loaded reconstruction",
         |listing| {
             (find_widget(listing, "label", "demo").is_some()
-                && find_widget(listing, "label", "Camera Images (8)").is_some()
+                && find_widget(listing, "label", "Camera Images (5)").is_some()
                 && find_widget(listing, "button", "S Solo").is_some())
             .then_some(())
         },
@@ -1563,7 +1597,11 @@ fn the_scene_panel_lists_the_loaded_reconstruction() {
 /// every entry in order, which entries open a submenu, and which are greyed.
 /// With one reconstruction loaded there is nothing to
 /// align to, so `Align to` is a greyed entry rather than a submenu; the demo is
-/// drawn in its own frame, so there is no transform to reset or bake. When each
+/// drawn in its own frame, so there is no transform to reset or bake. The demo
+/// scene is an `embedded_patches` file with patch frames and photographs in a
+/// workspace that names the `sfmtool` feature tool, so the whole-reconstruction
+/// edits and *Build SIFT Files* apply, *Convert to Embedded Patches* does not,
+/// and *Build Index Files* waits for the `.sift` files it has none of. When each
 /// entry is enabled is covered headlessly in `scene_graph/tests.rs`; this test
 /// pins a few of them to show the listing reports egui's own state.
 #[test]
@@ -1608,15 +1646,12 @@ fn the_reconstruction_rows_context_menu_lists_every_entry() {
             ("Tint", true),
             ("Bundle Adjust...", true),
             ("Retriangulate All Points", true),
-            ("Refit All Points", false),
-            ("Refine All Normals", false),
-            ("Prune Covered Observations", false),
-            (
-                "Switch SIFT Extraction to sfmtool and Build SIFT Files",
-                false,
-            ),
+            ("Refit All Points", true),
+            ("Refine All Normals", true),
+            ("Prune Covered Observations", true),
+            ("Build SIFT Files", true),
             ("Build Index Files", false),
-            ("Convert to Embedded Patches", true),
+            ("Convert to Embedded Patches", false),
             ("Close", true),
         ],
     );
@@ -1625,7 +1660,8 @@ fn the_reconstruction_rows_context_menu_lists_every_entry() {
         .filter(|item| item["submenu"] == true)
         .filter_map(|item| item["name"].as_str())
         .collect();
-    assert_eq!(submenus, ["Tint"], "{menu}");
+    // `Refine All Normals` opens its choice of step once it applies.
+    assert_eq!(submenus, ["Tint", "Refine All Normals"], "{menu}");
 }
 
 /// The default layout file, moved aside for the length of a test and put back
@@ -1891,20 +1927,8 @@ fn a_panel_that_is_not_drawn_is_refused_by_a_real_viewer() {
 #[test]
 fn a_point_can_be_deleted_over_the_wire_and_undone() {
     let viewer = McpViewer::launch_demo();
-    // The node is appended before the window opens, but `get_scene` is answered
-    // inside a frame, so the first call waits for it rather than racing it.
-    let deadline = Instant::now() + CONTENT_TIMEOUT;
-    let label = loop {
-        let scene = viewer.call("get_scene", json!({}));
-        if let Some(label) = scene["structuredContent"]["scene"][0]["label"].as_str() {
-            break label.to_string();
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the demo node never appeared: {scene}"
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    };
+    // `launch_demo` waited for the node.
+    let label = "demo";
 
     let made = viewer.ok(
         "delete_point",
@@ -1925,8 +1949,8 @@ fn a_point_can_be_deleted_over_the_wire_and_undone() {
     assert_eq!(history["cursor"], Value::String(serial.clone()));
     assert_eq!(history["dirty"], true);
     assert_eq!(history["can_undo"], true);
-    // The node came from no file, so nothing of it is on disk.
-    assert_eq!(history["disk_serial"], Value::Null);
+    // The node was opened from its file, so the disk holds its first version.
+    assert_eq!(history["disk_serial"], versions[0]["serial"]);
 
     let undone = viewer.ok("undo", json!({ "reconstruction_label": label }));
     assert_eq!(undone["cursor"], versions[0]["serial"]);
@@ -2020,7 +2044,7 @@ fn taking_a_camera_in_hand_reaches_a_real_window() {
     };
 
     click_item(&viewer.open_menu("Edit"), "Move Camera");
-    wait_for_line("Moving the camera of image_000.jpg");
+    wait_for_line("Moving the camera of demo_0.jpg");
 
     // With a lock held the same entry commits rather than takes, and the entry
     // beside it gives the camera back.
@@ -2030,7 +2054,7 @@ fn taking_a_camera_in_hand_reaches_a_real_window() {
         "the held lock did not change Move Camera to Commit Camera Move: {menu}"
     );
     click_item(&menu, "Cancel Camera Move");
-    wait_for_line("Cancelled the camera move of image_000.jpg");
+    wait_for_line("Cancelled the camera move of demo_0.jpg");
 }
 
 /// A `drag` reaches the 3D viewport of a real window: an unmodified left drag
@@ -2045,20 +2069,8 @@ fn a_drag_across_the_viewport_orbits_the_camera() {
             "layout": { "main": { "tabs": ["viewer_3d"], "active": "viewer_3d" }, "windows": [] },
         }),
     );
-    // The node is appended before the window opens; the framing that follows
-    // its load would otherwise move the camera under the drag.
-    let deadline = Instant::now() + CONTENT_TIMEOUT;
-    loop {
-        let scene = viewer.call("get_scene", json!({}));
-        if scene["structuredContent"]["scene"][0]["label"].is_string() {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the demo node never appeared: {scene}"
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    // `launch_demo` waited for the node, so the framing that follows its load
+    // has happened and does not move the camera under the drag.
     viewer.ok("set_view", json!({ "fit": null }));
     let view = || viewer.ok("get_scene", json!({}))["view"].clone();
     let before = view();

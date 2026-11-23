@@ -144,7 +144,7 @@ it for `sfm explorer`, as for any other part of the extension.
 
 ## Options the viewer takes that this command does not
 
-The viewer's command line also takes `--demo` (load generated demo data) and
+The viewer's command line also takes `--demo` (write the generated demo scene to a temporary workspace and open it) and
 `-h` / `--help`. `sfm explorer` does not forward either: `sfm explorer --help`
 prints the Click help for this command, and `--demo` is refused as an unknown
 option. Run the `sfm-explorer` binary for those.

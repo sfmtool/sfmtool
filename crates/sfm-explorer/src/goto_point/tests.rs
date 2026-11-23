@@ -223,7 +223,7 @@ fn a_full_id_past_the_end_is_bounds_checked_against_its_own_node() {
 
 #[test]
 fn a_node_that_came_from_no_file_resolves_by_its_computed_hash() {
-    // Demo data carries no stored hash, but its value hashes like any other, so
+    // A value built in memory carries no stored hash, but hashes like any other, so
     // the id the panel shows for it is a real id and pasting it back works.
     // `00000000` is not a state a node is in.
     let mut state = AppState::new();

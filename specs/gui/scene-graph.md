@@ -132,9 +132,10 @@ key type widens.
 pub struct SceneNode {
     pub id: ReconId,
     /// Display label: file stem, disambiguated with " (2)", " (3)"… on
-    /// collision. "demo" for demo data.
+    /// collision; "demo" for demo data, from its `demo.sfmr`.
     pub label: String,
-    /// Source path; None for demo data.
+    /// Source path. Every node the viewer makes has one, demo data included;
+    /// None only for a test's node of a value built in memory.
     pub path: Option<PathBuf>,
     /// The reconstruction as a sequence of values with a cursor: the versions
     /// this node has been through and which one it shows. Reached through
@@ -1477,17 +1478,20 @@ reconstruction on screen at a time, the same photo, one keystroke apart.
   showing another file's row.
 - **File > Close All** clears the scene. Individual close lives in the Scene
   panel.
-- **Demo data** becomes a node labeled `demo` (`path: None`) and appends like
-  any other load, through the same `append_node` and its cache and selection
-  resets, so node lifecycle is one code path.
+- **Demo data** is written as a workspace in a temporary directory and its
+  `demo.sfmr` opened as any file is, so it becomes a node labeled `demo`, with
+  that file as its path, through the same `append_node` and its cache and
+  selection resets ([background-tasks.md](background-tasks.md) § "Loading demo
+  data").
 - **CLI**: `sfm explorer` accepts multiple paths
   (`@click.argument("sfmr_files", nargs=-1)`), and `lib.rs` opens every
   trailing argument, in order, as one background open
   ([background-tasks.md](background-tasks.md) § "Opening a file").
 - **Window title**: `SfM Explorer` with nothing loaded,
   `SfM Explorer - run_a.sfmr` with one file, and
-  `SfM Explorer - run_a.sfmr (+2)` with three. A *nameless* first node (demo
-  data) leaves the title at `SfM Explorer` however many files follow it, since
+  `SfM Explorer - run_a.sfmr (+2)` with three, and `SfM Explorer - demo.sfmr`
+  with demo data. A *nameless* first node, one with no path, which only a test
+  makes, leaves the title at `SfM Explorer` however many files follow it, since
   there is no name to put the count after. A dirty node puts a `*` **on the
   file name**: `SfM Explorer - *run_a.sfmr`, `SfM Explorer - *run_a.sfmr (+2)`.
   The marker sits on the name, and the MCP port is a suffix
@@ -1727,10 +1731,15 @@ bundle from `retain_nodes` on the next frame.
   twice. After a real right-click on Windows, it checks that a context menu
   owned by the Scene row opened where the cursor was and holds a few of its
   entries (read over MCP). After a synthetic right-click over MCP on all three
-  platforms, it checks every entry in order with its enabled state, `Tint` as
-  the one entry that opens a submenu, `Align to` and `Bake Transform`
+  platforms, it checks every entry in order with its enabled state, `Tint` and
+  `Refine All Normals` as the entries that open a submenu, `Align to` and `Bake Transform`
   greyed on the demo, and `Bundle Adjust...` and `Retriangulate All Points`
-  enabled on it, since its observations carry their inline keypoints. A
+  enabled on it, since its observations carry their inline keypoints. The demo
+  is the demo scene, an `embedded_patches` file with patch frames and
+  photographs, so `Refit All Points`, `Refine All Normals`, `Prune Covered
+  Observations` and `Build SIFT Files` are enabled, `Convert to Embedded
+  Patches` is greyed, and `Build Index Files` is greyed until `.sift` files
+  exist. A
   submenu's contents exist only once it is opened, and are covered
   headlessly. The window title is covered by lib tests only:
   `window_title` decides the string on its own, and a windowed test of the

@@ -732,6 +732,24 @@ impl Operation {
         quiet: false,
     };
 
+    /// The demo scene rendered, written as a workspace in a temporary
+    /// directory and opened from there, for *File > Load Demo Data* and
+    /// `--demo` ([`crate::demo_data`], `specs/gui/background-tasks.md` section
+    /// "Loading demo data").
+    ///
+    /// Like an open, it makes a new node and so locks none. Cancellable
+    /// because the render polls the flag between rows and images, the build
+    /// between points and patch bitmaps, the write between files, and the open
+    /// as an open does, and a cancelled load appends no node.
+    pub(crate) const LOAD_DEMO_DATA: Operation = Operation {
+        name: "Load demo data",
+        cancellable: true,
+        kind: Kind::File,
+        queue: Queue::Fast,
+        locks: false,
+        quiet: false,
+    };
+
     /// One track evaluated against its current inputs by the bench's live
     /// evaluation ([`crate::bench::live`]): a quiet task.
     ///
@@ -820,8 +838,9 @@ impl Operation {
     /// declaration nothing checks is a declaration that rots.
     // Read by those tests alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 26] = [
+    pub(crate) const ALL: [Operation; 27] = [
         Operation::OPEN,
+        Operation::LOAD_DEMO_DATA,
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
         Operation::RETRIANGULATE_ALL_POINTS,
@@ -1035,6 +1054,17 @@ pub(crate) enum Finished {
     /// first version is the file as read. The GUI thread appends them in the
     /// order they were asked for and writes one row.
     Opened(Vec<crate::state::open::OpenedFile>),
+    /// The demo scene written and its `.sfmr` opened, or the reason the open
+    /// failed, and the number of points the load asked for.
+    ///
+    /// Lands as [`Finished::Opened`] does, with a row that names the number
+    /// of points the scene kept beside the number asked for.
+    DemoLoaded {
+        /// The written `demo.sfmr` and what its open made of it.
+        file: crate::state::open::OpenedFile,
+        /// The number of points asked for.
+        asked: u32,
+    },
     /// The kernel ran to its end and found nothing to change.
     ///
     /// Not a refusal and not a version: an edit whose answer is "there was
@@ -2246,6 +2276,18 @@ impl AppState {
                 match (made.is_empty(), refused) {
                     (true, Some(message)) => Err(message),
                     _ => Ok(crate::state::open::opened_sentence(self, &made)),
+                }
+            }
+            // The one file the load wrote, appended as an open appends it.
+            Finished::DemoLoaded { file, asked } => {
+                let _phase = collector.phase("append nodes");
+                let (made, refused) = self.append_opened(vec![file], actor);
+                opened = made.first().copied();
+                match (opened, refused) {
+                    (Some(node), _) => Ok(crate::demo_data::loaded_sentence(self, node, asked)),
+                    (None, refused) => Err(refused.unwrap_or_else(|| {
+                        "Failed to load demo data: its file was not opened".to_string()
+                    })),
                 }
             }
             Finished::SwitchedCamera(_) | Finished::BundleAdjusted(_) => {

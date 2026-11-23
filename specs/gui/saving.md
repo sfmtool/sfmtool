@@ -30,11 +30,21 @@ in [app.rs](../../crates/sfm-explorer/src/app.rs), and the close prompt is
 | `File > Save As...` | `Ctrl/Cmd+Shift+S` | Asks for a path, writes there, and re-points the node at it. |
 | `File > Save As Minimal...` | none | Asks for a path, then for the workspace path the copy records, and writes a minimal copy there; the node is left as it was. |
 
-**Save is disabled for a node with no path** -- demo data -- with the hover
-text `The selected reconstruction came from no file
--- use Save As`. There is nothing to write over, and the alternative is one menu
-item away, so the item says which one rather than opening a dialog the user did
-not ask for.
+**Save is disabled for a node with no path**, with the hover text `The
+selected reconstruction came from no file -- use Save As`. There is nothing to
+write over, and the alternative is one menu item away, so the item says which
+one rather than opening a dialog the user did not ask for. The viewer makes no
+such node itself: every node is opened from a file, demo data included.
+
+**Demo data saves as any other node does.** *Load Demo Data* writes the demo
+scene as a workspace in the system temporary directory and opens its
+`demo.sfmr` ([background-tasks.md](background-tasks.md) § "Loading demo
+data"), so the node's path is that file. *Save* writes over it, and *Save As*
+writes where the user chooses. A file saved inside the temporary workspace is
+deleted with it when the viewer exits. A file saved elsewhere records the path
+to the temporary workspace, as any *Save As* records its workspace, and once
+that directory is deleted it opens without photographs, as an
+`embedded_patches` file with thumbnails and bitmaps can.
 
 **Save As asks for the path through the platform's native save dialog**, the
 counterpart of the native open dialog `File > Open` uses, filtered to `.sfmr`.
@@ -87,8 +97,9 @@ it with the path from the new file's directory to the value's workspace,
 measured by `SfmrReconstruction::measured_workspace_path`, the measurement every
 other save makes. Where that equals the path the value carries, as it does for a
 file written beside the one it was read from, nothing changes; where there is
-nothing to measure (demo data has no workspace directory, and two paths on
-different drives have no path between them) the value's path stays. Save writes
+nothing to measure (a value built in memory, such as a test's, has no
+workspace directory, and two paths on different drives have no path between
+them) the value's path stays. Save writes
 over the file the path was measured from, so it keeps the path the value
 carries. Neither changes the recorded `workspace.absolute_path`, which names the
 workspace rather than a path from the file.
@@ -246,11 +257,10 @@ all; each version records which version it shares its document half with, and
 that is what the two are compared by. A commit, the one bench step that writes
 the reconstruction, makes the node dirty like any other edit.
 
-A node that came from no file is **not** dirty until something is done to it:
-its disk serial starts on its first version like every other node's, and demo
-data nobody has touched is not unsaved work. The first edit moves the cursor off
-that version and the marker appears; a save, which for such a node is a Save As,
-moves the disk serial to meet it.
+A node is **not** dirty until something is done to it: its disk serial starts
+on its first version, and a file nobody has touched, demo data included, is not
+unsaved work. The first edit moves the cursor off that version and the marker
+appears; a save moves the disk serial to meet it.
 
 **The Scene tree's node row** shows a leading `*` on the label while the node is
 dirty ([scene-graph.md](scene-graph.md) § "Tree rows").

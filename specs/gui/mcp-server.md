@@ -554,7 +554,7 @@ addressable. No arguments.
   "scene": [
     {
       "label": "seoul_bull",              // the handle everything else takes
-      "path": "C:/work/seoul_bull.sfmr",  // null for demo and derived ones
+      "path": "C:/work/seoul_bull.sfmr",  // demo data's is its demo.sfmr in a temporary workspace
       "content_hash": "a1b2c3d4",         // the hash this version's point ids are minted from
       "counts": { "points": 4210, "points_at_infinity": 0, "camera_images": 17,
                   "camera_intrinsics": 1, "observations": 19844 },
@@ -4252,8 +4252,11 @@ to the entries around it, and the two timestamps should be comparable without
 arithmetic.
 
 **`disk_serial` is `null` for a node that came from no file**, along with
-`is_on_disk: false` on every row: demo data has no file
-holding any of their versions, and `path` beside it says so. Such a node is not
+`is_on_disk: false` on every row: no file holds any of its versions, and
+`path` beside it says so. The viewer makes no such node itself, since demo
+data is opened from the `demo.sfmr` its load writes
+([background-tasks.md](background-tasks.md) § "Loading demo data"), so its
+first version is on disk as an opened file's is. A node with no file is not
 `dirty` until something is done to it ([saving.md](saving.md)), and a
 `save_reconstruction` on it needs a path.
 
@@ -4331,8 +4334,9 @@ where any version it would pass through has been released.
 ```
 
 With no path it is `AppState::save_node`, which writes over the file the node
-came from and refuses a node that came from none: *"`demo` came from no file —
-use Save As to choose one."* With a path it is `AppState::save_node_as`, which
+came from and refuses a node that came from none: *"`{label}` came from no
+file — use Save As to choose one."* Demo data has a file, its `demo.sfmr` in
+the temporary workspace its load wrote, so Save writes over that. With a path it is `AppState::save_node_as`, which
 writes there and **re-points the node at it**, taking that file's stem as the
 node's label. So the reply's `reconstruction_label` is what the next call must
 use, exactly as `open_reconstruction`'s returned label is.
@@ -7298,7 +7302,7 @@ where a test hands no host over.
   that takes its value when left has after Enter; it types into a number box a
   click opened; text that is not a number leaves the value as it was and a
   number past the range is clamped; it sets Load Demo Data's number of points
-  as it types; the modifiers are released afterwards; `type_text` is refused on
+  as it types, and holds a number below the box's 300 to 10,000 to 300; the modifiers are released afterwards; `type_text` is refused on
   a widget that is not a text input or number box, naming both roles, and with
   nothing focused; an unknown key is refused with the names; a
   point outside the target, a closed panel, a panel behind a tab, an unknown

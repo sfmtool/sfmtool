@@ -1276,7 +1276,8 @@ fn a_number_box_keeps_its_value_for_text_that_is_not_a_number() {
 }
 
 /// The viewer's own number box in Load Demo Data takes its value as it is
-/// typed, so the typed number replaces the old one with no Enter.
+/// typed, so the typed number replaces the old one with no Enter, and holds
+/// it to the box's range.
 #[test]
 fn type_text_sets_the_load_demo_data_number_of_points() {
     let mut harness = Harness::new();
@@ -1291,21 +1292,29 @@ fn type_text_sets_the_load_demo_data_number_of_points() {
         .find(|entry| entry["role"] == json!("spin_button"))
         .expect("the number of points")
         .clone();
-    assert_eq!(entry["value"], json!("1000"), "{entry:#}");
+    // The default scene's point count.
+    assert_eq!(entry["value"], json!("513"), "{entry:#}");
     // Named by the label before it.
     assert_eq!(entry["name"], json!("Number of points:"), "{entry:#}");
 
     let reply = harness.ok(
         "type_text",
-        json!({ "text": "250", "widget": entry["widget"] }),
+        json!({ "text": "900", "widget": entry["widget"] }),
     );
-    assert_eq!(harness.state.demo_num_points, 250, "{reply:#}");
-    assert_eq!(reply["focused"]["value"], json!("250"), "{reply:#}");
+    assert_eq!(harness.state.demo_num_points, 900, "{reply:#}");
+    assert_eq!(reply["focused"]["value"], json!("900"), "{reply:#}");
     let last = harness.state.action_log.entries().last().unwrap();
     assert_eq!(
         last.text,
         "type_text 3 characters into the number box \"Number of points:\" in Load Demo Data"
     );
+
+    // A number below the box's range, 300 to 10,000, is held to its start.
+    harness.ok(
+        "type_text",
+        json!({ "text": "100", "widget": entry["widget"] }),
+    );
+    assert_eq!(harness.state.demo_num_points, 300);
 }
 
 /// A widget that is not a text input or a number box is refused naming the

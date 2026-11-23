@@ -773,8 +773,9 @@ pub(crate) struct AppState {
     /// Whether the "Load Demo Data" dialog is currently open.
     pub(crate) show_demo_dialog: bool,
 
-    /// Number of points configured in the demo-data dialog (preserved across opens).
-    pub(crate) demo_num_points: usize,
+    /// Number of points configured in the demo-data dialog (preserved across
+    /// opens), held to [`crate::demo_data::POINT_COUNT_RANGE`].
+    pub(crate) demo_num_points: u32,
 
     /// The "Go to Point" dialog: the typed query, its last error, and whether
     /// it is showing. See [`crate::goto_point`].
@@ -1008,6 +1009,13 @@ pub(crate) struct AppState {
     /// at the bench's default bars, and set only through
     /// [`AppState::set_viewed_thresholds`].
     pub(crate) viewed_thresholds: sfmtool_core::bench::Thresholds,
+
+    /// The temporary workspaces the demo loads wrote, each with its lock
+    /// file held. See [`crate::demo_data`].
+    ///
+    /// The last field, so it drops after the scene: its `Drop` deletes the
+    /// workspaces, which the nodes read from.
+    pub(crate) demo_workspaces: crate::demo_data::DemoWorkspaces,
 }
 
 /// What the viewer says about a live MCP endpoint.
@@ -1107,7 +1115,7 @@ impl AppState {
             photographs: Arc::new(PhotographCache::new(PhotographCacheOptions::default())),
             photograph_requests: PhotographRequests::default(),
             show_demo_dialog: false,
-            demo_num_points: 1000,
+            demo_num_points: crate::demo_data::DEFAULT_POINT_COUNT,
             goto_point: GotoPointDialog::default(),
             close_prompt: crate::close_prompt::ClosePrompt::default(),
             bundle_adjust_prompt: crate::bundle_adjust_prompt::BundleAdjustPrompt::default(),
@@ -1141,6 +1149,7 @@ impl AppState {
             filter_3d: None,
             track_table_query: Default::default(),
             viewed_thresholds: Default::default(),
+            demo_workspaces: Default::default(),
         }
     }
 

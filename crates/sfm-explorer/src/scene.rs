@@ -334,11 +334,15 @@ impl NodeTint {
 /// One loaded reconstruction and the view state that belongs to it.
 pub(crate) struct SceneNode {
     pub(crate) id: ReconId,
-    /// Display label: the file stem, or `"demo"` for demo data, disambiguated
+    /// Display label: the file stem, or `"demo"` for a test's node of a value
+    /// built in memory (`SceneNode::demo`), disambiguated
     /// with `" (2)"`, `" (3)"`… when a stem is already taken (see
     /// [`unique_label`]).
     pub(crate) label: String,
-    /// Source path; `None` for demo data.
+    /// Source path. Every node the viewer makes has one, demo data included,
+    /// which is opened from the temporary workspace it was written to
+    /// ([`crate::demo_data`]); `None` only for a test's node of a value built
+    /// in memory.
     pub(crate) path: Option<PathBuf>,
     /// This node's reconstruction as a sequence of values with a cursor: the
     /// versions it has been through, and which one it is showing. See
@@ -510,12 +514,16 @@ impl SceneNode {
         Self::new(label_for_path(path), Some(path.to_path_buf()), recon)
     }
 
-    /// A node for generated demo data, which came from no file.
+    /// A node labelled `demo` that came from no file, for the tests that want
+    /// a node of a value built in memory, such as `SfmrReconstruction::demo`'s
+    /// sphere.
+    #[cfg(test)]
     pub(crate) fn demo(recon: SfmrReconstruction) -> Self {
         Self::new("demo".to_string(), None, recon)
     }
 
-    /// The file name shown in the window title, or `None` for demo data.
+    /// The file name shown in the window title, or `None` for a node with no
+    /// path.
     pub(crate) fn file_name(&self) -> Option<String> {
         let path = self.path.as_ref()?;
         Some(
@@ -529,11 +537,10 @@ impl SceneNode {
     /// what the window title's and the Scene row's `*` marker mean, and what
     /// closing asks about.
     ///
-    /// A node that came from no file is **not** dirty until something is done to
-    /// it: the disk serial starts on its first version like every other node's,
-    /// and demo data nobody has touched is not unsaved work. The first edit
-    /// moves the cursor off that version and the marker appears, and a save,
-    /// which for such a node is a Save As, moves the disk serial to meet it.
+    /// A node is **not** dirty until something is done to it: the disk serial
+    /// starts on its first version, and a file nobody has touched is not
+    /// unsaved work. The first edit moves the cursor off that version and the
+    /// marker appears, and a save moves the disk serial to meet it.
     ///
     /// The question is about the version's **document** half, so a run of bench
     /// steps over a saved value leaves the node clean

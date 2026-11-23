@@ -30,9 +30,9 @@ pub(crate) struct Args {
     /// Skip the startup load of `~/.sfm-explorer-default-layout.json`, and come
     /// up with the stock grid whatever is saved there.
     pub(crate) no_default_layout: bool,
-    /// Append a node of generated demo data at startup, after any files — the
-    /// same node File > Load Demo Data… makes, at the dialog's default point
-    /// count.
+    /// Load the demo scene at startup, after any files — the same background
+    /// load File > Load Demo Data… starts, at the dialog's default point
+    /// count, whose node is appended when it lands.
     pub(crate) demo: bool,
     /// `--help` was asked for; print [`USAGE`] and exit without opening a
     /// window.
@@ -59,9 +59,10 @@ OPTIONS:
     --no-default-layout
                     Start with the stock panel grid, ignoring any layout saved
                     at ~/.sfm-explorer-default-layout.json.
-    --demo          Load a generated demo reconstruction, after any files. The
-                    same node File > Load Demo Data... makes at its default
-                    point count, without the two dialogs.
+    --demo          Load the generated demo scene, after any files: the load
+                    File > Load Demo Data... starts at its default point
+                    count, written to a temporary directory and opened from
+                    there, without the dialog.
     -h, --help      Print this message and exit.
 ";
 

@@ -147,7 +147,8 @@ content hash is computed from the value without writing a file and equals what a
 save of it writes, and a point edit that creates points is hashed over the base's
 hash plus the records it adds
 ([`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)
-§ "Hashes"). Demo data therefore hashes exactly like a loaded file.
+§ "Hashes"). A value built in memory, with no file behind it, therefore
+hashes exactly like a loaded file.
 Those hashes plus this graph are what a point id is minted against and resolved
 through ([goto-point.md](goto-point.md) § "The ID forms and the version graph").
 

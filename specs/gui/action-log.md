@@ -188,7 +188,8 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | File | — | User / MCP | `Failed to load {path}: {error}` — **failed** |
 | File | — | User / MCP | `Closed {label}` |
 | File | — | User / MCP | `Closed all ({n})` — one entry, not one per node |
-| File | — | User | `Loaded demo data` |
+| File | — | User | `Loaded demo data from {path}: {kept} points, for {asked} asked for` -- the row the *Load demo data* task lands with ([background-tasks.md](background-tasks.md) § "Loading demo data") |
+| File | — | User | `Failed to load demo data: {why}` -- **failed** |
 | File | — | User / MCP | `Saved {label} at {serial} to {path}` -- one entry per save, the serial being the version that reached the disk ([saving.md](saving.md)) |
 | File | — | User / MCP | the reason a save was refused -- **failed**: the node is not loaded, the node came from no file (Save), the version at the cursor was released to keep the node inside the history budget, or the write itself failed |
 | Scene | — | User / MCP | `Soloed {label}` / `Ended the solo` |
@@ -778,7 +779,7 @@ same buffer the panel draws, on the same thread.
   seams are these. `AppState` mutating methods: the open's `append_opened`,
   `close_node`, `close_all`, `select_recon`, `select_camera`, `select_image`,
   `select_point`, `clear_selection`, `deselect_point`, `set_solo`, `align_node`,
-  `resect_image`, `reset_node_transform`, plus the demo loader. `Viewer3D`'s
+  `resect_image`, `reset_node_transform`, plus the demo load's landing. `Viewer3D`'s
   two camera-view *entries*, `enter_camera_view` and
   `animated_switch_camera_view`, which take the log as an argument — the node
   and the scene are borrowed out of the same `AppState` for the whole call, so
