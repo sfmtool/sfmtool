@@ -2428,7 +2428,14 @@ fn settle_reason(measurement: &mut super::track::TrackMeasurement, missing: Opti
 /// # fn run(track: &EditableTrack, edited: &EditedReconstruction, views: &[ProjectedImage<'_>])
 /// # -> Result<(), Box<dyn std::error::Error>> {
 /// let pool = RegionPool::for_kernel_call();
-/// let rendered = render_bitmap_in_place(track, edited, views, &pool, &FitOptions::default())?;
+/// let rendered = render_bitmap_in_place(
+///     track,
+///     edited,
+///     views,
+///     &pool,
+///     &FitOptions::default(),
+///     &Progress::none(),
+/// )?;
 /// let scored = score_bitmap(
 ///     &rendered,
 ///     edited,
