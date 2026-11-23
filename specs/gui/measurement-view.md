@@ -435,11 +435,14 @@ points (`HEADER_FIELD_WIDTH`) and down to 60 (`HEADER_FIELD_MIN_WIDTH`); a
 block's image drop-down takes the block's width and cuts a long name short;
 the `x` and `y` pixel fields, each with its letter, go one under the other
 where the block is too narrow for both; and the crop shrinks to the block's
-width where that is under 128 points. Whether the blocks sit side by side, and
-how wide the header fields are, is decided from the panel's width read before
-anything in it is drawn, since egui widens a `Ui` to take in a row that
-overflows it, and a width read after such a row would be wider than the
-panel. Only in the edited mode and in a panel narrower than about 150 points,
+width where that is under 128 points. Whether the blocks sit side by side, how
+wide each block is, and how wide the header fields are, is decided from the
+panel's width read before anything in it is drawn, since egui widens a `Ui` to
+take in a row that overflows it, and a width read after such a row would be
+wider than the panel. The header fields are two rows, each name at the wider
+name's measured width, rather than an `egui::Grid`, which lays out from the
+column widths of the frame before: on the frame the panel narrows, as on
+every frame of a splitter drag, a grid would still be at the old width. Only in the edited mode and in a panel narrower than about 150 points,
 too narrow for a header field at its minimum beside its name, is the content
 wider than the panel; egui_dock's tab body, which scrolls both ways for every
 panel, then scrolls it sideways. Each block shows:
@@ -1265,10 +1268,12 @@ at-infinity case is covered by the Rust tests.
   egui_dock draws a tab body, at 200, 272, 428, 500 and 900 points, with long
   image names and a long node label, no widget reaches past the panel's right
   edge, neither pixel field of a block is squeezed narrower than the other,
-  and the blocks stack below two blocks' width and sit side by side above
-  it: read-only with nothing selected and with a measurement selected,
-  edited with both endpoints placed, and a new item with endpoint B not
-  placed.
+  two pixel fields on one line are level, and the blocks stack below two
+  blocks' width and sit side by side above it: read-only with nothing
+  selected and with a measurement selected, edited with both endpoints
+  placed, and a new item with endpoint B not placed. The same holds on the
+  first frame at each width after frames at 900 points (or 200, for a width
+  where the blocks sit side by side), read only and edited.
 - **Switching an endpoint's image** (`measurement_view/tests.rs`): no button
   on a stored measurement; the button enabled for an endpoint that resolves
   and greyed with its sentence for one refused, one not placed, and while a

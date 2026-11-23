@@ -78,10 +78,8 @@ fn dock_frame(
     shown
 }
 
-/// What is wrong with the panel's layout at each width, drawn from `state`:
-/// a widget reaching past the panel's right edge, a pixel field squeezed
-/// narrower than the other, or the blocks side by side where they should stack or
-/// stacked where they should sit side by side.
+/// What is wrong with the panel's layout at each width, drawn from `state`
+/// on a fresh context, settled for a frame.
 fn layout_faults(state: &AppState) -> Vec<String> {
     let mut faults = Vec::new();
     for (width, side_by_side) in WIDTHS {
@@ -91,52 +89,77 @@ fn layout_faults(state: &AppState) -> Vec<String> {
         for _ in 0..2 {
             shown = dock_frame(&mut panel, &ctx, state, width);
         }
-        let widest = ctx.viewport(|viewport| {
-            viewport
-                .prev_pass
-                .widgets
-                .layers()
-                .flat_map(|(_, rects)| rects.iter().map(|w| w.rect.max.x))
-                .fold(f32::NEG_INFINITY, f32::max)
-        });
-        if widest > shown.max.x + 0.5 {
-            faults.push(format!(
-                "at {width}: a widget reaches x = {widest}, past the panel's edge at {}",
-                shown.max.x
-            ));
-        }
-        // The fixture's pixels are shorter than `PIXEL_FIELD_TEXT`, so both
-        // of a block's pixel fields are that text's width unless the line
-        // squeezed one.
-        for side in EndpointSide::BOTH {
-            let (Some(x), Some(y)) = (
-                panel.pixel_field_rect(side, PixelAxis::X),
-                panel.pixel_field_rect(side, PixelAxis::Y),
-            ) else {
-                continue;
-            };
-            if (x.width() - y.width()).abs() > 0.5 {
-                faults.push(format!(
-                    "at {width}: {side:?}'s pixel fields are {} and {} wide",
-                    x.width(),
-                    y.width()
-                ));
-            }
-        }
-        let (Some(a), Some(b)) = (
-            panel.block_rect(EndpointSide::A),
-            panel.block_rect(EndpointSide::B),
+        faults.extend(frame_faults(&panel, &ctx, shown, width, side_by_side));
+    }
+    faults
+}
+
+/// What is wrong with the frame `ctx` last ran of `panel`, `width` points
+/// wide, showing `shown`: a widget reaching past the panel's right edge, a
+/// pixel field squeezed narrower than the other, the two pixel fields of a
+/// block on one line more than a tenth of a point from level, or the blocks
+/// side by side where they should stack (`side_by_side` false) or stacked
+/// where they should sit side by side.
+fn frame_faults(
+    panel: &MeasurementView,
+    ctx: &egui::Context,
+    shown: egui::Rect,
+    width: f32,
+    side_by_side: bool,
+) -> Vec<String> {
+    let mut faults = Vec::new();
+    let widest = ctx.viewport(|viewport| {
+        viewport
+            .prev_pass
+            .widgets
+            .layers()
+            .flat_map(|(_, rects)| rects.iter().map(|w| w.rect.max.x))
+            .fold(f32::NEG_INFINITY, f32::max)
+    });
+    if widest > shown.max.x + 0.5 {
+        faults.push(format!(
+            "at {width}: a widget reaches x = {widest}, past the panel's edge at {}",
+            shown.max.x
+        ));
+    }
+    // The fixture's pixels are shorter than `PIXEL_FIELD_TEXT`, so both
+    // of a block's pixel fields are that text's width unless the line
+    // squeezed one.
+    for side in EndpointSide::BOTH {
+        let (Some(x), Some(y)) = (
+            panel.pixel_field_rect(side, PixelAxis::X),
+            panel.pixel_field_rect(side, PixelAxis::Y),
         ) else {
             continue;
         };
-        let beside = a.max.x <= b.min.x && a.min.y == b.min.y;
-        let stacked = a.max.y <= b.min.y;
-        if side_by_side && !beside {
-            faults.push(format!("at {width}: {a:?} and {b:?} are not side by side"));
+        if (x.width() - y.width()).abs() > 0.5 {
+            faults.push(format!(
+                "at {width}: {side:?}'s pixel fields are {} and {} wide",
+                x.width(),
+                y.width()
+            ));
         }
-        if !side_by_side && !stacked {
-            faults.push(format!("at {width}: {a:?} and {b:?} are not stacked"));
+        let one_line = x.max.y > y.min.y && y.max.y > x.min.y;
+        if one_line && (x.min.y - y.min.y).abs() > 0.1 {
+            faults.push(format!(
+                "at {width}: {side:?}'s pixel fields share a line at tops {} and {}",
+                x.min.y, y.min.y
+            ));
         }
+    }
+    let (Some(a), Some(b)) = (
+        panel.block_rect(EndpointSide::A),
+        panel.block_rect(EndpointSide::B),
+    ) else {
+        return faults;
+    };
+    let beside = a.max.x <= b.min.x && a.min.y == b.min.y;
+    let stacked = a.max.y <= b.min.y;
+    if side_by_side && !beside {
+        faults.push(format!("at {width}: {a:?} and {b:?} are not side by side"));
+    }
+    if !side_by_side && !stacked {
+        faults.push(format!("at {width}: {a:?} and {b:?} are not stacked"));
     }
     faults
 }
@@ -175,4 +198,36 @@ fn an_unplaced_endpoint_fits_every_width() {
         .unwrap();
     let faults = layout_faults(&state);
     assert!(faults.is_empty(), "{faults:#?}");
+}
+
+/// The first frame at a new width is laid out for that width: from 900
+/// points to each width where the blocks stack, and from 200 points to each
+/// where they sit side by side, read only and edited, nothing reaches past
+/// the panel's edge on that frame and the blocks are already as that width
+/// says, as on every frame of a splitter drag.
+#[test]
+fn the_first_frame_at_a_new_width_fits_it() {
+    let (mut state, id) = long_named_state();
+    state.select_measurement(MeasurementRef::distance(id, 1));
+    for editing in [false, true] {
+        if editing {
+            state
+                .put_measurement_on_bench(MeasurementRef::distance(id, 1))
+                .unwrap();
+        }
+        for (width, side_by_side) in WIDTHS {
+            let from = if side_by_side { 200.0 } else { 900.0 };
+            let mut panel = MeasurementView::new();
+            let ctx = egui::Context::default();
+            for _ in 0..2 {
+                dock_frame(&mut panel, &ctx, &state, from);
+            }
+            let shown = dock_frame(&mut panel, &ctx, &state, width);
+            let faults = frame_faults(&panel, &ctx, shown, width, side_by_side);
+            assert!(
+                faults.is_empty(),
+                "editing {editing}, from {from}: {faults:#?}"
+            );
+        }
+    }
 }
