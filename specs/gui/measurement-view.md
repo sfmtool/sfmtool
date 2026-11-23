@@ -427,22 +427,22 @@ in the default layout of a 1280 x 720 window. Every line of a block wraps
 inside it, so neither block draws over the other.
 
 Nothing in the panel is wider than the panel, in either mode, so it
-normally scrolls only up and down. That matters beyond looks: egui widens a
-`Ui` to take in a row that overflows it, and the width the blocks are laid out
-in is read after the header, so one header line wider than the panel would
-also put the blocks side by side in a panel too narrow for them. Each row
-that holds several pieces of text, such as the header's first line and the
-edited mode's bench label and node, wraps between them, and a single word
-longer than the line breaks. The edited mode's two header fields take the width beside their names,
-up to 180 points (`HEADER_FIELD_WIDTH`) and down to 60
-(`HEADER_FIELD_MIN_WIDTH`); a block's image drop-down takes the block's width
-and cuts a long name short; the `x` and `y` pixel fields, each with its
-letter, go one under the other where the block is too narrow for both; and
-the crop shrinks to the block's width where that is under 128 points. Only
-in the edited mode and in a panel narrower than about 160 points, too narrow
-for a header field at its minimum beside its name, is the content wider than
-the panel; egui_dock's tab body, which scrolls both ways for every panel, then
-scrolls it sideways. Each block shows:
+normally scrolls only up and down. Each row that holds several pieces of
+text, such as the header's first line and the edited mode's bench label and
+node, wraps between them, and a single word longer than the line breaks. The
+edited mode's two header fields take the width beside their names, up to 180
+points (`HEADER_FIELD_WIDTH`) and down to 60 (`HEADER_FIELD_MIN_WIDTH`); a
+block's image drop-down takes the block's width and cuts a long name short;
+the `x` and `y` pixel fields, each with its letter, go one under the other
+where the block is too narrow for both; and the crop shrinks to the block's
+width where that is under 128 points. Whether the blocks sit side by side, and
+how wide the header fields are, is decided from the panel's width read before
+anything in it is drawn, since egui widens a `Ui` to take in a row that
+overflows it, and a width read after such a row would be wider than the
+panel. Only in the edited mode and in a panel narrower than about 150 points,
+too narrow for a header field at its minimum beside its name, is the content
+wider than the panel; egui_dock's tab body, which scrolls both ways for every
+panel, then scrolls it sideways. Each block shows:
 
 - **The photograph's name** and the endpoint's pixel, `(412.3, 230.5)`.
 - **The crop.** The photograph around the endpoint, 128 points square. Where
@@ -1261,12 +1261,14 @@ at-infinity case is covered by the Rust tests.
   the default layout of a 1280 x 720 window the blocks are one above the
   other, inside the panel and not overlapping, in both modes, and side by side
   where the panel is wide. (`measurement_view/tests/layout.rs`): drawn in a
-  scroll area that scrolls both ways, as egui_dock draws a tab body, at 200,
-  272, 428, 500 and 900 points, with long image names and a long node label,
-  no widget reaches past the panel's right edge and the blocks stack below
-  two blocks' width and sit side by side above it: read-only with nothing
-  selected and with a measurement selected, edited with both endpoints
-  placed, and a new item with endpoint B not placed.
+  scroll area that scrolls both ways, with the tab body's margin, as
+  egui_dock draws a tab body, at 200, 272, 428, 500 and 900 points, with long
+  image names and a long node label, no widget reaches past the panel's right
+  edge, neither pixel field of a block is squeezed narrower than the other,
+  and the blocks stack below two blocks' width and sit side by side above
+  it: read-only with nothing selected and with a measurement selected,
+  edited with both endpoints placed, and a new item with endpoint B not
+  placed.
 - **Switching an endpoint's image** (`measurement_view/tests.rs`): no button
   on a stored measurement; the button enabled for an endpoint that resolves
   and greyed with its sentence for one refused, one not placed, and while a

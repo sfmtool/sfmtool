@@ -4,8 +4,9 @@
 //! Headless tests of Measurement View's layout across panel widths: nothing
 //! is wider than the panel, and the endpoint blocks stack where two do not
 //! fit and sit side by side where they do. The panel is drawn inside a
-//! scroll area that scrolls both ways, as egui_dock draws every tab body, so
-//! a row wider than the panel widens the content as it does in the viewer.
+//! scroll area that scrolls both ways, with the tab body's margin, as
+//! egui_dock draws every tab body, so a row wider than the panel widens the
+//! content as it does in the viewer.
 
 use super::super::*;
 use crate::state::AppState;
@@ -40,8 +41,9 @@ fn long_named_state() -> (AppState, ReconId) {
 }
 
 /// One frame of the panel in a window `width` points wide, inside a scroll
-/// area that scrolls both ways. The part of the content the scroll area
-/// shows comes back.
+/// area that scrolls both ways and a frame with the tab body's margin, as
+/// egui_dock's `DockArea` with its default style draws a tab. The part of the
+/// content the scroll area shows comes back.
 fn dock_frame(
     panel: &mut MeasurementView,
     ctx: &egui::Context,
@@ -61,7 +63,15 @@ fn dock_frame(
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
                 shown = egui::ScrollArea::both()
-                    .show(ui, |ui| panel.show(ui, state))
+                    .show(ui, |ui| {
+                        egui::Frame::new()
+                            .inner_margin(ui.style().spacing.window_margin)
+                            .show(ui, |ui| {
+                                let available = ui.available_rect_before_wrap();
+                                ui.expand_to_include_rect(available);
+                                panel.show(ui, state);
+                            });
+                    })
                     .inner_rect;
             });
     });
@@ -69,8 +79,9 @@ fn dock_frame(
 }
 
 /// What is wrong with the panel's layout at each width, drawn from `state`:
-/// a widget reaching past the panel's right edge, or the blocks side by side
-/// where they should stack or stacked where they should sit side by side.
+/// a widget reaching past the panel's right edge, a pixel field squeezed
+/// narrower than the other, or the blocks side by side where they should stack or
+/// stacked where they should sit side by side.
 fn layout_faults(state: &AppState) -> Vec<String> {
     let mut faults = Vec::new();
     for (width, side_by_side) in WIDTHS {
@@ -93,6 +104,24 @@ fn layout_faults(state: &AppState) -> Vec<String> {
                 "at {width}: a widget reaches x = {widest}, past the panel's edge at {}",
                 shown.max.x
             ));
+        }
+        // The fixture's pixels are shorter than `PIXEL_FIELD_TEXT`, so both
+        // of a block's pixel fields are that text's width unless the line
+        // squeezed one.
+        for side in EndpointSide::BOTH {
+            let (Some(x), Some(y)) = (
+                panel.pixel_field_rect(side, PixelAxis::X),
+                panel.pixel_field_rect(side, PixelAxis::Y),
+            ) else {
+                continue;
+            };
+            if (x.width() - y.width()).abs() > 0.5 {
+                faults.push(format!(
+                    "at {width}: {side:?}'s pixel fields are {} and {} wide",
+                    x.width(),
+                    y.width()
+                ));
+            }
         }
         let (Some(a), Some(b)) = (
             panel.block_rect(EndpointSide::A),

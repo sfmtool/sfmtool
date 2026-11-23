@@ -682,9 +682,10 @@ impl MeasurementView {
             .id_salt("measurement_view")
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                let width = ui.available_width();
                 show_header(ui, node, measurement, row, &rows, &readings.distance);
                 ui.separator();
-                self.show_blocks(ui, state, node, target, &blocks, None, &mut response);
+                self.show_blocks(ui, width, state, node, target, &blocks, None, &mut response);
                 ui.separator();
                 show_result(ui, row, resolved, unit);
             });
@@ -728,10 +729,11 @@ impl MeasurementView {
             .id_salt("measurement_view_item")
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                let width = ui.available_width();
                 self.show_toolbar(ui, state, node.id, label, response);
                 ui.separator();
                 show_item_origin(ui, node, label, &item, origin);
-                self.show_header_fields(ui, state, node, label, &item, response);
+                self.show_header_fields(ui, width, state, node, label, &item, response);
                 show_item_comparison(ui, row.as_ref(), || {
                     let row = row.as_ref()?;
                     let reading = reading.resolved.as_ref()?;
@@ -745,6 +747,7 @@ impl MeasurementView {
                 };
                 self.show_blocks(
                     ui,
+                    width,
                     state,
                     node,
                     Target::Item(node.id),
@@ -765,10 +768,17 @@ impl MeasurementView {
 
     /// The edited mode header's two fields: the measurement's own label and
     /// its stated distance, each greyed with the refusal a step would give
-    /// while a task holds the node or the bench is view-only.
+    /// while a task holds the node or the bench is view-only. The fields are
+    /// sized from `panel_width`, the panel's width read before anything in it
+    /// was drawn.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the frame's inputs, read once by show_item"
+    )]
     fn show_header_fields(
         &mut self,
         ui: &mut egui::Ui,
+        panel_width: f32,
         state: &AppState,
         node: &SceneNode,
         label: &str,
@@ -795,7 +805,7 @@ impl MeasurementView {
                     .x
             })
         });
-        let width = (ui.available_width() - names[0].max(names[1]) - ui.spacing().item_spacing.x)
+        let width = (panel_width - names[0].max(names[1]) - ui.spacing().item_spacing.x)
             .clamp(HEADER_FIELD_MIN_WIDTH, HEADER_FIELD_WIDTH);
         egui::Grid::new("measurement_view_header_fields")
             .num_columns(2)
@@ -936,7 +946,9 @@ impl MeasurementView {
     /// that shows it: side by side where the panel is wide enough for two,
     /// and one above the other where it is not, so neither draws over the
     /// other. In the edited mode (`edit`) each block carries *Switch image…*
-    /// and its right-click menu, and the popup the two open.
+    /// and its right-click menu, and the popup the two open. Which of the two
+    /// is decided by `panel_width`, the panel's width read before anything
+    /// in it was drawn, so a row wider than the panel cannot change it.
     #[allow(
         clippy::too_many_arguments,
         reason = "the frame's inputs, read once by show"
@@ -944,6 +956,7 @@ impl MeasurementView {
     fn show_blocks(
         &mut self,
         ui: &mut egui::Ui,
+        panel_width: f32,
         state: &AppState,
         node: &SceneNode,
         target: Target,
@@ -1017,7 +1030,7 @@ impl MeasurementView {
                 );
             }
         };
-        if ui.available_width() >= 2.0 * BLOCK_MIN_WIDTH {
+        if panel_width >= 2.0 * BLOCK_MIN_WIDTH {
             ui.columns(2, |columns| {
                 for side in EndpointSide::BOTH {
                     show_one(self, &mut columns[side.index()], side);
@@ -2167,8 +2180,11 @@ impl EndpointBlock<'_> {
             })
             .inner;
         // Each axis's letter and field stay together, and `y` goes under `x`
-        // where the block is too narrow for both on one line.
+        // where the block is too narrow for both on one line. Each pair is
+        // laid out at its own width, since a row the wrapping line hands the
+        // rest of its width to never wraps.
         ui.horizontal_wrapped(|ui| {
+            let font = egui::TextStyle::Body.resolve(ui.style());
             for axis in PixelAxis::BOTH {
                 let value = pixel_text(self.pixel[axis.index()]);
                 let hint = format!(
@@ -2176,23 +2192,38 @@ impl EndpointBlock<'_> {
                      Escape puts it back.",
                     axis.letter()
                 );
+                let width = pixel_field_width(ui, &value);
+                let letter = ui.fonts_mut(|fonts| {
+                    fonts
+                        .layout_no_wrap(axis.letter().to_string(), font.clone(), Color32::WHITE)
+                        .size()
+                        .x
+                });
+                let pair = egui::vec2(
+                    letter + ui.spacing().item_spacing.x + width,
+                    ui.spacing().interact_size.y,
+                );
                 let (committed, rect) = ui
-                    .horizontal(|ui| {
-                        ui.label(axis.letter());
-                        draft_field(
-                            ui,
-                            &mut kept.drafts[axis.index()],
-                            DraftField {
-                                item,
-                                value: &value,
-                                refusal,
-                                empty: "",
-                                hint: &hint,
-                                width: pixel_field_width(ui, &value),
-                                name: pixel_field_name(side, axis),
-                            },
-                        )
-                    })
+                    .allocate_ui_with_layout(
+                        pair,
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.label(axis.letter());
+                            draft_field(
+                                ui,
+                                &mut kept.drafts[axis.index()],
+                                DraftField {
+                                    item,
+                                    value: &value,
+                                    refusal,
+                                    empty: "",
+                                    hint: &hint,
+                                    width,
+                                    name: pixel_field_name(side, axis),
+                                },
+                            )
+                        },
+                    )
                     .inner;
                 kept.pixel_rects[axis.index()] = Some(rect);
                 let Some(text) = committed else {
