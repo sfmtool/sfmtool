@@ -654,10 +654,12 @@ impl Viewer3D {
     /// [`Self::surfel_scale`] ([`crate::measurements::texel_under_ray`]).
     ///
     /// `None` where the point is drawn as a dot (the node's style is Dots, it
-    /// has no patch bitmaps to draw surfels with, its points are hidden, or
-    /// the patch opacity is 0), has no patch frame,
-    /// or the ray misses the square, sees its back or grazes its plane: the
-    /// menu's measurement entries then take the point's reference pixel.
+    /// has no patch bitmaps to draw surfels with, its points are hidden, the
+    /// patch opacity is 0, or the point's own frame or bitmap row is empty,
+    /// which the upload packs no surfel for), or the ray misses the square,
+    /// sees its back or grazes its plane: the menu's measurement entries then
+    /// take the point's reference pixel. A point past the atlas's GPU limits
+    /// is drawn as a dot too and is not caught here.
     fn texel_under_pointer(
         &self,
         scene: &[SceneNode],
@@ -670,7 +672,17 @@ impl Viewer3D {
         if !(node.show_points && node.draws_patches()) {
             return None;
         }
-        let patch_frame = node.edited().point(point.point)?.patch_frame()?;
+        let view = node.edited().point(point.point)?;
+        // The upload's own rule for which points get a surfel
+        // (`patch_frame_is_stored` and `patch_bitmap_is_stored`): a point
+        // with an empty bitmap row is drawn as its dot.
+        if !view
+            .patch_bitmap()
+            .is_some_and(sfmtool_core::reconstruction::patch_bitmap_is_stored)
+        {
+            return None;
+        }
+        let patch_frame = view.patch_frame()?;
         let into_recon = node.transform().inverse().ok()?;
         let (origin, direction) = self.camera.ray_through(pos, rect);
         crate::measurements::texel_under_ray(

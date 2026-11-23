@@ -2785,12 +2785,21 @@ fn turned_moved_scaled() -> sfmtool_core::Se3Transform {
 /// it has patch frames and nothing to texture them with, and draws dots in the
 /// Patches style.
 fn facing_point_0(bitmaps: bool) -> (Viewer3D, egui::Context, AppState, ReconId, egui::Rect) {
+    facing_point_0_with(bitmaps, |_| {})
+}
+
+/// [`facing_point_0`] with `edit` made to the bitmaps it adds, before the
+/// node is built from the fixture.
+fn facing_point_0_with(
+    bitmaps: bool,
+    edit: impl FnOnce(&mut ndarray::Array4<u8>),
+) -> (Viewer3D, egui::Context, AppState, ReconId, egui::Rect) {
     let mut recon = crate::measurements::fixture::referenced_reconstruction(Some("m"));
     if bitmaps {
         let points = recon.point_set.points.len();
-        recon.point_set.patch_bitmaps_y_x_rgba = Some(std::sync::Arc::new(
-            ndarray::Array4::from_elem((points, 8, 8, 4), 128u8),
-        ));
+        let mut grey = ndarray::Array4::from_elem((points, 8, 8, 4), 128u8);
+        edit(&mut grey);
+        recon.point_set.patch_bitmaps_y_x_rgba = Some(std::sync::Arc::new(grey));
     }
     let mut state = AppState::new();
     let id = state.append_node(SceneNode::from_path(
@@ -3069,6 +3078,23 @@ fn the_point_menu_takes_the_point_s_centre_off_its_drawn_square() {
 #[test]
 fn a_patches_node_with_no_bitmaps_takes_the_point_s_centre() {
     let (mut viewer, ctx, mut state, id, rect) = facing_point_0(false);
+    let pick = Some(PickTarget::Point(PointRef::new(id, 0)));
+    let inside = on_screen(&viewer, &state, id, rect, [0.5, 0.5], 1.0);
+    right_click_at(&mut viewer, &ctx, &mut state, inside, pick);
+    assert_eq!(menu_texel(&viewer), None);
+}
+
+/// A point whose own bitmap row is all zeros, as a file writes where the
+/// reference rule picks no observation, gets no surfel in a node that draws
+/// patches and is drawn as a dot, so a right-click on the place its square
+/// would cover takes the point's centre.
+#[test]
+fn a_point_with_an_empty_bitmap_row_takes_its_centre() {
+    let (mut viewer, ctx, mut state, id, rect) = facing_point_0_with(true, |bitmaps| {
+        bitmaps.index_axis_mut(ndarray::Axis(0), 0).fill(0);
+    });
+    let point = state.node(id).unwrap().edited().point(0).unwrap();
+    assert!(point.patch_frame().is_some(), "point 0 keeps its frame");
     let pick = Some(PickTarget::Point(PointRef::new(id, 0)));
     let inside = on_screen(&viewer, &state, id, rect, [0.5, 0.5], 1.0);
     right_click_at(&mut viewer, &ctx, &mut state, inside, pick);
