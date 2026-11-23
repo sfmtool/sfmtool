@@ -506,14 +506,17 @@ fn for_point_count_scales_both_spacings() {
         DemoSceneOptions::for_point_count(DemoSceneOptions::DEFAULT_POINT_COUNT).unwrap(),
         default
     );
-    let quarter =
-        DemoSceneOptions::for_point_count(DemoSceneOptions::DEFAULT_POINT_COUNT / 4).unwrap();
+    let four_times =
+        DemoSceneOptions::for_point_count(4 * DemoSceneOptions::DEFAULT_POINT_COUNT).unwrap();
     assert_eq!(
-        quarter.ground_point_spacing,
-        2.0 * default.ground_point_spacing
+        four_times.ground_point_spacing,
+        0.5 * default.ground_point_spacing
     );
-    assert_eq!(quarter.face_point_spacing, 2.0 * default.face_point_spacing);
-    assert_eq!(quarter.image_width, default.image_width);
+    assert_eq!(
+        four_times.face_point_spacing,
+        0.5 * default.face_point_spacing
+    );
+    assert_eq!(four_times.image_width, default.image_width);
     assert!(matches!(
         DemoSceneOptions::for_point_count(0),
         Err(DemoSceneError::Options(m)) if m.contains("point_count")

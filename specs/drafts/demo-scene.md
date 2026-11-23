@@ -597,8 +597,8 @@ background, both of which compress better than that frame, so each JPEG is
 under 0.2 MB and the five are under 1 MB: measured, 0.066 to 0.068 MB for
 each low camera's and 0.097 to 0.098 MB for each high camera's, 0.40 MB in
 all. The `.sfmr`'s largest column is the
-patch bitmaps, 524 × 24 × 24 × 4 bytes, 1.2 MB before compression; the
-whole default `.sfmr` is 0.76 MB.
+patch bitmaps, 513 × 24 × 24 × 4 bytes, 1.2 MB before compression; the
+whole default `.sfmr` is 0.75 MB.
 
 ### Determinism of the JPEG encoder and decoder
 
@@ -674,7 +674,7 @@ photographs would echo:
 - On the ground, `m = round(5 / ground_point_spacing)` rows and columns over
   `[-2.5, 2.5] × [-2.5, 2.5]`, at `−2.5 + (i + 0.5) · 5 / m` m along each
   axis, leaving out the points that land inside the cube's footprint: at
-  0.25 m, `m = 20`, a grid of 400 of which 331 are observed by two cameras or
+  0.25 m, `m = 20`, a grid of 400 of which 321 are observed by two cameras or
   more. The rest lie inside the footprint, near the cameras below the views'
   lower edges, or at the grid's corners outside the outer views.
 - On each cube face but the base, `k = round(1 / face_point_spacing)` rows and
@@ -689,8 +689,8 @@ Both grids put each point at the centre of its cell, so the count on a
 surface is close to its area over the spacing squared and `for_point_count`
 scales it in proportion; a ground grid through the origin, `2n + 1` points a
 side, would not, since its extra row and column are a larger share of a coarse
-grid than of a fine one. 524 points at the defaults
-(`DEFAULT_POINT_COUNT`); a cut at 90° rather than 80° keeps the same 524. With a patch half-extent of 0.09 m, the
+grid than of a fine one. 513 points at the defaults
+(`DEFAULT_POINT_COUNT`). With a patch half-extent of 0.09 m, the
 patches of the outer row on each face cross the cube's edge, and those of the
 ground points next to the cube run into its side: those are the crease cases.
 The ground points behind the cube, seen past it by the outer cameras and hidden
@@ -699,8 +699,15 @@ from the middle ones, are the occlusion cases.
 **Visibility.** Camera `i` observes point `X` on a surface with normal `n` when
 all of these hold:
 
-1. `X` is in front of the camera (camera-space `z < 0`) and its projection lies
-   inside the image, `[0, 640) × [0, 480)`;
+1. the point's whole patch square lies in the photograph: each of its four
+   corners, `X ± h·u ± h·v` with `u` and `v` the surface's in-face axes of its
+   patch frame and `h` the patch half-extent, is in front of the camera
+   (camera-space `z < 0`) and projects inside the image,
+   `[0, 640) × [0, 480)`. An observation whose square runs off the image could
+   not supply a full bitmap, and a point whose observations all did would
+   have no reference view; at the defaults this rule leaves out 11 ground
+   points near the image edges that the centre alone would keep, and takes
+   one or two edge observations off 39 others;
 2. the camera is on the side `n` faces, and views the patch no more than
    `max_obliquity_deg` (80°) off `n`: `n · (C_i − X) / |C_i − X| ≥ cos 80°`, the
    same cut `sfm embed-patches` applies by default
@@ -764,16 +771,16 @@ JPEG's error.
 **Two things the render settles that the geometry does not.** The bitmaps are
 the reference-view rule's renders at the stored keypoints, with
 `KeypointSubpixelParams::default()` at the options' bitmap side, as
-`--add-patch-bitmaps` renders them. At the defaults one point, a ground point
-near the lower edge of both views that observe it, gets no pick from the rule,
-so it keeps a reference of `-1` and a zero bitmap row, as the format allows.
-And the rule's pick depends on the pixels: it compares the views by their
+`--add-patch-bitmaps` renders them. Every point gets a pick, since each of its
+observations' patch squares lies in its photograph (visibility rule 1). The
+rule's pick depends on the pixels: it compares the views by their
 content, and for a point whose two best views score nearly alike a change of
 one level in the photographs changes the pick, and with it the whole bitmap.
-On the default scene one point of the 524 picks the other view under the
-scalar JPEG encoder, and one other point under `jpeg-decoder`'s scalar path
-(its `platform_independent` feature) on the same JPEG bytes; both are points
-of the top, which only the two high cameras observe (points 359 and 382). So
+On the default scene one point of the 513, point 348 on the top, picks the
+other view under the scalar JPEG encoder. Before visibility rule 1 took the
+whole patch square, one point of the top also picked the other view under
+`jpeg-decoder`'s scalar path (its `platform_independent` feature) on the same
+JPEG bytes; the top is observed only by the two high cameras. So
 a machine of another encoder or decoder path can store a few bitmaps of
 another view. Decided by the maintainer (2026-11-22): the generator keeps the
 production reference-view rule rather than a pick made from the geometry, so
@@ -889,7 +896,7 @@ and appends a node holding `SfmrReconstruction::demo(n)` with no path
 the dialog in [modals.rs](../../crates/sfm-explorer/src/app/modals.rs)). With
 this proposal the dialog keeps its *Number of points* box, which now sets the
 scene's point spacings through `DemoSceneOptions::for_point_count`. The box
-starts at `DEFAULT_POINT_COUNT`, 524, and takes 300 to 10,000: below
+starts at `DEFAULT_POINT_COUNT`, 513, and takes 300 to 10,000: below
 about 250 the face spacing passes twice the patch half-extent and the
 measurement's corners are no longer covered, and 10,000 points keep the bitmap
 render to about a second. The count kept is near the number asked for, and the
@@ -1071,23 +1078,32 @@ Each step is one change on its own branch, with its tests.
    [demo_scene/value.rs](../../crates/sfmtool-core/src/reconstruction/data/demo_scene/value.rs);
    `write_workspace` and the `Directory`, `Save` and `Io` errors are in
    [demo_scene.rs](../../crates/sfmtool-core/src/reconstruction/data/demo_scene.rs).
-   `DEFAULT_POINT_COUNT` is 524: 331 on the ground and 64 on each of the top,
-   `-a` and `-b`. One change from the sampling this draft first described:
+   `DEFAULT_POINT_COUNT` is 513: 321 on the ground and 64 on each of the top,
+   `-a` and `-b`, with 1,712 observations. Two changes from the sampling this
+   draft first described. Visibility rule 1 takes the whole patch square
+   rather than the point's centre: with the centre alone, a ground point at
+   `(0.083, −2.160, 0)` was kept with its keypoint 0.2 px from the lower edge
+   of `demo_2` and its square only 73% inside `demo_1`, the reference-view
+   rule took neither view, and the point was stored with no reference and an
+   empty bitmap, which the viewer draws as a ball rather than a surfel. Of
+   the 524 points the centre rule kept, the square rule leaves out 11 ground
+   points, that one among them, and no point is left without a reference.
+   And
    the ground grid puts each point at the centre of its cell, as the faces'
    grids do, rather than on a grid through the origin with `2n + 1` points a
    side, whose count did not scale with the inverse square of the spacing
    ([The points and who sees them](#the-points-and-who-sees-them)); with the
    grid through the origin, `for_point_count(10_000)` kept 9,464 points.
-   Measured with the cell grid, `for_point_count` keeps 292 for 300, 1,010
-   for 1,000, 2,032 for 2,000, 2,998 for 3,000 and 9,938 for 10,000; the
+   Measured with both changes, `for_point_count` keeps 290 for 300, 994
+   for 1,000, 1,993 for 2,000, 2,935 for 3,000 and 9,751 for 10,000; the
    largest miss between 300 and 10,000 is at 500, which gives the default
-   grids and so 524, 4.8% over, since a grid side is a whole number. Below
+   grids and so 513, 2.6% over, since a grid side is a whole number. Below
    300 the misses grow (92 for 100). The test checks 300, 1,000, 3,000 and
    10,000 to within 5%, by the sampling alone, with no render.
 
    `render_patch_cloud_bitmaps` renders the bitmaps with the reference-view
-   rule; one ground point gets no pick and keeps a zero row, and the rule's
-   pick changes for one point under each other encoder or decoder path
+   rule; every point gets a pick, and the rule's pick changes for one point
+   under the other encoder path
    ([Two things the render settles](#the-reconstructions-columns)). The
    per-path values the last test stores are a digest rather than the
    columns: three thumbnail texels of each image, each image's four readings,
@@ -1097,14 +1113,15 @@ Each step is one change on its own branch, with its tests.
    would bound them only loosely, about half of `√Exx`, while the decoder's
    scalar and SSSE3 paths, a one-level difference at some samples, gave
    readings within `6.6 · 10⁻⁴` of each other and the two encoder paths
-   within `3 · 10⁻⁴`. The two paths' sampled texels and references are the
-   same; their readings differ in the fourth digit. A sampled point whose
+   within `3 · 10⁻⁴`. The two paths' sampled references and thumbnail texels
+   are the same, three sampled bitmap texels differ by a level, and their
+   readings differ in the fourth digit. A sampled point whose
    pick differs from the stored one is skipped, and at most one may.
 
    **The patch bitmaps' contrast.** Over the stored 24 × 24 bitmaps of the
    default scene, with the grey and the two contrasts of
    [Texture](#texture), the 10th percentile and median by surface, in grey
-   levels: the ground (330 bitmaps) 9.2 and 11.9 standard deviation, 2.19
+   levels: the ground (321 bitmaps) 9.2 and 11.9 standard deviation, 2.22
    and 2.77 pixel-scale; the top 8.7 and 10.8, 2.37 and 2.58; `-a` 10.1 and
    12.4, 3.12 and 3.37; `-b` 9.0 and 10.9, 2.91 and 3.19. The least
    textured bitmap has a standard deviation of 6.5 levels. These are near

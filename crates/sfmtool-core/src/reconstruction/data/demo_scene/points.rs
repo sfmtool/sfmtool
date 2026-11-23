@@ -75,28 +75,42 @@ pub(super) struct SampledPoint {
     pub(super) images: Vec<u32>,
 }
 
-/// Whether the camera at `pose` observes the point `x` on a surface with
-/// outward normal `normal`: `x` projects inside the image in front of the
-/// camera; the camera is on the side the normal faces, no more than the
-/// obliquity cut off it, `n · (C − x) / |C − x| ≥ cos_cut`; and the segment
-/// from the camera centre to `x` does not enter the cube before it reaches
-/// `x`, less `10⁻⁹` of its length, so a point on the face the segment enters
-/// is not hidden by its own face.
+/// The four corners of the patch square of the point `x` on `surface`, at
+/// `x ± h·u ± h·v` with `u` and `v` the surface's in-face axes: the square
+/// the point's patch frame spans at the half-extent `h`.
+pub(super) fn patch_corners(surface: Surface, x: [f64; 3], h: f64) -> [[f64; 3]; 4] {
+    let (_, u, v) = surface.frame();
+    [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+        .map(|(s, t)| [0, 1, 2].map(|k| x[k] + h * (s * u[k] + t * v[k])))
+}
+
+/// Whether the camera at `pose` observes the point `x` on `surface`, whose
+/// patch has the half-extent `h`: every corner of the point's patch square
+/// ([`patch_corners`]) projects inside the image in front of the camera, so
+/// the whole patch is in the photograph and the observation can supply a
+/// full bitmap; the camera is on the side the surface's normal faces, no
+/// more than the obliquity cut off it, `n · (C − x) / |C − x| ≥ cos_cut`; and
+/// the segment from the camera centre to `x` does not enter the cube before
+/// it reaches `x`, less `10⁻⁹` of its length, so a point on the face the
+/// segment enters is not hidden by its own face.
 pub(super) fn observes(
     camera: &CameraIntrinsics,
     pose: &DemoPose,
-    normal: [f64; 3],
+    surface: Surface,
     x: [f64; 3],
+    h: f64,
     cos_cut: f64,
 ) -> bool {
-    let Some([u, v]) = project(camera, pose, x) else {
-        return false;
+    let inside = |corner: [f64; 3]| {
+        project(camera, pose, corner).is_some_and(|[u, v]| {
+            (0.0..f64::from(camera.width)).contains(&u)
+                && (0.0..f64::from(camera.height)).contains(&v)
+        })
     };
-    let inside =
-        (0.0..f64::from(camera.width)).contains(&u) && (0.0..f64::from(camera.height)).contains(&v);
-    if !inside {
+    if !patch_corners(surface, x, h).into_iter().all(inside) {
         return false;
     }
+    let normal = surface.normal();
     let to_camera = [0, 1, 2].map(|k| pose.centre[k] - x[k]);
     if dot(normal, to_camera) < cos_cut * dot(to_camera, to_camera).sqrt() {
         return false;
@@ -222,12 +236,20 @@ pub(super) fn sample_points(
     let mut kept = Vec::new();
     for (surface, points) in candidates {
         progress.check_cancel()?;
-        let normal = surface.normal();
         for position in points {
             let images: Vec<u32> = poses
                 .iter()
                 .enumerate()
-                .filter(|(_, pose)| observes(camera, pose, normal, position, cos_cut))
+                .filter(|(_, pose)| {
+                    observes(
+                        camera,
+                        pose,
+                        surface,
+                        position,
+                        options.patch_half_extent,
+                        cos_cut,
+                    )
+                })
                 .map(|(i, _)| i as u32)
                 .collect();
             if images.len() >= 2 {

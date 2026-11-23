@@ -125,6 +125,44 @@ fn every_keypoint_is_its_points_projection() {
 }
 
 #[test]
+fn every_observations_patch_square_lies_inside_its_image() {
+    let recon = recon();
+    let u = recon.point_set.patch_u_halfvec_xyz.as_ref().unwrap();
+    let v = recon.point_set.patch_v_halfvec_xyz.as_ref().unwrap();
+    for p in 0..recon.point_count() {
+        let x = position(recon, p);
+        let row = |a: &Array2<f32>| [0, 1, 2].map(|k| f64::from(a[[p, k]]));
+        let (u, v) = (row(u), row(v));
+        for (image, _) in observations(recon, p) {
+            for (s, t) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+                let corner = [0, 1, 2].map(|k| x[k] + s * u[k] + t * v[k]);
+                let [cu, cv] = projection(image, corner);
+                assert!(
+                    (0.0..640.0).contains(&cu) && (0.0..480.0).contains(&cv),
+                    "point {p} in image {image}: corner ({s}, {t}) at ({cu}, {cv})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn every_point_has_a_reference_observation_and_a_bitmap() {
+    let recon = recon();
+    let references = recon.point_set.reference_observations.as_ref().unwrap();
+    let bitmaps = recon.point_set.patch_bitmaps_y_x_rgba.as_ref().unwrap();
+    for (p, &reference) in references.iter().enumerate() {
+        let count = recon.point_set.observation_counts[p] as i32;
+        assert!(
+            (0..count).contains(&reference),
+            "point {p}: reference {reference} of {count} observations"
+        );
+        let row = bitmaps.index_axis(ndarray::Axis(0), p);
+        assert!(row.iter().any(|&b| b != 0), "point {p} has an empty bitmap");
+    }
+}
+
+#[test]
 fn no_observations_segment_meets_the_cube() {
     let recon = recon();
     for p in 0..recon.point_count() {
@@ -436,13 +474,6 @@ fn the_thumbnails_readings_and_bitmaps_are_those_of_the_written_files_decoded_ag
     )
     .unwrap();
     let references = loaded.point_set.reference_observations.as_ref().unwrap();
-    // One point near the lower edge of both its views has no view whose tile
-    // the reference-view rule takes, and so no bitmap.
-    let unreferenced = references.iter().filter(|&&r| r < 0).count();
-    assert!(
-        unreferenced <= 1,
-        "{unreferenced} points without a reference"
-    );
     assert_eq!(&again.reference_observations, references);
     assert!(
         Some(&again.bitmaps) == loaded.point_set.patch_bitmaps_y_x_rgba.as_deref(),
@@ -520,28 +551,29 @@ const DIGEST_AVX2: DerivedDigest = DerivedDigest {
     ],
     bitmaps: [
         [145, 118, 87],
-        [89, 73, 57],
-        [93, 78, 56],
-        [98, 82, 59],
-        [79, 65, 49],
-        [99, 83, 60],
-        [152, 129, 96],
-        [131, 110, 80],
-        [88, 73, 52],
-        [99, 82, 57],
-        [65, 87, 66],
-        [120, 74, 69],
-        [119, 76, 70],
-        [69, 79, 108],
-        [69, 83, 118],
+        [128, 107, 78],
+        [106, 88, 66],
+        [118, 97, 65],
+        [127, 108, 78],
+        [97, 80, 55],
+        [94, 79, 56],
+        [92, 74, 50],
+        [128, 108, 80],
+        [78, 104, 78],
+        [62, 86, 62],
+        [102, 68, 64],
+        [142, 91, 87],
+        [78, 93, 131],
+        [73, 87, 116],
     ],
-    references: [2, 1, 3, 3, 3, 1, 1, 0, 1, 1, 0, 0, 0, 3, 3],
+    references: [1, 3, 1, 1, 1, 2, 1, 1, 1, 0, 1, 0, 0, 3, 3],
 };
 
 /// The digest of the scalar encoder path, which every other CPU takes:
 /// computed on x86-64 Windows with `jpeg-encoder`'s `simd` feature off. Its
-/// sampled texels and references are the AVX2 path's, and its readings
-/// differ from them in the fourth significant digit.
+/// sampled references and thumbnail texels are the AVX2 path's, three of its
+/// bitmap texels differ from them by a level, and its readings differ in the
+/// fourth significant digit.
 const DIGEST_SCALAR: DerivedDigest = DerivedDigest {
     thumbnails: [
         [129, 109, 78],
@@ -569,22 +601,22 @@ const DIGEST_SCALAR: DerivedDigest = DerivedDigest {
     ],
     bitmaps: [
         [145, 118, 87],
-        [89, 73, 57],
-        [93, 78, 56],
-        [98, 82, 59],
-        [79, 65, 49],
-        [99, 83, 60],
-        [152, 129, 96],
-        [131, 110, 80],
-        [88, 73, 52],
-        [99, 82, 57],
-        [65, 87, 66],
-        [120, 74, 69],
-        [119, 76, 70],
-        [69, 79, 108],
-        [69, 83, 118],
+        [128, 107, 78],
+        [106, 88, 66],
+        [118, 97, 65],
+        [126, 107, 77],
+        [97, 80, 55],
+        [94, 79, 56],
+        [92, 74, 50],
+        [127, 109, 80],
+        [78, 103, 78],
+        [62, 86, 62],
+        [102, 68, 64],
+        [142, 92, 87],
+        [78, 93, 131],
+        [73, 87, 116],
     ],
-    references: [2, 1, 3, 3, 3, 1, 1, 0, 1, 1, 0, 0, 0, 3, 3],
+    references: [1, 3, 1, 1, 1, 2, 1, 1, 1, 0, 1, 0, 0, 3, 3],
 };
 
 /// Whether two images' readings agree as closely as decodings of one JPEG
@@ -630,13 +662,13 @@ fn the_photograph_derived_columns_match_the_values_stored_for_the_encoders_path(
         );
     }
     // The reference-view rule picks between two near-equal views of a point
-    // differently when the pixels differ by a level: of the 524 points, point
-    // 359 changes its pick between the two encoder paths, and point 382
-    // between the x86 decoder's SSSE3 path and its scalar one. Neither is
-    // sampled, so on those paths every sampled pick agrees; the one sampled
-    // point allowed to differ is for a path not measured, such as arm64's
-    // decoder. A point whose pick differs has the other view's bitmap, so its
-    // texel is not compared, and every other one's is within a level.
+    // differently when the pixels differ by a level: of the 513 points, point
+    // 348, on the top, changes its pick between the two encoder paths, and
+    // the x86 decoder's scalar path changed one other point's pick from its
+    // SSSE3 path's. Neither is sampled; the one sampled point allowed to
+    // differ is for a path not measured, such as arm64's decoder. A point
+    // whose pick differs has the other view's bitmap, so its texel is not
+    // compared, and every other one's is within a level.
     let mut picks_differ = 0;
     for n in 0..15 {
         let (a, b) = (got.bitmaps[n], want.bitmaps[n]);

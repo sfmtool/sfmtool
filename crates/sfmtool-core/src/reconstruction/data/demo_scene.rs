@@ -90,8 +90,8 @@ impl Default for DemoSceneOptions {
 
 impl DemoSceneOptions {
     /// The number of points [`DemoScene::reconstruction`] keeps under the
-    /// default options: 524.
-    pub const DEFAULT_POINT_COUNT: u32 = 524;
+    /// default options: 513.
+    pub const DEFAULT_POINT_COUNT: u32 = 513;
 
     /// The default options with both point spacings scaled by
     /// `sqrt(DEFAULT_POINT_COUNT / point_count)`, so the scene keeps about
