@@ -101,6 +101,13 @@ pub struct PatchRead {
 }
 ```
 
+**Cancellation.** The sweep reads `progress` for cancellation in front of its
+reads and in front of each peak, and its refits fit with the flag silenced
+(`Progress::silenced`). A fit that the cancel stops counts as a refit that
+failed, so the sweep reads the flag again before it answers: a sweep
+cancelled while it refit answers `FarFieldError::Cancelled`, never readings
+that lack the refit the cancel stopped.
+
 **Why each read makes its own grey.** Every read samples the photographs in
 grey, blurred by a Gaussian of one pixel. A read takes the rectangle of level 0
 its samples need, plus the blur's 4 px, through `read_source_rect` from the

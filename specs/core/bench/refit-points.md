@@ -417,7 +417,9 @@ passed to every point's fit as its `sigma_px`: one walk over the observations
 per run, and none per point. The copy and its wrapper are made after this
 stage, in front of the loop.
 
-Each point's fit is called with `&Progress::none()`. A fit opens a phase for
+Each point's fit is called with the run's `Progress` silenced
+(`Progress::silenced`), which carries the cancel flag and reports nothing. A
+fit opens a phase for
 each of its steps, and per-point phases from a parallel loop are the per-item
 timing [`../../gui/operation-progress.md`](../../gui/operation-progress.md)
 § "Non-goals" refuses. The loop's own phase reports the count and the fraction
@@ -425,9 +427,11 @@ from an atomic counter instead.
 
 ### Cancellation
 
-The flag is read in front of every stage and in front of every point's fit; a
-point whose fit has begun runs to its end, so a cancel lands within one point's
-fit per worker thread. A cancelled run returns `RefitPointsError::Cancelled` and
+The flag is read in front of every stage and in front of every point's fit,
+and by the fit itself, which stops with `FitError::Cancelled`; a point whose
+fit the cancel stopped stops the run rather than reading as a fit that failed,
+so a cancel lands within one step of a point's fit per worker thread. A
+cancelled run returns `RefitPointsError::Cancelled` and
 drops its copy before writing to it, so no partially refit value is returned:
 a reconstruction in which some points were refit and others were not, chosen by
 thread scheduling, is not an answer anybody asked for. This is

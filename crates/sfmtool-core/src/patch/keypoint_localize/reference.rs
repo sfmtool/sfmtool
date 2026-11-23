@@ -245,8 +245,9 @@ impl TrackReferences {
             ) {
                 Ok(tile) => tile,
                 Err(LocalizeError::Photograph(e)) => return Err(e),
+                Err(LocalizeError::Cancelled) => return Err(PhotographReadError::Cancelled),
                 // A tile too large to allocate leaves the reference out.
-                Err(_) => continue,
+                Err(LocalizeError::OutOfMemory { .. }) => continue,
             };
             let mut raw = vec![0f32; tile.channels * n];
             if extract_core(&tile, &support, r, 0, 0, &mut raw) {
@@ -606,7 +607,9 @@ impl TrackReferences {
         ) {
             Ok(tile) => tile,
             Err(LocalizeError::Photograph(e)) => return Err(e),
-            Err(_) => return Ok(None),
+            Err(LocalizeError::Cancelled) => return Err(PhotographReadError::Cancelled),
+            // A tile too large to allocate scores nothing.
+            Err(LocalizeError::OutOfMemory { .. }) => return Ok(None),
         };
         let mut raw = vec![0f32; tile.channels * n];
         if !extract_core(&tile, &self.support, r, 0, 0, &mut raw) {

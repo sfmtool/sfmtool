@@ -1428,7 +1428,7 @@ each in the step that moves its readers:
 | 10 | `ViewSources::fetch` in [state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs), which returns `PhotographReadError` instead of `Cancelled` (`get_many` still returns `Cancelled`, which converts), and the bench kernels (`bench::evaluate`, `evaluate_rendering_bitmap`, `score_bitmap`, `fit`, `render_bitmap_in_place`, `search_geometry`, `set_stage`, `build_track_at_pixel`, `classify`) and the patch kernels they and the reference picks share (`view_selection::select_patch_views`, `select_patch_cloud_views`, `reference_view::render_view_tile`, `read_track`, `stored_bitmap::render_reference`, `keypoint_localize`'s and `keypoint_subpixel`'s entry points, `member_coherence`'s, `observation_reading::read_cloud_observations`, `spawn::spawn_candidate_tracks`), and every kernel that calls one of them or that the bench runs, since a kernel passes its caller's pool down and its errors up: the normal kernels the bench's normal steps run (`pairwise_flow_normal`, `grown_plane_normal`, `grid_plane_normal`, `finite_difference_normal`) and `refine_normals`, which runs them; the cluster refinement's entry points (`refine_cluster_patches`, `refine_cluster_patches_borrowed`), which the bench's evaluation of a cluster-stage track runs, and the bench's member-grid reads, which move to `sample_source_member_grid`, the source form of `sample_member_grid` that step 9 added beside it; `stored_bitmap::render_patch_bitmap`, `render_patch_cloud_bitmaps` and `refit_points`. Their callers that step 11 moves keep their fetch: each wraps the whole pyramids it holds with `from_pyramid` (the cluster-patches build, until 11b, its decoded images with `from_image`), makes the region pool for its call, and reports the error as its step's failure |
 | 11 | the public `render_patch_bitmap_column` / `render_display_patch_bitmaps` in [display_bitmaps.rs](../../crates/sfmtool-core/src/patch/display_bitmaps.rs), which return `PhotographReadError` instead of `Cancelled`, and `WebExportError`, which gains `Photograph` (built, 11a); the viewer's bulk jobs (the conversion to embedded patches, *Refine all normals*, *Refit all points*, the cluster-patches build) and `sfm web-export` take the tiled photographs `get_many` answers since step 13e1, having wrapped its whole pyramids with `from_pyramid` before it, and the cluster-patches build fetches through the cache from 11b (built) |
 | 12 | `read_patch_along_ray` and `depth_layers`, which take the caller's `&RegionPool` in place of the `&GreyImages` cache, and `far_field_sweep` and `find_nearby_tracks`, which took the pool in 10a and drop the cache; `PatchReadError` and `DepthLayerError` gain `Photograph(PhotographReadError)` in place of `GreyMismatch`, and `GreyImages`, with its `get` and `GreyImageError::NoSuchImage`, is gone (built). The plan also listed `guided_matches`, `nearby_cluster_tracks`, `constellation_seeds`, `nearby_points` and `distance_range`, which read the reconstruction, its index files and the cameras but no photograph, so their signatures do not change |
-| 13 | `PhotographCache::get`, which takes the caller's `&Progress`, and `GetError`, which gains `Cancelled` (built, 13a); `PhotographCache::new`, which takes `PhotographCacheOptions` (built, 13b); the layout and tile requests, `TileError` and `TryDecode`, the four that can decode a whole photograph taking the caller's `&Progress` (built, 13c1); `display_photograph`, which gives way to `display_layout`, `display_tiles` and `display_level` (built for Image Detail, 13c2, the 3D background, 13c3, Track View, 13d1, and the Track Table and Measurement View's endpoint crops, 13d2, which deletes it); `get`, `get_many`, `peek` and `peek_state`, which answer `Arc<TiledPhotograph>`, `insert`, which takes an `ImageU8`, `PhotographReadError`, which gains `Changed`, `NotFound`, `TooLarge` and `Unreadable` with the conversions from `TileError` and `GetError`, and `from_pyramid`, which is deleted (13e: the answers' type built in 13e1, `from_image` holding its tiles in 13e2, `insert` taking an `ImageU8`, `keeps_every_tile`, which the image menu asks in place of `peek`, and `from_pyramid` deleted in 13e3, built, the errors in 13e4b); every render entry point, and the public kernels `refine_cluster_patches`, `refine_cluster_patches_borrowed`, `depth_layers`, `read_patch_along_ray`, `refine_view_against_reference`, `render_bitmap_in_place`, `constellation_seeds` and `spawn_candidate_tracks`, taking the caller's `&Progress`, with `Progress::silenced` new in `sfmtool-progress` (built, 13e4a) |
+| 13 | `PhotographCache::get`, which takes the caller's `&Progress`, and `GetError`, which gains `Cancelled` (built, 13a); `PhotographCache::new`, which takes `PhotographCacheOptions` (built, 13b); the layout and tile requests, `TileError` and `TryDecode`, the four that can decode a whole photograph taking the caller's `&Progress` (built, 13c1); `display_photograph`, which gives way to `display_layout`, `display_tiles` and `display_level` (built for Image Detail, 13c2, the 3D background, 13c3, Track View, 13d1, and the Track Table and Measurement View's endpoint crops, 13d2, which deletes it); `get`, `get_many`, `peek` and `peek_state`, which answer `Arc<TiledPhotograph>`, `insert`, which takes an `ImageU8`, `PhotographReadError`, which gains `Changed`, `NotFound`, `TooLarge` and `Unreadable` with the conversions from `TileError` and `GetError`, and `from_pyramid`, which is deleted (13e: the answers' type built in 13e1, `from_image` holding its tiles in 13e2, `insert` taking an `ImageU8`, `keeps_every_tile`, which the image menu asks in place of `peek`, and `from_pyramid` deleted in 13e3, built, the errors in 13e4b); every render entry point, and the public kernels `refine_cluster_patches`, `refine_cluster_patches_borrowed`, `depth_layers`, `read_patch_along_ray`, `refine_view_against_reference`, `render_bitmap_in_place` and `spawn_candidate_tracks`, taking the caller's `&Progress`, with `Progress::silenced` new in `sfmtool-progress` (built, 13e4a) |
 | 16 | `ImagePyramidSet.read`, the first binding whose photographs come from the cache. The bindings over the kernels above change with their kernels in steps 10 to 12, build their tiled photographs from arrays with `from_image`, and raise the error from then on, though tiles cut from arrays cannot fail |
 
 The viewer's side, in
@@ -2785,9 +2785,8 @@ in core. Step 17 turns the tier on.
           `refine_cluster_patches_borrowed`, whose `Option<&AtomicUsize>`
           count of finished clusters is renamed `done`, gain `progress`
           after it; `depth_layers`, `read_patch_along_ray`,
-          `refine_view_against_reference`, `render_bitmap_in_place`,
-          `constellation_seeds` and `spawn_candidate_tracks` gain it as their
-          last argument; and so do the crate-private kernels on the way: the
+          `refine_view_against_reference`, `render_bitmap_in_place` and
+          `spawn_candidate_tracks` gain it as their last argument; and so do the crate-private kernels on the way: the
           cluster refinement's member, template and piecewise reads, the
           sub-pixel refinement's renders, the keypoint localizer's last
           alignment, `TrackReferences`' `build`, `search` and `score`, the
@@ -2801,7 +2800,16 @@ in core. Step 17 turns the tier on.
           the localization and refinement inside `spawn_candidate_tracks`),
           it now hands it `progress.silenced()`, new in `sfmtool-progress`,
           which carries the cancel flag and reports nothing, so what a run
-          reports is unchanged. The grown plane's step keeps the `Progress`
+          reports is unchanged. A nested call the cancel stops can answer
+          as a stage that failed, so each kernel that hands one the flag
+          answers its own cancellation rather than a half-built answer:
+          `build_track_at_pixel` reads the flag after each member and before
+          it answers with a track, `far_field_sweep` before it answers,
+          `refit_points` stops on a fit that answers `Cancelled`, and
+          `TrackReferences`' `build` and `score` pass a cancelled render on
+          as `Cancelled` rather than leaving the view out.
+          `constellation_seeds` keeps its signature: it reads no photograph,
+          and its descriptor search is quick. The grown plane's step keeps the `Progress`
           in its `StepReads`, beside the failure its renders keep, so its
           objective's trait methods keep their signatures, and the view
           selection passes its `renders` `Progress`, which is the caller's
@@ -2832,7 +2840,14 @@ in core. Step 17 turns the tier on.
           [patch/spawn/tests.rs](../../crates/sfmtool-core/src/patch/spawn/tests.rs),
           a cancelled `Progress` stops `spawn_candidate_tracks` with
           `Cancelled`, its flag reaching the localization through
-          `silenced`.
+          `silenced`; and in
+          [track_at_pixel/tests.rs](../../crates/sfmtool-core/src/bench/track_at_pixel/tests.rs)
+          and [nearby/tests.rs](../../crates/sfmtool-core/src/bench/nearby/tests.rs),
+          a cancel set from another thread at 40 times spread over a whole
+          run makes `build_track_at_pixel` and `far_field_sweep` (on a
+          scene whose peak is refitted) answer either `Cancelled` or the
+          uncancelled run's answer, never a track or a sweep made of part of
+          the work.
         - **13e4b, the answers read through the cache.** `get` and `get_many`
           answer a photograph that holds its layout and the cache's handle on
           its tiles and no pixel, each tile read going through `get_tile` with

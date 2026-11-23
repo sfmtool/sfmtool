@@ -756,9 +756,7 @@ pub fn find_nearby_tracks(
                 range_seconds: 0.0,
             });
         } else {
-            let found = run_source(
-                edited, views, sources, source, image, pixel, options, progress,
-            )?;
+            let found = run_source(edited, views, sources, source, image, pixel, options)?;
             let ranged = Instant::now();
             let n = found.len();
             for c in found {
@@ -1053,7 +1051,6 @@ fn in_sightings(track: &EditableTrack) -> Option<Sightings> {
 }
 
 /// Run the matching source `source`, whose inputs are all present.
-#[allow(clippy::too_many_arguments)]
 fn run_source(
     edited: &EditedReconstruction,
     views: &[ProjectedImage<'_>],
@@ -1062,7 +1059,6 @@ fn run_source(
     image: u32,
     pixel: [f64; 2],
     options: &NearbyTrackOptions,
-    progress: &Progress<'_>,
 ) -> Result<Vec<NearbyCandidate>, NearbySourceError> {
     match source {
         NearbySource::Points => nearby_points(edited, views, image, pixel, &options.points),
@@ -1087,7 +1083,6 @@ fn run_source(
             image,
             pixel,
             &options.constellation,
-            progress,
         ),
         NearbySource::FarField => unreachable!("refused before the sources run"),
     }

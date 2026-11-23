@@ -718,6 +718,8 @@ fn refit_one(
             failure.keep(e);
             return None;
         }
+        // A fit the cancel stopped stops the run, which answers `Cancelled`.
+        Err(FitError::Cancelled) => return None,
         Err(e) => return Some((status(RefitOutcome::NotFitted(e)), None)),
     };
 

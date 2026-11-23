@@ -882,6 +882,13 @@ pub fn build_track_at_pixel(
         // A member whose reads failed answers with what it read in their
         // place, so the failure is the query's answer.
         ctx.failure.check()?;
+        // A nested call that the cancel stopped answers as a stage that
+        // failed, so a member that ran while the query was cancelled leaves a
+        // half-built answer: the query is cancelled instead, whatever the
+        // member answered.
+        progress
+            .check_cancel()
+            .map_err(|_| TrackAtPixelError::Cancelled)?;
         match result {
             Ok(track) => {
                 // The member's readings render the bitmap where the patch
@@ -910,6 +917,9 @@ pub fn build_track_at_pixel(
                         progress,
                     ) {
                         Ok(rendered) => rendered,
+                        Err(super::evaluate::EvaluateError::Cancelled) => {
+                            return Err(TrackAtPixelError::Cancelled)
+                        }
                         Err(super::evaluate::EvaluateError::Photograph(e)) => {
                             return Err(TrackAtPixelError::Photograph(e))
                         }
@@ -936,6 +946,9 @@ pub fn build_track_at_pixel(
                         Err(_) => rendered,
                     }
                 };
+                progress
+                    .check_cancel()
+                    .map_err(|_| TrackAtPixelError::Cancelled)?;
                 return Ok((
                     track,
                     TrackAtPixelReport {

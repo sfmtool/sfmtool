@@ -177,7 +177,10 @@ tiles decodes nothing and never polls it. Every kernel passes its caller's
 cancel flag down to its renders: its own `Progress`, or, for a nested call
 whose reports it does not pass on (each item of a parallel loop, or a fit
 nested in a step that reports its own phases), `Progress::silenced`, which
-carries the flag and reports nothing. A panel on the GUI thread, whose
+carries the flag and reports nothing. A nested call the cancel stops can
+answer as a stage that failed, so a kernel that hands one the flag reads it
+again before it answers, and answers its own cancellation rather than a
+half-built answer. A panel on the GUI thread, whose
 photograph holds the tiles it renders, passes `&Progress::none()`, and so do
 the Python bindings that have no cancel flag to give. A kernel
 whose renders keep their failure aside rather than return it, as the grown

@@ -80,7 +80,6 @@ pub fn constellation_seeds(
     image: u32,
     pixel: [f64; 2],
     options: &ConstellationSeedOptions,
-    progress: &Progress<'_>,             // its cancel flag reaches the search; nothing is reported
 ) -> Result<Vec<NearbyCandidate>, NearbySourceError>;
 
 pub fn triangulate_sightings(views: &[ProjectedImage<'_>], sightings: &[(u32, [f64; 2])])

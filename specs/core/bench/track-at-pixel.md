@@ -114,6 +114,13 @@ pub enum TrackAtPixelError {
 }
 ```
 
+**Cancellation.** Every read, fit and search a member makes gets the flag of
+`progress`, silenced (`Progress::silenced`), and a call the cancel stops
+answers as a stage that failed. So the cascade reads the flag in front of each
+member, after each member, whatever it answered, and before it answers with a
+track: a query cancelled while a member ran answers `Cancelled`, never a track
+or a refusal made of what the member read before the stop.
+
 **Why these inputs.** `edited` and `views` are what every photometric bench step
 takes, so a caller that already runs `evaluate` and `fit` holds them, and
 decoding and caching the photographs stay the caller's. The reconstruction is

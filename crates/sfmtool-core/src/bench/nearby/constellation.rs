@@ -118,9 +118,7 @@ const LATERAL_SKIP_PX: f64 = 1.0;
 /// no [`NearbyCandidate::id`], and a keypoint's is named by its row.
 ///
 /// `views` holds one entry per image of `edited`, and `index` the same
-/// images; `edited` is read for the image's name only. `progress`'s
-/// cancel flag reaches every read, through `Progress::silenced`, and nothing
-/// is reported through it.
+/// images; `edited` is read for the image's name only.
 pub fn constellation_seeds(
     edited: &EditedReconstruction,
     views: &[ProjectedImage<'_>],
@@ -128,7 +126,6 @@ pub fn constellation_seeds(
     image: u32,
     pixel: [f64; 2],
     options: &ConstellationSeedOptions,
-    progress: &Progress<'_>,
 ) -> Result<Vec<NearbyCandidate>, NearbySourceError> {
     check_query(
         edited.image_count(),
@@ -179,7 +176,7 @@ pub fn constellation_seeds(
             keypoints,
             index.forest,
             &search,
-            &progress.silenced(),
+            &Progress::none(),
         ) else {
             continue;
         };

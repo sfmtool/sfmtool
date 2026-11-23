@@ -605,6 +605,9 @@ pub fn far_field_sweep(
             sweep.dropped.push(reading);
         }
     }
+    // A refit that the cancel stopped counts as a failed refit, so a sweep
+    // cancelled while it refit is cancelled rather than answered without it.
+    progress.check_cancel().map_err(cancelled)?;
     // A refit whose reads failed counts as a failed refit, so the failure is
     // the sweep's answer.
     failure.check()?;
