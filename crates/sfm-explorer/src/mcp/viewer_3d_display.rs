@@ -208,6 +208,11 @@ fn description(field: Field) -> &'static str {
             "Draw the orbit target's indicator all the time (Target indicator). Off by default, \
              when it shows only while Alt is held and for a moment after the target moves."
         }
+        Field::ShowAllMeasurements => {
+            "Draw every stored measurement of every visible reconstruction (Show all \
+             measurements). Off by default, when only the selected measurement and the focused \
+             measurement item are drawn."
+        }
         Field::PointSizeLog2 => {
             "Point size as log2 of a multiplier on the automatic size: 0 is the automatic size, \
              1 twice it (the HUD's Points slider)."

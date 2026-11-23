@@ -3035,3 +3035,109 @@ fn a_measurement_is_made_from_image_detail_s_menu_and_committed() {
     assert_eq!(stored["endpoints"][0]["camera_image"], 3, "{stored}");
     assert_eq!(stored["endpoints"][1]["camera_image"], 5, "{stored}");
 }
+
+/// Where `pixel` of the photograph Image Detail shows lands in the panel's
+/// screenshot, in the listing's pixels: the panel body is the bottom
+/// `panel_size_points` of the tab, under the toolbar, and shows
+/// `visible_rect_px` of the photograph.
+fn image_detail_px(view: &Value, size: &Value, pixel: [f64; 2]) -> [f64; 2] {
+    let view = &view["image_detail_view"];
+    let n = |v: &Value| v.as_f64().expect("a number");
+    let [w, h] = [n(&size[0]), n(&size[1])];
+    let px_per_point = w / n(&view["panel_size_points"][0]);
+    let body_top = h - n(&view["panel_size_points"][1]) * px_per_point;
+    let r = &view["visible_rect_px"];
+    let (x0, y0, x1, y1) = (n(&r[0]), n(&r[1]), n(&r[2]), n(&r[3]));
+    [
+        (pixel[0] - x0) / (x1 - x0) * w,
+        body_top + (pixel[1] - y0) / (y1 - y0) * (h - body_top),
+    ]
+}
+
+/// The focused measurement item's endpoints are handles in Image Detail: a
+/// drag of endpoint A's mark moves it to the pixel under the release, as one
+/// version. Image Detail's *Show all measurements* check box turns its option
+/// on.
+#[test]
+fn an_endpoint_handle_is_dragged_in_image_detail() {
+    let (_dir, path) = measured_copy();
+    let viewer = McpViewer::launched(ui_test_lock(), None, &["--no-default-layout", &path]);
+    let label = wait_for_measurements(&viewer, 2);
+    viewer.ok(
+        "put_measurement_on_bench",
+        json!({ "reconstruction_label": label, "measurement_index": 0 }),
+    );
+    let item = viewer.ok(
+        "get_measurement",
+        json!({ "reconstruction_label": label, "item": "distance #0" }),
+    );
+    let pixel_of = |item: &Value| -> [f64; 2] {
+        let p = &item["endpoints"][0]["pixel"];
+        [p[0].as_f64().expect("x"), p[1].as_f64().expect("y")]
+    };
+    let a = pixel_of(&item);
+    viewer.ok(
+        "set_image_detail_view",
+        json!({
+            "reconstruction_label": label,
+            "camera_image": 0,
+            "pixel": a,
+            "zoom": 4.0,
+        }),
+    );
+    let size = viewer.wait_for(
+        json!({ "panel_name": "image_detail" }),
+        "Image Detail never drew photograph 0",
+        |listing| {
+            let drawn = viewer.ok("get_image_detail_view", json!({}));
+            (drawn["image_detail_view"]["camera_image"] == 0)
+                .then(|| listing["target"]["size_px"].clone())
+        },
+    );
+    let view = viewer.ok("get_image_detail_view", json!({}));
+    let [x, y] = image_detail_px(&view, &size, a);
+    let path: Vec<[f64; 2]> = (0..5)
+        .map(|i| [(x + 10.0 * f64::from(i)).round(), y.round()])
+        .collect();
+    viewer.ok(
+        "drag",
+        json!({ "panel_name": "image_detail", "path_px": path }),
+    );
+
+    let r = &view["image_detail_view"]["visible_rect_px"];
+    let photo_per_px =
+        (r[2].as_f64().unwrap() - r[0].as_f64().unwrap()) / size[0].as_f64().unwrap();
+    let moved = pixel_of(&viewer.ok(
+        "get_measurement",
+        json!({ "reconstruction_label": label, "item": "distance #0" }),
+    ));
+    assert!(
+        (moved[0] - (a[0] + 40.0 * photo_per_px)).abs() < 2.0 && (moved[1] - a[1]).abs() < 2.0,
+        "endpoint A from {a:?} to {moved:?}"
+    );
+    let history = viewer.ok(
+        "get_reconstruction_history",
+        json!({ "reconstruction_label": label }),
+    );
+    assert_eq!(
+        history
+            .to_string()
+            .matches("Moved endpoint A of distance #0 to ")
+            .count(),
+        1,
+        "one version: {history}"
+    );
+
+    let check = viewer.wait_for(
+        json!({ "panel_name": "image_detail" }),
+        "Image Detail never drew its Show all measurements check box",
+        |listing| find_widget(listing, "check_box", "Show all measurements").cloned(),
+    );
+    assert_eq!(check["toggled"], false, "{check}");
+    viewer.click(json!({ "widget": check["widget"] }));
+    let display = viewer.ok("get_image_detail_display", json!({}));
+    assert_eq!(
+        display["image_detail_display"]["show_all_measurements"], true,
+        "{display}"
+    );
+}

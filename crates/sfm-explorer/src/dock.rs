@@ -251,6 +251,10 @@ impl TabContext<'_> {
         self.viewer_3d.endpoint_target = self.state.endpoint_target();
         // Why the point menu's New Measurement from Here is refused, by node.
         self.viewer_3d.measurement_start = self.state.measurement_start();
+        // The measurements it draws, with its own Show all measurements.
+        self.viewer_3d.measurements = self
+            .state
+            .measurement_layer(self.state.show_all_measurements);
         // Fetched only after `show_hud` has handed back its `&mut
         // AppState`: the node borrows `state.scene`, and the two cannot
         // overlap.
@@ -298,6 +302,11 @@ impl TabContext<'_> {
             // deleted as one version, applied here for the same reason.
             if let Some(gesture) = self.viewer_3d.brush_gesture.take() {
                 gesture.apply(self.state);
+            }
+            // A click on a measurement's mark or line, applied here for the
+            // same reason.
+            if let Some(gesture) = self.viewer_3d.measurement_gesture.take() {
+                self.apply_measurement_gesture(ui, gesture);
             }
         } else {
             // Nothing selected is nothing on a bench: the figure would
@@ -712,6 +721,10 @@ impl TabContext<'_> {
             let endpoint_target = self.state.endpoint_target();
             let endpoint_refusal = endpoint_target.as_ref().map(|target| target.refusal_on(id));
             let bench_view_only = self.state.bench_view_only_refusal(id);
+            // The measurements it draws, with its own Show all measurements.
+            self.image_detail.measurements = self
+                .state
+                .measurement_layer(self.state.feature_display.show_all_measurements);
             // Why *Create Track Here* and *Find Nearby Tracks* are greyed on the
             // image shown, if they are.
             let create_track_refusal = selected_image
@@ -939,6 +952,10 @@ impl TabContext<'_> {
                         .pick_bench_observation(id, label, observation, false);
                 }
             }
+            // A click, a double-click or a handle drag on a drawn measurement.
+            if let Some(gesture) = detail_response.measurement_gesture {
+                self.apply_measurement_gesture(ui, gesture);
+            }
             if detail_response.has_pointer {
                 // Detail owns hover state when it has the pointer.
                 self.state.hovered_point =
@@ -1095,27 +1112,92 @@ impl TabContext<'_> {
             }
         }
         if let Some((id, side)) = response.look_through_item {
-            self.state.select_item_endpoint(id, side);
-            if let Some((image, [x, y])) = self.state.focused_item_endpoint(id, side) {
-                self.look_through_toward(ui, image, Some([x as f32, y as f32]));
-            }
+            let label = self
+                .state
+                .focused_item_label(id)
+                .unwrap_or_default()
+                .to_string();
+            self.look_through_endpoint(
+                ui,
+                crate::measurement_marks::DrawnId::Item { node: id, label },
+                side,
+            );
         }
         // Last, because ending a held camera move needs the state mutably.
         if let Some((measurement, side)) = response.look_through {
-            self.state.select_endpoint(measurement, side);
-            if let Some(row) = self.state.distance_row(measurement) {
-                let image = row.image(side) as usize;
-                let held = crate::scene::node_by_id(&self.state.scene, measurement.recon)
-                    .is_some_and(|node| image < node.recon().image_set.images.len());
-                if held {
-                    let [x, y] = row.pixel(side);
-                    self.look_through_toward(
-                        ui,
-                        ImageRef::new(measurement.recon, image),
-                        Some([x as f32, y as f32]),
-                    );
-                }
+            self.look_through_endpoint(
+                ui,
+                crate::measurement_marks::DrawnId::Stored(measurement),
+                side,
+            );
+        }
+    }
+
+    /// A double-click on an endpoint, on its block in Measurement View or on
+    /// its mark in the 3D view or Image Detail: select the endpoint as a click
+    /// does, then enter camera view through its image turned toward its pixel,
+    /// as a double-click on a Track View row does. An endpoint whose image is
+    /// past the image set selects and moves nothing more.
+    pub(crate) fn look_through_endpoint(
+        &mut self,
+        ui: &egui::Ui,
+        id: crate::measurement_marks::DrawnId,
+        side: crate::measurements::EndpointSide,
+    ) {
+        let target = match id {
+            crate::measurement_marks::DrawnId::Item { node, .. } => {
+                self.state.select_item_endpoint(node, side);
+                self.state.focused_item_endpoint(node, side)
             }
+            crate::measurement_marks::DrawnId::Stored(measurement) => {
+                self.state.select_endpoint(measurement, side);
+                self.state.distance_row(measurement).map(|row| {
+                    (
+                        ImageRef::new(measurement.recon, row.image(side) as usize),
+                        row.pixel(side),
+                    )
+                })
+            }
+        };
+        let Some((image, [x, y])) = target else {
+            return;
+        };
+        let held = crate::scene::node_by_id(&self.state.scene, image.recon)
+            .is_some_and(|node| image.index() < node.recon().image_set.images.len());
+        if held {
+            self.look_through_toward(ui, image, Some([x as f32, y as f32]));
+        }
+    }
+
+    /// Apply what a click, a double-click or a handle drag on a drawn
+    /// measurement asked for, in the 3D view or Image Detail.
+    ///
+    /// A click on a stored measurement's line selects it, and one on its mark
+    /// selects it and that endpoint, as a click on the endpoint block does; on
+    /// the focused item a mark's click selects that endpoint of the item, and
+    /// its line's asks for nothing, the item being focused already. A
+    /// double-click on a mark is [`Self::look_through_endpoint`]. A released
+    /// handle drag is the *Set an endpoint's image and pixel* step, a refusal
+    /// one failed row.
+    pub(crate) fn apply_measurement_gesture(
+        &mut self,
+        ui: &egui::Ui,
+        gesture: crate::measurement_marks::MeasurementGesture,
+    ) {
+        use crate::measurement_marks::{DrawnId, MeasurementGesture};
+        match gesture {
+            MeasurementGesture::Select(DrawnId::Stored(measurement)) => {
+                self.state.select_measurement(measurement);
+            }
+            MeasurementGesture::Select(DrawnId::Item { .. }) => {}
+            MeasurementGesture::SelectEndpoint(DrawnId::Stored(measurement), side) => {
+                self.state.select_endpoint(measurement, side);
+            }
+            MeasurementGesture::SelectEndpoint(DrawnId::Item { node, .. }, side) => {
+                self.state.select_item_endpoint(node, side);
+            }
+            MeasurementGesture::LookThrough(id, side) => self.look_through_endpoint(ui, id, side),
+            MeasurementGesture::SetEndpoint(set) => self.state.set_endpoint(&set),
         }
     }
 
@@ -1593,10 +1675,11 @@ impl TabContext<'_> {
 
 /// Draw the overlay mode toolbar at the top of the image detail panel.
 ///
-/// Two layers' controls on one row: the feature filters, which keep their
-/// show-when-a-mode-is-active rule, and the intrinsics layer's checkbox and
-/// gear, which are always shown because that layer composes with every mode
-/// including `None`.
+/// Two layers' controls in one wrapping row: the feature filters, which keep
+/// their show-when-a-mode-is-active rule, and the intrinsics layer's checkbox
+/// and gear, which are always shown because that layer composes with every
+/// mode including `None`. In a panel narrower than the row the controls go on
+/// as many rows as they need, so every one of them is drawn.
 pub(crate) fn show_overlay_toolbar(
     ui: &mut egui::Ui,
     settings: &mut FeatureDisplaySettings,
@@ -1608,18 +1691,19 @@ pub(crate) fn show_overlay_toolbar(
     )>,
     proposal: Option<&crate::camera_model_proposal::CameraModelProposal>,
 ) {
-    // One unwrapped row of controls, so in a narrow dock cell it is wider than
-    // the panel — and egui grows a `Ui`'s `max_rect` to include any widget that
-    // overflowed it (`Placer::advance_after_rects`). Left to do that, the
-    // toolbar would leave the `available_rect_before_wrap` that
-    // `ImageDetail::show` reads below reporting a panel that reaches into the
-    // *neighbouring* dock cell: the image would be laid out in the wrong
-    // rectangle, and — since that same rect decides whether a gesture is
-    // addressed to this panel (`platform::pointer_in_rect`) — a trackpad scroll
-    // over the panel next door would pan the image. So the row is drawn in a
-    // child `Ui` and only the space it was *offered* is allocated back. What
-    // overflows stays clipped by the `ScrollArea` egui_dock wraps every tab
-    // body in, exactly as it is today.
+    // The row wraps, but a group of controls kept together (the size checkbox
+    // and its two values, say) can still be wider than a very narrow panel —
+    // and egui grows a `Ui`'s `max_rect` to include any widget that overflowed
+    // it (`Placer::advance_after_rects`). Left to do that, the toolbar would
+    // leave the `available_rect_before_wrap` that `ImageDetail::show` reads
+    // below reporting a panel that reaches into the *neighbouring* dock cell:
+    // the image would be laid out in the wrong rectangle, and — since that
+    // same rect decides whether a gesture is addressed to this panel
+    // (`platform::pointer_in_rect`) — a trackpad scroll over the panel next
+    // door would pan the image. So the rows are drawn in a child `Ui`, and
+    // only the width it was *offered*, with the height the rows took, is
+    // allocated back. What overflows stays clipped by the `ScrollArea`
+    // egui_dock wraps every tab body in.
     let offered = ui.available_rect_before_wrap();
     let mut row = ui.new_child(egui::UiBuilder::new().max_rect(offered));
     show_overlay_toolbar_row(&mut row, settings, intrinsics, detail, camera, proposal);
@@ -1643,70 +1727,80 @@ fn show_overlay_toolbar_row(
     )>,
     proposal: Option<&crate::camera_model_proposal::CameraModelProposal>,
 ) {
-    ui.horizontal(|ui| {
-        // Each dropdown is `labelled_by` the label before it, which names it
-        // for a screen reader and in `get_widgets`.
-        let label = ui.label("Overlay:");
-        egui::ComboBox::from_id_salt("overlay_mode")
-            .selected_text(settings.overlay_mode.label())
-            .width(100.0)
-            .show_ui(ui, |ui| {
-                for mode in OverlayMode::ALL {
-                    ui.selectable_value(&mut settings.overlay_mode, mode, mode.label());
-                }
-            })
-            .response
-            .labelled_by(label.id);
+    ui.horizontal_wrapped(|ui| {
+        // A wrapping layout would otherwise break a checkbox's text across two
+        // rows; a control moves to the next row whole instead.
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
 
-        if settings.overlay_mode != OverlayMode::None {
-            ui.separator();
-            let label = ui.label("Max:");
-            egui::ComboBox::from_id_salt("max_features")
-                .selected_text(match settings.max_features {
-                    Some(n) => format!("{n}"),
-                    None => "All".to_string(),
-                })
-                .width(60.0)
+        // Each dropdown is `labelled_by` the label before it, which names it
+        // for a screen reader and in `get_widgets`, and is kept on its row.
+        toolbar_group(ui, "overlay", |ui| {
+            let label = ui.label("Overlay:");
+            egui::ComboBox::from_id_salt("overlay_mode")
+                .selected_text(settings.overlay_mode.label())
+                .width(100.0)
                 .show_ui(ui, |ui| {
-                    for &preset in &[100usize, 500, 1000, 5000] {
-                        ui.selectable_value(
-                            &mut settings.max_features,
-                            Some(preset),
-                            format!("{preset}"),
-                        );
+                    for mode in OverlayMode::ALL {
+                        ui.selectable_value(&mut settings.overlay_mode, mode, mode.label());
                     }
-                    ui.selectable_value(&mut settings.max_features, None, "All");
                 })
                 .response
                 .labelled_by(label.id);
+        });
+
+        if settings.overlay_mode != OverlayMode::None {
+            ui.separator();
+            toolbar_group(ui, "max_features", |ui| {
+                let label = ui.label("Max:");
+                egui::ComboBox::from_id_salt("max_features")
+                    .selected_text(match settings.max_features {
+                        Some(n) => format!("{n}"),
+                        None => "All".to_string(),
+                    })
+                    .width(60.0)
+                    .show_ui(ui, |ui| {
+                        for &preset in &[100usize, 500, 1000, 5000] {
+                            ui.selectable_value(
+                                &mut settings.max_features,
+                                Some(preset),
+                                format!("{preset}"),
+                            );
+                        }
+                        ui.selectable_value(&mut settings.max_features, None, "All");
+                    })
+                    .response
+                    .labelled_by(label.id);
+            });
 
             ui.separator();
-            let mut has_size_filter =
-                settings.min_feature_size.is_some() || settings.max_feature_size.is_some();
-            ui.checkbox(&mut has_size_filter, "Min/max size:");
-            // The checkbox's text names the pair, so each box has a name of
-            // its own that says which bound it is.
-            let min = ui.add(
-                egui::DragValue::new(&mut settings.min_feature_size_value)
-                    .range(0.0..=1000.0)
-                    .speed(0.2)
-                    .suffix("px"),
-            );
-            set_widget_name(&min, "minimum size (px)");
-            let max = ui.add(
-                egui::DragValue::new(&mut settings.max_feature_size_value)
-                    .range(0.5..=1000.0)
-                    .speed(0.5)
-                    .suffix("px"),
-            );
-            set_widget_name(&max, "maximum size (px)");
-            if has_size_filter {
-                settings.min_feature_size = Some(settings.min_feature_size_value);
-                settings.max_feature_size = Some(settings.max_feature_size_value);
-            } else {
-                settings.min_feature_size = None;
-                settings.max_feature_size = None;
-            };
+            toolbar_group(ui, "feature_size", |ui| {
+                let mut has_size_filter =
+                    settings.min_feature_size.is_some() || settings.max_feature_size.is_some();
+                ui.checkbox(&mut has_size_filter, "Min/max size:");
+                // The checkbox's text names the pair, so each box has a name of
+                // its own that says which bound it is.
+                let min = ui.add(
+                    egui::DragValue::new(&mut settings.min_feature_size_value)
+                        .range(0.0..=1000.0)
+                        .speed(0.2)
+                        .suffix("px"),
+                );
+                set_widget_name(&min, "minimum size (px)");
+                let max = ui.add(
+                    egui::DragValue::new(&mut settings.max_feature_size_value)
+                        .range(0.5..=1000.0)
+                        .speed(0.5)
+                        .suffix("px"),
+                );
+                set_widget_name(&max, "maximum size (px)");
+                if has_size_filter {
+                    settings.min_feature_size = Some(settings.min_feature_size_value);
+                    settings.max_feature_size = Some(settings.max_feature_size_value);
+                } else {
+                    settings.min_feature_size = None;
+                    settings.max_feature_size = None;
+                };
+            });
 
             if settings.overlay_mode == OverlayMode::Features {
                 ui.separator();
@@ -1714,19 +1808,65 @@ fn show_overlay_toolbar_row(
             }
         }
 
+        // Shown in every mode: the measurements are a layer of their own, as
+        // the intrinsics layer is, and compose with each.
+        ui.separator();
+        ui.checkbox(
+            &mut settings.show_all_measurements,
+            crate::viewer_3d::display::SHOW_ALL_MEASUREMENTS_LABEL,
+        )
+        .on_hover_text(
+            "Draw every measurement with an endpoint in this image. Off, only the selected \
+             measurement and the one being edited are drawn.",
+        );
+
         // The layer's own report, built here so that the popup's footer and the
         // on-image legend read one computation rather than two.
         let grid_cols = intrinsics.grid_cols;
         let (layer, change) = detail.popup_layers(camera, proposal, grid_cols);
-        crate::image_detail::show_intrinsics_controls(
-            ui,
-            intrinsics,
-            camera.map(|(_, camera)| camera),
-            layer,
-            change,
-        );
+        ui.separator();
+        toolbar_group(ui, "intrinsics", |ui| {
+            crate::image_detail::show_intrinsics_controls(
+                ui,
+                intrinsics,
+                camera.map(|(_, camera)| camera),
+                layer,
+                change,
+            );
+        });
     });
     ui.separator();
+}
+
+/// Draw `add_contents` left to right as one piece of the wrapping toolbar row,
+/// so that it moves to the next row whole when it does not fit on this one.
+///
+/// egui decides whether to wrap from the size a widget asks for *before* it is
+/// drawn, and a nested layout does not know its own width until its contents
+/// are drawn. So the group asks for the width it measured on the last pass,
+/// kept under `name` in egui's memory, and when that width changes it asks
+/// egui to discard the pass, so that the next pass lays the row out with the
+/// new width.
+fn toolbar_group<R>(
+    ui: &mut egui::Ui,
+    name: &str,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let id = ui.id().with(("toolbar_group", name));
+    let known = ui.data(|data| data.get_temp::<f32>(id));
+    let desired = egui::vec2(known.unwrap_or(0.0), ui.spacing().interact_size.y);
+    let group = ui.allocate_ui_with_layout(
+        desired,
+        egui::Layout::left_to_right(egui::Align::Center),
+        add_contents,
+    );
+    let width = group.response.rect.width();
+    if known.is_none_or(|known| (known - width).abs() > 0.5) {
+        ui.data_mut(|data| data.insert_temp(id, width));
+        ui.ctx()
+            .request_discard("an Image Detail toolbar group changed width");
+    }
+    group.inner
 }
 
 /// Return the image indices in the selected point's track, or empty if none.

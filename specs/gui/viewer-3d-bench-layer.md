@@ -56,7 +56,10 @@ press.
 cluster-stage item has no shared geometry behind it and draws nothing, as does a
 track nothing has given a patch. Items that are not focused draw nothing, which
 is what Image Detail does too: the bench holds several and both panels show the
-one being worked on.
+one being worked on. A focused measurement item is drawn by the measurements'
+own marks and line, in the same violet, as a CPU overlay rather than by this
+pass, and has no handle in this view
+([`measurement-view.md`](measurement-view.md) § "Drawing measurements").
 
 **While a handle is held, what is drawn is the preview.** The figure is rebuilt
 from the track the release would push, through the same call the release goes

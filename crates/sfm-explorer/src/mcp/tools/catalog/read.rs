@@ -495,8 +495,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "get_image_detail_display",
             description: "What the Image Detail panel draws over its photograph: the feature \
-                          overlay mode, the three filters on the features, and the intrinsics \
-                          layer with its own sub-toggles, as one document. These are scene-level \
+                          overlay mode, the three filters on the features, show_all_measurements \
+                          (whether every measurement with an endpoint in the image is drawn, or \
+                          only the selected one and the focused item), and the intrinsics layer \
+                          with its own sub-toggles, as one document. These are scene-level \
                           controls rather than properties of any image, so they decide what a \
                           screenshot of the image_detail panel shows whichever camera image is \
                           selected.",
@@ -525,7 +527,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             description: "The 3D viewport's display controls, the checkboxes and sliders of its \
                           Display HUD, as one flat document named by the fields they are stored \
                           in: the layer toggles (show_points, show_camera_images, show_grid, \
-                          show_points_at_infinity, show_target_indicator), the \
+                          show_points_at_infinity, show_target_indicator, \
+                          show_all_measurements), the \
                           sizes (point_size_log2, infinity_point_px, length_scale), the patch \
                           sliders, maintain_z_up, the Advanced sliders, the Debug overlays \
                           (show_controls_help, show_fps, show_mcp_status_line) and tool, the \

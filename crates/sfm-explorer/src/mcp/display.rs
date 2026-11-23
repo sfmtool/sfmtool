@@ -116,6 +116,9 @@ fn apply_feature(feature: &mut FeatureDisplaySettings, change: &ImageDetailDispl
     if let Some(tracked_only) = change.tracked_only {
         feature.tracked_only = tracked_only;
     }
+    if let Some(show_all) = change.show_all_measurements {
+        feature.show_all_measurements = show_all;
+    }
 }
 
 fn apply_intrinsics(intrinsics: &mut IntrinsicsDisplaySettings, change: &IntrinsicsChange) {
@@ -159,6 +162,7 @@ fn document(state: &AppState) -> Value {
             "max_features": feature.max_features,
             "feature_size_px": feature_size_px(feature),
             "tracked_only": feature.tracked_only,
+            "show_all_measurements": feature.show_all_measurements,
             "intrinsics": {
                 "enabled": intrinsics.enabled,
                 "axes": intrinsics.axes,
@@ -217,6 +221,7 @@ pub(super) fn parse_change(args: &Args) -> Result<ImageDetailDisplayChange, Tool
         },
         feature_size_px: parse_feature_size(args)?,
         tracked_only: args.optional_bool("tracked_only")?,
+        show_all_measurements: args.optional_bool("show_all_measurements")?,
         intrinsics: parse_intrinsics(args)?,
     };
     if change == ImageDetailDisplayChange::default() {

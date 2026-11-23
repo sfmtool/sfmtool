@@ -25,8 +25,11 @@ menu set an endpoint too, to a pixel of the photograph shown or to a point's
 reference pixel. Each is a bench step. A new measurement starts from the same
 two menus, with its first endpoint at the pixel or point they were opened on,
 and is finished with the same steps. Deleting a stored measurement is a direct
-edit from its row's menu. Drawing measurements in the 3D view and Image Detail
-is proposed in [drafts/measurement-view.md](../drafts/measurement-view.md).
+edit from its row's menu. The 3D view and Image Detail draw the selected
+measurement and the item being edited, every measurement where a display option
+asks for it, and an arrow to the selected one when it is off screen; the item's
+marks in Image Detail are handles that set an endpoint's pixel
+(§ "Drawing measurements").
 
 Related specs: [track-view.md](track-view.md) (the panel this one is modelled
 on, and the crops it reuses), [bench.md](bench.md) § "Measurement items" (the
@@ -48,9 +51,16 @@ panel),
 [bench/measurement.rs](../../crates/sfm-explorer/src/bench/measurement.rs)
 (putting a measurement on the bench, the commit and the delete),
 [scene_graph/measurements.rs](../../crates/sfm-explorer/src/scene_graph/measurements.rs)
-(the Scene tree group) and
+(the Scene tree group),
 [mcp/measurements.rs](../../crates/sfm-explorer/src/mcp/measurements.rs) (the
-tools).
+tools), and, for the drawing,
+[measurement_marks.rs](../../crates/sfm-explorer/src/measurement_marks.rs)
+(which measurements are drawn, the marks and lines on screen, their hit test,
+the press and the indicator, shared by both views),
+[viewer_3d/measurements.rs](../../crates/sfm-explorer/src/viewer_3d/measurements.rs)
+(where the 3D view puts them) and
+[image_detail/measurements.rs](../../crates/sfm-explorer/src/image_detail/measurements.rs)
+(where Image Detail puts them, and the handle drag).
 
 ```rust
 // Core's, re-exported: `title()` is `Distance`, `name()` is `distance`.
@@ -166,6 +176,39 @@ impl MeasurementStart {
     pub(crate) fn at_point(&self, scene: &[SceneNode], point: PointRef)
         -> Result<ReferencePixel, String>;
 }
+
+// measurement_marks.rs
+/// A stored row, or the focused item by its label on its node's bench.
+pub(crate) enum DrawnId { Stored(MeasurementRef), Item { node: ReconId, label: String } }
+/// What one view draws this frame, in draw order: the others, the selected
+/// measurement, the focused item.
+pub(crate) struct MeasurementLayer { pub(crate) drawn: Vec<DrawnMeasurement> }
+impl AppState {
+    /// With that view's Show all measurements.
+    pub(crate) fn measurement_layer(&self, show_all: bool) -> MeasurementLayer;
+}
+/// What a click, a double-click or a handle drag asks of the app.
+pub(crate) enum MeasurementGesture {
+    Select(DrawnId),
+    SelectEndpoint(DrawnId, EndpointSide),
+    LookThrough(DrawnId, EndpointSide),
+    SetEndpoint(EndpointSet),
+}
+```
+
+The dock builds each view's layer every frame and hands it to the view
+(`Viewer3D::measurements`, `ImageDetail::measurements`), as it hands the 3D
+view its bench figure, because the views are handed `&mut` into the state
+further down the same call. A view reports a gesture back and the dock applies
+it (`TabContext::apply_measurement_gesture`), through the same calls an
+endpoint block's click and double-click make, so a mark and a block cannot
+disagree (G8):
+
+```rust
+// A click on endpoint B's mark of distance #2, in either view.
+MeasurementGesture::SelectEndpoint(DrawnId::Stored(MeasurementRef::distance(id, 2)),
+                                   EndpointSide::B)
+// applied as state.select_endpoint(MeasurementRef::distance(id, 2), EndpointSide::B)
 ```
 
 The reference pixel is in
@@ -735,9 +778,12 @@ The focused item's readings are computed from the item, not read from the
 stored row: each placed endpoint is resolved against the version at the cursor
 with the resolver's default options (`measurements::item_reading`, which calls
 core's `resolve_distance_endpoints`), and the result block and the median line
-are computed from those. The panel keeps them against the item's `Arc` and the
-version's document serial, so a step on the item, or an edit of the
-reconstruction under it, reads them again on the next frame. The median line
+are computed from those. The node keeps them against the item's `Arc` and the
+version's document serial (`SceneNode::item_reading`, beside
+`SceneNode::measurement_readings`), so a step on the item, or an edit of the
+reconstruction under it, reads them again on the next frame, and the panel and
+every view drawing the focused item (§ "Drawing measurements") read one
+resolution between them. The median line
 compares the item with the stored measurements other than its origin, so a
 person sees whether a change brings it into line before committing it.
 
@@ -833,6 +879,103 @@ follows through the version graph. An item whose origin was the deleted row
 stays on the bench with no row to replace, so committing it adds the
 measurement back as a new row.
 
+## Drawing measurements
+
+**Which measurements are drawn.** The selected measurement, where its
+reconstruction is visible, and the focused measurement item. A **Show all
+measurements** option, off by default, draws every stored measurement of every
+visible reconstruction as well, so a reconstruction with many measurements
+stays readable, and the person who wants to see them all together asks for it.
+Each view has its own: a checkbox in the 3D view's HUD, in its Layers section,
+and one in Image Detail's toolbar ([viewport-hud.md](viewport-hud.md),
+[multi-panel-image-browser.md](multi-panel-image-browser.md) § "Image Detail").
+With it on, the selected measurement is drawn wider (3.5 points against 2) and
+the others at 55% opacity, so the selected one is the brighter. A hidden
+reconstruction draws none of its stored measurements; the focused item is the
+bench's layer and is drawn whatever the node's eye says, as the bench layers
+draw a focused track.
+
+A stored measurement is drawn in its node's tint, or a light grey (`STORED_RGB`)
+on a node drawn in its own colours. **The focused item is drawn as the bench's
+layer**, in the bench's `in` violet and the bench layers' 2.5-point stroke, so a
+person tells the measurement being edited from the stored one it came from when
+both are drawn: with an item focused its origin is the selected measurement,
+and the item is drawn over it. The selected endpoint's mark is drawn 1.6 times
+larger, as the 3D view draws the selected observation's circle larger: on the
+item while one is focused, and on the selected measurement otherwise. Every mark
+and line has a dark halo so it reads over a bright photograph or cloud.
+
+**In the 3D view** a drawn measurement puts a mark, a ring with a dot at its
+centre, at each endpoint that resolves to a finite position, and a line between
+the two where both do. The positions are the resolved ones put through the
+node's display transform, as its points are, projected through the viewport
+camera, and drawn over the cloud rather than hidden by it, since a measurement
+is something a person looks for. An endpoint at infinity or refused draws
+nothing, and the other endpoint still draws its mark; a finite endpoint behind
+the eye draws no mark, and a line with one end behind it is clipped at the near
+plane.
+
+**In Image Detail** a drawn measurement with an endpoint in the image shown
+puts a mark at that endpoint's pixel, and a line between the two where both are
+in that image. The mark is drawn whether or not the endpoint resolves, since the
+pixel is the stored measurement; a refused endpoint's mark is in the warning
+colour. A pixel that is not finite, which the file reader refuses but an
+in-memory reconstruction can hold, draws no mark and so no line. An item with
+one endpoint placed, such as a new one, draws that mark alone.
+
+**Hover and click.** Hovering a mark or a line in either view shows the
+measurement's row text beside the pointer, the Scene tree row's for a stored
+measurement and, for the item, its label with the reading, or with where each
+endpoint is while one is not placed or no stated distance is given; the pointer
+takes the pointing hand. A click on a stored measurement's line selects the
+measurement (G1); a click on a mark selects the measurement and that endpoint,
+as a click on the endpoint block does (§ "Endpoint gestures"), and a
+double-click on it does what a double-click on the block does, camera view
+through the endpoint's image turned toward its pixel. On the focused item a
+mark's click selects that endpoint of the item, and a click on its line asks
+for nothing, the item being focused already. **A mark, a line and the indicator
+own their press** (G7): the press is taken when it lands
+(`measurement_marks::follow`), so the 3D view neither orbits nor picks a point
+under it, and Image Detail neither pans nor selects a feature's point under it.
+Only an unmodified primary press is taken; the bench figure's handles and the
+eraser brush, which are drawn above, take a press first. The reach is 9 points
+from a mark and 6 from a line, marks tried before lines and the topmost
+measurement first.
+
+**The handles.** In Image Detail the focused item's endpoint marks are handles:
+the pointer takes the open hand over one and the closed hand while it is held.
+Dragging one draws the mark at the pixel under the pointer, and the release is
+the *Set an endpoint's image and pixel* step
+(§ "Setting an endpoint by hand") with the image shown and that pixel, held
+inside the image, so a drag past an edge lands on the edge: one version when
+the drag ends, nothing while the button is down, and Escape abandons it. A
+press that moves less than 3 points is a click. The item's marks are not
+handles where a step on it would be refused, on a view-only bench or while a
+background task holds the node (`AppState::bench_edit_refusal`), and a drag
+there asks for nothing. The 3D view has no handles: an endpoint's 3D position
+follows from its image and pixel and is never set.
+
+**A selected measurement off screen.** When no part of the selected
+measurement's marks and line is inside the view, the view draws an indicator 24
+points inside its edge: an arrow pointing toward the measurement, with its kind
+and index (`Distance #2`) behind it. A click on either is the indicator's.
+
+- In the 3D view the arrow points toward the projection of the midpoint of the
+  two finite endpoints, or of the one finite endpoint. The direction on screen
+  is the point's view-space `(x, −y)`: in front of the eye that is the
+  direction of its projection from the view's centre, and behind it, where a
+  projection lands on the other side, it is that projection reflected through
+  the centre, so the arrow points the way to turn. A measurement with no finite
+  endpoint has none. A click frames the measurement with
+  `Viewer3D::frame_keeping_orientation`, as the double-click on its row does.
+- In Image Detail, when an endpoint is in the image shown but outside the part
+  the panel shows, the arrow points to that pixel, or to the midpoint of the
+  two where both are in the image, and a click centres the panel on it at the
+  current zoom (`Look::Pixel` with no zoom).
+
+The indicator follows the selection only. With *Show all measurements* on, the
+others are clipped as any scene geometry is.
+
 ## MCP
 
 The panel's content is reachable over MCP ([mcp-server.md](mcp-server.md)):
@@ -874,11 +1017,19 @@ The panel's content is reachable over MCP ([mcp-server.md](mcp-server.md)):
   `rename_bench_item` and `discard_bench_item` work on a measurement item as on
   a track.
 - `screenshot` accepts `measurement_view` as a `panel_name`.
+- `get_viewer_3d_display` and `set_viewer_3d_display` carry the 3D view's
+  *Show all measurements* as `show_all_measurements`, and
+  `get_image_detail_display` and `set_image_detail_display` carry Image
+  Detail's under the same name. No tool sets an endpoint's 3D position.
 
 ## Artificial measurements
 
 No checked-in reconstruction has measurements, and the panel cannot be judged
-or tested without them. They are made, never checked in, in three ways.
+or tested without them. They are made, never checked in, in three ways. The
+first real ones will be `dino_dog_toy`'s four tape-measured distances, entered
+by hand with the panel; when they are checked in the file keeps its name, since
+the `_vNN` suffix versions the reconstruction's cameras, poses, points, tracks
+and patch frames, and adding measurements changes none of those.
 
 **In Rust tests** (`sfm-explorer` lib tests, headless): a small synthetic
 reconstruction built in the test
@@ -1074,6 +1225,42 @@ at-infinity case is covered by the Rust tests.
   raising Measurement View on an item whose block for B says how to place it,
   *Set Endpoint B Here* on another photograph, a distance typed into its field
   and Enter, and *Commit* adding a third row.
+- **Drawing** (`measurement_marks/tests.rs`): with the option off only the
+  selected measurement, with it on every one, the selected one wider and the
+  others dimmer; a hidden reconstruction none either way, and the focused item
+  whatever the eye; each endpoint's place, finite through the display
+  transform, at infinity or refused; the item in the bench's colour with its
+  one endpoint, its marks handles and the selected endpoint's larger; a tinted
+  node's tint; the segment test, the indicator's place, the hit test taking
+  marks before lines, and what a click on each target asks for.
+  (`viewer_3d/measurements/tests.rs`, whole headless frames): the marks and the
+  line where the camera projects the endpoints through a display transform; a
+  refused endpoint and one at infinity drawing nothing; the hover text and
+  cursor on a mark and on the line; a click on a mark, on the line and a
+  double-click asking for their gestures and no pick (G7), while the same click
+  off them picks; a drag from a mark orbiting nothing while one off it orbits;
+  the indicator absent while the endpoints or only the line are in view, and
+  pointing right, left, down, up and, for a midpoint behind the eye, the way to
+  turn; a click on it framing both endpoints inside the view with the
+  orientation kept; the option and a hidden node; a line with one end behind
+  the eye clipped, the end in front keeping its mark. (`image_detail/measurements/tests.rs`):
+  the marks at the endpoint pixels, a line only where both are in the image,
+  the refused endpoint's warning colour; the hover, a click selecting no
+  feature's point under the mark while the same click with nothing drawn does,
+  a double-click and a click on the line; a handle drag asking once for the
+  pixel under the release, which the step makes one version, without a pan;
+  Escape abandoning a held handle with no step; a measurement with
+  mismatched columns and a pixel that is not a number drawn without a panic,
+  that pixel with no mark and no line;
+  no handle on a view-only bench; the indicator pointing to the endpoints
+  outside the view and a click centring them at the same zoom.
+  (`mcp/tests/display.rs`): each view's `show_all_measurements` over its own
+  tool, recording its own row. (`measurement_view/tests.rs`): the panel and the
+  drawing reading one cached resolution of the focused item, and a step on it
+  one more.
+- **`ui_basic`, drawing**: on the measured copy, endpoint A of the focused item
+  dragged in Image Detail moves to the pixel under the release in one version,
+  and Image Detail's *Show all measurements* checkbox turns its option on.
 - **The script** (`tests/test_add_artificial_measurements.py`): every case
   with its known scale read back through the resolver, the copy without a
   unit, the recorded workspace, and a path under `test-data/` refused with
@@ -1081,7 +1268,5 @@ at-infinity case is covered by the Rust tests.
 
 ## Non-goals
 
-Drawing measurements in the 3D view and Image Detail is proposed in
-[drafts/measurement-view.md](../drafts/measurement-view.md). An endpoint's 3D
-position, point and texel are never set directly: they always follow from its
-image and pixel.
+An endpoint's 3D position, point and texel are never set directly: they always
+follow from its image and pixel, so the 3D view draws no handle.

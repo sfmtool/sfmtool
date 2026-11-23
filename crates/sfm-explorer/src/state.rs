@@ -259,6 +259,11 @@ pub(crate) struct FeatureDisplaySettings {
     pub(crate) max_feature_size_value: f32,
     /// If true, only show features that have an associated 3D point.
     pub(crate) tracked_only: bool,
+    /// Whether the panel draws every stored measurement of the reconstruction
+    /// with an endpoint in the image shown, rather than only the selected one
+    /// and the focused measurement item: the toolbar's **Show all
+    /// measurements** checkbox. Off at launch.
+    pub(crate) show_all_measurements: bool,
 }
 
 impl Default for FeatureDisplaySettings {
@@ -271,6 +276,7 @@ impl Default for FeatureDisplaySettings {
             min_feature_size_value: 0.0,
             max_feature_size_value: 50.0,
             tracked_only: true,
+            show_all_measurements: false,
         }
     }
 }
@@ -356,6 +362,18 @@ pub(crate) fn record_image_detail_changes(
             on_off("Tracked only", now.tracked_only),
         );
     }
+    // The 3D view's HUD has a checkbox of the same name, so this one's row
+    // says which view it is and folds under a run of its own.
+    if was.show_all_measurements != now.show_all_measurements {
+        log.record_run(
+            Kind::Display,
+            IMAGE_DETAIL_SHOW_ALL_MEASUREMENTS,
+            on_off(
+                IMAGE_DETAIL_SHOW_ALL_MEASUREMENTS,
+                now.show_all_measurements,
+            ),
+        );
+    }
 
     let (was, now) = (&before.intrinsics, &after.intrinsics);
     if was.enabled != now.enabled {
@@ -415,6 +433,10 @@ pub(crate) fn record_image_detail_changes(
         );
     }
 }
+
+/// What Image Detail's *Show all measurements* records as, and the run it
+/// folds under: the 3D view's checkbox of the same name records as its label.
+pub(crate) const IMAGE_DETAIL_SHOW_ALL_MEASUREMENTS: &str = "Show all measurements in Image Detail";
 
 /// `Tracked only on`, `Intrinsics rings off` — the shape every HUD checkbox
 /// records under [`Kind::Display`].
@@ -644,6 +666,12 @@ pub(crate) struct AppState {
     /// only while Alt is held and for a moment after the target moves: the
     /// HUD's **Target indicator** checkbox. Off at launch.
     pub(crate) show_target_indicator: bool,
+
+    /// Whether the 3D view draws every stored measurement of every visible
+    /// reconstruction, rather than only the selected one and the focused
+    /// measurement item: the HUD's **Show all measurements** checkbox. Off at
+    /// launch. Image Detail has its own, in [`FeatureDisplaySettings`].
+    pub(crate) show_all_measurements: bool,
 
     /// On-screen splat radius (pixels) for points at infinity. A direction has
     /// no distance, so infinity points are sized in pixels rather than world
@@ -1058,6 +1086,7 @@ impl AppState {
             point_size_log2: 0.0,
             show_points_at_infinity: true,
             show_target_indicator: false,
+            show_all_measurements: false,
             infinity_point_px: 3.0,
             show_controls_help: true,
             show_fps: true,

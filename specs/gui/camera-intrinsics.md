@@ -584,7 +584,9 @@ layer adds one checkbox and, behind it, a settings button:
 ```
 
 The toolbar row is already the widest thing in the panel, and adding four more
-controls inline would wrap it at any reasonable panel width. So the layer's
+controls inline would push it onto another row at any reasonable panel width
+([multi-panel-image-browser.md](multi-panel-image-browser.md#feature-filtering)
+says how the row wraps). So the layer's
 sub-toggles live in a popup on the `⚙` button, named `⚙ Intrinsics settings`
 in `get_widgets`, which is enabled only while the checkbox is ticked:
 

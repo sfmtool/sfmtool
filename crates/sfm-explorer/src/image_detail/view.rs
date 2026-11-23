@@ -149,7 +149,6 @@ pub(crate) enum Look {
         pixel: [f32; 2],
     },
     /// Put `pixel` at the centre of the panel, at `zoom` where one is named.
-    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     Pixel {
         /// Where, in the image's own pixels.
         pixel: [f32; 2],

@@ -971,6 +971,28 @@ the focused item and Track View's *Lock*, which both this layer and the menu's
 two bench entries read, so what is offered and what is drawn cannot disagree
 about which track is focused or what its dot does.
 
+#### The measurements
+
+The selected measurement, the focused measurement item and, with the toolbar's
+*Show all measurements* on, every stored measurement of the reconstruction are
+drawn over everything, after the bench layer: a mark at each endpoint pixel in
+the image shown, whether or not the endpoint resolves, a refused one in the
+warning colour, and a line where both endpoints are in that image. The focused
+item is drawn in the bench's violet, and its marks are **handles**: a drag of
+one sets that endpoint to the image shown and the pixel under the release, held
+inside the image, as one bench step when the button comes up, and draws the
+mark under the pointer while it is held. A view-only or busy bench offers no
+handle. Hovering a mark or a line shows the measurement's row text; a click on
+a mark selects the measurement and that endpoint, a double-click looks through
+it, and a click on a stored measurement's line selects it. A press on a mark or
+a line is theirs (G7): it pans nothing and selects no feature's point under
+it. When the selected measurement has an endpoint in the image but no part of
+it is inside the panel, an arrow at the panel's edge points to that pixel,
+labelled `Distance #2`, and a click on it centres the panel on the pixel at the
+current zoom. See [measurement-view.md](measurement-view.md) § "Drawing
+measurements"; the code is
+[image_detail/measurements.rs](../../crates/sfm-explorer/src/image_detail/measurements.rs).
+
 #### Feature Filtering
 
 Extracted `.sift` files list features by decreasing size (largest first); a derived file,
@@ -1001,11 +1023,16 @@ struct FeatureDisplaySettings {
     /// If true, only show features that participate in a track (have an
     /// associated 3D point). Equivalent to CLI `--filter-sfm`.
     tracked_only: bool,
+    /// The panel's *Show all measurements*: draw every stored measurement
+    /// with an endpoint in the image shown, not only the selected one and the
+    /// focused measurement item.
+    show_all_measurements: bool,
 }
 ```
 
 **Defaults**: `overlay_mode: Features`, `max_features: None` (all), `tracked_only: true`,
-size filters disabled with persisted slider values (min: 0.0, max: 50.0).
+size filters disabled with persisted slider values (min: 0.0, max: 50.0),
+`show_all_measurements: false`.
 
 These settings, together with the intrinsics layer's, are also readable and
 writable over MCP as one `image_detail_display` document
@@ -1035,8 +1062,19 @@ requires reading affine shapes to check, but since features are sorted, only
 mode selector:
 
 ```
-[Overlay: Features ▾]  [Max: All ▾]  [☐ Min/max size: 0.0  50.0]  [☑ Tracked only]
+[Overlay: Features ▾]  [Max: All ▾]  [☐ Min/max size: 0.0  50.0]  [☑ Tracked only]  [☐ Show all measurements]  [☐ Intrinsics] [⚙]
 ```
+
+The row wraps: in a panel narrower than it, the controls go on as many rows as
+they need, so every control is drawn and reachable at any panel width that
+fits the widest group below. A control moves to the next row whole, and a
+group of controls moves together: a dropdown with the label that names it
+(`Overlay:`, `Max:`), the *Min/max size* checkbox with its two values, and the
+*Intrinsics* checkbox with its gear. egui decides whether to wrap from the size
+an item asks for before it is drawn, so each group asks for the width it
+measured on the previous pass and discards the pass when that width changes
+(`toolbar_group` in [`dock.rs`](../../crates/sfm-explorer/src/dock.rs)). The
+image area starts below the last row.
 
 - **Max features**: dropdown with common presets (100, 500, 1000, 5000, All). Changing
   this may trigger a re-read of SIFT data if the new value is larger than what was
@@ -1051,6 +1089,12 @@ mode selector:
   drawn. In Features mode, untracked features are hidden. In heatmap modes, untracked
   features are always hidden (they have no metric). This is independent of the size
   filters — applied after the size-based prefix truncation.
+- **Show all measurements**: checkbox, shown in every mode, since the
+  measurements are a layer of their own. Off, the panel draws the selected
+  measurement and the focused measurement item; on, every stored measurement of
+  the reconstruction with an endpoint in the image shown as well (§ "The
+  measurements"). It records as `Show all measurements in Image Detail on`, so
+  its row is told from the 3D view's checkbox of the same name.
 
 #### Data Loading
 
@@ -1398,11 +1442,11 @@ made in ([panel-layout.md](panel-layout.md) § "A raise from a gesture").
 ### The toolbar may not widen the panel
 
 egui grows a `Ui`'s `max_rect` to include any widget that overflowed it
-(`Placer::advance_after_rects`). The overlay toolbar is a single unwrapped row
-of controls — roughly 730 px with a feature mode active — so in a dock cell
-narrower than that it overflows, and the `available_rect_before_wrap()` the
-panel reads below it then describes a rectangle reaching into the
-**neighbouring** dock cell. A 400 px cell reported 726 px.
+(`Placer::advance_after_rects`). The overlay toolbar wraps, but a group of
+controls it keeps together, such as the *Min/max size* checkbox with its two
+values, can be wider than a very narrow dock cell. In such a cell it overflows,
+and the `available_rect_before_wrap()` the panel reads below it then describes
+a rectangle reaching into the **neighbouring** dock cell.
 
 That rect is load-bearing twice over: the image is fitted and centred in it, and
 `platform::pointer_in_rect` tests it to decide whether a trackpad gesture is
@@ -1413,8 +1457,9 @@ whatever sits to the right — scrolling the Camera Intrinsics panel beside it
 panned the image, for exactly as far into that panel as the overhang reached,
 which is why widening the Image Detail panel made the symptom disappear.
 
-So `show_overlay_toolbar` draws its row into a child `Ui` and allocates back only
-the space it was *offered*, leaving the parent's `max_rect` alone. What does not
+So `show_overlay_toolbar` draws its rows into a child `Ui` and allocates back
+only the width it was *offered*, with the height the rows took, leaving the
+parent's `max_rect` alone. What does not
 fit stays clipped by the `ScrollArea` egui_dock wraps every tab body in. The
 panel is the only one that reads its rect *after* drawing something — every other
 tab takes `available_rect_before_wrap()` as its first act, which is pristine by

@@ -193,6 +193,7 @@ fn get_image_detail_display_returns_the_defaults() {
             "max_features": Value::Null,
             "feature_size_px": Value::Null,
             "tracked_only": true,
+            "show_all_measurements": false,
             "intrinsics": {
                 "enabled": true,
                 "axes": true,
@@ -387,6 +388,7 @@ fn set_image_detail_display_refuses_a_value_it_cannot_show() {
             "max_features": Value::Null,
             "feature_size_px": Value::Null,
             "tracked_only": true,
+            "show_all_measurements": false,
             "intrinsics": {
                 "enabled": true,
                 "axes": true,
@@ -599,6 +601,7 @@ fn get_viewer_3d_display_returns_the_defaults() {
     assert_eq!(document["show_points"], true);
     assert_eq!(document["show_grid"], true);
     assert_eq!(document["show_target_indicator"], false);
+    assert_eq!(document["show_all_measurements"], false);
     assert_eq!(document["point_size_log2"], 0.0);
     assert_eq!(document["infinity_point_px"], 3.0);
     assert_eq!(document["edl_line_thickness"], 2.4);
@@ -1005,6 +1008,7 @@ fn every_viewer_3d_display_field_records_the_hud_s_words() {
             "Grid off",
             "Points at ∞ off",
             "Target indicator off",
+            "Show all measurements off",
             "Point size 1.0",
             "∞ point size 1.0 px",
             "Scene scale 1.000",
@@ -1073,4 +1077,51 @@ fn get_viewer_3d_display_is_a_query() {
     assert_eq!(entries.len(), 1, "{entries:?}");
     assert_eq!(entries[0].kind, Kind::Query("get_viewer_3d_display"));
     assert_eq!(entries[0].text, "get_viewer_3d_display");
+}
+
+/// Each view's *Show all measurements* goes over its own display tool and
+/// back, recording the checkbox's row, and the two are separate options.
+#[test]
+fn show_all_measurements_is_an_option_of_each_view() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let reply = set_viewer_3d(
+        &mut state,
+        &mut viewer,
+        json!({ "show_all_measurements": true }),
+    );
+    assert_eq!(reply["show_all_measurements"], true);
+    assert!(state.show_all_measurements);
+    assert!(
+        !state.feature_display.show_all_measurements,
+        "Image Detail's option is its own"
+    );
+    let reply = set_display(
+        &mut state,
+        &mut viewer,
+        json!({ "show_all_measurements": true }),
+    );
+    assert_eq!(reply["show_all_measurements"], true);
+    assert!(state.feature_display.show_all_measurements);
+    let reply = set_display(
+        &mut state,
+        &mut viewer,
+        json!({ "show_all_measurements": false }),
+    );
+    assert_eq!(reply["show_all_measurements"], false);
+    assert!(state.show_all_measurements, "the 3D view's is left alone");
+    let texts: Vec<String> = state
+        .action_log
+        .entries()
+        .map(|entry| entry.text.clone())
+        .collect();
+    for expected in [
+        "Show all measurements on",
+        // The Image Detail on and off fold into one row of their own run.
+        "Show all measurements in Image Detail off",
+    ] {
+        assert!(
+            texts.iter().any(|t| t == expected),
+            "{expected:?} not in {texts:?}"
+        );
+    }
 }

@@ -190,6 +190,26 @@ on a feature whose point is at infinity does the same
 ([multi-panel-image-browser.md](multi-panel-image-browser.md)). Nothing turns
 while a camera is in hand.
 
+### Measurements in the view
+
+The selected measurement, the focused measurement item and, with the HUD's
+*Show all measurements* on, every stored measurement of every visible
+reconstruction are drawn over the cloud: a mark at each endpoint that resolves
+to a finite position, through the node's display transform, and a line between
+two such. A press on a mark or a line is theirs (G7), taken before navigation
+reads the pointer, so it neither orbits nor picks: a click on a mark selects
+the measurement and that endpoint, a double-click enters camera view through
+the endpoint's image turned toward its pixel, a click on a stored
+measurement's line selects it, and hovering either shows the measurement's row
+text. The bench figure's handles and the eraser brush take a press before the
+measurements do. When no part of the selected measurement is in view, an arrow
+at the view's edge points toward the projection of its midpoint, reflected
+through the centre for a point behind the eye, labelled `Distance #2`; a click
+on it frames the measurement without turning
+(`Viewer3D::frame_keeping_orientation`). See
+[measurement-view.md](measurement-view.md) § "Drawing measurements"; the code
+is [viewer_3d/measurements.rs](../../crates/sfm-explorer/src/viewer_3d/measurements.rs).
+
 ### Trackpad Controls
 
 | Action | Input | Behavior |
