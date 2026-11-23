@@ -811,3 +811,22 @@ decisions.
    on the slot while another caller decoded the photograph. So the user
    decided that the level is built from the tiles at every budget. Built in
    the main draft's step 13c3.
+10. **How a decode inside a render is cancelled.** *Decided by the user:*
+    every render entry point (`render_source_tile`, `sample_source_grid`,
+    `sample_source_member_grid`, `read_source_samples`, `read_source_rect`,
+    `render_source_affine`, `source_clipped_share` and the gradient renders)
+    takes the caller's `&Progress`, so a tile evicted during a kernel and
+    decoded again by the read stops when the kernel is cancelled, and a
+    render that can take longer than a second takes a `Progress` as the
+    standards require. The options considered were the kernel call's cancel
+    flag carried by `RegionPool::for_kernel_call` or `ViewRegions`, which
+    changes no kernel signature, and a decode inside a render that cannot be
+    cancelled. To be built in the main draft's step 13e4.
+11. **Answers under a cache budget of 0.** *Decided by the user:* under a
+    budget of 0, an answer of `get` or `get_many` holds the tiles of the
+    decode that made it, as `TryDecode::Decoded` does, until the answer is
+    dropped, so `sfm web-export` and the viewer with
+    `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB=0` decode a photograph once per answer
+    rather than once per render. The options considered were `sfm
+    web-export` using a cache with the default budget, and accepting a
+    decode on every render. To be built in the main draft's step 13e4.

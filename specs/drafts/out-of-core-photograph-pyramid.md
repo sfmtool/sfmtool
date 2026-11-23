@@ -2650,7 +2650,11 @@ in core. Step 17 turns the tier on.
         decoding an in-core photograph again, reserving with
         `reserve_builds`, for a tile evicted during its kernel, so a
         `get_many` holds no pyramid; `get` decodes only a photograph none of
-        whose tiles are cached. `PhotographReadError` gains `Changed`,
+        whose tiles are cached. Every render entry point takes the caller's
+        `&Progress`, which such a decode polls for cancellation, and under a
+        cache budget of 0 an answer holds the tiles of the decode that made
+        it until it is dropped (the companion's open questions 10 and 11).
+        `PhotographReadError` gains `Changed`,
         `NotFound`, `TooLarge` and `Unreadable`, with `From<TileError>` and
         `From<GetError>`, which such a read returns, and every caller reports
         them as its failure, as it reports the read errors it reports today:
@@ -2663,7 +2667,9 @@ in core. Step 17 turns the tier on.
         a read of a photograph whose file was removed after its tiles were
         evicted fails with `NotFound` naming it; and `sfm web-export` given
         a `write_web_export` that raises `RuntimeError` reports it as its
-        failure.
+        failure; a render cancelled while it decodes an evicted tile stops
+        with the cancellation; and under a budget of 0 two renders from one
+        answer decode its photograph once.
       - **13e5, the bulk kernels under a small budget.** Tests: a bulk kernel
         whose photographs' tiles do not fit a small budget still completes,
         with its decodes counted, and so does one with a budget smaller than
