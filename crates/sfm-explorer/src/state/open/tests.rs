@@ -186,35 +186,6 @@ fn opening_renders_the_patch_bitmaps_a_file_does_not_carry() {
     );
 }
 
-/// A photograph the cache hands back that lacks pixels a render reads fails
-/// the open, naming the read, rather than being left out of the render.
-#[test]
-fn an_open_whose_photographs_lack_pixels_fails() {
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path().to_path_buf();
-    let path = saved_with_photographs(&dir);
-    let recon = SfmrReconstruction::load(&path, &sfmtool_core::progress::Progress::none())
-        .expect("the file reads");
-    // The paths the open reads: the read canonicalizes the workspace
-    // directory, which differs from `dir` where the temp directory is reached
-    // through a link or a short name (macOS `/var`, a Windows `RUNNER~1`).
-    let photographs: Vec<PathBuf> = recon
-        .image_set
-        .images
-        .iter()
-        .map(|image| recon.workspace_dir.join(&image.name))
-        .collect();
-
-    let mut state = AppState::new();
-    crate::test_support::insert_corners_only(&state.photographs, &photographs);
-    let error = state.open_now(&path).expect_err("the open failed");
-    assert!(
-        error.starts_with("Failed to render the patch bitmaps of ")
-            && error.contains("a photograph could not be read: a photograph in memory: "),
-        "{error}"
-    );
-}
-
 /// A file without bitmaps that stores references gets display bitmaps rendered
 /// from them: each stored reference stands and its observation's tile is the
 /// display bitmap, so Track View marks the row the file names. Only a point
@@ -316,7 +287,14 @@ fn a_second_open_reads_the_photographs_from_the_cache() {
         Some(format!("{n} of {n} read")),
     );
     let decoded = state.photographs.stats();
-    assert_eq!(decoded.entries, n, "every photograph stays decoded");
+    let recon = state.node(first).unwrap().recon();
+    assert!(
+        (0..n).all(|i| state
+            .photographs
+            .peek(&crate::state::photograph_path(recon, i).unwrap())
+            .is_some()),
+        "every photograph stays decoded"
+    );
 
     let second = state.open_now(&path).expect("the file opens again");
     assert_eq!(

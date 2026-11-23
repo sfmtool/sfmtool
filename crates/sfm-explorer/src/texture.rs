@@ -6,8 +6,8 @@
 //! egui wants `ColorImage` (RGBA); every image source the viewer holds is
 //! 3-channel RGB: the display thumbnails (a file's
 //! [`ImageSet::thumbnails_y_x_rgb`], or the rows the open built) and
-//! the decoded pyramids in [`crate::state::AppState`]'s photograph cache, which
-//! Image Detail cuts its photograph tiles from and expands as it cuts them
+//! the photograph tiles in [`crate::state::AppState`]'s photograph cache, which
+//! Image Detail expands as it uploads them
 //! (`image_detail::photograph_tiles`). Three panels used to expand it
 //! themselves, and the copies disagreed: two derived the output extent from the
 //! data while the third hard-coded 128, which is the thumbnail edge the `.sfmr`

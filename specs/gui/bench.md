@@ -1291,9 +1291,9 @@ On the worker `ViewSources::decode` asks the cache for every path at once
 (`PhotographCache::get_many`), which hands back what it holds and decodes the
 rest in parallel, under a `decode images` phase whose note says how many it
 read from disk, how many it reused from the cache, and how full the cache is
-afterwards. The cache holds pyramids rather than bare photographs, so a
-photograph the viewer had is neither decoded, nor copied, nor pyramided a
-second time, and what the worker decodes stays in the cache for the next step
+afterwards. The cache keeps each photograph's tiles, cut from its pyramid,
+rather than the bare photograph, so a photograph the viewer had whole is
+neither decoded, nor copied, nor pyramided a second time, and what the worker decodes stays in the cache for the next step
 and the panels. A photograph that cannot be read is the
 worker's refusal, arriving as the task's failed row rather than as a refusal of
 the gesture -- which is honest: whether a file is readable is not a question the

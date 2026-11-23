@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use super::*;
+use crate::camera::mipmap::PHOTOGRAPH_TILE_SIZE;
 use crate::camera::sampler::render_tile;
 use crate::camera::sampler::test_support::{maps, photograph, SAMPLERS};
 use crate::camera::tiled_photograph::{PhotographTile, TileKey};
@@ -112,7 +113,7 @@ fn the_grid_and_sample_reads_of_their_needed_tiles_equal_the_whole_pyramid() {
     let (pyramid, source) = sources();
     let a = [3.0, 1.0, 60.0, 1.0, 3.0, 40.0];
     let whole_pool = RegionPool::with_capacity(u64::MAX);
-    let whole = TiledPhotograph::from_pyramid(pyramid.clone());
+    let whole = TiledPhotograph::cut(&pyramid, PHOTOGRAPH_TILE_SIZE);
     for pool in pools() {
         let grid = |src: &TiledPhotograph| {
             sample_source_grid(
@@ -268,7 +269,7 @@ fn from_tiles_refuses_tiles_the_layout_does_not_have_or_place() {
 fn the_clipped_share_of_its_needed_tiles_equals_the_whole_pyramid_s() {
     use crate::patch::reference_view::source_clipped_share;
     let (pyramid, source) = sources();
-    let whole = TiledPhotograph::from_pyramid(pyramid);
+    let whole = TiledPhotograph::cut(&pyramid, PHOTOGRAPH_TILE_SIZE);
     // An outline across nine of the 32 px tiles, one past the image's right
     // edge, one too thin to hold a pixel centre, which reads the pixels
     // under its corners, and one wholly past the right edge, whose corners'

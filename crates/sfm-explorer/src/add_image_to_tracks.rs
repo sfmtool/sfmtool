@@ -137,10 +137,11 @@ impl AppState {
     ///
     /// What crosses to the worker is a clone of the value at the cursor, whose
     /// `base` is the `Arc` the node goes on drawing, and the photographs'
-    /// sources: the pyramids the viewer already holds and the paths of the
-    /// rest, which the worker reads. A photograph that cannot be read leaves
-    /// that image out of every point's references rather than refusing the
-    /// step; the target's own was checked for before the step began.
+    /// sources: the paths of the photographs, which the worker asks the
+    /// viewer's photograph cache for, reading those it does not hold. A
+    /// photograph that cannot be read leaves that image out of every point's
+    /// references rather than refusing the step; the target's own was
+    /// checked for before the step began.
     pub(crate) fn add_image_to_tracks_job(&self, image: ImageRef) -> Result<Job, String> {
         let id = image.recon;
         let node = self

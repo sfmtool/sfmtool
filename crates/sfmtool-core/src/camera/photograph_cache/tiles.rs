@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The cache's layout and tile requests: a photograph's layout, its
-//! photograph tiles, a view-region pyramid or one level whole, each cut from
-//! the whole pyramid the cache holds, through the tiled photograph that reads
-//! it, when it is asked for.
+//! photograph tiles, a view-region pyramid or one level whole, each from the
+//! tiles the cache keeps, decoding the photograph when a tile asked for is
+//! not kept.
 //!
 //! A panel asks [`PhotographCache::layout`] and [`PhotographCache::peek_tile`]
 //! on the GUI thread, which never read a file or wait, and asks on the rayon
@@ -22,15 +22,13 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use super::{
-    header, split_bytes, whole_decode_bytes, GetError, Making, PhotographCache, Share, Slot,
-    SlotState,
+    answer_of, has_key, header, whole_decode_bytes, Asked, GetError, Got, Making, PhotographCache,
+    Share, Slot,
 };
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use crate::camera::mipmap::PyramidLayout;
 use crate::camera::sampler::{copy_regions, LevelRect, LevelRegions};
-use crate::camera::tiled_photograph::{
-    PhotographReadError, PhotographTile, TileKey, TiledPhotograph,
-};
+use crate::camera::tiled_photograph::{PhotographReadError, PhotographTile, TileKey};
 use crate::progress::{Cancelled, Progress};
 
 #[cfg(test)]
@@ -90,43 +88,23 @@ impl std::error::Error for TileError {}
 
 /// What [`PhotographCache::try_decode_tiles`] did.
 pub enum TryDecode {
-    /// The tiles asked for, in the order of the keys: decoded now, or cut
-    /// from the photograph already held.
+    /// The tiles asked for, in the order of the keys: decoded now, or kept
+    /// by the cache already.
     Decoded(Vec<Arc<PhotographTile>>),
     /// Nothing was decoded: another caller is decoding the photograph, or
     /// its decode does not fit under the build budget now. Ask again later.
     Busy,
 }
 
-/// A made slot's value: the photograph, or the failure remembered for the
-/// file.
-type Made = Result<Arc<TiledPhotograph>, GetError>;
-
 /// What a panel's decode found its slot holding when it tried to claim it.
 enum Claim<'s, 'r> {
-    /// Made, with the photograph or the remembered failure.
-    Made(Made),
+    /// The tiles asked for, every one kept, or the remembered failure.
+    Made(Result<Got, GetError>),
     /// Being made by another caller.
     Busy,
-    /// Empty, and now marked as being made by this caller.
+    /// Not holding every tile asked for, and now marked as being made by
+    /// this caller.
     Making(Making<'s, 'r>),
-}
-
-/// Mark `slot` as being made if it is empty, without waiting on it.
-fn claim<'s, 'r>(slot: &'s Slot, share: Share<'r>) -> Claim<'s, 'r> {
-    let mut state = slot.lock();
-    match &*state {
-        SlotState::Made(value) => Claim::Made(value.clone()),
-        SlotState::Making => Claim::Busy,
-        SlotState::Empty => {
-            *state = SlotState::Making;
-            Claim::Making(Making {
-                slot,
-                share,
-                finished: false,
-            })
-        }
-    }
 }
 
 /// The [`TileError`] for a [`GetError`]: [`TileError::Cancelled`] for a
@@ -141,7 +119,7 @@ fn unreadable(path: &Path, e: GetError) -> TileError {
     }
 }
 
-/// [`TileError::OutOfRange`] for a read of a photograph made in memory.
+/// [`TileError::OutOfRange`] for a read of a photograph the cache answered.
 fn out_of_range(path: &Path, e: PhotographReadError) -> TileError {
     let why = match e {
         PhotographReadError::OutOfRange { why, .. } => why,
@@ -155,9 +133,8 @@ fn out_of_range(path: &Path, e: PhotographReadError) -> TileError {
 
 /// Refuse a key whose level, column or row `layout` does not have.
 fn check_keys(path: &Path, layout: &PyramidLayout, keys: &[TileKey]) -> Result<(), TileError> {
-    for key in keys {
-        let (cols, rows) = layout.tiles(usize::from(key.level));
-        if key.col >= cols || key.row >= rows {
+    for &key in keys {
+        if !has_key(layout, key) {
             return Err(TileError::OutOfRange {
                 path: path.to_path_buf(),
                 why: format!(
@@ -182,61 +159,50 @@ impl PhotographCache {
         )
     }
 
-    /// `pyramid` read in place, cut into the cache's tiles: the photograph
-    /// the cache answers for it.
-    pub(super) fn tiled(&self, pyramid: Arc<ImageU8Pyramid>) -> TiledPhotograph {
-        TiledPhotograph::from_pyramid(pyramid).with_tile_size(self.options.tile_size)
-    }
-
-    /// The tile `key` of `photograph`, the photograph at `path`.
-    fn cut(
+    /// Mark `slot` as being made if it does not keep every tile `keys`
+    /// names, without waiting on it.
+    fn claim<'s, 'r>(
         &self,
-        path: &Path,
-        photograph: &TiledPhotograph,
-        key: TileKey,
-    ) -> Result<Arc<PhotographTile>, TileError> {
-        photograph.tile(key).map_err(|e| out_of_range(path, e))
-    }
-
-    /// `path`'s slot and its value when it is made, without a stat of the
-    /// file and without waiting on a decode in flight.
-    fn made_slot(&self, path: &Path) -> Option<(Arc<Slot>, Made)> {
-        let slot = self.lock().map.get(path).map(Arc::clone)?;
-        let value = slot.made()?;
-        Some((slot, value))
+        slot: &'s Arc<Slot>,
+        share: Share<'r>,
+        keys: &[TileKey],
+    ) -> Claim<'s, 'r> {
+        let mut data = slot.lock();
+        if data.making {
+            return Claim::Busy;
+        }
+        if let Some(Err(e)) = &data.made {
+            return Claim::Made(Err(e.clone()));
+        }
+        if let Some(got) = data.kept(Asked::Keys(keys), self.next_tick()) {
+            return Claim::Made(Ok(got));
+        }
+        data.making = true;
+        Claim::Making(Making {
+            slot,
+            share,
+            finished: false,
+        })
     }
 
     /// What is known of `path`'s layout, without reading anything or
-    /// waiting: from the photograph held or its remembered failure, and
+    /// waiting: from the photograph's decode or its remembered failure, and
     /// otherwise from [`Self::request_layout`]'s answer.
     ///
     /// Like [`Self::peek_state`] it does not stat the file, so a layout or a
     /// failure is answered until the photograph is decoded again, the layout
     /// is asked for again, or the path is forgotten.
     ///
-    /// The layout of a held photograph is kept as `request_layout` keeps
-    /// one, so a panel that asks every frame is answered the same `Arc`
-    /// while the held photograph's layout stays the same, with nothing
-    /// allocated.
+    /// The layout of a decoded photograph is the one its slot keeps, so a
+    /// panel that asks every frame is answered the same `Arc`, with nothing
+    /// allocated, while the photograph's layout stays the same.
     pub fn layout(&self, path: &Path) -> PeekedLayout {
-        if let Some((_, value)) = self.made_slot(path) {
-            return match value {
-                Ok(photograph) => {
-                    let held = photograph.layout();
-                    let mut inner = self.lock();
-                    if let Some(Ok(kept)) = inner.layouts.get(path) {
-                        if **kept == *held {
-                            return PeekedLayout::Known(Arc::clone(kept));
-                        }
-                    }
-                    let held = Arc::new(held.clone());
-                    inner
-                        .layouts
-                        .insert(path.to_path_buf(), Ok(Arc::clone(&held)));
-                    PeekedLayout::Known(held)
-                }
-                Err(e) => PeekedLayout::Unreadable(e.to_string()),
-            };
+        if let Some(slot) = self.mapped(path) {
+            match &slot.lock().made {
+                Some(Ok(layout)) => return PeekedLayout::Known(Arc::clone(layout)),
+                Some(Err(e)) => return PeekedLayout::Unreadable(e.to_string()),
+                None => {}
+            }
         }
         match self.lock().layouts.get(path) {
             Some(Ok(layout)) => PeekedLayout::Known(Arc::clone(layout)),
@@ -256,27 +222,39 @@ impl PhotographCache {
         self.lock().layouts.insert(path.to_path_buf(), layout);
     }
 
-    /// The tile `key` of `path` if the photograph is decoded, cut from the
-    /// pyramid held, without reading a file and without waiting on a decode
-    /// in flight. What a panel calls every frame.
+    /// The tile `key` of `path` if the cache keeps it, without reading a
+    /// file and without waiting on a decode in flight. What a panel calls
+    /// every frame.
     ///
-    /// Like [`Self::peek`] it does not stat the file, and counts as a use for
-    /// the eviction order but not as a hit.
+    /// Like [`Self::peek`] it does not stat the file. It counts as a use for
+    /// the eviction order, marking the tile as used, but not as a hit.
     pub fn peek_tile(&self, path: &Path, key: TileKey) -> PeekedTile {
-        let Some((slot, value)) = self.made_slot(path) else {
+        let Some(slot) = self.mapped(path) else {
             return PeekedTile::NotReady;
         };
-        self.touch(&slot);
-        match value.map(|photograph| self.cut(path, &photograph, key)) {
-            Ok(Ok(tile)) => PeekedTile::Ready(tile),
-            Ok(Err(_)) | Err(_) => PeekedTile::Unreadable,
+        let tick = self.next_tick();
+        let mut guard = slot.lock();
+        let data = &mut *guard;
+        match &data.made {
+            None => PeekedTile::NotReady,
+            Some(Err(_)) => PeekedTile::Unreadable,
+            Some(Ok(layout)) if !has_key(layout, key) => PeekedTile::Unreadable,
+            Some(Ok(_)) => match data.tiles.get_mut(&key) {
+                Some(kept) => {
+                    (kept.used, kept.tick) = (true, tick);
+                    PeekedTile::Ready(Arc::clone(&kept.tile))
+                }
+                None => PeekedTile::NotReady,
+            },
         }
     }
 
-    /// The tile `key` of `path`, decoding the photograph on a miss as
-    /// [`Self::get`] does: reserving with [`Self::reserve_builds`] and waiting
-    /// while another caller decodes it. A kernel's read; a panel asks with
-    /// [`Self::try_decode_tiles`], which never waits.
+    /// The tile `key` of `path`, decoding the photograph when the cache does
+    /// not keep it, as [`Self::get`] decodes: reserving with
+    /// [`Self::reserve_builds`] and waiting while another caller decodes it.
+    /// A decode keeps the tile as used and the rest of the photograph as
+    /// unused. A kernel's read; a panel asks with [`Self::try_decode_tiles`],
+    /// which never waits.
     ///
     /// A whole decode can take over a second, so it takes the caller's
     /// `progress`, which it polls for cancellation as `get` does and reports
@@ -288,8 +266,16 @@ impl PhotographCache {
         key: TileKey,
         progress: &Progress<'_>,
     ) -> Result<Arc<PhotographTile>, TileError> {
-        let photograph = self.get(path, progress).map_err(|e| unreadable(path, e))?;
-        self.cut(path, &photograph, key)
+        let (value, _) = self.fetch(path, progress, Share::None, Asked::Keys(&[key]));
+        let got = value.map_err(|e| unreadable(path, e))?;
+        check_keys(path, &got.layout, &[key])?;
+        got.tiles
+            .into_iter()
+            .next()
+            .ok_or_else(|| TileError::OutOfRange {
+                path: path.to_path_buf(),
+                why: format!("the tile {key:?} was not cut"),
+            })
     }
 
     /// A view-region pyramid of `path`: the region of each level `regions`
@@ -332,20 +318,21 @@ impl PhotographCache {
 
     /// A panel's decode of `path`, answering the tiles `keys` names.
     ///
-    /// Answers the tiles at once when the photograph is held. Otherwise it
-    /// reads the header, refuses a key the photograph does not have, and
-    /// reserves the decode with [`Self::try_reserve_build`]; then it claims
-    /// the slot only when no other caller is decoding in it, giving the
+    /// Answers the tiles at once when the cache keeps every one of them.
+    /// Otherwise it reads the header, refuses a key the photograph does not
+    /// have, and reserves the decode with [`Self::try_reserve_build`]; then it
+    /// claims the slot only when no other caller is decoding in it, giving the
     /// reservation back if one is, and decodes in the slot as [`Self::get`]
-    /// does. It answers [`TryDecode::Busy`], decoding nothing, when the
-    /// reservation is refused or another caller holds the slot. So it never
-    /// waits on a slot or on the build count, and takes the count past the
-    /// build budget only by one decode that runs alone, as
-    /// [`Self::try_reserve_build`] grants it.
+    /// does, keeping the tiles `keys` names as used and the rest as unused. It
+    /// answers [`TryDecode::Busy`], decoding nothing, when the reservation is
+    /// refused or another caller holds the slot. So it never waits on a slot
+    /// or on the build count, and takes the count past the build budget only
+    /// by one decode that runs alone, as [`Self::try_reserve_build`] grants
+    /// it.
     ///
     /// Polls `progress` for cancellation after its decode, as `get` does, and
     /// answers [`TileError::Cancelled`] when it is cancelled: the slot is left
-    /// empty, nothing is remembered and the reservation is given back. It
+    /// as it was, nothing is remembered and the reservation is given back. It
     /// reports nothing through `progress`; a panel's task passes its own, or
     /// `&Progress::none()`.
     ///
@@ -357,17 +344,30 @@ impl PhotographCache {
         keys: &[TileKey],
         progress: &Progress<'_>,
     ) -> Result<TryDecode, TileError> {
+        let asked = Asked::Keys(keys);
         let slot = (self.options.budget_bytes > 0).then(|| self.slot_for(path));
         if let Some(slot) = &slot {
-            // Read with the slot's lock released before the tiles are cut.
-            let made = match &*slot.lock() {
-                SlotState::Made(value) => Some(value.clone()),
-                SlotState::Making => return Ok(TryDecode::Busy),
-                SlotState::Empty => None,
-            };
-            if let Some(value) = made {
-                self.hits.fetch_add(1, Ordering::Relaxed);
-                return self.answer(path, value, keys);
+            let tick = self.next_tick();
+            let mut data = slot.lock();
+            if data.making {
+                return Ok(TryDecode::Busy);
+            }
+            match &data.made {
+                Some(Err(e)) => {
+                    let e = e.clone();
+                    drop(data);
+                    self.hits.fetch_add(1, Ordering::Relaxed);
+                    return Err(unreadable(path, e));
+                }
+                Some(Ok(layout)) => {
+                    check_keys(path, layout, keys)?;
+                    if let Some(got) = data.kept(asked, tick) {
+                        drop(data);
+                        self.hits.fetch_add(1, Ordering::Relaxed);
+                        return Ok(TryDecode::Decoded(got.tiles));
+                    }
+                }
+                None => {}
             }
         }
         // A file whose header cannot be read is made at once, as the failure
@@ -388,43 +388,37 @@ impl PhotographCache {
                 self.misses.fetch_add(1, Ordering::Relaxed);
                 // The reservation is given back when `share` drops, whatever
                 // the outcome.
-                split_bytes(size.and_then(|_| self.decode(path, progress, &mut share))).0
+                size.and_then(|_| self.decode(path, progress, &mut share))
+                    .map(|cut| answer_of(cut, asked))
             }
             Some(slot) => {
-                let mut making = match claim(slot, share) {
+                let mut making = match self.claim(slot, share, keys) {
                     Claim::Made(value) => {
                         self.hits.fetch_add(1, Ordering::Relaxed);
-                        return self.answer(path, value, keys);
+                        return answer(path, value);
                     }
                     // Dropping the share gives the reservation back.
                     Claim::Busy => return Ok(TryDecode::Busy),
                     Claim::Making(making) => making,
                 };
                 self.misses.fetch_add(1, Ordering::Relaxed);
-                let (value, bytes) =
-                    split_bytes(size.and_then(|_| self.decode(path, progress, &mut making.share)));
+                let value = size.and_then(|_| self.decode(path, progress, &mut making.share));
                 if let Err(GetError::Cancelled) = value {
-                    // Dropping the hold gives the share back, empties the slot
-                    // and wakes its waiters.
+                    // Dropping the hold gives the share back, leaves the slot
+                    // as it was and wakes its waiters.
                     drop(making);
                     return Err(TileError::Cancelled);
                 }
-                making.finish(value.clone());
-                if value.is_ok() {
-                    self.charge(path, slot, bytes);
-                }
-                value
+                self.keep(path, making, value, asked)
             }
         };
-        self.answer(path, value, keys)
+        answer(path, value)
     }
+}
 
-    /// The tiles `keys` of a made photograph, or its failure.
-    fn answer(&self, path: &Path, value: Made, keys: &[TileKey]) -> Result<TryDecode, TileError> {
-        let photograph = value.map_err(|e| unreadable(path, e))?;
-        keys.iter()
-            .map(|&key| self.cut(path, &photograph, key))
-            .collect::<Result<Vec<_>, _>>()
-            .map(TryDecode::Decoded)
-    }
+/// A panel's decode's answer: the tiles asked for, or the failure.
+fn answer(path: &Path, value: Result<Got, GetError>) -> Result<TryDecode, TileError> {
+    value
+        .map(|got| TryDecode::Decoded(got.tiles))
+        .map_err(|e| unreadable(path, e))
 }

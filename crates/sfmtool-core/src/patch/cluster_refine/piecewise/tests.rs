@@ -21,7 +21,7 @@ use super::super::{
     FeatureGeometry, Mat2, MemberGeo, MemberOutcome, MemberStatus, MAX_PATCH_ELONGATION,
 };
 use super::*;
-use crate::camera::image::{ImageU8, ImageU8Pyramid, PyramidLevel};
+use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use crate::camera::sampler::RegionPool;
 use crate::camera::{PhotographReadError, TiledPhotograph};
 use crate::patch::cell_registration::{
@@ -1752,23 +1752,26 @@ fn a_read_that_fails_in_the_loop_fails_the_stage() {
         "the start's score and the first update's were read"
     );
 
-    // The render fails: the photograph holds an 8 px corner of level 0 and
-    // nothing else.
-    let corner = PyramidLevel {
-        image: ImageU8::new(8, 8, 1, vec![128; 64]),
-        origin: [0, 0],
-        full_size: [128, 128],
-    };
-    let mut levels: Vec<Option<PyramidLevel>> = (0..6).map(|_| None).collect();
-    levels[0] = Some(corner);
-    let lacking = TiledPhotograph::from_pyramid(std::sync::Arc::new(
-        ImageU8Pyramid::from_regions(levels).expect("a valid region pyramid"),
-    ));
+    // The render fails: the photograph holds the 8 px tile in the corner of
+    // level 0 and nothing else.
+    let whole = TiledPhotograph::cut(
+        &ImageU8Pyramid::build(&ImageU8::new(128, 128, 1, vec![128; 128 * 128]), 6),
+        8,
+    );
+    let corner = whole
+        .tile(crate::camera::TileKey {
+            level: 0,
+            col: 0,
+            row: 0,
+        })
+        .expect("a tile");
+    let lacking =
+        TiledPhotograph::from_tiles(whole.layout().clone(), [corner]).expect("the layout's tile");
     let error = run(&lacking, &mut |_: &Mat2, _: [f64; 2]| Ok(Some(0.5)))
         .err()
         .expect("the render fails");
     assert!(
-        matches!(error, PhotographReadError::OutOfRange { .. }),
+        matches!(error, PhotographReadError::NeedsTiles { .. }),
         "{error}"
     );
 }

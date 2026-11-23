@@ -4,11 +4,9 @@
 //! Tests for cluster-patch refinement: synthetic warp recovery, the vetting
 //! gates, determinism, and AVX2-vs-scalar equivalence.
 
-use std::sync::Arc;
-
 use super::kernels::{eval_zncc_scalar, SupportTables, TileCache};
 use super::*;
-use crate::camera::image::{ImageU8, ImageU8Pyramid, PyramidLevel};
+use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use ndarray::{Array2, Array3 as NdArray3};
 
 /// Band-limited analytic texture in `[2, 252]` (no u8 clipping).
@@ -1910,31 +1908,24 @@ fn level_one_scale(params: &ClusterRefineParams) -> f64 {
     2.0 / (2.0 * params.radius / params.resolution.max(2) as f64)
 }
 
-/// `pyramid` holding its level 1 whole and, of every other level, only an 8
-/// px square in the corner of level 0: a read of level 1 succeeds and a read
-/// near the middle of level 0 asks for pixels it does not hold.
+/// `pyramid` cut into 8 px tiles, holding its level 1 whole and, of every
+/// other level, only the tile in the corner of level 0: a read of level 1
+/// succeeds and a read near the middle of level 0 asks for tiles it does not
+/// hold.
 fn level_one_only(pyramid: &ImageU8Pyramid) -> TiledPhotograph {
-    let corner = |l: usize, side: u32| {
-        let full = pyramid.level(l);
-        let c = full.channels();
-        let stride = full.width() as usize * c as usize;
-        let mut data = Vec::new();
-        for row in 0..side as usize {
-            data.extend_from_slice(&full.data()[row * stride..][..side as usize * c as usize]);
-        }
-        PyramidLevel {
-            image: ImageU8::new(side, side, c, data),
-            origin: [0, 0],
-            full_size: pyramid.level_full_size(l),
-        }
+    let whole = TiledPhotograph::cut(pyramid, 8);
+    let (cols, rows) = whole.layout().tiles(1);
+    let level_one = (0..rows)
+        .flat_map(|row| (0..cols).map(move |col| crate::camera::TileKey { level: 1, col, row }));
+    let corner = crate::camera::TileKey {
+        level: 0,
+        col: 0,
+        row: 0,
     };
-    let level_one = pyramid.level(1);
-    let mut levels: Vec<Option<PyramidLevel>> = (0..pyramid.num_levels()).map(|_| None).collect();
-    levels[0] = Some(corner(0, 8));
-    levels[1] = Some(corner(1, level_one.width()));
-    TiledPhotograph::from_pyramid(Arc::new(
-        ImageU8Pyramid::from_regions(levels).expect("a valid region pyramid"),
-    ))
+    let tiles = level_one
+        .chain([corner])
+        .map(|key| whole.tile(key).expect("a tile"));
+    TiledPhotograph::from_tiles(whole.layout().clone(), tiles).expect("the layout's tiles")
 }
 
 /// A reference and a member of one cluster whose member gate and template
@@ -1993,7 +1984,7 @@ fn a_tile_read_that_fails_in_the_cascade_fails_the_call() {
     let lacking = cascade_across_levels(level_one_only);
     let error = lacking.err().expect("level 0 of the member cannot be read");
     assert!(
-        matches!(error, PhotographReadError::OutOfRange { .. }),
+        matches!(error, PhotographReadError::NeedsTiles { .. }),
         "{error}"
     );
 }

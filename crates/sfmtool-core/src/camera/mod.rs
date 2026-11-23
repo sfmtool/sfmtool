@@ -5,7 +5,7 @@
 //! rectification, image warping, the per-view choice of sampler ([`sampler`]),
 //! the image containers it reads and writes
 //! ([`image`]), the derived quantities a set of intrinsics
-//! implies ([`report`]), a byte-bounded cache of decoded photograph pyramids
+//! implies ([`report`]), a byte-bounded cache of decoded photographs' tiles
 //! ([`PhotographCache`]), the mip level files a large photograph's levels
 //! are stored in ([`mipmap`]), plus a 3D-viewport [`Camera`] for orbit-style
 //! navigation in `sfm-explorer`.

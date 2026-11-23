@@ -41,7 +41,14 @@ fn a_second_render_reads_its_photographs_from_the_cache() {
     .expect("the photographs are readable");
     assert_eq!(first.shape()[0], recon.point_count());
     let decoded = cache.stats();
-    assert_eq!(decoded.entries, n, "every photograph stays decoded");
+    assert!(
+        recon
+            .image_set
+            .images
+            .iter()
+            .all(|image| cache.peek(&recon.workspace_dir.join(&image.name)).is_some()),
+        "every photograph stays decoded"
+    );
     assert_eq!(decoded.misses as usize, n);
 
     let second = render_display_patch_bitmaps(
@@ -75,7 +82,7 @@ fn a_second_render_reads_its_photographs_from_the_cache() {
         first, third,
         "a cache that keeps nothing draws the same column"
     );
-    assert_eq!(uncached.stats().entries, 0);
+    assert_eq!(uncached.stats().tiles, 0);
 }
 
 /// With no photograph readable there is nothing to draw, and a photograph that
@@ -544,58 +551,5 @@ fn stored_references_survive_missing_views_skipped_points_and_zero_frames() {
     assert!(
         missing > 0 && rendered > 0,
         "{missing} missing, {rendered} rendered"
-    );
-}
-
-/// A photograph whose pyramid in the cache is the size its camera says but
-/// holds only an 8 px corner of each level, as one a caller made with
-/// `ImageU8Pyramid::from_regions` and inserted can be, is handed to the render
-/// rather than left out, and the first read of it that asks for other pixels
-/// fails the render with that read's error.
-#[test]
-fn a_photograph_that_lacks_pixels_a_render_reads_fails_the_render() {
-    use crate::camera::image::{ImageU8, ImageU8Pyramid, PyramidLevel};
-    use crate::camera::PhotographReadError;
-    use std::sync::Arc;
-
-    let recon = seoul_bull();
-    let cache = PhotographCache::new(PhotographCacheOptions {
-        budget_bytes: 1 << 30,
-        ..Default::default()
-    });
-    for image in &recon.image_set.images {
-        let path = recon.workspace_dir.join(&image.name);
-        let (width, height) = image::image_dimensions(&path).expect("checked in");
-        let layout = crate::camera::mipmap::PyramidLayout::in_memory(
-            width,
-            height,
-            ImageU8Pyramid::full_levels(width, height),
-            crate::camera::PHOTOGRAPH_TILE_SIZE,
-        );
-        let levels: Vec<Option<PyramidLevel>> = (0..layout.levels())
-            .map(|l| {
-                let (w, h) = layout.level_size(l);
-                let (cw, ch) = (w.min(8), h.min(8));
-                Some(PyramidLevel {
-                    image: ImageU8::new(cw, ch, 3, vec![128; (cw * ch * 3) as usize]),
-                    origin: [0, 0],
-                    full_size: [w, h],
-                })
-            })
-            .collect();
-        let partial = ImageU8Pyramid::from_regions(levels).expect("a valid region pyramid");
-        cache.insert(&path, Arc::new(partial));
-    }
-    let Err(error) = render_patch_bitmap_column(
-        &recon,
-        &cache,
-        crate::camera::sampler::test_pool(),
-        &Progress::none(),
-    ) else {
-        panic!("a read of a pixel the photographs lack did not fail the render");
-    };
-    assert!(
-        matches!(error, PhotographReadError::OutOfRange { path: None, .. }),
-        "{error}"
     );
 }

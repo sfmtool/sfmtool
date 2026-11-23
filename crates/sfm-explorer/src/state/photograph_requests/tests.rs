@@ -79,11 +79,13 @@ fn known_layout(source: PhotographSource<'_>, queue: &TaskQueue) -> Arc<PyramidL
 
 /// The layout and the tiles are asked for once each however many times they
 /// are looked at while the read runs, are read off the calling thread, with a
-/// budget and with a cache that keeps nothing, and the tiles a decode answers
-/// are handed over on a later look.
+/// budget, with one smaller than the photograph's level 0 and with a cache
+/// that keeps nothing, and the tiles a decode answers are handed over on a
+/// later look, with nothing asked for again.
 #[test]
 fn the_layout_and_the_tiles_are_read_once_off_the_calling_thread() {
-    for budget in [1 << 30, 0] {
+    // Level 0 of the 6 x 4 photograph is 72 bytes.
+    for budget in [1 << 30, 36, 0] {
         let dir = tempfile::tempdir().unwrap();
         let path = photo_in(dir.path());
         let cache = tile_cache(budget, 1 << 30);

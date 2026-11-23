@@ -4,23 +4,83 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Barrier;
 
+use crate::camera::image::{ImageU8Pyramid, PyramidLevel};
 use crate::progress::Event;
 
 use super::*;
 
-/// Bytes of the RGB pyramid the cache builds for a `w x h` photograph: every
-/// level of `full_levels` depth, each half the size of the one before.
+/// Bytes of the RGB tiles the cache keeps of a `w x h` photograph no larger
+/// than one tile: one tile a level, each with its one-pixel border, for every
+/// level of the pyramid `ImageU8Pyramid::from_image` builds.
 fn bytes_of(w: u32, h: u32) -> u64 {
     let (mut w, mut h) = (u64::from(w), u64::from(h));
-    let mut bytes = w * h * 3;
+    let mut bytes = (w + 2) * (h + 2) * 3;
     for _ in 1..ImageU8Pyramid::full_levels(w as u32, h as u32) {
         if w < 2 || h < 2 {
             break;
         }
         (w, h) = (w / 2, h / 2);
-        bytes += w * h * 3;
+        bytes += (w + 2) * (h + 2) * 3;
     }
     bytes
+}
+
+/// Every tile key of `layout`.
+pub(super) fn every_key(layout: &PyramidLayout) -> Vec<TileKey> {
+    (0..layout.levels())
+        .flat_map(|level| {
+            let (cols, rows) = layout.tiles(level);
+            (0..rows).flat_map(move |row| {
+                (0..cols).map(move |col| TileKey {
+                    level: level as u8,
+                    col,
+                    row,
+                })
+            })
+        })
+        .collect()
+}
+
+/// Whether `a` and `b` are made of the same tiles, the cache's own: every
+/// tile of one is the same `Arc` as the other's.
+pub(super) fn same_tiles(a: &TiledPhotograph, b: &TiledPhotograph) -> bool {
+    a.layout() == b.layout()
+        && every_key(a.layout())
+            .into_iter()
+            .all(|key| matches!((a.tile(key), b.tile(key)), (Ok(x), Ok(y)) if Arc::ptr_eq(&x, &y)))
+}
+
+/// The bytes of `photograph`'s tiles' pixels.
+pub(super) fn held_bytes(photograph: &TiledPhotograph) -> u64 {
+    every_key(photograph.layout())
+        .into_iter()
+        .map(|key| photograph.tile(key).unwrap().pixels.data().len() as u64)
+        .sum()
+}
+
+/// The pyramid the cache decoded a photograph into before it kept tiles:
+/// `ImageU8::read_rgb` of the file and [`ImageU8Pyramid::from_image`] at
+/// `full_levels` of its size.
+pub(super) fn pyramid_of(path: &Path) -> ImageU8Pyramid {
+    let image = ImageU8::read_rgb(path).unwrap();
+    let levels = ImageU8Pyramid::full_levels(image.width(), image.height());
+    ImageU8Pyramid::from_image(image, levels)
+}
+
+/// Every level of `photograph`, put together whole from its tiles.
+fn whole_pyramid(photograph: &TiledPhotograph) -> ImageU8Pyramid {
+    let levels = (0..photograph.layout().levels())
+        .map(|level| {
+            let image = photograph.whole_level(level).unwrap();
+            let full_size = [image.width(), image.height()];
+            Some(PyramidLevel {
+                image,
+                origin: [0, 0],
+                full_size,
+            })
+        })
+        .collect();
+    ImageU8Pyramid::from_regions(levels).unwrap()
 }
 
 /// Write a `w x h` PNG at `dir/name` and return its path.
@@ -90,9 +150,9 @@ fn default_budgets_are_in_range_or_overridden() {
     assert_ne!(BUDGET_ENV_VAR, BUILD_BUDGET_ENV_VAR);
 }
 
-/// Each pyramid's depth is `full_levels` of its own photograph's size, down to
-/// one or two pixels on the short side, so two photographs in one cache can
-/// have different depths. `Debug` shows the stats.
+/// Each photograph's depth is `full_levels` of its own size, down to one or
+/// two pixels on the short side, so two photographs in one cache can have
+/// different depths. `Debug` shows the stats.
 #[test]
 fn each_entry_has_the_depth_of_its_own_size() {
     let dir = tempfile::tempdir().unwrap();
@@ -101,15 +161,16 @@ fn each_entry_has_the_depth_of_its_own_size() {
     let cache = PhotographCache::new(with_budget(GIB));
     let small = cache.get(&small, &Progress::none()).unwrap();
     let tall = cache.get(&tall, &Progress::none()).unwrap();
-    assert_eq!(small.held_pyramid().num_levels(), 6);
-    assert_eq!(tall.held_pyramid().num_levels(), 9);
+    assert_eq!(small.layout().levels(), 6);
+    assert_eq!(tall.layout().levels(), 9);
     // The top level of each is one or two pixels on the short side.
-    assert_eq!(small.held_pyramid().level(5).width(), 2);
-    assert_eq!(small.held_pyramid().level(5).height(), 1);
-    assert_eq!(tall.held_pyramid().level(8).width(), 1);
-    assert_eq!(tall.held_pyramid().level(8).height(), 1);
+    assert_eq!(small.layout().level_size(5), (2, 1));
+    assert_eq!(small.whole_level(5).unwrap().width(), 2);
+    assert_eq!(tall.layout().level_size(8), (1, 1));
+    assert_eq!(tall.whole_level(8).unwrap().height(), 1);
+    // One tile a level of each, at the default tile size.
     let shown = format!("{cache:?}");
-    assert!(shown.contains("entries: 2"), "{shown}");
+    assert!(shown.contains("tiles: 15"), "{shown}");
 }
 
 /// A view that shrinks a photograph 64 times asks the kernels for level 6.
@@ -135,7 +196,7 @@ fn a_view_shrunk_64_times_reads_level_6() {
     let photograph = PhotographCache::new(with_budget(0))
         .get(&path, &Progress::none())
         .unwrap();
-    let pyramid = photograph.held_pyramid();
+    let pyramid = &whole_pyramid(&photograph);
     assert!(pyramid.num_levels() > 6);
 
     let side = 8u32;
@@ -183,16 +244,20 @@ fn one_decode_per_path_under_contention() {
             .collect();
         handles.into_iter().map(|h| h.join().unwrap()).collect()
     });
-    for pyramid in &results {
-        assert!(Arc::ptr_eq(pyramid, &results[0]));
+    for photograph in &results {
+        assert!(same_tiles(photograph, &results[0]));
     }
     let stats = cache.stats();
     assert_eq!(stats.misses, 1);
     assert_eq!(stats.hits, threads as u64 - 1);
-    assert_eq!(stats.entries, 1);
-    assert_eq!(stats.bytes, results[0].held_pyramid().byte_len() as u64);
+    assert_eq!(stats.tiles, every_key(results[0].layout()).len());
+    assert_eq!(stats.bytes, held_bytes(&results[0]));
+    assert_eq!(stats.bytes, bytes_of(64, 48));
 }
 
+/// Over the budget the least recently used tiles go, the finest level first,
+/// only as many as the budget needs; a photograph that lost a tile is not
+/// answered by `peek`, and `get` decodes it again.
 #[test]
 fn evicts_least_recently_used_within_budget() {
     let dir = tempfile::tempdir().unwrap();
@@ -212,13 +277,58 @@ fn evicts_least_recently_used_within_budget() {
     assert!(cache.peek(&b).is_none());
     assert!(cache.peek(&c).is_some());
     let stats = cache.stats();
-    assert_eq!(stats.entries, 2);
-    assert_eq!(stats.bytes, 2 * one);
+    // `b`'s level 0, 10 x 10 with its border, was enough; its three coarser
+    // levels stay.
+    let level_0 = 10 * 10 * 3;
+    assert_eq!((stats.tiles, stats.bytes), (11, 3 * one - level_0));
     assert!(stats.bytes <= stats.budget_bytes);
-    assert_eq!(stats.misses, 3);
-    assert_eq!(stats.hits, 1);
+    assert_eq!((stats.misses, stats.hits), (3, 1));
+    // `b` lacks a tile, so a `get` decodes it again.
+    cache.get(&b, &Progress::none()).unwrap();
+    assert_eq!(cache.stats().misses, 4);
 }
 
+/// `keeps_every_tile` answers whether the cache keeps every tile of a
+/// photograph, before and after an eviction takes one of them, and is no use
+/// for the eviction order: asked about the older of two photographs, it
+/// leaves that one the photograph whose tiles go next, where a `peek` makes
+/// it the newer.
+#[test]
+fn keeps_every_tile_answers_without_counting_as_a_use() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_png(dir.path(), "a.png", 8, 8);
+    let b = write_png(dir.path(), "b.png", 8, 8);
+    let c = write_png(dir.path(), "c.png", 8, 8);
+    let missing = dir.path().join("missing.png");
+    let one = bytes_of(8, 8);
+    for peeked in [false, true] {
+        let cache = PhotographCache::new(with_budget(2 * one + one / 2));
+        cache.get(&a, &Progress::none()).unwrap();
+        cache.get(&b, &Progress::none()).unwrap();
+        assert!(!cache.keeps_every_tile(&c), "never decoded");
+        assert!(cache.get(&missing, &Progress::none()).is_err());
+        assert!(!cache.keeps_every_tile(&missing), "unreadable");
+        let stats = cache.stats();
+        // Asked about `a`, the older.
+        assert!(cache.keeps_every_tile(&a));
+        if peeked {
+            assert!(cache.peek(&a).is_some());
+        }
+        assert_eq!(cache.stats(), stats, "neither counts as a hit or a miss");
+        cache.get(&c, &Progress::none()).unwrap();
+        // The decode of `c` took one tile of the least recently used.
+        let (older, newer) = if peeked { (&b, &a) } else { (&a, &b) };
+        assert!(!cache.keeps_every_tile(older), "peeked: {peeked}");
+        assert!(cache.keeps_every_tile(newer), "peeked: {peeked}");
+        assert!(cache.keeps_every_tile(&c));
+    }
+    let none = PhotographCache::new(with_budget(0));
+    none.get(&a, &Progress::none()).unwrap();
+    assert!(!none.keeps_every_tile(&a), "a budget of 0 keeps nothing");
+}
+
+/// A decode keeps every tile a `get` answers, even over the budget, and
+/// drops the older photograph's tiles instead.
 #[test]
 fn keeps_the_entry_just_decoded_even_over_budget() {
     let dir = tempfile::tempdir().unwrap();
@@ -235,7 +345,7 @@ fn keeps_the_entry_just_decoded_even_over_budget() {
 }
 
 #[test]
-fn a_held_pyramid_survives_eviction() {
+fn a_held_photograph_survives_eviction() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_png(dir.path(), "a.png", 8, 8);
     let b = write_png(dir.path(), "b.png", 8, 8);
@@ -243,7 +353,8 @@ fn a_held_pyramid_survives_eviction() {
     let held = cache.get(&a, &Progress::none()).unwrap();
     cache.get(&b, &Progress::none()).unwrap();
     assert!(cache.peek(&a).is_none());
-    let level = held.held_pyramid().level(0);
+    assert_eq!(cache.stats().tiles, 4, "only b's");
+    let level = held.whole_level(0).unwrap();
     assert_eq!(level.width(), 8);
     assert_eq!(level.get_pixel(3, 5, 0), 3);
     assert_eq!(level.get_pixel(3, 5, 1), 5);
@@ -272,7 +383,7 @@ fn remembers_a_failure_until_forgotten() {
     assert!(cache.get(&corrupt, &Progress::none()).is_err());
     let stats = cache.stats();
     assert_eq!((stats.misses, stats.hits), (2, 2));
-    assert_eq!((stats.entries, stats.bytes), (0, 0));
+    assert_eq!((stats.tiles, stats.bytes), (0, 0));
 
     cache.forget(&corrupt);
     assert!(cache.get(&corrupt, &Progress::none()).is_err());
@@ -305,7 +416,7 @@ fn a_rewritten_file_is_decoded_again() {
     assert_eq!(width(&cache.get(&path, &Progress::none()).ok()), 16);
     let stats = cache.stats();
     assert_eq!(stats.misses, 2);
-    assert_eq!(stats.entries, 1);
+    assert_eq!(stats.tiles, 4);
     assert_eq!(stats.bytes, bytes_of(16, 8));
 }
 
@@ -323,7 +434,7 @@ fn forget_and_clear_release_bytes() {
     assert_eq!(cache.stats().bytes, bytes_of(4, 4));
     cache.clear();
     let stats = cache.stats();
-    assert_eq!((stats.entries, stats.bytes), (0, 0));
+    assert_eq!((stats.tiles, stats.bytes), (0, 0));
 }
 
 #[test]
@@ -350,7 +461,7 @@ fn get_many_keeps_order_and_reports_the_tally() {
     assert!(pyramids[1].is_none());
     assert_eq!(width(&pyramids[2]), 12);
     assert_eq!(width(&pyramids[3]), 16);
-    assert!(Arc::ptr_eq(
+    assert!(same_tiles(
         pyramids[2].as_ref().unwrap(),
         &cache.peek(&b).unwrap()
     ));
@@ -389,7 +500,7 @@ fn get_many_of_one_path_twice_decodes_it_once() {
     let cache = PhotographCache::new(with_budget(GIB));
     let paths: Vec<&Path> = vec![&a, &a];
     let (pyramids, tally) = cache.get_many(&paths, &Progress::none()).unwrap();
-    assert!(Arc::ptr_eq(
+    assert!(same_tiles(
         pyramids[0].as_ref().unwrap(),
         pyramids[1].as_ref().unwrap()
     ));
@@ -470,7 +581,7 @@ impl HeldDecode {
     }
 }
 
-/// A caller cancelled during its decode stops before building the pyramid,
+/// A caller cancelled during its decode stops before cutting the tiles,
 /// remembers nothing and leaves the slot empty, and the caller waiting on the
 /// slot decodes in its place rather than wait for ever.
 #[test]
@@ -504,10 +615,10 @@ fn a_cancelled_maker_empties_its_slot_and_a_waiter_decodes_in_its_place() {
         .recv_timeout(HANG)
         .expect("the waiter never took the decode over")
         .unwrap();
-    assert_eq!(pyramid.held_pyramid().level(0).get_pixel(3, 2, 0), 3);
+    assert_eq!(pyramid.whole_level(0).unwrap().get_pixel(3, 2, 0), 3);
     assert_eq!(held.decodes.load(Ordering::SeqCst), 2);
     let stats = held.cache.stats();
-    assert_eq!((stats.misses, stats.hits, stats.entries), (2, 0, 1));
+    assert_eq!((stats.misses, stats.hits, stats.tiles), (2, 0, 3));
 }
 
 /// A caller waiting on another caller's decode, through `get` or `get_many`,
@@ -559,7 +670,7 @@ fn a_cancelled_waiter_stops_waiting_and_leaves_the_decode_to_its_maker() {
     assert_eq!(width(&pyramid.ok()), 8);
     assert_eq!(held.decodes.load(Ordering::SeqCst), 1);
     let stats = held.cache.stats();
-    assert_eq!((stats.misses, stats.hits, stats.entries), (1, 0, 1));
+    assert_eq!((stats.misses, stats.hits, stats.tiles), (1, 0, 3));
 }
 
 /// A decoding caller that unwinds leaves the slot empty, so the next caller
@@ -613,7 +724,7 @@ fn a_cancelled_decode_is_not_remembered() {
         assert_eq!(cache.get(&a, &cancelled).err(), Some(GetError::Cancelled));
         assert_eq!(cache.stats().build_reserved_bytes, 0);
         assert!(matches!(cache.peek_state(&a), PeekedPhotograph::NotDecoded));
-        assert_eq!(cache.stats().entries, 0);
+        assert_eq!(cache.stats().tiles, 0);
         // On a thread of its own, since a slot left as being made would make
         // it wait for ever.
         let next = on_a_thread({
@@ -635,12 +746,16 @@ fn budget_zero_keeps_nothing() {
     let cache = PhotographCache::new(with_budget(0));
     let first = cache.get(&a, &Progress::none()).unwrap();
     let second = cache.get(&a, &Progress::none()).unwrap();
-    assert!(!Arc::ptr_eq(&first, &second));
+    assert!(!same_tiles(&first, &second));
+    assert_eq!(
+        first.whole_level(0).unwrap().data(),
+        second.whole_level(0).unwrap().data()
+    );
     assert!(cache.peek(&a).is_none());
     let (_, tally) = cache.get_many(&[a.as_path()], &Progress::none()).unwrap();
     assert_eq!(tally.read, 1);
     let stats = cache.stats();
-    assert_eq!((stats.entries, stats.bytes, stats.misses), (0, 0, 3));
+    assert_eq!((stats.tiles, stats.bytes, stats.misses), (0, 0, 3));
 }
 
 #[test]
@@ -658,8 +773,8 @@ fn peek_state_tells_a_failure_from_no_answer_yet() {
     let got = cache.get(&a, &Progress::none()).unwrap();
     assert!(cache.get(&missing, &Progress::none()).is_err());
     match cache.peek_state(&a) {
-        PeekedPhotograph::Decoded(pyramid) => assert!(Arc::ptr_eq(&pyramid, &got)),
-        _ => panic!("expected the decoded pyramid"),
+        PeekedPhotograph::Decoded(photograph) => assert!(same_tiles(&photograph, &got)),
+        _ => panic!("expected the decoded photograph"),
     }
     assert!(matches!(
         cache.peek_state(&missing),
@@ -686,12 +801,11 @@ fn peek_state_does_not_wait_on_a_decode_in_flight() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_png(dir.path(), "a.png", 8, 4);
     let cache = PhotographCache::new(with_budget(GIB));
-    // A slot whose decode has not finished, as `get_found` leaves it while the
+    // A slot whose decode has not finished, as `fetch` leaves it while the
     // decoding thread runs.
-    cache.lock().map.insert(
-        a.clone(),
-        Arc::new(Slot::new(SlotState::Making, file_stamp(&a))),
-    );
+    let slot = Arc::new(Slot::new(file_stamp(&a)));
+    slot.lock().making = true;
+    cache.lock().map.insert(a.clone(), slot);
     assert!(matches!(cache.peek_state(&a), PeekedPhotograph::NotDecoded));
 }
 
@@ -702,72 +816,76 @@ fn peek_does_not_decode() {
     let cache = PhotographCache::new(with_budget(GIB));
     assert!(cache.peek(&a).is_none());
     let stats = cache.stats();
-    assert_eq!((stats.entries, stats.hits, stats.misses), (0, 0, 0));
+    assert_eq!((stats.tiles, stats.hits, stats.misses), (0, 0, 0));
     let got = cache.get(&a, &Progress::none()).unwrap();
-    assert!(Arc::ptr_eq(&cache.peek(&a).unwrap(), &got));
+    assert!(same_tiles(&cache.peek(&a).unwrap(), &got));
     assert_eq!(cache.stats().hits, 0);
 }
 
 #[test]
 fn decode_into_a_forgotten_slot_still_returns_and_charges_nothing() {
     // A slot forgotten while its decode runs: the decoding caller gets the
-    // pyramid, and the byte count stays at what the map holds.
+    // tiles, and the byte count stays at what the map holds.
     let dir = tempfile::tempdir().unwrap();
     let a = write_png(dir.path(), "a.png", 8, 8);
     let cache = PhotographCache::new(with_budget(GIB));
-    let slot = Arc::new(Slot::new(SlotState::Making, file_stamp(&a)));
+    let cut = || cut_image(ImageU8::read_rgb(&a).unwrap(), PHOTOGRAPH_TILE_SIZE);
+    let slot = Arc::new(Slot::new(file_stamp(&a)));
     // Not in the map, as after a `forget` during the decode.
-    cache.charge(&a, &slot, 192);
-    assert_eq!(cache.stats().bytes, 0);
+    let got = cache
+        .store(&mut cache.lock(), &a, &slot, Ok(cut()), Asked::Every)
+        .unwrap();
+    assert_eq!(got.tiles.len(), 4);
+    assert_eq!((cache.stats().bytes, slot.lock().tiles.len()), (0, 0));
     // In the map, it is charged once.
     cache.lock().map.insert(a.clone(), Arc::clone(&slot));
-    cache.charge(&a, &slot, 192);
-    assert_eq!(cache.stats().bytes, 192);
+    let got = cache
+        .store(&mut cache.lock(), &a, &slot, Ok(cut()), Asked::Every)
+        .unwrap();
+    assert_eq!(got.tiles.len(), 4);
+    assert_eq!(cache.stats().bytes, bytes_of(8, 8));
     cache.forget(&a);
     assert_eq!(cache.stats().bytes, 0);
 }
 
+/// An inserted image is cut into the tiles a decode of it would give, and
+/// `get` answers the photograph of them without reading the file.
 #[test]
-fn an_inserted_pyramid_is_what_get_answers() {
+fn an_inserted_image_is_what_get_answers() {
     let dir = tempfile::tempdir().unwrap();
     // No file at this path: the entry stands in for one.
     let absent = dir.path().join("absent.png");
     let cache = PhotographCache::new(with_budget(GIB));
-    let pyramid = Arc::new(ImageU8Pyramid::from_image(
-        ImageU8::from_channels(8, 4, 3),
-        1,
-    ));
-    cache.insert(&absent, Arc::clone(&pyramid));
+    let image = || ImageU8::new(8, 4, 3, (0..96).collect());
+    cache.insert(&absent, image());
     let got = cache.get(&absent, &Progress::none()).unwrap();
-    assert!(std::ptr::eq(got.held_pyramid(), &*pyramid));
-    assert!(Arc::ptr_eq(&cache.peek(&absent).unwrap(), &got));
+    assert_eq!(got.whole_level(0).unwrap().data(), image().data());
+    assert_eq!(got.layout().levels(), 3);
+    assert!(same_tiles(&cache.peek(&absent).unwrap(), &got));
     let stats = cache.stats();
-    assert_eq!((stats.entries, stats.bytes), (1, pyramid.byte_len() as u64));
+    assert_eq!((stats.tiles, stats.bytes), (3, bytes_of(8, 4)));
     assert_eq!((stats.hits, stats.misses), (1, 0));
 
     // A second insert replaces the first and is charged once.
-    let other = Arc::new(ImageU8Pyramid::from_image(
-        ImageU8::from_channels(4, 4, 3),
-        1,
-    ));
-    cache.insert(&absent, Arc::clone(&other));
-    assert!(std::ptr::eq(
-        cache.peek(&absent).unwrap().held_pyramid(),
-        &*other
-    ));
-    assert_eq!(cache.stats().bytes, other.byte_len() as u64);
+    let other = || ImageU8::new(4, 4, 3, vec![5; 48]);
+    cache.insert(&absent, other());
+    assert_eq!(
+        cache.peek(&absent).unwrap().whole_level(0).unwrap().data(),
+        other().data()
+    );
+    assert_eq!(cache.stats().bytes, bytes_of(4, 4));
 
-    // Over the budget, the older entry goes, as with a decode.
+    // Over the budget, the older entry's tiles go, as with a decode.
     let small = PhotographCache::new(with_budget(bytes_of(8, 4)));
     let b = dir.path().join("b.png");
-    small.insert(&absent, Arc::clone(&pyramid));
-    small.insert(&b, Arc::clone(&pyramid));
+    small.insert(&absent, image());
+    small.insert(&b, image());
     assert!(small.peek(&absent).is_none());
     assert!(small.peek(&b).is_some());
 
     // A budget of 0 keeps nothing.
     let none = PhotographCache::new(with_budget(0));
-    none.insert(&absent, pyramid);
+    none.insert(&absent, image());
     assert!(none.peek(&absent).is_none());
 }
 

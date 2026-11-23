@@ -22,9 +22,9 @@ use std::sync::Arc;
 
 use ndarray::{Array2, Array3};
 
-use crate::camera::image::{ImageU8, ImageU8Pyramid, PyramidLevel};
+use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use crate::camera::sampler::{RegionPool, RegionPoolStats, SamplerChoice, ViewRegions};
-use crate::camera::{PhotographReadError, TiledPhotograph};
+use crate::camera::{PhotographReadError, TileKey, TiledPhotograph};
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::PatchCloud;
 use crate::patch::cluster_refine::{
@@ -413,22 +413,18 @@ fn the_view_selection_is_the_same_on_every_read_path() {
     });
 }
 
-/// `source` replaced by one that holds only an 8 px square in the corner of
-/// its finest level and none of its coarser levels, so that a read anywhere
-/// near a patch asks for pixels it does not hold.
+/// `source` made of only its [`TILE`] px tile in the corner of its finest
+/// level, and none of its coarser levels, so that a read anywhere near a
+/// patch asks for tiles it does not hold.
 fn without_pixels(source: &TiledPhotograph) -> TiledPhotograph {
-    let (width, height) = source.layout().level_size(0);
-    let channels = source.channels();
-    let corner = PyramidLevel {
-        image: ImageU8::new(8, 8, channels, vec![128; 64 * channels as usize]),
-        origin: [0, 0],
-        full_size: [width, height],
-    };
-    let mut levels: Vec<Option<PyramidLevel>> =
-        (0..source.layout().levels()).map(|_| None).collect();
-    levels[0] = Some(corner);
-    let pyramid = ImageU8Pyramid::from_regions(levels).expect("a valid region pyramid");
-    TiledPhotograph::from_pyramid(Arc::new(pyramid)).with_tile_size(TILE)
+    let corner = source
+        .tile(TileKey {
+            level: 0,
+            col: 0,
+            row: 0,
+        })
+        .expect("a tile");
+    TiledPhotograph::from_tiles(source.layout().clone(), [corner]).expect("the layout's tile")
 }
 
 /// A photograph that lacks the pixels a read needs fails the cluster
@@ -452,7 +448,7 @@ fn a_read_of_pixels_a_photograph_lacks_fails_the_call() {
             .err()
             .expect("the image cannot be read");
         assert!(
-            matches!(refused, PhotographReadError::OutOfRange { .. }),
+            matches!(refused, PhotographReadError::NeedsTiles { .. }),
             "pool of {capacity}: {refused}"
         );
         assert_eq!(pool.held_bytes(), 0);
@@ -470,7 +466,7 @@ fn a_read_of_pixels_a_photograph_lacks_fails_the_call() {
         )
         .expect_err("the image cannot be read");
         assert!(
-            matches!(refused, PhotographReadError::OutOfRange { .. }),
+            matches!(refused, PhotographReadError::NeedsTiles { .. }),
             "pool of {capacity}: {refused}"
         );
         assert_eq!(pool.held_bytes(), 0);
@@ -739,7 +735,7 @@ fn a_read_of_pixels_a_photograph_lacks_fails_each_reference_view_kernel() {
     let mut sources = tiled(&truth.pyramids);
     sources[image] = without_pixels(&truth.tiled[image]);
     let is_out_of_range =
-        |e: &PhotographReadError| matches!(e, PhotographReadError::OutOfRange { .. });
+        |e: &PhotographReadError| matches!(e, PhotographReadError::NeedsTiles { .. });
     for capacity in [u64::MAX, 0] {
         let pool = RegionPool::with_capacity(capacity);
         let views = truth.views(&sources);
@@ -898,7 +894,7 @@ fn a_search_or_score_of_a_view_that_cannot_be_read_fails() {
     assert!(
         matches!(
             error,
-            LocalizeError::Photograph(PhotographReadError::OutOfRange { .. })
+            LocalizeError::Photograph(PhotographReadError::NeedsTiles { .. })
         ),
         "{error}"
     );
@@ -913,7 +909,7 @@ fn a_search_or_score_of_a_view_that_cannot_be_read_fails() {
         )
         .expect_err("the target cannot be read");
     assert!(
-        matches!(error, PhotographReadError::OutOfRange { .. }),
+        matches!(error, PhotographReadError::NeedsTiles { .. }),
         "{error}"
     );
 }

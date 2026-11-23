@@ -2657,7 +2657,8 @@ impl AppState {
     /// measurements are current: the track, the value at the cursor (its
     /// poses and camera intrinsics). The search radius is the track's own
     /// `max_shift_px`, so it is part of the track. The photographs are decoded
-    /// on the worker, from the node's cached pyramids where it has them.
+    /// on the worker, from the tiles the photograph cache keeps where it has
+    /// them.
     ///
     /// A track-stage track with a patch frame and no patch bitmap also gets
     /// its bitmap rendered where it stands (`bench::render_bitmap_in_place`), which

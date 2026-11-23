@@ -14,6 +14,7 @@ use crate::camera::remap::{sample_bilinear_u8, HeldLevel};
 use crate::camera::sampler::grid::{affine_regions, grid_cells, grid_regions, sample_grid};
 use crate::camera::sampler::test_support::{affine_map, copy, maps, photograph, Lcg, SAMPLERS};
 use crate::camera::sampler::{render_tile, render_tile_with_grad_into, TILE_WINDOW_TILES};
+use crate::camera::tiled_photograph::TileKey;
 
 const TILE: u32 = 32;
 
@@ -504,20 +505,19 @@ fn the_grid_affine_and_sample_reads_need_no_more_than_their_exact_regions() {
 }
 
 #[test]
-fn a_read_past_the_regions_of_a_region_pyramid_is_refused() {
+fn a_read_past_the_tiles_a_photograph_holds_is_refused() {
     // Level 0 whole, levels 1 and 2 not held: a read of level 2 is an error
-    // on either path, not the black of a level the pyramid does not hold.
-    let levels = vec![
-        Some(PyramidLevel {
-            image: photograph(64, 64),
-            origin: [0, 0],
-            full_size: [64, 64],
-        }),
-        None,
-        None,
-    ];
-    let pyramid = Arc::new(ImageU8Pyramid::from_regions(levels).unwrap());
-    let source = TiledPhotograph::from_pyramid(pyramid).with_tile_size(TILE);
+    // on either path, not the black of a level the photograph does not hold.
+    let pyramid = ImageU8Pyramid::build(&photograph(64, 64), 3);
+    let whole = TiledPhotograph::cut(&pyramid, TILE);
+    let (cols, rows) = whole.layout().tiles(0);
+    let level_0 =
+        (0..rows).flat_map(|row| (0..cols).map(move |col| TileKey { level: 0, col, row }));
+    let source = TiledPhotograph::from_tiles(
+        whole.layout().clone(),
+        level_0.map(|key| whole.tile(key).unwrap()),
+    )
+    .unwrap();
     for (pool, _) in pools() {
         let mut map = affine_map(16, [4.0, 0.0, 0.0, 0.0, 4.0, 0.0], 0);
         assert!(matches!(
@@ -526,7 +526,7 @@ fn a_read_past_the_regions_of_a_region_pyramid_is_refused() {
                 &mut map,
                 Sampler::BilinearMip
             ),
-            Err(PhotographReadError::OutOfRange { .. })
+            Err(PhotographReadError::NeedsTiles { .. })
         ));
         let mut map = affine_map(16, [1.0, 0.0, 8.0, 0.0, 1.0, 8.0], 0);
         assert!(render_source_tile(

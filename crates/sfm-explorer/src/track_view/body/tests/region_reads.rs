@@ -302,27 +302,18 @@ fn cluster_stage_pictures_drawn_through_regions_equal_the_whole_pyramid() {
 
 /// A row whose photograph cannot be read draws the cells' error state: the
 /// tile and crop cells say *unreadable* and their hovers say why, while the
-/// rows whose photographs read draw their pictures.
+/// rows whose photographs read draw their pictures. The first row's
+/// photograph leaves the cache, and its header read finds no file.
 #[test]
 fn a_photograph_that_cannot_be_read_draws_the_cells_error_state() {
-    use sfmtool_core::camera::image::PyramidLevel;
-    let (state, id, label, _, _) = on_the_bench();
+    let (mut state, id, label, _, _) = on_the_bench();
+    let (requests, queue) = crate::state::PhotographRequests::queued();
+    state.photograph_requests = requests;
     let track = state.bench_track(id, &label).expect("on the bench").clone();
     let image = track.observations[0].image as usize;
-    // The cache's pyramid for the first row's photograph holds one pixel of
-    // it, so any read past that pixel fails.
     let recon = state.node(id).expect("loaded").recon();
-    let camera = &recon.image_set.cameras[0];
-    let one_pixel = ImageU8Pyramid::from_regions(vec![Some(PyramidLevel {
-        image: ImageU8::new(1, 1, 3, vec![0; 3]),
-        origin: [0, 0],
-        full_size: [camera.width, camera.height],
-    })])
-    .expect("a region pyramid");
     let path = crate::state::photograph_path(recon, image).expect("a path");
-    state
-        .photographs
-        .insert(&path, std::sync::Arc::new(one_pixel));
+    state.photographs.forget(&path);
 
     let mut panel = TrackBody::new();
     let ctx = egui::Context::default();
@@ -330,6 +321,8 @@ fn a_photograph_that_cannot_be_read_draws_the_cells_error_state() {
         style.interaction.tooltip_delay = 0.0;
         style.interaction.tooltip_grace_time = 0.0;
     });
+    super::painted(&mut panel, &ctx, &state, Vec::new());
+    assert_eq!(queue.run_off_this_thread(), 1, "the header read");
     let texts = super::painted(&mut panel, &ctx, &state, Vec::new());
     let why = panel
         .read_failure(0)
@@ -564,7 +557,7 @@ fn a_row_whose_tiles_are_not_there_draws_its_loading_state_and_asks_once() {
     let image = track.observations[0].image as usize;
     let recon = state.node(id).expect("loaded").recon();
     let path = crate::state::photograph_path(recon, image).expect("a path");
-    let pyramid = state.cached_pyramid(id, image).expect("cached");
+    let photograph = state.cached_image(id, image).expect("cached");
     state.photographs.forget(&path);
     let decodes = state.photographs.stats().decodes;
 
@@ -585,7 +578,7 @@ fn a_row_whose_tiles_are_not_there_draws_its_loading_state_and_asks_once() {
 
     // The photograph lands, as the decode the next frames would ask for
     // puts it in the cache.
-    state.photographs.insert(&path, pyramid);
+    state.photographs.insert(&path, photograph);
     frame(&mut panel, &ctx, &state, Vec::new(), &mut uploaded);
     assert!(panel.tiles[&0].is_some() && panel.crops[&0].is_some());
     assert_eq!(queue.len(), 1, "nothing more asked for");
@@ -641,7 +634,7 @@ fn a_hover_view_whose_tiles_are_not_there_says_it_is_loading() {
     let image = track.observations[0].image as usize;
     let recon = state.node(id).expect("loaded").recon();
     let path = crate::state::photograph_path(recon, image).expect("a path");
-    let pyramid = state.cached_pyramid(id, image).expect("cached");
+    let photograph = state.cached_image(id, image).expect("cached");
 
     let mut panel = TrackBody::new();
     let ctx = egui::Context::default();
@@ -671,7 +664,7 @@ fn a_hover_view_whose_tiles_are_not_there_says_it_is_loading() {
     assert!(panel.read_failure(0).is_none());
     assert_eq!(queue.len(), 1, "one header read, asked for once");
 
-    state.photographs.insert(&path, pyramid);
+    state.photographs.insert(&path, photograph);
     let mut uploaded = Uploaded::new();
     for x in [layout.tile_x(), layout.crop_x()] {
         let at = egui::pos2(x + TILE_SIZE / 2.0 + 8.0, y + 20.0);

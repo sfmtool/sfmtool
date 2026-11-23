@@ -18,7 +18,7 @@ use crate::bench::{
     grid_plane_normal, grown_plane_normal, pairwise_flow_normal, GridPlaneNormalOptions,
     GrownPlaneNormalOptions, PairwiseFlowNormalOptions,
 };
-use crate::camera::image::{ImageU8, ImageU8Pyramid, PyramidLevel};
+use crate::camera::TileKey;
 use crate::camera::{PhotographReadError, TiledPhotograph};
 
 /// The tile side the scenes are cut into for the reads through tiles: a
@@ -290,19 +290,19 @@ fn a_geometry_search_is_the_same_on_every_read_path() {
     });
 }
 
-/// `scene`'s photograph `image` replaced by one that holds only an 8 px
-/// square in the corner of its finest level and none of its coarser levels,
-/// so that a read anywhere near the point asks for pixels it does not hold.
+/// `scene`'s photograph 0 made of only the [`TILE`] px tile in the corner of
+/// its finest level, and none of its coarser levels, so that a read anywhere
+/// near the point asks for tiles it does not hold.
 fn without_pixels(scene: &Scene) -> TiledPhotograph {
-    let (width, height) = scene.views()[0].source.layout().level_size(0);
-    let corner = PyramidLevel {
-        image: ImageU8::new(8, 8, 1, vec![128; 64]),
-        origin: [0, 0],
-        full_size: [width, height],
-    };
-    let levels = vec![Some(corner), None, None, None];
-    let pyramid = ImageU8Pyramid::from_regions(levels).expect("a valid region pyramid");
-    TiledPhotograph::from_pyramid(Arc::new(pyramid)).with_tile_size(TILE)
+    let whole = TiledPhotograph::cut(scene.pyramid(0), TILE);
+    let corner = whole
+        .tile(TileKey {
+            level: 0,
+            col: 0,
+            row: 0,
+        })
+        .expect("a tile");
+    TiledPhotograph::from_tiles(whole.layout().clone(), [corner]).expect("the layout's tile")
 }
 
 /// A photograph that lacks the pixels a read needs fails the step with the
@@ -329,7 +329,7 @@ fn a_read_of_pixels_a_photograph_lacks_fails_the_step() {
         assert!(
             matches!(
                 error,
-                NormalError::Photograph(PhotographReadError::OutOfRange { .. })
+                NormalError::Photograph(PhotographReadError::NeedsTiles { .. })
             ),
             "pool of {capacity}: {error}"
         );
@@ -355,7 +355,7 @@ fn a_read_of_pixels_a_photograph_lacks_fails_the_step() {
         assert!(
             matches!(
                 error,
-                EvaluateError::Photograph(PhotographReadError::OutOfRange { .. })
+                EvaluateError::Photograph(PhotographReadError::NeedsTiles { .. })
             ),
             "pool of {capacity}: {error}"
         );
@@ -380,7 +380,7 @@ fn a_read_of_pixels_a_photograph_lacks_fails_the_step() {
         assert!(
             matches!(
                 error,
-                GeometrySearchError::Photograph(PhotographReadError::OutOfRange { .. })
+                GeometrySearchError::Photograph(PhotographReadError::NeedsTiles { .. })
             ),
             "pool of {capacity}: {error}"
         );
@@ -482,7 +482,7 @@ fn a_read_of_pixels_a_photograph_lacks_fails_each_track_stage_step() {
     let is_read_error = |e: &EvaluateError| {
         matches!(
             e,
-            EvaluateError::Photograph(PhotographReadError::OutOfRange { .. })
+            EvaluateError::Photograph(PhotographReadError::NeedsTiles { .. })
         )
     };
     for capacity in [u64::MAX, 0] {
@@ -509,7 +509,7 @@ fn a_read_of_pixels_a_photograph_lacks_fails_each_track_stage_step() {
         assert!(
             matches!(
                 error,
-                FitError::Photograph(PhotographReadError::OutOfRange { .. })
+                FitError::Photograph(PhotographReadError::NeedsTiles { .. })
             ),
             "pool of {capacity}: {error}"
         );

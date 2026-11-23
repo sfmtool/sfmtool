@@ -2050,7 +2050,7 @@ pub(crate) fn ensure_sift_cached<'a>(
 pub(crate) const NOT_LOADED: &str = "That reconstruction is no longer loaded.";
 
 /// The path image `index` of `recon` is read from, which is also the key the
-/// photograph cache ([`AppState::photographs`]) holds its pyramid under: the
+/// photograph cache ([`AppState::photographs`]) keeps its tiles under: the
 /// workspace directory joined with the image's name. `None` for an index the
 /// image set does not have.
 pub(crate) fn photograph_path(recon: &SfmrReconstruction, index: usize) -> Option<PathBuf> {
@@ -2063,8 +2063,8 @@ pub(crate) fn photograph_path(recon: &SfmrReconstruction, index: usize) -> Optio
 
 #[cfg(test)]
 impl AppState {
-    /// Put `image`, pyramided at the depth the cache's decode gives its size,
-    /// in the photograph cache as the photograph of image `index` of node `id`:
+    /// Put `image` in the photograph cache as the photograph of image
+    /// `index` of node `id`, cut into tiles as the cache's decode cuts it:
     /// what a fixture whose photographs are not on disk does in place of the
     /// decode.
     pub(crate) fn insert_photograph(
@@ -2075,13 +2075,7 @@ impl AppState {
     ) {
         let recon = self.node(id).expect("a loaded node").recon();
         let path = photograph_path(recon, index).expect("an image of the node");
-        self.photographs.insert(
-            &path,
-            Arc::new({
-                let levels = ImageU8Pyramid::full_levels(image.width(), image.height());
-                ImageU8Pyramid::from_image(image, levels)
-            }),
-        );
+        self.photographs.insert(&path, image);
     }
 
     /// The photograph cache's photograph for image `index` of node `id`,
@@ -2093,6 +2087,24 @@ impl AppState {
     ) -> Option<Arc<sfmtool_core::camera::TiledPhotograph>> {
         let path = photograph_path(self.node(id)?.recon(), index)?;
         self.photographs.peek(&path)
+    }
+
+    /// Level 0 of the photograph the cache holds for image `index` of node
+    /// `id`, read whole from the cache, decoding nothing: what a test that
+    /// takes a photograph out of the cache puts back with `insert`.
+    pub(crate) fn cached_image(
+        &self,
+        id: ReconId,
+        index: usize,
+    ) -> Option<sfmtool_core::camera::image::ImageU8> {
+        let pyramid = self.cached_pyramid(id, index)?;
+        let level = pyramid.level(0);
+        Some(sfmtool_core::camera::image::ImageU8::new(
+            level.width(),
+            level.height(),
+            level.channels(),
+            level.data().to_vec(),
+        ))
     }
 
     /// The whole pyramid of the photograph the cache holds for image `index`
