@@ -12,7 +12,7 @@
 //! call the panel's gesture makes; `get_measurement_endpoint_views`, the
 //! offers of the panel's *Switch image…* popup; and
 //! `get_point_reference_pixel`, the pixel the 3D view's point menu sets an
-//! endpoint to.
+//! endpoint to where its right-click was not on the point's drawn patch.
 //!
 //! A stored measurement's reading is the node's cached one
 //! ([`crate::measurements::readings`]), so the wire, the tree and the panel
@@ -484,7 +484,10 @@ pub(super) fn get_measurement_endpoint_views(
 /// `get_point_reference_pixel`: point `point`'s reference pixel, the image
 /// and keypoint of its reference observation
 /// ([`crate::measurements::reference_pixel`]), which *Set Endpoint A Here*
-/// and *Set Endpoint B Here* in the 3D view's point menu set an endpoint to.
+/// and *Set Endpoint B Here* in the 3D view's point menu set an endpoint to
+/// where the right-click that opened it was not on the point's drawn patch.
+/// The tool has no pointer, so it gives this fallback and never a spot on the
+/// patch ([`crate::measurements::spot_pixel`]).
 ///
 /// Refused in the menu entries' words where the point has no patch frame, no
 /// reference observation, or is at infinity. It changes nothing, so it is not

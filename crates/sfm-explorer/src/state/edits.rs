@@ -903,7 +903,7 @@ pub(crate) mod tests;
 /// ([`crate::viewer_3d::Viewer3D`]), and the Image Detail panel's feature menu
 /// and its double-click ([`crate::image_detail::ImageDetail`]) -- so one
 /// gesture is one code path wherever it was made.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum PointGesture {
     /// A menu opened on this point. Select it, so that what the entries will
     /// act on is also what the rest of the viewer is looking at.
@@ -915,12 +915,16 @@ pub(crate) enum PointGesture {
     /// observations.
     Retriangulate(PointRef),
     /// `Set Endpoint A Here` or `Set Endpoint B Here` was chosen: set that
-    /// endpoint of the focused measurement item to this point's reference
-    /// pixel.
-    SetEndpointHere(PointRef, crate::measurements::EndpointSide),
+    /// endpoint of the focused measurement item to the pixel that shows this
+    /// spot on the point.
+    SetEndpointHere(
+        crate::measurements::PointSpot,
+        crate::measurements::EndpointSide,
+    ),
     /// `New Measurement from Here` was chosen: start a measurement item with
-    /// endpoint A at this point's reference pixel, and show Measurement View.
-    NewMeasurementHere(PointRef),
+    /// endpoint A at the pixel that shows this spot on the point, and show
+    /// Measurement View.
+    NewMeasurementHere(crate::measurements::PointSpot),
 }
 
 impl AppState {
@@ -1013,9 +1017,10 @@ impl AppState {
         let point = match request {
             PointGesture::Opened(point)
             | PointGesture::EditOnBench(point)
-            | PointGesture::Retriangulate(point)
-            | PointGesture::SetEndpointHere(point, _)
-            | PointGesture::NewMeasurementHere(point) => point,
+            | PointGesture::Retriangulate(point) => point,
+            PointGesture::SetEndpointHere(spot, _) | PointGesture::NewMeasurementHere(spot) => {
+                spot.point
+            }
         };
         self.select_point(point);
         match request {
@@ -1036,10 +1041,10 @@ impl AppState {
             // After the selection: a point on the item's node keeps the item
             // focused, and one on another node has unfocused it, so the step
             // then refuses, since no measurement is being edited.
-            PointGesture::SetEndpointHere(point, side) => self.set_endpoint_at_point(point, side),
+            PointGesture::SetEndpointHere(spot, side) => self.set_endpoint_at_point(spot, side),
             // Measurement View beside the panel, as Edit on Bench raises
             // Track View.
-            PointGesture::NewMeasurementHere(point) => self.start_measurement_at_point(point, from),
+            PointGesture::NewMeasurementHere(spot) => self.start_measurement_at_point(spot, from),
         }
     }
 

@@ -123,21 +123,22 @@ impl EndpointTarget {
         self.refusal.clone()
     }
 
-    /// Where *Set Endpoint … Here* on `point` in the 3D view would set the
-    /// endpoint to, `point`'s reference pixel, or why it cannot: the refusals
-    /// of [`Self::refusal_on`] for the point's node, then the point's own
-    /// ([`crate::measurements::reference_pixel`]).
+    /// Where *Set Endpoint … Here* on `spot` in the 3D view would set the
+    /// endpoint to, the pixel that shows the spot
+    /// ([`crate::measurements::spot_pixel`]), or why it cannot: the refusals
+    /// of [`Self::refusal_on`] for the point's node, then the point's own.
     pub(crate) fn at_point(
         &self,
         scene: &[SceneNode],
-        point: crate::scene::PointRef,
+        spot: crate::measurements::PointSpot,
     ) -> Result<crate::measurements::ReferencePixel, String> {
+        let point = spot.point;
         if let Some(why) = self.refusal_on(point.recon) {
             return Err(why);
         }
         let node = crate::scene::node_by_id(scene, point.recon)
             .ok_or_else(|| "That reconstruction is closed.".to_string())?;
-        crate::measurements::reference_pixel(node.edited(), point.point)
+        crate::measurements::spot_pixel(node.edited(), point.point, spot.texel)
     }
 }
 
@@ -159,21 +160,22 @@ pub(crate) struct MeasurementStart {
 }
 
 impl MeasurementStart {
-    /// Where *New Measurement from Here* on `point` in the 3D view would start
-    /// the measurement, `point`'s reference pixel, or why it cannot: the
-    /// node's refusal, then the point's own
-    /// ([`crate::measurements::reference_pixel`]).
+    /// Where *New Measurement from Here* on `spot` in the 3D view would start
+    /// the measurement, the pixel that shows the spot
+    /// ([`crate::measurements::spot_pixel`]), or why it cannot: the node's
+    /// refusal, then the point's own.
     pub(crate) fn at_point(
         &self,
         scene: &[SceneNode],
-        point: crate::scene::PointRef,
+        spot: crate::measurements::PointSpot,
     ) -> Result<crate::measurements::ReferencePixel, String> {
+        let point = spot.point;
         if let Some((_, why)) = self.refusals.iter().find(|(id, _)| *id == point.recon) {
             return Err(why.clone());
         }
         let node = crate::scene::node_by_id(scene, point.recon)
             .ok_or_else(|| "That reconstruction is closed.".to_string())?;
-        crate::measurements::reference_pixel(node.edited(), point.point)
+        crate::measurements::spot_pixel(node.edited(), point.point, spot.texel)
     }
 }
 
@@ -478,19 +480,19 @@ impl AppState {
     }
 
     /// *New Measurement from Here* in the 3D view's point menu: a measurement
-    /// started at `point`'s reference pixel
-    /// ([`crate::measurements::reference_pixel`]), as
+    /// started at the pixel that shows `spot`
+    /// ([`crate::measurements::spot_pixel`]), as
     /// [`Self::start_measurement_here`] starts one. A point with no reference
     /// pixel is one failed `Bench` row, in the sentence the entry is greyed
     /// with.
     pub(crate) fn start_measurement_at_point(
         &mut self,
-        point: crate::scene::PointRef,
+        spot: crate::measurements::PointSpot,
         from: crate::dock::Tab,
     ) {
-        match self.measurement_start().at_point(&self.scene, point) {
+        match self.measurement_start().at_point(&self.scene, spot) {
             Ok(reference) => self.start_measurement_here(
-                crate::scene::ImageRef::new(point.recon, reference.image as usize),
+                crate::scene::ImageRef::new(spot.point.recon, reference.image as usize),
                 reference.pixel,
                 from,
             ),
@@ -730,21 +732,21 @@ impl AppState {
     }
 
     /// *Set Endpoint A Here* or *Set Endpoint B Here* in the 3D view's point
-    /// menu: endpoint `side` of the focused measurement item set to `point`'s
-    /// reference pixel ([`crate::measurements::reference_pixel`]), as
+    /// menu: endpoint `side` of the focused measurement item set to the pixel
+    /// that shows `spot` ([`crate::measurements::spot_pixel`]), as
     /// [`Self::set_endpoint`] sets it. A point with no reference pixel, no
     /// measurement item focused, or one on another node is one failed `Bench`
     /// row, in the sentence the entry is greyed with.
     pub(crate) fn set_endpoint_at_point(
         &mut self,
-        point: crate::scene::PointRef,
+        spot: crate::measurements::PointSpot,
         side: EndpointSide,
     ) {
         let asked = self
             .endpoint_target()
             .ok_or_else(|| "No measurement is being edited.".to_string())
             .and_then(|target| {
-                let reference = target.at_point(&self.scene, point)?;
+                let reference = target.at_point(&self.scene, spot)?;
                 Ok(EndpointSet {
                     node: target.node,
                     item: target.item,

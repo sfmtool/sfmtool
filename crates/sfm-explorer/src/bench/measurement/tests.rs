@@ -1093,7 +1093,10 @@ fn the_point_menu_sets_an_endpoint_to_the_point_s_reference_pixel() {
 
     let before = version_count(&state, id);
     state.apply_point_gesture(
-        PointGesture::SetEndpointHere(PointRef::new(id, 0), EndpointSide::B),
+        PointGesture::SetEndpointHere(
+            crate::measurements::PointSpot::centre(PointRef::new(id, 0)),
+            EndpointSide::B,
+        ),
         from,
     );
     assert_eq!(version_count(&state, id), before + 1);
@@ -1123,7 +1126,10 @@ fn the_point_menu_sets_an_endpoint_to_the_point_s_reference_pixel() {
         d.endpoints[0] = None;
     });
     state.apply_point_gesture(
-        PointGesture::SetEndpointHere(PointRef::new(id, 2), EndpointSide::A),
+        PointGesture::SetEndpointHere(
+            crate::measurements::PointSpot::centre(PointRef::new(id, 2)),
+            EndpointSide::A,
+        ),
         from,
     );
     let a = endpoints_of(&state, id, "distance #0")[0].unwrap();
@@ -1142,7 +1148,10 @@ fn the_point_menu_sets_an_endpoint_to_the_point_s_reference_pixel() {
 
     let before = version_count(&state, id);
     state.apply_point_gesture(
-        PointGesture::SetEndpointHere(PointRef::new(id, 1), EndpointSide::A),
+        PointGesture::SetEndpointHere(
+            crate::measurements::PointSpot::centre(PointRef::new(id, 1)),
+            EndpointSide::A,
+        ),
         from,
     );
     assert_eq!(version_count(&state, id), before);
@@ -1186,7 +1195,10 @@ fn the_endpoint_target_is_the_focused_measurement_with_its_refusals() {
     // A point of the other node is refused for its node before its pixel is
     // asked about, though it has one.
     assert_eq!(
-        target.at_point(&state.scene, PointRef::new(other, 0)),
+        target.at_point(
+            &state.scene,
+            crate::measurements::PointSpot::centre(PointRef::new(other, 0))
+        ),
         Err(target.refusal_on(other).unwrap())
     );
     state
@@ -1324,8 +1336,12 @@ fn new_measurement_never_covers_the_panel_it_was_chosen_in() {
             Tab::ImageDetail => {
                 state.start_measurement_here(ImageRef::new(id, 0), [10.0, 10.0], from)
             }
-            _ => state
-                .apply_point_gesture(PointGesture::NewMeasurementHere(PointRef::new(id, 0)), from),
+            _ => state.apply_point_gesture(
+                PointGesture::NewMeasurementHere(crate::measurements::PointSpot::centre(
+                    PointRef::new(id, 0),
+                )),
+                from,
+            ),
         }
         assert!(state.focused_measurement_label(id).is_some(), "{from:?}");
         assert!(state.panel_is_in_front(from), "{from:?}");
@@ -1346,7 +1362,9 @@ fn new_measurement_from_a_point_starts_at_its_reference_pixel() {
     state.hide_panel(Tab::MeasurementView);
     let before = version_count(&state, id);
     state.apply_point_gesture(
-        PointGesture::NewMeasurementHere(PointRef::new(id, 0)),
+        PointGesture::NewMeasurementHere(crate::measurements::PointSpot::centre(PointRef::new(
+            id, 0,
+        ))),
         Tab::Viewer3D,
     );
     assert_eq!(version_count(&state, id), before + 1);
@@ -1367,7 +1385,9 @@ fn new_measurement_from_a_point_starts_at_its_reference_pixel() {
     state.hide_panel(Tab::MeasurementView);
     let before = version_count(&state, id);
     state.apply_point_gesture(
-        PointGesture::NewMeasurementHere(PointRef::new(id, 1)),
+        PointGesture::NewMeasurementHere(crate::measurements::PointSpot::centre(PointRef::new(
+            id, 1,
+        ))),
         Tab::Viewer3D,
     );
     assert_eq!(version_count(&state, id), before);
@@ -1402,9 +1422,10 @@ fn new_measurement_is_refused_while_busy_on_a_view_only_bench_and_outside_the_im
     );
     // Point 1 has no reference observation.
     assert_eq!(
-        state
-            .measurement_start()
-            .at_point(&state.scene, PointRef::new(id, 1)),
+        state.measurement_start().at_point(
+            &state.scene,
+            crate::measurements::PointSpot::centre(PointRef::new(id, 1))
+        ),
         Err(crate::measurements::NO_REFERENCE_FOR_PIXEL.to_string())
     );
     state
@@ -1421,9 +1442,10 @@ fn new_measurement_is_refused_while_busy_on_a_view_only_bench_and_outside_the_im
     assert!(!state.is_panel_open(Tab::MeasurementView));
     // The node's refusal comes before the point's own.
     assert_eq!(
-        state
-            .measurement_start()
-            .at_point(&state.scene, PointRef::new(id, 1)),
+        state.measurement_start().at_point(
+            &state.scene,
+            crate::measurements::PointSpot::centre(PointRef::new(id, 1))
+        ),
         Err(busy)
     );
     assert_eq!(version_count(&state, id), before);
@@ -1435,9 +1457,10 @@ fn new_measurement_is_refused_while_busy_on_a_view_only_bench_and_outside_the_im
         Err(sentence.clone())
     );
     assert_eq!(
-        state
-            .measurement_start()
-            .at_point(&state.scene, PointRef::new(id, 0)),
+        state.measurement_start().at_point(
+            &state.scene,
+            crate::measurements::PointSpot::centre(PointRef::new(id, 0))
+        ),
         Err(sentence)
     );
 }

@@ -103,12 +103,25 @@ Two entries, in this order:
 
 After a separator comes `New Measurement from Here`, offered whether or not
 an item is focused: a new measurement item on the point's node's bench with
-endpoint A at the point's **reference pixel**, the image and keypoint of its
-reference observation, focused, with Measurement View raised beside the 3D
-view, never over it (G9), in one version (`Put distance from
-IMG_0042@142,198 on the bench`). It is greyed with the reason as hover text
-while a background task holds the node, on a view-only bench, and where the
-point has no reference pixel (`MeasurementStart::at_point`, which the dock
+endpoint A at the pixel that shows the **spot right-clicked**, focused, with
+Measurement View raised beside the 3D view, never over it (G9), in one version
+(`Put distance from IMG_0042@142,198 on the bench`). On the frame the
+right-click lands, the viewport meets its pick ray, taken back through the
+node's display transform, with the plane of the point's patch frame, and
+records the texel `(s, t)` of the drawn surfel under the pointer with the point
+(`MenuTarget::Point`, a `measurements::PointSpot`), since the entries are
+chosen on later frames after the pointer has moved. An entry maps that texel
+into the image of the point's reference observation, the one its bitmap is
+rendered from, through that observation's square, so the endpoint resolves
+back to the point at that texel unless another square there wins. Where there
+is no texel -- the point is drawn as a dot, the click landed on its dot outside
+the square, the ray sees the square's back or meets its plane at under 5°, or
+the texel's place is outside the reference image or on a square facing away
+from its camera -- the entry takes the point's **reference pixel**, the image
+and keypoint of its reference observation, texel `(0, 0)`
+([measurement-view.md](measurement-view.md) § "The spot under the pointer").
+It is greyed with the reason as hover text while a background task holds the
+node, on a view-only bench, and where the point has no reference pixel (`MeasurementStart::at_point`, which the dock
 hands the viewport each frame as `Viewer3D::measurement_start`), and reports
 `PointGesture::NewMeasurementHere`, which `AppState::start_measurement_at_point`
 carries out after the point is selected
@@ -116,9 +129,10 @@ carries out after the point is selected
 
 With a measurement item focused, two more follow it:
 `Set Endpoint A Here` and `Set Endpoint B Here`, which set that endpoint of the
-focused item to the point's reference pixel, as one bench step
+focused item to the same pixel, the one that shows the spot right-clicked or
+the reference pixel, as one bench step
 ([measurement-view.md](measurement-view.md) § "Setting an endpoint by hand"
-and § "A point's reference pixel"). Selecting the point keeps the item focused,
+and § "The spot under the pointer"). Selecting the point keeps the item focused,
 since the point is on the item's node, so the menu keeps the two entries while
 it stands open. They are greyed with the reason as hover text while a step on
 the item would be refused, on a node other than the item's, and where the point

@@ -30,6 +30,7 @@ use super::{
 };
 use crate::bench::geometry::{self, PatchEdit};
 use crate::bench::measurement::NEW_MEASUREMENT_HERE_LABEL;
+use crate::measurements::PointSpot;
 use crate::platform::ScrollInput;
 use crate::scene::{PointRef, ReconId, SceneNode};
 use crate::scene_renderer::PickTarget;
@@ -247,7 +248,10 @@ fn a_right_click_on_a_point_opens_its_menu_and_names_the_point() {
         Some(PickTarget::Point(point)),
         None,
     );
-    assert_eq!(viewer.menu_target, Some(MenuTarget::Point(point)));
+    assert_eq!(
+        viewer.menu_target,
+        Some(MenuTarget::Point(PointSpot::centre(point)))
+    );
     // The gesture asks for the point to be selected, which is `dock.rs`'s to
     // carry out, and it asks before any entry is chosen.
     assert_eq!(viewer.point_menu, Some(PointGesture::Opened(point)));
@@ -2392,7 +2396,10 @@ fn a_right_click_on_a_point_away_from_the_square_opens_the_point_menu() {
         Some(PickTarget::Point(point)),
         None,
     );
-    assert_eq!(staged.viewer.menu_target, Some(MenuTarget::Point(point)));
+    assert_eq!(
+        staged.viewer.menu_target,
+        Some(MenuTarget::Point(PointSpot::centre(point)))
+    );
     assert_eq!(
         offered(&staged.viewer),
         [
@@ -2600,9 +2607,13 @@ fn a_focused_measurement_adds_the_set_endpoint_entries_to_the_point_menu() {
         None,
         set_endpoint_here_label(EndpointSide::B),
     );
-    assert_eq!(
-        viewer.point_menu,
-        Some(PointGesture::SetEndpointHere(point, EndpointSide::B))
+    assert!(
+        matches!(
+            viewer.point_menu,
+            Some(PointGesture::SetEndpointHere(spot, EndpointSide::B)) if spot.point == point
+        ),
+        "{:?}",
+        viewer.point_menu
     );
 
     // The entry closed the menu; with no measurement item focused the next
@@ -2695,9 +2706,13 @@ fn the_point_menu_offers_new_measurement_from_here() {
         None,
         NEW_MEASUREMENT_HERE_LABEL,
     );
-    assert_eq!(
-        viewer.point_menu,
-        Some(PointGesture::NewMeasurementHere(point))
+    assert!(
+        matches!(
+            viewer.point_menu,
+            Some(PointGesture::NewMeasurementHere(spot)) if spot.point == point
+        ),
+        "{:?}",
+        viewer.point_menu
     );
 }
 
@@ -2744,4 +2759,344 @@ fn new_measurement_from_here_is_greyed_where_it_cannot_start() {
         NEW_MEASUREMENT_HERE_LABEL,
     );
     assert_eq!(viewer.point_menu, None, "a greyed entry asked for its step");
+}
+
+// ── The spot under the pointer ──────────────────────────────────────────
+
+/// A display transform that turns, moves and scales the node, so a reading
+/// of the pointer that skips it lands elsewhere on the patch, or off it.
+fn turned_moved_scaled() -> sfmtool_core::Se3Transform {
+    sfmtool_core::Se3Transform::new(
+        sfmtool_core::RotQuaternion::from_nalgebra(nalgebra::UnitQuaternion::from_euler_angles(
+            0.4, -0.3, 1.1,
+        )),
+        Vector3::new(2.0, -1.0, 0.5),
+        1.7,
+    )
+}
+
+/// The measurement fixture's node under [`turned_moved_scaled`] in the Patches
+/// style, settled, with the camera 3 units (in the reconstruction's own) in
+/// front of point 0's patch and 20° off its normal, and the rect the viewport
+/// occupies.
+///
+/// With `bitmaps` the fixture gains a constant grey patch bitmap per point, so
+/// the node draws its points as surfels, as a file with bitmaps does; without,
+/// it has patch frames and nothing to texture them with, and draws dots in the
+/// Patches style.
+fn facing_point_0(bitmaps: bool) -> (Viewer3D, egui::Context, AppState, ReconId, egui::Rect) {
+    facing_point_0_with(bitmaps, |_| {})
+}
+
+/// [`facing_point_0`] with `edit` made to the bitmaps it adds, before the
+/// node is built from the fixture.
+fn facing_point_0_with(
+    bitmaps: bool,
+    edit: impl FnOnce(&mut ndarray::Array4<u8>),
+) -> (Viewer3D, egui::Context, AppState, ReconId, egui::Rect) {
+    let mut recon = crate::measurements::fixture::referenced_reconstruction(Some("m"));
+    if bitmaps {
+        let points = recon.point_set.points.len();
+        let mut grey = ndarray::Array4::from_elem((points, 8, 8, 4), 128u8);
+        edit(&mut grey);
+        recon.point_set.patch_bitmaps_y_x_rgba = Some(std::sync::Arc::new(grey));
+    }
+    let mut state = AppState::new();
+    let id = state.append_node(SceneNode::from_path(
+        std::path::Path::new("measured.sfmr"),
+        recon,
+    ));
+    state.set_node_transform(id, turned_moved_scaled()).unwrap();
+    state.scene[0].point_style = crate::scene::PointStyle::Patches;
+    assert_eq!(state.scene[0].draws_patches(), bitmaps);
+    let (mut viewer, ctx, mut state) = settled_over(state);
+    // Nothing turns the camera between frames.
+    viewer.maintain_z_up = false;
+    let node = state.node(id).unwrap();
+    let transform = node.transform();
+    let patch = node.edited().point(0).unwrap().patch_frame().unwrap();
+    let centre = transform.apply_to_point(&patch.center);
+    let turn = |v: Vector3<f64>| transform.rotation.rotate_vector(&v);
+    let a = 20f64.to_radians();
+    let off_normal = turn(patch.normal()) * a.cos() + turn(patch.u_axis) * a.sin();
+    let up = turn(patch.v_axis);
+    viewer.camera.world_up = up;
+    viewer.camera.camera =
+        Camera::look_at(centre + off_normal * (3.0 * transform.scale), centre, up);
+    let mut rect = egui::Rect::NOTHING;
+    run_bench_frame(
+        &mut viewer,
+        &ctx,
+        &mut state,
+        vec![egui::Event::PointerMoved(OVER_A_POINT)],
+        OVER_A_POINT,
+        None,
+        None,
+        None,
+        &mut rect,
+    );
+    (viewer, ctx, state, id, rect)
+}
+
+/// Where the place `(s, t)` of point 0's patch, drawn `scale` times its
+/// stored size, is on screen: through the node's transform and the camera.
+fn on_screen(
+    viewer: &Viewer3D,
+    state: &AppState,
+    id: ReconId,
+    rect: egui::Rect,
+    [s, t]: [f64; 2],
+    scale: f64,
+) -> egui::Pos2 {
+    let node = state.node(id).unwrap();
+    let patch = node.edited().point(0).unwrap().patch_frame().unwrap();
+    let place = node
+        .transform()
+        .apply_to_point(&patch.to_world(s * scale, t * scale));
+    viewer
+        .camera
+        .project_homogeneous(place.coords, 1.0, rect)
+        .expect("the patch is in front of the camera")
+}
+
+/// Press and release the right button at `pos`: a click there.
+fn right_click_at(
+    viewer: &mut Viewer3D,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    pos: egui::Pos2,
+    pick: Option<PickTarget>,
+) {
+    for events in [
+        vec![egui::Event::PointerMoved(pos)],
+        vec![secondary(pos, true)],
+        vec![secondary(pos, false)],
+        Vec::new(),
+    ] {
+        run_frame(viewer, ctx, state, events, pos, pick, None);
+    }
+}
+
+/// The texel the menu stands on, after a right-click.
+fn menu_texel(viewer: &Viewer3D) -> Option<[f64; 2]> {
+    match viewer.menu_target {
+        Some(MenuTarget::Point(spot)) => spot.texel,
+        other => panic!("the menu is not on a point: {other:?}"),
+    }
+}
+
+fn assert_texel_near(texel: Option<[f64; 2]>, [s, t]: [f64; 2]) {
+    let [hs, ht] = texel.unwrap_or_else(|| panic!("no texel, against ({s}, {t})"));
+    assert!(
+        (hs - s).abs() < 1e-3 && (ht - t).abs() < 1e-3,
+        "({hs}, {ht}) against ({s}, {t})"
+    );
+}
+
+/// Endpoint `k` of the measurement item `label` resolves to point 0 near
+/// texel `(s, t)` of its patch.
+fn assert_endpoint_on_point_0(state: &AppState, id: ReconId, label: &str, k: usize, st: [f64; 2]) {
+    use sfmtool_core::reconstruction::measurement_endpoint::{
+        resolve_measurement_endpoint, MeasurementEndpointOptions,
+    };
+    let item = state.bench_measurement(id, label).expect("on the bench");
+    let endpoint = item.as_distance().unwrap().endpoints[k].expect("the endpoint is placed");
+    // Point 0's reference observation is in image 1.
+    assert_eq!(endpoint.image, 1);
+    let resolved = resolve_measurement_endpoint(
+        state.node(id).unwrap().edited(),
+        endpoint.image,
+        endpoint.pixel,
+        &MeasurementEndpointOptions::default(),
+    )
+    .expect("the endpoint resolves");
+    assert_eq!(resolved.chosen().point, 0);
+    assert_texel_near(Some(resolved.chosen().patch_coords), st);
+}
+
+/// A right-click at an off-centre spot of a point's patch, under a display
+/// transform, records that spot's texel on the frame the menu opens; *New
+/// Measurement from Here* chosen after the pointer has moved onto the entry
+/// carries that texel, and the measurement it starts has endpoint A at the
+/// pixel of the reference image that shows the spot, which resolves back to
+/// the point at that texel.
+#[test]
+fn new_measurement_from_here_starts_at_the_spot_right_clicked() {
+    let (mut viewer, ctx, mut state, id, rect) = facing_point_0(true);
+    viewer.measurement_start = state.measurement_start();
+    let point = PointRef::new(id, 0);
+    let pick = Some(PickTarget::Point(point));
+    let spot = [0.55, -0.35];
+    let at = on_screen(&viewer, &state, id, rect, spot, 1.0);
+    right_click_at(&mut viewer, &ctx, &mut state, at, pick);
+    assert_texel_near(menu_texel(&viewer), spot);
+    let opened = menu_texel(&viewer);
+
+    viewer.point_menu = None;
+    click_entry(
+        &mut viewer,
+        &ctx,
+        &mut state,
+        pick,
+        None,
+        NEW_MEASUREMENT_HERE_LABEL,
+    );
+    let entry = viewer
+        .menu_entry_rects
+        .iter()
+        .find(|(text, _)| *text == NEW_MEASUREMENT_HERE_LABEL)
+        .map_or(at, |(_, r)| r.center());
+    let gesture = viewer.point_menu.expect("the entry asked for its step");
+    assert_eq!(
+        gesture,
+        PointGesture::NewMeasurementHere(PointSpot {
+            point,
+            texel: opened
+        }),
+        "the entry carries the texel of the frame the menu opened on, not of \
+         the pointer on the entry at {entry:?}"
+    );
+
+    state.apply_point_gesture(gesture, crate::dock::Tab::Viewer3D);
+    let label = state
+        .focused_measurement_label(id)
+        .expect("a measurement item is focused")
+        .to_string();
+    assert_endpoint_on_point_0(&state, id, &label, 0, spot);
+}
+
+/// *Set Endpoint A Here* and *Set Endpoint B Here* each set their endpoint to
+/// the pixel that shows the spot the menu was opened on.
+#[test]
+fn the_set_endpoint_entries_take_the_spot_right_clicked() {
+    use crate::bench::measurement::set_endpoint_here_label;
+    use crate::measurements::EndpointSide;
+    let (mut viewer, ctx, mut state, id, rect) = facing_point_0(true);
+    state
+        .put_measurement_on_bench(crate::measurements::MeasurementRef::distance(id, 0))
+        .unwrap();
+    let label = state.focused_measurement_label(id).unwrap().to_string();
+    let point = PointRef::new(id, 0);
+    let pick = Some(PickTarget::Point(point));
+    for (side, k, spot) in [
+        (EndpointSide::A, 0, [-0.7, 0.45]),
+        (EndpointSide::B, 1, [0.3, 0.8]),
+    ] {
+        viewer.endpoint_target = state.endpoint_target();
+        let at = on_screen(&viewer, &state, id, rect, spot, 1.0);
+        right_click_at(&mut viewer, &ctx, &mut state, at, pick);
+        assert_texel_near(menu_texel(&viewer), spot);
+        let opened = menu_texel(&viewer);
+        viewer.point_menu = None;
+        click_entry(
+            &mut viewer,
+            &ctx,
+            &mut state,
+            pick,
+            None,
+            set_endpoint_here_label(side),
+        );
+        let gesture = viewer.point_menu.expect("the entry asked for its step");
+        assert_eq!(
+            gesture,
+            PointGesture::SetEndpointHere(
+                PointSpot {
+                    point,
+                    texel: opened
+                },
+                side
+            )
+        );
+        state.apply_point_gesture(gesture, crate::dock::Tab::Viewer3D);
+        assert_endpoint_on_point_0(&state, id, &label, k, spot);
+    }
+}
+
+/// The menu stands on the point's centre, and its entries take the
+/// reference pixel, where the pointer is not on the drawn square: off its
+/// edge on the point's dot, with the node's points drawn as dots, and at zero
+/// patch opacity. A surfel drawn larger shows each texel farther out.
+#[test]
+fn the_point_menu_takes_the_point_s_centre_off_its_drawn_square() {
+    let (mut viewer, ctx, mut state, id, rect) = facing_point_0(true);
+    viewer.measurement_start = state.measurement_start();
+    let point = PointRef::new(id, 0);
+    let pick = Some(PickTarget::Point(point));
+
+    // Past the square's edge, where the pick still names the point.
+    let at = on_screen(&viewer, &state, id, rect, [1.3, 0.0], 1.0);
+    right_click_at(&mut viewer, &ctx, &mut state, at, pick);
+    assert_eq!(menu_texel(&viewer), None);
+    viewer.point_menu = None;
+    click_entry(
+        &mut viewer,
+        &ctx,
+        &mut state,
+        pick,
+        None,
+        NEW_MEASUREMENT_HERE_LABEL,
+    );
+    let gesture = viewer.point_menu.expect("the entry asked for its step");
+    assert_eq!(
+        gesture,
+        PointGesture::NewMeasurementHere(PointSpot::centre(point))
+    );
+    state.apply_point_gesture(gesture, crate::dock::Tab::Viewer3D);
+    let label = state.focused_measurement_label(id).unwrap().to_string();
+    let a = state
+        .bench_measurement(id, &label)
+        .unwrap()
+        .as_distance()
+        .unwrap()
+        .endpoints[0]
+        .unwrap();
+    let reference =
+        crate::measurements::reference_pixel(state.node(id).unwrap().edited(), 0).unwrap();
+    assert_eq!((a.image, a.pixel), (reference.image, reference.pixel));
+
+    // On the square, read at the size the surfel is drawn.
+    let inside = on_screen(&viewer, &state, id, rect, [0.5, 0.5], 1.0);
+    right_click_at(&mut viewer, &ctx, &mut state, inside, pick);
+    assert_texel_near(menu_texel(&viewer), [0.5, 0.5]);
+    viewer.surfel_scale = Some(2.0);
+    right_click_at(&mut viewer, &ctx, &mut state, inside, pick);
+    assert_texel_near(menu_texel(&viewer), [0.25, 0.25]);
+
+    // No surfel is drawn at zero opacity, nor in the Dots style.
+    viewer.surfel_scale = None;
+    right_click_at(&mut viewer, &ctx, &mut state, inside, pick);
+    assert_eq!(menu_texel(&viewer), None);
+    viewer.surfel_scale = Some(1.0);
+    state.scene[0].point_style = crate::scene::PointStyle::Dots;
+    right_click_at(&mut viewer, &ctx, &mut state, inside, pick);
+    assert_eq!(menu_texel(&viewer), None);
+}
+
+/// A node in the Patches style with patch frames and no bitmaps draws its
+/// points as dots, so a right-click on the place its square would cover
+/// takes the point's centre.
+#[test]
+fn a_patches_node_with_no_bitmaps_takes_the_point_s_centre() {
+    let (mut viewer, ctx, mut state, id, rect) = facing_point_0(false);
+    let pick = Some(PickTarget::Point(PointRef::new(id, 0)));
+    let inside = on_screen(&viewer, &state, id, rect, [0.5, 0.5], 1.0);
+    right_click_at(&mut viewer, &ctx, &mut state, inside, pick);
+    assert_eq!(menu_texel(&viewer), None);
+}
+
+/// A point whose own bitmap row is all zeros, as a file writes where the
+/// reference rule picks no observation, gets no surfel in a node that draws
+/// patches and is drawn as a dot, so a right-click on the place its square
+/// would cover takes the point's centre.
+#[test]
+fn a_point_with_an_empty_bitmap_row_takes_its_centre() {
+    let (mut viewer, ctx, mut state, id, rect) = facing_point_0_with(true, |bitmaps| {
+        bitmaps.index_axis_mut(ndarray::Axis(0), 0).fill(0);
+    });
+    let point = state.node(id).unwrap().edited().point(0).unwrap();
+    assert!(point.patch_frame().is_some(), "point 0 keeps its frame");
+    let pick = Some(PickTarget::Point(PointRef::new(id, 0)));
+    let inside = on_screen(&viewer, &state, id, rect, [0.5, 0.5], 1.0);
+    right_click_at(&mut viewer, &ctx, &mut state, inside, pick);
+    assert_eq!(menu_texel(&viewer), None);
 }

@@ -17,7 +17,8 @@
 //!
 //! [`endpoint_views`] runs the mapping backwards: for each candidate, the
 //! pixels in the point's other observations that hold the same texel, where
-//! the endpoint can move to without moving on the surface.
+//! the endpoint can move to without moving on the surface. [`texel_pixel`]
+//! runs it for one observation and one texel.
 //!
 //! `specs/core/reconstruction/measurement-endpoint.md` is the design.
 
@@ -883,18 +884,66 @@ pub fn endpoint_views(
     Ok(views)
 }
 
-/// Observation `k` of `view`, in image `image`, as a view of `candidate`'s
-/// texel, or `None` where it is dropped ([`endpoint_views`]). Its
-/// `resolves_to` is left for the caller.
-fn view_at(
+/// The pixel of observation `observation`'s image that shows texel
+/// `patch_coords` of point `point`'s patch: where that observation's square,
+/// the patch slid onto its keypoint and seen through its image's own
+/// intrinsics, holds the texel.
+///
+/// This is the mapping [`endpoint_views`] offers its views through, for one
+/// observation, so the resolver at the pixel finds that observation's square
+/// holding the same texel, unless another square in the image holds the pixel
+/// and wins the ranking there. `None` where the point, its patch frame or the
+/// observation is missing, where the texel is not a number or lies outside
+/// `[-1, 1]²`, where the image has no pose, where the texel's place projects
+/// outside `[0, width) × [0, height)` of the image or behind its camera, or
+/// where the square faces away from that camera, the resolver's back-facing
+/// test.
+///
+/// ```
+/// use std::sync::Arc;
+/// use sfmtool_core::reconstruction::measurement_endpoint::texel_pixel;
+/// use sfmtool_core::reconstruction::EditedReconstruction;
+/// use sfmtool_core::SfmrReconstruction;
+///
+/// // The demo reconstruction stores no patch frames, so no square holds a texel.
+/// let edited = EditedReconstruction::new(Arc::new(SfmrReconstruction::demo(10)));
+/// assert_eq!(texel_pixel(&edited, 0, 0, [0.25, -0.5]), None);
+/// ```
+pub fn texel_pixel(
+    edited: &EditedReconstruction,
+    point: u32,
+    observation: usize,
+    patch_coords: [f64; 2],
+) -> Option<[f64; 2]> {
+    let [s, t] = patch_coords;
+    if !(s.abs() <= 1.0 && t.abs() <= 1.0) {
+        return None;
+    }
+    let view = edited.point(point)?;
+    let patch = view.patch_frame()?;
+    let image = view.observations().get(observation)?.image_index;
+    texel_sighting(edited, &view, &patch, observation, image, patch_coords)
+        .map(|sighting| sighting.pixel)
+}
+
+/// Where observation `k` of a point shows a texel of its patch: the pixel, the
+/// observation's square and its image's pose.
+struct TexelSighting {
+    pixel: [f64; 2],
+    square: OrientedPatch,
+    cam_from_world: RigidTransform,
+}
+
+/// Observation `k` of `view`, in image `image`, holding texel `patch_coords`
+/// of `patch` in its square, or `None` where [`texel_pixel`] answers `None`.
+fn texel_sighting(
     edited: &EditedReconstruction,
     view: &PointView<'_>,
     patch: &OrientedPatch,
     k: usize,
     image: u32,
-    candidate: &EndpointCandidate,
-    grid: usize,
-) -> Option<EndpointView> {
+    patch_coords: [f64; 2],
+) -> Option<TexelSighting> {
     let image_set = &edited.base.image_set;
     let i = image as usize;
     let posed = image_set.images.get(i)?;
@@ -911,7 +960,7 @@ fn view_at(
         .keypoint_xy(k)
         .map(|xy| [f64::from(xy[0]), f64::from(xy[1])]);
     let square = patch.seen_at_keypoint(&intrinsics, &cam_from_world, keypoint);
-    let [s, t] = candidate.patch_coords;
+    let [s, t] = patch_coords;
     let (xyz, w) = square.corner_homogeneous(s, t);
     if w != 0.0 {
         // The resolver's back-facing test, along this camera's ray to the
@@ -927,6 +976,26 @@ fn view_at(
     if !(inside(x, camera.width) && inside(y, camera.height)) {
         return None;
     }
+    Some(TexelSighting {
+        pixel: [x, y],
+        square,
+        cam_from_world,
+    })
+}
+
+/// Observation `k` of `view`, in image `image`, as a view of `candidate`'s
+/// texel, or `None` where it is dropped ([`endpoint_views`]). Its
+/// `resolves_to` is left for the caller.
+fn view_at(
+    edited: &EditedReconstruction,
+    view: &PointView<'_>,
+    patch: &OrientedPatch,
+    k: usize,
+    image: u32,
+    candidate: &EndpointCandidate,
+    grid: usize,
+) -> Option<EndpointView> {
+    let sighting = texel_sighting(edited, view, patch, k, image, candidate.patch_coords)?;
     let localization = view
         .observation_readings()
         .and_then(|rows| rows.get(k))
@@ -937,10 +1006,11 @@ fn view_at(
         point: candidate.point,
         observation: k,
         image,
-        pixel: [x, y],
+        pixel: sighting.pixel,
         patch_coords: candidate.patch_coords,
         localization,
-        viewing_angle_deg: viewing_angle(&square, &cam_from_world).map(|a| a.angle_deg),
+        viewing_angle_deg: viewing_angle(&sighting.square, &sighting.cam_from_world)
+            .map(|a| a.angle_deg),
         resolves_to: None,
     })
 }

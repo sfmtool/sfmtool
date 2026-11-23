@@ -742,6 +742,88 @@ fn a_view_off_the_image_or_seen_from_behind_is_dropped() {
     assert_eq!(images, [2], "the view in image 1 sees the square's back");
 }
 
+/// `texel_pixel` gives the pixel where an observation's square, slid onto its
+/// keypoint, holds the texel, and the resolver there finds the same point at
+/// the same texel.
+#[test]
+fn texel_pixel_lands_where_the_square_holds_the_texel() {
+    let mut p = pt(0.1, -0.2, 0.0, 0.25);
+    p.images = vec![0, 1, 2];
+    let mut recon = scene(&[p]);
+    // Image 1's keypoint off the projection, so its square slides off the
+    // point and the unslid patch would put the texel elsewhere.
+    let keypoints_xy = recon.point_set.keypoints_xy.as_mut().unwrap();
+    keypoints_xy[[1, 0]] += 3.0;
+    keypoints_xy[[1, 1]] -= 2.0;
+    let value = edited(recon.clone());
+    let (s, t) = (0.4, -0.3);
+    for k in 0..3 {
+        let pixel = texel_pixel(&value, 0, k, [s, t]).expect("the texel is in view");
+        let expected = pixel_of_texel(&recon, 0, k, s, t);
+        assert_close(pixel[0], expected[0], 1e-9, "x");
+        assert_close(pixel[1], expected[1], 1e-9, "y");
+        let back = resolve(&value, k as u32, pixel).unwrap();
+        assert_eq!(back.chosen().point, 0);
+        assert_eq!(back.chosen().observation, k);
+        let [bs, bt] = back.chosen().patch_coords;
+        assert_close(bs, s, 1e-6, "s");
+        assert_close(bt, t, 1e-6, "t");
+    }
+    // The centre texel is the keypoint itself.
+    let centre = texel_pixel(&value, 0, 1, [0.0, 0.0]).unwrap();
+    let kp = recon.point_set.keypoints_xy.as_ref().unwrap();
+    assert_close(centre[0], f64::from(kp[[1, 0]]), 1e-3, "keypoint x");
+    assert_close(centre[1], f64::from(kp[[1, 1]]), 1e-3, "keypoint y");
+}
+
+/// `texel_pixel` answers `None` for a texel outside the square or not a
+/// number, a point or observation that does not exist, a texel whose place is
+/// off the image, and a square seen from behind.
+#[test]
+fn texel_pixel_refuses_what_no_square_shows() {
+    let mut side = pt(5.0, 0.0, 0.0, 0.2);
+    side.images = vec![0, 1];
+    let recon = scene(&[pt(0.0, 0.0, 0.0, 0.2), side]);
+    let value = edited(recon);
+    assert!(texel_pixel(&value, 0, 0, [0.5, -0.5]).is_some());
+    for texel in [
+        [1.01, 0.0],
+        [0.0, -1.5],
+        [f64::NAN, 0.0],
+        [0.0, f64::INFINITY],
+    ] {
+        assert_eq!(texel_pixel(&value, 0, 0, texel), None, "{texel:?}");
+    }
+    assert_eq!(
+        texel_pixel(&value, 0, 2, [0.0, 0.0]),
+        None,
+        "no observation 2"
+    );
+    assert_eq!(texel_pixel(&value, 9, 0, [0.0, 0.0]), None, "no point 9");
+    // Point 1 is inside image 0 and outside image 1.
+    assert!(texel_pixel(&value, 1, 0, [0.0, 0.0]).is_some());
+    assert_eq!(texel_pixel(&value, 1, 1, [0.0, 0.0]), None, "off image 1");
+
+    // A patch nearly edge on, its normal `(-1, 0, 0.05)`: image 0 sees its
+    // front, image 1 its back.
+    let h = 0.2;
+    let u = Vector3::new(0.05, 0.0, 1.0).normalize() * h;
+    let tilted = Pt {
+        pos: [0.0, 0.0, 0.0],
+        w: 1.0,
+        u: [u.x, u.y, u.z],
+        v: [0.0, h, 0.0],
+        images: vec![0, 1],
+    };
+    let value = edited(scene(&[tilted]));
+    assert!(texel_pixel(&value, 0, 0, [0.0, 0.0]).is_some());
+    assert_eq!(
+        texel_pixel(&value, 0, 1, [0.0, 0.0]),
+        None,
+        "seen from behind"
+    );
+}
+
 /// Where another square holds an offered pixel and wins the ranking there,
 /// the view says the endpoint would resolve to that other point.
 #[test]

@@ -145,7 +145,7 @@ Quit does (§ "`quit`").
 | `list_measurements` | read | Every measurement one reconstruction stores, each with the reading its Scene tree row shows |
 | `get_measurement` | read | One measurement whole, as Measurement View shows it: each endpoint's resolution with every candidate or its refusal, the result, and the median line; or a measurement item on the bench, read live |
 | `get_measurement_endpoint_views` | read | The other images that show the place one endpoint of a measurement item names, as Measurement View's *Switch image…* popup lists them |
-| `get_point_reference_pixel` | read | A 3D point's reference pixel, the image and keypoint of its reference observation, which the 3D view's *New Measurement from Here* starts a measurement at and its *Set Endpoint A Here* and *Set Endpoint B Here* set a measurement endpoint to |
+| `get_point_reference_pixel` | read | A 3D point's reference pixel, the image and keypoint of its reference observation, which the 3D view's *New Measurement from Here* starts a measurement at and its *Set Endpoint A Here* and *Set Endpoint B Here* set a measurement endpoint to where the right-click was not on the point's drawn patch |
 | `get_action_log` | read | What has happened in the viewer, from a revision onward, filtered by who did it, optionally with each row's stages |
 | `get_timing_detail` | read | Whether the detailed stages of an operation are being recorded |
 | `set_timing_detail` | write | Record the detailed stages of an operation, or stop |
@@ -1592,10 +1592,13 @@ switch.
 A 3D point's **reference pixel**: the image and keypoint of its reference
 observation (`tracks/reference_observations`), which *Set Endpoint A Here* and
 *Set Endpoint B Here* in the 3D view's point menu set an endpoint of the
-focused measurement item to ([measurement-view.md](measurement-view.md) §
-"A point's reference pixel"), so an agent can place an endpoint from a point
-as the menu does. The point is named in the reconstruction named, as
-`retriangulate_point` names one. The reply:
+focused measurement item to where the right-click that opened the menu was
+not on the point's drawn patch ([measurement-view.md](measurement-view.md) §
+"The spot under the pointer"), so an agent can place an endpoint from a point
+as the menu does there. The tool has no pointer, so it never gives the spot on
+the patch a right-click on it takes; a right-click through `click` does. The
+point is named in the reconstruction named, as `retriangulate_point` names one.
+The reply:
 
 ```jsonc
 { "reconstruction_label": "seoul_bull", "point": 812,

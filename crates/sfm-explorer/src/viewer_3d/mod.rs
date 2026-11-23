@@ -391,6 +391,12 @@ pub(crate) struct Viewer3D {
     /// Why the point menu's *New Measurement from Here* is refused on each
     /// node where it is, set by the dock each frame.
     pub(crate) measurement_start: crate::bench::measurement::MeasurementStart,
+    /// How many times its stored size a surfel is drawn at, `2^patch_size_log2`
+    /// from the HUD, or `None` while the HUD's patch opacity is 0, where every
+    /// node draws its points as dots. Set by the dock each frame; what the
+    /// point menu reads the texel under the pointer against
+    /// ([`Self::texel_under_pointer`]).
+    pub(crate) surfel_scale: Option<f64>,
     /// The measurements this view draws, set by the dock each frame with the
     /// HUD's *Show all measurements* ([`crate::measurement_marks`]).
     pub(crate) measurements: crate::measurement_marks::MeasurementLayer,
@@ -483,12 +489,13 @@ const PATCH_AT_INFINITY_HINT: &str =
     "This track is at infinity: its patch is a bearing with no place, so it has no centre to move.";
 
 /// What the viewport's context menu stands on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum MenuTarget {
     /// The focused item's patch, on the node whose figure was drawn.
     Patch(ReconId),
-    /// A 3D point the pick reported under the cursor.
-    Point(PointRef),
+    /// A 3D point the pick reported under the cursor, with the texel of its
+    /// drawn square the cursor was over.
+    Point(crate::measurements::PointSpot),
 }
 
 impl Default for Viewer3D {
@@ -538,6 +545,7 @@ impl Viewer3D {
             proposal_banner: Vec::new(),
             endpoint_target: None,
             measurement_start: Default::default(),
+            surfel_scale: Some(1.0),
             measurements: Default::default(),
             measurement_press: None,
             measurement_hover: None,
@@ -597,21 +605,30 @@ impl Viewer3D {
             self.menu_target = match (on_patch, hover_pick) {
                 (Some(node), _) => Some(MenuTarget::Patch(node)),
                 (None, Some(crate::scene_renderer::PickTarget::Point(point))) => {
-                    Some(MenuTarget::Point(point))
+                    // The texel is read from the pointer on this frame, the
+                    // one the click landed on: the entries are chosen on a
+                    // later one, after the pointer has moved.
+                    let texel = response
+                        .interact_pointer_pos()
+                        .and_then(|pos| self.texel_under_pointer(scene, point, pos, rect));
+                    Some(MenuTarget::Point(crate::measurements::PointSpot {
+                        point,
+                        texel,
+                    }))
                 }
                 _ => None,
             };
             // Selecting on open rather than on choice: the menu is about this
             // point, and the panels beside the viewport should be saying so
             // while it stands open.
-            if let Some(MenuTarget::Point(point)) = self.menu_target {
-                self.point_menu = Some(PointGesture::Opened(point));
+            if let Some(MenuTarget::Point(spot)) = self.menu_target {
+                self.point_menu = Some(PointGesture::Opened(spot.point));
             }
         }
         self.menu_entry_rects.clear();
         match self.menu_target {
             None => {}
-            Some(MenuTarget::Point(point)) => self.show_point_entries(response, point, busy, scene),
+            Some(MenuTarget::Point(spot)) => self.show_point_entries(response, spot, busy, scene),
             Some(MenuTarget::Patch(node)) => {
                 // The patch as it stands now. A menu left up across an undo that
                 // took the patch away has nothing to stand on, and closes.
@@ -629,6 +646,51 @@ impl Viewer3D {
                 }
             }
         }
+    }
+
+    /// The texel of `point`'s patch the pointer at `pos` is over, where the
+    /// point is drawn as its surfel: the viewport's ray at `pos`, taken back
+    /// through the node's display transform, met with the surfel's square at
+    /// [`Self::surfel_scale`] ([`crate::measurements::texel_under_ray`]).
+    ///
+    /// `None` where the point is drawn as a dot (the node's style is Dots, it
+    /// has no patch bitmaps to draw surfels with, its points are hidden, the
+    /// patch opacity is 0, or the point's own frame or bitmap row is empty,
+    /// which the upload packs no surfel for), or the ray misses the square,
+    /// sees its back or grazes its plane: the menu's measurement entries then
+    /// take the point's reference pixel. A point past the atlas's GPU limits
+    /// is drawn as a dot too and is not caught here.
+    fn texel_under_pointer(
+        &self,
+        scene: &[SceneNode],
+        point: PointRef,
+        pos: Pos2,
+        rect: Rect,
+    ) -> Option<[f64; 2]> {
+        let scale = self.surfel_scale?;
+        let node = crate::scene::node_by_id(scene, point.recon)?;
+        if !(node.show_points && node.draws_patches()) {
+            return None;
+        }
+        let view = node.edited().point(point.point)?;
+        // The upload's own rule for which points get a surfel
+        // (`patch_frame_is_stored` and `patch_bitmap_is_stored`): a point
+        // with an empty bitmap row is drawn as its dot.
+        if !view
+            .patch_bitmap()
+            .is_some_and(sfmtool_core::reconstruction::patch_bitmap_is_stored)
+        {
+            return None;
+        }
+        let patch_frame = view.patch_frame()?;
+        let into_recon = node.transform().inverse().ok()?;
+        let (origin, direction) = self.camera.ray_through(pos, rect);
+        crate::measurements::texel_under_ray(
+            &patch_frame,
+            into_recon.apply_to_point(&origin),
+            into_recon.rotation.to_rotation_matrix() * direction,
+            scale,
+        )
     }
 
     /// The four reframes, on the node whose patch the menu opened on.
@@ -662,9 +724,11 @@ impl Viewer3D {
     }
 
     /// The point's entries: `Edit on Bench` and `Retriangulate Point`, then
-    /// `New Measurement from Here`, which starts a measurement at the point's
-    /// reference pixel, and, with a measurement item focused, `Set Endpoint A
-    /// Here` and `Set Endpoint B Here`, which set that endpoint to it.
+    /// `New Measurement from Here`, which starts a measurement at the pixel
+    /// that shows the spot the menu was opened on
+    /// ([`crate::measurements::spot_pixel`]), and, with a measurement item
+    /// focused, `Set Endpoint A Here` and `Set Endpoint B Here`, which set
+    /// that endpoint to it.
     ///
     /// The measurement entries are greyed with the reason where a step on the
     /// bench they edit is refused, the point has no reference pixel
@@ -673,15 +737,16 @@ impl Viewer3D {
     fn show_point_entries(
         &mut self,
         response: &egui::Response,
-        point: PointRef,
+        spot: crate::measurements::PointSpot,
         busy: Option<&str>,
         scene: &[SceneNode],
     ) {
+        let point = spot.point;
         let endpoint_refusal = self
             .endpoint_target
             .as_ref()
-            .map(|target| target.at_point(scene, point).err());
-        let start_refusal = self.measurement_start.at_point(scene, point).err();
+            .map(|target| target.at_point(scene, spot).err());
+        let start_refusal = self.measurement_start.at_point(scene, spot).err();
         let mut rects = Vec::with_capacity(5);
         crate::context_menu::on_secondary_click(response).show(|ui| {
             let mut entry = |ui: &mut egui::Ui,
@@ -728,19 +793,19 @@ impl Viewer3D {
                 ui,
                 crate::bench::measurement::NEW_MEASUREMENT_HERE_LABEL,
                 start_refusal.as_deref(),
-                "Start a distance measurement with endpoint A at this point's reference pixel, \
-                 the keypoint of the observation its patch is rendered from, and open \
-                 Measurement View on it.",
+                "Start a distance measurement with endpoint A at the spot on this point's \
+                 patch that was right-clicked, as the image its patch is rendered from shows \
+                 it, and open Measurement View on it.",
             ) {
-                self.point_menu = Some(PointGesture::NewMeasurementHere(point));
+                self.point_menu = Some(PointGesture::NewMeasurementHere(spot));
                 ui.close();
             }
             if let Some(refusal) = &endpoint_refusal {
                 for side in crate::measurements::EndpointSide::BOTH {
                     let hint = format!(
-                        "Set endpoint {} of the measurement being edited to this point's \
-                         reference pixel: the keypoint of the observation its patch is \
-                         rendered from.",
+                        "Set endpoint {} of the measurement being edited to the spot on this \
+                         point's patch that was right-clicked, as the image its patch is \
+                         rendered from shows it.",
                         side.letter()
                     );
                     if entry(
@@ -749,7 +814,7 @@ impl Viewer3D {
                         refusal.as_deref(),
                         &hint,
                     ) {
-                        self.point_menu = Some(PointGesture::SetEndpointHere(point, side));
+                        self.point_menu = Some(PointGesture::SetEndpointHere(spot, side));
                         ui.close();
                     }
                 }

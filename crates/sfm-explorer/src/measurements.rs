@@ -22,8 +22,8 @@
 use std::sync::Arc;
 
 use sfmtool_core::reconstruction::measurement_endpoint::{
-    resolve_distance_measurements, EndpointRefusal, EndpointResolution, MeasurementEndpointOptions,
-    ResolvedDistanceMeasurement,
+    resolve_distance_measurements, texel_pixel, EndpointRefusal, EndpointResolution,
+    MeasurementEndpointOptions, ResolvedDistanceMeasurement,
 };
 use sfmtool_core::{EditedReconstruction, LengthUnit, MeasurementsData, SfmrReconstruction};
 
@@ -584,14 +584,16 @@ pub(crate) fn image_name(recon: &SfmrReconstruction, image: u32) -> String {
 /// A point's **reference pixel**: the image and keypoint of its reference
 /// observation (`tracks/reference_observations`), the pixel that stands for
 /// the point where a measurement's endpoint is taken from one
-/// ([`reference_pixel`]).
+/// ([`reference_pixel`]), or another pixel of that image, one that shows a
+/// spot on the point's patch ([`spot_pixel`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct ReferencePixel {
     /// The reference observation's index in the point's track.
     pub(crate) observation: usize,
     /// Its image.
     pub(crate) image: u32,
-    /// Its keypoint, the centre of its square.
+    /// Its keypoint, the centre of its square, or for [`spot_pixel`] the
+    /// pixel of that image that shows the spot.
     pub(crate) pixel: [f64; 2],
 }
 
@@ -649,6 +651,100 @@ pub(crate) fn reference_pixel(
         image: view.observations()[observation].image_index,
         pixel: [f64::from(x), f64::from(y)],
     })
+}
+
+/// Where on a point the 3D view's point menu was opened: the point, and the
+/// texel `(s, t)` of its patch under the pointer when the right-click landed
+/// on the point's drawn square ([`texel_under_ray`]), else `None`.
+///
+/// Recorded on the frame the menu opens, since the entries are chosen on a
+/// later frame, after the pointer has moved. The texel rather than the pixel
+/// is kept, so the pixel is read against the version on screen when an entry
+/// is chosen, as the reference pixel is ([`spot_pixel`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PointSpot {
+    /// The point.
+    pub(crate) point: crate::scene::PointRef,
+    /// The texel of its patch under the pointer, or `None` for its centre.
+    pub(crate) texel: Option<[f64; 2]>,
+}
+
+#[cfg(test)]
+impl PointSpot {
+    /// The point's centre, texel `(0, 0)`: what its reference pixel shows.
+    pub(crate) fn centre(point: crate::scene::PointRef) -> Self {
+        Self { point, texel: None }
+    }
+}
+
+/// The pixel a measurement's endpoint is taken at for texel `texel` of point
+/// `point`'s patch in `edited`: the pixel of its reference observation's image
+/// where that observation's square holds the texel (core's `texel_pixel`, the
+/// mapping `endpoint_views` offers its views through), or the point's
+/// reference pixel, texel `(0, 0)`, where `texel` is `None` or that mapping
+/// answers `None`: the texel's place is outside the reference image, or the
+/// square faces away from that camera.
+///
+/// Refused as [`reference_pixel`] refuses: no patch frame, no reference
+/// observation, or a point at infinity. Resolving the pixel lands back on the
+/// point at about `texel`, unless another square in that image holds the
+/// pixel and wins the ranking there; nothing here checks that.
+pub(crate) fn spot_pixel(
+    edited: &EditedReconstruction,
+    point: u32,
+    texel: Option<[f64; 2]>,
+) -> Result<ReferencePixel, String> {
+    let reference = reference_pixel(edited, point)?;
+    let pixel = texel
+        .and_then(|texel| texel_pixel(edited, point, reference.observation, texel))
+        .unwrap_or(reference.pixel);
+    Ok(ReferencePixel { pixel, ..reference })
+}
+
+/// The texel `(s, t)` of `patch_frame`'s square, drawn at `surfel_scale` times
+/// its stored size, that the ray from `origin` along `direction` meets, all in
+/// the reconstruction's own coordinates: the place on the drawn surfel the
+/// pointer is over, as the texel of the bitmap drawn there.
+///
+/// The surfel is `c + surfel_scale · (s·u + t·v)` with its bitmap stretched
+/// over it, so the bitmap's texel `(s, t)` is drawn where the ray meets that
+/// square at `(s·surfel_scale, t·surfel_scale)`, and that texel is the one
+/// answered. `None` where the ray meets the square nowhere in front of the eye
+/// or outside it (`|s|` or `|t|` over 1), sees its back, which the viewport
+/// culls, or meets its plane at under
+/// [`MIN_PLANE_ANGLE_DEG`](crate::bench::geometry::MIN_PLANE_ANGLE_DEG): there
+/// a pixel of pointer travel crosses more than eleven pixels' worth of the
+/// square, so the texel under the pointer is not the one aimed at, which is
+/// the bar the bench's handles refuse a press under. `None` too for a point at
+/// infinity, which has no place to measure to, and for a scale that is not a
+/// positive number.
+pub(crate) fn texel_under_ray(
+    patch_frame: &sfmtool_core::patch::cloud::OrientedPatch,
+    origin: nalgebra::Point3<f64>,
+    direction: nalgebra::Vector3<f64>,
+    surfel_scale: f64,
+) -> Option<[f64; 2]> {
+    if patch_frame.w == 0.0 || !(surfel_scale.is_finite() && surfel_scale > 0.0) {
+        return None;
+    }
+    let ray = direction.try_normalize(1e-12)?;
+    let normal = patch_frame.normal();
+    // The ray runs against the outward normal on the side the surfel is drawn
+    // on; `sin` of the angle between the ray and the plane is `-ray · n`.
+    // A normal that is not a number (axes of no length) fails the bar too.
+    let facing = -ray.dot(&normal);
+    let bar = crate::bench::geometry::MIN_PLANE_ANGLE_DEG
+        .to_radians()
+        .sin();
+    if facing.is_nan() || facing < bar {
+        return None;
+    }
+    let u = patch_frame.u_axis * (patch_frame.half_extent[0] * surfel_scale);
+    let v = patch_frame.v_axis * (patch_frame.half_extent[1] * surfel_scale);
+    let system = nalgebra::Matrix3::from_columns(&[ray, -u, -v]);
+    let x = system.lu().solve(&(patch_frame.center - origin))?;
+    let (lambda, s, t) = (x[0], x[1], x[2]);
+    (lambda > 0.0 && s.abs() <= 1.0 && t.abs() <= 1.0).then_some([s, t])
 }
 
 /// Where the finite endpoints of `measurement` are drawn, in the shared world

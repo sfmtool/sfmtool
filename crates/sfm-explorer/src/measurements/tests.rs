@@ -501,3 +501,212 @@ fn a_point_without_a_reference_pixel_says_why() {
         Err(NO_PATCH_FOR_PIXEL.to_string())
     );
 }
+
+// ── The spot under the pointer ──────────────────────────────────────────
+
+/// A square tilted out of every axis plane, its centre off the origin, with
+/// half-extents that differ, so a reading that mixes up `u` and `v` or drops
+/// a half-extent fails.
+fn tilted_square() -> sfmtool_core::patch::cloud::OrientedPatch {
+    let turn = nalgebra::UnitQuaternion::from_euler_angles(0.3, -0.2, 0.7);
+    sfmtool_core::patch::cloud::OrientedPatch::new(
+        nalgebra::Point3::new(0.5, -1.0, 2.0),
+        turn * nalgebra::Vector3::x(),
+        turn * nalgebra::Vector3::y(),
+        [0.3, 0.2],
+    )
+}
+
+/// An eye `distance` in front of `square`'s centre, off its normal by
+/// `angle_deg` towards `u`: the side the surfel is drawn on.
+fn eye_before(
+    square: &sfmtool_core::patch::cloud::OrientedPatch,
+    distance: f64,
+    angle_deg: f64,
+) -> nalgebra::Point3<f64> {
+    let a = angle_deg.to_radians();
+    square.center + (square.normal() * a.cos() + square.u_axis * a.sin()) * distance
+}
+
+/// The ray from `eye` through texel `(s, t)` of `square` drawn at `scale`
+/// meets the square at that texel, at any scale: the surfel at scale 2 shows
+/// texel `(s, t)` where the unscaled one shows `(2s, 2t)`.
+#[test]
+fn texel_under_ray_reads_the_texel_the_ray_meets() {
+    let square = tilted_square();
+    let eye = eye_before(&square, 3.0, 25.0);
+    for scale in [1.0, 2.0, 0.5] {
+        for [s, t] in [[0.6, -0.35], [-0.9, 0.8], [0.0, 0.0]] {
+            let aim = square.center
+                + square.u_axis * (s * square.half_extent[0] * scale)
+                + square.v_axis * (t * square.half_extent[1] * scale);
+            let [hs, ht] = texel_under_ray(&square, eye, (aim - eye) * 7.0, scale)
+                .unwrap_or_else(|| panic!("({s}, {t}) at scale {scale} is on the square"));
+            assert!(
+                (hs - s).abs() < 1e-9 && (ht - t).abs() < 1e-9,
+                "({hs}, {ht}) against ({s}, {t}) at scale {scale}"
+            );
+        }
+    }
+}
+
+/// No texel where the ray misses the square, sees its back, points away from
+/// it, grazes its plane under the bench's bar, or the point is at infinity.
+#[test]
+fn texel_under_ray_answers_none_off_the_drawn_square() {
+    let square = tilted_square();
+    let eye = eye_before(&square, 3.0, 25.0);
+    let through = |s: f64, t: f64| square.to_world(s, t) - eye;
+    assert!(texel_under_ray(&square, eye, through(0.95, -0.95), 1.0).is_some());
+    // Outside the square: the dot of a point may stick out past a small one.
+    assert_eq!(texel_under_ray(&square, eye, through(1.05, 0.0), 1.0), None);
+    assert_eq!(texel_under_ray(&square, eye, through(0.0, -1.2), 1.0), None);
+    // The same texel is inside the square drawn twice as large.
+    assert!(texel_under_ray(&square, eye, through(1.05, 0.0), 2.0).is_some());
+    // Pointing away from the square.
+    assert_eq!(texel_under_ray(&square, eye, -through(0.1, 0.1), 1.0), None);
+    // From behind: the viewport culls the surfel's back.
+    let behind = square.center - (eye - square.center);
+    assert!((behind - square.center).dot(&square.normal()) < 0.0);
+    let from_behind = square.to_world(0.2, 0.1) - behind;
+    assert_eq!(texel_under_ray(&square, behind, from_behind, 1.0), None);
+    // A point at infinity has no place to measure to.
+    let mut sky = square.clone();
+    sky.w = 0.0;
+    assert_eq!(texel_under_ray(&sky, eye, through(0.2, 0.1), 1.0), None);
+}
+
+/// The grazing bar is the bench's [`MIN_PLANE_ANGLE_DEG`]: a ray at a degree
+/// more than it to the plane reads a texel, and one a degree less does not.
+#[test]
+fn texel_under_ray_refuses_a_ray_grazing_the_square() {
+    use crate::bench::geometry::MIN_PLANE_ANGLE_DEG;
+    let square = tilted_square();
+    // The angle off the normal is 90° less the angle to the plane; the ray
+    // runs to the centre, so it meets the square wherever the bar allows.
+    for (to_plane, reads) in [
+        (MIN_PLANE_ANGLE_DEG + 1.0, true),
+        (MIN_PLANE_ANGLE_DEG - 1.0, false),
+    ] {
+        let eye = eye_before(&square, 3.0, 90.0 - to_plane);
+        let hit = texel_under_ray(&square, eye, square.center - eye, 1.0);
+        assert_eq!(hit.is_some(), reads, "{to_plane}° to the plane: {hit:?}");
+    }
+}
+
+/// Degenerate input answers `None` and never panics: a ray or an eye that is
+/// not a number, a ray of no length, a scale that is not a positive number,
+/// and a square of no extent.
+#[test]
+fn texel_under_ray_answers_none_on_degenerate_input() {
+    let square = tilted_square();
+    let eye = eye_before(&square, 3.0, 25.0);
+    let ray = square.center - eye;
+    let nan = nalgebra::Vector3::new(f64::NAN, 0.0, 0.0);
+    assert!(texel_under_ray(&square, eye, ray, 1.0).is_some());
+    assert_eq!(texel_under_ray(&square, eye, nan, 1.0), None);
+    assert_eq!(
+        texel_under_ray(&square, eye, nalgebra::Vector3::zeros(), 1.0),
+        None
+    );
+    assert_eq!(
+        texel_under_ray(&square, nalgebra::Point3::from(nan), ray, 1.0),
+        None
+    );
+    for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        assert_eq!(texel_under_ray(&square, eye, ray, scale), None, "{scale}");
+    }
+    let mut flat = square.clone();
+    flat.half_extent = [0.0, 0.0];
+    assert_eq!(texel_under_ray(&flat, eye, ray, 1.0), None);
+    let mut no_axes = square.clone();
+    no_axes.u_axis = nalgebra::Vector3::zeros();
+    assert_eq!(texel_under_ray(&no_axes, eye, ray, 1.0), None);
+}
+
+/// The pixel for a spot on point 0 is in its reference image, image 1, away
+/// from the keypoint, and an endpoint there resolves alone to point 0 at that
+/// texel; with no spot it is the reference pixel itself.
+#[test]
+fn a_spot_pixel_resolves_to_its_point_at_its_texel() {
+    use sfmtool_core::reconstruction::measurement_endpoint::{
+        resolve_measurement_endpoint, CandidateStanding, MeasurementEndpointOptions,
+    };
+    let edited = EditedReconstruction::new(Arc::new(super::fixture::referenced_reconstruction(
+        Some("m"),
+    )));
+    let reference = reference_pixel(&edited, 0).unwrap();
+    assert_eq!(spot_pixel(&edited, 0, None), Ok(reference));
+    let (s, t) = (0.6, -0.4);
+    let spot = spot_pixel(&edited, 0, Some([s, t])).expect("point 0 has a reference");
+    assert_eq!((spot.observation, spot.image), (1, 1));
+    let off = (spot.pixel[0] - reference.pixel[0]).hypot(spot.pixel[1] - reference.pixel[1]);
+    assert!(off > 5.0, "the spot is {off} px from the keypoint");
+    let resolved = resolve_measurement_endpoint(
+        &edited,
+        spot.image,
+        spot.pixel,
+        &MeasurementEndpointOptions::default(),
+    )
+    .expect("the pixel resolves");
+    let chosen = resolved.chosen();
+    assert_eq!(chosen.point, 0);
+    assert_eq!(chosen.standing, CandidateStanding::Alone);
+    let [rs, rt] = chosen.patch_coords;
+    assert!(
+        (rs - s).abs() < 1e-6 && (rt - t).abs() < 1e-6,
+        "texel ({rs}, {rt})"
+    );
+}
+
+/// A spot whose place falls outside the reference image, or on a square that
+/// faces away from the reference camera, takes the reference pixel; a texel
+/// outside the square does too. The three refusals stand with a spot as
+/// without one.
+#[test]
+fn a_spot_pixel_falls_back_to_the_reference_pixel() {
+    let referenced = super::fixture::referenced_reconstruction(Some("m"));
+    // Point 0's patch 20 units across: texel `(0.9, 0)` is 9 units to the
+    // side, well off image 1 at a depth of 8 and a focal length of 500.
+    let mut wide = referenced.clone();
+    wide.point_set.patch_u_halfvec_xyz.as_mut().unwrap()[[0, 0]] = 10.0;
+    let wide = EditedReconstruction::new(Arc::new(wide));
+    let reference = reference_pixel(&wide, 0).unwrap();
+    assert_ne!(
+        spot_pixel(&wide, 0, Some([0.01, 0.0])).unwrap().pixel,
+        reference.pixel,
+        "a spot near the centre is on the image"
+    );
+    assert_eq!(spot_pixel(&wide, 0, Some([0.9, 0.0])), Ok(reference));
+
+    // Point 0's patch turned to face away from the cameras.
+    let mut away = referenced.clone();
+    let set = &mut away.point_set;
+    std::mem::swap(
+        set.patch_u_halfvec_xyz.as_mut().unwrap(),
+        set.patch_v_halfvec_xyz.as_mut().unwrap(),
+    );
+    let away = EditedReconstruction::new(Arc::new(away));
+    let reference = reference_pixel(&away, 0).unwrap();
+    assert_eq!(spot_pixel(&away, 0, Some([0.6, -0.4])), Ok(reference));
+
+    let edited = EditedReconstruction::new(Arc::new(referenced));
+    let reference = reference_pixel(&edited, 0).unwrap();
+    assert_eq!(spot_pixel(&edited, 0, Some([1.5, 0.0])), Ok(reference));
+    assert_eq!(spot_pixel(&edited, 0, Some([f64::NAN, 0.0])), Ok(reference));
+
+    let spot = Some([0.6, -0.4]);
+    assert_eq!(
+        spot_pixel(&edited, 1, spot),
+        Err(NO_REFERENCE_FOR_PIXEL.to_string())
+    );
+    assert_eq!(
+        spot_pixel(&edited, SKY, spot),
+        Err(AT_INFINITY_FOR_PIXEL.to_string())
+    );
+    let demo = EditedReconstruction::new(Arc::new(SfmrReconstruction::demo(10)));
+    assert_eq!(
+        spot_pixel(&demo, 0, spot),
+        Err(NO_PATCH_FOR_PIXEL.to_string())
+    );
+}
