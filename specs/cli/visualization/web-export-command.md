@@ -57,8 +57,9 @@ when no photograph can be read, the points are drawn as splats. A photograph
 that cannot be decoded, or is not its camera's size, is left out of the
 render; a read of one the render was handed that fails ends the export with
 `WebExportError::Photograph`, which the binding raises as a `RuntimeError`
-and the command reports as its failure, the message naming the photograph,
-as it reports a refusal. The render reads the photographs through a
+and the command reports as its failure with exit status 1, the message
+naming the photograph (a refusal is a usage error, exit status 2). The
+render reads the photographs through a
 photograph cache that keeps nothing, so each photograph it answers holds the
 tiles of its decode while the render reads it, is decoded once, and is not
 read from its file again
