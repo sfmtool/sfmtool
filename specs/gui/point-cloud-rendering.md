@@ -544,9 +544,10 @@ The EDL shader receives these additional uniforms for the supernova:
 ## Render Pipeline Summary
 
 The passes that draw the point cloud and its post-processing, in the order the
-renderer records them. The background image before them and the track rays and
-bench figure after them are in [architecture.md](architecture.md#pass-order)
-§ "Pass Order", which lists every pass.
+renderer records them. The background image before them, and after them the
+track rays and the pass that draws the 3D view's measurements and then the
+bench figure, are in [architecture.md](architecture.md#pass-order) § "Pass
+Order", which lists every pass.
 
 ```
 Pass 1a: Point splats
@@ -588,7 +589,9 @@ Passes 1a to 1e share one hardware depth buffer, so points, frustums, image
 quads and surfels occlude each other. The passes after the EDL read that buffer
 and none writes it: Pass 2b attaches it read-only and tests against it, and the
 target indicator samples it, which lets it render with depth-aware
-transparency.
+transparency. The track rays and the pass of the measurements and the bench
+figure after them sample it the same way, and none of them writes a pick ID,
+so a click picks the scene under a measurement's mark.
 
 ---
 

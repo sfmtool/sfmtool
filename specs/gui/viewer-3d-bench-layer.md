@@ -57,8 +57,8 @@ cluster-stage item has no shared geometry behind it and draws nothing, as does a
 track nothing has given a patch. Items that are not focused draw nothing, which
 is what Image Detail does too: the bench holds several and both panels show the
 one being worked on. A focused measurement item is drawn by the measurements'
-own marks and line, in the same violet, as a CPU overlay rather than by this
-pass, and has no handle in this view
+own marks and line, in the same violet, as edges of this pass drawn before the
+figure (§ "Depth against the scene"), and has no handle in this view
 ([`measurement-view.md`](measurement-view.md) § "Drawing measurements").
 
 **While a handle is held, what is drawn is the preview.** The figure is rebuilt
@@ -205,6 +205,23 @@ corners agree in every view but a grazing one. The figure is rebuilt on the CPU
 and re-uploaded every frame it is drawn, since the barbs turn to face the eye
 and there is no state to key it on that a camera move does not invalidate. It is
 a few hundred instances.
+
+**The pass draws the 3D view's measurements too**, before the figure, so the
+figure is over them as its handles take a press before theirs do
+([`measurement-view.md`](measurement-view.md) § "Drawing measurements"). Their
+marks and lines are edges of the same kind, rebuilt on the CPU each frame
+(`viewer_3d::measurements::ribbons`), and each edge instance carries the two
+things in which they differ from the figure's. One is **its width**: the
+figure's edges are `BENCH_LINE_HALF_WIDTH`, and a measurement's are its stroke
+in points, in physical pixels. The other is **whether its part behind the scene
+fades**: the figure's does, as the table above says, and a measurement's
+holds at `BEHIND_OPACITY` however far behind it is, as a highlighted surfel's
+hidden outline does ([`patch-rendering.md`](patch-rendering.md)), since a
+measurement far behind the cloud has to stay findable and has no size of its
+own to fade over. The pass has one colour target and no depth attachment, so
+it writes no pick ID and no depth, and a click is decided by the measurements'
+and the handles' own hit tests on the CPU and otherwise by the scene under
+them.
 
 ## The handles
 
@@ -625,8 +642,10 @@ four half-lengths.
 wgpu's `noop` backend, where wgpu-core still performs its full validation while
 wgpu-hal stubs the driver: a vertex layout that disagrees with the instance
 struct, or a uniform block whose Rust side has drifted from the WGSL, is a
-validation error there rather than a blank pass on a real GPU. The depth-aware
-blend itself is checked by eye, with MCP screenshots of the viewport showing a
+validation error there rather than a blank pass on a real GPU. The same tests
+check that the figure's edges fade and the measurements' do not, at the widths
+each carries, and that the measurements' upload holds one instance per ribbon.
+The depth-aware blend itself is checked by eye, with MCP screenshots of the viewport showing a
 square lying on a surface, one in front of it and one behind it
 ([`mcp-server.md`](mcp-server.md)).
 

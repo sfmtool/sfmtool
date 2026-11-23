@@ -13,10 +13,13 @@
 
 use sfmtool_core::bench::EditableTrack;
 
-use super::super::gpu_types::{BenchDiscVertex, BenchEdgeInstance, BenchTrackUniforms};
+use super::super::gpu_types::{
+    BenchDiscVertex, BenchEdgeInstance, BenchTrackUniforms, BENCH_LINE_HALF_WIDTH,
+};
 use super::super::SceneRenderer;
 use crate::scene::ImageRef;
 use crate::viewer_3d::bench_track::{self, Figure};
+use crate::viewer_3d::measurements::Ribbon;
 
 fn device() -> (wgpu::Device, wgpu::Queue) {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -191,23 +194,15 @@ fn the_pass_pipelines_agree_with_the_buffers_the_upload_writes() {
             view_proj: [[0.0; 4]; 4],
             view: [[0.0; 4]; 4],
             screen_size: [64.0, 64.0],
-            line_half_width: 1.25,
             near: 0.1,
             fog_distance: 1.0,
-            _pad: [0.0; 3],
         }),
     );
     assert_eq!(std::mem::size_of::<BenchTrackUniforms>() % 16, 0);
 
     let figure = staged_figure();
-    let edges: Vec<BenchEdgeInstance> = figure
-        .strokes()
-        .map(|stroke| BenchEdgeInstance {
-            endpoint_a: stroke.a,
-            endpoint_b: stroke.b,
-            color: stroke.color,
-        })
-        .collect();
+    let edges = super::figure_instances(&figure);
+    let measurements = super::measurement_instances(&[ribbon(1.0)]);
     let disc: Vec<BenchDiscVertex> = figure
         .disc
         .iter()
@@ -229,6 +224,7 @@ fn the_pass_pipelines_agree_with_the_buffers_the_upload_writes() {
     };
     let edge_buffer = buffer("bench track edges", bytemuck::cast_slice(&edges));
     let disc_buffer = buffer("bench track disc", bytemuck::cast_slice(&disc));
+    let measurement_buffer = buffer("measurement edges", bytemuck::cast_slice(&measurements));
 
     let mut encoder = device.create_command_encoder(&Default::default());
     {
@@ -246,6 +242,12 @@ fn the_pass_pipelines_agree_with_the_buffers_the_upload_writes() {
             depth_stencil_attachment: None,
             ..Default::default()
         });
+        pass.set_pipeline(&resources.edge_pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.set_vertex_buffer(0, quad.slice(..));
+        pass.set_vertex_buffer(1, measurement_buffer.slice(..));
+        pass.draw(0..4, 0..measurements.len() as u32);
+
         pass.set_pipeline(&resources.disc_pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.set_vertex_buffer(0, disc_buffer.slice(..));
@@ -264,4 +266,109 @@ fn the_pass_pipelines_agree_with_the_buffers_the_upload_writes() {
         error.is_none(),
         "the bench track pass is invalid: {error:?}"
     );
+}
+
+/// A measurement ribbon from the origin to `x` along the X axis, in a
+/// half-transparent orange, 3 pixels wide.
+fn ribbon(x: f32) -> Ribbon {
+    Ribbon {
+        a: [0.0, 0.0, 0.0, 1.0],
+        b: [x, 0.0, 0.0, 1.0],
+        color: [1.0, 0.5, 0.0, 0.55],
+        half_width: 1.5,
+    }
+}
+
+#[test]
+fn the_figure_fades_behind_the_scene_and_the_measurements_do_not() {
+    let figure = staged_figure();
+    let edges = super::figure_instances(&figure);
+    assert_eq!(edges.len(), figure.strokes().count());
+    for (edge, stroke) in edges.iter().zip(figure.strokes()) {
+        assert_eq!(
+            (edge.endpoint_a, edge.endpoint_b, edge.color),
+            (stroke.a, stroke.b, stroke.color)
+        );
+        assert_eq!(edge.half_width, BENCH_LINE_HALF_WIDTH);
+        assert_eq!(edge.fade, 1.0, "the figure fades with distance behind");
+    }
+
+    let ribbons = [ribbon(1.0), ribbon(2.0)];
+    let measurements = super::measurement_instances(&ribbons);
+    assert_eq!(
+        measurements,
+        vec![
+            BenchEdgeInstance {
+                endpoint_a: ribbons[0].a,
+                endpoint_b: ribbons[0].b,
+                color: ribbons[0].color,
+                half_width: 1.5,
+                fade: 0.0,
+            },
+            BenchEdgeInstance {
+                endpoint_a: ribbons[1].a,
+                endpoint_b: ribbons[1].b,
+                color: ribbons[1].color,
+                half_width: 1.5,
+                fade: 0.0,
+            },
+        ],
+        "a measurement holds at BEHIND_OPACITY behind the scene"
+    );
+
+    // What the flag does: an edge that does not fade is drawn at the shared
+    // BEHIND_OPACITY wherever it is behind, before any fog is read.
+    let shader = include_str!("../../shaders/bench_track.wgsl");
+    let lines: Vec<&str> = shader.lines().map(str::trim).collect();
+    let flag = lines
+        .iter()
+        .position(|l| *l == "if fade == 0.0 {")
+        .expect("bench_track.wgsl tests the fade flag");
+    assert_eq!(lines[flag + 1], "return BEHIND_OPACITY;");
+    let fog = lines
+        .iter()
+        .position(|l| l.contains("exp(-behind / uniforms.fog_distance)"))
+        .expect("the figure still fades");
+    assert!(flag < fog, "the flag is read before the fog");
+}
+
+#[test]
+fn an_upload_of_measurements_holds_one_instance_per_ribbon_and_nothing_for_none() {
+    let (device, _queue) = device();
+    let mut r = SceneRenderer::new();
+
+    r.upload_measurements(&device, &[ribbon(1.0), ribbon(2.0), ribbon(3.0)]);
+    assert_eq!(r.measurement_edge_count, 3);
+    assert!(r.measurement_edge_buffer.is_some());
+    assert_eq!(r.bench_track_edge_count, 0, "the figure's own edges apart");
+    assert_eq!(
+        r.bench_pass_count(),
+        3,
+        "the pass draws them with no figure"
+    );
+
+    r.upload_measurements(&device, &[]);
+    assert_eq!(r.measurement_edge_count, 0);
+    assert!(r.measurement_edge_buffer.is_none());
+    assert_eq!(r.bench_pass_count(), 0);
+    device.poll(wgpu::PollType::Poll).expect("device poll");
+}
+
+#[test]
+fn the_pass_clips_a_finite_edge_at_the_near_plane() {
+    // A measurement's line with one end behind the eye is handed to the pass
+    // with that end as it is; the edge shader clips it at the near plane in
+    // view space before the divide, as it clips the figure's own segments.
+    let shader = include_str!("../../shaders/bench_track.wgsl");
+    for line in [
+        "let near_z = -uniforms.near;",
+        "if !a_in_front && !b_in_front {",
+        "world_a = mix(world_a, world_b, t);",
+        "world_b = mix(world_a, world_b, t);",
+    ] {
+        assert!(
+            shader.lines().any(|l| l.trim() == line),
+            "bench_track.wgsl does not declare `{line}`"
+        );
+    }
 }

@@ -317,6 +317,7 @@ impl TabContext<'_> {
             // Nothing selected is nothing on a bench: the figure would
             // otherwise hang in the scene after the node that held it closed.
             self.viewer_3d.bench_figure = None;
+            self.viewer_3d.measurement_ribbons.clear();
             ui.centered_and_justified(|ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(100.0);

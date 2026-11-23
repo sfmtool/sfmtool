@@ -114,19 +114,29 @@ pub(super) struct CompassEdgeInstance {
     pub(crate) endpoint_b: [f32; 4],
 }
 
-/// One edge of the bench figure: two homogeneous world endpoints and its own
-/// colour.
+/// One edge the bench track pass draws, of the bench figure or of a drawn
+/// measurement: two homogeneous world endpoints, its own colour, its own width
+/// and how it is drawn behind the scene.
 ///
 /// Wider than [`CompassEdgeInstance`] because the compass is one object in one
-/// colour, while this figure's marks each carry their observation's verdict
-/// colour. `w` is `1.0` for a place and `0.0` for a direction, which is how a
-/// track at infinity is drawn: rotation-only, as a point at infinity is.
+/// colour, while this pass's pieces each carry their own: an observation's
+/// verdict colour, or a measurement's colour and its halo. `w` is `1.0` for a
+/// place and `0.0` for a direction, which is how a track at infinity is drawn:
+/// rotation-only, as a point at infinity is.
 #[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct BenchEdgeInstance {
     pub(crate) endpoint_a: [f32; 4],
     pub(crate) endpoint_b: [f32; 4],
     pub(crate) color: [f32; 4],
+    /// Half the ribbon's width, in pixels: [`BENCH_LINE_HALF_WIDTH`] for the
+    /// bench figure, and a measurement's own stroke.
+    pub(crate) half_width: f32,
+    /// `1.0` where the part behind the scene fades with how far behind it is,
+    /// as the bench figure does; `0.0` where it holds at `BEHIND_OPACITY`
+    /// however far behind it is, as a measurement does and as a highlighted
+    /// surfel's hidden outline does.
+    pub(crate) fade: f32,
 }
 
 /// One vertex of the bench figure's filled centre disc.
@@ -141,20 +151,19 @@ pub(super) struct BenchDiscVertex {
 ///
 /// [`FrustumUniforms`]'s camera block, with the hover index it has no use for
 /// replaced by the one number this pass needs that no other does: how far
-/// behind the scene a fragment fades to the floor opacity.
+/// behind the scene a fragment fades to the floor opacity. The line width is
+/// each edge's own ([`BenchEdgeInstance::half_width`]).
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct BenchTrackUniforms {
     pub(crate) view_proj: [[f32; 4]; 4],
     pub(crate) view: [[f32; 4]; 4],
     pub(crate) screen_size: [f32; 2],
-    pub(crate) line_half_width: f32,
     /// Near clip distance, which the shader clips segments against and reads
     /// the scene's own view-space depth back out of the reversed-Z buffer with.
     pub(crate) near: f32,
     /// World units, the figure's own `4h`.
     pub(crate) fog_distance: f32,
-    pub(crate) _pad: [f32; 3],
 }
 
 #[repr(C)]

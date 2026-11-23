@@ -138,6 +138,10 @@ pub(crate) struct SceneRenderer {
     /// The figure's own `4h`, kept from the upload so the frame's uniform write
     /// does not have to be handed the track again.
     bench_track_fog_distance: f32,
+    /// The drawn measurements' marks and lines, edges of the same pass drawn
+    /// before the figure ([`SceneRenderer::upload_measurements`]).
+    measurement_edge_buffer: Option<wgpu::Buffer>,
+    measurement_edge_count: u32,
 
     // ── Frustum rendering ──
     frustum_pipeline: Option<wgpu::RenderPipeline>,
@@ -273,6 +277,8 @@ impl SceneRenderer {
             bench_track_bind_group_layout: None,
             bench_track_bind_group: None,
             bench_track_fog_distance: 0.0,
+            measurement_edge_buffer: None,
+            measurement_edge_count: 0,
             frustum_pipeline: None,
             frustum_uniform_buffer: None,
             frustum_bind_group_layout: None,

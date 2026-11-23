@@ -11,7 +11,7 @@ const SHADER: &str = concat!(
 /// Resources created by the bench track pipelines.
 pub(in crate::scene_renderer) struct BenchTrackPipelineResources {
     /// Instanced ribbon-quad edges: the frame, the normal, the barbs and the
-    /// marks.
+    /// marks, and the drawn measurements' marks and lines.
     pub(crate) edge_pipeline: wgpu::RenderPipeline,
     /// The filled centre disc, a triangle list.
     pub(crate) disc_pipeline: wgpu::RenderPipeline,
@@ -77,7 +77,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> BenchTrackPipe
             buffers: &[
                 // Slot 0: quad corners (per-vertex), reuses the point quad buffer
                 Some(QUAD_VERTEX_LAYOUT),
-                // Slot 1: one edge of the figure (per-instance)
+                // Slot 1: one edge of the figure or a measurement (per-instance)
                 Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<BenchEdgeInstance>() as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
@@ -96,6 +96,16 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> BenchTrackPipe
                             format: wgpu::VertexFormat::Float32x4,
                             offset: 32,
                             shader_location: 3, // color
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 48,
+                            shader_location: 4, // half_width
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 52,
+                            shader_location: 5, // fade
                         },
                     ],
                 }),

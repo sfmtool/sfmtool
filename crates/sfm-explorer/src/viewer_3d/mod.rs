@@ -20,7 +20,7 @@ pub(crate) mod display;
 mod framing;
 mod hud;
 mod input;
-mod measurements;
+pub(crate) mod measurements;
 /// Crate-visible so the overlay text builders can be asserted on directly —
 /// they are the user-facing wording of the scene stats and hover lines.
 pub(crate) mod overlay;
@@ -409,6 +409,11 @@ pub(crate) struct Viewer3D {
     /// What a click on a measurement asked of the app, drained by `dock.rs`
     /// after the frame for the reason [`Self::bench_gesture`] is.
     pub(crate) measurement_gesture: Option<crate::measurement_marks::MeasurementGesture>,
+    /// The measurements' marks and lines as the scene pass draws them, built
+    /// from [`Self::measurements`] through the camera of the last frame this
+    /// panel was shown, for the reason [`Self::bench_figure`] is built here.
+    /// `app.rs` uploads them.
+    pub(crate) measurement_ribbons: Vec<measurements::Ribbon>,
     /// The bench figure's handle the pointer has hold of, while it has one.
     ///
     /// Held here rather than derived each frame for the reason the Image Detail
@@ -550,6 +555,7 @@ impl Viewer3D {
             measurement_press: None,
             measurement_hover: None,
             measurement_gesture: None,
+            measurement_ribbons: Vec::new(),
             bench_drag: None,
             bench_gesture: None,
             menu_entry_rects: Vec::new(),
@@ -1048,9 +1054,16 @@ impl Viewer3D {
         // Update target indicator state for GPU rendering
         self.update_target_indicator_state(ui, show_target_indicator);
 
-        // The measurements, over the cloud: a measurement is something a
-        // person looks for, so the scene never hides it.
-        self.draw_measurements(ui, &painter, &response, rect);
+        // The measurements, as scene geometry the next frame's upload draws,
+        // after this frame's input has moved the camera; the indicator and
+        // the hover text over the view.
+        self.measurement_ribbons = measurements::ribbons(
+            &self.measurements,
+            &self.camera,
+            rect,
+            ui.ctx().pixels_per_point(),
+        );
+        self.draw_measurements(&painter, &response, rect);
 
         // The focused item, as the scene geometry the next frame's
         // upload draws. After the camera has been moved by this frame's input,

@@ -9,8 +9,12 @@
 //! projects an endpoint's resolved position through its camera and Image
 //! Detail puts it at the endpoint's pixel; each builds a [`Screen`] of panel
 //! positions from the [`MeasurementLayer`] the dock hands it, and from there
-//! the drawing, the hit test, the hover text and the press are this module's,
-//! so a mark means the same thing in both views (G8).
+//! the hit test, the hover text and the press are this module's, so a mark
+//! means the same thing in both views (G8). Image Detail paints the marks and
+//! lines with [`Screen::draw`]; the 3D view draws the same marks and lines, at
+//! the same sizes and in the same colours, in its scene pass
+//! (`viewer_3d::measurements::ribbons`), and paints only the indicator
+//! ([`Screen::draw_indicator`]).
 //!
 //! See `specs/gui/measurement-view.md` § "Drawing measurements".
 
@@ -451,7 +455,14 @@ impl Indicator {
 
 /// The dark stroke under every mark and line, so they read over a bright
 /// photograph or a bright cloud.
-const HALO: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 170);
+pub(crate) const HALO: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 170);
+
+/// How much wider a mark's or a line's halo is than its stroke, in panel
+/// points.
+pub(crate) const HALO_EXTRA_WIDTH: f32 = 2.0;
+
+/// Radius of the dot at the centre of an endpoint's mark, in panel points.
+pub(crate) const MARK_DOT_RADIUS: f32 = 1.5;
 
 /// The ground the hover text and the indicator's label are drawn on.
 const LABEL_GROUND: Color32 = Color32::from_rgba_premultiplied(20, 20, 24, 215);
@@ -543,18 +554,25 @@ impl Screen {
             let Some(drawn) = layer.drawn.get(m.index) else {
                 continue;
             };
+            let halo = drawn.width + HALO_EXTRA_WIDTH;
             if let Some([a, b]) = m.line {
-                painter.line_segment([a, b], Stroke::new(drawn.width + 2.0, HALO));
+                painter.line_segment([a, b], Stroke::new(halo, HALO));
                 painter.line_segment([a, b], Stroke::new(drawn.width, drawn.color));
             }
             for mark in &m.marks {
                 let color = if mark.warning { warning } else { drawn.color };
                 let radius = mark_radius(drawn, mark.side);
-                painter.circle_stroke(mark.pos, radius, Stroke::new(drawn.width + 2.0, HALO));
+                painter.circle_stroke(mark.pos, radius, Stroke::new(halo, HALO));
                 painter.circle_stroke(mark.pos, radius, Stroke::new(drawn.width, color));
-                painter.circle_filled(mark.pos, 1.5, color);
+                painter.circle_filled(mark.pos, MARK_DOT_RADIUS, color);
             }
         }
+        self.draw_indicator(painter, layer);
+    }
+
+    /// Draw the indicator alone, in the selected measurement's colour: what
+    /// the 3D view puts over the scene, whose pass draws the marks and lines.
+    pub(crate) fn draw_indicator(&self, painter: &egui::Painter, layer: &MeasurementLayer) {
         if let Some(indicator) = &self.indicator {
             let color = layer.selected().map_or(Color32::WHITE, |d| d.color);
             indicator.draw(painter, color);

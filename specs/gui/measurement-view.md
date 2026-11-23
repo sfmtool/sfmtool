@@ -58,7 +58,7 @@ tools), and, for the drawing,
 (which measurements are drawn, the marks and lines on screen, their hit test,
 the press and the indicator, shared by both views),
 [viewer_3d/measurements.rs](../../crates/sfm-explorer/src/viewer_3d/measurements.rs)
-(where the 3D view puts them) and
+(where the 3D view puts them, and the ribbons its scene pass draws them with) and
 [image_detail/measurements.rs](../../crates/sfm-explorer/src/image_detail/measurements.rs)
 (where Image Detail puts them, and the handle drag).
 
@@ -967,12 +967,30 @@ and line has a dark halo so it reads over a bright photograph or cloud.
 **In the 3D view** a drawn measurement puts a mark, a ring with a dot at its
 centre, at each endpoint that resolves to a finite position, and a line between
 the two where both do. The positions are the resolved ones put through the
-node's display transform, as its points are, projected through the viewport
-camera, and drawn over the cloud rather than hidden by it, since a measurement
-is something a person looks for. An endpoint at infinity or refused draws
-nothing, and the other endpoint still draws its mark; a finite endpoint behind
-the eye draws no mark, and a line with one end behind it is clipped at the near
-plane.
+node's display transform, as its points are. **The marks and lines are drawn
+in the scene**, by the bench figure's GPU pass
+([viewer-3d-bench-layer.md](viewer-3d-bench-layer.md) § "Depth against the
+scene"), so a person sees how a measurement meets the geometry around it, as
+the hidden part of a highlighted surfel's outline shows
+([patch-rendering.md](patch-rendering.md)): a piece in front of the scene is
+drawn at full strength, and a piece behind it at `BEHIND_OPACITY` (0.45) with
+no fade with distance, so a measurement far behind the cloud is as findable as
+one just behind it. Each straight piece is one camera-facing ribbon carrying
+its own colour and width (`viewer_3d::measurements::ribbons`): the line and
+its halo, and per mark a ring of 24 chords, its halo and the dot. A mark keeps
+its size on screen, its ring built facing the eye at the endpoint's depth with
+its radius in points unprojected there, and the widths are the points above
+in physical pixels. Every piece is drawn a hundredth of its distance toward
+the eye (`TOWARD_EYE`), since an endpoint lies on the surface it was read from
+and a mark exactly there would be half in front of that surface and half
+behind it; moving a point along its own line of sight leaves its projection
+where it was. An endpoint at infinity or refused draws nothing, and the other
+endpoint still draws its mark; a finite endpoint behind the eye draws no mark,
+and a line with one end behind it is clipped at the near plane, by the pass as
+it clips the bench figure's segments. The pass writes no pick id and no depth,
+and the hit test below reads the projected positions alone, so a measurement
+behind the scene is hovered and clicked as one in front of it is. The hover
+text and the off-screen indicator are drawn over the view.
 
 **In Image Detail** a drawn measurement with an endpoint in the image shown
 puts a mark at that endpoint's pixel, and a line between the two where both are
@@ -1326,7 +1344,15 @@ at-infinity case is covered by the Rust tests.
   pointing right, left, down, up and, for a midpoint behind the eye, the way to
   turn; a click on it framing both endpoints inside the view with the
   orientation kept; the option and a hidden node; a line with one end behind
-  the eye clipped, the end in front keeping its mark. (`image_detail/measurements/tests.rs`):
+  the eye clipped, the end in front keeping its mark; the ribbons the frame
+  builds for the pass: the line and its halo between the endpoints moved toward
+  the eye, each ring at its radius on screen and the selected one 1.6 times
+  larger, the dot, the colours and widths in physical pixels, the emphasis and
+  dimming of *Show all*, the item's violet, none for a refused endpoint or one
+  at infinity, and a line with one end behind the eye handed to the pass whole.
+  (`scene_renderer/bench_track/tests.rs`): the measurements' instances holding
+  at `BEHIND_OPACITY` while the figure's fade, their upload, and the pass with
+  both drawn validated on a headless device. (`image_detail/measurements/tests.rs`):
   the marks at the endpoint pixels, a line only where both are in the image,
   the refused endpoint's warning colour; the hover, a click selecting no
   feature's point under the mark while the same click with nothing drawn does,

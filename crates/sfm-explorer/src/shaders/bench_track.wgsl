@@ -3,8 +3,9 @@
 // Draws the focused item where it stands in the world: the patch
 // frame's square, its outward normal with an arrowhead, one mark per
 // observation, and the filled centre disc. Each edge is a camera-facing ribbon
-// quad carrying its own colour; the disc is a triangle list. Rendered as a
-// post-EDL pass onto edl_output.
+// quad carrying its own colour and width; the disc is a triangle list. The
+// drawn measurements' marks and lines are edges of the same kind, drawn first.
+// Rendered as a post-EDL pass onto edl_output.
 //
 // Two things differ from the target indicator, which this otherwise follows.
 // The blend is ordinary alpha rather than additive and there is no glow: the
@@ -17,13 +18,9 @@ struct Uniforms {
     view_proj: mat4x4<f32>,
     view: mat4x4<f32>,
     screen_size: vec2<f32>,
-    line_half_width: f32,
     near: f32,
     // World units: how far behind the scene the figure fades to the floor.
     fog_distance: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
 }
 
 // The pipeline prepends common.wgsl, which declares ReconUniforms, the
@@ -44,6 +41,9 @@ struct VertexOutput {
     @location(0) color: vec4<f32>,
     // 1.0 for a direction, whose occlusion has no distance to fade over.
     @location(1) @interpolate(flat) at_infinity: f32,
+    // 1.0 where the part behind the scene fades with distance (the bench
+    // figure), 0.0 where it holds at BEHIND_OPACITY (a measurement).
+    @location(2) @interpolate(flat) fade: f32,
 }
 
 // A vertex outside every clip plane, which drops its whole primitive.
@@ -52,16 +52,20 @@ fn clipped(color: vec4<f32>) -> VertexOutput {
     out.clip_pos = vec4<f32>(0.0, 0.0, 0.0, -1.0);
     out.color = color;
     out.at_infinity = 0.0;
+    out.fade = 1.0;
     return out;
 }
 
 struct EdgeInput {
     // Per-vertex: x in {-1, 1} selects endpoint A/B, y in {-1, 1} selects side
     @location(0) corner: vec2<f32>,
-    // Per-instance: the two homogeneous endpoints and the colour
+    // Per-instance: the two homogeneous endpoints, the colour, half the width
+    // in pixels and whether the part behind the scene fades
     @location(1) endpoint_a: vec4<f32>,
     @location(2) endpoint_b: vec4<f32>,
     @location(3) color: vec4<f32>,
+    @location(4) half_width: f32,
+    @location(5) fade: f32,
 }
 
 @vertex
@@ -125,12 +129,13 @@ fn vs_edge(in: EdgeInput) -> VertexOutput {
 
     // Expand by the line width in pixels, converted to NDC.
     let pixel_to_ndc = vec2<f32>(2.0 / uniforms.screen_size.x, 2.0 / uniforms.screen_size.y);
-    let offset_ndc = perp * in.corner.y * uniforms.line_half_width * pixel_to_ndc;
+    let offset_ndc = perp * in.corner.y * in.half_width * pixel_to_ndc;
 
     var out: VertexOutput;
     out.clip_pos = vec4<f32>(clip_pos.xy + offset_ndc * clip_pos.w, clip_pos.zw);
     out.color = in.color;
     out.at_infinity = at_infinity;
+    out.fade = in.fade;
     return out;
 }
 
@@ -144,6 +149,7 @@ fn vs_disc(in: DiscInput) -> VertexOutput {
     var out: VertexOutput;
     out.color = in.color;
     out.at_infinity = 0.0;
+    out.fade = 1.0;
 
     if in.position.w == 0.0 {
         let clip = uniforms.view_proj * vec4<f32>(in.position.xyz, 0.0);
@@ -173,10 +179,17 @@ fn vs_disc(in: DiscInput) -> VertexOutput {
 // the infinite reversed-Z projection ndc_z = near / view_depth, so dividing the
 // two depths back out states the gap in world units and the fog distance is the
 // patch's own size rather than a slice of the depth range.
-fn depth_aware_opacity(clip_pos: vec4<f32>, at_infinity: f32) -> f32 {
+//
+// An edge that does not fade, a measurement's, is drawn at BEHIND_OPACITY
+// wherever it is behind, however far, as a highlighted surfel's hidden outline
+// is: a measurement far behind the scene stays as findable as one just behind.
+fn depth_aware_opacity(clip_pos: vec4<f32>, at_infinity: f32, fade: f32) -> f32 {
     let scene_depth = textureLoad(depth_tex, vec2<i32>(clip_pos.xy), 0);
     if scene_depth <= 0.0 || clip_pos.z >= scene_depth {
         return 1.0;
+    }
+    if fade == 0.0 {
+        return BEHIND_OPACITY;
     }
     if at_infinity > 0.0 {
         // A direction is behind every finite thing, so there is no distance to
@@ -190,6 +203,6 @@ fn depth_aware_opacity(clip_pos: vec4<f32>, at_infinity: f32) -> f32 {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let opacity = depth_aware_opacity(in.clip_pos, in.at_infinity);
+    let opacity = depth_aware_opacity(in.clip_pos, in.at_infinity, in.fade);
     return vec4<f32>(in.color.rgb, in.color.a * opacity);
 }

@@ -208,9 +208,13 @@ while a camera is in hand.
 
 The selected measurement, the focused measurement item and, with the HUD's
 *Show all measurements* on, every stored measurement of every visible
-reconstruction are drawn over the cloud: a mark at each endpoint that resolves
+reconstruction are drawn in the scene: a mark at each endpoint that resolves
 to a finite position, through the node's display transform, and a line between
-two such. A press on a mark or a line is theirs (G7), taken before navigation
+two such. A piece in front of the scene is drawn at full strength and a piece
+behind it at `BEHIND_OPACITY`, with no fade with distance, as the hidden part
+of a highlighted surfel's outline is. The hit test reads the projection alone,
+so a measurement behind the scene is hovered and clicked as one in front of it
+is. A press on a mark or a line is theirs (G7), taken before navigation
 reads the pointer, so it neither orbits nor picks: a click on a mark selects
 the measurement and that endpoint, a double-click enters camera view through
 the endpoint's image turned toward its pixel, a click on a stored
