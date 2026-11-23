@@ -474,8 +474,9 @@ once:
   `get_tile` of the keys: it decodes the photograph, reserving with
   `reserve_builds`, keeps the tiles asked for as used and the rest as unused,
   and, unlike `get_tile`, drops none of them before the next decode when the
-  photograph is under half the budget (§ "Budget and eviction"), or waits on the slot while another caller decodes it, polling the render's
-  `Progress` as `get` polls the caller's, so a cancelled kernel stops in a
+  photograph is under half the budget (§ "Budget and eviction"), or waits on
+  the slot while another caller decodes it, polling the render's `Progress`
+  as `get` polls the caller's, so a cancelled kernel stops in a
   render that decodes. A decode whose layout is not the recorded one is
   `Changed` too. A file that is gone fails the read with
   `PhotographReadError::NotFound`, a file too large with `TooLarge`, and one

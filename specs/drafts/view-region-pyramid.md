@@ -718,10 +718,12 @@ under half the budget (built, open question 12).
    the cache to keep tiles, so they come with step 13e5, **built**: on one
    thread the decodes stay within that bound only when the budget also holds
    one more photograph than one reference image's points are seen in, since
-   the unused tiles of a decode go before the used tiles of the photograph
-   the previous reference image's points left, so the test's budget holds
-   four of its six photographs, three of which one reference image's points
-   are seen in. The rest is split
+   the unused tiles of the photographs the current reference image's points
+   still read, kept from their earlier decodes, go before the used tiles of
+   the photograph the previous reference image's points read and the
+   current one's do not, so the test's budget holds four of its six
+   photographs, three of which one reference image's points are seen in. The
+   rest is split
    into three pull requests, as the main draft's step 11 says. **The first, 11a, is built**: the display bitmaps' kernels
    return the photograph error rather than leave out a photograph whose
    pyramid is not whole, the open, the conversion and `sfm web-export`

@@ -295,9 +295,11 @@ fn a_run_under_a_budget_smaller_than_its_photographs_completes() {
 /// points taken by index, a shuffled order, decode more.
 ///
 /// The budget holds one photograph more than those three, four of the six:
-/// the unused tiles of a decode go before the used tiles of the photograph
-/// the previous reference image's points left, so under three a photograph
-/// can be decoded twice for one reference image.
+/// the unused tiles of the photographs the current reference image's points
+/// still read, kept from their earlier decodes, go before the used tiles of
+/// the photograph the previous reference image's points read and the current
+/// one's do not, so under three a photograph can be decoded twice for one
+/// reference image.
 #[test]
 fn the_point_order_decodes_each_photograph_once_per_reference_image_that_it_sees() {
     let (scene, recon) = row_scene();

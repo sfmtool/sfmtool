@@ -672,8 +672,9 @@ other entry. The decode that made a request's tiles drops none of them before
 the next decode when the request is `get`'s, or a render's read through a
 photograph `get` answered of a photograph under half the budget (step 13e5,
 the companion's open question 12). A tile or region held by a running render
-stays alive until the render drops it, as a pyramid does today. A budget of 0 keeps nothing: each
-request is decoded and handed to its asker, whose texture or render keeps it.
+stays alive until the render drops it, as a pyramid does today. A budget of 0
+keeps nothing: each request is decoded and handed to its asker, whose texture
+or render keeps it.
 
 **States, and what a caller on the GUI thread may do.** `peek_tile` and
 `layout` answer without reading or waiting:
@@ -2579,7 +2580,9 @@ in core. Step 17 turns the tier on.
       caller holds a pyramid today; then the answers that hold no tile and
       read through the cache, which is the part a read can fail in, so the
       errors, and `sfm web-export`'s report of a failed read, come with it;
-      and last the tests of the bulk kernels under a small budget.
+      and last the tests of the bulk kernels under a small budget, with a
+      render's decode kept whole while its photograph is under half the
+      budget.
 
       - **13e1, the answers as tiled photographs.** **Built.** `get`,
         `get_many`, `peek` and `peek_state` answer `Arc<TiledPhotograph>`.
@@ -3019,8 +3022,10 @@ in core. Step 17 turns the tier on.
         while the refit under a budget of one photograph decodes fewer times
         than there are observations. The budget of the point-order test
         holds one photograph more than one reference image's points are seen
-        in, since the unused tiles of a decode go before the used tiles of
-        the photograph the previous reference image's points left. The three
+        in, since the unused tiles of the photographs the current reference
+        image's points still read, kept from their earlier decodes, go before
+        the used tiles of the photograph the previous reference image's
+        points read and the current one's do not. The three
         take 0.32 s (the run that completes), 0.14 s (the point order) and
         0.13 s (the decode kept whole).
 14. **The out-of-core tier, off.** Photographs of a workspace with

@@ -410,8 +410,8 @@ struct Kept {
 /// decode is evicted as a tile request's is. Half is the line between the two:
 /// on `dino_dog_toy` at 50 MB (about four photographs) sparing halves the
 /// display bitmaps' decodes, and on six 128 px photographs under a budget of
-/// one, sparing decoded six times as often (`specs/drafts/view-region-pyramid.md`,
-/// open question 12).
+/// one, sparing made the refit's renders decode about four times as often
+/// (`specs/drafts/view-region-pyramid.md`, open question 12).
 const READ_SPARING_SHARE: f64 = 0.5;
 
 /// Whether the decode of a read through a photograph whose tiles are
