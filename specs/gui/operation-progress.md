@@ -81,6 +81,11 @@ impl<'a> Progress<'a> {
     pub fn to(sink: &'a (dyn Fn(Event<'_>) + Sync)) -> Self;
     pub fn cancelled_by(self, flag: &'a AtomicBool) -> Self;
     pub fn detailed(self, on: bool) -> Self;
+    /// The same cancel flag and nothing else: reports nothing, detail off.
+    /// What a kernel hands a nested call whose reports it does not pass on,
+    /// such as each item of a parallel loop, so that the call still stops
+    /// when the kernel is cancelled.
+    pub fn silenced(&self) -> Progress<'a>;
 
     /// Has the caller asked this to stop? One relaxed atomic load.
     ///
@@ -974,7 +979,10 @@ Rayon has no cancellation of its own, so a parallel loop that wants to stop uses
 `try_for_each` and short-circuits on the `Err`.
 
 A kernel that never asks is simply not cancellable, and says so by never
-touching the flag. Which operations are cancellable, what the button does, and
+touching the flag. A kernel that does not pass a nested call's reports on, as
+each item of a parallel loop does not, hands it `progress.silenced()`, which
+carries the flag and reports nothing, rather than `Progress::none()`, which
+would leave the nested call running after the kernel was cancelled. Which operations are cancellable, what the button does, and
 what a cancelled operation writes to the log are
 [background-tasks.md](background-tasks.md)'s, since they are
 about the worker rather than about the parameter.

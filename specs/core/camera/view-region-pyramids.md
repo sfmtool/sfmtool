@@ -173,10 +173,13 @@ Every entry point takes the caller's `Progress` and hands it to each tile
 read, the reads that would decode a photograph again for a tile evicted while
 the kernel ran polling it for cancellation, so such a decode stops with the
 kernel. A render reports nothing through it, and a photograph that holds its
-tiles decodes nothing and never polls it. The kernels pass their own down: a
-bulk kernel the one its caller gave it, which carries the cancel flag of the
-viewer's task or of the binding's call; a panel on the GUI thread, whose
-photograph holds the tiles it renders, passes `&Progress::none()`. A kernel
+tiles decodes nothing and never polls it. Every kernel passes its caller's
+cancel flag down to its renders: its own `Progress`, or, for a nested call
+whose reports it does not pass on (each item of a parallel loop, or a fit
+nested in a step that reports its own phases), `Progress::silenced`, which
+carries the flag and reports nothing. A panel on the GUI thread, whose
+photograph holds the tiles it renders, passes `&Progress::none()`, and so do
+the Python bindings that have no cancel flag to give. A kernel
 whose renders keep their failure aside rather than return it, as the grown
 plane's step does, keeps the `Progress` beside the failure. The cancel flag
 could instead have been carried by the region pool or `ViewRegions`, which

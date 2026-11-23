@@ -4142,7 +4142,8 @@ fn an_observation_naming_an_image_with_no_view_is_refused() {
             &edited,
             &scene.views(),
             crate::camera::sampler::test_pool(),
-            &test_fit_options()
+            &test_fit_options(),
+            &Progress::none()
         )
         .err(),
         Some(EvaluateError::NoView { image: 9 })

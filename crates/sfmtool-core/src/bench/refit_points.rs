@@ -523,6 +523,7 @@ pub(super) fn refit_points_in(
                     ranges.get(p).copied().unwrap_or(PointRange::Free),
                     &fit_options,
                     options.max_shift_px,
+                    progress,
                 )?;
                 let n = done.fetch_add(1, Ordering::Relaxed) + 1;
                 if n.is_multiple_of(step) || n == total {
@@ -674,6 +675,7 @@ fn refit_one(
     range: PointRange,
     options: &FitOptions,
     max_shift_px: f64,
+    progress: &Progress<'_>,
 ) -> Option<(RefitPoint, Option<PointRecord>)> {
     let status = |outcome| RefitPoint { index, outcome };
     let (entry, applied) = match range {
@@ -709,7 +711,7 @@ fn refit_one(
         &patch_frame,
         options,
         entry,
-        &Progress::none(),
+        &progress.silenced(),
     ) {
         Ok(answer) => answer,
         Err(FitError::Photograph(e)) => {

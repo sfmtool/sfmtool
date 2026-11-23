@@ -694,6 +694,7 @@ fn the_keypoint_kernels_are_the_same_on_every_read_path() {
             &offsets,
             &spawn_views,
             &SpawnParams::default(),
+            &Progress::none(),
         )
         .expect("photographs in memory read");
         format!("{localized:?}\n{refined:?}\n{spawned:?}")
@@ -818,6 +819,7 @@ fn a_read_of_pixels_a_photograph_lacks_fails_each_reference_view_kernel() {
             &[[0.6, 0.0]],
             &[tracks[0].clone()],
             &SpawnParams::default(),
+            &Progress::none(),
         )
         .expect_err("the image cannot be read");
         assert!(
@@ -877,6 +879,7 @@ fn a_search_or_score_of_a_view_that_cannot_be_read_fails() {
         None,
         None,
         &params,
+        &Progress::none(),
     )
     .expect("photographs in memory read")
     .expect("the references settle a template");
@@ -893,6 +896,7 @@ fn a_search_or_score_of_a_view_that_cannot_be_read_fails() {
             None,
             false,
             &params,
+            &Progress::none(),
         )
         .expect_err("the target cannot be read");
     assert!(
@@ -910,6 +914,7 @@ fn a_search_or_score_of_a_view_that_cannot_be_read_fails() {
             &mut target_regions,
             keypoint,
             &params,
+            &Progress::none(),
         )
         .expect_err("the target cannot be read");
     assert!(

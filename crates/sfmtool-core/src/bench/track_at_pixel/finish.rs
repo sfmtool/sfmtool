@@ -156,7 +156,11 @@ fn unplaced(track: &EditableTrack) -> bool {
 /// ([`evaluate_rendering_bitmap`]): a move of the patch drops the bitmap, and
 /// without one no row is scored against it, so the bars, which judge that
 /// score, would judge nothing.
-pub(super) fn read(ctx: &Ctx<'_>, track: &EditableTrack) -> Result<EditableTrack, String> {
+pub(super) fn read(
+    ctx: &Ctx<'_>,
+    track: &EditableTrack,
+    progress: &Progress<'_>,
+) -> Result<EditableTrack, String> {
     evaluate_rendering_bitmap(
         track,
         ctx.edited,
@@ -164,7 +168,7 @@ pub(super) fn read(ctx: &Ctx<'_>, track: &EditableTrack) -> Result<EditableTrack
         ctx.pool,
         &EvaluateOptions::default(),
         &FitOptions::default(),
-        &Progress::none(),
+        &progress.silenced(),
     )
     .map(|(t, _)| t)
     .map_err(|e| {
@@ -176,14 +180,18 @@ pub(super) fn read(ctx: &Ctx<'_>, track: &EditableTrack) -> Result<EditableTrack
 }
 
 /// Fit `track` with the default fit.
-pub(super) fn fit_track(ctx: &Ctx<'_>, track: &EditableTrack) -> Result<EditableTrack, String> {
+pub(super) fn fit_track(
+    ctx: &Ctx<'_>,
+    track: &EditableTrack,
+    progress: &Progress<'_>,
+) -> Result<EditableTrack, String> {
     fit(
         track,
         ctx.edited,
         ctx.views,
         ctx.pool,
         &FitOptions::default(),
-        &Progress::none(),
+        &progress.silenced(),
     )
     .map(|(t, _)| t)
     .map_err(|e| {
@@ -205,10 +213,11 @@ fn anchor(
     track: &EditableTrack,
     q: usize,
     pixel: [f64; 2],
+    progress: &Progress<'_>,
 ) -> Result<EditableTrack, String> {
     let (moved, _) = translate_patch_to_pixel(track, ctx.edited, Viewpoint::Observation(q), pixel)
         .map_err(|e| e.to_string())?;
-    read(ctx, &moved)
+    read(ctx, &moved, progress)
 }
 
 /// `refits` rounds of fit-then-anchor after an anchor, keeping the best
@@ -228,10 +237,13 @@ pub(super) fn anchored_fit(
     pixel: [f64; 2],
     refits: usize,
     unfitted: bool,
+    progress: &Progress<'_>,
 ) -> Result<EditableTrack, String> {
-    let mut best = anchor(ctx, track, q, pixel)?;
+    let mut best = anchor(ctx, track, q, pixel, progress)?;
     for round in 0..refits {
-        let Ok(fitted) = fit_track(ctx, &best).and_then(|f| anchor(ctx, &f, q, pixel)) else {
+        let Ok(fitted) =
+            fit_track(ctx, &best, progress).and_then(|f| anchor(ctx, &f, q, pixel, progress))
+        else {
             break;
         };
         let forced = unplaced(&best) || (unfitted && round == 0);
@@ -254,6 +266,7 @@ pub(super) fn track_from_sightings(
     pixel: [f64; 2],
     radius_px: f64,
     sightings: &[(u32, [f64; 2])],
+    progress: &Progress<'_>,
 ) -> Result<EditableTrack, String> {
     let track = seed_cluster(ctx, image, pixel, radius_px)?;
     upgrade_sightings(
@@ -263,6 +276,7 @@ pub(super) fn track_from_sightings(
         &ctx.failure,
         track,
         sightings,
+        progress,
     )
 }
 
@@ -277,6 +291,7 @@ pub(crate) fn upgrade_sightings(
     failure: &ReadFailure,
     mut track: EditableTrack,
     sightings: &[(u32, [f64; 2])],
+    progress: &Progress<'_>,
 ) -> Result<EditableTrack, String> {
     for &(other, px) in sightings {
         let seed = ObservationSeed {
@@ -297,7 +312,7 @@ pub(crate) fn upgrade_sightings(
         pool,
         StageKind::Track,
         &FitOptions::default(),
-        &Progress::none(),
+        &progress.silenced(),
     )
     .map(|(t, _)| t)
     .map_err(|e| {
@@ -404,6 +419,7 @@ fn clean(
     pixel: [f64; 2],
     opts: &FinishOptions,
     stages: &mut Vec<StageRecord>,
+    progress: &Progress<'_>,
 ) -> EditableTrack {
     let mut removed = Vec::new();
     for _ in 0..opts.clean_rounds {
@@ -426,7 +442,7 @@ fn clean(
         if in_count(&track) < 2 {
             break;
         }
-        match anchored_fit(ctx, &track, q, pixel, opts.anchor_refits, false) {
+        match anchored_fit(ctx, &track, q, pixel, opts.anchor_refits, false, progress) {
             Ok(next) => track = next,
             Err(_) => break,
         }
@@ -446,8 +462,9 @@ pub(super) fn finish(
     pixel: [f64; 2],
     opts: &FinishOptions,
     stages: &mut Vec<StageRecord>,
+    progress: &Progress<'_>,
 ) -> Result<EditableTrack, Refusal> {
-    let mut track = anchored_fit(ctx, &track, q, pixel, opts.anchor_refits, false)
+    let mut track = anchored_fit(ctx, &track, q, pixel, opts.anchor_refits, false, progress)
         .map_err(|e| Refusal::new(RefusalStage::Anchor, e))?;
     track = thresholds(&track);
     stages.push(StageRecord::Anchor {
@@ -464,21 +481,22 @@ pub(super) fn finish(
         if let Some(normal) = normal {
             let before = median_zncc(&track);
             let tilted = shape_track(ctx, &track, q, Some(normal), None);
-            let record = anchored_fit(ctx, &tilted, q, pixel, opts.anchor_refits, false).map(|t| {
-                let t = thresholds(&t);
-                let after = median_zncc(&t);
-                let kept = after >= before - opts.normal_prior_tolerance;
-                if kept {
-                    track = t;
-                }
-                TiltRecord {
-                    degrees: None,
-                    stopped: false,
-                    zncc_before: before,
-                    zncc_after: after,
-                    kept,
-                }
-            });
+            let record = anchored_fit(ctx, &tilted, q, pixel, opts.anchor_refits, false, progress)
+                .map(|t| {
+                    let t = thresholds(&t);
+                    let after = median_zncc(&t);
+                    let kept = after >= before - opts.normal_prior_tolerance;
+                    if kept {
+                        track = t;
+                    }
+                    TiltRecord {
+                        degrees: None,
+                        stopped: false,
+                        zncc_before: before,
+                        zncc_after: after,
+                        kept,
+                    }
+                });
             stages.push(StageRecord::NormalPrior(record));
         }
     }
@@ -490,7 +508,7 @@ pub(super) fn finish(
             ctx.views,
             ctx.pool,
             &GeometrySearchOptions::default(),
-            &Progress::none(),
+            &progress.silenced(),
         )
         .map_err(|e| {
             if let GeometrySearchError::Photograph(read) = &e {
@@ -503,8 +521,8 @@ pub(super) fn finish(
             if report.added() == 0 {
                 return Ok((None, found));
             }
-            let grown = thresholds(&read(ctx, &grown)?);
-            let grown = anchored_fit(ctx, &grown, q, pixel, opts.anchor_refits, true)?;
+            let grown = thresholds(&read(ctx, &grown, progress)?);
+            let grown = anchored_fit(ctx, &grown, q, pixel, opts.anchor_refits, true, progress)?;
             Ok((Some(grown), found))
         });
         match grown {
@@ -520,7 +538,7 @@ pub(super) fn finish(
 
     track = thresholds(&track);
     if opts.clean {
-        track = clean(ctx, track, q, pixel, opts, stages);
+        track = clean(ctx, track, q, pixel, opts, stages, progress);
     }
     gate(track, q, pixel, opts, stages)
 }

@@ -756,7 +756,9 @@ pub fn find_nearby_tracks(
                 range_seconds: 0.0,
             });
         } else {
-            let found = run_source(edited, views, sources, source, image, pixel, options)?;
+            let found = run_source(
+                edited, views, sources, source, image, pixel, options, progress,
+            )?;
             let ranged = Instant::now();
             let n = found.len();
             for c in found {
@@ -917,6 +919,7 @@ pub fn find_nearby_tracks(
                     &stem,
                     tracks[k].sightings(),
                     options.tracks.radius_px,
+                    progress,
                 )
             })
             .collect();
@@ -1050,6 +1053,7 @@ fn in_sightings(track: &EditableTrack) -> Option<Sightings> {
 }
 
 /// Run the matching source `source`, whose inputs are all present.
+#[allow(clippy::too_many_arguments)]
 fn run_source(
     edited: &EditedReconstruction,
     views: &[ProjectedImage<'_>],
@@ -1058,6 +1062,7 @@ fn run_source(
     image: u32,
     pixel: [f64; 2],
     options: &NearbyTrackOptions,
+    progress: &Progress<'_>,
 ) -> Result<Vec<NearbyCandidate>, NearbySourceError> {
     match source {
         NearbySource::Points => nearby_points(edited, views, image, pixel, &options.points),
@@ -1082,6 +1087,7 @@ fn run_source(
             image,
             pixel,
             &options.constellation,
+            progress,
         ),
         NearbySource::FarField => unreachable!("refused before the sources run"),
     }
@@ -1113,6 +1119,7 @@ fn group_count(
 /// A track-stage track at `sightings`, the queried image's first: a cluster
 /// seeded at its pixel there, with every other sighting added `in` by hand,
 /// upgraded to the track stage, which triangulates and fits it.
+#[allow(clippy::too_many_arguments)]
 fn bench_track(
     edited: &EditedReconstruction,
     views: &[ProjectedImage<'_>],
@@ -1121,9 +1128,18 @@ fn bench_track(
     stem: &str,
     sightings: &[(u32, [f64; 2])],
     radius_px: f64,
+    progress: &Progress<'_>,
 ) -> Result<EditableTrack, String> {
     let (image, pixel) = sightings[0];
     let seed = ClusterSeed::from_pixel(image, stem, pixel, radius_px);
     let track = seed_cluster_with(&seed, &Thresholds::default())?;
-    upgrade_sightings(edited, views, pool, failure, track, &sightings[1..])
+    upgrade_sightings(
+        edited,
+        views,
+        pool,
+        failure,
+        track,
+        &sightings[1..],
+        progress,
+    )
 }

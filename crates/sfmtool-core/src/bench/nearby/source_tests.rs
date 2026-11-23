@@ -644,6 +644,7 @@ fn the_constellation_carries_the_pixel_into_every_image_it_matches() {
         0,
         pixel,
         &ConstellationSeedOptions::default(),
+        &Progress::none(),
     )
     .expect("valid");
 
@@ -675,7 +676,16 @@ fn the_constellation_carries_the_pixel_into_every_image_it_matches() {
         lateral_radius_px: 30.0,
         ..ConstellationSeedOptions::default()
     };
-    let found = constellation_seeds(&edited, &views, &index, 0, pixel, &options).expect("valid");
+    let found = constellation_seeds(
+        &edited,
+        &views,
+        &index,
+        0,
+        pixel,
+        &options,
+        &Progress::none(),
+    )
+    .expect("valid");
     assert_eq!(found.len(), 3);
     for c in &found[1..] {
         let row = c.id.expect("a keypoint's query names its row") as usize;
@@ -690,9 +700,15 @@ fn the_constellation_carries_the_pixel_into_every_image_it_matches() {
         min_inliers: 40,
         ..ConstellationSeedOptions::default()
     };
-    assert!(
-        constellation_seeds(&edited, &views, &index, 0, pixel, &options)
-            .expect("valid")
-            .is_empty()
-    );
+    assert!(constellation_seeds(
+        &edited,
+        &views,
+        &index,
+        0,
+        pixel,
+        &options,
+        &Progress::none()
+    )
+    .expect("valid")
+    .is_empty());
 }

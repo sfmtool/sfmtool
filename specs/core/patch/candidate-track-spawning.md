@@ -107,6 +107,7 @@ pub fn spawn_candidate_tracks(
     offsets_uv: &[[f64; 2]],          // per candidate (du, dv)
     patch_views: &[Vec<u32>],         // per candidate
     params: &SpawnParams,
+    progress: &Progress<'_>,          // its cancel flag reaches the reads; nothing is reported
 ) -> Result<SpawnedTracks, SpawnError>
 ```
 

@@ -615,6 +615,7 @@ fn the_returned_track_carries_a_bitmap_on_the_reconstructions_grid() {
         &views,
         crate::camera::sampler::test_pool(),
         &crate::bench::FitOptions::default(),
+        &Progress::none(),
     )
     .unwrap();
     let after = again.track().expect("the track stage");
@@ -675,7 +676,7 @@ fn a_reading_after_the_patch_moves_scores_the_rows_and_the_bars_judge_them() {
         sources: &sources,
         thresholds: track.thresholds.clone(),
     };
-    let read = finish::read(&ctx, &moved).expect("the track reads");
+    let read = finish::read(&ctx, &moved, &Progress::none()).expect("the track reads");
     assert!(
         read.track().is_some_and(|p| p.bitmap.is_some()),
         "the reading rendered the bitmap"

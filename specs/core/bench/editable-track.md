@@ -641,6 +641,7 @@ pub fn render_bitmap_in_place(
     images: &[ProjectedImage<'_>],
     pool: &RegionPool,
     options: &FitOptions,
+    progress: &Progress<'_>,   // its cancel flag reaches the renders; nothing is reported
 ) -> Result<EditableTrack, EvaluateError>;
 
 // Score every row of a track-stage track against the bitmap it holds, writing

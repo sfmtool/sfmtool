@@ -974,6 +974,7 @@ impl Context<'_, '_> {
             reference,
             bitmap_row.as_ref().and_then(|r| r.as_slice()),
             self.localize,
+            progress,
         )? {
             Ok(references) => references,
             Err(NoTemplate::TooFewReferences) => {
@@ -1002,6 +1003,7 @@ impl Context<'_, '_> {
             None,
             self.options.ascend_on_edge,
             self.localize,
+            progress,
         ) {
             Ok(s) => s,
             Err(LocalizeError::Photograph(e)) => return Err(e),
@@ -1044,8 +1046,14 @@ impl Context<'_, '_> {
         }
         out.keypoint = Some(keypoint);
         out.offset_px = (keypoint[0] - proj[0]).hypot(keypoint[1] - proj[1]);
-        let Some(score) =
-            references.score(&patch, &target, &mut regions[0], keypoint, self.localize)?
+        let Some(score) = references.score(
+            &patch,
+            &target,
+            &mut regions[0],
+            keypoint,
+            self.localize,
+            progress,
+        )?
         else {
             out.refusal = Some(Refusal::Unscorable);
             return Ok(out);
@@ -1059,6 +1067,7 @@ impl Context<'_, '_> {
             &references,
             &ref_keypoints,
             keypoint,
+            progress,
         )?;
         settle_score(&mut out, references_z, z);
         out.reading = reading;
@@ -1093,6 +1102,7 @@ impl Context<'_, '_> {
         references: &TrackReferences,
         ref_keypoints: &[[f64; 2]],
         keypoint: [f64; 2],
+        progress: &Progress<'_>,
     ) -> Result<(Vec<f64>, f64, ObservationReading, ObservationReadingOptions), PhotographReadError>
     {
         let mut render = |l: usize, kp: [f64; 2], r: usize| {
@@ -1103,7 +1113,7 @@ impl Context<'_, '_> {
                 Some(kp),
                 r,
                 self.localize.sampler,
-                &Progress::none(),
+                &progress.silenced(),
             )
         };
         let (bitmap, r, stored) = match references.refine_template() {

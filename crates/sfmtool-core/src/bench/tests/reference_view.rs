@@ -373,6 +373,7 @@ fn every_row_is_scored_against_the_stored_bitmap() {
         &views,
         crate::camera::sampler::test_pool(),
         &FitOptions::default(),
+        &Progress::none(),
     )
     .unwrap();
     if let crate::bench::Stage::Track(payload) = &mut rendered.stage {
@@ -468,6 +469,7 @@ fn the_rendered_bitmap_is_the_picked_row_s_tile_and_the_commit_records_it() {
         &views,
         crate::camera::sampler::test_pool(),
         &FitOptions::default(),
+        &Progress::none(),
     )
     .unwrap();
     let payload = rendered.track().unwrap();
@@ -820,6 +822,7 @@ fn rendering_then_scoring_matches_an_evaluation_of_the_rendered_track() {
         &views,
         crate::camera::sampler::test_pool(),
         &FitOptions::default(),
+        &Progress::none(),
     )
     .unwrap();
     let payload = rendered.track().unwrap();
@@ -913,6 +916,7 @@ fn rendering_from_the_evaluation_matches_the_three_calls() {
         &views,
         crate::camera::sampler::test_pool(),
         &fit,
+        &Progress::none(),
     )
     .unwrap();
     let scored = score_bitmap(
@@ -1251,6 +1255,7 @@ fn a_defined_reference_is_rendered_from_through_the_bench_s_steps() {
         &views,
         crate::camera::sampler::test_pool(),
         &fit_options,
+        &Progress::none(),
     )
     .unwrap();
     let scored = score_bitmap(

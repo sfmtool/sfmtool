@@ -27,6 +27,7 @@ use sfmtool_core::bench::{
     PointsOptions, SiftIndexSource,
 };
 use sfmtool_core::features::kdforest::ImageKeypoints;
+use sfmtool_core::progress::Progress;
 
 use super::{read_keypoints, views_of};
 use crate::fileio::matches_file::PyMatchesFile;
@@ -576,7 +577,17 @@ pub(super) fn constellation_seeds(
     let (posed, pyramids) = posed_views(edited, images)?;
     let views = views_of(&posed, &pyramids);
     let found = py
-        .detach(|| core_constellation_seeds(&edited.inner, &views, &index, image, pixel, &options))
+        .detach(|| {
+            core_constellation_seeds(
+                &edited.inner,
+                &views,
+                &index,
+                image,
+                pixel,
+                &options,
+                &Progress::none(),
+            )
+        })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     candidate_list(py, &found)
 }

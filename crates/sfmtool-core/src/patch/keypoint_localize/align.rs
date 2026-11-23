@@ -320,7 +320,7 @@ pub(super) fn align_to_reference<'r>(
             st.placed = true;
         }
         return Ok(finish(
-            patch, views, states, None, None, wpp_u, wpp_v, params,
+            patch, views, states, None, None, wpp_u, wpp_v, params, progress,
         )?);
     };
     if let Some(a) = anchor {
@@ -445,6 +445,7 @@ pub(super) fn align_to_reference<'r>(
         wpp_u,
         wpp_v,
         params,
+        progress,
     )?;
     out.reference = reference.filter(|idx| out.views.contains(idx));
     Ok(out)
@@ -606,6 +607,7 @@ fn finish(
     wpp_u: f64,
     wpp_v: f64,
     params: &KeypointLocalizeParams,
+    progress: &Progress<'_>,
 ) -> Result<KeypointLocalization, PhotographReadError> {
     // Each view's keypoint, before any gate.
     let mut placed: Vec<(AlignedView<'_>, Option<[f64; 2]>)> = states
@@ -652,7 +654,7 @@ fn finish(
                         Some(*kp),
                         resolution,
                         params.sampler,
-                        &Progress::none(),
+                        &progress.silenced(),
                     )
                 })?;
                 scorer.score(&tile.planes(), None).blur_matched_zncc

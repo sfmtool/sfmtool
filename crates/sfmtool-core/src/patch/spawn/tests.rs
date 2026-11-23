@@ -160,6 +160,7 @@ fn spawn_valid(
         offsets_uv,
         patch_views,
         params,
+        &Progress::none(),
     )
     .expect("the requests are valid")
 }
@@ -465,6 +466,7 @@ fn malformed_requests_are_refused() {
             offsets,
             patch_views,
             &params(),
+            &Progress::none(),
         )
         .expect_err("the batch is malformed")
     };
@@ -505,5 +507,32 @@ fn malformed_requests_are_refused() {
             view: n_views as u32,
             views: n_views
         }
+    );
+}
+
+/// The caller's cancel flag reaches the localization, whose reports are
+/// silenced: a cancelled `progress` stops the spawn with `Cancelled` before
+/// any candidate is localized.
+#[test]
+fn a_cancelled_progress_stops_the_spawn() {
+    use std::sync::atomic::AtomicBool;
+
+    let scene = scene();
+    let cloud = parent_cloud();
+    let flag = AtomicBool::new(true);
+    let error = spawn_candidate_tracks(
+        &scene.views(),
+        crate::camera::sampler::test_pool(),
+        &cloud,
+        &[0],
+        &[[2.0, 0.0]],
+        &all_views(1),
+        &params(),
+        &Progress::none().cancelled_by(&flag),
+    )
+    .expect_err("a cancelled spawn");
+    assert_eq!(
+        error,
+        SpawnError::Photograph(crate::camera::PhotographReadError::Cancelled)
     );
 }

@@ -866,11 +866,17 @@ pub fn build_track_at_pixel(
         let _phase = progress.phase(member.name());
         let mut stages = Vec::new();
         let result = match member {
-            CascadeMember::Clusters => members::clusters(&ctx, image, pixel, options, &mut stages),
-            CascadeMember::Transfer => members::transfer(&ctx, image, pixel, options, &mut stages),
-            CascadeMember::Sweep => members::sweep(&ctx, image, pixel, options, &mut stages),
+            CascadeMember::Clusters => {
+                members::clusters(&ctx, image, pixel, options, &mut stages, progress)
+            }
+            CascadeMember::Transfer => {
+                members::transfer(&ctx, image, pixel, options, &mut stages, progress)
+            }
+            CascadeMember::Sweep => {
+                members::sweep(&ctx, image, pixel, options, &mut stages, progress)
+            }
             CascadeMember::Constellation => {
-                members::constellation(&ctx, image, pixel, options, &mut stages)
+                members::constellation(&ctx, image, pixel, options, &mut stages, progress)
             }
         };
         // A member whose reads failed answers with what it read in their
@@ -901,6 +907,7 @@ pub fn build_track_at_pixel(
                         views,
                         pool,
                         &super::fit::FitOptions::default(),
+                        progress,
                     ) {
                         Ok(rendered) => rendered,
                         Err(super::evaluate::EvaluateError::Photograph(e)) => {

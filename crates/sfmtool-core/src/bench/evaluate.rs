@@ -931,12 +931,14 @@ fn render_and_score(
             payload.drop_bitmap();
         }
     }
-    let mut rendered =
-        super::fit::render_bitmap_in_place_from(&cleared, edited, images, pool, fit, from)?;
+    let mut rendered = super::fit::render_bitmap_in_place_from(
+        &cleared, edited, images, pool, fit, from, progress,
+    )?;
     // No `in` row could hold the reference: the bars judge against a bitmap
     // rendered from every row with a keypoint, so a row can come back `in`.
     if rendered.track().is_some_and(|p| p.bitmap.is_none()) {
-        rendered = super::fit::render_bitmap_for_judging(&rendered, edited, images, pool, fit)?;
+        rendered =
+            super::fit::render_bitmap_for_judging(&rendered, edited, images, pool, fit, progress)?;
     }
     score_bitmap(&rendered, edited, images, pool, options, progress)
 }
