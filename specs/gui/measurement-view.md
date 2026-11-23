@@ -442,8 +442,9 @@ take in a row that overflows it, and a width read after such a row would be
 wider than the panel. The header fields are two rows, each name at the wider
 name's measured width, rather than an `egui::Grid`, which lays out from the
 column widths of the frame before: on the frame the panel narrows, as on
-every frame of a splitter drag, a grid would still be at the old width. Only in the edited mode and in a panel narrower than about 150 points,
-too narrow for a header field at its minimum beside its name, is the content
+every frame of a splitter drag, a grid would still be at the old width.
+Only in the edited mode and in a panel narrower than about 150 points, too
+narrow for a header field at its minimum beside its name, is the content
 wider than the panel; egui_dock's tab body, which scrolls both ways for every
 panel, then scrolls it sideways. Each block shows:
 
