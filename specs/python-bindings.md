@@ -87,9 +87,9 @@ Python reconstruction analysis that calls some of them; each keeps its name,
 the one from the extension and the one from the code it holds. In the same
 way `sfmtool.workspace` holds the bindings for a workspace's named image lists,
 the rules of its feature options, and `find_workspace_for_path`, the upward
-search for a path's workspace, and
-`sfmtool._workspace` is the internal Python that writes and reads
-`.sfm-workspace.json`.
+search for a path's workspace, and the writer of a new `sfmtool`
+workspace's `.sfm-workspace.json`, and `sfmtool._workspace` is the internal
+Python that writes the other tools' `.sfm-workspace.json` and reads every one.
 `sfmtool.fileio` is named `fileio` rather than `io` because
 `from sfmtool import *` binds it with the other public modules (see below),
 and a module named `io` would replace the standard library's `io` in the
@@ -452,7 +452,7 @@ Paths in the *Source* column are relative to
 
 | Source | Exposes | Spec |
 |--------|---------|------|
-| [workspace.rs](../crates/sfmtool-py/src/workspace.rs) | `NamedImageLists`, `NamedImageListMember`, `NamedImageListSlice`, `is_named_image_list_name`, `split_named_image_list_value`, `NAMED_IMAGE_LISTS_FILE_NAME`; `tool_image_to_gray`, `recorded_image_to_gray`, `WORKSPACE_VERSION`: each feature tool's grey conversion and the one a record states; `feature_prefix_dir`: the features folder named from a record's options, the one implementation every Python writer calls; `feature_type_for_tool`: the `feature_type` a workspace records for a tool, the one implementation every Python writer calls; `find_workspace_for_path`: the upward search for a path's workspace; `upgrade_workspace`: the upgrade of a workspace's files to the current versions, which `sfm ws upgrade` calls | [named-image-lists.md](workspace/named-image-lists.md), [workspace.md](workspace/workspace.md), [ws-upgrade-command.md](cli/workspace/ws-upgrade-command.md#interface) |
+| [workspace.rs](../crates/sfmtool-py/src/workspace.rs) | `NamedImageLists`, `NamedImageListMember`, `NamedImageListSlice`, `is_named_image_list_name`, `split_named_image_list_value`, `NAMED_IMAGE_LISTS_FILE_NAME`; `tool_image_to_gray`, `recorded_image_to_gray`, `WORKSPACE_VERSION`: each feature tool's grey conversion and the one a record states; `feature_prefix_dir`: the features folder named from a record's options, the one implementation every Python writer calls; `feature_type_for_tool`: the `feature_type` a workspace records for a tool, the one implementation every Python writer calls; `find_workspace_for_path`: the upward search for a path's workspace; `sfmtool_workspace_marker`, `write_sfmtool_workspace_marker`: the text of a new `sfmtool` workspace's `.sfm-workspace.json` and its one writer, which `init_workspace` and `get_default_sfmtool_feature_options` call; `upgrade_workspace`: the upgrade of a workspace's files to the current versions, which `sfm ws upgrade` calls | [named-image-lists.md](workspace/named-image-lists.md), [workspace.md](workspace/workspace.md), [ws-upgrade-command.md](cli/workspace/ws-upgrade-command.md#interface) |
 
 ## Keeping the index current
 

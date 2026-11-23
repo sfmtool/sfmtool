@@ -14,8 +14,9 @@ use pyo3::exceptions::{PyInterruptedError, PyValueError};
 use pyo3::prelude::*;
 use sfmtool_core::progress::{Event, Progress};
 use sfmtool_core::workspace::{
-    is_named_image_list_name, split_named_image_list_value, NamedImageList, NamedImageListEntry,
-    NamedImageListMember, NamedImageListSlice, NamedImageLists, NamedImageListsError,
+    is_named_image_list_name, sfmtool_workspace_marker, split_named_image_list_value,
+    write_sfmtool_workspace_marker, NamedImageList, NamedImageListEntry, NamedImageListMember,
+    NamedImageListSlice, NamedImageLists, NamedImageListsError, SfmtoolWorkspaceOptions,
     NAMED_IMAGE_LISTS_FILE_NAME, WORKSPACE_VERSION,
 };
 
@@ -485,6 +486,62 @@ fn feature_prefix_dir_py(
     ))
 }
 
+/// The options of a new ``sfmtool`` workspace: the feature cap, 8192 when
+/// ``None``, and the grey conversion, BT.709 luma unrounded when ``None``.
+fn sfmtool_workspace_options(
+    max_num_features: Option<usize>,
+    image_to_gray: Option<PyRef<'_, PyImageToGray>>,
+) -> SfmtoolWorkspaceOptions {
+    let default = SfmtoolWorkspaceOptions::default();
+    SfmtoolWorkspaceOptions {
+        max_num_features: max_num_features.unwrap_or(default.max_num_features),
+        image_to_gray: image_to_gray.map_or(default.image_to_gray, |g| g.inner.clone()),
+    }
+}
+
+/// The text of a new ``sfmtool`` workspace's ``.sfm-workspace.json``.
+///
+/// The record is version 2 for the ``sfmtool`` feature tool: its default
+/// SIFT options with ``double_image_below_long_side`` at 4096, the feature
+/// cap ``max_num_features`` (8192 when ``None``) and the grey conversion
+/// ``image_to_gray`` (BT.709 luma, unrounded, when ``None``), and the
+/// ``feature_prefix_dir`` named from them. It is written as
+/// ``json.dump(record, f, indent=2)`` writes it, with ``\n`` line breaks, so
+/// ``json.loads`` of it gives the record with its keys in the order written.
+///
+/// Raises:
+///     OverflowError: for a negative ``max_num_features``.
+#[pyfunction(name = "sfmtool_workspace_marker")]
+#[pyo3(signature = (*, max_num_features=None, image_to_gray=None))]
+fn sfmtool_workspace_marker_py(
+    max_num_features: Option<usize>,
+    image_to_gray: Option<PyRef<'_, PyImageToGray>>,
+) -> String {
+    sfmtool_workspace_marker(&sfmtool_workspace_options(max_num_features, image_to_gray))
+}
+
+/// Write a new ``sfmtool`` workspace's ``.sfm-workspace.json`` into
+/// ``workspace_dir`` and return its text, ``sfmtool_workspace_marker``'s for
+/// the same options.
+///
+/// The directory and its parents are made when they do not exist, and a
+/// workspace file already there is replaced; its folder of features and its
+/// named image lists stay on disk.
+///
+/// Raises:
+///     OSError: when the directory cannot be made or the file written.
+///     OverflowError: for a negative ``max_num_features``.
+#[pyfunction(name = "write_sfmtool_workspace_marker")]
+#[pyo3(signature = (workspace_dir, *, max_num_features=None, image_to_gray=None))]
+fn write_sfmtool_workspace_marker_py(
+    workspace_dir: PathBuf,
+    max_num_features: Option<usize>,
+    image_to_gray: Option<PyRef<'_, PyImageToGray>>,
+) -> PyResult<String> {
+    let options = sfmtool_workspace_options(max_num_features, image_to_gray);
+    Ok(write_sfmtool_workspace_marker(&workspace_dir, &options)?)
+}
+
 /// Bring the tree of workspaces at `path` to the current file versions, and
 /// return a report of every file and what became of it.
 ///
@@ -660,6 +717,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(split_named_image_list_value_py, m)?)?;
     m.add_function(wrap_pyfunction!(tool_image_to_gray_py, m)?)?;
     m.add_function(wrap_pyfunction!(recorded_image_to_gray_py, m)?)?;
+    m.add_function(wrap_pyfunction!(sfmtool_workspace_marker_py, m)?)?;
+    m.add_function(wrap_pyfunction!(write_sfmtool_workspace_marker_py, m)?)?;
     m.add_function(wrap_pyfunction!(upgrade_workspace_py, m)?)?;
     m.add("NAMED_IMAGE_LISTS_FILE_NAME", NAMED_IMAGE_LISTS_FILE_NAME)?;
     m.add("WORKSPACE_VERSION", WORKSPACE_VERSION)?;

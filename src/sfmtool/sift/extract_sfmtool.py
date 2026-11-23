@@ -12,6 +12,7 @@ concurrently and how many it runs at once: ``specs/cli/image-feature/sift-comman
 """
 
 import collections
+import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -20,11 +21,11 @@ import cv2
 import numpy as np
 
 from sfmtool._sfmtool import THUMBNAIL_SIZE
-from sfmtool._sfmtool.sift import default_concurrent_images
+from sfmtool._sfmtool.sift import ImageToGray, default_concurrent_images
 from sfmtool.fileio import read_image_rgb
 from sfmtool.sift.extract import SiftExtractionError, _image_readings_fields
 from sfmtool.sift.file import xxh128_of_file
-from sfmtool.workspace import tool_image_to_gray
+from sfmtool.workspace import sfmtool_workspace_marker
 
 __all__ = [
     "get_default_sfmtool_feature_options",
@@ -38,12 +39,15 @@ def get_default_sfmtool_feature_options(
 ) -> dict:
     """Get default options for the sfmtool SIFT backend.
 
-    The keys mirror the output-defining fields of ``SiftParams`` in
-    ``sfmtool-core``, at the values of ``SiftParams::default()`` except
-    ``double_image_below_long_side``, which is 4096 here and absent (no limit)
-    in the Rust default, and are passed straight through to the
-    ``sfmtool._sfmtool.sift.extract_sift`` binding. They also feed the feature-cache
-    hash, so changing any of them yields a distinct cache directory.
+    They are the ``feature_options`` a new ``sfmtool`` workspace records, as
+    ``sfmtool.workspace.sfmtool_workspace_marker`` writes them: the
+    output-defining fields of ``SiftParams`` in ``sfmtool-core``, at the
+    values of ``SiftParams::default()`` except ``double_image_below_long_side``,
+    which is 4096 here and absent (no limit) in the Rust default, plus the
+    grey conversion. They are passed straight through to the
+    ``sfmtool._sfmtool.sift.extract_sift`` binding, and they also feed the
+    feature-cache hash, so changing any of them yields a distinct cache
+    directory.
 
     Hardware/performance-only knobs (e.g. thread count) are intentionally
     excluded — they do not change the feature output.
@@ -57,34 +61,17 @@ def get_default_sfmtool_feature_options(
 
     Returns:
         Dict of sfmtool SIFT options.
+
+    Raises:
+        ValueError: for an ``image_to_gray`` object that does not parse.
     """
-    return {
-        "octave_layers": 3,
-        "sigma": 1.6,
-        "blur_radius_factor": 2.25,
-        "input_sigma": 0.5,
-        "double_image": True,
-        # A new workspace stops doubling at a 4096-pixel long side; why is in
-        # specs/core/features/sift.md § "1. Scale-space pyramid". A record
-        # without the key doubles every image, as before the key existed.
-        "double_image_below_long_side": 4096,
-        "contrast_threshold": 0.0067,
-        "edge_threshold": 10.0,
-        "max_num_features": 8192 if max_num_features is None else max_num_features,
-        "orientation_bins": 36,
-        "peak_ratio": 0.8,
-        "descriptor_width": 4,
-        "descriptor_bins": 8,
-        "descriptor_magnification": 3.0,
-        "descriptor_clamp": 0.2,
-        # The grey conversion is output-defining, so it is recorded here, where
-        # it names the feature folder and goes into every .sift file.
-        "image_to_gray": (
-            tool_image_to_gray("sfmtool").to_dict()
-            if image_to_gray is None
-            else dict(image_to_gray)
-        ),
-    }
+    marker = sfmtool_workspace_marker(
+        max_num_features=max_num_features,
+        image_to_gray=None
+        if image_to_gray is None
+        else ImageToGray.from_json(image_to_gray),
+    )
+    return json.loads(marker)["feature_options"]
 
 
 def thumbnail_of_rgb(image: np.ndarray) -> np.ndarray:

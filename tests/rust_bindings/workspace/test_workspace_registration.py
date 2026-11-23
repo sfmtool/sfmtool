@@ -11,9 +11,11 @@ _EXPECTED_FUNCTIONS = (
     "find_workspace_for_path",
     "is_named_image_list_name",
     "recorded_image_to_gray",
+    "sfmtool_workspace_marker",
     "split_named_image_list_value",
     "tool_image_to_gray",
     "upgrade_workspace",
+    "write_sfmtool_workspace_marker",
 )
 
 _EXPECTED_CLASSES = (

@@ -26,6 +26,7 @@ use crate::bench::{
     GrownPlaneView,
 };
 use crate::camera::CameraModel;
+use crate::reconstruction::data::value_noise;
 
 /// A half-length that projects to 16 px in a view facing the plane from the
 /// scenes' distance, as in the grid plane normal's tests.
@@ -65,26 +66,10 @@ fn hit(c: [f64; 3], d: [f64; 3], depth: f64) -> (f64, f64) {
     (c[0] + lambda * d[0], c[1] + lambda * d[1])
 }
 
-/// Value noise: smooth steps between pseudo-random levels on a lattice
-/// `spacing` apart, in `128 ± amplitude`, so that no shift of it resembles
-/// another. `seed` picks the levels.
+/// The shared value noise on a lattice `spacing` apart, in `128 ± amplitude`,
+/// so that no shift of it resembles another. `seed` picks the levels.
 fn noise(x: f64, y: f64, spacing: f64, amplitude: f64, seed: u64) -> f64 {
-    let level = |i: i64, j: i64| {
-        let mut h = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
-            ^ (j as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
-            ^ seed.wrapping_mul(0xD6E8_FEB8_6659_FD93);
-        h ^= h >> 29;
-        h = h.wrapping_mul(0x1656_67B1_9E37_79F9);
-        h ^= h >> 32;
-        (h % 1024) as f64 / 1023.0 * 2.0 - 1.0
-    };
-    let (u, v) = (x / spacing, y / spacing);
-    let (i, j) = (u.floor() as i64, v.floor() as i64);
-    let smooth = |t: f64| t * t * (3.0 - 2.0 * t);
-    let (s, t) = (smooth(u - u.floor()), smooth(v - v.floor()));
-    let top = level(i, j) * (1.0 - s) + level(i + 1, j) * s;
-    let bottom = level(i, j + 1) * (1.0 - s) + level(i + 1, j + 1) * s;
-    128.0 + amplitude * (top * (1.0 - t) + bottom * t)
+    128.0 + amplitude * value_noise(x, y, spacing, seed)
 }
 
 /// The plane's texture: value noise about 2.5 px a cell in a facing view.

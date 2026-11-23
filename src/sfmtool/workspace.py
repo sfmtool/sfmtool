@@ -9,8 +9,10 @@ position, `split_named_image_list_value`, and `is_named_image_list_name`;
 the rules of the feature options a workspace records: `feature_prefix_dir`,
 which names the features folder for them, `feature_type_for_tool`, which
 names the `feature_type` a workspace records for a tool,
-`recorded_image_to_gray` and `tool_image_to_gray`; and `upgrade_workspace`,
-which brings a workspace's files to the current versions.
+`recorded_image_to_gray` and `tool_image_to_gray`;
+`sfmtool_workspace_marker` and `write_sfmtool_workspace_marker`, the text of
+a new `sfmtool` workspace's `.sfm-workspace.json` and its one writer; and
+`upgrade_workspace`, which brings a workspace's files to the current versions.
 
 This module is the public home of the `sfmtool._sfmtool.workspace` bindings.
 """

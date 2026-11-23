@@ -189,3 +189,86 @@ def test_init_image_to_gray_errors(tmp_path: Path, args, message):
     assert result.exit_code != 0
     assert message in result.output
     assert not (tmp_path / "ws" / ".sfm-workspace.json").exists()
+
+
+def _python_written_marker(max_num_features=None, image_to_gray=None) -> dict:
+    """The record ``init_workspace`` built for the sfmtool tool before its
+    writer moved to Rust: the old ``get_default_sfmtool_feature_options``
+    literal and the record around it, keys in the order it wrote them."""
+    from sfmtool.workspace import feature_prefix_dir, feature_type_for_tool
+
+    options = {
+        "octave_layers": 3,
+        "sigma": 1.6,
+        "blur_radius_factor": 2.25,
+        "input_sigma": 0.5,
+        "double_image": True,
+        "double_image_below_long_side": 4096,
+        "contrast_threshold": 0.0067,
+        "edge_threshold": 10.0,
+        "max_num_features": 8192 if max_num_features is None else max_num_features,
+        "orientation_bins": 36,
+        "peak_ratio": 0.8,
+        "descriptor_width": 4,
+        "descriptor_bins": 8,
+        "descriptor_magnification": 3.0,
+        "descriptor_clamp": 0.2,
+        "image_to_gray": (
+            {"formula": "0.2126*R + 0.7152*G + 0.0722*B"}
+            if image_to_gray is None
+            else dict(image_to_gray)
+        ),
+    }
+    feature_type = feature_type_for_tool("sfmtool", options)
+    return {
+        "version": 2,
+        "feature_tool": "sfmtool",
+        "feature_type": feature_type,
+        "feature_options": options,
+        "feature_prefix_dir": feature_prefix_dir("sfmtool", feature_type, options),
+    }
+
+
+@pytest.mark.parametrize(
+    "kwargs, old",
+    [
+        ({}, {}),
+        (
+            {
+                "max_num_features": 4000,
+                "image_to_gray_formula": "G",
+                "quantize_bits": 6,
+            },
+            {
+                "max_num_features": 4000,
+                "image_to_gray": {"formula": "G", "quantize_bits": 6},
+            },
+        ),
+        (
+            {"quantize_bits": 8},
+            {
+                "image_to_gray": {
+                    "formula": "0.2126*R + 0.7152*G + 0.0722*B",
+                    "quantize_bits": 8,
+                }
+            },
+        ),
+    ],
+)
+def test_init_workspace_writes_what_the_python_writer_wrote(
+    tmp_path: Path, kwargs, old
+):
+    """The Rust writer ``init_workspace`` calls for the sfmtool tool writes the
+    text the Python writer's ``json.dump(record, f, indent=2)`` wrote, with
+    ``\n`` line breaks on every platform, and returns the same record."""
+    from sfmtool._workspace import init_workspace
+    from sfmtool.sift.extract_sfmtool import get_default_sfmtool_feature_options
+
+    expected = _python_written_marker(**old)
+    workspace_dir = tmp_path / "new" / "workspace"
+    returned = init_workspace(workspace_dir, **kwargs)
+    written = (workspace_dir / ".sfm-workspace.json").read_bytes()
+    assert written == json.dumps(expected, indent=2).encode()
+    assert list(returned.items()) == list(expected.items())
+    assert list(returned["feature_options"]) == list(expected["feature_options"])
+    assert get_default_sfmtool_feature_options(**old) == expected["feature_options"]

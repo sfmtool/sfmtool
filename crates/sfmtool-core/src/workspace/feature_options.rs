@@ -319,7 +319,7 @@ fn write_python_json(value: &serde_json::Value, out: &mut String) {
 /// the decimal exponent is from -4 to 15, and otherwise `d.ddde±XX`, the
 /// exponent signed and of at least two digits. A `serde_json` number is never
 /// NaN or infinite, but those are written as Python writes them too.
-fn write_python_float(f: f64, out: &mut String) {
+pub(super) fn write_python_float(f: f64, out: &mut String) {
     if f.is_nan() {
         out.push_str("NaN");
         return;
@@ -386,7 +386,7 @@ fn write_python_float(f: f64, out: &mut String) {
 /// five control characters with their short escapes, and every other
 /// character as `\uXXXX` in lowercase hex, one outside the Basic Multilingual
 /// Plane as its UTF-16 surrogate pair.
-fn write_python_string(s: &str, out: &mut String) {
+pub(super) fn write_python_string(s: &str, out: &mut String) {
     out.push('"');
     for c in s.chars() {
         match c {

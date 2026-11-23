@@ -124,18 +124,8 @@ impl ImageU8 {
     }
 
     /// Encode the image to the file at `path`, in the format the path's
-    /// extension names (case does not matter).
-    ///
-    /// `.jpg` / `.jpeg` write a baseline JPEG with 4:2:0 chroma subsampling
-    /// at `jpeg_quality`; callers pass [`DEFAULT_JPEG_QUALITY`] unless they
-    /// choose otherwise. `.png` writes a lossless PNG at the `png` crate's
-    /// fast compression with adaptive filtering. Any other extension whose
-    /// format the `image` crate encodes 8-bit pixels to (`.tif`, `.bmp`,
-    /// `.webp`, ...) is written with that crate's defaults, which leave a
-    /// TIFF uncompressed. `jpeg_quality` must be 1 to 100 whatever the
-    /// format, though only a JPEG uses it. The channels are written as they
-    /// are held: 1 is grey, 3 is RGB and 4 is RGBA. Every format is written
-    /// at 8 bits per channel.
+    /// extension names (case does not matter): the bytes
+    /// [`encode`](Self::encode) gives for that format and `jpeg_quality`.
     ///
     /// The file is encoded in memory, written to a temporary file beside
     /// `path` and renamed into place, so a failed encode or write leaves
@@ -145,23 +135,57 @@ impl ImageU8 {
     /// instead, as a plain `std::fs::write` would, and a failure part way
     /// through that write can leave a partial file.
     ///
-    /// The errors are
+    /// The errors are those of [`encode`](Self::encode),
     /// [`ImageError::Unsupported`](::image::ImageError::Unsupported) for an
-    /// extension that names no format the crate encodes, or a channel count
-    /// the format cannot hold, among them 4 channels to JPEG, whose alpha is
-    /// refused rather than dropped;
-    /// [`ImageError::Parameter`](::image::ImageError::Parameter) for a
-    /// `jpeg_quality` outside 1 to 100, a channel count other than 1, 3 or 4,
-    /// a side of 0, or a side over 65535 in a JPEG;
-    /// [`ImageError::Encoding`](::image::ImageError::Encoding) when the
-    /// format's encoder refuses the image, such as a WebP side over 16384;
-    /// and [`ImageError::IoError`](::image::ImageError::IoError) when the
-    /// file cannot be written.
+    /// extension that names no format the crate encodes, and
+    /// [`ImageError::IoError`](::image::ImageError::IoError) when the file
+    /// cannot be written.
     pub fn write(
         &self,
         path: &std::path::Path,
         jpeg_quality: u8,
     ) -> Result<(), ::image::ImageError> {
+        let format = ::image::ImageFormat::from_path(path)?;
+        let bytes = self.encode(format, jpeg_quality)?;
+        write_via_temporary(path, &bytes)?;
+        Ok(())
+    }
+
+    /// Encode the image to the bytes of a file in `format`, in memory.
+    ///
+    /// [`ImageFormat::Jpeg`](::image::ImageFormat::Jpeg) gives a baseline
+    /// JPEG with 4:2:0 chroma subsampling at `jpeg_quality`; callers pass
+    /// [`DEFAULT_JPEG_QUALITY`] unless they choose otherwise.
+    /// [`ImageFormat::Png`](::image::ImageFormat::Png) gives a lossless PNG at
+    /// the `png` crate's fast compression with adaptive filtering. Any other
+    /// format the `image` crate encodes 8-bit pixels to (TIFF, BMP, WebP,
+    /// ...) is encoded with that crate's defaults, which leave a TIFF
+    /// uncompressed. `jpeg_quality` must be 1 to 100 whatever the format,
+    /// though only a JPEG uses it. The channels are encoded as they are held:
+    /// 1 is grey, 3 is RGB and 4 is RGBA. Every format is encoded at 8 bits
+    /// per channel.
+    ///
+    /// The JPEG encoder has no floating-point arithmetic, so the same image
+    /// and quality give the same bytes on every run of one machine. It
+    /// chooses an AVX2 forward DCT on an x86 CPU that has AVX2 and a scalar
+    /// one elsewhere, which do not give the same coefficients for every
+    /// block, so the bytes differ between the two.
+    ///
+    /// The errors are
+    /// [`ImageError::Unsupported`](::image::ImageError::Unsupported) for a
+    /// format the crate does not encode, or a channel count the format cannot
+    /// hold, among them 4 channels to JPEG, whose alpha is refused rather
+    /// than dropped;
+    /// [`ImageError::Parameter`](::image::ImageError::Parameter) for a
+    /// `jpeg_quality` outside 1 to 100, a channel count other than 1, 3 or 4,
+    /// a side of 0, or a side over 65535 in a JPEG; and
+    /// [`ImageError::Encoding`](::image::ImageError::Encoding) when the
+    /// format's encoder refuses the image, such as a WebP side over 16384.
+    pub fn encode(
+        &self,
+        format: ::image::ImageFormat,
+        jpeg_quality: u8,
+    ) -> Result<Vec<u8>, ::image::ImageError> {
         use ::image::error::{
             EncodingError, ImageFormatHint, ParameterError, ParameterErrorKind, UnsupportedError,
             UnsupportedErrorKind,
@@ -173,7 +197,6 @@ impl ImageU8 {
                 message,
             )))
         };
-        let format = ImageFormat::from_path(path)?;
         if !(1..=100).contains(&jpeg_quality) {
             return Err(parameter_error(format!(
                 "JPEG quality {jpeg_quality} is outside 1 to 100"
@@ -262,8 +285,7 @@ impl ImageU8 {
                 )?;
             }
         }
-        write_via_temporary(path, &bytes)?;
-        Ok(())
+        Ok(bytes)
     }
 
     /// Create a zeroed image with the given dimensions and channel count.

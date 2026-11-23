@@ -14,7 +14,12 @@ one undistorted pinhole camera; the temporary workspace lives in the system
 temporary directory and is deleted at exit; the demo node saves as any other
 node does; the first version holds a 1 m distance measurement along a cube
 edge; the demo scene is bound to Python; and decoded JPEG pixels may differ
-by one level between x86 and arm64, which the tests tolerate.
+by one level between x86 and arm64, which the tests tolerate. Step 1 of the
+[step plan](#step-plan) is built; it found that the JPEG encoder's two paths
+give different bytes. Decided by the maintainer (2026-11-22): the encoder keeps
+its AVX2 path, and the tests store the JPEG hashes and the photograph-derived
+values once for each encoder path
+([Determinism of the JPEG encoder and decoder](#determinism-of-the-jpeg-encoder-and-decoder)).
 
 ## Purpose
 
@@ -57,7 +62,7 @@ that need pixels.
 
 ## Rust API
 
-The generator would live in
+The generator lives in
 `crates/sfmtool-core/src/reconstruction/data/demo_scene.rs`, beside
 [demo.rs](../../crates/sfmtool-core/src/reconstruction/data/demo.rs), with
 submodules for the renderer and the texture in `demo_scene/`.
@@ -292,8 +297,8 @@ right-handed, +Z up, the X-Y plane the ground, in metres, and the file records
   and `b = (-0.6, 0.8, 0)`, a turn of about 36.9° written with no
   trigonometric function. Its six faces have outward normals `±a`, `±b`, `+z`
   (top) and `-z` (the base, which rests on the ground and is not seen).
-- **Background.** A ray that meets neither surface sees one flat colour. No
-  point lies on it.
+- **Background.** A ray that meets neither surface sees one flat colour, the
+  dark slate `(60, 70, 80)`. No point lies on it.
 - **No lighting.** A surface's colour is its texture alone, the same from
   every direction, so a surface point has the same colour in every photograph
   that sees it, up to the renderer's sampling, the rounding to 8 bits and the
@@ -303,41 +308,131 @@ right-handed, +Z up, the X-Y plane the ground, in metres, and the file records
 
 ### Texture
 
-Each surface carries value noise: pseudo-random levels on a square lattice,
-blended between lattice nodes with the smoothstep `3t² − 2t³`, so that no shift
-of the texture resembles another and a patch can be located by its content.
+Each surface carries fractional Brownian motion (fBm) of Perlin gradient
+noise: five layers, or octaves, of the noise at lattice spacings from 0.32 m
+down to 0.02 m, summed with falling amplitudes, so that the texture has light
+and dark patches about a third of a face across as well as detail at the
+scale of a patch, no
+shift of it resembles another, and a patch can be located by its content.
 The ground and each cube face use a different seed, so the cube does not blend
 into the ground, and two faces meeting at an edge do not continue each other's
-pattern. The noise is evaluated in each surface's own 2D coordinates: `(x, y)`
+pattern: a surface's seed is `7 · seed + i`, where `seed` is the options' and
+`i` the surface's index in the order ground, top, `-a`, `-b`, `+a`, `+b`,
+base. The noise is evaluated in each surface's own 2D coordinates: `(x, y)`
 on the ground, and on a cube face the coordinates along its two in-face axes
-from one corner.
+from one corner, each in `[0, 1]` on the face. A side face with outward normal
+`n` takes `ẑ × n` and `ẑ`, the top `a` and `b`, and the base `a` and `-b`, the
+same axes as the patch frames ([The reconstruction's columns](#the-reconstructions-columns)),
+so each pair's cross product is the face's outward normal; the corner is the
+one where both coordinates are 0.
 
-The lattice spacing is 0.02 m. A surface about 4 m from a camera with a focal
-length of 560 px is about 7 mm per pixel, so a lattice cell spans about 2.8 px
-in a view that faces it: detail at the scale of a patch, as the bench tests
-choose it (their plane texture is about 2.5 px a cell in a facing view,
+**The noise functions** are in
+[demo_scene/texture.rs](../../crates/sfmtool-core/src/reconstruction/data/demo_scene/texture.rs).
+`perlin_noise(x, y, spacing, seed)` puts a unit gradient at each node of a
+square lattice `spacing` apart, one of the eight unit vectors 45° apart,
+picked by a hash of the node and `seed`; between nodes it blends the four
+corners' linear ramps `g · (p − node)` with Perlin's quintic fade
+`6t⁵ − 15t⁴ + 10t³`. It is 0 at every node, continuous with continuous first
+and second derivatives, and its magnitude is at most `1/√2`
+(`PERLIN_BOUND`), the value at a cell's centre when all four gradients point
+at it. `perlin_fbm(x, y, &FbmOptions, seed)` sums `octaves` octaves of it:
+octave `k` has the lattice spacing `spacing / lacunarityᵏ` and the amplitude
+`gainᵏ`, and the sum is divided by the sum of the amplitudes, so its
+magnitude is at most `1/√2` as well. Octave `k` takes its own seed, a hash of
+`seed` and `k`, and its lattice is shifted by the fractional part of
+`k · 0.618034` of its own cell along both axes. Without the seeds, every
+octave would draw the same gradients at the same node indices, a pattern
+repeated at each scale about the origin; without the shift, with a lacunarity
+of 2 every node of a coarse octave would be a node of every finer one, where
+all of them are 0. Both are computed in `f64` from `+`, `−`, `×`, `÷` and
+`floor`, and the gradients are constants written without `sin` or `cos`, so
+the same arguments give the same bits on every platform.
+
+**The octaves.** The texture's fBm, `TEXTURE_FBM`, has 5 octaves, a coarsest
+spacing of 0.32 m, a lacunarity of 2 and a gain of 0.8: lattice spacings of
+0.32, 0.16, 0.08, 0.04 and 0.02 m, at amplitudes 1, 0.8, 0.64, 0.51 and 0.41.
+The coarsest octave puts about three light or dark patches across a 1 m face,
+each about 45 px across in a view 4 m away. The finest has the spacing 0.02 m.
+A surface about 4 m from a camera with a focal length of 560 px is about 7 mm
+per pixel, so a cell of the finest octave spans about 2.8 px in a view that
+faces it: detail at the scale of a patch, as the bench tests choose it (their
+plane texture is about 2.5 px a cell in a facing view,
 [grown_plane_normal.rs](../../crates/sfmtool-core/src/bench/tests/grown_plane_normal.rs)).
 The far ground and the ground at a grazing angle have cells under 2 px across,
 which the supersampling averages rather than aliases.
 
-The noise function is the one the bench tests already use, moved into the
-library and shared rather than copied a third time. There are two copies today,
-`noise` in
+**Contrast at the scale of a patch.** A patch is 0.18 m across and its bitmap
+24 px; the photometric kernels the later steps run compare patches between views
+by their content, which is the texture's variation within a patch. An fBm
+spends part of the grey range on its coarse octaves, which change little
+across a patch, and the octaves' sum is near its extremes at few points (its
+RMS over the scene is about a quarter of its largest magnitude), so the
+texture has less contrast within a patch than single-scale value noise at
+0.02 m mapped onto the same grey range. Measured on the default scene's
+renders, over each 24 × 24 px window that lies wholly on one surface: the
+standard deviation of the grey, and the pixel-scale contrast, the RMS
+difference between neighbouring pixels over `√2`, which is what the finest
+octaves give. The values are the 10th percentile and the median over the
+windows, in grey levels:
+
+| Surface (windows) | Value noise, std. dev. | fBm, std. dev. | Value noise, pixel-scale | fBm, pixel-scale | fBm without the 0.02 m octave, pixel-scale |
+|---|---|---|---|---|---|
+| Ground (1347) | 23.6, 28.8 | 10.0, 13.2 | 11.6, 16.5 | 3.1, 4.3 | 2.3, 3.7 |
+| Top (12) | 27.4, 29.0 | 11.6, 13.6 | 18.1, 18.7 | 4.6, 4.9 | 4.3, 4.7 |
+| Face `-a` (45) | 27.6, 29.4 | 10.4, 12.4 | 11.0, 13.1 | 2.9, 3.3 | 2.2, 2.6 |
+| Face `-b` (59) | 26.9, 28.0 | 9.0, 10.6 | 10.8, 12.6 | 3.0, 3.3 | 2.2, 2.5 |
+
+The fBm keeps about 45% of the value noise's standard deviation within a
+patch and about a quarter of its pixel-scale contrast. The gain is what
+trades the coarse patches against the fine detail. Measured on the texture
+itself, the medians of the standard deviation over 0.18 m windows on the four
+surfaces are 9.5 to 11.2 levels at a gain of 0.5, 11.8 to 13.5 at 0.8 and 13.4
+to 14.6 at 1.0; at 0.5 the texture looks blurred at the scale of a patch, and
+at 1.0 the coarse patches fade into the fine grain, so 0.8 is used. Starting
+the octaves at 0.64 m instead of 0.32 m lowers each of those by about a
+quarter. The JPEG's error, a mean of 0.85 to 1.32 levels against the render
+([The photographs are JPEGs](#the-photographs-are-jpegs)), stays well under
+the pixel-scale contrast. A test asserts that the 10th percentile of each
+seen surface's windows has a standard deviation of at least 8 levels and a
+pixel-scale contrast of at least 2.6; without the 0.02 m octave the
+pixel-scale contrast's 10th percentile falls to 2.2 on the two side faces and
+2.3 on the ground, and the test fails.
+
+**Normalisation.** The fBm's magnitude stays well under its bound, since the
+octaves seldom reach their extremes at one point: its largest over every
+surface of the scenes of seeds 0 to 15, sampled every 2 cm on the ground and
+every 2 mm on the faces, is 0.462, 0.654 of `1/√2`. The texture maps the
+magnitude `TEXTURE_PEAK`, 0.665 of `1/√2` or 0.470, to the ends of its grey
+range, so the measured fBm takes up 98% of that range. A channel would clip
+only where the fBm's magnitude passed 0.83 of `1/√2`, where the factor below
+would fall under 0 or the largest tint channel, 250, rise over 255; that
+needs the five octaves near their own extremes at one point, and no sampled
+point comes near it.
+
+The bench tests' noise is value noise, `value_noise(x, y, spacing, seed)`,
+beside the Perlin noise in
+[demo_scene/texture.rs](../../crates/sfmtool-core/src/reconstruction/data/demo_scene/texture.rs)
+and built only for tests: pseudo-random levels on a square lattice from the
+same hash of the node and the seed, blended between nodes with the smoothstep
+`3t² − 2t³`, a value in `[-1, 1]` that each caller maps to its own range. It
+was two copies in the bench tests, and both now call it: `noise` in
 [grown_plane_normal.rs](../../crates/sfmtool-core/src/bench/tests/grown_plane_normal.rs)
-(seeded, in `128 ± amplitude`) and `other_texture` in
+as `128 + amplitude · value_noise`, the same bits as its copy gave, and
+`other_texture` in
 [grid_plane_normal.rs](../../crates/sfmtool-core/src/bench/tests/grid_plane_normal.rs)
-(the same hash with no seed term, in `30 + 195 · level`). They are one function
-of `(x, y, spacing, seed)` returning a value in `[-1, 1]`: the unseeded hash is
-the seeded one at seed 0, since the seed enters by an XOR with
-`seed · constant`, and `30 + 195 · l` is `127.5 + 97.5 · (2l − 1)`. Each caller
-maps the shared value to its own range. The two forms are equal in exact
-arithmetic and can differ in the last bit in `f64`, which the bench tests'
-assertions, all tolerances, do not see.
+as `127.5 + 97.5 · value_noise(x, y, 0.12, 0)`. Its copy had no seed term,
+which is the seeded hash at seed 0, since the seed enters by an XOR with
+`seed · constant`, and blended levels `30 + 195 · l`, which is
+`127.5 + 97.5 · (2l − 1)`. The two forms are equal in exact arithmetic; in
+`f64` they differ in the last bits at 47% of a million sampled points, by at
+most `8.5 · 10⁻¹⁴`, which the bench tests' assertions, all tolerances, do not
+see.
 
 **Colour.** Each surface has its own tint, so that a person looking at the
 viewer can tell from a patch's colour which face it is on. A surface's colour
-is its tint scaled by `0.5 + 0.4 · noise`, one noise value for all three
-channels:
+is its tint scaled by the factor `0.5 + 0.4 · fbm / TEXTURE_PEAK`, one
+factor for all three channels, in `[0.1, 0.9]` wherever the fBm's magnitude
+is under `TEXTURE_PEAK`:
 
 | Surface | Tint (RGB) | Hue | BT.709 luma of the tint |
 |---|---|---|---|
@@ -350,10 +445,10 @@ channels:
 
 The kernels read the photographs through `ImageToGray::default()`, BT.709 luma
 unrounded, which is linear in the three channels, so a surface's grey is the
-luma of its tint times `0.5 + 0.4 · noise`: the same noise as a grey scene,
+luma of its tint times that factor: the same noise as a grey scene,
 at a gain set by the tint's luma. The tints are chosen with lumas within 5% of
-each other, near 180, so every surface's grey runs over about `18` to `167`
-and the noise has the same contrast on every surface; what the kernels read is
+each other, near 180, so every surface's grey runs over at most about `18`
+to `167` and the noise has the same contrast on every surface; what the kernels read is
 in substance the grey scene's. The largest channel times `0.9` is 225, so no
 channel clips. The base, `-z`, is never seen and takes the ground's tint.
 
@@ -426,7 +521,7 @@ averaging of at most a few dozen 8-bit samples needs `f32` at most
 ([STANDARDS.md](../STANDARDS.md) § "Numeric precision is the smallest the use
 justifies").
 
-**Determinism.** The render depends only on the options. The texture's levels
+**Determinism.** The render depends only on the options. The texture's gradients
 come from the hash of the lattice node and the seed, with no random number
 generator, and the renderer uses `+`, `−`, `×`, `÷`, `sqrt` and `floor`, so a
 rendered photograph is the same bytes on every platform. Rows are rendered in
@@ -436,13 +531,26 @@ order, so the thread count does not change a pixel.
 ### Cost
 
 Five 640 × 480 photographs at four rays a pixel are 6.1 million rays.
-A ray is one slab test, one plane test and one evaluation of the noise (four
-hashes and a bilinear blend), on the order of 50 to 100 ns, so 0.3 to 0.6 s on
-one thread and well under 0.1 s across 16 threads. Encoding and decoding five
+A ray is one slab test, one plane test and one evaluation of the texture (five
+octaves of Perlin noise, each four hashes and a blend), on the order of 50 to
+100 ns, so 0.3 to 0.6 s on one thread and well under 0.1 s across 16
+threads. Encoding and decoding five
 640 × 480 JPEGs is a small part of that. The bitmaps are cheaper still: a
 whole-cloud render of about 1,000 points takes 0.1 to 0.2 s on 32 threads
 ([reference-view.md § Cost of the stored bitmap](../core/patch/reference-view.md#cost-of-the-stored-bitmap)).
 The step plan measures each.
+
+Measured in the test build (optimization level 1) on a 32-thread x86-64
+Windows machine, three runs each, while the machine was lightly loaded: the five
+photographs render in 0.41 to 0.44 s on one thread and 0.030 to 0.035 s across
+the thread pool; encoding the five JPEGs one after another takes 14 to 15 ms
+and decoding them 10 ms; `DemoScene::render` as a whole takes 0.055 to
+0.059 s. The same runs with single-scale value noise as the texture rendered
+in 0.36 to 0.37 s on one thread, so the five octaves cost about 15% more; its
+JPEGs, with more fine detail, were larger and took 23 to 24 ms to encode and
+17 to 19 ms to decode. While another build loaded the machine the same runs
+took up to twice as long on one thread and up to seven times as long on the
+pool.
 
 ## The photographs are JPEGs
 
@@ -473,8 +581,8 @@ another, the default of `sfmtool.fileio.write_image_rgb` and of OpenCV's
 `cv2.imwrite` ([image.rs](../../crates/sfmtool-core/src/camera/image.rs)), with the
 4:2:0 chroma subsampling `ImageU8::write` uses, so the demo's photographs are
 compressed as the photographs the toolkit writes elsewhere are. Measured on a
-full 640 × 480 frame of the sand-tinted texture at 2.8 px a cell with no
-supersampling, the decoded pixels differ from the encoded ones by a mean of
+full 640 × 480 frame of sand-tinted value noise at 2.8 px a cell with no
+supersampling, which has more fine detail than the scene's texture, the decoded pixels differ from the encoded ones by a mean of
 about 3 levels and at most about 25, and the file is 0.19 MB; the same frame
 as PNG is 0.70 MB. The difference is the small one the maintainer asked for: a
 patch's bitmaps no longer agree between views to the last level, as they do
@@ -482,13 +590,16 @@ not in a real capture.
 
 **Size.** A rendered photograph has the blur of the supersampling and a flat
 background, both of which compress better than that frame, so each JPEG is
-under 0.2 MB and the five are under 1 MB. The `.sfmr`'s largest column is the
+under 0.2 MB and the five are under 1 MB: measured, 0.066 to 0.068 MB for
+each low camera's and 0.097 to 0.098 MB for each high camera's, 0.40 MB in
+all. The `.sfmr`'s largest column is the
 patch bitmaps, about 540 × 24 × 24 × 4 bytes, 1.2 MB before compression.
 
 ### Determinism of the JPEG encoder and decoder
 
-**The encoder gives the same bytes on every run and platform.**
-`ImageU8::write` encodes a JPEG with the `jpeg-encoder` crate (0.7.1,
+**The encoder gives the same bytes on every run of one path, and different
+bytes on its two paths.** `ImageU8::encode` encodes a JPEG with the
+`jpeg-encoder` crate (0.7.1,
 [sfmtool-core's Cargo.toml](../../crates/sfmtool-core/Cargo.toml)), not with
 the `image` crate's encoder, baseline, 4:2:0 with averaged chroma and the
 optimized Huffman tables off. The crate has no floating-point arithmetic: its
@@ -496,13 +607,32 @@ RGB to YCbCr conversion is a fixed-point formula scaled by 2¹⁶, and its forwa
 DCT is the integer slow DCT ported from libjpeg's `jfdctint`. With its `simd`
 feature, which sfmtool-core turns on, it chooses an AVX2 path at run time on an
 x86 CPU that has AVX2 and the scalar path elsewhere, such as the macOS arm64 CI
-runner. The AVX2 colour conversion is the same integer formula with the same
-rounding as the scalar one, and the AVX2 DCT is a port of libjpeg-turbo's
-`jfdctint-avx2`, written to compute the same integers as `jfdctint`. The crate
-tests that its AVX2 colour conversion matches the scalar one
-(`avx_matches_scalar_rgb`), but has no test that the two DCTs, or two whole
-encodes, give the same bytes, so the step plan's test does it: it checks the five JPEGs against hashes stored in the test, on every
-CI platform.
+runner. The AVX2 colour conversion gives the same integers as the scalar one:
+the crate tests it (`avx_matches_scalar_rgb`), and an encode that converts the
+colours with the scalar formula and runs the AVX2 DCT gives the AVX2 path's
+bytes. The AVX2 DCT, a port of libjpeg-turbo's `jfdctint-avx2`, does not give
+the scalar DCT's coefficients for every block. With the crate's `simd` feature
+turned off, the same x86 machine encodes the five default photographs to other
+bytes: decoded, 2.5% to 4% of their samples differ from the AVX2 files', by at
+most 5 levels, the files differ in size by at most 27 bytes, and each path's
+files are as close to the render as the other's, a mean error of 0.85 to 1.32
+levels.
+
+Step 1's test stores both paths' hashes of the five JPEGs and checks them
+against the set of the path the encoder takes: the AVX2 set on CI's Linux and
+Windows runners, and on the macOS arm64 runner the scalar set, computed on x86
+with `simd` off, which so checks that the scalar path gives the same bytes on
+x86 and arm64.
+
+**Decided by the maintainer (2026-11-22): `simd` stays on.** A written demo
+workspace's JPEGs, their `image_file_hashes`, and every column computed from
+the decoded photographs differ between an x86 machine with AVX2 and any other
+machine. Turning off `jpeg-encoder`'s `simd` feature would make the demo's
+JPEG bytes the same everywhere, at the cost of encode time for every JPEG the
+toolkit writes (on the five default photographs of the scene's first,
+value-noise texture, 30 to 39 ms against 26 to 28 ms). Instead the encoder keeps its AVX2 path, and the tests store the file
+hashes and the photograph-derived values once for each encoder path and check
+the set of the path the encoder takes, as step 1's hash test does.
 
 **The decoder can differ between platforms in the last level.**
 `ImageU8::decode_rgb` decodes a JPEG with the `jpeg-decoder` crate (0.3.2,
@@ -512,20 +642,21 @@ changelog says the SSSE3 output is not bit-for-bit the scalar output; its
 `platform_independent` feature runs the scalar code everywhere, and the
 workspace does not turn it on. So the photograph-derived columns (thumbnails,
 readings, bitmaps) built on an x86 machine can differ from those built on an
-arm64 one by a rounding level, while the JPEG bytes, the hashes and every
-column the scene fixes are the same. On any one machine the value and a load
-of the written file agree exactly, as above. The workspace keeps
-`platform_independent` off, so the toolkit's decoding of real photographs keeps
-its x86 speed: the demo's tests pin the JPEG bytes exactly and compare the
-photograph-derived columns across platforms to within one level.
+arm64 one by a rounding level from the same JPEG bytes, on top of the
+encoder's difference above, while every column the scene fixes is the same.
+On any one machine the value and a load of the written file agree exactly, as
+above. The workspace keeps `platform_independent` off, so the toolkit's
+decoding of real photographs keeps its x86 speed: the demo's tests pin the
+JPEG bytes of each encoder path exactly and compare the photograph-derived
+columns to within one level against the values stored for the encoder path
+taken.
 
-**What the code has and lacks.** `ImageU8::write` already encodes into a byte
-buffer before it writes the file, but it writes only to a path; the demo needs
-the bytes to hash and decode before anything is written. Step 1 of the plan
-splits the encoding out as `ImageU8::encode(format, jpeg_quality) ->
-Result<Vec<u8>, ImageError>`, which `write` then calls, so both encode the
-same bytes. `ImageU8::decode_rgb(bytes)` already decodes from memory with the
-same decoders as `read_rgb`
+**What the code has.** `ImageU8::encode(format, jpeg_quality) ->
+Result<Vec<u8>, ImageError>` encodes to bytes in memory, with the checks of
+`ImageU8::write`, which calls it, so both encode the same bytes; the demo
+hashes and decodes the bytes before anything is written.
+`ImageU8::decode_rgb(bytes)` decodes from memory with the same decoders as
+`read_rgb`
 ([reading-and-writing-images.md](../core/camera/reading-and-writing-images.md)).
 
 ## The points and who sees them
@@ -693,25 +824,22 @@ workspace moves with it. `dir` inside another workspace is refused, as `sfm ws
 init` refuses to nest one
 ([workspace.md § Protection Against Nesting](../workspace/workspace.md#protection-against-nesting)).
 
-**What the code does not do yet.** No Rust code writes a `.sfm-workspace.json`:
-`init_workspace` is Python
-([_workspace.py](../../src/sfmtool/_workspace.py)), and the `sfmtool` tool's
-default `feature_options` are built in Python
-(`get_default_sfmtool_feature_options`). Rust can name the folder
-(`feature_prefix_dir` in
-[workspace/feature_options.rs](../../crates/sfmtool-core/src/workspace/feature_options.rs))
-and read the options into `SiftParams` (`SiftParams::from_feature_options`),
-but cannot produce the default options. Python's defaults are not `SiftParams::default()`: they set
-`double_image_below_long_side` to 4096, where the Rust default has no limit.
-The first step of the plan adds a Rust function that writes a version 2 marker
-for the `sfmtool` tool with the options Python writes today, which Python's
-`init_workspace` then calls, so the two cannot drift. Encoding a JPEG to bytes
-without writing it needs `ImageU8::encode`
-([What the code has and lacks](#determinism-of-the-jpeg-encoder-and-decoder)).
-The workspace marker's file name is defined three times in Rust
-(`WORKSPACE_MARKER` in `sfmtool-archive-io`, `WORKSPACE_CONFIG_FILE` in
-`features::sift::files` and `WORKSPACE_FILE_NAME` in `workspace`); the writer
-uses the first.
+**The marker's writer.** `write_sfmtool_workspace_marker(dir, options)` in
+[workspace/marker.rs](../../crates/sfmtool-core/src/workspace/marker.rs) writes
+the version 2 marker for the `sfmtool` tool, from `SfmtoolWorkspaceOptions`
+(the feature cap and the grey conversion `sfm ws init` offers, with
+`Default`): `SiftParams::default()` with `double_image_below_long_side` at
+4096, where the Rust default has no limit, the `feature_type`, and the
+`feature_prefix_dir` named from them. Python's `init_workspace`
+([_workspace.py](../../src/sfmtool/_workspace.py)) calls it through its
+binding for the `sfmtool` tool, and `get_default_sfmtool_feature_options`
+returns its options, so the two cannot drift. It writes the text Python's
+`json.dump(record, f, indent=2)` wrote, keys in the same order, with LF line
+breaks; the Python writer, opening the file in text mode, wrote CRLF on
+Windows. `write_workspace` calls it with the default options. The workspace
+marker's file name is defined three times in Rust (`WORKSPACE_MARKER` in
+`sfmtool-archive-io`, `WORKSPACE_CONFIG_FILE` in `features::sift::files` and
+`WORKSPACE_FILE_NAME` in `workspace`); the writer uses the first.
 
 ## Load Demo Data
 
@@ -838,16 +966,46 @@ Each step is one change on its own branch, with its tests.
    2 `sfmtool` workspace marker, which Python's `init_workspace` calls;
    `ImageU8::encode` to bytes, split out of `ImageU8::write`;
    `DemoSceneOptions` with `for_point_count`, and `DemoScene::render` with the
-   tinted texture and the JPEG encode and decode. Tests: the rendered
+   tinted texture, a Perlin-noise fBm, and the JPEG encode and decode. Tests:
+   the Perlin noise is 0 at its lattice nodes, continuous in value and slope
+   across a lattice line, reaches its bound `1/√2` at a cell's centre and
+   never passes it, changes with its seed, and gives stored bits; the fBm
+   adds each octave at its spacing, shift, seed and amplitude and stays
+   within the bound; the texture's largest fBm magnitude over four scenes is
+   under `TEXTURE_PEAK` and within 10% of it; on each surface the photographs
+   show, the 10th percentile of the 24 × 24 px windows has a grey standard
+   deviation of at least 8 levels and a pixel-scale contrast of at least 2.6
+   ([Texture](#texture)); the rendered
    photographs are the same bytes on two runs and across thread counts; the
-   five JPEGs match XXH128 hashes stored in the test, checked on every CI
-   platform, so that the x86 AVX2 encoder path and the arm64 scalar one are
-   checked against each other; `photographs()` is `decode_rgb` of
+   five JPEGs match XXH128 hashes stored in the test for each encoder path,
+   checked on every CI platform, so that the x86 AVX2 encoder path and the
+   arm64 scalar one are each checked; `photographs()` is `decode_rgb` of
    `encoded_photographs()`; a facing pixel's colour in the render is the
    texture at the point its centre ray hits, to within the supersampling's
    blur; each surface's grey is its tint's luma times the noise factor; the
    cube's silhouette is where the slab test puts it. Measure the render's and
    the JPEG encode and decode's time.
+
+   *Built.* The generator is
+   [demo_scene.rs](../../crates/sfmtool-core/src/reconstruction/data/demo_scene.rs)
+   with `texture` and `render` in `demo_scene/`, re-exported from
+   `sfmtool_core::reconstruction`. It has `render`, `options`,
+   `image_names`, `rendered_photographs`, `photographs` and
+   `encoded_photographs`; `tiled_photographs` comes with step 2, which is
+   the first to read it, and so do `DemoSceneError`'s `Directory`, `Save`
+   and `Io`. `DEFAULT_POINT_COUNT` is 540, this draft's estimate, until step
+   2's test of the sampling fixes it. `render` checks every option, the
+   sampling's among them, and also refuses an image side over 65535, the
+   most a JPEG holds. The JPEG hash test stores a set of hashes for each
+   encoder path, since the two paths give different bytes
+   ([Determinism of the JPEG encoder and decoder](#determinism-of-the-jpeg-encoder-and-decoder)).
+   The facing-pixel test also renders with `supersampling` 1, where the
+   pixel is the texture at its centre ray's hit up to the rounding, since
+   the four-sample comparison alone cannot see a texture misplaced by a
+   fraction of a pixel. Measured times are in [Cost](#cost). The texture
+   was single-scale value noise at first and is now the Perlin fBm the
+   maintainer asked for (2026-11-22); the value noise stays beside it for
+   the bench tests.
 2. **The reconstruction.** Point sampling, visibility, the columns, the
    measurement, the bitmaps; `DemoScene::reconstruction` and
    `DemoScene::write_workspace`. Tests: the defaults keep
@@ -863,8 +1021,9 @@ Each step is one change on its own branch, with its tests.
    measurement out; the value saves, verifies and loads back equal, with the
    workspace directory set; the image file hashes match the written files; the
    thumbnails, readings and bitmaps are those computed from the written files
-   decoded again; the photograph-derived columns match stored values within a
-   tolerance of one level on every CI platform.
+   decoded again; the photograph-derived columns match the values stored for
+   the encoder path taken, within a tolerance of one level, on every CI
+   platform.
 3. **Python binding.** `DemoScene` in `sfmtool.reconstruction`, its row in
    [python-bindings.md](../python-bindings.md) and its entry in
    [test_reconstruction_patches_registration.py](../../tests/rust_bindings/reconstruction/test_reconstruction_patches_registration.py),

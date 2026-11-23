@@ -27,6 +27,9 @@ impl ImageU8 {
     /// `read_rgb` of a file held in memory: the same decoders and limits.
     pub fn decode_rgb(bytes: &[u8]) -> Result<ImageU8, image::ImageError>;
     pub fn write(&self, path: &Path, jpeg_quality: u8) -> Result<(), image::ImageError>;
+    /// The bytes `write` writes, for a format named rather than by a path.
+    pub fn encode(&self, format: image::ImageFormat, jpeg_quality: u8)
+        -> Result<Vec<u8>, image::ImageError>;
 }
 pub fn image_has_alpha(path: &Path) -> Result<bool, image::ImageError>; // header only
 pub fn image_dimensions(path: &Path) -> Result<(u32, u32), image::ImageError>; // header only
@@ -194,6 +197,10 @@ since OpenCV draws a tuple in whatever channel order the array has.
   as Python's `open` does, cannot be replaced by a rename, though it can be
   written; there the bytes are written to the path directly instead, and a
   failure part way through that write can leave a partial file.
+  `ImageU8::encode` is the encoding alone: it returns the bytes `write`
+  writes for the format it is given, with the same checks, and `write` calls
+  it, so a caller that needs a file's bytes before writing it, to hash or
+  decode them, gets the same bytes.
 - **JPEG quality.** `jpeg_quality` is 1 to 100 and defaults to
   `DEFAULT_JPEG_QUALITY`, 95, the default of OpenCV's `cv2.imwrite`, so a
   command that names no quality gets the quality OpenCV gave it. Commands
@@ -206,6 +213,14 @@ since OpenCV draws a tuple in whatever channel order the array has.
   with them the encoder writes each component in a scan of its own, which
   zune-jpeg 0.5.15, and so any program reading through the `image` crate,
   decodes to wrong pixels without an error.
+  The crate chooses its AVX2 forward DCT at run time on an x86 CPU that has
+  AVX2 and its scalar one elsewhere, and the two do not give the same
+  coefficients for every block, so one image at one quality encodes to
+  different bytes on the two paths: on five rendered 640 x 480 photographs of
+  a textured scene at quality 95, 3.5% to 6% of the decoded samples differ, by at most 6
+  levels, and the files differ by tens of bytes in size, while each path is
+  as close to the source as the other. On one path the bytes are the same on
+  every run.
 - **JPEG size, error and time.** Measured on the 85 `dino_dog_toy`
   photographs (2040 x 1536) at quality 95, against `cv2.imwrite` at the same
   quality. The size is the total of the 85 files. The error is the mean of
