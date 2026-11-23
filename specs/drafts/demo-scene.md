@@ -1387,7 +1387,7 @@ Each step is one change on its own branch, with its tests.
      through `default_demo_scene`; the test takes 0.3 to 0.4 s alone, with
      the render, and 0.34 s for the whole module.
    - `far_demo` stays for the tests that use it: they rely on what the scene
-     does not hold, points 4,000 km from the origin, whose position shifts
+     does not hold, points 5,000 km from the origin, whose position shifts
      back through the f64 centre, a last point with no frame or bitmap, eight
      images, a `sift_files` value whose per-image hashes a case shortens,
      points made directions, and 8 × 8 bitmaps whose count sets the page
