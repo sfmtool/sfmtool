@@ -15,8 +15,8 @@ temporary directory and is deleted at exit; the demo node saves as any other
 node does; the first version holds a 1 m distance measurement along a cube
 edge; the demo scene is bound to Python; and decoded JPEG pixels may differ
 by one level between x86 and arm64, which the tests tolerate. Steps 1, 2 and
-3 of the [step plan](#step-plan) are built, and the Python half of step 5;
-step 1 found that the JPEG encoder's
+3 of the [step plan](#step-plan) are built, and the Python and SfM Explorer
+halves of step 5; step 1 found that the JPEG encoder's
 two paths give different bytes, and step 2 that the reference-view rule's pick
 of a point's bitmap view can change with a one-level change in the pixels
 ([The reconstruction's columns](#the-reconstructions-columns)), which the
@@ -1315,3 +1315,51 @@ Each step is one change on its own branch, with its tests.
    0.4 to 0.5 s less each where they converted or copied seoul_bull, and the
    four modules 6 s where they took 9 to 10 s on one worker; the scene's
    render and workspace cost 0.2 s once per worker.
+
+   *The SfM Explorer half is built.* The viewer's tests share one render and
+   its value through `demo_scene` in
+   [test_support.rs](../../crates/sfm-explorer/src/test_support.rs), a
+   `OnceLock` the first test that asks fills, and `demo_scene_state_of`, which
+   makes a node of a value of the scene and puts each decoded photograph in the
+   photograph cache, so no test writes a file. Moved to the demo scene, in
+   [bench/tests.rs](../../crates/sfm-explorer/src/bench/tests.rs):
+   - the Grown Plane Normal test (which also runs Finite Difference and Grid
+     Plane Normal for their labels) and the Pairwise Flow Normal test: a
+     ground point four cameras see, its patch turned 15 degrees off the
+     ground, is turned back to within half a degree of the stored normal
+     (0.05 and 0.00 degrees measured), where on the pattern each could only
+     be seen to push a version;
+   - the fit's version label test: the point stored 5 cm off its place is
+     placed back within 1 mm (0.13 mm measured), and the label says finite,
+     where it could say either;
+   - the geometry search test: a point of the `-b` face with its sighting in
+     `demo_4` taken out of its track gets that sighting back as the one
+     candidate, within half a pixel of the exact keypoint, and image 0, which
+     sees the face from behind, is not proposed.
+
+   The old fixture paints one pattern into every image, so a viewer that
+   handed each step another image's photograph passed every bench test; with
+   each image's path taken from the next image, all four moved tests fail and
+   the rest of the module passes. Each moved test takes 0.1 to 0.7 s alone,
+   the render included, and the module 1.6 s where it took 0.95 s.
+
+   Kept on `embedded_demo` and `projected_embedded_demo`: the tests that need
+   what the scene cannot give, the 1, 2 and 3 track lengths cycling by point
+   index (the re-triangulation's three outcomes, Refit All Points' refusal of
+   a one-observation point, the open's unrendered one-view bitmap) or bars
+   the pattern fails on some rows (`put_with_rows_the_bars_refuse`, which the
+   app, dock and surface tiling tests call); and the tests that assert what the viewer does with a
+   track rather than what a step finds, whose assertions no photograph
+   changes: the rest of the bench tests, the MCP bench tests (which say
+   they test the wire's boundary), Track View, the track table, Image
+   Detail's bench layer, overlay and ghost tests, cluster patches, the camera
+   model proposal, the scene graph, open and save tests. The display
+   thumbnail tests keep their flat-colour photographs and `.sift`
+   thumbnails, since a flat colour is what says which source a row came
+   from, and the thumbnail's resize is core's, checked on the scene in step
+   2. The *Build SIFT Files* tests keep seoul_bull's photographs, which are
+   already real: their assertions are about which files are written where,
+   not what is in them. *Create Track Here* keeps its plane capture, which
+   mirrors the one core's track-at-pixel tests are decided against.
+   `web_export`'s `far_demo` and core's bench `fixture_of` are not viewer
+   tests and are left for another change.

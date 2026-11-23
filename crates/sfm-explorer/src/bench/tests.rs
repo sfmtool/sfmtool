@@ -9,7 +9,10 @@
 //! (`crates/sfmtool-core/src/bench/tests.rs`). What is under test here is the
 //! half core does not have: one version per step, the document half left alone
 //! by all but the commit, the dirty question asked of the document half only,
-//! and a report that comes home to a bench the item has left.
+//! and a report that comes home to a bench the item has left. The normal steps,
+//! the fit and the geometry search run on the demo scene, whose photographs
+//! differ from image to image and agree with the value, so that their answers
+//! also show the viewer handed each step the photograph of each image.
 
 use std::sync::Arc;
 
@@ -178,6 +181,86 @@ fn rows(state: &AppState) -> Vec<(Kind, String)> {
 /// The label of the focused item on `id`'s bench, owned.
 fn focused(state: &AppState, id: ReconId) -> Option<String> {
     state.focused_item_label(id).map(str::to_string)
+}
+
+// ── The demo scene ──────────────────────────────────────────────────────
+//
+// The steps whose answer these tests check against the truth run on the demo
+// scene (`crate::test_support::demo_scene`): photographs of a textured ground
+// and cube, with a value whose every keypoint, position and normal is exact.
+// On [`state`]'s pattern a step can only be seen to run; here what it finds
+// can be held to the surface it was run on.
+
+/// A ground point of the demo scene, which four of its five cameras see.
+fn scene_ground_point() -> usize {
+    crate::test_support::demo_scene_point([0.0, 0.0, 1.0], 4)
+}
+
+/// A point on the cube's `-b` face, which four of its five cameras see.
+fn scene_face_point() -> usize {
+    crate::test_support::demo_scene_point([0.6, -0.8, 0.0], 4)
+}
+
+/// The angle between two directions, in degrees.
+fn degrees_between(a: nalgebra::Vector3<f64>, b: nalgebra::Vector3<f64>) -> f64 {
+    a.normalize()
+        .dot(&b.normalize())
+        .clamp(-1.0, 1.0)
+        .acos()
+        .to_degrees()
+}
+
+/// The normal of the patch the track called `label` stands on.
+fn bench_normal(state: &AppState, id: ReconId, label: &str) -> nalgebra::Vector3<f64> {
+    match &state.bench_track(id, label).expect("on the bench").stage {
+        sfmtool_core::bench::Stage::Track(payload) => payload
+            .patch_frame
+            .as_ref()
+            .expect("a framed track")
+            .normal(),
+        sfmtool_core::bench::Stage::Cluster(_) => panic!("a track-stage item"),
+    }
+}
+
+/// The demo scene's state with `point`'s patch frame turned `by` degrees
+/// about its own `u` axis, so its normal starts that far from the surface's,
+/// and `point` put on the bench. Gives back the state, the node, the label
+/// and the surface's normal.
+fn scene_bench_with_turned_normal(
+    point: usize,
+    by: f64,
+) -> (AppState, ReconId, String, nalgebra::Vector3<f64>) {
+    let mut recon = crate::test_support::demo_scene().recon.clone();
+    let truth = recon.point_set.points[point].normal.cast::<f64>();
+    let row = |column: &ndarray::Array2<f32>| {
+        nalgebra::Vector3::from_fn(|c, _| f64::from(column[[point, c]]))
+    };
+    let u = row(recon
+        .point_set
+        .patch_u_halfvec_xyz
+        .as_ref()
+        .expect("framed"));
+    let v = row(recon
+        .point_set
+        .patch_v_halfvec_xyz
+        .as_ref()
+        .expect("framed"));
+    let turn =
+        nalgebra::Rotation3::from_axis_angle(&nalgebra::Unit::new_normalize(u), by.to_radians());
+    let turned = turn * v;
+    let column = recon
+        .point_set
+        .patch_v_halfvec_xyz
+        .as_mut()
+        .expect("framed");
+    for c in 0..3 {
+        column[[point, c]] = turned[c] as f32;
+    }
+    let (mut state, id) = crate::test_support::demo_scene_state_of(recon);
+    let label = state
+        .put_point_on_bench(PointRef::new(id, point), None)
+        .expect("a live point");
+    (state, id, label, truth)
 }
 
 // ── The list, the focused item and the discard ──────────────────────────
@@ -1592,10 +1675,43 @@ fn a_descriptor_search_seeds_a_candidate_at_the_warped_pixel_and_shape() {
     );
 }
 
+/// The search needs no descriptor index, comes home as one version and one
+/// `Bench` row, and finds what the photographs show.
+///
+/// On the demo scene, a point of the cube's `-b` face with the observation in
+/// its last image taken out of its track: the search proposes that image, and
+/// no other, at the observation's exact keypoint. Image 0 sees the face from
+/// behind and is not proposed.
 #[test]
-fn a_geometry_search_needs_no_sift_index_and_routes_its_report() {
-    let (mut state, id) = state();
-    let label = put_on_bench(&mut state, id);
+fn a_geometry_search_needs_no_sift_index_and_finds_the_sighting_the_track_lacks() {
+    let point = scene_face_point();
+    let fixture = crate::test_support::demo_scene();
+    let mut edited = sfmtool_core::EditedReconstruction::new(Arc::new(fixture.recon.clone()));
+    let mut record = edited
+        .point(point as u32)
+        .expect("a live point")
+        .to_record();
+    let taken = record.observations.len() - 1;
+    let removed = record.observations.remove(taken);
+    let keypoint = removed.keypoint_xy.expect("an inline keypoint");
+    if let Some(reference) = record.reference_observation.as_mut() {
+        if *reference as usize == taken {
+            *reference = -1;
+        }
+    }
+    edited
+        .replace_point(point as u32, record)
+        .expect("a live point");
+    let (recon, _) = edited.materialize();
+    assert_eq!(
+        recon.point_set.track_image_indices(point),
+        [1, 2, 3],
+        "test setup: the replaced point keeps its slot and loses image 4"
+    );
+    let (mut state, id) = crate::test_support::demo_scene_state_of(recon);
+    let label = state
+        .put_point_on_bench(PointRef::new(id, point), None)
+        .expect("a live point");
     assert!(
         state.sift_index(id).is_none(),
         "the fixture unexpectedly has a descriptor index"
@@ -1618,10 +1734,21 @@ fn a_geometry_search_needs_no_sift_index_and_routes_its_report() {
     assert_eq!(rows[0].0, Kind::Bench);
     assert!(
         rows[0].1.starts_with(&format!(
-            "{label}: Geometry search from observation 0 of 3:"
+            "{label}: Geometry search from observation 0 of 3: 1 image matched, 1 candidate added"
         )),
         "the geometry report is not distinguishable: {}",
         rows[0].1
+    );
+    let track = state.bench_track(id, &label).expect("on the bench");
+    assert_eq!(track.observations.len(), 4, "the three held, and one found");
+    let found = &track.observations[3];
+    assert_eq!(found.image, 4, "the image the track lacked");
+    assert_eq!(found.verdict, Verdict::Out);
+    let site = found.site().expect("a proposed sighting has a place");
+    let off = (site[0] - f64::from(keypoint[0])).hypot(site[1] - f64::from(keypoint[1]));
+    assert!(
+        off < 0.5,
+        "{site:?} is {off} px from the keypoint {keypoint:?}"
     );
 }
 
@@ -1657,25 +1784,28 @@ fn a_descriptor_search_with_no_index_is_refused_before_the_worker() {
 
 /// Each normal step runs on the worker and comes home under its own name.
 ///
-/// The fixture's photographs are a pattern in screen space rather than views
-/// of one surface, so the grown plane may find no plane the views agree on;
-/// it still ends with the track read back, so it pushes one version, and its
-/// Action Log row names the step and says how many views joined. The finite
-/// difference fits its pieces, which the pattern supports, and pushes one
-/// version labelled with the settings it was pressed at. Settings core would
-/// refuse are refused before a task starts. Whether the estimates are right is
-/// core's to test, over a scene with a surface in it.
+/// On the demo scene, a ground point that four cameras see, its patch turned
+/// 15 degrees off the ground. The grown plane turns it back onto the ground,
+/// to within half a degree, pushes one version, and its Action Log row names
+/// the step and says how many views joined. The finite difference and the
+/// grid plane each push one version labelled with the settings they were
+/// pressed at. Settings core would refuse are refused before a task starts.
+/// How close each estimate comes over other surfaces is core's to test.
 #[test]
 fn a_normal_step_runs_on_the_worker_and_is_named_for_what_it_did() {
     use super::{NormalStep, SplitSettings};
-    let (mut state, id) = state();
-    let label = put_on_bench(&mut state, id);
+    let (mut state, id, label, truth) = scene_bench_with_turned_normal(scene_ground_point(), 15.0);
+    let start = degrees_between(bench_normal(&state, id, &label), truth);
+    assert!(
+        (start - 15.0).abs() < 1e-3,
+        "test setup: {start} degrees off"
+    );
 
     state.action_log.clear();
     let before = versions(&state, id);
     state
         .start_bench_normal(id, &label, NormalStep::GrownPlane)
-        .expect("a framed finite track with three sightings");
+        .expect("a framed finite track with four sightings");
     assert!(
         state.running_tasks().next().is_some(),
         "it runs on the worker"
@@ -1703,6 +1833,11 @@ fn a_normal_step_runs_on_the_worker_and_is_named_for_what_it_did() {
                 && text.contains("turned")),
         "{logged:?}"
     );
+    let off = degrees_between(bench_normal(&state, id, &label), truth);
+    assert!(
+        off < 0.5,
+        "the grown plane left the normal {off} degrees off the ground"
+    );
 
     let settings = SplitSettings {
         pieces: 3,
@@ -1722,7 +1857,7 @@ fn a_normal_step_runs_on_the_worker_and_is_named_for_what_it_did() {
         let before = versions(&state, id);
         state
             .start_bench_normal(id, &label, step)
-            .expect("a framed finite track with three sightings");
+            .expect("a framed finite track with four sightings");
         state.finish_background_tasks();
         let logged = rows(&state);
         assert_eq!(versions(&state, id), before + 1, "{logged:?}");
@@ -1763,20 +1898,25 @@ fn a_normal_step_runs_on_the_worker_and_is_named_for_what_it_did() {
 /// home as one version named for the step, with an Action Log row that carries
 /// the step's report: how many rounds ran and the turn.
 ///
-/// On the fixture's screen-space pattern the step may find no plane the pairs
-/// agree on; it still ends with the track read back. Whether its estimate is
-/// right is core's to test.
+/// On the demo scene, a ground point that four cameras see, its patch turned
+/// 15 degrees off the ground: the step turns it back onto the ground, to
+/// within half a degree. How close it comes over other surfaces is core's to
+/// test.
 #[test]
 fn the_pairwise_flow_normal_runs_on_the_worker_and_is_named_for_its_step() {
     use super::NormalStep;
-    let (mut state, id) = state();
-    let label = put_on_bench(&mut state, id);
+    let (mut state, id, label, truth) = scene_bench_with_turned_normal(scene_ground_point(), 15.0);
+    let start = degrees_between(bench_normal(&state, id, &label), truth);
+    assert!(
+        (start - 15.0).abs() < 1e-3,
+        "test setup: {start} degrees off"
+    );
 
     state.action_log.clear();
     let before = versions(&state, id);
     state
         .start_bench_normal(id, &label, NormalStep::PairwiseFlow)
-        .expect("a framed finite track with three sightings");
+        .expect("a framed finite track with four sightings");
     assert_eq!(
         state.running_tasks().next().map(|task| task.operation.name),
         Some("Pairwise flow normal"),
@@ -1805,6 +1945,11 @@ fn the_pairwise_flow_normal_runs_on_the_worker_and_is_named_for_its_step() {
                 && text.contains("turned")),
         "{logged:?}"
     );
+    let off = degrees_between(bench_normal(&state, id, &label), truth);
+    assert!(
+        off < 0.5,
+        "the step left the normal {off} degrees off the ground"
+    );
 }
 
 /// A fit's **version label** carries the classification, not just the item.
@@ -1813,14 +1958,24 @@ fn the_pairwise_flow_normal_runs_on_the_worker_and_is_named_for_its_step() {
 /// history row reading only "Fitted X" hides the one thing a person scrolling it
 /// is looking for -- which fit crossed the boundary, and on what evidence. The
 /// Action Log keeps the whole report, counts and all.
+///
+/// On the demo scene, a ground point that four cameras see, stored 5 cm from
+/// where it stands: the fit reads its sightings in the photographs and places
+/// it back on the ground, to within a millimetre, and says it is finite.
 #[test]
 fn a_fit_s_version_label_carries_the_classification_and_the_log_the_whole_report() {
-    let (mut state, id) = state();
-    let label = put_on_bench(&mut state, id);
+    let point = scene_ground_point();
+    let mut recon = crate::test_support::demo_scene().recon.clone();
+    let truth = recon.point_set.points[point].position;
+    recon.point_set.points[point].position.x += 0.05;
+    let (mut state, id) = crate::test_support::demo_scene_state_of(recon);
+    let label = state
+        .put_point_on_bench(PointRef::new(id, point), None)
+        .expect("a live point");
     state.action_log.clear();
     state
         .start_bench_fit(id, &label)
-        .expect("a framed track with three sightings fits");
+        .expect("a framed track with four sightings fits");
     state.finish_background_tasks();
 
     let version = state
@@ -1837,8 +1992,17 @@ fn a_fit_s_version_label_carries_the_classification_and_the_log_the_whole_report
         "the label should name the item and then say something: {version}"
     );
     assert!(
-        version.contains("finite at (") || version.contains("at infinity along ("),
+        version.contains("finite at ("),
         "and what it says is which representation the rays earned: {version}"
+    );
+    let placed = match &state.bench_track(id, &label).expect("on the bench").stage {
+        sfmtool_core::bench::Stage::Track(payload) => payload.position.expect("a fitted place"),
+        sfmtool_core::bench::Stage::Cluster(_) => panic!("a fit leaves a track"),
+    };
+    let off = (placed - truth).norm();
+    assert!(
+        off < 1e-3,
+        "the fit placed the point {off} m from where it stands"
     );
     assert!(
         version.contains("threshold") && version.contains("px noise"),
