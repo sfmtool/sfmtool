@@ -284,8 +284,8 @@ impl Viewer3D {
     /// Follow a press over the measurements for this frame, against what the
     /// last camera showed, and say whether the pointer is theirs (G7).
     ///
-    /// `taken` is a press something drawn above them already holds: the bench
-    /// figure's handle or the brush's stroke. A click on a mark or a line
+    /// `taken` is a press something that takes it first already holds: the
+    /// bench figure's handle or the brush's stroke. A click on a mark or a line
     /// becomes the gesture the dock applies ([`Viewer3D::measurement_gesture`]);
     /// a click on the indicator frames the selected measurement here, with
     /// [`Viewer3D::frame_keeping_orientation`].

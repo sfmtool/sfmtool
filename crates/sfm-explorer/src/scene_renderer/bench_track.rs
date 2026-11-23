@@ -21,8 +21,9 @@
 //! as egui painted them.
 //!
 //! It runs **after** the EDL resolve, and after the target indicator and the
-//! track rays, so the figure sits on top of everything the frame has drawn --
-//! it is the thing being worked on. Like both of those it samples the shared
+//! track rays, so the figure sits on top of everything the scene texture
+//! holds -- it is the thing being worked on; only the measurements' layer is
+//! painted over it. Like both of those it samples the shared
 //! hardware depth buffer rather than testing against it, which is what lets a
 //! fragment behind the scene still be drawn, dimmed, instead of discarded
 //! (`specs/gui/point-cloud-rendering.md` § "Depth-Aware Transparency"). Each

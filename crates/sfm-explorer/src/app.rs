@@ -988,10 +988,10 @@ impl App {
             self.scene_renderer.render_track_rays(encoder);
         }
 
-        // The measurements and then the focused item, last of the post-EDL
-        // passes: the focused item is the thing being worked on, so nothing
-        // the frame drew is over it, and the measurements are over the rest,
-        // as the overlay they replaced was.
+        // The measurements into their own layer, which the 3D view paints
+        // over the scene texture, and then the focused item, last of the
+        // post-EDL passes onto it: the focused item is the thing being worked
+        // on, so nothing else the scene texture holds is over it.
         self.scene_renderer
             .update_bench_track_uniforms(queue, &self.viewer_3d.camera);
         self.scene_renderer.render_bench_track(encoder);

@@ -155,7 +155,8 @@ behind the viewer is clipped away entirely.
 
 The figure is drawn **in the scene, by the GPU**, in a pass that runs after the
 EDL resolve and after the target indicator and the track rays, so it sits on top
-of everything else the frame has drawn. It is the thing being worked on. Like
+of everything else the scene texture holds; only the measurements' layer is
+painted over it. It is the thing being worked on. Like
 those two it *samples* the shared depth buffer rather than testing against it,
 which is what lets a fragment behind the scene still be drawn, dimmed, instead
 of discarded ([`point-cloud-rendering.md`](point-cloud-rendering.md) §

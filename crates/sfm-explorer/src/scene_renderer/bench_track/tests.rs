@@ -386,7 +386,7 @@ fn a_translucent_measurement_composites_as_egui_painted_it() {
         super::MEASUREMENT_LAYER_LOAD,
         wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
     );
-    let blend = wgpu::BlendState::ALPHA_BLENDING;
+    let blend = super::super::pipelines::bench_track::BLEND;
     assert_eq!(blend.color.src_factor, wgpu::BlendFactor::SrcAlpha);
     assert_eq!(blend.color.dst_factor, wgpu::BlendFactor::OneMinusSrcAlpha);
     assert_eq!(blend.color.operation, wgpu::BlendOperation::Add);

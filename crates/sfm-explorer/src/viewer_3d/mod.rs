@@ -957,8 +957,9 @@ impl Viewer3D {
         let owns_pointer =
             self.update_bench_drag(ui, &response, rect, handles) || brush_owns_pointer;
         // The measurements' marks, lines and off-screen indicator own a press
-        // that lands on them (G7), under the bench figure and the brush,
-        // which are drawn above them and take the press first.
+        // that lands on them (G7), after the bench figure and the brush,
+        // which take the press first although the marks are drawn over the
+        // figure.
         let owns_pointer = self.update_measurement_press(
             ui,
             &response,

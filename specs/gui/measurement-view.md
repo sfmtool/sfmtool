@@ -1028,7 +1028,8 @@ own their press** (G7): the press is taken when it lands
 (`measurement_marks::follow`), so the 3D view neither orbits nor picks a point
 under it, and Image Detail neither pans nor selects a feature's point under it.
 Only an unmodified primary press is taken; the bench figure's handles and the
-eraser brush, which are drawn above, take a press first. The reach is 9 points
+eraser brush take a press first, although the 3D view draws the marks and
+lines over the figure. The reach is 9 points
 from a mark and 6 from a line, marks tried before lines and the topmost
 measurement first.
 

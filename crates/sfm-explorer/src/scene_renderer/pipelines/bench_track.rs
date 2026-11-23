@@ -8,6 +8,13 @@ const SHADER: &str = concat!(
     include_str!("../../shaders/bench_track.wgsl")
 );
 
+/// The blend of every bench track pipeline, the measurements' included.
+///
+/// Ordinary alpha rather than the compass's additive blend: the three violets
+/// carry meaning, and additive light over a bright point cloud washes them all
+/// to white.
+pub(in crate::scene_renderer) const BLEND: wgpu::BlendState = wgpu::BlendState::ALPHA_BLENDING;
+
 /// Resources created by the bench track pipelines.
 pub(in crate::scene_renderer) struct BenchTrackPipelineResources {
     /// Instanced ribbon-quad edges of the figure: the frame, the normal, the
@@ -63,13 +70,10 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> BenchTrackPipe
         ..Default::default()
     });
 
-    // Ordinary alpha rather than the compass's additive blend: the three
-    // violets carry meaning, and additive light over a bright point cloud
-    // washes them all to white.
     let target = |format| {
         [Some(wgpu::ColorTargetState {
             format,
-            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            blend: Some(BLEND),
             write_mask: wgpu::ColorWrites::ALL,
         })]
     };
