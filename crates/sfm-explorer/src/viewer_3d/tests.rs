@@ -2775,15 +2775,31 @@ fn turned_moved_scaled() -> sfmtool_core::Se3Transform {
     )
 }
 
-/// The measurement fixture's node under [`turned_moved_scaled`], settled, with
-/// the camera 3 units (in the reconstruction's own) in front of point 0's
-/// patch and 20° off its normal, and the rect the viewport occupies.
-fn facing_point_0() -> (Viewer3D, egui::Context, AppState, ReconId, egui::Rect) {
-    let (mut state, id) = crate::measurements::fixture::referenced_state(Some("m"));
+/// The measurement fixture's node under [`turned_moved_scaled`] in the Patches
+/// style, settled, with the camera 3 units (in the reconstruction's own) in
+/// front of point 0's patch and 20° off its normal, and the rect the viewport
+/// occupies.
+///
+/// With `bitmaps` the fixture gains a constant grey patch bitmap per point, so
+/// the node draws its points as surfels, as a file with bitmaps does; without,
+/// it has patch frames and nothing to texture them with, and draws dots in the
+/// Patches style.
+fn facing_point_0(bitmaps: bool) -> (Viewer3D, egui::Context, AppState, ReconId, egui::Rect) {
+    let mut recon = crate::measurements::fixture::referenced_reconstruction(Some("m"));
+    if bitmaps {
+        let points = recon.point_set.points.len();
+        recon.point_set.patch_bitmaps_y_x_rgba = Some(std::sync::Arc::new(
+            ndarray::Array4::from_elem((points, 8, 8, 4), 128u8),
+        ));
+    }
+    let mut state = AppState::new();
+    let id = state.append_node(SceneNode::from_path(
+        std::path::Path::new("measured.sfmr"),
+        recon,
+    ));
     state.set_node_transform(id, turned_moved_scaled()).unwrap();
-    // The fixture stores patch frames and no bitmaps, so it starts as dots;
-    // a file with bitmaps starts in the Patches style this asks for.
     state.scene[0].point_style = crate::scene::PointStyle::Patches;
+    assert_eq!(state.scene[0].draws_patches(), bitmaps);
     let (mut viewer, ctx, mut state) = settled_over(state);
     // Nothing turns the camera between frames.
     viewer.maintain_z_up = false;
@@ -2897,7 +2913,7 @@ fn assert_endpoint_on_point_0(state: &AppState, id: ReconId, label: &str, k: usi
 /// the point at that texel.
 #[test]
 fn new_measurement_from_here_starts_at_the_spot_right_clicked() {
-    let (mut viewer, ctx, mut state, id, rect) = facing_point_0();
+    let (mut viewer, ctx, mut state, id, rect) = facing_point_0(true);
     viewer.measurement_start = state.measurement_start();
     let point = PointRef::new(id, 0);
     let pick = Some(PickTarget::Point(point));
@@ -2946,7 +2962,7 @@ fn new_measurement_from_here_starts_at_the_spot_right_clicked() {
 fn the_set_endpoint_entries_take_the_spot_right_clicked() {
     use crate::bench::measurement::set_endpoint_here_label;
     use crate::measurements::EndpointSide;
-    let (mut viewer, ctx, mut state, id, rect) = facing_point_0();
+    let (mut viewer, ctx, mut state, id, rect) = facing_point_0(true);
     state
         .put_measurement_on_bench(crate::measurements::MeasurementRef::distance(id, 0))
         .unwrap();
@@ -2993,7 +3009,7 @@ fn the_set_endpoint_entries_take_the_spot_right_clicked() {
 /// patch opacity. A surfel drawn larger shows each texel farther out.
 #[test]
 fn the_point_menu_takes_the_point_s_centre_off_its_drawn_square() {
-    let (mut viewer, ctx, mut state, id, rect) = facing_point_0();
+    let (mut viewer, ctx, mut state, id, rect) = facing_point_0(true);
     viewer.measurement_start = state.measurement_start();
     let point = PointRef::new(id, 0);
     let pick = Some(PickTarget::Point(point));
@@ -3043,6 +3059,18 @@ fn the_point_menu_takes_the_point_s_centre_off_its_drawn_square() {
     assert_eq!(menu_texel(&viewer), None);
     viewer.surfel_scale = Some(1.0);
     state.scene[0].point_style = crate::scene::PointStyle::Dots;
+    right_click_at(&mut viewer, &ctx, &mut state, inside, pick);
+    assert_eq!(menu_texel(&viewer), None);
+}
+
+/// A node in the Patches style with patch frames and no bitmaps draws its
+/// points as dots, so a right-click on the place its square would cover
+/// takes the point's centre.
+#[test]
+fn a_patches_node_with_no_bitmaps_takes_the_point_s_centre() {
+    let (mut viewer, ctx, mut state, id, rect) = facing_point_0(false);
+    let pick = Some(PickTarget::Point(PointRef::new(id, 0)));
+    let inside = on_screen(&viewer, &state, id, rect, [0.5, 0.5], 1.0);
     right_click_at(&mut viewer, &ctx, &mut state, inside, pick);
     assert_eq!(menu_texel(&viewer), None);
 }

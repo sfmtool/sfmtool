@@ -797,8 +797,9 @@ the point's own patch, which is the point itself. The entries fall back to it
 where:
 
 - the pointer is not on the point's drawn square: the node draws its points as
-  dots (its style is Dots, its points are hidden, or the patch opacity is 0),
-  or the click landed on the point's dot outside the square;
+  dots (its style is Dots, it has no patch bitmaps to draw surfels with, its
+  points are hidden, or the patch opacity is 0), or the click landed on the
+  point's dot outside the square;
 - the ray sees the square's back, which the viewport culls, or meets its plane
   at under 5° (the bench's `MIN_PLANE_ANGLE_DEG`): a pixel of pointer travel
   then crosses more than eleven pixels' worth of the square, so the texel under

@@ -653,8 +653,9 @@ impl Viewer3D {
     /// through the node's display transform, met with the surfel's square at
     /// [`Self::surfel_scale`] ([`crate::measurements::texel_under_ray`]).
     ///
-    /// `None` where the point is drawn as a dot (the node's style is Dots,
-    /// its points are hidden, or the patch opacity is 0), has no patch frame,
+    /// `None` where the point is drawn as a dot (the node's style is Dots, it
+    /// has no patch bitmaps to draw surfels with, its points are hidden, or
+    /// the patch opacity is 0), has no patch frame,
     /// or the ray misses the square, sees its back or grazes its plane: the
     /// menu's measurement entries then take the point's reference pixel.
     fn texel_under_pointer(
@@ -666,7 +667,7 @@ impl Viewer3D {
     ) -> Option<[f64; 2]> {
         let scale = self.surfel_scale?;
         let node = crate::scene::node_by_id(scene, point.recon)?;
-        if !(node.show_points && node.point_style == crate::scene::PointStyle::Patches) {
+        if !(node.show_points && node.draws_patches()) {
             return None;
         }
         let patch_frame = node.edited().point(point.point)?.patch_frame()?;
