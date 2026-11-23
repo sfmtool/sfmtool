@@ -28,8 +28,8 @@ use sfmtool_core::features::cluster_match::{
 };
 use sfmtool_core::features::kdforest::{KdForestParams, KdfError, LazyKdForestU8};
 use sfmtool_core::patch::cluster_refine::{
-    refine_cluster_patches, warp_consistency_residuals, ClusterRefineParams, FeatureGeometry,
-    MemberStatus, REFERENCE_UNREFINABLE,
+    refine_cluster_patches_borrowed, warp_consistency_residuals, ClusterRefineParams,
+    FeatureGeometry, MemberStatus, REFERENCE_UNREFINABLE,
 };
 use sfmtool_core::progress::Progress;
 use sfmtool_core::{progress_note, SfmrReconstruction};
@@ -759,8 +759,8 @@ fn member_detections(
     Ok((positions, shapes))
 }
 
-/// Every photograph as a tiled photograph with a full pyramid, in the node's
-/// order, read through the viewer's photograph cache.
+/// Every photograph as the viewer's photograph cache answers it, a tiled
+/// photograph read from a full pyramid, in the node's order.
 ///
 /// The cache decodes a photograph it does not hold with [`ImageU8::read_rgb`],
 /// the reader under `sfm cluster-patches`' `read_image_rgb`, into a pyramid of
@@ -778,7 +778,7 @@ fn read_photographs(
     photographs: &[PathBuf],
     cache: &PhotographCache,
     progress: &Progress<'_>,
-) -> Result<Vec<TiledPhotograph>, Stopped> {
+) -> Result<Vec<Arc<TiledPhotograph>>, Stopped> {
     let mut phase = progress.phase("read photographs");
     let paths: Vec<&Path> = photographs.iter().map(PathBuf::as_path).collect();
     let (found, tally) = cache
@@ -796,18 +796,15 @@ fn read_photographs(
     found
         .into_iter()
         .zip(paths)
-        .map(|(pyramid, path)| {
-            let pyramid = match pyramid {
-                Some(pyramid) => pyramid,
-                // `get_many` drops the reason; `get` answers it from the
-                // failure the cache remembered, and decodes again only when
-                // the file changed since or the cache keeps nothing.
-                None => cache.get(path, &phase).map_err(|e| match e {
-                    GetError::Cancelled => Stopped::Cancelled,
-                    e => Stopped::Failed(format!("Cannot read a photograph: {e}")),
-                })?,
-            };
-            Ok(TiledPhotograph::from_pyramid(pyramid))
+        .map(|(photograph, path)| match photograph {
+            Some(photograph) => Ok(photograph),
+            // `get_many` drops the reason; `get` answers it from the failure
+            // the cache remembered, and decodes again only when the file
+            // changed since or the cache keeps nothing.
+            None => cache.get(path, &phase).map_err(|e| match e {
+                GetError::Cancelled => Stopped::Cancelled,
+                e => Stopped::Failed(format!("Cannot read a photograph: {e}")),
+            }),
         })
         .collect()
 }
@@ -835,7 +832,7 @@ struct Refined {
 /// same rows as a `.sift` read, without opening a `.sift` file. Each batch is
 /// one kernel call, with a region pool of its own.
 fn refine(
-    photographs: &[TiledPhotograph],
+    photographs: &[Arc<TiledPhotograph>],
     facts: &[ImageFacts],
     clusters: &Clusters,
     detected_positions: &Array2<f32>,
@@ -892,6 +889,7 @@ fn refine(
         member_consistency_residual: Vec::new(),
         elongated_members: 0,
     };
+    let sources: Vec<&TiledPhotograph> = photographs.iter().map(|p| &**p).collect();
     let mut first = 0;
     while first < cluster_count {
         if phase.is_cancelled() {
@@ -900,8 +898,8 @@ fn refine(
         let last = (first + REFINE_BATCH).min(cluster_count);
         let (m0, m1) = (starts[first] as usize, starts[last] as usize);
         let local: Vec<u32> = starts[first..=last].iter().map(|s| s - m0 as u32).collect();
-        let batch = refine_cluster_patches(
-            photographs,
+        let batch = refine_cluster_patches_borrowed(
+            &sources,
             &RegionPool::for_kernel_call(),
             &features,
             &local,

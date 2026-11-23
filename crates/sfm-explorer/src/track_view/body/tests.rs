@@ -28,8 +28,7 @@ const POINT: u32 = 2;
 
 const VIEWPORT: egui::Vec2 = egui::vec2(1400.0, 900.0);
 
-/// A photograph as the panel reads it: the cache's whole pyramid read as a
-/// tiled photograph.
+/// A pyramid made in the test, read in place as a tiled photograph.
 fn tiled(src: &Arc<ImageU8Pyramid>) -> TiledPhotograph {
     TiledPhotograph::from_pyramid(src.clone())
 }
@@ -1240,7 +1239,7 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
 
     let node = crate::scene::node_by_id(&state.scene, id).expect("loaded");
     let recon = node.recon();
-    let drawn = super::tile::image(recon, &track, candidate, &tiled(&src), &pool())
+    let drawn = super::tile::image(recon, &track, candidate, &src, &pool())
         .unwrap()
         .expect("a tile");
 
@@ -1261,7 +1260,7 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
         camera,
         &cam_from_world,
         Some(site),
-        &tiled(&src),
+        &src,
         &pool(),
         sampler,
     )
@@ -1294,7 +1293,7 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
         (0..map.height()).all(|r| (0..map.width()).all(|c| map.is_valid(c, r))),
         "the slid patch has blank texels in this photograph"
     );
-    let context = super::tile::context(recon, &track, candidate, &tiled(&src), &pool())
+    let context = super::tile::context(recon, &track, candidate, &src, &pool())
         .unwrap()
         .expect("a hover view");
     assert!(
@@ -3567,10 +3566,10 @@ fn tile_and_context(
         .cached_photograph(id, row.image as usize)
         .expect("a cached photograph");
     let recon = state.node(id).expect("loaded").recon();
-    let tile = super::tile::image(recon, &track, observation, &tiled(&src), &pool())
+    let tile = super::tile::image(recon, &track, observation, &src, &pool())
         .unwrap()
         .expect("a tile");
-    let context = super::tile::context(recon, &track, observation, &tiled(&src), &pool())
+    let context = super::tile::context(recon, &track, observation, &src, &pool())
         .unwrap()
         .expect("a context");
     (tile, context)
@@ -4429,10 +4428,10 @@ fn crop_and_context(
         .expect("a cached photograph");
     let recon = state.node(id).expect("loaded").recon();
     let outline = super::crop::outline(recon, &track, observation).expect("an outline");
-    let crop = super::crop::image(recon, &track, observation, &tiled(&src), &pool())
+    let crop = super::crop::image(recon, &track, observation, &src, &pool())
         .unwrap()
         .expect("a crop");
-    let context = super::crop::context(recon, &track, observation, &tiled(&src), &pool())
+    let context = super::crop::context(recon, &track, observation, &src, &pool())
         .unwrap()
         .expect("a context");
     (outline, crop, context)
@@ -4456,7 +4455,7 @@ fn a_crop_cut_from_a_point_s_values_is_track_view_s_crop() {
         let src = state
             .cached_photograph(id, row.image as usize)
             .expect("a cached photograph");
-        let from_track = super::crop::image(recon, &track, k, &tiled(&src), &pool())
+        let from_track = super::crop::image(recon, &track, k, &src, &pool())
             .unwrap()
             .expect("a crop");
         let (camera, pose) =
@@ -4470,7 +4469,7 @@ fn a_crop_cut_from_a_point_s_values_is_track_view_s_crop() {
             view.point().position,
             crate::patch_pictures::marks::ProjectionOf::Point,
         );
-        let from_point = crate::patch_pictures::crop::image(&outline, &tiled(&src), &pool())
+        let from_point = crate::patch_pictures::crop::image(&outline, &src, &pool())
             .unwrap()
             .expect("a crop");
         assert_eq!(from_point.crop, from_track.crop, "observation {k}");
@@ -4549,7 +4548,7 @@ fn a_crop_holds_the_whole_outline_with_a_pixel_to_spare() {
                 "{stage}: the crop is not one texel per pixel"
             );
             let src = state
-                .cached_photograph(id, track.observations[observation].image as usize)
+                .cached_pyramid(id, track.observations[observation].image as usize)
                 .expect("a cached photograph");
             let (x, y) = (region.min[0] + 1, region.min[1] + 1);
             let texel = crop.image.pixels[crop.image.size[0] + 1].to_array();
@@ -6618,10 +6617,10 @@ fn a_tile_is_warped_through_its_image_s_own_intrinsics() {
 
     let read = |recon: &sfmtool_core::SfmrReconstruction| {
         let jacobian = super::tile::patch_jacobian(recon, &track, 0).expect("a Jacobian");
-        let tile = super::tile::image(recon, &track, 0, &tiled(&src), &pool())
+        let tile = super::tile::image(recon, &track, 0, &src, &pool())
             .unwrap()
             .expect("a tile");
-        let context = super::tile::context(recon, &track, 0, &tiled(&src), &pool())
+        let context = super::tile::context(recon, &track, 0, &src, &pool())
             .unwrap()
             .expect("a context");
         (jacobian, tile, context.projection_px)
@@ -6663,10 +6662,10 @@ fn a_tile_is_warped_through_its_image_s_lens_corrections() {
 
     let read = |recon: &sfmtool_core::SfmrReconstruction| {
         let jacobian = super::tile::patch_jacobian(recon, &track, 0).expect("a Jacobian");
-        let tile = super::tile::image(recon, &track, 0, &tiled(&src), &pool())
+        let tile = super::tile::image(recon, &track, 0, &src, &pool())
             .unwrap()
             .expect("a tile");
-        let context = super::tile::context(recon, &track, 0, &tiled(&src), &pool())
+        let context = super::tile::context(recon, &track, 0, &src, &pool())
             .unwrap()
             .expect("a context");
         (jacobian, tile, context.projection_px)

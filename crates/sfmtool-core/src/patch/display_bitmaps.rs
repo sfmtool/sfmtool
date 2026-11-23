@@ -10,6 +10,7 @@
 //! [`render_display_patch_bitmaps`], so the two draw the same patches.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use ndarray::Array4;
 
@@ -113,12 +114,11 @@ pub fn render_patch_bitmap_column(
         // A photograph that is not the size its camera says would be sampled
         // at the wrong pixels, so it is left out like an unreadable one. The
         // size is the layout's, which a read's pixels are checked against.
-        let sources: Vec<Option<TiledPhotograph>> = found
+        let sources: Vec<Option<Arc<TiledPhotograph>>> = found
             .into_iter()
             .zip(&intrinsics)
-            .map(|(pyramid, camera)| {
-                pyramid
-                    .map(TiledPhotograph::from_pyramid)
+            .map(|(source, camera)| {
+                source
                     .filter(|source| source.layout().level_size(0) == (camera.width, camera.height))
             })
             .collect();

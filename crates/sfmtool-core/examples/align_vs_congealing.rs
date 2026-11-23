@@ -50,7 +50,6 @@ use std::time::Instant;
 
 use nalgebra::{Matrix3, Vector3};
 use serde_json::{json, Value};
-use sfmtool_core::camera::image::ImageU8Pyramid;
 use sfmtool_core::camera::sampler::RegionPool;
 #[cfg(not(congeal))]
 use sfmtool_core::camera::sampler::ViewRegions;
@@ -448,12 +447,8 @@ fn main() {
         budget_bytes: 0,
         ..Default::default()
     });
-    let (pyramids, _) = cache.get_many(&refs, &Progress::none()).expect("decode");
-    let pyramids: Vec<Option<Arc<ImageU8Pyramid>>> = pyramids;
-    let sources: Vec<Option<TiledPhotograph>> = pyramids
-        .into_iter()
-        .map(|p| p.map(TiledPhotograph::from_pyramid))
-        .collect();
+    let (sources, _) = cache.get_many(&refs, &Progress::none()).expect("decode");
+    let sources: Vec<Option<Arc<TiledPhotograph>>> = sources;
     eprintln!(
         "decoded {} images in {:.1}s",
         needed.len(),

@@ -704,12 +704,12 @@ draft's step 5 that count decodes run.
    regions of all the points in progress together never exceed the one pool
    the caller made. Each bulk kernel's phase note counts the renders that
    took the tile path, and the pull request reports that count for each
-   kernel on the test data and on a real capture. The callers fetch tiled
-   photographs once the main draft's step 13e makes `get_many` answer them;
-   until then they wrap the whole pyramids it answers, so the tests that
-   count decodes and the one of a budget smaller than a level 0 come with
-   step 13e. The rest is split into three pull requests, as the main draft's
-   step 11 says. **The first, 11a, is built**: the display bitmaps' kernels
+   kernel on the test data and on a real capture. The callers take the
+   tiled photographs `get_many` answers since the main draft's step 13e1,
+   having wrapped the whole pyramids it answered before it, and the tests
+   that count decodes and the one of a budget smaller than a level 0 need
+   the cache to keep tiles, so they come with step 13e5. The rest is split
+   into three pull requests, as the main draft's step 11 says. **The first, 11a, is built**: the display bitmaps' kernels
    return the photograph error rather than leave out a photograph whose
    pyramid is not whole, the open, the conversion and `sfm web-export`
    report it as their failure, and the render notes its region reads, with
@@ -811,3 +811,22 @@ decisions.
    on the slot while another caller decoded the photograph. So the user
    decided that the level is built from the tiles at every budget. Built in
    the main draft's step 13c3.
+10. **How a decode inside a render is cancelled.** *Decided by the user:*
+    every render entry point (`render_source_tile`, `sample_source_grid`,
+    `sample_source_member_grid`, `read_source_samples`, `read_source_rect`,
+    `render_source_affine`, `source_clipped_share` and the gradient renders)
+    takes the caller's `&Progress`, so a tile evicted during a kernel and
+    decoded again by the read stops when the kernel is cancelled, and a
+    render that can take longer than a second takes a `Progress` as the
+    standards require. The options considered were the kernel call's cancel
+    flag carried by `RegionPool::for_kernel_call` or `ViewRegions`, which
+    changes no kernel signature, and a decode inside a render that cannot be
+    cancelled. To be built in the main draft's step 13e4.
+11. **Answers under a cache budget of 0.** *Decided by the user:* under a
+    budget of 0, an answer of `get` or `get_many` holds the tiles of the
+    decode that made it, as `TryDecode::Decoded` does, until the answer is
+    dropped, so `sfm web-export` and the viewer with
+    `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB=0` decode a photograph once per answer
+    rather than once per render. The options considered were `sfm
+    web-export` using a cache with the default budget, and accepting a
+    decode on every render. To be built in the main draft's step 13e4.

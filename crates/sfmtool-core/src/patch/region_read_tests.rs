@@ -17,16 +17,14 @@
 //! patch frame as their shape.
 
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use ndarray::{Array2, Array3};
 
 use crate::camera::image::{ImageU8, ImageU8Pyramid, PyramidLevel};
 use crate::camera::sampler::{RegionPool, RegionPoolStats, SamplerChoice, ViewRegions};
-use crate::camera::{
-    PhotographCache, PhotographCacheOptions, PhotographReadError, TiledPhotograph,
-};
+use crate::camera::{PhotographReadError, TiledPhotograph};
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::PatchCloud;
 use crate::patch::cluster_refine::{
@@ -89,16 +87,14 @@ impl Truth {
         .expect("the ground truth loads");
         let images = &recon.image_set.images;
         let paths: Vec<PathBuf> = images.iter().map(|i| dir.join(&i.name)).collect();
-        let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-        let (pyramids, _) = PhotographCache::new(PhotographCacheOptions {
-            budget_bytes: 0,
-            ..Default::default()
-        })
-        .get_many(&refs, &Progress::none())
-        .expect("nothing cancels the decode");
-        let pyramids: Vec<_> = pyramids
-            .into_iter()
-            .map(|p| p.expect("every photograph is checked in"))
+        // Decoded as the photograph cache decodes them.
+        let pyramids: Vec<_> = paths
+            .iter()
+            .map(|path| {
+                let image = ImageU8::read_rgb(path).expect("every photograph is checked in");
+                let levels = ImageU8Pyramid::full_levels(image.width(), image.height());
+                Arc::new(ImageU8Pyramid::from_image(image, levels))
+            })
             .collect();
         let whole = pyramids
             .iter()

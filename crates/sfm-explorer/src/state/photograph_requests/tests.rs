@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use sfmtool_core::camera::image::ImageU8;
+use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::camera::sampler::{read_source_rect, LevelRect, RegionPool};
 use sfmtool_core::SfmrReconstruction;
 
@@ -438,12 +438,12 @@ fn level_of(answer: DisplayLevel) -> Arc<ImageU8> {
 fn the_level_is_read_once_off_the_calling_thread_and_is_the_pyramid_s_level() {
     let dir = tempfile::tempdir().unwrap();
     let path = level_photo(dir.path(), "level.png");
-    let before = PhotographCache::new(sfmtool_core::camera::PhotographCacheOptions {
-        budget_bytes: 0,
-        ..Default::default()
-    })
-    .get(&path, &Progress::none())
-    .unwrap();
+    // The pyramid the cache's decode builds.
+    let before = {
+        let image = ImageU8::read_rgb(&path).unwrap();
+        let levels = ImageU8Pyramid::full_levels(image.width(), image.height());
+        ImageU8Pyramid::from_image(image, levels)
+    };
     for budget in [1 << 30, 0] {
         let cache = small_tile_cache(budget, 1 << 30);
         let (requests, queue) = PhotographRequests::queued();

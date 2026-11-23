@@ -1031,7 +1031,7 @@ fn crop_cells_drawn_through_regions_equal_the_whole_pyramid_crops() {
         let (_, outline, image) = panel.pictures.crop_of(point).expect("a crop held");
         let crop = crate::patch_pictures::crop::region(outline).expect("a crop region");
         let src = state
-            .cached_photograph(id, image)
+            .cached_pyramid(id, image)
             .expect("a cached photograph");
         let drawn = &uploaded[&texture];
         let step = crop.size[0] as f64 / drawn.size[0] as f64;
@@ -1135,7 +1135,7 @@ fn a_crop_whose_tiles_are_not_there_draws_its_loading_state_and_asks_once() {
     state.photograph_requests = requests;
     let recon = state.node(id).expect("loaded").recon();
     let path = crate::state::photograph_path(recon, 0).expect("a path");
-    let pyramid = state.cached_photograph(id, 0).expect("cached");
+    let pyramid = state.cached_pyramid(id, 0).expect("cached");
     state.photographs.forget(&path);
     let decodes = state.photographs.stats().decodes;
     assert_eq!(stored_reference(0), 0);
@@ -1213,7 +1213,7 @@ fn a_crop_hover_view_whose_tiles_are_not_there_says_it_is_loading() {
     ));
     let recon = state.node(id).expect("loaded").recon();
     let path = crate::state::photograph_path(recon, 0).expect("a path");
-    let pyramid = state.cached_photograph(id, 0).expect("cached");
+    let pyramid = state.cached_pyramid(id, 0).expect("cached");
     state.photographs.forget(&path);
 
     let texts = crop_hover_texts(&ctx, &mut panel, &mut state, &mut clock, point);
@@ -1277,7 +1277,7 @@ fn an_unreadable_crop_is_drawn_once_its_photograph_arrives() {
     state.photograph_requests = requests;
     let recon = state.node(id).expect("loaded").recon();
     let path = crate::state::photograph_path(recon, 0).expect("a path");
-    let pyramid = state.cached_photograph(id, 0).expect("cached");
+    let pyramid = state.cached_pyramid(id, 0).expect("cached");
     state.photographs.forget(&path);
     assert_eq!(stored_reference(0), 0);
 

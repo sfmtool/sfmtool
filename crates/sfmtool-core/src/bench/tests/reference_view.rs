@@ -46,7 +46,7 @@ const MIN_TRACK: usize = 8;
 /// The seoul_bull ground truth with its decoded photographs and poses.
 pub(super) struct GroundTruth {
     pub(super) recon: SfmrReconstruction,
-    sources: Vec<TiledPhotograph>,
+    sources: Vec<Arc<TiledPhotograph>>,
     poses: Vec<RigidTransform>,
 }
 
@@ -62,15 +62,15 @@ impl GroundTruth {
         let images = &recon.image_set.images;
         let paths: Vec<PathBuf> = images.iter().map(|i| dir.join(&i.name)).collect();
         let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-        let (pyramids, _) = PhotographCache::new(PhotographCacheOptions {
+        let (found, _) = PhotographCache::new(PhotographCacheOptions {
             budget_bytes: 0,
             ..Default::default()
         })
         .get_many(&refs, &Progress::none())
         .expect("nothing cancels the decode");
-        let sources = pyramids
+        let sources = found
             .into_iter()
-            .map(|p| TiledPhotograph::from_pyramid(p.expect("every photograph is checked in")))
+            .map(|p| p.expect("every photograph is checked in"))
             .collect();
         let poses = images
             .iter()
