@@ -34,11 +34,12 @@ const RING_SEGMENTS: usize = 24;
 ///
 /// An endpoint lies on the surface it was read from, so a mark or a line
 /// drawn exactly there would be in front of that surface on some pixels and
-/// behind it on others. Pulled toward the eye by a little more than its own
-/// ring's radius, measured in the same world length at its depth, a mark on a
-/// surface turned up to about 50 degrees from the view stays in front of it
-/// whatever the field of view and the panel's size, while an occluder more
-/// than that length in front of it still hides it.
+/// behind it on others. Pulled toward the eye by as far as the selected
+/// ring's halo reaches from its centre, measured in the same world length at
+/// its depth, a mark and its halo on a surface turned up to 45 degrees from
+/// the view stay in front of it whatever the field of view and the panel's
+/// size, while an occluder more than that length in front of it still hides
+/// it.
 pub(crate) const PULL_POINTS: f64 = (measurement_marks::MARK_RADIUS
     * measurement_marks::SELECTED_MARK_SCALE
     + (measurement_marks::EMPHASISED_LINE_WIDTH + measurement_marks::HALO_EXTRA_WIDTH) / 2.0)

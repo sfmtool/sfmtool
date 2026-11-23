@@ -984,15 +984,17 @@ in physical pixels. Every piece is drawn toward the eye by `PULL_POINTS`
 (10.75: the selected ring's radius and its halo) as a world length at its own
 depth, since an endpoint lies on the surface it was read from and a mark
 exactly there would be half in front of that surface and half behind it.
-Sized in points, the pull keeps a mark in front of a surface turned up to
-about 50 degrees from the view whatever the field of view and the panel's
-height. A point at depth `d` is `d · 2·tan(vfov/2) / height` long, so the pull
-is the same fraction of every piece's depth (`toward_eye_fraction`, at most a
-quarter), a uniform scale toward the eye: each piece moves along its own line
-of sight, which leaves its projection where it was. An endpoint at infinity or refused draws nothing, and the other
-endpoint still draws its mark; a finite endpoint behind the eye draws no mark,
-and a line with one end behind it is clipped at the near plane, by the pass as
-it clips the bench figure's segments. The pass writes no pick id and no depth,
+Sized in points, the pull keeps a mark and its halo in front of a surface
+turned up to 45 degrees from the view whatever the field of view and the
+panel's height. One panel point at view depth `d` is
+`d · 2·tan(vfov/2) / height` long, so the pull is the same fraction of every
+piece's depth (`toward_eye_fraction`, at most a quarter, and none for a panel
+with no height), a uniform scale toward the eye: each piece moves along its
+own line of sight, which leaves its projection where it was. An endpoint at
+infinity or refused draws nothing, and the other endpoint still draws its
+mark; a finite endpoint behind the eye draws no mark, and a line with one end
+behind it is clipped at the near plane, by the pass as it clips the bench
+figure's segments. The pass writes no pick id and no depth,
 and the hit test below reads the projected positions alone, so a measurement
 behind the scene is hovered and clicked as one in front of it is. The hover
 text and the off-screen indicator are drawn over the view.

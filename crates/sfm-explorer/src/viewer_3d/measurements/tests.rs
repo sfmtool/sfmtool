@@ -803,10 +803,11 @@ fn a_line_with_one_end_behind_the_eye_is_handed_to_the_pass_whole() {
 }
 
 /// The pull toward the eye is `PULL_POINTS` panel points at each piece's
-/// depth, whatever the field of view and the panel's height: measured
-/// against the world length of one point at that depth, it is the same number
-/// of points at 5, 45 and 160 degrees and in a short and a tall panel, which a
-/// fixed fraction of the distance is not.
+/// depth, whatever the field of view and the panel's shape: measured against
+/// the world length of one point at that depth, it is the same number of
+/// points at 5, 45 and 160 degrees, in a short and a tall landscape panel and
+/// in a portrait one, which a fixed fraction of the distance is not. It is at
+/// most a quarter of the depth, and none in a panel with no height.
 #[test]
 fn the_pull_toward_the_eye_is_a_fixed_number_of_points_on_screen() {
     let mut camera = crate::viewer_3d::ViewportCamera::default();
@@ -814,9 +815,8 @@ fn the_pull_toward_the_eye_is_a_fixed_number_of_points_on_screen() {
     let mut fractions = Vec::new();
     for fov_degrees in [5.0_f64, 45.0, 160.0] {
         camera.fov = fov_degrees.to_radians();
-        for height in [800.0_f32, 1600.0] {
-            let rect =
-                egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1.5 * height, height));
+        for (width, height) in [(1200.0_f32, 800.0_f32), (2400.0, 1600.0), (1200.0, 1600.0)] {
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height));
             let c = rect.center();
             let point_length = (camera.unproject(c.x, c.y + 1.0, depth, rect)
                 - camera.unproject(c.x, c.y, depth, rect))
@@ -825,7 +825,7 @@ fn the_pull_toward_the_eye_is_a_fixed_number_of_points_on_screen() {
             let points = fraction * depth / point_length;
             assert!(
                 (points - super::PULL_POINTS).abs() < 1e-3,
-                "{fov_degrees} degrees, {height} points tall: {points} points"
+                "{fov_degrees} degrees, {width} by {height} points: {points} points"
             );
             assert!(fraction > 0.0 && fraction < 0.25);
             fractions.push(fraction);
@@ -833,6 +833,13 @@ fn the_pull_toward_the_eye_is_a_fixed_number_of_points_on_screen() {
     }
     // Wider fields and shorter panels pull further, as a share of the depth.
     assert!(fractions.windows(2).all(|w| w[0] != w[1]));
-    assert!(fractions[0] < fractions[2] && fractions[2] < fractions[4]);
+    assert!(fractions[0] < fractions[3] && fractions[3] < fractions[6]);
     assert!(fractions[1] < fractions[0], "a taller panel pulls less");
+
+    // At 160 degrees in a panel 100 points tall, PULL_POINTS would be more
+    // than a quarter of the depth.
+    let small = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(150.0, 100.0));
+    assert_eq!(super::toward_eye_fraction(&camera, small), 0.25);
+    let flat = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(150.0, 0.0));
+    assert_eq!(super::toward_eye_fraction(&camera, flat), 0.0);
 }
