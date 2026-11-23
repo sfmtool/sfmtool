@@ -1596,8 +1596,9 @@ focused measurement item to where the right-click that opened the menu was
 not on the point's drawn patch ([measurement-view.md](measurement-view.md) §
 "The spot under the pointer"), so an agent can place an endpoint from a point
 as the menu does there. The tool has no pointer, so it never gives the spot on
-the patch a right-click on it takes; a right-click through `click` does. The point is named in the reconstruction named, as
-`retriangulate_point` names one. The reply:
+the patch a right-click on it takes; a right-click through `click` does. The
+point is named in the reconstruction named, as `retriangulate_point` names one.
+The reply:
 
 ```jsonc
 { "reconstruction_label": "seoul_bull", "point": 812,

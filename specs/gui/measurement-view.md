@@ -22,9 +22,9 @@ sets the item's label and its stated distance, and each endpoint block sets
 its endpoint's image and pixel in fields or switches it to another photograph
 that shows the same place. Image Detail's context menu and the 3D view's point
 menu set an endpoint too, to a pixel of the photograph shown or to the pixel
-that shows the spot right-clicked on a point's patch. Each is a bench step. A new measurement starts from the same
-two menus, with its first endpoint at the pixel or point they were opened on,
-and is finished with the same steps. Deleting a stored measurement is a direct
+that shows the spot right-clicked on a point's patch. Each is a bench step. A
+new measurement starts from the same two menus, with its first endpoint at the
+pixel or point they were opened on, and is finished with the same steps. Deleting a stored measurement is a direct
 edit from its row's menu. The 3D view and Image Detail draw the selected
 measurement and the item being edited, every measurement where a display option
 asks for it, and an arrow to the selected one when it is off screen; the item's
@@ -1262,10 +1262,11 @@ at-infinity case is covered by the Rust tests.
   moved, and the measurement started at the pixel that shows it, resolving
   back to the point at that texel under a display transform; the point's
   centre taken past the square's edge, in the Dots style and at zero patch
-  opacity, and the texel read at the patch size drawn. (`measurement_view/tests.rs`): the new item's
-  unplaced block with its instructions, the empty header fields, the result's
-  line and *Commit*'s refusal following B and the distance; and a pixel field
-  wide enough for `117.847664`. (`mcp/tests/measurements.rs`):
+  opacity, and the texel read at the patch size drawn.
+  (`measurement_view/tests.rs`): the new item's unplaced block with its
+  instructions, the empty header fields, the result's line and *Commit*'s
+  refusal following B and the distance; and a pixel field wide enough for
+  `117.847664`. (`mcp/tests/measurements.rs`):
   `create_bench_measurement` starting an item, focused with no panel raised,
   that the other tools finish and commit as a new row, and its refusal of a
   pixel outside the image.

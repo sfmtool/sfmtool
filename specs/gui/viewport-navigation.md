@@ -120,9 +120,8 @@ the texel's place is outside the reference image or on a square facing away
 from its camera -- the entry takes the point's **reference pixel**, the image
 and keypoint of its reference observation, texel `(0, 0)`
 ([measurement-view.md](measurement-view.md) § "The spot under the pointer").
-It is greyed with the reason as hover text
-while a background task holds the node, on a view-only bench, and where the
-point has no reference pixel (`MeasurementStart::at_point`, which the dock
+It is greyed with the reason as hover text while a background task holds the
+node, on a view-only bench, and where the point has no reference pixel (`MeasurementStart::at_point`, which the dock
 hands the viewport each frame as `Viewer3D::measurement_start`), and reports
 `PointGesture::NewMeasurementHere`, which `AppState::start_measurement_at_point`
 carries out after the point is selected
