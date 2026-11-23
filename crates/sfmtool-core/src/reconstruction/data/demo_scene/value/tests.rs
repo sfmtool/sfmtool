@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 
 use super::super::points::{demo_poses, sample_points};
 use super::super::render::{camera_rotation, CAMERA_CENTRES};
-use super::super::tests::{reference_trace, scene};
+use super::super::tests::{default_demo_scene, reference_trace};
 use super::super::texture::Surface;
 use super::super::DemoSceneOptions;
 use super::*;
@@ -40,7 +40,11 @@ fn surface_of(x: [f64; 3]) -> Surface {
 /// read it.
 fn recon() -> &'static SfmrReconstruction {
     static RECON: OnceLock<SfmrReconstruction> = OnceLock::new();
-    RECON.get_or_init(|| scene().reconstruction(&Progress::none()).unwrap())
+    RECON.get_or_init(|| {
+        default_demo_scene()
+            .reconstruction(&Progress::none())
+            .unwrap()
+    })
 }
 
 /// The pixel where camera `image` sees `x`, computed from the camera's centre
@@ -304,7 +308,7 @@ fn the_measurement_is_the_cube_edge_and_resolves_to_1_m() {
 /// A copy of the default scene with other options that do not change its
 /// photographs, so it need not be rendered again.
 fn with_options(options: DemoSceneOptions) -> DemoScene {
-    let scene = scene();
+    let scene = default_demo_scene();
     let copy = |images: &[ImageU8]| -> Vec<ImageU8> {
         images
             .iter()
@@ -339,7 +343,9 @@ fn an_option_set_that_leaves_a_corner_in_no_patch_leaves_the_measurement_out() {
 /// Write the default scene's workspace into `dir`, returning the `.sfmr`
 /// path.
 fn write(dir: &Path) -> PathBuf {
-    scene().write_workspace(dir, &Progress::none()).unwrap()
+    default_demo_scene()
+        .write_workspace(dir, &Progress::none())
+        .unwrap()
 }
 
 #[test]
@@ -384,9 +390,12 @@ fn the_value_saves_verifies_and_loads_back_equal_with_the_workspace_directory_se
     // The image file hashes are those of the written files, which are the
     // scene's JPEGs.
     let hashes = loaded.image_file_hashes().unwrap();
-    for (i, name) in scene().image_names().iter().enumerate() {
+    for (i, name) in default_demo_scene().image_names().iter().enumerate() {
         let bytes = std::fs::read(dir.join(name)).unwrap();
-        assert!(bytes == scene().encoded_photographs()[i], "{name}");
+        assert!(
+            bytes == default_demo_scene().encoded_photographs()[i],
+            "{name}"
+        );
         assert_eq!(
             hashes[i],
             xxhash_rust::xxh3::xxh3_128(&bytes).to_be_bytes(),
@@ -395,7 +404,7 @@ fn the_value_saves_verifies_and_loads_back_equal_with_the_workspace_directory_se
     }
 
     // A second write into the directory, which now holds files, is refused.
-    let refused = scene().write_workspace(&dir, &Progress::none());
+    let refused = default_demo_scene().write_workspace(&dir, &Progress::none());
     assert!(
         matches!(refused, Err(DemoSceneError::Directory(_))),
         "{refused:?}"
@@ -706,7 +715,7 @@ fn write_workspace_reports_its_phases_stops_when_cancelled_and_refuses_a_bad_dir
         _ => {}
     };
     let tmp = tempfile::tempdir().unwrap();
-    scene()
+    default_demo_scene()
         .write_workspace(&tmp.path().join("demo"), &Progress::to(&sink))
         .unwrap();
     let events = events.into_inner().unwrap();
@@ -739,7 +748,8 @@ fn write_workspace_reports_its_phases_stops_when_cancelled_and_refuses_a_bad_dir
             }
         };
         let dir = tmp.path().join(dir_name);
-        let result = scene().write_workspace(&dir, &Progress::to(&sink).cancelled_by(&cancelled));
+        let result = default_demo_scene()
+            .write_workspace(&dir, &Progress::to(&sink).cancelled_by(&cancelled));
         assert!(
             matches!(result, Err(DemoSceneError::Cancelled)),
             "{cancel_at}: {result:?}"
@@ -752,7 +762,7 @@ fn write_workspace_reports_its_phases_stops_when_cancelled_and_refuses_a_bad_dir
     }
     let cancelled = AtomicBool::new(true);
     assert!(matches!(
-        scene().reconstruction(&Progress::none().cancelled_by(&cancelled)),
+        default_demo_scene().reconstruction(&Progress::none().cancelled_by(&cancelled)),
         Err(DemoSceneError::Cancelled)
     ));
 
@@ -761,7 +771,7 @@ fn write_workspace_reports_its_phases_stops_when_cancelled_and_refuses_a_bad_dir
     let full = tmp.path().join("full");
     std::fs::create_dir(&full).unwrap();
     std::fs::write(full.join("x"), b"x").unwrap();
-    let result = scene().write_workspace(&full, &Progress::none());
+    let result = default_demo_scene().write_workspace(&full, &Progress::none());
     assert!(
         matches!(result, Err(DemoSceneError::Directory(_))),
         "{result:?}"
@@ -769,15 +779,15 @@ fn write_workspace_reports_its_phases_stops_when_cancelled_and_refuses_a_bad_dir
     assert!(!full.join("demo.sfmr").exists());
     let file = tmp.path().join("a_file");
     std::fs::write(&file, b"x").unwrap();
-    let result = scene().write_workspace(&file, &Progress::none());
+    let result = default_demo_scene().write_workspace(&file, &Progress::none());
     assert!(
         matches!(result, Err(DemoSceneError::Directory(_))),
         "{result:?}"
     );
-    let result = scene().write_workspace(&file.join("below"), &Progress::none());
+    let result = default_demo_scene().write_workspace(&file.join("below"), &Progress::none());
     assert!(matches!(result, Err(DemoSceneError::Io(_))), "{result:?}");
-    let result =
-        scene().write_workspace(&tmp.path().join("demo").join("nested"), &Progress::none());
+    let result = default_demo_scene()
+        .write_workspace(&tmp.path().join("demo").join("nested"), &Progress::none());
     assert!(
         matches!(result, Err(DemoSceneError::Directory(_))),
         "{result:?}"
