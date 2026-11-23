@@ -87,7 +87,8 @@ impl SceneRenderer {
         });
     }
 
-    /// How many instances and vertices the pass draws this frame.
+    /// How many instances and vertices the measurement and figure passes
+    /// draw this frame.
     fn bench_pass_count(&self) -> u32 {
         self.bench_track_edge_count + self.bench_track_disc_count + self.measurement_edge_count
     }

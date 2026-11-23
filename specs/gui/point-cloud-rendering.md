@@ -589,7 +589,7 @@ Passes 1a to 1e share one hardware depth buffer, so points, frustums, image
 quads and surfels occlude each other. The passes after the EDL read that buffer
 and none writes it: Pass 2b attaches it read-only and tests against it, and the
 target indicator samples it, which lets it render with depth-aware
-transparency. The track rays and the pass of the measurements and the bench
+transparency. The track rays and the passes of the measurements and the bench
 figure after them sample it the same way, and none of them writes a pick ID,
 so a click picks the scene under a measurement's mark.
 

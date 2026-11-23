@@ -968,7 +968,7 @@ and line has a dark halo so it reads over a bright photograph or cloud.
 centre, at each endpoint that resolves to a finite position, and a line between
 the two where both do. The positions are the resolved ones put through the
 node's display transform, as its points are. **The marks and lines are drawn
-in the scene**, by the bench figure's GPU pass
+in the scene**, by the bench figure's shader in a GPU pass of their own
 ([viewer-3d-bench-layer.md](viewer-3d-bench-layer.md) § "Depth against the
 scene"), so a person sees how a measurement meets the geometry around it, as
 the hidden part of a highlighted surfel's outline shows

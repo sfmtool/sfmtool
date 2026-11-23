@@ -340,7 +340,7 @@ For detailed specifications of each pass, see:
 - [scene-graph.md](scene-graph.md) § "Track rays and background image" —
   Track rays
 - [viewer-3d-bench-layer.md](viewer-3d-bench-layer.md) — The bench figure, and
-  the pass the measurements share with it
+  the measurements' pass drawn just before it
 
 ### GPU Readback
 
