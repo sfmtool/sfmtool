@@ -1095,9 +1095,11 @@ Each step is one change on its own branch, with its tests.
    ([The points and who sees them](#the-points-and-who-sees-them)); with the
    grid through the origin, `for_point_count(10_000)` kept 9,464 points.
    Measured with both changes, `for_point_count` keeps 290 for 300, 994
-   for 1,000, 1,993 for 2,000, 2,935 for 3,000 and 9,751 for 10,000; the
-   largest miss between 300 and 10,000 is at 500, which gives the default
-   grids and so 513, 2.6% over, since a grid side is a whole number. Below
+   for 1,000, 1,993 for 2,000, 2,935 for 3,000 and 9,751 for 10,000. Since
+   a grid side is a whole number, neighbouring counts can give the same
+   grids: over every tenth count from 300 to 10,000 the largest miss is at
+   350, which keeps 380, 8.6% over, and every miss from 2,300 up is under
+   3%. Below
    300 the misses grow (92 for 100). The test checks 300, 1,000, 3,000 and
    10,000 to within 5%, by the sampling alone, with no render.
 
