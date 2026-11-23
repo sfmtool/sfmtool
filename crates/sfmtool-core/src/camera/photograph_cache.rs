@@ -494,8 +494,8 @@ impl Inner {
 /// photograph's own size, so each entry's depth is set by its image. The
 /// cache answers each with one [`TiledPhotograph`], made with the pyramid,
 /// which reads it in place and is cut into tiles of
-/// [`PhotographCacheOptions::tile_size`]. A photograph with a side over [`MAX_JPEG_SIDE`] is refused from its header,
-/// before any decode, as [`GetError::TooLarge`]. A file that cannot be read
+/// [`PhotographCacheOptions::tile_size`]. A photograph with a side over
+/// [`MAX_JPEG_SIDE`] is refused from its header, before any decode, as [`GetError::TooLarge`]. A file that cannot be read
 /// or is refused is remembered as its error and costs nothing against the
 /// budget. An entry records the file's length and modification time when it
 /// is made; `get` and `get_many` compare them with the file on disk and decode
@@ -692,8 +692,8 @@ impl PhotographCache {
     }
 
     /// The photograph at `path` if it is decoded, without reading anything
-    /// and without waiting on a decode in flight. What a panel calls every
-    /// frame.
+    /// and without waiting on a decode in flight. What the image menu asks
+    /// to tell a photograph the cache holds from one only on disk.
     ///
     /// It does not compare the entry with the file on disk, and counts as a
     /// use for the eviction order but not as a hit.

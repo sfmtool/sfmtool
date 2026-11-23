@@ -2573,8 +2573,8 @@ in core. Step 17 turns the tier on.
       tiles, with each answer holding every tile of its photograph as a
       caller holds a pyramid today; then the answers that hold no tile and
       read through the cache, which is the part a read can fail in, so the
-      errors come with it; and last the tests of the bulk kernels under a
-      small budget and `sfm web-export`'s report of a failed read.
+      errors, and `sfm web-export`'s report of a failed read, come with it;
+      and last the tests of the bulk kernels under a small budget.
 
       - **13e1, the answers as tiled photographs.** **Built.** `get`,
         `get_many`, `peek` and `peek_state` answer `Arc<TiledPhotograph>`.
@@ -2592,12 +2592,13 @@ in core. Step 17 turns the tier on.
         reference picks, whose size check reads the layout; and the
         `align_vs_congealing` and `pairwise_flow_measure` examples. Every
         kernel reads the same pyramid through the same 512 px tiles as
-        before, so no result changes: *Refine all normals* with both its
-        steps and *Refit all points*, run through `ViewSources` on
-        `seoul_bull_sculpture_ground_truth_v02` and
-        `kerry_park_ground_truth_v02`, and the grown-plane step on
-        `dino_dog_toy_ground_truth_v01`, give the same points, patch frames
-        and Action Log sentences as before this step. Specified in
+        before, so no result changes: on
+        `seoul_bull_sculpture_ground_truth_v02`,
+        `kerry_park_ground_truth_v02` and `dino_dog_toy_ground_truth_v01`,
+        the display bitmaps and their reference observations, with a budget
+        and with a budget of 0, and the reference-view rule's picks, tiles
+        and readings for the first 40 points, as the Track Table's picks read
+        them, are the same bit for bit as before this step. Specified in
         [core/camera/photograph-cache.md](../core/camera/photograph-cache.md),
         with a test in
         [photograph_cache/tiles/tests.rs](../../crates/sfmtool-core/src/camera/photograph_cache/tiles/tests.rs):
@@ -2652,17 +2653,18 @@ in core. Step 17 turns the tier on.
         whose tiles are cached. `PhotographReadError` gains `Changed`,
         `NotFound`, `TooLarge` and `Unreadable`, with `From<TileError>` and
         `From<GetError>`, which such a read returns, and every caller reports
-        them as its failure, as it reports the read errors it reports today.
-        Tests: a kernel's `get_many` over 20 in-core photographs decodes them
-        all into tiles in its read phase, so its renders decode nothing when
-        the tiles fit the budget; a `get_many` over 20 photographs holds no
+        them as its failure, as it reports the read errors it reports today:
+        `sfm web-export` reports the `RuntimeError` a read that fails raises
+        through `write_web_export` as its failure, as it reports the
+        `ValueError` of a refusal. Tests: a kernel's `get_many` over 20
+        in-core photographs decodes them all into tiles in its read phase,
+        so its renders decode nothing when the tiles fit the budget; a `get_many` over 20 photographs holds no
         pyramid (the cache's stats show only tiles, within a small budget);
-        and a read of a photograph whose file was removed after its tiles
-        were evicted fails with `NotFound` naming it.
-      - **13e5, the bulk kernels under a small budget, and `sfm
-        web-export`'s failure.** `sfm web-export` reports the `RuntimeError`
-        a read that fails raises through `write_web_export` as its failure,
-        as it reports the `ValueError` of a refusal. Tests: a bulk kernel
+        a read of a photograph whose file was removed after its tiles were
+        evicted fails with `NotFound` naming it; and `sfm web-export` given
+        a `write_web_export` that raises `RuntimeError` reports it as its
+        failure.
+      - **13e5, the bulk kernels under a small budget.** Tests: a bulk kernel
         whose photographs' tiles do not fit a small budget still completes,
         with its decodes counted, and so does one with a budget smaller than
         one photograph's level 0; the companion's step-5 test of the point
@@ -2671,9 +2673,7 @@ in core. Step 17 turns the tier on.
         reference image's points are seen in, each in-core photograph is
         decoded at most once in the read phase and once more for each
         reference image whose points it sees, and the same points in
-        shuffled order decode more; and `sfm web-export` given a
-        `write_web_export` that raises `RuntimeError` reports it as its
-        failure.
+        shuffled order decode more.
 14. **The out-of-core tier, off.** Photographs of a workspace with
     `mipmap_options` read through their mip level files: tiles from the
     files, mipmaps made in the slot when missing or stale (the misses of a

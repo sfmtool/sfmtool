@@ -12,8 +12,8 @@ once decoded, each read through the tiled photograph the cache answers for it
 [view-region-pyramids.md](view-region-pyramids.md)), so that whichever part
 of the program asks next, on whichever thread, gets the same pixels without
 reading the file again, and so that memory stays under a set budget however
-many photographs the reconstruction has. A second budget, the build budget, bounds the whole decodes in progress
-on one cache at once, so a caller asking for hundreds of photographs does not
+many photographs the reconstruction has. A second budget, the build budget,
+bounds the whole decodes in progress on one cache at once, so a caller asking for hundreds of photographs does not
 hold hundreds of decodes in memory together.
 
 ## Why it exists

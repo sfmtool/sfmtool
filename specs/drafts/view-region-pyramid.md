@@ -708,8 +708,8 @@ draft's step 5 that count decodes run.
    tiled photographs `get_many` answers since the main draft's step 13e1,
    having wrapped the whole pyramids it answered before it, and the tests
    that count decodes and the one of a budget smaller than a level 0 need
-   the cache to keep tiles, so they come with step 13e5. The rest is split into three pull requests, as the main draft's
-   step 11 says. **The first, 11a, is built**: the display bitmaps' kernels
+   the cache to keep tiles, so they come with step 13e5. The rest is split
+   into three pull requests, as the main draft's step 11 says. **The first, 11a, is built**: the display bitmaps' kernels
    return the photograph error rather than leave out a photograph whose
    pyramid is not whole, the open, the conversion and `sfm web-export`
    report it as their failure, and the render notes its region reads, with
