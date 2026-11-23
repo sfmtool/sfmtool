@@ -594,3 +594,69 @@ impl HeldPhotograph {
         }
     }
 }
+
+/// The demo scene at its default options, rendered once for the whole test
+/// binary, and the exact reconstruction of it: five 640 x 480 photographs of
+/// a textured ground and a cube, and an `embedded_patches` value whose every
+/// keypoint is its point's projection and every normal its surface's
+/// (`specs/drafts/demo-scene.md`).
+///
+/// For a test whose assertion needs photographs that agree with the value:
+/// a photometric step whose answer can be checked against the stored truth.
+/// A test that only wants a cheap value with no pixels keeps
+/// `SfmrReconstruction::demo` or `projected_embedded_demo`.
+pub(crate) struct DemoSceneFixture {
+    pub(crate) scene: sfmtool_core::reconstruction::DemoScene,
+    pub(crate) recon: sfmtool_core::SfmrReconstruction,
+}
+
+/// The one [`DemoSceneFixture`] of the test binary. The render and the value
+/// take about a tenth of a second, paid by the first test that asks.
+pub(crate) fn demo_scene() -> &'static DemoSceneFixture {
+    static SCENE: std::sync::OnceLock<DemoSceneFixture> = std::sync::OnceLock::new();
+    SCENE.get_or_init(|| {
+        use sfmtool_core::progress::Progress;
+        use sfmtool_core::reconstruction::{DemoScene, DemoSceneOptions};
+        let scene = DemoScene::render(&DemoSceneOptions::default(), &Progress::none())
+            .expect("the default scene renders");
+        let recon = scene
+            .reconstruction(&Progress::none())
+            .expect("the default scene's value builds");
+        DemoSceneFixture { scene, recon }
+    })
+}
+
+/// A state holding `recon`, a value of the demo scene's images, as its one
+/// node, with each of the scene's photographs in the photograph cache as the
+/// photograph of its image, so a step that reads pixels finds them without a
+/// file on disk.
+pub(crate) fn demo_scene_state_of(
+    recon: sfmtool_core::SfmrReconstruction,
+) -> (crate::state::AppState, crate::scene::ReconId) {
+    let mut state = crate::state::AppState::new();
+    state.append_node(crate::scene::SceneNode::demo(recon));
+    let id = state.selected_recon.expect("a selected reconstruction");
+    for (index, photograph) in demo_scene().scene.photographs().iter().enumerate() {
+        let copy = sfmtool_core::camera::image::ImageU8::new(
+            photograph.width(),
+            photograph.height(),
+            photograph.channels(),
+            photograph.data().to_vec(),
+        );
+        state.insert_photograph(id, index, copy);
+    }
+    (state, id)
+}
+
+/// The index of the first point of the demo scene's value whose stored normal
+/// is `normal` and which `views` cameras observe.
+pub(crate) fn demo_scene_point(normal: [f32; 3], views: usize) -> usize {
+    let recon = &demo_scene().recon;
+    (0..recon.point_count())
+        .find(|&p| {
+            let n = recon.point_set.points[p].normal;
+            (n - nalgebra::Vector3::from(normal)).norm() < 1e-6
+                && recon.point_set.track_image_indices(p).len() == views
+        })
+        .unwrap_or_else(|| panic!("the scene has a point facing {normal:?} seen {views} times"))
+}
