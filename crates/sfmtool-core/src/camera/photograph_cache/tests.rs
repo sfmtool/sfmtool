@@ -6,6 +6,7 @@ use std::sync::Barrier;
 
 use crate::camera::image::{ImageU8Pyramid, PyramidLevel};
 use crate::progress::Event;
+use crate::progress::Progress;
 
 use super::*;
 
@@ -47,14 +48,21 @@ pub(super) fn same_tiles(a: &TiledPhotograph, b: &TiledPhotograph) -> bool {
     a.layout() == b.layout()
         && every_key(a.layout())
             .into_iter()
-            .all(|key| matches!((a.tile(key), b.tile(key)), (Ok(x), Ok(y)) if Arc::ptr_eq(&x, &y)))
+            .all(|key| matches!((a.tile(key, &Progress::none()), b.tile(key, &Progress::none())), (Ok(x), Ok(y)) if Arc::ptr_eq(&x, &y)))
 }
 
 /// The bytes of `photograph`'s tiles' pixels.
 pub(super) fn held_bytes(photograph: &TiledPhotograph) -> u64 {
     every_key(photograph.layout())
         .into_iter()
-        .map(|key| photograph.tile(key).unwrap().pixels.data().len() as u64)
+        .map(|key| {
+            photograph
+                .tile(key, &Progress::none())
+                .unwrap()
+                .pixels
+                .data()
+                .len() as u64
+        })
         .sum()
 }
 

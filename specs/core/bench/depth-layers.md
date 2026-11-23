@@ -39,6 +39,7 @@ pub fn depth_layers(
     pixel: [f64; 2],                 // the queried pixel
     candidates: &[LayerCandidate<'_>],
     options: &DepthLayerOptions,
+    progress: &Progress<'_>,         // polled for cancellation by the patch reads
 ) -> Result<DepthLayers, DepthLayerError>;
 // NoSuchImage | BadDistance (a distance_px that is not finite and at least 0)
 // | NanRange (a usable candidate with a NaN range end) | Photograph (a read of
@@ -148,7 +149,9 @@ let candidates: Vec<LayerCandidate<'_>> = found
     })
     .collect();
 let pool = RegionPool::for_kernel_call();
-let layers = depth_layers(&views, &pool, image, pixel, &candidates, &DepthLayerOptions::default())?;
+let layers = depth_layers(
+    &views, &pool, image, pixel, &candidates, &DepthLayerOptions::default(), &Progress::none(),
+)?;
 let first = layers.layers.iter().find(|l| l.ranking.as_ref().unwrap().rank == 1);
 ```
 

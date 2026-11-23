@@ -715,6 +715,7 @@ fn candidate_zncc(
                 resolution,
                 sampler,
                 raw_scratch,
+                renders,
             )
         })?;
         return Ok(score_raw_against_reference(
@@ -933,8 +934,9 @@ pub fn projected_patch_frame(
 /// [`prof::TOTAL`] phase is a single wrap).
 ///
 /// `progress` takes the phases, the view count and the cancellation;
-/// `renders` takes only the detail phases that time the renders under each
-/// sampler. A single selection passes one `Progress` as both, and the batch
+/// `renders` takes the detail phases that time the renders under each
+/// sampler, and is the `Progress` the renders' reads poll for cancellation,
+/// since it is the caller's own in both cases. A single selection passes one `Progress` as both, and the batch
 /// passes its own only as `renders`, since many patches counting views into
 /// one bar would overwrite each other.
 #[allow(clippy::too_many_arguments)]

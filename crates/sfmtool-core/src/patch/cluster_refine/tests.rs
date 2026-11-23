@@ -7,6 +7,7 @@
 use super::kernels::{eval_zncc_scalar, SupportTables, TileCache};
 use super::*;
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
+use crate::progress::Progress;
 use ndarray::{Array2, Array3 as NdArray3};
 
 /// Band-limited analytic texture in `[2, 252]` (no u8 clipping).
@@ -77,6 +78,7 @@ fn refine_sources(
         member_features,
         params,
         progress,
+        &Progress::none(),
     )
     .expect("photographs in memory read")
 }
@@ -104,6 +106,7 @@ fn refine_sources_with_elongation_limit(
         params,
         max_elongation,
         progress,
+        &Progress::none(),
     )
     .expect("photographs in memory read")
 }
@@ -1014,9 +1017,18 @@ fn avx2_matches_scalar_scores() {
         let step = 2.0 * params.radius / resolution as f64;
         let off = 0.5 * step - params.radius;
         let mut view = ViewRegions::new(&source, &pool);
-        let tmpl = build_template(&mut view, &geo, &support, &tables, resolution, step, off)
-            .unwrap()
-            .unwrap();
+        let tmpl = build_template(
+            &mut view,
+            &geo,
+            &support,
+            &tables,
+            resolution,
+            step,
+            off,
+            &Progress::none(),
+        )
+        .unwrap()
+        .unwrap();
 
         // Score a spread of perturbed warps through both paths.
         let mut tiles = TileCache::default();
@@ -1034,7 +1046,7 @@ fn avx2_matches_scalar_scores() {
             let lmap = map_at_level(&map, level);
             let bbox = super::kernels::grid_bbox(&lmap, resolution);
             let tile = tiles
-                .get_or_build(&source, &pool, level, bbox)
+                .get_or_build(&source, &pool, level, bbox, &Progress::none())
                 .unwrap()
                 .unwrap();
             let a32 = {
@@ -1654,6 +1666,7 @@ fn a_member_grid_read_through_a_tiled_photograph_equals_the_whole_pyramid() {
                     position,
                     shape,
                     params,
+                    &Progress::none(),
                 )
                 .expect("a photograph in memory reads");
                 let bits = |g: &Option<Vec<f32>>| {
@@ -1924,7 +1937,7 @@ fn level_one_only(pyramid: &ImageU8Pyramid) -> TiledPhotograph {
     };
     let tiles = level_one
         .chain([corner])
-        .map(|key| whole.tile(key).expect("a tile"));
+        .map(|key| whole.tile(key, &Progress::none()).expect("a tile"));
     TiledPhotograph::from_tiles(whole.layout().clone(), tiles).expect("the layout's tiles")
 }
 
@@ -1957,6 +1970,7 @@ fn cascade_across_levels(
         &[0, 0],
         &params,
         None,
+        &Progress::none(),
     )
 }
 

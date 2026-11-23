@@ -31,6 +31,7 @@ use crate::patch::cell_registration::{
 use crate::patch::normal_refine::build_support;
 use crate::patch::normal_refine::grid_cell_centres;
 use crate::patch::normal_refine::{grid_bounds, FLAT_NORM_SQ_EPS};
+use crate::progress::Progress;
 use ndarray::{Array2, Array3};
 
 /// The band-limited texture of the cluster-refinement tests, with fine terms
@@ -166,6 +167,7 @@ fn fixture_with(pp: PiecewiseParams) -> Fixture {
         resolution,
         step,
         off,
+        &Progress::none(),
     )
     .expect("a photograph in memory reads")
     .expect("textured template");
@@ -214,6 +216,7 @@ impl Fixture {
             self.off,
             &self.pp(),
             |s: &Mat2, p: [f64; 2]| Ok(score(s, p)),
+            &Progress::none(),
         )
         .expect("a photograph in memory reads")
     }
@@ -236,6 +239,7 @@ impl Fixture {
                 self.step,
                 self.off,
                 &ElongationLimit::new(MAX_PATCH_ELONGATION),
+                &Progress::none(),
             )
             .expect("a photograph in memory reads")
         }
@@ -632,6 +636,7 @@ fn run_clusters(params: &ClusterRefineParams, starts: &[(Mat2, [f64; 2])]) -> Cl
         &member_features,
         params,
         None,
+        &Progress::none(),
     )
     .expect("photographs in memory read")
 }
@@ -905,6 +910,7 @@ impl Fixture {
             params,
             &self.pp(),
             &ElongationLimit::new(MAX_PATCH_ELONGATION),
+            &Progress::none(),
         )
         .expect("a photograph in memory reads");
         out
@@ -979,6 +985,7 @@ fn an_update_whose_support_leaves_the_frame_is_not_applied() {
             fx.step,
             fx.off,
             &ElongationLimit::new(MAX_PATCH_ELONGATION),
+            &Progress::none(),
         )
         .expect("a photograph in memory reads")
         .is_some()
@@ -1641,6 +1648,7 @@ fn run_duplicate_pair(
         &[0, 0, 1],
         params,
         None,
+        &Progress::none(),
     )
     .expect("photographs in memory read")
 }
@@ -1729,6 +1737,7 @@ fn a_read_that_fails_in_the_loop_fails_the_stage() {
             fx.off,
             &fx.pp(),
             score,
+            &Progress::none(),
         )
     };
 
@@ -1759,11 +1768,14 @@ fn a_read_that_fails_in_the_loop_fails_the_stage() {
         8,
     );
     let corner = whole
-        .tile(crate::camera::TileKey {
-            level: 0,
-            col: 0,
-            row: 0,
-        })
+        .tile(
+            crate::camera::TileKey {
+                level: 0,
+                col: 0,
+                row: 0,
+            },
+            &Progress::none(),
+        )
         .expect("a tile");
     let lacking =
         TiledPhotograph::from_tiles(whole.layout().clone(), [corner]).expect("the layout's tile");

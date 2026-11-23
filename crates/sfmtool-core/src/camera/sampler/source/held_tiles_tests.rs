@@ -14,6 +14,7 @@ use crate::camera::mipmap::PHOTOGRAPH_TILE_SIZE;
 use crate::camera::sampler::render_tile;
 use crate::camera::sampler::test_support::{maps, photograph, SAMPLERS};
 use crate::camera::tiled_photograph::{PhotographTile, TileKey};
+use crate::progress::Progress;
 
 const TILE: u32 = 32;
 
@@ -40,7 +41,9 @@ fn first_tile(source: &TiledPhotograph) -> TileKey {
 
 /// `source`'s photograph made of its tiles `keys`.
 fn held(source: &TiledPhotograph, keys: &[TileKey]) -> TiledPhotograph {
-    let tiles = keys.iter().map(|&key| source.tile(key).expect("a tile"));
+    let tiles = keys
+        .iter()
+        .map(|&key| source.tile(key, &Progress::none()).expect("a tile"));
     TiledPhotograph::from_tiles(source.layout().clone(), tiles).expect("the layout's tiles")
 }
 
@@ -96,7 +99,12 @@ fn every_render_of_its_needed_tiles_equals_the_whole_pyramid() {
             for pool in pools() {
                 let (tile, keys) = read_held(&source, |src| {
                     let mut map = crate::camera::sampler::test_support::copy(&map);
-                    render_source_tile(&mut ViewRegions::new(src, &pool), &mut map, sampler)
+                    render_source_tile(
+                        &mut ViewRegions::new(src, &pool),
+                        &mut map,
+                        sampler,
+                        &Progress::none(),
+                    )
                 });
                 assert_eq!(tile.data(), whole.data(), "map {m}, {sampler:?}");
                 // Every tile named is of a level the photograph has.
@@ -125,6 +133,7 @@ fn the_grid_and_sample_reads_of_their_needed_tiles_equal_the_whole_pyramid() {
                     size: 20,
                 },
                 GridEdge::Clamp,
+                &Progress::none(),
             )
         };
         let (read, _) = read_held(&source, grid);
@@ -137,6 +146,7 @@ fn the_grid_and_sample_reads_of_their_needed_tiles_equal_the_whole_pyramid() {
                 size: 20,
             },
             GridEdge::Clamp,
+            &Progress::none(),
         )
         .unwrap();
         assert_eq!(read, expected);
@@ -144,7 +154,13 @@ fn the_grid_and_sample_reads_of_their_needed_tiles_equal_the_whole_pyramid() {
         let positions = [[10.5f32, 3.25], [95.0, 70.75], [199.9, 149.9], [-4.0, 31.5]];
         for level in [0, 1] {
             let samples = |src: &TiledPhotograph| {
-                read_source_samples(&mut ViewRegions::new(src, &pool), level, &positions, 1)
+                read_source_samples(
+                    &mut ViewRegions::new(src, &pool),
+                    level,
+                    &positions,
+                    1,
+                    &Progress::none(),
+                )
             };
             let (read, _) = read_held(&source, samples);
             let expected = read_source_samples(
@@ -152,6 +168,7 @@ fn the_grid_and_sample_reads_of_their_needed_tiles_equal_the_whole_pyramid() {
                 level,
                 &positions,
                 1,
+                &Progress::none(),
             )
             .unwrap();
             for k in 0..positions.len() {
@@ -187,7 +204,8 @@ fn a_rectangle_of_its_needed_tiles_equals_the_whole_level() {
     ] {
         for pool in pools() {
             let (read, keys) = read_held(&source, |src| {
-                read_source_rect(src, &pool, level, rect).map(|r| r.image().data().to_vec())
+                read_source_rect(src, &pool, level, rect, &Progress::none())
+                    .map(|r| r.image().data().to_vec())
             });
             let img = pyramid.level(level);
             let mut expected = Vec::new();
@@ -211,7 +229,7 @@ fn a_rectangle_of_its_needed_tiles_equals_the_whole_level() {
 fn from_tiles_refuses_tiles_the_layout_does_not_have_or_place() {
     let (_, source) = sources();
     let layout = || source.layout().clone();
-    let tile = |key| source.tile(key).unwrap();
+    let tile = |key| source.tile(key, &Progress::none()).unwrap();
     let key = TileKey {
         level: 0,
         col: 1,
@@ -280,8 +298,10 @@ fn the_clipped_share_of_its_needed_tiles_equals_the_whole_pyramid_s() {
         vec![[40.2, 40.2], [100.3, 40.3], [100.3, 40.4]],
         vec![[210.0, 10.0], [230.0, 12.0], [220.0, 70.0]],
     ] {
-        let expected = source_clipped_share(&whole, &outline).unwrap();
-        let (share, keys) = read_held(&source, |src| source_clipped_share(src, &outline));
+        let expected = source_clipped_share(&whole, &outline, &Progress::none()).unwrap();
+        let (share, keys) = read_held(&source, |src| {
+            source_clipped_share(src, &outline, &Progress::none())
+        });
         assert_eq!(share, expected, "{outline:?}");
         assert!(keys.len() > 1, "{outline:?} reads several tiles: {keys:?}");
     }

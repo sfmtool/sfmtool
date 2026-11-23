@@ -12,6 +12,7 @@ use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use crate::camera::remap::sample_bilinear_u8;
 use crate::camera::sampler::{read_source_samples, RegionPool, ViewRegions};
 use crate::camera::TiledPhotograph;
+use crate::progress::Progress;
 
 #[test]
 fn sobel_and_value_reads_through_a_source_equal_the_whole_level() {
@@ -43,9 +44,14 @@ fn sobel_and_value_reads_through_a_source_equal_the_whole_level() {
             RegionPool::with_capacity(u64::MAX),
             RegionPool::with_capacity(0),
         ] {
-            let samples =
-                read_source_samples(&mut ViewRegions::new(&source, &pool), level, &positions, 1)
-                    .unwrap();
+            let samples = read_source_samples(
+                &mut ViewRegions::new(&source, &pool),
+                level,
+                &positions,
+                1,
+                &Progress::none(),
+            )
+            .unwrap();
             for (k, &[x, y]) in positions.iter().enumerate() {
                 let window = samples.window(k);
                 let [fx, fy] = samples.fractions(k);

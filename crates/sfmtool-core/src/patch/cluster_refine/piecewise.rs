@@ -50,6 +50,7 @@ use crate::patch::cell_registration::{
     fit_pass, read_cells, CellGateOptions, CellLayout, CellStatus, CellTemplates, Pass, Update,
     UpdateModel, WorkingPatch,
 };
+use crate::progress::Progress;
 
 use super::kernels::TemplateKernel;
 use super::{inv2, mul2, sample_source_grid_window, GridEdge, Mat2};
@@ -285,6 +286,7 @@ impl WorkingPatch {
         layout: &CellLayout,
         step: f64,
         off: f64,
+        progress: &Progress<'_>,
     ) -> Result<Option<WorkingPatch>, PhotographReadError> {
         let side = layout.patch_side();
         let samples = sample_source_grid_window(
@@ -296,6 +298,7 @@ impl WorkingPatch {
             -(layout.margin as i64),
             side,
             GridEdge::Missing,
+            progress,
         )?;
         Ok(samples.map(|samples| {
             let channels = samples.len() / (side * side);
@@ -391,6 +394,7 @@ pub(super) fn refine_member_cells(
     off: f64,
     params: &PiecewiseParams,
     mut score: impl FnMut(&Mat2, [f64; 2]) -> Result<Option<f64>, PhotographReadError>,
+    progress: &Progress<'_>,
 ) -> Result<MemberCells, PhotographReadError> {
     let gates = params.cell_gates();
     // The first read that failed; every pass and score after it fails
@@ -411,7 +415,7 @@ pub(super) fn refine_member_cells(
         }
         let patch = keep(
             &failure,
-            WorkingPatch::render(view, position, shape, layout, step, off),
+            WorkingPatch::render(view, position, shape, layout, step, off, progress),
         )?;
         let readings = read_cells(templates, src_channels, &patch, layout, &gates);
         fit_pass(readings, layout)

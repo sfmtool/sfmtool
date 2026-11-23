@@ -1401,10 +1401,11 @@ renders, `render_source_affine` for the view selection's affine fast path,
 `read_source_samples` for the grown plane's value and Sobel reads,
 `read_source_rect` for the cluster refinement's `LevelTile` and the grey
 reads of *Find Nearby Tracks*, and `clipped_share`. Each takes the source
-(a `&ProjectedImage`, and so a `&TiledPhotograph`) and the region pool the
+(a `&ProjectedImage`, and so a `&TiledPhotograph`), the region pool the
 kernel's caller made for this kernel call (`RegionPool::for_kernel_call()`,
 whatever way the caller fetched its sources; a kernel that calls another
-passes its own pool down), and returns `Result<_, PhotographReadError>`:
+passes its own pool down) and the caller's `&Progress`, which a read that
+decodes polls for cancellation (built in step 13e4a), and returns `Result<_, PhotographReadError>`:
 it works out the regions the read needs and copies them from the pool or
 reads through tiles, either of which can fail for a photograph the cache
 reads, and never fails for one built `from_image`. No kernel computes a
@@ -1427,7 +1428,7 @@ each in the step that moves its readers:
 | 10 | `ViewSources::fetch` in [state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs), which returns `PhotographReadError` instead of `Cancelled` (`get_many` still returns `Cancelled`, which converts), and the bench kernels (`bench::evaluate`, `evaluate_rendering_bitmap`, `score_bitmap`, `fit`, `render_bitmap_in_place`, `search_geometry`, `set_stage`, `build_track_at_pixel`, `classify`) and the patch kernels they and the reference picks share (`view_selection::select_patch_views`, `select_patch_cloud_views`, `reference_view::render_view_tile`, `read_track`, `stored_bitmap::render_reference`, `keypoint_localize`'s and `keypoint_subpixel`'s entry points, `member_coherence`'s, `observation_reading::read_cloud_observations`, `spawn::spawn_candidate_tracks`), and every kernel that calls one of them or that the bench runs, since a kernel passes its caller's pool down and its errors up: the normal kernels the bench's normal steps run (`pairwise_flow_normal`, `grown_plane_normal`, `grid_plane_normal`, `finite_difference_normal`) and `refine_normals`, which runs them; the cluster refinement's entry points (`refine_cluster_patches`, `refine_cluster_patches_borrowed`), which the bench's evaluation of a cluster-stage track runs, and the bench's member-grid reads, which move to `sample_source_member_grid`, the source form of `sample_member_grid` that step 9 added beside it; `stored_bitmap::render_patch_bitmap`, `render_patch_cloud_bitmaps` and `refit_points`. Their callers that step 11 moves keep their fetch: each wraps the whole pyramids it holds with `from_pyramid` (the cluster-patches build, until 11b, its decoded images with `from_image`), makes the region pool for its call, and reports the error as its step's failure |
 | 11 | the public `render_patch_bitmap_column` / `render_display_patch_bitmaps` in [display_bitmaps.rs](../../crates/sfmtool-core/src/patch/display_bitmaps.rs), which return `PhotographReadError` instead of `Cancelled`, and `WebExportError`, which gains `Photograph` (built, 11a); the viewer's bulk jobs (the conversion to embedded patches, *Refine all normals*, *Refit all points*, the cluster-patches build) and `sfm web-export` take the tiled photographs `get_many` answers since step 13e1, having wrapped its whole pyramids with `from_pyramid` before it, and the cluster-patches build fetches through the cache from 11b (built) |
 | 12 | `read_patch_along_ray` and `depth_layers`, which take the caller's `&RegionPool` in place of the `&GreyImages` cache, and `far_field_sweep` and `find_nearby_tracks`, which took the pool in 10a and drop the cache; `PatchReadError` and `DepthLayerError` gain `Photograph(PhotographReadError)` in place of `GreyMismatch`, and `GreyImages`, with its `get` and `GreyImageError::NoSuchImage`, is gone (built). The plan also listed `guided_matches`, `nearby_cluster_tracks`, `constellation_seeds`, `nearby_points` and `distance_range`, which read the reconstruction, its index files and the cameras but no photograph, so their signatures do not change |
-| 13 | `PhotographCache::get`, which takes the caller's `&Progress`, and `GetError`, which gains `Cancelled` (built, 13a); `PhotographCache::new`, which takes `PhotographCacheOptions` (built, 13b); the layout and tile requests, `TileError` and `TryDecode`, the four that can decode a whole photograph taking the caller's `&Progress` (built, 13c1); `display_photograph`, which gives way to `display_layout`, `display_tiles` and `display_level` (built for Image Detail, 13c2, the 3D background, 13c3, Track View, 13d1, and the Track Table and Measurement View's endpoint crops, 13d2, which deletes it); `get`, `get_many`, `peek` and `peek_state`, which answer `Arc<TiledPhotograph>`, `insert`, which takes an `ImageU8`, `PhotographReadError`, which gains `Changed`, `NotFound`, `TooLarge` and `Unreadable` with the conversions from `TileError` and `GetError`, and `from_pyramid`, which is deleted (13e: the answers' type built in 13e1, `from_image` holding its tiles in 13e2, `insert` taking an `ImageU8`, `keeps_every_tile`, which the image menu asks in place of `peek`, and `from_pyramid` deleted in 13e3, built, the errors in 13e4) |
+| 13 | `PhotographCache::get`, which takes the caller's `&Progress`, and `GetError`, which gains `Cancelled` (built, 13a); `PhotographCache::new`, which takes `PhotographCacheOptions` (built, 13b); the layout and tile requests, `TileError` and `TryDecode`, the four that can decode a whole photograph taking the caller's `&Progress` (built, 13c1); `display_photograph`, which gives way to `display_layout`, `display_tiles` and `display_level` (built for Image Detail, 13c2, the 3D background, 13c3, Track View, 13d1, and the Track Table and Measurement View's endpoint crops, 13d2, which deletes it); `get`, `get_many`, `peek` and `peek_state`, which answer `Arc<TiledPhotograph>`, `insert`, which takes an `ImageU8`, `PhotographReadError`, which gains `Changed`, `NotFound`, `TooLarge` and `Unreadable` with the conversions from `TileError` and `GetError`, and `from_pyramid`, which is deleted (13e: the answers' type built in 13e1, `from_image` holding its tiles in 13e2, `insert` taking an `ImageU8`, `keeps_every_tile`, which the image menu asks in place of `peek`, and `from_pyramid` deleted in 13e3, built, the errors in 13e4b); every render entry point, and the public kernels `refine_cluster_patches`, `refine_cluster_patches_borrowed`, `depth_layers`, `read_patch_along_ray` and `refine_view_against_reference`, taking the caller's `&Progress` (built, 13e4a) |
 | 16 | `ImagePyramidSet.read`, the first binding whose photographs come from the cache. The bindings over the kernels above change with their kernels in steps 10 to 12, build their tiled photographs from arrays with `from_image`, and raise the error from then on, though tiles cut from arrays cannot fail |
 
 The viewer's side, in
@@ -1604,7 +1605,7 @@ readers to view-region pyramids, one group per pull request, while the cache
 still hands out whole pyramids: a moved reader wraps the pyramid it gets in a
 `TiledPhotograph` (`from_pyramid`), so readers that have moved and readers
 that have not both work. Step 13 makes the cache hand out tiled photographs
-only, once every reader takes them, in twelve pull requests: the slot and the
+only, once every reader takes them, in thirteen pull requests: the slot and the
 build budget first, then the cache's tile requests and the panels, then the
 tiles. Steps 14 to 16 build the out-of-core tier
 without turning it on anywhere but in tests: until step 17, neither
@@ -2092,8 +2093,8 @@ in core. Step 17 turns the tier on.
     animation plays, and `get_image_detail_view`'s `level` and
     `tiles_pending`; `from_pyramid` deleted.
 
-    The step is twelve pull requests, 13a to 13e, with 13c in three, 13d
-    in two and 13e in five. Once the
+    The step is thirteen pull requests, 13a to 13e, with 13c in three,
+    13d in two and 13e in six. Once the
     cache keeps tiles in place of pyramids, no reader can be handed a whole
     pyramid, so every reader that still takes one (Image Detail, the 3D
     background, Track View, the Track Table, the bulk callers that wrap with
@@ -2565,7 +2566,7 @@ in core. Step 17 turns the tier on.
       through `write_web_export` as its failure, as it reports the
       `ValueError` of a refusal, since a read can fail from here on.
 
-      It is five pull requests, 13e1 to 13e5, each leaving every result
+      It is six pull requests, 13e1 to 13e5 with 13e4 in two, each leaving every result
       identical. The answers' type comes first, while the cache still holds
       whole pyramids, so every caller takes what the cache answers before
       what the cache holds changes; then the tiles a source owns, so that
@@ -2715,7 +2716,7 @@ in core. Step 17 turns the tier on.
         `NeedsTiles` where they were refused with `OutOfRange`; the tests in
         which a photograph from the cache lacked pixels (the display bitmaps',
         the open's and the conversion to embedded patches') are gone, since
-        no answer of the cache can lack a pixel until step 13e4, which
+        no answer of the cache can lack a pixel until step 13e4b, which
         brings them back, and the
         Track Table's and Track View's tests of a photograph that cannot be
         read take one whose header read finds no file.
@@ -2761,20 +2762,83 @@ in core. Step 17 turns the tier on.
         them as its failure, as it reports the read errors it reports today:
         `sfm web-export` reports the `RuntimeError` a read that fails raises
         through `write_web_export` as its failure, as it reports the
-        `ValueError` of a refusal. Tests: a kernel's `get_many` over 20
-        in-core photographs decodes them all into tiles in its read phase,
-        so its renders decode nothing when the tiles fit the budget; a `get_many` over 20 photographs holds no
-        pyramid (the cache's stats show only tiles, within a small budget);
-        a read of a photograph whose file was removed after its tiles were
-        evicted fails with `NotFound` naming it; and `sfm web-export` given
-        a `write_web_export` that raises `RuntimeError` reports it as its
-        failure; a render cancelled while it decodes an evicted tile stops
-        with the cancellation; under a budget of 0 two renders from one
-        answer decode its photograph once; and the three tests step 13e3
-        removed come back, each with a photograph whose file was removed
-        after its tiles were evicted: the display bitmaps' render, the
-        viewer's open and its conversion to embedded patches each fail with
-        the read's error, naming it, the conversion pushing no version.
+        `ValueError` of a refusal.
+
+        It is two pull requests. The `&Progress` comes first, alone, since
+        it changes the signatures of every render entry point and of the
+        kernels between them and their callers, and changes no behaviour
+        while every photograph holds its tiles; then the answers that read
+        through the cache, with the errors such a read can return, the
+        report of a failed read, and the tests of the reads.
+
+        - **13e4a, the render entry points take `&Progress`.** **Built.**
+          `render_source_tile`, `render_source_tile_with_grad_into`,
+          `render_source_affine`, `sample_source_grid`,
+          `read_source_samples`, `read_source_rect`,
+          `sample_source_member_grid` and `source_clipped_share` take the
+          caller's `progress: &Progress<'_>` as their last argument and hand
+          it to every tile read (`TiledPhotograph`'s crate-private `tile` and
+          `region`, `copy_regions` and the tile path's window), which a
+          photograph that holds its tiles never polls. The kernels between
+          them and a caller that has a `Progress` pass it down: the public
+          `refine_cluster_patches` and `refine_cluster_patches_borrowed`,
+          whose `Option<&AtomicUsize>` count of finished clusters is
+          renamed `done` and which gain `progress` after it, and
+          `depth_layers`, `read_patch_along_ray` and
+          `refine_view_against_reference`, which gain it as their last
+          argument, and the crate-private kernels on the way (the cluster
+          refinement's member, template and piecewise reads, the sub-pixel
+          refinement's renders, the bench's grid-plane, pairwise-flow and
+          *Find Nearby Tracks* reads, and `add_image_to_tracks`'
+          measurement). The grown plane's step keeps the `Progress` in its
+          `StepReads`, beside the failure its renders keep, so its
+          objective's trait methods keep their signatures, and the view
+          selection passes its `renders` `Progress`, which is the caller's
+          in a single selection and in a batch. A panel on the GUI thread
+          (Track View's tiles and patches, the Track Table's pictures and
+          Measurement View's crops), whose photograph holds the tiles it
+          renders, and the bindings, which build their photographs from
+          arrays, pass `&Progress::none()`; the viewer's cluster-patches
+          build passes its *refine patches* phase. Nothing decodes inside a
+          render yet, so no result changes: the display bitmaps and their
+          reference observations, the reference-view rule's picks, tiles and
+          readings for the first 40 points, and `refine_cluster_patches`
+          over every track of the first 40 points, on
+          `seoul_bull_sculpture_ground_truth_v02`,
+          `kerry_park_ground_truth_v02` and
+          `dino_dog_toy_ground_truth_v01`, are the same bit for bit as
+          before this step. Specified in
+          [core/camera/view-region-pyramids.md](../core/camera/view-region-pyramids.md),
+          with a test in
+          [sampler/source/tests.rs](../../crates/sfmtool-core/src/camera/sampler/source/tests.rs):
+          every entry point given a cancelled `Progress` reads a photograph
+          that holds its tiles, through copied regions and through the tile
+          path, as it reads it given `Progress::none()`.
+        - **13e4b, the answers read through the cache.** `get` and
+          `get_many` answer a photograph that holds its layout and the
+          cache's handle on its tiles and no pixel, each tile read going
+          through `get_tile` with the `Progress` the render was given; under
+          a budget of 0 an answer holds the tiles of the decode that made
+          it. `PhotographReadError` gains `Changed`, `NotFound`, `TooLarge`
+          and `Unreadable`, with `From<TileError>` and `From<GetError>`, and
+          every caller reports them as its failure; `sfm web-export` reports
+          the `RuntimeError` of a failed read as its failure. No signature
+          but `PhotographReadError`'s changes. Tests: a kernel's `get_many`
+          over 20 in-core photographs decodes them all into tiles in its
+          read phase, so its renders decode nothing when the tiles fit the
+          budget; a `get_many` over 20 photographs holds no pyramid (the
+          cache's stats show only tiles, within a small budget); a read of a
+          photograph whose file was removed after its tiles were evicted
+          fails with `NotFound` naming it; `sfm web-export` given a
+          `write_web_export` that raises `RuntimeError` reports it as its
+          failure; a render cancelled while it decodes an evicted tile stops
+          with the cancellation; under a budget of 0 two renders from one
+          answer decode its photograph once; and the three tests step 13e3
+          removed come back, each with a photograph whose file was removed
+          after its tiles were evicted: the display bitmaps' render, the
+          viewer's open and its conversion to embedded patches each fail
+          with the read's error, naming it, the conversion pushing no
+          version.
       - **13e5, the bulk kernels under a small budget.** Tests: a bulk kernel
         whose photographs' tiles do not fit a small budget still completes,
         with its decodes counted, and so does one with a budget smaller than

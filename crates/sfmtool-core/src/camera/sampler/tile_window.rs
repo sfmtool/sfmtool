@@ -17,6 +17,7 @@ use crate::camera::remap::{LevelTexels, PyramidTexels};
 use crate::camera::tiled_photograph::{
     PhotographReadError, PhotographTile, TileKey, TiledPhotograph,
 };
+use crate::progress::Progress;
 
 /// The most photograph tiles one render on the tile path keeps pinned; the
 /// least recently used goes out first.
@@ -29,6 +30,8 @@ pub const TILE_WINDOW_TILES: usize = 16;
 /// render's result is discarded for the error ([`Self::finish`]).
 pub(crate) struct TileWindow<'s> {
     source: &'s TiledPhotograph,
+    /// The caller's `Progress`, which a tile read polls for cancellation.
+    progress: Progress<'s>,
     state: RefCell<WindowState>,
 }
 
@@ -59,9 +62,10 @@ pub(crate) struct WindowStats {
 }
 
 impl<'s> TileWindow<'s> {
-    pub(crate) fn new(source: &'s TiledPhotograph) -> Self {
+    pub(crate) fn new(source: &'s TiledPhotograph, progress: &Progress<'s>) -> Self {
         Self {
             source,
+            progress: *progress,
             state: RefCell::new(WindowState {
                 tiles: Vec::with_capacity(TILE_WINDOW_TILES),
                 current: 0,
@@ -112,7 +116,7 @@ impl<'s> TileWindow<'s> {
         };
         let index = match found {
             Some(index) => index,
-            None => match self.source.tile(key) {
+            None => match self.source.tile(key, &self.progress) {
                 Ok(tile) => {
                     state.fetched += 1;
                     let pinned = Pinned {

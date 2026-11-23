@@ -10,6 +10,7 @@ use std::sync::Arc;
 use super::*;
 use crate::camera::sampler::render_tile;
 use crate::camera::sampler::test_support::{affine_map, copy, photograph, SAMPLERS};
+use crate::progress::Progress;
 
 const TILE: u32 = 32;
 
@@ -67,7 +68,7 @@ fn regions_assembled_from_tiles_equal_the_whole_pyramids_pixels() {
             .into_iter()
             .filter(|r| r.width() > 0 && r.height() > 0)
         {
-            let read = source.region(level, r).unwrap();
+            let read = source.region(level, r, &Progress::none()).unwrap();
             assert_eq!(
                 (read.width(), read.height(), read.channels()),
                 (r.width(), r.height(), 3)
@@ -86,7 +87,7 @@ fn regions_assembled_from_tiles_equal_the_whole_pyramids_pixels() {
         let (w, h) = source.layout().level_size(level);
         regions.set_region(level, rect(w / 3, h / 4, w, h - h / 5));
     }
-    let held = copy_regions(&source, &regions).unwrap();
+    let held = copy_regions(&source, &regions, &Progress::none()).unwrap();
     for level in 0..pyramid.num_levels() {
         let r = regions.region(level).unwrap();
         assert_eq!(held.level_origin(level), [r.x0, r.y0]);
@@ -105,7 +106,7 @@ fn kept_for(source: &TiledPhotograph, level: usize, required: LevelRect) -> (Lev
     let mut view = ViewRegions::new(source, &pool);
     let mut regions = LevelRegions::new(source.layout());
     regions.set_region(level, required);
-    let ((), path) = read_regions(&mut view, &regions, |_| ()).unwrap();
+    let ((), path) = read_regions(&mut view, &regions, &Progress::none(), |_| ()).unwrap();
     let kept = view.kept_regions().unwrap();
     for other in (0..kept.levels()).filter(|&l| l != level) {
         assert_eq!(kept.region(other), None);
@@ -187,7 +188,9 @@ fn a_render_inside_the_kept_regions_reuses_them_and_one_outside_reassembles() {
         ] {
             let map = affine_map(16, [1.5, 0.2, 78.0 + dx, -0.1, 1.5, 58.0 + dy], 0);
             let mut kept_map = copy(&map);
-            let (tile, path) = render_source_tile_path(&mut view, &mut kept_map, sampler).unwrap();
+            let (tile, path) =
+                render_source_tile_path(&mut view, &mut kept_map, sampler, &Progress::none())
+                    .unwrap();
             let required = required_regions(&mut copy(&map), sampler, source.layout());
             let kept = view.kept_regions().unwrap().clone();
             match path {
@@ -213,6 +216,7 @@ fn a_render_inside_the_kept_regions_reuses_them_and_one_outside_reassembles() {
                 &mut ViewRegions::new(&source, &fresh_pool),
                 &mut copy(&map),
                 sampler,
+                &Progress::none(),
             )
             .unwrap();
             assert_eq!(tile.data(), fresh.data());
@@ -233,14 +237,16 @@ fn the_other_reads_reuse_the_regions_a_render_kept() {
     let pool = RegionPool::with_capacity(u64::MAX);
     let mut view = ViewRegions::new(&source, &pool);
     let mut map = affine_map(24, [1.0, 0.0, 60.0, 0.0, 1.0, 40.0], 0);
-    let (_, path) = render_source_tile_path(&mut view, &mut map, Sampler::Bilinear).unwrap();
+    let (_, path) =
+        render_source_tile_path(&mut view, &mut map, Sampler::Bilinear, &Progress::none()).unwrap();
     assert!(matches!(path, ReadPath::Copied { .. }));
 
     // Positions inside the render's footprint read the kept level 0.
     let inside: Vec<[f32; 2]> = (0..10)
         .map(|k| [62.0 + 2.0 * k as f32, 42.0 + 1.5 * k as f32])
         .collect();
-    let (samples, path) = read_source_samples_path(&mut view, 0, &inside, 1).unwrap();
+    let (samples, path) =
+        read_source_samples_path(&mut view, 0, &inside, 1, &Progress::none()).unwrap();
     assert!(matches!(path, ReadPath::Reused { .. }), "{path:?}");
     let level = pyramid.level(0);
     for (k, &[x, y]) in inside.iter().enumerate() {
@@ -255,9 +261,10 @@ fn the_other_reads_reuse_the_regions_a_render_kept() {
 
     // A level the render did not read, and positions past the kept region,
     // reassemble.
-    let (_, path) = read_source_samples_path(&mut view, 1, &inside, 0).unwrap();
+    let (_, path) = read_source_samples_path(&mut view, 1, &inside, 0, &Progress::none()).unwrap();
     assert!(matches!(path, ReadPath::Copied { .. }), "{path:?}");
-    let (_, path) = read_source_samples_path(&mut view, 0, &[[150.0, 120.0]], 0).unwrap();
+    let (_, path) =
+        read_source_samples_path(&mut view, 0, &[[150.0, 120.0]], 0, &Progress::none()).unwrap();
     assert!(matches!(path, ReadPath::Copied { .. }), "{path:?}");
 }
 
@@ -269,7 +276,7 @@ fn kept_regions_are_counted_in_the_pool_and_released_when_dropped() {
     let one = {
         let pool = RegionPool::with_capacity(u64::MAX);
         let mut view = ViewRegions::new(&source, &pool);
-        render_source_tile(&mut view, &mut map(), Sampler::Bilinear).unwrap();
+        render_source_tile(&mut view, &mut map(), Sampler::Bilinear, &Progress::none()).unwrap();
         view.kept_bytes()
     };
     assert!(one > 0);
@@ -277,28 +284,44 @@ fn kept_regions_are_counted_in_the_pool_and_released_when_dropped() {
     // A pool that holds one view's kept regions.
     let pool = RegionPool::with_capacity(one);
     let mut first = ViewRegions::new(&source, &pool);
-    let (_, path) = render_source_tile_path(&mut first, &mut map(), Sampler::Bilinear).unwrap();
+    let (_, path) =
+        render_source_tile_path(&mut first, &mut map(), Sampler::Bilinear, &Progress::none())
+            .unwrap();
     assert_eq!(path, ReadPath::Copied { bytes: one });
     assert_eq!(pool.held_bytes(), one);
 
     // While the first view keeps its regions, a second finds the pool full
     // and takes the tile path, keeping nothing.
     let mut second = ViewRegions::new(&source, &pool);
-    let (_, path) = render_source_tile_path(&mut second, &mut map(), Sampler::Bilinear).unwrap();
+    let (_, path) = render_source_tile_path(
+        &mut second,
+        &mut map(),
+        Sampler::Bilinear,
+        &Progress::none(),
+    )
+    .unwrap();
     assert!(matches!(path, ReadPath::Tiles(_)), "{path:?}");
     assert_eq!(second.kept_bytes(), 0);
     assert_eq!(pool.held_bytes(), one);
 
     // The first view's next read elsewhere gives its regions back before it
     // reserves the new ones, so the full pool still holds them.
-    let (_, path) = render_source_tile_path(&mut first, &mut far(), Sampler::Bilinear).unwrap();
+    let (_, path) =
+        render_source_tile_path(&mut first, &mut far(), Sampler::Bilinear, &Progress::none())
+            .unwrap();
     assert_eq!(path, ReadPath::Copied { bytes: one });
     assert_eq!(pool.held_bytes(), one);
 
     // Dropping the first view releases them, and the second can copy.
     drop(first);
     assert_eq!(pool.held_bytes(), 0);
-    let (_, path) = render_source_tile_path(&mut second, &mut map(), Sampler::Bilinear).unwrap();
+    let (_, path) = render_source_tile_path(
+        &mut second,
+        &mut map(),
+        Sampler::Bilinear,
+        &Progress::none(),
+    )
+    .unwrap();
     assert_eq!(path, ReadPath::Copied { bytes: one });
     assert_eq!(pool.held_bytes(), one);
     drop(second);
@@ -314,7 +337,7 @@ fn a_read_with_one_level_outside_the_kept_regions_reassembles() {
     let mut regions = LevelRegions::new(source.layout());
     regions.set_region(0, rect(60, 40, 100, 80));
     regions.set_region(1, rect(30, 20, 50, 40));
-    let ((), path) = read_regions(&mut view, &regions, |_| ()).unwrap();
+    let ((), path) = read_regions(&mut view, &regions, &Progress::none(), |_| ()).unwrap();
     assert!(matches!(path, ReadPath::Copied { .. }), "{path:?}");
 
     // Level 0 inside the kept region, level 1 past it: the read reassembles,
@@ -323,7 +346,7 @@ fn a_read_with_one_level_outside_the_kept_regions_reassembles() {
     let mut moved = LevelRegions::new(source.layout());
     moved.set_region(0, rect(62, 42, 98, 78));
     moved.set_region(1, rect(60, 50, 80, 70));
-    let (level_1, path) = read_regions(&mut view, &moved, |held| match held {
+    let (level_1, path) = read_regions(&mut view, &moved, &Progress::none(), |held| match held {
         Held::Copied(pyramid) => {
             let r = moved.region(1).unwrap();
             let [ox, oy] = pyramid.level_origin(1);

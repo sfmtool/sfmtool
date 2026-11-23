@@ -743,7 +743,7 @@ pub fn add_image_to_tracks(
                 if progress.is_cancelled() {
                     return Ok(CandidateReport::new(p));
                 }
-                let report = ctx.measure(p);
+                let report = ctx.measure(p, progress);
                 let n = done.fetch_add(1, Ordering::Relaxed) + 1;
                 if n.is_multiple_of(step) || n == total {
                     progress.count(n as u64, Some(total as u64), "points");
@@ -864,7 +864,11 @@ impl Context<'_, '_> {
     /// references and their template, the search, the sub-pixel step and the score.
     /// Each of the point's views is read through one [`ViewRegions`], which
     /// every read of it shares; a read that fails is returned as its error.
-    fn measure(&self, p: u32) -> Result<CandidateReport, PhotographReadError> {
+    fn measure(
+        &self,
+        p: u32,
+        progress: &Progress<'_>,
+    ) -> Result<CandidateReport, PhotographReadError> {
         let mut out = CandidateReport::new(p);
         let pi = p as usize;
         let point = &self.recon.point_set.points[pi];
@@ -1033,6 +1037,7 @@ impl Context<'_, '_> {
                 0,
                 keypoint,
                 self.refine,
+                progress,
             )? {
                 keypoint = refined;
             }

@@ -979,7 +979,7 @@ pub fn grown_plane_normal(
         }
     } as usize;
     let grid = Grid::new(&patch_frame, ref_view, ref_keypoint, side);
-    let reads = StepReads::new(pool);
+    let reads = StepReads::new(pool, progress);
     let ref_image = ViewImage::new(
         ref_view,
         &reads,

@@ -150,7 +150,7 @@ pub fn render_view_tile(
     let outline = tile_outline(&map);
     let tile = {
         let _phase = render_phase(progress, sampler, 1);
-        render_source_tile(regions, &mut map, sampler)?
+        render_source_tile(regions, &mut map, sampler, progress)?
     };
     let src_channels = tile.channels();
     // The second of two channels is alpha, as the fourth of four is.
@@ -173,7 +173,7 @@ pub fn render_view_tile(
     Ok(ViewTile {
         samples,
         valid,
-        clipped_share: source_clipped_share(regions.source(), &outline)?,
+        clipped_share: source_clipped_share(regions.source(), &outline, progress)?,
         viewing_angle: viewing_angle(&patch_frame, view.cam_from_world),
         patch_frame,
         jacobian,
@@ -261,10 +261,12 @@ pub fn clipped_share(pyramid: &ImageU8Pyramid, outline: &[[f64; 2]]) -> Option<f
 /// photograph with no pixels, and passes up a tile read that fails. A
 /// photograph made of tiles that does not hold every tile the read needs is
 /// refused with [`PhotographReadError::NeedsTiles`], naming them all,
-/// before any pixel is read.
+/// before any pixel is read. Each tile read takes `progress`, as the render
+/// entry points of [`sampler`](crate::camera::sampler) do.
 pub fn source_clipped_share(
     source: &TiledPhotograph,
     outline: &[[f64; 2]],
+    progress: &Progress<'_>,
 ) -> Result<Option<f64>, PhotographReadError> {
     check_source(source)?;
     if outline.len() < 3 {
@@ -335,7 +337,7 @@ pub fn source_clipped_share(
     if !rows.is_empty() && !cols.is_empty() {
         for row in rows.start() / ts..=rows.end() / ts {
             for col in cols.start() / ts..=cols.end() / ts {
-                let tile = source.tile(tile_of(col * ts, row * ts))?;
+                let tile = source.tile(tile_of(col * ts, row * ts), progress)?;
                 let (ox, oy) = (i64::from(tile.origin[0]), i64::from(tile.origin[1]));
                 let tile_rows =
                     (*rows.start()).max(oy)..=(*rows.end()).min(oy + i64::from(tile.size[1]) - 1);
@@ -347,7 +349,7 @@ pub fn source_clipped_share(
     if count.total == 0 {
         for p in outline {
             let (x, y) = pixel_under(p, w, h);
-            let tile = source.tile(tile_of(x, y))?;
+            let tile = source.tile(tile_of(x, y), progress)?;
             count.add(pixel(&tile, x, y));
         }
     }

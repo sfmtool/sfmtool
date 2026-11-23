@@ -12,6 +12,7 @@ use crate::bench::track_at_pixel::ViewCamera;
 use crate::camera::sampler::RegionPool;
 use crate::camera::PhotographReadError;
 use crate::patch::normal_refine::ProjectedImage;
+use crate::progress::Progress;
 
 use super::grey::read_grey;
 
@@ -169,7 +170,9 @@ pub(super) fn middle_mask() -> Vec<bool> {
 ///
 /// Returns `None` when the queried patch runs off its photograph or is flat,
 /// with nothing to correlate. `keep_samples` keeps the samples in
-/// [`PatchRead::samples`].
+/// [`PatchRead::samples`]. The reads poll `progress` for cancellation, as
+/// the render entry points of [`sampler`](crate::camera::sampler) do; nothing
+/// is reported through it.
 ///
 /// # Errors
 ///
@@ -183,6 +186,7 @@ pub fn read_patch_along_ray(
     distances: &[f64],
     images: &[u32],
     keep_samples: bool,
+    progress: &Progress<'_>,
 ) -> Result<Option<PatchRead>, PatchReadError> {
     let image_count = views.len();
     if let Some(&image) = std::iter::once(&patch.image)
@@ -191,8 +195,16 @@ pub fn read_patch_along_ray(
     {
         return Err(PatchReadError::NoSuchImage { image, image_count });
     }
-    read_checked(views, pool, patch, distances, images, keep_samples)
-        .map_err(PatchReadError::Photograph)
+    read_checked(
+        views,
+        pool,
+        patch,
+        distances,
+        images,
+        keep_samples,
+        progress,
+    )
+    .map_err(PatchReadError::Photograph)
 }
 
 /// [`read_patch_along_ray`] for inputs the caller has already checked:
@@ -204,6 +216,7 @@ pub(super) fn read_checked(
     distances: &[f64],
     images: &[u32],
     keep_samples: bool,
+    progress: &Progress<'_>,
 ) -> Result<Option<PatchRead>, PhotographReadError> {
     let n = PATCH_GRID;
     let centre = (n * n) / 2;
@@ -223,7 +236,7 @@ pub(super) fn read_checked(
         })
         .collect();
 
-    let Some(template) = read_grey(views[q].source, pool, &grid)? else {
+    let Some(template) = read_grey(views[q].source, pool, &grid, progress)? else {
         return Ok(None);
     };
     let as_f64 = |v: &[f32]| v.iter().map(|&x| f64::from(x)).collect::<Vec<_>>();
@@ -278,7 +291,12 @@ pub(super) fn read_checked(
             let Some(positions) = pixels.iter().copied().collect::<Option<Vec<_>>>() else {
                 continue;
             };
-            let Some(sampled) = read_grey(views[images[vi] as usize].source, pool, &positions)?
+            let Some(sampled) = read_grey(
+                views[images[vi] as usize].source,
+                pool,
+                &positions,
+                progress,
+            )?
             else {
                 continue;
             };

@@ -19,6 +19,7 @@ use crate::camera::sampler::RegionPool;
 use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::normal_refine::ProjectedImage;
+use crate::progress::Progress;
 
 /// A 128-px pinhole, focal 160 px, centred.
 fn camera() -> CameraIntrinsics {
@@ -108,7 +109,7 @@ fn a_grid_laid_at_the_starting_normal_is_the_starting_grid() {
 #[test]
 fn a_laid_grid_covers_the_turned_square() {
     let pool = RegionPool::for_kernel_call();
-    let reads = StepReads::new(&pool);
+    let reads = StepReads::new(&pool, &Progress::none());
     let scene = scene();
     let views = scene.views();
     let side = 24;
@@ -177,7 +178,7 @@ fn a_laid_grid_covers_the_turned_square() {
 #[test]
 fn the_template_is_rendered_on_the_turned_square() {
     let pool = RegionPool::for_kernel_call();
-    let reads = StepReads::new(&pool);
+    let reads = StepReads::new(&pool, &Progress::none());
     let scene = scene();
     let views = scene.views();
     let side = 24;
@@ -253,7 +254,7 @@ fn the_template_is_rendered_on_the_turned_square() {
 #[test]
 fn a_laid_grids_pixel_derivatives_follow_its_projection() {
     let pool = RegionPool::for_kernel_call();
-    let reads = StepReads::new(&pool);
+    let reads = StepReads::new(&pool, &Progress::none());
     let scene = scene();
     let views = scene.views();
     let side = 16;

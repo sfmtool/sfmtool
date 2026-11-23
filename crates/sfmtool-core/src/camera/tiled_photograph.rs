@@ -22,7 +22,7 @@ use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use crate::camera::mipmap::{PyramidLayout, PHOTOGRAPH_TILE_SIZE};
 use crate::camera::remap::HeldLevel;
 use crate::camera::sampler::{LevelRect, LevelRegions};
-use crate::progress::Cancelled;
+use crate::progress::{Cancelled, Progress};
 
 /// Which photograph tile: its level, and its column and row in that level's
 /// grid of tiles.
@@ -352,7 +352,7 @@ impl TiledPhotograph {
             x1: w,
             y1: h,
         };
-        self.region(level, rect)
+        self.region(level, rect, &Progress::none())
     }
 
     /// Every level's size and the number of levels, read with no pixel.
@@ -406,7 +406,17 @@ impl TiledPhotograph {
 
     /// The tile `key`, with its border; [`PhotographReadError::NeedsTiles`]
     /// naming it when the photograph does not hold it.
-    pub(crate) fn tile(&self, key: TileKey) -> Result<Arc<PhotographTile>, PhotographReadError> {
+    ///
+    /// `progress` is the caller's, which a read that has to decode the
+    /// photograph again polls for cancellation; a photograph that holds its
+    /// tiles decodes nothing and never polls it. Every read of a tiled
+    /// photograph takes it, so that a render entry point passes its caller's
+    /// down to the read.
+    pub(crate) fn tile(
+        &self,
+        key: TileKey,
+        _progress: &Progress<'_>,
+    ) -> Result<Arc<PhotographTile>, PhotographReadError> {
         self.held
             .get(&key)
             .cloned()
@@ -416,11 +426,13 @@ impl TiledPhotograph {
     /// The pixels `x0..x1` by `y0..y1` of level `level`: the part of each
     /// photograph tile's core inside the rectangle, copied to its place.
     /// Refused with [`PhotographReadError::NeedsTiles`] when the photograph
-    /// does not hold every tile the rectangle covers.
+    /// does not hold every tile the rectangle covers. `progress` is as for
+    /// [`Self::tile`].
     pub(crate) fn region(
         &self,
         level: usize,
         rect: LevelRect,
+        _progress: &Progress<'_>,
     ) -> Result<ImageU8, PhotographReadError> {
         check_rect(&self.layout, level, rect)?;
         if let Some(keys) = self.missing_rect_tiles(level, rect) {

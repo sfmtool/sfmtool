@@ -237,6 +237,7 @@ impl Clusters {
             &self.features,
             params,
             None,
+            &Progress::none(),
         )
     }
 }
@@ -418,11 +419,14 @@ fn the_view_selection_is_the_same_on_every_read_path() {
 /// patch asks for tiles it does not hold.
 fn without_pixels(source: &TiledPhotograph) -> TiledPhotograph {
     let corner = source
-        .tile(TileKey {
-            level: 0,
-            col: 0,
-            row: 0,
-        })
+        .tile(
+            TileKey {
+                level: 0,
+                col: 0,
+                row: 0,
+            },
+            &Progress::none(),
+        )
         .expect("a tile");
     TiledPhotograph::from_tiles(source.layout().clone(), [corner]).expect("the layout's tile")
 }

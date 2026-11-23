@@ -38,6 +38,7 @@ use sfmtool_core::camera::sampler::{read_source_samples, RegionPool, ViewRegions
 use sfmtool_core::camera::{CameraIntrinsics, PhotographReadError, TiledPhotograph};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
+use sfmtool_core::progress::Progress;
 
 use super::marks::{ProjectionOf, CONTEXT_FACTOR, CONTEXT_HOVER_SIDE};
 use crate::bench::geometry;
@@ -322,6 +323,7 @@ fn picture(
             level,
             &positions,
             0,
+            &Progress::none(),
         )?)
     };
     let channels = src.channels().max(1) as usize;

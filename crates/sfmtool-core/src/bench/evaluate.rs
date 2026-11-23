@@ -1203,6 +1203,7 @@ pub(super) fn evaluate_cluster(
             &member_features,
             &params,
             None,
+            progress,
         )?;
         progress_note!(phase, "{} observations", members.len());
         result
@@ -1283,6 +1284,7 @@ pub(super) fn evaluate_cluster(
                 measurement.seed_position,
                 measurement.seed_shape,
                 &params,
+                progress,
             )?;
             next_measurement.zncc_self_similarity_radius = similarity.radius;
             next_measurement.zncc_self_similarity_radius_middle = similarity.middle;
@@ -1310,6 +1312,7 @@ pub(super) fn evaluate_cluster(
                     measurement.seed_position,
                     measurement.seed_shape,
                     &params,
+                    progress,
                 )?,
                 None => None,
             }
@@ -1441,8 +1444,9 @@ fn tile_self_similarity(
     position: [f64; 2],
     shape: [[f64; 2]; 2],
     params: &ClusterRefineParams,
+    progress: &Progress<'_>,
 ) -> Result<TileSelfSimilarity, PhotographReadError> {
-    let Some(tile) = sample_source_member_grid(view, position, shape, params)? else {
+    let Some(tile) = sample_source_member_grid(view, position, shape, params, progress)? else {
         return Ok(TileSelfSimilarity::default());
     };
     let resolution = params.resolution.max(2) as usize;

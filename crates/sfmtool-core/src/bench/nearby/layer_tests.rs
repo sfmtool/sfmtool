@@ -10,6 +10,7 @@ use nalgebra::Point3;
 use crate::bench::tests::scene::Scene;
 use crate::bench::track_at_pixel::ViewCamera;
 use crate::camera::sampler::RegionPool;
+use crate::progress::Progress;
 
 use super::layers::{layer_distances, rank_layers};
 use super::*;
@@ -87,7 +88,16 @@ fn run(scene: &Scene, owned: &[Owned], options: &DepthLayerOptions) -> DepthLaye
     let views = scene.views();
     let pool = RegionPool::for_kernel_call();
     let candidates: Vec<LayerCandidate<'_>> = owned.iter().map(Owned::candidate).collect();
-    depth_layers(&views, &pool, 0, PIXEL, &candidates, options).expect("valid")
+    depth_layers(
+        &views,
+        &pool,
+        0,
+        PIXEL,
+        &candidates,
+        options,
+        &Progress::none(),
+    )
+    .expect("valid")
 }
 
 const BOUNDED: RangeClass = RangeClass {
@@ -273,7 +283,15 @@ fn the_layers_refuse_a_candidate_no_finder_gives() {
     };
     let layers = |owned: &[Owned]| {
         let candidates: Vec<LayerCandidate<'_>> = owned.iter().map(Owned::candidate).collect();
-        depth_layers(&views, &pool, 0, PIXEL, &candidates, &options)
+        depth_layers(
+            &views,
+            &pool,
+            0,
+            PIXEL,
+            &candidates,
+            &options,
+            &Progress::none(),
+        )
     };
     let good = with_range(&[0, 1], [1.0, 1.5], BOUNDED);
     for distance_px in [f64::NAN, f64::INFINITY, -2.0] {
@@ -386,9 +404,10 @@ fn the_layers_refuse_an_image_that_is_not_there() {
     let options = DepthLayerOptions::default();
     let pool = RegionPool::for_kernel_call();
     assert!(matches!(
-        depth_layers(&views, &pool, 9, PIXEL, &[], &options),
+        depth_layers(&views, &pool, 9, PIXEL, &[], &options, &Progress::none()),
         Err(DepthLayerError::NoSuchImage { image: 9, .. })
     ));
-    let none = depth_layers(&views, &pool, 0, PIXEL, &[], &options).expect("valid");
+    let none =
+        depth_layers(&views, &pool, 0, PIXEL, &[], &options, &Progress::none()).expect("valid");
     assert!(none.layers.is_empty() && none.support.is_empty());
 }

@@ -69,6 +69,7 @@ use sfmtool_core::camera::{CameraIntrinsics, PhotographReadError, TiledPhotograp
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::patch::cluster_refine::{sample_source_member_grid, ClusterRefineParams};
+use sfmtool_core::progress::Progress;
 use sfmtool_core::SfmrReconstruction;
 
 use super::patch::PatchJacobian;
@@ -229,6 +230,7 @@ pub(super) fn image(
                 site.pixel,
                 shape,
                 &params,
+                &Progress::none(),
             )?;
             let resolution = params.resolution.max(2) as usize;
             Ok(grid.map(|grid| {
@@ -380,6 +382,7 @@ pub(super) fn context(
                 site.pixel,
                 shape,
                 &params,
+                &Progress::none(),
             )?
             else {
                 return Ok(None);

@@ -83,6 +83,7 @@ pub fn read_patch_along_ray(
     distances: &[f64],       // f64::INFINITY allowed
     images: &[u32],
     keep_samples: bool,
+    progress: &Progress<'_>, // polled for cancellation by the reads
 ) -> Result<Option<PatchRead>, PatchReadError>;
 // Ok(None): the queried patch is flat or off its photograph.
 // Err: NoSuchImage { image, image_count } for `patch.image` or an entry of

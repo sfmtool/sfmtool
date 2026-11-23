@@ -20,6 +20,7 @@ use crate::camera::image::ImageU8;
 use crate::camera::sampler::{check_source, read_source_rect, LevelRect, RegionPool};
 use crate::camera::{PhotographReadError, TiledPhotograph};
 use crate::features::optical_flow::matcher_gray_from_rgb;
+use crate::progress::Progress;
 
 /// The standard deviation of the blur, in px.
 pub const GREY_BLUR_SIGMA: f64 = 1.0;
@@ -287,6 +288,7 @@ pub(super) fn read_grey(
     source: &TiledPhotograph,
     pool: &RegionPool,
     positions: &[[f64; 2]],
+    progress: &Progress<'_>,
 ) -> Result<Option<Vec<f32>>, PhotographReadError> {
     check_source(source)?;
     let (width, height) = source.layout().level_size(0);
@@ -322,7 +324,7 @@ pub(super) fn read_grey(
         x1: inner.x1.saturating_add(reach).min(width),
         y1: inner.y1.saturating_add(reach).min(height),
     };
-    let grey = grey_values(read_source_rect(source, pool, 0, rect)?.image());
+    let grey = grey_values(read_source_rect(source, pool, 0, rect, progress)?.image());
     let blurred = blur_box(&grey, rect, inner, full);
     let stride = inner.width() as usize;
     Ok(Some(

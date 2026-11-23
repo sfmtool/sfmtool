@@ -290,7 +290,7 @@ impl PhotographCache {
         progress: &Progress<'_>,
     ) -> Result<ImageU8Pyramid, TileError> {
         let photograph = self.get(path, progress).map_err(|e| unreadable(path, e))?;
-        copy_regions(&photograph, regions).map_err(|e| out_of_range(path, e))
+        copy_regions(&photograph, regions, progress).map_err(|e| out_of_range(path, e))
     }
 
     /// Level `level` of `path` whole, decoded on a miss as
@@ -311,7 +311,7 @@ impl PhotographCache {
             y1,
         };
         tiled
-            .region(level, rect)
+            .region(level, rect, progress)
             .map(Arc::new)
             .map_err(|e| out_of_range(path, e))
     }

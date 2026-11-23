@@ -312,6 +312,7 @@ fn refine_patch_keypoints_impl(
             pad,
             st.sampler,
             &mut scratch.img,
+            progress,
         )?);
     }
 
@@ -366,6 +367,7 @@ fn refine_patch_keypoints_impl(
                 &support,
                 channels,
                 &mut raw,
+                progress,
             )?
             .then(|| {
                 znorm_core(&raw, &support, channels, &mut znorm);
@@ -404,6 +406,7 @@ fn refine_patch_keypoints_impl(
                 wpp_v,
                 params,
                 &mut scratch,
+                progress,
             )?;
             reanchor(
                 patch,
@@ -419,6 +422,7 @@ fn refine_patch_keypoints_impl(
                 pad,
                 params,
                 &mut scratch,
+                progress,
             )?;
         }
     }
@@ -528,6 +532,7 @@ fn refine_one_view(
     wpp_v: f64,
     params: &KeypointSubpixelParams,
     scratch: &mut GnScratch,
+    progress: &Progress<'_>,
 ) -> Result<(), PhotographReadError> {
     let GnScratch {
         g,
@@ -549,7 +554,7 @@ fn refine_one_view(
      -> Result<Option<f64>, PhotographReadError> {
         if !core_value(
             patch, view, regions, tile, off[0], off[1], wpp_u, wpp_v, resolution, sampler, support,
-            channels, g,
+            channels, g, progress,
         )? {
             return Ok(None);
         }
@@ -575,7 +580,7 @@ fn refine_one_view(
         // frame the local Jacobian is ill-defined here: stop.
         if !core_value_with_jg(
             patch, view, regions, tile, cur[0], cur[1], wpp_u, wpp_v, resolution, sampler, support,
-            channels, g, jg_u, jg_v, img,
+            channels, g, jg_u, jg_v, img, progress,
         )? {
             break;
         }
@@ -656,6 +661,7 @@ fn reanchor(
     pad: u32,
     params: &KeypointSubpixelParams,
     scratch: &mut GnScratch,
+    progress: &Progress<'_>,
 ) -> Result<(), PhotographReadError> {
     let moved = st.off[0].hypot(st.off[1]);
     if !(st.score.is_finite() && moved > REANCHOR_MIN_OFFSET) {
@@ -680,6 +686,7 @@ fn reanchor(
         pad,
         st.sampler,
         &mut scratch.img,
+        progress,
     )?;
     let kept = (st.patch_frame.clone(), st.off, st.score, st.keypoint);
     // The frame slid onto the reached keypoint stands as the view's start: a
@@ -708,6 +715,7 @@ fn reanchor(
         wpp_v,
         &left,
         scratch,
+        progress,
     )?;
     // The never-worse guard across the two solves: where the second does not
     // score at least what the first reached, the first stands.
@@ -785,7 +793,9 @@ pub enum ReferenceTemplate<'a> {
 ///
 /// `target_regions` reads the target's photograph, which every read of the
 /// target shares; the reference observation, where it is the template, is
-/// read once through regions of its own from the same region pool.
+/// read once through regions of its own from the same region pool. Every
+/// read polls `progress` for cancellation, as the render entry points of
+/// [`sampler`](crate::camera::sampler) do; nothing is reported through it.
 ///
 /// # Errors
 ///
@@ -794,6 +804,7 @@ pub enum ReferenceTemplate<'a> {
 /// # Panics
 ///
 /// Panics if an image index is out of range for `views`.
+#[allow(clippy::too_many_arguments)]
 pub fn refine_view_against_reference(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
@@ -802,6 +813,7 @@ pub fn refine_view_against_reference(
     target: u32,
     target_keypoint: [f64; 2],
     params: &KeypointSubpixelParams,
+    progress: &Progress<'_>,
 ) -> Result<Option<([f64; 2], f64)>, PhotographReadError> {
     let resolution = params.resolution.max(2);
     let wpp_u = 2.0 * patch.half_extent[0] / resolution as f64;
@@ -851,6 +863,7 @@ pub fn refine_view_against_reference(
                 &support,
                 channels,
                 &mut raw,
+                progress,
             )? {
                 return Ok(None);
             }
@@ -894,6 +907,7 @@ pub fn refine_view_against_reference(
         pad,
         state.sampler,
         &mut scratch.img,
+        progress,
     )?;
     refine_one_view(
         target_view,
@@ -908,6 +922,7 @@ pub fn refine_view_against_reference(
         wpp_v,
         params,
         &mut scratch,
+        progress,
     )?;
     reanchor(
         patch,
@@ -923,6 +938,7 @@ pub fn refine_view_against_reference(
         pad,
         params,
         &mut scratch,
+        progress,
     )?;
     if !state.score.is_finite() {
         return Ok(None);

@@ -486,7 +486,7 @@ pub fn grid_plane_normal(
             tolerance,
             options.acceptance,
             |t: &EditableTrack| {
-                let mut m = cells.measure(t)?;
+                let mut m = cells.measure(t, progress)?;
                 if let Some(render) = m.record.take() {
                     renders.borrow_mut().push(*render);
                 }
@@ -826,7 +826,11 @@ impl<'a, 'v> Cells<'a, 'v> {
     /// Render every view at `track`'s patch frame, register and gate its cells,
     /// triangulate them and fit the plane, and score the views against the
     /// reference.
-    fn measure(&self, track: &EditableTrack) -> Result<Measurement, NormalError> {
+    fn measure(
+        &self,
+        track: &EditableTrack,
+        progress: &Progress<'_>,
+    ) -> Result<Measurement, NormalError> {
         let patch_frame = patch_frame_of(track);
         let r = self.layout.resolution;
         let wpp = 2.0 * patch_frame.half_extent[0] / r as f64;
@@ -858,6 +862,7 @@ impl<'a, 'v> Cells<'a, 'v> {
             ref_observation.image,
             seed_of(ref_observation),
             0,
+            progress,
         )?
         else {
             return Ok(nothing(view_cells, record));
@@ -909,6 +914,7 @@ impl<'a, 'v> Cells<'a, 'v> {
                 observation.image,
                 seed_of(observation),
                 self.layout.margin,
+                progress,
             )?
             else {
                 continue;
@@ -1038,6 +1044,7 @@ impl<'a, 'v> Cells<'a, 'v> {
         image: u32,
         keypoint: Option<[f64; 2]>,
         margin: usize,
+        progress: &Progress<'_>,
     ) -> Result<Option<Render>, NormalError> {
         let view = &self.images[image as usize];
         let r = self.layout.resolution;
@@ -1060,6 +1067,7 @@ impl<'a, 'v> Cells<'a, 'v> {
                 &mut self.regions[image as usize].borrow_mut(),
                 &mut map,
                 sampler,
+                progress,
             )?
         };
         // A fourth channel is the photograph's alpha, which carries no

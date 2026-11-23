@@ -429,7 +429,15 @@ pub fn far_field_sweep(
     let others: Vec<u32> = (0..image_count as u32).filter(|&i| i != image).collect();
     // The views hold every image, `image` among them, as checked above, so
     // the reads need no check of their own.
-    let Some(at_infinity) = read_checked(views, pool, &patch, &[f64::INFINITY], &others, false)?
+    let Some(at_infinity) = read_checked(
+        views,
+        pool,
+        &patch,
+        &[f64::INFINITY],
+        &others,
+        false,
+        progress,
+    )?
     else {
         return Ok(FarFieldSweep::default());
     };
@@ -468,7 +476,7 @@ pub fn far_field_sweep(
     let images: Vec<u32> = rates.iter().map(|&(j, _)| j).collect();
     let rate: Vec<f64> = rates.iter().map(|&(_, r)| r).collect();
     progress.check_cancel().map_err(cancelled)?;
-    let Some(read) = read_checked(views, pool, &patch, &distances, &images, true)? else {
+    let Some(read) = read_checked(views, pool, &patch, &distances, &images, true, progress)? else {
         return Ok(FarFieldSweep::default());
     };
 

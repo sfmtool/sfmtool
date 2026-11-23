@@ -171,6 +171,7 @@ fn the_patch_reads_best_at_the_planes_distance() {
         &distances,
         &[1, 2, 3],
         true,
+        &Progress::none(),
     )
     .expect("every image is a view")
     .expect("the patch is textured and inside the photograph");
@@ -203,7 +204,15 @@ fn a_patch_off_the_photograph_or_flat_is_not_read() {
         radius_px: 8.0,
     };
     assert_eq!(
-        read_patch_along_ray(&views, &pool, &off, &[f64::INFINITY], &[1], false),
+        read_patch_along_ray(
+            &views,
+            &pool,
+            &off,
+            &[f64::INFINITY],
+            &[1],
+            false,
+            &Progress::none()
+        ),
         Ok(None)
     );
 
@@ -237,7 +246,15 @@ fn a_patch_off_the_photograph_or_flat_is_not_read() {
         radius_px: 8.0,
     };
     assert_eq!(
-        read_patch_along_ray(&flat, &pool, &patch, &[f64::INFINITY], &[1], false),
+        read_patch_along_ray(
+            &flat,
+            &pool,
+            &patch,
+            &[f64::INFINITY],
+            &[1],
+            false,
+            &Progress::none()
+        ),
         Ok(None)
     );
 }
@@ -261,6 +278,7 @@ fn a_patch_read_refuses_an_image_with_no_view() {
             &[f64::INFINITY],
             images,
             false,
+            &Progress::none(),
         )
     };
     let no_view = Err(PatchReadError::NoSuchImage {

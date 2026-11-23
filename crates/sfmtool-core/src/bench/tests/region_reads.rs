@@ -20,6 +20,7 @@ use crate::bench::{
 };
 use crate::camera::TileKey;
 use crate::camera::{PhotographReadError, TiledPhotograph};
+use crate::progress::Progress;
 
 /// The tile side the scenes are cut into for the reads through tiles: a
 /// quarter of the photographs' 128 px, so a read crosses several tiles.
@@ -296,11 +297,14 @@ fn a_geometry_search_is_the_same_on_every_read_path() {
 fn without_pixels(scene: &Scene) -> TiledPhotograph {
     let whole = TiledPhotograph::cut(scene.pyramid(0), TILE);
     let corner = whole
-        .tile(TileKey {
-            level: 0,
-            col: 0,
-            row: 0,
-        })
+        .tile(
+            TileKey {
+                level: 0,
+                col: 0,
+                row: 0,
+            },
+            &Progress::none(),
+        )
         .expect("a tile");
     TiledPhotograph::from_tiles(whole.layout().clone(), [corner]).expect("the layout's tile")
 }

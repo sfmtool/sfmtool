@@ -907,6 +907,7 @@ fn refine(
             &member_features[m0..m1],
             &params,
             None,
+            &phase,
         )
         .map_err(|e| match e {
             PhotographReadError::Cancelled => Stopped::Cancelled,

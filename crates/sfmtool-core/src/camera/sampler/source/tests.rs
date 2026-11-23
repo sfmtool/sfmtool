@@ -15,6 +15,7 @@ use crate::camera::sampler::grid::{affine_regions, grid_cells, grid_regions, sam
 use crate::camera::sampler::test_support::{affine_map, copy, maps, photograph, Lcg, SAMPLERS};
 use crate::camera::sampler::{render_tile, render_tile_with_grad_into, TILE_WINDOW_TILES};
 use crate::camera::tiled_photograph::TileKey;
+use crate::progress::Progress;
 
 const TILE: u32 = 32;
 
@@ -60,6 +61,7 @@ fn every_value_and_gradient_render_equals_the_whole_pyramid() {
                     &mut ViewRegions::new(&source, &pool),
                     &mut map,
                     sampler,
+                    &Progress::none(),
                 )
                 .expect("an in-memory read");
                 assert_eq!(tile.data(), whole.data(), "map {m}, {sampler:?}, {path:?}");
@@ -69,6 +71,7 @@ fn every_value_and_gradient_render_equals_the_whole_pyramid() {
                     &mut map,
                     sampler,
                     &mut grad,
+                    &Progress::none(),
                 )
                 .expect("an in-memory read");
                 assert_eq!(
@@ -108,6 +111,7 @@ fn the_tile_path_pins_no_more_than_its_window() {
         &mut ViewRegions::new(&source, &pool),
         &mut map,
         Sampler::Bilinear,
+        &Progress::none(),
     )
     .unwrap();
     let ReadPath::Tiles(stats) = path else {
@@ -158,6 +162,7 @@ fn the_cluster_grid_samplers_equal_their_whole_level_results() {
                         level,
                         points,
                         edge,
+                        &Progress::none(),
                     )
                     .unwrap();
                     let bits = |v: &Option<Vec<f32>>| {
@@ -202,6 +207,7 @@ fn the_affine_fast_path_equals_its_whole_level_result() {
                 24,
                 sampler,
                 &mut out,
+                &Progress::none(),
             )
             .unwrap();
             assert_eq!(matches!(path, ReadPath::Copied { .. }), fits);
@@ -247,6 +253,7 @@ fn read_source_samples_gives_the_bilinear_value_of_the_whole_level() {
                     level,
                     &positions,
                     border,
+                    &Progress::none(),
                 )
                 .unwrap();
                 assert_eq!(matches!(path, ReadPath::Copied { .. }), fits);
@@ -327,7 +334,7 @@ fn read_source_rect_returns_the_rectangles_pixels() {
             }
         }
         for (pool, fits) in pools() {
-            let read = read_source_rect(&source, &pool, level, rect).unwrap();
+            let read = read_source_rect(&source, &pool, level, rect, &Progress::none()).unwrap();
             assert_eq!(read.image().data(), &expected[..]);
             assert_eq!(pool.held_bytes() > 0, fits);
             drop(read);
@@ -365,7 +372,7 @@ fn read_source_rect_returns_the_rectangles_pixels() {
         ),
     ] {
         assert!(matches!(
-            read_source_rect(&source, &pool, level, rect),
+            read_source_rect(&source, &pool, level, rect, &Progress::none()),
             Err(PhotographReadError::OutOfRange { .. })
         ));
     }
@@ -401,6 +408,7 @@ fn a_kernel_calls_renders_never_hold_more_than_its_pool() {
                             &mut ViewRegions::new(&source, &pool),
                             &mut map,
                             sampler,
+                            &Progress::none(),
                         )
                         .unwrap();
                         let whole = render_tile(&pyramid, &mut map, sampler);
@@ -454,7 +462,7 @@ fn the_grid_affine_and_sample_reads_need_no_more_than_their_exact_regions() {
         let cells = grid_cells(&a, points, GridEdge::Missing, layout.level_size(level)).unwrap();
         let mut regions = LevelRegions::new(layout);
         grid_regions(&mut regions, level, &cells);
-        let held = copy_regions(&source, &regions).unwrap();
+        let held = copy_regions(&source, &regions, &Progress::none()).unwrap();
         assert_eq!(
             bits(&sample_grid(&HeldLevel::of(&held, level), &cells)),
             bits(&sample_grid(&HeldLevel::of(&pyramid, level), &cells))
@@ -469,7 +477,7 @@ fn the_grid_affine_and_sample_reads_need_no_more_than_their_exact_regions() {
     ] {
         let mut regions = LevelRegions::new(layout);
         affine_regions(&mut regions, &a, level, aniso, &pixels, 24);
-        let held = copy_regions(&source, &regions).unwrap();
+        let held = copy_regions(&source, &regions, &Progress::none()).unwrap();
         let mut whole = vec![0f32; 3 * pixels.len()];
         let mut read = vec![0f32; 3 * pixels.len()];
         if aniso {
@@ -488,7 +496,7 @@ fn the_grid_affine_and_sample_reads_need_no_more_than_their_exact_regions() {
         .map(|k| [60.0 + 3.7 * k as f32, 50.0 + 1.9 * k as f32])
         .collect();
     let regions = LevelRegions::for_samples(layout, 0, &positions, 1);
-    let held = copy_regions(&source, &regions).unwrap();
+    let held = copy_regions(&source, &regions, &Progress::none()).unwrap();
     let (held, whole) = (HeldLevel::of(&held, 0), HeldLevel::of(&pyramid, 0));
     for &[x, y] in &positions {
         let (x0, y0, _, _) = bilinear_cell(x, y);
@@ -515,7 +523,7 @@ fn a_read_past_the_tiles_a_photograph_holds_is_refused() {
         (0..rows).flat_map(|row| (0..cols).map(move |col| TileKey { level: 0, col, row }));
     let source = TiledPhotograph::from_tiles(
         whole.layout().clone(),
-        level_0.map(|key| whole.tile(key).unwrap()),
+        level_0.map(|key| whole.tile(key, &Progress::none()).unwrap()),
     )
     .unwrap();
     for (pool, _) in pools() {
@@ -524,7 +532,8 @@ fn a_read_past_the_tiles_a_photograph_holds_is_refused() {
             render_source_tile(
                 &mut ViewRegions::new(&source, &pool),
                 &mut map,
-                Sampler::BilinearMip
+                Sampler::BilinearMip,
+                &Progress::none()
             ),
             Err(PhotographReadError::NeedsTiles { .. })
         ));
@@ -532,8 +541,136 @@ fn a_read_past_the_tiles_a_photograph_holds_is_refused() {
         assert!(render_source_tile(
             &mut ViewRegions::new(&source, &pool),
             &mut map,
-            Sampler::BilinearMip
+            Sampler::BilinearMip,
+            &Progress::none()
         )
         .is_ok());
     }
+}
+
+/// A photograph that holds its tiles decodes nothing, so a read of it never
+/// polls the caller's `Progress`: given a cancelled one, every entry point
+/// reads, through copied regions and through the tile path, what it reads
+/// given `Progress::none()`.
+#[test]
+fn a_photograph_that_holds_its_tiles_reads_the_same_under_a_cancelled_progress() {
+    use std::sync::atomic::AtomicBool;
+
+    use crate::patch::cluster_refine::{sample_source_member_grid, ClusterRefineParams};
+    use crate::patch::reference_view::source_clipped_share;
+
+    let image = photograph(200, 150);
+    let (_, source) = sources(&image);
+    let flag = AtomicBool::new(true);
+    let cancelled = Progress::none().cancelled_by(&flag);
+    assert!(cancelled.is_cancelled());
+    let pixels: Vec<usize> = (0..24 * 24).filter(|p| p % 5 != 2).collect();
+    let grid = grid_map(4.0, 100.0, 75.0, 25.0);
+    let affine = grid_map(3.0, 100.0, 75.0, 24.0).map(|c| c * 0.3);
+    let positions = positions(200, 150);
+    let rect = LevelRect {
+        x0: 20,
+        y0: 30,
+        x1: 150,
+        y1: 110,
+    };
+    let outline = [[40.5, 30.0], [150.0, 52.5], [130.5, 120.0], [35.0, 99.5]];
+    let params = ClusterRefineParams::default();
+    let mut tiled = 0;
+    for (pool, fits) in pools() {
+        // Every read through each entry point, as bytes, with how it read.
+        let read = |progress: &Progress<'_>| {
+            let view = || ViewRegions::new(&source, &pool);
+            let mut out: Vec<Vec<u8>> = Vec::new();
+            let mut paths = Vec::new();
+            for sampler in SAMPLERS {
+                let map = affine_map(16, [1.5, 0.2, 78.0, -0.1, 1.5, 58.0], 0);
+                let (tile, path) =
+                    render_source_tile_path(&mut view(), &mut copy(&map), sampler, progress)
+                        .expect("a photograph that holds its tiles");
+                out.push(tile.data().to_vec());
+                paths.push(path);
+                let mut grad = ImageF32WithGrad::empty();
+                let path = render_source_tile_with_grad_path(
+                    &mut view(),
+                    &mut copy(&map),
+                    sampler,
+                    &mut grad,
+                    progress,
+                )
+                .expect("a photograph that holds its tiles");
+                out.push(
+                    grad_bits(&grad)
+                        .iter()
+                        .flat_map(|b| b.to_le_bytes())
+                        .collect(),
+                );
+                paths.push(path);
+                let mut values = vec![0f32; 3 * pixels.len()];
+                let path = render_source_affine_path(
+                    &mut view(),
+                    &affine,
+                    0,
+                    &pixels,
+                    24,
+                    sampler,
+                    &mut values,
+                    progress,
+                )
+                .expect("a photograph that holds its tiles");
+                out.push(values.iter().flat_map(|v| v.to_le_bytes()).collect());
+                paths.push(path);
+            }
+            let points = GridPoints::Window {
+                first: -3,
+                size: 31,
+            };
+            let (samples, path) =
+                sample_source_grid_path(&mut view(), &grid, 0, points, GridEdge::Clamp, progress)
+                    .expect("a photograph that holds its tiles")
+                    .expect("a grid in frame");
+            out.push(samples.iter().flat_map(|v| v.to_le_bytes()).collect());
+            paths.push(path);
+            let (samples, path) = read_source_samples_path(&mut view(), 0, &positions, 1, progress)
+                .expect("a photograph that holds its tiles");
+            out.push(
+                (0..samples.len())
+                    .flat_map(|k| samples.window(k).to_vec())
+                    .collect(),
+            );
+            paths.push(path);
+            let rect = read_source_rect(&source, &pool, 0, rect, progress)
+                .expect("a photograph that holds its tiles");
+            out.push(rect.image().data().to_vec());
+            let member = sample_source_member_grid(
+                &mut view(),
+                [100.0, 75.0],
+                [[3.0, 0.5], [-0.4, 2.5]],
+                &params,
+                progress,
+            )
+            .expect("a photograph that holds its tiles")
+            .expect("a member grid");
+            out.push(member.iter().flat_map(|v| v.to_le_bytes()).collect());
+            let share = source_clipped_share(&source, &outline, progress)
+                .expect("a photograph that holds its tiles")
+                .expect("an outline of four points");
+            out.push(share.to_le_bytes().to_vec());
+            (out, paths)
+        };
+        let (reads, paths) = read(&cancelled);
+        let (expected, _) = read(&Progress::none());
+        assert_eq!(reads, expected, "a pool that fits: {fits}");
+        for path in paths {
+            match path {
+                ReadPath::Copied { .. } => assert!(fits, "{path:?}"),
+                ReadPath::Tiles(_) => {
+                    assert!(!fits, "{path:?}");
+                    tiled += 1;
+                }
+                ReadPath::Reused { .. } => panic!("a fresh view keeps no regions"),
+            }
+        }
+    }
+    assert!(tiled > 0);
 }

@@ -17,6 +17,7 @@ use sfmtool_core::bench::{
     NearbySource, RangeClass,
 };
 use sfmtool_core::camera::sampler::RegionPool;
+use sfmtool_core::progress::Progress;
 
 use super::nearby::harness_name;
 use super::views_of;
@@ -190,7 +191,15 @@ pub(super) fn depth_layers(
         .detach(|| {
             let candidates: Vec<LayerCandidate<'_>> = owned.iter().map(Anchor::candidate).collect();
             let pool = RegionPool::for_kernel_call();
-            core_depth_layers(&views, &pool, image, pixel, &candidates, &options)
+            core_depth_layers(
+                &views,
+                &pool,
+                image,
+                pixel,
+                &candidates,
+                &options,
+                &Progress::none(),
+            )
         })
         .map_err(kernel_err)?;
     let out = PyDict::new(py);

@@ -791,7 +791,7 @@ pub fn find_nearby_tracks(
         FarFieldWhen::Never => None,
         FarFieldWhen::Always => Some(FarFieldTrigger::Always),
         FarFieldWhen::Needed => {
-            let grouped = group_count(views, pool, image, pixel, &tracks)?;
+            let grouped = group_count(views, pool, image, pixel, &tracks, progress)?;
             if grouped == 0 {
                 Some(FarFieldTrigger::NoLayer)
             } else if grouped > 1 {
@@ -860,7 +860,15 @@ pub fn find_nearby_tracks(
         let _phase = progress.phase("depth layers");
         let candidates: Vec<LayerCandidate<'_>> =
             tracks.iter().map(NearbyTrack::layer_candidate).collect();
-        depth_layers(views, pool, image, pixel, &candidates, &options.layers)?
+        depth_layers(
+            views,
+            pool,
+            image,
+            pixel,
+            &candidates,
+            &options.layers,
+            progress,
+        )?
     };
     report.layers_seconds = start.elapsed().as_secs_f64();
     for (t, support) in tracks.iter_mut().zip(found.support) {
@@ -1087,6 +1095,7 @@ fn group_count(
     image: u32,
     pixel: [f64; 2],
     tracks: &[NearbyTrack],
+    progress: &Progress<'_>,
 ) -> Result<usize, DepthLayerError> {
     let candidates: Vec<LayerCandidate<'_>> =
         tracks.iter().map(NearbyTrack::layer_candidate).collect();
@@ -1095,7 +1104,7 @@ fn group_count(
         ..DepthLayerOptions::default()
     };
     Ok(
-        depth_layers(views, pool, image, pixel, &candidates, &grouping)?
+        depth_layers(views, pool, image, pixel, &candidates, &grouping, progress)?
             .layers
             .len(),
     )

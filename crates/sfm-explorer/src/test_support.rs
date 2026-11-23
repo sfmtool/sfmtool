@@ -6,6 +6,7 @@
 use crate::action_log::ActionLog;
 use crate::progress::Detail;
 use crate::window::{MonitorInfo, WindowChange, WindowError, WindowHost, WindowInfo, WindowState};
+use sfmtool_core::progress::Progress;
 
 /// A [`WindowHost`] with no window behind it: it records the primitives it was
 /// asked for, in order, and reports what it then is.
@@ -476,8 +477,14 @@ pub(crate) fn level_0_pixels(photograph: &sfmtool_core::camera::TiledPhotograph)
         y1,
     };
     let pool = sfmtool_core::camera::sampler::RegionPool::with_capacity(u64::MAX);
-    let read = sfmtool_core::camera::sampler::read_source_rect(photograph, &pool, 0, rect)
-        .expect("a photograph holding every tile");
+    let read = sfmtool_core::camera::sampler::read_source_rect(
+        photograph,
+        &pool,
+        0,
+        rect,
+        &Progress::none(),
+    )
+    .expect("a photograph holding every tile");
     read.image().data().to_vec()
 }
 
