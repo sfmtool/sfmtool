@@ -49,6 +49,12 @@ pub(crate) const MAX_DRAG_POINTS: usize = 120;
 /// the last event, so this is far more than a scroll takes at any frame rate.
 const MAX_SCROLL_COAST_FRAMES: usize = 120;
 
+/// The most frames a right `click` waits for the 3D view's menu to open on the
+/// pick at the click's pixel before it replies, for the reason a drag's path
+/// is bounded. The pick is read back on the frame after the click at the
+/// latest, so this is far more than the wait takes.
+const MAX_MENU_PICK_FRAMES: usize = 30;
+
 /// Where `hover` with `leave: true` puts the tracked pointer: above and left
 /// of the window, inside no panel's rectangle, in points and in pixels alike.
 const OFF_WINDOW: egui::Pos2 = egui::pos2(-1.0, -1.0);
@@ -185,6 +191,12 @@ impl InputCommand {
     fn steps(&self) -> VecDeque<Step> {
         use Step::*;
         match self {
+            // A right click waits for the 3D view to open its menu on the
+            // pick at the click's pixel, so the reply lists that menu.
+            InputCommand::Click {
+                button: egui::PointerButton::Secondary,
+                ..
+            } => [Look, Move, Press, Pick, Settle].into(),
             InputCommand::Click { .. } => [Look, Move, Press, Settle].into(),
             InputCommand::Hover { .. } => [Look, Move, Settle].into(),
             // Nothing to aim at, so no frame to aim against.
@@ -335,6 +347,10 @@ enum Step {
     /// Deliver nothing while egui is still spreading the scroll over frames,
     /// so the reply is built from a frame that has had the whole of it.
     Coast,
+    /// Deliver nothing while the 3D view's right-click waits on the pick at
+    /// its pixel, and for one frame after it opened its menu on it, so the
+    /// reply is built from a frame that shows the menu laid out.
+    Pick,
     /// Press the key.
     KeyDown,
     /// Release it.
@@ -376,6 +392,8 @@ pub(crate) struct PendingInput {
     before: Option<egui::Modifiers>,
     /// How many frames a scroll has waited out egui's smoothing.
     coasted: usize,
+    /// How many frames a right click has waited on the 3D view's pick.
+    picked: usize,
 }
 
 /// What a command needs to know of egui's input state as the frame before
@@ -387,6 +405,12 @@ pub(crate) struct EguiHeld {
     /// Whether egui is still spreading a scroll over frames
     /// (`InputState::is_scrolling`).
     pub(crate) scrolling: bool,
+    /// Whether the 3D view's right-click is waiting on the pick at its pixel,
+    /// or has it and has not opened its menu yet
+    /// (`Viewer3D::awaits_menu_pick`). Not egui's, but read at the same
+    /// moment and for the same kind of wait as `scrolling`; [`Self::of`]
+    /// leaves it false.
+    pub(crate) menu_pick: bool,
 }
 
 impl EguiHeld {
@@ -395,6 +419,7 @@ impl EguiHeld {
         ctx.input(|input| Self {
             modifiers: input.modifiers,
             scrolling: input.is_scrolling(),
+            menu_pick: false,
         })
     }
 }
@@ -411,6 +436,7 @@ impl PendingInput {
             hit: Value::Null,
             before: None,
             coasted: 0,
+            picked: 0,
         }
     }
 
@@ -638,6 +664,13 @@ impl PendingInput {
                 if held.scrolling && self.coasted < MAX_SCROLL_COAST_FRAMES {
                     self.coasted += 1;
                     self.steps.push_front(Step::Coast);
+                }
+                Ok(Vec::new())
+            }
+            Step::Pick => {
+                if held.menu_pick && self.picked < MAX_MENU_PICK_FRAMES {
+                    self.picked += 1;
+                    self.steps.push_front(Step::Pick);
                 }
                 Ok(Vec::new())
             }

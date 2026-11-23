@@ -13,7 +13,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             name: "click",
             description: "Click in the window the way a person's mouse does: the pointer moves \
                           to the point and a frame is drawn, the button is pressed and released \
-                          in the next, and the reply is built from the frame after that. Aim \
+                          in the next, and the reply is built from the frame after that. A \
+                          right click in the 3D view first waits, for up to 30 frames, until \
+                          its menu has opened on the point under the click. Aim \
                           with at_px, in the pixels of the window or of panel_name's body (the \
                           space get_widgets and screenshot use), or with widget, an id from \
                           get_widgets, which is aimed at its centre and refused naming what is \

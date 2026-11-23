@@ -254,13 +254,14 @@ impl WidgetFrame {
                 // a popup, and its widgets stay in the main list rather than
                 // being reported as a menu nobody opened.
                 egui::Order::Foreground => popup_owner.get(&layer.id).map(|&(owner, sub)| {
-                    let at = egui::Popup::position_of_id(ctx, layer.id);
+                    let at = crate::context_menu::position_of_id(ctx, layer.id);
                     let kind = if sub {
                         MenuKind::Submenu
                     } else if at.is_some() {
                         // Opened at the pointer: `Popup::context_menu` and
                         // `context_menu::on_secondary_click` both do that, and
-                        // a menu or combo box opens against its button.
+                        // `context_menu::once_decided` opens at the click; a
+                        // menu or combo box opens against its button.
                         MenuKind::ContextMenu
                     } else if find_rect(&layers, owner)
                         .is_some_and(|rect| in_a_panel(&panel_points, &dock_windows, ctx, rect))

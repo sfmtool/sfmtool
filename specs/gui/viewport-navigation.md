@@ -88,11 +88,21 @@ hangs off egui's own `clicked_by(Secondary)` instead. The Image Detail overlay's
 menu is opened the same way and for the same reason
 ([multi-panel-image-browser.md](multi-panel-image-browser.md)).
 
-The point is the one the GPU pick reported under the cursor on the frame the
-click landed. The pick encodes a point's **dot and its patch to the same id**,
-so right-clicking a surfel names the point it belongs to, exactly as
+The point is the one the GPU pick reports at the **click's own pixel**, as a
+left click's is. The pick reaches the CPU through the readback a frame or more
+after the click, so the click waits for it (`Viewer3D::menu_pick`): the
+viewport records the click's pixel and place, the next 5×5 read is copied at
+that pixel wherever the pointer has gone (`Viewer3D::readback_pixel`),
+`App::process_pick_readback` hands the read back (`Viewer3D::pick_read`), and
+the menu opens at the click's place on the frame after the read arrives,
+selecting its point then. The hover pick the viewport is handed each frame is
+not used: it was read where the pointer was on an earlier frame, so a
+right-click made straight after a move would name whatever was under the old
+place. The pick encodes a point's **dot and its patch to the same id**, so
+right-clicking a surfel names the point it belongs to, exactly as
 left-clicking it selects that point. A right click anywhere else -- empty space,
-a frustum -- opens nothing.
+a frustum -- opens nothing, and closes a menu that was up. With the eraser
+brush on, the viewport hovers no point and a right-click names none.
 
 Two entries, in this order:
 
@@ -106,11 +116,13 @@ an item is focused: a new measurement item on the point's node's bench with
 endpoint A at the pixel that shows the **spot right-clicked**, focused, with
 Measurement View raised beside the 3D view, never over it (G9), in one version
 (`Put distance from IMG_0042@142,198 on the bench`). On the frame the
-right-click lands, the viewport meets its pick ray, taken back through the
-node's display transform, with the plane of the point's patch frame, and
-records the texel `(s, t)` of the drawn surfel under the pointer with the point
-(`MenuTarget::Point`, a `measurements::PointSpot`), since the entries are
-chosen on later frames after the pointer has moved. An entry maps that texel
+right-click lands, the viewport keeps its pick ray, through the click's place
+with that frame's camera. When the pick names the point, the menu meets that
+ray, taken back through the node's display transform, with the plane of the
+point's patch frame, and records the texel `(s, t)` of the drawn surfel under
+the click with the point (`MenuTarget::Point`, a `measurements::PointSpot`),
+since the pointer may have moved by then and the entries are chosen on later
+frames still. An entry maps that texel
 into the image of the point's reference observation, the one its bitmap is
 rendered from, through that observation's square, so the endpoint resolves
 back to the point at that texel unless another square there wins. Where there

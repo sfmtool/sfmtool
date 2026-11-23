@@ -828,9 +828,7 @@ impl Viewer3D {
         if response.clicked() {
             if let Some(pos) = response.interact_pointer_pos() {
                 let ppp = ui.ctx().pixels_per_point();
-                let px = ((pos.x - rect.left()) * ppp) as u32;
-                let py = ((pos.y - rect.top()) * ppp) as u32;
-                self.pending_click = Some([px, py]);
+                self.pending_click = Some(super::texture_pixel(pos, rect, ppp));
                 self.pending_click_is_alt = self.alt_held;
                 self.pending_click_is_double = response.double_clicked();
                 self.pick_ppp = ppp;

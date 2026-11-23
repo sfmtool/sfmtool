@@ -336,7 +336,9 @@ are defined on the Rust and WGSL sides.
 ### Unified hover + click readback
 
 A single pair of 5×5 staging buffers serves both hover (every frame) and click.
-Every frame, the pixel under the cursor is read back:
+Every frame, the pixel under the cursor is read back, or, while a right-click
+waits on its pick, the click's pixel (`Viewer3D::readback_pixel`;
+[viewport-navigation.md](viewport-navigation.md) § "The point context menu"):
 
 1. `copy_readback_region(encoder, cx, cy)` — copies a 5×5 pixel region from
    **both** the linear depth texture and the pick buffer to staging buffers.
@@ -348,6 +350,7 @@ Every frame, the pixel under the cursor is read back:
 pub struct ReadbackResult {
     pub depth: Option<f32>,          // nearest valid depth in 5x5 region
     pub pick: Option<PickTarget>,    // the picked entity, decoded to a typed ref
+    pub pixel: [u32; 2],             // the pixel the region was centred on
 }
 ```
 
@@ -356,7 +359,9 @@ Cached accessors for the hover overlay:
 - `hover_pick() -> Option<PickTarget>` — entity under cursor
 
 The 5×5 fuzzy search makes it easy to hover over and click on thin wireframe lines.
-Both hover tooltip and click selection use the same readback result.
+Both hover tooltip and click selection use the same readback result. A
+right-click takes it only when `pixel` is its own (`Viewer3D::pick_read`), so
+the point menu never opens on a read taken where the pointer was before.
 
 ### Region reads
 
@@ -379,8 +384,8 @@ It is requested a frame ahead and answered a frame later, as the 5×5 read is:
    `PointRef`; any other pixel, and an id outside every range, is `None`.
 
 **A region read replaces the hover read on its frame.** The 5×5 copy runs beside
-it only when a click is waiting on its pick, since Alt+click still sets the
-target while the brush is on. On a frame with a region read and no 5×5 read,
+it only when a click or a right-click is waiting on its pick, since Alt+click
+still sets the target while the brush is on. On a frame with a region read and no 5×5 read,
 nothing is hovered: the hovered point and image are cleared, and
 `hover_depth` and `hover_pick` read as none.
 

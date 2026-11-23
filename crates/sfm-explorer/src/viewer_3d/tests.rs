@@ -6,7 +6,9 @@
 //!
 //! egui needs no GPU to lay out a frame, so these drive the real thing:
 //! `Viewer3D::show` through `Context::run_ui`, with the pick the GPU would have
-//! reported handed in as the parameter `dock.rs` hands it in as. What they
+//! reported handed in as the parameter `dock.rs` hands it in as, and read back
+//! after the frame at the pixel the viewport asked for, as
+//! `App::process_pick_readback` hands it back. What they
 //! assert is what the viewport *decides* -- whether the menu opened and on
 //! which point, which handle a press took and what the release asked for --
 //! rather than anything about pixels.
@@ -94,6 +96,39 @@ fn run_bench_frame(
     bench: Option<(&EditableTrack, Option<usize>, bool)>,
     rect: &mut egui::Rect,
 ) -> Frame {
+    run_reading_frame(
+        viewer,
+        ctx,
+        state,
+        events,
+        pointer,
+        pick,
+        &|_| Some(pick),
+        busy,
+        bench,
+        rect,
+    )
+}
+
+/// One frame with the GPU's 5×5 read modelled as the app runs it: copied
+/// before the pass at the pixel [`Viewer3D::readback_pixel`] named, and read
+/// after it, reporting what `read` says is at that pixel, or nothing for a
+/// read that has not arrived. `pick` is the hover pick of an earlier frame,
+/// handed to the panel as `dock.rs` hands it.
+#[allow(clippy::too_many_arguments)]
+fn run_reading_frame(
+    viewer: &mut Viewer3D,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    events: Vec<egui::Event>,
+    pointer: egui::Pos2,
+    pick: Option<PickTarget>,
+    read: &dyn Fn([u32; 2]) -> Option<Option<PickTarget>>,
+    busy: Option<&str>,
+    bench: Option<(&EditableTrack, Option<usize>, bool)>,
+    rect: &mut egui::Rect,
+) -> Frame {
+    let copied = viewer.readback_pixel();
     let input = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
         events,
@@ -140,6 +175,11 @@ fn run_bench_frame(
         });
     });
     output.textures_delta.clear();
+    if let Some(pixel) = copied {
+        if let Some(reported) = read(pixel) {
+            viewer.pick_read(pixel, reported);
+        }
+    }
     Frame {
         cursor: output.platform_output.cursor_icon,
         texts: crate::test_support::output_texts(&output),
@@ -184,7 +224,10 @@ fn secondary(pos: egui::Pos2, pressed: bool) -> egui::Event {
     }
 }
 
-/// Press and release the right button at one place: a click.
+/// Press and release the right button at one place: a click, then two frames
+/// with the pointer still. The menu opens on the first of them, once the pick
+/// at the click's pixel is read, and egui lays a popup out unseen on the frame
+/// it opens, so its entries take a press from the second.
 fn right_click(
     viewer: &mut Viewer3D,
     ctx: &egui::Context,
@@ -196,6 +239,7 @@ fn right_click(
         vec![egui::Event::PointerMoved(OVER_A_POINT)],
         vec![secondary(OVER_A_POINT, true)],
         vec![secondary(OVER_A_POINT, false)],
+        Vec::new(),
         Vec::new(),
     ] {
         run_frame(viewer, ctx, state, events, OVER_A_POINT, pick, busy);
@@ -358,6 +402,160 @@ fn a_right_drag_is_the_zoom_and_puts_no_menu_up() {
     run_frame(&mut viewer, &ctx, &mut state, Vec::new(), away, pick, None);
     assert_eq!(viewer.menu_target, None);
     assert_eq!(viewer.point_menu, None);
+}
+
+/// Move to `at` and right-click there in one frame, as a quick hand or an
+/// agent's `click` can, then draw `settle` more frames with the pointer still.
+///
+/// The hover pick handed to the panel stays `hovered` throughout: the read of
+/// an earlier frame, taken where the pointer was before the move. `read` is
+/// what the GPU reports on each frame, given whether the viewport had it
+/// copied at the click's pixel, or `None` on a frame whose read has not
+/// arrived. Returns the menu target and the point gesture after each frame,
+/// the click's first.
+fn move_and_right_click(
+    viewer: &mut Viewer3D,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    at: egui::Pos2,
+    hovered: Option<PickTarget>,
+    read: &dyn Fn(usize, bool) -> Option<Option<PickTarget>>,
+    settle: usize,
+) -> Vec<(Option<MenuTarget>, Option<PointGesture>)> {
+    // A frame with nothing new, for the rect the viewport occupies, which is
+    // what says which pixel of the pick buffer is under the click.
+    let mut rect = egui::Rect::NOTHING;
+    let before = viewer.hover_pixel;
+    run_reading_frame(
+        viewer,
+        ctx,
+        state,
+        Vec::new(),
+        OVER_A_POINT,
+        hovered,
+        &|_| Some(hovered),
+        None,
+        None,
+        &mut rect,
+    );
+    assert_eq!(
+        viewer.hover_pixel, before,
+        "the pointer moved before the click"
+    );
+    let clicked = super::texture_pixel(at, rect, ctx.pixels_per_point());
+    let mut seen = Vec::new();
+    for frame in 0..=settle {
+        let events = if frame == 0 {
+            vec![
+                egui::Event::PointerMoved(at),
+                secondary(at, true),
+                secondary(at, false),
+            ]
+        } else {
+            Vec::new()
+        };
+        run_reading_frame(
+            viewer,
+            ctx,
+            state,
+            events,
+            at,
+            hovered,
+            &|pixel| read(frame, pixel == clicked),
+            None,
+            None,
+            &mut rect,
+        );
+        seen.push((viewer.menu_target, viewer.point_menu));
+    }
+    seen
+}
+
+/// A right-click made in the same frame as the move onto its point names that
+/// point, not the one the hover pick still reports from the old place, and
+/// the menu opens on it once the read at the click's pixel arrives. Nothing
+/// opens before then.
+#[test]
+fn a_right_click_straight_after_a_move_opens_the_menu_on_the_point_under_the_click() {
+    let (mut viewer, ctx, mut state) = settled();
+    let node = state.selected_recon.expect("a selected reconstruction");
+    let (old, new) = (PointRef::new(node, 7), PointRef::new(node, 8));
+    let at = OVER_A_POINT + egui::vec2(150.0, -90.0);
+    // The read still copied at the old place reports the old point; the one
+    // copied at the click's pixel, the new one.
+    let read =
+        |_: usize, at_click: bool| Some(Some(PickTarget::Point(if at_click { new } else { old })));
+    let seen = move_and_right_click(
+        &mut viewer,
+        &ctx,
+        &mut state,
+        at,
+        Some(PickTarget::Point(old)),
+        &read,
+        3,
+    );
+    assert_eq!(
+        seen[0],
+        (None, None),
+        "the menu opened on the click's frame, before its pick was read"
+    );
+    let opened = Some(MenuTarget::Point(PointSpot::centre(new)));
+    assert_eq!(seen[2], (opened, Some(PointGesture::Opened(new))));
+    assert_eq!(seen[3].0, opened);
+    assert_eq!(
+        offered(&viewer),
+        [
+            EDIT_ON_BENCH_LABEL,
+            RETRIANGULATE_POINT_LABEL,
+            NEW_MEASUREMENT_HERE_LABEL
+        ]
+    );
+}
+
+/// The read the click waits on can take more than a frame to come back; the
+/// menu waits for it and then opens.
+#[test]
+fn a_right_click_waits_for_a_slow_read_and_then_opens_the_menu() {
+    let (mut viewer, ctx, mut state) = settled();
+    let point = picked(&state);
+    // Nothing comes back for the first three frames.
+    let read = |frame: usize, at_click: bool| {
+        (frame >= 3 && at_click).then_some(Some(PickTarget::Point(point)))
+    };
+    let seen = move_and_right_click(&mut viewer, &ctx, &mut state, OVER_A_POINT, None, &read, 5);
+    assert!(
+        seen[..4].iter().all(|(target, _)| target.is_none()),
+        "the menu opened before its read: {seen:?}"
+    );
+    let opened = Some(MenuTarget::Point(PointSpot::centre(point)));
+    assert_eq!(seen[4], (opened, Some(PointGesture::Opened(point))));
+    assert_eq!(seen[5].0, opened);
+    assert!(!viewer.awaits_menu_pick());
+}
+
+/// A right-click on empty space opens no menu, though the hover pick, read at
+/// the place the pointer came from, still names a point.
+#[test]
+fn a_right_click_on_empty_space_opens_no_menu_though_a_point_was_hovered() {
+    let (mut viewer, ctx, mut state) = settled();
+    let hovered = picked(&state);
+    let at = OVER_A_POINT + egui::vec2(-200.0, 120.0);
+    let read = |_: usize, at_click: bool| Some((!at_click).then_some(PickTarget::Point(hovered)));
+    let seen = move_and_right_click(
+        &mut viewer,
+        &ctx,
+        &mut state,
+        at,
+        Some(PickTarget::Point(hovered)),
+        &read,
+        3,
+    );
+    assert!(
+        seen.iter().all(|seen| *seen == (None, None)),
+        "a menu opened over empty space: {seen:?}"
+    );
+    assert!(viewer.menu_entry_rects.is_empty());
+    assert!(!viewer.awaits_menu_pick());
 }
 
 #[test]
@@ -2859,7 +3057,8 @@ fn on_screen(
         .expect("the patch is in front of the camera")
 }
 
-/// Press and release the right button at `pos`: a click there.
+/// Press and release the right button at `pos`: a click there, settled as
+/// [`right_click`] settles it.
 fn right_click_at(
     viewer: &mut Viewer3D,
     ctx: &egui::Context,
@@ -2871,6 +3070,7 @@ fn right_click_at(
         vec![egui::Event::PointerMoved(pos)],
         vec![secondary(pos, true)],
         vec![secondary(pos, false)],
+        Vec::new(),
         Vec::new(),
     ] {
         run_frame(viewer, ctx, state, events, pos, pick, None);
@@ -2963,6 +3163,50 @@ fn new_measurement_from_here_starts_at_the_spot_right_clicked() {
         .expect("a measurement item is focused")
         .to_string();
     assert_endpoint_on_point_0(&state, id, &label, 0, spot);
+}
+
+/// The texel is the one under the click, though the menu opens on the pick
+/// read back after it and the pointer has moved on by then: a right-click
+/// made with the move onto the spot, then the pointer moved to another spot
+/// of the same patch while the read is on its way.
+#[test]
+fn the_texel_is_read_where_the_right_click_landed_not_where_the_pointer_went() {
+    let (mut viewer, ctx, mut state, id, rect) = facing_point_0(true);
+    let point = PointRef::new(id, 0);
+    let spot = [0.55, -0.35];
+    let at = on_screen(&viewer, &state, id, rect, spot, 1.0);
+    let later = on_screen(&viewer, &state, id, rect, [-0.5, 0.4], 1.0);
+    let clicked = super::texture_pixel(at, rect, ctx.pixels_per_point());
+    let read = |pixel: [u32; 2]| Some((pixel == clicked).then_some(PickTarget::Point(point)));
+    let mut seen = egui::Rect::NOTHING;
+    for (events, pointer) in [
+        (
+            vec![
+                egui::Event::PointerMoved(at),
+                secondary(at, true),
+                secondary(at, false),
+            ],
+            at,
+        ),
+        (vec![egui::Event::PointerMoved(later)], later),
+        (Vec::new(), later),
+        (Vec::new(), later),
+    ] {
+        run_reading_frame(
+            &mut viewer,
+            &ctx,
+            &mut state,
+            events,
+            pointer,
+            None,
+            &read,
+            None,
+            None,
+            &mut seen,
+        );
+    }
+    assert_eq!(seen, rect, "the viewport moved under the test");
+    assert_texel_near(menu_texel(&viewer), spot);
 }
 
 /// *Set Endpoint A Here* and *Set Endpoint B Here* each set their endpoint to

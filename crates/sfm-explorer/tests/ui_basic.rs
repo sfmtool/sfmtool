@@ -2225,17 +2225,9 @@ fn a_brush_stroke_deletes_the_points_it_passes_over() {
     );
 }
 
-/// Alt+click on a point drawn as its patch surfel moves the orbit target onto
-/// the surfel. The depth Alt+click unprojects comes from the GPU's linear depth
-/// target, which only a real window draws: a surfel that wrote no depth there
-/// selected its point and left the target where it was.
-///
-/// The view is put through point 275 of the seoul bull ground truth, which
-/// opens in the Patches style, with the point in the middle of the viewport at
-/// depth `d` and the orbit target twice as far. An Alt+click in the middle
-/// selects the point and brings the target distance down to `d`.
-#[test]
-fn an_alt_click_on_a_surfel_moves_the_orbit_target_onto_it() {
+/// A viewer on the seoul bull ground truth, with the 3D viewer the only panel
+/// in the window.
+fn seoul_bull_in_the_3d_viewer() -> McpViewer {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr"
@@ -2263,17 +2255,21 @@ fn an_alt_click_on_a_surfel_moves_the_orbit_target_onto_it() {
             "layout": { "main": { "tabs": ["viewer_3d"], "active": "viewer_3d" }, "windows": [] },
         }),
     );
+    viewer
+}
 
-    // Through a photograph that sees the point, so its surfel faces the
-    // camera, then panned until the point is in the middle.
-    const POINT: u64 = 275;
-    let point = viewer.ok("get_point", json!({ "point": POINT }));
-    let seen_in = point["track"][0]["camera_image_index"].clone();
+/// Look at `point` through a photograph that sees it, so its surfel faces the
+/// camera, from twice that distance, with the point in the middle of the
+/// viewport. Returns `get_point`'s reply, the distance to the point, and the
+/// middle of the viewport in the 3D viewer's pixels.
+fn centre_on_point(viewer: &McpViewer, point: u64) -> (Value, f64, [f64; 2]) {
+    let read = viewer.ok("get_point", json!({ "point": point }));
+    let seen_in = read["track"][0]["camera_image_index"].clone();
     viewer.ok(
         "set_view",
         json!({ "look_through": { "camera_image": seen_in } }),
     );
-    let on_point = viewer.ok("set_view", json!({ "point": POINT }))["view"].clone();
+    let on_point = viewer.ok("set_view", json!({ "point": point }))["view"].clone();
     let depth = on_point["target_distance"].as_f64().expect("a distance");
     let view = viewer.ok(
         "set_view",
@@ -2303,6 +2299,24 @@ fn an_alt_click_on_a_surfel_moves_the_orbit_target_onto_it() {
         (n(&rect[0]) + n(&rect[2]) / 2.0).floor(),
         (n(&rect[1]) + n(&rect[3]) / 2.0).floor(),
     ];
+    (read, depth, middle)
+}
+
+/// Alt+click on a point drawn as its patch surfel moves the orbit target onto
+/// the surfel. The depth Alt+click unprojects comes from the GPU's linear depth
+/// target, which only a real window draws: a surfel that wrote no depth there
+/// selected its point and left the target where it was.
+///
+/// The view is put through point 275 of the seoul bull ground truth, which
+/// opens in the Patches style, with the point in the middle of the viewport at
+/// depth `d` and the orbit target twice as far. An Alt+click in the middle
+/// selects the point and brings the target distance down to `d`.
+#[test]
+fn an_alt_click_on_a_surfel_moves_the_orbit_target_onto_it() {
+    let viewer = seoul_bull_in_the_3d_viewer();
+    const POINT: u64 = 275;
+    let (point, depth, middle) = centre_on_point(&viewer, POINT);
+    let n = |value: &Value| value.as_f64().expect("a number of pixels");
     viewer.click(json!({
         "panel_name": "viewer_3d",
         "at_px": middle,
@@ -2331,6 +2345,62 @@ fn an_alt_click_on_a_surfel_moves_the_orbit_target_onto_it() {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// A right-click in the 3D view opens the point menu on the point under the
+/// click, read from the pick at the click's own pixel, not on the point the
+/// pointer was last over.
+///
+/// The pointer is left over point 100 in the middle of the viewport, which a
+/// left click there confirms by selecting it, and then taken out of the
+/// window, so the viewport stops reading the pick under it and the last read
+/// still names point 100. The view is put through point 275 in the same place,
+/// and a right `click` moves the pointer back to the middle and presses a
+/// frame later, which is too soon for the hover read to have caught up. The
+/// menu must open on point 275 and select it (G3).
+#[test]
+fn a_right_click_opens_the_point_menu_on_the_point_under_the_click() {
+    let viewer = seoul_bull_in_the_3d_viewer();
+    const BEFORE: u64 = 100;
+    const POINT: u64 = 275;
+    let (_, _, middle) = centre_on_point(&viewer, BEFORE);
+    viewer.click(json!({ "panel_name": "viewer_3d", "at_px": middle }));
+    let scene = viewer.ok("get_scene", json!({}));
+    assert_eq!(
+        scene["selection"]["point"]["index"], BEFORE,
+        "the left click did not land on point {BEFORE}'s surfel: {scene}"
+    );
+    viewer.ok("hover", json!({ "leave": true }));
+
+    let (_, _, there) = centre_on_point(&viewer, POINT);
+    assert_eq!(there, middle, "the viewport changed size");
+    let reply = viewer.click(json!({
+        "panel_name": "viewer_3d",
+        "at_px": middle,
+        "mouse_button": "right",
+    }));
+    let scene = viewer.ok("get_scene", json!({}));
+    assert_eq!(
+        scene["selection"]["point"]["index"], POINT,
+        "the menu opened on another point than the one under the click: {scene}"
+    );
+    let menus = reply["menus"].as_array().expect("a menus array");
+    assert_eq!(menus.len(), 1, "{reply}");
+    assert_eq!(menus[0]["kind"], "context_menu", "{reply}");
+    assert_eq!(menus[0]["owner"]["panel_name"], "viewer_3d", "{reply}");
+    assert_eq!(
+        menus[0]["owner"]["at_px"],
+        json!([middle[0] as i64, middle[1] as i64]),
+        "the menu did not open where the click landed: {reply}"
+    );
+    assert_menu(
+        &menus[0],
+        &[
+            ("Edit on Bench", true),
+            ("Retriangulate Point", true),
+            ("New Measurement from Here", true),
+        ],
+    );
 }
 
 /// The camera model proposal's Drop per image row in a real window: on the

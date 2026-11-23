@@ -532,12 +532,15 @@ all four on its own sentence, as every entry that makes a version is greyed.
 ### One menu, with the patch winning
 
 The point menu and the patch menu hang off the one `egui::Response` the viewport
-produces, and `context_menu::on_secondary_click` takes the popup's identity from
-that response, so they are **one menu with two sets of entries**, decided when
-the click lands and latched in `Viewer3D::menu_target` (`MenuTarget::Patch` or
-`MenuTarget::Point`). The latch is kept because the entries are laid out on
-frames after the click, by which time the pointer has moved off whatever it
-named; a secondary click that claims neither clears it.
+produces, and `context_menu::once_decided` takes the popup's identity from
+that response, so they are **one menu with two sets of entries**, latched in
+`Viewer3D::menu_target` (`MenuTarget::Patch` or `MenuTarget::Point`). The patch
+is decided on the frame the click lands, from the click's place; a point waits
+for the pick at the click's pixel, read back a frame or more later
+([viewport-navigation.md](viewport-navigation.md) § "The point context
+menu"). The latch is kept because the entries are laid out on frames after the
+click, by which time the pointer has moved off whatever it named; every
+secondary click clears it, so one that claims neither opens nothing.
 
 **The patch wins.** On the frame of the click the figure's hit test runs first,
 and when it claims the pointer the pick is not consulted: the square is drawn on
@@ -697,7 +700,16 @@ already moved off the square, which is the latch holding; a secondary click on a
 point away from the square opens the point menu; one on empty space opens
 nothing; with no figure there is no square to click; choosing an entry reports
 the node and the reframe; and a busy node greys the four rather than hiding
-them.
+them. Those tests read the pick back after each frame at the pixel the
+viewport asked for, as the app does, which is how they also show the point
+menu waiting for the pick at the click's pixel: a right-click made in the same
+frame as the move onto a point opens on that point and not on the one the
+hover pick still names, and opens nothing before that read arrives; a read
+that takes several frames is waited for; and a right-click on empty space
+opens nothing though a point was hovered. In a real window, `ui_basic` leaves
+the hover pick on one point, puts another under the pointer's place, and has
+a right `click` there open the point menu on the second, select it and stand
+where the click landed.
 
 `display_transform/tests.rs` asserts what the four entries leave, on the
 resulting frame rather than on the transform's components, from a node already
