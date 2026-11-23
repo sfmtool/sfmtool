@@ -18,8 +18,9 @@ by one level between x86 and arm64, which the tests tolerate. Steps 1 and 2
 of the [step plan](#step-plan) are built; step 1 found that the JPEG encoder's
 two paths give different bytes, and step 2 that the reference-view rule's pick
 of a point's bitmap view can change with a one-level change in the pixels
-([The reconstruction's columns](#the-reconstructions-columns)). Decided by the maintainer (2026-11-22): the encoder keeps
-its AVX2 path, and the tests store the JPEG hashes and the photograph-derived
+([The reconstruction's columns](#the-reconstructions-columns)), which the
+tests tolerate, as the maintainer decided (2026-11-22). Decided by the
+maintainer (2026-11-22): the encoder keeps its AVX2 path, and the tests store the JPEG hashes and the photograph-derived
 values once for each encoder path
 ([Determinism of the JPEG encoder and decoder](#determinism-of-the-jpeg-encoder-and-decoder)).
 
@@ -772,10 +773,15 @@ one level in the photographs changes the pick, and with it the whole bitmap.
 On the default scene one point of the 524 picks the other view under the
 scalar JPEG encoder, and one other point under `jpeg-decoder`'s scalar path
 (its `platform_independent` feature) on the same JPEG bytes; both are points
-of the top, which only the two high cameras observe. So a machine of another
-encoder or decoder path can store a few bitmaps of another view; the tests
-compare the bitmaps within a level only where the pick agrees, and allow one
-sampled point whose pick differs ([step plan](#step-plan), step 2).
+of the top, which only the two high cameras observe (points 359 and 382). So
+a machine of another encoder or decoder path can store a few bitmaps of
+another view. Decided by the maintainer (2026-11-22): the generator keeps the
+production reference-view rule rather than a pick made from the geometry, so
+its bitmaps are the ones `--add-patch-bitmaps` stores, and the tests tolerate
+the flip: they compare the bitmaps within a level only where the pick agrees,
+and allow one sampled point whose pick differs ([step plan](#step-plan),
+step 2). Neither measured flip is among the sampled points, so the allowance
+covers a path not measured, such as arm64's decoder.
 
 ### The measurement
 

@@ -630,12 +630,13 @@ fn the_photograph_derived_columns_match_the_values_stored_for_the_encoders_path(
         );
     }
     // The reference-view rule picks between two near-equal views of a point
-    // differently when the pixels differ by a level: of the 524 points, one
-    // changes its pick between the two encoder paths, and one between the
-    // x86 decoder's SSSE3 path and its scalar one. A point whose pick
-    // differs has the other view's bitmap, so at most one of the 15 sampled
-    // points may differ in its pick, and every other one's texel is within a
-    // level.
+    // differently when the pixels differ by a level: of the 524 points, point
+    // 359 changes its pick between the two encoder paths, and point 382
+    // between the x86 decoder's SSSE3 path and its scalar one. Neither is
+    // sampled, so on those paths every sampled pick agrees; the one sampled
+    // point allowed to differ is for a path not measured, such as arm64's
+    // decoder. A point whose pick differs has the other view's bitmap, so its
+    // texel is not compared, and every other one's is within a level.
     let mut picks_differ = 0;
     for n in 0..15 {
         let (a, b) = (got.bitmaps[n], want.bitmaps[n]);
@@ -652,5 +653,72 @@ fn the_photograph_derived_columns_match_the_values_stored_for_the_encoders_path(
     assert!(
         picks_differ <= 1,
         "{picks_differ} sampled points changed their pick"
+    );
+}
+
+#[test]
+fn write_workspace_reports_its_phases_stops_when_cancelled_and_refuses_a_bad_directory() {
+    use crate::progress::Event;
+    use std::sync::Mutex;
+
+    let events = Mutex::new(Vec::new());
+    let sink = |event: Event<'_>| match event {
+        Event::Enter { phase, depth: 0 } => events.lock().unwrap().push(format!("enter {phase}")),
+        Event::Count {
+            done,
+            total: Some(total),
+            unit,
+        } if done == total && (unit == "points" || unit == "files") => {
+            events.lock().unwrap().push(format!("{done} {unit}"))
+        }
+        _ => {}
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    scene()
+        .write_workspace(&tmp.path().join("demo"), &Progress::to(&sink))
+        .unwrap();
+    let events = events.into_inner().unwrap();
+    let entered: Vec<&str> = events
+        .iter()
+        .filter(|e| e.starts_with("enter "))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        entered,
+        ["enter points", "enter patch bitmaps", "enter write"]
+    );
+    assert!(events.iter().any(|e| e.ends_with(" points")), "{events:?}");
+    assert_eq!(events.last().map(String::as_str), Some("7 files"));
+
+    // Cancelled, nothing is written.
+    let cancelled = std::sync::atomic::AtomicBool::new(true);
+    let dir = tmp.path().join("cancelled");
+    let result = scene().write_workspace(&dir, &Progress::none().cancelled_by(&cancelled));
+    assert!(
+        matches!(result, Err(DemoSceneError::Cancelled)),
+        "{result:?}"
+    );
+    assert!(!dir.exists());
+    assert!(matches!(
+        scene().reconstruction(&Progress::none().cancelled_by(&cancelled)),
+        Err(DemoSceneError::Cancelled)
+    ));
+
+    // A file at the path, a directory inside a workspace, and a path under a
+    // file are refused with an error.
+    let file = tmp.path().join("a_file");
+    std::fs::write(&file, b"x").unwrap();
+    let result = scene().write_workspace(&file, &Progress::none());
+    assert!(
+        matches!(result, Err(DemoSceneError::Directory(_))),
+        "{result:?}"
+    );
+    let result = scene().write_workspace(&file.join("below"), &Progress::none());
+    assert!(matches!(result, Err(DemoSceneError::Io(_))), "{result:?}");
+    let result =
+        scene().write_workspace(&tmp.path().join("demo").join("nested"), &Progress::none());
+    assert!(
+        matches!(result, Err(DemoSceneError::Directory(_))),
+        "{result:?}"
     );
 }

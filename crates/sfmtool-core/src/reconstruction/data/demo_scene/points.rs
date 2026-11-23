@@ -21,7 +21,7 @@ use super::DemoSceneOptions;
 
 /// The half side of the square of the ground the points are sampled on,
 /// `[-2.5, 2.5] × [-2.5, 2.5]`, in metres.
-pub(super) const GROUND_SAMPLING_HALF_SIDE: f64 = 2.5;
+const GROUND_SAMPLING_HALF_SIDE: f64 = 2.5;
 
 /// A camera's stored pose: its centre, and the canonical world-to-camera
 /// rotation and translation, `p_cam = R · p_world + t`.
@@ -122,13 +122,13 @@ fn offset_seed(surface: Surface, seed: u64) -> u64 {
 
 /// The number of rows and columns of points on each cube face,
 /// `round(1 / face_point_spacing)`, and at least 1.
-pub(super) fn face_grid_side(options: &DemoSceneOptions) -> u32 {
+fn face_grid_side(options: &DemoSceneOptions) -> u32 {
     grid_side(1.0, options.face_point_spacing)
 }
 
 /// The number of rows and columns of points on the ground's sampling
 /// square, `round(5 / ground_point_spacing)`, and at least 1.
-pub(super) fn ground_grid_side(options: &DemoSceneOptions) -> u32 {
+fn ground_grid_side(options: &DemoSceneOptions) -> u32 {
     grid_side(
         2.0 * GROUND_SAMPLING_HALF_SIDE,
         options.ground_point_spacing,

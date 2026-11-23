@@ -59,13 +59,13 @@ use super::{demo_camera, DemoScene, DemoSceneError};
 const DEPTH_HISTOGRAM_BUCKETS: u32 = 128;
 
 /// The measurement's label.
-pub(super) const MEASUREMENT_LABEL: &str = "cube edge";
+const MEASUREMENT_LABEL: &str = "cube edge";
 
 /// The measurement's endpoints: the base and the top of the cube's vertical
 /// edge where the faces `-a` and `-b` meet, `-0.5·a − 0.5·b` at heights 0
 /// and 1, each with the image it is marked in: the base corner in `demo_2`
 /// (0°, 1.2 m) and the top corner in `demo_1` (−27.5°, 3.0 m).
-pub(super) fn measurement_corners() -> [(u32, [f64; 3]); 2] {
+fn measurement_corners() -> [(u32, [f64; 3]); 2] {
     let corner = |z: f64| {
         [
             -0.5 * CUBE_A[0] - 0.5 * CUBE_B[0],
