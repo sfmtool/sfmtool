@@ -151,6 +151,14 @@ const OFFER_CROP_SIDE: f32 = 96.0;
 /// the panel stacks the blocks rather than putting them side by side.
 const BLOCK_MIN_WIDTH: f32 = CROP_SIDE + PATCH_SIDE + 40.0;
 
+/// The width of each of the edited mode header's fields, in points, where
+/// the panel has room for it.
+const HEADER_FIELD_WIDTH: f32 = 180.0;
+
+/// The narrowest the edited mode header's fields shrink to in a narrow
+/// panel, in points.
+const HEADER_FIELD_MIN_WIDTH: f32 = 60.0;
+
 /// One of the edited mode header's fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HeaderField {
@@ -674,9 +682,10 @@ impl MeasurementView {
             .id_salt("measurement_view")
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                let width = ui.available_width();
                 show_header(ui, node, measurement, row, &rows, &readings.distance);
                 ui.separator();
-                self.show_blocks(ui, state, node, target, &blocks, None, &mut response);
+                self.show_blocks(ui, width, state, node, target, &blocks, None, &mut response);
                 ui.separator();
                 show_result(ui, row, resolved, unit);
             });
@@ -720,10 +729,11 @@ impl MeasurementView {
             .id_salt("measurement_view_item")
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                let width = ui.available_width();
                 self.show_toolbar(ui, state, node.id, label, response);
                 ui.separator();
                 show_item_origin(ui, node, label, &item, origin);
-                self.show_header_fields(ui, state, node, label, &item, response);
+                self.show_header_fields(ui, width, state, node, label, &item, response);
                 show_item_comparison(ui, row.as_ref(), || {
                     let row = row.as_ref()?;
                     let reading = reading.resolved.as_ref()?;
@@ -737,6 +747,7 @@ impl MeasurementView {
                 };
                 self.show_blocks(
                     ui,
+                    width,
                     state,
                     node,
                     Target::Item(node.id),
@@ -757,10 +768,17 @@ impl MeasurementView {
 
     /// The edited mode header's two fields: the measurement's own label and
     /// its stated distance, each greyed with the refusal a step would give
-    /// while a task holds the node or the bench is view-only.
+    /// while a task holds the node or the bench is view-only. The fields are
+    /// sized from `panel_width`, the panel's width read before anything in it
+    /// was drawn.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the frame's inputs, read once by show_item"
+    )]
     fn show_header_fields(
         &mut self,
         ui: &mut egui::Ui,
+        panel_width: f32,
         state: &AppState,
         node: &SceneNode,
         label: &str,
@@ -776,48 +794,76 @@ impl MeasurementView {
             .map_or(String::new(), |(distance, unit)| {
                 format!("{} {}", measurements::length_number(distance), unit.name())
             });
-        egui::Grid::new("measurement_view_header_fields")
-            .num_columns(2)
-            .show(ui, |ui| {
-                ui.label("Label");
-                if let Some(to) = self.header_field(
-                    ui,
-                    label,
-                    HeaderField::Label,
-                    &item.label,
-                    refusal.as_deref(),
-                    "No label",
-                    "The measurement's own label, written into the file on commit. Enter or \
-                     clicking elsewhere sets it; Escape puts it back.",
-                ) {
-                    response.set_label = Some((node.id, label.to_string(), to));
-                }
-                ui.end_row();
-                ui.label("Stated distance");
-                let hint = format!(
-                    "A number and a unit: 12in, 30.48 cm. A bare number is in {}. Enter or \
-                     clicking elsewhere sets it; Escape puts it back.",
-                    bare.name()
-                );
-                if let Some(to) = self.header_field(
-                    ui,
-                    label,
-                    HeaderField::Distance,
-                    &stated,
-                    refusal.as_deref(),
-                    "No stated distance",
-                    &hint,
-                ) {
-                    response.set_distance = Some((node.id, label.to_string(), to));
-                }
-                ui.end_row();
-            });
+        // The fields take what the panel has beside the wider name, up to
+        // their full width, so neither row is wider than the panel. Two rows
+        // with the names at the measured width line the fields up as a grid
+        // would, without the grid's column widths from the frame before,
+        // which on the frame the panel narrows would be the old ones.
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let names = ["Label", "Stated distance"].map(|name| {
+            ui.fonts_mut(|fonts| {
+                fonts
+                    .layout_no_wrap(name.to_string(), font.clone(), Color32::WHITE)
+                    .size()
+                    .x
+            })
+        });
+        let name_width = names[0].max(names[1]);
+        let width = (panel_width - name_width - ui.spacing().item_spacing.x)
+            .clamp(HEADER_FIELD_MIN_WIDTH, HEADER_FIELD_WIDTH);
+        let name_cell = |ui: &mut egui::Ui, name: &str| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(name_width, ui.spacing().interact_size.y),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_min_width(name_width);
+                    ui.label(name);
+                },
+            );
+        };
+        ui.horizontal(|ui| {
+            name_cell(ui, "Label");
+            if let Some(to) = self.header_field(
+                ui,
+                label,
+                width,
+                HeaderField::Label,
+                &item.label,
+                refusal.as_deref(),
+                "No label",
+                "The measurement's own label, written into the file on commit. Enter or \
+                 clicking elsewhere sets it; Escape puts it back.",
+            ) {
+                response.set_label = Some((node.id, label.to_string(), to));
+            }
+        });
+        let hint = format!(
+            "A number and a unit: 12in, 30.48 cm. A bare number is in {}. Enter or \
+             clicking elsewhere sets it; Escape puts it back.",
+            bare.name()
+        );
+        ui.horizontal(|ui| {
+            name_cell(ui, "Stated distance");
+            if let Some(to) = self.header_field(
+                ui,
+                label,
+                width,
+                HeaderField::Distance,
+                &stated,
+                refusal.as_deref(),
+                "No stated distance",
+                &hint,
+            ) {
+                response.set_distance = Some((node.id, label.to_string(), to));
+            }
+        });
     }
 
-    /// One header field of the item `item`, holding `value` while nobody is
-    /// typing in it. What it was set to, on the frame it is committed: Enter,
-    /// or the field losing focus, with text other than the text it held when
-    /// it took focus. Escape puts the field back and commits nothing.
+    /// One header field of the item `item`, `width` points wide, holding
+    /// `value` while nobody is typing in it. What it was set to, on the frame
+    /// it is committed: Enter, or the field losing focus, with text other than
+    /// the text it held when it took focus. Escape puts the field back and
+    /// commits nothing.
     #[allow(
         clippy::too_many_arguments,
         reason = "the field's own inputs, each one read once"
@@ -826,6 +872,7 @@ impl MeasurementView {
         &mut self,
         ui: &mut egui::Ui,
         item: &str,
+        width: f32,
         field: HeaderField,
         value: &str,
         refusal: Option<&str>,
@@ -841,7 +888,7 @@ impl MeasurementView {
                 refusal,
                 empty,
                 hint,
-                width: 180.0,
+                width,
                 name: field.widget_name(),
             },
         );
@@ -911,7 +958,9 @@ impl MeasurementView {
     /// that shows it: side by side where the panel is wide enough for two,
     /// and one above the other where it is not, so neither draws over the
     /// other. In the edited mode (`edit`) each block carries *Switch image…*
-    /// and its right-click menu, and the popup the two open.
+    /// and its right-click menu, and the popup the two open. Which of the two
+    /// is decided by `panel_width`, the panel's width read before anything
+    /// in it was drawn, so a row wider than the panel cannot change it.
     #[allow(
         clippy::too_many_arguments,
         reason = "the frame's inputs, read once by show"
@@ -919,6 +968,7 @@ impl MeasurementView {
     fn show_blocks(
         &mut self,
         ui: &mut egui::Ui,
+        panel_width: f32,
         state: &AppState,
         node: &SceneNode,
         target: Target,
@@ -943,7 +993,7 @@ impl MeasurementView {
             .collect();
         self.pictures.retain(|key, _| keys.contains(key));
         self.picture_needs.retain(|key, _| keys.contains(key));
-        let mut show_one = |this: &mut Self, ui: &mut egui::Ui, side: EndpointSide| {
+        let mut show_one = |this: &mut Self, ui: &mut egui::Ui, side: EndpointSide, width: f32| {
             let switch = edit.map(|edit| {
                 switch_refusal(
                     edit.refusal.as_deref(),
@@ -952,7 +1002,7 @@ impl MeasurementView {
                 )
             });
             let Some(endpoint) = &blocks[side.index()] else {
-                let drawn = show_unplaced(ui, side, switch);
+                let drawn = show_unplaced(ui, width, side, switch);
                 this.note_block(side, &drawn);
                 return;
             };
@@ -975,7 +1025,7 @@ impl MeasurementView {
                 refusal: edit.refusal.as_deref(),
                 kept: &mut this.endpoint_fields[side.index()],
             });
-            let drawn = block.show(ui, pictures, fields, response);
+            let drawn = block.show(ui, width, pictures, fields, response);
             this.names[side.index()] = Some(drawn.name);
             this.note_block(side, &drawn);
             if let (Some(edit), Some(button)) = (edit, &drawn.switch_button) {
@@ -992,15 +1042,19 @@ impl MeasurementView {
                 );
             }
         };
-        if ui.available_width() >= 2.0 * BLOCK_MIN_WIDTH {
+        // Each block is as wide as its share of `panel_width`, as
+        // `Ui::columns` divides it, rather than the `Ui`'s width, which a row
+        // drawn wider than the panel earlier in the frame would have widened.
+        if panel_width >= 2.0 * BLOCK_MIN_WIDTH {
+            let column = (panel_width - ui.spacing().item_spacing.x) / 2.0;
             ui.columns(2, |columns| {
                 for side in EndpointSide::BOTH {
-                    show_one(self, &mut columns[side.index()], side);
+                    show_one(self, &mut columns[side.index()], side, column);
                 }
             });
         } else {
             for side in EndpointSide::BOTH {
-                show_one(self, ui, side);
+                show_one(self, ui, side, panel_width);
             }
         }
     }
@@ -1439,17 +1493,22 @@ pub(crate) fn place_instruction(side: EndpointSide) -> String {
     )
 }
 
-/// An endpoint that is not placed: a block saying so and how to place it,
-/// with *Switch image…* greyed in the edited mode (`switch`).
+/// An endpoint that is not placed, in a block `width` points wide: a block
+/// saying so and how to place it, with *Switch image…* greyed in the edited
+/// mode (`switch`).
 fn show_unplaced(
     ui: &mut egui::Ui,
+    width: f32,
     side: EndpointSide,
     switch: Option<Option<String>>,
 ) -> BlockDrawn {
     let mut button = None;
     let mut targets = Vec::new();
-    let frame = egui::Frame::group(ui.style()).show(ui, |ui| {
-        ui.set_width(ui.available_width());
+    let frame = egui::Frame::group(ui.style());
+    let inner = width - frame.total_margin().sum().x;
+    let frame = frame.show(ui, |ui| {
+        ui.set_width(inner);
+        ui.set_max_width(inner);
         targets.push(
             ui.add(
                 egui::Label::new(egui::RichText::new(side.letter()).strong())
@@ -1648,7 +1707,7 @@ fn show_item_origin(
     item: &EditableMeasurement,
     origin: Option<u32>,
 ) {
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label(egui::RichText::new(label).strong());
         ui.weak("on the bench of");
         ui.label(&node.label);
@@ -1696,7 +1755,7 @@ fn show_header(
     rows: &[DistanceRow],
     resolved: &[ResolvedDistanceMeasurement],
 ) {
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label(egui::RichText::new(measurement.title()).strong());
         ui.weak("in");
         ui.label(&node.label);
@@ -1869,16 +1928,17 @@ impl EndpointBlock<'_> {
         format!("{}_{:.3}_{:.3}", self.image, self.pixel[0], self.pixel[1])
     }
 
-    /// Draw the block and report its gestures into `response`. In the edited
-    /// mode (`fields`) the image name is a drop-down of the reconstruction's
-    /// images and the pixel is two number fields
-    /// ([`Self::show_fields`]).
+    /// Draw the block, `width` points wide with its frame, and report its
+    /// gestures into `response`. In the edited mode (`fields`) the image name
+    /// is a drop-down of the reconstruction's images and the pixel is two
+    /// number fields ([`Self::show_fields`]).
     ///
     /// Every line wraps inside the block's width, so a long one, such as the
     /// position, never reaches into the block beside it.
     fn show(
         &self,
         ui: &mut egui::Ui,
+        width: f32,
         pictures: Option<&EndpointPictures>,
         fields: Option<BlockFields<'_>>,
         response: &mut MeasurementViewResponse,
@@ -1897,10 +1957,10 @@ impl EndpointBlock<'_> {
         let mut targets: Vec<egui::Response> = Vec::new();
         let mut name_rect = Rect::NOTHING;
         let mut button = None;
+        let inner = width - frame.total_margin().sum().x;
         let drawn = frame.show(ui, |ui| {
-            let width = ui.available_width();
-            ui.set_width(width);
-            ui.set_max_width(width);
+            ui.set_width(inner);
+            ui.set_max_width(inner);
             match fields {
                 None => {
                     let name = ui.add(
@@ -1936,7 +1996,7 @@ impl EndpointBlock<'_> {
                     recon,
                     image,
                     pictures.map(|p| &p.crop),
-                    CROP_SIDE,
+                    CROP_SIDE.min(ui.available_width()),
                 ));
                 if let Some(patch) = pictures.and_then(|p| p.patch.as_ref()) {
                     targets.push(self.show_patch(ui, patch));
@@ -2141,28 +2201,56 @@ impl EndpointBlock<'_> {
                 letter
             })
             .inner;
-        ui.horizontal(|ui| {
+        // Each axis's letter and field stay together, and `y` goes under `x`
+        // where the block is too narrow for both on one line. Each pair is
+        // laid out at its own width, since a row the wrapping line hands the
+        // rest of its width to never wraps.
+        ui.horizontal_wrapped(|ui| {
+            let font = egui::TextStyle::Body.resolve(ui.style());
             for axis in PixelAxis::BOTH {
-                ui.label(axis.letter());
                 let value = pixel_text(self.pixel[axis.index()]);
                 let hint = format!(
                     "The endpoint's {} pixel coordinate. Enter or clicking elsewhere sets it; \
                      Escape puts it back.",
                     axis.letter()
                 );
-                let (committed, rect) = draft_field(
-                    ui,
-                    &mut kept.drafts[axis.index()],
-                    DraftField {
-                        item,
-                        value: &value,
-                        refusal,
-                        empty: "",
-                        hint: &hint,
-                        width: pixel_field_width(ui, &value),
-                        name: pixel_field_name(side, axis),
-                    },
+                let width = pixel_field_width(ui, &value);
+                let letter = ui.fonts_mut(|fonts| {
+                    fonts
+                        .layout_no_wrap(axis.letter().to_string(), font.clone(), Color32::WHITE)
+                        .size()
+                        .x
+                });
+                // As tall as the field: a line of text with `TextEdit`'s
+                // default margin of 2 points above and below, so two pairs
+                // on one line sit level.
+                let field_height = ui.fonts_mut(|fonts| fonts.row_height(&font)) + 4.0;
+                let pair = egui::vec2(
+                    letter + ui.spacing().item_spacing.x + width,
+                    field_height.max(ui.spacing().interact_size.y),
                 );
+                let (committed, rect) = ui
+                    .allocate_ui_with_layout(
+                        pair,
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.label(axis.letter());
+                            draft_field(
+                                ui,
+                                &mut kept.drafts[axis.index()],
+                                DraftField {
+                                    item,
+                                    value: &value,
+                                    refusal,
+                                    empty: "",
+                                    hint: &hint,
+                                    width,
+                                    name: pixel_field_name(side, axis),
+                                },
+                            )
+                        },
+                    )
+                    .inner;
                 kept.pixel_rects[axis.index()] = Some(rect);
                 let Some(text) = committed else {
                     continue;
@@ -2219,7 +2307,7 @@ impl EndpointBlock<'_> {
         };
         let chosen = resolution.chosen();
         let id = crate::scene::point_id(self.node, chosen.point as usize);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(egui::RichText::new(&id).monospace());
             if crate::track_view::header_buttons::copy_button(ui, "Copy Point ID") {
                 ui.ctx().copy_text(id.clone());

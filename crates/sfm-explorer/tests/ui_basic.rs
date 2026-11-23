@@ -2885,9 +2885,9 @@ fn an_endpoint_is_set_from_image_detail_s_menu() {
 /// Which way [`wait_for_in_measurement_view`] scrolls Measurement View.
 #[derive(Clone, Copy)]
 enum Toward {
-    /// Toward the top left: the toolbar, the header and endpoint A.
+    /// Toward the top: the toolbar, the header and endpoint A.
     Start,
-    /// Toward the bottom right: endpoint B and the result.
+    /// Toward the bottom: endpoint B and the result.
     End,
 }
 
@@ -2897,13 +2897,10 @@ enum Toward {
 /// A listing holds only what is drawn in the visible part of the panel, and
 /// how much of the content that is depends on the window's size, which
 /// differs between platforms: the macOS runner's panel is 272×399 pixels,
-/// too short for the toolbar, the header and both endpoint blocks. In a panel
-/// 200 to 265 pixels wide on Windows the content is also wider than the
-/// panel, with the blocks side by side and B's to the right, in the scroll
-/// area egui_dock wraps every tab in. So each step scrolls 10 lines sideways,
-/// which reaches that side in a step or two, and 2 lines (80 points) up or
-/// down, so every part of the content's height is drawn on the way. A scroll
-/// past an end stops there, and the polling goes on until
+/// too short for the toolbar, the header and both endpoint blocks. The
+/// content is never wider than the panel, so each step scrolls 2 lines (80
+/// points) up or down, and every part of the content's height is drawn on the
+/// way. A scroll past an end stops there, and the polling goes on until
 /// [`CONTENT_TIMEOUT`].
 fn wait_for_in_measurement_view<T>(
     viewer: &McpViewer,
@@ -2913,8 +2910,8 @@ fn wait_for_in_measurement_view<T>(
 ) -> T {
     let panel = json!({ "panel_name": "measurement_view" });
     let lines = match toward {
-        Toward::Start => [10.0, 2.0],
-        Toward::End => [-10.0, -2.0],
+        Toward::Start => [0.0, 2.0],
+        Toward::End => [0.0, -2.0],
     };
     let deadline = Instant::now() + CONTENT_TIMEOUT;
     loop {
