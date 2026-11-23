@@ -980,11 +980,16 @@ its own colour and width (`viewer_3d::measurements::ribbons`): the line and
 its halo, and per mark a ring of 24 chords, its halo and the dot. A mark keeps
 its size on screen, its ring built facing the eye at the endpoint's depth with
 its radius in points unprojected there, and the widths are the points above
-in physical pixels. Every piece is drawn a hundredth of its distance toward
-the eye (`TOWARD_EYE`), since an endpoint lies on the surface it was read from
-and a mark exactly there would be half in front of that surface and half
-behind it; moving a point along its own line of sight leaves its projection
-where it was. An endpoint at infinity or refused draws nothing, and the other
+in physical pixels. Every piece is drawn toward the eye by `PULL_POINTS`
+(10.75: the selected ring's radius and its halo) as a world length at its own
+depth, since an endpoint lies on the surface it was read from and a mark
+exactly there would be half in front of that surface and half behind it.
+Sized in points, the pull keeps a mark in front of a surface turned up to
+about 50 degrees from the view whatever the field of view and the panel's
+height. A point at depth `d` is `d · 2·tan(vfov/2) / height` long, so the pull
+is the same fraction of every piece's depth (`toward_eye_fraction`, at most a
+quarter), a uniform scale toward the eye: each piece moves along its own line
+of sight, which leaves its projection where it was. An endpoint at infinity or refused draws nothing, and the other
 endpoint still draws its mark; a finite endpoint behind the eye draws no mark,
 and a line with one end behind it is clipped at the near plane, by the pass as
 it clips the bench figure's segments. The pass writes no pick id and no depth,
@@ -1346,7 +1351,8 @@ at-infinity case is covered by the Rust tests.
   orientation kept; the option and a hidden node; a line with one end behind
   the eye clipped, the end in front keeping its mark; the ribbons the frame
   builds for the pass: the line and its halo between the endpoints moved toward
-  the eye, each ring at its radius on screen and the selected one 1.6 times
+  the eye by a pull that is the same number of points at any field of view and
+  panel height, each ring at its radius on screen and the selected one 1.6 times
   larger, the dot, the colours and widths in physical pixels, the emphasis and
   dimming of *Show all*, the item's violet, none for a refused endpoint or one
   at infinity, and a line with one end behind the eye handed to the pass whole.

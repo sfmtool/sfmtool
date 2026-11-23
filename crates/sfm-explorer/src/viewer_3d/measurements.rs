@@ -29,17 +29,43 @@ mod tests;
 /// Chords in an endpoint mark's ring.
 const RING_SEGMENTS: usize = 24;
 
-/// How far toward the eye a measurement's pieces are drawn, as a fraction of
-/// their distance from it.
+/// How far toward the eye a measurement's pieces are drawn, in panel points
+/// at each piece's own depth: the selected ring's radius and its halo.
 ///
 /// An endpoint lies on the surface it was read from, so a mark or a line
 /// drawn exactly there would be in front of that surface on some pixels and
-/// behind it on others. Drawn a hundredth of the way toward the eye, a mark
-/// at the usual size on a surface turned well away from the view stays in
-/// front of it, while the far side of an object of any real thickness still
-/// hides it. A point moved along its own line of sight projects where it did,
-/// so the marks land where the hit test reads them.
-pub(crate) const TOWARD_EYE: f64 = 0.01;
+/// behind it on others. Pulled toward the eye by a little more than its own
+/// ring's radius, measured in the same world length at its depth, a mark on a
+/// surface turned up to about 50 degrees from the view stays in front of it
+/// whatever the field of view and the panel's size, while an occluder more
+/// than that length in front of it still hides it.
+pub(crate) const PULL_POINTS: f64 = (measurement_marks::MARK_RADIUS
+    * measurement_marks::SELECTED_MARK_SCALE
+    + (measurement_marks::EMPHASISED_LINE_WIDTH + measurement_marks::HALO_EXTRA_WIDTH) / 2.0)
+    as f64;
+
+/// The most of its distance toward the eye a piece is drawn, however wide the
+/// field of view and however short the panel.
+const MAX_TOWARD_EYE: f64 = 0.25;
+
+/// What fraction of its distance toward the eye every piece is drawn through
+/// `camera` in `rect`: [`PULL_POINTS`] as a world length at the piece's depth.
+///
+/// One panel point at view depth `d` is `d · 2·tan(vfov / 2) / height` long,
+/// so a pull of a fixed number of points is the same fraction of every
+/// piece's depth, and the pull is a uniform scale toward the eye. A point
+/// moved along its own line of sight projects where it did, so the marks land
+/// where the hit test reads them.
+pub(crate) fn toward_eye_fraction(camera: &ViewportCamera, rect: Rect) -> f64 {
+    let aspect = f64::from(rect.width()) / f64::from(rect.height());
+    let per_point = 2.0 * (camera.vertical_fov(aspect) / 2.0).tan() / f64::from(rect.height());
+    let fraction = PULL_POINTS * per_point;
+    if fraction.is_finite() {
+        fraction.clamp(0.0, MAX_TOWARD_EYE)
+    } else {
+        0.0
+    }
+}
 
 /// One straight piece of a drawn measurement as the 3D view's scene pass
 /// draws it: the line, a chord of a mark's ring, the halo under either, or
@@ -70,8 +96,8 @@ pub(crate) struct Ribbon {
 /// dot at its centre, the order Image Detail paints them in. A mark's ring is
 /// the size it is on screen whatever its distance: it is built in the plane
 /// facing the eye at the endpoint's depth, its radius in panel points
-/// unprojected there. Every piece is drawn [`TOWARD_EYE`] of the way toward
-/// the eye.
+/// unprojected there. Every piece is drawn [`toward_eye_fraction`] of the way
+/// toward the eye.
 ///
 /// An endpoint at infinity or refused draws nothing and the other endpoint
 /// still draws its mark. A finite endpoint behind the eye draws no mark, and
@@ -84,7 +110,8 @@ pub(crate) fn ribbons(
     pixels_per_point: f32,
 ) -> Vec<Ribbon> {
     let eye = camera.position();
-    let toward_eye = |p: &Point3<f64>| eye + (p - eye) * (1.0 - TOWARD_EYE);
+    let keep = 1.0 - toward_eye_fraction(camera, rect);
+    let toward_eye = |p: &Point3<f64>| eye + (p - eye) * keep;
     let half = |width: f32| width * 0.5 * pixels_per_point;
     let halo = linear_rgba(measurement_marks::HALO);
     let mut out = Vec::new();
@@ -114,7 +141,7 @@ pub(crate) fn ribbons(
             let Some(centre) = camera.project_homogeneous(p.coords, 1.0, rect) else {
                 continue;
             };
-            let depth = -camera.world_to_view(p).z * (1.0 - TOWARD_EYE);
+            let depth = -camera.world_to_view(p).z * keep;
             let at = |offset: Vec2| {
                 let c = centre + offset;
                 homogeneous(&camera.unproject(c.x, c.y, depth, rect))

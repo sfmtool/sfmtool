@@ -541,11 +541,12 @@ fn a_line_with_one_end_behind_the_eye_is_clipped() {
 /// and the dot.
 const MARK_RIBBONS: usize = 2 * super::RING_SEGMENTS + 1;
 
-/// `p` moved [`super::TOWARD_EYE`] of the way toward the viewer's eye, as the
+/// `p` moved [`super::toward_eye_fraction`] of the way toward the viewer's eye
+/// in `rect`, as the
 /// pass takes it.
-fn toward_eye(viewer: &Viewer3D, p: Point3<f64>) -> [f32; 4] {
+fn toward_eye(viewer: &Viewer3D, rect: egui::Rect, p: Point3<f64>) -> [f32; 4] {
     let eye = viewer.camera.position();
-    let q = eye + (p - eye) * (1.0 - super::TOWARD_EYE);
+    let q = eye + (p - eye) * (1.0 - super::toward_eye_fraction(&viewer.camera, rect));
     [q.x as f32, q.y as f32, q.z as f32, 1.0]
 }
 
@@ -614,8 +615,8 @@ fn a_measurement_draws_its_line_and_marks_as_ribbons() {
         (line_halo, halo, LINE_WIDTH + 2.0),
         (line, grey, LINE_WIDTH),
     ] {
-        assert_close(ribbon.a, toward_eye(&viewer, a), "line end A");
-        assert_close(ribbon.b, toward_eye(&viewer, b), "line end B");
+        assert_close(ribbon.a, toward_eye(&viewer, rect, a), "line end A");
+        assert_close(ribbon.b, toward_eye(&viewer, rect, b), "line end B");
         assert_eq!(ribbon.color, color);
         assert_eq!(ribbon.half_width, width / 2.0 * ppp);
     }
@@ -666,7 +667,8 @@ fn a_measurement_draws_its_line_and_marks_as_ribbons() {
                 ))
                 .z
         };
-        let expected = -viewer.camera.world_to_view(&p).z * (1.0 - super::TOWARD_EYE);
+        let expected = -viewer.camera.world_to_view(&p).z
+            * (1.0 - super::toward_eye_fraction(&viewer.camera, rect));
         assert!((depth(ring[0].a) - expected).abs() < 1e-4);
     }
 }
@@ -784,8 +786,12 @@ fn a_line_with_one_end_behind_the_eye_is_handed_to_the_pass_whole() {
     let ribbons = super::ribbons(&viewer.measurements, &viewer.camera, rect, 1.0);
     assert_eq!(ribbons.len(), 2 + MARK_RIBBONS, "the line and B's mark");
     let (a, b) = (Point3::from(POINTS[0]), Point3::from(POINTS[1]));
-    assert_close(ribbons[1].a, toward_eye(&viewer, a), "A, behind the eye");
-    assert_close(ribbons[1].b, toward_eye(&viewer, b), "B");
+    assert_close(
+        ribbons[1].a,
+        toward_eye(&viewer, rect, a),
+        "A, behind the eye",
+    );
+    assert_close(ribbons[1].b, toward_eye(&viewer, rect, b), "B");
     assert!(
         viewer.camera.world_to_view(&a).z > 0.0,
         "A is behind the eye"
@@ -794,4 +800,39 @@ fn a_line_with_one_end_behind_the_eye_is_handed_to_the_pass_whole() {
     for ribbon in &ribbons[2..] {
         assert!(on_screen(&viewer, rect, ribbon.a).distance(centre) < 10.0);
     }
+}
+
+/// The pull toward the eye is `PULL_POINTS` panel points at each piece's
+/// depth, whatever the field of view and the panel's height: measured
+/// against the world length of one point at that depth, it is the same number
+/// of points at 5, 45 and 160 degrees and in a short and a tall panel, which a
+/// fixed fraction of the distance is not.
+#[test]
+fn the_pull_toward_the_eye_is_a_fixed_number_of_points_on_screen() {
+    let mut camera = crate::viewer_3d::ViewportCamera::default();
+    let depth = 7.0;
+    let mut fractions = Vec::new();
+    for fov_degrees in [5.0_f64, 45.0, 160.0] {
+        camera.fov = fov_degrees.to_radians();
+        for height in [800.0_f32, 1600.0] {
+            let rect =
+                egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1.5 * height, height));
+            let c = rect.center();
+            let point_length = (camera.unproject(c.x, c.y + 1.0, depth, rect)
+                - camera.unproject(c.x, c.y, depth, rect))
+            .norm();
+            let fraction = super::toward_eye_fraction(&camera, rect);
+            let points = fraction * depth / point_length;
+            assert!(
+                (points - super::PULL_POINTS).abs() < 1e-3,
+                "{fov_degrees} degrees, {height} points tall: {points} points"
+            );
+            assert!(fraction > 0.0 && fraction < 0.25);
+            fractions.push(fraction);
+        }
+    }
+    // Wider fields and shorter panels pull further, as a share of the depth.
+    assert!(fractions.windows(2).all(|w| w[0] != w[1]));
+    assert!(fractions[0] < fractions[2] && fractions[2] < fractions[4]);
+    assert!(fractions[1] < fractions[0], "a taller panel pulls less");
 }
