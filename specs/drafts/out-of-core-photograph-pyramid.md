@@ -2711,7 +2711,8 @@ in core. Step 17 turns the tier on.
         `NeedsTiles` where they were refused with `OutOfRange`; the tests in
         which a photograph from the cache lacked pixels (the display bitmaps',
         the open's and the conversion to embedded patches') are gone, since
-        no answer of the cache can lack a pixel until step 13e4, and the
+        no answer of the cache can lack a pixel until step 13e4, which
+        brings them back, and the
         Track Table's and Track View's tests of a photograph that cannot be
         read take one whose header read finds no file.
 
@@ -2759,8 +2760,12 @@ in core. Step 17 turns the tier on.
         evicted fails with `NotFound` naming it; and `sfm web-export` given
         a `write_web_export` that raises `RuntimeError` reports it as its
         failure; a render cancelled while it decodes an evicted tile stops
-        with the cancellation; and under a budget of 0 two renders from one
-        answer decode its photograph once.
+        with the cancellation; under a budget of 0 two renders from one
+        answer decode its photograph once; and the three tests step 13e3
+        removed come back, each with a photograph whose file was removed
+        after its tiles were evicted: the display bitmaps' render, the
+        viewer's open and its conversion to embedded patches each fail with
+        the read's error, naming it, the conversion pushing no version.
       - **13e5, the bulk kernels under a small budget.** Tests: a bulk kernel
         whose photographs' tiles do not fit a small budget still completes,
         with its decodes counted, and so does one with a budget smaller than
