@@ -352,7 +352,7 @@ photograph just decoded stays whole even over the budget until the next
 decode, since its caller is about to read it. A render's read through a
 photograph `get` answered (§ "Reads through the cache") that decodes it again
 keeps the tiles it asked for as used and the rest as unused, and, while the
-photograph's tiles of every level, the bytes the decode adds, are under half
+photograph's tiles of every level, the bytes of the whole decode, are under half
 the budget (`READ_SPARING_SHARE`), drops none of the photograph's tiles
 either, as a `get` does; over half, it drops tiles as a tile request does. A
 bulk kernel takes its points by reference image, so its next renders read the
