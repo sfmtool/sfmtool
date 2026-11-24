@@ -13,7 +13,8 @@
 //! without waiting on its slot or on the build count. A kernel's reads,
 //! [`PhotographCache::get_tile`], [`PhotographCache::view_region_pyramid`]
 //! and [`PhotographCache::get_level`], decode as [`PhotographCache::get`]
-//! does. See the spec `specs/core/camera/photograph-cache.md` § "Layouts and
+//! does, but never make a mipmap: for an out-of-core photograph whose files
+//! are not current they answer [`TileError::Changed`]. See the spec `specs/core/camera/photograph-cache.md` § "Layouts and
 //! tiles".
 
 use std::fmt;
@@ -21,7 +22,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use super::files::{is_out_of_core, Failure};
+use super::build::Make;
+use super::files::{is_out_of_core, Failure, Tier, Unmapped};
 use super::{
     answer_of, has_key, header, whole_decode_bytes, Asked, GetError, Got, Making, PhotographCache,
     Share, Slot,
@@ -29,6 +31,7 @@ use super::{
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use crate::camera::mipmap::PyramidLayout;
 use crate::camera::sampler::{copy_regions, LevelRect, LevelRegions};
+use crate::camera::tiled_photograph::TiledPhotograph;
 use crate::camera::tiled_photograph::{PhotographReadError, PhotographTile, TileKey};
 use crate::progress::{Cancelled, Progress};
 
@@ -64,8 +67,10 @@ pub enum PeekedTile {
 pub enum TileError {
     /// A file of an out-of-core photograph's mipmap, or its original, is
     /// missing, not current, or not the one the cache first read for it:
-    /// `path` names the file. Only a kernel's read answers it; a panel's
-    /// decode reads such a photograph whole in core instead.
+    /// `path` names the file, or the photograph when its mipmap was already
+    /// found not current. Only a kernel's read answers it, which never makes
+    /// a mipmap ([`PhotographCache::get`] does); a panel's decode reads such
+    /// a photograph whole in core instead.
     Changed { path: PathBuf },
     /// The photograph does not exist, cannot be read or decoded, or has a
     /// side over [`MAX_JPEG_SIDE`](crate::camera::mipmap::MAX_JPEG_SIDE);
@@ -127,6 +132,15 @@ fn unreadable(path: &Path, e: GetError) -> TileError {
             path: path.to_path_buf(),
             why: e.to_string(),
         },
+    }
+}
+
+/// The [`TileError`] for a request's failure: [`TileError::Changed`] naming
+/// the file found not current, and otherwise as [`unreadable`] says.
+fn failed(path: &Path, e: Failure) -> TileError {
+    match e {
+        Failure::Get(e) => unreadable(path, e),
+        Failure::Changed(file) => TileError::Changed { path: file },
     }
 }
 
@@ -247,10 +261,15 @@ impl PhotographCache {
                 let files = if !is_out_of_core(&setting, width, height) {
                     None
                 } else if self.shared.options.budget_bytes == 0 {
-                    self.unmapped_files_slot(path, &setting)
-                        .map(|(_, files)| files)
+                    match self.unmapped_files_slot(path, &setting) {
+                        Unmapped::Files(_, files) => Some(files),
+                        Unmapped::InCore | Unmapped::NotCurrent => None,
+                    }
                 } else {
-                    self.tier_of(path, &self.slot_for(path))
+                    match self.tier_of(path, &self.slot_for(path)) {
+                        Tier::Files(files) => Some(files),
+                        Tier::Unchecked | Tier::InCore | Tier::NotCurrent => None,
+                    }
                 };
                 match files {
                     Some(files) => Arc::clone(&files.layout),
@@ -298,7 +317,10 @@ impl PhotographCache {
     /// An out-of-core photograph whose mipmap is current has the tile decoded
     /// from its file instead, without waiting, and a file found missing, not
     /// current or changed since the slot read it is [`TileError::Changed`],
-    /// naming it, after which the slot reads the photograph in core.
+    /// naming it. It never makes a mipmap: an out-of-core photograph whose
+    /// files are missing or stale, found so now or before, is
+    /// [`TileError::Changed`] naming the photograph, decoding nothing, until
+    /// [`Self::get`] makes its mipmap.
     ///
     /// A whole decode can take over a second, so it takes the caller's
     /// `progress`, which it polls for cancellation as `get` does and reports
@@ -310,11 +332,14 @@ impl PhotographCache {
         key: TileKey,
         progress: &Progress<'_>,
     ) -> Result<Arc<PhotographTile>, TileError> {
-        let (value, _) = self.fetch(path, progress, Share::None, Asked::Keys(&[key]));
-        let got = value.map_err(|e| match e {
-            Failure::Get(e) => unreadable(path, e),
-            Failure::Changed(file) => TileError::Changed { path: file },
-        })?;
+        let (value, _) = self.fetch(
+            path,
+            progress,
+            Share::None,
+            Asked::Keys(&[key]),
+            Make::Never,
+        );
+        let got = value.map_err(|e| failed(path, e))?;
         check_keys(path, &got.layout, &[key])?;
         got.tiles
             .into_iter()
@@ -327,29 +352,30 @@ impl PhotographCache {
 
     /// A view-region pyramid of `path`: the region of each level `regions`
     /// names, copied from the photograph, decoded on a miss as
-    /// [`Self::get_tile`] decodes it, polling `progress` as it does. A level
-    /// or region the photograph does not have, or no region at all, is
-    /// [`TileError::OutOfRange`].
+    /// [`Self::get_tile`] decodes it, polling `progress` as it does, and like
+    /// it never making a mipmap. A level or region the photograph does not
+    /// have, or no region at all, is [`TileError::OutOfRange`].
     pub fn view_region_pyramid(
         &self,
         path: &Path,
         regions: &LevelRegions,
         progress: &Progress<'_>,
     ) -> Result<ImageU8Pyramid, TileError> {
-        let photograph = self.get(path, progress).map_err(|e| unreadable(path, e))?;
+        let photograph = self.read_photograph(path, progress)?;
         copy_regions(&photograph, regions, progress).map_err(|e| read_failed(path, e))
     }
 
     /// Level `level` of `path` whole, decoded on a miss as
-    /// [`Self::get_tile`] decodes it, polling `progress` as it does. A level
-    /// the photograph does not have is [`TileError::OutOfRange`].
+    /// [`Self::get_tile`] decodes it, polling `progress` as it does, and like
+    /// it never making a mipmap. A level the photograph does not have is
+    /// [`TileError::OutOfRange`].
     pub fn get_level(
         &self,
         path: &Path,
         level: usize,
         progress: &Progress<'_>,
     ) -> Result<Arc<ImageU8>, TileError> {
-        let tiled = self.get(path, progress).map_err(|e| unreadable(path, e))?;
+        let tiled = self.read_photograph(path, progress)?;
         let (x1, y1) = tiled.layout().level_size(level);
         let rect = LevelRect {
             x0: 0,
@@ -361,6 +387,19 @@ impl PhotographCache {
             .region(level, rect, progress)
             .map(Arc::new)
             .map_err(|e| read_failed(path, e))
+    }
+
+    /// The photograph at `path` as [`Self::get`] answers it, for a kernel's
+    /// read that never makes a mipmap: an out-of-core photograph whose files
+    /// are missing or stale is [`TileError::Changed`].
+    fn read_photograph(
+        &self,
+        path: &Path,
+        progress: &Progress<'_>,
+    ) -> Result<Arc<TiledPhotograph>, TileError> {
+        let (value, _) = self.fetch(path, progress, Share::None, Asked::Photograph, Make::Never);
+        let got = value.map_err(|e| failed(path, e))?;
+        got.photograph(self, path).map_err(|e| unreadable(path, e))
     }
 
     /// A panel's decode of `path`, answering the tiles `keys` names.
@@ -387,10 +426,13 @@ impl PhotographCache {
     /// answers are the only ones the caller gets.
     ///
     /// An out-of-core photograph whose mipmap is current is read from its
-    /// files, with no reservation. It never answers [`TileError::Changed`]:
-    /// when a file turns out missing, not current or changed since the slot
-    /// read it, the slot's mipmap is marked not current and the tiles are
-    /// decoded whole in core, as above, in the same call.
+    /// files, with no reservation. It never makes a mipmap, and never answers
+    /// [`TileError::Changed`]: an out-of-core photograph whose files are
+    /// missing or stale, or turn out missing, not current or changed since
+    /// the slot read them (the slot's mipmap then marked not current), has
+    /// its tiles decoded whole in core, as above, in the same call; while
+    /// another caller makes its mipmap in the slot it is
+    /// [`TryDecode::Busy`].
     pub fn try_decode_tiles(
         &self,
         path: &Path,
@@ -414,10 +456,14 @@ impl PhotographCache {
         // tiles are decoded whole below, in core, so a panel is never
         // answered `Changed`.
         let read_from_files = match &slot {
-            Some(slot) => self
-                .tier_of(path, slot)
-                .map(|files| (Arc::clone(slot), files)),
-            None => self.unmapped_files_slot(path, setting),
+            Some(slot) => match self.tier_of(path, slot) {
+                Tier::Files(files) => Some((Arc::clone(slot), files)),
+                Tier::Unchecked | Tier::InCore | Tier::NotCurrent => None,
+            },
+            None => match self.unmapped_files_slot(path, setting) {
+                Unmapped::Files(slot, files) => Some((slot, files)),
+                Unmapped::InCore | Unmapped::NotCurrent => None,
+            },
         };
         if let Some((files_slot, files)) = read_from_files {
             check_keys(path, &files.layout, keys)?;

@@ -30,8 +30,13 @@ invalid, and changes no read this draft describes. Its second, 14b, has the
 cache read an out-of-core photograph whose mipmap is current from its files:
 the render entry points read its tiles as they read every photograph's, and
 a kernel's read of a file found changed fails with
-`PhotographReadError::Changed`, which they pass up as every read error. The user
-has decided every open question (§ "Open questions"). It amends
+`PhotographReadError::Changed`, which they pass up as every read error. Its
+third, 14c, has the cache's `get` and `get_many` make the mipmap of an
+out-of-core photograph whose files are missing or stale, in a kernel's read
+phase, so the photographs the render entry points are handed read from
+current files; the cache's tile reads (`get_tile`, `view_region_pyramid` and
+`get_level`) never make one, and answer `Changed` for such a photograph. The
+user has decided every open question (§ "Open questions"). It amends
 [core/camera/photograph-cache.md](../core/camera/photograph-cache.md) and the
 samplers of [core/camera/image-warping.md](../core/camera/image-warping.md).
 

@@ -22,9 +22,9 @@ use crate::progress::Progress;
 use super::tests::every_key;
 use super::*;
 
-const TILE: u32 = 32;
+pub(super) const TILE: u32 = 32;
 
-fn options() -> MipmapOptions {
+pub(super) fn options() -> MipmapOptions {
     MipmapOptions {
         out_of_core_long_side: 64,
         jpeg_quality: 95,
@@ -33,12 +33,12 @@ fn options() -> MipmapOptions {
 }
 
 /// A temporary workspace whose file has [`options`].
-struct Workspace {
-    dir: tempfile::TempDir,
+pub(super) struct Workspace {
+    pub(super) dir: tempfile::TempDir,
 }
 
 impl Workspace {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let o = options();
         std::fs::write(
@@ -55,7 +55,7 @@ impl Workspace {
 
     /// Write `bytes` at `name` in the workspace's `images` and return its
     /// path.
-    fn photograph(&self, name: &str, bytes: &[u8]) -> PathBuf {
+    pub(super) fn photograph(&self, name: &str, bytes: &[u8]) -> PathBuf {
         let images = self.dir.path().join("images");
         std::fs::create_dir_all(&images).unwrap();
         let path = images.join(name);
@@ -64,7 +64,7 @@ impl Workspace {
     }
 
     /// Every file under the mipmap directory, with its bytes, sorted by path.
-    fn mipmap_files(&self) -> Vec<(PathBuf, Vec<u8>)> {
+    pub(super) fn mipmap_files(&self) -> Vec<(PathBuf, Vec<u8>)> {
         let mut out = Vec::new();
         let mut stack = vec![self.dir.path().join(MIPMAP_DIR_NAME)];
         while let Some(dir) = stack.pop() {
@@ -87,16 +87,19 @@ impl Workspace {
 }
 
 /// Make `photograph`'s mipmap, writing its files.
-fn build(photograph: &Path) {
+pub(super) fn build(photograph: &Path) {
     let built = build_mipmaps(photograph, None, &options(), TILE, &Progress::none()).unwrap();
     assert_eq!(built.not_written, None);
 }
 
 /// Make `photograph`'s mipmap again with another record in every file: the
-/// original's modification time is moved while it is made, and put back, so
-/// the files are current for the original and their records name another
-/// time.
+/// files are removed, since a build keeps a level whose file is current, and
+/// the original's modification time is moved while they are made, and put
+/// back, so the files are current for the original and their records name
+/// another time.
 fn rebuild_with_another_record(photograph: &Path) {
+    let dir = mipmap_location(photograph).unwrap().dir().to_path_buf();
+    std::fs::remove_dir_all(dir).unwrap();
     let time = std::fs::metadata(photograph).unwrap().modified().unwrap();
     let set = |t| {
         std::fs::File::options()
@@ -112,7 +115,7 @@ fn rebuild_with_another_record(photograph: &Path) {
 }
 
 /// A region-readable JPEG: 4:2:0 with an interval of the 19 MCUs of a row.
-fn readable_jpeg() -> Vec<u8> {
+pub(super) fn readable_jpeg() -> Vec<u8> {
     encode_jpeg(
         &synthetic_rgb(300, 200),
         JpegOptions {
@@ -124,11 +127,11 @@ fn readable_jpeg() -> Vec<u8> {
 }
 
 /// A JPEG with no restart markers, which gets a `-mip0`.
-fn restartless_jpeg() -> Vec<u8> {
+pub(super) fn restartless_jpeg() -> Vec<u8> {
     encode_jpeg(&synthetic_rgb(300, 200), JpegOptions::default())
 }
 
-fn cache_of(budget_bytes: u64) -> PhotographCache {
+pub(super) fn cache_of(budget_bytes: u64) -> PhotographCache {
     PhotographCache::new(PhotographCacheOptions {
         budget_bytes,
         build_budget_bytes: GIB,
@@ -137,12 +140,12 @@ fn cache_of(budget_bytes: u64) -> PhotographCache {
 }
 
 /// The out-of-core layout of the test photographs.
-fn out_of_core_layout() -> PyramidLayout {
+pub(super) fn out_of_core_layout() -> PyramidLayout {
     PyramidLayout::for_size(300, 200, Some(&options()), TILE).unwrap()
 }
 
 /// The path of `photograph`'s mip level file of `level`.
-fn level_file(photograph: &Path, level: usize) -> PathBuf {
+pub(super) fn level_file(photograph: &Path, level: usize) -> PathBuf {
     mipmap_location(photograph)
         .unwrap()
         .level_path(level, options().quality_for_level(level))
@@ -152,7 +155,7 @@ fn level_file(photograph: &Path, level: usize) -> PathBuf {
 /// region decode of the original, or the decode of its `-mip0`; levels 1 to
 /// `K` the region decodes of their files, whole; and each level below `K`
 /// box-filtered from the one above it.
-fn files_levels(photograph: &Path) -> Vec<ImageU8> {
+pub(super) fn files_levels(photograph: &Path) -> Vec<ImageU8> {
     let layout = out_of_core_layout();
     let relative = mipmap_location(photograph).unwrap().relative().to_string();
     let open = |level: usize| {
@@ -179,7 +182,10 @@ fn files_levels(photograph: &Path) -> Vec<ImageU8> {
 }
 
 /// Every tile of `layout` cut from `levels`, its whole levels.
-fn tiles_of(layout: &PyramidLayout, levels: &[ImageU8]) -> HashMap<TileKey, Arc<PhotographTile>> {
+pub(super) fn tiles_of(
+    layout: &PyramidLayout,
+    levels: &[ImageU8],
+) -> HashMap<TileKey, Arc<PhotographTile>> {
     let mut tiles = HashMap::new();
     for (level, image) in levels.iter().enumerate() {
         cut_level(layout, level, image, &mut tiles);
@@ -187,12 +193,15 @@ fn tiles_of(layout: &PyramidLayout, levels: &[ImageU8]) -> HashMap<TileKey, Arc<
     tiles
 }
 
-fn same_tile(a: &PhotographTile, b: &PhotographTile) -> bool {
+pub(super) fn same_tile(a: &PhotographTile, b: &PhotographTile) -> bool {
     a.key == b.key && a.origin == b.origin && a.size == b.size && a.pixels.data() == b.pixels.data()
 }
 
 /// Level `level` of `photograph`, read whole through a render entry point.
-fn read_level(photograph: &TiledPhotograph, level: usize) -> Result<Vec<u8>, PhotographReadError> {
+pub(super) fn read_level(
+    photograph: &TiledPhotograph,
+    level: usize,
+) -> Result<Vec<u8>, PhotographReadError> {
     let (x1, y1) = photograph.layout().level_size(level);
     let rect = LevelRect {
         x0: 0,
@@ -298,8 +307,10 @@ fn the_coarsest_level_outlives_every_other_entry() {
 /// A kernel's read of a file replaced, after the read first opened it, by
 /// one with another record fails with `Changed` naming the file, both a read
 /// through the photograph `get` answered (from one cache) and a `get_tile`
-/// (from another); after that the slot's mipmap is not current, and the next
-/// `get_tile` reads the photograph in core. A read through a photograph after
+/// (from another); after that the slot's mipmap is not current, so the next
+/// `get_tile` answers `Changed` naming the photograph, decoding nothing,
+/// until a `get` finds the new files current and reads them, making no
+/// mipmap of its own. A read through a photograph after
 /// its original changed fails with `Changed` naming the original. Under a
 /// budget too small to keep a file, so each read opens it again, and under a
 /// budget of 0, where a `get_tile` decides from the files as they are, the
@@ -340,9 +351,15 @@ fn a_file_changed_during_a_kernel_s_read_fails_it_with_changed() {
             Err(TileError::Changed { path: named }) => {
                 assert!(budget > 0);
                 assert_eq!(named, mip1);
+                match cache.get_tile(&path, key, &Progress::none()) {
+                    Err(TileError::Changed { path: named }) => assert_eq!(named, path),
+                    other => panic!("not read in core: {:?}", other.err()),
+                }
+                cache.get(&path, &Progress::none()).unwrap();
                 let tile = cache.get_tile(&path, key, &Progress::none()).unwrap();
-                assert_eq!(cache.stats().decodes, 1, "read in core");
-                assert!(!same_tile(&tile, &before), "the in-core pixels");
+                assert!(same_tile(&tile, &before), "the new files' pixels");
+                let stats = cache.stats();
+                assert_eq!((stats.decodes, stats.mipmaps_made), (0, 0));
             }
             // The rebuilt files hold the same pixels.
             Ok(tile) => {
@@ -449,6 +466,7 @@ fn a_panel_s_decode_never_answers_changed() {
         assert!(same_tile(&tiles[0], &in_core_tiles(&path)[&key(1, 0)]));
         assert_eq!(cache.stats().decodes, 1);
         assert!(ws.mipmap_files().is_empty(), "no mipmap made");
+        assert_eq!(cache.stats().mipmaps_made, 0);
 
         for replace in ["another record", "level 1 removed"] {
             let ws = Workspace::new();
@@ -494,6 +512,7 @@ fn a_panel_s_decode_never_answers_changed() {
                 other => panic!("{other:?}"),
             }
             assert_eq!(ws.mipmap_files(), on_disk, "no mipmap made");
+            assert_eq!(cache.stats().mipmaps_made, 0);
         }
     }
 }

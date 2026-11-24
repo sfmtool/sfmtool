@@ -96,10 +96,14 @@ impl PhotographCache {
     /// is kept. Waits while another thread is decoding the same path, and
     /// then answers from its decode rather than decoding a second time, or
     /// decodes in its place if that thread stops. A decode it makes is
-    /// reserved with `reserve_builds`. An error when the file does not exist,
-    /// cannot be read, or has a side over `MAX_JPEG_SIDE` (65535), and
-    /// `Cancelled` when `progress` is cancelled while it waits or decodes.
-    /// Under a budget of 0 the photograph holds every tile of its decode.
+    /// reserved with `reserve_builds`. An out-of-core photograph whose mip
+    /// level files are missing or stale has its mipmap made in the slot the
+    /// same way, reporting the phases `decode`, `reduce` and `encode` through
+    /// `progress` (§ "Making a mipmap"). An error when the file does not
+    /// exist, cannot be read, or has a side over `MAX_JPEG_SIDE` (65535), and
+    /// `Cancelled` when `progress` is cancelled while it waits, decodes or
+    /// builds. Under a budget of 0 the photograph holds every tile of its
+    /// decode.
     pub fn get(&self, path: &Path, progress: &Progress<'_>)
         -> Result<Arc<TiledPhotograph>, GetError>;
 
@@ -119,6 +123,8 @@ impl PhotographCache {
     /// pool. One entry per path, in order, and a tally. Counts `images`
     /// through `progress` and polls it for cancellation before each path and
     /// as `get` does. The answers hold no tile, so the call holds no pyramid.
+    /// It makes missing or stale mipmaps as `get` does, passing on a build's
+    /// messages through `progress` but not its phases.
     pub fn get_many(
         &self,
         paths: &[&Path],
@@ -132,9 +138,12 @@ impl PhotographCache {
     /// and never answers `Changed`; `get_tile` decodes when its tile is not
     /// kept, and `view_region_pyramid` and `get_level` read the photograph
     /// `get` answers, each decoding as `get` does, an out-of-core
-    /// photograph's tiles from its files (§ "Out-of-core photographs"). The
-    /// four that can decode a whole photograph take the caller's `Progress`
-    /// and poll it for cancellation as `get` does.
+    /// photograph's tiles from its files (§ "Out-of-core photographs"). None
+    /// of these makes a mipmap: the three kernel reads answer `Changed` for
+    /// an out-of-core photograph whose files are missing or stale, and
+    /// `try_decode_tiles` decodes such a photograph whole in core. The four
+    /// that can decode a whole photograph take the caller's `Progress` and
+    /// poll it for cancellation as `get` does.
     pub fn layout(&self, path: &Path) -> PeekedLayout;
     pub fn request_layout(&self, path: &Path);
     pub fn peek_tile(&self, path: &Path, key: TileKey) -> PeekedTile;
@@ -156,9 +165,9 @@ impl PhotographCache {
     pub fn forget(&self, path: &Path);
     pub fn clear(&self);
 
-    /// Tiles, file entries and bytes kept, the budget, the hit, miss and
-    /// decode counters, the build budget and the bytes reserved on the build
-    /// count.
+    /// Tiles, file entries and bytes kept, the budget, the hit, miss, decode
+    /// and mipmaps-made counters, the build budget and the bytes reserved on
+    /// the build count.
     pub fn stats(&self) -> PhotographCacheStats;
 }
 
@@ -186,7 +195,8 @@ pub enum TryDecode { Decoded(Vec<Arc<PhotographTile>>), Busy }
 
 pub struct PhotographCacheStats {
     pub tiles: usize, pub files: usize, pub bytes: u64, pub budget_bytes: u64, pub hits: u64,
-    pub misses: u64, pub decodes: u64, pub build_budget_bytes: u64, pub build_reserved_bytes: u64,
+    pub misses: u64, pub decodes: u64, pub mipmaps_made: u64, pub build_budget_bytes: u64,
+    pub build_reserved_bytes: u64,
 }
 
 /// A quarter of physical memory, clamped to 1-16 GiB; 4 GiB when it cannot
@@ -226,7 +236,8 @@ Why it is shaped this way:
   caller's `Progress` so that a cancelled task stops waiting on a decode
   another caller started, rather than wait out a decode of a second or more.
   A caller with nothing to cancel passes `&Progress::none()`. `get` reports
-  nothing through it. The GUI thread must not wait on a decode, so it asks
+  nothing through it but a mipmap's build, which is part of the call that
+  makes it (§ "Making a mipmap"). The GUI thread must not wait on a decode, so it asks
   whether they are there. `peek_state` adds the one thing a caller that starts
   a decode on a miss needs: whether a decode was already tried and failed, so
   it does not start another for a file that cannot be read.
@@ -461,6 +472,10 @@ ever.
 - **A maker that stops** (cancelled, failed or unwinding) gives its share
   back before its slot changes state, so the waiter that decodes in its place
   never finds that decode still counted, and reserves for its own decode.
+- **A mipmap's build** holds a whole decode, its reduced levels and the
+  encoded files, and is reserved as a whole decode is, at the same estimate,
+  by the `get` that marks the slot as being made or as one decode of a
+  `get_many` group (§ "Making a mipmap").
 
 Since a caller that finds the budget used up is still granted one decode, the
 count goes past the budget only by one decode per caller reserving at that
@@ -570,16 +585,20 @@ level's edge, so tiles drawn side by side with linear filtering show no seam.
   current or changed since the slot read it, the call marks the slot's
   mipmap not current and decodes the tiles asked for whole in core, in the
   same call, as for a photograph whose files are missing, so it never
-  answers `TileError::Changed`. Under a budget of 0 each call decides so
-  from the files as they are.
+  answers `TileError::Changed`; it never makes a mipmap, and while another
+  caller makes one in the slot it answers `Busy`. Under a budget of 0 each
+  call decides so from the files as they are.
 - **`get_tile`, `view_region_pyramid` and `get_level`** are a kernel's
   reads. `get_tile` answers a tile the cache keeps, marking it used, and
   otherwise decodes as `get` does, reserving with `reserve_builds` and
   waiting while another caller decodes the photograph, and keeps the tile as
-  used; `view_region_pyramid` and `get_level` read the photograph `get`
-  answers. An out-of-core photograph's tile is read from its files, and a
-  file found missing, not current or changed since the slot read it is
-  `TileError::Changed`, naming the file, without waiting.
+  used; `view_region_pyramid` and `get_level` read the photograph as `get`
+  answers it, but none of the three makes a mipmap. An out-of-core
+  photograph's tile is read from its files, and a file found missing, not
+  current or changed since the slot read it is `TileError::Changed`, naming
+  the file, without waiting; an out-of-core photograph whose files were
+  already found missing or stale is `TileError::Changed` naming the
+  photograph, decoding nothing, until `get` makes its mipmap.
   A level, tile or rectangle the photograph does not have, or an empty
   set of regions, is `TileError::OutOfRange`; a photograph that cannot be
   read is `TileError::Unreadable`, with `GetError`'s message.
@@ -653,11 +672,10 @@ most once while it stays the same. A current coarsest file makes the
 photograph's layout the out-of-core one and its region answer the one that
 file records; the slot keeps the answer, so a session's start costs one small
 file per out-of-core photograph. A photograph whose coarsest file is missing
-or stale, or one so thin it stores no reduced level, is read whole in core,
-as an in-core photograph is: the cache makes no mipmap, and the steps of
-[out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md)
-that follow step 14b have it made. Under a budget of 0, where no slot is
-kept, each request decides so from the files as they are.
+or stale has its mipmap made by the next `get` or `get_many` (§ "Making a
+mipmap"); one so thin it stores no reduced level is read whole in core, as
+an in-core photograph is. Under a budget of 0, where no slot is kept, each
+request decides so from the files as they are.
 
 **Where its tiles come from.**
 
@@ -679,25 +697,85 @@ bytes were evicted is compared with the record first read.
 another record than the one first read or does not decode, or an original
 whose index fails, means the mipmap is not current. The request that finds
 it marks the slot's mipmap not current, dropping the slot's tiles and file
-entries from the files: from then on the slot reads the photograph in core,
-and `layout` answers the in-core layout. The
-readers then answer in two ways. A kernel's read (`get_tile`, a read through
-a photograph `get` answered, and so `view_region_pyramid` and `get_level`)
-fails with `TileError::Changed` or `PhotographReadError::Changed` naming the
-file, so a kernel never goes on with levels of two versions; its other
-reads of that photograph fail with `Changed` too, naming the photograph, and
-the next kernel's read takes it in core. A panel's decode
-(`try_decode_tiles`) never answers `Changed`: it decodes the tiles asked for
-whole in core in the same call.
-The tiles a panel already holds from the files stay drawn beside the new
-ones until it asks for them again; both are the same photograph, a JPEG loss
-apart.
+entries from the files, and `layout` answers the in-core layout. The
+readers then answer in three ways, and none reads the files of two versions
+or the photograph in core for a kernel:
+
+- **A kernel's read** (`get_tile`, a read through a photograph `get`
+  answered, `view_region_pyramid` and `get_level`) fails with
+  `TileError::Changed` or `PhotographReadError::Changed` naming the file, so
+  a kernel never goes on with levels of two versions. Its other reads of
+  that photograph, and every kernel read of an out-of-core photograph whose
+  files were missing or stale when its slot first checked them, fail with
+  `Changed` naming the photograph, decoding nothing, until a `get` makes
+  the mipmap. These reads never make one.
+- **`get` and `get_many`** make the mipmap in the slot (§ "Making a
+  mipmap") and answer the photograph read from its files.
+- **A panel's decode** (`try_decode_tiles`) never makes a mipmap and never
+  answers `Changed`: it decodes the tiles asked for whole in core in the
+  same call, and answers `Busy` while another caller makes the mipmap in
+  the slot. The tiles a panel already holds from the files stay drawn beside
+  the new ones until it asks for them again; both are the same photograph,
+  a JPEG loss apart.
 
 `get` and `get_many` answer an out-of-core photograph whose mipmap is current
 from its slot, with nothing decoded; `get_many` still reserves a whole
 decode's estimate on the build count for each path it does not find made, as
 it does for an in-core one, until the step of the draft that resolves each
 path's layout first.
+
+### Making a mipmap
+
+A `get` or `get_many` that finds an out-of-core photograph's mip level files
+missing or stale makes its mipmap in the photograph's slot, as it decodes an
+in-core photograph there, with no builder object or queue; the code is in
+[photograph_cache/build.rs](../../../crates/sfmtool-core/src/camera/photograph_cache/build.rs).
+
+- **In the slot, on the caller's thread.** The caller marks the slot as being
+  made, reserves the build on the build count as a whole decode (§ "The build
+  budget"), and calls `build_mipmaps`
+  ([mipmaps.md § "How a mipmap is made"](mipmaps.md#how-a-mipmap-is-made)),
+  which uses no rayon, for the reason § "Implementation notes" gives for a
+  decode. It first checks the coarsest file again, since another process or
+  an earlier build may have made the files current since the slot found them
+  stale, and then reads them without a build. Every other caller asking for
+  the path waits on the slot, polling its own `Progress`, and reads what the
+  maker made. `get_many` makes its misses in parallel across photographs, one
+  build in each member that answers such a path.
+- **Reading what it made.** The slot then reads the photograph from the files
+  the build returned, kept as its file entries with their records, so a file
+  read again after its bytes are evicted is compared with the record the
+  build wrote. The slot drops the tiles a panel's decode in core kept for it.
+  A build whose files could not be written (a blocked mipmap directory, a
+  full disk) is read from the files it holds in memory, every level from
+  there and level 0 of a region-readable original from the original: their
+  bytes are counted against the budget while the slot is in the map, and
+  never evicted, and a warning through the caller's `Progress` says why, as
+  *The mipmap of … is held in memory, since its files could not be
+  written: …*. A build that fails otherwise is `GetError::Unreadable` naming
+  the photograph, remembered as a failed decode is until the file changes.
+- **Progress.** A `get` reports the build's phases `decode`, `reduce` and
+  `encode`, counting levels, through its `Progress`; a `get_many` member
+  passes on only the build's messages, since the phases of members running in
+  parallel would overwrite one another, and the call counts photographs as it
+  does for decodes. `PhotographCacheStats::mipmaps_made` counts the builds
+  that finished, written or held in memory; a build started is a miss, and
+  not a decode.
+- **Cancellation.** The build polls the caller's `Progress` between its
+  stages: after the decode, after each reduced level, and before each level's
+  encode and the coarsest file's write. A cancelled maker stops within one
+  stage, gives its share back and leaves the slot as it found it, waking its
+  waiters; the first to take the slot's lock makes the mipmap in its place.
+  The files the cancelled maker wrote are complete, and its successor's
+  build reads each file that is current rather than make it again, so it
+  makes only the levels not written. The coarsest file is written last, so
+  a build that stops never leaves a current coarsest file beside missing
+  finer ones, which the check of the coarsest file alone would take for a
+  current mipmap.
+- **Never from a panel or a kernel's tile read.** `try_decode_tiles`,
+  `get_tile`, `view_region_pyramid` and `get_level` never make a mipmap
+  (§ "When a file is not current" above), so a panel's task never waits on a
+  build, and a kernel's render never starts one.
 
 ## In the viewer
 
@@ -894,7 +972,9 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   it was cancelled is neither. `peek` counts as a use for the eviction order but
   not as a hit. A decode is a miss that read the photograph's pixels, so a file
   whose header cannot be read, or that is refused as too large, is a miss but
-  not a decode; a maker cancelled after reading the pixels counts one.
+  not a decode; a maker cancelled after reading the pixels counts one. A
+  mipmap's build started is a miss, and one that finishes counts in
+  `mipmaps_made`, never as a decode.
 
 ## Parameters
 
@@ -981,8 +1061,9 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   entries; the coarse tiles outliving every other entry under a small
   budget; a file replaced with another record after a kernel's read first
   opened it failing `get_tile` and a read through the photograph `get`
-  answered with `Changed` naming it, the next `get_tile` reading the
-  photograph in core, and a changed original failing that
+  answered with `Changed` naming it, the next `get_tile` answering
+  `Changed` naming the photograph until a `get` reads the new files, and a
+  changed original failing that
   read with `Changed` naming the original, under a budget too small to keep
   a file and under a budget of 0; an in-core photograph of the same
   workspace read as before; `request_layout` answering the in-core layout
@@ -990,6 +1071,21 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   decode of an out-of-core photograph whose mipmap is missing, replaced with
   another record or missing its level-1 file after its first tiles were
   answered answering its tiles and never `Changed`, and making no mipmap.
+- [photograph_cache/build_tests.rs](../../../crates/sfmtool-core/src/camera/photograph_cache/build_tests.rs),
+  on the same synthetic photographs: `get_tile`, `get_level` and
+  `view_region_pyramid` of a photograph with no mipmap answering `Changed`
+  and making nothing; a `get` making a missing mipmap, and a stale one after
+  its original changed, and answering the pixels of its files with nothing
+  decoded whole, with a budget and with a budget of 0, for a region-readable
+  original and one with a `-mip0`; a `get_many` after a panel's decode in
+  core making the mipmap rather than answer the in-core tiles, and
+  reporting no build phase; two threads asking for one path making one
+  mipmap, the second waiting with nothing reserved; a maker cancelled during
+  its encodes stopping within one level, the coarsest file not yet written,
+  and the waiter that takes over making only the levels not written; a
+  build's phases reported through the caller's `Progress`; and a build
+  behind a blocked mipmap directory read from memory with a warning, its
+  bytes counted and kept under a budget too small to hold them.
 - [bench/tests/bulk_budget.rs](../../../crates/sfmtool-core/src/bench/tests/bulk_budget.rs),
   bulk kernels on one thread over six photographs written to a temporary
   directory: *Refit all points* under a budget of one photograph and under
@@ -1107,10 +1203,10 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 - **Display thumbnails** keep their own decodes. They make small images once
   per open.
 - **No cache on disk.** Tiles are cut from the JPEGs in each session. A
-  large photograph's reduced levels can be stored as
-  [mip level files](mipmaps.md), and the cache reads each workspace's
-  `mipmap_options`, but it does not read the files. Reading the stored levels
-  of large ones is proposed in
+  large photograph's reduced levels are stored as
+  [mip level files](mipmaps.md), which the cache reads and makes
+  (§ "Out-of-core photographs"), but it keeps no tile on disk. The rest of
+  the out-of-core tier is proposed in
   [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md).
 - **The budget and the build budget are set only by their environment
   variables** (or a caller's `PhotographCacheOptions`), not in the viewer's

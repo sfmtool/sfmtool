@@ -271,6 +271,8 @@ fn two_builds_give_the_same_bytes() {
     let photograph = ws.photograph("images/a.png", &encode_png(&synthetic_rgb(300, 200)));
     build(&photograph, &options(95));
     let first = files_under(&ws.mipmaps());
+    // A build keeps a current file, so the files go first.
+    std::fs::remove_dir_all(ws.mipmaps()).unwrap();
     build(&photograph, &options(95));
     assert_eq!(files_under(&ws.mipmaps()), first);
     assert_eq!(first.len(), 6, "CACHEDIR.TAG, -mip0 and four levels");
@@ -374,7 +376,8 @@ fn a_source_differing_only_in_case_is_decided_by_the_hash() {
     check_mipmap(&source, location.as_ref().unwrap(), &layout).unwrap();
     assert_eq!(source.hashes(), 1, "and not again for the same spelling");
 
-    // Two originals sharing a cache file, of other lengths.
+    // Two originals sharing a cache file, of other lengths: the build makes
+    // its own mipmap over the other's, warning once and naming both.
     build(&photograph, &options(95));
     for mip in mips(&photograph) {
         rewrite_record(&mip, |r| {
@@ -383,8 +386,20 @@ fn a_source_differing_only_in_case_is_decided_by_the_hash() {
         });
     }
     assert_stale(check(&photograph), "bytes");
-    build(&photograph, &options(95));
+    let warnings = std::sync::Mutex::new(Vec::new());
+    let sink = |event: crate::progress::Event<'_>| {
+        if let crate::progress::Event::Message { text, .. } = event {
+            warnings.lock().unwrap().push(text.to_string());
+        }
+    };
+    build_mipmaps(&photograph, None, &options(95), TILE, &Progress::to(&sink)).unwrap();
     assert!(check(&photograph).is_ok());
+    let warnings = warnings.into_inner().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].contains("images/IMG_0001.JPG and images/img_0001.jpg"),
+        "{warnings:?}"
+    );
 
     // Two originals of equal length and time and another hash.
     for mip in mips(&photograph) {
@@ -722,10 +737,11 @@ fn two_processes_building_at_once_leave_current_files() {
     let built = build(&photograph, &options(95));
     // Hold a file open while the children rename over it: a reader keeps an
     // open file, and that must not block another process's write. The held
-    // file is made stale first, so a rename it blocked would not count as
-    // written and the children would report it in `not_written`.
+    // file is made stale first, so the children make it again rather than
+    // keep it, and a rename it blocked would not count as written and the
+    // children would report it in `not_written`.
     let held_path = location(&photograph).level_path(1, 95);
-    rewrite_record(&held_path, |r| r.source_xxh128 = "0".repeat(32));
+    rewrite_record(&held_path, |r| r.source_size += 1);
     let held = std::fs::File::open(&held_path).unwrap();
     let exe = std::env::current_exe().unwrap();
     let children: Vec<_> = (0..2)

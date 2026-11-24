@@ -3189,7 +3189,7 @@ in core. Step 17 turns the tier on.
       entries); read in core, as in a workspace without the object, they
       peaked at 289 MB and held 194 MB (every tile of the whole decode, under
       a 4 GiB budget).
-    - **14c, making a mipmap in the slot.** A `get` that finds an
+    - **14c, making a mipmap in the slot.** **Built.** A `get` that finds an
       out-of-core photograph's files missing or stale makes the mipmap in
       the path's slot on its own thread, reserving the build with
       `reserve_builds`, reporting the phases *decode*, *reduce* and *encode*
@@ -3218,6 +3218,52 @@ in core. Step 17 turns the tier on.
       `try_decode_tiles` of an out-of-core photograph with no mipmap, with a
       budget and with a budget of 0, answers its tiles from a decode in core
       and makes no mipmap.
+      **As built** ([photograph_cache/build.rs](../../crates/sfmtool-core/src/camera/photograph_cache/build.rs)):
+      a slot's tier tells an out-of-core photograph whose mipmap is not
+      current apart from an in-core one, so `get` and `get_many` make the
+      mipmap there and `get_tile`, `view_region_pyramid`, `get_level` and a
+      read through a photograph answer `Changed` naming the photograph (or
+      the failure the slot remembers), decoding nothing; a panel's
+      `try_decode_tiles` answers `Busy` while a build holds the slot.
+      `get_many` already made a member's build through `get`'s path, so a
+      member makes it too, in its group's share; until 14d it passes on only
+      the build's messages through its `Progress`, since the phases of
+      members running in parallel would overwrite one another. The maker
+      checks the coarsest file again once it has marked the slot, and reads
+      the files without a build when another process or an earlier build
+      made them current since. "Makes only the levels not written" is
+      `build_mipmaps` reading each level whose file is current rather than
+      encoding it again, which the cache's own builds and every other
+      caller share; and `build_mipmaps` writes the coarsest file last, after
+      `-mip0`, still encoding it first. Without that, a maker cancelled
+      after writing the coarsest file would leave a mipmap whose coarsest
+      file is current and whose finer files are missing, which a new slot,
+      checking the coarsest file alone as 14b does, takes for current, so a
+      kernel would fail with `Changed` on its first finer read; since
+      *Build mipmaps* gives way to every task asked for (14e), such
+      leftovers would be common. The slot keeps the files the build returned
+      as its file entries, with their records, and drops the tiles a panel's
+      decode in core kept for it; a build held in memory keeps its files on
+      the slot's `MipmapFiles`, counted against the budget and never
+      evicted, so a photograph a kernel holds stays readable. Under a budget
+      of 0 nothing is kept, so a `get` whose files could not be written
+      builds again on its next call. `PhotographCacheStats::decodes` does
+      not count a build, which `mipmaps_made` counts once it finishes;
+      a build started is a miss. The warning for a file made over another
+      spelling's is `build_mipmaps`'s, sent through the `Progress` it is
+      given. Measured with a counting allocator in a release build on a
+      synthetic 8000 x 6000 JPEG at 4:2:0 (10 MB; 144 MB of pixels), with a
+      new cache for each call: a `get` that made the mipmap of a
+      region-readable original peaked at 243 MB over its start (1.69 times
+      the image's bytes, 5.1 bytes a pixel, about 1% over the 5 bytes a pixel
+      the build reserves) and held 5.3 MB after (the files it wrote, kept as
+      entries), in 0.48 s; one that also made a `-mip0` peaked at 244 MB and
+      held 22.5 MB, in 0.90 s; a `get` of the same photograph whose mipmap
+      was current peaked at 0.1 MB; and a whole decode in core, as in a
+      workspace without the object, peaked at 289 MB (2.01 times, the same
+      reservation) and held 194 MB. Encoding the full-resolution `-mip0`
+      raised the build's peak by about 1 MB, so the peak comes before the
+      encodes, while the original is decoded.
     - **14d, `get_many`'s builds.** `get_many` first resolves each path's
       layout (a header read, the region test and a record check), so an
       out-of-core photograph whose mipmap is current is read without a

@@ -16,12 +16,11 @@ workspace turns this on with a `mipmap_options` object in its
 This spec describes the files: which photographs have them, their names and
 contents, how they are made, when they are current, and how a rectangle of
 one, or of a region-readable original, is decoded alone. The photograph cache
-reads an out-of-core photograph whose mipmap is current from its files
-([photograph-cache.md § "Out-of-core photographs"](photograph-cache.md#out-of-core-photographs)),
-and reads one whose mipmap is missing or stale whole, as it reads an in-core
-one. Nothing makes the files in use yet, and no command writes
-`mipmap_options`; making them in the cache, the viewer's and `sfm`'s makers
-and the object's writers come in the steps of
+reads an out-of-core photograph whose mipmap is current from its files, and
+its `get` makes the mipmap of one whose files are missing or stale
+([photograph-cache.md § "Out-of-core photographs"](photograph-cache.md#out-of-core-photographs)).
+No command writes `mipmap_options` yet; the viewer's and `sfm`'s makers and
+the object's writers come in the steps of
 [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md),
 which also has the measurements behind the choices below.
 
@@ -303,9 +302,22 @@ carries one JPEG loss, any level can be made again alone to the same bytes,
 and the reduced levels are the same whether or not the original is
 region-readable. The same original and build give the same bytes.
 
+A level whose file is current already (§ "When a mip level file is
+current", with the build's number of stored levels and region answer) is
+read from that file rather than encoded and written again, so a build that
+follows one that stopped makes only the levels not written. The coarsest
+level's file is written last, after `-mip0`: a reader that checks only the
+coarsest file, as the photograph cache does when it first needs a
+photograph, never finds it current beside finer files a stopped build did
+not write. A file at a level's name whose `source` differs from the
+photograph's relative path only in letter case and that the hash finds is
+another original's is made over, with one warning through the caller's
+`Progress` naming both paths.
+
 It reports the phases `decode`, `reduce` and `encode` through the caller's
-`Progress`, counting levels, and polls for cancellation between levels; a
-cancelled build writes no further file and leaves none partial.
+`Progress`, counting levels, and polls for cancellation between levels and
+before the coarsest file is written; a cancelled build writes no further file
+and leaves none partial.
 
 **Writes.** Each file is written to a temporary file in its directory,
 `.<file name>.<process id>-<count>.tmp` with the one process-wide count
@@ -485,7 +497,9 @@ and one with an interval wider than 1024 px, and none for a region-readable
 JPEG; two builds giving the same bytes; each staleness case, made by writing
 the record directly so it runs on any file system, including the three
 case-only `source` cases, and the remake; a quality change and back; a record
-of another threshold; in-core photographs writing nothing; the 65535 / 65536
+of another threshold; in-core photographs writing nothing; a build over
+a file of an original whose path differs only in case warning once, naming
+both; the 65535 / 65536
 header-only refusal in every workspace kind; the in-memory equivalent behind a
 blocked mipmap directory; a cancelled build; a grey photograph; a build of a
 header-only PNG answering in core or too large without decoding it; and two
