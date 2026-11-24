@@ -546,11 +546,11 @@ tiles"):
   Once the build making the mipmap has published the photograph's coarsest level, the
   panel draws that level under the spinner, its tiles laid over the level-0 pixels they
   cover in the view of the photograph's own size, so the overlays, which are in level-0
-  pixels, line up with it and the view carries over to the photograph unchanged; that
-  level is what the panel has of the photograph, not the photograph, so it takes the
-  gestures G13 gives a picture kept while its replacement loads
-  ([interaction-rules.md](interaction-rules.md)). The level's tiles are the ones the
-  finished mipmap answers, so they stay drawn as the photograph's tiles land. The panel
+  pixels, line up with it and the view carries over to the photograph unchanged. It is
+  the selected photograph at low resolution, so it takes the gestures the photograph
+  does, under G1 to G12 ([interaction-rules.md](interaction-rules.md)); the spinner
+  and its label are painted over it and take no pointer. The level's tiles are the
+  ones the finished mipmap answers, so they stay drawn as the photograph's tiles land. The panel
   does not keep drawing the image it showed before meanwhile, since a mipmap takes
   seconds to make rather than the milliseconds a tile decode takes; an image the panel
   has already drawn, whose files are found changed later, keeps its uploaded tiles. The

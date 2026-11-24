@@ -963,19 +963,13 @@ impl ImageDetail {
                     .take()
                     .filter(|(image, _)| *image == requested)
                     .map(|(_, look)| look);
-                // The coarsest level is drawn at the selected image's own
-                // geometry, so a look applies to it and carries over, but
-                // none of the photograph's tiles is asked for, and it takes
-                // the gestures G13 gives a picture kept while its
-                // replacement loads.
+                // The coarsest level is the selected photograph at low
+                // resolution, drawn at its own level-0 geometry: a look
+                // applies to it and carries over, and it takes the gestures
+                // the photograph does, but none of the photograph's tiles is
+                // asked for while its mipmap is made.
                 let photograph = photograph.filter(|_| !building);
-                (
-                    requested,
-                    photograph,
-                    look.or(held),
-                    sift_features,
-                    building,
-                )
+                (requested, photograph, look.or(held), sift_features, false)
             }
             Shown::Previous(previous) => {
                 if let Some(look) = look {
@@ -1101,9 +1095,8 @@ impl ImageDetail {
         // so we can handle scroll/drag even when the image is smaller than the panel.
         let interact_rect = panel_rect;
         let interact_id = ui.id().with("image_detail_interact");
-        // While the previous image is held, or the selected image's coarsest
-        // level is drawn while its mipmap is made, what is drawn is not the
-        // selected photograph, so no click, drag or menu acts on it (G13 in
+        // While the previous image is held, what is drawn is not the selected
+        // image, so no click, drag or menu acts on it (G13 in
         // specs/gui/interaction-rules.md); hover and the view's own wheel and
         // keys still work on what is drawn.
         let sense = if holding {
@@ -1356,8 +1349,8 @@ impl ImageDetail {
             },
         );
 
-        // Over everything: the picture is the coarsest level, not the
-        // photograph, until the mipmap is made.
+        // Over everything: the picture is the coarsest level until the
+        // mipmap is made.
         if building {
             paint_building_mipmap(ui, &painter, panel_rect);
         }

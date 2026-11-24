@@ -1386,8 +1386,9 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   drawn once the task has made it; a run held once its build has published
   the coarsest level, the panel drawing that level under the spinner over
   the level-0 pixels it covers, uploaded once, asking for no tile, under a
-  budget smaller than the photograph and one of 0; and that level taking no
-  click or double-click while a hover still names a feature's point),
+  budget smaller than the photograph and one of 0; and a click on that
+  level selecting the point under it and a right-click opening the menu at
+  its level-0 pixel, as on the photograph),
   [image_detail/photograph_tiles/tests.rs](../../../crates/sfm-explorer/src/image_detail/photograph_tiles/tests.rs)
   (two panels showing one photograph ask for its layout and its tiles once,
   neither decoding as it draws, with a budget and with a budget of 0; the tiles

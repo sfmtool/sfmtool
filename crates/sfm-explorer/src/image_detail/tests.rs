@@ -4801,16 +4801,68 @@ fn a_photograph_whose_mipmap_is_being_made_draws_its_coarsest_level_under_the_sp
     }
 }
 
-/// G13 for the coarsest level drawn while the mipmap is made: a click on a
-/// feature drawn over it selects nothing and a double-click off every
-/// feature does not zoom, while hovering a feature still names its point;
-/// once the mipmap is made and the photograph's tiles are drawn, a click on
-/// the same feature selects its point.
+/// One frame showing image 0 of `node` with the pointer at `at`, right-clicked
+/// there, answering what the panel reported.
+fn right_click_frame(
+    detail: &mut ImageDetail,
+    ctx: &egui::Context,
+    node: &SceneNode,
+    sift: &crate::state::CachedSiftFeatures,
+    photograph: crate::state::PhotographSource<'_>,
+    at: egui::Pos2,
+) -> super::ImageDetailResponse {
+    let display = FeatureDisplaySettings::default();
+    let mut intrinsics_display = IntrinsicsDisplaySettings::default();
+    let mut events = vec![egui::Event::PointerMoved(at)];
+    for pressed in [true, false] {
+        events.push(egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+    }
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, PANEL)),
+        events,
+        ..Default::default()
+    };
+    crate::platform::set_test_pointer_pos(Some(at));
+    let mut response = None;
+    crate::test_support::run_frame_headless(ctx, input, |ui| {
+        response = Some(detail.show(
+            ui,
+            node.edited(),
+            node.id,
+            node.history.current_version().serial,
+            Some(0),
+            None,
+            None,
+            None,
+            BenchMenu::default(),
+            &[],
+            &crate::platform::ScrollInput::default(),
+            Some(sift),
+            Some(photograph),
+            &display,
+            &mut intrinsics_display,
+            None,
+        ));
+    });
+    crate::platform::set_test_pointer_pos(None);
+    response.expect("the frame ran")
+}
+
+/// The coarsest level drawn while the mipmap is made is the selected
+/// photograph at low resolution, at its own level-0 size, so it takes the
+/// gestures the photograph does (G1, G3): a click on a feature drawn over it
+/// selects that feature's point, and a right-click there opens the menu at
+/// the feature's level-0 pixel, as on the finished photograph.
 #[test]
-fn the_coarsest_level_drawn_while_the_mipmap_is_made_takes_no_click_but_still_hovers() {
+fn the_coarsest_level_drawn_while_the_mipmap_is_made_takes_clicks_as_the_photograph_does() {
     use crate::state::build_mipmaps::tests::run_held_once_published;
     let (_dir, path) = large_out_of_core_photo();
-    let node = demo_node("/runs/coarsest-held.sfmr");
+    let node = demo_node("/runs/coarsest-clicked.sfmr");
     let image = pixels(1920, 1080);
     let (&feature, &point) = node.recon().point_set.image_feature_to_point[0]
         .iter()
@@ -4839,23 +4891,25 @@ fn the_coarsest_level_drawn_while_the_mipmap_is_made_takes_no_click_but_still_ho
 
     let run = run_held_once_published(&cache, &requests);
     run.wait_published();
-    let empty = egui::pos2(20.0, PANEL.y - 20.0);
-    for step in 0..2 {
-        let held = pointer_frame(&mut detail, &ctx, &node, 0, &sift, source, on_feature, 1);
-        assert_eq!(held.view.map(|v| v.image.index()), Some(0), "step {step}");
-        assert_eq!(held.select_point, None, "step {step}: a click selected");
-        assert_eq!(held.hovered_point, Some(point), "step {step}: the hover");
-        pointer_frame(&mut detail, &ctx, &node, 0, &sift, source, empty, 2);
-        assert_eq!(detail.zoom, 1.0, "step {step}: a double-click zoomed");
-    }
-
-    run.finish();
-    for _ in 0..3 {
-        pointer_frame(&mut detail, &ctx, &node, 0, &sift, source, on_feature, 0);
-        queue.run_off_this_thread();
-    }
+    // The first frame that draws the level lays out what a click lands on.
+    pointer_frame(&mut detail, &ctx, &node, 0, &sift, source, on_feature, 0);
     let clicked = pointer_frame(&mut detail, &ctx, &node, 0, &sift, source, on_feature, 1);
-    assert_eq!(clicked.select_point, Some(point));
+    assert_eq!(clicked.view.map(|v| v.image.index()), Some(0));
+    assert_eq!(
+        clicked.select_point,
+        Some(point),
+        "a click selected nothing"
+    );
+    let menu = right_click_frame(&mut detail, &ctx, &node, &sift, source, on_feature);
+    let pixel = menu
+        .context_menu_pixel
+        .expect("a right-click opened the menu");
+    assert!(
+        (pixel[0] - x).abs() < 1.0 && (pixel[1] - y).abs() < 1.0,
+        "the menu is at {pixel:?}, not the feature's ({x}, {y})"
+    );
+    assert_eq!(queue.len(), 0, "a tile asked for while Building");
+    run.finish();
 }
 
 // ── The focused measurement item's two entries ──────────────────────────

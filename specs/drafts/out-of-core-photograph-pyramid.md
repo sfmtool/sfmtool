@@ -3487,7 +3487,8 @@ in core. Step 17 turns the tier on.
           `Building` with that level, and Image Detail and the 3D
           background draw it before the build ends; under a budget of 0
           the coarsest is handed to the panel that asked, as a tile is; the
-          level drawn while waiting takes no click (G13); and neither panel
+          level drawn while waiting takes clicks as the photograph does
+          (open question 16); and neither panel
           asks for a tile or repaints more than the reads need, at a budget
           of 0 and at one smaller than the photograph.
           **As built** ([photograph_cache/build.rs](../../crates/sfmtool-core/src/camera/photograph_cache/build.rs),
@@ -3519,9 +3520,12 @@ in core. Step 17 turns the tier on.
           messages) and *Build mipmaps*' run, tapping its `Progress`, calls
           the viewer's `wake` once a build, so the repaints are bounded by
           the photographs built, one each besides the run's end. Image
-          Detail's coarsest frames take the gestures G13 gives a held
-          picture (the interaction rule now names this stand-in), draw the
-          view at the photograph's own size so the overlays line up, ask
+          Detail's coarsest frames take clicks, drags and menus as the
+          finished photograph does, under G1 to G12, since the level is the
+          selected photograph at low resolution (open question 16; the
+          first form held them under G13, which the maintainer reversed),
+          draw the view at the photograph's own size so the overlays and
+          the pixels a gesture names line up, ask
           for no tile, and paint the spinner and *Building mipmap…* over
           everything, on a backing, as painted shapes that take no
           pointer. The background copies level `K` into its texture once
@@ -3749,5 +3753,20 @@ decisions.
     and (c) are still ruled out by the rule that a panel never makes a
     mipmap and by what kernels read. 14e1 applies (a) also under a budget
     of 0, where no slot keeps the levels at all, so that a panel's every
-    request would otherwise have the build made again (14e1's as-built
-    note).
+. **Gestures on the coarsest level drawn while a mipmap is made.** Found
+    while building 14e2a: Image Detail draws the selected photograph's
+    coarsest level under the spinner while *Build mipmaps* makes its
+    mipmap. The options:
+    - (a) it takes no click, drag or menu, as G13 has a picture kept while
+      its replacement loads take none, hover and the view's own wheel and
+      keys still working;
+    - (b) it takes the gestures the finished photograph does, under G1 to
+      G12, only the painted spinner and its label sitting over it.
+
+    *Decided by the user:* (b). The level is the selected photograph at low
+    resolution, drawn at its real level-0 size with the overlays lined up,
+    so a click, a drag or a menu names the pixel and the feature the user
+    sees; G13's reason, that the drawn picture is not the selected one,
+    does not apply. The first form of 14e2a built (a) and named the
+    stand-in in G13; that clause is gone and the panel's spec cites G1 to
+    G12 for it.
