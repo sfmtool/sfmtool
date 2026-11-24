@@ -30,7 +30,10 @@ The figure's world geometry and its handles are
 the GPU pass that draws them is
 [scene_renderer/bench_track.rs](../../crates/sfm-explorer/src/scene_renderer/bench_track.rs)
 with
-[shaders/bench_track.wgsl](../../crates/sfm-explorer/src/shaders/bench_track.wgsl);
+[shaders/bench_track.wgsl](../../crates/sfm-explorer/src/shaders/bench_track.wgsl),
+drawing its edges out of the overlay ribbon store,
+[scene_renderer/overlay_ribbons.rs](../../crates/sfm-explorer/src/scene_renderer/overlay_ribbons.rs)
+(§ "The overlay ribbon store");
 and what a pointer means against a patch is
 [bench/geometry.rs](../../crates/sfm-explorer/src/bench/geometry.rs), which the
 Image Detail handles and the wire's patch tools read a pixel through as well.
@@ -203,14 +206,18 @@ centre disc is a **triangle list**. A triangle cannot be clipped a vertex at a
 time the way a segment can, so a disc vertex behind the near plane drops its
 whole triangle; the disc is an eighth of a half-length across, so its three
 corners agree in every view but a grazing one. The figure is rebuilt on the CPU
-and re-uploaded every frame it is drawn, since the barbs turn to face the eye
-and there is no state to key it on that a camera move does not invalidate. It is
-a few hundred instances.
+every frame it is drawn, since the barbs turn to face the eye and there is no
+state to key it on that a camera move does not invalidate. It is a few hundred
+instances. Its edges are written into the figure's region of the overlay ribbon
+store (§ "The overlay ribbon store"), and its disc into a vertex buffer of its
+own, made again each frame: a disc is three vertices per triangle rather than
+an edge instance, drawn by a pipeline of its own.
 
 **The same shader draws the 3D view's measurements**, in the same call
 ([`measurement-view.md`](measurement-view.md) § "Drawing measurements"). Their
 marks and lines are edges of the same kind, rebuilt on the CPU each frame
-(`viewer_3d::measurements::ribbons`), and each edge instance carries the two
+(`viewer_3d::measurements::ribbons`) and written into their own region of the
+store, and each edge instance carries the two
 things in which they differ from the figure's. One is **its width**: the
 figure's edges are `BENCH_LINE_HALF_WIDTH`, and a measurement's are its stroke
 in points, in physical pixels. The other is **whether its part behind the scene
@@ -235,6 +242,54 @@ colour target and no depth attachment, so it writes no pick ID
 and no depth, and a click is decided by the measurements' and the handles'
 own hit tests on the CPU and otherwise by the scene under
 them.
+
+### The overlay ribbon store
+
+The figure's edges and the measurements' marks and lines are held in one GPU
+buffer, the **overlay ribbon store**
+([scene_renderer/overlay_ribbons.rs](../../crates/sfm-explorer/src/scene_renderer/overlay_ribbons.rs)),
+which the scene renderer owns. Each overlay figure is written by one
+**producer**, the code that builds its instances, and each producer has its own
+region of the buffer:
+
+```rust
+pub(crate) enum ProducerId { BenchFigure, Measurements } // the region order
+pub(crate) enum OverlayTarget { Scene, MeasurementLayer }
+
+impl OverlayRibbons {
+    pub(crate) fn write(&mut self, device: &wgpu::Device, queue: &wgpu::Queue,
+        producer: ProducerId, target: OverlayTarget, instances: &[OverlayInstance]);
+    pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'_>, target: OverlayTarget);
+}
+```
+
+A region records its producer, the target it is drawn into, and its offset,
+count and capacity in instances. `OverlayInstance` is the edge instance
+described above.
+
+- **Writing.** Instances that fit the region's capacity are one
+  `queue.write_buffer` of that region and nothing else. More instances than
+  that double the region's capacity until they fit, starting from 64, and the
+  regions are laid out end to end again. Every region that moved is written
+  again at its new place, from the copy of its last instances the store keeps
+  for that purpose. When the regions no longer fit the buffer, the buffer is
+  replaced by one doubled in size until they do, starting from 256 instances,
+  and every region is written into it. The buffer and the regions never shrink
+  within a session.
+- **An empty write** sets the region's count to 0 and writes nothing. The region
+  keeps its capacity for the next write.
+- **Drawing.** Each target's pass sets its pipeline and the quad corners, binds
+  the store's buffer once, and draws each of its regions as
+  `draw(0..4, offset..offset + count)`. The regions lie in the buffer, and are
+  drawn, in a fixed order, `ProducerId`'s: the bench figure on the scene
+  target, and the measurements on their layer.
+
+The bench figure and the measurements both write their region every frame,
+since both are built from the camera. The figure's centre disc is not in the
+store (§ "Depth against the scene").
+[`../drafts/overlay-ribbons.md`](../drafts/overlay-ribbons.md) describes the
+later steps: instances that do not depend on the camera, producers that write
+only when what they draw from changes, and the track rays as a third producer.
 
 ## The handles
 
@@ -661,11 +716,23 @@ struct, or a uniform block whose Rust side has drifted from the WGSL, is a
 validation error there rather than a blank pass on a real GPU. The same tests
 check that the figure's edges carry the fade flag and the measurements' do
 not, at the widths each carries, and that the measurements' upload holds one
-instance per ribbon. What the shader does with them, the depth-aware blend with
+instance per ribbon. The pass contract draws both targets' regions out of one
+store, the measurements' at an offset past the figure's. What the shader does
+with them, the depth-aware blend with
 and without the fade and the clip at the near plane, runs on no `noop` device,
 so it is checked by eye, with MCP screenshots of the viewport showing a
 square lying on a surface, one in front of it and one behind it
 ([`mcp-server.md`](mcp-server.md)).
+
+`scene_renderer/overlay_ribbons/tests.rs` checks the store on the same `noop`
+device. That device keeps no buffer contents, so the store records, in test
+builds only, each write it issues as a byte range and the bytes those writes
+leave in the buffer. A write within capacity is one write of its own region; a
+region growing past its capacity moves the regions after it and writes them
+again, the regions before it are not written, and past the buffer's size a
+larger buffer holds every region's instances; an empty write issues nothing,
+draws nothing and keeps the capacity; and the regions are drawn in the fixed
+order whatever order they were written in, each target drawing only its own.
 
 `bench/geometry/tests.rs` covers the ray arithmetic on its own: a ray meets a
 finite patch where its plane is and a bearing's tangent plane at its own

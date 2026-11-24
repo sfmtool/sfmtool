@@ -836,12 +836,12 @@ impl App {
         // turn to face the eye, so a camera move alone invalidates it, and it
         // is a few hundred instances.
         self.scene_renderer
-            .upload_bench_track(device, self.viewer_3d.bench_figure.as_ref());
+            .upload_bench_track(device, queue, self.viewer_3d.bench_figure.as_ref());
         // The measurements' marks and lines, on the same cadence and for the
         // same reason: a mark is a ring a fixed number of points across, so
         // its world size follows the camera.
         self.scene_renderer
-            .upload_measurements(device, &self.viewer_3d.measurement_ribbons);
+            .upload_measurements(device, queue, &self.viewer_3d.measurement_ribbons);
 
         // Upload/clear background image for camera view mode. The background is
         // a singleton too, serving the camera view's own node — whose transform
