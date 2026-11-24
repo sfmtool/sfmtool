@@ -14,13 +14,13 @@
 use sfmtool_core::bench::EditableTrack;
 
 use super::super::gpu_types::{
-    BenchDiscVertex, BenchTrackUniforms, OverlayInstance, BENCH_LINE_HALF_WIDTH,
+    mat4_to_cols, BenchDiscVertex, BenchTrackUniforms, OverlayInstance, BENCH_LINE_HALF_WIDTH,
 };
 use super::super::overlay_ribbons::{OverlayRibbons, OverlayTarget, ProducerId};
 use super::super::SceneRenderer;
+use super::OverlayView;
 use crate::scene::ImageRef;
 use crate::viewer_3d::bench_track::{self, Figure};
-use crate::viewer_3d::measurements::Ribbon;
 
 fn device() -> (wgpu::Device, wgpu::Queue) {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -217,16 +217,21 @@ fn the_pass_pipelines_agree_with_the_buffers_the_upload_writes() {
         bytemuck::bytes_of(&BenchTrackUniforms {
             view_proj: [[0.0; 4]; 4],
             view: [[0.0; 4]; 4],
+            proj: [[0.0; 4]; 4],
             screen_size: [64.0, 64.0],
             near: 0.1,
             fog_distance: 1.0,
+            pixels_per_point: 2.0,
+            pull_fraction: 0.01,
+            _pad: [0.0; 2],
         }),
     );
     assert_eq!(std::mem::size_of::<BenchTrackUniforms>() % 16, 0);
 
     let figure = staged_figure();
     let edges = super::figure_instances(&figure);
-    let measurements = super::measurement_instances(&[ribbon(1.0)]);
+    // Every kind of piece: a segment, a ring and a disc.
+    let measurements = [segment(1.0), ring(), disc()];
     let disc: Vec<BenchDiscVertex> = figure
         .disc
         .iter()
@@ -320,61 +325,86 @@ fn the_pass_pipelines_agree_with_the_buffers_the_upload_writes() {
     );
 }
 
-/// A measurement ribbon from the origin to `x` along the X axis, in a
-/// half-transparent orange, 3 pixels wide.
-fn ribbon(x: f32) -> Ribbon {
-    Ribbon {
-        a: [0.0, 0.0, 0.0, 1.0],
-        b: [x, 0.0, 0.0, 1.0],
-        color: [1.0, 0.5, 0.0, 0.55],
-        half_width: 1.5,
-    }
+/// How a measurement's pieces are drawn.
+const MEASUREMENT: u32 = OverlayInstance::HOLD | OverlayInstance::PULL_TOWARD_EYE;
+
+/// A measurement's line from the origin to `x` along the X axis, in a
+/// half-transparent orange, 3 points wide.
+fn segment(x: f32) -> OverlayInstance {
+    OverlayInstance::segment(
+        [0.0, 0.0, 0.0, 1.0],
+        [x, 0.0, 0.0, 1.0],
+        [1.0, 0.5, 0.0, 0.55],
+        1.5,
+        MEASUREMENT,
+    )
 }
 
+/// A measurement's ring at the origin, 5 points to the middle of its stroke.
+fn ring() -> OverlayInstance {
+    OverlayInstance::ring([0.0, 0.0, 0.0, 1.0], [1.0; 4], 5.0, 1.0, MEASUREMENT)
+}
+
+/// A measurement's dot at the origin.
+fn disc() -> OverlayInstance {
+    OverlayInstance::disc([0.0, 0.0, 0.0, 1.0], [1.0; 4], 1.5, MEASUREMENT)
+}
+
+/// The figure's pieces are segments at the bench's width in points, fading
+/// behind the scene and not pulled toward the eye.
 #[test]
-fn the_figure_fades_behind_the_scene_and_the_measurements_do_not() {
+fn the_figure_is_segments_that_fade_behind_the_scene() {
     let figure = staged_figure();
     let edges = super::figure_instances(&figure);
     assert_eq!(edges.len(), figure.strokes().count());
     for (edge, stroke) in edges.iter().zip(figure.strokes()) {
         assert_eq!(
-            (edge.endpoint_a, edge.endpoint_b, edge.color),
+            (edge.a, edge.b, edge.color),
             (stroke.a, stroke.b, stroke.color)
         );
-        assert_eq!(edge.half_width, BENCH_LINE_HALF_WIDTH);
-        assert_eq!(edge.fade, 1.0, "the figure fades with distance behind");
+        assert_eq!(edge.kind, OverlayInstance::SEGMENT);
+        assert_eq!((edge.half_width, edge.radius), (BENCH_LINE_HALF_WIDTH, 0.0));
+        assert_eq!(
+            edge.flags,
+            OverlayInstance::FADE,
+            "the figure fades with distance behind, and is not pulled"
+        );
     }
+}
 
-    let ribbons = [ribbon(1.0), ribbon(2.0)];
-    let measurements = super::measurement_instances(&ribbons);
+/// The camera block carries the projection on its own, so the shader can
+/// project a piece after pulling it toward the eye in view space, and the
+/// frame's pixels per point and pull fraction as the 3D view handed them.
+#[test]
+fn the_camera_block_carries_the_frame_s_scale_and_pull() {
+    let camera = crate::viewer_3d::ViewportCamera {
+        fov: 0.9,
+        ..Default::default()
+    };
+    let view = OverlayView {
+        pixels_per_point: 1.5,
+        pull_fraction: 0.0125,
+    };
+    let uniforms = super::bench_track_uniforms(&camera, (300, 200), 2.0, view);
+    let proj = camera.projection_matrix(1.5);
+    assert_eq!(uniforms.proj, mat4_to_cols(&proj));
+    assert_eq!(uniforms.view, mat4_to_cols(&camera.view_matrix()));
     assert_eq!(
-        measurements,
-        vec![
-            OverlayInstance {
-                endpoint_a: ribbons[0].a,
-                endpoint_b: ribbons[0].b,
-                color: ribbons[0].color,
-                half_width: 1.5,
-                fade: 0.0,
-            },
-            OverlayInstance {
-                endpoint_a: ribbons[1].a,
-                endpoint_b: ribbons[1].b,
-                color: ribbons[1].color,
-                half_width: 1.5,
-                fade: 0.0,
-            },
-        ],
-        "a measurement holds at BEHIND_OPACITY behind the scene"
+        uniforms.view_proj,
+        mat4_to_cols(&(proj * camera.view_matrix()))
     );
+    assert_eq!(uniforms.screen_size, [300.0, 200.0]);
+    assert_eq!(uniforms.fog_distance, 2.0);
+    assert_eq!(uniforms.pixels_per_point, 1.5);
+    assert_eq!(uniforms.pull_fraction, 0.0125);
 }
 
 #[test]
-fn an_upload_of_measurements_holds_one_instance_per_ribbon_and_nothing_for_none() {
+fn an_upload_of_measurements_holds_its_instances_and_nothing_for_none() {
     let (device, queue) = device();
     let mut r = SceneRenderer::new();
 
-    r.upload_measurements(&device, &queue, &[ribbon(1.0), ribbon(2.0), ribbon(3.0)]);
+    r.upload_measurements(&device, &queue, &[segment(1.0), ring(), disc()]);
     assert_eq!(
         r.overlay_ribbons
             .drawn_count(OverlayTarget::MeasurementLayer),

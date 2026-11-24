@@ -50,6 +50,11 @@ use recon::ReconResources;
 use upload::{BgMeshKey, LoadedBgLevel};
 
 // Re-export public constants so external modules can use `crate::scene_renderer::*`.
+/// What the overlay pieces are drawn with that their instances do not hold,
+/// which the 3D view sets each frame.
+pub(crate) use bench_track::OverlayView;
+/// One piece of an overlay figure, which a producer builds.
+pub(crate) use gpu_types::OverlayInstance;
 pub(crate) use gpu_types::{
     DEFAULT_FRUSTUM_SIZE_MULTIPLIER, DEFAULT_LENGTH_SCALE_MULTIPLIER,
     DEFAULT_TARGET_FOG_MULTIPLIER, DEFAULT_TARGET_SIZE_MULTIPLIER,

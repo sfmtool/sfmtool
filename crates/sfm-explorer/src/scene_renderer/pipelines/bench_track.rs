@@ -17,11 +17,11 @@ pub(in crate::scene_renderer) const BLEND: wgpu::BlendState = wgpu::BlendState::
 
 /// Resources created by the bench track pipelines.
 pub(in crate::scene_renderer) struct BenchTrackPipelineResources {
-    /// Instanced ribbon-quad edges of the figure: the frame, the normal, the
-    /// barbs and the marks.
+    /// The figure's pieces out of the overlay ribbon store: the frame, the
+    /// normal, the barbs and the marks, each a segment.
     pub(crate) edge_pipeline: wgpu::RenderPipeline,
-    /// The same edges into the measurements' layer
-    /// ([`MEASUREMENT_TARGET_FORMAT`]): the drawn measurements' marks and
+    /// The same pieces into the measurements' layer
+    /// ([`MEASUREMENT_TARGET_FORMAT`]): the drawn measurements' rings, dots and
     /// lines, which egui composites as it composites its own painting.
     pub(crate) measurement_pipeline: wgpu::RenderPipeline,
     /// The filled centre disc, a triangle list.
@@ -79,7 +79,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> BenchTrackPipe
     };
     let color_target = target(EDL_OUTPUT_FORMAT);
 
-    // One edge pipeline per target format: the figure's onto the sRGB view of
+    // One overlay pipeline per target format: the figure's onto the sRGB view of
     // the EDL output, the measurements' into their encoded layer.
     let edge = |label, targets: &[Option<wgpu::ColorTargetState>]| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -87,11 +87,11 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> BenchTrackPipe
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_edge"),
+                entry_point: Some("vs_overlay"),
                 buffers: &[
                     // Slot 0: quad corners (per-vertex), reuses the point quad buffer
                     Some(QUAD_VERTEX_LAYOUT),
-                    // Slot 1: one edge of the figure or a measurement (per-instance)
+                    // Slot 1: one piece of the figure or of a measurement (per-instance)
                     Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<OverlayInstance>() as u64,
                         step_mode: wgpu::VertexStepMode::Instance,
@@ -99,12 +99,12 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> BenchTrackPipe
                             wgpu::VertexAttribute {
                                 format: wgpu::VertexFormat::Float32x4,
                                 offset: 0,
-                                shader_location: 1, // endpoint_a (xyz + w)
+                                shader_location: 1, // a (xyz + w)
                             },
                             wgpu::VertexAttribute {
                                 format: wgpu::VertexFormat::Float32x4,
                                 offset: 16,
-                                shader_location: 2, // endpoint_b (xyz + w)
+                                shader_location: 2, // b (xyz + w)
                             },
                             wgpu::VertexAttribute {
                                 format: wgpu::VertexFormat::Float32x4,
@@ -114,12 +114,22 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> BenchTrackPipe
                             wgpu::VertexAttribute {
                                 format: wgpu::VertexFormat::Float32,
                                 offset: 48,
-                                shader_location: 4, // half_width
+                                shader_location: 4, // half_width, in points
                             },
                             wgpu::VertexAttribute {
                                 format: wgpu::VertexFormat::Float32,
                                 offset: 52,
-                                shader_location: 5, // fade
+                                shader_location: 5, // radius, in points
+                            },
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Uint32,
+                                offset: 56,
+                                shader_location: 6, // kind
+                            },
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Uint32,
+                                offset: 60,
+                                shader_location: 7, // flags
                             },
                         ],
                     }),
@@ -137,7 +147,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> BenchTrackPipe
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_main"),
+                entry_point: Some("fs_overlay"),
                 targets,
                 compilation_options: Default::default(),
             }),

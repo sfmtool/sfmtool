@@ -321,8 +321,9 @@ Pass 4:  Track rays (when a 3D point is selected)
 Pass 5:  Measurements, then the bench figure (while the 3D viewer draws a
          measurement or the focused item)
   Input:  The overlay ribbon store's regions for each target (the
-          measurements' edge instances, then the figure's) + the figure's
-          centre disc mesh + hw depth (sampled)
+          measurements' segments, rings and discs, then the figure's
+          segments) + the frame's pixels per point and pull toward the eye
+          + the figure's centre disc mesh + hw depth (sampled)
   Output: The measurement layer, a Rgba8Unorm texture of its own cleared
           to transparent every frame; then EDL output color (alpha blending,
           reads depth for occlusion; neither writes a pick ID or depth)

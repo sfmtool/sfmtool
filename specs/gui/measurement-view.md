@@ -58,7 +58,7 @@ tools), and, for the drawing,
 (which measurements are drawn, the marks and lines on screen, their hit test,
 the press and the indicator, shared by both views),
 [viewer_3d/measurements.rs](../../crates/sfm-explorer/src/viewer_3d/measurements.rs)
-(where the 3D view puts them, and the ribbons its scene pass draws them with) and
+(where the 3D view puts them, and the instances its scene pass draws them with) and
 [image_detail/measurements.rs](../../crates/sfm-explorer/src/image_detail/measurements.rs)
 (where Image Detail puts them, and the handle drag).
 
@@ -1001,16 +1001,25 @@ the hidden part of a highlighted surfel's outline shows
 ([patch-rendering.md](patch-rendering.md)): a piece in front of the scene is
 drawn at full strength, and a piece behind it at `BEHIND_OPACITY` (0.45) with
 no fade with distance, so a measurement far behind the cloud is as findable as
-one just behind it. Each straight piece is one camera-facing ribbon carrying
-its own colour and width (`viewer_3d::measurements::ribbons`): the line and
-its halo, and per mark a ring of 24 chords, its halo and the dot. The ribbons
-are built every frame and written into the measurements' region of the overlay
-ribbon store, the buffer the bench figure's edges share
+one just behind it. Each piece is one instance of the overlay ribbon store,
+the buffer the bench figure's segments share
 ([viewer-3d-bench-layer.md](viewer-3d-bench-layer.md) § "The overlay ribbon
-store"). A mark keeps
-its size on screen, its ring built facing the eye at the endpoint's depth with
-its radius in points unprojected there, and the widths are the points above
-in physical pixels. The layer is a texture of its own, cleared to transparent
+store"), carrying its own colour and its sizes in points
+(`viewer_3d::measurements::instances`): the line and its halo are segments,
+and a mark is three instances, its ring's halo, its ring and its dot, the ring
+and its halo each a ring and the dot a disc about the endpoint, which the pass
+turns to face the eye, so a mark keeps its size on screen. Its edges, and the
+line's, are anti-aliased over about one point. Within the region every halo
+comes first, then every stroke (each measurement's line and then its rings),
+then every dot, each in the layer's order, so one measurement's halo never
+crosses another's stroke. Nothing in an instance depends on the camera, so the
+instances are built only when what they are drawn from changes: the 3D view
+keys them on each drawn node's document serial, display transform and tint,
+the selected measurement and endpoint, the focused item's `Arc`, *Show all
+measurements*, and the visible nodes (`measurement_marks::MeasurementLayerKey`),
+and writes them into the measurements' region only then. Orbiting, zooming and
+resizing the panel build and write nothing, even with *Show all measurements*
+on over a thousand measurements. The layer is a texture of its own, cleared to transparent
 every frame, that holds egui's premultiplied colours as egui's own textures
 hold them; the view paints it over the scene, the grid and the axes, where
 the overlay was painted, so egui composites a translucent colour (the dimmed
@@ -1026,11 +1035,14 @@ panel's height. One panel point at view depth `d` is
 `d · 2·tan(vfov/2) / height` long, so the pull is the same fraction of every
 piece's depth (`toward_eye_fraction`, at most a quarter, and none for a panel
 with no height), a uniform scale toward the eye: each piece moves along its
-own line of sight, which leaves its projection where it was. An endpoint at
-infinity or refused draws nothing, and the other endpoint still draws its
-mark; a finite endpoint behind the eye draws no mark, and a line with one end
-behind it is clipped at the near plane, by the pass as it clips the bench
-figure's segments. The pass writes no pick id and no depth,
+own line of sight, which leaves its projection where it was. The 3D view
+computes the fraction once a frame and hands it to the pass with the panel's
+pixels per point, and the vertex shader moves each piece by it, so the
+instances need not change when the field of view or the panel does. An
+endpoint at infinity or refused draws nothing, and the other endpoint still
+draws its mark; a finite endpoint behind the near plane draws no mark, and a
+line with one end behind it is clipped at the near plane, both by the pass as
+it clips the bench figure's segments. The pass writes no pick id and no depth,
 and the hit test below reads the projected positions alone, so a measurement
 behind the scene is hovered and clicked as one in front of it is. The hover
 text and the off-screen indicator are drawn over the view.
@@ -1400,18 +1412,30 @@ at-infinity case is covered by the Rust tests.
   pointing right, left, down, up and, for a midpoint behind the eye, the way to
   turn; a click on it framing both endpoints inside the view with the
   orientation kept; the option and a hidden node; a line with one end behind
-  the eye clipped, the end in front keeping its mark; the ribbons the frame
-  builds for the pass: the line and its halo between the endpoints moved toward
-  the eye by a pull that is the same number of points at any field of view and
-  panel height, each ring at its radius on screen and the selected one 1.6 times
-  larger, the dot, the colours and widths in physical pixels, the emphasis and
-  dimming of *Show all*, the item's violet, none for a refused endpoint or one
-  at infinity, and a line with one end behind the eye handed to the pass whole.
-  (`scene_renderer/bench_track/tests.rs`): the measurements' instances holding
-  at `BEHIND_OPACITY` while the figure's fade, their upload, and the pass with
-  both drawn validated on a headless device, the measurements into their
-  own layer; the layer's one format and its clear, and a translucent colour
-  composited as egui painted it on an sRGB or an encoded surface.
+  the eye clipped, the end in front keeping its mark; the instances the frame
+  builds for the pass: the halos of the line and of each ring, then the line
+  and each ring, then each dot, at the endpoints themselves, each ring and dot
+  one instance with its radius in points whatever the distance and the
+  selected ring 1.6 times larger, the colours and widths in points, every piece
+  held behind the scene and pulled toward the eye; every halo before every
+  stroke and every dot last across the measurements of *Show all*, with its
+  emphasis and dimming; the item's violet; none for a refused endpoint or one
+  at infinity, and a line with one end behind the eye handed to the pass
+  whole; the pull a frame hands the pass equal to `toward_eye_fraction` of its
+  camera and panel, which is the same number of points at any field of view
+  and panel height, with its pixels per point; the instances built once and
+  not again for a camera move, a field of view or a panel size, and once more
+  for each change of their key (the item focused, a step on it, an undo,
+  another measurement or an endpoint selected, *Show all* toggled, the node
+  hidden and shown, its display transform changed, and its tint); and a thousand measurements with *Show all*
+  on orbited with nothing built or handed to the upload.
+  (`scene_renderer/bench_track/tests.rs`): the figure's segments fading while
+  the measurements' instances hold at `BEHIND_OPACITY`, their upload, the
+  camera block carrying the projection, the pixels per point and the pull,
+  and the pass with both drawn validated on a headless device, a segment, a
+  ring and a disc into the measurements' own layer; the layer's one format and
+  its clear, and a translucent colour composited as egui painted it on an sRGB
+  or an encoded surface.
   (`image_detail/measurements/tests.rs`):
   the marks at the endpoint pixels, a line only where both are in the image,
   the refused endpoint's warning colour; the hover, a click selecting no

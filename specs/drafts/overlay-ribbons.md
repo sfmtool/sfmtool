@@ -1,8 +1,10 @@
 # Overlay ribbons in the 3D view
 
-**Status:** Draft. Step 1, the store, is built and specified in
+**Status:** Draft. Steps 1 and 2, the store and instances independent of the
+camera, are built and specified in
 [gui/viewer-3d-bench-layer.md](../gui/viewer-3d-bench-layer.md) § "The overlay
-ribbon store"; steps 2 to 4 are not built.
+ribbon store" and [gui/measurement-view.md](../gui/measurement-view.md) §
+"Drawing measurements"; steps 3 and 4 are not built.
 
 The 3D view draws several kinds of overlay figure into the scene. Today they are:
 - the focused bench item's figure;
@@ -24,12 +26,13 @@ pass of its own. A track ray to a point at infinity reaches the horizon instead
 of stopping at a fixed length.
 
 Amends:
-- [gui/viewer-3d-bench-layer.md](../gui/viewer-3d-bench-layer.md): the pass and
-  instance format the bench figure and the measurements share today.
-- [gui/measurement-view.md](../gui/measurement-view.md) § "Drawing measurements".
+- [gui/viewer-3d-bench-layer.md](../gui/viewer-3d-bench-layer.md) § "The overlay
+  ribbon store": the track rays as a third producer.
 - [gui/architecture.md](../gui/architecture.md): Pass 4, the track rays, and
   Pass 5.
 - [gui/point-cloud-rendering.md](../gui/point-cloud-rendering.md): the pass list.
+- [gui/scene-graph.md](../gui/scene-graph.md) § "Track rays and background
+  image".
 
 Decided by the maintainer:
 - **The bench figure is rebuilt when the camera moves.** Its arrowhead's barbs
@@ -51,28 +54,16 @@ Nothing in this draft is still open.
 
 ## What exists
 
-**The bench figure and the measurements.** They share one shader
-(`bench_track.wgsl`) and one instance format, `OverlayInstance`: two
-homogeneous world endpoints, a colour, a half width in physical pixels and a
-`fade` flag. They are drawn in two passes. The measurements draw into their own
-layer texture, which egui paints over the scene, and the figure draws into the
-scene texture.
-
-Both are rebuilt on the CPU every frame and written into their regions of the
-overlay ribbon store, which step 1 built (`SceneRenderer::upload_measurements`,
-`upload_bench_track`). Their instances depend on the camera:
-- **A measurement mark.** Its ring is 24 chords placed in screen space and
-  unprojected at the mark's depth. Its dot is a short ribbon. Every piece is
-  pulled toward the eye by a fraction that follows the field of view and the
-  panel's height (`viewer_3d::measurements::ribbons`). That is about 100
-  instances per measurement.
-- **The figure's arrowhead.** Its barbs turn to face the eye.
-
-With a few measurements none of this costs anything. With *Show all measurements*
-on and a thousand measurements, it is about 100,000 instances (5.6 MB) built
-and uploaded every frame while the camera orbits and nothing else
-changes. The chord rings also overlap their own halo where chords meet, and the
-ribbons are hard-edged.
+**The store and the instance format.** The bench figure and the measurements
+are drawn out of one buffer, a region per producer, and each piece is one
+`OverlayInstance`: a segment, a ring or a disc, with homogeneous world places,
+sizes in panel points, and flags for how it is drawn behind the scene and
+whether it is pulled toward the eye. Segments are clipped at the near plane in
+homogeneous view space, so an end with `w = 0` stays a direction, and edges are
+anti-aliased over about a point
+([gui/viewer-3d-bench-layer.md](../gui/viewer-3d-bench-layer.md) § "The overlay
+ribbon store"). The measurements are built only when their key changes; the
+bench figure every frame, for its barbs.
 
 **The track rays** have their own pass (`track_ray.wgsl`), their own instance
 (`EdgeInstance`: two `vec3` endpoints) and a uniform half width of 1.5 pixels.
@@ -93,167 +84,25 @@ own shaders; § "Non-goals".
 
 ## The design
 
-### One instance format, independent of the camera
+### The track rays as a producer
 
-```rust
-/// One piece of an overlay figure.
-#[repr(C)]
-pub(crate) struct OverlayInstance {
-    /// A segment's two ends; a ring's or a disc's centre in `a`.
-    /// Homogeneous world coordinates: `w = 1` a place, `w = 0` a direction,
-    /// which is drawn at infinity.
-    pub(crate) a: [f32; 4],
-    pub(crate) b: [f32; 4],
-    /// Not premultiplied, in the colour space of the target it is drawn into.
-    pub(crate) color: [f32; 4],
-    /// Half the stroke's width, in panel points.
-    pub(crate) half_width: f32,
-    /// A ring's or a disc's radius, in panel points; 0 for a segment.
-    pub(crate) radius: f32,
-    /// Segment, ring or disc.
-    pub(crate) kind: u32,
-    /// How it is drawn behind the scene (FADE or HOLD), and
-    /// PULL_TOWARD_EYE.
-    pub(crate) flags: u32,
-}
-```
-
-The vertex shader already has the camera's uniform block, and everything that
-depends on the camera moves into it.
-
-**Sizes in points.** Widths and radii are in panel points. The shader turns them
-into pixels with a new `pixels_per_point` uniform, so an instance stays the same
-across a DPI change.
-
-**The pull toward the eye.** A flagged piece is moved toward the eye by the
-fraction `PULL_POINTS · 2·tan(vfov/2) / panel_height`, capped as today. The CPU
-computes it once per frame and hands it to the shader as a uniform. A piece moves
-along its own line of sight, so where it projects is unchanged and the CPU hit
-test agrees with it.
-
-**Rings and discs.** Each is one instance. The shader projects the centre and
-expands a quad of `radius + half_width` points, aligned to the screen, around it.
-The fragment shader draws the annulus or disc from each fragment's distance to
-the centre. That replaces 24 chord instances, a halo and a dot with three
-instances (halo ring, ring, dot), and it removes the doubled halo where chords
-met.
-
-**Segments** are today's ribbons, with two changes:
-- **Clipping.** They are clipped at the near plane in homogeneous view space, so
-  an end with `w = 0` stays a direction rather than being divided by zero
-  (§ "Track rays").
-- **Edges.** A segment's edges are anti-aliased over about one panel point.
-
-**Behind the scene.** Each instance says how its hidden part is drawn:
-- `FADE`: fades with depth behind the scene, down to a floor. This is the bench
-  figure.
-- `HOLD`: held at `BEHIND_OPACITY`. This is a measurement and a track ray, and
-  also how a highlighted surfel's hidden outline is drawn.
-
-**Unchanged.** The bench figure's arrowhead barbs still turn to face the eye, so
-the figure's producer rebuilds when the camera moves (§ "Producers and their
-keys").
-
-### One buffer, a region per producer
-
-*Built (step 1),* as
-[gui/viewer-3d-bench-layer.md](../gui/viewer-3d-bench-layer.md) § "The overlay
-ribbon store" describes, with the bench figure and the measurements as its two
-producers and today's edge fields in `OverlayInstance`. What the step settled
-that this section leaves open: a region's offset is in instances; a region
-starts at 64 instances and the buffer at 256; the store keeps a copy of each
-region's last instances, which a repack writes again at the region's new place;
-and a region is drawn as `draw(0..4, ...)`, today's four-corner strip, until
-step 2 changes the vertex layout. The figure's centre disc stays a vertex
-buffer of its own: it lies in the patch's plane and foreshortens with it, which
-a screen-aligned disc of step 2 does not, so it joins the store only if step 2
-gives it a kind of its own.
-
-The scene renderer owns one `OverlayRibbons` store:
-
-```rust
-pub(crate) struct OverlayRibbons {
-    /// Grown by doubling when a producer outgrows its region, never shrunk
-    /// within a session.
-    buffer: wgpu::Buffer,
-    /// In draw order.
-    regions: Vec<Region>,
-}
-
-struct Region {
-    producer: ProducerId,
-    target: OverlayTarget,
-    /// Where its instances start in `buffer`, how many it holds now, and how
-    /// many it has room for.
-    offset: u64,
-    count: u32,
-    capacity: u32,
-}
-
-pub(crate) enum OverlayTarget {
-    /// The scene texture, blended in linear light (the bench figure, the
-    /// track rays).
-    Scene,
-    /// The measurements' layer, blended on encoded values and painted over the
-    /// scene by egui (§ "Drawing measurements").
-    MeasurementLayer,
-}
-```
-
-- **Writing.** A producer whose instances changed hands them to
-  `OverlayRibbons::write(producer, target, &[OverlayInstance])`.
-  - If they fit its region's capacity, that is one `queue.write_buffer` of that
-    region and nothing else.
-  - If they don't, the region's capacity doubles, the regions are repacked, and
-    the store rewrites the regions that moved.
-  - A producer that changed nothing writes nothing, and its region keeps the last
-    frame's instances.
-- **Drawing.** Each target's pass binds the buffer once and draws each of its
-  regions with `draw(0..6, offset..offset + count)`, in region order. Each target
-  has one pipeline: the two that exist today, with the new vertex layout.
-- **Order.** A producer lays out its own instances with all halos first, then all
-  strokes, then dots, so one item's halo never crosses another's stroke. The
-  regions are drawn in a fixed order: track rays, then the bench figure on the
-  scene target; measurements on their layer.
-- **Retiring.** A producer that draws nothing writes an empty slice and its
-  region's count drops to 0. Its capacity is kept for next time.
-
-The store is the one place overlay geometry lives on the GPU. The per-overlay
-buffers go away: `measurement_edge_buffer` and `bench_track_edge_buffer` went
-with step 1, and `track_ray_edge_buffer`, with its count, goes with step 3. The
-track rays' own pass and pipeline go away too.
-
-### Producers and their keys
-
-A producer is the code that turns one overlay's data into instances. It keeps the
-key it last built from, and rebuilds only when that key changes:
+The track rays become the store's third producer, drawn first on the `Scene`
+target, before the bench figure. Their own buffer, `track_ray_edge_buffer` with
+its count, their pass and their pipeline go away.
 
 | Producer | Target | Key |
 |---|---|---|
 | Track rays | `Scene` | The selected point and the version that holds it (`app::selected_point_source`), the node's transform and visibility, and whether the observations' keypoints are cached |
-| Bench figure | `Scene` | The focused item's `Arc` and the camera's pose, for the barbs |
-| Measurements | `MeasurementLayer` | Each drawn node's document serial and display transform, the selected measurement and endpoint, the focused item's `Arc`, *Show all measurements*, and the visible nodes |
 
-The measurement key covers everything the instances are built from, now that
-nothing in them depends on the camera. It reuses the readings cache's key
-(`SceneNode::measurement_readings`, `SceneNode::item_reading`) with the selection
-and display state added. Orbiting, zooming and resizing the panel then rebuild
-nothing and upload nothing. The track rays already rebuild only on their key, so
-they keep that behaviour.
-
-The hit test (`measurement_marks`) keeps projecting the endpoints on the CPU from
-the same readings. It does not read the instances.
-
-A new widget, such as a GPS marker, is another producer. It builds
-`OverlayInstance`s from its own data, chooses a target and a key, and calls
-`write`. Its labels and hover text stay egui, as the measurements' do.
+The track rays already rebuild only on their key, so they keep that behaviour.
 
 ### Track rays
 
 A track ray is a segment in the rays' orange, anti-aliased as the other
-overlays are, with `HOLD` behind the scene: where geometry hides it, it is drawn
-at `BEHIND_OPACITY`, so a ray going into the bull shows where it goes. Its width
-is a stroke in points like a measurement's, replacing the 1.5-pixel glow. It runs from the observing camera's centre (`a`,
+overlays are, with `HOLD` behind the scene and no pull toward the eye: where
+geometry hides it, it is drawn at `BEHIND_OPACITY`, so a ray going into the bull
+shows where it goes. Its width is a stroke in points like a measurement's,
+replacing the 1.5-pixel glow. It runs from the observing camera's centre (`a`,
 `w = 1`) to its far end (`b`):
 
 - **To a finite point,** `b` is the nearest point on the observation ray to the
@@ -271,9 +120,14 @@ is a stroke in points like a measurement's, replacing the 1.5-pixel glow. It run
     depth the points and patches at infinity use. That puts it behind every
     finite thing, so a ray is dimmed where finite geometry covers it.
   - **Behind the camera.** If the direction points away from the camera, the
-    segment is clipped at the near plane in homogeneous coordinates. The part in
-    front of the camera, from the camera centre outward, is drawn up to the
-    screen's edge, where the clipped line leaves the view.
+    segment is clipped at the near plane in homogeneous coordinates, as every
+    segment already is. The part in front of the camera, from the camera centre
+    outward, is drawn up to the screen's edge, where the clipped line leaves the
+    view.
+  - **Occlusion of a mixed segment.** A segment with one place and one
+    direction is neither wholly finite nor wholly at infinity, so the shader's
+    choice of fading or holding behind the scene, which today follows whether
+    both ends are directions, has to hold for every fragment of it; `HOLD` does.
 - **Through the node's transform.** The node's display transform is applied to a
   direction as a rotation only: a similarity's translation and scale do not move
   a direction. This matches how points at infinity are drawn.
@@ -281,6 +135,13 @@ is a stroke in points like a measurement's, replacing the 1.5-pixel glow. It run
 That is the whole change for points at infinity. A ray now reaches its point on
 the screen wherever the point is drawn, instead of ending at a length that looks
 arbitrary next to it.
+
+### The bench figure's barbs
+
+The bench figure's producer rebuilds every frame because its arrowhead's barbs
+turn to face the eye. Once the rest is built, judge whether the barbs should
+turn in the shader instead, so that the figure's key no longer holds the
+camera's pose and a camera move writes nothing for it either.
 
 ## Non-goals
 
@@ -292,22 +153,6 @@ arbitrary next to it.
 
 ## Testing
 
-**The store**
-- A producer that writes within its capacity issues one write of its own region,
-  and leaves the other regions untouched.
-- Growing past capacity repacks, and every region keeps its instances.
-- A key that hasn't changed writes nothing.
-- An empty write draws nothing and keeps the region's capacity.
-- Regions are drawn in the fixed order, and halos before strokes within a
-  producer.
-
-**The measurement producer**
-- It builds once, and doesn't rebuild when only the camera, the field of view or
-  the panel's size changes.
-- It does rebuild on each change to its key: a step on the focused item, an undo,
-  another measurement selected, *Show all* toggled, a node hidden, the display
-  transform changed.
-
 **The track-ray producer**
 - A finite point's rays end where they do today.
 - A point at infinity's rays carry `w = 0` and the direction through the node's
@@ -316,52 +161,35 @@ arbitrary next to it.
 - There is no fixed-length end.
 - In the shader-side geometry, a `w = 0` end projects to the same screen spot as
   the point at infinity's own splat.
+- The flags: `HOLD` and no pull on a ray's pieces.
+- A key that hasn't changed writes nothing.
+- Regions are drawn in the fixed order: the track rays, then the bench figure.
 
-**Instances**
-- A ring or disc is one instance, with its radius in points.
-- The flags: `HOLD` and `PULL_TOWARD_EYE` on a measurement's pieces, `FADE` on
-  the figure's, `HOLD` and no pull on a ray's.
-
-**Pass contract.** Each target's pipeline draws regions from the shared buffer on
-the `noop` device, with the new vertex layout.
+**Pass contract.** The scene target's pipeline draws the rays' region from the
+shared buffer on the `noop` device, and the rays' own pass is gone.
 
 **By eye, on a real GPU, in the PR's screenshots**
-- Rings anti-aliased, with an even halo.
-- Hidden measurement pieces at `BEHIND_OPACITY`.
-- No visible change to the bench figure.
-- The hit test still landing on the drawn mark at several fields of view.
 - For a point at infinity, every ray of its track reaching its splat at the
   horizon: seoul_bull v02 has one, point #264.
 - A track ray that passes into the bull drawn at `BEHIND_OPACITY` where the bull
   hides it, and at full strength where it is in front.
 
-**Cost.** With 1,000 measurements and *Show all* on, a frame while orbiting
-builds and uploads no instances. A test counter checks this, as for
-`item_reading`.
-
 ## Steps
 
-1. **The store.** `OverlayRibbons` with regions, `write`, per-target draws, and
-   the fixed region order. The measurements and the bench figure move onto it,
-   still built every frame, with today's instance contents in the new format.
-   There is no visible change.
-
-   *Built.* `BenchEdgeInstance` became `OverlayInstance` with its fields
-   unchanged, so step 2 changes the fields and not the name. The tests of the
-   store's regions and of the pass contract are built
-   (§ "One buffer, a region per producer").
-2. **Instances independent of the camera.** This step brings:
-   - widths and radii in points;
-   - the pull toward the eye in the shader;
-   - rings and discs as one instance each;
-   - edges anti-aliased over a point;
-   - halos drawn before strokes;
-   - the measurement producer keyed and cached.
-
-   It is visible (rings, edges and halo order), so it needs screenshots.
+1. **The store.** *Built*
+   ([gui/viewer-3d-bench-layer.md](../gui/viewer-3d-bench-layer.md) § "The
+   overlay ribbon store").
+2. **Instances independent of the camera.** *Built*: widths and radii in
+   points, the pull toward the eye in the shader, rings and discs as one
+   instance each, edges anti-aliased over a point, halos before strokes, and
+   the measurement producer keyed and cached
+   ([gui/viewer-3d-bench-layer.md](../gui/viewer-3d-bench-layer.md) § "The
+   overlay ribbon store", [gui/measurement-view.md](../gui/measurement-view.md)
+   § "Drawing measurements").
 3. **Track rays.** The rays move onto the store as a producer, drawn as
    anti-aliased strokes and dimmed where hidden, and their own pass is removed.
    A ray to a point at infinity becomes a direction drawn to the horizon. This is
    visible, so it needs screenshots.
 4. **Later, once the rest is built:** judge whether the bench figure's barbs
-   should turn in the shader, so the figure's key no longer includes the camera.
+   should turn in the shader, so the figure's key no longer includes the camera
+   (§ "The bench figure's barbs").

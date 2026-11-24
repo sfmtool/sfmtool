@@ -5,19 +5,19 @@
 //!
 //! The figure itself is [`crate::viewer_3d::bench_track`]'s -- world points,
 //! world directions and colours, with no GPU in it. What this module adds is
-//! the three things the frame needs: the figure's edges, written into its
+//! the three things the frame needs: the figure's segments, written into its
 //! region of the [overlay ribbon store](super::overlay_ribbons), and its centre
 //! disc, in a vertex buffer of its own; the camera block the shader projects
 //! through; and the pass that draws them onto the EDL output.
 //!
-//! The measurements the 3D view shows are drawn in the same call, with
-//! the same shader and bind group: their marks and lines are ribbons
-//! ([`crate::viewer_3d::measurements::Ribbon`]) built on the CPU each frame
-//! and written into a region of their own in the same store, as edges of the
-//! figure's own kind. They differ from the
-//! figure's in two things the instance carries, their width and that the
-//! part behind the scene holds at `BEHIND_OPACITY` rather than fading, and
-//! in one the pass does not: they are a render pass of their own into a layer
+//! The measurements the 3D view shows are drawn in the same call, with the
+//! same shader and bind group: their rings, dots and lines are
+//! [`OverlayInstance`]s that `viewer_3d::measurements::instances` builds when
+//! what they are drawn from changes, written into a region of their own in the
+//! same store. They differ from the figure's pieces in what the instances
+//! carry -- their shapes and widths, a part behind the scene that holds at
+//! `BEHIND_OPACITY` rather than fading, and the pull toward the eye -- and in
+//! one thing the pass does: they are a render pass of their own into a layer
 //! texture of their own (`MEASUREMENT_TARGET_FORMAT`), which egui paints over
 //! the scene texture, so a translucent colour composites on encoded values,
 //! as egui painted them.
@@ -35,46 +35,84 @@
 //! The figure is rebuilt and written again every frame it is drawn, because the
 //! arrowhead's barbs turn to face the eye: there is no state it could be keyed
 //! on that a camera move does not invalidate. It is a few hundred instances.
+//! The measurements are written only when they change: nothing in their
+//! instances depends on the camera, and the camera block this pass writes each
+//! frame carries the frame's pixels per point and pull toward the eye
+//! ([`bench_track_uniforms`]).
 
 use wgpu::util::DeviceExt;
 
 use super::gpu_types::{
-    BenchDiscVertex, BenchTrackUniforms, OverlayInstance, BENCH_LINE_HALF_WIDTH,
+    mat4_to_cols, BenchDiscVertex, BenchTrackUniforms, OverlayInstance, BENCH_LINE_HALF_WIDTH,
 };
 use super::overlay_ribbons::{OverlayTarget, ProducerId};
 use super::SceneRenderer;
 use crate::viewer_3d::bench_track::Figure;
-use crate::viewer_3d::measurements::Ribbon;
 use crate::viewer_3d::ViewportCamera;
 
-/// The edges `figure` draws: in its strokes' colours at the bench's width,
-/// fading with how far behind the scene they are.
+/// What the overlay pieces are drawn with on one frame that their instances do
+/// not hold: the panel's scale and the pull toward the eye. The 3D view sets it
+/// each frame it is shown.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct OverlayView {
+    /// Physical pixels to a panel point.
+    pub(crate) pixels_per_point: f32,
+    /// What fraction of its distance to the eye a piece flagged
+    /// [`OverlayInstance::PULL_TOWARD_EYE`] is drawn toward it
+    /// (`viewer_3d::measurements::toward_eye_fraction`).
+    pub(crate) pull_fraction: f32,
+}
+
+impl Default for OverlayView {
+    fn default() -> Self {
+        Self {
+            pixels_per_point: 1.0,
+            pull_fraction: 0.0,
+        }
+    }
+}
+
+/// The segments `figure` draws: in its strokes' colours at the bench's width in
+/// points, fading with how far behind the scene they are, and not pulled
+/// toward the eye.
 pub(super) fn figure_instances(figure: &Figure) -> Vec<OverlayInstance> {
     figure
         .strokes()
-        .map(|stroke| OverlayInstance {
-            endpoint_a: stroke.a,
-            endpoint_b: stroke.b,
-            color: stroke.color,
-            half_width: BENCH_LINE_HALF_WIDTH,
-            fade: 1.0,
+        .map(|stroke| {
+            OverlayInstance::segment(
+                stroke.a,
+                stroke.b,
+                stroke.color,
+                BENCH_LINE_HALF_WIDTH,
+                OverlayInstance::FADE,
+            )
         })
         .collect()
 }
 
-/// The edges the measurements' `ribbons` draw: each at its own width, and
-/// held at `BEHIND_OPACITY` wherever it is behind the scene.
-pub(super) fn measurement_instances(ribbons: &[Ribbon]) -> Vec<OverlayInstance> {
-    ribbons
-        .iter()
-        .map(|ribbon| OverlayInstance {
-            endpoint_a: ribbon.a,
-            endpoint_b: ribbon.b,
-            color: ribbon.color,
-            half_width: ribbon.half_width,
-            fade: 0.0,
-        })
-        .collect()
+/// The bench track pass's camera block for `camera` in a panel `size` physical
+/// pixels across, with the figure's `fog_distance` and the frame's `view`.
+pub(super) fn bench_track_uniforms(
+    camera: &ViewportCamera,
+    size: (u32, u32),
+    fog_distance: f32,
+    view: OverlayView,
+) -> BenchTrackUniforms {
+    let (w, h) = size;
+    let aspect = w as f64 / h as f64;
+    let view_matrix = camera.view_matrix();
+    let proj = camera.projection_matrix(aspect);
+    BenchTrackUniforms {
+        view_proj: mat4_to_cols(&(proj * view_matrix)),
+        view: mat4_to_cols(&view_matrix),
+        proj: mat4_to_cols(&proj),
+        screen_size: [w as f32, h as f32],
+        near: camera.near as f32,
+        fog_distance,
+        pixels_per_point: view.pixels_per_point,
+        pull_fraction: view.pull_fraction,
+        _pad: [0.0; 2],
+    }
 }
 
 /// How the measurements' pass opens their layer: cleared to transparent, so the
@@ -83,21 +121,21 @@ pub(super) const MEASUREMENT_LAYER_LOAD: wgpu::LoadOp<wgpu::Color> =
     wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
 
 impl SceneRenderer {
-    /// Write the marks and lines of the measurements the 3D view draws into
-    /// their region of the overlay ribbon store, or empty it when there are
-    /// none.
+    /// Write the rings, dots and lines of the measurements the 3D view draws
+    /// into their region of the overlay ribbon store, or empty it when there
+    /// are none. Called only when they have changed.
     pub(crate) fn upload_measurements(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        ribbons: &[Ribbon],
+        instances: &[OverlayInstance],
     ) {
         self.overlay_ribbons.write(
             device,
             queue,
             ProducerId::Measurements,
             OverlayTarget::MeasurementLayer,
-            &measurement_instances(ribbons),
+            instances,
         );
     }
 
@@ -174,8 +212,14 @@ impl SceneRenderer {
         self.bench_track_fog_distance = 0.0;
     }
 
-    /// Update the bench track pass's camera block.
-    pub(crate) fn update_bench_track_uniforms(&self, queue: &wgpu::Queue, camera: &ViewportCamera) {
+    /// Update the bench track pass's camera block, with the frame's pixels per
+    /// point and pull toward the eye.
+    pub(crate) fn update_bench_track_uniforms(
+        &self,
+        queue: &wgpu::Queue,
+        camera: &ViewportCamera,
+        view: OverlayView,
+    ) {
         let (w, h) = self.current_size;
         if w == 0 || h == 0 || self.bench_pass_count() == 0 {
             return;
@@ -183,18 +227,7 @@ impl SceneRenderer {
         let Some(buf) = &self.bench_track_uniform_buffer else {
             return;
         };
-
-        let aspect = w as f64 / h as f64;
-        let view = camera.view_matrix();
-        let view_proj = camera.projection_matrix(aspect) * view;
-
-        let uniforms = BenchTrackUniforms {
-            view_proj: super::gpu_types::mat4_to_cols(&view_proj),
-            view: super::gpu_types::mat4_to_cols(&view),
-            screen_size: [w as f32, h as f32],
-            near: camera.near as f32,
-            fog_distance: self.bench_track_fog_distance,
-        };
+        let uniforms = bench_track_uniforms(camera, (w, h), self.bench_track_fog_distance, view);
         queue.write_buffer(buf, 0, bytemuck::bytes_of(&uniforms));
     }
 
@@ -202,14 +235,14 @@ impl SceneRenderer {
     /// output texture.
     ///
     /// The measurements' layer is cleared to transparent every frame, whether
-    /// or not there is a measurement to draw, and the ribbons are drawn into it
-    /// with straight-alpha blending, which over a transparent layer keeps the
-    /// layer premultiplied. egui paints it over the scene texture as it paints
-    /// its own textures, so a translucent mark or line composites on encoded
-    /// values as egui painted it before. The figure is drawn onto the scene
-    /// texture: the disc first and the edges over it, as the target indicator
-    /// draws its star under its wireframe, since the outline is what says
-    /// where the frame's boundary is, so nothing fills over it.
+    /// or not there is a measurement to draw, and their pieces are drawn into
+    /// it with straight-alpha blending, which over a transparent layer keeps
+    /// the layer premultiplied. egui paints it over the scene texture as it
+    /// paints its own textures, so a translucent mark or line composites on
+    /// encoded values as egui painted it before. The figure is drawn onto the
+    /// scene texture: the disc first and the segments over it, as the target
+    /// indicator draws its star under its wireframe, since the outline is what
+    /// says where the frame's boundary is, so nothing fills over it.
     pub(crate) fn render_bench_track(&self, encoder: &mut wgpu::CommandEncoder) {
         let Some(bind_group) = &self.bench_track_bind_group else {
             return;

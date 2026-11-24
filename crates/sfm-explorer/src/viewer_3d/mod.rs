@@ -408,6 +408,9 @@ pub(crate) struct Viewer3D {
     /// The measurements this view draws, set by the dock each frame with the
     /// HUD's *Show all measurements* ([`crate::measurement_marks`]).
     pub(crate) measurements: crate::measurement_marks::MeasurementLayer,
+    /// What [`Self::measurements`] was built from, set by the dock beside it:
+    /// the key the instances the scene pass draws them with are built on.
+    pub(crate) measurement_key: crate::measurement_marks::MeasurementLayerKey,
     /// A press a measurement's mark, line or the off-screen indicator holds,
     /// from the press until the button comes up. Held here for the reason
     /// [`Self::bench_drag`] is.
@@ -417,12 +420,25 @@ pub(crate) struct Viewer3D {
     /// What a click on a measurement asked of the app, drained by `dock.rs`
     /// after the frame for the reason [`Self::bench_gesture`] is.
     pub(crate) measurement_gesture: Option<crate::measurement_marks::MeasurementGesture>,
-    /// The measurements' marks and lines as the scene pass draws them, built
-    /// from [`Self::measurements`] through the camera of the last frame this
-    /// panel was shown, for the reason [`Self::bench_figure`] is built here.
-    /// `app.rs` uploads them.
-    pub(crate) measurement_ribbons: Vec<measurements::Ribbon>,
-    /// The texture the scene pass draws those ribbons into, which this panel
+    /// The key the measurements' instances in the scene pass were last built
+    /// on, or `None` when none have been built or they were cleared.
+    measurement_built: Option<crate::measurement_marks::MeasurementLayerKey>,
+    /// The measurements' rings, dots and lines as the scene pass draws them,
+    /// built from [`Self::measurements`] when [`Self::measurement_key`]
+    /// changes and taken by `app.rs`, which writes them into the overlay
+    /// ribbon store; `None` while what the store holds is current. Nothing in
+    /// them depends on the camera, so orbiting, zooming and resizing build
+    /// and write nothing.
+    pub(crate) measurement_upload: Option<Vec<crate::scene_renderer::OverlayInstance>>,
+    /// How many times the measurements' instances have been built, for the
+    /// tests that a camera move builds none.
+    #[cfg(test)]
+    pub(crate) measurement_builds: usize,
+    /// The panel's pixels per point and the measurements' pull toward the
+    /// eye through the camera of the last frame this panel was shown, which
+    /// `app.rs` hands the scene pass's uniform write.
+    pub(crate) overlay_view: crate::scene_renderer::OverlayView,
+    /// The texture the scene pass draws those pieces into, which this panel
     /// paints over the scene texture; set by `app.rs` each frame, `None`
     /// before the renderer has made it.
     pub(crate) measurement_texture: Option<egui::TextureId>,
@@ -596,10 +612,15 @@ impl Viewer3D {
             measurement_start: Default::default(),
             surfel_scale: Some(1.0),
             measurements: Default::default(),
+            measurement_key: Default::default(),
             measurement_press: None,
             measurement_hover: None,
             measurement_gesture: None,
-            measurement_ribbons: Vec::new(),
+            measurement_built: None,
+            measurement_upload: None,
+            #[cfg(test)]
+            measurement_builds: 0,
+            overlay_view: Default::default(),
             measurement_texture: None,
             bench_drag: None,
             bench_gesture: None,
@@ -1178,21 +1199,22 @@ impl Viewer3D {
 
         // The measurements: the layer the scene pass drew them into, painted
         // over the scene, the grid and the axes as egui painted them before,
-        // then the indicator and the hover text. The ribbons for the next
-        // frame's upload are built after this frame's input has moved the
-        // camera.
+        // then the indicator and the hover text. The instances for the next
+        // frame's upload are built only when what they are drawn from has
+        // changed; the pull toward the eye, which follows the field of view
+        // and the panel's height, is taken after this frame's input has moved
+        // the camera.
         if let Some(tex_id) = self.measurement_texture {
             let uv = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
             let mut mesh = egui::Mesh::with_texture(tex_id);
             mesh.add_rect_with_uv(rect, uv, Color32::WHITE);
             painter.add(egui::Shape::mesh(mesh));
         }
-        self.measurement_ribbons = measurements::ribbons(
-            &self.measurements,
-            &self.camera,
-            rect,
-            ui.ctx().pixels_per_point(),
-        );
+        self.build_measurement_instances();
+        self.overlay_view = crate::scene_renderer::OverlayView {
+            pixels_per_point: ui.ctx().pixels_per_point(),
+            pull_fraction: measurements::toward_eye_fraction(&self.camera, rect) as f32,
+        };
         self.draw_measurements(&painter, &response, rect);
 
         // The focused item, as the scene geometry the next frame's

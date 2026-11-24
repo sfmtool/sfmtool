@@ -115,30 +115,111 @@ pub(super) struct CompassEdgeInstance {
 }
 
 /// One piece of an overlay figure, as the
-/// [overlay ribbon store](super::overlay_ribbons::OverlayRibbons) holds it: an
-/// edge of the bench figure or of a drawn measurement, with two homogeneous
-/// world endpoints, its own colour, its own width and how it is drawn behind
-/// the scene.
+/// [overlay ribbon store](super::overlay_ribbons::OverlayRibbons) holds it: a
+/// segment, a ring or a disc of the bench figure or of a drawn measurement.
+///
+/// Nothing in it depends on the camera. Its places are homogeneous world
+/// points, `w = 1.0` for a place and `w = 0.0` for a direction, which is drawn
+/// at infinity, rotation-only, as a point at infinity is. Its sizes are in
+/// panel points, which the shader turns into pixels with the frame's
+/// `pixels_per_point`, and the pull toward the eye a flagged piece is drawn
+/// with is the frame's too ([`BenchTrackUniforms`]). So a producer builds its
+/// instances once from what it draws, and a camera move, a zoom or a resize
+/// writes nothing.
 ///
 /// Wider than [`CompassEdgeInstance`] because the compass is one object in one
 /// colour, while this pass's pieces each carry their own: an observation's
-/// verdict colour, or a measurement's colour and its halo. `w` is `1.0` for a
-/// place and `0.0` for a direction, which is how a track at infinity is drawn:
-/// rotation-only, as a point at infinity is.
+/// verdict colour, or a measurement's colour and its halo.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-pub(super) struct OverlayInstance {
-    pub(crate) endpoint_a: [f32; 4],
-    pub(crate) endpoint_b: [f32; 4],
+pub(crate) struct OverlayInstance {
+    /// A segment's one end; a ring's or a disc's centre.
+    pub(crate) a: [f32; 4],
+    /// A segment's other end; unused by a ring or a disc.
+    pub(crate) b: [f32; 4],
+    /// Not premultiplied, in the colour space of the target it is drawn into.
     pub(crate) color: [f32; 4],
-    /// Half the ribbon's width, in pixels: [`BENCH_LINE_HALF_WIDTH`] for the
-    /// bench figure, and a measurement's own stroke.
+    /// Half the stroke's width, in panel points; 0 for a disc.
     pub(crate) half_width: f32,
-    /// `1.0` where the part behind the scene fades with how far behind it is,
-    /// as the bench figure does; `0.0` where it holds at `BEHIND_OPACITY`
-    /// however far behind it is, as a measurement does and as a highlighted
-    /// surfel's hidden outline does.
-    pub(crate) fade: f32,
+    /// A ring's or a disc's radius, in panel points; 0 for a segment.
+    pub(crate) radius: f32,
+    /// [`Self::SEGMENT`], [`Self::RING`] or [`Self::DISC`].
+    pub(crate) kind: u32,
+    /// How its part behind the scene is drawn, [`Self::HOLD`] or
+    /// [`Self::FADE`], with [`Self::PULL_TOWARD_EYE`] or not.
+    pub(crate) flags: u32,
+}
+
+impl OverlayInstance {
+    /// A straight stroke from `a` to `b`, a ribbon facing the eye.
+    pub(crate) const SEGMENT: u32 = 0;
+    /// A hollow circle facing the eye, `radius` points from its centre to the
+    /// middle of its stroke.
+    pub(crate) const RING: u32 = 1;
+    /// A filled circle facing the eye, `radius` points across from its centre.
+    pub(crate) const DISC: u32 = 2;
+
+    /// Behind the scene it is held at `BEHIND_OPACITY`, however far behind,
+    /// as a measurement is and as a highlighted surfel's hidden outline is.
+    pub(crate) const HOLD: u32 = 0;
+    /// Behind the scene it fades with how far behind it is, down to a floor,
+    /// as the bench figure does.
+    pub(crate) const FADE: u32 = 1;
+    /// It is drawn toward the eye by the frame's pull fraction, along its own
+    /// line of sight, so it projects where it would without the pull.
+    pub(crate) const PULL_TOWARD_EYE: u32 = 2;
+
+    /// A segment from `a` to `b`, `half_width` points to either side.
+    pub(crate) fn segment(
+        a: [f32; 4],
+        b: [f32; 4],
+        color: [f32; 4],
+        half_width: f32,
+        flags: u32,
+    ) -> Self {
+        Self {
+            a,
+            b,
+            color,
+            half_width,
+            radius: 0.0,
+            kind: Self::SEGMENT,
+            flags,
+        }
+    }
+
+    /// A ring about `centre`, `radius` points to the middle of a stroke
+    /// `half_width` points to either side.
+    pub(crate) fn ring(
+        centre: [f32; 4],
+        color: [f32; 4],
+        radius: f32,
+        half_width: f32,
+        flags: u32,
+    ) -> Self {
+        Self {
+            a: centre,
+            b: [0.0; 4],
+            color,
+            half_width,
+            radius,
+            kind: Self::RING,
+            flags,
+        }
+    }
+
+    /// A disc about `centre`, `radius` points across.
+    pub(crate) fn disc(centre: [f32; 4], color: [f32; 4], radius: f32, flags: u32) -> Self {
+        Self {
+            a: centre,
+            b: [0.0; 4],
+            color,
+            half_width: 0.0,
+            radius,
+            kind: Self::DISC,
+            flags,
+        }
+    }
 }
 
 /// One vertex of the bench figure's filled centre disc.
@@ -152,20 +233,33 @@ pub(super) struct BenchDiscVertex {
 /// Uniforms for the bench track pass.
 ///
 /// [`FrustumUniforms`]'s camera block, with the hover index it has no use for
-/// replaced by the one number this pass needs that no other does: how far
-/// behind the scene a fragment fades to the floor opacity. The line width is
-/// each edge's own ([`OverlayInstance::half_width`]).
+/// replaced by what this pass needs that no other does: the projection on its
+/// own, which a piece drawn toward the eye is projected through after the pull;
+/// how far behind the scene a fragment fades to the floor opacity; how many
+/// pixels a panel point is; and the pull toward the eye. The widths and radii
+/// are each instance's own, in points ([`OverlayInstance`]).
 #[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct BenchTrackUniforms {
     pub(crate) view_proj: [[f32; 4]; 4],
     pub(crate) view: [[f32; 4]; 4],
+    pub(crate) proj: [[f32; 4]; 4],
     pub(crate) screen_size: [f32; 2],
     /// Near clip distance, which the shader clips segments against and reads
     /// the scene's own view-space depth back out of the reversed-Z buffer with.
     pub(crate) near: f32,
     /// World units, the figure's own `4h`.
     pub(crate) fog_distance: f32,
+    /// Physical pixels to a panel point, which turns the instances' widths
+    /// and radii into pixels.
+    pub(crate) pixels_per_point: f32,
+    /// What fraction of its distance to the eye a piece flagged
+    /// [`OverlayInstance::PULL_TOWARD_EYE`] is drawn toward it
+    /// (`viewer_3d::measurements::toward_eye_fraction`).
+    pub(crate) pull_fraction: f32,
+    /// Rounds the block up to the 16 bytes a uniform buffer's struct is
+    /// aligned to.
+    pub(crate) _pad: [f32; 2],
 }
 
 #[repr(C)]
@@ -360,9 +454,9 @@ pub(super) const INDICATOR_LINE_HALF_WIDTH: f32 = 2.0;
 /// Half-width of frustum lines in pixels.
 pub(super) const FRUSTUM_LINE_HALF_WIDTH: f32 = 1.0;
 
-/// Half-width of the bench figure's lines in pixels.
+/// Half-width of the bench figure's lines, in panel points.
 ///
-/// Half of the 2.5 px stroke the Image Detail panel's bench layer draws the
+/// Half of the 2.5-point stroke the Image Detail panel's bench layer draws the
 /// same track with, so the figure reads as the same layer in both panels.
 pub(super) const BENCH_LINE_HALF_WIDTH: f32 = 1.25;
 

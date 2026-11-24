@@ -256,7 +256,12 @@ impl TabContext<'_> {
         // node draws dots (`NodeDisplay::of`).
         self.viewer_3d.surfel_scale = (self.state.patch_opacity > 0.0)
             .then(|| 2f64.powf(f64::from(self.state.patch_size_log2)));
-        // The measurements it draws, with its own Show all measurements.
+        // The measurements it draws, with its own Show all measurements, and
+        // what they were built from, which the instances it draws them with
+        // are keyed on.
+        self.viewer_3d.measurement_key = self
+            .state
+            .measurement_layer_key(self.state.show_all_measurements);
         self.viewer_3d.measurements = self
             .state
             .measurement_layer(self.state.show_all_measurements);
@@ -317,7 +322,7 @@ impl TabContext<'_> {
             // Nothing selected is nothing on a bench: the figure would
             // otherwise hang in the scene after the node that held it closed.
             self.viewer_3d.bench_figure = None;
-            self.viewer_3d.measurement_ribbons.clear();
+            self.viewer_3d.clear_measurement_instances();
             ui.centered_and_justified(|ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(100.0);
