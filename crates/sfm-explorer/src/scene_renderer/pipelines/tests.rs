@@ -424,7 +424,7 @@ fn a_highlighted_point_with_a_surfel_shows_as_its_outline_and_not_its_dot() {
         "if in.w != 0.0 {",
         "if !is_outlined(in) {",
         "out.back_facing = 1u;",
-        "let outline = (selected || hovered) && edge_px < OUTLINE_WIDTH_PX;",
+        "let outline = (selected || hovered) && edge_px < outline_width_px();",
         "if !outline && (texel.a < uniforms.alpha_cutoff || in.back_facing != 0u) {",
         "let opacity = select(uniforms.patch_opacity * in.alpha, 1.0, outline);",
     ] {
@@ -447,7 +447,7 @@ fn the_hidden_outline_is_the_surfels_band_at_the_bench_figures_behind_opacity() 
         "return place_preview(in, preview, size_factor);",
         // The same band, in the same colours, at the opacity the bench figure
         // is drawn through the scene at.
-        "if edge_distance_px(in.uv) >= OUTLINE_WIDTH_PX {",
+        "if edge_distance_px(in.uv) >= outline_width_px() {",
         "return vec4<f32>(outline_color(in.mark, selected), BEHIND_OPACITY);",
         "rgb = outline_color(in.mark, selected);",
     ] {
@@ -569,15 +569,30 @@ fn the_splat_and_the_outline_share_the_highlight_colours_and_the_bench_stroke() 
         }
     }
     // The outline is as wide as the stroke the bench draws the patch being
-    // edited with, so the two read as the same kind of mark.
-    let line = format!(
-        "const OUTLINE_WIDTH_PX: f32 = {};",
-        2.0 * super::super::gpu_types::BENCH_LINE_HALF_WIDTH
-    );
-    assert!(
-        include_str!("../../shaders/patch.wgsl")
-            .lines()
-            .any(|l| l.trim() == line),
-        "patch.wgsl does not declare `{line}`"
+    // edited with, so the two read as the same kind of mark: both in panel
+    // points, the outline turned into the pixels its edge distance is measured
+    // in by the frame's pixels per point, which the patch uniform block
+    // carries as the bench pass's does.
+    let patch = include_str!("../../shaders/patch.wgsl");
+    for line in [
+        format!(
+            "const OUTLINE_WIDTH_POINTS: f32 = {};",
+            2.0 * super::super::gpu_types::BENCH_LINE_HALF_WIDTH
+        ),
+        "return OUTLINE_WIDTH_POINTS * uniforms.pixels_per_point;".to_string(),
+        "pixels_per_point: f32, // physical pixels to a panel point".to_string(),
+    ] {
+        assert!(
+            patch.lines().any(|l| l.trim() == line),
+            "patch.wgsl does not declare `{line}`"
+        );
+    }
+    let bench = include_str!("../../shaders/bench_track.wgsl");
+    assert!(bench.contains("let half_px = in.half_width * px;"));
+    // The patch block's Rust side places `pixels_per_point` straight after
+    // the camera position, where the WGSL declares it.
+    assert_eq!(
+        std::mem::offset_of!(super::super::gpu_types::PatchUniforms, pixels_per_point),
+        std::mem::offset_of!(super::super::gpu_types::PatchUniforms, camera_pos) + 12
     );
 }

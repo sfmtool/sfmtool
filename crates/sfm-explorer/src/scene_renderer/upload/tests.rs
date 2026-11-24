@@ -2315,6 +2315,7 @@ fn the_additions_atlas_is_one_of_the_atlases_the_frame_writes_uniforms_for() {
         0.0,
         1.0,
         0.1,
+        1.0,
     );
 }
 
@@ -4034,6 +4035,7 @@ fn the_hidden_outline_pass_waits_for_a_drawn_surfel_to_be_highlighted() {
             0.0,
             1.0,
             0.0,
+            1.0,
         );
         assert_eq!(r.outlined_surfel, recorded, "selected {selected:?}");
     }

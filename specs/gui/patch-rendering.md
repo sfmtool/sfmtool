@@ -140,7 +140,8 @@ instead.
    WGSL allows derivatives only in uniform control flow, before any `discard`.
 2. Sample the atlas layer at `uv` → `texel` (RGBA).
 3. **Outline.** A fragment of a highlighted surfel (its point selected, hovered
-   or called out) with `edge_px < 2.5` is in the outline band; see
+   or called out) with `edge_px` under 2.5 points, in pixels by
+   `PatchUniforms::pixels_per_point`, is in the outline band; see
    [Picking, hover, selection](#picking-hover-selection).
 4. **Coverage from bitmap alpha.** `texel.a` is per-pixel cross-view confidence,
    not opacity. Treat it as coverage: `discard` when `texel.a < alpha_cutoff`
@@ -412,7 +413,7 @@ Because patches write `PICK_TAG_POINT | point_index`, the existing pick pipeline
 new code** — selection highlight, cross-panel hover, and Track View all work through the point they already key on.
 
 The surfel shows its point's highlight itself, as an **outline**: a band
-2.5 screen pixels wide just inside the quad's edge, in the selection's yellow
+2.5 panel points wide just inside the quad's edge, in the selection's yellow
 for the selected point, else the hover's cyan for the hovered point or a point
 the viewport calls out (mask word `2`). That is the precedence and the colours
 the point's splat takes (`SELECTED_COLOR`, `HOVERED_COLOR` in `common.wgsl`),
@@ -422,12 +423,15 @@ dot while it is highlighted, so it is still drawn once
 indexes from `PatchUniforms::selected_point_index` and `hovered_point_index`
 and the call-out from the mask word.
 
-- **Width.** 2.5 px is the stroke the bench draws the patch being edited with
-  (twice `BENCH_LINE_HALF_WIDTH`), so the two read as the same kind of mark.
+- **Width.** 2.5 points (`OUTLINE_WIDTH_POINTS`) is the stroke the bench
+  draws the patch being edited with (twice `BENCH_LINE_HALF_WIDTH`, also in
+  points), so the two read as the same kind of mark at any window scale. The
+  shader turns it into pixels with `PatchUniforms::pixels_per_point`, the
+  frame's pixels per point, which the bench pass's camera block carries too.
   It is constant on screen because it is measured with screen-space
   derivatives, and the band lies inside the quad, so the vertex stage does not
-  grow it. A surfel under about 5 px across is all band, a solid square in the
-  highlight colour, so a far-away highlighted point still reads.
+  grow it. A surfel under about 5 points across is all band, a solid square in
+  the highlight colour, so a far-away highlighted point still reads.
 - **Edge cutoff.** The band is exempt from the coverage discard, so the
   outline traces the whole square at any edge cutoff, while the texels inside
   it are carved as usual.

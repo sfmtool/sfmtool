@@ -344,7 +344,9 @@ pub(super) struct PatchUniforms {
     pub(crate) hovered_point_index: u32,
     /// Camera world position, for front-face culling of patch surfels.
     pub(crate) camera_pos: [f32; 3],
-    pub(crate) _pad1: f32,
+    /// Physical pixels to a panel point, which turns the highlighted surfel's
+    /// outline width into pixels. It fills the vec3's padding.
+    pub(crate) pixels_per_point: f32,
 }
 
 /// Vertex for a tessellated (distorted) image quad.

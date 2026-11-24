@@ -32,15 +32,22 @@ struct Uniforms {
     selected_point_index: u32,
     hovered_point_index: u32,
     camera_pos: vec3<f32>, // world-space camera position (front-face culling)
+    pixels_per_point: f32, // physical pixels to a panel point
 }
 
 // The pipeline prepends common.wgsl, which declares ReconUniforms, the
 // PICK_TAG_* pick ID tags and INF_DEPTH.
 
-// Width in screen pixels of a highlighted surfel's outline, a band inside the
-// quad's edge: the 2.5 px stroke the bench draws the patch being edited with
+// Width in panel points of a highlighted surfel's outline, a band inside the
+// quad's edge: the 2.5-point stroke the bench draws the patch being edited with
 // (twice `BENCH_LINE_HALF_WIDTH` in `scene_renderer/gpu_types.rs`).
-const OUTLINE_WIDTH_PX: f32 = 2.5;
+const OUTLINE_WIDTH_POINTS: f32 = 2.5;
+
+// The outline's width in screen pixels, which `edge_distance_px` is measured
+// in.
+fn outline_width_px() -> f32 {
+    return OUTLINE_WIDTH_POINTS * uniforms.pixels_per_point;
+}
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var patch_texture: texture_2d_array<f32>;
@@ -318,7 +325,7 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     // edge in the highlight colour.
     let selected = in.point_index == uniforms.selected_point_index;
     let hovered = in.point_index == uniforms.hovered_point_index || in.mark == MASK_HIGHLIGHTED;
-    let outline = (selected || hovered) && edge_px < OUTLINE_WIDTH_PX;
+    let outline = (selected || hovered) && edge_px < outline_width_px();
 
     // The bitmap alpha is per-pixel cross-view confidence, not opacity — treat
     // it as coverage so ragged edges and unfilled corners drop out and the quad
@@ -371,7 +378,7 @@ fn fs_main(in: VertexOutput) -> FragOutput {
 // shading, and no pick id, which would change what a click picks.
 @fragment
 fn fs_hidden_outline(in: VertexOutput) -> @location(0) vec4<f32> {
-    if edge_distance_px(in.uv) >= OUTLINE_WIDTH_PX {
+    if edge_distance_px(in.uv) >= outline_width_px() {
         discard;
     }
     let selected = in.point_index == uniforms.selected_point_index;

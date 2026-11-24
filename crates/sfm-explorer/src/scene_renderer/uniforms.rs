@@ -142,6 +142,7 @@ impl SceneRenderer {
         patch_size_log2: f32,
         patch_opacity: f32,
         patch_alpha_cutoff: f32,
+        pixels_per_point: f32,
     ) {
         // Whether this frame records the hidden-outline pass, read from the same
         // selection and hover the patch uniforms below carry.
@@ -261,7 +262,7 @@ impl SceneRenderer {
                         selected_point_index: global_point(selected_point),
                         hovered_point_index: global_point(hovered_point),
                         camera_pos: [cam_pos.x as f32, cam_pos.y as f32, cam_pos.z as f32],
-                        _pad1: 0.0,
+                        pixels_per_point,
                     }),
                 );
             }
