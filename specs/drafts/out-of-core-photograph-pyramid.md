@@ -23,9 +23,8 @@ or number of the photographs. That last part is specified in the companion
 draft [view-region-pyramid.md](view-region-pyramid.md), which this design
 requires: without it no kernel can read a large photograph within a bounded
 memory, so it is a numbered step here (§ "Implementation steps"), not a later
-optimization. The user has decided open questions 1 to 13 of this draft
-(§ "Open questions") and every one of the companion draft's; question 14,
-found while splitting step 14, waits on the user.
+optimization. The user has decided every open question of this draft
+(§ "Open questions", 1 to 14) and every one of the companion draft's.
 
 Amends [core/camera/photograph-cache.md](../core/camera/photograph-cache.md)
 (the cache hands out photograph tiles for every photograph instead of whole
@@ -3059,7 +3058,7 @@ in core. Step 17 turns the tier on.
     files; then `get` makes a missing or stale mipmap in the slot; then
     `get_many` makes its misses in groups sized by the build budget and
     reports what it made; and last the panels act on the `Building` state and
-    queue photographs for *Build mipmaps*. Reading comes before making, so
+    queue photographs for *Build mipmaps*, whose job makes them. Reading comes before making, so
     that making a mipmap only hands the slot the files the reading part
     already reads, as `build_mipmaps` returns them. In a workspace without
     `mipmap_options`, which until step 17 is every workspace no one has
@@ -3067,7 +3066,11 @@ in core. Step 17 turns the tier on.
     part. In one with the object, 14b changes the pixels of an out-of-core
     photograph whose mipmap is current to its mipmap's; between 14b and 14c
     one whose files are missing or stale is still read in core, from a whole
-    decode of the original, and from 14c none is.
+    decode of the original, and from 14c no kernel reads one so. A panel
+    never makes a mipmap: until 14e its requests read an out-of-core
+    photograph without a current mipmap whole in core, as they read every
+    photograph today, and from 14e they wait on its `Building` state
+    instead.
 
     - **14a, the workspace's setting in the cache.** **Built.** The cache
       finds each photograph's workspace root when it makes the photograph's
@@ -3112,6 +3115,30 @@ in core. Step 17 turns the tier on.
       `TileError::Changed` (and `PhotographReadError::Changed` through a
       photograph `get` answered), naming the file. An out-of-core photograph
       whose files are missing or stale is still read in core, as before.
+      `request_layout` and `layout` answer the layout the photograph's tiles
+      are served under: the out-of-core layout while its mipmap is current,
+      the in-core one otherwise. The two have the same levels, level sizes
+      and tile grid (they differ only in the tier and `K`), so a key valid
+      under one is valid under the other, and a panel holding either is
+      never answered `OutOfRange` for the change.
+      **The panels until 14e.** A panel's request, `try_decode_tiles`, never
+      answers `Changed`: a request that finds the photograph's mipmap not
+      current, whether missing, stale or changed since the slot read it,
+      marks the slot's mipmap not current and serves the tiles it was asked
+      for from a whole decode in core, in the same request, as `get` serves
+      a photograph whose files are missing. Under a budget of 0, where no
+      slot remembers anything, each request decides from the files as they
+      are and serves its tiles the same way, so no request is answered with
+      an error a later one would answer again. The tiles a panel already
+      holds from the files stay drawn beside the new ones until it asks for
+      them again; both are the same photograph, a JPEG loss apart. The
+      viewer's `failed_with` handles `TileError::Changed`, which only a
+      kernel's read can now return, as it handles `Unreadable`: the
+      photograph's kept answers are dropped and the failure kept with the
+      photograph's file stamp, asked about again only when that stamp
+      changes, never with `forget`, so a `Changed` cannot start a request
+      and repaint loop. From 14e a `Changed` puts the photograph back to
+      `Building` instead.
       Signature changes: `TileError` gains `Changed { path }`;
       `PhotographCacheStats` counts the file entries beside the tiles.
       Tests: every tile, region and level of an out-of-core photograph with
@@ -3121,7 +3148,17 @@ in core. Step 17 turns the tier on.
       coarsest level outlives every other entry under eviction; a file
       replaced by one with another record during a read fails with
       `Changed`, and one made stale during a kernel fails it with the named
-      error; an in-core photograph in the same workspace reads as before.
+      error; an in-core photograph in the same workspace reads as before;
+      `request_layout` answers the in-core layout for an out-of-core
+      photograph without a current mipmap and the out-of-core one with it;
+      and Image Detail, Track View and the 3D background asking over many
+      looks, through the viewer's `PhotographRequests`, for an out-of-core
+      photograph whose mipmap is missing, and for one whose files are
+      replaced with another record after its first tiles were answered,
+      under a budget of 0 and under a budget smaller than the photograph,
+      draw its tiles, start a bounded number of tasks and repaints (no more
+      than the tiles they ask for need, however many looks), answer no
+      `Changed`, and make no mipmap (the mipmap directory unchanged).
     - **14c, making a mipmap in the slot.** A `get` that finds an
       out-of-core photograph's files missing or stale makes the mipmap in
       the path's slot on its own thread, reserving the build with
@@ -3133,10 +3170,13 @@ in core. Step 17 turns the tier on.
       is held as the in-memory equivalent, its bytes counted against the
       budget, with a warning in the log; a photograph that the hash finds is
       not a shared file's source makes its own mipmap over it, with a
-      warning naming both paths. `get_tile`, `view_region_pyramid` and
-      `get_level` never make one, answering `Changed` for an out-of-core
-      photograph whose files are not current. No out-of-core photograph is
-      read in core from here on. Signature changes: `PhotographCacheStats`
+      warning naming both paths. `get_tile`, `view_region_pyramid`,
+      `get_level` and `try_decode_tiles` never make one: the first three,
+      a kernel's reads, answer `Changed` for an out-of-core photograph whose
+      files are not current, and `try_decode_tiles`, a panel's, serves such
+      a photograph in core as in 14b until 14e. No kernel reads an
+      out-of-core photograph in core from here on. Signature changes:
+      `PhotographCacheStats`
       gains `mipmaps_made`; a build that fails is `GetError::Unreadable`
       naming the photograph. Tests: with the small threshold, a `get` on a
       photograph with no mipmap makes it and returns its pixels; two threads
@@ -3144,7 +3184,10 @@ in core. Step 17 turns the tier on.
       stops within one stage, and the waiter that takes the build over makes
       only the levels not written; a build reports its phases through the
       caller's `Progress`; a build behind a blocked mipmap directory is read
-      from memory and counted against the budget.
+      from memory and counted against the budget; and a panel's
+      `try_decode_tiles` of an out-of-core photograph with no mipmap, with a
+      budget and with a budget of 0, answers its tiles from a decode in core
+      and makes no mipmap.
     - **14d, `get_many`'s builds.** `get_many` first resolves each path's
       layout (a header read, the region test and a record check), so an
       out-of-core photograph whose mipmap is current is read without a
@@ -3166,28 +3209,44 @@ in core. Step 17 turns the tier on.
       mipmaps*' shared list once per path, the spinner with *Building
       mipmap…*, the 3D background drawing the coarsest level while it
       waits, and Image Detail's *Workspace file error:* with the message.
-      Tests: a panel that needs a photograph without a current mipmap adds
-      it to the front of *Build mipmaps*' list once and draws the spinner,
-      twenty such panels add twenty photographs to the one task's list, and
-      no rayon task a panel starts makes or waits on a mipmap; no GUI-thread
-      reader requests a tile of a photograph that is `Building`, and none
-      calls `get` for an out-of-core photograph; and a kernel in another
-      task makes a missing mipmap on its own job thread, and waits on the
-      slot when *Build mipmaps* is making it. Before it is built, open
-      question 14 has to be decided.
-15. **Makers**: `sfm sift` and `build_sift_file`, the viewer's *Build
-    mipmaps* quiet task, `sfm ws mipmaps` with `--prune`
+      A panel's request then no longer reads an out-of-core photograph
+      without a current mipmap in core, and a `Changed` puts the photograph
+      back to `Building`, queued again. With the list comes the least of
+      the *Build mipmaps* quiet task that drains it (open question 14,
+      decided (a)): a quiet source on the fast queue, `state/build_mipmaps.rs`,
+      whose job takes one chunk from the front of the list, as many
+      photographs as `reserve_builds` would grant from an empty count and
+      at most the rayon pool's size, calls `get_many` on it with its own
+      `Progress` and ends, the source queueing it again while the list is
+      not empty; it pushes no version, and the Background Tasks panel shows
+      it as *Building mipmaps: {done} of {total}*. Step 15 adds the rest of
+      the task. Tests: a panel that needs a photograph without a current
+      mipmap adds it to the front of *Build mipmaps*' list once and draws
+      the spinner, twenty such panels add twenty photographs to the one
+      task's list, and no rayon task a panel starts makes or waits on a
+      mipmap; no GUI-thread reader requests a tile of a photograph that is
+      `Building`, and none calls `get` for an out-of-core photograph; a
+      kernel in another task makes a missing mipmap on its own job thread,
+      and waits on the slot when *Build mipmaps* is making it; the task runs
+      on the fast queue, makes one chunk a run, is queued again while its
+      list is not empty and pushes no version; and a panel's spinner ends
+      once the task has made its photograph's mipmap.
+15. **Makers**: `sfm sift` and `build_sift_file`, the rest of the viewer's
+    *Build mipmaps* quiet task, whose job and shared list 14e builds (the
+    list filled when a reconstruction opens, the selected image first, then
+    the Image Browser strip's, then the rest; its place in the `QuietRank`
+    order; a cancelled chunk's photographs put back at the front; and its
+    giving way under the quiet-task rules), `sfm ws mipmaps` with `--prune`
     and `--check` (its `--enable` waits for step 17, since it writes the
     object), and the thumbnail from the coarsest mip level file.
     Tests: `sfm sift` on a small-threshold synthetic workspace writes the
-    files; the quiet task runs on the fast queue, makes the selected image's
-    mipmap in its first run, ends after each chunk and is queued again while
-    its list is not empty, takes a photograph a panel adds to the front of
-    its list in its next run without cancelling the running one, lets a
-    waiting quiet task of higher `QuietRank` (a camera model proposal's job)
-    start between its chunks while it has a long list, pushes no version,
-    runs on a locked node, and gives way to an asked-for task, leaving no slot
-    marked as being made;
+    files; the quiet task makes the selected image's mipmap in its first
+    run, takes a photograph a panel adds to the front of its list in its
+    next run without cancelling the running one, lets a waiting quiet task
+    of higher `QuietRank` (a camera model proposal's job) start between its
+    chunks while it has a long list, runs on a locked node, and gives way to
+    an asked-for task, leaving no slot marked as being made and the
+    photographs of its chunk at the front of its list;
     `--prune` deletes an orphan and
     keeps a current mipmap, and deletes every mip level file in a workspace without the
     object; `--check` writes nothing.
@@ -3247,8 +3306,8 @@ or `read_rgb` pixel by pixel.
 
 ## Open questions
 
-The user has decided questions 1 to 13 below, and the section records the
-decisions; question 14 is not decided yet.
+The user has decided every question below; the section records the
+decisions.
 
 1. **The names of the mip level files.** *Decided by the user:* the whole
    original file name followed by the suffix, as a `.sift` is named
@@ -3320,8 +3379,8 @@ decisions; question 14 is not decided yet.
     the kernels read for every large photograph, a change the owner makes by
     a command named for it. The viewer's notice names the command
     ([mipmaps.md § "The workspace setting"](../core/camera/mipmaps.md#the-workspace-setting)).
-14. **What makes the mipmaps panels queue before step 15.** *Not decided
-    yet*; found while splitting step 14. Step 14e has the panels queue a
+14. **What makes the mipmaps panels queue before step 15.** Found while
+    splitting step 14. Step 14e has the panels queue a
     photograph whose mipmap is not current on *Build mipmaps*' shared list
     and draw *Building mipmap…* until its layout is `Known`, and step 15
     builds the task that makes them. Between the two, in a workspace whose
@@ -3339,6 +3398,8 @@ decisions; question 14 is not decided yet.
     - (c) as planned: 14e queues and nothing drains the list until step 15,
       accepted since the tier is off.
 
-    Recommended: (a), since no part then leaves a panel waiting on work
-    nothing will do, and the job is the part of the task the list cannot be
-    tested without.
+    *Decided by the user:* (a). 14e builds the job and the shared list, the
+    job taking one chunk from the front of the list, calling `get_many` on
+    it and ending, queued again while the list is not empty, so no part
+    leaves a panel waiting on work nothing will do; step 15 adds the rest
+    of the task (§ "Implementation steps", 14e and 15).
