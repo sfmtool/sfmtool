@@ -496,7 +496,7 @@ impl AppState {
             Operation::TRACK_TABLE_REFERENCE_PICKS,
             QuietSource::TrackTableReferencePicks,
             QuietRank::TrackTableReferencePicks,
-            node,
+            Some(node),
             label,
             QuietJob::new(run, move || {
                 let _ = dropped.send(Message::Dropped);

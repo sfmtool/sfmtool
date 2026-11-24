@@ -32,7 +32,7 @@ columns a `find_points` call needs and the track table cache lacks
 Apply: the switch of one camera followed by the retriangulation of the tracks
 its images observe, as one version
 ([edits/switch-camera-model.md](edits/switch-camera-model.md)); it polls the
-flag on either side of the switch and inside the retriangulation. Every one of them is **cancellable**. Four
+flag on either side of the switch and inside the retriangulation. Every one of them is **cancellable**. Five
 more are **quiet tasks**: work the viewer starts by itself to keep a panel
 current, which runs from the fast queue, gives way to every task someone asks
 for, locks no node, writes no row for running and is not reported on the wire
@@ -49,7 +49,9 @@ node the panel shows, and once it holds them, as a second run, the computed
 columns the panel shows, bounds or sorts by ([track-table.md](track-table.md) § "Computing the
 columns"). `Track Table reference picks` picks the reference observation of
 each visible point that stores none, for the Track Table's *Crop* column
-([track-table.md](track-table.md) § "The reference photograph"). The open polls the
+([track-table.md](track-table.md) § "The reference photograph"). `Build
+mipmaps` makes the mipmaps of the out-of-core photographs the panels are
+waiting for, a chunk a run (§ "Quiet tasks"). The open polls the
 flag between files, between each file's stages, before every thumbnail it builds
 and every photograph it decodes, and before every patch it renders, and a
 cancelled open appends no node. The bench steps
@@ -180,6 +182,7 @@ pub(crate) struct Operation {
 | Camera model proposal | fast | no; it pushes no version (Apply installs its answer), and an open proposal refuses every task on its node | yes |
 | Track Table columns | fast | no; it pushes no version (it fills the track table cache), and it runs on a locked node (§ "Quiet tasks") | yes |
 | Track Table reference picks | fast | no; it pushes no version (the panel keeps its picks), and it runs on a locked node (§ "Quiet tasks") | yes |
+| Build mipmaps | fast | no; it pushes no version (it writes mip level files and fills the photograph cache), and it runs on a locked node (§ "Quiet tasks") | yes |
 
 The **slow queue** holds the operations whose cost grows with the whole
 reconstruction and that use every core, Build SIFT files and Build index files
@@ -246,7 +249,7 @@ the pool with it, which slows the adjustment while the fast task runs
 ## Quiet tasks
 
 A **quiet task** is work the viewer starts by itself to keep a panel current,
-rather than work a person or an agent asked for. There are four quiet
+rather than work a person or an agent asked for. There are five quiet
 operations: `Live evaluation`, the bench's live evaluation of one track
 ([bench.md](bench.md) § "Live evaluation"); `Camera model proposal`, the
 job that switches an open proposal's camera and, for its preview,
@@ -254,14 +257,13 @@ retriangulates its tracks ([edits/switch-camera-model.md](edits/switch-camera-mo
 § "The proposal's job"); `Track Table columns`, the Track Table panel's
 table job, which computes the stored track table columns the track table cache
 lacks for the node the panel shows, and then the computed ones the panel needs ([track-table.md](track-table.md)
-§ "Computing the columns"); and `Track Table reference picks`, which runs the
+§ "Computing the columns"); `Track Table reference picks`, which runs the
 reference-view rule for each point on screen in the Track Table that stores no
 reference observation, one point after another, so its *Crop* cell knows which
 photograph to cut ([track-table.md](track-table.md) § "The reference
-photograph"). A fifth, `Build mipmaps`, which makes the stored mipmaps of
-large photographs that the panels are waiting for, is proposed in
-[out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md).
-Nobody asked for any of them, so nothing someone
+photograph"); and `Build mipmaps`, which makes the mipmaps of the out-of-core
+photographs the panels are waiting for (§ "Build mipmaps" below). Nobody
+asked for any of them, so nothing someone
 asked for waits behind them, and nothing reports them as the viewer being busy:
 
 - **It gives way to a task someone asks for.** When a task that is not quiet
@@ -282,7 +284,9 @@ asked for waits behind them, and nothing reports them as the viewer being busy:
   itself takes no `Progress`, so a cancel that arrives during it is read when
   it returns (§ "Open questions" has what that costs); the table job polls
   between blocks of points; the reference picks poll between their picks,
-  between the photographs a pick decodes and inside the rule's renders. Its
+  between the photographs a pick decodes and inside the rule's renders;
+  *Build mipmaps* polls before each photograph of its chunk and between each
+  build's stages, so it stops within one stage of one build. Its
   source then queues
   it again, behind that task, as it already does for a cancelled run, so this
   loses at most the work the cancelled run had done.
@@ -291,14 +295,16 @@ asked for waits behind them, and nothing reports them as the viewer being busy:
   task is queued behind every task someone asked for and behind the waiting
   quiet tasks ahead of it in the fixed order among quiet tasks, its
   `QuietRank`: the camera model proposal's job, whose comparison and preview
-  are on screen while a person decides whether to apply it, then the viewed
+  are on screen while a person decides whether to apply it, then *Build
+  mipmaps*, since a panel is waiting on it, then the viewed
   track's evaluation, the focused item's, the Track Table's columns, the
   Track Table's reference picks, and then
   any other bench item's evaluation.
 - **Each source keeps at most one waiting entry.** A source is one producer of
   quiet work (`QuietSource::CameraModelProposal`,
   `QuietSource::LiveEvaluation`, `QuietSource::TrackTableColumns`,
-  `QuietSource::TrackTableReferencePicks`). A new request replaces the
+  `QuietSource::TrackTableReferencePicks`, `QuietSource::BuildMipmaps`). A
+  new request replaces the
   source's waiting entry rather than adding a second, because a quiet task's
   input is the state of a panel and only the latest state matters.
 - **It is checked again when it would start.** A waiting quiet task whose node
@@ -311,7 +317,9 @@ asked for waits behind them, and nothing reports them as the viewer being busy:
   not: they push no version and their answers are keyed by the document serial
   they read, so they start on a node a slow task holds and work on the version
   on screen, which is the value the slow task was handed; when that task lands
-  its version the serial moves and they run again.
+  its version the serial moves and they run again. *Build mipmaps* reads
+  photographs and not a node's version, and is queued on no node, so it runs
+  whatever a slow task holds.
 - **A dropped or replaced entry is not a failure.** A quiet task's job is a
   `QuietJob`: the work, `FnOnce(&Progress) + Send`, which sends its answers to
   its source on the source's own channel, and a second closure the queue calls
@@ -347,6 +355,51 @@ No wire call waits on a quiet task. A `find_points` call whose columns are not
 cached queues *Find points*, which is asked for, rather than a quiet task
 ([mcp-server.md](mcp-server.md) § "`find_points`"); a running table job is
 asked to stop for it, and the two fill the same track table cache.
+
+### Build mipmaps
+
+A panel never makes a mipmap. One that needs an out-of-core photograph whose
+mipmap is missing or stale, which the photograph cache answers as `Building`
+([core/camera/photograph-cache.md](../core/camera/photograph-cache.md)
+§ "In the viewer"), adds it to the front of a list shared with this task,
+once while it is there, and draws its waiting state; the code is in
+[build_mipmaps.rs](../../crates/sfm-explorer/src/state/build_mipmaps.rs).
+When a reconstruction opens, the list is also filled with its out-of-core
+photographs whose mipmaps are missing or stale, the selected image first,
+which [out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md)
+specifies with the rest of the task (its step 15).
+
+- **One chunk a run.** Each run takes one chunk from the front of the list,
+  as many photographs as the cache's build budget lets it make at once
+  (`PhotographCache::builds_that_fit` of the photograph at the front: as many
+  as `reserve_builds` would grant from an empty count, at least one and at
+  most the rayon pool's size), calls `get_many` on them on its job thread,
+  which makes their mipmaps, and ends. `AppState::drive_build_mipmaps`,
+  called in the frame where the other quiet sources are driven, after the
+  proposal's job and before the evaluation, queues the next run while the
+  list is not empty, so `QuietRank` decides between chunks: a quiet task
+  ahead of it waiting in the fast queue starts before the next chunk rather
+  than after the whole list.
+- **No node.** The task is queued on no node (`start_quiet_task` takes the
+  node as `None`), since the photographs the list holds may belong to any
+  node, and its work waits for none, so a slow task locking the node on
+  screen does not hold it up.
+- **Giving way.** A run displaced by a task someone asked for in the fast
+  queue puts the photographs of its chunk whose layout is not yet known back
+  at the front of the list, in their order, so the run queued again behind
+  that task makes them first and no photograph a panel queued is lost.
+- **What it answers.** Each photograph a run answers, made or found current,
+  leaves the list's memory, so one that goes back to `Building` (a file of
+  its mipmap found not current by a later read) is queued again. One it
+  could not make is kept as a failed decode of the panels' reads is, with
+  the file's length and modification time, so a cache of budget 0, which
+  remembers no failure, is not asked to make it again on every frame; it is
+  queued again once its file changes. A run ends with a repaint, as every
+  task's end does, which draws what it made.
+- **Its line.** While a run is running, the quiet line says what it does
+  and how far it has got, how many photographs have been answered of how
+  many queued since the list was last empty: `quiet Building mipmaps: 3 of
+  10` (§ "Quiet line").
 
 ## What the user sees
 
@@ -553,7 +606,9 @@ quiet task runs only while its queue runs nothing someone asked for, so the
 queue's line above it is in its idle form, showing the last task someone asked
 for that finished from it. It has no phases the panel shows, so its name does
 not pick the phase list. Quiet tasks waiting are neither named nor counted on
-the waiting line.
+the waiting line. A quiet task queued on no node, *Build mipmaps*, has no node
+to name, so its line is `quiet` and its label, which says what it does and
+how far it has got: `quiet Building mipmaps: 3 of 10` (§ "Build mipmaps").
 
 ### Running
 
@@ -1354,7 +1409,7 @@ impl AppState {
     /// only in an idle queue and on a node that is not locked; otherwise it
     /// waits, or is dropped. Nothing is logged.
     pub fn start_quiet_task(&mut self, operation: Operation, source: QuietSource,
-        rank: QuietRank, node: ReconId, label: String, job: QuietJob)
+        rank: QuietRank, node: Option<ReconId>, label: String, job: QuietJob)
         -> Result<u64, String>;
     /// Ask the running quiet task `id` to stop, or drop the waiting one.
     pub fn cancel_quiet_task(&mut self, id: u64);

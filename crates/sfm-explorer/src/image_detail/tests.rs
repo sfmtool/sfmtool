@@ -4497,6 +4497,99 @@ fn a_kept_previous_image_takes_no_click_but_still_hovers() {
     assert_eq!(clicked.select_point, Some(selected_point));
 }
 
+// ── A photograph waiting for its mipmap ─────────────────────────────────
+
+/// The texts one frame of the panel paints, showing image 0 of `node` from
+/// `photograph`.
+fn painted_frame(
+    detail: &mut ImageDetail,
+    ctx: &egui::Context,
+    node: &SceneNode,
+    photograph: crate::state::PhotographSource<'_>,
+) -> Vec<String> {
+    let display = FeatureDisplaySettings::default();
+    let mut intrinsics_display = IntrinsicsDisplaySettings::default();
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, PANEL)),
+        ..Default::default()
+    };
+    crate::test_support::painted_texts(ctx, input, |ui| {
+        detail.show(
+            ui,
+            node.edited(),
+            node.id,
+            node.history.current_version().serial,
+            Some(0),
+            None,
+            None,
+            None,
+            BenchMenu::default(),
+            &[],
+            &crate::platform::ScrollInput::default(),
+            None,
+            Some(photograph),
+            &display,
+            &mut intrinsics_display,
+            None,
+        );
+    })
+}
+
+/// An out-of-core photograph with no mipmap: once its header is read the
+/// panel draws a spinner with *Building mipmap…* in place of the image, asks
+/// for none of its tiles and queues it for *Build mipmaps* once, however
+/// many frames it draws; once the task's run has made the mipmap, the
+/// spinner ends and the photograph's tiles are asked for and drawn.
+#[test]
+fn a_photograph_without_a_mipmap_draws_a_spinner_until_build_mipmaps_has_made_it() {
+    use crate::state::build_mipmaps::run_chunk;
+    use crate::state::build_mipmaps::tests::{cache_for, out_of_core_workspace};
+    use sfmtool_core::progress::Progress;
+    let (_dir, paths) = out_of_core_workspace(1);
+    let node = demo_node("/runs/building.sfmr");
+    let cache = cache_for(1 << 30, 1);
+    let (requests, queue) = crate::state::PhotographRequests::queued();
+    let source = crate::state::PhotographSource {
+        cache: &cache,
+        requests: &requests,
+        path: &paths[0],
+    };
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+
+    let texts = painted_frame(&mut detail, &ctx, &node, source);
+    assert!(
+        texts.iter().any(|t| t == super::DECODING_LABEL),
+        "{texts:?}"
+    );
+    assert_eq!(queue.run_off_this_thread(), 1, "the header read");
+    for frame in 0..3 {
+        let texts = painted_frame(&mut detail, &ctx, &node, source);
+        assert!(
+            texts.iter().any(|t| t == super::BUILDING_MIPMAP_LABEL),
+            "frame {frame}: {texts:?}"
+        );
+        assert_eq!(queue.len(), 0, "frame {frame}: a tile asked for");
+        assert_eq!(requests.mipmaps_waiting(), paths, "frame {frame}");
+    }
+
+    run_chunk(&cache, &requests, &Progress::none());
+    let mut drawn = false;
+    for frame in 0..4 {
+        let texts = painted_frame(&mut detail, &ctx, &node, source);
+        assert!(
+            !texts.iter().any(|t| t == super::BUILDING_MIPMAP_LABEL),
+            "frame {frame}: {texts:?}"
+        );
+        if detail.tiles.shown().is_some() {
+            drawn = true;
+            break;
+        }
+        queue.run_off_this_thread();
+    }
+    assert!(drawn, "the photograph was drawn");
+}
+
 // ── The focused measurement item's two entries ──────────────────────────
 
 /// *Set Endpoint A Here* and *Set Endpoint B Here* are offered only while a

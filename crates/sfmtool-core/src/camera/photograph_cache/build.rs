@@ -188,7 +188,7 @@ impl PhotographCache {
             data.making = false;
             match made {
                 Ok((files, opened, found)) => {
-                    self.read_from(&mut inner, mapped, slot, data, files, opened);
+                    self.read_from(path, &mut inner, mapped, slot, data, files, opened);
                     Ok(found)
                 }
                 Err(e) => {
@@ -231,7 +231,7 @@ impl PhotographCache {
         let slot = Arc::new(Slot::new(stamp, setting));
         {
             let mut inner = self.lock();
-            self.read_from(&mut inner, false, &slot, slot.lock(), files, opened);
+            self.read_from(path, &mut inner, false, &slot, slot.lock(), files, opened);
         }
         (photograph_of(path, &slot), Found::Made)
     }
@@ -301,13 +301,23 @@ impl PhotographCache {
             files,
             not_written,
         } = built;
-        if let Some(why) = &not_written {
-            let first = self
+        self.made_since_stale(path);
+        let stamp = file_stamp(path);
+        let first = {
+            let mut held = self
                 .shared
-                .not_written_warned
+                .not_written
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(path.to_path_buf());
+                .unwrap_or_else(|e| e.into_inner());
+            match &not_written {
+                Some(_) => held.insert(path.to_path_buf(), stamp).is_none(),
+                None => {
+                    held.remove(path);
+                    false
+                }
+            }
+        };
+        if let Some(why) = &not_written {
             if first {
                 progress_warn!(
                     reporting,

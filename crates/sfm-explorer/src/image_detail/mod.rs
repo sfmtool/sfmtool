@@ -60,6 +60,24 @@ pub(crate) const DECODING_LABEL: &str = "Loading image…";
 /// What the panel says in place of a photograph that could not be read.
 pub(crate) const UNREADABLE_LABEL: &str = "Failed to load image";
 
+/// What the panel says, under a spinner, in place of an out-of-core
+/// photograph whose mipmap *Build mipmaps* is making.
+pub(crate) const BUILDING_MIPMAP_LABEL: &str = "Building mipmap…";
+
+/// A spinner over [`BUILDING_MIPMAP_LABEL`], centred in what is left of the
+/// panel. The spinner asks for the frames it turns in, so the panel repaints
+/// while it waits; the run of *Build mipmaps* that makes the mipmap ends
+/// with a repaint too.
+fn show_building_mipmap(ui: &mut egui::Ui) {
+    let height = ui.available_height();
+    ui.vertical_centered(|ui| {
+        let content = ui.spacing().interact_size.y * 2.0 + ui.spacing().item_spacing.y;
+        ui.add_space(((height - content) / 2.0).max(0.0));
+        ui.spinner();
+        ui.label(BUILDING_MIPMAP_LABEL);
+    });
+}
+
 /// The least the zoom limit is, relative to the fit: 32× is pixel-level
 /// inspection for a photograph that fits the panel at a quarter of its size or
 /// larger. See [`view::zoom_limit`].
@@ -779,6 +797,9 @@ impl ImageDetail {
                 self.tiles.fetch(ctx, &carried, requested, known, source)
             }
             (Some(DisplayLayout::Loading), Some(_)) => false,
+            // A mipmap takes seconds to make, so the panel does not keep the
+            // image it showed before meanwhile: it says what it waits on.
+            (Some(DisplayLayout::Building), Some(_)) => return Shown::Nothing,
             _ => true,
         };
         if landed {
@@ -909,9 +930,13 @@ impl ImageDetail {
                 if let Some(look) = look {
                     self.held_look = Some((requested, look));
                 }
-                ui.centered_and_justified(|ui| {
-                    ui.label(DECODING_LABEL);
-                });
+                if matches!(layout, Some(DisplayLayout::Building)) {
+                    show_building_mipmap(ui);
+                } else {
+                    ui.centered_and_justified(|ui| {
+                        ui.label(DECODING_LABEL);
+                    });
+                }
                 return response;
             }
         };
@@ -957,8 +982,12 @@ impl ImageDetail {
         // size: every coordinate below, the overlays' included, is in level-0
         // pixels whichever level the tiles are drawn from.
         let Some(size) = layout_size else {
+            if matches!(layout, Some(DisplayLayout::Building)) {
+                show_building_mipmap(ui);
+                return response;
+            }
             ui.centered_and_justified(|ui| match layout {
-                Some(DisplayLayout::Loading) => {
+                Some(DisplayLayout::Building | DisplayLayout::Loading) => {
                     ui.label(DECODING_LABEL);
                 }
                 Some(DisplayLayout::Known(_) | DisplayLayout::Unreadable) | None => {

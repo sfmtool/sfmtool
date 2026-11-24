@@ -309,8 +309,9 @@ fn the_coarsest_level_outlives_every_other_entry() {
 /// through the photograph `get` answered (from one cache) and a `get_tile`
 /// (from another); after that the slot's mipmap is not current, so the next
 /// `get_tile` answers `Changed` naming the photograph, decoding nothing,
-/// until a `get` finds the new files current and reads them, making no
-/// mipmap of its own. A read through a photograph after
+/// until a `get` makes the mipmap again, since a read found a file of it
+/// not current, which encodes nothing over the new files, current, and then
+/// reads them. A read through a photograph after
 /// its original changed fails with `Changed` naming the original. Under a
 /// budget too small to keep a file, so each read opens it again, and under a
 /// budget of 0, where a `get_tile` decides from the files as they are, the
@@ -355,11 +356,13 @@ fn a_file_changed_during_a_kernel_s_read_fails_it_with_changed() {
                     Err(TileError::Changed { path: named }) => assert_eq!(named, path),
                     other => panic!("not read in core: {:?}", other.err()),
                 }
+                let on_disk = ws.mipmap_files();
                 cache.get(&path, &Progress::none()).unwrap();
+                assert_eq!(ws.mipmap_files(), on_disk, "nothing written over them");
                 let tile = cache.get_tile(&path, key, &Progress::none()).unwrap();
                 assert!(same_tile(&tile, &before), "the new files' pixels");
                 let stats = cache.stats();
-                assert_eq!((stats.decodes, stats.mipmaps_made), (0, 0));
+                assert_eq!((stats.decodes, stats.mipmaps_made), (0, 1));
             }
             // The rebuilt files hold the same pixels.
             Ok(tile) => {
@@ -410,29 +413,39 @@ fn an_in_core_photograph_in_the_same_workspace_reads_as_before() {
     assert!(ws.mipmap_files().is_empty());
 }
 
-/// `request_layout` answers the in-core layout for an out-of-core
-/// photograph whose mipmap is missing and the out-of-core one once its
-/// mipmap is current; the two have the same levels, sizes and tile grid.
-/// With a budget and with one of 0.
+/// `request_layout` answers `Building` for an out-of-core photograph whose
+/// mipmap is missing, each of its tiles `Building` to `peek_tile` (with a
+/// budget; under a budget of 0 nothing is kept), and its out-of-core layout
+/// once a `get_many` has made the mipmap. That layout has the levels, sizes
+/// and tile grid of the photograph's in-core layout, so a panel asks for the
+/// same keys whichever it holds. With a budget and with one of 0.
 #[test]
-fn request_layout_answers_the_layout_the_tiles_are_served_under() {
+fn request_layout_answers_building_until_the_mipmap_is_made() {
+    let key = TileKey {
+        level: 1,
+        col: 0,
+        row: 0,
+    };
     for budget in [GIB, 0] {
         let ws = Workspace::new();
         let path = ws.photograph("a.jpg", &readable_jpeg());
         let cache = cache_of(budget);
-        let layout = |cache: &PhotographCache| {
-            cache.request_layout(&path);
-            match cache.layout(&path) {
-                PeekedLayout::Known(layout) => layout,
-                other => panic!("{other:?}"),
-            }
+        cache.request_layout(&path);
+        assert_eq!(cache.layout(&path), PeekedLayout::Building, "{budget}");
+        let building = matches!(cache.peek_tile(&path, key), PeekedTile::Building);
+        assert_eq!(building, budget > 0, "{budget}");
+        assert!(ws.mipmap_files().is_empty(), "{budget}: no mipmap made");
+
+        cache
+            .get_many(&[path.as_path()], &Progress::none())
+            .unwrap();
+        let out = match cache.layout(&path) {
+            PeekedLayout::Known(layout) => layout,
+            other => panic!("{budget}: {other:?}"),
         };
-        let in_core = layout(&cache);
-        assert!(!in_core.is_out_of_core(), "budget {budget}");
-        build(&path);
-        cache.forget(&path);
-        let out = layout(&cache);
-        assert!(out.is_out_of_core(), "budget {budget}");
+        assert!(out.is_out_of_core(), "{budget}");
+        assert!(!matches!(cache.peek_tile(&path, key), PeekedTile::Building));
+        let in_core = cache.layout_for(300, 200);
         assert_eq!(in_core.levels(), out.levels());
         for level in 0..out.levels() {
             assert_eq!(in_core.level_size(level), out.level_size(level));
@@ -443,28 +456,29 @@ fn request_layout_answers_the_layout_the_tiles_are_served_under() {
 
 /// A panel's decode of an out-of-core photograph whose mipmap is missing,
 /// or whose files are replaced with another record after its first tiles
-/// were answered, or whose level-1 file is removed then, answers its tiles
-/// and never `Changed`: from the files while they are current, and
-/// otherwise from a whole decode in core, after which its layout is the
-/// in-core one. It makes no mipmap. Under a budget too small to keep a
-/// file, and under a budget of 0, where each request decides from the files
-/// as they are.
+/// were answered, or whose level-1 file is removed then, reads nothing in
+/// core: it answers its tiles from the files while they are current, and
+/// otherwise `Changed` (naming the photograph, or the file found not
+/// current), decoding nothing, after which the photograph is `Building`. It
+/// makes no mipmap. Under a budget too small to keep a file, and under a
+/// budget of 0, where each request decides from the files as they are.
 #[test]
-fn a_panel_s_decode_never_answers_changed() {
+fn a_panel_s_decode_reads_nothing_in_core_and_leaves_the_photograph_building() {
     let key = |level: u8, col: u32| TileKey { level, col, row: 0 };
-    let in_core_tiles = |path: &Path| cut_image(ImageU8::read_rgb(path).unwrap(), TILE).tiles;
     for budget in [1, 0] {
         // Missing.
         let ws = Workspace::new();
         let path = ws.photograph("a.jpg", &readable_jpeg());
         let cache = cache_of(budget);
-        let Ok(TryDecode::Decoded(tiles)) =
-            cache.try_decode_tiles(&path, &[key(1, 0)], &Progress::none())
-        else {
-            panic!("budget {budget}: decoded");
-        };
-        assert!(same_tile(&tiles[0], &in_core_tiles(&path)[&key(1, 0)]));
-        assert_eq!(cache.stats().decodes, 1);
+        cache.request_layout(&path);
+        let answer = cache.try_decode_tiles(&path, &[key(1, 0)], &Progress::none());
+        assert_eq!(
+            answer.err(),
+            Some(TileError::Changed { path: path.clone() }),
+            "budget {budget}"
+        );
+        assert_eq!(cache.layout(&path), PeekedLayout::Building);
+        assert_eq!(cache.stats().decodes, 0);
         assert!(ws.mipmap_files().is_empty(), "no mipmap made");
         assert_eq!(cache.stats().mipmaps_made, 0);
 
@@ -473,6 +487,7 @@ fn a_panel_s_decode_never_answers_changed() {
             let path = ws.photograph("a.jpg", &readable_jpeg());
             build(&path);
             let cache = cache_of(budget);
+            cache.request_layout(&path);
             let files = files_levels(&path);
             let from_files = tiles_of(&out_of_core_layout(), &files);
             let Ok(TryDecode::Decoded(tiles)) =
@@ -486,31 +501,30 @@ fn a_panel_s_decode_never_answers_changed() {
                 _ => std::fs::remove_file(level_file(&path, 1)).unwrap(),
             }
             let on_disk = ws.mipmap_files();
-            let Ok(TryDecode::Decoded(tiles)) =
-                cache.try_decode_tiles(&path, &[key(1, 1)], &Progress::none())
-            else {
-                panic!("{replace}, budget {budget}: decoded");
-            };
+            let answer = cache.try_decode_tiles(&path, &[key(1, 1)], &Progress::none());
             // The rebuilt files are current, so a request that decides from
             // the files as they are reads them.
-            let read_from_files = budget == 0 && replace == "another record";
-            let (want, decodes) = if read_from_files {
-                (from_files[&key(1, 1)].clone(), 0)
+            if budget == 0 && replace == "another record" {
+                let Ok(TryDecode::Decoded(tiles)) = answer else {
+                    panic!("{replace}, budget {budget}: decoded");
+                };
+                assert!(same_tile(&tiles[0], &from_files[&key(1, 1)]));
+                assert!(matches!(cache.layout(&path), PeekedLayout::Known(_)));
             } else {
-                (in_core_tiles(&path)[&key(1, 1)].clone(), 1)
-            };
-            assert!(same_tile(&tiles[0], &want), "{replace}, budget {budget}");
-            assert_eq!(cache.stats().decodes, decodes, "{replace}, {budget}");
-            // With a budget the slot remembers its mipmap is not current;
-            // under a budget of 0 the layout is decided from the coarsest
-            // file, which is current.
-            cache.request_layout(&path);
-            match cache.layout(&path) {
-                PeekedLayout::Known(layout) => {
-                    assert_eq!(layout.is_out_of_core(), budget == 0, "{replace}");
-                }
-                other => panic!("{other:?}"),
+                assert_eq!(
+                    answer.err(),
+                    Some(TileError::Changed {
+                        path: level_file(&path, 1)
+                    }),
+                    "{replace}, budget {budget}"
+                );
+                assert_eq!(cache.layout(&path), PeekedLayout::Building, "{replace}");
+                // Asked again, it is still `Building`, decoding nothing.
+                let again = cache.try_decode_tiles(&path, &[key(1, 1)], &Progress::none());
+                assert!(matches!(again, Err(TileError::Changed { .. })), "{replace}");
+                assert_eq!(cache.layout(&path), PeekedLayout::Building, "{replace}");
             }
+            assert_eq!(cache.stats().decodes, 0, "{replace}, {budget}");
             assert_eq!(ws.mipmap_files(), on_disk, "no mipmap made");
             assert_eq!(cache.stats().mipmaps_made, 0);
         }

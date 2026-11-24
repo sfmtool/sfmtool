@@ -233,7 +233,11 @@ impl SceneRenderer {
                         None => self.clear_bg_image(),
                     }
                 }
-                DisplayLayout::Loading => self.keep_bg_image_while_loading(image),
+                // A photograph waiting for its mipmap keeps the previous
+                // image's photograph on its own mesh, as one being read does.
+                DisplayLayout::Loading | DisplayLayout::Building => {
+                    self.keep_bg_image_while_loading(image)
+                }
                 DisplayLayout::Unreadable => self.clear_bg_image(),
             }
         }

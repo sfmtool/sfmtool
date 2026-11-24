@@ -170,9 +170,14 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut AppState) {
         }
         if let Some(task) = state.quiet_running_in(queue) {
             let (name, label) = (task.operation.name, task.label.clone());
+            let on_a_node = task.node.is_some();
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = LINE_SPACING;
-                show_quiet(ui, name, &label);
+                if on_a_node {
+                    show_quiet(ui, name, &label);
+                } else {
+                    show_quiet_on_no_node(ui, &label);
+                }
             });
         }
         if state.waiting_in(queue).next().is_some() {
@@ -738,6 +743,19 @@ fn show_quiet(ui: &mut egui::Ui, name: &str, label: &str) {
                 .selectable(false),
         );
     });
+}
+
+/// The quiet line of a quiet task on no node, *Build mipmaps*: the word
+/// `quiet` and its label, which says what it does and how far it has got
+/// (*Building mipmaps: 3 of 10*), all dim, since there is no node to name
+/// beside its operation.
+fn show_quiet_on_no_node(ui: &mut egui::Ui, label: &str) {
+    ui.label(egui::RichText::new(QUIET).weak());
+    ui.add(
+        egui::Label::new(egui::RichText::new(label).weak())
+            .truncate()
+            .selectable(false),
+    );
 }
 
 // -- Idle ------------------------------------------------------------------

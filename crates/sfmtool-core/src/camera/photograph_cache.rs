@@ -30,7 +30,7 @@
 //! and [`PhotographCache::try_decode_tiles`], which never waits. The design is
 //! in the spec `specs/core/camera/photograph-cache.md`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -887,10 +887,13 @@ struct Inner {
     map: HashMap<PathBuf, Arc<Slot>>,
     /// The sum of every mapped slot's `bytes`.
     bytes: u64,
-    /// The layouts [`PhotographCache::request_layout`] read, or why it could
-    /// not, kept whatever the budget and not counted against it, since each is
-    /// a few dozen bytes. `forget` and `clear` drop them.
-    layouts: HashMap<PathBuf, Result<Arc<PyramidLayout>, String>>,
+    /// What [`PhotographCache::request_layout`] found of each photograph's
+    /// layout, never [`PeekedLayout::NotKnown`]: kept whatever the budget and
+    /// not counted against it, since each is a few dozen bytes. An entry
+    /// becomes `Known` when a build or a check finds the photograph's mipmap
+    /// current, and `Building` when a read finds a file of it not current.
+    /// `forget` and `clear` drop them.
+    layouts: HashMap<PathBuf, PeekedLayout>,
 }
 
 impl Inner {
@@ -983,8 +986,18 @@ struct Shared {
     /// other lock held.
     sources: Mutex<HashMap<PathBuf, (FileStamp, Arc<crate::camera::mipmap::MipmapSource>)>>,
     /// The photographs whose mipmap a build of this cache could not write,
-    /// warned about once each, so making one again in memory says nothing.
-    not_written_warned: Mutex<HashSet<PathBuf>>,
+    /// with the original's length and modification time then: warned about
+    /// once each, so making one again in memory says nothing, and under a
+    /// budget of 0, which keeps no build, answered to a panel from a decode
+    /// in core while the original stays the same, as a panel's read of an
+    /// evicted level of a mipmap held in memory is. A build that writes its
+    /// files drops the photograph. Its lock is taken with no other lock
+    /// held.
+    not_written: Mutex<HashMap<PathBuf, FileStamp>>,
+    /// The out-of-core photographs a read found a mip level file of not
+    /// current, which a check of the coarsest file alone does not show
+    /// ([`files::Stale`]). Its lock is taken with no other lock held.
+    stale: Mutex<HashMap<PathBuf, files::Stale>>,
     /// How many times a workspace file has been read for its
     /// `mipmap_options`.
     #[cfg(test)]
@@ -1086,7 +1099,8 @@ impl PhotographCache {
                 build_reserved: AtomicU64::new(0),
                 workspaces: Mutex::new(HashMap::new()),
                 sources: Mutex::new(HashMap::new()),
-                not_written_warned: Mutex::new(HashSet::new()),
+                not_written: Mutex::new(HashMap::new()),
+                stale: Mutex::new(HashMap::new()),
                 #[cfg(test)]
                 workspace_reads: AtomicU64::new(0),
                 #[cfg(test)]
@@ -1174,6 +1188,24 @@ impl PhotographCache {
             granted: 1,
             released: AtomicU64::new(0),
         })
+    }
+
+    /// How many builds or whole decodes of the photograph at `path` fit in
+    /// this cache's build budget at once: as many as [`Self::reserve_builds`]
+    /// would grant from an empty count, at most the rayon pool's size and at
+    /// least one. Reads the photograph's header, and answers one when it
+    /// cannot be read. Reserves nothing: what a caller that hands
+    /// [`Self::get_many`] photographs a group at a time sizes its groups by.
+    pub fn builds_that_fit(&self, path: &Path) -> usize {
+        let Ok((width, height)) = image_dimensions(path) else {
+            return 1;
+        };
+        let pool = rayon::current_num_threads().max(1);
+        let budget = self.shared.options.build_budget_bytes;
+        let fit = budget
+            .checked_div(whole_decode_bytes(width, height))
+            .map_or(pool, |fit| usize::try_from(fit).unwrap_or(usize::MAX));
+        fit.clamp(1, pool)
     }
 
     /// The photograph at `path`, which holds its layout and the cache's handle

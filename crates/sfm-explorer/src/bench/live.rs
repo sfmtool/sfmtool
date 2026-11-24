@@ -343,7 +343,7 @@ impl AppState {
             Operation::LIVE_EVALUATION,
             QuietSource::LiveEvaluation,
             rank,
-            inputs.subject.node(),
+            Some(inputs.subject.node()),
             label,
             QuietJob::new(run, move || {
                 let _ = dropped.send(Answer::Dropped);

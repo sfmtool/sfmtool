@@ -17,7 +17,7 @@ use crate::camera::sampler::{read_source_rect, test_pool, LevelRect, LevelRegion
 use crate::progress::{Event, Level, Progress};
 
 use super::mipmap_tests::{
-    cache_of, files_levels, level_file, out_of_core_layout, read_level, readable_jpeg,
+    build, cache_of, files_levels, level_file, out_of_core_layout, read_level, readable_jpeg,
     restartless_jpeg, same_tile, tiles_of, Workspace, TILE,
 };
 
@@ -79,9 +79,10 @@ fn levels_on_disk(ws: &Workspace) -> Vec<u32> {
 /// files, and answers the photograph read from them with nothing decoded
 /// whole, after which the kernel's reads read those files. A photograph whose
 /// original changes has its stale mipmap made again by the next `get`. A
-/// `get_many` after a panel decoded the photograph in core makes the mipmap
-/// rather than answer the in-core tiles, reporting the build's phases through
-/// nothing. With a budget and with one of 0, for a region-readable original
+/// panel's decode of a photograph with no mipmap answers `Changed` and
+/// leaves it `Building`, decoding nothing, and a `get_many` then makes the
+/// mipmap, reporting the build's phases through nothing, after which the
+/// photograph's layout is `Known`. With a budget and with one of 0, for a region-readable original
 /// and one that gets a `-mip0`.
 #[test]
 fn a_get_makes_a_missing_or_stale_mipmap_and_reads_it() {
@@ -158,13 +159,19 @@ fn a_get_makes_a_missing_or_stale_mipmap_and_reads_it() {
         }
     }
 
-    // A panel's decode in core, then a kernel's `get_many`.
+    // A panel's decode, which reads nothing in core and makes the
+    // photograph `Building`, then a kernel's `get_many`, which makes it
+    // `Known`.
     let ws = Workspace::new();
     let path = ws.photograph("a.jpg", &readable_jpeg());
     let cache = cache_of(GIB);
-    let Ok(TryDecode::Decoded(_)) = cache.try_decode_tiles(&path, &[key], &Progress::none()) else {
-        panic!("decoded in core");
-    };
+    assert_eq!(
+        cache
+            .try_decode_tiles(&path, &[key], &Progress::none())
+            .err(),
+        Some(TileError::Changed { path: path.clone() })
+    );
+    assert_eq!(cache.layout(&path), PeekedLayout::Building);
     let phases = Mutex::new(Vec::new());
     let sink = |event: Event<'_>| {
         if let Event::Enter { phase, .. } = event {
@@ -178,8 +185,12 @@ fn a_get_makes_a_missing_or_stale_mipmap_and_reads_it() {
     assert_eq!(*photograph.layout(), out_of_core_layout());
     assert_eq!(levels_read(photograph), files_level_bytes(&path));
     let stats = cache.stats();
-    assert_eq!((stats.decodes, stats.mipmaps_made), (1, 1));
+    assert_eq!((stats.decodes, stats.mipmaps_made), (0, 1));
     assert!(phases.lock().unwrap().is_empty(), "{:?}", phases.lock());
+    assert_eq!(
+        cache.layout(&path),
+        PeekedLayout::Known(Arc::new(out_of_core_layout()))
+    );
 }
 
 /// A cache whose decodes and builds each wait, once started, until the test
@@ -462,6 +473,120 @@ fn an_evicted_in_memory_level_is_made_again_and_reads_the_same_pixels() {
     assert_eq!(levels_read(&photograph), want);
     let stats = cache.stats();
     assert_eq!((stats.mipmaps_made, stats.bytes), (2, 0), "held, not kept");
+}
+
+/// Under a budget of 0, which keeps no build, a photograph whose mipmap a
+/// `get_many` made in memory, its files not written, is answered to a panel
+/// from a decode in core while its original stays the same: its layout is
+/// `Known` (the in-core one), and a panel's decode answers the in-core tiles
+/// every time it is asked, making no build. Before the build it was
+/// `Building`, and a panel's decode answered `Changed`.
+#[test]
+fn under_a_budget_of_0_a_panel_reads_a_build_held_in_memory_in_core() {
+    let (_ws, paths, _, _) = blocked_workspace(1);
+    let path = &paths[0];
+    let key = TileKey {
+        level: 1,
+        col: 1,
+        row: 0,
+    };
+    let cache = cache_of(0);
+    cache.request_layout(path);
+    assert_eq!(cache.layout(path), PeekedLayout::Building);
+    assert_eq!(
+        cache
+            .try_decode_tiles(path, &[key], &Progress::none())
+            .err(),
+        Some(TileError::Changed { path: path.clone() })
+    );
+
+    let (found, tally) = cache
+        .get_many(&[path.as_path()], &Progress::none())
+        .unwrap();
+    assert!(found[0].is_some());
+    assert_eq!(tally.mipmaps_made, 1);
+    cache.request_layout(path);
+    match cache.layout(path) {
+        PeekedLayout::Known(layout) => assert!(!layout.is_out_of_core()),
+        other => panic!("{other:?}"),
+    }
+    let in_core = cut_image(ImageU8::read_rgb(path).unwrap(), TILE).tiles;
+    for ask in 0..3 {
+        let Ok(TryDecode::Decoded(tiles)) = cache.try_decode_tiles(path, &[key], &Progress::none())
+        else {
+            panic!("ask {ask}: a panel's decode");
+        };
+        assert!(same_tile(&tiles[0], &in_core[&key]), "ask {ask}");
+    }
+    let stats = cache.stats();
+    assert_eq!((stats.decodes, stats.mipmaps_made), (3, 1));
+}
+
+/// A file a read found missing is made again by the next build, rather than
+/// taken as current on the coarsest file's word, after which the photograph
+/// reads; the same file found missing again under the same original, which
+/// a build has not mended, makes the photograph unreadable rather than
+/// `Building` again, so nothing makes its mipmap again and again. Under a
+/// budget too small to keep a file, and under a budget of 0.
+#[test]
+fn a_file_a_read_found_not_current_is_made_again_once() {
+    let key = TileKey {
+        level: 1,
+        col: 0,
+        row: 0,
+    };
+    for budget in [1, 0] {
+        let ws = Workspace::new();
+        let path = ws.photograph("a.jpg", &readable_jpeg());
+        build(&path);
+        let cache = cache_of(budget);
+        cache.request_layout(&path);
+        let level_1 = level_file(&path, 1);
+        std::fs::remove_file(&level_1).unwrap();
+        assert_eq!(
+            cache
+                .try_decode_tiles(&path, &[key], &Progress::none())
+                .err(),
+            Some(TileError::Changed {
+                path: level_1.clone()
+            }),
+            "{budget}"
+        );
+        assert_eq!(cache.layout(&path), PeekedLayout::Building, "{budget}");
+
+        let (found, tally) = cache
+            .get_many(&[path.as_path()], &Progress::none())
+            .unwrap();
+        assert!(found[0].is_some(), "{budget}");
+        assert_eq!(tally.mipmaps_made, 1, "{budget}: made again");
+        assert!(level_1.exists(), "{budget}");
+        assert!(matches!(cache.layout(&path), PeekedLayout::Known(_)));
+        assert!(matches!(
+            cache.try_decode_tiles(&path, &[key], &Progress::none()),
+            Ok(TryDecode::Decoded(_))
+        ));
+
+        let unreadable = |e: Option<TileError>| match e {
+            Some(TileError::Unreadable { why, .. }) => {
+                assert!(why.contains("made again"), "{budget}: {why}")
+            }
+            other => panic!("{budget}: {other:?}"),
+        };
+        std::fs::remove_file(&level_1).unwrap();
+        let other = TileKey { col: 1, ..key };
+        unreadable(
+            cache
+                .try_decode_tiles(&path, &[other], &Progress::none())
+                .err(),
+        );
+        assert!(matches!(cache.layout(&path), PeekedLayout::Unreadable(_)));
+        let made = cache.stats().mipmaps_made;
+        let _ = cache
+            .get_many(&[path.as_path()], &Progress::none())
+            .unwrap();
+        assert_eq!(cache.stats().mipmaps_made, made, "{budget}: not made again");
+        assert!(!level_1.exists(), "{budget}");
+    }
 }
 
 /// The side of the photographs the `get_many` tests make many mipmaps of:

@@ -346,7 +346,7 @@ impl AppState {
             Operation::TRACK_TABLE_COLUMNS,
             QuietSource::TrackTableColumns,
             QuietRank::TrackTableColumns,
-            inputs.node,
+            Some(inputs.node),
             label,
             QuietJob::new(run, move || {
                 let _ = dropped.send(Message::Dropped);

@@ -233,13 +233,20 @@ impl App {
         if self.state.drive_camera_model_proposal_job() {
             self.egui_ctx.request_repaint();
         }
+        // *Build mipmaps* lands here too, so a run that has ended is
+        // forgotten and the next queued, and the panels drawn below show
+        // the photographs it made. Between the two above and below, its
+        // place among the quiet tasks.
+        if self.state.drive_build_mipmaps() {
+            self.egui_ctx.request_repaint();
+        }
         // The bench's live evaluation lands here too, for the same reason
         // (`specs/gui/bench.md` § "Live evaluation").
         if self.state.drive_bench_evaluation() {
             self.egui_ctx.request_repaint();
         }
         // And the Track Table's columns, so a `find_points` call drained below
-        // reads the columns the table job just brought back. After the two
+        // reads the columns the table job just brought back. After those
         // above, because it waits behind them among the quiet tasks.
         if self.state.drive_track_table_columns() {
             self.egui_ctx.request_repaint();
@@ -370,6 +377,14 @@ impl App {
         // job on the new inputs in the same frame, ahead of the evaluation
         // below, as above.
         if self.state.drive_camera_model_proposal_job() {
+            self.egui_ctx.request_repaint();
+        }
+
+        // The panels drew this frame and queued the photographs whose
+        // mipmaps they wait on, so *Build mipmaps* is queued in the same
+        // frame, after the proposal's job and ahead of the evaluation, its
+        // place among the quiet tasks (`crate::state::build_mipmaps`).
+        if self.state.drive_build_mipmaps() {
             self.egui_ctx.request_repaint();
         }
 

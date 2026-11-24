@@ -3053,13 +3053,14 @@ in core. Step 17 turns the tier on.
     with another record during a read fails with `Changed`, and one made
     stale during a kernel fails it with the named error.
 
-    The step is five pull requests, 14a to 14e. The cache first learns each
+    The step is six pull requests, 14a to 14e2. The cache first learns each
     photograph's workspace setting, reading every photograph as before; then
     it reads an out-of-core photograph whose mipmap is current from its
     files; then `get` makes a missing or stale mipmap in the slot; then
     `get_many` makes its misses in groups sized by the build budget and
-    reports what it made; and last the panels act on the `Building` state and
-    queue photographs for *Build mipmaps*, whose job makes them. Reading
+    reports what it made; then the panels act on the `Building` state and
+    queue photographs for *Build mipmaps*, whose job makes them (14e1); and
+    last a waiting panel draws the coarsest level as it is made (14e2). Reading
     comes before making, so that making a mipmap only hands the slot the
     files the reading part already reads, as `build_mipmaps` returns them.
     In a workspace without `mipmap_options`, which until step 17 is every
@@ -3068,9 +3069,9 @@ in core. Step 17 turns the tier on.
     of an out-of-core photograph whose mipmap is current to its mipmap's;
     between 14b and 14c one whose files are missing or stale is still read
     in core, from a whole decode of the original, and from 14c no kernel
-    reads one so. A panel never makes a mipmap: until 14e its requests read
+    reads one so. A panel never makes a mipmap: until 14e1 its requests read
     an out-of-core photograph without a current mipmap whole in core, as
-    they read every photograph today, and from 14e they wait on its
+    they read every photograph today, and from 14e1 they wait on its
     `Building` state instead.
 
     - **14a, the workspace's setting in the cache.** **Built.** The cache
@@ -3375,6 +3376,112 @@ in core. Step 17 turns the tier on.
       marked as being made and the photographs of its chunk at the front of
       its list; and a panel's spinner ends once the task has made its
       photograph's mipmap.
+
+      The step is two pull requests, split so that no part leaves a panel
+      waiting on work nothing does (the reason for open question 14) and no
+      part can ask for a photograph and repaint without end. 14e1 gives the
+      panels the `Building` state together with the task that ends it, so
+      the moment a panel waits, something makes what it waits for; 14e2
+      changes only what a waiting panel draws.
+      - **14e1, the panels wait on *Build mipmaps*.** **Built.**
+        `PeekedLayout::Building` and `PeekedTile::Building`; `layout`,
+        `request_layout` and `peek_tile` answering them for an out-of-core
+        photograph whose mipmap is not current; `try_decode_tiles` reading
+        no out-of-core photograph in core, answering `Changed` instead and
+        leaving it `Building`; the viewer's `DisplayLayout::Building`,
+        `display_layout` queueing the photograph at the front of the shared
+        list once per path, Image Detail's spinner with *Building mipmap…*,
+        the other panels' loading state, and the 3D background keeping the
+        previous photograph; and the *Build mipmaps* quiet task as the 14e
+        entry above describes it. Signature changes: `PeekedLayout` and
+        `PeekedTile` gain `Building`; `PhotographCache::builds_that_fit`;
+        `AppState::start_quiet_task` takes `node: Option<ReconId>`. Tests:
+        every test the 14e entry lists.
+        **As built** ([state/build_mipmaps.rs](../../crates/sfm-explorer/src/state/build_mipmaps.rs),
+        [photograph_cache/tiles.rs](../../crates/sfmtool-core/src/camera/photograph_cache/tiles.rs),
+        [photograph_cache/files.rs](../../crates/sfmtool-core/src/camera/photograph_cache/files.rs)):
+        `Building` is a unit variant; 14e2 gives it the coarsest level. A
+        mapped slot whose tier is not current is `Building` to `layout`
+        and its tiles to `peek_tile`, a remembered failure first; the
+        layouts `request_layout` keeps (a `PeekedLayout` each now) become
+        `Known` when a build or a check reads the photograph's files and
+        `Building` when a read finds one not current, so under a budget of
+        0, which keeps no slot, the spinner ends when the task's build ends.
+        The task is queued on no node: the photographs on its list belong
+        to whichever nodes the panels show, so `start_quiet_task` takes the
+        node as `Option<ReconId>` and the task's quiet line, having no node
+        to name, is `quiet` and its label, *Building mipmaps: {done} of
+        {total}* (the Background Tasks panel's `show_quiet_on_no_node`).
+        `done` counts the photographs answered, made or found current, since
+        the list was last empty. A chunk is sized by
+        `PhotographCache::builds_that_fit` of the photograph at the front,
+        from its header. A cancelled run puts back the photographs of its
+        chunk whose layout is not `Known`. A photograph the run could not
+        make is kept as a failed decode of the panels' reads, with its
+        file's stamp, which is what keeps a budget of 0 from asking for it
+        again on every frame. Track View, the Track Table's crops and
+        Measurement View's endpoint crops draw their loading state while
+        the photograph is `Building`; 14e2 gives them the spinner and its
+        text. Image Detail does not keep drawing the previous image while
+        the new one is `Building`, since a build takes seconds: the
+        spinner says what it waits on, and there is no picture to click
+        (G13). Two loops the plan did not name came up and are closed in the
+        cache. A read that finds a finer file not current (a deleted `-mip1`,
+        a file rewritten by another process) made the photograph `Building`,
+        and the task's `get_many` then took the coarsest file's word that
+        the mipmap was current and made nothing, so the panel's next read
+        found the same file and the photograph went round for ever; the
+        cache now notes the file found not current (`files::Stale`, keyed by
+        the original's length and modification time), and while the
+        original is unchanged and no build has made the mipmap since, the
+        check of the coarsest file answers not current, so the next `get`
+        or `get_many` builds, rewriting each level whose file is not
+        current. A read that finds the same file not current again after
+        that build has found a file a build does not mend (its record
+        current, its data not decoding), and the photograph is then
+        remembered as unreadable, naming the file, until the original
+        changes. And under a budget of 0, which keeps no build, a mipmap
+        whose files could not be written was made again on every request,
+        each time a panel asked for its tiles; the cache now notes such a
+        photograph with the original's stamp (`Shared::not_written`, which
+        replaces the set the warning was sent once for), and while the
+        original is unchanged `request_layout` answers its in-core layout and
+        `try_decode_tiles` decodes its tiles in core, kept by no slot, as
+        open question 15 (a) answers a panel's read of an evicted level held
+        in memory. A kernel's `get` after a read found a file not current
+        now builds where it read the files before, so a test of a file
+        rebuilt by another process counts one mipmap made, which encodes
+        nothing over the current files but decodes the original. Image
+        Detail's prefetch of the next animated image queues it too, since
+        it asks through `display_layout`.
+      - **14e2, what a waiting panel draws.** `PeekedLayout::Building {
+        coarsest: Option<Arc<PhotographTile>> }`; a build publishing each
+        reduced level to its slot as it is encoded, coarsest first
+        (`build_mipmaps` telling its caller each level, which the cache
+        cuts into the coarse tiles a finished mipmap keeps), so `layout`
+        answers the coarsest tile about a second after a build starts;
+        Image Detail drawing it under the spinner and the 3D background
+        drawing it as the background while the photograph is `Building`;
+        Track View's pictures, the Track Table's crop cells and hover, and
+        Measurement View's endpoint crops drawing the spinner with
+        *Building mipmap…* in place of their loading state
+        (`PeekedRead::Building`); and Image Detail's *Workspace file error:*
+        with the message for a photograph refused by an invalid
+        `mipmap_options` (`DisplayLayout::Unreadable` carrying the cache's
+        message, or a variant for a workspace's refusal). Signature changes:
+        `PeekedLayout::Building` gains `coarsest`; `DisplayLayout::Building`
+        carries the coarsest tile; `PeekedRead` gains `Building`. Tests: a
+        build held after its coarsest level is encoded (the cache's slot
+        hook) answers `Building` with that tile, and Image Detail and the 3D
+        background draw it before the build ends; under a budget of 0 the
+        coarsest is handed to the panel that asked, as a tile is; a Track
+        View picture, a Track Table crop and a Measurement View crop of a
+        `Building` photograph draw the spinner and *Building mipmap…* and
+        ask for no tile; Image Detail on a photograph of a workspace whose
+        `mipmap_options` is invalid draws *Workspace file error:* and the
+        message naming the key; and none of these asks for a tile or
+        repaints more than the reads need, at a budget of 0 and at one
+        smaller than the photograph.
 15. **Makers**: `sfm sift` and `build_sift_file`, the rest of the viewer's
     *Build mipmaps* quiet task, whose job, shared list, `QuietRank` place
     and giving way 14e builds (the list filled when a reconstruction opens,
@@ -3572,3 +3679,11 @@ decisions.
     workspace whose mipmap files cannot be written, with the cache under
     its budget, and it keeps the rule that a panel never makes a mipmap.
     Step 14e, which gives panels the `Building` state, looks at it again.
+    Looked at again in 14e1: (a) still fits. Answering such a read
+    `Building` instead would have *Build mipmaps* make the levels again
+    in memory for the panel, only for them to be evicted again, and (b)
+    and (c) are still ruled out by the rule that a panel never makes a
+    mipmap and by what kernels read. 14e1 applies (a) also under a budget
+    of 0, where no slot keeps the levels at all, so that a panel's every
+    request would otherwise have the build made again (14e1's as-built
+    note).

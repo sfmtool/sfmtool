@@ -1031,39 +1031,6 @@ fn a_tile_set_takes_nothing_until_every_tile_is_there() {
 
 // ── An out-of-core photograph without a current mipmap ──────────────────
 
-/// A `Changed` a decode answers, which only a kernel's read can, is kept as
-/// an unreadable photograph is, with its file's stamp, and the path is not
-/// forgotten: the next looks answer it as unreadable, start no header read
-/// or decode, only a check of the file, which finds it unchanged.
-#[test]
-fn a_changed_read_is_remembered_with_the_file_stamp_not_forgotten() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = photo_in(dir.path());
-    let cache = tile_cache(1 << 30, 1 << 30);
-    let (requests, queue) = PhotographRequests::queued();
-    let source = PhotographSource {
-        cache: &cache,
-        requests: &requests,
-        path: &path,
-    };
-    known_layout(source, &queue);
-    let changed = TileError::Changed { path: path.clone() };
-    lock(&requests.tiles).failed_with(&cache, &path, changed);
-    assert!(
-        matches!(cache.layout(&path), PeekedLayout::Known(_)),
-        "the layout is kept"
-    );
-    let ctx = egui::Context::default();
-    for look in 0..3 {
-        assert!(
-            matches!(display_layout(source, &ctx), DisplayLayout::Unreadable),
-            "look {look}"
-        );
-        assert_eq!(queue.run_off_this_thread(), 1, "a check of the file");
-    }
-    assert_eq!(cache.stats().misses, 0, "nothing decoded");
-}
-
 /// The `mipmap_options` of [`out_of_core_photo`]'s workspace: a photograph
 /// with a side over 64 px is out of core.
 fn mipmap_options() -> sfmtool_core::camera::MipmapOptions {
@@ -1102,43 +1069,11 @@ fn build_mipmap(path: &Path) {
         .unwrap();
 }
 
-/// Make `path`'s mipmap again with another record in every file: the
-/// original's modification time moved while it is made, and put back.
-fn rebuild_with_another_record(path: &Path) {
-    let time = std::fs::metadata(path).unwrap().modified().unwrap();
-    let set = |t| {
-        std::fs::File::options()
-            .write(true)
-            .open(path)
-            .unwrap()
-            .set_modified(t)
-            .unwrap()
-    };
-    set(time + Duration::from_secs(10));
-    build_mipmap(path);
-    set(time);
-}
-
-/// Every file under `dir`'s mipmap directory, with its bytes, sorted.
-fn mipmap_files(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
-    let mut out = Vec::new();
-    let mut stack = vec![dir.join(sfmtool_core::camera::mipmap::MIPMAP_DIR_NAME)];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                stack.push(path);
-            } else {
-                let bytes = std::fs::read(&path).unwrap();
-                out.push((path, bytes));
-            }
-        }
-    }
-    out.sort();
-    out
+/// Remove the mip level file of level 1 of `path`'s mipmap, which a read of
+/// level 1 then finds missing.
+fn remove_level_1(path: &Path) {
+    let location = sfmtool_core::camera::mipmap::mipmap_location(path).unwrap();
+    std::fs::remove_file(location.level_path(1, mipmap_options().jpeg_quality)).unwrap();
 }
 
 /// End a frame of `ctx`, so egui, which asks for one repaint however many
@@ -1154,31 +1089,92 @@ fn end_frame(ctx: &egui::Context) {
 /// asked again on every look would start more tasks than the bound.
 const LOOKS: usize = 10;
 
-/// Image Detail, then Track View, then the 3D background ask for an
-/// out-of-core photograph over many looks: one whose mipmap is missing, and
-/// one whose files are replaced with another record after Image Detail's
-/// tiles were answered. Under a budget of 0 and under one smaller than the
-/// photograph and than any of its files, each panel draws, none is answered
-/// as unreadable (which a `Changed` would make it), the looks start no more
-/// tasks and repaints than the reads need, and the mipmap directory is as
-/// it was.
-#[test]
-fn panels_draw_an_out_of_core_photograph_without_a_current_mipmap() {
-    let level0 = |col, row| TileKey { level: 0, col, row };
-    // Two tiles of the left of level 0, and a rectangle of its right that
-    // covers others.
-    let detail_keys = [level0(0, 0), level0(1, 0)];
+/// One look of Image Detail, Track View and the 3D background, in turn, at
+/// an out-of-core photograph, each asking only for what it has not drawn:
+/// Image Detail the tiles `detail_keys` once its layout is known, Track View
+/// one render of a rectangle of the right of level 0, and the background
+/// level 1 whole once its layout is known. Panics on anything answered as
+/// unreadable.
+#[allow(clippy::too_many_arguments)]
+fn look_at(
+    source: PhotographSource<'_>,
+    ctx: &egui::Context,
+    detail_keys: &[TileKey],
+    drawn: &mut HashMap<TileKey, Arc<PhotographTile>>,
+    needs: &mut Vec<TileKey>,
+    rendered: &mut Option<Vec<u8>>,
+    level: &mut Option<Arc<ImageU8>>,
+    what: &str,
+) {
     let right = LevelRect {
         x0: 200,
         y0: 100,
         x1: 260,
         y1: 150,
     };
-    for case in ["missing", "replaced"] {
+    let pool = RegionPool::with_capacity(u64::MAX);
+    match display_layout(source, ctx) {
+        DisplayLayout::Known(layout) => {
+            let missing: Vec<TileKey> = detail_keys
+                .iter()
+                .copied()
+                .filter(|key| !drawn.contains_key(key))
+                .collect();
+            // Once drawn it asks for nothing, as its textures keep the tiles.
+            let tiles = if missing.is_empty() {
+                Vec::new()
+            } else {
+                display_tiles(source, &missing, ctx)
+            };
+            for (key, tile) in missing.iter().zip(tiles) {
+                match tile {
+                    DisplayTile::Ready(tile) => {
+                        drawn.insert(*key, tile);
+                    }
+                    DisplayTile::Loading => {}
+                    DisplayTile::Unreadable => panic!("{what}: tile unreadable"),
+                }
+            }
+            if level.is_none() {
+                match display_level(source, &layout, 1, ctx) {
+                    DisplayLevel::Ready(pixels) => *level = Some(pixels),
+                    DisplayLevel::Loading => {}
+                    DisplayLevel::Unreadable => panic!("{what}: level unreadable"),
+                }
+            }
+        }
+        DisplayLayout::Loading | DisplayLayout::Building => {}
+        DisplayLayout::Unreadable => panic!("{what}: layout unreadable"),
+    }
+    if rendered.is_none() {
+        match read_peeked(source, needs, ctx, |src| read_rect(src, &pool, right)) {
+            PeekedRead::Read(read) => *rendered = Some(read.unwrap()),
+            PeekedRead::Loading => {}
+            PeekedRead::Unreadable => panic!("{what}: render unreadable"),
+        }
+    }
+}
+
+/// Image Detail, Track View and the 3D background ask, over many looks, for
+/// an out-of-core photograph whose mipmap is missing, and for one whose
+/// level-1 file is removed after Image Detail's tiles were answered, which
+/// the background's read of level 1 finds. Under a budget of 0 and under one
+/// smaller than the photograph and than any of its files: while the
+/// photograph is `Building` no panel asks for a tile of it, and it is queued
+/// once on *Build mipmaps*' list; no task a panel starts makes a mipmap; one
+/// run of the task (here [`run_chunk`] on this thread) makes it, after which
+/// every panel draws; none is answered as unreadable; and the looks start no
+/// more tasks and repaints than the reads need.
+#[test]
+fn panels_wait_on_build_mipmaps_for_an_out_of_core_photograph_without_a_current_mipmap() {
+    use super::super::build_mipmaps::run_chunk;
+    let level0 = |col, row| TileKey { level: 0, col, row };
+    let detail_keys = [level0(0, 0), level0(1, 0)];
+    for case in ["missing", "level 1 removed"] {
         for budget in [0, 20_000] {
             let dir = tempfile::tempdir().unwrap();
             let path = out_of_core_photo(dir.path());
-            if case == "replaced" {
+            if case != "missing" {
                 build_mipmap(&path);
             }
             let cache = Arc::new(PhotographCache::new(
@@ -1205,95 +1201,183 @@ fn panels_draw_an_out_of_core_photograph_without_a_current_mipmap() {
             ctx.set_request_repaint_callback(move |_| {
                 counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             });
-            let mut tasks = 0;
             let what = format!("{case}, budget {budget}");
-
-            // Image Detail: the layout, then its tiles, each kept once drawn
-            // as its textures keep them.
-            let mut drawn: HashMap<TileKey, Arc<PhotographTile>> = HashMap::new();
-            for _ in 0..LOOKS {
-                match display_layout(source, &ctx) {
-                    DisplayLayout::Known(_) => {
-                        let missing: Vec<TileKey> = detail_keys
-                            .iter()
-                            .copied()
-                            .filter(|key| !drawn.contains_key(key))
-                            .collect();
-                        let tiles = display_tiles(source, &missing, &ctx);
-                        for (key, tile) in missing.iter().zip(tiles) {
-                            match tile {
-                                DisplayTile::Ready(tile) => {
-                                    drawn.insert(*key, tile);
-                                }
-                                DisplayTile::Loading => {}
-                                DisplayTile::Unreadable => panic!("{what}: tile unreadable"),
+            let mut drawn = HashMap::new();
+            let (mut needs, mut rendered, mut level) = (Vec::new(), None, None);
+            let (mut tasks, mut runs, mut queued_at_most) = (0, 0, 0);
+            let mut first_tasks = 0;
+            if case != "missing" {
+                // Image Detail's tiles first, from the files.
+                for _ in 0..LOOKS {
+                    let known = matches!(display_layout(source, &ctx), DisplayLayout::Known(_));
+                    if known && drawn.len() < detail_keys.len() {
+                        let tiles = display_tiles(source, &detail_keys, &ctx);
+                        for (key, tile) in detail_keys.iter().zip(tiles) {
+                            if let DisplayTile::Ready(tile) = tile {
+                                drawn.insert(*key, tile);
                             }
                         }
                     }
-                    DisplayLayout::Loading => {}
-                    DisplayLayout::Unreadable => panic!("{what}: layout unreadable"),
+                    first_tasks += queue.run_off_this_thread();
+                    end_frame(&ctx);
                 }
+                assert_eq!(drawn.len(), detail_keys.len(), "{what}: drew first");
+                remove_level_1(&path);
+            }
+            for _ in 0..LOOKS {
+                look_at(
+                    source,
+                    &ctx,
+                    &detail_keys,
+                    &mut drawn,
+                    &mut needs,
+                    &mut rendered,
+                    &mut level,
+                    &what,
+                );
+                if matches!(cache.layout(&path), PeekedLayout::Building) {
+                    assert_eq!(queue.len(), 0, "{what}: a tile asked for while Building");
+                }
+                let made = cache.stats().mipmaps_made;
                 tasks += queue.run_off_this_thread();
+                assert_eq!(cache.stats().mipmaps_made, made, "{what}: a panel made one");
+                let waiting = requests.mipmaps_waiting();
+                queued_at_most = queued_at_most.max(waiting.len());
+                if !waiting.is_empty() {
+                    assert_eq!(waiting, [path.clone()], "{what}");
+                    runs += 1;
+                    run_chunk(&cache, &requests, &Progress::none());
+                }
                 end_frame(&ctx);
             }
             assert_eq!(drawn.len(), detail_keys.len(), "{what}: Image Detail drew");
-            if case == "replaced" {
-                rebuild_with_another_record(&path);
-            }
-            let on_disk = mipmap_files(dir.path());
-
-            // Track View: a render of the right of level 0, once.
-            let pool = RegionPool::with_capacity(u64::MAX);
-            let mut needs = Vec::new();
-            let mut rendered = None;
-            for _ in 0..LOOKS {
-                if rendered.is_none() {
-                    let read =
-                        read_peeked(source, &mut needs, &ctx, |src| read_rect(src, &pool, right));
-                    match read {
-                        PeekedRead::Read(read) => rendered = Some(read.unwrap()),
-                        PeekedRead::Loading => {}
-                        PeekedRead::Unreadable => panic!("{what}: render unreadable"),
-                    }
-                }
-                tasks += queue.run_off_this_thread();
-                end_frame(&ctx);
-            }
             assert!(rendered.is_some(), "{what}: Track View drew");
-
-            // The 3D background: level 1 whole, once.
-            let mut level = None;
-            for _ in 0..LOOKS {
-                if level.is_none() {
-                    let layout = match display_layout(source, &ctx) {
-                        DisplayLayout::Known(layout) => layout,
-                        other => panic!("{what}: {other:?}"),
-                    };
-                    match display_level(source, &layout, 1, &ctx) {
-                        DisplayLevel::Ready(pixels) => level = Some(pixels),
-                        DisplayLevel::Loading => {}
-                        DisplayLevel::Unreadable => panic!("{what}: level unreadable"),
-                    }
-                }
-                tasks += queue.run_off_this_thread();
-                end_frame(&ctx);
-            }
             assert_eq!(
                 level.map(|l| (l.width(), l.height())),
                 Some((150, 100)),
                 "{what}: the background drew"
             );
-
-            // A header read and a decode for Image Detail, up to three
-            // decodes for Track View (its first tile, the tiles it needs,
-            // and those again if they were not all there together), and
-            // one for the background: far fewer than the looks.
-            assert!(tasks <= 7, "{what}: {tasks} tasks");
-            // A task asks for one repaint, and egui asks for one more pass
-            // after the frame it gave: far fewer than one a look.
+            assert_eq!(runs, 1, "{what}: runs of Build mipmaps");
+            assert_eq!(queued_at_most, 1, "{what}: queued once");
+            assert_eq!(cache.stats().mipmaps_made, 1, "{what}");
+            // Before the file is removed, a header read and Image Detail's
+            // decode. Then a header read for a missing mipmap, Image Detail's
+            // decode, two for Track View's first tile and the tiles it needs
+            // and the background's level, and for a removed file the read that
+            // found it missing and the reads it cut short asked again: far
+            // fewer than the thirty asks of the looks.
+            assert!(first_tasks <= 2, "{what}: {first_tasks} tasks first");
+            assert!(tasks <= 8, "{what}: {tasks} tasks");
             let repainted = repaints.load(std::sync::atomic::Ordering::Relaxed);
-            assert!(repainted <= 2 * tasks, "{what}: {repainted} repaints");
-            assert_eq!(mipmap_files(dir.path()), on_disk, "{what}: no mipmap made");
+            assert!(
+                repainted <= 2 * (first_tasks + tasks),
+                "{what}: {repainted} repaints"
+            );
         }
     }
+}
+
+/// Twenty panels, each showing its own out-of-core photograph with no
+/// mipmap and asking for it on every look, Image Detail's way and Track
+/// View's, add the twenty photographs to the one list *Build mipmaps*
+/// drains, each once, each at the front as it is asked for, so the last
+/// asked for is first; once the headers are read the looks start no task,
+/// decode nothing and make no mipmap. With a budget and with one of 0.
+#[test]
+fn twenty_panels_add_twenty_photographs_to_the_one_list_each_once_at_the_front() {
+    use super::super::build_mipmaps::tests::{cache_for, mipmap_file_count, out_of_core_workspace};
+    for budget in [1 << 30, 0] {
+        let (dir, paths) = out_of_core_workspace(20);
+        let cache = cache_for(budget, 1);
+        let (requests, queue) = PhotographRequests::queued();
+        let ctx = egui::Context::default();
+        let mut tasks = Vec::new();
+        for _ in 0..3 {
+            for path in &paths {
+                let source = PhotographSource {
+                    cache: &cache,
+                    requests: &requests,
+                    path,
+                };
+                let _ = display_layout(source, &ctx);
+                let read = read_peeked(source, &mut Vec::new(), &ctx, |_| Ok(()));
+                assert!(matches!(read, PeekedRead::Loading));
+            }
+            tasks.push(queue.run_off_this_thread());
+        }
+        assert_eq!(tasks, [20, 0, 0], "budget {budget}: the header reads alone");
+        let mut first = paths.clone();
+        first.reverse();
+        assert_eq!(requests.mipmaps_waiting(), first, "budget {budget}");
+        let stats = cache.stats();
+        assert_eq!((stats.decodes, stats.mipmaps_made), (0, 0), "{budget}");
+        assert_eq!(mipmap_file_count(dir.path()), 0);
+    }
+}
+
+/// An out-of-core photograph whose mipmap *Build mipmaps* cannot make (its
+/// header reads, its pixels do not) is answered as unreadable once the run
+/// has failed, and is not queued again while its file stays the same, under
+/// a cache that keeps nothing and so remembers no failure itself; a look
+/// starts only a check of the file. Once the file is fixed it is queued
+/// again, and the next run makes it.
+#[test]
+fn a_photograph_build_mipmaps_cannot_make_is_unreadable_until_its_file_changes() {
+    use super::super::build_mipmaps::run_chunk;
+    let dir = tempfile::tempdir().unwrap();
+    let path = out_of_core_photo(dir.path());
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::write(&path, &bytes[..bytes.len() / 2]).unwrap();
+    let cache = tile_cache(0, 1 << 30);
+    let (requests, queue) = PhotographRequests::queued();
+    let source = PhotographSource {
+        cache: &cache,
+        requests: &requests,
+        path: &path,
+    };
+    let ctx = egui::Context::default();
+    assert!(matches!(
+        display_layout(source, &ctx),
+        DisplayLayout::Loading
+    ));
+    assert_eq!(queue.run_off_this_thread(), 1, "the header read");
+    assert!(matches!(
+        display_layout(source, &ctx),
+        DisplayLayout::Building
+    ));
+    run_chunk(&cache, &requests, &Progress::none());
+    for look in 0..3 {
+        assert!(
+            matches!(display_layout(source, &ctx), DisplayLayout::Unreadable),
+            "look {look}"
+        );
+        assert_eq!(
+            queue.run_off_this_thread(),
+            1,
+            "look {look}: a check of the file"
+        );
+        assert!(
+            requests.mipmaps_waiting().is_empty(),
+            "look {look}: queued again"
+        );
+    }
+    assert_eq!(cache.stats().mipmaps_made, 0);
+
+    std::fs::write(&path, &bytes).unwrap();
+    assert!(matches!(
+        display_layout(source, &ctx),
+        DisplayLayout::Unreadable
+    ));
+    assert_eq!(queue.run_off_this_thread(), 1, "the check finds it changed");
+    assert!(matches!(
+        display_layout(source, &ctx),
+        DisplayLayout::Building
+    ));
+    assert_eq!(requests.mipmaps_waiting(), [path.clone()]);
+    run_chunk(&cache, &requests, &Progress::none());
+    assert_eq!(cache.stats().mipmaps_made, 1);
+    assert!(matches!(
+        display_layout(source, &ctx),
+        DisplayLayout::Known(_)
+    ));
 }

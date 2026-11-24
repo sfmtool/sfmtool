@@ -538,6 +538,16 @@ tiles"):
   `layout` and, while it is not known, starts one `request_layout` on the rayon pool, a
   read of the file's header, and repaints when it ends. A file that cannot be read or
   decoded shows "Failed to load image".
+- **A photograph waiting for its mipmap.** An out-of-core photograph whose mipmap is
+  missing or stale is `Building`: the panel asks for none of its tiles, the frame's ask
+  queues it once for the quiet task *Build mipmaps*, which makes it
+  ([background-tasks.md](background-tasks.md) § "Build mipmaps"), and in place of the
+  image the panel draws a spinner over "Building mipmap…", repainting while it turns.
+  It does not keep drawing the image it showed before meanwhile, since a mipmap takes
+  seconds to make rather than the milliseconds a tile decode takes; an image the panel
+  has already drawn, whose files are found changed later, keeps its uploaded tiles. The
+  run of the task that makes the mipmap ends with a repaint, and the panel then asks for
+  the tiles as for any photograph.
 - **Switching images.** A newly selected image is drawn once the tiles its first frame
   uploads first, the overview level's (§ "Uploads" below), have landed: each frame asks
   for them and uploads them at the view the panel will carry over to the image, with any
