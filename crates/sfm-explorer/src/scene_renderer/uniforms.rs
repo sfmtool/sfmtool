@@ -294,35 +294,6 @@ impl SceneRenderer {
         }
     }
 
-    /// Update track ray uniforms.
-    pub(crate) fn update_track_ray_uniforms(&self, queue: &wgpu::Queue, camera: &ViewportCamera) {
-        let (w, h) = self.current_size;
-        if w == 0 || h == 0 {
-            return;
-        }
-        let Some(buf) = &self.track_ray_uniform_buffer else {
-            return;
-        };
-        if self.track_ray_count == 0 {
-            return;
-        }
-
-        let aspect = w as f64 / h as f64;
-        let view = camera.view_matrix();
-        let view_proj = camera.projection_matrix(aspect) * view;
-
-        let uniforms = FrustumUniforms {
-            view_proj: mat4_to_cols(&view_proj),
-            view: mat4_to_cols(&view),
-            screen_size: [w as f32, h as f32],
-            line_half_width: 1.5,
-            hovered_image_index: PICK_INDEX_NONE, // no hover for track rays
-            near: camera.near as f32,
-            _pad: [0.0; 3],
-        };
-        queue.write_buffer(buf, 0, bytemuck::bytes_of(&uniforms));
-    }
-
     /// Update background image uniforms for camera view mode.
     ///
     /// `transform` is the transform of the node the viewed camera belongs to —

@@ -266,7 +266,7 @@ fn an_empty_write_draws_nothing_and_keeps_the_capacity() {
 fn regions_are_drawn_in_the_fixed_order_whatever_order_they_were_written_in() {
     let (device, queue) = device();
     let mut store = OverlayRibbons::default();
-    // Written last-first, and both on one target, so the order the draws come
+    // Written last-first, and all on one target, so the order the draws come
     // in is the store's and not the writes'.
     store.write(
         &device,
@@ -282,15 +282,23 @@ fn regions_are_drawn_in_the_fixed_order_whatever_order_they_were_written_in() {
         OverlayTarget::Scene,
         &instances(7, 1.0),
     );
+    store.write(
+        &device,
+        &queue,
+        ProducerId::TrackRays,
+        OverlayTarget::Scene,
+        &instances(5, 3.0),
+    );
     let draws: Vec<_> = store.draws(OverlayTarget::Scene).collect();
     assert_eq!(
         draws,
         [
-            (ProducerId::BenchFigure, 0..7),
-            (ProducerId::Measurements, 64..67),
+            (ProducerId::TrackRays, 0..5),
+            (ProducerId::BenchFigure, 64..71),
+            (ProducerId::Measurements, 128..131),
         ]
     );
-    assert_eq!(store.drawn_count(OverlayTarget::Scene), 10);
+    assert_eq!(store.drawn_count(OverlayTarget::Scene), 15);
     assert_eq!(store.draws(OverlayTarget::MeasurementLayer).count(), 0);
 
     // Each target draws only its own regions.
@@ -303,7 +311,13 @@ fn regions_are_drawn_in_the_fixed_order_whatever_order_they_were_written_in() {
     );
     let scene: Vec<_> = store.draws(OverlayTarget::Scene).collect();
     let layer: Vec<_> = store.draws(OverlayTarget::MeasurementLayer).collect();
-    assert_eq!(scene, [(ProducerId::BenchFigure, 0..7)]);
-    assert_eq!(layer, [(ProducerId::Measurements, 64..67)]);
+    assert_eq!(
+        scene,
+        [
+            (ProducerId::TrackRays, 0..5),
+            (ProducerId::BenchFigure, 64..71)
+        ]
+    );
+    assert_eq!(layer, [(ProducerId::Measurements, 128..131)]);
     device.poll(wgpu::PollType::Poll).expect("device poll");
 }

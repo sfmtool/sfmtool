@@ -192,48 +192,6 @@ impl SceneRenderer {
         }
     }
 
-    /// Render track rays onto the EDL output texture.
-    ///
-    /// Pass 4: renders after the target indicator using alpha blending,
-    /// with depth-aware occlusion from sampling the hardware depth buffer.
-    pub(crate) fn render_track_rays(&self, encoder: &mut wgpu::CommandEncoder) {
-        if self.track_ray_count == 0 {
-            return;
-        }
-
-        let Some(edl_output_view) = &self.edl_output_view else {
-            return;
-        };
-
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("track ray pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: edl_output_view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load, // preserve EDL + target indicator output
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
-
-        if let (Some(pipeline), Some(bind_group), Some(quad_vb), Some(edge_buf)) = (
-            &self.track_ray_pipeline,
-            &self.track_ray_bind_group,
-            &self.quad_vertex_buffer,
-            &self.track_ray_edge_buffer,
-        ) {
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, bind_group, &[]);
-            pass.set_vertex_buffer(0, quad_vb.slice(..));
-            pass.set_vertex_buffer(1, edge_buf.slice(..));
-            pass.draw(0..4, 0..self.track_ray_count);
-        }
-    }
-
     /// Render the scene: Passes 0 to 2b of `specs/gui/architecture.md`
     /// § "Pass Order", which are the background image, the scene geometry
     /// (Passes 1a to 1e, one render pass), the EDL post-process and the hidden

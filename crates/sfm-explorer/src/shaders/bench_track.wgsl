@@ -1,9 +1,10 @@
 // Bench track shader.
 //
 // Draws the 3D view's overlay figures out of the overlay ribbon store: the
-// focused item where it stands in the world (the patch frame's square, its
-// outward normal with an arrowhead, one mark per observation) and the drawn
-// measurements' marks and lines; and the bench figure's filled centre disc,
+// selected point's track rays, the focused item where it stands in the world
+// (the patch frame's square, its outward normal with an arrowhead, one mark
+// per observation) and the drawn measurements' marks and lines; and the bench
+// figure's filled centre disc,
 // from a vertex buffer of its own. Each overlay piece is one instance: a
 // segment, drawn as a ribbon facing the eye, or a ring or a disc, drawn as a
 // quad facing the eye with its shape cut out of it in the fragment shader.
@@ -62,7 +63,8 @@ struct VertexOutput {
     // 1.0 for a direction, whose occlusion has no distance to fade over.
     @location(1) @interpolate(flat) at_infinity: f32,
     // 1.0 where the part behind the scene fades with distance (the bench
-    // figure), 0.0 where it holds at BEHIND_OPACITY (a measurement).
+    // figure), 0.0 where it holds at BEHIND_OPACITY (a measurement, a track
+    // ray).
     @location(2) @interpolate(flat) fade: f32,
     // Where the fragment lies, in pixels: across a segment from its middle in
     // y, and from a ring's or a disc's centre in x and y. Interpolated across
@@ -193,7 +195,12 @@ fn vs_overlay(in: OverlayInput) -> VertexOutput {
         // Clipped at the near plane in homogeneous view space, before the
         // perspective divide, so an end with w = 0 stays a direction rather
         // than being divided by zero. See frustum.wgsl for why a segment is
-        // clipped here at all.
+        // clipped here at all. A segment from a place to a direction, a track
+        // ray to a point at infinity, runs from the place to the direction's
+        // vanishing point, pinned at INF_DEPTH by to_clip; one whose direction
+        // points behind the eye is cut where it crosses the near plane. Its
+        // fragments are neither all finite nor all at infinity, so such a
+        // segment holds behind the scene rather than fading.
         let fa = in_front(va);
         let fb = in_front(vb);
         if fa <= 0.0 && fb <= 0.0 {
@@ -315,9 +322,10 @@ fn vs_disc(in: DiscInput) -> VertexOutput {
 // two depths back out states the gap in world units and the fog distance is the
 // patch's own size rather than a slice of the depth range.
 //
-// A piece that does not fade, a measurement's, is drawn at BEHIND_OPACITY
-// wherever it is behind, however far, as a highlighted surfel's hidden outline
-// is: a measurement far behind the scene stays as findable as one just behind.
+// A piece that does not fade, a measurement's or a track ray's, is drawn at
+// BEHIND_OPACITY wherever it is behind, however far, as a highlighted surfel's
+// hidden outline is: a measurement far behind the scene stays as findable as
+// one just behind.
 fn depth_aware_opacity(clip_pos: vec4<f32>, at_infinity: f32, fade: f32) -> f32 {
     let scene_depth = textureLoad(depth_tex, vec2<i32>(clip_pos.xy), 0);
     if scene_depth <= 0.0 || clip_pos.z >= scene_depth {

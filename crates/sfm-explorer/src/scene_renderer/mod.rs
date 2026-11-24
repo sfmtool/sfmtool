@@ -129,14 +129,6 @@ pub(crate) struct SceneRenderer {
     target_bind_group_layout: Option<wgpu::BindGroupLayout>,
     target_bind_group: Option<wgpu::BindGroup>, // recreated on resize
 
-    // ── Track ray rendering (post-EDL, depth-aware) ──
-    track_ray_pipeline: Option<wgpu::RenderPipeline>,
-    track_ray_edge_buffer: Option<wgpu::Buffer>,
-    track_ray_uniform_buffer: Option<wgpu::Buffer>,
-    track_ray_bind_group_layout: Option<wgpu::BindGroupLayout>,
-    track_ray_bind_group: Option<wgpu::BindGroup>, // recreated on resize
-    track_ray_count: u32,
-
     // ── The focused item (post-EDL, depth-aware) ──
     bench_track_edge_pipeline: Option<wgpu::RenderPipeline>,
     measurement_pipeline: Option<wgpu::RenderPipeline>,
@@ -276,12 +268,6 @@ impl SceneRenderer {
             target_uniform_buffer: None,
             target_bind_group_layout: None,
             target_bind_group: None,
-            track_ray_pipeline: None,
-            track_ray_edge_buffer: None,
-            track_ray_uniform_buffer: None,
-            track_ray_bind_group_layout: None,
-            track_ray_bind_group: None,
-            track_ray_count: 0,
             bench_track_edge_pipeline: None,
             measurement_pipeline: None,
             bench_track_disc_pipeline: None,
@@ -635,12 +621,6 @@ impl SceneRenderer {
         self.target_star_vertex_count = tgt.star_vertex_count;
         self.target_uniform_buffer = Some(tgt.uniform_buffer);
         self.target_bind_group_layout = Some(tgt.bind_group_layout);
-
-        // ── Track ray pipeline (post-EDL, depth-aware) ──
-        let tr = pipelines::track_ray::create(device);
-        self.track_ray_pipeline = Some(tr.pipeline);
-        self.track_ray_uniform_buffer = Some(tr.uniform_buffer);
-        self.track_ray_bind_group_layout = Some(tr.bind_group_layout);
 
         // ── Bench track pipelines (post-EDL, depth-aware) ──
         let bt = pipelines::bench_track::create(device);

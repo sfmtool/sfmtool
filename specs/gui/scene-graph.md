@@ -960,7 +960,7 @@ thumbnail- and patch-atlas grid blocks) — a bind group naming a node's atlas
 and color buffer cannot outlive them, so it belongs to the same lifetime.
 
 Shared and unchanged: pipelines, render targets, samplers, the unit quad
-vertex buffer, EDL/target-indicator/track-ray/bg-image resources (all
+vertex buffer, EDL/target-indicator/overlay-ribbon/bg-image resources (all
 singletons by nature — track rays and bg image serve *the* selection, which is
 single). The atlas samplers are singletons too: every node's atlas is sampled
 identically, so only the textures are per-recon.
@@ -1081,10 +1081,15 @@ comparison. Sentinel remains `0xFFFFFFFF`.
 
 ### Track rays and background image
 
-Track rays are CPU-built per selection from the owning recon; the builder
-additionally applies `node.transform` to camera centers and ray points (a
-similarity is affine, so mapping the two endpoints maps the whole segment). They
-are rebuilt when the selection changes *or* when a transform does.
+Track rays are CPU-built per selection from the owning recon, as the
+overlay ribbon store's `TrackRays` region, which has no per-recon `model`
+matrix; the builder additionally applies `node.transform` to their ends. A
+camera centre and a finite ray end are places and go through the whole
+similarity (a similarity is affine, so mapping the two ends maps the whole
+segment). A ray to a point at infinity ends at a direction (`w = 0`), which goes
+through the similarity's rotation only, as the `model` matrix turns a point at
+infinity. They are rebuilt when the selection changes *or* when a transform
+does ([architecture.md](architecture.md) § "Track Ray Visualization").
 The background image (camera view mode) is keyed by `ImageRef` instead of
 bare index, fixing the latent "same index, wrong reconstruction" aliasing.
 

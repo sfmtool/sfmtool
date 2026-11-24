@@ -4,7 +4,7 @@
 //! What a frame decides before it draws. Headless: these are questions about
 //! the state, asked the way the frame asks them.
 
-use super::{selected_point_source, track_ray_source};
+use super::{selected_point_source, sync_track_rays, track_ray_source};
 use crate::scene::{ImageRef, PointRef};
 use crate::state::edits::tests as edits;
 use crate::state::AppState;
@@ -152,7 +152,7 @@ fn a_point_that_is_not_there_has_no_ray_source() {
 
 /// A node that is not on screen draws no rays.
 ///
-/// `render_track_rays` draws whatever the buffer holds and has no node of its
+/// The scene pass draws whatever the rays' region holds and has no node of its
 /// own in the draw loop, so nothing else stops a hidden node's rays hanging in
 /// the air over the node that is still shown.
 #[test]
@@ -681,4 +681,67 @@ fn opening_a_measurement_raises_its_panel_and_frames_its_finite_endpoints() {
         still.transition_end().is_none(),
         "the view moved for nothing"
     );
+}
+
+/// A `wgpu` device on the noop backend, for the frame's writes into the
+/// renderer's buffers.
+fn noop_device() -> (wgpu::Device, wgpu::Queue) {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::NOOP,
+        backend_options: wgpu::BackendOptions {
+            noop: wgpu::NoopBackendOptions::enabled(),
+            ..Default::default()
+        },
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    let adapter =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .expect("noop adapter");
+    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        .expect("noop device")
+}
+
+/// The track rays are written into the overlay ribbon store only when their
+/// key changes: a frame with the same selected point, version, visibility and
+/// transform writes nothing for them. A hidden node's rays are emptied, and
+/// come back when it is shown.
+#[test]
+fn the_track_rays_are_written_only_when_their_key_changes() {
+    let (device, queue) = noop_device();
+    let (mut state, point) = selected(0);
+    let mut renderer = crate::scene_renderer::SceneRenderer::new();
+    let mut prev = None;
+    let progress = sfmtool_core::progress::Progress::none();
+    let mut sync = |state: &mut AppState,
+                    renderer: &mut crate::scene_renderer::SceneRenderer,
+                    transform_changed: bool| {
+        sync_track_rays(
+            state,
+            renderer,
+            &mut prev,
+            transform_changed,
+            (&device, &queue),
+            &progress,
+        )
+    };
+
+    assert!(sync(&mut state, &mut renderer, false), "the first frame");
+    let rays = renderer.track_ray_count();
+    assert!(rays > 0, "the fixture draws rays");
+    let writes = renderer.track_ray_writes();
+
+    assert!(!sync(&mut state, &mut renderer, false));
+    assert_eq!(renderer.track_ray_writes(), writes, "an unchanged key");
+
+    assert!(sync(&mut state, &mut renderer, true), "a moved node");
+    assert_eq!(renderer.track_ray_writes(), writes + 1);
+
+    assert_eq!(state.scene[0].id, point.recon);
+    state.scene[0].visible = false;
+    assert!(sync(&mut state, &mut renderer, false), "a hidden node");
+    assert_eq!(renderer.track_ray_count(), 0, "its rays are emptied");
+
+    state.scene[0].visible = true;
+    assert!(sync(&mut state, &mut renderer, false), "shown again");
+    assert_eq!(renderer.track_ray_count(), rays);
 }

@@ -1,7 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The bench track pass: the upload, the uniform write and the draw.
+//! The bench track pass: the upload, the uniform write and the draw of the
+//! overlay ribbon store's figures.
 //!
 //! The figure itself is [`crate::viewer_3d::bench_track`]'s -- world points,
 //! world directions and colours, with no GPU in it. What this module adds is
@@ -22,10 +23,16 @@
 //! the scene texture, so a translucent colour composites on encoded values,
 //! as egui painted them.
 //!
-//! It runs **after** the EDL resolve, and after the target indicator and the
-//! track rays, so the figure sits on top of everything the scene texture
-//! holds -- it is the thing being worked on; only the measurements' layer is
-//! painted over it. Like both of those it samples the shared
+//! The selected point's track rays are drawn by the same pass too, out of the
+//! store's first region on the scene target, which `upload/track_rays.rs`
+//! writes: segments in the rays' orange that hold at `BEHIND_OPACITY` behind
+//! the scene and are not pulled toward the eye. They are drawn first, under
+//! the figure.
+//!
+//! It runs **after** the EDL resolve and the target indicator, so the figure
+//! sits on top of everything the scene texture holds -- it is the thing being
+//! worked on; only the measurements' layer is painted over it. Like the
+//! target indicator it samples the shared
 //! hardware depth buffer rather than testing against it, which is what lets a
 //! fragment behind the scene still be drawn, dimmed, instead of discarded
 //! (`specs/gui/point-cloud-rendering.md` § "Depth-Aware Transparency"). Each
@@ -231,8 +238,10 @@ impl SceneRenderer {
         queue.write_buffer(buf, 0, bytemuck::bytes_of(&uniforms));
     }
 
-    /// Draw the measurements into their layer, and the figure onto the EDL
-    /// output texture.
+    /// Draw the measurements into their layer, and the track rays and then
+    /// the figure onto the EDL output texture. `show_track_rays` false leaves
+    /// the rays out of this frame without emptying their region
+    /// (`AppState::preview_hides_track_rays`).
     ///
     /// The measurements' layer is cleared to transparent every frame, whether
     /// or not there is a measurement to draw, and their pieces are drawn into
@@ -240,10 +249,15 @@ impl SceneRenderer {
     /// the layer premultiplied. egui paints it over the scene texture as it
     /// paints its own textures, so a translucent mark or line composites on
     /// encoded values as egui painted it before. The figure is drawn onto the
-    /// scene texture: the disc first and the segments over it, as the target
-    /// indicator draws its star under its wireframe, since the outline is what
-    /// says where the frame's boundary is, so nothing fills over it.
-    pub(crate) fn render_bench_track(&self, encoder: &mut wgpu::CommandEncoder) {
+    /// scene texture over the rays: the disc first and the segments over it,
+    /// as the target indicator draws its star under its wireframe, since the
+    /// outline is what says where the frame's boundary is, so nothing fills
+    /// over it.
+    pub(crate) fn render_bench_track(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        show_track_rays: bool,
+    ) {
         let Some(bind_group) = &self.bench_track_bind_group else {
             return;
         };
@@ -282,8 +296,12 @@ impl SceneRenderer {
             }
         }
 
-        if self.overlay_ribbons.drawn_count(OverlayTarget::Scene) + self.bench_track_disc_count == 0
-        {
+        let drawn = self
+            .overlay_ribbons
+            .draws(OverlayTarget::Scene)
+            .filter(|(producer, _)| show_track_rays || *producer != ProducerId::TrackRays)
+            .count();
+        if drawn == 0 && self.bench_track_disc_count == 0 {
             return;
         }
         let Some(edl_output_view) = &self.edl_output_view else {
@@ -297,6 +315,21 @@ impl SceneRenderer {
             wgpu::LoadOp::Load,
         );
 
+        let edges = |pass: &mut wgpu::RenderPass<'_>, producer: ProducerId| {
+            if let (Some(pipeline), Some(quad_vb)) =
+                (&self.bench_track_edge_pipeline, &self.quad_vertex_buffer)
+            {
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, bind_group, &[]);
+                pass.set_vertex_buffer(0, quad_vb.slice(..));
+                self.overlay_ribbons.draw_producer(pass, producer);
+            }
+        };
+
+        if show_track_rays {
+            edges(&mut pass, ProducerId::TrackRays);
+        }
+
         if let (Some(pipeline), Some(disc_buf)) = (
             &self.bench_track_disc_pipeline,
             &self.bench_track_disc_buffer,
@@ -307,14 +340,7 @@ impl SceneRenderer {
             pass.draw(0..self.bench_track_disc_count, 0..1);
         }
 
-        if let (Some(pipeline), Some(quad_vb)) =
-            (&self.bench_track_edge_pipeline, &self.quad_vertex_buffer)
-        {
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, bind_group, &[]);
-            pass.set_vertex_buffer(0, quad_vb.slice(..));
-            self.overlay_ribbons.draw(&mut pass, OverlayTarget::Scene);
-        }
+        edges(&mut pass, ProducerId::BenchFigure);
     }
 }
 

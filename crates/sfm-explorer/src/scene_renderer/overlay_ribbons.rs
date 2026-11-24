@@ -4,12 +4,12 @@
 //! The overlay ribbon store: one GPU buffer holding the instances of every
 //! overlay figure the 3D view draws, a region per producer.
 //!
-//! A producer is the code that builds one overlay's instances: the bench
-//! figure, and the drawn measurements. Each writes its instances into its own
-//! region with [`OverlayRibbons::write`], and each target's pass draws its
-//! regions out of the one buffer in the fixed region order
-//! ([`ProducerId`]'s). `specs/gui/viewer-3d-bench-layer.md` § "The overlay
-//! ribbon store" describes it.
+//! A producer is the code that builds one overlay's instances: the track
+//! rays, the bench figure, and the drawn measurements. Each writes its
+//! instances into its own region with [`OverlayRibbons::write`], and each
+//! target's pass draws its regions out of the one buffer in the fixed region
+//! order ([`ProducerId`]'s). `specs/gui/viewer-3d-bench-layer.md` § "The
+//! overlay ribbon store" describes it.
 //!
 //! The regions lie end to end in [`ProducerId`] order, each `capacity`
 //! instances long. A write that fits its region's capacity is one
@@ -38,10 +38,12 @@ const MIN_BUFFER_CAPACITY: u32 = 256;
 /// The code that writes one region of the store.
 ///
 /// The variants are in the fixed order the regions lie in and are drawn in:
-/// on the scene target the bench figure; on the measurements' layer the
-/// measurements.
+/// on the scene target the track rays and then the bench figure; on the
+/// measurements' layer the measurements.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum ProducerId {
+    /// The selected point's observation rays.
+    TrackRays,
     /// The focused bench item's figure.
     BenchFigure,
     /// The selected and shown measurements.
@@ -51,8 +53,8 @@ pub(crate) enum ProducerId {
 /// The texture a region's instances are drawn into.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum OverlayTarget {
-    /// The scene texture, the EDL output, blended in linear light (the bench
-    /// figure).
+    /// The scene texture, the EDL output, blended in linear light (the track
+    /// rays and the bench figure).
     Scene,
     /// The measurements' layer, blended on encoded values and painted over
     /// the scene by egui (`specs/gui/measurement-view.md` § "Drawing
@@ -261,6 +263,26 @@ impl OverlayRibbons {
         for (_, instances) in self.draws(target) {
             pass.draw(0..4, instances);
         }
+    }
+
+    /// Bind the buffer to vertex slot 1 of `pass` and draw `producer`'s
+    /// region alone, as [`Self::draw`] draws each of a target's: for a pass
+    /// that draws something else between two regions, as the scene target's
+    /// draws the bench figure's centre disc between the track rays and the
+    /// figure's segments.
+    pub(crate) fn draw_producer(&self, pass: &mut wgpu::RenderPass<'_>, producer: ProducerId) {
+        let Some(buffer) = &self.buffer else {
+            return;
+        };
+        let Some(region) = self
+            .regions
+            .iter()
+            .find(|region| region.producer == producer && region.count > 0)
+        else {
+            return;
+        };
+        pass.set_vertex_buffer(1, buffer.slice(..));
+        pass.draw(0..4, region.offset..region.offset + region.count);
     }
 
     /// The buffer every region lies in, once a write has made it.
