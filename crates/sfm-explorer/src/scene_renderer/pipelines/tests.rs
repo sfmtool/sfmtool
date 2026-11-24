@@ -470,6 +470,44 @@ fn the_hidden_outline_is_the_surfels_band_at_the_bench_figures_behind_opacity() 
     );
 }
 
+/// An overlay segment's inset ends: an end clipped at the near plane is not
+/// inset, a segment no longer on screen than its insets draws nothing, the cut
+/// ends lie on the segment at the places that project there, and a cut end's
+/// coverage falls off over a point as the sides' does while an end that is
+/// not cut stays square.
+#[test]
+fn an_overlay_segment_is_inset_on_screen_except_at_a_clipped_end() {
+    let bench = include_str!("../../shaders/bench_track.wgsl");
+    for line in [
+        "@location(8) inset: vec2<f32>,",
+        "inset_a = 0.0;",
+        "inset_b = 0.0;",
+        "if edge_len <= inset_a + inset_b {",
+        "let start = at_screen_fraction(clip_a, clip_b, inset_a / edge_len);",
+        "let end = at_screen_fraction(clip_a, clip_b, 1.0 - inset_b / edge_len);",
+        "let t = fraction * clip_a.w / ((1.0 - fraction) * clip_b.w + fraction * clip_a.w);",
+        "let reach = select(select(0.0, aa_px, cut_a), select(0.0, aa_px, cut_b), is_b);",
+        "select(NOT_CUT, -along, cut_a),",
+        "select(NOT_CUT, along - drawn_len, cut_b),",
+        "outside = max(abs(in.local.y) - half_px, max(in.past_ends.x, in.past_ends.y));",
+    ] {
+        assert!(
+            bench.lines().any(|l| l.trim() == line),
+            "bench_track.wgsl does not declare `{line}`"
+        );
+    }
+    // Each end's inset is dropped in the branch that clips that end.
+    let clip_a = bench
+        .find("va = mix(va, vb, t);")
+        .expect("end a is clipped");
+    let clip_b = bench
+        .find("vb = mix(va, vb, t);")
+        .expect("end b is clipped");
+    assert!(bench[clip_a..clip_b].contains("inset_a = 0.0;"));
+    assert!(!bench[clip_a..clip_b].contains("inset_b = 0.0;"));
+    assert!(bench[clip_b..].contains("inset_b = 0.0;"));
+}
+
 #[test]
 fn the_hidden_outline_pipelines_draw_onto_the_edl_output_over_the_scenes_depth_read_only() {
     use super::super::gpu_types::{

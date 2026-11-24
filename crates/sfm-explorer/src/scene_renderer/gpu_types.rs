@@ -148,6 +148,9 @@ pub(crate) struct OverlayInstance {
     /// How its part behind the scene is drawn, [`Self::HOLD`] or
     /// [`Self::FADE`], with [`Self::PULL_TOWARD_EYE`] or not.
     pub(crate) flags: u32,
+    /// How many panel points in from `a` and from `b` a segment starts and
+    /// stops on screen ([`Self::inset`]); `[0, 0]` for a ring or a disc.
+    pub(crate) inset: [f32; 2],
 }
 
 impl OverlayInstance {
@@ -186,6 +189,23 @@ impl OverlayInstance {
             radius: 0.0,
             kind: Self::SEGMENT,
             flags,
+            inset: [0.0; 2],
+        }
+    }
+
+    /// This segment, started `at_a` points in from `a` and stopped `at_b`
+    /// points short of `b` along its projection on screen, stroke and halo
+    /// alike, with each cut end anti-aliased as its sides are.
+    ///
+    /// A measurement's line stops at the outer edge of the ring at each of
+    /// its ends this way, so it draws neither over that ring's stroke nor
+    /// inside it. An end the pass clips at the near plane is not inset, since
+    /// the place it was inset from is not drawn, and a segment shorter on
+    /// screen than its two insets together draws nothing.
+    pub(crate) fn inset(self, at_a: f32, at_b: f32) -> Self {
+        Self {
+            inset: [at_a, at_b],
+            ..self
         }
     }
 
@@ -206,6 +226,7 @@ impl OverlayInstance {
             radius,
             kind: Self::RING,
             flags,
+            inset: [0.0; 2],
         }
     }
 
@@ -219,6 +240,7 @@ impl OverlayInstance {
             radius,
             kind: Self::DISC,
             flags,
+            inset: [0.0; 2],
         }
     }
 }

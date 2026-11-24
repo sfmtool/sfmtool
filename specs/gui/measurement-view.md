@@ -1009,7 +1009,14 @@ store"), carrying its own colour and its sizes in points
 and a mark is three instances, its ring's halo, its ring and its dot, the ring
 and its halo each a ring and the dot a disc about the endpoint, which the pass
 turns to face the eye, so a mark keeps its size on screen. Its edges, and the
-line's, are anti-aliased over about one point. Within the region every halo
+line's, are anti-aliased over about one point. The line and its halo stop on
+screen at the outer edge of each end's ring, inset there by the ring's radius
+and half its stroke (`OverlayInstance::inset`): drawn to the endpoint, the
+line's stroke would cross the inside of the ring to the dot, so the mark would
+read as a spiral rather than a ring around a dot, and would lie over the ring's
+stroke, where the two translucent strokes of a dimmed measurement add up to a
+brighter spot. The ring's halo, drawn before every stroke, bounds the join. An
+end clipped at the near plane has no ring and is not inset. Within the region every halo
 comes first, then every stroke (each measurement's line and then its rings),
 then every dot, each in the layer's order, so one measurement's halo never
 crosses another's stroke. Nothing in an instance depends on the camera, so the
@@ -1419,7 +1426,10 @@ at-infinity case is covered by the Rust tests.
   selected ring 1.6 times larger, the colours and widths in points, every piece
   held behind the scene and pulled toward the eye; every halo before every
   stroke and every dot last across the measurements of *Show all*, with its
-  emphasis and dimming; the item's violet; none for a refused endpoint or one
+  emphasis and dimming; every line and its halo inset at each end by the
+  radius and half the stroke of the ring there, the selected endpoint's larger
+  ring and the emphasised stroke included, and no other piece inset; the
+  item's violet; none for a refused endpoint or one
   at infinity, and a line with one end behind the eye handed to the pass
   whole; the pull a frame hands the pass equal to `toward_eye_fraction` of its
   camera and panel, which is the same number of points at any field of view

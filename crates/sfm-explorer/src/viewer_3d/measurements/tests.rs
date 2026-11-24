@@ -609,7 +609,11 @@ fn a_measurement_draws_its_line_and_marks_as_instances() {
     let (a, b) = (at(Point3::from(POINTS[0])), at(Point3::from(POINTS[1])));
     let (half, halo_half) = (LINE_WIDTH / 2.0, (LINE_WIDTH + HALO_EXTRA_WIDTH) / 2.0);
     let selected = MARK_RADIUS * SELECTED_MARK_SCALE;
-    let line = |color, half_width| OverlayInstance::segment(a, b, color, half_width, FLAGS);
+    // The line and its halo stop at the outer edge of each ring's stroke.
+    let line = |color, half_width| {
+        OverlayInstance::segment(a, b, color, half_width, FLAGS)
+            .inset(MARK_RADIUS + half, selected + half)
+    };
     let ring =
         |p, color, radius, half_width| OverlayInstance::ring(p, color, radius, half_width, FLAGS);
     let dot = |p| OverlayInstance::disc(p, grey, MARK_DOT_RADIUS, FLAGS);
@@ -712,6 +716,59 @@ fn halos_come_before_strokes_across_measurements() {
         .map(|d| super::encoded_rgba(d.color))
         .collect();
     assert_eq!(lines, expected);
+}
+
+/// Every measurement's line and its halo stop at the outer edge of the stroke
+/// of the ring at each of their ends, the selected endpoint's larger ring and
+/// the selected measurement's wider stroke included, so no line draws over a
+/// ring's stroke or inside it. The rings, dots and every other piece are not
+/// inset.
+#[test]
+fn a_line_stops_at_the_outer_edge_of_each_end_s_ring() {
+    let (mut state, id) = measured_state(Some("m"));
+    let m = select(&mut state, id, 0);
+    state.select_endpoint(m, EndpointSide::A);
+    state.show_all_measurements = true;
+    let (viewer, _ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
+    let halo = super::encoded_rgba(crate::measurement_marks::HALO);
+    let pieces = super::instances(&viewer.measurements);
+    let segments: Vec<_> = pieces
+        .iter()
+        .filter(|p| p.kind == OverlayInstance::SEGMENT)
+        .collect();
+    assert!(segments.len() >= 4, "two lines, each with its halo");
+    let mut radii = Vec::new();
+    for segment in &segments {
+        // The stroke ring of the same colour at each end: a halo's line is
+        // inset as its measurement's stroke is.
+        let stroke = segments
+            .iter()
+            .find(|s| s.a == segment.a && s.b == segment.b && s.color != halo)
+            .expect("each halo's line has its stroke");
+        let ring_at = |p: [f32; 4]| {
+            pieces
+                .iter()
+                .find(|r| r.kind == OverlayInstance::RING && r.a == p && r.color == stroke.color)
+                .expect("a ring at each end of a line")
+        };
+        let (ring_a, ring_b) = (ring_at(segment.a), ring_at(segment.b));
+        assert_eq!(
+            segment.inset,
+            [
+                ring_a.radius + ring_a.half_width,
+                ring_b.radius + ring_b.half_width
+            ]
+        );
+        radii.extend([ring_a.radius, ring_b.radius]);
+    }
+    // The selected endpoint's ring is the larger one, and its line's end
+    // stops further out.
+    assert!(radii
+        .iter()
+        .any(|r| *r > crate::measurement_marks::MARK_RADIUS));
+    for piece in pieces.iter().filter(|p| p.kind != OverlayInstance::SEGMENT) {
+        assert_eq!(piece.inset, [0.0; 2]);
+    }
 }
 
 /// With *Show all measurements* on, the selected measurement's line is the

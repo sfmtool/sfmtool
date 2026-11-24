@@ -8,6 +8,8 @@
 // segment, drawn as a ribbon facing the eye, or a ring or a disc, drawn as a
 // quad facing the eye with its shape cut out of it in the fragment shader.
 // Sizes are in panel points, and edges are anti-aliased over about one point.
+// A segment can be cut short on screen at either end by an inset in points,
+// which a measurement's line is so that it stops at its rings.
 // Rendered as post-EDL passes onto edl_output and into the measurements'
 // layer.
 //
@@ -71,7 +73,15 @@ struct VertexOutput {
     // The piece's kind, its radius and its half width, the last two in
     // pixels.
     @location(4) @interpolate(flat) shape: vec3<f32>,
+    // How far past a segment's inset end at a and at b the fragment lies
+    // along it, in pixels: negative short of that end. NOT_CUT for an end
+    // that is not inset, and for a ring or a disc.
+    @location(5) @interpolate(linear) past_ends: vec2<f32>,
 }
+
+// past_ends for an end that is drawn to where it is: further inside than any
+// fragment, so its coverage never falls off along the segment.
+const NOT_CUT: f32 = -1.0e6;
 
 // A vertex outside every clip plane, which drops its whole primitive.
 fn clipped(color: vec4<f32>) -> VertexOutput {
@@ -82,6 +92,7 @@ fn clipped(color: vec4<f32>) -> VertexOutput {
     out.fade = 1.0;
     out.local = vec2<f32>(0.0, 0.0);
     out.shape = vec3<f32>(0.0, 0.0, 0.0);
+    out.past_ends = vec2<f32>(NOT_CUT, NOT_CUT);
     return out;
 }
 
@@ -97,6 +108,7 @@ struct OverlayInput {
     @location(5) radius: f32,
     @location(6) kind: u32,
     @location(7) flags: u32,
+    @location(8) inset: vec2<f32>,
 }
 
 // A homogeneous world point in view space, drawn toward the eye by the pull
@@ -143,6 +155,7 @@ fn vs_overlay(in: OverlayInput) -> VertexOutput {
     out.color = in.color;
     out.fade = select(0.0, 1.0, (in.flags & FLAG_FADE) != 0u);
     out.shape = vec3<f32>(f32(in.kind), radius_px, half_px);
+    out.past_ends = vec2<f32>(NOT_CUT, NOT_CUT);
 
     if in.kind != KIND_SEGMENT {
         // A ring or a disc: a quad facing the eye about its projected centre.
@@ -162,6 +175,11 @@ fn vs_overlay(in: OverlayInput) -> VertexOutput {
 
     var va = to_view(in.a, pull);
     var vb = to_view(in.b, pull);
+    // How far in from each end the segment is drawn, in pixels. An end
+    // clipped at the near plane is drawn from where it is clipped: what it
+    // was inset from, a measurement's ring, is behind the eye and not drawn.
+    var inset_a = max(in.inset.x, 0.0) * px;
+    var inset_b = max(in.inset.y, 0.0) * px;
     var at_infinity = 0.0;
     if in.a.w == 0.0 && in.b.w == 0.0 {
         // A figure at infinity, both ends directions. One pointing behind the
@@ -184,36 +202,74 @@ fn vs_overlay(in: OverlayInput) -> VertexOutput {
         let t = fa / (fa - fb);
         if fa <= 0.0 {
             va = mix(va, vb, t);
+            inset_a = 0.0;
         } else if fb <= 0.0 {
             vb = mix(va, vb, t);
+            inset_b = 0.0;
         }
     }
-    let clip_a = to_clip(va);
-    let clip_b = to_clip(vb);
-
-    let is_b = in.corner.x > 0.0;
-    let clip_pos = select(clip_a, clip_b, is_b);
+    var clip_a = to_clip(va);
+    var clip_b = to_clip(vb);
 
     // The segment's direction in pixels, for the perpendicular the ribbon
-    // expands along.
+    // expands along and the insets it is cut short by.
     let ndc_a = clip_a.xy / clip_a.w;
     let ndc_b = clip_b.xy / clip_b.w;
     let edge_px = (ndc_b - ndc_a) * uniforms.screen_size * 0.5;
     let edge_len = length(edge_px);
-    var perp: vec2<f32>;
+    var edge_dir = vec2<f32>(1.0, 0.0);
     if edge_len > 0.0001 {
-        let edge_dir = edge_px / edge_len;
-        perp = vec2<f32>(-edge_dir.y, edge_dir.x);
-    } else {
-        perp = vec2<f32>(0.0, 1.0);
+        edge_dir = edge_px / edge_len;
     }
+    let perp = vec2<f32>(-edge_dir.y, edge_dir.x);
+
+    // Cut short by the insets on screen, at the places along the segment that
+    // project there, so the cut ends keep the segment's own depths. A segment
+    // no longer on screen than its insets draws nothing.
+    let cut_a = inset_a > 0.0;
+    let cut_b = inset_b > 0.0;
+    if cut_a || cut_b {
+        if edge_len <= inset_a + inset_b {
+            return clipped(in.color);
+        }
+        let start = at_screen_fraction(clip_a, clip_b, inset_a / edge_len);
+        let end = at_screen_fraction(clip_a, clip_b, 1.0 - inset_b / edge_len);
+        clip_a = start;
+        clip_b = end;
+    }
+    let drawn_len = edge_len - inset_a - inset_b;
+
+    // A cut end reaches a point past where it is cut, for its anti-aliasing
+    // to fall off over, as the sides do; an end drawn to where it is stays
+    // square there, where it meets the figure's other pieces.
+    let is_b = in.corner.x > 0.0;
+    let clip_pos = select(clip_a, clip_b, is_b);
+    let reach = select(select(0.0, aa_px, cut_a), select(0.0, aa_px, cut_b), is_b);
+    // How far along the drawn segment this corner is from its start, in
+    // pixels.
+    let along = select(-reach, drawn_len + reach, is_b);
 
     let extent_px = half_px + aa_px;
-    let offset_ndc = perp * in.corner.y * extent_px * pixel_to_ndc;
-    out.clip_pos = vec4<f32>(clip_pos.xy + offset_ndc * clip_pos.w, clip_pos.zw);
+    let offset_px = perp * in.corner.y * extent_px + edge_dir * in.corner.x * reach;
+    out.clip_pos = vec4<f32>(clip_pos.xy + offset_px * pixel_to_ndc * clip_pos.w, clip_pos.zw);
     out.at_infinity = at_infinity;
     out.local = vec2<f32>(0.0, in.corner.y * extent_px);
+    out.past_ends = vec2<f32>(
+        select(NOT_CUT, -along, cut_a),
+        select(NOT_CUT, along - drawn_len, cut_b),
+    );
     return out;
+}
+
+// The place on the segment from clip_a to clip_b, both in front of the eye,
+// that projects `fraction` of the way from a's projection to b's.
+//
+// A place a fraction t of the way in clip space projects a fraction
+// u = t·w_b / ((1 - t)·w_a + t·w_b) of the way on screen; solved for t, that
+// is t = u·w_a / ((1 - u)·w_b + u·w_a).
+fn at_screen_fraction(clip_a: vec4<f32>, clip_b: vec4<f32>, fraction: f32) -> vec4<f32> {
+    let t = fraction * clip_a.w / ((1.0 - fraction) * clip_b.w + fraction * clip_a.w);
+    return mix(clip_a, clip_b, t);
 }
 
 struct DiscInput {
@@ -296,7 +352,7 @@ fn coverage(in: VertexOutput) -> f32 {
     let half_px = in.shape.z;
     var outside: f32;
     if kind == KIND_SEGMENT {
-        outside = abs(in.local.y) - half_px;
+        outside = max(abs(in.local.y) - half_px, max(in.past_ends.x, in.past_ends.y));
     } else if kind == KIND_RING {
         outside = abs(length(in.local) - radius_px) - half_px;
     } else {

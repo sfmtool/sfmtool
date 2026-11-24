@@ -57,10 +57,11 @@ Nothing in this draft is still open.
 **The store and the instance format.** The bench figure and the measurements
 are drawn out of one buffer, a region per producer, and each piece is one
 `OverlayInstance`: a segment, a ring or a disc, with homogeneous world places,
-sizes in panel points, and flags for how it is drawn behind the scene and
-whether it is pulled toward the eye. Segments are clipped at the near plane in
-homogeneous view space, so an end with `w = 0` stays a direction, and edges are
-anti-aliased over about a point
+sizes in panel points, flags for how it is drawn behind the scene and
+whether it is pulled toward the eye, and a segment's inset at each end, by which
+a measurement's line stops at its rings on screen. Segments are clipped at the
+near plane in homogeneous view space, so an end with `w = 0` stays a direction,
+and edges are anti-aliased over about a point
 ([gui/viewer-3d-bench-layer.md](../gui/viewer-3d-bench-layer.md) § "The overlay
 ribbon store"). The measurements are built only when their key changes; the
 bench figure every frame, for its barbs.

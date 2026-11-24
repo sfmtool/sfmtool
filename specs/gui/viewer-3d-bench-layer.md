@@ -283,6 +283,7 @@ pub(crate) struct OverlayInstance {
     pub(crate) radius: f32,     // a ring's or a disc's radius, in panel points
     pub(crate) kind: u32,       // SEGMENT, RING or DISC
     pub(crate) flags: u32,      // HOLD or FADE, and PULL_TOWARD_EYE
+    pub(crate) inset: [f32; 2], // how far in from a and from b a segment is drawn, in panel points
 }
 
 // A measurement's ring about its endpoint, which the pass turns to face the eye.
@@ -311,14 +312,26 @@ nothing:
   that the anti-aliasing reads is interpolated linearly on the screen rather
   than in perspective, so the middle of a ribbon whose ends lie at different
   depths stays on the line between them.
+- **Insets.** A segment can be cut short on screen at either end by its
+  `inset` there, in points (`OverlayInstance::inset`), which a measurement's
+  line is so that it stops at the outer edge of each end's ring
+  ([`measurement-view.md`](measurement-view.md) § "Drawing measurements"). The
+  shader moves each cut end, after the near-plane clip and the projection, to
+  the place on the segment that projects that many points along it, so the cut
+  end keeps the segment's depth there. An end clipped at the near plane is not
+  inset, since what it was inset from is behind the eye; a segment no longer on
+  screen than its two insets together draws nothing. A cut end is
+  anti-aliased over a point as the sides are, while an end that is not cut
+  stays square where it is, which is how the figure's segments, never inset,
+  meet at its corners.
 - **Rings and discs** are one instance each. The shader projects the centre and
   expands a square of `radius + half_width` points, plus the anti-aliasing's
   point, aligned to the screen around it; the fragment shader draws the annulus
   or the disc from each fragment's distance to the centre. A centre behind the
   near plane draws nothing.
 - **Edges** are anti-aliased over about one panel point: a fragment's coverage
-  falls from 1 to 0 over the point centred on the shape's edge, and multiplies
-  its alpha.
+  falls from 1 to 0 over the point centred on the shape's edge (a segment's
+  sides and its cut ends), and multiplies its alpha.
 - **Behind the scene**, `FADE` fades with depth to the floor, as the figure
   does, and `HOLD` holds at `BEHIND_OPACITY`, as a measurement does
   (§ "Depth against the scene").
@@ -798,11 +811,15 @@ the projection, the pixels per point and the pull fraction the frame handed it.
 The pass contract draws both targets' regions out of one store, a segment, a
 ring and a disc among the measurements', at an offset past the figure's. What
 the shader does with them, the depth-aware blend with and without the fade, the
-clip at the near plane, the pull and the anti-aliased shapes, runs on no `noop`
-device, so it is checked by eye, with MCP screenshots of the viewport showing a
-square lying on a surface, one in front of it and one behind it, and rings and
-lines of measurements in front of and behind the scene
-([`mcp-server.md`](mcp-server.md)).
+clip at the near plane, the pull, the insets and the anti-aliased shapes, runs
+on no `noop` device, so it is checked by eye, with MCP screenshots of the
+viewport showing a square lying on a surface, one in front of it and one behind
+it, rings and lines of measurements in front of and behind the scene, and a
+line that stops at its rings and runs off the view where it is clipped
+([`mcp-server.md`](mcp-server.md)). `scene_renderer/pipelines/tests.rs` holds
+the shader's insets to their rules in its source: an end clipped at the near
+plane not inset, a segment shorter than its insets dropped, the cut ends placed
+on the segment and anti-aliased.
 
 `scene_renderer/overlay_ribbons/tests.rs` checks the store on the same `noop`
 device. That device keeps no buffer contents, so the store records, in test

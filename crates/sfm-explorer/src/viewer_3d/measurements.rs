@@ -76,13 +76,18 @@ const FLAGS: u32 = OverlayInstance::HOLD | OverlayInstance::PULL_TOWARD_EYE;
 /// order, built from nothing that depends on the camera.
 ///
 /// Every halo comes first, then every stroke, then every dot, each in the
-/// layer's order: so no measurement's halo crosses another's stroke, and a
-/// dot sits on its own ring's line. A measurement's halos are its line's and
-/// then each mark's ring's; its strokes are its line and then each mark's
-/// ring. A ring and a dot are one instance each, sized in points about the
-/// endpoint, which the pass turns to face the eye there; the widths are the
-/// strokes' in points. Every piece is flagged to hold at `BEHIND_OPACITY`
-/// behind the scene and to be drawn toward the eye ([`toward_eye_fraction`]).
+/// layer's order: so no measurement's halo crosses another's stroke. A
+/// measurement's halos are its line's and then each mark's ring's; its
+/// strokes are its line and then each mark's ring. A ring and a dot are one
+/// instance each, sized in points about the endpoint, which the pass turns to
+/// face the eye there; the widths are the strokes' in points. The line and its
+/// halo are inset at each end by that end's ring's radius and half its stroke
+/// ([`OverlayInstance::inset`]): the line stops on screen at the ring's outer
+/// edge, so it neither runs inside the ring to the dot nor draws over the
+/// ring's stroke, where a translucent measurement's two strokes would add up
+/// to a brighter spot, and the ring's halo bounds the join. Every piece is
+/// flagged to hold at `BEHIND_OPACITY` behind the scene and to be drawn toward
+/// the eye ([`toward_eye_fraction`]).
 ///
 /// An endpoint at infinity or refused draws nothing and the other endpoint
 /// still draws its mark. A finite endpoint behind the eye draws no mark and a
@@ -105,9 +110,16 @@ pub(crate) fn instances(layer: &MeasurementLayer) -> Vec<OverlayInstance> {
                 Place::AtInfinity | Place::Refused => None,
             })
             .collect();
-        if let [(_, a), (_, b)] = finite.as_slice() {
-            halos.push(OverlayInstance::segment(*a, *b, halo, halo_half, FLAGS));
-            strokes.push(OverlayInstance::segment(*a, *b, color, half, FLAGS));
+        if let [(side_a, a), (side_b, b)] = finite.as_slice() {
+            // The line and its halo stop at the outer edge of each end's
+            // ring's stroke.
+            let ring_edge = |side| measurement_marks::mark_radius(drawn, side) + half;
+            let (inset_a, inset_b) = (ring_edge(*side_a), ring_edge(*side_b));
+            halos.push(
+                OverlayInstance::segment(*a, *b, halo, halo_half, FLAGS).inset(inset_a, inset_b),
+            );
+            strokes
+                .push(OverlayInstance::segment(*a, *b, color, half, FLAGS).inset(inset_a, inset_b));
         }
         for (side, p) in &finite {
             let radius = measurement_marks::mark_radius(drawn, *side);

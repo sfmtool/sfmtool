@@ -15,6 +15,34 @@ const SHADER: &str = concat!(
 /// to white.
 pub(in crate::scene_renderer) const BLEND: wgpu::BlendState = wgpu::BlendState::ALPHA_BLENDING;
 
+/// [`OverlayInstance`]'s fields as `vs_overlay` reads them, each at the
+/// offset the struct puts it at.
+const OVERLAY_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 8] = {
+    use std::mem::offset_of;
+    use wgpu::VertexFormat::{Float32, Float32x2, Float32x4, Uint32};
+    const fn attribute(
+        format: wgpu::VertexFormat,
+        offset: usize,
+        shader_location: u32,
+    ) -> wgpu::VertexAttribute {
+        wgpu::VertexAttribute {
+            format,
+            offset: offset as u64,
+            shader_location,
+        }
+    }
+    [
+        attribute(Float32x4, offset_of!(OverlayInstance, a), 1),
+        attribute(Float32x4, offset_of!(OverlayInstance, b), 2),
+        attribute(Float32x4, offset_of!(OverlayInstance, color), 3),
+        attribute(Float32, offset_of!(OverlayInstance, half_width), 4),
+        attribute(Float32, offset_of!(OverlayInstance, radius), 5),
+        attribute(Uint32, offset_of!(OverlayInstance, kind), 6),
+        attribute(Uint32, offset_of!(OverlayInstance, flags), 7),
+        attribute(Float32x2, offset_of!(OverlayInstance, inset), 8),
+    ]
+};
+
 /// Resources created by the bench track pipelines.
 pub(in crate::scene_renderer) struct BenchTrackPipelineResources {
     /// The figure's pieces out of the overlay ribbon store: the frame, the
@@ -95,43 +123,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> BenchTrackPipe
                     Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<OverlayInstance>() as u64,
                         step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &[
-                            wgpu::VertexAttribute {
-                                format: wgpu::VertexFormat::Float32x4,
-                                offset: 0,
-                                shader_location: 1, // a (xyz + w)
-                            },
-                            wgpu::VertexAttribute {
-                                format: wgpu::VertexFormat::Float32x4,
-                                offset: 16,
-                                shader_location: 2, // b (xyz + w)
-                            },
-                            wgpu::VertexAttribute {
-                                format: wgpu::VertexFormat::Float32x4,
-                                offset: 32,
-                                shader_location: 3, // color
-                            },
-                            wgpu::VertexAttribute {
-                                format: wgpu::VertexFormat::Float32,
-                                offset: 48,
-                                shader_location: 4, // half_width, in points
-                            },
-                            wgpu::VertexAttribute {
-                                format: wgpu::VertexFormat::Float32,
-                                offset: 52,
-                                shader_location: 5, // radius, in points
-                            },
-                            wgpu::VertexAttribute {
-                                format: wgpu::VertexFormat::Uint32,
-                                offset: 56,
-                                shader_location: 6, // kind
-                            },
-                            wgpu::VertexAttribute {
-                                format: wgpu::VertexFormat::Uint32,
-                                offset: 60,
-                                shader_location: 7, // flags
-                            },
-                        ],
+                        attributes: &OVERLAY_INSTANCE_ATTRIBUTES,
                     }),
                 ],
                 compilation_options: Default::default(),
