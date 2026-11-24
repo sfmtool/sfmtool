@@ -215,6 +215,12 @@ fn update(atomic: &AtomicU64, next: impl Fn(u64) -> Option<u64>) -> Option<u64> 
     }
 }
 
+/// Lock `mutex`, ignoring a poison: the notes behind these locks are read
+/// and written whole, so one a panicking thread left is still usable.
+fn lock_ignoring_poison<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Take `bytes` off a build count, stopping at 0. Only a reservation whose
 /// bytes saturated the count could otherwise take it below 0.
 fn give_back(count: &AtomicU64, bytes: u64) {
@@ -1491,23 +1497,34 @@ impl PhotographCache {
         let _ = self.store(&mut inner, path, &slot, Ok(cut), Asked::Every);
     }
 
-    /// Drop one path's entry, its tiles and its layout. The next `get` of it
-    /// reads the file again.
+    /// Drop one path's entry, its tiles and its layout, and what the cache
+    /// noted of its mipmap's files (a file found not current, a build whose
+    /// files could not be written). The next `get` of it reads the file again.
     pub fn forget(&self, path: &Path) {
-        let mut inner = self.lock();
-        inner.remove(path);
-        inner.layouts.remove(path);
+        {
+            let mut inner = self.lock();
+            inner.remove(path);
+            inner.layouts.remove(path);
+        }
+        // Each note's lock is taken with no other lock held.
+        lock_ignoring_poison(&self.shared.stale).remove(path);
+        lock_ignoring_poison(&self.shared.not_written).remove(path);
     }
 
-    /// Drop every entry, every tile and every layout.
+    /// Drop every entry, every tile and every layout, and every note of a
+    /// mipmap's files.
     pub fn clear(&self) {
-        let mut inner = self.lock();
-        for slot in inner.map.values() {
-            slot.lock().drop_entries();
+        {
+            let mut inner = self.lock();
+            for slot in inner.map.values() {
+                slot.lock().drop_entries();
+            }
+            inner.map.clear();
+            inner.layouts.clear();
+            inner.bytes = 0;
         }
-        inner.map.clear();
-        inner.layouts.clear();
-        inner.bytes = 0;
+        lock_ignoring_poison(&self.shared.stale).clear();
+        lock_ignoring_poison(&self.shared.not_written).clear();
     }
 
     /// Tiles, file entries and bytes kept, the budget, the hit, miss and

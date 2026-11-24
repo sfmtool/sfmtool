@@ -173,7 +173,8 @@ impl PhotographCache {
     pub fn insert(&self, path: &Path, image: ImageU8);
 
     /// Drop one path's entry, tiles and layout, or every entry, tile and
-    /// layout.
+    /// layout, with what the cache noted of their mipmaps' files (§ "When a
+    /// file is not current", § "Making a mipmap").
     pub fn forget(&self, path: &Path);
     pub fn clear(&self);
 
@@ -769,12 +770,18 @@ modification time, since the check of the coarsest file alone does not see
 it: while the original is unchanged and no build has made the mipmap since,
 the check answers the mipmap not current, so the next `get` or `get_many`
 builds it, rewriting each level whose file is not current, rather than take
-the coarsest file's word and read the same file again. When a read finds
-the same file not current again after that build, under the same original,
-a build does not mend it (a file whose record is current and whose data does
-not decode): the photograph is then remembered as unreadable, naming the
-file, until its original changes, so neither a panel nor *Build mipmaps*
-asks for its mipmap again and again.
+the coarsest file's word and read the same file again. A build mends a
+file that is missing or whose record is not current by writing it, so the
+same file found missing again, or rewritten (a mipmap directory deleted
+twice, another process making the file again), is a first find once more.
+When a read finds the same file not current again after that build, under
+the same original and still there with the length and modification time it
+had when first found, the build left it as it was because its record is
+current, though its data does not decode, and no build mends it: the
+photograph is then remembered as unreadable, naming the file, until its
+original changes or `forget` or `clear` drops it, so neither a panel nor
+*Build mipmaps* asks for its mipmap again and again. `forget` and `clear`
+also drop the note of a build whose files could not be written.
 
 `get` and `get_many` answer an out-of-core photograph whose mipmap is current
 from its slot, with nothing decoded and nothing reserved on the build count:
@@ -1210,9 +1217,12 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   photograph whose build was held in memory answered its in-core layout and
   tiles from a decode in core, three times, with one build; and a file a
   read found missing made again by the next `get_many` rather than taken as
-  current from the coarsest file, and found missing again after that build
-  making the photograph unreadable, with no further build, under a budget
-  too small to keep a file and under a budget of 0. The `get_many` tests, on smaller 96 x 64
+  current from the coarsest file, twice when it is deleted twice, the
+  photograph readable after each; and a file left as it was by the build,
+  its record current and its scan spoiled, found not current again making
+  the photograph unreadable, with no further build, until `forget` drops
+  it; each under a budget too small to keep a file and under a budget of 0.
+  The `get_many` tests, on smaller 96 x 64
   photographs where they make many mipmaps: a `get_many` over 20
   photographs with no mipmap making them in groups that never pass a build
   budget of three builds, every build reserved as it starts, its tally and

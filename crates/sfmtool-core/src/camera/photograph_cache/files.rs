@@ -181,16 +181,24 @@ pub(super) enum Checked {
 /// the mipmap since, [`PhotographCache::check_files`] answers the mipmap not
 /// current, so the next `get` or `get_many` makes it, rewriting every level
 /// whose file is not current, rather than take the coarsest file's word and
-/// read the same file again. A read that finds the same file not current
-/// again after that build has found one a build does not mend (a file whose
-/// record is current and whose data does not decode), and the photograph is
-/// then remembered as unreadable until its original changes, so neither a
-/// panel nor *Build mipmaps* asks for it again and again.
+/// read the same file again. A build mends a file that is missing or whose
+/// record is not current by writing it, so such a file found again, gone or
+/// with another length or modification time (deleted again, or rewritten by
+/// another process), is a first find once more. A read that finds the same
+/// file not current again after that build, still there with the length and
+/// modification time it had when first found, has found one the build left
+/// as it was because its record is current, though its data does not
+/// decode: no build mends it, and the photograph is then remembered as
+/// unreadable until its original changes or the cache forgets it, so
+/// neither a panel nor *Build mipmaps* asks for it again and again.
 pub(super) struct Stale {
     /// The original's length and modification time when the file was found.
     stamp: FileStamp,
     /// The file found not current.
     file: PathBuf,
+    /// That file's own length and modification time when it was found,
+    /// `None` when it was missing.
+    file_stamp: FileStamp,
     /// Whether a build has made the mipmap since.
     rebuilt: bool,
 }
@@ -350,19 +358,26 @@ impl PhotographCache {
 
     /// Note that a read found `file`, a file of `path`'s mipmap, not current,
     /// and answer whether it found the same file so after a build made the
-    /// mipmap again under the same original: a file a build does not mend.
+    /// mipmap again under the same original, the file still there and
+    /// unchanged since it was first found: a file a build does not mend.
     fn note_stale(&self, path: &Path, file: &Path) -> bool {
         let stamp = file_stamp(path);
+        let found_stamp = file_stamp(file);
         let mut stale = self.shared.stale.lock().unwrap_or_else(|e| e.into_inner());
-        let again = stale
-            .get(path)
-            .is_some_and(|found| found.rebuilt && found.stamp == stamp && found.file == file);
+        let again = stale.get(path).is_some_and(|found| {
+            found.rebuilt
+                && found.stamp == stamp
+                && found.file == file
+                && found_stamp.is_some()
+                && found.file_stamp == found_stamp
+        });
         if !again {
             stale.insert(
                 path.to_path_buf(),
                 Stale {
                     stamp,
                     file: file.to_path_buf(),
+                    file_stamp: found_stamp,
                     rebuilt: false,
                 },
             );

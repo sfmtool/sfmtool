@@ -3436,11 +3436,20 @@ in core. Step 17 turns the tier on.
         original is unchanged and no build has made the mipmap since, the
         check of the coarsest file answers not current, so the next `get`
         or `get_many` builds, rewriting each level whose file is not
-        current. A read that finds the same file not current again after
-        that build has found a file a build does not mend (its record
-        current, its data not decoding), and the photograph is then
-        remembered as unreadable, naming the file, until the original
-        changes. And under a budget of 0, which keeps no build, a mipmap
+        current. A missing or rewritten file is one a build mends, so the
+        same file found missing or rewritten again (a mipmap directory
+        deleted twice, step 15's makers writing a file twice) is a first
+        find once more and is built again. Only the same file found not
+        current again after that build, still there with the length and
+        modification time it had when first found (`Stale::file_stamp`), is
+        one the build left as it was because its record is current though
+        its data does not decode; no build mends it, and the photograph is
+        then remembered as unreadable, naming the file, until the original
+        changes or `forget` or `clear` drops it (both also drop the
+        `not_written` note below). An audit of 14e1 found the first form of
+        this rule, which counted any second find of the same file, turning
+        a mipmap directory deleted twice into an unreadable photograph for
+        the session. And under a budget of 0, which keeps no build, a mipmap
         whose files could not be written was made again on every request,
         each time a panel asked for its tiles; the cache now notes such a
         photograph with the original's stamp (`Shared::not_written`, which

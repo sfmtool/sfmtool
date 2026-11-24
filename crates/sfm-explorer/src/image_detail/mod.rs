@@ -982,10 +982,6 @@ impl ImageDetail {
         // size: every coordinate below, the overlays' included, is in level-0
         // pixels whichever level the tiles are drawn from.
         let Some(size) = layout_size else {
-            if matches!(layout, Some(DisplayLayout::Building)) {
-                show_building_mipmap(ui);
-                return response;
-            }
             ui.centered_and_justified(|ui| match layout {
                 Some(DisplayLayout::Building | DisplayLayout::Loading) => {
                     ui.label(DECODING_LABEL);

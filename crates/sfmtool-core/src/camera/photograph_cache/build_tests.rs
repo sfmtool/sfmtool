@@ -477,10 +477,11 @@ fn an_evicted_in_memory_level_is_made_again_and_reads_the_same_pixels() {
 
 /// Under a budget of 0, which keeps no build, a photograph whose mipmap a
 /// `get_many` made in memory, its files not written, is answered to a panel
-/// from a decode in core while its original stays the same: its layout is
-/// `Known` (the in-core one), and a panel's decode answers the in-core tiles
-/// every time it is asked, making no build. Before the build it was
-/// `Building`, and a panel's decode answered `Changed`.
+/// from a decode in core while its original stays the same: `request_layout`
+/// then answers its in-core layout, and a panel's decode answers the
+/// in-core tiles each of the three times it is asked, with no build after
+/// the first. Before that build `request_layout` answered `Building`, and a
+/// panel's decode `Changed`.
 #[test]
 fn under_a_budget_of_0_a_panel_reads_a_build_held_in_memory_in_core() {
     let (_ws, paths, _, _) = blocked_workspace(1);
@@ -524,17 +525,12 @@ fn under_a_budget_of_0_a_panel_reads_a_build_held_in_memory_in_core() {
 
 /// A file a read found missing is made again by the next build, rather than
 /// taken as current on the coarsest file's word, after which the photograph
-/// reads; the same file found missing again under the same original, which
-/// a build has not mended, makes the photograph unreadable rather than
-/// `Building` again, so nothing makes its mipmap again and again. Under a
-/// budget too small to keep a file, and under a budget of 0.
+/// reads; deleted again under the same original, it is a first find again,
+/// and the next build makes it again, so a mipmap directory deleted twice is
+/// made twice and the photograph stays readable. Under a budget too small to
+/// keep a file, and under a budget of 0.
 #[test]
-fn a_file_a_read_found_not_current_is_made_again_once() {
-    let key = TileKey {
-        level: 1,
-        col: 0,
-        row: 0,
-    };
+fn a_file_a_read_found_missing_is_made_again_each_time() {
     for budget in [1, 0] {
         let ws = Workspace::new();
         let path = ws.photograph("a.jpg", &readable_jpeg());
@@ -542,50 +538,134 @@ fn a_file_a_read_found_not_current_is_made_again_once() {
         let cache = cache_of(budget);
         cache.request_layout(&path);
         let level_1 = level_file(&path, 1);
-        std::fs::remove_file(&level_1).unwrap();
+        for round in 0..2u32 {
+            let key = TileKey {
+                level: 1,
+                col: round,
+                row: 0,
+            };
+            std::fs::remove_file(&level_1).unwrap();
+            assert_eq!(
+                cache
+                    .try_decode_tiles(&path, &[key], &Progress::none())
+                    .err(),
+                Some(TileError::Changed {
+                    path: level_1.clone()
+                }),
+                "{budget}, round {round}"
+            );
+            assert_eq!(cache.layout(&path), PeekedLayout::Building, "{budget}");
+
+            let (found, tally) = cache
+                .get_many(&[path.as_path()], &Progress::none())
+                .unwrap();
+            assert!(found[0].is_some(), "{budget}, round {round}");
+            assert_eq!(tally.mipmaps_made, 1, "{budget}, round {round}: made again");
+            assert!(level_1.exists(), "{budget}, round {round}");
+            assert!(matches!(cache.layout(&path), PeekedLayout::Known(_)));
+            assert!(
+                matches!(
+                    cache.try_decode_tiles(&path, &[key], &Progress::none()),
+                    Ok(TryDecode::Decoded(_))
+                ),
+                "{budget}, round {round}: readable"
+            );
+        }
+        assert_eq!(cache.stats().mipmaps_made, 2, "{budget}");
+    }
+}
+
+/// Overwrite the entropy-coded bytes of the JPEG at `path` with 0xFE, in
+/// place, keeping its markers, its byte stuffing and its record: the file
+/// opens, and its record is current, but its scan does not decode.
+fn spoil_scan(path: &Path) {
+    let mut bytes = std::fs::read(path).unwrap();
+    let sos = bytes.windows(2).position(|w| w == [0xFF, 0xDA]).unwrap();
+    let header = usize::from(u16::from_be_bytes([bytes[sos + 2], bytes[sos + 3]]));
+    let end = bytes.len() - 2;
+    let mut i = sos + 2 + header;
+    while i < end {
+        if bytes[i] == 0xFF {
+            i += 2;
+        } else {
+            bytes[i] = 0xFE;
+            i += 1;
+        }
+    }
+    std::fs::write(path, &bytes).unwrap();
+}
+
+/// A file that is there with a current record but whose scan does not
+/// decode is found not current by a read; the next build leaves it as it is,
+/// since its record is current, and a read that finds it so again, unchanged,
+/// makes the photograph unreadable, naming the build, rather than `Building`
+/// again, so nothing makes its mipmap again and again. Under a budget too
+/// small to keep a file, and under a budget of 0.
+#[test]
+fn a_file_no_build_mends_makes_the_photograph_unreadable() {
+    let key = |col| TileKey {
+        level: 1,
+        col,
+        row: 0,
+    };
+    for budget in [1, 0] {
+        let ws = Workspace::new();
+        let path = ws.photograph("a.jpg", &readable_jpeg());
+        build(&path);
+        let level_1 = level_file(&path, 1);
+        spoil_scan(&level_1);
+        let spoiled = std::fs::read(&level_1).unwrap();
+        let cache = cache_of(budget);
+        cache.request_layout(&path);
         assert_eq!(
             cache
-                .try_decode_tiles(&path, &[key], &Progress::none())
+                .try_decode_tiles(&path, &[key(0)], &Progress::none())
                 .err(),
             Some(TileError::Changed {
                 path: level_1.clone()
             }),
             "{budget}"
         );
-        assert_eq!(cache.layout(&path), PeekedLayout::Building, "{budget}");
 
         let (found, tally) = cache
             .get_many(&[path.as_path()], &Progress::none())
             .unwrap();
         assert!(found[0].is_some(), "{budget}");
-        assert_eq!(tally.mipmaps_made, 1, "{budget}: made again");
-        assert!(level_1.exists(), "{budget}");
-        assert!(matches!(cache.layout(&path), PeekedLayout::Known(_)));
-        assert!(matches!(
-            cache.try_decode_tiles(&path, &[key], &Progress::none()),
-            Ok(TryDecode::Decoded(_))
-        ));
+        assert_eq!(tally.mipmaps_made, 1, "{budget}");
+        assert_eq!(
+            std::fs::read(&level_1).unwrap(),
+            spoiled,
+            "{budget}: left as it was"
+        );
 
-        let unreadable = |e: Option<TileError>| match e {
+        match cache
+            .try_decode_tiles(&path, &[key(1)], &Progress::none())
+            .err()
+        {
             Some(TileError::Unreadable { why, .. }) => {
                 assert!(why.contains("made again"), "{budget}: {why}")
             }
             other => panic!("{budget}: {other:?}"),
-        };
-        std::fs::remove_file(&level_1).unwrap();
-        let other = TileKey { col: 1, ..key };
-        unreadable(
-            cache
-                .try_decode_tiles(&path, &[other], &Progress::none())
-                .err(),
-        );
+        }
         assert!(matches!(cache.layout(&path), PeekedLayout::Unreadable(_)));
         let made = cache.stats().mipmaps_made;
         let _ = cache
             .get_many(&[path.as_path()], &Progress::none())
             .unwrap();
         assert_eq!(cache.stats().mipmaps_made, made, "{budget}: not made again");
-        assert!(!level_1.exists(), "{budget}");
+
+        // Forgotten, the photograph is a first find again.
+        cache.forget(&path);
+        cache.request_layout(&path);
+        assert_eq!(
+            cache
+                .try_decode_tiles(&path, &[key(2)], &Progress::none())
+                .err(),
+            Some(TileError::Changed {
+                path: level_1.clone()
+            }),
+            "{budget}: forgotten"
+        );
     }
 }
 
