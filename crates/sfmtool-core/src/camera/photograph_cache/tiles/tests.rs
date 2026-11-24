@@ -258,7 +258,9 @@ fn an_unreadable_photograph_is_answered_and_remembered() {
     let cache = cache_of(GIB, 16);
     cache.request_layout(&missing);
     match cache.layout(&missing) {
-        PeekedLayout::Unreadable(why) => assert!(why.contains("missing.png"), "{why}"),
+        PeekedLayout::Unreadable(why) => {
+            assert!(why.to_string().contains("missing.png"), "{why}")
+        }
         other => panic!("{other:?}"),
     }
     let unreadable =

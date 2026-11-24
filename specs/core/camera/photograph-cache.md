@@ -206,14 +206,14 @@ pub struct GetManyTally { pub read: usize, pub from_mipmaps: usize, pub mipmaps_
                           pub reused: usize, pub unreadable: usize }
 
 pub enum PeekedLayout { Known(Arc<PyramidLayout>), Building { coarsest: Option<Arc<CoarsestLevel>> },
-                        Unreadable(String), NotKnown }
+                        Unreadable(GetError), NotKnown }
 /// The coarsest level a build publishes as soon as it is encoded: the
 /// out-of-core layout, and one tile of level `K` and of each level below it.
 pub struct CoarsestLevel { pub layout: Arc<PyramidLayout>, pub tiles: Vec<Arc<PhotographTile>> }
 /// The `Progress::value` a build reports once it has published that level.
 pub const COARSEST_PUBLISHED: &str = "coarsest_published";
 pub enum PeekedTile { Ready(Arc<PhotographTile>), Building, Unreadable, NotReady }
-pub enum TileError { Changed { path: PathBuf }, Unreadable { path: PathBuf, why: String },
+pub enum TileError { Changed { path: PathBuf }, Unreadable { path: PathBuf, why: GetError },
                      OutOfRange { path: PathBuf, why: String }, Cancelled }
 pub enum TryDecode { Decoded(Vec<Arc<PhotographTile>>), Busy }
 
@@ -588,7 +588,9 @@ level's edge, so tiles drawn side by side with linear filtering show no seam.
   otherwise) once the photograph is held or its header has been read and,
   for an out-of-core photograph, its mipmap found current or made;
   `Building` for an out-of-core photograph whose mipmap is missing or stale,
-  or being made; `Unreadable` with the message once a read has failed; and
+  or being made; `Unreadable` with the `GetError` once a read has failed
+  (`GetError::Workspace` when the photograph's workspace file refuses it);
+  and
   `NotKnown` otherwise. It reads nothing, waits on nothing and does not stat
   the file. The layout of a photograph the cache has decoded is the one its
   slot keeps, whether or not every tile is still kept, so a panel that asks
@@ -655,7 +657,8 @@ level's edge, so tiles drawn side by side with linear filtering show no seam.
   photograph, decoding nothing, until `get` makes its mipmap.
   A level, tile or rectangle the photograph does not have, or an empty
   set of regions, is `TileError::OutOfRange`; a photograph that cannot be
-  read is `TileError::Unreadable`, with `GetError`'s message.
+  read is `TileError::Unreadable`, with the `GetError`, whose message names
+  the file.
 - **Cancellation.** A whole decode can take over a second, so the four
   calls that can make one, `try_decode_tiles`, `get_tile`,
   `view_region_pyramid` and `get_level`, take the caller's `&Progress`,
@@ -1031,10 +1034,32 @@ reconstruction's photographs goes through it except the ones under
   spinner with *Building mipmap…* meanwhile, over the coarsest level once
   the build has published it; the background draws that level, keeping
   the previous image's photograph on its own mesh until it lands, as while
-  a level loads; the pictures read through `read_peeked` draw their loading
-  state. The run of *Build mipmaps* wakes the viewer as each build of its
-  chunk publishes its coarsest level, once a build, and again as it ends.
+  a level loads; and a render through `read_peeked` or
+  `read_peeked_without_asking` is `PeekedRead::Building`, whose picture
+  (Track View's tiles and crops, the Track Table's crops, Measurement
+  View's endpoint crops) draws a spinner with *Building mipmap…* in its
+  cell, painted by `patch_pictures::paint_building_mipmap`, the label under
+  the spinner where the cell has room for it and on the cell's hover. Only
+  a read that asks queues the photograph, so the Track Table's rows queue
+  nothing while they scroll. A spinner asks for the frames it turns in, so
+  a panel repaints every frame only while it draws one, and the run of
+  *Build mipmaps* wakes the viewer as each build of its chunk publishes
+  its coarsest level, once a build, and again as it ends.
   No panel's task makes a mipmap or waits on one.
+- **A photograph its workspace file refuses** (the file cannot be read or
+  parsed, or its `mipmap_options` is invalid) is
+  `DisplayLayout::WorkspaceFileError` with the file's error, from the
+  layout's `GetError::Workspace` or from a decode's
+  `TileError::Unreadable` with one. `PhotographRequests` keeps it as a
+  failure, as it keeps a failed decode, but with the workspace file's
+  stamp in place of the photograph's: a look starts a check of that file
+  on the rayon pool, and once the file has changed the check drops the
+  failure, has the cache `forget` the path, whose layout it otherwise
+  answers as refused without a stat, and repaints, so the next frame reads
+  the photograph again. Image Detail says *Workspace file error:* over the
+  error, which names the file and the key; the other panels draw it as an
+  unreadable photograph. Nothing else is asked for and nothing repaints
+  while the file stays as it is.
 - **The image menu** asks only whether each photograph is decoded, with
   `keeps_every_tile`, and reads no pixel. The scene graph lays the menu out
   for every node on every frame, so the question allocates nothing and is no
@@ -1368,9 +1393,16 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   it, none answered as unreadable, and the looks starting no more tasks and
   repaints than the reads need; twenty panels adding their twenty
   photographs to the one list, each once and at the front, with nothing
-  decoded or made; and a photograph *Build mipmaps* cannot make answered as
+  decoded or made; a photograph *Build mipmaps* cannot make answered as
   unreadable and not queued again until its file changes, under a budget of
-  0),
+  0; a render of an out-of-core photograph without a mipmap answered as
+  `Building`, asking for no tile, queued once by a read that asks and not by
+  one that only looks, and run once the task has made the mipmap; and a
+  photograph of a workspace whose `mipmap_options` is invalid answered as a
+  workspace file error naming the key, found by the header read and by a
+  decode of a photograph read before the file broke, decoded no more and
+  repainted for no more, and read again once the file is fixed, with a
+  budget smaller than the photograph and one of 0),
   [state/build_mipmaps/tests.rs](../../../crates/sfm-explorer/src/state/build_mipmaps/tests.rs)
   (the task in the fast queue, one chunk of as many photographs as the build
   budget fits a run, queued again while its list is not empty, running while
@@ -1388,7 +1420,10 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   the level-0 pixels it covers, uploaded once, asking for no tile, under a
   budget smaller than the photograph and one of 0; and a click on that
   level selecting the point under it and a right-click opening the menu at
-  its level-0 pixel, as on the photograph),
+  its level-0 pixel, as on the photograph; and a photograph of a workspace
+  whose `mipmap_options` is invalid drawn as *Workspace file error:* over
+  the error naming the file and the key, asking for nothing and repainting
+  nothing, with a budget smaller than the photograph and one of 0),
   [image_detail/photograph_tiles/tests.rs](../../../crates/sfm-explorer/src/image_detail/photograph_tiles/tests.rs)
   (two panels showing one photograph ask for its layout and its tiles once,
   neither decoding as it draws, with a budget and with a budget of 0; the tiles
@@ -1407,7 +1442,17 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   and [measurement_view/tests/crops.rs](../../../crates/sfm-explorer/src/measurement_view/tests/crops.rs)
   (a crop whose tiles are not there drawn as loading, its photograph asked
   for once and nothing decoded as it draws, with a budget and with a budget
-  of 0 for Measurement View, and drawn once they land), and
+  of 0 for Measurement View, and drawn once they land; and a crop whose
+  photograph waits for its mipmap drawn as a spinner with *Building
+  mipmap…*, which the Track Table's hover says too, asking for no tile and
+  queueing the photograph once, and cut once the task has made the mipmap,
+  under a budget smaller than a photograph and one of 0),
+  [track_view/body/tests/region_reads.rs](../../../crates/sfm-explorer/src/track_view/body/tests/region_reads.rs)
+  (rows whose photographs wait for their mipmaps drawing a spinner with
+  *Building mipmap…* in their tile and crop cells and on hover, asking for
+  no tile and queueing each photograph once, then read with a few reads
+  once the task has made the mipmaps, under a budget smaller than a
+  photograph and one of 0), and
   [scene_graph/tests.rs](../../../crates/sfm-explorer/src/scene_graph/tests.rs)
   (closing everything keeps the photographs).
 

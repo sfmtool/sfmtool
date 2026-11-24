@@ -33,7 +33,7 @@ pub(crate) use photograph_requests::TaskQueue;
 pub(crate) use photograph_requests::{
     display_layout, display_level, display_tiles, prefetch_tiles, read_peeked,
     read_peeked_without_asking, DisplayLayout, DisplayLevel, DisplayTile, PeekedRead,
-    PhotographRequests, PhotographSource, UNREADABLE_PHOTOGRAPH,
+    PhotographRequests, PhotographSource, BUILDING_MIPMAP_LABEL, UNREADABLE_PHOTOGRAPH,
 };
 pub(crate) mod build_mipmaps;
 mod ops;

@@ -331,6 +331,12 @@ pub(crate) struct TrackBody {
     /// so a row draws its pictures once its photograph can be read, whatever
     /// made it readable.
     unreadable: HashSet<usize>,
+    /// The rows whose photograph is waiting for its mipmap
+    /// ([`PeekedRead::Building`]) on this frame, whose tile and crop cells
+    /// draw a spinner with [`crate::state::BUILDING_MIPMAP_LABEL`] in place
+    /// of their pictures. Nothing is kept for such a picture, so each frame
+    /// asks again, and this is made again on each frame.
+    building: HashSet<usize>,
     /// The region pool the tiles, the crops and their hover views read their
     /// photographs through.
     regions: crate::patch_pictures::PanelRegionPool,
@@ -429,12 +435,18 @@ enum Picture {
 /// needs is there, on a photograph made of exactly those tiles
 /// ([`crate::state::read_peeked`]), the tiles it needed kept in `needs`
 /// under `key` until it has run. `None` while the photograph's layout or
-/// tiles are being read, which repaints when they land; otherwise the
-/// render's answer, or why it failed, or why the photograph cannot be read,
-/// which also puts the row in `unreadable`.
+/// tiles are being read, which repaints when they land, and while its
+/// mipmap is being made, which also puts the row in `building`; otherwise
+/// the render's answer, or why it failed, or why the photograph cannot be
+/// read, which also puts the row in `unreadable`.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the panel's fields the read updates, each borrowed apart"
+)]
 fn read_picture<T>(
     needs: &mut HashMap<(usize, Picture), Vec<TileKey>>,
     unreadable: &mut HashSet<usize>,
+    building: &mut HashSet<usize>,
     state: &AppState,
     path: &std::path::Path,
     key: (usize, Picture),
@@ -449,6 +461,10 @@ fn read_picture<T>(
     let answer = match crate::state::read_peeked(source, needs.entry(key).or_default(), ctx, render)
     {
         PeekedRead::Loading => return None,
+        PeekedRead::Building => {
+            building.insert(key.0);
+            return None;
+        }
         PeekedRead::Unreadable => {
             unreadable.insert(key.0);
             Err(UNREADABLE_PHOTOGRAPH.to_string())
@@ -487,6 +503,7 @@ impl TrackBody {
             read_failures: HashMap::new(),
             needs: HashMap::new(),
             unreadable: HashSet::new(),
+            building: HashSet::new(),
             regions: crate::patch_pictures::PanelRegionPool::default(),
             blurred_bitmaps: HashMap::new(),
             hover_bitmap: None,
@@ -568,6 +585,7 @@ impl TrackBody {
         self.read_failures.clear();
         self.needs.clear();
         self.unreadable.clear();
+        self.building.clear();
         self.blurred_bitmaps.clear();
         self.hover_bitmap = None;
         self.track_patch = None;
@@ -1193,6 +1211,7 @@ impl TrackBody {
         let tile = read_picture(
             &mut self.needs,
             &mut self.unreadable,
+            &mut self.building,
             state,
             &path,
             (observation, Picture::Tile),
@@ -1250,6 +1269,12 @@ impl TrackBody {
         self.read_failures.get(&observation).map(String::as_str)
     }
 
+    /// Whether one row's photograph was found waiting for its mipmap by a
+    /// read on this frame ([`TrackBody::building`]).
+    fn building_mipmap(&self, observation: usize) -> bool {
+        self.building.contains(&observation)
+    }
+
     /// The Jacobian at the centre of one row's tile, computing it if this is
     /// the first frame that has asked for it since the track moved. Geometry
     /// alone, so unlike [`Self::ensure_tile`] it never waits on a photograph,
@@ -1287,6 +1312,7 @@ impl TrackBody {
             let context = read_picture(
                 &mut self.needs,
                 &mut self.unreadable,
+                &mut self.building,
                 state,
                 &path,
                 (observation, Picture::Context),
@@ -1433,6 +1459,7 @@ impl TrackBody {
                 read_picture(
                     &mut self.needs,
                     &mut self.unreadable,
+                    &mut self.building,
                     state,
                     &path,
                     (observation, Picture::CropContext),
@@ -1447,6 +1474,7 @@ impl TrackBody {
                 read_picture(
                     &mut self.needs,
                     &mut self.unreadable,
+                    &mut self.building,
                     state,
                     &path,
                     (observation, Picture::Crop),
@@ -1506,8 +1534,11 @@ impl TrackBody {
     /// moved, so a row never shows a picture of a position the observation has
     /// left; and, on every frame, the pictures a row's unreadable photograph
     /// left empty, so they are asked for again
-    /// ([`TrackBody::unreadable`]).
+    /// ([`TrackBody::unreadable`]), and the rows found waiting for a
+    /// mipmap last frame, which this frame's reads find again
+    /// ([`TrackBody::building`]).
     fn retile_if_stale(&mut self, label: &str, track: &std::sync::Arc<EditableTrack>) {
+        self.building.clear();
         for observation in std::mem::take(&mut self.unreadable) {
             for pictures in [&mut self.crops, &mut self.crop_contexts] {
                 if matches!(pictures.get(&observation), Some(None)) {

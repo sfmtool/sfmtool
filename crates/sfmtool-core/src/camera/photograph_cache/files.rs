@@ -978,7 +978,7 @@ impl PhotographCache {
         }
         if let Some(kept) = inner.layouts.get_mut(path) {
             *kept = match &again {
-                Some(e) => PeekedLayout::Unreadable(e.to_string()),
+                Some(e) => PeekedLayout::Unreadable(e.clone()),
                 None => PeekedLayout::Building { coarsest: None },
             };
         }

@@ -1294,3 +1294,115 @@ fn an_unreadable_crop_is_drawn_once_its_photograph_arrives() {
         Some(CellPicture::Texture(_))
     ));
 }
+
+/// The crops of points whose reference photograph waits for its mipmap
+/// draw a spinner with *Building mipmap…* in an empty frame once the
+/// header is read, which their hover says too; no photograph tile is asked
+/// for and the photograph is queued once for *Build mipmaps*. Once it has
+/// made the mipmaps the spinners are gone and the cells draw what the
+/// photograph gives. With a budget smaller than a photograph and with one
+/// of 0.
+#[test]
+fn crops_whose_photograph_waits_for_its_mipmap_draw_a_spinner_and_ask_for_no_tile() {
+    use crate::state::build_mipmaps::tests::{out_of_core_photographs_of, run_until_empty};
+    use crate::state::BUILDING_MIPMAP_LABEL;
+    for budget in [20_000, 0] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut recon = crop_recon();
+        let paths = out_of_core_photographs_of(&mut recon, dir.path(), &[0, 1, 2]);
+        let (mut state, _) = state_with(recon, &[]);
+        state.photographs = Arc::new(sfmtool_core::camera::PhotographCache::new(
+            sfmtool_core::camera::PhotographCacheOptions {
+                budget_bytes: budget,
+                build_budget_bytes: 1 << 30,
+                tile_size: 32,
+            },
+        ));
+        let (requests, queue) = crate::state::PhotographRequests::queued();
+        state.photograph_requests = requests;
+        let mut clock = Clock(0.0);
+        let (ctx, mut panel) = shown(&mut state, 400.0, &mut clock);
+        ctx.all_styles_mut(|style| {
+            style.interaction.tooltip_delay = 0.0;
+            style.interaction.tooltip_grace_time = 0.0;
+        });
+        assert!(
+            queue.run_off_this_thread() > 0,
+            "{budget}: the header reads"
+        );
+        let building = |panel: &TrackTablePanel| -> Vec<u32> {
+            panel
+                .drawn()
+                .iter()
+                .map(|&(p, _)| p)
+                .filter(|&p| cell(panel, p, PictureColumn::Crop) == Some(CellPicture::Building))
+                .collect()
+        };
+        // The rows on show store reference 0, image 0's photograph, but for
+        // the point with no patch frame.
+        let expected: Vec<u32> = panel
+            .drawn()
+            .iter()
+            .map(|&(p, _)| p)
+            .filter(|&p| p != NO_FRAME)
+            .collect();
+        assert!(expected.iter().all(|&p| stored_reference(p as usize) == 0));
+        let mut label_at = None;
+        for frame in 0..3 {
+            let mut output = ctx.run_ui(at(400.0, clock.tick()), |ui| panel.show(ui, &mut state));
+            output.textures_delta.clear();
+            assert_eq!(building(&panel), expected, "{budget}, frame {frame}");
+            let texts = crate::test_support::output_text_rects(&output);
+            let labels: Vec<_> = texts
+                .iter()
+                .filter(|t| t.text == BUILDING_MIPMAP_LABEL)
+                .collect();
+            assert_eq!(labels.len(), expected.len(), "{budget}, frame {frame}");
+            label_at = Some(labels[0].rect.center());
+            // A spinner is painted where it is in view: in each cell whose
+            // label is, and perhaps in a row the scroll cuts off.
+            let in_view = labels
+                .iter()
+                .filter(|t| t.clip.contains_rect(t.rect))
+                .count();
+            let spinners = crate::test_support::output_spinner_rects(&output).len();
+            assert!(
+                (in_view..=expected.len()).contains(&spinners),
+                "{budget}, frame {frame}: {spinners} spinners, {in_view} in view"
+            );
+            assert!(in_view > 0, "{budget}, frame {frame}");
+            assert_eq!(queue.len(), 0, "{budget}, frame {frame}: a tile asked for");
+        }
+        assert_eq!(
+            state.photograph_requests.mipmaps_waiting(),
+            paths[..1],
+            "{budget}: queued once"
+        );
+
+        let at_label = label_at.expect("a label drawn");
+        let mut hover = Vec::new();
+        for _ in 0..3 {
+            let mut input = at(400.0, clock.tick());
+            input.events = vec![egui::Event::PointerMoved(at_label)];
+            hover = painted_texts(&ctx, input, |ui| panel.show(ui, &mut state));
+        }
+        let said = hover.iter().filter(|t| *t == BUILDING_MIPMAP_LABEL).count();
+        assert_eq!(said, expected.len() + 1, "{budget}: the hover: {hover:?}");
+        assert_eq!(queue.len(), 0, "{budget}: a tile asked for");
+
+        run_until_empty(&state.photographs, &state.photograph_requests);
+        let mut settled = false;
+        for _ in 0..8 {
+            let mut output = ctx.run_ui(at(400.0, clock.tick()), |ui| panel.show(ui, &mut state));
+            output.textures_delta.clear();
+            assert!(building(&panel).is_empty(), "{budget}");
+            assert!(crate::test_support::output_spinner_rects(&output).is_empty());
+            if queue.len() == 0 {
+                settled = true;
+                break;
+            }
+            queue.run_off_this_thread();
+        }
+        assert!(settled, "{budget}: the frames kept asking for reads");
+    }
+}

@@ -673,3 +673,154 @@ fn a_hover_view_whose_tiles_are_not_there_says_it_is_loading() {
     assert!(panel.contexts[&0].is_some() && panel.crop_contexts[&0].is_some());
     assert_eq!(queue.len(), 1, "nothing more asked for");
 }
+
+/// A state whose one node is the fixture with its workspace in `dir`, its
+/// photographs of the track's images written there out of core with no
+/// mipmap, its photograph cache keeping `budget_bytes` and its reads waiting
+/// in the queue answered beside it, with the fixture's point on the bench;
+/// and the bench item's label and the photographs' paths.
+fn out_of_core_bench(
+    dir: &std::path::Path,
+    budget_bytes: u64,
+) -> (
+    AppState,
+    String,
+    crate::state::TaskQueue,
+    Vec<std::path::PathBuf>,
+) {
+    use crate::state::build_mipmaps::tests::out_of_core_photographs_of;
+    let mut recon = crate::state::edits::tests::projected_embedded_demo(12);
+    let images: Vec<usize> = (0..=super::POINT as usize % 3).collect();
+    let paths = out_of_core_photographs_of(&mut recon, dir, &images);
+    let mut state = AppState::new();
+    state.photographs = std::sync::Arc::new(sfmtool_core::camera::PhotographCache::new(
+        sfmtool_core::camera::PhotographCacheOptions {
+            budget_bytes,
+            build_budget_bytes: 1 << 30,
+            tile_size: 32,
+        },
+    ));
+    let (requests, queue) = crate::state::PhotographRequests::queued();
+    state.photograph_requests = requests;
+    state.append_node(crate::scene::SceneNode::demo(recon));
+    let id = state.selected_recon.expect("a selected reconstruction");
+    let label = state
+        .put_point_on_bench(crate::scene::PointRef::new(id, super::POINT as usize), None)
+        .expect("a live point");
+    (state, label, queue, paths)
+}
+
+/// How many spinners one frame painted in the rows' tile cells and in
+/// their crop cells, with the rows at `rows_from` and below: not the one
+/// the header turns while the track is evaluated. The table starts 8
+/// points in from the panel's left edge.
+fn spinners(output: &egui::FullOutput, rows_from: f32) -> [usize; 2] {
+    let layout = ColumnLayout::new();
+    let spinners = crate::test_support::output_spinner_rects(output);
+    [layout.tile_x(), layout.crop_x()].map(|x| {
+        let left = x + 8.0;
+        spinners
+            .iter()
+            .filter(|rect| rect.min.y >= rows_from)
+            .filter(|rect| rect.min.x >= left && rect.max.x <= left + TILE_SIZE)
+            .count()
+    })
+}
+
+/// Rows whose photographs wait for their mipmaps, once the headers are
+/// read, draw in their tile and crop cells a spinner with *Building
+/// mipmap…*, which the cell's hover says too, ask for no photograph tile,
+/// and queue each photograph once for *Build mipmaps*. Once *Build
+/// mipmaps* has made the mipmaps the spinners are gone and the pictures are
+/// read with a few reads, after which the frames ask for none. With a
+/// budget smaller than a photograph and with one of 0.
+#[test]
+fn rows_whose_photographs_wait_for_their_mipmaps_draw_a_spinner_and_ask_for_no_tile() {
+    use crate::state::build_mipmaps::tests::run_until_empty;
+    use crate::state::BUILDING_MIPMAP_LABEL;
+    for budget in [20_000, 0] {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, _, queue, mut paths) = out_of_core_bench(dir.path(), budget);
+        let mut panel = TrackBody::new();
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| {
+            style.interaction.tooltip_delay = 0.0;
+            style.interaction.tooltip_grace_time = 0.0;
+        });
+        let run = |panel: &mut TrackBody, state: &AppState| {
+            let mut output = ctx.run_ui(input(Vec::new()), |ui| {
+                panel.show(ui, state);
+            });
+            output.textures_delta.clear();
+            output
+        };
+        run(&mut panel, &state);
+        assert_eq!(
+            queue.run_off_this_thread(),
+            paths.len(),
+            "{budget}: the header reads"
+        );
+        let rows = panel.rows().len();
+        assert_eq!(rows, paths.len(), "{budget}: a row a photograph");
+        // Where the pointer first finds the first row: its top, or below.
+        let y = row_y(&mut panel, &ctx, &state, 0);
+        let rows_from = y - 8.0;
+        for frame in 0..3 {
+            let output = run(&mut panel, &state);
+            assert_eq!(panel.building.len(), rows, "{budget}, frame {frame}");
+            assert_eq!(
+                spinners(&output, rows_from),
+                [rows, rows],
+                "{budget}, frame {frame}"
+            );
+            let texts = crate::test_support::output_texts(&output);
+            let said = texts.iter().filter(|t| *t == BUILDING_MIPMAP_LABEL).count();
+            assert_eq!(said, 2 * rows, "{budget}, frame {frame}: {texts:?}");
+            assert_eq!(queue.len(), 0, "{budget}, frame {frame}: a tile asked for");
+            assert!(panel.tiles.is_empty() && panel.crops.is_empty(), "{budget}");
+        }
+        let mut waiting = state.photograph_requests.mipmaps_waiting();
+        waiting.sort();
+        paths.sort();
+        assert_eq!(waiting, paths, "{budget}: each queued once");
+
+        let at = egui::pos2(
+            ColumnLayout::new().tile_x() + TILE_SIZE / 2.0 + 8.0,
+            y + 20.0,
+        );
+        let mut texts = Vec::new();
+        for _ in 0..14 {
+            texts = super::painted(
+                &mut panel,
+                &ctx,
+                &state,
+                vec![egui::Event::PointerMoved(at)],
+            );
+        }
+        let hover = texts.iter().filter(|t| *t == BUILDING_MIPMAP_LABEL).count();
+        assert_eq!(
+            hover,
+            2 * rows + 1,
+            "{budget}: the hover says it: {texts:?}"
+        );
+        assert_eq!(queue.len(), 0, "{budget}: a tile asked for");
+
+        run_until_empty(&state.photographs, &state.photograph_requests);
+        let mut reads = 0;
+        let mut settled = false;
+        for _ in 0..8 {
+            let output = run(&mut panel, &state);
+            assert_eq!(spinners(&output, rows_from), [0, 0], "{budget}");
+            if queue.len() == 0 {
+                settled = true;
+                break;
+            }
+            reads += queue.run_off_this_thread();
+        }
+        assert!(settled, "{budget}: the frames kept asking for reads");
+        assert!(panel.building.is_empty(), "{budget}");
+        assert_eq!(panel.tiles.len(), rows, "{budget}: every tile read");
+        // A layout read and the tiles each photograph's renders need.
+        assert!(reads <= 4 * rows, "{budget}: {reads} reads");
+    }
+}

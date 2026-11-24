@@ -674,7 +674,7 @@ fn a_file_no_build_mends_makes_the_photograph_unreadable() {
             .err()
         {
             Some(TileError::Unreadable { why, .. }) => {
-                assert!(why.contains("made again"), "{budget}: {why}")
+                assert!(why.to_string().contains("made again"), "{budget}: {why}")
             }
             other => panic!("{budget}: {other:?}"),
         }

@@ -460,10 +460,19 @@ panel, then scrolls it sideways. Each block shows:
   photograph tiles both need (`state::read_peeked`, as Track View's crops
   are read), so nothing is decoded on the GUI thread and no whole pyramid is
   read ([photograph-cache.md](../core/camera/photograph-cache.md) § "In the
-  viewer"). While those tiles are loading the cell says *loading…*; where
-  the photograph cannot be read, the cell says *no crop* and why in its
-  hover text, and the crop is cut again on every frame, so it is drawn once
-  the photograph can be read.
+  viewer"). While those tiles are loading the cell says *loading…*; while
+  the photograph is an out-of-core one waiting for its mipmap
+  (`PeekedRead::Building`, `Crop::Building`), the cell draws a spinner with
+  *Building mipmap…* under it (`patch_pictures::paint_building_mipmap`),
+  which its hover text says too, asks for no photograph tile, and queues
+  the photograph for *Build mipmaps*
+  ([background-tasks.md](background-tasks.md) § "Build mipmaps"), the crop
+  asked for again on every frame, so the frame after the run that makes the
+  mipmap reads its tiles; the spinner asks for the frames it turns in, so
+  the panel repaints every frame only while it draws one. Where the
+  photograph cannot be read, the cell says *no crop* and why in its hover
+  text, and the crop is cut again on every frame, so it is drawn once the
+  photograph can be read.
 - **The crop's hover view.** The photograph's full name, then the same crop in
   context, three times its width and height at 288 points
   (`marks::CONTEXT_FACTOR`, `CONTEXT_HOVER_SIDE`), with the outline and the
@@ -1250,7 +1259,12 @@ at-infinity case is covered by the Rust tests.
   over three frames, nothing is decoded on the GUI thread, and a crop and a
   hover view that need different tiles take no more reads than one render
   does; a photograph that cannot be read gives *no crop*, and the crop is
-  drawn on the frame after the photograph lands in the cache.
+  drawn on the frame after the photograph lands in the cache; and crops
+  whose out-of-core photographs wait for their mipmaps, under a budget
+  smaller than a photograph and one of 0, each draw a spinner with
+  *Building mipmap…*, ask for no photograph tile and queue each photograph
+  once, and once *Build mipmaps* has made the mipmaps are cut with a few
+  reads, after which the frames ask for nothing and repaint no more.
 - **The tools** (`mcp/tests/measurements.rs`): `get_scene`'s counts,
   `list_measurements`' rows and results, `get_measurement`'s resolutions,
   refusal and median line, an index past the rows refused with the count, and

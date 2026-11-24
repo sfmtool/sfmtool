@@ -36,10 +36,19 @@ pub(crate) fn mipmap_options() -> MipmapOptions {
 /// one has a `-mip0`.
 pub(crate) fn out_of_core_workspace(n: usize) -> (tempfile::TempDir, Vec<PathBuf>) {
     let dir = tempfile::tempdir().unwrap();
+    write_out_of_core_workspace_file(dir.path());
+    let paths = (0..n)
+        .map(|i| write_out_of_core_photo(&dir.path().join(format!("{i}.png")), i))
+        .collect();
+    (dir, paths)
+}
+
+/// Write the workspace file of a workspace at `dir` whose `mipmap_options`
+/// is [`mipmap_options`].
+fn write_out_of_core_workspace_file(dir: &Path) {
     let o = mipmap_options();
     std::fs::write(
-        dir.path()
-            .join(sfmtool_core::workspace::WORKSPACE_FILE_NAME),
+        dir.join(sfmtool_core::workspace::WORKSPACE_FILE_NAME),
         format!(
             r#"{{"version": 2, "mipmap_options": {{"out_of_core_long_side": {},
             "jpeg_quality": {}, "full_resolution_jpeg_quality": {}}}}}"#,
@@ -47,18 +56,51 @@ pub(crate) fn out_of_core_workspace(n: usize) -> (tempfile::TempDir, Vec<PathBuf
         ),
     )
     .unwrap();
-    let paths = (0..n)
-        .map(|i| {
-            let path = dir.path().join(format!("{i}.png"));
-            image::RgbImage::from_fn(300, 200, |x, y| {
-                image::Rgb([(x * 7) as u8, (y * 5 + i as u32) as u8, (x ^ y) as u8])
-            })
-            .save(&path)
-            .unwrap();
-            path
-        })
-        .collect();
-    (dir, paths)
+}
+
+/// Write the `i`th of [`out_of_core_workspace`]'s 300 x 200 PNGs at `path`.
+fn write_out_of_core_photo(path: &Path, i: usize) -> PathBuf {
+    image::RgbImage::from_fn(300, 200, |x, y| {
+        image::Rgb([(x * 7) as u8, (y * 5 + i as u32) as u8, (x ^ y) as u8])
+    })
+    .save(path)
+    .unwrap();
+    path.to_path_buf()
+}
+
+/// Make `recon`'s workspace `dir`, a workspace whose `mipmap_options` puts
+/// a photograph with a side over 64 px out of core, its images named
+/// `image_000.png` on, and write the photographs of `images` there as
+/// [`out_of_core_workspace`]'s 300 x 200 PNGs, none with a mipmap; answer
+/// their paths. The photographs are smaller than the cameras say, so a
+/// picture read from one once its mipmap is made may land off it, which
+/// the panels draw as they draw any picture with nothing to cut.
+pub(crate) fn out_of_core_photographs_of(
+    recon: &mut SfmrReconstruction,
+    dir: &Path,
+    images: &[usize],
+) -> Vec<PathBuf> {
+    recon.workspace_dir = dir.to_path_buf();
+    for (i, image) in recon.image_set.images.iter_mut().enumerate() {
+        image.name = format!("image_{i:03}.png");
+    }
+    write_out_of_core_workspace_file(dir);
+    images
+        .iter()
+        .map(|&i| write_out_of_core_photo(&dir.join(format!("image_{i:03}.png")), i))
+        .collect()
+}
+
+/// Run *Build mipmaps* on this thread, a chunk a run, until its list is
+/// empty, answering how many runs it took.
+pub(crate) fn run_until_empty(cache: &PhotographCache, requests: &PhotographRequests) -> usize {
+    let mut runs = 0;
+    while !requests.mipmaps_waiting().is_empty() {
+        run_chunk(cache, requests, &Progress::none(), None);
+        runs += 1;
+        assert!(runs <= 64, "the list never emptied");
+    }
+    runs
 }
 
 /// The estimated bytes of a whole decode of one of

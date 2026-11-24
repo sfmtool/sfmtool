@@ -537,7 +537,16 @@ tiles"):
 - **The layout.** Each frame asks `state::display_layout`, which answers the cache's
   `layout` and, while it is not known, starts one `request_layout` on the rayon pool, a
   read of the file's header, and repaints when it ends. A file that cannot be read or
-  decoded shows "Failed to load image".
+  decoded shows "Failed to load image". A photograph whose workspace file the cache
+  refuses, since the file cannot be read or parsed or its `mipmap_options` is invalid
+  ([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md) § "A changed
+  file and remembered failures"), shows "Workspace file error:" over the file's error,
+  which names
+  the file and the key (`…/.sfm-workspace.json: mipmap_options.jpeg_quality is 0; it
+  must be …`), wrapped to the panel's width, with no repaint and nothing asked for but a
+  check of the workspace file on the rayon pool; every photograph of that workspace
+  shows it until the file changes, and the frame after the check finds it changed reads
+  the photograph again.
 - **A photograph waiting for its mipmap.** An out-of-core photograph whose mipmap is
   missing or stale is `Building`: the panel asks for none of its tiles, the frame's ask
   queues it once for the quiet task *Build mipmaps*, which makes it

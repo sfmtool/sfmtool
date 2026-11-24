@@ -84,19 +84,27 @@ fn an_invalid_mipmap_options_refuses_every_photograph_of_its_workspace() {
 
         cache.request_layout(&b);
         match cache.layout(&b) {
-            PeekedLayout::Unreadable(why) => assert!(names_the_key(&why), "{why}"),
+            PeekedLayout::Unreadable(GetError::Workspace(e)) => {
+                assert!(names_the_key(&e.to_string()), "{e}")
+            }
             other => panic!("budget {budget}: {other:?}"),
         }
         match cache.try_decode_tiles(&b, &[key], &Progress::none()) {
-            Err(TileError::Unreadable { path, why }) => {
+            Err(TileError::Unreadable {
+                path,
+                why: GetError::Workspace(e),
+            }) => {
                 assert_eq!(path, b);
-                assert!(names_the_key(&why), "{why}");
+                assert!(names_the_key(&e.to_string()), "{e}");
             }
             Err(e) => panic!("budget {budget}: {e}"),
             Ok(_) => panic!("budget {budget}: answered tiles"),
         }
         match cache.get_tile(&a, key, &Progress::none()) {
-            Err(TileError::Unreadable { why, .. }) => assert!(names_the_key(&why), "{why}"),
+            Err(TileError::Unreadable {
+                why: GetError::Workspace(e),
+                ..
+            }) => assert!(names_the_key(&e.to_string()), "{e}"),
             Err(e) => panic!("budget {budget}: {e}"),
             Ok(_) => panic!("budget {budget}: answered a tile"),
         }
