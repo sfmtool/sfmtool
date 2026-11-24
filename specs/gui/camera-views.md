@@ -739,9 +739,10 @@ for any level, copied into the texture once rather than on every frame that
 asks; the run wakes the viewer when it is published. Until then the
 previous image's photograph stays on its own mesh, as while a level loads.
 When the run that makes the mipmap ends with a repaint, the photograph's own
-level is asked for, and the coarsest level stays drawn until it lands. A photograph whose decode failed is
-remembered with its file's length and modification time and not decoded
-again until the file changes, under a budget of 0 too.
+level is asked for, and the coarsest level stays drawn until it lands. A
+photograph whose decode failed is remembered with its file's length and
+modification time and not decoded again until the file changes, under a
+budget of 0 too.
 
 The loader state:
 

@@ -1033,8 +1033,8 @@ reconstruction's photographs goes through it except the ones under
   the previous image's photograph on its own mesh until it lands, as while
   a level loads; the pictures read through `read_peeked` draw their loading
   state. The run of *Build mipmaps* wakes the viewer as each build of its
-  chunk publishes its coarsest level, once a build, and again as it ends. No panel's
-  task makes a mipmap or waits on one.
+  chunk publishes its coarsest level, once a build, and again as it ends.
+  No panel's task makes a mipmap or waits on one.
 - **The image menu** asks only whether each photograph is decoded, with
   `keeps_every_tile`, and reads no pixel. The scene graph lays the menu out
   for every node on every frame, so the question allocates nothing and is no
