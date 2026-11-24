@@ -3096,10 +3096,11 @@ in core. Step 17 turns the tier on.
       decodes it, and a photograph decoded before the file broke is refused
       after it; the object is read once for the photographs of one root,
       and once more after the file changes.
-    - **14b, reading a current mipmap.** **Built.** The cache reads a photograph's
-      layout under its setting (`photograph_layout`), and for an out-of-core
-      photograph checks the coarsest mip level file when it first needs the
-      photograph and each finer one when it first opens it, with one
+    - **14b, reading a current mipmap.** **Built.** The cache reads a
+      photograph's layout under its setting (`photograph_layout`), and for
+      an out-of-core photograph checks the coarsest mip level file when it
+      first needs the photograph and each finer one when it first opens it,
+      with one
       `MipmapSource` kept per original and spelling of its path for as long
       as the cache lives; it takes the region answer from the coarsest file's
       record while test 4 holds. An out-of-core photograph whose mipmap is
@@ -3166,10 +3167,14 @@ in core. Step 17 turns the tier on.
       photograph its setting puts out of core, so a workspace without
       `mipmap_options` reads exactly as before, with no extra header read;
       a photograph too thin to store a reduced level (`K` of 0) is read in
-      core. A file found missing, not current or changed during a kernel's
-      read marks the slot's mipmap not current as a panel's does, so the
-      kernel fails with `Changed` and the photograph's next requests read it
-      in core, as one whose files are stale is read until 14c. Under a
+      core. The cache finds the layout from the photograph's header and the
+      setting it keeps, not with `photograph_layout`, and cuts level `K`'s
+      own tiles from the same whole decode of its file as the levels below
+      it, which gives the pixels `decode_region` would. A file found
+      missing, not current or changed during a kernel's read marks the
+      slot's mipmap not current as a panel's does, so the kernel fails with
+      `Changed` and the photograph's next requests read it in core, as one
+      whose files are stale is read until 14c. Under a
       budget of 0 `request_layout` decides from the coarsest file as it is,
       so it can answer the out-of-core layout for a photograph a panel then
       reads in core because a finer file is not current; the two layouts

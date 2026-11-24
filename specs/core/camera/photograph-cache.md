@@ -544,9 +544,9 @@ level's edge, so tiles drawn side by side with linear filtering show no seam.
   level sizes and tile grid, differing only in the tier and the number of
   stored levels, so a key valid under one is valid under the other and a
   panel holding either is never answered `OutOfRange` when the photograph
-  moves from one to the other. Layouts are kept whatever the budget, a budget of 0
-  included, and are not counted against it, since each is a few dozen
-  bytes; `forget` and `clear` drop them.
+  moves from one to the other. Layouts are kept whatever the budget, a
+  budget of 0 included, and are not counted against it, since each is a few
+  dozen bytes; `forget` and `clear` drop them.
 - **`peek_tile`** answers a tile the cache keeps, without reading a file
   or waiting, and counts as a use for the eviction order, marking the tile
   as used, but not as a hit. It answers `NotReady` while the photograph is
@@ -677,10 +677,10 @@ bytes were evicted is compared with the record first read.
 
 **When a file is not current.** A file that is missing, not current, holds
 another record than the one first read or does not decode, or an original
-whose index fails, means the mipmap is not current, and the readers answer
-the request that finds it marks the slot's mipmap not current, dropping the
-slot's tiles and file entries from the files: from then on the slot reads
-the photograph in core, and `layout` answers the in-core layout. The
+whose index fails, means the mipmap is not current. The request that finds
+it marks the slot's mipmap not current, dropping the slot's tiles and file
+entries from the files: from then on the slot reads the photograph in core,
+and `layout` answers the in-core layout. The
 readers then answer in two ways. A kernel's read (`get_tile`, a read through
 a photograph `get` answered, and so `view_region_pyramid` and `get_level`)
 fails with `TileError::Changed` or `PhotographReadError::Changed` naming the
