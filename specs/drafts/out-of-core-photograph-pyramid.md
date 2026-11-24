@@ -3166,10 +3166,15 @@ in core. Step 17 turns the tier on.
       mipmaps*' shared list once per path, the spinner with *Building
       mipmap…*, the 3D background drawing the coarsest level while it
       waits, and Image Detail's *Workspace file error:* with the message.
-      Tests: the panel tests of the list above, and a kernel in another task
-      making a missing mipmap on its own job thread and waiting on the slot
-      when *Build mipmaps* is making it. Before it is built, open question
-      14 has to be decided.
+      Tests: a panel that needs a photograph without a current mipmap adds
+      it to the front of *Build mipmaps*' list once and draws the spinner,
+      twenty such panels add twenty photographs to the one task's list, and
+      no rayon task a panel starts makes or waits on a mipmap; no GUI-thread
+      reader requests a tile of a photograph that is `Building`, and none
+      calls `get` for an out-of-core photograph; and a kernel in another
+      task makes a missing mipmap on its own job thread, and waits on the
+      slot when *Build mipmaps* is making it. Before it is built, open
+      question 14 has to be decided.
 15. **Makers**: `sfm sift` and `build_sift_file`, the viewer's *Build
     mipmaps* quiet task, `sfm ws mipmaps` with `--prune`
     and `--check` (its `--enable` waits for step 17, since it writes the
