@@ -123,8 +123,12 @@ impl PhotographCache {
     /// pool. One entry per path, in order, and a tally. Counts `images`
     /// through `progress` and polls it for cancellation before each path and
     /// as `get` does. The answers hold no tile, so the call holds no pyramid.
-    /// It makes missing or stale mipmaps as `get` does, passing on a build's
-    /// messages through `progress` but not its phases.
+    /// It resolves each path's layout first, reading an out-of-core
+    /// photograph whose mipmap is current from its files with nothing
+    /// reserved, and makes the misses, whole decodes and missing or stale
+    /// mipmaps, in groups sized by the build budget, passing on a build's
+    /// messages through `progress` but not its phases, and reporting the
+    /// value `mipmaps_made` as each build finishes.
     pub fn get_many(
         &self,
         paths: &[&Path],
@@ -185,7 +189,12 @@ pub enum GetError { NotFound(PathBuf), Unreadable(String), Workspace(WorkspaceCo
 
 pub enum PeekedPhotograph { Decoded(Arc<TiledPhotograph>), Unreadable, NotDecoded }
 
-pub struct GetManyTally { pub read: usize, pub reused: usize, pub unreadable: usize }
+/// The five counts add up to the paths asked for: decoded whole in core,
+/// read from the mip level files of a mipmap found current, mipmaps made,
+/// reused from the cache or from another caller's work waited on, and
+/// unreadable.
+pub struct GetManyTally { pub read: usize, pub from_mipmaps: usize, pub mipmaps_made: usize,
+                          pub reused: usize, pub unreadable: usize }
 
 pub enum PeekedLayout { Known(Arc<PyramidLayout>), Unreadable(String), NotKnown }
 pub enum PeekedTile { Ready(Arc<PhotographTile>), Unreadable, NotReady }
@@ -286,7 +295,14 @@ Why it is shaped this way:
   caller names the phase (`decode images` in the viewer's bench steps, `decode
   photographs` in the bitmap render, `read photographs` in the
   cluster-patches build) and writes its note from the tally, since
-  what the note should say depends on the caller.
+  what the note should say depends on the caller. The tally counts what the
+  call did for each path, so a note can say how many photographs a phase
+  decoded, read from mip level files or made mipmaps of; in a workspace
+  without `mipmap_options` the two mipmap counts are 0, and each note leaves
+  them out, reading as it did before the tier. The mipmaps made reach the
+  caller as each build finishes too, as the `Progress` value `mipmaps_made`,
+  rather than as a count, since `get_many` already counts `images` and a
+  stage shows its newest count.
 - **Each photograph's depth set by its size.** Every entry has
   `ImageU8Pyramid::full_levels(width, height)` levels, down to one or two
   pixels on the short side: 14 for 16320×12240, 12 for 3840×2160, 9 for
@@ -466,14 +482,20 @@ ever.
   being made, whether the slot was empty or a maker that stopped has just
   emptied it, and reserves its one decode with `reserve_builds`. It holds
   nothing while it waits on another caller's decode.
-- **`get_many`** first answers every path whose slot is made from the file as
-  it is now, and reads the header of each other path to know its misses and
-  their sizes. It then decodes the misses in groups, one `par_iter` a group,
-  the groups one after another. A group is as many of the next misses as
-  `reserve_builds` grants, at most the rayon pool's size and at least one,
-  each reserved at its group's largest size. A member that finds its slot
-  being made by another caller keeps its share while it waits, since it may
-  take the decode over, and gives it back when it ends.
+- **`get_many`** first resolves each path's layout, in parallel and
+  reserving nothing: it answers every path whose slot is made from the file
+  as it is now, and every out-of-core photograph whose mipmap it finds
+  current (its header and the coarsest mip level file's record, § "Out-of-core
+  photographs"), read from its files, since such a read decodes nothing
+  whole. Every other path is a miss, an in-core photograph none of whose
+  tiles is kept or an out-of-core one whose mipmap is missing or stale, and
+  its header gives its size. It then makes the misses in groups, one
+  `par_iter` a group, the groups one after another. A group is as many of the
+  next misses as `reserve_builds` grants, at most the rayon pool's size and
+  at least one, each reserved at its group's largest size. A member that
+  finds its slot being decoded or made by another caller keeps its share
+  while it waits, since it may take the work over, and gives it back when it
+  ends.
 - **A maker that stops** (cancelled, failed or unwinding) gives its share
   back before its slot changes state, so the waiter that decodes in its place
   never finds that decode still counted, and reserves for its own decode.
@@ -724,10 +746,11 @@ or the photograph in core for a kernel:
   a JPEG loss apart.
 
 `get` and `get_many` answer an out-of-core photograph whose mipmap is current
-from its slot, with nothing decoded; `get_many` still reserves a whole
-decode's estimate on the build count for each path it does not find made, as
-it does for an in-core one, until the step of the draft that resolves each
-path's layout first.
+from its slot, with nothing decoded and nothing reserved on the build count:
+`get_many` resolves each path's layout before it sizes its groups (§ "The
+build budget"), and counts such a photograph as `from_mipmaps` in its tally
+when it checked the files itself, or as `reused` when the slot already read
+from them.
 
 ### Making a mipmap
 
@@ -746,7 +769,9 @@ in-core photograph there, with no builder object or queue; the code is in
   stale, and then reads them without a build. Every other caller asking for
   the path waits on the slot, polling its own `Progress`, and reads what the
   maker made. `get_many` makes its misses in parallel across photographs, one
-  build in each member that answers such a path.
+  build in each member that answers such a path, in groups sized by the
+  build budget, so no more builds are in progress on the cache than the
+  budget holds (§ "The build budget").
 - **Reading what it made.** The slot then reads the photograph from the files
   the build returned, kept as its file entries with their records, so a file
   read again after its bytes are evicted is compared with the record the
@@ -784,9 +809,12 @@ in-core photograph there, with no builder object or queue; the code is in
   `encode`, counting levels, through its `Progress`; a `get_many` member
   passes on only the build's messages, since the phases of members running in
   parallel would overwrite one another, and the call counts photographs as it
-  does for decodes. `PhotographCacheStats::mipmaps_made` counts the builds
-  that finished, written or held in memory; a build started is a miss, and
-  not a decode.
+  does for decodes, reports the value `mipmaps_made`, the builds it has
+  finished so far, as each one finishes, and counts them in its tally's
+  `mipmaps_made`; a photograph whose build another caller made while this
+  call waited is `reused`. `PhotographCacheStats::mipmaps_made` counts the
+  builds that finished, written or held in memory; a build started is a
+  miss, and not a decode.
 - **Cancellation.** The build polls the caller's `Progress` between its
   stages: after the decode, after each reduced level, and before each level's
   encode and the coarsest file's write. A cancelled maker stops within one
@@ -816,7 +844,8 @@ reconstruction's photographs goes through it except the ones under
   build a `ViewSources` on the GUI thread, which holds per image the path to
   read or nothing, and a clone of the cache. The worker calls `get_many` inside
   the `decode images` phase, whose note gives how many were read from disk and
-  how many reused, and how full the cache is afterwards ([edits.rs](../../../crates/sfm-explorer/src/state/edits.rs);
+  how many reused, how many were read from mip level files and how many
+  mipmaps made when either is not 0, and how full the cache is afterwards ([edits.rs](../../../crates/sfm-explorer/src/state/edits.rs);
   [bench.md](../../gui/bench.md), [background-tasks.md](../../gui/background-tasks.md)).
 - **Opening a file** with patch frames and no bitmaps renders them through
   `render_display_patch_bitmaps`, which reads every photograph with `get_many`,
@@ -1117,7 +1146,19 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   nothing, a kernel's read of it making the build again once and reading
   the same pixels, and one warning for each photograph; and a photograph
   whose slot left the map making its in-memory build again once and
-  holding it for its later reads.
+  holding it for its later reads. The `get_many` tests, on smaller 96 x 64
+  photographs where they make many mipmaps: a `get_many` over 20
+  photographs with no mipmap making them in groups that never pass a build
+  budget of three builds, every build reserved as it starts, its tally and
+  its `Progress` value `mipmaps_made` counting the 20, with a budget and
+  with one of 0; a `get_many` over a photograph whose mipmap is current, one
+  with none, an in-core photograph and a missing file reading the first from
+  its files with nothing reserved on the build count, counting one of each
+  in its tally, and a second call reusing all three, or under a budget of 0
+  reading both out-of-core ones from their files and decoding the in-core
+  one again; and a `get_many` that finds a build in progress by another
+  caller waiting on the slot, keeping its share, rather than start a second,
+  and counting the photograph as reused.
 - [bench/tests/bulk_budget.rs](../../../crates/sfmtool-core/src/bench/tests/bulk_budget.rs),
   bulk kernels on one thread over six photographs written to a temporary
   directory: *Refit all points* under a budget of one photograph and under

@@ -95,7 +95,8 @@ every image some live point observes. Nothing is read there. On the worker it:
 
 1. **decodes the photographs** through `ViewSources::decode`, in a `decode
    images` phase whose note says how many were read from disk, reused from the
-   photograph cache and how full the cache is. A photograph that cannot be read
+   photograph cache, read from mip level files and made mipmaps of (those two
+   when not 0), and how full the cache is. A photograph that cannot be read
    **fails the run** with *"Cannot read <image>."*, as the bench's *Fit* does,
    and no version is pushed. The run does not go ahead without it: refitting
    only the points that do not observe the missing image would leave a few

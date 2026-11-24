@@ -162,12 +162,12 @@ impl PhotographCache {
         let made = match self.check_files(path, &slot.setting) {
             Checked::Current(files, coarsest) => {
                 self.shared.hits.fetch_add(1, Ordering::Relaxed);
-                Ok((files, vec![*coarsest], Found::Reused))
+                Ok((files, vec![*coarsest], Found::FromFiles))
             }
             Checked::InCore | Checked::NotCurrent => {
                 self.shared.misses.fetch_add(1, Ordering::Relaxed);
                 self.build(path, progress, &mut making.share, &slot.setting, make)
-                    .map(|(files, opened)| (files, opened, Found::Decoded))
+                    .map(|(files, opened)| (files, opened, Found::Made))
             }
         };
         if let Err(GetError::Cancelled) = made {
@@ -233,7 +233,7 @@ impl PhotographCache {
             let mut inner = self.lock();
             self.read_from(&mut inner, false, &slot, slot.lock(), files, opened);
         }
-        (photograph_of(path, &slot), Found::Decoded)
+        (photograph_of(path, &slot), Found::Made)
     }
 
     /// Make the mipmap of the photograph at `path`, read under `setting`,

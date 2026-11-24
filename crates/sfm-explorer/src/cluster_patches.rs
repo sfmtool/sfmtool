@@ -42,7 +42,7 @@ use crate::action_log::{Actor, Kind};
 use crate::index_files::{unsaved_refusal, IndexFileState, Stopped};
 use crate::scene::{ReconId, SceneNode};
 use crate::sift_index::{image_fingerprint, SiftIndex};
-use crate::state::edits::GIB;
+use crate::state::edits::{mipmap_counts, GIB};
 use crate::state::AppState;
 
 #[cfg(test)]
@@ -787,9 +787,10 @@ fn read_photographs(
     let stats = cache.stats();
     progress_note!(
         phase,
-        "{} read from disk, {} reused from the cache, cache {:.1} of {:.1} GiB",
+        "{} read from disk, {} reused from the cache{}, cache {:.1} of {:.1} GiB",
         tally.read,
         tally.reused,
+        mipmap_counts(&tally),
         stats.bytes as f64 / GIB,
         stats.budget_bytes as f64 / GIB
     );

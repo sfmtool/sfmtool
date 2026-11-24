@@ -488,6 +488,8 @@ fn get_many_keeps_order_and_reports_the_tally() {
         tally,
         GetManyTally {
             read: 2,
+            from_mipmaps: 0,
+            mipmaps_made: 0,
             reused: 1,
             unreadable: 1
         }
@@ -506,6 +508,8 @@ fn get_many_keeps_order_and_reports_the_tally() {
         tally,
         GetManyTally {
             read: 0,
+            from_mipmaps: 0,
+            mipmaps_made: 0,
             reused: 3,
             unreadable: 1
         }

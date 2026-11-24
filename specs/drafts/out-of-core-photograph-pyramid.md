@@ -3274,7 +3274,7 @@ in core. Step 17 turns the tier on.
       reservation) and held 194 MB. Encoding the full-resolution `-mip0`
       raised the build's peak by about 1 MB, so the peak comes before the
       encodes, while the original is decoded.
-    - **14d, `get_many`'s builds.** `get_many` first resolves each path's
+    - **14d, `get_many`'s builds.** **Built.** `get_many` first resolves each path's
       layout (a header read, the region test and a record check), so an
       out-of-core photograph whose mipmap is current is read without a
       build's reservation, and makes the misses (out-of-core photographs to
@@ -3288,6 +3288,46 @@ in core. Step 17 turns the tier on.
       `get_many` that finds a photograph's build in progress by another
       caller waits on the slot rather than start a second; its tally and
       its `Progress` count the mipmaps made.
+      **As built** ([photograph_cache.rs](../../crates/sfmtool-core/src/camera/photograph_cache.rs)
+      `get_many` and `look`): the look at each path, in parallel and
+      reserving nothing, answers a path the cache answers as it is now
+      (`made_now`, as before), and otherwise decides the slot's tier as a
+      first request does (14b's `tier_of`, or under a budget of 0 the
+      files as they are) and answers an out-of-core photograph whose
+      coarsest file is current from its files; every other path is a miss
+      sized from its header, an in-core decode and a build reserving the
+      same whole-decode estimate, as 13b and 14c set. `GetManyTally` also
+      gains `from_mipmaps`, the out-of-core photographs the call found
+      current and read from their files, so a read from files is counted
+      neither as `read` (decoded whole) nor as `reused`, which keeps its
+      meaning of nothing read: before 14d such a photograph was `reused`
+      with a budget and `read` under a budget of 0. The five counts add up
+      to the paths asked for; a photograph whose slot already read from its
+      files is `reused`, and one whose build another caller made while this
+      call waited is `reused` too. The mipmaps made reach the `Progress` as
+      the value `mipmaps_made` (`Progress::value`), the builds finished so
+      far, as each finishes, since `get_many` already counts `images` and
+      a stage shows its newest count. The notes add `, {f} read from mip
+      level files` and `, {m} mipmaps made` (the bench's `decode images`,
+      the cluster-patches build's `read photographs`) or `, {m} mipmaps
+      made` (the bitmap render's `decode photographs`, *{k} of {n} read, 2
+      mipmaps made*) only when the count is not 0, so a workspace without
+      `mipmap_options` reads exactly as before. The test of builds in
+      progress reads, as each build starts, the builds started less those
+      made and the build count, and asserts the count covers every build in
+      progress and never passes the budget; a count read alone would not
+      catch groups larger than their grant, since a member past the grant
+      adds nothing to it. Measured with a counting allocator in a release
+      build, a `get_many` over 12 synthetic 4000 x 3000 region-readable
+      JPEGs (60 MB a build reserved) with no mipmap, under a 64 MiB budget,
+      peaked at 167, 253 and 451 MB over its start with build budgets of
+      one, two and four builds, holding 62 MB after, against 167, 272 and
+      444 MB before 14d: 14c's groups already bounded the builds, so the
+      peak is unchanged and grows with the build budget, about 95 MB a build
+      in flight. Before 14d that call's tally said 12 read and no mipmap
+      made. With six of the twelve made current first, the call reserved
+      nothing for those six and took 2.5 s against 3.0 s before, peaking at
+      266 MB against 272 MB.
     - **14e, the panels.** `PeekedLayout::Building { coarsest }` and
       `PeekedTile::Building`, `request_layout` answering `Building` when its
       record check finds the mipmap not current, a build

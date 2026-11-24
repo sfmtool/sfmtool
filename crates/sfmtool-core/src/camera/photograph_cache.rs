@@ -349,16 +349,27 @@ pub struct PhotographCacheStats {
     pub build_reserved_bytes: u64,
 }
 
-/// How a [`PhotographCache::get_many`] call's photographs were found. The three
-/// counts add up to the number of paths asked for.
+/// How a [`PhotographCache::get_many`] call's photographs were found. The five
+/// counts add up to the number of paths asked for. In a workspace without
+/// `mipmap_options` every photograph is in core, and `from_mipmaps` and
+/// `mipmaps_made` are 0.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GetManyTally {
-    /// Decoded by this call.
+    /// Decoded whole by this call: in-core photographs none of whose tiles
+    /// was kept.
     pub read: usize,
-    /// Every tile already in the cache, or decoded by another thread while
-    /// this call waited for it.
+    /// Out-of-core photographs whose mipmap this call found current and
+    /// answered from their mip level files, with nothing decoded whole and
+    /// nothing made.
+    pub from_mipmaps: usize,
+    /// Out-of-core photographs whose mipmap this call made, its files
+    /// written or held in memory.
+    pub mipmaps_made: usize,
+    /// Answered from what the cache already had (an in-core photograph with
+    /// a tile kept, an out-of-core one whose slot reads its files), or from
+    /// another caller's decode or build this call waited on.
     pub reused: usize,
-    /// Could not be read or decoded, now or when last tried.
+    /// Could not be read, decoded or made, now or when last tried.
     pub unreadable: usize,
 }
 
@@ -978,6 +989,10 @@ struct Shared {
     /// `mipmap_options`.
     #[cfg(test)]
     workspace_reads: AtomicU64,
+    /// The most bytes reserved on the build count as a photograph was
+    /// answered from its mip level files.
+    #[cfg(test)]
+    reserved_reading_files: AtomicU64,
     /// Called as a decode or a mipmap's build starts, once its header is
     /// read and it is reserved and before the pixels are read, as a caller
     /// starts to wait on a slot being made, and as a panel's decode has its
@@ -1013,15 +1028,37 @@ impl std::fmt::Debug for PhotographCache {
     }
 }
 
-/// Whether a request decoded the photograph itself.
+/// What a request did to answer the photograph, which `get_many`'s tally
+/// counts.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Found {
+    /// Decoded it whole in core.
     Decoded,
+    /// Made its mipmap.
+    Made,
+    /// Found its mipmap current and answered it from its mip level files,
+    /// with nothing decoded whole and nothing made.
+    FromFiles,
+    /// Answered from what the cache had, or from another caller's decode or
+    /// build it waited on.
     Reused,
 }
 
 /// One path's answer inside `get_many`.
 type Answer = (Result<Arc<TiledPhotograph>, GetError>, Found);
+
+/// What `get_many` found for a path before it makes its misses.
+enum Looked {
+    /// Answered with no decode and no build: from the cache, or from the mip
+    /// level files of a mipmap found current.
+    Answered(Answer),
+    /// A whole decode in core or a mipmap's build, with the estimated bytes
+    /// it reserves; 0 when the header cannot be read, whose `get` then stops
+    /// at the header too, decoding nothing.
+    Miss(u64),
+    /// Not looked at, since the call was cancelled.
+    Cancelled,
+}
 
 impl PhotographCache {
     /// A cache keeping up to `options.budget_bytes` of photograph tiles, cut
@@ -1052,6 +1089,8 @@ impl PhotographCache {
                 not_written_warned: Mutex::new(HashSet::new()),
                 #[cfg(test)]
                 workspace_reads: AtomicU64::new(0),
+                #[cfg(test)]
+                reserved_reading_files: AtomicU64::new(0),
                 #[cfg(test)]
                 on_slot_event: None,
             }),
@@ -1267,25 +1306,34 @@ impl PhotographCache {
     /// within its budget, and a render of an answer whose tiles were evicted
     /// decodes it again.
     ///
-    /// It first looks for each path in the cache and reads the header of each
-    /// one none of whose tiles it finds kept, to know its misses and their
-    /// sizes. It then decodes the misses in groups, one parallel loop a
-    /// group and the groups one after another, each group as many as
-    /// [`Self::reserve_builds`] grants when it is decided, at most the rayon
-    /// pool's size and at least one. A member that finds its path being
-    /// decoded by another caller keeps its share while it waits, since it may
-    /// take the decode over, and gives it back when it ends.
+    /// It first resolves each path's layout, reserving nothing: a path the
+    /// cache answers as it is now is answered, and so is an out-of-core
+    /// photograph whose mipmap it finds current (a header read and a check of
+    /// the coarsest mip level file's record), read from its files. Every
+    /// other path is a miss, an in-core photograph none of whose tiles is
+    /// kept or an out-of-core one whose mipmap is missing or stale, its size
+    /// read from its header. It then makes the misses in groups, one
+    /// parallel loop a group and the groups one after another, each group as
+    /// many as [`Self::reserve_builds`] grants when it is decided, at most the
+    /// rayon pool's size and at least one, each member reserving a whole
+    /// decode, which a mipmap's build holds too. So the decodes and builds
+    /// in progress on the cache stay within the build budget, past it only by
+    /// the one [`Self::reserve_builds`] grants when none fits. A member that
+    /// finds its path being decoded or made by another caller keeps its share
+    /// while it waits, since it may take the work over, and gives it back
+    /// when it ends.
     ///
-    /// It makes the mipmap of each out-of-core photograph whose files are
-    /// missing or stale, as [`Self::get`] does, in the member that answers
-    /// that path, passing on the build's messages through `progress` but not
-    /// its phases.
+    /// A member decodes an in-core photograph whole, and makes the mipmap of
+    /// an out-of-core one, as [`Self::get`] does, passing on the build's
+    /// messages through `progress` but not its phases.
     ///
-    /// Counts `images` through `progress` as each path is answered, and polls
-    /// it for cancellation before each path and as [`Self::get`] polls it. It
-    /// opens no phase of its own:
-    /// the caller names the phase (the viewer's is `decode images`) and writes
-    /// its note from the tally, and may add [`Self::stats`] to it.
+    /// Counts `images` through `progress` as each path is answered, reports
+    /// the value `mipmaps_made`, the mipmaps this call has made so far, as
+    /// each of its builds finishes, and polls `progress` for cancellation
+    /// before each path and as [`Self::get`] polls it. It opens no phase of
+    /// its own: the caller names the phase (the viewer's is `decode images`)
+    /// and writes its note from the tally, and may add [`Self::stats`] to
+    /// it.
     ///
     /// # Errors
     ///
@@ -1302,39 +1350,36 @@ impl PhotographCache {
     ) -> Result<(Vec<Option<Arc<TiledPhotograph>>>, GetManyTally), Cancelled> {
         let total = paths.len();
         let answered = AtomicUsize::new(0);
-        let answer = |found| {
+        let counted = || {
             let n = answered.fetch_add(1, Ordering::Relaxed) + 1;
             progress.count(n as u64, Some(total as u64), "images");
-            Some(found)
         };
-        // A path made from the file as it is now, with every tile kept, is
-        // answered here; any other is a miss, with the estimated bytes of its
-        // decode, 0 when its header cannot be read (its `get` then stops at
-        // the header too, decoding nothing).
-        let looked: Vec<Result<Option<Answer>, u64>> = paths
+        let looked: Vec<Looked> = paths
             .par_iter()
             .map(|path| {
                 if progress.is_cancelled() {
-                    return Ok(None);
+                    return Looked::Cancelled;
                 }
-                match self.made_now(path) {
-                    Some(value) => Ok(answer((value, Found::Reused))),
-                    None => Err(image_dimensions(path)
-                        .map_or(0, |(width, height)| whole_decode_bytes(width, height))),
+                let looked = self.look(path, progress);
+                if let Looked::Answered(_) = looked {
+                    counted();
                 }
+                looked
             })
             .collect();
         let mut found = Vec::with_capacity(total);
         let mut misses = Vec::new();
         for (i, looked) in looked.into_iter().enumerate() {
             match looked {
-                Ok(value) => found.push(value),
-                Err(bytes) => {
+                Looked::Answered(value) => found.push(Some(value)),
+                Looked::Cancelled => found.push(None),
+                Looked::Miss(bytes) => {
                     found.push(None);
                     misses.push((i, bytes));
                 }
             }
         }
+        let made_count = AtomicUsize::new(0);
         // The misses in groups, each reserved as it is decided. The group's
         // bytes per decode are its largest photograph's, so the count never
         // holds less than the group's decodes.
@@ -1354,7 +1399,12 @@ impl PhotographCache {
                         return (i, None);
                     }
                     let found = self.get_found(paths[i], progress, share, Make::Quietly);
-                    (i, answer(found))
+                    if let (Ok(_), Found::Made) = &found {
+                        let made = made_count.fetch_add(1, Ordering::Relaxed) + 1;
+                        progress.value("mipmaps_made", made as f64);
+                    }
+                    counted();
+                    (i, Some(found))
                 })
                 .collect();
             for (i, value) in made {
@@ -1373,6 +1423,8 @@ impl PhotographCache {
                 match (&photograph, how) {
                     (Err(_), _) => tally.unreadable += 1,
                     (Ok(_), Found::Decoded) => tally.read += 1,
+                    (Ok(_), Found::Made) => tally.mipmaps_made += 1,
+                    (Ok(_), Found::FromFiles) => tally.from_mipmaps += 1,
                     (Ok(_), Found::Reused) => tally.reused += 1,
                 }
                 Ok(photograph.ok())
@@ -1645,6 +1697,16 @@ impl PhotographCache {
         make: Make,
     ) -> (Result<Arc<TiledPhotograph>, GetError>, Found) {
         let (value, found) = self.fetch(path, progress, share, Asked::Photograph, make);
+        (self.photograph_answered(path, value), found)
+    }
+
+    /// The photograph a request for [`Asked::Photograph`] of `path` answered
+    /// `value`.
+    fn photograph_answered(
+        &self,
+        path: &Path,
+        value: Result<Got, Failure>,
+    ) -> Result<Arc<TiledPhotograph>, GetError> {
         let value = value.map_err(|e| match e {
             Failure::Get(e) => e,
             // Answering a photograph reads no tile, so no file is found
@@ -1654,7 +1716,40 @@ impl PhotographCache {
             }
             Failure::NotHeld => Failure::not_held(path),
         });
-        (value.and_then(|got| got.photograph(self, path)), found)
+        value.and_then(|got| got.photograph(self, path))
+    }
+
+    /// `get_many`'s look at `path` before it makes its misses, reserving
+    /// nothing: the photograph the cache answers as it is now, counted as
+    /// reused; an out-of-core photograph whose mipmap it finds current, read
+    /// from its files, deciding the slot's tier when it was not decided; and
+    /// otherwise a miss with the estimated bytes of a whole decode, which an
+    /// in-core photograph's decode and an out-of-core one's build reserve.
+    fn look(&self, path: &Path, progress: &Progress<'_>) -> Looked {
+        if let Some(value) = self.made_now(path) {
+            return Looked::Answered((value, Found::Reused));
+        }
+        let from_files = if self.shared.options.budget_bytes == 0 {
+            match self.unmapped_files_slot(path, &self.setting_for(path)) {
+                Unmapped::Files(slot, _) => Some(slot),
+                Unmapped::InCore | Unmapped::NotCurrent => None,
+            }
+        } else {
+            let slot = self.slot_for(path);
+            matches!(self.tier_of(path, &slot), Tier::Files(_)).then_some(slot)
+        };
+        if let Some(slot) = from_files {
+            // Fails only when another request has found the files not current
+            // since, and the photograph is then a miss.
+            let read = self.read_files(path, &slot, Asked::Photograph, true, progress);
+            if read.is_ok() {
+                let value = self.photograph_answered(path, read);
+                return Looked::Answered((value, Found::FromFiles));
+            }
+        }
+        Looked::Miss(
+            image_dimensions(path).map_or(0, |(width, height)| whole_decode_bytes(width, height)),
+        )
     }
 
     /// The tiles `asked` names of `path`, decoding the photograph when one of
@@ -1683,7 +1778,7 @@ impl PhotographCache {
                 Unmapped::Files(slot, _) => {
                     return (
                         self.read_files(path, &slot, asked, true, progress),
-                        Found::Decoded,
+                        Found::FromFiles,
                     )
                 }
                 Unmapped::NotCurrent if make == Make::Never => {

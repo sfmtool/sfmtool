@@ -887,7 +887,7 @@ of the bar. Each file's stages sit under a phase `open` of its own:
 |-------|-----------|---------|
 | `read`, `derive`, `keypoints` | always | `SfmrReconstruction::load`'s own stages and notes; `keypoints` reads a `sift_files` file's `.sift` positions when it carries no inline keypoint column (a version 16 file written without it), with a count of `images`, and notes `not filled: {reason}` when a `.sift` is missing or does not match |
 | `thumbnails` | the file carries no thumbnail column | a count of `images`; note `{a} from .sift files, {b} from photographs, {c} placeholders` |
-| `patch bitmaps` > `decode photographs` | the file has patch frames and inline keypoints but no bitmaps | a count of `images`; note `{k} of {n} read`, with `, {r} reused from the cache` when the cache already held any |
+| `patch bitmaps` > `decode photographs` | the file has patch frames and inline keypoints but no bitmaps | a count of `images`; note `{k} of {n} read`, with `, {r} reused from the cache` when the cache already held any and `, {m} mipmaps made` when the call made any |
 | `patch bitmaps` > `render` | the same | a count of `patches`; note `{P} patches at {R} px` |
 | `patch bitmaps` > `read regions` | the same | note `{a} region pyramids assembled, {u} reused, {t} reads on tiles`, the counts of the render's region pool |
 
@@ -1097,7 +1097,8 @@ puts nothing on the bench when cancelled.
 
 Every `decode images` phase reads through the viewer's photograph cache
 ([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)),
-counts `images`, and notes `{k} read from disk, {r} reused from the cache`,
+counts `images`, and notes `{k} read from disk, {r} reused from the cache`, then
+`, {f} read from mip level files` and `, {m} mipmaps made` when either is not 0,
 then `, {u} unreadable` for a step that can do without some photographs, then
 the cache's occupancy afterwards as `cache {x} of {y} GiB`. The geometry search
 reads only the photographs of the track's own images and of the images that
