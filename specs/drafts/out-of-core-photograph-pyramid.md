@@ -3587,11 +3587,13 @@ in core. Step 17 turns the tier on.
           was queued (`failed_to_build` reads the header again, since
           `get_many` answers `None` with no error and a cache of budget 0
           keeps none, so no signature changes), watching the workspace
-          file's stamp rather than the photograph's. The header read and
-          the build take that stamp before a second read that finds the
-          refusal still there (`confirmed_refusal`), so a file fixed while
-          the first read ran is not kept with the fixed file's stamp, which
-          no check would find changed (an audit finding). Without watching
+          file's stamp rather than the photograph's. The header read, the
+          decode and the build take that stamp before a second read that
+          finds the refusal still there (`confirmed_refusal`), so a file
+          fixed while the first read ran is not kept with the fixed file's
+          stamp, which no check would find changed (an audit finding); a
+          decode whose second read no longer finds the refusal keeps no
+          failure, and the next frame asks again. Without watching
           that file, fixing
           the file would leave every photograph the viewer had found
           refused answered as refused for the session, since `layout`

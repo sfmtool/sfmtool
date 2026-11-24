@@ -232,6 +232,29 @@ fn confirmed_refusal(
     }
 }
 
+/// For a decode its workspace file refused, that refusal as a second read
+/// of the header confirms it ([`confirmed_refusal`]), or `None` when that
+/// read no longer finds it, as when the file was fixed while the decode
+/// ran. Reads the header only for such a refusal, so it runs off the GUI
+/// thread.
+fn decode_refusal<T>(
+    cache: &PhotographCache,
+    path: &Path,
+    answer: &Result<T, TileError>,
+) -> Option<(WorkspaceConfigError, FileStamp)> {
+    if !matches!(
+        answer,
+        Err(TileError::Unreadable {
+            why: GetError::Workspace(_),
+            ..
+        })
+    ) {
+        return None;
+    }
+    cache.request_layout(path);
+    confirmed_refusal(cache, path)
+}
+
 /// The workspace file `e` is an error of.
 fn workspace_file(e: &WorkspaceConfigError) -> &Path {
     match e {
@@ -314,14 +337,11 @@ impl TileRequests {
     }
 
     /// Remember that `path` could not be read, in place of any tiles answered
-    /// for it: with the photograph's stamp now, or, when its workspace file
-    /// refused it, with that file's error and the file's stamp now, so it is
-    /// asked for again once that file changes. Stats the file, so it runs
-    /// off the GUI thread.
-    fn remember_failure(&mut self, path: &Path, workspace: Option<WorkspaceConfigError>) {
-        let watched = workspace.as_ref().map_or(path, workspace_file);
-        let stamp = file_stamp(watched);
-        self.remember(path, workspace, stamp);
+    /// for it, with the photograph's stamp now, so it is asked for again once
+    /// the photograph changes. Stats the file, so it runs off the GUI thread.
+    fn remember_failure(&mut self, path: &Path) {
+        let stamp = file_stamp(path);
+        self.remember(path, None, stamp);
     }
 
     /// Remember that `path`'s workspace file refuses it with `e`, the file's
@@ -354,25 +374,35 @@ impl TileRequests {
     /// Keep what a decode of `path` that failed with `e` tells later frames.
     /// A cancelled decode tells nothing, and the next frame asks again. An
     /// unreadable photograph is remembered with its file's stamp, in place of
-    /// any tiles answered for it, and with the workspace file's error when
-    /// its workspace file refused it. A photograph whose mipmap was found not
-    /// current (`Changed`) is `Building` in the cache from then on, so the
-    /// next frame asks for none of its tiles and queues it for *Build
-    /// mipmaps*; the tiles answered for it are dropped, since they may be of
-    /// the files that changed. A key or a level the photograph does not have
+    /// any tiles answered for it. One its workspace file refused is
+    /// remembered with that file's error and stamp when `refusal`, a second
+    /// read's ([`decode_refusal`]), still finds the refusal, and otherwise
+    /// not at all, so the next frame asks again. A photograph whose mipmap
+    /// was found not current (`Changed`) is `Building` in the cache from then
+    /// on, so the next frame asks for none of its tiles and queues it for
+    /// *Build mipmaps*; the tiles answered for it are dropped, since they may
+    /// be of the files that changed. A key or a level the photograph does not have
     /// comes from a layout read before the file changed size: the cache
     /// forgets the path, so the next frame reads the header again rather than
     /// ask for the same pixels on every frame.
-    fn failed_with(&mut self, cache: &PhotographCache, path: &Path, e: TileError) {
+    fn failed_with(
+        &mut self,
+        cache: &PhotographCache,
+        path: &Path,
+        e: TileError,
+        refusal: Option<(WorkspaceConfigError, FileStamp)>,
+    ) {
         match e {
             TileError::Cancelled => {}
-            TileError::Unreadable { why, .. } => {
-                let workspace = match why {
-                    GetError::Workspace(e) => Some(e),
-                    _ => None,
-                };
-                self.remember_failure(path, workspace);
+            TileError::Unreadable {
+                why: GetError::Workspace(_),
+                ..
+            } => {
+                if let Some((e, stamp)) = refusal {
+                    self.remember_refusal(path, e, stamp);
+                }
             }
+            TileError::Unreadable { .. } => self.remember_failure(path),
             TileError::Changed { .. } => self.answered.retain(|(p, _)| p != path),
             TileError::OutOfRange { .. } => cache.forget(path),
         }
@@ -509,7 +539,7 @@ impl PhotographRequests {
         let mut tiles = lock(&self.tiles);
         match refusal {
             Some((e, stamp)) => tiles.remember_refusal(path, e, stamp),
-            None => tiles.remember_failure(path, None),
+            None => tiles.remember_failure(path),
         }
     }
 
@@ -537,7 +567,7 @@ impl PhotographRequests {
     /// Start reading `path`'s header into `cache` unless a read of it is
     /// already running, and repaint `ctx` when it ends. A photograph its
     /// workspace file refuses is remembered as a failure watching that file
-    /// ([`TileRequests::remember_failure`]), since the cache answers its
+    /// ([`TileRequests::remember_refusal`]), since the cache answers its
     /// layout so, without a stat, until the path is forgotten.
     fn request_layout(&self, cache: &Arc<PhotographCache>, path: &Path, ctx: &egui::Context) {
         if !lock(&self.layouts_in_flight).insert(path.to_path_buf()) {
@@ -578,6 +608,7 @@ impl PhotographRequests {
         (self.spawn)(Box::new(move || {
             let answer = cache.try_decode_tiles(&path, &keys, &Progress::none());
             let busy = matches!(answer, Ok(TryDecode::Busy));
+            let refusal = decode_refusal(&cache, &path, &answer);
             {
                 // One lock for the answer and the end of the flight, so a
                 // frame that finds the path no longer in flight finds its
@@ -590,7 +621,7 @@ impl PhotographRequests {
                     }
                     // Nothing was decoded, and the next frame asks again.
                     Ok(TryDecode::Busy) => {}
-                    Err(e) => tiles.failed_with(&cache, &path, e),
+                    Err(e) => tiles.failed_with(&cache, &path, e, refusal),
                 }
                 tiles.in_flight.remove(&path);
             }
@@ -627,6 +658,7 @@ impl PhotographRequests {
         (self.spawn)(Box::new(move || {
             let answer = read_level(&cache, &path, &layout, level);
             let busy = matches!(answer, Ok(None));
+            let refusal = decode_refusal(&cache, &path, &answer);
             {
                 // One lock for the answer and the end of the flight, so a
                 // frame that finds the path no longer in flight finds its
@@ -642,7 +674,7 @@ impl PhotographRequests {
                     }
                     // Nothing was decoded, and the next frame asks again.
                     Ok(None) => {}
-                    Err(e) => tiles.failed_with(&cache, &path, e),
+                    Err(e) => tiles.failed_with(&cache, &path, e, refusal),
                 }
                 tiles.in_flight.remove(&path);
             }
