@@ -24,7 +24,7 @@ draft [view-region-pyramid.md](view-region-pyramid.md), which this design
 requires: without it no kernel can read a large photograph within a bounded
 memory, so it is a numbered step here (§ "Implementation steps"), not a later
 optimization. The user has decided every open question of this draft
-(§ "Open questions", 1 to 14) and every one of the companion draft's.
+(§ "Open questions", 1 to 15) and every one of the companion draft's.
 
 Amends [core/camera/photograph-cache.md](../core/camera/photograph-cache.md)
 (the cache hands out photograph tiles for every photograph instead of whole
@@ -3189,7 +3189,7 @@ in core. Step 17 turns the tier on.
       entries); read in core, as in a workspace without the object, they
       peaked at 289 MB and held 194 MB (every tile of the whole decode, under
       a 4 GiB budget).
-    - **14c, making a mipmap in the slot.** A `get` that finds an
+    - **14c, making a mipmap in the slot.** **Built.** A `get` that finds an
       out-of-core photograph's files missing or stale makes the mipmap in
       the path's slot on its own thread, reserving the build with
       `reserve_builds`, reporting the phases *decode*, *reduce* and *encode*
@@ -3218,6 +3218,62 @@ in core. Step 17 turns the tier on.
       `try_decode_tiles` of an out-of-core photograph with no mipmap, with a
       budget and with a budget of 0, answers its tiles from a decode in core
       and makes no mipmap.
+      **As built** ([photograph_cache/build.rs](../../crates/sfmtool-core/src/camera/photograph_cache/build.rs)):
+      a slot's tier tells an out-of-core photograph whose mipmap is not
+      current apart from an in-core one, so `get` and `get_many` make the
+      mipmap there and `get_tile`, `view_region_pyramid`, `get_level` and a
+      read through a photograph answer `Changed` naming the photograph (or
+      the failure the slot remembers), decoding nothing; a panel's
+      `try_decode_tiles` answers `Busy` while a build holds the slot.
+      `get_many` already made a member's build through `get`'s path, so a
+      member makes it too, in its group's share; until 14d it passes on only
+      the build's messages through its `Progress`, since the phases of
+      members running in parallel would overwrite one another. The maker
+      checks the coarsest file again once it has marked the slot, and reads
+      the files without a build when another process or an earlier build
+      made them current since. "Makes only the levels not written" is
+      `build_mipmaps` reading each level whose file is current rather than
+      encoding it again, which the cache's own builds and every other
+      caller share; and `build_mipmaps` writes the coarsest file last, after
+      `-mip0`, still encoding it first. Without that, a maker cancelled
+      after writing the coarsest file would leave a mipmap whose coarsest
+      file is current and whose finer files are missing, which a new slot,
+      checking the coarsest file alone as 14b does, takes for current, so a
+      kernel would fail with `Changed` on its first finer read; since
+      *Build mipmaps* gives way to every task asked for (14e), such
+      leftovers would be common. The slot keeps the files the build returned
+      as its file entries, with their records, and drops the tiles a panel's
+      decode in core kept for it. A build held in memory is kept the same
+      way, as file entries counted against the budget, evicted after every
+      entry but the coarse tiles and spared by the slot's own eviction while
+      under half the budget, as 13e5 spares a read's decode; a kernel's read
+      of a level evicted since makes the build again in the slot, deterministic
+      so its records match, keeping every level, and a panel's read of one
+      decodes in core, kept by no slot, since a panel never makes a mipmap.
+      A slot outside the map holds the levels it was made with, as an answer
+      under a budget of 0 holds its decode, and the warning is sent once for
+      each photograph. So in a read-only workspace the bytes kept pass the
+      budget by at most one photograph's levels rather than pinning every
+      photograph read (an audit finding; option (a), which the draft's
+      "counted against the budget" asks for). Under a budget
+      of 0 nothing is kept, so a `get` whose files could not be written
+      builds again on its next call. `PhotographCacheStats::decodes` does
+      not count a build, which `mipmaps_made` counts once it finishes;
+      a build started is a miss. The warning for a file made over another
+      spelling's is `build_mipmaps`'s, sent through the `Progress` it is
+      given. Measured with a counting allocator in a release build on a
+      synthetic 8000 x 6000 JPEG at 4:2:0 (10 MB; 144 MB of pixels), with a
+      new cache for each call: a `get` that made the mipmap of a
+      region-readable original peaked at 243 MB over its start (1.69 times
+      the image's bytes, 5.1 bytes a pixel, about 1% over the 5 bytes a pixel
+      the build reserves) and held 5.3 MB after (the files it wrote, kept as
+      entries), in 0.48 s; one that also made a `-mip0` peaked at 244 MB and
+      held 22.5 MB, in 0.90 s; a `get` of the same photograph whose mipmap
+      was current peaked at 0.1 MB; and a whole decode in core, as in a
+      workspace without the object, peaked at 289 MB (2.01 times, the same
+      reservation) and held 194 MB. Encoding the full-resolution `-mip0`
+      raised the build's peak by about 1 MB, so the peak comes before the
+      encodes, while the original is decoded.
     - **14d, `get_many`'s builds.** `get_many` first resolves each path's
       layout (a header read, the region test and a record check), so an
       out-of-core photograph whose mipmap is current is read without a
@@ -3240,7 +3296,9 @@ in core. Step 17 turns the tier on.
       mipmaps*' shared list once per path, the spinner with *Building
       mipmap…*, the 3D background drawing the coarsest level while it
       waits, and Image Detail's *Workspace file error:* with the message.
-      A panel's request then no longer reads an out-of-core photograph
+      It looks again at how a panel is answered for an evicted level held
+      in memory (§ "Open questions", 15). A panel's request then no
+      longer reads an out-of-core photograph
       without a current mipmap in core, and a `Changed` puts the photograph
       back to `Building`, queued again. With the list comes the least of
       the *Build mipmaps* quiet task that drains it (open question 14,
@@ -3451,3 +3509,23 @@ decisions.
     chunk would never be queued again, and its panel would draw the spinner
     for good, which (a) was chosen to rule out. This follows from (a) and
     needs no further decision.
+15. **A panel's read of an evicted level held in memory.** Found while
+    building 14c: when a mipmap's files cannot be written, its levels are
+    held in memory as file entries, evicted under the budget and made again
+    when a kernel reads them. A panel that asks for tiles of such a level
+    after it was evicted (on a zoom or a pan; a panel keeps the tiles it is
+    answered, so not on every frame) could be answered in three ways:
+    - (a) from a whole decode of the original in core that no slot keeps,
+      reserved with `try_reserve_build`, as for a photograph without a
+      current mipmap, so a panel never makes a mipmap;
+    - (b) by the panel making the levels again in memory without waiting
+      (reserved with `try_reserve_build`, answering `Busy` when refused or
+      when the slot is being made, and writing no files), so later requests
+      cost nothing until the levels are evicted again;
+    - (c) by keeping the panel's in-core tiles in the slot, which would mix
+      pixels one JPEG loss apart into what kernels read.
+
+    *Decided by the user:* (a), as built in 14c. It happens only in a
+    workspace whose mipmap files cannot be written, with the cache under
+    its budget, and it keeps the rule that a panel never makes a mipmap.
+    Step 14e, which gives panels the `Building` state, looks at it again.

@@ -10,19 +10,20 @@
 //! current is read from its files: levels 1 to `K` a tile at a time from the
 //! level's file, the levels below `K` cut from one decode of level `K`, and
 //! level 0 from the original when it is region-readable or from its `-mip0`.
-//! Each finer file is checked when it is first opened. Every other
-//! photograph, an out-of-core one whose files are missing or stale included,
-//! is read whole in core. See the spec `specs/core/camera/photograph-cache.md`
-//! § "Out-of-core photographs".
+//! Each finer file is checked when it is first opened. An out-of-core
+//! photograph whose files are missing or stale has its mipmap made in its
+//! slot by `get` (`build.rs`); every other photograph is read whole in core.
+//! See the spec `specs/core/camera/photograph-cache.md` § "Out-of-core
+//! photographs".
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, MutexGuard};
 
 use super::{
-    file_stamp, has_key, tile_bytes, Asked, GetError, Got, Kept, PhotographCache, Slot,
-    WorkspaceSetting,
+    file_stamp, has_key, tile_bytes, Asked, GetError, Got, Inner, Kept, PhotographCache, Slot,
+    SlotData, WorkspaceSetting,
 };
 use crate::camera::image::{image_dimensions, ImageU8};
 use crate::camera::mipmap::{
@@ -33,17 +34,21 @@ use crate::camera::tiled_photograph::{cut_level, tile_from_region, PhotographTil
 use crate::progress::{Cancelled, Progress};
 
 /// How a slot reads its photograph's pixels.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) enum Tier {
     /// Not decided yet: no request has needed the photograph.
     #[default]
     Unchecked,
-    /// Whole, from a decode of the original: an in-core photograph, an
-    /// out-of-core one whose mipmap was missing or stale when the slot
-    /// checked it, or one whose files a panel's request found not current
-    /// since.
+    /// Whole, from a decode of the original: an in-core photograph, or an
+    /// out-of-core one too thin to store a reduced level.
     InCore,
-    /// From its mip level files, current when the slot checked them.
+    /// Out of core, its mipmap missing or stale when the slot checked it, or
+    /// found not current since. `get` makes the mipmap in the slot; until it
+    /// is made a panel's decode reads the photograph whole in core, and a
+    /// kernel's tile read answers `Changed`.
+    NotCurrent,
+    /// From its mip level files, current when the slot checked them or made
+    /// by the slot's build, or from the build's files held in memory.
     Files(Arc<MipmapFiles>),
 }
 
@@ -52,27 +57,34 @@ impl Tier {
     pub(super) fn files(&self) -> Option<&Arc<MipmapFiles>> {
         match self {
             Tier::Files(files) => Some(files),
-            Tier::Unchecked | Tier::InCore => None,
+            Tier::Unchecked | Tier::InCore | Tier::NotCurrent => None,
         }
     }
 
     /// Whether the slot reads from `files`, the ones a request started with.
-    fn is(&self, files: &Arc<MipmapFiles>) -> bool {
+    pub(super) fn is(&self, files: &Arc<MipmapFiles>) -> bool {
         self.files().is_some_and(|f| Arc::ptr_eq(f, files))
     }
 }
 
-/// An out-of-core photograph's mipmap, found current: its layout, where its
-/// files are, the original its records are checked against, and whether its
-/// level 0 is read from the original.
+/// An out-of-core photograph's mipmap, found current or just made: its
+/// layout, where its files are, the original its records are checked
+/// against, and whether its level 0 is read from the original.
 pub(super) struct MipmapFiles {
     /// The out-of-core layout, of the workspace's `mipmap_options`.
     pub(super) layout: Arc<PyramidLayout>,
-    location: MipmapLocation,
-    source: Arc<MipmapSource>,
+    pub(super) location: MipmapLocation,
+    pub(super) source: Arc<MipmapSource>,
     /// The region answer of the coarsest file's record: level 0 is read
     /// from the original when `true`, and from `-mip0` otherwise.
-    region_readable: bool,
+    pub(super) region_readable: bool,
+    /// Whether the files are a build's that could not be written, the
+    /// in-memory equivalent: a slot in the map keeps them as file entries,
+    /// evicted after every other entry but the coarse tiles, and a slot
+    /// outside the map holds them ([`SlotData::held`]). A kernel's read of
+    /// a level no longer kept makes the build again in memory
+    /// ([`PhotographCache::rebuild_in_memory`]).
+    pub(super) in_memory: bool,
 }
 
 impl MipmapFiles {
@@ -90,7 +102,7 @@ impl MipmapFiles {
     /// The file level `level`'s tiles are decoded from: the original for
     /// level 0 of a region-readable original, and the level's mip level file
     /// otherwise.
-    fn file_of(&self, photograph: &Path, level: usize) -> PathBuf {
+    pub(super) fn file_of(&self, photograph: &Path, level: usize) -> PathBuf {
         if level == 0 && self.region_readable {
             return photograph.to_path_buf();
         }
@@ -148,10 +160,33 @@ impl LevelSource {
     }
 }
 
+/// What [`PhotographCache::check_files`] found for a photograph.
+pub(super) enum Checked {
+    /// Read in core: in a workspace without `mipmap_options`, under the
+    /// threshold, too thin to store a reduced level, or with a header that
+    /// cannot be read (whose decode then reports it).
+    InCore,
+    /// Out of core, and its coarsest mip level file missing or stale.
+    NotCurrent,
+    /// Out of core with its coarsest file current: the mipmap, and that file.
+    Current(Arc<MipmapFiles>, Box<MipLevelFile>),
+}
+
+/// How a slot outside the map reads its photograph, under a budget of 0,
+/// as [`PhotographCache::unmapped_files_slot`] decides it.
+pub(super) enum Unmapped {
+    /// Whole in core.
+    InCore,
+    /// Out of core, its mipmap missing or stale.
+    NotCurrent,
+    /// From its files, through the slot made to read them.
+    Files(Arc<Slot>, Arc<MipmapFiles>),
+}
+
 /// A file entry: a level's source, kept under the cache's budget while tiles
 /// of it are read.
 pub(super) struct FileEntry {
-    source: Arc<LevelSource>,
+    pub(super) source: Arc<LevelSource>,
     /// What it counts against the budget.
     pub(super) bytes: u64,
     /// The cache's tick when it was kept or last read.
@@ -165,6 +200,21 @@ pub(super) enum Failure {
     /// A file of the photograph's mipmap is missing, not current or not the
     /// one first read: the named file.
     Changed(PathBuf),
+    /// A level of a mipmap held in memory is no longer kept, and the request
+    /// is a panel's, which never makes a mipmap: it decodes the photograph
+    /// in core instead.
+    NotHeld,
+}
+
+impl Failure {
+    /// The [`GetError`] a caller that never sees [`Failure::NotHeld`] answers
+    /// for one, rather than panic on a broken invariant.
+    pub(super) fn not_held(path: &Path) -> GetError {
+        GetError::Unreadable(format!(
+            "{}: a level of its mipmap held in memory was not kept",
+            path.display()
+        ))
+    }
 }
 
 impl From<GetError> for Failure {
@@ -228,7 +278,11 @@ impl PhotographCache {
     /// its records are checked against: the ones kept for this spelling of
     /// its path while its length and modification time stay the same, and
     /// otherwise read again and kept. `None` when it cannot be read.
-    fn source_for(&self, path: &Path, location: &MipmapLocation) -> Option<Arc<MipmapSource>> {
+    pub(super) fn source_for(
+        &self,
+        path: &Path,
+        location: &MipmapLocation,
+    ) -> Option<Arc<MipmapSource>> {
         let stamp = file_stamp(path);
         let mut sources = self
             .shared
@@ -245,59 +299,66 @@ impl PhotographCache {
         Some(source)
     }
 
-    /// The mipmap of the photograph at `path`, read under `setting`, when the
-    /// photograph is out of core and its coarsest mip level file is current,
-    /// with that file; `None` for every other photograph, which is read in
-    /// core. Reads the header, and for an out-of-core photograph the coarsest
-    /// file and the original's length and time, hashing the original only
-    /// when its time is not the record's.
-    fn check_files(
-        &self,
-        path: &Path,
-        setting: &WorkspaceSetting,
-    ) -> Option<(Arc<MipmapFiles>, MipLevelFile)> {
+    /// Whether the photograph at `path`, read under `setting`, is out of core
+    /// and whether its coarsest mip level file is current, with the mipmap
+    /// and that file when it is. Reads the header, and for an out-of-core
+    /// photograph the coarsest file and the original's length and time,
+    /// hashing the original only when its time is not the record's.
+    pub(super) fn check_files(&self, path: &Path, setting: &WorkspaceSetting) -> Checked {
         let Ok(Some(options)) = &setting.options else {
-            return None;
+            return Checked::InCore;
         };
-        let (width, height) = image_dimensions(path).ok()?;
+        let Ok((width, height)) = image_dimensions(path) else {
+            return Checked::InCore;
+        };
         if !is_out_of_core(setting, width, height) {
-            return None;
+            return Checked::InCore;
         }
-        let layout =
-            PyramidLayout::for_size(width, height, Some(options), self.shared.options.tile_size)?;
+        let tile_size = self.shared.options.tile_size;
+        let Some(layout) = PyramidLayout::for_size(width, height, Some(options), tile_size) else {
+            return Checked::InCore;
+        };
         // A photograph a pixel thin stores no reduced level, and is read in
         // core.
         let k = layout.stored_levels();
-        if k == 0 {
-            return None;
-        }
-        let location = mipmap_location(path)?;
-        let source = self.source_for(path, &location)?;
-        let expected = ExpectedMipLevel::new(&layout, source.relative(), k)?;
-        let coarsest =
-            MipLevelFile::open(&location.level_path(k, options.jpeg_quality), &expected).ok()?;
-        let record = coarsest.record();
-        if source.check(record).is_err() || record.stored_levels as usize != k {
-            return None;
-        }
-        let files = MipmapFiles {
-            layout: Arc::new(layout),
-            location,
-            source,
-            region_readable: record.region_readable_original,
+        let Some(location) = mipmap_location(path).filter(|_| k > 0) else {
+            return Checked::InCore;
         };
-        Some((Arc::new(files), coarsest))
+        let current = || {
+            let source = self.source_for(path, &location)?;
+            let expected = ExpectedMipLevel::new(&layout, source.relative(), k)?;
+            let file = location.level_path(k, options.jpeg_quality);
+            let coarsest = MipLevelFile::open(&file, &expected).ok()?;
+            let record = coarsest.record();
+            if source.check(record).is_err() || record.stored_levels as usize != k {
+                return None;
+            }
+            let region_readable = record.region_readable_original;
+            Some((source, region_readable, coarsest))
+        };
+        match current() {
+            Some((source, region_readable, coarsest)) => {
+                let files = MipmapFiles {
+                    layout: Arc::new(layout),
+                    location,
+                    source,
+                    region_readable,
+                    in_memory: false,
+                };
+                Checked::Current(Arc::new(files), Box::new(coarsest))
+            }
+            None => Checked::NotCurrent,
+        }
     }
 
-    /// The mipmap `slot` reads its photograph from, deciding its tier the
-    /// first time it is needed: `Some` when the photograph is out of core and
-    /// its files were current then, `None` when it is read in core. The
-    /// coarsest file, read for the check, is the slot's first file entry.
-    pub(super) fn tier_of(&self, path: &Path, slot: &Arc<Slot>) -> Option<Arc<MipmapFiles>> {
-        match &slot.lock().tier {
-            Tier::Unchecked => {}
-            Tier::InCore => return None,
-            Tier::Files(files) => return Some(Arc::clone(files)),
+    /// How `slot` reads its photograph, deciding its tier the first time it
+    /// is needed, so never [`Tier::Unchecked`]: from its files when the
+    /// photograph is out of core and its coarsest file was current then, that
+    /// file then being the slot's first file entry.
+    pub(super) fn tier_of(&self, path: &Path, slot: &Arc<Slot>) -> Tier {
+        let tier = slot.lock().tier.clone();
+        if !matches!(tier, Tier::Unchecked) {
+            return tier;
         }
         // Checked with no lock held; another caller may decide first, and
         // its answer is then the slot's.
@@ -308,64 +369,118 @@ impl PhotographCache {
             .get(path)
             .is_some_and(|mapped| Arc::ptr_eq(mapped, slot));
         let mut data = slot.lock();
-        match &data.tier {
-            Tier::Unchecked => {}
-            Tier::InCore => return None,
-            Tier::Files(files) => return Some(Arc::clone(files)),
+        if !matches!(data.tier, Tier::Unchecked) {
+            return data.tier.clone();
         }
-        let Some((files, coarsest)) = checked else {
-            data.tier = Tier::InCore;
-            return None;
-        };
-        let k = files.coarsest();
-        data.tier = Tier::Files(Arc::clone(&files));
-        data.made = Some(Ok(Arc::clone(&files.layout)));
-        data.records.insert(k, coarsest.record().clone());
+        match checked {
+            Checked::InCore => data.tier = Tier::InCore,
+            Checked::NotCurrent => data.tier = Tier::NotCurrent,
+            Checked::Current(files, coarsest) => {
+                let tier = Tier::Files(Arc::clone(&files));
+                self.read_from(&mut inner, mapped, slot, data, files, vec![*coarsest]);
+                return tier;
+            }
+        }
+        data.tier.clone()
+    }
+
+    /// Make `slot`, whose data `data` is, read its photograph from `files`:
+    /// its tier, its layout and the record of each of `opened`, the files a
+    /// check or a build has read or made. When the slot is in the map
+    /// (`mapped`), each of `opened` is kept as a file entry before entries are
+    /// dropped down to the budget; outside the map, files held in memory are
+    /// held by the slot, and others dropped, to be read from disk again. What
+    /// the slot kept before, the tiles of a whole decode in core included, is
+    /// dropped.
+    pub(super) fn read_from(
+        &self,
+        inner: &mut Inner,
+        mapped: bool,
+        slot: &Arc<Slot>,
+        mut data: MutexGuard<'_, SlotData>,
+        files: Arc<MipmapFiles>,
+        opened: Vec<MipLevelFile>,
+    ) {
+        let freed = data.drop_entries();
         if mapped {
-            let source = Arc::new(LevelSource::Mip(coarsest));
+            inner.bytes -= freed;
+        }
+        data.records.clear();
+        data.made = Some(Ok(Arc::clone(&files.layout)));
+        data.channels = 3;
+        for file in &opened {
+            let record = file.record();
+            data.records.insert(record.level as usize, record.clone());
+        }
+        if mapped {
+            let added = self.keep_entries(&mut data, opened);
+            inner.bytes += added;
+        } else if files.in_memory {
+            for file in opened {
+                let level = file.record().level as usize;
+                data.held.insert(level, Arc::new(LevelSource::Mip(file)));
+            }
+        }
+        data.tier = Tier::Files(files);
+        drop(data);
+        if mapped {
+            self.evict(inner, slot, Asked::Keys(&[]), None);
+        }
+    }
+
+    /// Keep each of `opened` as a file entry of `data`, a slot in the map,
+    /// unless it keeps one for that level already, answering the bytes added,
+    /// which the caller adds to [`Inner::bytes`].
+    pub(super) fn keep_entries(&self, data: &mut SlotData, opened: Vec<MipLevelFile>) -> u64 {
+        let mut added = 0;
+        for file in opened {
+            let level = file.record().level as usize;
+            if data.files.contains_key(&level) {
+                continue;
+            }
+            let source = Arc::new(LevelSource::Mip(file));
             let bytes = source.held_bytes();
             let tick = self.next_tick();
             data.files.insert(
-                k,
+                level,
                 FileEntry {
                     source,
                     bytes,
                     tick,
                 },
             );
-            data.bytes += bytes;
-            inner.bytes += bytes;
-            drop(data);
-            self.evict(&mut inner, slot, Asked::Keys(&[]));
+            added += bytes;
         }
-        Some(files)
+        data.bytes += added;
+        added
     }
 
-    /// For a cache of budget 0, which keeps no slot: a slot outside the map
-    /// for the photograph at `path`, read under `setting`, with its mipmap,
-    /// when its files are current now; `None` when it is read in core. Each
-    /// request decides so from the files as they are.
-    pub(super) fn unmapped_files_slot(
-        &self,
-        path: &Path,
-        setting: &WorkspaceSetting,
-    ) -> Option<(Arc<Slot>, Arc<MipmapFiles>)> {
+    /// For a cache of budget 0, which keeps no slot: how the photograph at
+    /// `path`, read under `setting`, is read now, with a slot outside the map
+    /// that reads its files when they are current. Each request decides so
+    /// from the files as they are.
+    pub(super) fn unmapped_files_slot(&self, path: &Path, setting: &WorkspaceSetting) -> Unmapped {
         // A workspace without `mipmap_options` has no out-of-core
         // photograph: nothing is read for it, not even the stamp.
         if !matches!(setting.options, Ok(Some(_))) {
-            return None;
+            return Unmapped::InCore;
         }
         let stamp = file_stamp(path);
-        let (files, coarsest) = self.check_files(path, setting)?;
-        let slot = Arc::new(Slot::new(stamp, setting.clone()));
-        {
-            let mut data = slot.lock();
-            data.tier = Tier::Files(Arc::clone(&files));
-            data.made = Some(Ok(Arc::clone(&files.layout)));
-            data.records
-                .insert(files.coarsest(), coarsest.record().clone());
+        match self.check_files(path, setting) {
+            Checked::InCore => Unmapped::InCore,
+            Checked::NotCurrent => Unmapped::NotCurrent,
+            Checked::Current(files, coarsest) => {
+                let slot = Arc::new(Slot::new(stamp, setting.clone()));
+                {
+                    let mut data = slot.lock();
+                    data.tier = Tier::Files(Arc::clone(&files));
+                    data.made = Some(Ok(Arc::clone(&files.layout)));
+                    data.records
+                        .insert(files.coarsest(), coarsest.record().clone());
+                }
+                Unmapped::Files(slot, files)
+            }
         }
-        Some((slot, files))
     }
 
     /// The tiles `asked` names of the photograph at `path`, read from the
@@ -379,13 +494,18 @@ impl PhotographCache {
     /// files, or a file it reads is missing, not current, does not decode, or
     /// holds another record than the one the slot first read, and then marks
     /// the slot's mipmap not current ([`Self::mark_not_current`]), so the
-    /// photograph's next requests read it in core; and with
+    /// photograph's next `get` makes it again; and with
     /// [`GetError::Cancelled`] when `progress` is cancelled between files.
+    ///
+    /// A level of a mipmap held in memory that the slot no longer keeps is
+    /// made again in memory when `may_build` (a kernel's read), and is
+    /// otherwise [`Failure::NotHeld`] (a panel's), the slot left as it is.
     pub(super) fn read_files(
         &self,
         path: &Path,
         slot: &Arc<Slot>,
         asked: Asked<'_>,
+        may_build: bool,
         progress: &Progress<'_>,
     ) -> Result<Got, Failure> {
         let changed = || Failure::Changed(path.to_path_buf());
@@ -433,11 +553,12 @@ impl PhotographCache {
             self.shared.hits.fetch_add(1, Ordering::Relaxed);
         } else {
             self.shared.misses.fetch_add(1, Ordering::Relaxed);
-            let made = match self.decode_missing(path, slot, &files, &missing, progress) {
+            let decoded = self.decode_missing(path, slot, &files, &missing, may_build, progress);
+            let made = match decoded {
                 Ok(made) => made,
                 Err(Failure::Changed(file)) => {
-                    // The mipmap is not current: from now on the slot reads
-                    // the photograph in core, as one whose files are stale.
+                    // The mipmap is not current: from now on the slot treats
+                    // the photograph as one whose files are stale.
                     self.mark_not_current(path, slot);
                     return Err(Failure::Changed(file));
                 }
@@ -469,12 +590,13 @@ impl PhotographCache {
         slot: &Arc<Slot>,
         files: &Arc<MipmapFiles>,
         missing: &[TileKey],
+        may_build: bool,
         progress: &Progress<'_>,
     ) -> Result<HashMap<TileKey, Arc<PhotographTile>>, Failure> {
         let mut made = HashMap::new();
         if missing.iter().any(|&key| files.is_coarse(key)) {
             progress.check_cancel()?;
-            made = self.coarse_tiles(path, slot, files)?;
+            made = self.coarse_tiles(path, slot, files, may_build, progress)?;
         }
         let mut level = None;
         let mut source = None;
@@ -482,7 +604,7 @@ impl PhotographCache {
             if level != Some(key.level) {
                 progress.check_cancel()?;
                 let l = usize::from(key.level);
-                source = Some(self.level_source(path, slot, files, l)?);
+                source = Some(self.level_source(path, slot, files, l, may_build, progress)?);
                 level = Some(key.level);
             }
             let Some(source) = &source else {
@@ -538,7 +660,7 @@ impl PhotographCache {
         data.bytes += added;
         inner.bytes += added;
         drop(data);
-        self.evict(&mut inner, slot, Asked::Keys(asked));
+        self.evict(&mut inner, slot, Asked::Keys(asked), None);
         true
     }
 
@@ -548,13 +670,18 @@ impl PhotographCache {
     /// first time is checked as current and its record kept; read again,
     /// after its bytes were evicted, its record is compared with that one. A
     /// region-readable original is read when it is the one the slot was made
-    /// from, and indexed, a failure of the index failing the read.
-    fn level_source(
+    /// from, and indexed, a failure of the index failing the read. A level of
+    /// a mipmap held in memory is the one the slot holds or keeps, and one
+    /// it no longer keeps is made again ([`Self::rebuild_in_memory`]) when
+    /// `may_build`, and is [`Failure::NotHeld`] otherwise.
+    pub(super) fn level_source(
         &self,
         path: &Path,
         slot: &Arc<Slot>,
         files: &Arc<MipmapFiles>,
         level: usize,
+        may_build: bool,
+        progress: &Progress<'_>,
     ) -> Result<Arc<LevelSource>, Failure> {
         {
             let tick = self.next_tick();
@@ -562,10 +689,16 @@ impl PhotographCache {
             if !data.tier.is(files) {
                 return Err(Failure::Changed(path.to_path_buf()));
             }
-            if let Some(entry) = data.files.get_mut(&level) {
-                entry.tick = tick;
-                return Ok(Arc::clone(&entry.source));
+            if let Some(source) = data.kept_level(level, tick) {
+                return Ok(source);
             }
+        }
+        // A build's files that could not be written are made again.
+        if files.in_memory && !(level == 0 && files.region_readable) {
+            if !may_build {
+                return Err(Failure::NotHeld);
+            }
+            return self.rebuild_in_memory(path, slot, files, level, progress);
         }
         let file = files.file_of(path, level);
         let changed = || Failure::Changed(file.clone());
@@ -630,7 +763,7 @@ impl PhotographCache {
         data.bytes += bytes;
         inner.bytes += bytes;
         drop(data);
-        self.evict(&mut inner, slot, Asked::Keys(&[]));
+        self.evict(&mut inner, slot, Asked::Keys(&[]), None);
     }
 
     /// Every tile of level `K` and the levels below it, cut from one decode
@@ -641,10 +774,12 @@ impl PhotographCache {
         path: &Path,
         slot: &Arc<Slot>,
         files: &Arc<MipmapFiles>,
+        may_build: bool,
+        progress: &Progress<'_>,
     ) -> Result<HashMap<TileKey, Arc<PhotographTile>>, Failure> {
         let k = files.coarsest();
         let changed = || Failure::Changed(files.file_of(path, k));
-        let source = self.level_source(path, slot, files, k)?;
+        let source = self.level_source(path, slot, files, k, may_build, progress)?;
         let LevelSource::Mip(file) = &*source else {
             return Err(changed());
         };
@@ -663,12 +798,13 @@ impl PhotographCache {
         Ok(tiles)
     }
 
-    /// Mark `slot`'s mipmap not current: it reads its photograph whole in
-    /// core from now on, its tiles and file entries from the files dropped,
-    /// and the layout `request_layout` kept for `path` becomes the in-core
-    /// one. What a request that finds a file not current does: a kernel's
-    /// read then fails with `Changed`, and a panel's decodes the tiles in
-    /// core, so it never answers `Changed`.
+    /// Mark `slot`'s mipmap not current: its tiles and file entries from the
+    /// files are dropped, the layout `request_layout` kept for `path` becomes
+    /// the in-core one, and from now on `get` makes the mipmap again, a
+    /// panel's decode reads the photograph whole in core and a kernel's tile
+    /// read answers `Changed`. What a request that finds a file not current
+    /// does: a kernel's read then fails with `Changed`, and a panel's decodes
+    /// the tiles in core, so it never answers `Changed`.
     pub(super) fn mark_not_current(&self, path: &Path, slot: &Arc<Slot>) {
         let mut inner = self.lock();
         let mapped = inner
@@ -681,7 +817,7 @@ impl PhotographCache {
                 return;
             };
             let size = files.layout.level_size(0);
-            data.tier = Tier::InCore;
+            data.tier = Tier::NotCurrent;
             data.made = None;
             data.records.clear();
             let freed = data.drop_entries();

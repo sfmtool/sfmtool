@@ -17,7 +17,9 @@
 //! puts what it decodes where the next worker and the GUI thread find it.
 //! [`PhotographCache::get`] answers a [`TiledPhotograph`] that holds no tile
 //! and reads each through the cache, decoding the photograph only when none of
-//! its tiles is kept, and again for a read of a tile the cache evicted since;
+//! its tiles is kept, and again for a read of a tile the cache evicted since
+//! (an out-of-core photograph is read from its mip level files instead, which
+//! `get` makes when they are missing or stale);
 //! it waits while another thread decodes the same path, and stops waiting when
 //! its caller is cancelled. [`PhotographCache::peek`] never reads a file and
 //! never waits, which is what a caller that draws every frame wants. Every
@@ -28,7 +30,7 @@
 //! and [`PhotographCache::try_decode_tiles`], which never waits. The design is
 //! in the spec `specs/core/camera/photograph-cache.md`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -46,10 +48,12 @@ use crate::workspace::{
     find_workspace_for_path, read_mipmap_options, WorkspaceConfigError, WORKSPACE_FILE_NAME,
 };
 
+mod build;
 mod files;
 mod tiles;
 
-use files::{Failure, FileEntry, Tier};
+use build::Make;
+use files::{Failure, FileEntry, LevelSource, Tier, Unmapped};
 pub use tiles::{PeekedLayout, PeekedTile, TileError, TryDecode};
 
 /// How long a caller waiting for another caller's decode of the same path
@@ -328,11 +332,16 @@ pub struct PhotographCacheStats {
     /// photograph none of whose tiles were kept, or one a tile of which was
     /// asked for or read and not kept, decoded again.
     pub misses: u64,
-    /// Photographs decoded whole: every decode that read a photograph's
-    /// pixels, including one whose caller was cancelled before its tiles
-    /// were cut. A file whose header cannot be read, or that is refused as
-    /// too large, is a miss but not a decode.
+    /// Photographs decoded whole into tiles: every such decode that read a
+    /// photograph's pixels, including one whose caller was cancelled before
+    /// its tiles were cut. A file whose header cannot be read, or that is
+    /// refused as too large, is a miss but not a decode, and a mipmap's
+    /// build is counted in `mipmaps_made` instead.
     pub decodes: u64,
+    /// Out-of-core photographs' mipmaps made by this cache's `get` and
+    /// `get_many`, whether their files were written or are held in memory.
+    /// A build that failed or was cancelled is a miss but is not counted.
+    pub mipmaps_made: u64,
     /// The build budget the cache was made with.
     pub build_budget_bytes: u64,
     /// The estimated bytes reserved on the build count now, for whole decodes
@@ -604,13 +613,14 @@ impl CachedTiles {
         let failed = |e| match e {
             Failure::Get(e) => read_error(&self.path, e),
             Failure::Changed(path) => PhotographReadError::Changed { path },
+            Failure::NotHeld => read_error(&self.path, Failure::not_held(&self.path)),
         };
         if self.layout.is_out_of_core() {
             // Read from the files the slot read, comparing each file read
             // again with the record first read, whatever the slot's place in
             // the map.
             let got = cache
-                .read_files(&self.path, &self.slot, Asked::Keys(keys), progress)
+                .read_files(&self.path, &self.slot, Asked::Keys(keys), true, progress)
                 .map_err(failed)?;
             if *got.layout != *self.layout || got.tiles.len() != keys.len() {
                 return Err(PhotographReadError::Changed {
@@ -619,7 +629,13 @@ impl CachedTiles {
             }
             return Ok(got.tiles);
         }
-        let (value, _) = cache.fetch(&self.path, progress, Share::None, Asked::Read(keys));
+        let (value, _) = cache.fetch(
+            &self.path,
+            progress,
+            Share::None,
+            Asked::Read(keys),
+            Make::Never,
+        );
         let got = value.map_err(failed)?;
         if *got.layout != *self.layout || got.tiles.len() != keys.len() {
             return Err(PhotographReadError::Changed {
@@ -674,6 +690,12 @@ struct SlotData {
     /// Whether the slot reads its photograph whole in core or from its mip
     /// level files, decided when a request first needs it.
     tier: Tier,
+    /// For a slot outside the map reading a mipmap held in memory, the
+    /// levels it was made with, held while the slot is (by the photograph
+    /// that reads through it), as an answer under a budget of 0 holds its
+    /// decode, and not counted. Empty for a slot in the map, which keeps them
+    /// as file entries.
+    held: HashMap<usize, Arc<LevelSource>>,
 }
 
 impl SlotData {
@@ -748,7 +770,28 @@ impl SlotData {
     fn drop_entries(&mut self) -> u64 {
         self.tiles.clear();
         self.files.clear();
+        self.held.clear();
         std::mem::take(&mut self.bytes)
+    }
+
+    /// The source of `level`'s tiles when the slot keeps its file entry,
+    /// counted as read at `tick`, or holds it as a slot outside the map.
+    fn kept_level(&mut self, level: usize, tick: u64) -> Option<Arc<LevelSource>> {
+        if let Some(entry) = self.files.get_mut(&level) {
+            entry.tick = tick;
+            return Some(Arc::clone(&entry.source));
+        }
+        self.held.get(&level).map(Arc::clone)
+    }
+
+    /// The bytes of the file entries of a mipmap held in memory, which a
+    /// slot's own eviction spares while they are under
+    /// [`READ_SPARING_SHARE`] of the budget; 0 for any other slot.
+    fn in_memory_bytes(&self) -> u64 {
+        match self.tier.files() {
+            Some(files) if files.in_memory => self.files.values().map(|e| e.bytes).sum(),
+            _ => 0,
+        }
     }
 }
 
@@ -914,6 +957,7 @@ struct Shared {
     hits: AtomicU64,
     misses: AtomicU64,
     decodes: AtomicU64,
+    mipmaps_made: AtomicU64,
     /// Estimated bytes of the whole decodes reserved now.
     build_reserved: AtomicU64,
     /// Each workspace root's `mipmap_options` as last read, read again when
@@ -927,17 +971,20 @@ struct Shared {
     /// the same, and read again when it changes. Its lock is taken with no
     /// other lock held.
     sources: Mutex<HashMap<PathBuf, (FileStamp, Arc<crate::camera::mipmap::MipmapSource>)>>,
+    /// The photographs whose mipmap a build of this cache could not write,
+    /// warned about once each, so making one again in memory says nothing.
+    not_written_warned: Mutex<HashSet<PathBuf>>,
     /// How many times a workspace file has been read for its
     /// `mipmap_options`.
     #[cfg(test)]
     workspace_reads: AtomicU64,
-    /// Called as a decode starts, once its header is read and the decode is
-    /// reserved and before the pixels are read, as a caller starts to wait on
-    /// a slot being made, and as a panel's decode has its reservation and is
-    /// about to claim the slot: what lets a test hold a decode in progress,
-    /// cancel a caller in the middle of a decode or a wait, make a decode
-    /// panic, change a slot under a panel's decode, or read the build count at
-    /// those moments.
+    /// Called as a decode or a mipmap's build starts, once its header is
+    /// read and it is reserved and before the pixels are read, as a caller
+    /// starts to wait on a slot being made, and as a panel's decode has its
+    /// reservation and is about to claim the slot: what lets a test hold a
+    /// decode in progress, cancel a caller in the middle of a decode or a
+    /// wait, make a decode panic, change a slot under a panel's decode, or
+    /// read the build count at those moments.
     #[cfg(test)]
     on_slot_event: Option<Box<SlotHook>>,
 }
@@ -998,9 +1045,11 @@ impl PhotographCache {
                 hits: AtomicU64::new(0),
                 misses: AtomicU64::new(0),
                 decodes: AtomicU64::new(0),
+                mipmaps_made: AtomicU64::new(0),
                 build_reserved: AtomicU64::new(0),
                 workspaces: Mutex::new(HashMap::new()),
                 sources: Mutex::new(HashMap::new()),
+                not_written_warned: Mutex::new(HashSet::new()),
                 #[cfg(test)]
                 workspace_reads: AtomicU64::new(0),
                 #[cfg(test)]
@@ -1116,16 +1165,30 @@ impl PhotographCache {
     /// every tile of the decode that made it while the caller holds it, and
     /// its reads decode nothing.
     ///
-    /// Polls `progress` for cancellation while it waits, every
-    /// [`SLOT_WAIT_POLL`], and after its own decode, before it cuts the
-    /// tiles, and answers [`GetError::Cancelled`] when it is cancelled,
-    /// remembering nothing. It reports nothing through `progress`; a caller
-    /// with nothing to cancel passes `&Progress::none()`.
+    /// An out-of-core photograph whose mipmap is current is answered from its
+    /// files, decoding nothing. One whose mip level files are missing or
+    /// stale has its mipmap made in the slot, as a decode is, the files then
+    /// read as the build returned them; a build whose files could not be
+    /// written is read from memory, its bytes counted against the budget,
+    /// with a warning through `progress`. A build that fails is
+    /// [`GetError::Unreadable`] naming the photograph, remembered as a
+    /// failed decode is. A caller waiting on another caller's build reads
+    /// what it made; one that takes over from a maker that stopped makes only
+    /// the levels whose files are not current.
     ///
-    /// A decode it makes is reserved with [`Self::reserve_builds`] when it has
-    /// marked the slot as being made, whether its tiles were not kept or a
-    /// stopped maker has just left it, and given back when the decode ends,
-    /// is cancelled or unwinds. It holds no share while it waits.
+    /// Polls `progress` for cancellation while it waits, every
+    /// [`SLOT_WAIT_POLL`], after its own decode, before it cuts the tiles,
+    /// and between a build's stages, and answers [`GetError::Cancelled`] when
+    /// it is cancelled, remembering nothing. A build reports its phases
+    /// `decode`, `reduce` and `encode` through `progress`, counting levels;
+    /// nothing else is reported. A caller with nothing to cancel passes
+    /// `&Progress::none()`.
+    ///
+    /// A decode or build it makes is reserved with [`Self::reserve_builds`]
+    /// when it has marked the slot as being made, whether its tiles were not
+    /// kept or a stopped maker has just left it, and given back when the
+    /// decode or build ends, is cancelled or unwinds. It holds no share while
+    /// it waits.
     ///
     /// A caller already inside a rayon parallel loop calls this rather than
     /// [`Self::get_many`].
@@ -1134,7 +1197,8 @@ impl PhotographCache {
         path: &Path,
         progress: &Progress<'_>,
     ) -> Result<Arc<TiledPhotograph>, GetError> {
-        self.get_found(path, progress, Share::None).0
+        self.get_found(path, progress, Share::None, Make::Reporting)
+            .0
     }
 
     /// The photograph at `path` if every tile of it is kept, without reading
@@ -1212,6 +1276,11 @@ impl PhotographCache {
     /// decoded by another caller keeps its share while it waits, since it may
     /// take the decode over, and gives it back when it ends.
     ///
+    /// It makes the mipmap of each out-of-core photograph whose files are
+    /// missing or stale, as [`Self::get`] does, in the member that answers
+    /// that path, passing on the build's messages through `progress` but not
+    /// its phases.
+    ///
     /// Counts `images` through `progress` as each path is answered, and polls
     /// it for cancellation before each path and as [`Self::get`] polls it. It
     /// opens no phase of its own:
@@ -1284,7 +1353,8 @@ impl PhotographCache {
                     if progress.is_cancelled() {
                         return (i, None);
                     }
-                    (i, answer(self.get_found(paths[i], progress, share)))
+                    let found = self.get_found(paths[i], progress, share, Make::Quietly);
+                    (i, answer(found))
                 })
                 .collect();
             for (i, value) in made {
@@ -1375,6 +1445,7 @@ impl PhotographCache {
             hits: self.shared.hits.load(Ordering::Relaxed),
             misses: self.shared.misses.load(Ordering::Relaxed),
             decodes: self.shared.decodes.load(Ordering::Relaxed),
+            mipmaps_made: self.shared.mipmaps_made.load(Ordering::Relaxed),
             build_budget_bytes: self.shared.options.build_budget_bytes,
             build_reserved_bytes: self.shared.build_reserved.load(Ordering::Acquire),
         }
@@ -1519,6 +1590,8 @@ impl PhotographCache {
         }
         let value = match &data.made {
             Some(Err(e)) => Err(e.clone()),
+            // Its mipmap is made by `get`, never read in core.
+            _ if matches!(data.tier, Tier::NotCurrent) => return None,
             _ => Ok(data.kept(Asked::Photograph, tick, &slot)?),
         };
         drop(data);
@@ -1559,17 +1632,19 @@ impl PhotographCache {
         }
     }
 
-    /// `get`, telling whether it decoded. `share` is the caller's share of
-    /// the build count when it already holds one (a `get_many` member's), or
-    /// [`Share::None`] for a `get`, which reserves when it decodes. Whatever
-    /// the outcome, the share has been given back when this returns.
+    /// `get`, telling whether it decoded or made a mipmap. `share` is the
+    /// caller's share of the build count when it already holds one (a
+    /// `get_many` member's), or [`Share::None`] for a `get`, which reserves
+    /// when it decodes. Whatever the outcome, the share has been given back
+    /// when this returns. `make` says how a mipmap's build reports.
     fn get_found<'r>(
         &'r self,
         path: &Path,
         progress: &Progress<'_>,
         share: Share<'r>,
+        make: Make,
     ) -> (Result<Arc<TiledPhotograph>, GetError>, Found) {
-        let (value, found) = self.fetch(path, progress, share, Asked::Photograph);
+        let (value, found) = self.fetch(path, progress, share, Asked::Photograph, make);
         let value = value.map_err(|e| match e {
             Failure::Get(e) => e,
             // Answering a photograph reads no tile, so no file is found
@@ -1577,6 +1652,7 @@ impl PhotographCache {
             Failure::Changed(file) => {
                 GetError::Unreadable(format!("{} changed while it was read", file.display()))
             }
+            Failure::NotHeld => Failure::not_held(path),
         });
         (value.and_then(|got| got.photograph(self, path)), found)
     }
@@ -1588,22 +1664,35 @@ impl PhotographCache {
     /// An out-of-core photograph whose mipmap is current is read from its
     /// mip level files instead ([`Self::read_files`]), which decodes only the
     /// tiles asked for and fails with [`Failure::Changed`] when a file it
-    /// reads is not the one the slot first read; one whose mipmap is missing
-    /// or stale is decoded whole, as every photograph is in core.
+    /// reads is not the one the slot first read. One whose mipmap is missing
+    /// or stale has it made in the slot when `make` says so, and is
+    /// otherwise [`Failure::Changed`] naming the photograph (or the failure
+    /// its slot remembers), never read in core.
     fn fetch<'r>(
         &'r self,
         path: &Path,
         progress: &Progress<'_>,
         mut share: Share<'r>,
         asked: Asked<'_>,
+        make: Make,
     ) -> (Result<Got, Failure>, Found) {
+        let not_current = || Failure::Changed(path.to_path_buf());
         if self.shared.options.budget_bytes == 0 {
             let setting = self.setting_for(path);
-            if let Some((slot, _)) = self.unmapped_files_slot(path, &setting) {
-                return (
-                    self.read_files(path, &slot, asked, progress),
-                    Found::Decoded,
-                );
+            match self.unmapped_files_slot(path, &setting) {
+                Unmapped::Files(slot, _) => {
+                    return (
+                        self.read_files(path, &slot, asked, true, progress),
+                        Found::Decoded,
+                    )
+                }
+                Unmapped::NotCurrent if make == Make::Never => {
+                    return (Err(not_current()), Found::Reused)
+                }
+                Unmapped::NotCurrent => {
+                    return self.make_unmapped(path, progress, share, setting, make)
+                }
+                Unmapped::InCore => {}
             }
             self.shared.misses.fetch_add(1, Ordering::Relaxed);
             let value = self.decode(path, progress, &mut share, &setting);
@@ -1613,11 +1702,24 @@ impl PhotographCache {
             );
         }
         let slot = self.slot_for(path);
-        if self.tier_of(path, &slot).is_some() {
-            return (self.read_files(path, &slot, asked, progress), Found::Reused);
+        match self.tier_of(path, &slot) {
+            Tier::Files(_) => (
+                self.read_files(path, &slot, asked, true, progress),
+                Found::Reused,
+            ),
+            Tier::NotCurrent if make == Make::Never => {
+                let remembered = match &slot.lock().made {
+                    Some(Err(e)) => Failure::Get(e.clone()),
+                    _ => not_current(),
+                };
+                (Err(remembered), Found::Reused)
+            }
+            Tier::NotCurrent => self.make_in_slot(path, &slot, progress, share, make),
+            Tier::Unchecked | Tier::InCore => {
+                let (value, found) = self.fetch_in_core(path, &slot, progress, share, asked);
+                (value.map_err(Failure::Get), found)
+            }
         }
-        let (value, found) = self.fetch_in_core(path, &slot, progress, share, asked);
-        (value.map_err(Failure::Get), found)
     }
 
     /// [`Self::fetch`] of a photograph read whole in core, from its `slot`.
@@ -1787,7 +1889,7 @@ impl PhotographCache {
             }
             asked => asked,
         };
-        self.evict(inner, slot, evicting);
+        self.evict(inner, slot, evicting, None);
         // Every tile of the layout was put in the slot just above.
         got.ok_or_else(|| GetError::Unreadable(format!("{}: tiles not kept", path.display())))
     }
@@ -1802,21 +1904,36 @@ impl PhotographCache {
     /// [`Asked::Keys`].
     ///
     /// A file entry is evicted as a used tile is, by when it was last read.
-    /// The tiles of an out-of-core photograph's coarsest level and the levels
-    /// below it, cut from one decode of its coarsest mip level file, go only
-    /// after every other entry, so a photograph whose files have been read
-    /// can be drawn small at once whatever else was read since.
-    fn evict(&self, inner: &mut Inner, slot: &Arc<Slot>, asked: Asked<'_>) {
+    /// The file entries of a mipmap held in memory, which only a build makes
+    /// again, go after every other entry but the coarse tiles, and `slot`'s
+    /// own are spared while they are under [`READ_SPARING_SHARE`] of the
+    /// budget, as a read's decode is, and the level `spared_level` names
+    /// whatever their size: so a kernel reading such a photograph a tile at a
+    /// time does not make its build again for each tile, and the bytes kept
+    /// pass the budget by at most one photograph's levels. The tiles of an
+    /// out-of-core photograph's coarsest level and the levels below it, cut
+    /// from one decode of its coarsest mip level file, go only after every
+    /// other entry, so a photograph whose files have been read can be drawn
+    /// small at once whatever else was read since.
+    fn evict(
+        &self,
+        inner: &mut Inner,
+        slot: &Arc<Slot>,
+        asked: Asked<'_>,
+        spared_level: Option<usize>,
+    ) {
         if inner.bytes <= self.shared.options.budget_bytes {
             return;
         }
         let slots: Vec<Arc<Slot>> = inner.map.values().map(Arc::clone).collect();
         /// An entry that can be evicted, its fields in the order they are
-        /// evicted by: the coarse tiles last, then the unused before the
-        /// used, the least recently asked for first, the finer levels first.
+        /// evicted by: the coarse tiles last, the levels held in memory
+        /// before them, then the unused before the used, the least recently
+        /// asked for first, the finer levels first.
         #[derive(PartialEq, Eq, PartialOrd, Ord)]
         struct Candidate {
             coarse: bool,
+            in_memory: bool,
             used: bool,
             tick: u64,
             level: u8,
@@ -1830,6 +1947,9 @@ impl PhotographCache {
             let own = Arc::ptr_eq(other, slot);
             let data = other.lock();
             let coarsest = data.tier.files().map(|files| files.coarsest());
+            let in_memory = data.tier.files().is_some_and(|files| files.in_memory);
+            let spare_memory =
+                own && in_memory && spares_read_decode(data.in_memory_bytes(), self.budget_bytes());
             for (key, kept) in data.tiles.iter() {
                 let spared = own
                     && match asked {
@@ -1839,6 +1959,7 @@ impl PhotographCache {
                 if !spared {
                     candidates.push(Candidate {
                         coarse: coarsest.is_some_and(|k| usize::from(key.level) >= k),
+                        in_memory: false,
                         used: kept.used,
                         tick: kept.tick,
                         level: key.level,
@@ -1850,8 +1971,13 @@ impl PhotographCache {
                 }
             }
             for (&level, entry) in data.files.iter() {
+                let spared = own && in_memory && (spare_memory || spared_level == Some(level));
+                if spared {
+                    continue;
+                }
                 candidates.push(Candidate {
                     coarse: false,
+                    in_memory,
                     used: true,
                     tick: entry.tick,
                     level: level as u8,
@@ -1924,3 +2050,6 @@ mod workspace_tests;
 
 #[cfg(test)]
 mod mipmap_tests;
+
+#[cfg(test)]
+mod build_tests;

@@ -17,6 +17,7 @@ use super::{
 };
 use crate::camera::image::{image_dimensions, temporary_path, ImageU8};
 use crate::progress::Progress;
+use crate::progress_warn;
 
 /// A photograph's layout under its workspace's `mipmap_options`, and where
 /// its mipmap is when it is out of core (`None` in core).
@@ -168,23 +169,31 @@ impl BuiltMipmap {
 }
 
 /// Make a photograph's mipmap from one decode, writing what can be written:
-/// levels 1 to `K`, coarsest first, and `-mip0` last when the original is not
-/// region-readable.
+/// levels 1 to `K`, encoded coarsest first, and `-mip0` last when the
+/// original is not region-readable; the coarsest level's file is written
+/// after every other, so a build that stops early leaves no current coarsest
+/// file beside missing finer ones.
 ///
 /// The photograph's header is read first, so a photograph in core under
 /// `options` or too large is refused without being read whole or decoded.
 /// `decoded` is `ImageU8::read_rgb(photograph)` when the caller already holds
 /// it, and is decoded here from the bytes otherwise. Each reduced level is
 /// box-filtered from the exact level above it in memory, never from a decoded
-/// file, and encoded on its own. Each file is written to a temporary file in
-/// its directory and renamed into place; when that rename fails, a target
-/// that is now current (another writer made it) counts as written, and
-/// otherwise the build keeps the encoded bytes as the in-memory equivalent and
-/// writes nothing further, saying why in [`BuiltMipmap::not_written`]. A
-/// mipmap directory made by the build gets a `CACHEDIR.TAG`.
+/// file, and encoded on its own. A level whose file is current already (an
+/// earlier build that stopped, or another writer, made it) is read from that
+/// file rather than encoded and written again; a file at its name made from
+/// an original whose path differs only in letter case and that is not the
+/// same file is made over, with a warning through `progress` naming both.
+/// Each file is written to a temporary file in its directory and renamed into
+/// place; when that rename fails, a target that is now current (another
+/// writer made it) counts as written, and otherwise the build keeps the
+/// encoded bytes as the in-memory equivalent and writes nothing further,
+/// saying why in [`BuiltMipmap::not_written`]. A mipmap directory made by the
+/// build gets a `CACHEDIR.TAG`.
 ///
 /// Reports the phases `decode`, `reduce` and `encode` through `progress`,
-/// counting levels, and polls it for cancellation between levels.
+/// counting levels, and polls it for cancellation between levels and before
+/// the coarsest file is written.
 ///
 /// # Errors
 ///
@@ -306,7 +315,10 @@ pub fn build_mipmaps(
         sfmtool_version: env!("CARGO_PKG_VERSION").to_string(),
     };
 
-    // Coarsest first, then `-mip0`, the largest, last.
+    // Coarsest first, then `-mip0`, the largest, last. The coarsest file is
+    // written after every other, so a build that stops early never leaves a
+    // current coarsest file beside missing finer ones: a reader that checks
+    // only the coarsest file then finds the mipmap not current.
     let mut order: Vec<usize> = (1..=k).rev().collect();
     if !region_readable {
         order.push(0);
@@ -314,9 +326,43 @@ pub fn build_mipmaps(
     let total = order.len() as u64;
     phase = progress.phase("encode");
     let mut not_written = None;
+    let mut warned = false;
     let mut files = Vec::with_capacity(order.len());
+    let mut coarsest: Option<(PathBuf, ExpectedMipLevel)> = None;
     for (done, level) in order.into_iter().enumerate() {
         progress.check_cancel()?;
+        let expected =
+            ExpectedMipLevel::new(&layout, &relative, level).ok_or_else(not_out_of_core)?;
+        let target = location.level_path(level, options.quality_for_level(level));
+        // A level whose file is current already, written by an earlier build
+        // that stopped or by another writer, is not made again.
+        match MipLevelFile::open(&target, &expected) {
+            Ok(existing) if is_current_for(&existing, &source, k, region_readable) => {
+                files.push(existing);
+                phase.count(done as u64 + 1, Some(total), "levels");
+                continue;
+            }
+            Ok(existing) => {
+                // Only a file the hash finds is from other bytes, not one
+                // stale for its number of levels or region answer.
+                let other = &existing.record().source;
+                if !warned
+                    && *other != relative
+                    && other.to_lowercase() == relative.to_lowercase()
+                    && source.check(existing.record()).is_err()
+                {
+                    warned = true;
+                    progress_warn!(
+                        progress,
+                        "{relative} and {other} differ only in letter case and share the mip \
+                         level files in {}, which were made from other bytes; making the \
+                         mipmap of {relative} over that of {other}",
+                        location.dir().display()
+                    );
+                }
+            }
+            Err(_) => {}
+        }
         let image = if level == 0 {
             level0
         } else {
@@ -325,17 +371,28 @@ pub fn build_mipmaps(
         let record = record_for(level, image);
         let encoded: Arc<[u8]> =
             encode_mip_level(image, grey, record.jpeg_quality, &record)?.into();
-        let expected =
-            ExpectedMipLevel::new(&layout, &relative, level).ok_or_else(not_out_of_core)?;
         let file = MipLevelFile::from_bytes(encoded, &expected)?;
-        if not_written.is_none() {
-            let target = location.level_path(level, record.jpeg_quality);
+        if level == k {
+            coarsest = Some((target, expected));
+        } else if not_written.is_none() {
             if let Err(why) = write_mip_level_file(&location, &target, &file, &expected, &source) {
                 not_written = Some(why);
             }
         }
         files.push(file);
         phase.count(done as u64 + 1, Some(total), "levels");
+    }
+    if let Some((target, expected)) = coarsest {
+        progress.check_cancel()?;
+        if not_written.is_none() {
+            let file = files
+                .iter()
+                .find(|f| f.record().level as usize == k)
+                .ok_or_else(not_out_of_core)?;
+            if let Err(why) = write_mip_level_file(&location, &target, file, &expected, &source) {
+                not_written = Some(why);
+            }
+        }
     }
     drop(phase);
     files.sort_by_key(|f| f.record().level);
@@ -345,6 +402,21 @@ pub fn build_mipmaps(
         files,
         not_written,
     })
+}
+
+/// Whether `file`, found at a level's name, is current for `source` and
+/// agrees with the build: the same number of stored levels and the same
+/// region answer.
+fn is_current_for(
+    file: &MipLevelFile,
+    source: &MipmapSource,
+    k: usize,
+    region_readable: bool,
+) -> bool {
+    let record = file.record();
+    record.stored_levels as usize == k
+        && record.region_readable_original == region_readable
+        && source.check(record).is_ok()
 }
 
 /// Write `file` to `target` through a temporary file in its directory,
