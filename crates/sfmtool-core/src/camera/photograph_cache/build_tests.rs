@@ -21,7 +21,7 @@ use super::mipmap_tests::{
     restartless_jpeg, same_tile, tiles_of, Workspace, TILE,
 };
 
-use super::tests::{on_a_thread, HANG};
+use super::tests::{assert_within_the_build_budget, cache_watching_its_builds, on_a_thread, HANG};
 use super::*;
 
 /// The levels of `photograph` as a photograph `get` answered reads them.
@@ -510,26 +510,14 @@ fn get_many_makes_its_mipmaps_in_groups_within_the_build_budget() {
         let ws = Workspace::new();
         let photographs = many_out_of_core(&ws, 20);
         let paths: Vec<&Path> = photographs.iter().map(PathBuf::as_path).collect();
-        let mut cache = PhotographCache::new(PhotographCacheOptions {
-            budget_bytes: budget,
-            build_budget_bytes: 3 * build_bytes,
-            tile_size: TILE,
-        });
-        // As each build starts: the builds in progress and the bytes the
-        // count holds then.
-        let starts = Arc::new(Mutex::new(Vec::new()));
-        let started = AtomicU64::new(0);
-        cache.set_slot_hook(Box::new({
-            let starts = Arc::clone(&starts);
-            move |cache, event, _| {
-                if event == SlotEvent::DecodeStarted {
-                    let n = started.fetch_add(1, Ordering::SeqCst) + 1;
-                    let in_progress = n - cache.shared.mipmaps_made.load(Ordering::SeqCst);
-                    let reserved = cache.shared.build_reserved.load(Ordering::SeqCst);
-                    starts.lock().unwrap().push((in_progress, reserved));
-                }
-            }
-        }));
+        let (cache, starts) = cache_watching_its_builds(
+            PhotographCacheOptions {
+                budget_bytes: budget,
+                build_budget_bytes: 3 * build_bytes,
+                tile_size: TILE,
+            },
+            |cache| cache.shared.mipmaps_made.load(Ordering::SeqCst),
+        );
         let made = MipmapsMade(Mutex::new(Vec::new()));
         let sink = |event: Event<'_>| made.sink(event);
         let (found, tally) = cache.get_many(&paths, &Progress::to(&sink)).unwrap();
@@ -542,18 +530,8 @@ fn get_many_makes_its_mipmaps_in_groups_within_the_build_budget() {
             },
             "budget {budget}"
         );
-        let starts = starts.lock().unwrap().clone();
-        assert_eq!(starts.len(), 20);
-        for (in_progress, reserved) in starts {
-            assert!(
-                reserved >= in_progress * build_bytes,
-                "{in_progress} builds in progress with {reserved} bytes reserved"
-            );
-            assert!(
-                reserved <= 3 * build_bytes,
-                "{reserved} bytes reserved, past the build budget"
-            );
-        }
+        assert_eq!(starts.lock().unwrap().len(), 20);
+        assert_within_the_build_budget(&starts, build_bytes, 3);
         let stats = cache.stats();
         assert_eq!((stats.mipmaps_made, stats.decodes), (20, 0));
         assert_eq!(stats.build_reserved_bytes, 0);

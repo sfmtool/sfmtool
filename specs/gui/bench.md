@@ -1292,8 +1292,8 @@ On the worker `ViewSources::decode` asks the cache for every path at once
 rest in parallel, under a `decode images` phase whose note says how many it
 read from disk, how many it reused from the cache, how many it read from mip
 level files and how many mipmaps it made when either is not 0, and how full
-the cache is afterwards. The cache keeps each photograph's tiles, cut from its pyramid,
-rather than the bare photograph, so a photograph the viewer had whole is
+the cache is afterwards. The cache keeps each photograph's tiles, cut from
+its pyramid, rather than the bare photograph, so a photograph the viewer had whole is
 neither decoded, nor copied, nor pyramided a second time, and what the worker decodes stays in the cache for the next step
 and the panels. A photograph that cannot be read is the
 worker's refusal, arriving as the task's failed row rather than as a refusal of

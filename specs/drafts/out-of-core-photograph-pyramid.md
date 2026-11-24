@@ -3274,8 +3274,8 @@ in core. Step 17 turns the tier on.
       reservation) and held 194 MB. Encoding the full-resolution `-mip0`
       raised the build's peak by about 1 MB, so the peak comes before the
       encodes, while the original is decoded.
-    - **14d, `get_many`'s builds.** **Built.** `get_many` first resolves each path's
-      layout (a header read, the region test and a record check), so an
+    - **14d, `get_many`'s builds.** **Built.** `get_many` first resolves
+      each path's layout (a header read, the region test and a record check), so an
       out-of-core photograph whose mipmap is current is read without a
       build's reservation, and makes the misses (out-of-core photographs to
       build and in-core photographs none of whose tiles is kept) in groups
@@ -3313,11 +3313,14 @@ in core. Step 17 turns the tier on.
       made` (the bitmap render's `decode photographs`, *{k} of {n} read, 2
       mipmaps made*) only when the count is not 0, so a workspace without
       `mipmap_options` reads exactly as before. The test of builds in
-      progress reads, as each build starts, the builds started less those
-      made and the build count, and asserts the count covers every build in
-      progress and never passes the budget; a count read alone would not
-      catch groups larger than their grant, since a member past the grant
-      adds nothing to it. Measured with a counting allocator in a release
+      progress reads, as each build starts, the build count and then the
+      builds started less those made, and asserts the count covers every
+      build in progress and never passes the budget; a count read alone
+      would not catch groups larger than their grant, since a member past
+      the grant adds nothing to it. The count is read first because a build
+      counts itself made before it gives its share back. The in-core test
+      of 13b's groups reads its decodes in progress the same way, through
+      the same helper. Measured with a counting allocator in a release
       build, a `get_many` over 12 synthetic 4000 x 3000 region-readable
       JPEGs (60 MB a build reserved) with no mipmap, under a 64 MiB budget,
       peaked at 167, 253 and 451 MB over its start with build budgets of

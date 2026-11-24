@@ -299,7 +299,7 @@ Why it is shaped this way:
   call did for each path, so a note can say how many photographs a phase
   decoded, read from mip level files or made mipmaps of; in a workspace
   without `mipmap_options` the two mipmap counts are 0, and each note leaves
-  them out, reading as it did before the tier. The mipmaps made reach the
+  them out. The mipmaps made reach the
   caller as each build finishes too, as the `Progress` value `mipmaps_made`,
   rather than as a count, since `get_many` already counts `images` and a
   stage shows its newest count.
@@ -845,7 +845,8 @@ reconstruction's photographs goes through it except the ones under
   read or nothing, and a clone of the cache. The worker calls `get_many` inside
   the `decode images` phase, whose note gives how many were read from disk and
   how many reused, how many were read from mip level files and how many
-  mipmaps made when either is not 0, and how full the cache is afterwards ([edits.rs](../../../crates/sfm-explorer/src/state/edits.rs);
+  mipmaps made when either is not 0, and how full the cache is afterwards
+  ([edits.rs](../../../crates/sfm-explorer/src/state/edits.rs);
   [bench.md](../../gui/bench.md), [background-tasks.md](../../gui/background-tasks.md)).
 - **Opening a file** with patch frames and no bitmaps renders them through
   `render_display_patch_bitmaps`, which reads every photograph with `get_many`,
@@ -1074,8 +1075,9 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   grants what fits and one when none does, a decode larger than the whole
   budget and absurd sizes included; `try_reserve_build` never takes the count
   past the budget, from one thread or eight; a `get_many` over 20
-  photographs decodes them in groups that never pass a build budget of three
-  decodes, every decode reserved as it starts, with a budget and without one;
+  photographs never has more than three decodes in progress under a build
+  budget of three decodes, the build count holding a reservation for every
+  decode in progress as each starts, with a budget and without one;
   four `get_many` callers started together on the same 20 photographs never
   reserve more than the build budget plus one decode each, an invariant that
   holds whatever order their threads run in; two caches keep separate counts,
