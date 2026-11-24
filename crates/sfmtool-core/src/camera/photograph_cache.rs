@@ -46,8 +46,10 @@ use crate::workspace::{
     find_workspace_for_path, read_mipmap_options, WorkspaceConfigError, WORKSPACE_FILE_NAME,
 };
 
+mod files;
 mod tiles;
 
+use files::{Failure, FileEntry, Tier};
 pub use tiles::{PeekedLayout, PeekedTile, TileError, TryDecode};
 
 /// How long a caller waiting for another caller's decode of the same path
@@ -306,7 +308,12 @@ impl std::error::Error for GetError {}
 pub struct PhotographCacheStats {
     /// Photograph tiles kept, of every photograph.
     pub tiles: usize,
-    /// Pixel bytes of the tiles kept, each tile with its border.
+    /// File entries kept: the bytes and restart index of a mip level file,
+    /// or of a region-readable original, that tiles of an out-of-core
+    /// photograph are decoded from.
+    pub files: usize,
+    /// Bytes kept: the pixels of the tiles, each with its border, and the
+    /// file entries' bytes and restart indexes.
     pub bytes: u64,
     /// The budget the cache was made with.
     pub budget_bytes: u64,
@@ -544,7 +551,10 @@ impl Got {
 /// whose length or modification time is not the slot's any more, or whose
 /// layout is not the one recorded, fails the read with
 /// [`PhotographReadError::Changed`], so a kernel never reads two versions of
-/// one photograph.
+/// one photograph. A photograph answered with its out-of-core layout reads a
+/// tile it does not find kept from the mip level files its slot reads
+/// ([`PhotographCache::read_files`]), each file read again compared with the
+/// record the slot first read.
 pub(crate) struct CachedTiles {
     cache: PhotographCache,
     path: PathBuf,
@@ -591,8 +601,26 @@ impl CachedTiles {
                 path: self.path.clone(),
             });
         }
+        let failed = |e| match e {
+            Failure::Get(e) => read_error(&self.path, e),
+            Failure::Changed(path) => PhotographReadError::Changed { path },
+        };
+        if self.layout.is_out_of_core() {
+            // Read from the files the slot read, comparing each file read
+            // again with the record first read, whatever the slot's place in
+            // the map.
+            let got = cache
+                .read_files(&self.path, &self.slot, Asked::Keys(keys), progress)
+                .map_err(failed)?;
+            if *got.layout != *self.layout || got.tiles.len() != keys.len() {
+                return Err(PhotographReadError::Changed {
+                    path: self.path.clone(),
+                });
+            }
+            return Ok(got.tiles);
+        }
         let (value, _) = cache.fetch(&self.path, progress, Share::None, Asked::Read(keys));
-        let got = value.map_err(|e| read_error(&self.path, e))?;
+        let got = value.map_err(failed)?;
         if *got.layout != *self.layout || got.tiles.len() != keys.len() {
             return Err(PhotographReadError::Changed {
                 path: self.path.clone(),
@@ -630,10 +658,22 @@ struct SlotData {
     /// The tiles kept, by key. Empty unless the slot is in the map: a slot
     /// leaves the map with no tile.
     tiles: HashMap<TileKey, Kept>,
-    /// Bytes of `tiles`' pixels, what the slot adds to [`Inner::bytes`].
+    /// The file entries kept, by level, for a slot whose tier is
+    /// [`Tier::Files`]: each file's bytes and restart index. Empty unless the
+    /// slot is in the map.
+    files: HashMap<usize, FileEntry>,
+    /// The record of each mip level file the slot has opened, by level,
+    /// kept when its bytes are evicted, so a file read again is compared
+    /// with the one first read. Whatever the slot's place in the map.
+    records: HashMap<usize, crate::camera::mipmap::MipLevelRecord>,
+    /// Bytes of `tiles`' pixels and of `files`, what the slot adds to
+    /// [`Inner::bytes`].
     bytes: u64,
     /// The channels of the tiles of the decode that made the slot.
     channels: u32,
+    /// Whether the slot reads its photograph whole in core or from its mip
+    /// level files, decided when a request first needs it.
+    tier: Tier,
 }
 
 impl SlotData {
@@ -652,7 +692,9 @@ impl SlotData {
         let channels = self.channels;
         let tiles = match asked {
             Asked::Photograph => {
-                if self.tiles.is_empty() {
+                // A photograph read from its files decodes its tiles as they
+                // are read, so it is answered whatever tiles are kept.
+                if self.tiles.is_empty() && !matches!(self.tier, Tier::Files(_)) {
                     return None;
                 }
                 for kept in self.tiles.values_mut() {
@@ -702,9 +744,10 @@ impl SlotData {
         })
     }
 
-    /// Drop every tile kept, answering the bytes they held.
-    fn drop_tiles(&mut self) -> u64 {
+    /// Drop every tile and file entry kept, answering the bytes they held.
+    fn drop_entries(&mut self) -> u64 {
         self.tiles.clear();
+        self.files.clear();
         std::mem::take(&mut self.bytes)
     }
 }
@@ -800,7 +843,7 @@ impl Inner {
     /// Take `path`'s slot out of the map, with its tiles.
     fn remove(&mut self, path: &Path) {
         if let Some(old) = self.map.remove(path) {
-            self.bytes -= old.lock().drop_tiles();
+            self.bytes -= old.lock().drop_entries();
         }
     }
 }
@@ -877,6 +920,13 @@ struct Shared {
     /// the root's workspace file changes. Its lock is taken with no other
     /// lock held, and held while a workspace file is read.
     workspaces: Mutex<HashMap<PathBuf, KeptOptions>>,
+    /// Each out-of-core original's facts as its mipmap's records are checked
+    /// against them, one per spelling of its path, with the original's
+    /// length and modification time when they were read: kept for the
+    /// cache's life, so the original is hashed at most once while it stays
+    /// the same, and read again when it changes. Its lock is taken with no
+    /// other lock held.
+    sources: Mutex<HashMap<PathBuf, (FileStamp, Arc<crate::camera::mipmap::MipmapSource>)>>,
     /// How many times a workspace file has been read for its
     /// `mipmap_options`.
     #[cfg(test)]
@@ -950,6 +1000,7 @@ impl PhotographCache {
                 decodes: AtomicU64::new(0),
                 build_reserved: AtomicU64::new(0),
                 workspaces: Mutex::new(HashMap::new()),
+                sources: Mutex::new(HashMap::new()),
                 #[cfg(test)]
                 workspace_reads: AtomicU64::new(0),
                 #[cfg(test)]
@@ -1277,6 +1328,8 @@ impl PhotographCache {
         }
         let cut = cut_image(image, self.shared.options.tile_size);
         let slot = Arc::new(Slot::new(file_stamp(path), self.setting_for(path)));
+        // The pixels are the caller's, not the files', whatever its tier.
+        slot.lock().tier = Tier::InCore;
         let mut inner = self.lock();
         inner.remove(path);
         inner.map.insert(path.to_path_buf(), Arc::clone(&slot));
@@ -1296,20 +1349,27 @@ impl PhotographCache {
     pub fn clear(&self) {
         let mut inner = self.lock();
         for slot in inner.map.values() {
-            slot.lock().drop_tiles();
+            slot.lock().drop_entries();
         }
         inner.map.clear();
         inner.layouts.clear();
         inner.bytes = 0;
     }
 
-    /// Tiles and bytes kept, the budget, the hit, miss and decode counters,
-    /// the build budget and the bytes reserved on the build count.
+    /// Tiles, file entries and bytes kept, the budget, the hit, miss and
+    /// decode counters, the build budget and the bytes reserved on the build
+    /// count.
     pub fn stats(&self) -> PhotographCacheStats {
         let inner = self.lock();
-        let tiles = inner.map.values().map(|slot| slot.lock().tiles.len()).sum();
+        let (mut tiles, mut files) = (0, 0);
+        for slot in inner.map.values() {
+            let data = slot.lock();
+            tiles += data.tiles.len();
+            files += data.files.len();
+        }
         PhotographCacheStats {
             tiles,
+            files,
             bytes: inner.bytes,
             budget_bytes: self.shared.options.budget_bytes,
             hits: self.shared.hits.load(Ordering::Relaxed),
@@ -1510,27 +1570,65 @@ impl PhotographCache {
         share: Share<'r>,
     ) -> (Result<Arc<TiledPhotograph>, GetError>, Found) {
         let (value, found) = self.fetch(path, progress, share, Asked::Photograph);
+        let value = value.map_err(|e| match e {
+            Failure::Get(e) => e,
+            // Answering a photograph reads no tile, so no file is found
+            // changed; this answers a broken invariant rather than panic.
+            Failure::Changed(file) => {
+                GetError::Unreadable(format!("{} changed while it was read", file.display()))
+            }
+        });
         (value.and_then(|got| got.photograph(self, path)), found)
     }
 
     /// The tiles `asked` names of `path`, decoding the photograph when one of
     /// them is not kept, as [`Self::get`] describes, and telling whether it
     /// decoded. `share` is as for [`Self::get_found`].
+    ///
+    /// An out-of-core photograph whose mipmap is current is read from its
+    /// mip level files instead ([`Self::read_files`]), which decodes only the
+    /// tiles asked for and fails with [`Failure::Changed`] when a file it
+    /// reads is not the one the slot first read; one whose mipmap is missing
+    /// or stale is decoded whole, as every photograph is in core.
     fn fetch<'r>(
         &'r self,
         path: &Path,
         progress: &Progress<'_>,
         mut share: Share<'r>,
         asked: Asked<'_>,
-    ) -> (Result<Got, GetError>, Found) {
+    ) -> (Result<Got, Failure>, Found) {
         if self.shared.options.budget_bytes == 0 {
-            self.shared.misses.fetch_add(1, Ordering::Relaxed);
             let setting = self.setting_for(path);
+            if let Some((slot, _)) = self.unmapped_files_slot(path, &setting) {
+                return (
+                    self.read_files(path, &slot, asked, progress),
+                    Found::Decoded,
+                );
+            }
+            self.shared.misses.fetch_add(1, Ordering::Relaxed);
             let value = self.decode(path, progress, &mut share, &setting);
-            return (value.map(|cut| answer_of(cut, asked)), Found::Decoded);
+            return (
+                value.map(|cut| answer_of(cut, asked)).map_err(Failure::Get),
+                Found::Decoded,
+            );
         }
         let slot = self.slot_for(path);
+        if self.tier_of(path, &slot).is_some() {
+            return (self.read_files(path, &slot, asked, progress), Found::Reused);
+        }
+        let (value, found) = self.fetch_in_core(path, &slot, progress, share, asked);
+        (value.map_err(Failure::Get), found)
+    }
 
+    /// [`Self::fetch`] of a photograph read whole in core, from its `slot`.
+    fn fetch_in_core<'r>(
+        &'r self,
+        path: &Path,
+        slot: &Arc<Slot>,
+        progress: &Progress<'_>,
+        share: Share<'r>,
+        asked: Asked<'_>,
+    ) -> (Result<Got, GetError>, Found) {
         // Wait while another caller makes the slot, and take it over when
         // what is asked for is not kept, as before anyone has decoded it,
         // after a tile of it was evicted and after its maker stopped.
@@ -1544,13 +1642,13 @@ impl PhotographCache {
                         self.shared.hits.fetch_add(1, Ordering::Relaxed);
                         return (Err(e.clone()), Found::Reused);
                     }
-                    if let Some(got) = data.kept(asked, self.next_tick(), &slot) {
+                    if let Some(got) = data.kept(asked, self.next_tick(), slot) {
                         self.shared.hits.fetch_add(1, Ordering::Relaxed);
                         return (Ok(got), Found::Reused);
                     }
                     data.making = true;
                     break Making {
-                        slot: &slot,
+                        slot,
                         share,
                         finished: false,
                     };
@@ -1629,7 +1727,7 @@ impl PhotographCache {
         let cut = match value {
             Ok(cut) => cut,
             Err(e) => {
-                let freed = data.drop_tiles();
+                let freed = data.drop_entries();
                 if mapped {
                     inner.bytes -= freed;
                 }
@@ -1702,34 +1800,91 @@ impl PhotographCache {
     /// request that just kept them is answered, or reads first. [`Self::store`]
     /// hands a read's decode over [`READ_SPARING_SHARE`] of the budget in as
     /// [`Asked::Keys`].
+    ///
+    /// A file entry is evicted as a used tile is, by when it was last read.
+    /// The tiles of an out-of-core photograph's coarsest level and the levels
+    /// below it, cut from one decode of its coarsest mip level file, go only
+    /// after every other entry, so a photograph whose files have been read
+    /// can be drawn small at once whatever else was read since.
     fn evict(&self, inner: &mut Inner, slot: &Arc<Slot>, asked: Asked<'_>) {
         if inner.bytes <= self.shared.options.budget_bytes {
             return;
         }
         let slots: Vec<Arc<Slot>> = inner.map.values().map(Arc::clone).collect();
-        let mut candidates: Vec<(bool, u64, u8, u32, u32, usize)> = Vec::new();
+        /// An entry that can be evicted, its fields in the order they are
+        /// evicted by: the coarse tiles last, then the unused before the
+        /// used, the least recently asked for first, the finer levels first.
+        #[derive(PartialEq, Eq, PartialOrd, Ord)]
+        struct Candidate {
+            coarse: bool,
+            used: bool,
+            tick: u64,
+            level: u8,
+            row: u32,
+            col: u32,
+            file: bool,
+            slot: usize,
+        }
+        let mut candidates: Vec<Candidate> = Vec::new();
         for (s, other) in slots.iter().enumerate() {
             let own = Arc::ptr_eq(other, slot);
-            for (key, kept) in other.lock().tiles.iter() {
+            let data = other.lock();
+            let coarsest = data.tier.files().map(|files| files.coarsest());
+            for (key, kept) in data.tiles.iter() {
                 let spared = own
                     && match asked {
                         Asked::Photograph | Asked::Every | Asked::Read(_) => true,
                         Asked::Keys(keys) => keys.contains(key),
                     };
                 if !spared {
-                    candidates.push((kept.used, kept.tick, key.level, key.row, key.col, s));
+                    candidates.push(Candidate {
+                        coarse: coarsest.is_some_and(|k| usize::from(key.level) >= k),
+                        used: kept.used,
+                        tick: kept.tick,
+                        level: key.level,
+                        row: key.row,
+                        col: key.col,
+                        file: false,
+                        slot: s,
+                    });
                 }
+            }
+            for (&level, entry) in data.files.iter() {
+                candidates.push(Candidate {
+                    coarse: false,
+                    used: true,
+                    tick: entry.tick,
+                    level: level as u8,
+                    row: 0,
+                    col: 0,
+                    file: true,
+                    slot: s,
+                });
             }
         }
         candidates.sort_unstable();
-        for (_, _, level, row, col, s) in candidates {
+        for candidate in candidates {
             if inner.bytes <= self.shared.options.budget_bytes {
                 break;
             }
+            let Candidate {
+                level,
+                row,
+                col,
+                file,
+                slot: s,
+                ..
+            } = candidate;
             let mut data = slots[s].lock();
-            let key = TileKey { level, col, row };
-            if let Some(kept) = data.tiles.remove(&key) {
-                let bytes = tile_bytes(&kept.tile);
+            let bytes = if file {
+                data.files
+                    .remove(&usize::from(level))
+                    .map(|entry| entry.bytes)
+            } else {
+                let key = TileKey { level, col, row };
+                data.tiles.remove(&key).map(|kept| tile_bytes(&kept.tile))
+            };
+            if let Some(bytes) = bytes {
                 data.bytes -= bytes;
                 inner.bytes -= bytes;
             }
@@ -1766,3 +1921,6 @@ mod read_tests;
 
 #[cfg(test)]
 mod workspace_tests;
+
+#[cfg(test)]
+mod mipmap_tests;

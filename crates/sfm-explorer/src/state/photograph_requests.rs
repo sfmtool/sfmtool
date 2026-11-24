@@ -225,14 +225,17 @@ impl TileRequests {
     /// Keep what a decode of `path` that failed with `e` tells later frames.
     /// A cancelled decode tells nothing, and the next frame asks again. An
     /// unreadable photograph is remembered with its file's stamp, in place of
-    /// any tiles answered for it. A key or a level the photograph does not
-    /// have comes from a layout read before the file changed size: the cache
-    /// forgets the path, so the next frame reads the header again rather than
-    /// ask for the same pixels on every frame.
+    /// any tiles answered for it. A file of its mipmap found changed, which
+    /// only a kernel's read answers and a panel's decode never does, is
+    /// remembered the same way, never by forgetting the path, so it cannot
+    /// start a request and a repaint on every frame. A key or a level the
+    /// photograph does not have comes from a layout read before the file
+    /// changed size: the cache forgets the path, so the next frame reads the
+    /// header again rather than ask for the same pixels on every frame.
     fn failed_with(&mut self, cache: &PhotographCache, path: &Path, e: TileError) {
         match e {
             TileError::Cancelled => {}
-            TileError::Unreadable { .. } => {
+            TileError::Unreadable { .. } | TileError::Changed { .. } => {
                 self.answered.retain(|(p, _)| p != path);
                 self.failures.insert(path.to_path_buf(), file_stamp(path));
             }

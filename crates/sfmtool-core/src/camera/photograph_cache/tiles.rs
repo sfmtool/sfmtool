@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use super::files::{is_out_of_core, Failure};
 use super::{
     answer_of, has_key, header, whole_decode_bytes, Asked, GetError, Got, Making, PhotographCache,
     Share, Slot,
@@ -61,6 +62,11 @@ pub enum PeekedTile {
 /// Why a tile, a region or a level could not be read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TileError {
+    /// A file of an out-of-core photograph's mipmap, or its original, is
+    /// missing, not current, or not the one the cache first read for it:
+    /// `path` names the file. Only a kernel's read answers it; a panel's
+    /// decode reads such a photograph whole in core instead.
+    Changed { path: PathBuf },
     /// The photograph does not exist, cannot be read or decoded, or has a
     /// side over [`MAX_JPEG_SIDE`](crate::camera::mipmap::MAX_JPEG_SIDE);
     /// `why` is the [`GetError`]'s message.
@@ -77,6 +83,11 @@ pub enum TileError {
 impl fmt::Display for TileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Changed { path } => write!(
+                f,
+                "{} changed while it was being read; run it again",
+                path.display()
+            ),
             Self::Unreadable { why, .. } => write!(f, "{why}"),
             Self::OutOfRange { path, why } => write!(f, "{}: {why}", path.display()),
             Self::Cancelled => write!(f, "{Cancelled}"),
@@ -120,13 +131,15 @@ fn unreadable(path: &Path, e: GetError) -> TileError {
 }
 
 /// The [`TileError`] for a failed read of a photograph the cache answered:
-/// [`TileError::Cancelled`] for a cancelled read, [`TileError::OutOfRange`]
-/// for a level or region the photograph does not have, and
+/// [`TileError::Cancelled`] for a cancelled read, [`TileError::Changed`] for
+/// a file found changed, [`TileError::OutOfRange`] for a level or region the
+/// photograph does not have, and
 /// [`TileError::Unreadable`] for a read of its file again that failed.
 fn read_failed(path: &Path, e: PhotographReadError) -> TileError {
     let path = path.to_path_buf();
     match e {
         PhotographReadError::Cancelled => TileError::Cancelled,
+        PhotographReadError::Changed { path: file } => TileError::Changed { path: file },
         PhotographReadError::OutOfRange { why, .. } => TileError::OutOfRange { path, why },
         PhotographReadError::NeedsTiles { .. } => TileError::OutOfRange {
             path,
@@ -158,7 +171,7 @@ fn check_keys(path: &Path, layout: &PyramidLayout, keys: &[TileKey]) -> Result<(
 impl PhotographCache {
     /// The layout of a `width` x `height` photograph as the cache cuts its
     /// tiles: in core, of [`ImageU8Pyramid::full_levels`] depth.
-    fn layout_for(&self, width: u32, height: u32) -> PyramidLayout {
+    pub(super) fn layout_for(&self, width: u32, height: u32) -> PyramidLayout {
         PyramidLayout::in_memory(
             width,
             height,
@@ -219,13 +232,31 @@ impl PhotographCache {
         }
     }
 
-    /// Read `path`'s header and keep the layout it gives, or why it could
-    /// not be read, for [`Self::layout`] to answer, whatever the budget.
-    /// Reads only the header, decodes nothing and never waits on a slot;
-    /// a panel calls it on the rayon pool.
+    /// Read `path`'s header and keep the layout its tiles are served under,
+    /// or why it could not be read, for [`Self::layout`] to answer, whatever
+    /// the budget: for an out-of-core photograph whose mipmap is current, the
+    /// out-of-core layout, and otherwise the in-core one. For an out-of-core
+    /// photograph it checks the coarsest mip level file, as the photograph's
+    /// first request does (with a budget, in the slot, which keeps the
+    /// answer). Decodes no pixel and never waits on a slot; a panel calls it
+    /// on the rayon pool.
     pub fn request_layout(&self, path: &Path) {
-        let layout = header(path, &self.setting_for(path))
-            .map(|(width, height)| Arc::new(self.layout_for(width, height)))
+        let setting = self.setting_for(path);
+        let layout = header(path, &setting)
+            .map(|(width, height)| {
+                let files = if !is_out_of_core(&setting, width, height) {
+                    None
+                } else if self.shared.options.budget_bytes == 0 {
+                    self.unmapped_files_slot(path, &setting)
+                        .map(|(_, files)| files)
+                } else {
+                    self.tier_of(path, &self.slot_for(path))
+                };
+                match files {
+                    Some(files) => Arc::clone(&files.layout),
+                    None => Arc::new(self.layout_for(width, height)),
+                }
+            })
             .map_err(|e| e.to_string());
         self.lock().layouts.insert(path.to_path_buf(), layout);
     }
@@ -264,6 +295,11 @@ impl PhotographCache {
     /// unused. A kernel's read; a panel asks with [`Self::try_decode_tiles`],
     /// which never waits.
     ///
+    /// An out-of-core photograph whose mipmap is current has the tile decoded
+    /// from its file instead, without waiting, and a file found missing, not
+    /// current or changed since the slot read it is [`TileError::Changed`],
+    /// naming it, after which the slot reads the photograph in core.
+    ///
     /// A whole decode can take over a second, so it takes the caller's
     /// `progress`, which it polls for cancellation as `get` does and reports
     /// nothing through, and answers [`TileError::Cancelled`] when it is
@@ -275,7 +311,10 @@ impl PhotographCache {
         progress: &Progress<'_>,
     ) -> Result<Arc<PhotographTile>, TileError> {
         let (value, _) = self.fetch(path, progress, Share::None, Asked::Keys(&[key]));
-        let got = value.map_err(|e| unreadable(path, e))?;
+        let got = value.map_err(|e| match e {
+            Failure::Get(e) => unreadable(path, e),
+            Failure::Changed(file) => TileError::Changed { path: file },
+        })?;
         check_keys(path, &got.layout, &[key])?;
         got.tiles
             .into_iter()
@@ -346,6 +385,12 @@ impl PhotographCache {
     ///
     /// A cache with a budget of 0 keeps nothing, so there the tiles it
     /// answers are the only ones the caller gets.
+    ///
+    /// An out-of-core photograph whose mipmap is current is read from its
+    /// files, with no reservation. It never answers [`TileError::Changed`]:
+    /// when a file turns out missing, not current or changed since the slot
+    /// read it, the slot's mipmap is marked not current and the tiles are
+    /// decoded whole in core, as above, in the same call.
     pub fn try_decode_tiles(
         &self,
         path: &Path,
@@ -354,6 +399,26 @@ impl PhotographCache {
     ) -> Result<TryDecode, TileError> {
         let asked = Asked::Keys(keys);
         let slot = (self.shared.options.budget_bytes > 0).then(|| self.slot_for(path));
+        // An out-of-core photograph whose mipmap is current is read from its
+        // files, which never waits on a slot or the build count. When a file
+        // turns out not current, the slot's mipmap is marked so and the
+        // tiles are decoded whole below, in core, so a panel is never
+        // answered `Changed`.
+        let read_from_files = match &slot {
+            Some(slot) => self
+                .tier_of(path, slot)
+                .map(|files| (Arc::clone(slot), files)),
+            None => self.unmapped_files_slot(path, &self.setting_for(path)),
+        };
+        if let Some((files_slot, files)) = read_from_files {
+            check_keys(path, &files.layout, keys)?;
+            match self.read_files(path, &files_slot, asked, progress) {
+                Ok(got) => return Ok(TryDecode::Decoded(got.tiles)),
+                Err(Failure::Get(e)) => return Err(unreadable(path, e)),
+                // `read_files` has marked the slot's mipmap not current.
+                Err(Failure::Changed(_)) => {}
+            }
+        }
         if let Some(slot) = &slot {
             let tick = self.next_tick();
             let mut data = slot.lock();

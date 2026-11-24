@@ -26,7 +26,11 @@ between steps 2 and 3, limits the cluster members' elongation (§ "The members' 
 built. The main draft's step 14, which reads out-of-core photographs from
 their mip level files, comes after every step here; its first part, 14a, has
 the cache refuse every photograph of a workspace whose `mipmap_options` is
-invalid, and changes no read this draft describes. The user
+invalid, and changes no read this draft describes. Its second, 14b, has the
+cache read an out-of-core photograph whose mipmap is current from its files:
+the render entry points read its tiles as they read every photograph's, and
+a kernel's read of a file found changed fails with
+`PhotographReadError::Changed`, which they pass up as every read error. The user
 has decided every open question (§ "Open questions"). It amends
 [core/camera/photograph-cache.md](../core/camera/photograph-cache.md) and the
 samplers of [core/camera/image-warping.md](../core/camera/image-warping.md).

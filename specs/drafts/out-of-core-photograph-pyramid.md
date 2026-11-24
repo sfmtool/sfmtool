@@ -3096,7 +3096,7 @@ in core. Step 17 turns the tier on.
       decodes it, and a photograph decoded before the file broke is refused
       after it; the object is read once for the photographs of one root,
       and once more after the file changes.
-    - **14b, reading a current mipmap.** The cache reads a photograph's
+    - **14b, reading a current mipmap.** **Built.** The cache reads a photograph's
       layout under its setting (`photograph_layout`), and for an out-of-core
       photograph checks the coarsest mip level file when it first needs the
       photograph and each finer one when it first opens it, with one
@@ -3160,6 +3160,30 @@ in core. Step 17 turns the tier on.
       draw its tiles, start a bounded number of tasks and repaints (no more
       than the tiles they ask for need, however many looks), answer no
       `Changed`, and make no mipmap (the mipmap directory unchanged).
+      **As built** ([photograph_cache/files.rs](../../crates/sfmtool-core/src/camera/photograph_cache/files.rs)):
+      a slot decides its tier the first time a request needs the photograph
+      (`get`, `get_many`, a tile request, `request_layout`), and only for a
+      photograph its setting puts out of core, so a workspace without
+      `mipmap_options` reads exactly as before, with no extra header read;
+      a photograph too thin to store a reduced level (`K` of 0) is read in
+      core. A file found missing, not current or changed during a kernel's
+      read marks the slot's mipmap not current as a panel's does, so the
+      kernel fails with `Changed` and the photograph's next requests read it
+      in core, as one whose files are stale is read until 14c. Under a
+      budget of 0 `request_layout` decides from the coarsest file as it is,
+      so it can answer the out-of-core layout for a photograph a panel then
+      reads in core because a finer file is not current; the two layouts
+      have the same grid. `get_many` still reserves a whole decode's
+      estimate for each path it does not find made (14d resolves layouts
+      first). `PhotographCacheStats` gained `files`, and its `bytes` count
+      them. Measured with a counting allocator on a synthetic 8000 x 6000
+      region-readable JPEG (8.4 MB, its mipmap made first), reading eight
+      tiles of levels 0 and 1 with `get_tile`: out of core the reads peaked
+      at 22.4 MB over their start and held 20.2 MB after (the eight tiles,
+      6.3 MB, and the original's, level 1's and the coarsest file's
+      entries); read in core, as in a workspace without the object, they
+      peaked at 289 MB and held 194 MB (every tile of the whole decode, under
+      a 4 GiB budget).
     - **14c, making a mipmap in the slot.** A `get` that finds an
       out-of-core photograph's files missing or stale makes the mipmap in
       the path's slot on its own thread, reserving the build with

@@ -77,6 +77,14 @@ impl RestartIndex {
         &self.bytes
     }
 
+    /// The bytes the index holds: the file's, the prefix and the intervals'
+    /// ranges.
+    pub(super) fn held_bytes(&self) -> u64 {
+        (self.bytes.len()
+            + self.prefix.len()
+            + self.intervals.len() * std::mem::size_of::<Range<usize>>()) as u64
+    }
+
     /// The number of restart intervals.
     pub(super) fn len(&self) -> usize {
         self.intervals.len()
@@ -312,6 +320,12 @@ impl OriginalRegions {
     /// The original's bytes.
     pub fn bytes(&self) -> &Arc<[u8]> {
         self.index.bytes()
+    }
+
+    /// The bytes held: the original's and its restart index's, what the
+    /// photograph cache counts against its budget.
+    pub(crate) fn held_bytes(&self) -> u64 {
+        self.index.held_bytes()
     }
 
     /// Pixels `x0..x1` by `y0..y1` of the original as RGB, equal to the same

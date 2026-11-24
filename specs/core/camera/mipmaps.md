@@ -15,10 +15,14 @@ workspace turns this on with a `mipmap_options` object in its
 
 This spec describes the files: which photographs have them, their names and
 contents, how they are made, when they are current, and how a rectangle of
-one, or of a region-readable original, is decoded alone. No reader of
-photograph pixels reads them yet, and no command writes `mipmap_options`; the
-photograph cache, the viewer, the kernels and `sfm` move to them in the steps
-of [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md),
+one, or of a region-readable original, is decoded alone. The photograph cache
+reads an out-of-core photograph whose mipmap is current from its files
+([photograph-cache.md § "Out-of-core photographs"](photograph-cache.md#out-of-core-photographs)),
+and reads one whose mipmap is missing or stale whole, as it reads an in-core
+one. Nothing makes the files in use yet, and no command writes
+`mipmap_options`; making them in the cache, the viewer's and `sfm`'s makers
+and the object's writers come in the steps of
+[out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md),
 which also has the measurements behind the choices below.
 
 ## Rust API
@@ -120,8 +124,8 @@ Why it is shaped this way:
   is to call it in a path's slot, so only one build per path and cache runs.
 - **A file is read and indexed once, then decoded a rectangle at a time.**
   `MipLevelFile` and `OriginalRegions` hold the bytes and the restart index,
-  so each tile costs only the intervals it needs; the photograph cache is to
-  keep one per file as an entry of its own.
+  so each tile costs only the intervals it needs; the photograph cache keeps
+  one per file as an entry of its own, counted against its budget.
 
 Example: is a photograph's mipmap current, and if not, make it.
 
@@ -465,8 +469,8 @@ decodes.
   `jdcolext.c`). A tile decode converts with the same formula
   (§ "Reading a rectangle"). Converting outside the decoder costs time: a
   whole decode of a 4080 x 3060 level took 0.58 to 0.64 s, against 0.16 to
-  0.45 s with the decoder's own SIMD conversion. The pyramid reader of the
-  draft decodes only the coarsest level whole.
+  0.45 s with the decoder's own SIMD conversion. The photograph cache
+  decodes only a mipmap's coarsest level whole.
 - **The marker walk** finds markers as `jpeg-decoder` does (bytes up to the
   next `FF` skipped, fill bytes skipped, `FF 00` not a marker), so the region
   test and the reader agree on which segments a file has.

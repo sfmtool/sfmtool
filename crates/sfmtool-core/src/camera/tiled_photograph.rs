@@ -53,8 +53,11 @@ pub enum PhotographReadError {
     Cancelled,
     /// The file of a photograph the cache answered is no longer the one its
     /// tiles were cut from (its length, modification time or size differ),
-    /// found when a tile evicted after the answer was read again. A kernel
-    /// never goes on with pixels of two versions of one photograph.
+    /// found when a tile evicted after the answer was read again; or, for an
+    /// out-of-core photograph read from its mipmap, a mip level file it
+    /// reads is missing, not current, or holds another record than the one
+    /// the cache read first. `path` names the file. A kernel never goes on
+    /// with pixels of two versions of one photograph.
     Changed {
         path: PathBuf,
     },
@@ -138,11 +141,12 @@ impl From<Cancelled> for PhotographReadError {
 }
 
 /// A failed tile, region or level read of the cache as a kernel reports it:
-/// `Unreadable` and `OutOfRange` keep their path.
+/// `Changed`, `Unreadable` and `OutOfRange` keep their path.
 impl From<TileError> for PhotographReadError {
     fn from(e: TileError) -> Self {
         match e {
             TileError::Cancelled => Self::Cancelled,
+            TileError::Changed { path } => Self::Changed { path },
             TileError::Unreadable { path, why } => Self::Unreadable {
                 path: Some(path),
                 why,
@@ -670,9 +674,41 @@ fn copy_clamped(held: HeldLevel<'_>, full: (u32, u32), start: [i64; 2], size: [u
     ImageU8::new(size[0], size[1], img.channels(), data)
 }
 
+/// The photograph tile `key` of `layout`, with its border, from `region`, a
+/// rectangle of its level whose top-left pixel is `origin` and which holds
+/// the tile's core and every border pixel inside the level: what the cache
+/// cuts from a rectangle it decoded from a mip level file or an original. The
+/// border repeats the edge pixel at the level's edge, as [`cut_level`] cuts
+/// it from the whole level, so the two give the same tile.
+pub(crate) fn tile_from_region(
+    layout: &PyramidLayout,
+    key: TileKey,
+    region: &ImageU8,
+    origin: [u32; 2],
+) -> PhotographTile {
+    let ts = layout.tile_size();
+    let (w, h) = layout.level_size(usize::from(key.level));
+    let core = [key.col * ts, key.row * ts];
+    let size = [ts.min(w - core[0]), ts.min(h - core[1])];
+    // A level's side is under 2^16, so its origin fits.
+    let held = HeldLevel::at(region, [origin[0] as i32, origin[1] as i32]);
+    let pixels = copy_clamped(
+        held,
+        (w, h),
+        [i64::from(core[0]) - 1, i64::from(core[1]) - 1],
+        [size[0] + 2, size[1] + 2],
+    );
+    PhotographTile {
+        key,
+        origin: core,
+        size,
+        pixels,
+    }
+}
+
 /// Every photograph tile of level `level` of `layout`, whose whole pixels are
 /// `image`, each with its border, into `held`.
-fn cut_level(
+pub(crate) fn cut_level(
     layout: &PyramidLayout,
     level: usize,
     image: &ImageU8,

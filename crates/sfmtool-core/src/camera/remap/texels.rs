@@ -82,6 +82,13 @@ impl<'a> HeldLevel<'a> {
         }
     }
 
+    /// A rectangle of a level whose top-left pixel is `origin` in the full
+    /// level.
+    #[inline]
+    pub(crate) fn at(image: &'a ImageU8, origin: [i32; 2]) -> Self {
+        Self { image, origin }
+    }
+
     /// Level `level` of `pyramid`, at its origin.
     #[inline]
     pub(crate) fn of(pyramid: &'a ImageU8Pyramid, level: usize) -> Self {

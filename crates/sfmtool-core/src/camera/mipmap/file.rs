@@ -155,6 +155,12 @@ impl MipLevelFile {
         self.index.bytes()
     }
 
+    /// The bytes held: the file's and its restart index's, what the
+    /// photograph cache counts against its budget.
+    pub(crate) fn held_bytes(&self) -> u64 {
+        self.index.held_bytes()
+    }
+
     fn check(path: &Path, bytes: Arc<[u8]>, expected: &ExpectedMipLevel) -> Result<Self, String> {
         if bytes.get(..2) != Some(&[0xFF, 0xD8]) {
             return Err("it is not a JPEG".to_string());
