@@ -52,6 +52,7 @@ use crate::patch::cell_registration::CellLayout;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::shifted_center;
 use crate::patch::normal_refine::ProjectedImage;
+use crate::progress::Progress;
 
 /// A reference channel whose spread over the samples read is under this, in
 /// grey levels, is flat: it is not scored, and a cell flat in every channel
@@ -465,20 +466,23 @@ pub(super) fn anchored(
 }
 
 /// What every read of one grown-plane step shares: the step's region pool,
-/// and the first read of a photograph that failed.
+/// the caller's `Progress`, which every read polls for cancellation, and the
+/// first read of a photograph that failed.
 ///
 /// The step's renders return plain samples, so a read that fails reads as
 /// zeros and is kept in a [`ReadFailure`], and the step returns it in place
 /// of its result before it turns the patch ([`Self::check`]).
 pub(super) struct StepReads<'a> {
     pool: &'a RegionPool,
+    progress: Progress<'a>,
     failure: ReadFailure,
 }
 
 impl<'a> StepReads<'a> {
-    pub(super) fn new(pool: &'a RegionPool) -> Self {
+    pub(super) fn new(pool: &'a RegionPool, progress: &Progress<'a>) -> Self {
         StepReads {
             pool,
+            progress: *progress,
             failure: ReadFailure::default(),
         }
     }
@@ -594,6 +598,7 @@ impl<'a> ViewImage<'a> {
             self.level,
             positions,
             border,
+            &self.reads.progress,
         ) {
             Ok(samples) => Some(samples),
             Err(error) => {

@@ -431,7 +431,7 @@ fn render_context(
     }
     let img = prof::RENDER_REMAP.time(|| {
         let _phase = render_phase(progress, sampler, 1);
-        render_source_tile(regions, &mut map, sampler)
+        render_source_tile(regions, &mut map, sampler, progress)
     })?;
     debug_assert_eq!(channels, img.channels() as usize);
 

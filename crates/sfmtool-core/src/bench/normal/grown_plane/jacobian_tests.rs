@@ -22,6 +22,7 @@ use crate::camera::image::ImageU8;
 use crate::camera::sampler::RegionPool;
 use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::patch::cloud::OrientedPatch;
+use crate::progress::Progress;
 
 /// Every camera's distance from the point.
 const DISTANCE: f64 = 4.0;
@@ -174,7 +175,7 @@ fn compare<O: Objective>(objective: &O, p: &[f64], tilt_free: bool) -> (f64, f64
 #[test]
 fn the_analytic_jacobian_follows_a_difference_of_renders() {
     let pool = RegionPool::for_kernel_call();
-    let reads = StepReads::new(&pool);
+    let reads = StepReads::new(&pool, &Progress::none());
     for model in ["pinhole", "simple_radial", "simple_radial_fisheye"] {
         let scene = scene(model);
         let views = scene.views();
@@ -260,7 +261,7 @@ fn the_analytic_jacobian_follows_a_difference_of_renders() {
 #[test]
 fn the_information_is_read_through_the_sobel_gradient() {
     let pool = RegionPool::for_kernel_call();
-    let reads = StepReads::new(&pool);
+    let reads = StepReads::new(&pool, &Progress::none());
     let scene = scene("pinhole");
     let views = scene.views();
     let patch_frame = patch_frame();
@@ -323,7 +324,7 @@ fn the_information_is_read_through_the_sobel_gradient() {
 #[test]
 fn a_grid_partly_off_the_photograph_differences_like_its_residual() {
     let pool = RegionPool::for_kernel_call();
-    let reads = StepReads::new(&pool);
+    let reads = StepReads::new(&pool, &Progress::none());
     let scene = scene("pinhole");
     let views = scene.views();
     let patch_frame = patch_frame();
@@ -391,7 +392,7 @@ fn a_grid_partly_off_the_photograph_differences_like_its_residual() {
 #[test]
 fn the_sampler_gradient_is_the_derivative_of_its_value_at_the_edge() {
     let pool = RegionPool::for_kernel_call();
-    let reads = StepReads::new(&pool);
+    let reads = StepReads::new(&pool, &Progress::none());
     let (w, h) = (16u32, 12u32);
     let data: Vec<u8> = (0..w * h)
         .flat_map(|k| {
@@ -482,7 +483,7 @@ fn the_sampler_gradient_is_the_derivative_of_its_value_at_the_edge() {
 #[test]
 fn the_sobel_read_is_a_bilinear_read_of_the_sobel_images() {
     let pool = RegionPool::for_kernel_call();
-    let reads = StepReads::new(&pool);
+    let reads = StepReads::new(&pool, &Progress::none());
     let (w, h) = (16u32, 12u32);
     let data: Vec<u8> = (0..w * h)
         .flat_map(|k| {
@@ -696,7 +697,7 @@ fn a_blocks_derivative_goes_through_its_normalisation() {
 #[test]
 fn the_pixels_tilt_derivative_follows_the_projection() {
     let pool = RegionPool::for_kernel_call();
-    let reads = StepReads::new(&pool);
+    let reads = StepReads::new(&pool, &Progress::none());
     for model in ["pinhole", "simple_radial", "simple_radial_fisheye"] {
         let scene = scene(model);
         let views = scene.views();
@@ -744,7 +745,7 @@ fn the_pixels_tilt_derivative_follows_the_projection() {
 #[test]
 fn a_view_reads_the_patch_slid_onto_its_own_keypoint() {
     let pool = RegionPool::for_kernel_call();
-    let reads = StepReads::new(&pool);
+    let reads = StepReads::new(&pool, &Progress::none());
     for model in ["pinhole", "simple_radial_fisheye"] {
         let scene = scene(model);
         let views = scene.views();

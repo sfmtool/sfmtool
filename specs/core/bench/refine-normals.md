@@ -377,9 +377,9 @@ write back
 ```
 
 Each point's step is called with a `Progress` that carries the run's cancel
-flag and drops every event it reports (`Progress::tapped` with a sink that
-does nothing): a step opens phases, and per-point phases from a parallel loop
-are what the refit keeps out of its report for the reason
+flag and reports nothing (`Progress::silenced`): a step opens phases, and
+per-point phases from a parallel loop are what the refit keeps out of its
+report for the reason
 [`refit-points.md`](refit-points.md) § "Stages and progress" gives. The
 loop's phase reports the count and the fraction from an atomic counter. With
 a list of points, `n` is the number of points on it, each counted once, and a

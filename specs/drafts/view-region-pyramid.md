@@ -595,7 +595,8 @@ moves the 3D background to them (built), 13d1 moves Track View to them
 draft's step 5 that count decodes run: 13e1 answers tiled photographs
 (built), 13e2 has `from_image` hold its tiles (built), 13e3 has the cache
 keep tiles in place of pyramids, the tiles a request asked for as used and
-the rest of a decode as unused, evicted first (built), and 13e4 and 13e5
+the rest of a decode as unused, evicted first (built), 13e4a has every
+render entry point take the caller's `&Progress` (built), and 13e4b and 13e5
 follow.
 
 1. **Regions in the pyramid and the samplers.** Built, as the main draft's
@@ -825,7 +826,8 @@ decisions.
     standards require. The options considered were the kernel call's cancel
     flag carried by `RegionPool::for_kernel_call` or `ViewRegions`, which
     changes no kernel signature, and a decode inside a render that cannot be
-    cancelled. To be built in the main draft's step 13e4.
+    cancelled. The `Progress` parameters are built in the main draft's step
+    13e4a, and the decode that polls them in 13e4b.
 11. **Answers under a cache budget of 0.** *Decided by the user:* under a
     budget of 0, an answer of `get` or `get_many` holds the tiles of the
     decode that made it, as `TryDecode::Decoded` does, until the answer is
@@ -833,4 +835,4 @@ decisions.
     `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB=0` decode a photograph once per answer
     rather than once per render. The options considered were `sfm
     web-export` using a cache with the default budget, and accepting a
-    decode on every render. To be built in the main draft's step 13e4.
+    decode on every render. To be built in the main draft's step 13e4b.

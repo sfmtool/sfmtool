@@ -1541,6 +1541,7 @@ fn refining_one_view_against_the_reference_recovers_a_planted_offset() {
             3,
             [p3.0, p3.1],
             &bl,
+            &Progress::none(),
         )
         .unwrap()
         .unwrap_or_else(|| panic!("{name}: the target refines"));
@@ -1560,7 +1561,8 @@ fn refining_one_view_against_the_reference_recovers_a_planted_offset() {
         ReferenceTemplate::Bitmap(&bitmap[..bitmap.len() - 4]),
         3,
         [p3.0, p3.1],
-        &bl
+        &bl,
+        &Progress::none()
     )
     .unwrap()
     .is_none());
@@ -1615,7 +1617,8 @@ fn coarse_grid_gate_routes_around_the_tile() {
             p.resolution,
             4,
             Sampler::BilinearMip,
-            &mut img
+            &mut img,
+            &Progress::none()
         )
         .unwrap()
         .is_none(),
@@ -1647,7 +1650,8 @@ fn coarse_grid_gate_routes_around_the_tile() {
             p.resolution,
             4,
             Sampler::BilinearMip,
-            &mut img
+            &mut img,
+            &Progress::none()
         )
         .unwrap()
         .is_some(),
@@ -1678,6 +1682,7 @@ fn tile_read_matches_direct_render_at_integer_shifts() {
         4,
         Sampler::BilinearMip,
         &mut img,
+        &Progress::none(),
     )
     .unwrap();
     let mut got = vec![0f32; n];
@@ -1702,7 +1707,8 @@ fn tile_read_matches_direct_render_at_integer_shifts() {
             Sampler::BilinearMip,
             &support,
             1,
-            &mut want
+            &mut want,
+            &Progress::none()
         )
         .unwrap());
         for (k, (a, b)) in got.iter().zip(&want).enumerate() {
@@ -1740,6 +1746,7 @@ fn tile_gradient_matches_direct_render_at_integer_shifts() {
         4,
         Sampler::BilinearMip,
         &mut img,
+        &Progress::none(),
     )
     .unwrap();
     let (mut g_t, mut ju_t, mut jv_t) = (vec![0f32; n], vec![0f32; n], vec![0f32; n]);
@@ -1778,7 +1785,8 @@ fn tile_gradient_matches_direct_render_at_integer_shifts() {
             &mut g_d,
             &mut ju_d,
             &mut jv_d,
-            &mut scratch
+            &mut scratch,
+            &Progress::none()
         )
         .unwrap());
         for k in 0..n {
@@ -1853,6 +1861,7 @@ fn tile_gradient_matches_finite_differences() {
         4,
         Sampler::BilinearMip,
         &mut img,
+        &Progress::none(),
     )
     .unwrap();
     let (au, av) = (seed[0] + 0.43, seed[1] - 0.68);
@@ -1967,6 +1976,7 @@ fn tile_read_out_of_coverage_falls_back_to_direct_render() {
         4,
         Sampler::BilinearMip,
         &mut img,
+        &Progress::none(),
     )
     .unwrap();
     let (au, av) = (seed[0] + 10.0, seed[1]);
@@ -1992,6 +2002,7 @@ fn tile_read_out_of_coverage_falls_back_to_direct_render() {
         &support,
         1,
         &mut got,
+        &Progress::none(),
     )
     .unwrap();
     let ok_want = render_core(
@@ -2007,6 +2018,7 @@ fn tile_read_out_of_coverage_falls_back_to_direct_render() {
         &support,
         1,
         &mut want,
+        &Progress::none(),
     )
     .unwrap();
     assert_eq!(ok_got, ok_want, "fallback must mirror the direct render");

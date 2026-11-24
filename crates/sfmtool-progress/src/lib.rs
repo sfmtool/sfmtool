@@ -297,6 +297,37 @@ impl<'a> Progress<'a> {
         }
     }
 
+    /// The same cancel flag and nothing else: a `Progress` that reports
+    /// nothing, with detail off, and is cancelled when this one is.
+    ///
+    /// For a kernel that hands a nested call its cancellation but not its
+    /// reports, such as each item of a parallel loop, whose phases would
+    /// overwrite one another in the one display, or a nested call whose
+    /// phases the kernel's own phases already cover.
+    ///
+    /// ```
+    /// use sfmtool_progress::{Event, Progress};
+    /// use std::sync::atomic::{AtomicBool, Ordering};
+    /// use std::sync::Mutex;
+    ///
+    /// let seen = Mutex::new(0);
+    /// let sink = |_: Event<'_>| *seen.lock().unwrap() += 1;
+    /// let flag = AtomicBool::new(false);
+    /// let progress = Progress::to(&sink).cancelled_by(&flag);
+    /// let silenced = progress.silenced();
+    /// silenced.count(1, Some(2), "items");
+    /// let _phase = silenced.phase("nested");
+    /// assert_eq!(*seen.lock().unwrap(), 0);
+    /// flag.store(true, Ordering::Relaxed);
+    /// assert!(silenced.is_cancelled());
+    /// ```
+    pub fn silenced(&self) -> Progress<'a> {
+        Progress {
+            cancel: self.cancel,
+            ..Progress::none()
+        }
+    }
+
     /// The same `Progress`, at the same depth, over the same range, with the
     /// same detail setting and cancel flag, whose events go to `tap` instead
     /// of to this one's sink.

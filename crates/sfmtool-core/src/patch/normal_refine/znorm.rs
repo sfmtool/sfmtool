@@ -71,7 +71,7 @@ pub(in crate::patch) fn normalized_source_stack<'r>(
         for (k, map) in maps.iter_mut().enumerate() {
             if chosen[k] == sampler {
                 let view = regions[ctx.kept[k]].borrow_mut();
-                images[k] = Some(render_source_tile(view, map, sampler)?);
+                images[k] = Some(render_source_tile(view, map, sampler, progress)?);
             }
         }
     }

@@ -615,6 +615,7 @@ fn the_returned_track_carries_a_bitmap_on_the_reconstructions_grid() {
         &views,
         crate::camera::sampler::test_pool(),
         &crate::bench::FitOptions::default(),
+        &Progress::none(),
     )
     .unwrap();
     let after = again.track().expect("the track stage");
@@ -675,7 +676,7 @@ fn a_reading_after_the_patch_moves_scores_the_rows_and_the_bars_judge_them() {
         sources: &sources,
         thresholds: track.thresholds.clone(),
     };
-    let read = finish::read(&ctx, &moved).expect("the track reads");
+    let read = finish::read(&ctx, &moved, &Progress::none()).expect("the track reads");
     assert!(
         read.track().is_some_and(|p| p.bitmap.is_some()),
         "the reading rendered the bitmap"
@@ -692,4 +693,61 @@ fn a_reading_after_the_patch_moves_scores_the_rows_and_the_bars_judge_them() {
         Verdict::In,
         "the bars turned the matching row in"
     );
+}
+
+/// A cancel that lands while the query runs stops the nested calls that read
+/// the photographs, which answer it as a stage that failed; the query then
+/// answers `Cancelled`, never a track or a refusal made of what it read before
+/// the stop. The cancel lands at times spread over a whole run, from another
+/// thread, so every answer is either `Cancelled` or the uncancelled run's
+/// track.
+#[test]
+fn a_cancel_while_the_query_runs_is_its_answer() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Instant;
+
+    let scene = Scene::new();
+    let edited = held_out(&scene);
+    let views = scene.views();
+    let options = TrackAtPixelOptions {
+        members: vec![CascadeMember::Transfer],
+        ..TrackAtPixelOptions::default()
+    };
+    let run = |progress: &Progress<'_>| {
+        build_track_at_pixel(
+            &edited,
+            &views,
+            &RegionPool::for_kernel_call(),
+            &TrackAtPixelSources::default(),
+            0,
+            held_out_pixel(&scene),
+            &options,
+            progress,
+        )
+    };
+    let start = Instant::now();
+    let (whole, _) = run(&Progress::none()).expect("the transfer builds a track");
+    let took = start.elapsed();
+    let mut cancelled = 0;
+    for step in 0..40u32 {
+        let at = took * step / 32;
+        let flag = AtomicBool::new(false);
+        let answer = std::thread::scope(|scope| {
+            let started = Instant::now();
+            let flag = &flag;
+            scope.spawn(move || {
+                while started.elapsed() < at {
+                    std::hint::spin_loop();
+                }
+                flag.store(true, Ordering::Relaxed);
+            });
+            run(&Progress::none().cancelled_by(flag))
+        });
+        match answer {
+            Err(TrackAtPixelError::Cancelled) => cancelled += 1,
+            Ok((track, _)) => assert_eq!(track, whole, "a cancel at {at:?}"),
+            Err(e) => panic!("a cancel at {at:?} answered {e:?}"),
+        }
+    }
+    assert!(cancelled > 0, "no cancel landed while the query ran");
 }

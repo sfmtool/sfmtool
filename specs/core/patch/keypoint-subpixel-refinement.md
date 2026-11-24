@@ -62,6 +62,7 @@ pub fn refine_view_against_reference(
     target: u32,
     target_keypoint: [f64; 2],
     params: &KeypointSubpixelParams,
+    progress: &Progress<'_>,                 // polled for cancellation by the reads
 ) -> Result<Option<([f64; 2], f64)>, PhotographReadError>; // the keypoint and its ECC score
 ```
 

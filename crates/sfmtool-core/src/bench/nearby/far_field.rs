@@ -429,7 +429,15 @@ pub fn far_field_sweep(
     let others: Vec<u32> = (0..image_count as u32).filter(|&i| i != image).collect();
     // The views hold every image, `image` among them, as checked above, so
     // the reads need no check of their own.
-    let Some(at_infinity) = read_checked(views, pool, &patch, &[f64::INFINITY], &others, false)?
+    let Some(at_infinity) = read_checked(
+        views,
+        pool,
+        &patch,
+        &[f64::INFINITY],
+        &others,
+        false,
+        progress,
+    )?
     else {
         return Ok(FarFieldSweep::default());
     };
@@ -468,7 +476,7 @@ pub fn far_field_sweep(
     let images: Vec<u32> = rates.iter().map(|&(j, _)| j).collect();
     let rate: Vec<f64> = rates.iter().map(|&(_, r)| r).collect();
     progress.check_cancel().map_err(cancelled)?;
-    let Some(read) = read_checked(views, pool, &patch, &distances, &images, true)? else {
+    let Some(read) = read_checked(views, pool, &patch, &distances, &images, true, progress)? else {
         return Ok(FarFieldSweep::default());
     };
 
@@ -590,13 +598,16 @@ pub fn far_field_sweep(
             pixel,
             options,
         };
-        let (reading, kept) = refit.group(reading, &read, k, &agree);
+        let (reading, kept) = refit.group(reading, &read, k, &agree, progress);
         if kept {
             sweep.keep_unless_repeated(reading);
         } else {
             sweep.dropped.push(reading);
         }
     }
+    // A refit that the cancel stopped counts as a failed refit, so a sweep
+    // cancelled while it refit is cancelled rather than answered without it.
+    progress.check_cancel().map_err(cancelled)?;
     // A refit whose reads failed counts as a failed refit, so the failure is
     // the sweep's answer.
     failure.check()?;
@@ -728,6 +739,7 @@ impl Refitter<'_, '_> {
         read: &PatchRead,
         k: usize,
         agree: &[usize],
+        progress: &Progress<'_>,
     ) -> (FarFieldReading, bool) {
         let samples = read
             .samples
@@ -816,7 +828,7 @@ impl Refitter<'_, '_> {
         }
         rest.sort_unstable();
         let sight: Vec<(u32, [f64; 2])> = rest.iter().map(|&i| reading.views[i]).collect();
-        let Ok(track) = self.refit_track(&sight) else {
+        let Ok(track) = self.refit_track(&sight, progress) else {
             reading.refit = Some(Refit::Failed);
             return (reading, false);
         };
@@ -889,7 +901,11 @@ impl Refitter<'_, '_> {
 
     /// A track on `sight` with the queried pixel as observation 0, turned
     /// out, fitted twice.
-    fn refit_track(&self, sight: &[(u32, [f64; 2])]) -> Result<EditableTrack, String> {
+    fn refit_track(
+        &self,
+        sight: &[(u32, [f64; 2])],
+        progress: &Progress<'_>,
+    ) -> Result<EditableTrack, String> {
         let name = &self.edited.base.image_set.images[self.image as usize].name;
         let stem = std::path::Path::new(name)
             .file_stem()
@@ -903,6 +919,7 @@ impl Refitter<'_, '_> {
             self.failure,
             track,
             sight,
+            progress,
         )?;
         let (mut track, _) = set_verdict(&track, 0, Verdict::Out).map_err(|e| e.to_string())?;
         for _ in 0..2 {
@@ -912,7 +929,7 @@ impl Refitter<'_, '_> {
                 self.views,
                 self.pool,
                 &FitOptions::default(),
-                &Progress::none(),
+                &progress.silenced(),
             )
             .map_err(|e| {
                 if let FitError::Photograph(read) = &e {

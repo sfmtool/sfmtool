@@ -31,6 +31,7 @@ use sfmtool_core::camera::warp_map::singular_values_2x2;
 use sfmtool_core::camera::{CameraIntrinsics, PhotographReadError, TiledPhotograph, WarpMap};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
+use sfmtool_core::progress::Progress;
 
 /// Render resolution of a row's patch tile, in texels a side. The tile is
 /// rendered crisp at this resolution and drawn scaled to the row's tile cell.
@@ -105,7 +106,12 @@ pub(crate) fn patch_frame_color_image(
     sampler: Sampler,
 ) -> Result<egui::ColorImage, PhotographReadError> {
     let mut map = WarpMap::from_patch(patch_frame, camera, cam_from_world, resolution);
-    let tile = render_source_tile(&mut ViewRegions::new(src, pool), &mut map, sampler)?;
+    let tile = render_source_tile(
+        &mut ViewRegions::new(src, pool),
+        &mut map,
+        sampler,
+        &Progress::none(),
+    )?;
     // Expand 3-channel RGB (same channel count as the cached source) to RGBA.
     let (w, h) = (tile.width() as usize, tile.height() as usize);
     let mut rgba = Vec::with_capacity(w * h * 4);

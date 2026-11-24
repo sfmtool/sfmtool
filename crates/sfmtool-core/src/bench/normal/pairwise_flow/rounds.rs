@@ -90,7 +90,7 @@ impl Point<'_, '_> {
                 options,
             );
             let crops: Vec<Option<Crop>> = match &grid {
-                Some(grid) => render_crops(grid, &self.views, &self.regions, &sights)?,
+                Some(grid) => render_crops(grid, &self.views, &self.regions, &sights, progress)?,
                 None => self.views.iter().map(|_| None).collect(),
             };
             (grid, sights, crops)

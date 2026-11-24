@@ -23,6 +23,7 @@ use crate::camera::sampler::{read_source_rect, LevelRect, RegionPool, SourceRect
 use crate::camera::{PhotographReadError, TiledPhotograph};
 use crate::patch::normal_refine::{PartZncc, Parts, Support, FLAT_NORM_SQ_EPS};
 use crate::patch::view_selection::AffineCoreMap;
+use crate::progress::Progress;
 
 /// An integer pixel rectangle in level coordinates, half-open (`[x0, x1) ×
 /// [y0, y1)`).
@@ -161,6 +162,7 @@ impl<'p> LevelTile<'p> {
         pool: &'p RegionPool,
         level: usize,
         rect: Rect,
+        progress: &Progress<'_>,
     ) -> Result<LevelTile<'p>, PhotographReadError> {
         prof::count(&prof::N_TILE_BUILDS, 1);
         prof::count(
@@ -181,6 +183,7 @@ impl<'p> LevelTile<'p> {
                 x1: rect.x1 as u32,
                 y1: rect.y1 as u32,
             },
+            progress,
         )?;
         let img = pixels.image();
         let w = (rect.x1 - rect.x0) as usize;
@@ -243,6 +246,7 @@ impl<'p> TileCache<'p> {
         pool: &'p RegionPool,
         level: usize,
         needed: Rect,
+        progress: &Progress<'_>,
     ) -> Result<Option<&LevelTile<'p>>, PhotographReadError> {
         let (w, h) = source.layout().level_size(level);
         let (w, h) = (i64::from(w), i64::from(h));
@@ -261,14 +265,15 @@ impl<'p> TileCache<'p> {
                 // The old tile goes first, so its bytes are back in the pool
                 // before its replacement reserves them.
                 self.tiles.swap_remove(i);
-                let tile = prof::TILE.time(|| LevelTile::build(source, pool, level, grown))?;
+                let tile =
+                    prof::TILE.time(|| LevelTile::build(source, pool, level, grown, progress))?;
                 self.tiles.push(tile);
                 return Ok(self.tiles.last());
             }
             return Ok(Some(&self.tiles[i]));
         }
         let grown = clipped.expand(TILE_MARGIN).clip(w, h);
-        let tile = prof::TILE.time(|| LevelTile::build(source, pool, level, grown))?;
+        let tile = prof::TILE.time(|| LevelTile::build(source, pool, level, grown, progress))?;
         self.tiles.push(tile);
         Ok(self.tiles.last())
     }

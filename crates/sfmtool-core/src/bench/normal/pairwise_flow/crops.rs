@@ -30,6 +30,7 @@ use crate::camera::WarpMap;
 use crate::features::optical_flow::{matcher_gray_from_rgb, GrayImage, ImagePyramid};
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::normal_refine::ProjectedImage;
+use crate::progress::Progress;
 
 use super::model::CommonPlane;
 use super::PairwiseFlowNormalOptions;
@@ -279,6 +280,7 @@ pub(crate) fn render_crops(
     views: &[ProjectedImage<'_>],
     regions: &[Mutex<ViewRegions<'_>>],
     sights: &[ViewSight],
+    progress: &Progress<'_>,
 ) -> Result<Vec<Option<Crop>>, PhotographReadError> {
     views
         .par_iter()
@@ -290,7 +292,7 @@ pub(crate) fn render_crops(
                 pixel_size,
             } => {
                 let mut regions = regions.lock().unwrap_or_else(PoisonError::into_inner);
-                render_crop(grid, view, &mut regions, angle_deg, pixel_size).map(Some)
+                render_crop(grid, view, &mut regions, angle_deg, pixel_size, progress).map(Some)
             }
             _ => Ok(None),
         })
@@ -303,13 +305,14 @@ fn render_crop(
     regions: &mut ViewRegions<'_>,
     angle_deg: f64,
     pixel_size: f64,
+    progress: &Progress<'_>,
 ) -> Result<Crop, PhotographReadError> {
     let side = grid.side();
     let patch = grid.crop_patch();
     let sampler =
         SamplerChoice::per_view().for_patch_frame(&patch, view.camera, view.cam_from_world, side);
     let mut map = WarpMap::from_patch(&patch, view.camera, view.cam_from_world, side);
-    let tile = render_source_tile(regions, &mut map, sampler)?;
+    let tile = render_source_tile(regions, &mut map, sampler, progress)?;
     let n = side as usize * side as usize;
     let channels = tile.channels() as usize;
     let data = tile.data();

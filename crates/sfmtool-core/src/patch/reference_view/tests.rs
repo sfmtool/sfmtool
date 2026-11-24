@@ -231,7 +231,9 @@ fn the_clipped_share_over_tiles_equals_it_over_the_whole_level() {
         let source = TiledPhotograph::cut(&pyramid, 32);
         for outline in &outlines {
             let whole = clipped_share(&pyramid, outline).unwrap();
-            let tiles = source_clipped_share(&source, outline).unwrap().unwrap();
+            let tiles = source_clipped_share(&source, outline, &Progress::none())
+                .unwrap()
+                .unwrap();
             assert_eq!(tiles, whole, "{outline:?}");
             if pyramid.level(0).channels() == 1 {
                 // NaN for an outline that holds no centre, read by the
@@ -241,7 +243,7 @@ fn the_clipped_share_over_tiles_equals_it_over_the_whole_level() {
             }
         }
         assert_eq!(
-            source_clipped_share(&source, &[[1.0, 1.0], [40.0, 40.0]]),
+            source_clipped_share(&source, &[[1.0, 1.0], [40.0, 40.0]], &Progress::none()),
             Ok(None)
         );
     }

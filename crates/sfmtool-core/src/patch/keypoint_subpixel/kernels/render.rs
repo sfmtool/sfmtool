@@ -10,6 +10,7 @@
 //! ([`grid_to_source_scale`] / [`TILE_MAX_GRID_TO_SOURCE`]).
 
 use crate::camera::image::ImageF32WithGrad;
+use crate::progress::Progress;
 
 use crate::camera::sampler::{render_source_tile, render_source_tile_with_grad_into, ViewRegions};
 use crate::camera::{PhotographReadError, WarpMap};
@@ -43,6 +44,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_core(
     support: &Support,
     channels: usize,
     out: &mut [f32],
+    progress: &Progress<'_>,
 ) -> Result<bool, PhotographReadError> {
     prof::RENDER_VALUE.time(|| {
         let center = shifted_center(patch, au, av, wpp_u, wpp_v);
@@ -57,7 +59,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_core(
         core_patch.w = patch.w;
         let mut map =
             WarpMap::from_patch(&core_patch, view.camera, view.cam_from_world, resolution);
-        let img = render_source_tile(regions, &mut map, sampler)?;
+        let img = render_source_tile(regions, &mut map, sampler, progress)?;
         let n = support.pixels.len();
         for (k, &p) in support.pixels.iter().enumerate() {
             let col = (p % resolution as usize) as u32;
@@ -110,6 +112,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_core_with_jg(
     jg_u: &mut [f32],
     jg_v: &mut [f32],
     img_scratch: &mut ImageF32WithGrad,
+    progress: &Progress<'_>,
 ) -> Result<bool, PhotographReadError> {
     prof::RENDER_GRAD.time(|| {
         let center = shifted_center(patch, au, av, wpp_u, wpp_v);
@@ -123,7 +126,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_core_with_jg(
         let mut map =
             WarpMap::from_patch(&core_patch, view.camera, view.cam_from_world, resolution);
         // Also fills the map's per-pixel Jacobians, which the composition reads.
-        render_source_tile_with_grad_into(regions, &mut map, sampler, img_scratch)?;
+        render_source_tile_with_grad_into(regions, &mut map, sampler, img_scratch, progress)?;
         let n = support.pixels.len();
         let stride = img_scratch.width() as usize * channels;
         let value = img_scratch.value();
@@ -584,10 +587,11 @@ pub(in crate::patch::keypoint_subpixel) fn try_render_refine_tile(
     pad: u32,
     sampler: Sampler,
     img: &mut ImageF32WithGrad,
+    progress: &Progress<'_>,
 ) -> Result<Option<RefineTile>, PhotographReadError> {
     match grid_to_source_scale(patch, view, resolution) {
         Some(s) if s <= TILE_MAX_GRID_TO_SOURCE => render_refine_tile(
-            patch, view, regions, seed, wpp_u, wpp_v, resolution, pad, sampler, img,
+            patch, view, regions, seed, wpp_u, wpp_v, resolution, pad, sampler, img, progress,
         )
         .map(Some),
         _ => {
@@ -617,6 +621,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_refine_tile(
     pad: u32,
     sampler: Sampler,
     img: &mut ImageF32WithGrad,
+    progress: &Progress<'_>,
 ) -> Result<RefineTile, PhotographReadError> {
     prof::TILE_PRERENDER.time(|| {
         let tile_res = resolution + 2 * pad;
@@ -633,7 +638,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_refine_tile(
         tile_patch.w = patch.w;
         let mut map = WarpMap::from_patch(&tile_patch, view.camera, view.cam_from_world, tile_res);
         // Also fills the map's per-pixel Jacobians, which the composition reads.
-        render_source_tile_with_grad_into(regions, &mut map, sampler, img)?;
+        render_source_tile_with_grad_into(regions, &mut map, sampler, img, progress)?;
         let t = tile_res as usize;
         let ch = img.channels() as usize;
         let area = t * t;
@@ -730,6 +735,7 @@ pub(in crate::patch::keypoint_subpixel) fn core_value(
     support: &Support,
     channels: usize,
     out: &mut [f32],
+    progress: &Progress<'_>,
 ) -> Result<bool, PhotographReadError> {
     if let Some(tile) = tile {
         debug_assert_eq!(tile.channels, channels);
@@ -740,6 +746,7 @@ pub(in crate::patch::keypoint_subpixel) fn core_value(
     }
     render_core(
         patch, view, regions, au, av, wpp_u, wpp_v, resolution, sampler, support, channels, out,
+        progress,
     )
 }
 
@@ -770,6 +777,7 @@ pub(in crate::patch::keypoint_subpixel) fn core_value_with_jg(
     jg_u: &mut [f32],
     jg_v: &mut [f32],
     img_scratch: &mut ImageF32WithGrad,
+    progress: &Progress<'_>,
 ) -> Result<bool, PhotographReadError> {
     if let Some(tile) = tile {
         debug_assert_eq!(tile.channels, channels);
@@ -796,5 +804,6 @@ pub(in crate::patch::keypoint_subpixel) fn core_value_with_jg(
         jg_u,
         jg_v,
         img_scratch,
+        progress,
     )
 }

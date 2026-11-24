@@ -3,6 +3,7 @@
 
 use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::camera::sampler::{read_source_rect, LevelRect, RegionPool};
+use sfmtool_core::progress::Progress;
 use sfmtool_core::SfmrReconstruction;
 
 use super::super::{photograph_path, TaskQueue};
@@ -692,7 +693,7 @@ fn read_rect(
     pool: &RegionPool,
     rect: LevelRect,
 ) -> Result<Vec<u8>, PhotographReadError> {
-    read_source_rect(src, pool, 0, rect).map(|read| read.image().data().to_vec())
+    read_source_rect(src, pool, 0, rect, &Progress::none()).map(|read| read.image().data().to_vec())
 }
 
 /// The pixels of `rect` of the photograph at `path`, decoded here.

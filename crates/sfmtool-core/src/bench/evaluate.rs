@@ -931,12 +931,14 @@ fn render_and_score(
             payload.drop_bitmap();
         }
     }
-    let mut rendered =
-        super::fit::render_bitmap_in_place_from(&cleared, edited, images, pool, fit, from)?;
+    let mut rendered = super::fit::render_bitmap_in_place_from(
+        &cleared, edited, images, pool, fit, from, progress,
+    )?;
     // No `in` row could hold the reference: the bars judge against a bitmap
     // rendered from every row with a keypoint, so a row can come back `in`.
     if rendered.track().is_some_and(|p| p.bitmap.is_none()) {
-        rendered = super::fit::render_bitmap_for_judging(&rendered, edited, images, pool, fit)?;
+        rendered =
+            super::fit::render_bitmap_for_judging(&rendered, edited, images, pool, fit, progress)?;
     }
     score_bitmap(&rendered, edited, images, pool, options, progress)
 }
@@ -1203,6 +1205,7 @@ pub(super) fn evaluate_cluster(
             &member_features,
             &params,
             None,
+            progress,
         )?;
         progress_note!(phase, "{} observations", members.len());
         result
@@ -1283,6 +1286,7 @@ pub(super) fn evaluate_cluster(
                 measurement.seed_position,
                 measurement.seed_shape,
                 &params,
+                progress,
             )?;
             next_measurement.zncc_self_similarity_radius = similarity.radius;
             next_measurement.zncc_self_similarity_radius_middle = similarity.middle;
@@ -1310,6 +1314,7 @@ pub(super) fn evaluate_cluster(
                     measurement.seed_position,
                     measurement.seed_shape,
                     &params,
+                    progress,
                 )?,
                 None => None,
             }
@@ -1441,8 +1446,9 @@ fn tile_self_similarity(
     position: [f64; 2],
     shape: [[f64; 2]; 2],
     params: &ClusterRefineParams,
+    progress: &Progress<'_>,
 ) -> Result<TileSelfSimilarity, PhotographReadError> {
-    let Some(tile) = sample_source_member_grid(view, position, shape, params)? else {
+    let Some(tile) = sample_source_member_grid(view, position, shape, params, progress)? else {
         return Ok(TileSelfSimilarity::default());
     };
     let resolution = params.resolution.max(2) as usize;
@@ -2422,7 +2428,14 @@ fn settle_reason(measurement: &mut super::track::TrackMeasurement, missing: Opti
 /// # fn run(track: &EditableTrack, edited: &EditedReconstruction, views: &[ProjectedImage<'_>])
 /// # -> Result<(), Box<dyn std::error::Error>> {
 /// let pool = RegionPool::for_kernel_call();
-/// let rendered = render_bitmap_in_place(track, edited, views, &pool, &FitOptions::default())?;
+/// let rendered = render_bitmap_in_place(
+///     track,
+///     edited,
+///     views,
+///     &pool,
+///     &FitOptions::default(),
+///     &Progress::none(),
+/// )?;
 /// let scored = score_bitmap(
 ///     &rendered,
 ///     edited,

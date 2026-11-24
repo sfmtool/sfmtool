@@ -167,7 +167,7 @@ fn a_grey_read_samples_the_whole_photographs_blurred_grey() {
             let pool = RegionPool::with_capacity(capacity);
             let views = scene.views();
             for positions in &sets {
-                let got = read_grey(views[image].source, &pool, positions)
+                let got = read_grey(views[image].source, &pool, positions, &Progress::none())
                     .expect("an in-memory photograph reads")
                     .expect("every position is on the photograph");
                 let want: Vec<u32> = positions
@@ -183,7 +183,10 @@ fn a_grey_read_samples_the_whole_photographs_blurred_grey() {
             }
             let mut off = sets[1].clone();
             off[60] = [0.49, 64.0];
-            assert_eq!(read_grey(views[image].source, &pool, &off), Ok(None));
+            assert_eq!(
+                read_grey(views[image].source, &pool, &off, &Progress::none()),
+                Ok(None)
+            );
             assert_eq!(pool.held_bytes(), 0);
         }
     }
@@ -209,6 +212,7 @@ fn the_patch_read_is_the_same_on_every_read_path() {
                 &[t * 0.8, t, t * 1.25, f64::INFINITY],
                 &[1, 2, 3],
                 true,
+                &Progress::none(),
             )
             .expect("every image is a view")
         })
@@ -272,6 +276,7 @@ fn layers(
         PIXEL,
         &candidates,
         &DepthLayerOptions::default(),
+        &Progress::none(),
     )
 }
 
@@ -393,11 +398,14 @@ fn the_nearby_track_search_is_the_same_on_every_read_path() {
 fn without_pixels(scene: &Scene) -> TiledPhotograph {
     let whole = TiledPhotograph::cut(scene.pyramid(0), TILE);
     let corner = whole
-        .tile(TileKey {
-            level: 0,
-            col: 0,
-            row: 0,
-        })
+        .tile(
+            TileKey {
+                level: 0,
+                col: 0,
+                row: 0,
+            },
+            &Progress::none(),
+        )
         .expect("a tile");
     TiledPhotograph::from_tiles(whole.layout().clone(), [corner]).expect("the layout's tile")
 }
@@ -423,8 +431,16 @@ fn a_grey_read_of_pixels_a_photograph_lacks_fails_each_kernel() {
             let mut views = scene.views();
             views[broken_image].source = &broken;
             let pool = RegionPool::with_capacity(capacity);
-            let error = read_patch_along_ray(&views, &pool, &patch, &[t], &[1, 2, 3], false)
-                .expect_err("the broken photograph is read");
+            let error = read_patch_along_ray(
+                &views,
+                &pool,
+                &patch,
+                &[t],
+                &[1, 2, 3],
+                false,
+                &Progress::none(),
+            )
+            .expect_err("the broken photograph is read");
             assert!(
                 matches!(&error, PatchReadError::Photograph(e) if needs_tiles(e)),
                 "image {broken_image}, pool of {capacity}: {error}"

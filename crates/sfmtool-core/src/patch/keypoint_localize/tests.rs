@@ -1377,6 +1377,7 @@ fn a_reference_search_reports_the_view_s_own_self_similarity_radius() {
         None,
         None,
         &p,
+        &Progress::none(),
     )
     .unwrap()
     .expect("two textured references");
@@ -1388,6 +1389,7 @@ fn a_reference_search_reports_the_view_s_own_self_similarity_radius() {
             None,
             false,
             &p,
+            &Progress::none(),
         )
         .expect("a search");
     let edge = references
@@ -1398,6 +1400,7 @@ fn a_reference_search_reports_the_view_s_own_self_similarity_radius() {
             None,
             false,
             &p,
+            &Progress::none(),
         )
         .expect("a search");
     assert!(
@@ -3713,6 +3716,7 @@ fn the_localizer_and_a_reference_search_read_a_shift_near_the_edge_alike() {
         Some(0),
         None,
         &p,
+        &Progress::none(),
     )
     .unwrap()
     .expect("two textured references");
@@ -3724,6 +3728,7 @@ fn the_localizer_and_a_reference_search_read_a_shift_near_the_edge_alike() {
             Some(projection(&views, 3)),
             false,
             &p,
+            &Progress::none(),
         )
         .expect("a search");
     let by_reference = found.keypoint.expect("a keypoint");

@@ -94,9 +94,10 @@ fn fit_sightings(
     radius_px: f64,
     sightings: &[(u32, [f64; 2])],
     refits: usize,
+    progress: &Progress<'_>,
 ) -> Result<EditableTrack, String> {
-    let track = track_from_sightings(ctx, image, pixel, radius_px, sightings)?;
-    anchored_fit(ctx, &track, 0, pixel, refits, false)
+    let track = track_from_sightings(ctx, image, pixel, radius_px, sightings, progress)?;
+    anchored_fit(ctx, &track, 0, pixel, refits, false, progress)
 }
 
 // ---- Clusters ------------------------------------------------------------
@@ -109,6 +110,7 @@ pub(super) fn clusters(
     pixel: [f64; 2],
     options: &TrackAtPixelOptions,
     stages: &mut Vec<StageRecord>,
+    progress: &Progress<'_>,
 ) -> Result<EditableTrack, Refusal> {
     let opts = &options.clusters;
     let Some(clusters) = ctx.sources.clusters else {
@@ -155,6 +157,7 @@ pub(super) fn clusters(
                     radius_px,
                     &sightings,
                     options.finish.anchor_refits,
+                    progress,
                 );
                 best.offer(fitted, &mut record);
             }
@@ -171,7 +174,7 @@ pub(super) fn clusters(
             "no nearby cluster carried the pixel into another photograph",
         ));
     };
-    finish(ctx, track, 0, pixel, &options.finish, stages)
+    finish(ctx, track, 0, pixel, &options.finish, stages, progress)
 }
 
 /// The pixel carried into every other image the cluster's kept members (and
@@ -302,6 +305,7 @@ pub(super) fn transfer(
     pixel: [f64; 2],
     options: &TrackAtPixelOptions,
     stages: &mut Vec<StageRecord>,
+    progress: &Progress<'_>,
 ) -> Result<EditableTrack, Refusal> {
     let opts = &options.transfer;
     let near = ctx.observations_near(image, pixel, opts.neighbour_radius_px);
@@ -361,6 +365,7 @@ pub(super) fn transfer(
             radius_px,
             &sightings,
             options.finish.anchor_refits,
+            progress,
         );
         best.offer(fitted, &mut record);
         tried.push(record);
@@ -372,7 +377,7 @@ pub(super) fn transfer(
             "no neighbourhood carried the pixel into another photograph",
         ));
     };
-    finish(ctx, track, 0, pixel, &options.finish, stages)
+    finish(ctx, track, 0, pixel, &options.finish, stages, progress)
 }
 
 /// The pixel carried into each other image by an affine map fitted to the
@@ -528,6 +533,7 @@ pub(super) fn sweep(
     pixel: [f64; 2],
     options: &TrackAtPixelOptions,
     stages: &mut Vec<StageRecord>,
+    progress: &Progress<'_>,
 ) -> Result<EditableTrack, Refusal> {
     let opts = &options.sweep;
     let hypotheses = surface_hypotheses(ctx, image, pixel, options);
@@ -559,10 +565,19 @@ pub(super) fn sweep(
             tried.push(record);
             continue;
         }
-        let fitted = track_from_sightings(ctx, image, pixel, h.half_px, &sightings).and_then(|t| {
-            let shaped = shape_track(ctx, &t, 0, Some(h.normal), Some(h.half));
-            anchored_fit(ctx, &shaped, 0, pixel, options.finish.anchor_refits, false)
-        });
+        let fitted = track_from_sightings(ctx, image, pixel, h.half_px, &sightings, progress)
+            .and_then(|t| {
+                let shaped = shape_track(ctx, &t, 0, Some(h.normal), Some(h.half));
+                anchored_fit(
+                    ctx,
+                    &shaped,
+                    0,
+                    pixel,
+                    options.finish.anchor_refits,
+                    false,
+                    progress,
+                )
+            });
         best.offer(fitted, &mut record);
         tried.push(record);
     }
@@ -573,7 +588,7 @@ pub(super) fn sweep(
             "no surface hypothesis could be fitted in any photograph",
         ));
     };
-    finish(ctx, track, 0, pixel, &options.finish, stages)
+    finish(ctx, track, 0, pixel, &options.finish, stages, progress)
 }
 
 /// One hypothesis per depth mode of the neighbours, nearest first.
@@ -803,6 +818,7 @@ pub(super) fn constellation(
     pixel: [f64; 2],
     options: &TrackAtPixelOptions,
     stages: &mut Vec<StageRecord>,
+    progress: &Progress<'_>,
 ) -> Result<EditableTrack, Refusal> {
     let opts = &options.constellation;
     let refuse = |stage, reason: String| Err(Refusal::new(stage, reason));
@@ -849,7 +865,7 @@ pub(super) fn constellation(
         &index.keypoints[image as usize],
         index.forest,
         &search_options(search_radius),
-        &Progress::none(),
+        &progress.silenced(),
     ) {
         Ok((next, report)) => {
             track = next;
@@ -879,7 +895,7 @@ pub(super) fn constellation(
             &index.keypoints[other as usize],
             index.forest,
             &search_options(radius_in(other)),
-            &Progress::none(),
+            &progress.silenced(),
         );
         lateral.push(LateralRecord {
             from: other,
@@ -905,7 +921,7 @@ pub(super) fn constellation(
     }
 
     // Cluster evaluation and the thresholds' verdicts.
-    track = match read(ctx, &track) {
+    track = match read(ctx, &track, progress) {
         Ok(t) => thresholds(&t),
         Err(e) => return refuse(RefusalStage::ClusterEvaluate, e),
     };
@@ -932,7 +948,7 @@ pub(super) fn constellation(
         ctx.pool,
         StageKind::Track,
         &crate::bench::fit::FitOptions::default(),
-        &Progress::none(),
+        &progress.silenced(),
     ) {
         Ok(done) => done,
         Err(e) => {
@@ -961,7 +977,7 @@ pub(super) fn constellation(
             }
             let record = tilt_patch(&track, ctx.edited, normal)
                 .map_err(|e| e.to_string())
-                .and_then(|(tilted, tilt)| Ok((fit_track(ctx, &tilted)?, tilt)))
+                .and_then(|(tilted, tilt)| Ok((fit_track(ctx, &tilted, progress)?, tilt)))
                 .map(|(tilted, tilt)| {
                     let before = median_zncc(&track);
                     let after = median_zncc(&tilted);
@@ -981,5 +997,5 @@ pub(super) fn constellation(
         }
     }
 
-    finish(ctx, track, 0, pixel, &options.finish, stages)
+    finish(ctx, track, 0, pixel, &options.finish, stages, progress)
 }

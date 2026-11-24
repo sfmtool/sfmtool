@@ -13,6 +13,7 @@ use crate::camera::{CameraIntrinsics, CameraModel, TiledPhotograph};
 use crate::features::optical_flow::GrayImage;
 use crate::geometry::RigidTransform;
 use crate::patch::normal_refine::ProjectedImage;
+use crate::progress::Progress;
 
 use super::super::scene::{look_at, origin, ring, Scene, HALF_EXTENT};
 use super::super::PairwiseFlowNormalOptions;
@@ -222,7 +223,7 @@ fn crops_on_the_photographed_plane_line_up() {
         .iter()
         .map(|v| Mutex::new(ViewRegions::new(v.source, &pool)))
         .collect();
-    let crops: Vec<Crop> = render_crops(&grid, &views, &regions, &sights)
+    let crops: Vec<Crop> = render_crops(&grid, &views, &regions, &sights, &Progress::none())
         .unwrap()
         .into_iter()
         .map(Option::unwrap)

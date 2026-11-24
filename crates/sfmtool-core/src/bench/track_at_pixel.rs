@@ -866,16 +866,29 @@ pub fn build_track_at_pixel(
         let _phase = progress.phase(member.name());
         let mut stages = Vec::new();
         let result = match member {
-            CascadeMember::Clusters => members::clusters(&ctx, image, pixel, options, &mut stages),
-            CascadeMember::Transfer => members::transfer(&ctx, image, pixel, options, &mut stages),
-            CascadeMember::Sweep => members::sweep(&ctx, image, pixel, options, &mut stages),
+            CascadeMember::Clusters => {
+                members::clusters(&ctx, image, pixel, options, &mut stages, progress)
+            }
+            CascadeMember::Transfer => {
+                members::transfer(&ctx, image, pixel, options, &mut stages, progress)
+            }
+            CascadeMember::Sweep => {
+                members::sweep(&ctx, image, pixel, options, &mut stages, progress)
+            }
             CascadeMember::Constellation => {
-                members::constellation(&ctx, image, pixel, options, &mut stages)
+                members::constellation(&ctx, image, pixel, options, &mut stages, progress)
             }
         };
         // A member whose reads failed answers with what it read in their
         // place, so the failure is the query's answer.
         ctx.failure.check()?;
+        // A nested call that the cancel stopped answers as a stage that
+        // failed, so a member that ran while the query was cancelled leaves a
+        // half-built answer: the query is cancelled instead, whatever the
+        // member answered.
+        progress
+            .check_cancel()
+            .map_err(|_| TrackAtPixelError::Cancelled)?;
         match result {
             Ok(track) => {
                 // The member's readings render the bitmap where the patch
@@ -901,8 +914,12 @@ pub fn build_track_at_pixel(
                         views,
                         pool,
                         &super::fit::FitOptions::default(),
+                        progress,
                     ) {
                         Ok(rendered) => rendered,
+                        Err(super::evaluate::EvaluateError::Cancelled) => {
+                            return Err(TrackAtPixelError::Cancelled)
+                        }
                         Err(super::evaluate::EvaluateError::Photograph(e)) => {
                             return Err(TrackAtPixelError::Photograph(e))
                         }
@@ -929,6 +946,9 @@ pub fn build_track_at_pixel(
                         Err(_) => rendered,
                     }
                 };
+                progress
+                    .check_cancel()
+                    .map_err(|_| TrackAtPixelError::Cancelled)?;
                 return Ok((
                     track,
                     TrackAtPixelReport {

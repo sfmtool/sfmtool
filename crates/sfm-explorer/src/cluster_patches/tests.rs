@@ -27,6 +27,7 @@ use sfmtool_core::patch::cluster_refine::{
     DEFAULT_ROTATION_STARTS,
 };
 use sfmtool_core::patch::normal_refine::PatchWindow;
+use sfmtool_core::progress::Progress;
 
 use super::{cluster_patches_path, CLUSTER_PATCHES_FILE_SUFFIX, INDEX_HASH_OPTION};
 use crate::index_files::IndexFileState;
@@ -290,6 +291,7 @@ fn the_file_holds_what_the_two_cli_steps_make_from_the_same_index() {
         clusters.member_features.as_slice().unwrap(),
         &refine_params,
         None,
+        &Progress::none(),
     )
     .expect("photographs in memory read");
     let consistency = warp_consistency_residuals(

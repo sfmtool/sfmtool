@@ -791,7 +791,7 @@ pub fn find_nearby_tracks(
         FarFieldWhen::Never => None,
         FarFieldWhen::Always => Some(FarFieldTrigger::Always),
         FarFieldWhen::Needed => {
-            let grouped = group_count(views, pool, image, pixel, &tracks)?;
+            let grouped = group_count(views, pool, image, pixel, &tracks, progress)?;
             if grouped == 0 {
                 Some(FarFieldTrigger::NoLayer)
             } else if grouped > 1 {
@@ -860,7 +860,15 @@ pub fn find_nearby_tracks(
         let _phase = progress.phase("depth layers");
         let candidates: Vec<LayerCandidate<'_>> =
             tracks.iter().map(NearbyTrack::layer_candidate).collect();
-        depth_layers(views, pool, image, pixel, &candidates, &options.layers)?
+        depth_layers(
+            views,
+            pool,
+            image,
+            pixel,
+            &candidates,
+            &options.layers,
+            progress,
+        )?
     };
     report.layers_seconds = start.elapsed().as_secs_f64();
     for (t, support) in tracks.iter_mut().zip(found.support) {
@@ -909,6 +917,7 @@ pub fn find_nearby_tracks(
                     &stem,
                     tracks[k].sightings(),
                     options.tracks.radius_px,
+                    progress,
                 )
             })
             .collect();
@@ -1087,6 +1096,7 @@ fn group_count(
     image: u32,
     pixel: [f64; 2],
     tracks: &[NearbyTrack],
+    progress: &Progress<'_>,
 ) -> Result<usize, DepthLayerError> {
     let candidates: Vec<LayerCandidate<'_>> =
         tracks.iter().map(NearbyTrack::layer_candidate).collect();
@@ -1095,7 +1105,7 @@ fn group_count(
         ..DepthLayerOptions::default()
     };
     Ok(
-        depth_layers(views, pool, image, pixel, &candidates, &grouping)?
+        depth_layers(views, pool, image, pixel, &candidates, &grouping, progress)?
             .layers
             .len(),
     )
@@ -1104,6 +1114,7 @@ fn group_count(
 /// A track-stage track at `sightings`, the queried image's first: a cluster
 /// seeded at its pixel there, with every other sighting added `in` by hand,
 /// upgraded to the track stage, which triangulates and fits it.
+#[allow(clippy::too_many_arguments)]
 fn bench_track(
     edited: &EditedReconstruction,
     views: &[ProjectedImage<'_>],
@@ -1112,9 +1123,18 @@ fn bench_track(
     stem: &str,
     sightings: &[(u32, [f64; 2])],
     radius_px: f64,
+    progress: &Progress<'_>,
 ) -> Result<EditableTrack, String> {
     let (image, pixel) = sightings[0];
     let seed = ClusterSeed::from_pixel(image, stem, pixel, radius_px);
     let track = seed_cluster_with(&seed, &Thresholds::default())?;
-    upgrade_sightings(edited, views, pool, failure, track, &sightings[1..])
+    upgrade_sightings(
+        edited,
+        views,
+        pool,
+        failure,
+        track,
+        &sightings[1..],
+        progress,
+    )
 }

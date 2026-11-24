@@ -167,7 +167,8 @@ pub enum SpawnError {
         view: u32,
         views: usize,
     },
-    /// A photograph could not be read.
+    /// A photograph could not be read, or `progress` was cancelled
+    /// (`PhotographReadError::Cancelled`).
     Photograph(PhotographReadError),
 }
 
@@ -287,6 +288,8 @@ pub fn check_spawn_requests(
 ///
 /// The photographs are read through `pool`, the region pool the caller made
 /// for this call, which the localization and the refinement share.
+/// `progress`'s cancel flag reaches every read, through `Progress::silenced`,
+/// and nothing is reported through it.
 ///
 /// # Errors
 ///
@@ -294,6 +297,7 @@ pub fn check_spawn_requests(
 /// is not parallel to `parents`, a parent index is out of range for `cloud` or
 /// names a patch at infinity, or a patch view is out of range for `views`; and
 /// [`SpawnError::Photograph`] when a read of a photograph failed.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_candidate_tracks(
     views: &[ProjectedImage<'_>],
     pool: &RegionPool,
@@ -302,6 +306,7 @@ pub fn spawn_candidate_tracks(
     offsets_uv: &[[f64; 2]],
     patch_views: &[Vec<u32>],
     params: &SpawnParams,
+    progress: &Progress<'_>,
 ) -> Result<SpawnedTracks, SpawnError> {
     check_spawn_requests(views.len(), cloud, parents, offsets_uv, patch_views)?;
     let n = parents.len();
@@ -338,7 +343,8 @@ pub fn spawn_candidate_tracks(
         max_shift_px: params.max_shift_px,
         ..KeypointLocalizeParams::default()
     };
-    // `Progress::none` never cancels, so an error is a read that failed.
+    // A cancelled `progress` stops the localization with `Cancelled`, which
+    // comes back as `SpawnError::Photograph`, as a read that failed does.
     let localized = localize_patch_cloud_keypoints(
         &candidates,
         views,
@@ -348,7 +354,7 @@ pub fn spawn_candidate_tracks(
         None,
         &localize_params,
         None,
-        &Progress::none(),
+        &progress.silenced(),
     )
     .map_err(SpawnError::Photograph)?;
 
@@ -398,7 +404,7 @@ pub fn spawn_candidate_tracks(
             Some(&seeds),
             Some(&references),
             &refine_params,
-            &Progress::none(),
+            &progress.silenced(),
         )
         .map_err(SpawnError::Photograph)?
         .into_iter()

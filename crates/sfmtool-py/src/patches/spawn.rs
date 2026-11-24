@@ -12,6 +12,7 @@ use sfmtool_core::patch::normal_refine::ProjectedImage;
 use sfmtool_core::patch::spawn::{
     check_spawn_requests, spawn_candidate_tracks as core_spawn, SpawnParams,
 };
+use sfmtool_core::progress::Progress;
 
 use super::cloud::PyPatchCloud;
 use super::views::{resolve_pyramids, resolve_scene};
@@ -149,6 +150,7 @@ pub fn spawn_candidate_tracks(
                 &offsets,
                 &patch_views,
                 &params,
+                &Progress::none(),
             )
         })
         .map_err(crate::helpers::kernel_err)?;

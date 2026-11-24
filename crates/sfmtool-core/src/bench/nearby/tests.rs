@@ -171,6 +171,7 @@ fn the_patch_reads_best_at_the_planes_distance() {
         &distances,
         &[1, 2, 3],
         true,
+        &Progress::none(),
     )
     .expect("every image is a view")
     .expect("the patch is textured and inside the photograph");
@@ -203,7 +204,15 @@ fn a_patch_off_the_photograph_or_flat_is_not_read() {
         radius_px: 8.0,
     };
     assert_eq!(
-        read_patch_along_ray(&views, &pool, &off, &[f64::INFINITY], &[1], false),
+        read_patch_along_ray(
+            &views,
+            &pool,
+            &off,
+            &[f64::INFINITY],
+            &[1],
+            false,
+            &Progress::none()
+        ),
         Ok(None)
     );
 
@@ -237,7 +246,15 @@ fn a_patch_off_the_photograph_or_flat_is_not_read() {
         radius_px: 8.0,
     };
     assert_eq!(
-        read_patch_along_ray(&flat, &pool, &patch, &[f64::INFINITY], &[1], false),
+        read_patch_along_ray(
+            &flat,
+            &pool,
+            &patch,
+            &[f64::INFINITY],
+            &[1],
+            false,
+            &Progress::none()
+        ),
         Ok(None)
     );
 }
@@ -261,6 +278,7 @@ fn a_patch_read_refuses_an_image_with_no_view() {
             &[f64::INFINITY],
             images,
             false,
+            &Progress::none(),
         )
     };
     let no_view = Err(PatchReadError::NoSuchImage {
@@ -672,4 +690,74 @@ fn average_linkage_splits_two_groups() {
     assert_eq!(average_linkage(&similar, n, 0.1).len(), 1);
     // A flat similarity (NaN) merges nothing.
     assert_eq!(average_linkage(&[f64::NAN; 4], 2, 0.9).len(), 2);
+}
+
+/// A cancel that lands while the sweep refits a peak stops the refit's fits,
+/// which answer it as a refit that failed; the sweep then answers
+/// `Cancelled`, never readings that lack the refit. The query image's middle
+/// carries a pattern the others do not, so the others group without it and
+/// the peak is refitted on them. The cancel lands at times spread over a
+/// whole run, from another thread, so every answer is either `Cancelled` or
+/// the uncancelled run's.
+#[test]
+fn a_cancel_while_the_sweep_refits_is_its_answer() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Instant;
+
+    use crate::bench::tests::scene::texture;
+
+    let depth = widest_rate() / 6.0;
+    let scene = Scene::from_surface(&CENTERS, |c, d| {
+        let lambda = depth - c[2];
+        let v = texture(c[0] + lambda * d[0], c[1] + lambda * d[1], depth);
+        let (px, py) = (d[0] * 160.0, d[1] * 160.0);
+        if c == CENTERS[0] && px.abs() < 6.0 && py.abs() < 6.0 {
+            v + 60.0 * (px * 0.45).sin() * (py * 0.35 + 0.7).cos()
+        } else {
+            v
+        }
+    });
+    let edited = edited(&scene, Point3::new(0.0, 0.0, depth));
+    let views = scene.views();
+    let run = |progress: &Progress<'_>| {
+        far_field_sweep(
+            &edited,
+            &views,
+            &RegionPool::for_kernel_call(),
+            0,
+            PIXEL,
+            &FarFieldOptions::default(),
+            progress,
+        )
+    };
+    let start = Instant::now();
+    let whole = run(&Progress::none()).expect("the query is valid");
+    let took = start.elapsed();
+    assert_eq!(
+        whole.readings.first().and_then(|r| r.refit),
+        Some(Refit::Stands),
+        "the peak is refitted on the other images"
+    );
+    let mut cancelled = 0;
+    for step in 0..40u32 {
+        let at = took * step / 32;
+        let flag = AtomicBool::new(false);
+        let answer = std::thread::scope(|scope| {
+            let started = Instant::now();
+            let flag = &flag;
+            scope.spawn(move || {
+                while started.elapsed() < at {
+                    std::hint::spin_loop();
+                }
+                flag.store(true, Ordering::Relaxed);
+            });
+            run(&Progress::none().cancelled_by(flag))
+        });
+        match answer {
+            Err(FarFieldError::Cancelled) => cancelled += 1,
+            Ok(sweep) => assert_eq!(sweep, whole, "a cancel at {at:?}"),
+            Err(e) => panic!("a cancel at {at:?} answered {e:?}"),
+        }
+    }
+    assert!(cancelled > 0, "no cancel landed while the sweep ran");
 }

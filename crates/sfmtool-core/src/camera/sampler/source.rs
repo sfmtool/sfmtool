@@ -10,6 +10,13 @@
 //! them from the photograph's tiles and keeps them; when the reservation
 //! fails it reads through photograph tiles ([`TileWindow`]). Every way gives
 //! the values a whole pyramid gives, bit for bit.
+//!
+//! Each takes the caller's [`Progress`] and hands it to every tile read, the
+//! reads that would decode a photograph again for a tile evicted while the
+//! kernel ran polling it for cancellation; a photograph that holds its tiles
+//! decodes nothing and never polls it. A render reports nothing through it,
+//! and a caller with nothing to cancel, such as a panel rendering tiles it
+//! holds on the GUI thread, passes `&Progress::none()`.
 
 use crate::camera::image::{ImageF32WithGrad, ImageU8, ImageU8Pyramid, PyramidLevel};
 use crate::camera::remap::{
@@ -21,6 +28,7 @@ use crate::camera::tiled_photograph::{
     check_rect, out_of_range, PhotographReadError, TiledPhotograph,
 };
 use crate::camera::WarpMap;
+use crate::progress::Progress;
 
 use super::grid::{
     affine_regions, grid_cells, grid_regions, sample_grid, sample_support_affine,
@@ -143,6 +151,7 @@ enum Held<'a, 's> {
 fn read_regions<R>(
     view: &mut ViewRegions<'_>,
     regions: &LevelRegions,
+    progress: &Progress<'_>,
     read: impl FnOnce(Held<'_, '_>) -> R,
 ) -> Result<(R, ReadPath), PhotographReadError> {
     let (source, pool) = (view.source, view.pool);
@@ -166,7 +175,7 @@ fn read_regions<R>(
         view.kept = None;
         let bytes = grown.byte_len(source.channels());
         if let Some(reservation) = pool.try_reserve(bytes) {
-            let pyramid = copy_regions(source, &grown)?;
+            let pyramid = copy_regions(source, &grown, progress)?;
             pool.count_copied();
             let kept = view.kept.insert(Kept {
                 regions: grown,
@@ -179,17 +188,19 @@ fn read_regions<R>(
             ));
         }
     }
-    let window = TileWindow::new(source);
+    let window = TileWindow::new(source, progress);
     let result = read(Held::Tiles(&window));
     let stats = window.finish()?;
     pool.count_tiled();
     Ok((result, ReadPath::Tiles(stats)))
 }
 
-/// A region pyramid of `regions`, each assembled from `source`'s tiles.
+/// A region pyramid of `regions`, each assembled from `source`'s tiles, each
+/// tile read taking the caller's `progress`.
 pub(crate) fn copy_regions(
     source: &TiledPhotograph,
     regions: &LevelRegions,
+    progress: &Progress<'_>,
 ) -> Result<ImageU8Pyramid, PhotographReadError> {
     let layout = source.layout();
     let mut levels = Vec::with_capacity(regions.levels());
@@ -198,7 +209,7 @@ pub(crate) fn copy_regions(
             Some(rect) => {
                 let (w, h) = layout.level_size(level);
                 Some(PyramidLevel {
-                    image: source.region(level, rect)?,
+                    image: source.region(level, rect, progress)?,
                     origin: [rect.x0, rect.y0],
                     full_size: [w, h],
                 })
@@ -230,8 +241,9 @@ pub fn render_source_tile(
     view: &mut ViewRegions<'_>,
     map: &mut WarpMap,
     sampler: Sampler,
+    progress: &Progress<'_>,
 ) -> Result<ImageU8, PhotographReadError> {
-    render_source_tile_path(view, map, sampler).map(|(image, _)| image)
+    render_source_tile_path(view, map, sampler, progress).map(|(image, _)| image)
 }
 
 /// [`render_source_tile`], and how it read.
@@ -239,6 +251,7 @@ pub(crate) fn render_source_tile_path(
     view: &mut ViewRegions<'_>,
     map: &mut WarpMap,
     sampler: Sampler,
+    progress: &Progress<'_>,
 ) -> Result<(ImageU8, ReadPath), PhotographReadError> {
     let source = view.source();
     check_source(source)?;
@@ -246,7 +259,7 @@ pub(crate) fn render_source_tile_path(
     let regions = required_regions(map, sampler, source.layout());
     let map = &*map;
     let channels = source.channels() as usize;
-    read_regions(view, &regions, |held| match held {
+    read_regions(view, &regions, progress, |held| match held {
         Held::Copied(pyramid) => render_prepared(pyramid, map, sampler),
         Held::Tiles(window) => match sampler {
             Sampler::Bilinear => tile_rows(map, channels, |row, row_data| {
@@ -275,8 +288,9 @@ pub fn render_source_tile_with_grad_into(
     map: &mut WarpMap,
     sampler: Sampler,
     out: &mut ImageF32WithGrad,
+    progress: &Progress<'_>,
 ) -> Result<(), PhotographReadError> {
-    render_source_tile_with_grad_path(view, map, sampler, out).map(|_| ())
+    render_source_tile_with_grad_path(view, map, sampler, out, progress).map(|_| ())
 }
 
 /// [`render_source_tile_with_grad_into`], and how it read.
@@ -285,6 +299,7 @@ pub(crate) fn render_source_tile_with_grad_path(
     map: &mut WarpMap,
     sampler: Sampler,
     out: &mut ImageF32WithGrad,
+    progress: &Progress<'_>,
 ) -> Result<ReadPath, PhotographReadError> {
     let source = view.source();
     check_source(source)?;
@@ -293,7 +308,7 @@ pub(crate) fn render_source_tile_with_grad_path(
     let channels = source.channels();
     let (out_w, out_h) = (map.width(), map.height());
     let map_ref = &*map;
-    let ((), path) = read_regions(view, &regions, |held| match held {
+    let ((), path) = read_regions(view, &regions, progress, |held| match held {
         Held::Copied(pyramid) => render_with_grad_prepared(pyramid, map_ref, sampler, out),
         Held::Tiles(window) => {
             out.resize(out_w, out_h, channels);
@@ -351,6 +366,7 @@ fn check_level(source: &TiledPhotograph, level: usize) -> Result<(), PhotographR
 /// indices into a grid of `resolution` columns, and `out` holds
 /// `channels · pixels.len()` values. Refuses a level the photograph does not
 /// have, a `resolution` of 0 and an `out` of the wrong length.
+#[allow(clippy::too_many_arguments)]
 pub fn render_source_affine(
     view: &mut ViewRegions<'_>,
     a: &[f64; 6],
@@ -359,11 +375,14 @@ pub fn render_source_affine(
     resolution: usize,
     sampler: Sampler,
     out: &mut [f32],
+    progress: &Progress<'_>,
 ) -> Result<(), PhotographReadError> {
-    render_source_affine_path(view, a, level, pixels, resolution, sampler, out).map(|_| ())
+    render_source_affine_path(view, a, level, pixels, resolution, sampler, out, progress)
+        .map(|_| ())
 }
 
 /// [`render_source_affine`], and how it read.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_source_affine_path(
     view: &mut ViewRegions<'_>,
     a: &[f64; 6],
@@ -372,6 +391,7 @@ pub(crate) fn render_source_affine_path(
     resolution: usize,
     sampler: Sampler,
     out: &mut [f32],
+    progress: &Progress<'_>,
 ) -> Result<ReadPath, PhotographReadError> {
     let source = view.source();
     check_source(source)?;
@@ -386,7 +406,7 @@ pub(crate) fn render_source_affine_path(
     let aniso = sampler == Sampler::Anisotropic;
     let mut regions = LevelRegions::new(source.layout());
     affine_regions(&mut regions, a, level, aniso, pixels, resolution);
-    let ((), path) = read_regions(view, &regions, |held| match held {
+    let ((), path) = read_regions(view, &regions, progress, |held| match held {
         Held::Copied(pyramid) if aniso => {
             sample_support_affine_aniso(pyramid, a, pixels, resolution, out)
         }
@@ -415,8 +435,9 @@ pub fn sample_source_grid(
     level: usize,
     points: GridPoints<'_>,
     edge: GridEdge,
+    progress: &Progress<'_>,
 ) -> Result<Option<Vec<f32>>, PhotographReadError> {
-    sample_source_grid_path(view, a, level, points, edge).map(|r| r.map(|(v, _)| v))
+    sample_source_grid_path(view, a, level, points, edge, progress).map(|r| r.map(|(v, _)| v))
 }
 
 /// [`sample_source_grid`], and how it read.
@@ -426,6 +447,7 @@ pub(crate) fn sample_source_grid_path(
     level: usize,
     points: GridPoints<'_>,
     edge: GridEdge,
+    progress: &Progress<'_>,
 ) -> Result<Option<(Vec<f32>, ReadPath)>, PhotographReadError> {
     let source = view.source();
     check_source(source)?;
@@ -443,7 +465,7 @@ pub(crate) fn sample_source_grid_path(
     };
     let mut regions = LevelRegions::new(source.layout());
     grid_regions(&mut regions, level, &cells);
-    let (samples, path) = read_regions(view, &regions, |held| match held {
+    let (samples, path) = read_regions(view, &regions, progress, |held| match held {
         Held::Copied(pyramid) => sample_grid(&HeldLevel::of(pyramid, level), &cells),
         Held::Tiles(window) => sample_grid(&window.texels(level), &cells),
     })?;
@@ -506,8 +528,9 @@ pub fn read_source_samples(
     level: usize,
     positions: &[[f32; 2]],
     border: u32,
+    progress: &Progress<'_>,
 ) -> Result<SourceSamples, PhotographReadError> {
-    read_source_samples_path(view, level, positions, border).map(|(s, _)| s)
+    read_source_samples_path(view, level, positions, border, progress).map(|(s, _)| s)
 }
 
 /// [`read_source_samples`], and how it read.
@@ -516,6 +539,7 @@ pub(crate) fn read_source_samples_path(
     level: usize,
     positions: &[[f32; 2]],
     border: u32,
+    progress: &Progress<'_>,
 ) -> Result<(SourceSamples, ReadPath), PhotographReadError> {
     let source = view.source();
     check_source(source)?;
@@ -553,7 +577,7 @@ pub(crate) fn read_source_samples_path(
     let (w, h) = source.layout().level_size(level);
     let (w_max, h_max) = ((w as i32 - 1).max(0), (h as i32 - 1).max(0));
     let clamp = move |x: i32, y: i32| (x.clamp(0, w_max), y.clamp(0, h_max));
-    read_regions(view, &regions, |held| match held {
+    read_regions(view, &regions, progress, |held| match held {
         Held::Copied(pyramid) => {
             let held = HeldLevel::of(pyramid, level);
             gather(&|x, y, out| {
@@ -598,6 +622,7 @@ pub fn read_source_rect<'p>(
     pool: &'p RegionPool,
     level: usize,
     rect: LevelRect,
+    progress: &Progress<'_>,
 ) -> Result<SourceRect<'p>, PhotographReadError> {
     check_rect(source.layout(), level, rect)?;
     if let Some(keys) = source.missing_rect_tiles(level, rect) {
@@ -607,11 +632,11 @@ pub fn read_source_rect<'p>(
     if let Some(reservation) = pool.try_reserve(bytes) {
         pool.count_copied();
         return Ok(SourceRect {
-            image: source.region(level, rect)?,
+            image: source.region(level, rect, progress)?,
             _reservation: Some(reservation),
         });
     }
-    let window = TileWindow::new(source);
+    let window = TileWindow::new(source, progress);
     let texels = window.texels(level);
     let mut data = Vec::with_capacity(bytes as usize);
     for y in rect.y0..rect.y1 {

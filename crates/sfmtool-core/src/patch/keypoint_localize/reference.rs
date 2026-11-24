@@ -186,6 +186,7 @@ impl TrackReferences {
     ///
     /// Panics if `keypoints` is not parallel to `references`, or a reference
     /// is out of range for `views`.
+    #[allow(clippy::too_many_arguments)]
     pub fn build<'r>(
         patch: &OrientedPatch,
         views: &[ProjectedImage<'_>],
@@ -194,6 +195,7 @@ impl TrackReferences {
         reference: Option<usize>,
         bitmap: Option<&[u8]>,
         params: &KeypointLocalizeParams,
+        progress: &Progress<'_>,
     ) -> Result<Result<Self, NoTemplate>, PhotographReadError> {
         assert_eq!(
             references.len(),
@@ -239,12 +241,13 @@ impl TrackReferences {
                     Some(kp),
                     resolution,
                 ),
-                &Progress::none(),
+                &progress.silenced(),
             ) {
                 Ok(tile) => tile,
                 Err(LocalizeError::Photograph(e)) => return Err(e),
+                Err(LocalizeError::Cancelled) => return Err(PhotographReadError::Cancelled),
                 // A tile too large to allocate leaves the reference out.
-                Err(_) => continue,
+                Err(LocalizeError::OutOfMemory { .. }) => continue,
             };
             let mut raw = vec![0f32; tile.channels * n];
             if extract_core(&tile, &support, r, 0, 0, &mut raw) {
@@ -307,7 +310,7 @@ impl TrackReferences {
                     resolution,
                     params.sampler,
                     &ReferenceViewOptions::default(),
-                    &Progress::none(),
+                    &progress.silenced(),
                 )?
                 else {
                     return Ok(Err(NoTemplate::NoReferenceView));
@@ -405,6 +408,7 @@ impl TrackReferences {
     ///
     /// `regions` reads `view`'s photograph; a read that fails is
     /// [`LocalizeError::Photograph`].
+    #[allow(clippy::too_many_arguments)]
     pub fn search(
         &self,
         patch: &OrientedPatch,
@@ -413,6 +417,7 @@ impl TrackReferences {
         seed: Option<[f64; 2]>,
         ascend_on_edge: bool,
         params: &KeypointLocalizeParams,
+        progress: &Progress<'_>,
     ) -> Result<ViewSearch, LocalizeError> {
         let mut out = ViewSearch {
             projection: [f64::NAN; 2],
@@ -446,7 +451,7 @@ impl TrackReferences {
                 seed,
                 self.resolution,
             ),
-            &Progress::none(),
+            &progress.silenced(),
         )?;
         let c0 = margin as usize;
         out.zncc_self_similarity_radius =
@@ -526,7 +531,7 @@ impl TrackReferences {
                         Some(found),
                         self.resolution,
                     ),
-                    &Progress::none(),
+                    &progress.silenced(),
                 )?;
                 let c = REANCHOR_MARGIN as usize;
                 if let Some(again) = search_shift(
@@ -573,6 +578,7 @@ impl TrackReferences {
         regions: &mut ViewRegions<'_>,
         keypoint: [f64; 2],
         params: &KeypointLocalizeParams,
+        progress: &Progress<'_>,
     ) -> Result<Option<ViewScore>, PhotographReadError> {
         let r = self.resolution as usize;
         let n = self.support.pixels.len();
@@ -597,11 +603,13 @@ impl TrackReferences {
                 Some(keypoint),
                 self.resolution,
             ),
-            &Progress::none(),
+            &progress.silenced(),
         ) {
             Ok(tile) => tile,
             Err(LocalizeError::Photograph(e)) => return Err(e),
-            Err(_) => return Ok(None),
+            Err(LocalizeError::Cancelled) => return Err(PhotographReadError::Cancelled),
+            // A tile too large to allocate scores nothing.
+            Err(LocalizeError::OutOfMemory { .. }) => return Ok(None),
         };
         let mut raw = vec![0f32; tile.channels * n];
         if !extract_core(&tile, &self.support, r, 0, 0, &mut raw) {

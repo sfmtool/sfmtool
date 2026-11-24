@@ -532,7 +532,8 @@ pub fn fit(
 /// rendered here still hands on what its repaint did.
 ///
 /// The photographs are read through `pool`, the region pool the caller made
-/// for this call.
+/// for this call. `progress`'s cancel flag reaches every read, through
+/// `Progress::silenced`, and nothing is reported through it.
 ///
 /// # Errors
 ///
@@ -545,6 +546,7 @@ pub fn render_bitmap_in_place(
     images: &[ProjectedImage<'_>],
     pool: &RegionPool,
     options: &FitOptions,
+    progress: &Progress<'_>,
 ) -> Result<EditableTrack, EvaluateError> {
     check_observation_views(track, images)?;
     Ok(render_bitmap_in_place_from(
@@ -554,6 +556,7 @@ pub fn render_bitmap_in_place(
         pool,
         options,
         track.held_reference(),
+        progress,
     )?)
 }
 
@@ -569,8 +572,9 @@ pub(super) fn render_bitmap_in_place_from(
     pool: &RegionPool,
     options: &FitOptions,
     from: Option<usize>,
+    progress: &Progress<'_>,
 ) -> Result<EditableTrack, PhotographReadError> {
-    let mut next = rendered_in_place(track, edited, images, pool, options, from)?;
+    let mut next = rendered_in_place(track, edited, images, pool, options, from, progress)?;
     next.repaint = track.repaint.carried();
     Ok(next)
 }
@@ -583,6 +587,7 @@ fn rendered_in_place(
     pool: &RegionPool,
     options: &FitOptions,
     from: Option<usize>,
+    progress: &Progress<'_>,
 ) -> Result<EditableTrack, PhotographReadError> {
     let Stage::Track(payload) = &track.stage else {
         return Ok(track.clone());
@@ -600,7 +605,7 @@ fn rendered_in_place(
         &ins,
         options,
         from,
-        &Progress::none(),
+        &progress.silenced(),
     )?;
     let Some(bitmap) = bitmap else {
         return Ok(track.clone());
@@ -624,6 +629,7 @@ pub(super) fn render_bitmap_for_judging(
     images: &[ProjectedImage<'_>],
     pool: &RegionPool,
     options: &FitOptions,
+    progress: &Progress<'_>,
 ) -> Result<EditableTrack, PhotographReadError> {
     let Stage::Track(payload) = &track.stage else {
         return Ok(track.clone());
@@ -641,7 +647,7 @@ pub(super) fn render_bitmap_for_judging(
         &keyed,
         options,
         None,
-        &Progress::none(),
+        &progress.silenced(),
     )?;
     let Some(bitmap) = bitmap else {
         return Ok(track.clone());

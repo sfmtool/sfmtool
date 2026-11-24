@@ -65,8 +65,8 @@ pub fn render_view_tile(patch: &OrientedPatch, view: &ProjectedImage<'_>,
     keypoint: Option<[f64; 2]>, resolution: usize, sampler: SamplerChoice,
     progress: &Progress<'_>) -> Result<ViewTile, PhotographReadError>;
 pub fn clipped_share(pyramid: &ImageU8Pyramid, outline: &[[f64; 2]]) -> Option<f64>;
-pub fn source_clipped_share(source: &TiledPhotograph, outline: &[[f64; 2]])
-    -> Result<Option<f64>, PhotographReadError>; // the same share, a tile at a time
+pub fn source_clipped_share(source: &TiledPhotograph, outline: &[[f64; 2]],
+    progress: &Progress<'_>) -> Result<Option<f64>, PhotographReadError>; // the same share, a tile at a time
 impl ViewTile { pub fn planes(&self) -> TilePlanes; } // what blur matching reads
 
 pub fn pair_zncc_grid(a: &ViewTile, b: &ViewTile) -> [[f64; 3]; 3];

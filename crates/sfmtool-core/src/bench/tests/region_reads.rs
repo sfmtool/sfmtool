@@ -20,6 +20,7 @@ use crate::bench::{
 };
 use crate::camera::TileKey;
 use crate::camera::{PhotographReadError, TiledPhotograph};
+use crate::progress::Progress;
 
 /// The tile side the scenes are cut into for the reads through tiles: a
 /// quarter of the photographs' 128 px, so a read crosses several tiles.
@@ -296,11 +297,14 @@ fn a_geometry_search_is_the_same_on_every_read_path() {
 fn without_pixels(scene: &Scene) -> TiledPhotograph {
     let whole = TiledPhotograph::cut(scene.pyramid(0), TILE);
     let corner = whole
-        .tile(TileKey {
-            level: 0,
-            col: 0,
-            row: 0,
-        })
+        .tile(
+            TileKey {
+                level: 0,
+                col: 0,
+                row: 0,
+            },
+            &Progress::none(),
+        )
         .expect("a tile");
     TiledPhotograph::from_tiles(whole.layout().clone(), [corner]).expect("the layout's tile")
 }
@@ -439,9 +443,15 @@ fn a_track_stage_fit_and_bitmap_are_the_same_on_every_read_path() {
             &Progress::none(),
         )
         .expect("the track stage fits");
-        let rendered =
-            render_bitmap_in_place(&fitted, &edited, &views, pool, &FitOptions::default())
-                .expect("every row names a view");
+        let rendered = render_bitmap_in_place(
+            &fitted,
+            &edited,
+            &views,
+            pool,
+            &FitOptions::default(),
+            &Progress::none(),
+        )
+        .expect("every row names a view");
         let scored = score_bitmap(
             &rendered,
             &edited,
@@ -513,8 +523,15 @@ fn a_read_of_pixels_a_photograph_lacks_fails_each_track_stage_step() {
             ),
             "pool of {capacity}: {error}"
         );
-        let error = render_bitmap_in_place(&fitted, &edited, &views, &pool, &FitOptions::default())
-            .expect_err("image 1 cannot be read");
+        let error = render_bitmap_in_place(
+            &fitted,
+            &edited,
+            &views,
+            &pool,
+            &FitOptions::default(),
+            &Progress::none(),
+        )
+        .expect_err("image 1 cannot be read");
         assert!(is_read_error(&error), "pool of {capacity}: {error}");
         let error = score_bitmap(
             &fitted,

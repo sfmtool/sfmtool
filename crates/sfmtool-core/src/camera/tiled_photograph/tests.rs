@@ -6,6 +6,7 @@
 //! bit, cut at 512 px and cut again at a small tile size.
 
 use super::*;
+use crate::progress::Progress;
 
 /// A `width` x `height` photograph of three channels of noise.
 fn photograph(width: u32, height: u32) -> ImageU8 {
@@ -79,7 +80,9 @@ fn assert_holds_the_pyramid(source: &TiledPhotograph, pyramid: &ImageU8Pyramid, 
                     col,
                     row,
                 };
-                let tile = source.tile(key).expect("a tile it holds");
+                let tile = source
+                    .tile(key, &Progress::none())
+                    .expect("a tile it holds");
                 let (origin, size, pixels) = expected_tile(pyramid, ts, key);
                 assert_eq!(tile.key, key);
                 assert_eq!((tile.origin, tile.size), (origin, size), "{key:?}");
@@ -108,7 +111,9 @@ fn assert_holds_the_pyramid(source: &TiledPhotograph, pyramid: &ImageU8Pyramid, 
             y1: h,
         };
         for rect in [whole, across, corner] {
-            let read = source.region(level, rect).expect("a rectangle inside");
+            let read = source
+                .region(level, rect, &Progress::none())
+                .expect("a rectangle inside");
             assert_eq!(
                 read.data(),
                 &expected_region(pyramid, level, rect)[..],

@@ -83,6 +83,7 @@ pub fn read_patch_along_ray(
     distances: &[f64],       // f64::INFINITY allowed
     images: &[u32],
     keep_samples: bool,
+    progress: &Progress<'_>, // polled for cancellation by the reads
 ) -> Result<Option<PatchRead>, PatchReadError>;
 // Ok(None): the queried patch is flat or off its photograph.
 // Err: NoSuchImage { image, image_count } for `patch.image` or an entry of
@@ -99,6 +100,13 @@ pub struct PatchRead {
     pub samples: Option<PatchSamples>,
 }
 ```
+
+**Cancellation.** The sweep reads `progress` for cancellation in front of its
+reads and in front of each peak, and its refits fit with the flag silenced
+(`Progress::silenced`). A fit that the cancel stops counts as a refit that
+failed, so the sweep reads the flag again before it answers: a sweep
+cancelled while it refit answers `FarFieldError::Cancelled`, never readings
+that lack the refit the cancel stopped.
 
 **Why each read makes its own grey.** Every read samples the photographs in
 grey, blurred by a Gaussian of one pixel. A read takes the rectangle of level 0

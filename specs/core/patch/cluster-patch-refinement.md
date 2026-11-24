@@ -129,7 +129,8 @@ pub fn refine_cluster_patches(
     member_images: &[u32],              // (M,)
     member_features: &[u32],            // (M,)
     params: &ClusterRefineParams,
-    progress: Option<&AtomicUsize>,     // one tick per finished cluster
+    done: Option<&AtomicUsize>,         // one tick per finished cluster
+    progress: &Progress<'_>,            // polled for cancellation by the reads
 ) -> Result<ClusterRefineResult, PhotographReadError>;
 
 /// The same kernel over borrowed photographs, for a caller that holds each
@@ -142,7 +143,8 @@ pub fn refine_cluster_patches_borrowed(
     member_images: &[u32],
     member_features: &[u32],
     params: &ClusterRefineParams,
-    progress: Option<&AtomicUsize>,
+    done: Option<&AtomicUsize>,
+    progress: &Progress<'_>,
 ) -> Result<ClusterRefineResult, PhotographReadError>;
 
 /// One member's own `R×R` grid at a position and affine shape, from a whole
@@ -223,6 +225,10 @@ an error; the one error is a read of a photograph that failed, the first one's
 `PhotographReadError`, returned in place of the result, which a photograph
 made in memory gives only for pixels it does not hold. The failures that
 remain are caller bugs (non-parallel inputs, malformed CSR), which assert.
+`done` counts finished clusters for a caller that shows them, the Python
+binding's progress counter; `progress` is the caller's `Progress`, which every
+read takes as the render entry points do, polled for cancellation by a read
+that decodes a photograph, and through which nothing is reported.
 `warp_consistency_residuals` stands apart from the result because it is a fit
 over a whole refined cluster set, and a caller that only wants warps should not
 pay for it. The member-grid sampler and the radius are public so the bench
@@ -262,6 +268,7 @@ let out = refine_cluster_patches(
     &[17u32, 42, 8, 91, 5],  // member features
     &ClusterRefineParams::default(),
     None,
+    &Progress::none(),
 )?;
 
 // Member 1's image-space extent and refined position, if it survived vetting.
@@ -359,7 +366,10 @@ let params = ClusterRefineParams {
 };
 let pool = RegionPool::for_kernel_call();
 let out =
-    refine_cluster_patches(&photographs, &pool, &features, &starts, &images, &feats, &params, None)?;
+    refine_cluster_patches(
+        &photographs, &pool, &features, &starts, &images, &feats, &params, None,
+        &Progress::none(),
+    )?;
 if let Some(cells) = &out.cells[1] {
     let middle = cells.shift_px[1][1];          // grid px from the stored shape
     let trusted = cells.status[1][1] == CellStatus::Fitted;

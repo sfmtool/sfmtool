@@ -11,6 +11,7 @@
 use crate::camera::sampler::RegionPool;
 use crate::camera::PhotographReadError;
 use crate::patch::normal_refine::ProjectedImage;
+use crate::progress::Progress;
 
 use super::candidate::NearbyCandidate;
 use super::far_field::FarFieldReading;
@@ -357,7 +358,9 @@ fn is_subset(a: &[u32], b: &[u32]) -> bool {
 /// reads read their photographs through `pool`. A candidate whose
 /// `distance_px` is not finite and at least zero, or a usable one with a
 /// `NaN` in its range, is refused: no finder gives one; a read of a
-/// photograph that fails is [`DepthLayerError::Photograph`].
+/// photograph that fails is [`DepthLayerError::Photograph`]. The patch
+/// reads poll `progress` for cancellation, as the render entry points of
+/// [`sampler`](crate::camera::sampler) do; nothing is reported through it.
 pub fn depth_layers(
     views: &[ProjectedImage<'_>],
     pool: &RegionPool,
@@ -365,6 +368,7 @@ pub fn depth_layers(
     pixel: [f64; 2],
     candidates: &[LayerCandidate<'_>],
     options: &DepthLayerOptions,
+    progress: &Progress<'_>,
 ) -> Result<DepthLayers, DepthLayerError> {
     let image_count = views.len();
     if image as usize >= image_count {
@@ -388,7 +392,7 @@ pub fn depth_layers(
     let support = support_counts(candidates, &images);
     let mut layers = group_layers(candidates);
     if options.evidence && !layers.is_empty() {
-        let reads = layer_reads(views, pool, image, pixel, &layers, options)
+        let reads = layer_reads(views, pool, image, pixel, &layers, options, progress)
             .map_err(DepthLayerError::Photograph)?;
         let evidence: Vec<LayerEvidence> = (0..layers.len())
             .map(|n| layer_evidence(candidates, &images, &layers[n], &reads, n))
@@ -515,6 +519,7 @@ fn layer_reads(
     pixel: [f64; 2],
     layers: &[DepthLayer],
     options: &DepthLayerOptions,
+    progress: &Progress<'_>,
 ) -> Result<LayerReads, PhotographReadError> {
     let others: Vec<u32> = (0..views.len() as u32).filter(|&i| i != image).collect();
     let mut distances = Vec::new();
@@ -534,7 +539,7 @@ fn layer_reads(
     };
     // `depth_layers` checked the queried image against the views, and
     // `others` are the views' own indexes.
-    if let Some(read) = read_checked(views, pool, &patch, &distances, &others, false)? {
+    if let Some(read) = read_checked(views, pool, &patch, &distances, &others, false, progress)? {
         for (k, &n) in owner.iter().enumerate() {
             for v in 0..others.len() {
                 let w = read.whole[[k, v]];

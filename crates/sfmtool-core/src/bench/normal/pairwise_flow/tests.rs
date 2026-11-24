@@ -11,6 +11,7 @@ use std::sync::Mutex;
 
 use crate::camera::sampler::{RegionPool, ViewRegions};
 use crate::features::optical_flow::OpticalFlowError;
+use crate::progress::Progress;
 
 use super::crops::{render_crops, Crop, CropGrid, CropPyramid, PairLevel};
 use super::fit::{fit_pair, PairFit};
@@ -197,7 +198,7 @@ impl Round {
             .iter()
             .map(|v| Mutex::new(ViewRegions::new(v.source, &pool)))
             .collect();
-        let crops = render_crops(&grid, &views, &regions, &sights)
+        let crops = render_crops(&grid, &views, &regions, &sights, &Progress::none())
             .unwrap()
             .into_iter()
             .map(Option::unwrap)

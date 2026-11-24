@@ -67,6 +67,7 @@ use crate::patch::self_similarity::{
     SelfSimilarityParts,
 };
 use crate::patch::view_selection::AffineCoreMap;
+use crate::progress::Progress;
 
 use kernels::{
     eval_zncc, eval_zncc_parts, grid_bbox, nelder_mead, SupportTables, TemplateKernel, TileCache,
@@ -373,9 +374,11 @@ impl MemberOutcome {
         &mut self,
         view: &mut ViewRegions<'_>,
         params: &ClusterRefineParams,
+        progress: &Progress<'_>,
     ) -> Result<Option<MemberStatus>, PhotographReadError> {
         let (shape, position) = self.shape_and_position();
-        let Some(samples) = sample_source_member_grid(view, position, shape, params)? else {
+        let Some(samples) = sample_source_member_grid(view, position, shape, params, progress)?
+        else {
             return Ok(None);
         };
         let resolution = params.resolution.max(2) as usize;
@@ -457,12 +460,14 @@ pub fn sample_member_grid(
 /// the view's region pool or read through the photograph's tiles.
 ///
 /// Track View's cluster-stage tiles and their hover views call it.
-/// `Ok(None)` where [`sample_member_grid`] gives `None`.
+/// `Ok(None)` where [`sample_member_grid`] gives `None`. `progress` is
+/// [`sample_source_grid`]'s.
 pub fn sample_source_member_grid(
     view: &mut ViewRegions<'_>,
     position: [f64; 2],
     affine_shape: [[f64; 2]; 2],
     params: &ClusterRefineParams,
+    progress: &Progress<'_>,
 ) -> Result<Option<Vec<f32>>, PhotographReadError> {
     let det = det2(&affine_shape);
     if !det.is_finite() || det.abs() < MIN_ABS_DET {
@@ -480,6 +485,7 @@ pub fn sample_source_member_grid(
         0,
         resolution as usize,
         GridEdge::Clamp,
+        progress,
     )
 }
 
@@ -627,6 +633,7 @@ fn sample_source_grid_window(
     first: i64,
     size: usize,
     edge: GridEdge,
+    progress: &Progress<'_>,
 ) -> Result<Option<Vec<f32>>, PhotographReadError> {
     let (level, lmap) = grid_level_map(pos, a, step, off, view.source().layout().levels());
     sample_source_grid(
@@ -635,6 +642,7 @@ fn sample_source_grid_window(
         level,
         GridPoints::Window { first, size },
         edge,
+        progress,
     )
 }
 
@@ -660,6 +668,7 @@ fn grid_level_map(
 /// any support sample leaves the frame or every channel is flat — the
 /// candidate reference is unusable. Both of its reads go through `view`, the
 /// candidate's view.
+#[allow(clippy::too_many_arguments)]
 fn build_template(
     view: &mut ViewRegions<'_>,
     geo: &MemberGeo,
@@ -668,6 +677,7 @@ fn build_template(
     resolution: u32,
     step: f64,
     off: f64,
+    progress: &Progress<'_>,
 ) -> Result<Option<TemplateKernel>, PhotographReadError> {
     let (level, lmap) = grid_level_map(geo.pos, &geo.a, step, off, view.source().layout().levels());
     let n = support.pixels.len();
@@ -676,7 +686,9 @@ fn build_template(
         pixels: &support.pixels,
         resolution: resolution as usize,
     };
-    let Some(samples) = sample_source_grid(view, &lmap.a, level, points, GridEdge::InFrame)? else {
+    let Some(samples) =
+        sample_source_grid(view, &lmap.a, level, points, GridEdge::InFrame, progress)?
+    else {
         return Ok(None);
     };
 
@@ -737,7 +749,9 @@ fn build_template(
     let square = r * r;
     let mut square_samples = vec![f32::NAN; src_channels.len() * square];
     let window = GridPoints::Window { first: 0, size: r };
-    if let Some(all) = sample_source_grid(view, &lmap.a, level, window, GridEdge::Missing)? {
+    if let Some(all) =
+        sample_source_grid(view, &lmap.a, level, window, GridEdge::Missing, progress)?
+    {
         for (p, sample) in all.chunks_exact(ch).enumerate() {
             for (tc, &c) in src_channels.iter().enumerate() {
                 square_samples[tc * square + p] = sample[c];
@@ -806,6 +820,7 @@ fn refine_member<'p>(
     off: f64,
     params: &ClusterRefineParams,
     limit: &ElongationLimit,
+    progress: &Progress<'_>,
 ) -> Result<Option<MemberFit>, PhotographReadError> {
     let a_ref_inv = inv2(&ref_geo.a);
     let num_levels = source.layout().levels();
@@ -824,7 +839,7 @@ fn refine_member<'p>(
         let level = level_for_map(&map, num_levels);
         let lmap = map_at_level(&map, level);
         let bbox = grid_bbox(&lmap, resolution);
-        let Some(tile) = tiles.get_or_build(source, pool, level, bbox)? else {
+        let Some(tile) = tiles.get_or_build(source, pool, level, bbox, progress)? else {
             return Ok(None);
         };
         prof::count(&prof::N_EVALS, 1);
@@ -950,7 +965,7 @@ fn refine_member<'p>(
             let lmap = map_at_level(&map, level);
             let bbox = grid_bbox(&lmap, resolution);
             tiles
-                .get_or_build(source, pool, level, bbox)?
+                .get_or_build(source, pool, level, bbox, progress)?
                 .map_or(PartZncc::NAN, |tile| {
                     eval_zncc_parts(&lmap, tile, tables, tmpl)
                 })
@@ -1004,6 +1019,7 @@ fn refine_cluster(
     tables: &SupportTables,
     resolution: u32,
     max_elongation: f64,
+    progress: &Progress<'_>,
 ) -> Result<ClusterOutcome, PhotographReadError> {
     let size = k1 - k0;
     let mut members = vec![MemberOutcome::default(); size];
@@ -1088,8 +1104,8 @@ fn refine_cluster(
                 continue;
             };
             let view = views[j].as_mut().expect("a usable member has a view");
-            let Some(grid) =
-                prof::GATE_SAMPLE.time(|| sample_source_member_grid(view, g.pos, g.a, params))?
+            let Some(grid) = prof::GATE_SAMPLE
+                .time(|| sample_source_member_grid(view, g.pos, g.a, params, progress))?
             else {
                 continue;
             };
@@ -1124,7 +1140,7 @@ fn refine_cluster(
         let g = geo[j].as_ref().unwrap();
         let view = views[j].as_mut().expect("a usable member has a view");
         if let Some(t) = prof::TEMPLATE
-            .time(|| build_template(view, g, support, tables, resolution, step, off))?
+            .time(|| build_template(view, g, support, tables, resolution, step, off, progress))?
         {
             reference = Some((j, t));
             break;
@@ -1185,6 +1201,7 @@ fn refine_cluster(
                 off,
                 params,
                 &limit,
+                progress,
             )
         })? {
             let status = if zncc < params.min_zncc {
@@ -1212,7 +1229,7 @@ fn refine_cluster(
                 let member = &mut members[j];
                 let view = views[j].as_mut().expect("a usable member has a view");
                 if let Some(refused) =
-                    prof::REFINED_GATE.time(|| member.read_refined_shape(view, params))?
+                    prof::REFINED_GATE.time(|| member.read_refined_shape(view, params, progress))?
                 {
                     prof::count(&prof::N_REFINED_GATE_REJECTED, 1);
                     member.status = refused;
@@ -1273,6 +1290,7 @@ fn refine_cluster(
                         params,
                         pp,
                         &limit,
+                        progress,
                     )
                 })?;
             }
@@ -1331,6 +1349,7 @@ fn refine_kept_member_cells(
     params: &ClusterRefineParams,
     pp: &PiecewiseParams,
     limit: &ElongationLimit,
+    progress: &Progress<'_>,
 ) -> Result<(), PhotographReadError> {
     let s = [
         [member.affine[0][0], member.affine[0][1]],
@@ -1341,7 +1360,7 @@ fn refine_kept_member_cells(
     // The cascade's own objective, which an update must not lower.
     let score = |shape: &Mat2, position: [f64; 2]| {
         member_zncc_at(
-            source, pool, position, shape, tmpl, tables, resolution, step, off, limit,
+            source, pool, position, shape, tmpl, tables, resolution, step, off, limit, progress,
         )
     };
     let out = piecewise::refine_member_cells(
@@ -1355,6 +1374,7 @@ fn refine_kept_member_cells(
         off,
         pp,
         score,
+        progress,
     )?;
     if !out.updated {
         member.cells = Some(out.cells);
@@ -1367,7 +1387,7 @@ fn refine_kept_member_cells(
     // cascade's stored value in the last bits, so the stored value is the bar.
     let cascade_zncc = member.zncc;
     let reread = read_member_at(
-        source, pool, ps, &sh, tmpl, tables, resolution, step, off, limit,
+        source, pool, ps, &sh, tmpl, tables, resolution, step, off, limit, progress,
     )?
     .filter(|&(zncc, _)| {
         zncc >= params.min_zncc && zncc as f32 >= cascade_zncc && params.admits_shift(shift, &sh)
@@ -1381,7 +1401,8 @@ fn refine_kept_member_cells(
     member.zncc = zncc as f32;
     member.set_parts(parts);
     member.shift = shift as f32;
-    if params.reads_refined_shape() && member.read_refined_shape(view, params)?.is_some() {
+    if params.reads_refined_shape() && member.read_refined_shape(view, params, progress)?.is_some()
+    {
         // The moved shape fails a gate the cascade shape passed: keep the
         // cascade shape and its readings.
         prof::count(&prof::N_REFINED_GATE_REVERTED, 1);
@@ -1409,6 +1430,7 @@ fn read_member_at(
     step: f64,
     off: f64,
     limit: &ElongationLimit,
+    progress: &Progress<'_>,
 ) -> Result<Option<(f64, PartZncc)>, PhotographReadError> {
     let map = warp_map(p, [0.0, 0.0], s, step, off);
     if !limit.admits_map(&map) {
@@ -1418,7 +1440,7 @@ fn read_member_at(
     let lmap = map_at_level(&map, level);
     let bbox = grid_bbox(&lmap, resolution);
     let mut tiles = TileCache::default();
-    let Some(tile) = tiles.get_or_build(source, pool, level, bbox)? else {
+    let Some(tile) = tiles.get_or_build(source, pool, level, bbox, progress)? else {
         return Ok(None);
     };
     Ok(eval_zncc(&lmap, tile, tables, tmpl)
@@ -1442,6 +1464,7 @@ fn member_zncc_at(
     step: f64,
     off: f64,
     limit: &ElongationLimit,
+    progress: &Progress<'_>,
 ) -> Result<Option<f64>, PhotographReadError> {
     let map = warp_map(p, [0.0, 0.0], s, step, off);
     if !limit.admits_map(&map) {
@@ -1451,7 +1474,7 @@ fn member_zncc_at(
     let lmap = map_at_level(&map, level);
     let bbox = grid_bbox(&lmap, resolution);
     let mut tiles = TileCache::default();
-    let Some(tile) = tiles.get_or_build(source, pool, level, bbox)? else {
+    let Some(tile) = tiles.get_or_build(source, pool, level, bbox, progress)? else {
         return Ok(None);
     };
     Ok(eval_zncc(&lmap, tile, tables, tmpl))
@@ -1466,8 +1489,10 @@ fn member_zncc_at(
 /// [`warp_consistency_residuals`], which does exactly that).
 /// Parallel over clusters (rayon); results are deterministic
 /// under any thread schedule (each cluster's work is self-contained and the
-/// scatter preserves cluster order). `progress` is bumped once per finished
-/// cluster.
+/// scatter preserves cluster order). `done` is bumped once per finished
+/// cluster, and every read polls `progress` for cancellation, as the render
+/// entry points of [`sampler`](crate::camera::sampler) do; nothing is
+/// reported through it.
 ///
 /// The kernel does no I/O and reads no `.sift` file -- the caller supplies the
 /// photographs and feature geometry, one [`FeatureGeometry`] per photograph. A
@@ -1501,7 +1526,8 @@ pub fn refine_cluster_patches(
     member_images: &[u32],
     member_features: &[u32],
     params: &ClusterRefineParams,
-    progress: Option<&AtomicUsize>,
+    done: Option<&AtomicUsize>,
+    progress: &Progress<'_>,
 ) -> Result<ClusterRefineResult, PhotographReadError> {
     let borrowed: Vec<&TiledPhotograph> = sources.iter().collect();
     refine_cluster_patches_borrowed(
@@ -1512,6 +1538,7 @@ pub fn refine_cluster_patches(
         member_images,
         member_features,
         params,
+        done,
         progress,
     )
 }
@@ -1535,7 +1562,8 @@ pub fn refine_cluster_patches_borrowed(
     member_images: &[u32],
     member_features: &[u32],
     params: &ClusterRefineParams,
-    progress: Option<&AtomicUsize>,
+    done: Option<&AtomicUsize>,
+    progress: &Progress<'_>,
 ) -> Result<ClusterRefineResult, PhotographReadError> {
     refine_cluster_patches_with_elongation_limit(
         sources,
@@ -1546,6 +1574,7 @@ pub fn refine_cluster_patches_borrowed(
         member_features,
         params,
         MAX_PATCH_ELONGATION,
+        done,
         progress,
     )
 }
@@ -1565,7 +1594,8 @@ fn refine_cluster_patches_with_elongation_limit(
     member_features: &[u32],
     params: &ClusterRefineParams,
     max_elongation: f64,
-    progress: Option<&AtomicUsize>,
+    done: Option<&AtomicUsize>,
+    progress: &Progress<'_>,
 ) -> Result<ClusterRefineResult, PhotographReadError> {
     assert_eq!(
         features.len(),
@@ -1618,9 +1648,10 @@ fn refine_cluster_patches_with_elongation_limit(
                     &tables,
                     resolution,
                     max_elongation,
+                    progress,
                 )
             })?;
-            if let Some(p) = progress {
+            if let Some(p) = done {
                 p.fetch_add(1, Ordering::Relaxed);
             }
             Ok(out)

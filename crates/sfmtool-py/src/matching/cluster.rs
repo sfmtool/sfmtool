@@ -23,6 +23,7 @@ use sfmtool_core::patch::cluster_refine::{
     warp_consistency_residuals, ClusterRefineParams, FeatureGeometry, LoopStop, PiecewiseParams,
     MAX_PATCH_ELONGATION,
 };
+use sfmtool_core::progress::Progress;
 
 use crate::patches::args::parse_patch_window;
 use crate::patches::views::build_photographs_from_image_list;
@@ -676,6 +677,7 @@ pub fn refine_cluster_patches<'py>(
             &m_features,
             &params,
             progress_handle.as_deref(),
+            &Progress::none(),
         )
         .map_err(crate::helpers::kernel_err)?;
         let consistency = warp_consistency_residuals(

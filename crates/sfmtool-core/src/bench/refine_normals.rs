@@ -26,7 +26,7 @@ use crate::camera::sampler::RegionPool;
 use crate::camera::PhotographReadError;
 use crate::numeric::median_in_place;
 use crate::patch::normal_refine::ProjectedImage;
-use crate::progress::{Cancelled, Event, Progress};
+use crate::progress::{Cancelled, Progress};
 use crate::reconstruction::bulk_point_order::BulkPointOrder;
 use crate::reconstruction::data::SfmrReconstruction;
 use crate::reconstruction::edited::{EditedReconstruction, PointRecord};
@@ -676,8 +676,7 @@ pub(super) fn refine_normals_in(
         .map_or(point_count, |a| a.iter().filter(|&&x| x).count());
     // Each point's step reads the run's cancel flag, and what it reports is
     // dropped: per-point phases from a parallel loop are not reported.
-    let silent = |_: Event<'_>| {};
-    let step_progress = p_refine.tapped(&silent).detailed(false);
+    let step_progress = p_refine.silenced();
     let failure = ReadFailure::default();
     let refined: Option<Vec<(RefinedNormal, Option<PointRecord>)>> = {
         let mut phase = p_refine.phase("refine normals");

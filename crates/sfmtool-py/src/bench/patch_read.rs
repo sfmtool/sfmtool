@@ -9,6 +9,7 @@ use pyo3::types::PyDict;
 
 use sfmtool_core::bench::{read_patch_along_ray as core_read_patch_along_ray, RayPatch};
 use sfmtool_core::camera::sampler::RegionPool;
+use sfmtool_core::progress::Progress;
 
 use super::views_of;
 use crate::helpers::kernel_err;
@@ -83,6 +84,7 @@ pub(super) fn read_patch_along_ray(
                 &distances,
                 &read_images,
                 samples,
+                &Progress::none(),
             )
         })
         .map_err(kernel_err)?

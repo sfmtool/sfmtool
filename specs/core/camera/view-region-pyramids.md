@@ -128,21 +128,22 @@ impl LevelRegions {
 }
 
 pub fn render_source_tile(view: &mut ViewRegions<'_>, map: &mut WarpMap,
-    sampler: Sampler) -> Result<ImageU8, PhotographReadError>;
+    sampler: Sampler, progress: &Progress<'_>) -> Result<ImageU8, PhotographReadError>;
 pub fn render_source_tile_with_grad_into(view, map, sampler,
-    out: &mut ImageF32WithGrad) -> Result<(), PhotographReadError>;
+    out: &mut ImageF32WithGrad, progress) -> Result<(), PhotographReadError>;
 pub fn render_source_affine(view, a: &[f64; 6], level: usize, pixels: &[usize],
-    resolution: usize, sampler: Sampler, out: &mut [f32]) -> Result<(), PhotographReadError>;
+    resolution: usize, sampler: Sampler, out: &mut [f32], progress)
+    -> Result<(), PhotographReadError>;
 pub fn sample_source_grid(view, a: &[f64; 6], level: usize, points: GridPoints<'_>,
-    edge: GridEdge) -> Result<Option<Vec<f32>>, PhotographReadError>;
+    edge: GridEdge, progress) -> Result<Option<Vec<f32>>, PhotographReadError>;
 pub fn read_source_samples(view, level: usize, positions: &[[f32; 2]],
-    border: u32) -> Result<SourceSamples, PhotographReadError>;
+    border: u32, progress) -> Result<SourceSamples, PhotographReadError>;
 pub fn read_source_rect<'p>(source: &TiledPhotograph, pool: &'p RegionPool, level: usize,
-    rect: LevelRect) -> Result<SourceRect<'p>, PhotographReadError>;
+    rect: LevelRect, progress) -> Result<SourceRect<'p>, PhotographReadError>;
 pub fn source_clipped_share(source: &TiledPhotograph,
-    outline: &[[f64; 2]]) -> Result<Option<f64>, PhotographReadError>;
+    outline: &[[f64; 2]], progress) -> Result<Option<f64>, PhotographReadError>;
 pub fn sample_source_member_grid(view, position: [f64; 2], affine_shape: [[f64; 2]; 2],
-    params: &ClusterRefineParams) -> Result<Option<Vec<f32>>, PhotographReadError>;
+    params: &ClusterRefineParams, progress) -> Result<Option<Vec<f32>>, PhotographReadError>;
 ```
 
 | Entry point | Reads as | Returns |
@@ -167,6 +168,28 @@ mid-read; one made in memory fails only for a level, rectangle or tile it does
 not have, or for having no pixels. The whole-pyramid samplers (`render_tile`,
 the `remap_*` functions) keep their signatures and stay infallible: a pyramid
 already assembled cannot fail.
+
+Every entry point takes the caller's `Progress` and hands it to each tile
+read, the reads that would decode a photograph again for a tile evicted while
+the kernel ran polling it for cancellation, so such a decode stops with the
+kernel. A render reports nothing through it, and a photograph that holds its
+tiles decodes nothing and never polls it. Every kernel passes its caller's
+cancel flag down to its renders: its own `Progress`, or, for a nested call
+whose reports it does not pass on (each item of a parallel loop, or a fit
+nested in a step that reports its own phases), `Progress::silenced`, which
+carries the flag and reports nothing. A nested call the cancel stops can
+answer as a stage that failed, so a kernel that hands one the flag reads it
+again before it answers, and answers its own cancellation rather than a
+half-built answer. A panel on the GUI thread, whose
+photograph holds the tiles it renders, passes `&Progress::none()`, and so do
+the Python bindings that have no cancel flag to give. A kernel
+whose renders keep their failure aside rather than return it, as the grown
+plane's step does, keeps the `Progress` beside the failure. The cancel flag
+could instead have been carried by the region pool or `ViewRegions`, which
+would have changed no kernel's signature; a `Progress` in each read is what
+the [standards](../../STANDARDS.md#long-running-functions-take-a-progress) ask
+of a call that can run longer than a second, as a decode of a large photograph
+can.
 
 The pool belongs to a kernel call, not to a thread or a view: the caller of a
 kernel makes one for the call and passes it in, so a call over 151 views shares
@@ -229,9 +252,9 @@ use sfmtool_core::camera::TiledPhotograph;
 let source = TiledPhotograph::from_image(image);
 let pool = RegionPool::for_kernel_call();
 let mut view = ViewRegions::new(&source, &pool);
-let tile = render_source_tile(&mut view, &mut map, Sampler::Anisotropic)?;
+let tile = render_source_tile(&mut view, &mut map, Sampler::Anisotropic, progress)?;
 // The next round's frame moved a little: this render reuses the kept regions.
-let next = render_source_tile(&mut view, &mut moved_map, Sampler::Anisotropic)?;
+let next = render_source_tile(&mut view, &mut moved_map, Sampler::Anisotropic, progress)?;
 ```
 
 ## Theory
@@ -422,7 +445,10 @@ the whole pyramid's; it does the same for the grid and affine samplers, the
 sample windows and the rectangles, and checks that nested parallel renders on
 eight threads never hold more than a small pool, that each copied read
 reserves its grown regions, and that the tile path pins no more than its
-window. [source/kept_tests.rs](../../../crates/sfmtool-core/src/camera/sampler/source/kept_tests.rs)
+window; and that every entry point given a cancelled `Progress` reads a
+photograph that holds its tiles, through copied regions and through the tile
+path, as it reads it given `Progress::none()`.
+[source/kept_tests.rs](../../../crates/sfmtool-core/src/camera/sampler/source/kept_tests.rs)
 checks that regions assembled from tiles equal the whole pyramid's pixels at
 every level, across tile edges and at the image's edges; that each kept region
 is its required region grown by the margin and clipped to the level, for sides
