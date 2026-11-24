@@ -719,8 +719,9 @@ struct SlotData {
     /// photograph is not current: from the build that made it until the slot
     /// reads its files or drops its entries, kept after a cancelled build until
     /// the next one publishes. Not counted against the budget: one photograph's
-    /// level `K` and the levels below it, a few hundred kilobytes, for each
-    /// photograph a build has started on and not finished.
+    /// level `K`, whose long side is at most a tile, and the levels below it,
+    /// up to about 1 MB with the cache's 512 px tiles, for each photograph a
+    /// build has started on and not finished.
     coarsest: Option<Arc<CoarsestLevel>>,
 }
 
@@ -906,9 +907,12 @@ struct Inner {
     bytes: u64,
     /// What [`PhotographCache::request_layout`] found of each photograph's
     /// layout, never [`PeekedLayout::NotKnown`]: kept whatever the budget and
-    /// not counted against it, since each is a few dozen bytes. An entry
-    /// becomes `Known` when a build or a check finds the photograph's mipmap
-    /// current, and `Building` when a read finds a file of it not current.
+    /// not counted against it, since each is a few dozen bytes, except a
+    /// `Building` entry under a budget of 0 holding the coarsest level a build
+    /// has published, up to about 1 MB, while that build is unfinished. An
+    /// entry becomes `Known` when a build or a check finds the photograph's
+    /// mipmap current, and `Building` when a read finds a file of it not
+    /// current.
     /// `forget` and `clear` drop them.
     layouts: HashMap<PathBuf, PeekedLayout>,
 }

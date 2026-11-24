@@ -873,7 +873,8 @@ in-core photograph there, with no builder object or queue; the code is in
   dropped; a cancelled build's stays until the next build publishes its
   own, since the photograph is queued again. The level is not counted
   against the budget: it is held only while a build of the photograph is
-  unfinished, a few hundred kilobytes each. A build made again in memory
+  unfinished, level `K`'s long side at most a tile, so up to about 1 MB
+  each with the cache's 512 px tiles. A build made again in memory
   for a kernel's read publishes nothing.
 - **Progress.** A `get` reports the build's phases `decode`, `reduce` and
   `encode`, counting levels, through its `Progress`; a `get_many` member
@@ -1254,7 +1255,8 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   A build held once it has published the coarsest level answering
   `layout` as `Building` with that level, before any file is written: the
   layout the finished mipmap is read under and one tile of each of levels
-  `K` to the last, equal to the coarse tiles the written files give, the
+  `K` to the last, equal to the coarse tiles the written files give and
+  kept through a panel's header read and tile ask meanwhile, the
   value `COARSEST_PUBLISHED` reported once through `get_many`'s `Progress`,
   and the photograph `Known` with no coarsest level once the build ends,
   with a budget and with a budget of 0.

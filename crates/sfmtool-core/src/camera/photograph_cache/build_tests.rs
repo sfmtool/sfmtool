@@ -899,7 +899,8 @@ fn get_many_waits_on_a_build_another_caller_is_making() {
 /// slot hook's `CoarsestPublished`), before it has written a file, answers
 /// `layout` as `Building` with that level: the layout the finished mipmap is
 /// read under, and one tile of level `K` and of each level below it, equal to
-/// the coarse tiles the written files then give. The build reports
+/// the coarse tiles the written files then give, and kept through a panel's
+/// header read and tile ask meanwhile. The build reports
 /// [`COARSEST_PUBLISHED`] once through `get_many`'s `Progress`, and once it
 /// ends the photograph is `Known` and keeps no coarsest level. With a budget,
 /// where the slot holds the level, and with one of 0, where the layout a
@@ -960,6 +961,22 @@ fn a_build_publishes_the_coarsest_level_before_it_ends() {
             panic!("{budget}: {:?}", cache.layout(&path));
         };
         assert!(ws.mipmap_files().is_empty(), "{budget}: a file was written");
+        // A panel's header read again, or its ask for a tile, while the build
+        // runs keeps the level published.
+        cache.request_layout(&path);
+        let key = TileKey {
+            level: 0,
+            col: 0,
+            row: 0,
+        };
+        let _ = cache.try_decode_tiles(&path, &[key], &Progress::none());
+        assert_eq!(
+            cache.layout(&path),
+            PeekedLayout::Building {
+                coarsest: Some(Arc::clone(&coarsest))
+            },
+            "{budget}: the published level was dropped"
+        );
         release.send(()).unwrap();
         assert_eq!(built.recv_timeout(HANG).unwrap(), [4.0], "{budget}");
 
