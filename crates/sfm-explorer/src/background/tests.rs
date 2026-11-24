@@ -716,6 +716,7 @@ fn each_operation_declares_the_spec_s_queue_lock_and_quiet_value() {
         ("Camera model proposal", Fast, false, true),
         ("Track Table columns", Fast, false, true),
         ("Track Table reference picks", Fast, false, true),
+        ("Build mipmaps", Fast, false, true),
     ];
     assert_eq!(
         table.len(),
@@ -863,6 +864,9 @@ fn quiet_job_stops(operation: Operation) -> bool {
         "Track Table reference picks" => {
             crate::track_table_panel::picks::job_stops_when_cancelled()
         }
+        // A chunk of one out-of-core photograph whose mipmap it would
+        // otherwise make.
+        "Build mipmaps" => crate::state::build_mipmaps::job_stops_when_cancelled(),
         other => panic!("{other} has no starter here; add one"),
     }
 }
@@ -3505,7 +3509,7 @@ fn start_quiet(
             Operation::LIVE_EVALUATION,
             QuietSource::LiveEvaluation,
             QuietRank::BenchItem,
-            node,
+            Some(node),
             "fake subject".to_string(),
             quiet_job(gate, said),
         )

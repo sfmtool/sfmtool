@@ -41,7 +41,10 @@
 //!   scroll.
 //!
 //! No panel reads a whole pyramid, and none decodes on the GUI thread, at
-//! any budget.
+//! any budget. None makes a mipmap: an out-of-core photograph whose mipmap
+//! is not current is [`DisplayLayout::Building`], queued for the *Build
+//! mipmaps* quiet task ([`super::build_mipmaps`]), and none of its tiles is
+//! asked for until that task has made it.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -55,6 +58,8 @@ use sfmtool_core::camera::{
 };
 use sfmtool_core::progress::Progress;
 
+use super::build_mipmaps::MipmapList;
+
 #[cfg(test)]
 mod tests;
 
@@ -66,6 +71,10 @@ pub(crate) enum DisplayLayout {
     /// Its header is being read on a worker, or about to be. A repaint
     /// follows the read.
     Loading,
+    /// An out-of-core photograph whose mipmap is missing or stale: queued
+    /// for *Build mipmaps*, whose run that makes it ends with a repaint. No
+    /// tile of it is asked for meanwhile.
+    Building,
     /// The file could not be read or decoded.
     Unreadable,
 }
@@ -174,6 +183,11 @@ type Task = Box<dyn FnOnce() + Send>;
 /// runs by hand.
 type Spawner = Arc<dyn Fn(Task) + Send + Sync>;
 
+/// A test's hook told the chunk each run of *Build mipmaps* takes, as it
+/// starts.
+#[cfg(test)]
+pub(crate) type ChunkHook = Arc<dyn Fn(&[PathBuf]) + Send + Sync>;
+
 /// The tiles a photograph's decode tasks answered that no panel has taken
 /// yet.
 type Answered = HashMap<TileKey, Arc<PhotographTile>>;
@@ -225,20 +239,22 @@ impl TileRequests {
     /// Keep what a decode of `path` that failed with `e` tells later frames.
     /// A cancelled decode tells nothing, and the next frame asks again. An
     /// unreadable photograph is remembered with its file's stamp, in place of
-    /// any tiles answered for it. A file of its mipmap found changed, which
-    /// only a kernel's read answers and a panel's decode never does, is
-    /// remembered the same way, never by forgetting the path, so it cannot
-    /// start a request and a repaint on every frame. A key or a level the
-    /// photograph does not have comes from a layout read before the file
-    /// changed size: the cache forgets the path, so the next frame reads the
-    /// header again rather than ask for the same pixels on every frame.
+    /// any tiles answered for it. A photograph whose mipmap was found not
+    /// current (`Changed`) is `Building` in the cache from then on, so the
+    /// next frame asks for none of its tiles and queues it for *Build
+    /// mipmaps*; the tiles answered for it are dropped, since they may be of
+    /// the files that changed. A key or a level the photograph does not have
+    /// comes from a layout read before the file changed size: the cache
+    /// forgets the path, so the next frame reads the header again rather than
+    /// ask for the same pixels on every frame.
     fn failed_with(&mut self, cache: &PhotographCache, path: &Path, e: TileError) {
         match e {
             TileError::Cancelled => {}
-            TileError::Unreadable { .. } | TileError::Changed { .. } => {
+            TileError::Unreadable { .. } => {
                 self.answered.retain(|(p, _)| p != path);
                 self.failures.insert(path.to_path_buf(), file_stamp(path));
             }
+            TileError::Changed { .. } => self.answered.retain(|(p, _)| p != path),
             TileError::OutOfRange { .. } => cache.forget(path),
         }
     }
@@ -321,7 +337,12 @@ pub(crate) struct PhotographRequests {
     /// The paths a header read is running for.
     layouts_in_flight: Arc<Mutex<HashSet<PathBuf>>>,
     tiles: Arc<Mutex<TileRequests>>,
+    /// The photographs queued for *Build mipmaps*, shared with its job.
+    pub(super) mipmaps: Arc<Mutex<MipmapList>>,
     spawn: Spawner,
+    /// Told the chunk each run of *Build mipmaps* takes, as it starts.
+    #[cfg(test)]
+    on_chunk: Option<ChunkHook>,
 }
 
 impl Default for PhotographRequests {
@@ -347,8 +368,42 @@ impl PhotographRequests {
         Self {
             layouts_in_flight: Arc::default(),
             tiles: Arc::default(),
+            mipmaps: Arc::default(),
             spawn,
+            #[cfg(test)]
+            on_chunk: None,
         }
+    }
+
+    /// Keep `path`, whose mipmap *Build mipmaps* could not make, as a failed
+    /// read is kept: answered as unreadable, with its file's stamp, until
+    /// the file changes, so a cache that remembers no failure is not asked
+    /// to make it again on every frame.
+    pub(super) fn failed_to_build(&self, path: &Path) {
+        let mut tiles = lock(&self.tiles);
+        tiles.answered.retain(|(p, _)| p != path);
+        tiles.failures.insert(path.to_path_buf(), file_stamp(path));
+    }
+
+    /// Tell the test's hook the chunk a run of *Build mipmaps* has taken.
+    #[cfg(test)]
+    pub(super) fn chunk_started(&self, chunk: &[PathBuf]) {
+        if let Some(on_chunk) = &self.on_chunk {
+            on_chunk(chunk);
+        }
+    }
+
+    /// Call `hook` with the chunk each run of *Build mipmaps* takes, as it
+    /// starts: what lets a test hold a run while it asks for a task.
+    #[cfg(test)]
+    pub(crate) fn set_chunk_hook(&mut self, hook: ChunkHook) {
+        self.on_chunk = Some(hook);
+    }
+
+    /// The paths waiting in *Build mipmaps*' list, the next first.
+    #[cfg(test)]
+    pub(crate) fn mipmaps_waiting(&self) -> Vec<PathBuf> {
+        super::build_mipmaps::lock(&self.mipmaps).waiting()
     }
 
     /// Start reading `path`'s header into `cache` unless a read of it is
@@ -570,18 +625,30 @@ impl TaskQueue {
 /// A photograph whose last decode task failed is answered as unreadable,
 /// which is what a cache of budget 0, which remembers no failure, would
 /// otherwise never say, until its file changes.
+///
+/// An out-of-core photograph whose mipmap is not current is
+/// [`DisplayLayout::Building`], and is added to the front of *Build
+/// mipmaps*' list once while it waits there ([`super::build_mipmaps`]); a
+/// panel never makes a mipmap, and asks for none of its tiles meanwhile.
 pub(crate) fn display_layout(source: PhotographSource<'_>, ctx: &egui::Context) -> DisplayLayout {
     layout_of(source, Some(ctx))
 }
 
 /// [`display_layout`], which with no `ctx` asks for nothing: it neither
-/// starts a header read nor checks whether a file that failed has changed.
+/// starts a header read, nor checks whether a file that failed has changed,
+/// nor queues a photograph for *Build mipmaps*.
 fn layout_of(source: PhotographSource<'_>, ctx: Option<&egui::Context>) -> DisplayLayout {
     if source.requests.failed_asking(source.path, ctx) {
         return DisplayLayout::Unreadable;
     }
     match source.cache.layout(source.path) {
         PeekedLayout::Known(layout) => DisplayLayout::Known(layout),
+        PeekedLayout::Building => {
+            if ctx.is_some() {
+                super::build_mipmaps::lock(&source.requests.mipmaps).queue(source.path);
+            }
+            DisplayLayout::Building
+        }
         PeekedLayout::Unreadable(_) => DisplayLayout::Unreadable,
         PeekedLayout::NotKnown => {
             if let Some(ctx) = ctx {
@@ -631,6 +698,9 @@ pub(crate) fn display_tiles(
             None => match source.cache.peek_tile(source.path, key) {
                 PeekedTile::Ready(tile) => DisplayTile::Ready(tile),
                 PeekedTile::Unreadable => DisplayTile::Unreadable,
+                // Asked for by no task: the next frame's layout is
+                // `Building`, which queues the photograph.
+                PeekedTile::Building => DisplayTile::Loading,
                 PeekedTile::NotReady => {
                     missing.push(key);
                     DisplayTile::Loading
@@ -707,6 +777,9 @@ fn display_tile_set(
             match source.cache.peek_tile(source.path, key) {
                 PeekedTile::Ready(tile) => ready.push(tile),
                 PeekedTile::Unreadable => return DisplayTileSet::Unreadable,
+                // Asked for by no task: the next frame's layout is
+                // `Building`, which queues the photograph.
+                PeekedTile::Building => return DisplayTileSet::Loading,
                 PeekedTile::NotReady => missing.push(key),
             }
         }
@@ -774,7 +847,10 @@ fn read_tiles<T>(
 ) -> PeekedRead<T> {
     let layout = match layout_of(source, ctx) {
         DisplayLayout::Known(layout) => layout,
-        DisplayLayout::Loading => return PeekedRead::Loading,
+        // A picture of a photograph waiting for its mipmap is drawn as
+        // loading; the run of *Build mipmaps* that makes it ends with a
+        // repaint.
+        DisplayLayout::Loading | DisplayLayout::Building => return PeekedRead::Loading,
         DisplayLayout::Unreadable => return PeekedRead::Unreadable,
     };
     let Some(coarsest) = layout.levels().checked_sub(1) else {

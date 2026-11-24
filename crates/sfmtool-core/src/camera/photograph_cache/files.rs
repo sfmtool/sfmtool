@@ -22,8 +22,8 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, MutexGuard};
 
 use super::{
-    file_stamp, has_key, tile_bytes, Asked, GetError, Got, Inner, Kept, PhotographCache, Slot,
-    SlotData, WorkspaceSetting,
+    file_stamp, has_key, tile_bytes, Asked, FileStamp, GetError, Got, Inner, Kept, PeekedLayout,
+    PhotographCache, Slot, SlotData, WorkspaceSetting,
 };
 use crate::camera::image::{image_dimensions, ImageU8};
 use crate::camera::mipmap::{
@@ -166,10 +166,41 @@ pub(super) enum Checked {
     /// threshold, too thin to store a reduced level, or with a header that
     /// cannot be read (whose decode then reports it).
     InCore,
-    /// Out of core, and its coarsest mip level file missing or stale.
+    /// Out of core, and its coarsest mip level file missing or stale, or a
+    /// file of its mipmap found not current by a read ([`Stale`]).
     NotCurrent,
     /// Out of core with its coarsest file current: the mipmap, and that file.
     Current(Arc<MipmapFiles>, Box<MipLevelFile>),
+}
+
+/// A file of an out-of-core photograph's mipmap that a read found missing,
+/// not current or not decoding, which a check of the coarsest file alone
+/// does not show (a finer file, `-mip0`, or the original read as level 0).
+///
+/// While the original is the one it was found under and no build has made
+/// the mipmap since, [`PhotographCache::check_files`] answers the mipmap not
+/// current, so the next `get` or `get_many` makes it, rewriting every level
+/// whose file is not current, rather than take the coarsest file's word and
+/// read the same file again. A build mends a file that is missing or whose
+/// record is not current by writing it, so such a file found again, gone or
+/// with another length or modification time (deleted again, or rewritten by
+/// another process), is a first find once more. A read that finds the same
+/// file not current again after that build, still there with the length and
+/// modification time it had when first found, has found one the build left
+/// as it was because its record is current, though its data does not
+/// decode: no build mends it, and the photograph is then remembered as
+/// unreadable until its original changes or the cache forgets it, so
+/// neither a panel nor *Build mipmaps* asks for it again and again.
+pub(super) struct Stale {
+    /// The original's length and modification time when the file was found.
+    stamp: FileStamp,
+    /// The file found not current.
+    file: PathBuf,
+    /// That file's own length and modification time when it was found,
+    /// `None` when it was missing.
+    file_stamp: FileStamp,
+    /// Whether a build has made the mipmap since.
+    rebuilt: bool,
 }
 
 /// How a slot outside the map reads its photograph, under a budget of 0,
@@ -299,6 +330,73 @@ impl PhotographCache {
         Some(source)
     }
 
+    /// Whether a read has found a file of `path`'s mipmap not current
+    /// ([`Stale`]) under the original as it is now, with no build since. An
+    /// entry found under another original is dropped.
+    fn found_stale(&self, path: &Path) -> bool {
+        let stamp = file_stamp(path);
+        let mut stale = self.shared.stale.lock().unwrap_or_else(|e| e.into_inner());
+        match stale.get(path) {
+            Some(found) if found.stamp != stamp => {
+                stale.remove(path);
+                false
+            }
+            Some(found) => !found.rebuilt,
+            None => false,
+        }
+    }
+
+    /// Note that a build has made `path`'s mipmap, so a file a read found
+    /// not current before is made again or found current
+    /// ([`Stale::rebuilt`]).
+    pub(super) fn made_since_stale(&self, path: &Path) {
+        let mut stale = self.shared.stale.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(found) = stale.get_mut(path) {
+            found.rebuilt = true;
+        }
+    }
+
+    /// Note that a read found `file`, a file of `path`'s mipmap, not current,
+    /// and answer whether it found the same file so after a build made the
+    /// mipmap again under the same original, the file still there and
+    /// unchanged since it was first found: a file a build does not mend.
+    fn note_stale(&self, path: &Path, file: &Path) -> bool {
+        let stamp = file_stamp(path);
+        let found_stamp = file_stamp(file);
+        let mut stale = self.shared.stale.lock().unwrap_or_else(|e| e.into_inner());
+        let again = stale.get(path).is_some_and(|found| {
+            found.rebuilt
+                && found.stamp == stamp
+                && found.file == file
+                && found_stamp.is_some()
+                && found.file_stamp == found_stamp
+        });
+        if !again {
+            stale.insert(
+                path.to_path_buf(),
+                Stale {
+                    stamp,
+                    file: file.to_path_buf(),
+                    file_stamp: found_stamp,
+                    rebuilt: false,
+                },
+            );
+        }
+        again
+    }
+
+    /// Whether `path`'s mipmap was last made by a build that could not write
+    /// its files, under the original as it is now.
+    pub(super) fn held_in_memory(&self, path: &Path) -> bool {
+        let stamp = file_stamp(path);
+        let not_written = self
+            .shared
+            .not_written
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        not_written.get(path) == Some(&stamp)
+    }
+
     /// Whether the photograph at `path`, read under `setting`, is out of core
     /// and whether its coarsest mip level file is current, with the mipmap
     /// and that file when it is. Reads the header, and for an out-of-core
@@ -324,6 +422,9 @@ impl PhotographCache {
         let Some(location) = mipmap_location(path).filter(|_| k > 0) else {
             return Checked::InCore;
         };
+        if self.found_stale(path) {
+            return Checked::NotCurrent;
+        }
         let current = || {
             let source = self.source_for(path, &location)?;
             let expected = ExpectedMipLevel::new(&layout, source.relative(), k)?;
@@ -377,7 +478,7 @@ impl PhotographCache {
             Checked::NotCurrent => data.tier = Tier::NotCurrent,
             Checked::Current(files, coarsest) => {
                 let tier = Tier::Files(Arc::clone(&files));
-                self.read_from(&mut inner, mapped, slot, data, files, vec![*coarsest]);
+                self.read_from(path, &mut inner, mapped, slot, data, files, vec![*coarsest]);
                 return tier;
             }
         }
@@ -391,9 +492,12 @@ impl PhotographCache {
     /// dropped down to the budget; outside the map, files held in memory are
     /// held by the slot, and others dropped, to be read from disk again. What
     /// the slot kept before, the tiles of a whole decode in core included, is
-    /// dropped.
+    /// dropped. The layout [`Self::request_layout`] kept for `path`, if any,
+    /// becomes the files' one.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn read_from(
         &self,
+        path: &Path,
         inner: &mut Inner,
         mapped: bool,
         slot: &Arc<Slot>,
@@ -420,6 +524,9 @@ impl PhotographCache {
                 let level = file.record().level as usize;
                 data.held.insert(level, Arc::new(LevelSource::Mip(file)));
             }
+        }
+        if let Some(kept) = inner.layouts.get_mut(path) {
+            *kept = PeekedLayout::Known(Arc::clone(&files.layout));
         }
         data.tier = Tier::Files(files);
         drop(data);
@@ -458,7 +565,8 @@ impl PhotographCache {
     /// For a cache of budget 0, which keeps no slot: how the photograph at
     /// `path`, read under `setting`, is read now, with a slot outside the map
     /// that reads its files when they are current. Each request decides so
-    /// from the files as they are.
+    /// from the files as they are. Files found current make the layout
+    /// [`Self::request_layout`] kept for `path`, if any, theirs.
     pub(super) fn unmapped_files_slot(&self, path: &Path, setting: &WorkspaceSetting) -> Unmapped {
         // A workspace without `mipmap_options` has no out-of-core
         // photograph: nothing is read for it, not even the stamp.
@@ -477,6 +585,9 @@ impl PhotographCache {
                     data.made = Some(Ok(Arc::clone(&files.layout)));
                     data.records
                         .insert(files.coarsest(), coarsest.record().clone());
+                }
+                if let Some(kept) = self.lock().layouts.get_mut(path) {
+                    *kept = PeekedLayout::Known(Arc::clone(&files.layout));
                 }
                 Unmapped::Files(slot, files)
             }
@@ -563,9 +674,12 @@ impl PhotographCache {
                 Ok(made) => made,
                 Err(Failure::Changed(file)) => {
                     // The mipmap is not current: from now on the slot treats
-                    // the photograph as one whose files are stale.
-                    self.mark_not_current(path, slot);
-                    return Err(Failure::Changed(file));
+                    // the photograph as one whose files are stale, or, for a
+                    // file a build did not mend, as unreadable.
+                    return Err(match self.mark_not_current(path, slot, &file) {
+                        Some(e) => Failure::Get(e),
+                        None => Failure::Changed(file),
+                    });
                 }
                 Err(e) => return Err(e),
             };
@@ -803,39 +917,59 @@ impl PhotographCache {
         Ok(tiles)
     }
 
-    /// Mark `slot`'s mipmap not current: its tiles and file entries from the
-    /// files are dropped, the layout `request_layout` kept for `path` becomes
-    /// the in-core one, and from now on `get` makes the mipmap again, a
-    /// panel's decode reads the photograph whole in core and a kernel's tile
-    /// read answers `Changed`. What a request that finds a file not current
-    /// does: a kernel's read then fails with `Changed`, and a panel's decodes
-    /// the tiles in core, so it never answers `Changed`.
-    pub(super) fn mark_not_current(&self, path: &Path, slot: &Arc<Slot>) {
+    /// Mark `slot`'s mipmap not current, a read having found `file`, a file
+    /// of it, missing, not current or not decoding: its tiles and file
+    /// entries are dropped, the layout `request_layout` kept for `path`
+    /// becomes [`PeekedLayout::Building`], the file is noted ([`Stale`]), and
+    /// from now on `get` makes the mipmap again and a panel's decode and a
+    /// kernel's tile read answer `Changed`.
+    ///
+    /// When the same file was found so after a build made the mipmap again
+    /// under the same original, a build does not mend it: the photograph is
+    /// remembered as unreadable instead, with the error answered here, and
+    /// the kept layout says so, so nothing asks for it again until the
+    /// original changes. `None` otherwise, and when the slot no longer reads
+    /// from its files (another request marked it first).
+    pub(super) fn mark_not_current(
+        &self,
+        path: &Path,
+        slot: &Arc<Slot>,
+        file: &Path,
+    ) -> Option<GetError> {
+        // Only a slot that reads its files is marked, the first request to
+        // find one of them not current.
+        slot.lock().tier.files()?;
+        // Noted with no other lock held.
+        let again = self.note_stale(path, file).then(|| {
+            GetError::Unreadable(format!(
+                "{}, a file of the mipmap of {}, could not be read after the mipmap was \
+                 made again",
+                file.display(),
+                path.display()
+            ))
+        });
         let mut inner = self.lock();
         let mapped = inner
             .map
             .get(path)
             .is_some_and(|mapped| Arc::ptr_eq(mapped, slot));
-        let (width, height) = {
+        {
             let mut data = slot.lock();
-            let Some(files) = data.tier.files() else {
-                return;
-            };
-            let size = files.layout.level_size(0);
+            data.tier.files()?;
             data.tier = Tier::NotCurrent;
-            data.made = None;
+            data.made = again.clone().map(Err);
             data.records.clear();
             let freed = data.drop_entries();
             if mapped {
                 inner.bytes -= freed;
             }
-            size
-        };
-        if let Some(Ok(layout)) = inner.layouts.get(path) {
-            if layout.is_out_of_core() {
-                let in_core = Arc::new(self.layout_for(width, height));
-                inner.layouts.insert(path.to_path_buf(), Ok(in_core));
-            }
         }
+        if let Some(kept) = inner.layouts.get_mut(path) {
+            *kept = match &again {
+                Some(e) => PeekedLayout::Unreadable(e.to_string()),
+                None => PeekedLayout::Building,
+            };
+        }
+        again
     }
 }

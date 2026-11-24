@@ -271,7 +271,7 @@ impl AppState {
             Operation::CAMERA_MODEL_PROPOSAL,
             QuietSource::CameraModelProposal,
             QuietRank::CameraModelProposal,
-            node,
+            Some(node),
             label,
             QuietJob::new(run, move || {
                 let _ = dropped.send(Message::Dropped);

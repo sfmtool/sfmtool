@@ -42,9 +42,14 @@ mod tests;
 /// without reading a file or waiting.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PeekedLayout {
-    /// The header has been read, or the photograph decoded: its tiles may be
-    /// asked for.
+    /// The header has been read, or the photograph decoded, and for an
+    /// out-of-core photograph its mipmap found current or made: its tiles
+    /// may be asked for.
     Known(Arc<PyramidLayout>),
+    /// An out-of-core photograph whose mipmap is missing, stale or being
+    /// made: no tile of it is asked for until a `get` or `get_many` makes
+    /// the mipmap, which a panel never does.
+    Building,
     /// The photograph cannot be read; the message names the file and why.
     Unreadable(String),
     /// Not read yet: [`PhotographCache::request_layout`] reads it.
@@ -55,6 +60,9 @@ pub enum PeekedLayout {
 pub enum PeekedTile {
     /// The tile, with its border.
     Ready(Arc<PhotographTile>),
+    /// The photograph is [`PeekedLayout::Building`]: asking for the tile
+    /// would answer [`TileError::Changed`].
+    Building,
     /// The photograph cannot be read, or has no such tile: asking for it
     /// would fail.
     Unreadable,
@@ -68,9 +76,10 @@ pub enum TileError {
     /// A file of an out-of-core photograph's mipmap, or its original, is
     /// missing, not current, or not the one the cache first read for it:
     /// `path` names the file, or the photograph when its mipmap was already
-    /// found not current. Only a kernel's read answers it, which never makes
-    /// a mipmap ([`PhotographCache::get`] does); a panel's decode reads such
-    /// a photograph whole in core instead.
+    /// found not current. The photograph is [`PeekedLayout::Building`] from
+    /// then on, until a [`PhotographCache::get`] or
+    /// [`PhotographCache::get_many`] makes its mipmap; a tile read never
+    /// makes one.
     Changed { path: PathBuf },
     /// The photograph does not exist, cannot be read or decoded, or has a
     /// side over [`MAX_JPEG_SIDE`](crate::camera::mipmap::MAX_JPEG_SIDE);
@@ -232,52 +241,70 @@ impl PhotographCache {
     /// The layout of a decoded photograph is the one its slot keeps, so a
     /// panel that asks every frame is answered the same `Arc`, with nothing
     /// allocated, while the photograph's layout stays the same.
+    ///
+    /// An out-of-core photograph whose slot found its mipmap missing or
+    /// stale, or is making it, is [`PeekedLayout::Building`] until the
+    /// mipmap is made, or [`PeekedLayout::Unreadable`] when its build
+    /// failed.
     pub fn layout(&self, path: &Path) -> PeekedLayout {
         if let Some(slot) = self.mapped(path) {
-            match &slot.lock().made {
-                Some(Ok(layout)) => return PeekedLayout::Known(Arc::clone(layout)),
-                Some(Err(e)) => return PeekedLayout::Unreadable(e.to_string()),
-                None => {}
+            let data = slot.lock();
+            match (&data.made, &data.tier) {
+                (Some(Err(e)), _) => return PeekedLayout::Unreadable(e.to_string()),
+                (_, Tier::NotCurrent) => return PeekedLayout::Building,
+                (Some(Ok(layout)), _) => return PeekedLayout::Known(Arc::clone(layout)),
+                (None, _) => {}
             }
         }
-        match self.lock().layouts.get(path) {
-            Some(Ok(layout)) => PeekedLayout::Known(Arc::clone(layout)),
-            Some(Err(why)) => PeekedLayout::Unreadable(why.clone()),
-            None => PeekedLayout::NotKnown,
-        }
+        self.lock()
+            .layouts
+            .get(path)
+            .cloned()
+            .unwrap_or(PeekedLayout::NotKnown)
     }
 
-    /// Read `path`'s header and keep the layout its tiles are served under,
-    /// or why it could not be read, for [`Self::layout`] to answer, whatever
-    /// the budget: for an out-of-core photograph whose mipmap is current, the
-    /// out-of-core layout, and otherwise the in-core one. For an out-of-core
-    /// photograph it checks the coarsest mip level file, as the photograph's
-    /// first request does (with a budget, in the slot, which keeps the
-    /// answer). Decodes no pixel and never waits on a slot; a panel calls it
-    /// on the rayon pool.
+    /// Read `path`'s header and keep what it says of the layout its tiles are
+    /// served under, or why it could not be read, for [`Self::layout`] to
+    /// answer, whatever the budget: an in-core photograph's in-core layout,
+    /// an out-of-core photograph's out-of-core layout when its mipmap is
+    /// current, and [`PeekedLayout::Building`] when its mipmap is missing or
+    /// stale. For an out-of-core photograph it checks the coarsest mip level
+    /// file, as the photograph's first request does (with a budget, in the
+    /// slot, which keeps the answer). Decodes no pixel and never waits on a
+    /// slot; a panel calls it on the rayon pool.
+    ///
+    /// Under a budget of 0, which keeps no build, an out-of-core photograph
+    /// whose last build could not write its files, under the original as it
+    /// is now, is answered with its in-core layout, since a panel then reads
+    /// it from a decode in core ([`Self::try_decode_tiles`]).
     pub fn request_layout(&self, path: &Path) {
         let setting = self.setting_for(path);
-        let layout = header(path, &setting)
-            .map(|(width, height)| {
-                let files = if !is_out_of_core(&setting, width, height) {
-                    None
+        let layout = match header(path, &setting) {
+            Err(e) => PeekedLayout::Unreadable(e.to_string()),
+            Ok((width, height)) => {
+                let in_core = || PeekedLayout::Known(Arc::new(self.layout_for(width, height)));
+                if !is_out_of_core(&setting, width, height) {
+                    in_core()
                 } else if self.shared.options.budget_bytes == 0 {
                     match self.unmapped_files_slot(path, &setting) {
-                        Unmapped::Files(_, files) => Some(files),
-                        Unmapped::InCore | Unmapped::NotCurrent => None,
+                        Unmapped::Files(_, files) => PeekedLayout::Known(Arc::clone(&files.layout)),
+                        Unmapped::InCore => in_core(),
+                        Unmapped::NotCurrent if self.held_in_memory(path) => in_core(),
+                        Unmapped::NotCurrent => PeekedLayout::Building,
                     }
                 } else {
-                    match self.tier_of(path, &self.slot_for(path)) {
-                        Tier::Files(files) => Some(files),
-                        Tier::Unchecked | Tier::InCore | Tier::NotCurrent => None,
+                    let slot = self.slot_for(path);
+                    match self.tier_of(path, &slot) {
+                        Tier::Files(files) => PeekedLayout::Known(Arc::clone(&files.layout)),
+                        Tier::NotCurrent => match &slot.lock().made {
+                            Some(Err(e)) => PeekedLayout::Unreadable(e.to_string()),
+                            _ => PeekedLayout::Building,
+                        },
+                        Tier::Unchecked | Tier::InCore => in_core(),
                     }
-                };
-                match files {
-                    Some(files) => Arc::clone(&files.layout),
-                    None => Arc::new(self.layout_for(width, height)),
                 }
-            })
-            .map_err(|e| e.to_string());
+            }
+        };
         self.lock().layouts.insert(path.to_path_buf(), layout);
     }
 
@@ -286,7 +313,9 @@ impl PhotographCache {
     /// every frame.
     ///
     /// Like [`Self::peek`] it does not stat the file. It counts as a use for
-    /// the eviction order, marking the tile as used, but not as a hit.
+    /// the eviction order, marking the tile as used, but not as a hit. Any
+    /// tile of a photograph [`Self::layout`] answers as
+    /// [`PeekedLayout::Building`] from its slot is [`PeekedTile::Building`].
     pub fn peek_tile(&self, path: &Path, key: TileKey) -> PeekedTile {
         let Some(slot) = self.mapped(path) else {
             return PeekedTile::NotReady;
@@ -295,8 +324,9 @@ impl PhotographCache {
         let mut guard = slot.lock();
         let data = &mut *guard;
         match &data.made {
-            None => PeekedTile::NotReady,
             Some(Err(_)) => PeekedTile::Unreadable,
+            _ if matches!(data.tier, Tier::NotCurrent) => PeekedTile::Building,
+            None => PeekedTile::NotReady,
             Some(Ok(layout)) if !has_key(layout, key) => PeekedTile::Unreadable,
             Some(Ok(_)) => match data.tiles.get_mut(&key) {
                 Some(kept) => {
@@ -427,13 +457,15 @@ impl PhotographCache {
     /// answers are the only ones the caller gets.
     ///
     /// An out-of-core photograph whose mipmap is current is read from its
-    /// files, with no reservation. It never makes a mipmap, and never answers
-    /// [`TileError::Changed`]: an out-of-core photograph whose files are
-    /// missing or stale, or turn out missing, not current or changed since
-    /// the slot read them (the slot's mipmap then marked not current), has
-    /// its tiles decoded whole in core, as above, in the same call; while
-    /// another caller makes its mipmap in the slot it is
-    /// [`TryDecode::Busy`].
+    /// files, with no reservation. It never makes a mipmap and never reads
+    /// an out-of-core photograph whole in core: one whose files are missing
+    /// or stale, being made, or turn out missing, not current or changed
+    /// since the slot read them, is [`TileError::Changed`], decoding
+    /// nothing, and [`PeekedLayout::Building`] from then on, until a `get` or
+    /// `get_many` makes its mipmap. Two cases are decoded whole in core, as
+    /// above, and kept by no slot: a level of a mipmap held in memory that
+    /// the slot no longer keeps, and, under a budget of 0, which keeps no
+    /// build, a photograph whose last build could not write its files.
     pub fn try_decode_tiles(
         &self,
         path: &Path,
@@ -453,18 +485,40 @@ impl PhotographCache {
         };
         let mut slot = slot.as_ref();
         // An out-of-core photograph whose mipmap is current is read from its
-        // files, which never waits on a slot or the build count. When a file
-        // turns out not current, the slot's mipmap is marked so and the
-        // tiles are decoded whole below, in core, so a panel is never
-        // answered `Changed`.
+        // files, which never waits on a slot or the build count. One whose
+        // mipmap is not current, found so now or before, is `Changed` and
+        // `Building` from then on, decoding nothing.
         let read_from_files = match slot {
             Some(slot) => match self.tier_of(path, slot) {
                 Tier::Files(files) => Some((Arc::clone(slot), files)),
-                Tier::Unchecked | Tier::InCore | Tier::NotCurrent => None,
+                Tier::NotCurrent => {
+                    let remembered = match &slot.lock().made {
+                        Some(Err(e)) => Some(e.clone()),
+                        _ => None,
+                    };
+                    return Err(match remembered {
+                        Some(e) => unreadable(path, e),
+                        None => TileError::Changed {
+                            path: path.to_path_buf(),
+                        },
+                    });
+                }
+                Tier::Unchecked | Tier::InCore => None,
             },
             None => match self.unmapped_files_slot(path, setting) {
                 Unmapped::Files(slot, files) => Some((slot, files)),
-                Unmapped::InCore | Unmapped::NotCurrent => None,
+                Unmapped::InCore => None,
+                // A build that could not write its files is not kept under
+                // a budget of 0: the tiles are decoded whole in core.
+                Unmapped::NotCurrent if self.held_in_memory(path) => None,
+                Unmapped::NotCurrent => {
+                    self.lock()
+                        .layouts
+                        .insert(path.to_path_buf(), PeekedLayout::Building);
+                    return Err(TileError::Changed {
+                        path: path.to_path_buf(),
+                    });
+                }
             },
         };
         if let Some((files_slot, files)) = read_from_files {
@@ -472,8 +526,8 @@ impl PhotographCache {
             match self.read_files(path, &files_slot, asked, false, progress) {
                 Ok(got) => return Ok(TryDecode::Decoded(got.tiles)),
                 Err(Failure::Get(e)) => return Err(unreadable(path, e)),
-                // `read_files` has marked the slot's mipmap not current.
-                Err(Failure::Changed(_)) => {}
+                // `read_files` has marked the photograph `Building`.
+                Err(Failure::Changed(file)) => return Err(TileError::Changed { path: file }),
                 // A level of a mipmap held in memory was evicted, which only
                 // a build makes again: the tiles are decoded whole in core
                 // and kept by no slot, which goes on reading its mipmap.

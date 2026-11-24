@@ -225,6 +225,9 @@ pub(crate) enum QuietSource {
     /// The Track Table panel's reference picks
     /// ([`crate::track_table_panel::picks`]).
     TrackTableReferencePicks,
+    /// *Build mipmaps*, which makes the mipmaps the panels wait on
+    /// (`state/build_mipmaps.rs`).
+    BuildMipmaps,
 }
 
 impl QuietSource {
@@ -238,11 +241,14 @@ impl QuietSource {
     /// its reference picks keep theirs in the panel's own state, each keyed by
     /// the document serial it read, so both run on a node a slow task holds,
     /// against the version on screen, and give way only to a task queued in
-    /// their own queue.
+    /// their own queue. *Build mipmaps* reads photographs, not a node's
+    /// version, and is queued on none.
     pub(crate) fn waits_for_its_node(self) -> bool {
         match self {
             QuietSource::CameraModelProposal | QuietSource::LiveEvaluation => true,
-            QuietSource::TrackTableColumns | QuietSource::TrackTableReferencePicks => false,
+            QuietSource::TrackTableColumns
+            | QuietSource::TrackTableReferencePicks
+            | QuietSource::BuildMipmaps => false,
         }
     }
 }
@@ -251,16 +257,19 @@ impl QuietSource {
 /// first first (`specs/gui/background-tasks.md` § "Quiet tasks").
 ///
 /// The camera model proposal's job goes first, because its comparison and its
-/// preview are on screen while a person decides whether to apply it. The live
-/// evaluation's place depends on its subject: the viewed track and the focused
-/// item are what Track View shows, so they go ahead of the other bench items,
-/// in the order the evaluation driver picks them. The Track Table's columns,
-/// then its reference picks, go between the focused item and the other bench
+/// preview are on screen while a person decides whether to apply it. *Build
+/// mipmaps* is next, since a panel is waiting on it. The live evaluation's
+/// place depends on its subject: the viewed track and the focused item are
+/// what Track View shows, so they go ahead of the other bench items, in the
+/// order the evaluation driver picks them. The Track Table's columns, then
+/// its reference picks, go between the focused item and the other bench
 /// items.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum QuietRank {
     /// The camera model proposal's job.
     CameraModelProposal,
+    /// *Build mipmaps*.
+    BuildMipmaps,
     /// The live evaluation of the viewed track.
     ViewedTrack,
     /// The live evaluation of the focused bench item.
@@ -830,6 +839,26 @@ impl Operation {
         quiet: true,
     };
 
+    /// *Build mipmaps* (`state/build_mipmaps.rs`): one chunk of the
+    /// out-of-core photographs the panels wait on, their mipmaps made with
+    /// the photograph cache's `get_many`. A quiet task.
+    ///
+    /// It locks nothing, since it pushes no version: it writes mip level
+    /// files and fills the photograph cache, and is queued on no node, so it
+    /// runs while a slow task holds the node the panels show
+    /// ([`QuietSource::waits_for_its_node`]). Cancellable because `get_many`
+    /// polls the flag before each photograph and between each build's
+    /// stages. It writes no row, so its kind is never read; it is the kind of
+    /// the panels it serves.
+    pub(crate) const BUILD_MIPMAPS: Operation = Operation {
+        name: "Build mipmaps",
+        cancellable: true,
+        kind: Kind::Display,
+        queue: Queue::Fast,
+        locks: false,
+        quiet: true,
+    };
+
     /// Every operation that can go to the background.
     ///
     /// A list rather than a set of constants used one at a time, so the tests
@@ -838,7 +867,7 @@ impl Operation {
     /// declaration nothing checks is a declaration that rots.
     // Read by those tests alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 27] = [
+    pub(crate) const ALL: [Operation; 28] = [
         Operation::OPEN,
         Operation::LOAD_DEMO_DATA,
         Operation::BUNDLE_ADJUST,
@@ -866,6 +895,7 @@ impl Operation {
         Operation::CAMERA_MODEL_PROPOSAL,
         Operation::TRACK_TABLE_COLUMNS,
         Operation::TRACK_TABLE_REFERENCE_PICKS,
+        Operation::BUILD_MIPMAPS,
     ];
 }
 
@@ -1609,7 +1639,8 @@ impl AppState {
     /// A quiet task waits behind every task someone asked for and behind the
     /// quiet tasks ahead of it in `rank`, and the source's own waiting entry,
     /// if it has one, is replaced, its job told it was dropped. It starts at
-    /// once only when its queue is idle, and then only when `node` is not
+    /// once only when its queue is idle, and then only when `node`, the node
+    /// its work is on (`None` for work on no node, *Build mipmaps*), is not
     /// locked: a quiet task does not start on a locked node, and is dropped,
     /// its source told so, rather than run, unless its source does not wait for
     /// its node ([`QuietSource::waits_for_its_node`]). The id is from a count of its own
@@ -1623,7 +1654,7 @@ impl AppState {
         operation: Operation,
         source: QuietSource,
         rank: QuietRank,
-        node: ReconId,
+        node: Option<ReconId>,
         label: String,
         job: QuietJob,
     ) -> Result<u64, String> {
@@ -1647,7 +1678,7 @@ impl AppState {
         let task = WaitingTask {
             id,
             operation,
-            node: Some(node),
+            node,
             label,
             queued: Instant::now(),
             actor: self.action_log.actor(),

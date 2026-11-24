@@ -91,6 +91,13 @@ impl PhotographCache {
     /// decode that runs alone. Never waits.
     pub fn try_reserve_build(&self, bytes: u64) -> Option<BuildReservation<'_>>;
 
+    /// How many builds or whole decodes of the photograph at `path` fit in
+    /// the build budget at once, as `reserve_builds` would grant them from
+    /// an empty count: at least one, at most the rayon pool's size. Reserves
+    /// nothing; what a caller handing `get_many` photographs a group at a
+    /// time (the viewer's *Build mipmaps*) sizes its groups by.
+    pub fn builds_that_fit(&self, path: &Path) -> usize;
+
     /// The photograph at `path`, holding its layout and the cache's handle on
     /// its tiles and no pixel, decoding it into tiles only when none of them
     /// is kept. Waits while another thread is decoding the same path, and
@@ -138,14 +145,15 @@ impl PhotographCache {
     /// The layout and tile requests of § "Layouts and tiles". `layout` and
     /// `peek_tile` read nothing and never wait; `request_layout` reads the
     /// header, and for an out-of-core photograph checks its coarsest mip
-    /// level file; `try_decode_tiles` is a panel's decode, which never waits
-    /// and never answers `Changed`; `get_tile` decodes when its tile is not
-    /// kept, and `view_region_pyramid` and `get_level` read the photograph
-    /// `get` answers, each decoding as `get` does, an out-of-core
-    /// photograph's tiles from its files (§ "Out-of-core photographs"). None
-    /// of these makes a mipmap: the three kernel reads answer `Changed` for
-    /// an out-of-core photograph whose files are missing or stale, and
-    /// `try_decode_tiles` decodes such a photograph whole in core. The four
+    /// level file; `try_decode_tiles` is a panel's decode, which never waits;
+    /// `get_tile` decodes when its tile is not kept, and
+    /// `view_region_pyramid` and `get_level` read the photograph `get`
+    /// answers, each decoding as `get` does, an out-of-core photograph's
+    /// tiles from its files (§ "Out-of-core photographs"). None of these
+    /// makes a mipmap: an out-of-core photograph whose files are missing or
+    /// stale is `Building` to `layout` and `peek_tile`, and all four reads
+    /// answer `Changed` for it, decoding nothing, until a `get` or
+    /// `get_many` makes its mipmap. The four
     /// that can decode a whole photograph take the caller's `Progress` and
     /// poll it for cancellation as `get` does.
     pub fn layout(&self, path: &Path) -> PeekedLayout;
@@ -165,7 +173,8 @@ impl PhotographCache {
     pub fn insert(&self, path: &Path, image: ImageU8);
 
     /// Drop one path's entry, tiles and layout, or every entry, tile and
-    /// layout.
+    /// layout, with what the cache noted of their mipmaps' files (§ "When a
+    /// file is not current", § "Making a mipmap").
     pub fn forget(&self, path: &Path);
     pub fn clear(&self);
 
@@ -196,8 +205,8 @@ pub enum PeekedPhotograph { Decoded(Arc<TiledPhotograph>), Unreadable, NotDecode
 pub struct GetManyTally { pub read: usize, pub from_mipmaps: usize, pub mipmaps_made: usize,
                           pub reused: usize, pub unreadable: usize }
 
-pub enum PeekedLayout { Known(Arc<PyramidLayout>), Unreadable(String), NotKnown }
-pub enum PeekedTile { Ready(Arc<PhotographTile>), Unreadable, NotReady }
+pub enum PeekedLayout { Known(Arc<PyramidLayout>), Building, Unreadable(String), NotKnown }
+pub enum PeekedTile { Ready(Arc<PhotographTile>), Building, Unreadable, NotReady }
 pub enum TileError { Changed { path: PathBuf }, Unreadable { path: PathBuf, why: String },
                      OutOfRange { path: PathBuf, why: String }, Cancelled }
 pub enum TryDecode { Decoded(Vec<Arc<PhotographTile>>), Busy }
@@ -570,30 +579,37 @@ level's edge, so tiles drawn side by side with linear filtering show no seam.
 - **`layout`** answers `Known` with the photograph's `PyramidLayout` (its
   level sizes and tile grid, of `full_levels` depth; the out-of-core layout
   for an out-of-core photograph read from its files, the in-core one
-  otherwise) once the
-  photograph is held or its header has been read, `Unreadable` with the
-  message once a read has failed, and `NotKnown` otherwise. It reads
-  nothing, waits on nothing and does not stat the file. The layout of a
-  photograph the cache has decoded is the one its slot keeps, whether or not
-  every tile is still kept, so a panel that asks every frame is answered the
-  same `Arc` while the photograph's layout stays the same and nothing is
-  allocated; otherwise it is what `request_layout` last read.
-- **`request_layout`** reads the header and keeps the layout its tiles are
-  served under, or why it could not be read: for an out-of-core photograph
-  it checks the coarsest mip level file as the photograph's first request
-  does (§ "Out-of-core photographs"), and keeps the out-of-core layout when
-  it is current and the in-core one otherwise. The two have the same levels,
-  level sizes and tile grid, differing only in the tier and the number of
-  stored levels, so a key valid under one is valid under the other and a
-  panel holding either is never answered `OutOfRange` when the photograph
-  moves from one to the other. Layouts are kept whatever the budget, a
-  budget of 0 included, and are not counted against it, since each is a few
-  dozen bytes; `forget` and `clear` drop them.
+  otherwise) once the photograph is held or its header has been read and,
+  for an out-of-core photograph, its mipmap found current or made;
+  `Building` for an out-of-core photograph whose mipmap is missing or stale,
+  or being made; `Unreadable` with the message once a read has failed; and
+  `NotKnown` otherwise. It reads nothing, waits on nothing and does not stat
+  the file. The layout of a photograph the cache has decoded is the one its
+  slot keeps, whether or not every tile is still kept, so a panel that asks
+  every frame is answered the same `Arc` while the photograph's layout stays
+  the same and nothing is allocated; otherwise it is what `request_layout`
+  last read, moved to `Known` when a build or a check makes or finds the
+  photograph's mipmap current and to `Building` when a read finds a file of
+  it not current.
+- **`request_layout`** reads the header and keeps what it says of the
+  layout the photograph's tiles are served under, or why it could not be
+  read: for an out-of-core photograph it checks the coarsest mip level file
+  as the photograph's first request does (§ "Out-of-core photographs"), and
+  keeps the out-of-core layout when it is current and `Building` otherwise.
+  The out-of-core layout has the levels, level sizes and tile grid of the
+  in-core one, differing only in the tier and the number of stored levels,
+  so a key valid under one is valid under the other and a panel holding
+  either is never answered `OutOfRange` for the difference (a panel's read
+  of an evicted level held in memory is answered in core, § "Out-of-core
+  photographs"). Layouts are kept whatever the budget, a budget of 0
+  included, and are not counted against it, since each is a few dozen
+  bytes; `forget` and `clear` drop them.
 - **`peek_tile`** answers a tile the cache keeps, without reading a file
   or waiting, and counts as a use for the eviction order, marking the tile
   as used, but not as a hit. It answers `NotReady` while the photograph is
-  not decoded or the tile is not kept, and `Unreadable` for a remembered
-  failure or a tile the photograph does not have.
+  not decoded or the tile is not kept, `Building` for any tile of a
+  photograph whose slot finds its mipmap not current, and `Unreadable` for a
+  remembered failure or a tile the photograph does not have.
 - **`try_decode_tiles`** is a panel's decode. It answers the tiles asked
   for at once, as a hit, when the cache keeps every one of them. Otherwise it
   reads the header, refuses a key the photograph does not have as
@@ -608,13 +624,16 @@ level's edge, so tiles drawn side by side with linear filtering show no seam.
   under a budget of 0, where the cache keeps nothing. A file whose header
   cannot be read is remembered as its failure, as `get` remembers it. An
   out-of-core photograph whose mipmap is current is read from its files,
-  which needs no reservation; when a file it reads turns out missing, not
-  current or changed since the slot read it, the call marks the slot's
-  mipmap not current and decodes the tiles asked for whole in core, in the
-  same call, as for a photograph whose files are missing, so it never
-  answers `TileError::Changed`; it never makes a mipmap, and while another
-  caller makes one in the slot it answers `Busy`. Under a budget of 0 each
-  call decides so from the files as they are.
+  which needs no reservation. It never makes a mipmap and never reads an
+  out-of-core photograph whole in core: one whose files are missing or
+  stale, being made, or turn out missing, not current or changed since the
+  slot read them, is `TileError::Changed`, decoding nothing, and `Building`
+  from then on, until a `get` or `get_many` makes its mipmap. Under a budget
+  of 0 each call decides so from the files as they are. Two cases are
+  decoded whole in core and kept by no slot: a level of a mipmap held in
+  memory that the slot no longer keeps, and, under a budget of 0, a
+  photograph whose last build could not write its files (§ "Out-of-core
+  photographs").
 - **`get_tile`, `view_region_pyramid` and `get_level`** are a kernel's
   reads. `get_tile` answers a tile the cache keeps, marking it used, and
   otherwise decodes as `get` does, reserving with `reserve_builds` and
@@ -724,9 +743,9 @@ bytes were evicted is compared with the record first read.
 another record than the one first read or does not decode, or an original
 whose index fails, means the mipmap is not current. The request that finds
 it marks the slot's mipmap not current, dropping the slot's tiles and file
-entries from the files, and `layout` answers the in-core layout. The
-readers then answer in three ways, and none reads the files of two versions
-or the photograph in core for a kernel:
+entries from the files, and `layout` answers `Building`. The readers then
+answer in three ways, and none reads the files of two versions or reads the
+photograph in core:
 
 - **A kernel's read** (`get_tile`, a read through a photograph `get`
   answered, `view_region_pyramid` and `get_level`) fails with
@@ -738,12 +757,31 @@ or the photograph in core for a kernel:
   the mipmap. These reads never make one.
 - **`get` and `get_many`** make the mipmap in the slot (§ "Making a
   mipmap") and answer the photograph read from its files.
-- **A panel's decode** (`try_decode_tiles`) never makes a mipmap and never
-  answers `Changed`: it decodes the tiles asked for whole in core in the
-  same call, and answers `Busy` while another caller makes the mipmap in
-  the slot. The tiles a panel already holds from the files stay drawn beside
-  the new ones until it asks for them again; both are the same photograph,
-  a JPEG loss apart.
+- **A panel's decode** (`try_decode_tiles`) never makes a mipmap: it
+  answers `Changed` too, decoding nothing, and the photograph stays
+  `Building` until a `get` or `get_many` makes its mipmap, which in the
+  viewer is the quiet task *Build mipmaps* the panel queues it for
+  ([gui/background-tasks.md](../../gui/background-tasks.md) § "Quiet
+  tasks"). The tiles a panel already holds from the files stay drawn until
+  it asks for them again.
+
+A file a read found not current is noted with the original's length and
+modification time, since the check of the coarsest file alone does not see
+it: while the original is unchanged and no build has made the mipmap since,
+the check answers the mipmap not current, so the next `get` or `get_many`
+builds it, rewriting each level whose file is not current, rather than take
+the coarsest file's word and read the same file again. A build mends a
+file that is missing or whose record is not current by writing it, so the
+same file found missing again, or rewritten (a mipmap directory deleted
+twice, another process making the file again), is a first find once more.
+When a read finds the same file not current again after that build, under
+the same original and still there with the length and modification time it
+had when first found, the build left it as it was because its record is
+current, though its data does not decode, and no build mends it: the
+photograph is then remembered as unreadable, naming the file, until its
+original changes or `forget` or `clear` drops it, so neither a panel nor
+*Build mipmaps* asks for its mipmap again and again. `forget` and `clear`
+also drop the note of a build whose files could not be written.
 
 `get` and `get_many` answer an out-of-core photograph whose mipmap is current
 from its slot, with nothing decoded and nothing reserved on the build count:
@@ -775,7 +813,7 @@ in-core photograph there, with no builder object or queue; the code is in
 - **Reading what it made.** The slot then reads the photograph from the files
   the build returned, kept as its file entries with their records, so a file
   read again after its bytes are evicted is compared with the record the
-  build wrote. The slot drops the tiles a panel's decode in core kept for it.
+  build wrote, and `layout` answers `Known`.
   A build whose files could not be written (a blocked mipmap directory, a
   full disk) is read from the files it made in memory, level 0 of a
   region-readable original from the original, and a warning through the
@@ -802,7 +840,14 @@ in-core photograph there, with no builder object or queue; the code is in
   budget of 0 holds its decode, and makes them again at most once after it
   leaves the map. A panel's decode never makes them again: for a level no
   longer kept it decodes the tiles asked for whole in core, kept by no
-  slot, and the slot goes on reading its mipmap. A build that fails
+  slot, and the slot goes on reading its mipmap. Under a budget of 0 no
+  slot is kept, so a panel would never find the levels held: the cache
+  notes each photograph whose last build could not write its files, with
+  the original's length and modification time, and while the original is
+  unchanged `request_layout` answers its in-core layout and a panel's
+  decode decodes the tiles asked for whole in core, kept by no slot, rather
+  than answer `Building` and have the build made again on every request. A
+  build that writes its files drops the note. A build that fails
   otherwise is `GetError::Unreadable` naming the photograph, remembered as
   a failed decode is until the file changes.
 - **Progress.** A `get` reports the build's phases `decode`, `reduce` and
@@ -892,10 +937,9 @@ reconstruction's photographs goes through it except the ones under
   since a failure dropped to make room would be decoded again by the next
   frame that shows the photograph, and panels showing more such photographs
   than the bound would decode them in turn and repaint without end. A
-  `TileError::Changed`, which only a kernel's read answers and a panel's
-  decode never does, is kept the same way, with the file's stamp and never
-  by forgetting the path, so it cannot start a request and a repaint on
-  every frame. A key
+  `TileError::Changed` is not kept as a failure: the cache answers the
+  photograph `Building` from then on, so the next frame asks for none of
+  its tiles and queues it, as below. A key
   the photograph does not have, which
   only a layout read before the file changed size names, makes the decode
   `forget` the path, so the next frame reads the header again. While
@@ -947,6 +991,21 @@ reconstruction's photographs goes through it except the ones under
   the scroll to stop"). Measurement View cuts an endpoint's crop and its
   hover view in one render, so the tiles both need are asked for together
   ([measurement-view.md](../../gui/measurement-view.md)).
+- **An out-of-core photograph whose mipmap is not current** is `Building`
+  to `layout`, and `display_layout` answers it so to every one of these
+  panels, which ask for none of its tiles meanwhile. Each frame that asks
+  adds the path to the front of *Build mipmaps*' list in
+  `PhotographRequests`, once while it is there, and the viewer's quiet task
+  *Build mipmaps* ([build_mipmaps.rs](../../../crates/sfm-explorer/src/state/build_mipmaps.rs))
+  makes it with `get_many`, a chunk sized by `builds_that_fit` a run
+  ([gui/background-tasks.md](../../gui/background-tasks.md) § "Quiet
+  tasks"). A photograph the task could not make is kept as a failed decode
+  is, with the file's stamp, so a cache of budget 0, which remembers no
+  failure, is not asked to make it on every frame. Image Detail draws a
+  spinner with *Building mipmap…* meanwhile; the background keeps the
+  previous image's photograph on its own mesh, as while a level loads; the
+  pictures read through `read_peeked` draw their loading state. No panel's
+  task makes a mipmap or waits on one.
 - **The image menu** asks only whether each photograph is decoded, with
   `keeps_every_tile`, and reads no pixel. The scene graph lays the menu out
   for every node on every frame, so the question allocates nothing and is no
@@ -1119,24 +1178,30 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   budget; a file replaced with another record after a kernel's read first
   opened it failing `get_tile` and a read through the photograph `get`
   answered with `Changed` naming it, the next `get_tile` answering
-  `Changed` naming the photograph until a `get` reads the new files, and a
-  changed original failing that
+  `Changed` naming the photograph until a `get` makes the mipmap again,
+  writing nothing over the new files, and reads them, and a changed
+  original failing that
   read with `Changed` naming the original, under a budget too small to keep
   a file and under a budget of 0; an in-core photograph of the same
-  workspace read as before; `request_layout` answering the in-core layout
-  without a current mipmap and the out-of-core one with it; and a panel's
-  decode of an out-of-core photograph whose mipmap is missing, replaced with
-  another record or missing its level-1 file after its first tiles were
-  answered answering its tiles and never `Changed`, and making no mipmap.
+  workspace read as before; `request_layout` answering `Building` without a
+  current mipmap, `peek_tile` answering `Building` for its tiles with a
+  budget, and the out-of-core layout, of the in-core one's levels, sizes and
+  grid, once a `get_many` has made the mipmap; and a panel's decode of an
+  out-of-core photograph whose mipmap is missing, replaced with another
+  record or missing its level-1 file after its first tiles were answered
+  decoding nothing in core: answering `Changed` and leaving the photograph
+  `Building` (under a budget of 0, reading the rebuilt files as they are),
+  and making no mipmap.
 - [photograph_cache/build_tests.rs](../../../crates/sfmtool-core/src/camera/photograph_cache/build_tests.rs),
   on the same synthetic photographs: `get_tile`, `get_level` and
   `view_region_pyramid` of a photograph with no mipmap answering `Changed`
   and making nothing; a `get` making a missing mipmap, and a stale one after
   its original changed, and answering the pixels of its files with nothing
   decoded whole, with a budget and with a budget of 0, for a region-readable
-  original and one with a `-mip0`; a `get_many` after a panel's decode in
-  core making the mipmap rather than answer the in-core tiles, and
-  reporting no build phase; two threads asking for one path making one
+  original and one with a `-mip0`; a panel's decode of a photograph with no
+  mipmap answering `Changed` and leaving it `Building`, and a `get_many`
+  then making the mipmap, reporting no build phase, after which the layout
+  is `Known`; two threads asking for one path making one
   mipmap, the second waiting with nothing reserved; a maker cancelled during
   its encodes stopping within one level, the coarsest file not yet written,
   and the waiter that takes over making only the levels not written; a
@@ -1148,7 +1213,17 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   nothing, a kernel's read of it making the build again once and reading
   the same pixels, and one warning for each photograph; and a photograph
   whose slot left the map making its in-memory build again once and
-  holding it for its later reads. The `get_many` tests, on smaller 96 x 64
+  holding it for its later reads; under a budget of 0, a panel's read of a
+  photograph whose build was held in memory answered its in-core layout and
+  tiles from a decode in core, three times, with one build; and a file a
+  read found missing made again by the next `get_many` rather than taken as
+  current from the coarsest file, twice when it is deleted twice, and twice
+  when it is rewritten twice with the same bytes that do not open as the
+  level, the photograph readable after each; and a file left as it was by the build,
+  its record current and its scan spoiled, found not current again making
+  the photograph unreadable, with no further build, until `forget` drops
+  it; each under a budget too small to keep a file and under a budget of 0.
+  The `get_many` tests, on smaller 96 x 64
   photographs where they make many mipmaps: a `get_many` over 20
   photographs with no mipmap making them in groups that never pass a build
   budget of three builds, every build reserved as it starts, its tally and
@@ -1246,15 +1321,31 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   has reading the layout again; a failed level read not decoded again; a
   render from peeked tiles run once they are all there, nothing decoded on
   the calling thread, with a budget and with a budget of 0; a render
-  that asks for nothing starting no read and no check of a failed file; a
-  `Changed` kept as a failure with the file's stamp, the layout not
-  forgotten; and Image Detail, Track View and the 3D background, asking over
-  many looks for an out-of-core photograph whose mipmap is missing and for
-  one whose files are replaced with another record after Image Detail's
-  tiles were answered, under a budget of 0 and one smaller than the
-  photograph, each drawing it, none answered as unreadable, the looks
-  starting no more tasks and repaints than the reads need, and the mipmap
-  directory unchanged),
+  that asks for nothing starting no read and no check of a failed file;
+  Image Detail, Track View and the 3D background, asking over many looks
+  for an out-of-core photograph whose mipmap is missing and for one whose
+  level-1 file is removed after Image Detail's tiles were answered, under a
+  budget of 0 and one smaller than the photograph, asking for no tile of it
+  while it is `Building`, queueing it once for *Build mipmaps*, no task of
+  theirs making a mipmap, each drawing it once one run of the task has made
+  it, none answered as unreadable, and the looks starting no more tasks and
+  repaints than the reads need; twenty panels adding their twenty
+  photographs to the one list, each once and at the front, with nothing
+  decoded or made; and a photograph *Build mipmaps* cannot make answered as
+  unreadable and not queued again until its file changes, under a budget of
+  0),
+  [state/build_mipmaps/tests.rs](../../../crates/sfm-explorer/src/state/build_mipmaps/tests.rs)
+  (the task in the fast queue, one chunk of as many photographs as the build
+  budget fits a run, queued again while its list is not empty, running while
+  a slow task locks the node on screen and pushing no version; a run
+  displaced by an asked-for task putting its chunk back at the front,
+  holding nothing on the build count, and taking it first once queued again;
+  and a kernel's `get_many` and a run over the same photographs making each
+  mipmap once between them),
+  [image_detail/tests.rs](../../../crates/sfm-explorer/src/image_detail/tests.rs)
+  (the spinner with *Building mipmap…* drawn while the photograph waits,
+  with no tile asked for and the photograph queued once, and the photograph
+  drawn once the task has made it),
   [image_detail/photograph_tiles/tests.rs](../../../crates/sfm-explorer/src/image_detail/photograph_tiles/tests.rs)
   (two panels showing one photograph ask for its layout and its tiles once,
   neither decoding as it draws, with a budget and with a budget of 0; the tiles

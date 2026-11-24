@@ -728,7 +728,12 @@ is the cache's `ImageU8::read_rgb` (the file's contents choose the decoder
 and the EXIF orientation is ignored, as in
 [reading-and-writing-images.md](../core/camera/reading-and-writing-images.md))
 and its pyramid of `ImageU8Pyramid::full_levels` levels, so the background
-shares its pixels with Image Detail. A photograph whose decode failed is
+shares its pixels with Image Detail. An out-of-core photograph whose mipmap
+is missing or stale is `Building`: `display_layout` queues it for the quiet
+task *Build mipmaps* ([background-tasks.md](background-tasks.md) § "Build
+mipmaps"), no level of it is asked for, and the previous image's photograph
+stays on its own mesh, as while a level loads, until the task's run that
+makes the mipmap ends with a repaint. A photograph whose decode failed is
 remembered with its file's length and modification time and not decoded
 again until the file changes, under a budget of 0 too.
 

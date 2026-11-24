@@ -35,6 +35,7 @@ pub(crate) use photograph_requests::{
     read_peeked_without_asking, DisplayLayout, DisplayLevel, DisplayTile, PeekedRead,
     PhotographRequests, PhotographSource, UNREADABLE_PHOTOGRAPH,
 };
+pub(crate) mod build_mipmaps;
 mod ops;
 mod photograph_requests;
 mod save;
@@ -984,6 +985,11 @@ pub(crate) struct AppState {
     /// [`crate::track_table_panel::job`].
     pub(crate) track_table_jobs: crate::track_table_panel::job::TrackTableJobs,
 
+    /// *Build mipmaps*, the quiet task that makes the mipmaps of the
+    /// photographs the panels queue in [`Self::photograph_requests`]: the run
+    /// queued last, if any. See [`build_mipmaps`].
+    pub(crate) build_mipmaps: build_mipmaps::BuildMipmaps,
+
     /// The Track Table panel's reference picks: the references picked for
     /// visible points that store none, for the version at their node's
     /// cursor, and the quiet task picking them. Session state, not part of
@@ -1145,6 +1151,7 @@ impl AppState {
             viewed_tracks: Default::default(),
             track_tables: Default::default(),
             track_table_jobs: Default::default(),
+            build_mipmaps: Default::default(),
             reference_picks: Default::default(),
             filter_3d: None,
             track_table_query: Default::default(),
