@@ -1244,7 +1244,7 @@ fn panels_wait_on_build_mipmaps_for_an_out_of_core_photograph_without_a_current_
                 let waiting = requests.mipmaps_waiting();
                 queued_at_most = queued_at_most.max(waiting.len());
                 if !waiting.is_empty() {
-                    assert_eq!(waiting, [path.clone()], "{what}");
+                    assert_eq!(waiting, std::slice::from_ref(&path), "{what}");
                     runs += 1;
                     run_chunk(&cache, &requests, &Progress::none());
                 }
@@ -1373,7 +1373,7 @@ fn a_photograph_build_mipmaps_cannot_make_is_unreadable_until_its_file_changes()
         display_layout(source, &ctx),
         DisplayLayout::Building
     ));
-    assert_eq!(requests.mipmaps_waiting(), [path.clone()]);
+    assert_eq!(requests.mipmaps_waiting(), std::slice::from_ref(&path));
     run_chunk(&cache, &requests, &Progress::none());
     assert_eq!(cache.stats().mipmaps_made, 1);
     assert!(matches!(

@@ -921,9 +921,9 @@ impl PhotographCache {
         slot: &Arc<Slot>,
         file: &Path,
     ) -> Option<GetError> {
-        if slot.lock().tier.files().is_none() {
-            return None;
-        }
+        // Only a slot that reads its files is marked, the first request to
+        // find one of them not current.
+        slot.lock().tier.files()?;
         // Noted with no other lock held.
         let again = self.note_stale(path, file).then(|| {
             GetError::Unreadable(format!(
@@ -940,9 +940,7 @@ impl PhotographCache {
             .is_some_and(|mapped| Arc::ptr_eq(mapped, slot));
         {
             let mut data = slot.lock();
-            if data.tier.files().is_none() {
-                return None;
-            }
+            data.tier.files()?;
             data.tier = Tier::NotCurrent;
             data.made = again.clone().map(Err);
             data.records.clear();

@@ -183,6 +183,11 @@ type Task = Box<dyn FnOnce() + Send>;
 /// runs by hand.
 type Spawner = Arc<dyn Fn(Task) + Send + Sync>;
 
+/// A test's hook told the chunk each run of *Build mipmaps* takes, as it
+/// starts.
+#[cfg(test)]
+pub(crate) type ChunkHook = Arc<dyn Fn(&[PathBuf]) + Send + Sync>;
+
 /// The tiles a photograph's decode tasks answered that no panel has taken
 /// yet.
 type Answered = HashMap<TileKey, Arc<PhotographTile>>;
@@ -337,7 +342,7 @@ pub(crate) struct PhotographRequests {
     spawn: Spawner,
     /// Told the chunk each run of *Build mipmaps* takes, as it starts.
     #[cfg(test)]
-    on_chunk: Option<Arc<dyn Fn(&[PathBuf]) + Send + Sync>>,
+    on_chunk: Option<ChunkHook>,
 }
 
 impl Default for PhotographRequests {
@@ -391,7 +396,7 @@ impl PhotographRequests {
     /// Call `hook` with the chunk each run of *Build mipmaps* takes, as it
     /// starts: what lets a test hold a run while it asks for a task.
     #[cfg(test)]
-    pub(crate) fn set_chunk_hook(&mut self, hook: Arc<dyn Fn(&[PathBuf]) + Send + Sync>) {
+    pub(crate) fn set_chunk_hook(&mut self, hook: ChunkHook) {
         self.on_chunk = Some(hook);
     }
 
