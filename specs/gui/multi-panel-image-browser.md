@@ -550,8 +550,8 @@ tiles"):
   the selected photograph at low resolution, so it takes the gestures the photograph
   does, under G1 to G12 ([interaction-rules.md](interaction-rules.md)); the spinner
   and its label are painted over it and take no pointer. The level's tiles are the
-  ones the finished mipmap answers, so they stay drawn as the photograph's tiles land. The panel
-  does not keep drawing the image it showed before meanwhile, since a mipmap takes
+  ones the finished mipmap answers, so they stay drawn as the photograph's tiles land.
+  The panel does not keep drawing the image it showed before meanwhile, since a mipmap takes
   seconds to make rather than the milliseconds a tile decode takes; an image the panel
   has already drawn, whose files are found changed later, keeps its uploaded tiles. The
   run of the task that makes the mipmap ends with a repaint, and the panel then asks for

@@ -3488,9 +3488,9 @@ in core. Step 17 turns the tier on.
           background draw it before the build ends; under a budget of 0
           the coarsest is handed to the panel that asked, as a tile is; the
           level drawn while waiting takes clicks as the photograph does
-          (open question 16); and neither panel
-          asks for a tile or repaints more than the reads need, at a budget
-          of 0 and at one smaller than the photograph.
+          (open question 16); and neither panel asks for a tile or
+          repaints more than the reads need, at a budget of 0 and at one
+          smaller than the photograph.
           **As built** ([photograph_cache/build.rs](../../crates/sfmtool-core/src/camera/photograph_cache/build.rs),
           [image_detail/mod.rs](../../crates/sfm-explorer/src/image_detail/mod.rs),
           [scene_renderer/upload/bg_image.rs](../../crates/sfm-explorer/src/scene_renderer/upload/bg_image.rs)):
@@ -3525,10 +3525,9 @@ in core. Step 17 turns the tier on.
           selected photograph at low resolution (open question 16; the
           first form held them under G13, which the maintainer reversed),
           draw the view at the photograph's own size so the overlays and
-          the pixels a gesture names line up, ask
-          for no tile, and paint the spinner and *Building mipmap…* over
-          everything, on a backing, as painted shapes that take no
-          pointer. The background copies level `K` into its texture once
+          the pixels a gesture names line up, ask for no tile, and paint
+          the spinner and *Building mipmap…* over everything, on a
+          backing, as painted shapes that take no pointer. The background copies level `K` into its texture once
           and keeps it while the photograph's own level loads once it is
           `Known`. An audit-time flake in
           `a_file_a_read_found_missing_is_made_again_each_time` (two writes
@@ -3753,7 +3752,9 @@ decisions.
     and (c) are still ruled out by the rule that a panel never makes a
     mipmap and by what kernels read. 14e1 applies (a) also under a budget
     of 0, where no slot keeps the levels at all, so that a panel's every
-. **Gestures on the coarsest level drawn while a mipmap is made.** Found
+    request would otherwise have the build made again (14e1's as-built
+    note).
+16. **Gestures on the coarsest level drawn while a mipmap is made.** Found
     while building 14e2a: Image Detail draws the selected photograph's
     coarsest level under the spinner while *Build mipmaps* makes its
     mipmap. The options:
