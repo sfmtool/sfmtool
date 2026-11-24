@@ -237,8 +237,8 @@ Why it is shaped this way:
   another caller started, rather than wait out a decode of a second or more.
   A caller with nothing to cancel passes `&Progress::none()`. `get` reports
   nothing through it but a mipmap's build, which is part of the call that
-  makes it (§ "Making a mipmap"). The GUI thread must not wait on a decode, so it asks
-  whether they are there. `peek_state` adds the one thing a caller that starts
+  makes it (§ "Making a mipmap"). The GUI thread must not wait on a decode,
+  so it asks whether they are there. `peek_state` adds the one thing a caller that starts
   a decode on a miss needs: whether a decode was already tried and failed, so
   it does not start another for a file that cannot be read.
 - **Tiles, not pyramids.** A decode is cut into photograph tiles of

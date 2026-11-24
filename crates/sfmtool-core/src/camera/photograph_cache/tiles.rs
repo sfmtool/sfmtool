@@ -14,8 +14,8 @@
 //! [`PhotographCache::get_tile`], [`PhotographCache::view_region_pyramid`]
 //! and [`PhotographCache::get_level`], decode as [`PhotographCache::get`]
 //! does, but never make a mipmap: for an out-of-core photograph whose files
-//! are not current they answer [`TileError::Changed`]. See the spec `specs/core/camera/photograph-cache.md` § "Layouts and
-//! tiles".
+//! are not current they answer [`TileError::Changed`]. See the spec
+//! `specs/core/camera/photograph-cache.md` § "Layouts and tiles".
 
 use std::fmt;
 use std::path::{Path, PathBuf};

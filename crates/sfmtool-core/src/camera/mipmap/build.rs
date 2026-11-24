@@ -343,15 +343,20 @@ pub fn build_mipmaps(
                 continue;
             }
             Ok(existing) => {
+                // Only a file the hash finds is from other bytes, not one
+                // stale for its number of levels or region answer.
                 let other = &existing.record().source;
-                if !warned && *other != relative && other.to_lowercase() == relative.to_lowercase()
+                if !warned
+                    && *other != relative
+                    && other.to_lowercase() == relative.to_lowercase()
+                    && source.check(existing.record()).is_err()
                 {
                     warned = true;
                     progress_warn!(
                         progress,
                         "{relative} and {other} differ only in letter case and share the mip \
-                         level files in {}, but they are not the same file; making the mipmap \
-                         of {relative} over that of {other}",
+                         level files in {}, which were made from other bytes; making the \
+                         mipmap of {relative} over that of {other}",
                         location.dir().display()
                     );
                 }

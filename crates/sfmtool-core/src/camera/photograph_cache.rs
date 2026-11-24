@@ -949,11 +949,11 @@ struct Shared {
     workspace_reads: AtomicU64,
     /// Called as a decode or a mipmap's build starts, once its header is
     /// read and it is reserved and before the pixels are read, as a caller
-    /// starts to wait on a slot being made, and as a panel's decode has its reservation and is
-    /// about to claim the slot: what lets a test hold a decode in progress,
-    /// cancel a caller in the middle of a decode or a wait, make a decode
-    /// panic, change a slot under a panel's decode, or read the build count at
-    /// those moments.
+    /// starts to wait on a slot being made, and as a panel's decode has its
+    /// reservation and is about to claim the slot: what lets a test hold a
+    /// decode in progress, cancel a caller in the middle of a decode or a
+    /// wait, make a decode panic, change a slot under a panel's decode, or
+    /// read the build count at those moments.
     #[cfg(test)]
     on_slot_event: Option<Box<SlotHook>>,
 }

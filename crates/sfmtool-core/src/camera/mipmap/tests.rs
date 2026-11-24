@@ -737,11 +737,17 @@ fn two_processes_building_at_once_leave_current_files() {
     let built = build(&photograph, &options(95));
     // Hold a file open while the children rename over it: a reader keeps an
     // open file, and that must not block another process's write. The held
-    // file is made stale first, so the children make it again rather than
-    // keep it, and a rename it blocked would not count as written and the
-    // children would report it in `not_written`.
+    // Every file is made stale first, so the children make each again rather
+    // than keep it and both write every file; a rename the held file blocked
+    // would not count as written and the children would report it in
+    // `not_written`.
+    for file in &built.files {
+        let level = file.record().level as usize;
+        rewrite_record(&location(&photograph).level_path(level, 95), |r| {
+            r.source_size += 1
+        });
+    }
     let held_path = location(&photograph).level_path(1, 95);
-    rewrite_record(&held_path, |r| r.source_size += 1);
     let held = std::fs::File::open(&held_path).unwrap();
     let exe = std::env::current_exe().unwrap();
     let children: Vec<_> = (0..2)
