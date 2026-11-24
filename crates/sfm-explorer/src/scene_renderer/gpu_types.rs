@@ -156,7 +156,8 @@ impl OverlayInstance {
     /// A hollow circle facing the eye, `radius` points from its centre to the
     /// middle of its stroke.
     pub(crate) const RING: u32 = 1;
-    /// A filled circle facing the eye, `radius` points across from its centre.
+    /// A filled circle facing the eye, `radius` points from its centre to its
+    /// edge.
     pub(crate) const DISC: u32 = 2;
 
     /// Behind the scene it is held at `BEHIND_OPACITY`, however far behind,
@@ -208,7 +209,7 @@ impl OverlayInstance {
         }
     }
 
-    /// A disc about `centre`, `radius` points across.
+    /// A disc about `centre`, of radius `radius` points.
     pub(crate) fn disc(centre: [f32; 4], color: [f32; 4], radius: f32, flags: u32) -> Self {
         Self {
             a: centre,

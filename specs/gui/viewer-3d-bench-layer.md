@@ -303,8 +303,13 @@ nothing:
   homogeneous view space before the perspective divide, so an end with `w = 0`
   stays a direction rather than being divided by zero. A segment whose two ends
   are both directions is dropped when either points behind the eye, as the
-  figure of a track at infinity is. The ribbon's width is measured across it in
-  pixels.
+  figure of a track at infinity is, and only such a segment is drawn as at
+  infinity behind the scene, at the floor opacity rather than faded with
+  distance; a segment with one finite end is drawn as a finite one. The
+  ribbon's width is measured across it in pixels, and the distance across it
+  that the anti-aliasing reads is interpolated linearly on the screen rather
+  than in perspective, so the middle of a ribbon whose ends lie at different
+  depths stays on the line between them.
 - **Rings and discs** are one instance each. The shader projects the centre and
   expands a square of `radius + half_width` points, plus the anti-aliasing's
   point, aligned to the screen around it; the fragment shader draws the annulus

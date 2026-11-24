@@ -63,8 +63,11 @@ struct VertexOutput {
     // figure), 0.0 where it holds at BEHIND_OPACITY (a measurement).
     @location(2) @interpolate(flat) fade: f32,
     // Where the fragment lies, in pixels: across a segment from its middle in
-    // y, and from a ring's or a disc's centre in x and y.
-    @location(3) local: vec2<f32>,
+    // y, and from a ring's or a disc's centre in x and y. Interpolated across
+    // the screen, not in perspective: a segment's two ends are at different
+    // depths, and a perspective-correct interpolation would move its middle
+    // off the line between them.
+    @location(3) @interpolate(linear) local: vec2<f32>,
     // The piece's kind, its radius and its half width, the last two in
     // pixels.
     @location(4) @interpolate(flat) shape: vec3<f32>,
