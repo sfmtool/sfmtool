@@ -304,8 +304,9 @@ nothing:
   stays a direction rather than being divided by zero. A segment whose two ends
   are both directions is dropped when either points behind the eye, as the
   figure of a track at infinity is, and only such a segment is drawn as at
-  infinity behind the scene, at the floor opacity rather than faded with
-  distance; a segment with one finite end is drawn as a finite one. The
+  infinity behind the scene: a `FADE` one at the floor opacity rather than
+  faded with distance, a `HOLD` one at `BEHIND_OPACITY` as any `HOLD` piece is;
+  a segment with one finite end is drawn as a finite one. The
   ribbon's width is measured across it in pixels, and the distance across it
   that the anti-aliasing reads is interpolated linearly on the screen rather
   than in perspective, so the middle of a ribbon whose ends lie at different
