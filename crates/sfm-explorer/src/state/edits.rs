@@ -712,6 +712,21 @@ pub(crate) fn note_region_reads(
 /// the cluster-patches build's `read photographs` note.
 pub(crate) const GIB: f64 = (1u64 << 30) as f64;
 
+/// The out-of-core photographs a `get_many` read from their mip level files
+/// and the mipmaps it made, for the `decode images` and `read photographs`
+/// notes: `, {f} read from mip level files, {m} mipmaps made`, each part only
+/// when it is not 0, so a workspace without `mipmap_options` adds nothing.
+pub(crate) fn mipmap_counts(tally: &sfmtool_core::camera::GetManyTally) -> String {
+    let mut counts = String::new();
+    if tally.from_mipmaps > 0 {
+        counts += &format!(", {} read from mip level files", tally.from_mipmaps);
+    }
+    if tally.mipmaps_made > 0 {
+        counts += &format!(", {} mipmaps made", tally.mipmaps_made);
+    }
+    counts
+}
+
 impl ViewSources {
     /// The images whose photographs this reads, in index order: every image
     /// but the placeholders.
@@ -749,15 +764,16 @@ impl ViewSources {
             stats.budget_bytes as f64 / GIB
         );
         let (read, reused, missing) = (tally.read, tally.reused, tally.unreadable);
+        let mipmaps = mipmap_counts(&tally);
         if with_unreadable {
             progress_note!(
                 phase,
-                "{read} read from disk, {reused} reused from the cache, {missing} unreadable, {occupancy}"
+                "{read} read from disk, {reused} reused from the cache{mipmaps}, {missing} unreadable, {occupancy}"
             );
         } else {
             progress_note!(
                 phase,
-                "{read} read from disk, {reused} reused from the cache, {occupancy}"
+                "{read} read from disk, {reused} reused from the cache{mipmaps}, {occupancy}"
             );
         }
         let mut found = found.into_iter();

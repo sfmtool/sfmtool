@@ -124,15 +124,14 @@ pub fn render_patch_bitmap_column(
             })
             .collect();
         let read = sources.iter().filter(|p| p.is_some()).count();
-        if tally.reused == 0 {
-            progress_note!(phase, "{read} of {total} read");
-        } else {
-            progress_note!(
-                phase,
-                "{read} of {total} read, {} reused from the cache",
-                tally.reused
-            );
+        let mut note = format!("{read} of {total} read");
+        if tally.reused > 0 {
+            note += &format!(", {} reused from the cache", tally.reused);
         }
+        if tally.mipmaps_made > 0 {
+            note += &format!(", {} mipmaps made", tally.mipmaps_made);
+        }
+        progress_note!(phase, "{note}");
         sources
     };
     if sources.iter().all(Option::is_none) {

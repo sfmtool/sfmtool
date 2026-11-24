@@ -514,6 +514,11 @@ impl PhotographCache {
         let keys: Vec<TileKey> = match asked {
             Asked::Photograph => {
                 self.shared.hits.fetch_add(1, Ordering::Relaxed);
+                #[cfg(test)]
+                self.shared.reserved_reading_files.fetch_max(
+                    self.shared.build_reserved.load(Ordering::SeqCst),
+                    Ordering::SeqCst,
+                );
                 return Ok(Got {
                     layout: Arc::clone(layout),
                     tiles: Vec::new(),

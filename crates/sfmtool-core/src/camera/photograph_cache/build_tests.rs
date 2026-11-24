@@ -21,7 +21,7 @@ use super::mipmap_tests::{
     restartless_jpeg, same_tile, tiles_of, Workspace, TILE,
 };
 
-use super::tests::{on_a_thread, HANG};
+use super::tests::{assert_within_the_build_budget, cache_watching_its_builds, on_a_thread, HANG};
 use super::*;
 
 /// The levels of `photograph` as a photograph `get` answered reads them.
@@ -462,4 +462,199 @@ fn an_evicted_in_memory_level_is_made_again_and_reads_the_same_pixels() {
     assert_eq!(levels_read(&photograph), want);
     let stats = cache.stats();
     assert_eq!((stats.mipmaps_made, stats.bytes), (2, 0), "held, not kept");
+}
+
+/// The side of the photographs the `get_many` tests make many mipmaps of:
+/// over the threshold of 64, so each is out of core, and small, so each
+/// build is quick.
+const MANY_SIZE: (u32, u32) = (96, 64);
+
+/// `n` out-of-core photographs of [`MANY_SIZE`] in `ws`, none with a mipmap.
+fn many_out_of_core(ws: &Workspace, n: usize) -> Vec<PathBuf> {
+    let jpeg = encode_jpeg(
+        &synthetic_rgb(MANY_SIZE.0, MANY_SIZE.1),
+        JpegOptions::default(),
+    );
+    (0..n)
+        .map(|i| ws.photograph(&format!("p{i:02}.jpg"), &jpeg))
+        .collect()
+}
+
+/// The values `mipmaps_made` a `Progress` made with [`Progress::to`] of
+/// this sink is told, in order.
+struct MipmapsMade(Mutex<Vec<f64>>);
+
+impl MipmapsMade {
+    fn sink(&self, event: Event<'_>) {
+        if let Event::Value {
+            name: "mipmaps_made",
+            value,
+        } = event
+        {
+            self.0.lock().unwrap().push(value);
+        }
+    }
+}
+
+/// A `get_many` over 20 out-of-core photographs with no mipmap never has more
+/// builds in progress than the build budget allows, set to three builds:
+/// as each build starts, the build count holds a reservation for every build
+/// in progress (those started less those made) and never more than three.
+/// Its tally counts the 20 mipmaps made, and its `Progress` is told
+/// `mipmaps_made` once a build, up to 20. With a budget and with a cache that
+/// keeps nothing.
+#[test]
+fn get_many_makes_its_mipmaps_in_groups_within_the_build_budget() {
+    let build_bytes = whole_decode_bytes(MANY_SIZE.0, MANY_SIZE.1);
+    for budget in [GIB, 0] {
+        let ws = Workspace::new();
+        let photographs = many_out_of_core(&ws, 20);
+        let paths: Vec<&Path> = photographs.iter().map(PathBuf::as_path).collect();
+        let (cache, starts) = cache_watching_its_builds(
+            PhotographCacheOptions {
+                budget_bytes: budget,
+                build_budget_bytes: 3 * build_bytes,
+                tile_size: TILE,
+            },
+            |cache| cache.shared.mipmaps_made.load(Ordering::SeqCst),
+        );
+        let made = MipmapsMade(Mutex::new(Vec::new()));
+        let sink = |event: Event<'_>| made.sink(event);
+        let (found, tally) = cache.get_many(&paths, &Progress::to(&sink)).unwrap();
+        assert!(found.iter().all(Option::is_some));
+        assert_eq!(
+            tally,
+            GetManyTally {
+                mipmaps_made: 20,
+                ..GetManyTally::default()
+            },
+            "budget {budget}"
+        );
+        assert_eq!(starts.lock().unwrap().len(), 20);
+        assert_within_the_build_budget(&starts, build_bytes, 3);
+        let stats = cache.stats();
+        assert_eq!((stats.mipmaps_made, stats.decodes), (20, 0));
+        assert_eq!(stats.build_reserved_bytes, 0);
+        let mut made = made.0.into_inner().unwrap();
+        made.sort_by(f64::total_cmp);
+        assert_eq!(made, (1..=20).map(f64::from).collect::<Vec<_>>());
+    }
+}
+
+/// A `get_many` resolves each photograph's layout before it reserves: an
+/// out-of-core photograph whose mipmap is current is answered from its files
+/// with nothing reserved on the build count, and counted apart from those it
+/// decoded in core, made or reused. Over one such photograph, one with no
+/// mipmap, an in-core photograph and a missing file, the first call reads
+/// one from its files, makes one mipmap and decodes one; a second call
+/// reuses all three with a budget, and with one of 0, which keeps nothing,
+/// reads the two out-of-core ones from their files and decodes the in-core
+/// one again.
+#[test]
+fn get_many_reads_a_current_mipmap_without_reserving_and_counts_what_it_did() {
+    for budget in [GIB, 0] {
+        let ws = Workspace::new();
+        let current = ws.photograph("current.jpg", &readable_jpeg());
+        super::mipmap_tests::build(&current);
+        let no_mipmap = ws.photograph("no_mipmap.jpg", &readable_jpeg());
+        let in_core = ws.photograph(
+            "in_core.jpg",
+            &encode_jpeg(&synthetic_rgb(48, 32), JpegOptions::default()),
+        );
+        let gone = ws.dir.path().join("images").join("gone.jpg");
+        let paths: Vec<&Path> = vec![&current, &no_mipmap, &in_core, &gone];
+        let cache = cache_of(budget);
+        let made = MipmapsMade(Mutex::new(Vec::new()));
+        let sink = |event: Event<'_>| made.sink(event);
+        let (found, tally) = cache.get_many(&paths, &Progress::to(&sink)).unwrap();
+        assert_eq!(
+            found.iter().map(Option::is_some).collect::<Vec<_>>(),
+            [true, true, true, false]
+        );
+        assert_eq!(
+            tally,
+            GetManyTally {
+                read: 1,
+                from_mipmaps: 1,
+                mipmaps_made: 1,
+                reused: 0,
+                unreadable: 1
+            },
+            "budget {budget}"
+        );
+        assert_eq!(*made.0.lock().unwrap(), [1.0]);
+        let stats = cache.stats();
+        assert_eq!((stats.decodes, stats.mipmaps_made), (1, 1));
+
+        let (_, tally) = cache.get_many(&paths, &Progress::none()).unwrap();
+        let again = if budget == 0 {
+            GetManyTally {
+                read: 1,
+                from_mipmaps: 2,
+                unreadable: 1,
+                ..GetManyTally::default()
+            }
+        } else {
+            GetManyTally {
+                reused: 3,
+                unreadable: 1,
+                ..GetManyTally::default()
+            }
+        };
+        assert_eq!(tally, again, "budget {budget}");
+        assert_eq!(cache.stats().mipmaps_made, 1);
+        assert_eq!(
+            cache.shared.reserved_reading_files.load(Ordering::SeqCst),
+            0,
+            "a photograph read from its files reserved a build"
+        );
+    }
+}
+
+/// A `get_many` that finds a photograph's mipmap being made by another
+/// caller waits on the slot rather than start a second build, holding its
+/// share while it waits, and reads what the other caller made, counted as
+/// reused rather than made.
+#[test]
+fn get_many_waits_on_a_build_another_caller_is_making() {
+    let ws = Workspace::new();
+    let path = ws.photograph("a.jpg", &readable_jpeg());
+    let held = cache_holding_every_build();
+    let maker = {
+        let (cache, path) = (Arc::clone(&held.cache), path.clone());
+        on_a_thread(move || cache.get(&path, &Progress::none()))
+    };
+    let build_bytes = whole_decode_bytes(300, 200);
+    assert_eq!(held.expect(SlotEvent::DecodeStarted), build_bytes);
+    let many = {
+        let (cache, path) = (Arc::clone(&held.cache), path.clone());
+        on_a_thread(move || {
+            let made = MipmapsMade(Mutex::new(Vec::new()));
+            let sink = |event: Event<'_>| made.sink(event);
+            let (found, tally) = cache
+                .get_many(&[path.as_path()], &Progress::to(&sink))
+                .unwrap();
+            (found[0].is_some(), tally, made.0.into_inner().unwrap())
+        })
+    };
+    assert_eq!(
+        held.expect(SlotEvent::WaitStarted),
+        2 * build_bytes,
+        "the waiting member keeps its share"
+    );
+    held.release.send(()).unwrap();
+    maker.recv_timeout(HANG).expect("never made").unwrap();
+    let (answered, tally, made) = many.recv_timeout(HANG).expect("never answered");
+    assert!(answered);
+    assert_eq!(
+        tally,
+        GetManyTally {
+            reused: 1,
+            ..GetManyTally::default()
+        }
+    );
+    assert!(made.is_empty(), "{made:?}");
+    let stats = held.cache.stats();
+    assert_eq!((stats.mipmaps_made, stats.build_reserved_bytes), (1, 0));
+    assert!(held.events.try_recv().is_err(), "one build started");
 }

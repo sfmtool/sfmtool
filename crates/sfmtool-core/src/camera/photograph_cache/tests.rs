@@ -488,6 +488,8 @@ fn get_many_keeps_order_and_reports_the_tally() {
         tally,
         GetManyTally {
             read: 2,
+            from_mipmaps: 0,
+            mipmaps_made: 0,
             reused: 1,
             unreadable: 1
         }
@@ -506,6 +508,8 @@ fn get_many_keeps_order_and_reports_the_tally() {
         tally,
         GetManyTally {
             read: 0,
+            from_mipmaps: 0,
+            mipmaps_made: 0,
             reused: 3,
             unreadable: 1
         }
@@ -944,6 +948,53 @@ pub(super) fn cache_watching_its_count(
     cache
 }
 
+/// As each decode or build started, those in progress (started less those
+/// finished) and the bytes the build count held.
+pub(super) type Starts = Arc<Mutex<Vec<(u64, u64)>>>;
+
+/// A cache made with `options` whose hook keeps in [`Starts`], as each decode
+/// or build starts, those in progress and what the build count holds, with
+/// `finished` telling how many have finished: the cache's decodes, or its
+/// mipmaps made. The count is read before the finished ones, since each
+/// counts itself finished before it gives its share back: one that ends
+/// between the two reads is then either still in the count or counted
+/// finished, never counted in progress with its share already given back.
+pub(super) fn cache_watching_its_builds(
+    options: PhotographCacheOptions,
+    finished: fn(&PhotographCache) -> u64,
+) -> (PhotographCache, Starts) {
+    let mut cache = PhotographCache::new(options);
+    let starts = Starts::default();
+    let started = AtomicU64::new(0);
+    cache.set_slot_hook(Box::new({
+        let starts = Arc::clone(&starts);
+        move |cache, event, _| {
+            if event == SlotEvent::DecodeStarted {
+                let n = started.fetch_add(1, Ordering::SeqCst) + 1;
+                let reserved = cache.shared.build_reserved.load(Ordering::SeqCst);
+                let in_progress = n - finished(cache);
+                starts.lock().unwrap().push((in_progress, reserved));
+            }
+        }
+    }));
+    (cache, starts)
+}
+
+/// Asserts that, as each of `starts` began, the build count held `bytes` for
+/// every decode or build in progress and never more than `most` of them.
+pub(super) fn assert_within_the_build_budget(starts: &Starts, bytes: u64, most: u64) {
+    for &(in_progress, reserved) in starts.lock().unwrap().iter() {
+        assert!(
+            reserved >= in_progress * bytes,
+            "{in_progress} in progress with {reserved} bytes reserved"
+        );
+        assert!(
+            reserved <= most * bytes,
+            "{reserved} bytes reserved, past the build budget"
+        );
+    }
+}
+
 /// `reserve_builds` grants as many decodes as fit beside what is reserved,
 /// and one when none fit, a decode larger than the whole budget included;
 /// each is given back as it ends and the rest when the reservation drops.
@@ -1042,36 +1093,28 @@ fn try_reserve_build_passes_the_build_budget_only_alone() {
     assert!(none.try_reserve_build(1).is_some());
 }
 
-/// A `get_many` over 20 photographs decodes them in groups whose reservations
-/// never pass the build budget, set to three decodes, and every decode is
-/// reserved when it starts; with a budget and with a cache that keeps
-/// nothing.
+/// A `get_many` over 20 photographs never has more decodes in progress than
+/// the build budget allows, set to three decodes: as each decode starts, the
+/// build count holds a reservation for every decode in progress and never
+/// more than three. With a budget and with a cache that keeps nothing.
 #[test]
 fn get_many_decodes_in_groups_within_the_build_budget() {
     let dir = tempfile::tempdir().unwrap();
     let photographs = small_photographs(dir.path(), 20);
     let paths: Vec<&Path> = photographs.iter().map(PathBuf::as_path).collect();
     for budget in [GIB, 0] {
-        let seen = unseen();
-        let cache = cache_watching_its_count(
+        let (cache, starts) = cache_watching_its_builds(
             PhotographCacheOptions {
                 build_budget_bytes: 3 * SMALL,
                 ..with_budget(budget)
             },
-            &seen,
+            |cache| cache.shared.decodes.load(Ordering::SeqCst),
         );
         let (found, tally) = cache.get_many(&paths, &Progress::none()).unwrap();
         assert!(found.iter().all(Option::is_some));
         assert_eq!(tally.read, 20);
-        let (least, most) = (seen.0.load(Ordering::SeqCst), seen.1.load(Ordering::SeqCst));
-        assert!(
-            least >= SMALL,
-            "a decode started with {least} bytes reserved"
-        );
-        assert!(
-            most <= 3 * SMALL,
-            "{most} bytes reserved, past the build budget"
-        );
+        assert_eq!(starts.lock().unwrap().len(), 20);
+        assert_within_the_build_budget(&starts, SMALL, 3);
         let stats = cache.stats();
         assert_eq!((stats.decodes, stats.build_reserved_bytes), (20, 0));
         assert_eq!(stats.build_budget_bytes, 3 * SMALL);
