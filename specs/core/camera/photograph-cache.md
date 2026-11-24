@@ -1049,17 +1049,22 @@ reconstruction's photographs goes through it except the ones under
 - **A photograph its workspace file refuses** (the file cannot be read or
   parsed, or its `mipmap_options` is invalid) is
   `DisplayLayout::WorkspaceFileError` with the file's error, from the
-  layout's `GetError::Workspace` or from a decode's
-  `TileError::Unreadable` with one. `PhotographRequests` keeps it as a
-  failure, as it keeps a failed decode, but with the workspace file's
-  stamp in place of the photograph's: a look starts a check of that file
-  on the rayon pool, and once the file has changed the check drops the
-  failure, has the cache `forget` the path, whose layout it otherwise
-  answers as refused without a stat, and repaints, so the next frame reads
-  the photograph again. Image Detail says *Workspace file error:* over the
-  error, which names the file and the key; the other panels draw it as an
-  unreadable photograph. Nothing else is asked for and nothing repaints
-  while the file stays as it is.
+  layout's `GetError::Workspace` or from a decode's `TileError::Unreadable`
+  with one, and from a build of *Build mipmaps* that failed because the file
+  broke after the photograph was queued, which the task finds by reading the
+  header again, since `get_many` answers no error for a path and a cache of
+  budget 0 keeps none. `PhotographRequests` keeps it as a failure, as it
+  keeps a failed decode, but with the workspace file's stamp in place of the
+  photograph's, taken before a second read of the header that finds the
+  refusal still there, so a file fixed while the first read ran is not kept
+  with the fixed file's stamp: a look starts a check of that file on the
+  rayon pool, and once the file has changed the check drops the failure, has
+  the cache `forget` the path, whose layout it otherwise answers as refused
+  without a stat, and repaints, so the next frame reads the photograph
+  again. Image Detail says *Workspace file error:* over the error, which
+  names the file and the key; the other panels draw it as an unreadable
+  photograph. Nothing else is asked for and nothing repaints while the file
+  stays as it is.
 - **The image menu** asks only whether each photograph is decoded, with
   `keeps_every_tile`, and reads no pixel. The scene graph lays the menu out
   for every node on every frame, so the question allocates nothing and is no
@@ -1401,7 +1406,10 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   photograph of a workspace whose `mipmap_options` is invalid answered as a
   workspace file error naming the key, found by the header read and by a
   decode of a photograph read before the file broke, decoded no more and
-  repainted for no more, and read again once the file is fixed, with a
+  repainted for no more, and read again once the file is fixed, and one
+  queued for *Build mipmaps* whose workspace file breaks before its build
+  runs answered the same way and read, queued and made once the file is
+  fixed, with a
   budget smaller than the photograph and one of 0),
   [state/build_mipmaps/tests.rs](../../../crates/sfm-explorer/src/state/build_mipmaps/tests.rs)
   (the task in the fast queue, one chunk of as many photographs as the build

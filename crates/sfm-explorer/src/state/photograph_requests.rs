@@ -210,6 +210,28 @@ struct Failure {
     workspace: Option<WorkspaceConfigError>,
 }
 
+/// `path`'s refusal by its workspace file, when the layout the cache
+/// answers for it after a read is one: the file's error, and the stamp the
+/// workspace file had before a second read that found the refusal still
+/// there. Taking the stamp before that read, rather than after the first,
+/// means a file fixed while the first read ran is not kept as refused with
+/// the fixed file's stamp, which no later check would find changed. Reads
+/// the header again, so it runs off the GUI thread.
+fn confirmed_refusal(
+    cache: &PhotographCache,
+    path: &Path,
+) -> Option<(WorkspaceConfigError, FileStamp)> {
+    let PeekedLayout::Unreadable(GetError::Workspace(e)) = cache.layout(path) else {
+        return None;
+    };
+    let stamp = file_stamp(workspace_file(&e));
+    cache.request_layout(path);
+    match cache.layout(path) {
+        PeekedLayout::Unreadable(GetError::Workspace(e)) => Some((e, stamp)),
+        _ => None,
+    }
+}
+
 /// The workspace file `e` is an error of.
 fn workspace_file(e: &WorkspaceConfigError) -> &Path {
     match e {
@@ -297,12 +319,28 @@ impl TileRequests {
     /// asked for again once that file changes. Stats the file, so it runs
     /// off the GUI thread.
     fn remember_failure(&mut self, path: &Path, workspace: Option<WorkspaceConfigError>) {
+        let watched = workspace.as_ref().map_or(path, workspace_file);
+        let stamp = file_stamp(watched);
+        self.remember(path, workspace, stamp);
+    }
+
+    /// Remember that `path`'s workspace file refuses it with `e`, the file's
+    /// stamp having been `stamp` before the read that found the refusal
+    /// ([`confirmed_refusal`]), so a file fixed during that read is found
+    /// changed by the next check.
+    fn remember_refusal(&mut self, path: &Path, e: WorkspaceConfigError, stamp: FileStamp) {
+        self.remember(path, Some(e), stamp);
+    }
+
+    /// Keep `path`'s failure, watching the workspace file `workspace` names
+    /// or else the photograph, whose stamp was `stamp`, in place of any
+    /// tiles answered for it.
+    fn remember(&mut self, path: &Path, workspace: Option<WorkspaceConfigError>, stamp: FileStamp) {
         self.answered.retain(|(p, _)| p != path);
         let watched = workspace
             .as_ref()
             .map_or(path, workspace_file)
             .to_path_buf();
-        let stamp = file_stamp(&watched);
         self.failures.insert(
             path.to_path_buf(),
             Failure {
@@ -459,9 +497,20 @@ impl PhotographRequests {
     /// Keep `path`, whose mipmap *Build mipmaps* could not make, as a failed
     /// read is kept: answered as unreadable, with its file's stamp, until
     /// the file changes, so a cache that remembers no failure is not asked
-    /// to make it again on every frame.
-    pub(super) fn failed_to_build(&self, path: &Path) {
-        lock(&self.tiles).remember_failure(path, None);
+    /// to make it again on every frame. A build its workspace file refused,
+    /// as when the file broke after the photograph was queued, is found so
+    /// by reading the header again, since `get_many` answers no error and a
+    /// cache of budget 0 keeps none, and is kept as the header read keeps
+    /// one ([`confirmed_refusal`]): a workspace file error, watching that
+    /// file. Runs on the task's thread.
+    pub(super) fn failed_to_build(&self, cache: &PhotographCache, path: &Path) {
+        cache.request_layout(path);
+        let refusal = confirmed_refusal(cache, path);
+        let mut tiles = lock(&self.tiles);
+        match refusal {
+            Some((e, stamp)) => tiles.remember_refusal(path, e, stamp),
+            None => tiles.remember_failure(path, None),
+        }
     }
 
     /// Tell the test's hook the chunk a run of *Build mipmaps* has taken.
@@ -501,8 +550,8 @@ impl PhotographRequests {
         let ctx = ctx.clone();
         (self.spawn)(Box::new(move || {
             cache.request_layout(&path);
-            if let PeekedLayout::Unreadable(GetError::Workspace(e)) = cache.layout(&path) {
-                lock(&tiles).remember_failure(&path, Some(e));
+            if let Some((e, stamp)) = confirmed_refusal(&cache, &path) {
+                lock(&tiles).remember_refusal(&path, e, stamp);
             }
             lock(&in_flight).remove(&path);
             ctx.request_repaint();

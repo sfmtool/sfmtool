@@ -3582,8 +3582,17 @@ in core. Step 17 turns the tier on.
           `TileError::Unreadable`'s `why` carry the `GetError` in place of
           its message, two signature changes the plan did not name; their
           messages are unchanged. A refusal is kept as a failure, from the
-          header read's task or from a decode's, watching the workspace
-          file's stamp rather than the photograph's: without that, fixing
+          header read's task, from a decode's, or from a build of *Build
+          mipmaps* the file refused because it broke after the photograph
+          was queued (`failed_to_build` reads the header again, since
+          `get_many` answers `None` with no error and a cache of budget 0
+          keeps none, so no signature changes), watching the workspace
+          file's stamp rather than the photograph's. The header read and
+          the build take that stamp before a second read that finds the
+          refusal still there (`confirmed_refusal`), so a file fixed while
+          the first read ran is not kept with the fixed file's stamp, which
+          no check would find changed (an audit finding). Without watching
+          that file, fixing
           the file would leave every photograph the viewer had found
           refused answered as refused for the session, since `layout`
           answers a refusal without a stat. When the check of a later look
@@ -3594,7 +3603,10 @@ in core. Step 17 turns the tier on.
           `Building`, queued once by an asking read and not by a looking
           one, and the workspace refusal found by a header read and by a
           decode, decoded no more, repainted for no more, and read again
-          once the file is fixed (photograph_requests/tests.rs); Image
+          once the file is fixed, and one queued whose workspace file
+          breaks before its build runs answered the same way and read,
+          queued and made once the file is fixed
+          (photograph_requests/tests.rs); Image
           Detail's *Workspace file error:* with the message naming the file
           and the key, repainting nothing; and Track View's tile and crop
           cells, the Track Table's crops and Measurement View's endpoint

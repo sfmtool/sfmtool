@@ -1579,3 +1579,69 @@ fn a_photograph_its_workspace_file_refuses_is_a_workspace_file_error() {
         }
     }
 }
+
+/// A photograph queued for *Build mipmaps* whose workspace file breaks
+/// before its build runs: the build is refused, and the panels then answer
+/// it as a workspace file error naming the key, as when the header read
+/// finds the refusal, not as an unreadable photograph; once the file is
+/// fixed the next look's check finds it changed and the photograph is read
+/// again and queued again. With a budget smaller than the photograph and
+/// with one of 0, which keeps no record of the refusal.
+#[test]
+fn a_workspace_file_broken_before_a_queued_build_is_a_workspace_file_error() {
+    use super::super::build_mipmaps::run_chunk;
+    for budget in [20_000, 0] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = out_of_core_photo(dir.path());
+        let workspace = dir
+            .path()
+            .join(sfmtool_core::workspace::WORKSPACE_FILE_NAME);
+        let valid = std::fs::read(&workspace).unwrap();
+        let cache = tile_cache(budget, 1 << 30);
+        let (requests, queue) = PhotographRequests::queued();
+        let source = PhotographSource {
+            cache: &cache,
+            requests: &requests,
+            path: &path,
+        };
+        let ctx = egui::Context::default();
+        let _ = display_layout(source, &ctx);
+        assert_eq!(queue.run_off_this_thread(), 1, "{budget}: the header read");
+        assert!(matches!(
+            display_layout(source, &ctx),
+            DisplayLayout::Building(_)
+        ));
+        assert_eq!(requests.mipmaps_waiting(), std::slice::from_ref(&path));
+
+        std::fs::write(&workspace, INVALID_MIPMAP_OPTIONS).unwrap();
+        run_chunk(&cache, &requests, &Progress::none(), None);
+        assert_eq!(cache.stats().mipmaps_made, 0, "{budget}");
+        for look in 0..3 {
+            match display_layout(source, &ctx) {
+                DisplayLayout::WorkspaceFileError(e) => {
+                    assert!(names_jpeg_quality(&e), "{budget}, look {look}: {e}");
+                }
+                other => panic!("{budget}, look {look}: {other:?}"),
+            }
+            // A check of the workspace file, which finds it unchanged.
+            assert!(queue.run_off_this_thread() <= 1, "{budget}, look {look}");
+        }
+        assert!(requests.mipmaps_waiting().is_empty(), "{budget}: queued");
+
+        std::fs::write(&workspace, &valid).unwrap();
+        let _ = display_layout(source, &ctx);
+        assert_eq!(queue.run_off_this_thread(), 1, "{budget}: the check");
+        assert!(matches!(
+            display_layout(source, &ctx),
+            DisplayLayout::Loading
+        ));
+        assert_eq!(queue.run_off_this_thread(), 1, "{budget}: the header read");
+        assert!(
+            matches!(display_layout(source, &ctx), DisplayLayout::Building(_)),
+            "{budget}: read again once the file is fixed"
+        );
+        assert_eq!(requests.mipmaps_waiting(), std::slice::from_ref(&path));
+        run_chunk(&cache, &requests, &Progress::none(), None);
+        assert_eq!(cache.stats().mipmaps_made, 1, "{budget}");
+    }
+}
