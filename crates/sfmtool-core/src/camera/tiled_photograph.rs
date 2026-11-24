@@ -6,10 +6,11 @@
 //!
 //! A tiled photograph answers its layout and channels with no pixel read, and
 //! gives its pixels a photograph tile or a rectangle of one level at a time.
-//! It reads them from the photograph tiles it holds and no others: every tile
-//! of an image's pyramid ([`TiledPhotograph::from_image`]), or the tiles it
-//! was made of ([`TiledPhotograph::from_tiles`]), as the photograph cache
-//! makes each photograph it answers. The render entry points of
+//! It reads them from the photograph tiles it holds: every tile of an image's
+//! pyramid ([`TiledPhotograph::from_image`]), or the tiles it was made of
+//! ([`TiledPhotograph::from_tiles`]); or, for one the photograph cache's
+//! `get` answers, from the cache, which decodes the photograph again for a
+//! tile it has evicted. The render entry points of
 //! [`sampler`](crate::camera::sampler) are what read it; see
 //! `specs/core/camera/view-region-pyramids.md`.
 
@@ -19,7 +20,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
-use crate::camera::mipmap::{PyramidLayout, PHOTOGRAPH_TILE_SIZE};
+use crate::camera::mipmap::{PyramidLayout, MAX_JPEG_SIDE, PHOTOGRAPH_TILE_SIZE};
+use crate::camera::photograph_cache::{CachedTiles, GetError, TileError};
 use crate::camera::remap::HeldLevel;
 use crate::camera::sampler::{LevelRect, LevelRegions};
 use crate::progress::{Cancelled, Progress};
@@ -49,6 +51,33 @@ pub struct PhotographTile {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PhotographReadError {
     Cancelled,
+    /// The file of a photograph the cache answered is no longer the one its
+    /// tiles were cut from (its length, modification time or size differ),
+    /// found when a tile evicted after the answer was read again. A kernel
+    /// never goes on with pixels of two versions of one photograph.
+    Changed {
+        path: PathBuf,
+    },
+    /// The photograph's file does not exist ([`GetError::NotFound`]): for a
+    /// photograph the cache answered, it was removed before a tile evicted
+    /// since the answer was read again.
+    NotFound {
+        path: PathBuf,
+    },
+    /// A side over [`MAX_JPEG_SIDE`] px, read from the header
+    /// ([`GetError::TooLarge`]).
+    TooLarge {
+        path: PathBuf,
+        width: u32,
+        height: u32,
+    },
+    /// The photograph's file could not be read or decoded; `why` names the
+    /// file. `path` is `None` when the error came from a [`GetError`], whose
+    /// message alone names it.
+    Unreadable {
+        path: Option<PathBuf>,
+        why: String,
+    },
     /// A level, rectangle or tile the photograph does not have, or an empty
     /// one, was asked for; `path` is `None` for a photograph made in memory.
     OutOfRange {
@@ -68,6 +97,23 @@ impl fmt::Display for PhotographReadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Cancelled => write!(f, "{Cancelled}"),
+            Self::Changed { path } => write!(
+                f,
+                "{} changed while it was being read; run it again",
+                path.display()
+            ),
+            Self::NotFound { path } => write!(f, "{}: no such file", path.display()),
+            Self::TooLarge {
+                path,
+                width,
+                height,
+            } => write!(
+                f,
+                "{} is {width} x {height}, and a photograph with a side over \
+                 {MAX_JPEG_SIDE} px cannot be read",
+                path.display()
+            ),
+            Self::Unreadable { why, .. } => write!(f, "{why}"),
             Self::OutOfRange {
                 path: Some(path),
                 why,
@@ -90,12 +136,57 @@ impl From<Cancelled> for PhotographReadError {
     }
 }
 
+/// A failed tile, region or level read of the cache as a kernel reports it:
+/// `Unreadable` and `OutOfRange` keep their path.
+impl From<TileError> for PhotographReadError {
+    fn from(e: TileError) -> Self {
+        match e {
+            TileError::Cancelled => Self::Cancelled,
+            TileError::Unreadable { path, why } => Self::Unreadable {
+                path: Some(path),
+                why,
+            },
+            TileError::OutOfRange { path, why } => Self::OutOfRange {
+                path: Some(path),
+                why,
+            },
+        }
+    }
+}
+
+/// A failed `get` as a kernel reports it; `Unreadable` has no path, since
+/// [`GetError::Unreadable`]'s message alone names the file.
+impl From<GetError> for PhotographReadError {
+    fn from(e: GetError) -> Self {
+        match e {
+            GetError::Cancelled => Self::Cancelled,
+            GetError::NotFound(path) => Self::NotFound { path },
+            GetError::TooLarge {
+                path,
+                width,
+                height,
+            } => Self::TooLarge {
+                path,
+                width,
+                height,
+            },
+            GetError::Unreadable(why) => Self::Unreadable { path: None, why },
+        }
+    }
+}
+
 /// What a kernel reads a photograph through.
 ///
-/// It is made of photograph tiles, which it holds and reads, and holds no
-/// other pixel: every tile of an image's pyramid, cut when it is made
-/// ([`from_image`](Self::from_image)), or the tiles it is given
-/// ([`from_tiles`](Self::from_tiles)).
+/// It reads photograph tiles, and holds no other pixel: every tile of an
+/// image's pyramid, cut when it is made ([`from_image`](Self::from_image)),
+/// the tiles it is given ([`from_tiles`](Self::from_tiles)), or, for one
+/// [`PhotographCache::get`](crate::camera::PhotographCache::get) or
+/// [`PhotographCache::get_many`](crate::camera::PhotographCache::get_many)
+/// answers, none: it holds its layout and the cache's handle on its tiles,
+/// and reads each tile through the cache, which decodes the photograph again
+/// for a tile it has evicted. Such a read can fail as a read of the file can
+/// ([`PhotographReadError::NotFound`], [`PhotographReadError::Changed`] and
+/// the rest), and polls the reader's `Progress` while it decodes.
 pub struct TiledPhotograph {
     /// The photograph tiles held, by key.
     held: HashMap<TileKey, Arc<PhotographTile>>,
@@ -104,6 +195,9 @@ pub struct TiledPhotograph {
     every: bool,
     layout: PyramidLayout,
     channels: u32,
+    /// The cache the photograph reads its tiles through, for one the cache
+    /// answered; it then holds no tile.
+    through: Option<CachedTiles>,
 }
 
 /// Every photograph tile of an image's pyramid, as [`cut_image`] cuts them.
@@ -230,6 +324,7 @@ impl TiledPhotograph {
             every: true,
             layout,
             channels,
+            through: None,
         }
     }
 
@@ -269,6 +364,7 @@ impl TiledPhotograph {
             every: true,
             layout,
             channels,
+            through: None,
         }
     }
 
@@ -316,7 +412,27 @@ impl TiledPhotograph {
             every,
             layout,
             channels,
+            through: None,
         })
+    }
+
+    /// The photograph of `layout` and `channels` that holds no tile and reads
+    /// each through `through`: what the photograph cache's `get` answers.
+    pub(crate) fn read_through(layout: PyramidLayout, channels: u32, through: CachedTiles) -> Self {
+        Self {
+            held: HashMap::new(),
+            every: false,
+            layout,
+            channels,
+            through: Some(through),
+        }
+    }
+
+    /// The number of photograph tiles the photograph holds: none for one
+    /// that reads through the cache.
+    #[cfg(test)]
+    pub(crate) fn held_tiles(&self) -> usize {
+        self.held.len()
     }
 
     /// The same photograph cut into tiles of `tile_size` px (a size of 0 is
@@ -324,7 +440,7 @@ impl TiledPhotograph {
     /// crosses many of them. A photograph that
     /// holds every tile of its layout has its levels put together from its
     /// tiles and cut again; one made by [`Self::from_tiles`] that lacks a
-    /// tile cannot have them put together, and is left as it is.
+    /// tile, or one that reads through the cache, is left as it is.
     #[cfg(test)]
     pub(crate) fn with_tile_size(self, tile_size: u32) -> Self {
         if !self.every {
@@ -366,9 +482,10 @@ impl TiledPhotograph {
     }
 
     /// The tiles held, when the photograph may lack one a read needs; `None`
-    /// when it holds every tile of its layout.
+    /// when it holds every tile of its layout or reads them through the
+    /// cache.
     fn lacking(&self) -> Option<&HashMap<TileKey, Arc<PhotographTile>>> {
-        (!self.every).then_some(&self.held)
+        (!self.every && self.through.is_none()).then_some(&self.held)
     }
 
     /// All the tiles a read of `regions` needs, when the photograph does not
@@ -405,44 +522,89 @@ impl TiledPhotograph {
     }
 
     /// The tile `key`, with its border; [`PhotographReadError::NeedsTiles`]
-    /// naming it when the photograph does not hold it.
+    /// naming it when the photograph does not hold it and does not read
+    /// through the cache.
     ///
-    /// `progress` is the caller's, which a read that has to decode the
-    /// photograph again polls for cancellation; a photograph that holds its
-    /// tiles decodes nothing and never polls it. Every read of a tiled
-    /// photograph takes it, so that a render entry point passes its caller's
-    /// down to the read.
+    /// `progress` is the caller's, which a read through the cache that has
+    /// to decode the photograph again polls for cancellation; a photograph
+    /// that holds its tiles decodes nothing and never polls it. Every read of
+    /// a tiled photograph takes it, so that a render entry point passes its
+    /// caller's down to the read.
     pub(crate) fn tile(
         &self,
         key: TileKey,
-        _progress: &Progress<'_>,
+        progress: &Progress<'_>,
     ) -> Result<Arc<PhotographTile>, PhotographReadError> {
-        self.held
-            .get(&key)
-            .cloned()
-            .ok_or(PhotographReadError::NeedsTiles { keys: vec![key] })
+        if let Some(tile) = self.held.get(&key) {
+            return Ok(Arc::clone(tile));
+        }
+        match &self.through {
+            Some(through) => through
+                .read(&[key], progress)?
+                .into_iter()
+                .next()
+                .ok_or(PhotographReadError::NeedsTiles { keys: vec![key] }),
+            None => Err(PhotographReadError::NeedsTiles { keys: vec![key] }),
+        }
+    }
+
+    /// The tiles `keys`, by key: those held, or, for a photograph that reads
+    /// through the cache, all of them in one read, which decodes the
+    /// photograph at most once. [`PhotographReadError::NeedsTiles`] naming
+    /// them all when the photograph does not hold every one and does not
+    /// read through the cache. `progress` is as for [`Self::tile`].
+    pub(crate) fn tiles(
+        &self,
+        keys: &[TileKey],
+        progress: &Progress<'_>,
+    ) -> Result<HashMap<TileKey, Arc<PhotographTile>>, PhotographReadError> {
+        if let Some(through) = &self.through {
+            let tiles = through.read(keys, progress)?;
+            return Ok(keys.iter().copied().zip(tiles).collect());
+        }
+        keys.iter()
+            .map(|&key| match self.held.get(&key) {
+                Some(tile) => Ok((key, Arc::clone(tile))),
+                None => Err(PhotographReadError::NeedsTiles {
+                    keys: keys.to_vec(),
+                }),
+            })
+            .collect()
     }
 
     /// The pixels `x0..x1` by `y0..y1` of level `level`: the part of each
     /// photograph tile's core inside the rectangle, copied to its place.
     /// Refused with [`PhotographReadError::NeedsTiles`] when the photograph
-    /// does not hold every tile the rectangle covers. `progress` is as for
-    /// [`Self::tile`].
+    /// does not hold every tile the rectangle covers and does not read
+    /// through the cache. `progress` is as for [`Self::tile`].
     pub(crate) fn region(
         &self,
         level: usize,
         rect: LevelRect,
-        _progress: &Progress<'_>,
+        progress: &Progress<'_>,
     ) -> Result<ImageU8, PhotographReadError> {
         check_rect(&self.layout, level, rect)?;
         if let Some(keys) = self.missing_rect_tiles(level, rect) {
             return Err(PhotographReadError::NeedsTiles { keys });
         }
+        let keys: Vec<TileKey> = covering(&self.layout, level, rect).collect();
+        let tiles = self.tiles(&keys, progress)?;
+        Ok(self.region_of(level, rect, &tiles))
+    }
+
+    /// The pixels of `rect`, a rectangle inside level `level`, copied from
+    /// `tiles`, which hold every tile it covers.
+    pub(crate) fn region_of(
+        &self,
+        level: usize,
+        rect: LevelRect,
+        tiles: &HashMap<TileKey, Arc<PhotographTile>>,
+    ) -> ImageU8 {
         let c = self.channels as usize;
         let row_len = rect.width() as usize * c;
         let mut data = vec![0; row_len * rect.height() as usize];
         for key in covering(&self.layout, level, rect) {
-            let tile = &self.held[&key];
+            let tile = &tiles[&key];
             let [ox, oy] = tile.origin;
             let (x0, x1) = (rect.x0.max(ox), rect.x1.min(ox + tile.size[0]));
             let (y0, y1) = (rect.y0.max(oy), rect.y1.min(oy + tile.size[1]));
@@ -455,12 +617,7 @@ impl TiledPhotograph {
                 data[to..to + span].copy_from_slice(&tile.pixels.data()[from..from + span]);
             }
         }
-        Ok(ImageU8::new(
-            rect.width(),
-            rect.height(),
-            self.channels,
-            data,
-        ))
+        ImageU8::new(rect.width(), rect.height(), self.channels, data)
     }
 }
 
@@ -556,7 +713,7 @@ pub(crate) fn tile_count(layout: &PyramidLayout) -> usize {
 
 /// The keys of the tiles of level `level` of `layout` whose cores `rect`
 /// covers, row by row; `rect` lies inside its level.
-fn covering(
+pub(crate) fn covering(
     layout: &PyramidLayout,
     level: usize,
     rect: LevelRect,

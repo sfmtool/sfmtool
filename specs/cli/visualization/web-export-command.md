@@ -56,7 +56,14 @@ bitmap" describes);
 when no photograph can be read, the points are drawn as splats. A photograph
 that cannot be decoded, or is not its camera's size, is left out of the
 render; a read of one the render was handed that fails ends the export with
-`WebExportError::Photograph`, which the binding raises as a `RuntimeError`.
+`WebExportError::Photograph`, which the binding raises as a `RuntimeError`
+and the command reports as its failure with exit status 1, the message
+naming the photograph (a refusal is a usage error, exit status 2). The
+render reads the photographs through a
+photograph cache that keeps nothing, so each photograph it answers holds the
+tiles of its decode while the render reads it, is decoded once, and is not
+read from its file again
+([photograph-cache.md](../../core/camera/photograph-cache.md)).
 A point with no
 frame (an all-zero `u` row) or an all-zero bitmap row is drawn as a splat
 either way, by the rule SfM Explorer's surfels follow
@@ -391,4 +398,5 @@ a tenth of the download (0.2 MB compressed against 1.6 MB).
   on the Seoul bull ground truth into a temporary directory: `scene.json`
   against the files written and the `.sfmr`, page sizes, the non-empty
   directory refusal and `--overwrite`, leaving out atlases, the start image,
-  the single-file page and its 16 MB refusal.
+  the single-file page and its 16 MB refusal, and a `RuntimeError` from
+  `write_web_export` reported as the command's failure.

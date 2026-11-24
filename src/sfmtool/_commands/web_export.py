@@ -144,6 +144,10 @@ def web_export(
         )
     except WebExportError as e:
         raise click.UsageError(str(e))
+    except RuntimeError as e:
+        # A read of a photograph the patch bitmaps are rendered from failed:
+        # removed, changed or unreadable since the export started.
+        raise click.ClickException(str(e))
 
     line = f"  Points written: {report['points']}"
     if report["points_at_infinity"]:

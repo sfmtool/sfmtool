@@ -553,3 +553,60 @@ fn stored_references_survive_missing_views_skipped_points_and_zero_frames() {
         "{missing} missing, {rendered} rendered"
     );
 }
+
+/// A photograph whose file is removed after the render's read phase decoded
+/// it, and whose tiles the cache has evicted since, fails the render with
+/// `NotFound`, naming the file, rather than be left out of it.
+#[test]
+fn a_photograph_removed_after_its_tiles_were_evicted_fails_the_render() {
+    use crate::camera::PhotographReadError;
+    use crate::progress::Event;
+
+    let mut recon = seoul_bull();
+    let dir = tempfile::tempdir().unwrap();
+    let paths: Vec<PathBuf> = recon
+        .image_set
+        .images
+        .iter()
+        .map(|image| {
+            let to = dir.path().join(&image.name);
+            std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+            std::fs::copy(recon.workspace_dir.join(&image.name), &to).unwrap();
+            to
+        })
+        .collect();
+    recon.workspace_dir = dir.path().to_path_buf();
+    // Each decode keeps only its own tiles, so the read phase leaves at most
+    // the last photographs it decoded.
+    let cache = PhotographCache::new(PhotographCacheOptions {
+        budget_bytes: 1,
+        ..Default::default()
+    });
+    // The photographs go once the read phase is over, as the render starts.
+    let remove = |event: Event<'_>| {
+        if let Event::Enter {
+            phase: "render", ..
+        } = event
+        {
+            for path in &paths {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    };
+    let Err(error) = render_patch_bitmap_column(
+        &recon,
+        &cache,
+        crate::camera::sampler::test_pool(),
+        &Progress::to(&remove),
+    ) else {
+        panic!("a render of photographs that are gone did not fail");
+    };
+    let PhotographReadError::NotFound { path } = &error else {
+        panic!("{error}");
+    };
+    assert!(paths.contains(path), "{error}");
+    assert!(
+        error.to_string().contains(&*path.to_string_lossy()),
+        "{error}"
+    );
+}

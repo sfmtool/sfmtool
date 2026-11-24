@@ -17,7 +17,9 @@ pixels, the reuse of kept regions across renders, and the entry points,
 [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md)
 and its companion [view-region-pyramid.md](../../drafts/view-region-pyramid.md)
 propose moving the kernels and panels onto them. Today the entry points read
-photographs made in memory. Track View, the Track Table's crops and
+photographs made in memory, and the photographs the photograph cache's `get` and
+`get_many` answer, which read their tiles through the cache and decode a
+photograph again for a tile it evicted. Track View, the Track Table's crops and
 Measurement View's endpoint crops read a photograph made of the photograph
 tiles they peeked in the photograph cache, through
 `TiledPhotograph::from_tiles`, and draw every tile, crop and hover view
@@ -93,11 +95,24 @@ impl TiledPhotograph {
 }
 pub enum PhotographReadError {
     Cancelled,
+    /// The file of a photograph the cache answered changed after it was
+    /// decoded, found when a tile evicted since was read again.
+    Changed { path: PathBuf },
+    /// The file is gone (`GetError::NotFound`).
+    NotFound { path: PathBuf },
+    /// A side over `MAX_JPEG_SIDE` (`GetError::TooLarge`).
+    TooLarge { path: PathBuf, width: u32, height: u32 },
+    /// The file could not be read or decoded; `why` names it, and `path` is
+    /// `None` for one converted from `GetError::Unreadable`.
+    Unreadable { path: Option<PathBuf>, why: String },
     OutOfRange { path: Option<PathBuf>, why: String },
     /// Every tile the read needs, which a photograph made by `from_tiles`
     /// does not all hold.
     NeedsTiles { keys: Vec<TileKey> },
 }
+impl From<Cancelled> for PhotographReadError { /* … */ }
+impl From<TileError> for PhotographReadError { /* … */ }
+impl From<GetError> for PhotographReadError { /* … */ }
 
 pub const REGION_REUSE_MARGIN: f64 = 0.25;
 pub const REGION_POOL_BYTES_PER_THREAD: u64 = 4 * 512 * 512 * 3;
@@ -164,14 +179,18 @@ sampler's footprint and to its region is one change. The kernels keep their
 level rules (`level_for_map`, `affine_core_map`), so the grid and affine entry
 points take the level and the map in that level's pixels. Every entry point
 returns `PhotographReadError`, because a photograph read from files can fail
-mid-read; one made in memory fails only for a level, rectangle or tile it does
-not have, or for having no pixels. The whole-pyramid samplers (`render_tile`,
+mid-read: one the photograph cache's `get` answered reads its tiles through
+the cache and decodes the file again for a tile the cache evicted, which
+fails when the file is gone, changed or unreadable
+([photograph-cache.md](photograph-cache.md) § "Reads through the cache");
+one made in memory fails only for a level, rectangle or tile it does not
+have, or for having no pixels. The whole-pyramid samplers (`render_tile`,
 the `remap_*` functions) keep their signatures and stay infallible: a pyramid
 already assembled cannot fail.
 
-Every entry point takes the caller's `Progress` and hands it to each tile
-read, the reads that would decode a photograph again for a tile evicted while
-the kernel ran polling it for cancellation, so such a decode stops with the
+Every entry point takes the caller's `Progress` and hands it to each tile read,
+and a read through the cache that decodes a photograph again for a tile evicted
+while the kernel ran polls it for cancellation, so such a decode stops with the
 kernel. A render reports nothing through it, and a photograph that holds its
 tiles decodes nothing and never polls it. Every kernel passes its caller's
 cancel flag down to its renders: its own `Progress`, or, for a nested call
@@ -375,12 +394,15 @@ order on the calling thread, so the window has one owner. A tile read that
 fails is remembered, its taps read as 0, and the entry point returns the error
 instead of the result.
 
-**Photographs made of tiles.** `from_tiles` keeps its tiles by key and
-answers a tile read with the tile it holds; so does `from_image`, which
-holds every tile of its layout. A photograph that holds every tile of its
-layout, as `from_image`'s does and as one `from_tiles` is handed all of them
-does, needs no tile worked out before a read, so its reads skip the checks
-below. Every entry point that goes
+**Photographs made of tiles.** `from_tiles` keeps its tiles by key and answers a
+tile read with the tile it holds; so does `from_image`, which holds every tile
+of its layout. A photograph the photograph cache's `get` answers holds no tile
+and reads each through the cache; a read of several tiles, such as the regions
+of every level a copied read assembles, asks the cache for them together, so it
+decodes at most once. A photograph that holds every tile of its layout, as
+`from_image`'s does and as one `from_tiles` is handed all of them does, or that
+reads through the cache, needs no tile worked out before a read, so its reads
+skip the checks below. Every entry point that goes
 through the kept regions works out, before its reservation, the tiles under
 its regions grown by `REGION_REUSE_MARGIN`, the tiles a copied read
 assembles them from, and refuses with `NeedsTiles` when the photograph does
@@ -411,7 +433,8 @@ Building the pyramid and then cutting it would hold the pyramid and all its
 tiles, about 2.67 times; the bindings make the photographs of many images at
 once on the rayon pool, so the difference decides their peak memory. The
 photograph cache cuts each decode the same way, at its own tile size, keeps
-the tiles, and answers a photograph made of them with `from_tiles`
+the tiles, and answers a photograph that reads them through the cache, or,
+under a budget of 0, one that holds every tile of the decode
 ([photograph-cache.md](photograph-cache.md)). A tile is cut with its border
 by one clamped copy, the columns that need no clamping copied as one span a
 row. The layout has the pyramid's own levels, each level 0's size halved,

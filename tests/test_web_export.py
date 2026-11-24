@@ -164,3 +164,16 @@ def test_single_file_is_refused_past_the_page_limit(tmp_path, monkeypatch):
 def test_jpeg_quality_is_range_checked(tmp_path, quality):
     result = run("-o", str(tmp_path / "site"), "--jpeg-quality", quality)
     assert result.exit_code != 0
+
+
+def test_a_failed_photograph_read_is_reported_as_the_failure(tmp_path, monkeypatch):
+    from sfmtool import fileio
+
+    def failing_read(*args, **kwargs):
+        raise RuntimeError("images/a.jpg: no such file")
+
+    monkeypatch.setattr(fileio, "write_web_export", failing_read)
+    result = run("-o", str(tmp_path / "site"))
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit), result.exception
+    assert "Error: images/a.jpg: no such file" in result.output

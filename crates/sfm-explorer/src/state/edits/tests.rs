@@ -1923,6 +1923,49 @@ fn converting_pushes_one_embedded_patches_version_over_the_same_rows() {
     assert!(!state.scene[0].has_patch_data());
 }
 
+/// A photograph whose file is removed after the conversion's read phase
+/// decoded it, and whose tiles the cache has evicted since, fails the
+/// conversion with the read's error, naming the file, and pushes no version.
+#[test]
+fn converting_fails_when_a_photograph_is_removed_after_its_tiles_were_evicted() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = convertible_state(dir.path());
+    let camera = &state.scene[0].recon().image_set.cameras[0];
+    let photograph =
+        image::RgbImage::from_pixel(camera.width, camera.height, image::Rgb([40, 80, 120]));
+    let paths: Vec<std::path::PathBuf> = state.scene[0].recon().image_set.images[..2]
+        .iter()
+        .map(|image| dir.path().join(&image.name))
+        .collect();
+    for path in &paths {
+        photograph.save(path).unwrap();
+    }
+    state.photographs = crate::test_support::one_photograph_cache();
+
+    let job = state.convert_to_embedded_patches_job(id).unwrap();
+    let job = crate::test_support::removing_on_render(job, paths.clone());
+    state
+        .start_background_task(crate::background::Operation::TO_EMBEDDED_PATCHES, id, job)
+        .unwrap();
+    state.finish_background_tasks();
+
+    let entry = newest(&state);
+    assert!(entry.failed, "{}", entry.text);
+    assert!(
+        entry
+            .text
+            .starts_with("Convert to embedded patches of run_a refused: ")
+            && entry.text.contains("a photograph could not be read: ")
+            && entry.text.ends_with(": no such file")
+            && paths
+                .iter()
+                .any(|path| entry.text.contains(&*path.to_string_lossy())),
+        "{}",
+        entry.text
+    );
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+}
+
 #[test]
 fn converting_renders_and_persists_patch_bitmaps_when_photographs_are_available() {
     let dir = tempfile::tempdir().unwrap();

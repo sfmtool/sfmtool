@@ -94,6 +94,63 @@ fn opening_builds_every_thumbnail_from_the_sift_first_then_the_photographs() {
     );
 }
 
+/// A photograph whose file is removed after the open's read phase decoded it,
+/// and whose tiles the cache has evicted since, fails the open with the read's
+/// error, naming the file, rather than being left out of the render.
+#[test]
+fn an_open_whose_photograph_is_removed_after_its_tiles_were_evicted_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
+    let path = saved_with_photographs(&dir);
+    let recon = SfmrReconstruction::load(&path, &sfmtool_core::progress::Progress::none())
+        .expect("the file reads");
+    // The paths the open reads: the read canonicalizes the workspace
+    // directory, which differs from `dir` where the temp directory is reached
+    // through a link or a short name (macOS `/var`, a Windows `RUNNER~1`).
+    let photographs: Vec<PathBuf> = recon
+        .image_set
+        .images
+        .iter()
+        .map(|image| recon.workspace_dir.join(&image.name))
+        .collect();
+
+    let mut state = AppState::new();
+    state.photographs = crate::test_support::one_photograph_cache();
+    let job = crate::test_support::removing_on_render(
+        crate::state::open::open_job(
+            vec![path.clone()],
+            std::sync::Arc::clone(&state.photographs),
+        ),
+        photographs.clone(),
+    );
+    let task = state
+        .start_task(
+            crate::background::Operation::OPEN,
+            None,
+            "recon".into(),
+            job,
+        )
+        .unwrap();
+    state.finish_background_task(task);
+    let error = match &state
+        .finished_task(task)
+        .expect("the open finished")
+        .outcome
+    {
+        Err(message) => message.clone(),
+        Ok(_) => panic!("the open of photographs that are gone succeeded"),
+    };
+    assert!(
+        error.starts_with("Failed to render the patch bitmaps of ")
+            && error.contains("a photograph could not be read: ")
+            && error.ends_with(": no such file")
+            && photographs
+                .iter()
+                .any(|photo| error.contains(&*photo.to_string_lossy())),
+        "{error}"
+    );
+}
+
 #[test]
 fn opening_renders_the_patch_bitmaps_a_file_does_not_carry() {
     let tmp = tempfile::tempdir().unwrap();

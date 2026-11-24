@@ -15,10 +15,11 @@
 //!
 //! Its callers hold it in an `Arc` and call it through `&self`: a worker thread
 //! puts what it decodes where the next worker and the GUI thread find it.
-//! [`PhotographCache::get`] answers a [`TiledPhotograph`] holding every tile
-//! of the photograph, decoding it again when a tile is not kept; it waits
-//! while another thread decodes the same path, and stops waiting when its
-//! caller is cancelled. [`PhotographCache::peek`] never reads a file and
+//! [`PhotographCache::get`] answers a [`TiledPhotograph`] that holds no tile
+//! and reads each through the cache, decoding the photograph only when none of
+//! its tiles is kept, and again for a read of a tile the cache evicted since;
+//! it waits while another thread decodes the same path, and stops waiting when
+//! its caller is cancelled. [`PhotographCache::peek`] never reads a file and
 //! never waits, which is what a caller that draws every frame wants. Every
 //! whole decode is reserved on the cache's build count first
 //! ([`PhotographCache::reserve_builds`]), so the decodes in progress on one
@@ -38,7 +39,7 @@ use rayon::prelude::*;
 use crate::camera::image::{image_dimensions, ImageU8};
 use crate::camera::mipmap::{PyramidLayout, MAX_JPEG_SIDE, PHOTOGRAPH_TILE_SIZE};
 use crate::camera::tiled_photograph::{
-    cut_image, tile_count, CutImage, PhotographTile, TileKey, TiledPhotograph,
+    cut_image, tile_count, CutImage, PhotographReadError, PhotographTile, TileKey, TiledPhotograph,
 };
 use crate::progress::{Cancelled, Progress};
 
@@ -248,7 +249,6 @@ impl Drop for GroupShare<'_> {
 }
 
 /// Why [`PhotographCache::get`] has no photograph for a path.
-/// Why [`PhotographCache::get`] has no photograph for a path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GetError {
     /// The file does not exist.
@@ -301,15 +301,16 @@ pub struct PhotographCacheStats {
     pub bytes: u64,
     /// The budget the cache was made with.
     pub budget_bytes: u64,
-    /// Answers that decoded nothing: every tile asked for was kept, the file
-    /// is remembered as unreadable, or another caller's decode of the same
-    /// path was waited on. Each path of a `get_many` counts as one `get`.
-    /// The peeks are not counted, and neither is a call that stopped waiting
-    /// because it was cancelled.
+    /// Answers that decoded nothing: every tile asked for was kept (for
+    /// `get`, a tile of the photograph), the file is remembered as
+    /// unreadable, or another caller's decode of the same path was waited on.
+    /// Each path of a `get_many` counts as one `get`. The peeks are not
+    /// counted, nor is a read of a photograph `get` answered that finds its
+    /// tiles kept, nor a call that stopped waiting because it was cancelled.
     pub hits: u64,
     /// Decodes started, whether they succeeded, failed or were cancelled: a
     /// photograph none of whose tiles were kept, or one a tile of which was
-    /// asked for and not kept, decoded again.
+    /// asked for or read and not kept, decoded again.
     pub misses: u64,
     /// Photographs decoded whole: every decode that read a photograph's
     /// pixels, including one whose caller was cancelled before its tiles
@@ -399,8 +400,13 @@ struct Kept {
 /// decode keeps as used.
 #[derive(Clone, Copy)]
 enum Asked<'a> {
-    /// The whole photograph, `get`'s and `get_many`'s: answered every tile,
-    /// and a decode keeps them all as unused.
+    /// The photograph read through the cache, `get`'s and `get_many`'s:
+    /// answered no tile, once the photograph is made and a tile of it is
+    /// kept, and a decode keeps every tile as unused. A decode is made only
+    /// when no tile is kept; a read of a tile not kept decodes again.
+    Photograph,
+    /// Every tile of the photograph, `peek`'s and `insert`'s: answered every
+    /// tile, and a decode keeps them all as unused.
     Every,
     /// The tiles `keys` that the layout has, `get_tile`'s and a panel's
     /// decode's: answered those, and a decode keeps them as used and the
@@ -413,18 +419,123 @@ enum Asked<'a> {
 struct Got {
     layout: Arc<PyramidLayout>,
     tiles: Vec<Arc<PhotographTile>>,
+    /// The channels of the photograph's tiles.
+    channels: u32,
+    /// For [`Asked::Photograph`], the slot the photograph reads its tiles
+    /// from; `None` when the cache keeps none of them (a budget of 0, or a
+    /// slot that left the map while its decode ran), and `tiles` is then
+    /// every tile of the decode.
+    slot: Option<Arc<Slot>>,
 }
 
 impl Got {
-    /// The photograph made of the tiles, which for [`Asked::Every`] are every
-    /// tile of its layout.
-    fn photograph(self) -> Result<Arc<TiledPhotograph>, GetError> {
+    /// The photograph the request is answered: one that reads its tiles
+    /// through `cache` from the slot, or one made of the tiles, which for
+    /// [`Asked::Every`], and for [`Asked::Photograph`] with no slot, are
+    /// every tile of its layout.
+    fn photograph(
+        self,
+        cache: &PhotographCache,
+        path: &Path,
+    ) -> Result<Arc<TiledPhotograph>, GetError> {
+        if let Some(slot) = self.slot {
+            let layout = (*self.layout).clone();
+            let through = CachedTiles {
+                cache: cache.handle(),
+                path: path.to_path_buf(),
+                slot,
+                layout: self.layout,
+            };
+            return Ok(Arc::new(TiledPhotograph::read_through(
+                layout,
+                self.channels,
+                through,
+            )));
+        }
         TiledPhotograph::from_tiles((*self.layout).clone(), self.tiles)
             .map(Arc::new)
             // Every layout has a tile, and the tiles are the layout's own, cut
             // from one image; this answers a broken invariant rather than
             // panic on it.
             .map_err(|e| GetError::Unreadable(e.to_string()))
+    }
+}
+
+/// What a photograph [`PhotographCache::get`] or [`PhotographCache::get_many`]
+/// answers reads its tiles through: the cache, the path, the slot it was
+/// answered from and the layout of the decode that made it.
+///
+/// A read takes the tiles the slot keeps; when one is not kept it reads the
+/// file again as [`PhotographCache::get_tile`] does, decoding the photograph,
+/// reserving with [`PhotographCache::reserve_builds`] and waiting on the slot
+/// while another caller decodes it, polling the reader's `Progress`. A file
+/// whose length or modification time is not the slot's any more, or whose
+/// layout is not the one recorded, fails the read with
+/// [`PhotographReadError::Changed`], so a kernel never reads two versions of
+/// one photograph.
+pub(crate) struct CachedTiles {
+    cache: PhotographCache,
+    path: PathBuf,
+    slot: Arc<Slot>,
+    layout: Arc<PyramidLayout>,
+}
+
+impl CachedTiles {
+    /// The tiles `keys`, in order, each a tile of the layout: from the slot
+    /// when it keeps every one of them, marking them used, and otherwise
+    /// from one decode of the file that keeps them as used.
+    pub(crate) fn read(
+        &self,
+        keys: &[TileKey],
+        progress: &Progress<'_>,
+    ) -> Result<Vec<Arc<PhotographTile>>, PhotographReadError> {
+        if let Some(&key) = keys.iter().find(|&&key| !has_key(&self.layout, key)) {
+            return Err(PhotographReadError::OutOfRange {
+                path: Some(self.path.clone()),
+                why: format!(
+                    "level {} has no tile at column {}, row {}",
+                    key.level, key.col, key.row
+                ),
+            });
+        }
+        let cache = &self.cache;
+        {
+            let tick = cache.next_tick();
+            let mut data = self.slot.lock();
+            if matches!(&data.made, Some(Ok(layout)) if **layout == *self.layout) {
+                if let Some(got) = data.kept(Asked::Keys(keys), tick, &self.slot) {
+                    return Ok(got.tiles);
+                }
+            }
+        }
+        // A tile is not kept: read the file again, as it was when the slot
+        // was made.
+        progress.check_cancel()?;
+        let stamp = file_stamp(&self.path);
+        if stamp.is_some() && stamp != self.slot.stamp {
+            return Err(PhotographReadError::Changed {
+                path: self.path.clone(),
+            });
+        }
+        let (value, _) = cache.fetch(&self.path, progress, Share::None, Asked::Keys(keys));
+        let got = value.map_err(|e| read_error(&self.path, e))?;
+        if *got.layout != *self.layout || got.tiles.len() != keys.len() {
+            return Err(PhotographReadError::Changed {
+                path: self.path.clone(),
+            });
+        }
+        Ok(got.tiles)
+    }
+}
+
+/// The [`PhotographReadError`] of a failed read of `path`'s file.
+fn read_error(path: &Path, e: GetError) -> PhotographReadError {
+    match e {
+        GetError::Unreadable(why) => PhotographReadError::Unreadable {
+            path: Some(path.to_path_buf()),
+            why,
+        },
+        e => e.into(),
     }
 }
 
@@ -443,19 +554,39 @@ struct SlotData {
     tiles: HashMap<TileKey, Kept>,
     /// Bytes of `tiles`' pixels, what the slot adds to [`Inner::bytes`].
     bytes: u64,
+    /// The channels of the tiles of the decode that made the slot.
+    channels: u32,
 }
 
 impl SlotData {
     /// The tiles `asked` names, when a made photograph has every one of them
     /// kept, each counted as asked for at `tick`: what a request is answered
-    /// without a decode. `None` when the photograph is not made, its decode
-    /// failed, or a tile it asks for is not kept.
-    fn kept(&mut self, asked: Asked<'_>, tick: u64) -> Option<Got> {
+    /// without a decode. For [`Asked::Photograph`], no tile, when a tile of
+    /// the photograph is kept, each kept tile counted as asked for, and
+    /// `slot`, this data's slot, for the photograph to read through. `None`
+    /// when the photograph is not made, its decode failed, or a tile it asks
+    /// for is not kept.
+    fn kept(&mut self, asked: Asked<'_>, tick: u64, slot: &Arc<Slot>) -> Option<Got> {
         let Some(Ok(layout)) = &self.made else {
             return None;
         };
         let layout = Arc::clone(layout);
+        let channels = self.channels;
         let tiles = match asked {
+            Asked::Photograph => {
+                if self.tiles.is_empty() {
+                    return None;
+                }
+                for kept in self.tiles.values_mut() {
+                    kept.tick = tick;
+                }
+                return Some(Got {
+                    layout,
+                    tiles: Vec::new(),
+                    channels,
+                    slot: Some(Arc::clone(slot)),
+                });
+            }
             Asked::Every => {
                 if self.tiles.len() != tile_count(&layout) {
                     return None;
@@ -485,7 +616,12 @@ impl SlotData {
                     .collect::<Option<Vec<_>>>()?
             }
         };
-        Some(Got { layout, tiles })
+        Some(Got {
+            layout,
+            tiles,
+            channels,
+            slot: None,
+        })
     }
 
     /// Drop every tile kept, answering the bytes they held.
@@ -598,21 +734,26 @@ impl Inner {
 /// photograph's depth is set by its image; the pyramid is never held whole,
 /// and only the tiles are kept. The tiles a request asked for are kept as
 /// used and the rest of the decode as unused. [`Self::get`] and
-/// [`Self::get_many`] answer a [`TiledPhotograph`] made of every tile of the
-/// photograph, the tiles the cache keeps, and decode it again when a tile of
-/// it is not kept. A photograph with a side over [`MAX_JPEG_SIDE`] is refused
-/// from its header, before any decode, as [`GetError::TooLarge`]. A file that
-/// cannot be read or is refused is remembered as its error and costs nothing
-/// against the budget. An entry records the file's length and modification
-/// time when it is made; `get` and `get_many` compare them with the file on
-/// disk and decode again when they differ, so a remembered failure is also
-/// retried once the file appears or changes.
+/// [`Self::get_many`] answer a [`TiledPhotograph`] that holds no tile and reads
+/// each through the cache, which decodes the photograph again for a tile it no
+/// longer keeps; they decode only a photograph none of whose tiles is kept.
+/// Under a budget of 0 the cache keeps nothing, and the photograph they answer
+/// holds every tile of the decode that made it. A photograph with a side over
+/// [`MAX_JPEG_SIDE`] is refused from its header, before any decode, as
+/// [`GetError::TooLarge`]. A file that cannot be read or is refused is
+/// remembered as its error and costs nothing against the budget. An entry
+/// records the file's length and modification time when it is made; `get` and
+/// `get_many` compare them with the file on disk and decode again when they
+/// differ, so a remembered failure is also retried once the file appears or
+/// changes.
 ///
 /// When a decode takes the bytes kept over the budget, tiles are dropped
 /// until the total is back under it: the unused before the used, the least
 /// recently asked for first, and never one the decode's own request asked
 /// for (every tile of a `get`'s decode). Only the cache's `Arc` is dropped: a
-/// caller still holding a tile or a photograph keeps its pixels alive.
+/// caller still holding a tile keeps its pixels alive, and a photograph `get`
+/// answered reads a tile it needs that was dropped by decoding the file
+/// again.
 ///
 /// Each path has one slot. The caller that finds the tiles it asks for not
 /// kept marks the slot as being made and decodes; the others wait on it,
@@ -632,6 +773,17 @@ impl Inner {
 /// [`ImageU8Pyramid::from_image`]: crate::camera::image::ImageU8Pyramid::from_image
 /// [`ImageU8Pyramid::full_levels`]: crate::camera::image::ImageU8Pyramid::full_levels
 pub struct PhotographCache {
+    /// What the cache keeps and counts, shared with every photograph
+    /// [`Self::get`] and [`Self::get_many`] answer that reads its tiles
+    /// through the cache.
+    shared: Arc<Shared>,
+}
+
+/// A [`PhotographCache`]'s state: its tiles, its counters and its build
+/// count. Held in an `Arc` by the cache and by each photograph it answers
+/// that reads through it, so such a photograph stays readable after the
+/// cache that answered it is dropped, keeping the tiles kept until then.
+struct Shared {
     options: PhotographCacheOptions,
     inner: Mutex<Inner>,
     tick: AtomicU64,
@@ -654,12 +806,12 @@ pub struct PhotographCache {
 /// The test build's hook on a cache's slot events, told the cache too so it
 /// can read the build count.
 #[cfg(test)]
-type SlotHook = dyn Fn(&PhotographCache, SlotEvent) + Send + Sync;
+pub(crate) type SlotHook = dyn Fn(&PhotographCache, SlotEvent) + Send + Sync;
 
 /// What [`PhotographCache::on_slot_event`] is told.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SlotEvent {
+pub(crate) enum SlotEvent {
     DecodeStarted,
     WaitStarted,
     /// A panel's decode ([`PhotographCache::try_decode_tiles`]) has its
@@ -696,26 +848,45 @@ impl PhotographCache {
     /// [`ImageU8Pyramid::full_levels`]: crate::camera::image::ImageU8Pyramid::full_levels
     pub fn new(options: PhotographCacheOptions) -> Self {
         Self {
-            options,
-            inner: Mutex::new(Inner {
-                map: HashMap::new(),
-                bytes: 0,
-                layouts: HashMap::new(),
+            shared: Arc::new(Shared {
+                options,
+                inner: Mutex::new(Inner {
+                    map: HashMap::new(),
+                    bytes: 0,
+                    layouts: HashMap::new(),
+                }),
+                tick: AtomicU64::new(0),
+                hits: AtomicU64::new(0),
+                misses: AtomicU64::new(0),
+                decodes: AtomicU64::new(0),
+                build_reserved: AtomicU64::new(0),
+                #[cfg(test)]
+                on_slot_event: None,
             }),
-            tick: AtomicU64::new(0),
-            hits: AtomicU64::new(0),
-            misses: AtomicU64::new(0),
-            decodes: AtomicU64::new(0),
-            build_reserved: AtomicU64::new(0),
-            #[cfg(test)]
-            on_slot_event: None,
         }
+    }
+
+    /// Another handle on the same cache, which a photograph that reads
+    /// through the cache holds.
+    fn handle(&self) -> PhotographCache {
+        PhotographCache {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+
+    /// Set the test build's hook on the cache's slot events, before any
+    /// photograph holds a handle on the cache.
+    #[cfg(test)]
+    pub(crate) fn set_slot_hook(&mut self, hook: Box<SlotHook>) {
+        Arc::get_mut(&mut self.shared)
+            .expect("a cache no photograph holds yet")
+            .on_slot_event = Some(hook);
     }
 
     /// The budget the cache was made with. At 0 it keeps nothing, so a decode
     /// that one caller starts is never there for another to [`Self::peek`].
     pub fn budget_bytes(&self) -> u64 {
-        self.options.budget_bytes
+        self.shared.options.budget_bytes
     }
 
     /// Reserve up to `wanted` whole decodes of `bytes_per_build` estimated
@@ -727,7 +898,7 @@ impl PhotographCache {
     /// only way the count goes past the budget. Grants none only when
     /// `wanted` is 0.
     pub fn reserve_builds(&self, bytes_per_build: u64, wanted: usize) -> BuildReservation<'_> {
-        let budget = self.options.build_budget_bytes;
+        let budget = self.shared.options.build_budget_bytes;
         // How many to grant when `reserved` bytes are reserved already.
         let grant = |reserved: u64| {
             let free = budget.saturating_sub(reserved);
@@ -738,7 +909,7 @@ impl PhotographCache {
             };
             fit.max(wanted.min(1))
         };
-        let before = update(&self.build_reserved, |reserved| {
+        let before = update(&self.shared.build_reserved, |reserved| {
             let bytes = bytes_per_build.saturating_mul(grant(reserved) as u64);
             Some(reserved.saturating_add(bytes))
         });
@@ -746,7 +917,7 @@ impl PhotographCache {
         // answers `None`; the grant is the one made from the count it found.
         let granted = before.map_or(0, grant);
         BuildReservation {
-            count: &self.build_reserved,
+            count: &self.shared.build_reserved,
             bytes_per_build,
             granted,
             released: AtomicU64::new(0),
@@ -761,21 +932,22 @@ impl PhotographCache {
     /// decode when none fits, and the count passes the budget only by that
     /// one decode. Never waits; a caller that is refused asks again later.
     pub fn try_reserve_build(&self, bytes: u64) -> Option<BuildReservation<'_>> {
-        let budget = self.options.build_budget_bytes;
-        update(&self.build_reserved, |reserved| {
+        let budget = self.shared.options.build_budget_bytes;
+        update(&self.shared.build_reserved, |reserved| {
             let after = reserved.saturating_add(bytes);
             (reserved == 0 || after <= budget).then_some(after)
         })?;
         Some(BuildReservation {
-            count: &self.build_reserved,
+            count: &self.shared.build_reserved,
             bytes_per_build: bytes,
             granted: 1,
             released: AtomicU64::new(0),
         })
     }
 
-    /// The photograph at `path`, made of every one of its tiles, decoding it
-    /// when a tile of it is not kept. Waits while another thread is decoding
+    /// The photograph at `path`, which holds its layout and the cache's handle
+    /// on its tiles and no pixel, decoding it into tiles when none of them is
+    /// kept. Waits while another thread is decoding
     /// the same path, and then answers from its decode rather than decoding
     /// a second time; if that thread is cancelled or unwinds, the first
     /// waiter decodes in its place. An error when the file does not exist,
@@ -784,8 +956,22 @@ impl PhotographCache {
     /// modification time changes.
     ///
     /// A decode keeps every tile as unused, so tiles a panel or a kernel's
-    /// tile read asks for are evicted after them. The photograph holds its
-    /// tiles while the caller holds it, whatever the cache evicts.
+    /// tile read asks for are evicted after them, and never evicts one of its
+    /// own tiles. The photograph reads each tile through the cache, as
+    /// [`Self::get_tile`] does: one the cache still keeps it takes, marking
+    /// it used, and one the cache has evicted it reads by decoding the
+    /// photograph again, reserving with [`Self::reserve_builds`], waiting
+    /// while another caller decodes it, and polling the `Progress` of the
+    /// render that reads it. Such a read fails with
+    /// [`PhotographReadError::NotFound`] when the file is gone,
+    /// [`PhotographReadError::Changed`] when its length, modification time or
+    /// size are not the ones the photograph was decoded from, and the error
+    /// of a decode that fails otherwise. The photograph holds the cache's
+    /// state alive, so it stays readable after the cache is dropped.
+    ///
+    /// Under a budget of 0 the cache keeps nothing, so the photograph holds
+    /// every tile of the decode that made it while the caller holds it, and
+    /// its reads decode nothing.
     ///
     /// Polls `progress` for cancellation while it waits, every
     /// [`SLOT_WAIT_POLL`], and after its own decode, before it cuts the
@@ -838,11 +1024,11 @@ impl PhotographCache {
         if let Some(Err(_)) = data.made {
             return PeekedPhotograph::Unreadable;
         }
-        let Some(got) = data.kept(Asked::Every, tick) else {
+        let Some(got) = data.kept(Asked::Every, tick, &slot) else {
             return PeekedPhotograph::NotDecoded;
         };
         drop(data);
-        match got.photograph() {
+        match got.photograph(self, path) {
             Ok(photograph) => PeekedPhotograph::Decoded(photograph),
             Err(_) => PeekedPhotograph::NotDecoded,
         }
@@ -869,9 +1055,14 @@ impl PhotographCache {
     /// pool. Returns one entry per path, in order, and the tally the caller's
     /// phase note reports.
     ///
+    /// Each photograph it answers is one `get` answers, so the answers hold no
+    /// tile and the call holds no pyramid: what it decodes stays in the cache,
+    /// within its budget, and a render of an answer whose tiles were evicted
+    /// decodes it again.
+    ///
     /// It first looks for each path in the cache and reads the header of each
-    /// one not every tile of which it finds kept, to know its misses and
-    /// their sizes. It then decodes the misses in groups, one parallel loop a
+    /// one none of whose tiles it finds kept, to know its misses and their
+    /// sizes. It then decodes the misses in groups, one parallel loop a
     /// group and the groups one after another, each group as many as
     /// [`Self::reserve_builds`] grants when it is decided, at most the rayon
     /// pool's size and at least one. A member that finds its path being
@@ -989,10 +1180,10 @@ impl PhotographCache {
     /// photograph of these tiles until the file changes, or until one of them
     /// is evicted, when it decodes the file.
     pub fn insert(&self, path: &Path, image: ImageU8) {
-        if self.options.budget_bytes == 0 {
+        if self.shared.options.budget_bytes == 0 {
             return;
         }
-        let cut = cut_image(image, self.options.tile_size);
+        let cut = cut_image(image, self.shared.options.tile_size);
         let slot = Arc::new(Slot::new(file_stamp(path)));
         let mut inner = self.lock();
         inner.remove(path);
@@ -1028,31 +1219,31 @@ impl PhotographCache {
         PhotographCacheStats {
             tiles,
             bytes: inner.bytes,
-            budget_bytes: self.options.budget_bytes,
-            hits: self.hits.load(Ordering::Relaxed),
-            misses: self.misses.load(Ordering::Relaxed),
-            decodes: self.decodes.load(Ordering::Relaxed),
-            build_budget_bytes: self.options.build_budget_bytes,
-            build_reserved_bytes: self.build_reserved.load(Ordering::Acquire),
+            budget_bytes: self.shared.options.budget_bytes,
+            hits: self.shared.hits.load(Ordering::Relaxed),
+            misses: self.shared.misses.load(Ordering::Relaxed),
+            decodes: self.shared.decodes.load(Ordering::Relaxed),
+            build_budget_bytes: self.shared.options.build_budget_bytes,
+            build_reserved_bytes: self.shared.build_reserved.load(Ordering::Acquire),
         }
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
         // Nothing panics while the lock is held except on a broken invariant,
         // and the map is still usable then, so poisoning is ignored.
-        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+        self.shared.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     #[cfg(test)]
     fn slot_event(&self, event: SlotEvent) {
-        if let Some(on_slot_event) = &self.on_slot_event {
+        if let Some(on_slot_event) = &self.shared.on_slot_event {
             on_slot_event(self, event);
         }
     }
 
     /// The next tick of the eviction order.
     fn next_tick(&self) -> u64 {
-        self.tick.fetch_add(1, Ordering::Relaxed)
+        self.shared.tick.fetch_add(1, Ordering::Relaxed)
     }
 
     /// `path`'s slot when it is in the map, without a stat of the file.
@@ -1092,19 +1283,19 @@ impl PhotographCache {
         #[cfg(test)]
         self.slot_event(SlotEvent::DecodeStarted);
         let image = ImageU8::read_rgb(path).map_err(|e| unreadable(path, e))?;
-        self.decodes.fetch_add(1, Ordering::Relaxed);
+        self.shared.decodes.fetch_add(1, Ordering::Relaxed);
         if progress.is_cancelled() {
             return Err(GetError::Cancelled);
         }
-        Ok(cut_image(image, self.options.tile_size))
+        Ok(cut_image(image, self.shared.options.tile_size))
     }
 
     /// The photograph at `path` when its slot is made from the file as it is
-    /// now and keeps every tile of it, or the failure it remembers, counted
-    /// as a hit; `None` otherwise. Reads nothing but the file's stamp and
+    /// now and keeps a tile of it, or the failure it remembers, counted as a
+    /// hit; `None` otherwise. Reads nothing but the file's stamp and
     /// never waits on a decode.
     fn made_now(&self, path: &Path) -> Option<Result<Arc<TiledPhotograph>, GetError>> {
-        if self.options.budget_bytes == 0 {
+        if self.shared.options.budget_bytes == 0 {
             return None;
         }
         let stamp = file_stamp(path);
@@ -1119,11 +1310,11 @@ impl PhotographCache {
         }
         let value = match &data.made {
             Some(Err(e)) => Err(e.clone()),
-            _ => Ok(data.kept(Asked::Every, tick)?),
+            _ => Ok(data.kept(Asked::Photograph, tick, &slot)?),
         };
         drop(data);
-        self.hits.fetch_add(1, Ordering::Relaxed);
-        Some(value.and_then(Got::photograph))
+        self.shared.hits.fetch_add(1, Ordering::Relaxed);
+        Some(value.and_then(|got| got.photograph(self, path)))
     }
 
     /// `path`'s slot made from the file as it is now: the mapped one when its
@@ -1153,8 +1344,8 @@ impl PhotographCache {
         progress: &Progress<'_>,
         share: Share<'r>,
     ) -> (Result<Arc<TiledPhotograph>, GetError>, Found) {
-        let (value, found) = self.fetch(path, progress, share, Asked::Every);
-        (value.and_then(Got::photograph), found)
+        let (value, found) = self.fetch(path, progress, share, Asked::Photograph);
+        (value.and_then(|got| got.photograph(self, path)), found)
     }
 
     /// The tiles `asked` names of `path`, decoding the photograph when one of
@@ -1167,8 +1358,8 @@ impl PhotographCache {
         mut share: Share<'r>,
         asked: Asked<'_>,
     ) -> (Result<Got, GetError>, Found) {
-        if self.options.budget_bytes == 0 {
-            self.misses.fetch_add(1, Ordering::Relaxed);
+        if self.shared.options.budget_bytes == 0 {
+            self.shared.misses.fetch_add(1, Ordering::Relaxed);
             let value = self.decode(path, progress, &mut share);
             return (value.map(|cut| answer_of(cut, asked)), Found::Decoded);
         }
@@ -1184,11 +1375,11 @@ impl PhotographCache {
             loop {
                 if !data.making {
                     if let Some(Err(e)) = &data.made {
-                        self.hits.fetch_add(1, Ordering::Relaxed);
+                        self.shared.hits.fetch_add(1, Ordering::Relaxed);
                         return (Err(e.clone()), Found::Reused);
                     }
-                    if let Some(got) = data.kept(asked, self.next_tick()) {
-                        self.hits.fetch_add(1, Ordering::Relaxed);
+                    if let Some(got) = data.kept(asked, self.next_tick(), &slot) {
+                        self.shared.hits.fetch_add(1, Ordering::Relaxed);
                         return (Ok(got), Found::Reused);
                     }
                     data.making = true;
@@ -1212,7 +1403,7 @@ impl PhotographCache {
                     .0;
             }
         };
-        self.misses.fetch_add(1, Ordering::Relaxed);
+        self.shared.misses.fetch_add(1, Ordering::Relaxed);
         let value = self.decode(path, progress, &mut making.share);
         if let Err(GetError::Cancelled) = value {
             // Dropping the hold leaves the slot as it was and wakes its
@@ -1285,6 +1476,9 @@ impl PhotographCache {
             _ => Arc::new(cut.layout),
         };
         data.made = Some(Ok(Arc::clone(&layout)));
+        if let Some(tile) = cut.tiles.values().next() {
+            data.channels = tile.pixels.channels();
+        }
         if !mapped {
             return Ok(answer_of(
                 CutImage {
@@ -1296,7 +1490,7 @@ impl PhotographCache {
         }
         let tick = self.next_tick();
         let used = |key: &TileKey| match asked {
-            Asked::Every => false,
+            Asked::Photograph | Asked::Every => false,
             Asked::Keys(keys) => keys.contains(key),
         };
         let mut added = 0;
@@ -1315,7 +1509,7 @@ impl PhotographCache {
         }
         data.bytes += added;
         inner.bytes += added;
-        let got = data.kept(asked, tick);
+        let got = data.kept(asked, tick, slot);
         drop(data);
         self.evict(inner, slot, asked);
         // Every tile of the layout was put in the slot just above.
@@ -1325,10 +1519,11 @@ impl PhotographCache {
     /// Drop tiles until the bytes kept are within the budget: the unused
     /// before the used, the least recently asked for first and, among tiles
     /// asked for together, the finer levels first. Never one of `slot`'s
-    /// tiles that `asked` names (every one of them for [`Asked::Every`]):
-    /// those the request that just kept them is answered.
+    /// tiles that `asked` names (every one of them for [`Asked::Photograph`]
+    /// and [`Asked::Every`]): those the request that just kept them is
+    /// answered, or reads first.
     fn evict(&self, inner: &mut Inner, slot: &Arc<Slot>, asked: Asked<'_>) {
-        if inner.bytes <= self.options.budget_bytes {
+        if inner.bytes <= self.shared.options.budget_bytes {
             return;
         }
         let slots: Vec<Arc<Slot>> = inner.map.values().map(Arc::clone).collect();
@@ -1338,7 +1533,7 @@ impl PhotographCache {
             for (key, kept) in other.lock().tiles.iter() {
                 let spared = own
                     && match asked {
-                        Asked::Every => true,
+                        Asked::Photograph | Asked::Every => true,
                         Asked::Keys(keys) => keys.contains(key),
                     };
                 if !spared {
@@ -1348,7 +1543,7 @@ impl PhotographCache {
         }
         candidates.sort_unstable();
         for (_, _, level, row, col, s) in candidates {
-            if inner.bytes <= self.options.budget_bytes {
+            if inner.bytes <= self.shared.options.budget_bytes {
                 break;
             }
             let mut data = slots[s].lock();
@@ -1363,11 +1558,13 @@ impl PhotographCache {
 }
 
 /// The tiles `asked` names of a decode the cache does not keep: every tile,
-/// or those of `keys` the layout has.
+/// which a photograph `get` answers then holds, or those of `keys` the layout
+/// has.
 fn answer_of(cut: CutImage, asked: Asked<'_>) -> Got {
     let CutImage { layout, tiles } = cut;
+    let channels = tiles.values().next().map_or(0, |t| t.pixels.channels());
     let tiles = match asked {
-        Asked::Every => tiles.into_values().collect(),
+        Asked::Photograph | Asked::Every => tiles.into_values().collect(),
         Asked::Keys(keys) => keys
             .iter()
             .filter_map(|key| tiles.get(key).cloned())
@@ -1376,8 +1573,13 @@ fn answer_of(cut: CutImage, asked: Asked<'_>) -> Got {
     Got {
         layout: Arc::new(layout),
         tiles,
+        channels,
+        slot: None,
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod read_tests;
