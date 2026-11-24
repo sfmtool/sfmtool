@@ -40,8 +40,12 @@ Decided by the maintainer:
   before every stroke, so one measurement's halo never crosses another's stroke.
 - **The track rays are included,** and a ray to a point at infinity is drawn to
   the horizon (§ "Track rays").
+- **Track rays are drawn as the other overlays are:** anti-aliased strokes
+  rather than the soft glow, and dimmed to `BEHIND_OPACITY` where the scene
+  hides them rather than discarded, so a ray going into the bull shows where it
+  goes.
 
-Open: § "Open questions".
+Nothing in this draft is still open.
 
 ## What exists
 
@@ -106,8 +110,8 @@ pub(crate) struct OverlayInstance {
     pub(crate) radius: f32,
     /// Segment, ring or disc.
     pub(crate) kind: u32,
-    /// How it is drawn behind the scene (FADE, HOLD or HIDE), its profile
-    /// across the stroke (SOLID or GLOW), and PULL_TOWARD_EYE.
+    /// How it is drawn behind the scene (FADE or HOLD), and
+    /// PULL_TOWARD_EYE.
     pub(crate) flags: u32,
 }
 ```
@@ -136,16 +140,13 @@ met.
 - **Clipping.** They are clipped at the near plane in homogeneous view space, so
   an end with `w = 0` stays a direction rather than being divided by zero
   (§ "Track rays").
-- **Profile.** `SOLID` is a stroke whose edges are anti-aliased over about one
-  panel point. `GLOW` is the track rays' falloff from the centre (40% peak,
-  `smoothstep` from 0.3 to 1 of the half width).
+- **Edges.** A segment's edges are anti-aliased over about one panel point.
 
 **Behind the scene.** Each instance says how its hidden part is drawn:
 - `FADE`: fades with depth behind the scene, down to a floor. This is the bench
   figure.
-- `HOLD`: held at `BEHIND_OPACITY`. This is a measurement, and also how a
-  highlighted surfel's hidden outline is drawn.
-- `HIDE`: discarded. This is a track ray, as today.
+- `HOLD`: held at `BEHIND_OPACITY`. This is a measurement and a track ray, and
+  also how a highlighted surfel's hidden outline is drawn.
 
 **Unchanged.** The bench figure's arrowhead barbs still turn to face the eye, so
 the figure's producer rebuilds when the camera moves (§ "Producers and their
@@ -194,9 +195,7 @@ pub(crate) enum OverlayTarget {
     frame's instances.
 - **Drawing.** Each target's pass binds the buffer once and draws each of its
   regions with `draw(0..6, offset..offset + count)`, in region order. Each target
-  has one pipeline: the two that exist today, with the new vertex layout. The
-  scene target's pipeline premultiplies in the shader for the `GLOW` profile, as
-  the track rays blend today.
+  has one pipeline: the two that exist today, with the new vertex layout.
 - **Order.** A producer lays out its own instances with all halos first, then all
   strokes, then dots, so one item's halo never crosses another's stroke. The
   regions are drawn in a fixed order: track rays, then the bench figure on the
@@ -236,8 +235,10 @@ A new widget, such as a GPS marker, is another producer. It builds
 
 ### Track rays
 
-A track ray is a `SOLID` or `GLOW` segment, depending on § "Open questions" 2,
-with `HIDE` behind the scene. It runs from the observing camera's centre (`a`,
+A track ray is a segment in the rays' orange, anti-aliased as the other
+overlays are, with `HOLD` behind the scene: where geometry hides it, it is drawn
+at `BEHIND_OPACITY`, so a ray going into the bull shows where it goes. Its width
+is a stroke in points like a measurement's, replacing the 1.5-pixel glow. It runs from the observing camera's centre (`a`,
 `w = 1`) to its far end (`b`):
 
 - **To a finite point,** `b` is the nearest point on the observation ray to the
@@ -253,7 +254,7 @@ with `HIDE` behind the scene. It runs from the observing camera's centre (`a`,
     point end at or near it.
   - **Its depth.** The direction's end is pinned at the same tiny positive NDC
     depth the points and patches at infinity use. That puts it behind every
-    finite thing, so a ray is hidden where finite geometry covers it.
+    finite thing, so a ray is dimmed where finite geometry covers it.
   - **Behind the camera.** If the direction points away from the camera, the
     segment is clipped at the near plane in homogeneous coordinates. The part in
     front of the camera, from the camera centre outward, is drawn up to the
@@ -273,14 +274,6 @@ arbitrary next to it.
 - **The hidden part of a highlighted outline** is drawn on the surfels' own
   geometry, not as ribbons.
 - **Labels and hover text** stay egui.
-
-## Open questions
-
-1. **Hidden track rays.** Keep discarding the part of a ray behind geometry
-   (`HIDE`, as today), or draw it at `BEHIND_OPACITY` (`HOLD`) as the
-   measurements are drawn, so a ray going into the bull shows where it goes?
-2. **The rays' profile.** Keep the soft glow (`GLOW`), or draw them as anti-aliased
-   strokes (`SOLID`) like the other overlays? The glow is what they look like now.
 
 ## Testing
 
@@ -312,7 +305,7 @@ arbitrary next to it.
 **Instances**
 - A ring or disc is one instance, with its radius in points.
 - The flags: `HOLD` and `PULL_TOWARD_EYE` on a measurement's pieces, `FADE` on
-  the figure's, `HIDE` on a ray's.
+  the figure's, `HOLD` and no pull on a ray's.
 
 **Pass contract.** Each target's pipeline draws regions from the shared buffer on
 the `noop` device, with the new vertex layout.
@@ -324,6 +317,8 @@ the `noop` device, with the new vertex layout.
 - The hit test still landing on the drawn mark at several fields of view.
 - For a point at infinity, every ray of its track reaching its splat at the
   horizon: seoul_bull v02 has one, point #264.
+- A track ray that passes into the bull drawn at `BEHIND_OPACITY` where the bull
+  hides it, and at full strength where it is in front.
 
 **Cost.** With 1,000 measurements and *Show all* on, a frame while orbiting
 builds and uploads no instances. A test counter checks this, as for
@@ -344,9 +339,9 @@ builds and uploads no instances. A test counter checks this, as for
    - the measurement producer keyed and cached.
 
    It is visible (rings, edges and halo order), so it needs screenshots.
-3. **Track rays.** The rays move onto the store as a producer, with the `GLOW`
-   profile and `HIDE`, or as § "Open questions" decides, and their own pass is
-   removed. A ray to a point at infinity becomes a direction drawn to the
-   horizon. This is visible, so it needs screenshots.
+3. **Track rays.** The rays move onto the store as a producer, drawn as
+   anti-aliased strokes and dimmed where hidden, and their own pass is removed.
+   A ray to a point at infinity becomes a direction drawn to the horizon. This is
+   visible, so it needs screenshots.
 4. **Later, once the rest is built:** judge whether the bench figure's barbs
    should turn in the shader, so the figure's key no longer includes the camera.
